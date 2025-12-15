@@ -1,0 +1,33 @@
+{
+  "name": "revure-v2-backend",
+  "version": "1.0.0",
+  "description": "Customer-facing backend API for Revure V2 Landing",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "gendb": "npx sequelize-auto -o \"./src/models\" -d revurge -h localhost -u root -p 3306 -e mysql -a .sequelize-auto.cfg.js",
+    "seed:user-types": "node src/db/seedUserTypes.js"
+  },
+  "keywords": ["revure", "api", "booking", "creators"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "body-parser": "^2.2.1",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^2.0.2",
+    "mysql2": "^3.15.3",
+    "nodemailer": "^7.0.11",
+    "s3-bucket": "^1.0.3",
+    "sequelize": "^6.37.7",
+    "stripe": "^14.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.11",
+    "sequelize-auto": "^0.8.8"
+  }
+}
