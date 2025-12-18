@@ -1,3 +1,5 @@
+console.log('🔥 server.js loaded');
+
 const app = require('./app');
 const sequelize = require('./db');
 const config = require('./config/config');
@@ -19,7 +21,7 @@ async function start() {
     app.listen(PORT, () => {
       console.log(`Revure V2 Backend Server running on port ${PORT}`);
       console.log(`Environment: ${config.nodeEnv}`);
-      console.log(`Base API path: /v1`);
+      console.log(`Base API path: /api`);
     });
   } catch (err) {
     console.error('Failed to start server:', err);

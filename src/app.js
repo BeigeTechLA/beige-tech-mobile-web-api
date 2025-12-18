@@ -3,6 +3,7 @@ const cors = require('cors');
 const bodyParser = require('body-parser');
 const routes = require('./routes');
 const errorHandler = require('./middleware/errorHandler');
+const creatorRoutes = require('./routes/creator.routes');
 
 const app = express();
 
@@ -20,10 +21,14 @@ app.use(cors({
 
 // Request logging middleware
 app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  const baseUrl = 'http://localhost:3000/api/'; // Define base URL for API
+  const fullUrl = `${baseUrl}${req.originalUrl}`;  // Combine base URL with the current request URL
+  console.log(`[${new Date().toISOString()}] ${req.method} ${fullUrl}`);
+  
   if (process.env.NODE_ENV === 'development') {
     console.log('Headers:', req.headers);
   }
+  
   next();
 });
 
@@ -51,7 +56,10 @@ app.get('/health', (req, res) => {
 });
 
 // Mount API routes with /v1 prefix
+
 app.use('/v1', routes);
+// app.use('/api/creator', creatorRoutes);
+
 
 // 404 handler for unknown routes
 app.use((req, res) => {

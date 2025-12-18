@@ -20,7 +20,7 @@ module.exports = function(sequelize, DataTypes) {
       allowNull: true,
       references: {
         model: 'users',
-        key: 'user_id'
+        key: 'id'
       }
     },
     amount: {
