@@ -124,15 +124,26 @@ exports.searchCreators = async (req, res) => {
         || creatorData.crew_member_files?.find(f => f.file_type.includes('image'))
         || null;
 
+      // Map role ID to role name
+      const roleMap = {
+        1: 'Videographer',
+        2: 'Photographer',
+        3: 'Editor',
+        4: 'Producer',
+        5: 'Director'
+      };
+
       return {
-        id: creatorData.crew_member_id,
+        crew_member_id: creatorData.crew_member_id,
         name: `${creatorData.first_name} ${creatorData.last_name}`,
-        role: creatorData.primary_role,
-        price: parseFloat(creatorData.hourly_rate || 0),
+        role_id: creatorData.primary_role,
+        role_name: roleMap[creatorData.primary_role] || 'Creative Professional',
+        hourly_rate: parseFloat(creatorData.hourly_rate || 0),
         rating: parseFloat(creatorData.rating || 0),
-        image: profileImage ? profileImage.file_path : null,
+        total_reviews: 0, // TODO: Calculate from reviews table when implemented
+        profile_image: profileImage ? profileImage.file_path : null,
         location: creatorData.location,
-        experience: creatorData.years_of_experience,
+        experience_years: creatorData.years_of_experience,
         bio: creatorData.bio,
         skills: creatorData.skills,
         is_available: creatorData.is_available === 1
@@ -158,23 +169,13 @@ exports.searchCreators = async (req, res) => {
     res.json({
       success: true,
       data: {
-        creators: transformedCreators,
+        data: transformedCreators, // Array of creators
         pagination: {
-          total: finalCount,
           page: parseInt(page),
           limit: parseInt(limit),
-          totalPages: Math.ceil(finalCount / parseInt(limit))
-        },
-        searchParams: {
-          useProximitySearch: useProximitySearch,
-          maxDistance: useProximitySearch ? parseFloat(maxDistance) : null,
-          searchLocation: parsedLocation ? {
-            address: parsedLocation.address,
-            coordinates: (parsedLocation.lat && parsedLocation.lng) ? {
-              lat: parsedLocation.lat,
-              lng: parsedLocation.lng
-            } : null
-          } : null
+          total: finalCount,
+          totalPages: Math.ceil(finalCount / parseInt(limit)),
+          hasMore: parseInt(page) < Math.ceil(finalCount / parseInt(limit))
         }
       }
     });
