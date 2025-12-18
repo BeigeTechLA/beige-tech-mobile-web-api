@@ -98,7 +98,8 @@ exports.searchCreators = async (req, res) => {
         'years_of_experience',
         'bio',
         'skills',
-        'is_available'
+        'is_available',
+        'created_at'  // Required for ORDER BY in subquery
       ],
       order: [
         ['rating', 'DESC'],

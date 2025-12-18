@@ -11,6 +11,16 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.STRING(150),
       allowNull: false
     },
+    // Alias for backwards compatibility with controllers expecting 'category_name'
+    category_name: {
+      type: DataTypes.STRING(150),
+      allowNull: false,
+      field: 'name'  // Maps to the same 'name' column in database
+    },
+    description: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
     is_active: {
       type: DataTypes.TINYINT,
       allowNull: true,

@@ -8,6 +8,9 @@ yarn.lock
 .env.local
 .env.production
 
+# AWS RDS credentials
+RDS_CONNECTION_INFO.md
+
 # Logs
 logs/
 *.log

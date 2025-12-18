@@ -23,6 +23,12 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.STRING(100),
       allowNull: true
     },
+    // Alias for backwards compatibility with controllers expecting 'brand'
+    brand: {
+      type: DataTypes.STRING(100),
+      allowNull: true,
+      field: 'manufacturer'  // Maps to the same 'manufacturer' column in database
+    },
     model_number: {
       type: DataTypes.STRING(100),
       allowNull: true
@@ -49,6 +55,25 @@ module.exports = function(sequelize, DataTypes) {
     },
     daily_rental_rate: {
       type: DataTypes.DECIMAL(10,2),
+      allowNull: true
+    },
+    // Alias for backwards compatibility with controllers expecting 'rental_price_per_day'
+    rental_price_per_day: {
+      type: DataTypes.DECIMAL(10,2),
+      allowNull: true,
+      field: 'daily_rental_rate'  // Maps to the same 'daily_rental_rate' column in database
+    },
+    rental_price_per_hour: {
+      type: DataTypes.DECIMAL(10,2),
+      allowNull: true
+    },
+    availability_status: {
+      type: DataTypes.ENUM('available', 'unavailable', 'maintenance', 'rented'),
+      allowNull: true,
+      defaultValue: 'available'
+    },
+    condition_status: {
+      type: DataTypes.STRING(50),
       allowNull: true
     },
     purchase_date: {

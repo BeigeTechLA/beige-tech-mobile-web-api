@@ -3,6 +3,7 @@ console.log('🔥 server.js loaded');
 const app = require('./app');
 const sequelize = require('./db');
 const config = require('./config/config');
+const models = require('./models'); // Load all models
 
 async function start() {
   try {
@@ -11,10 +12,11 @@ async function start() {
     console.log('Database connected successfully');
 
     // Sync models in development (alter: true updates schema without dropping tables)
-    if (config.nodeEnv === 'development') {
-      await sequelize.sync({ alter: true });
-      console.log('Database models synchronized');
-    }
+    // Disabled for now - tables already created
+    // if (config.nodeEnv === 'development') {
+    //   await sequelize.sync({ alter: true });
+    //   console.log('Database models synchronized');
+    // }
 
     // Start Express server
     const PORT = config.port;

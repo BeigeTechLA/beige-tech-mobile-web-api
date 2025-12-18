@@ -30,6 +30,7 @@ router.use('/equipment', require('./equipment.routes'));
 router.use('/pricing', require('./pricing.routes'));
 // router.use('/projects', require('./project.routes'));
 router.use('/bookings', require('./bookings.routes'));
+router.use('/guest-bookings', require('./guest-bookings.routes'));
 router.use('/payments', require('./payments.routes'));
 router.use('/waitlist', require('./waitlist.routes'));
 router.use('/admin', require('./admin.routes'));
