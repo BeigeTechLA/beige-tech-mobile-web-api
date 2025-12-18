@@ -146,7 +146,7 @@ DATABASE_USER=root
 DATABASE_PASS=root
 
 # JWT
-JWT_SECRET=a83eriOp9f2206f7bc
+JWT_SECRET=your_jwt_secret_here_min_32_chars
 JWT_EXPIRES_IN=7d
 
 # CORS
@@ -162,7 +162,7 @@ S3_SUB_FOLDER=beige
 
 # Email (Gmail)
 EMAIL_USER=os.beige.app@gmail.com
-EMAIL_APP_PASSWORD=mpuibstxjzifqcnf
+EMAIL_APP_PASSWORD=your_app_password_here
 EMAIL_FROM_NAME=Revurge Platform
 
 # Stripe

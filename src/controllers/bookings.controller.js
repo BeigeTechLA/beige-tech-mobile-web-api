@@ -1,6 +1,7 @@
 const { stream_project_booking, assigned_crew, crew_members, crew_member_files } = require('../models');
 const { Op } = require('sequelize');
 const constants = require('../utils/constants');
+const { parseLocation, formatLocationResponse } = require('../utils/locationHelpers');
 
 /**
  * Create a new booking
@@ -75,6 +76,17 @@ exports.createBooking = async (req, res) => {
       budget = budget_min;
     }
 
+    // Parse and normalize location (supports Mapbox JSON format and plain strings)
+    let normalizedLocation = location;
+    if (location) {
+      // If location is already stringified JSON, keep as-is for storage
+      // If it's an object, stringify it
+      if (typeof location === 'object') {
+        normalizedLocation = JSON.stringify(location);
+      }
+      // Plain strings are kept as-is for backward compatibility
+    }
+
     // Prepare booking data mapping frontend fields to database fields
     const bookingData = {
       project_name: order_name,
@@ -88,7 +100,7 @@ exports.createBooking = async (req, res) => {
       expected_viewers: expected_viewers ? parseInt(expected_viewers) : null,
       stream_quality: stream_quality || null,
       crew_size_needed: crew_size ? parseInt(crew_size) : null,
-      event_location: location || null,
+      event_location: normalizedLocation || null,
       streaming_platforms: streaming_platforms
         ? (typeof streaming_platforms === 'string' ? streaming_platforms : JSON.stringify(streaming_platforms))
         : '[]',
@@ -117,7 +129,7 @@ exports.createBooking = async (req, res) => {
         booking_id: booking.stream_project_booking_id,
         project_name: booking.project_name,
         event_date: booking.event_date,
-        event_location: booking.event_location,
+        event_location: formatLocationResponse(booking.event_location),
         budget: booking.budget,
         is_draft: booking.is_draft === 1,
         created_at: booking.created_at
@@ -264,7 +276,7 @@ exports.getBooking = async (req, res) => {
       start_time: bookingData.start_time,
       end_time: bookingData.end_time,
       duration_hours: bookingData.duration_hours,
-      event_location: bookingData.event_location,
+      event_location: formatLocationResponse(bookingData.event_location),
       budget: parseFloat(bookingData.budget || 0),
       expected_viewers: bookingData.expected_viewers,
       stream_quality: bookingData.stream_quality,
@@ -382,7 +394,7 @@ exports.getUserBookings = async (req, res) => {
         event_type: bookingData.event_type,
         event_date: bookingData.event_date,
         start_time: bookingData.start_time,
-        event_location: bookingData.event_location,
+        event_location: formatLocationResponse(bookingData.event_location),
         budget: parseFloat(bookingData.budget || 0),
         crew_size_needed: bookingData.crew_size_needed,
         assigned_crew_count: bookingData.assigned_crews?.length || 0,
@@ -488,7 +500,14 @@ exports.updateBooking = async (req, res) => {
     if (expected_viewers !== undefined) updateData.expected_viewers = parseInt(expected_viewers);
     if (stream_quality !== undefined) updateData.stream_quality = stream_quality;
     if (crew_size !== undefined) updateData.crew_size_needed = parseInt(crew_size);
-    if (location !== undefined) updateData.event_location = location;
+    if (location !== undefined) {
+      // Normalize location format (support Mapbox JSON and plain strings)
+      if (typeof location === 'object') {
+        updateData.event_location = JSON.stringify(location);
+      } else {
+        updateData.event_location = location;
+      }
+    }
     if (is_draft !== undefined) updateData.is_draft = is_draft ? 1 : 0;
     if (is_completed !== undefined) updateData.is_completed = is_completed ? 1 : 0;
     if (is_cancelled !== undefined) updateData.is_cancelled = is_cancelled ? 1 : 0;
@@ -555,7 +574,7 @@ exports.updateBooking = async (req, res) => {
         booking_id: updatedBooking.stream_project_booking_id,
         project_name: updatedBooking.project_name,
         event_date: updatedBooking.event_date,
-        event_location: updatedBooking.event_location,
+        event_location: formatLocationResponse(updatedBooking.event_location),
         budget: parseFloat(updatedBooking.budget || 0),
         is_draft: updatedBooking.is_draft === 1,
         is_completed: updatedBooking.is_completed === 1,

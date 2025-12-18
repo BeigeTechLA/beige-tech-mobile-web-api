@@ -1,10 +1,15 @@
 const { crew_members, crew_member_files, crew_roles } = require('../models');
 const { Op } = require('sequelize');
+const { parseLocation, filterByProximity, formatLocationResponse } = require('../utils/locationHelpers');
 
 /**
  * Search creators with filters
  * GET /api/creators/search
- * Query params: budget, location, skills, content_type, page, limit
+ * Query params: budget, location, skills, content_type, maxDistance, page, limit
+ * Location can be:
+ * - Plain string: "Los Angeles, CA"
+ * - Mapbox JSON: {"lat":34.0522,"lng":-118.2437,"address":"Los Angeles, CA"}
+ * maxDistance: Optional distance in miles for proximity search (requires lat/lng in location)
  */
 exports.searchCreators = async (req, res) => {
   try {
@@ -13,11 +18,26 @@ exports.searchCreators = async (req, res) => {
       location,
       skills,
       content_type,
+      maxDistance,
       page = 1,
       limit = 20
     } = req.query;
 
     const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    // Parse location to determine if we have coordinates for proximity search
+    let parsedLocation = null;
+    let useProximitySearch = false;
+
+    if (location) {
+      parsedLocation = parseLocation(location);
+      useProximitySearch = Boolean(
+        parsedLocation &&
+        parsedLocation.lat &&
+        parsedLocation.lng &&
+        maxDistance
+      );
+    }
 
     // Build dynamic where clause
     const whereClause = {
@@ -33,10 +53,10 @@ exports.searchCreators = async (req, res) => {
       };
     }
 
-    // Location filter
-    if (location) {
+    // Location filter - use text search if no coordinates or no maxDistance
+    if (location && !useProximitySearch && parsedLocation) {
       whereClause.location = {
-        [Op.like]: `%${location}%`
+        [Op.like]: `%${parsedLocation.address || location}%`
       };
     }
 
@@ -56,7 +76,8 @@ exports.searchCreators = async (req, res) => {
     }
 
     // Execute search query
-    const { count, rows: creators } = await crew_members.findAndCountAll({
+    // If using proximity search, fetch without pagination first, then filter by distance
+    const queryOptions = {
       where: whereClause,
       include: [
         {
@@ -79,16 +100,22 @@ exports.searchCreators = async (req, res) => {
         'skills',
         'is_available'
       ],
-      limit: parseInt(limit),
-      offset: offset,
       order: [
         ['rating', 'DESC'],
         ['created_at', 'DESC']
       ]
-    });
+    };
+
+    // Only apply limit/offset if NOT using proximity search (we'll paginate after filtering)
+    if (!useProximitySearch) {
+      queryOptions.limit = parseInt(limit);
+      queryOptions.offset = offset;
+    }
+
+    const { count: totalCount, rows: creators } = await crew_members.findAndCountAll(queryOptions);
 
     // Transform data to match expected creator structure
-    const transformedCreators = creators.map(creator => {
+    let transformedCreators = creators.map(creator => {
       const creatorData = creator.toJSON();
 
       // Get profile image (prefer 'profile_image' type, fallback to first image)
@@ -111,15 +138,42 @@ exports.searchCreators = async (req, res) => {
       };
     });
 
+    // Apply proximity filtering if coordinates provided
+    let finalCount = totalCount;
+    if (useProximitySearch) {
+      transformedCreators = filterByProximity(
+        transformedCreators,
+        parsedLocation,
+        parseFloat(maxDistance),
+        'location'
+      );
+
+      finalCount = transformedCreators.length;
+
+      // Manual pagination after filtering
+      transformedCreators = transformedCreators.slice(offset, offset + parseInt(limit));
+    }
+
     res.json({
       success: true,
       data: {
         creators: transformedCreators,
         pagination: {
-          total: count,
+          total: finalCount,
           page: parseInt(page),
           limit: parseInt(limit),
-          totalPages: Math.ceil(count / parseInt(limit))
+          totalPages: Math.ceil(finalCount / parseInt(limit))
+        },
+        searchParams: {
+          useProximitySearch: useProximitySearch,
+          maxDistance: useProximitySearch ? parseFloat(maxDistance) : null,
+          searchLocation: parsedLocation ? {
+            address: parsedLocation.address,
+            coordinates: (parsedLocation.lat && parsedLocation.lng) ? {
+              lat: parsedLocation.lat,
+              lng: parsedLocation.lng
+            } : null
+          } : null
         }
       }
     });
@@ -220,7 +274,7 @@ exports.getCreatorProfile = async (req, res) => {
       price: parseFloat(creatorData.hourly_rate || 0),
       rating: parseFloat(creatorData.rating || 0),
       image: profileImage ? profileImage.file_path : null,
-      location: creatorData.location,
+      location: formatLocationResponse(creatorData.location),
       workingDistance: creatorData.working_distance,
       experience: creatorData.years_of_experience,
       bio: creatorData.bio,

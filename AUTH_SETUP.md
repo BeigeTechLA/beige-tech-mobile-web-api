@@ -11,7 +11,7 @@ npm install
 ### 2. Configure Environment
 Verify `.env` file contains:
 ```env
-JWT_SECRET=a83eriOp9f2206f7bc
+JWT_SECRET=your_jwt_secret_here_min_32_chars
 JWT_EXPIRES_IN=7d
 NODE_ENV=development
 DATABASE_HOST=localhost

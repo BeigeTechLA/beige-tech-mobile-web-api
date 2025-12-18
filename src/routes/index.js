@@ -12,6 +12,8 @@ router.get('/', (req, res) => {
       auth: '/v1/auth/*',
       users: '/v1/users/*',
       creators: '/v1/creators/*',
+      equipment: '/v1/equipment/*',
+      pricing: '/v1/pricing/*',
       projects: '/v1/projects/*',
       bookings: '/v1/bookings/*',
       payments: '/v1/payments/*',
@@ -24,6 +26,8 @@ router.get('/', (req, res) => {
 router.use('/auth', require('./auth.routes'));
 // router.use('/users', require('./user.routes'));
 router.use('/creators', require('./creators.routes'));
+router.use('/equipment', require('./equipment.routes'));
+router.use('/pricing', require('./pricing.routes'));
 // router.use('/projects', require('./project.routes'));
 router.use('/bookings', require('./bookings.routes'));
 router.use('/payments', require('./payments.routes'));

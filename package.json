@@ -7,7 +7,11 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "gendb": "npx sequelize-auto -o \"./src/models\" -d revurge -h localhost -u root -p 3306 -e mysql -a .sequelize-auto.cfg.js",
-    "seed:user-types": "node src/db/seedUserTypes.js"
+    "db:init": "node src/db/initDatabase.js",
+    "db:seed:reference": "node src/db/seeders/index.js --reference-only",
+    "db:seed:full": "node src/db/seeders/index.js --full",
+    "db:seed:reset": "node src/db/seeders/index.js --reset --full",
+    "db:setup": "npm run db:init && npm run db:seed:full"
   },
   "keywords": ["revure", "api", "booking", "creators"],
   "author": "",
