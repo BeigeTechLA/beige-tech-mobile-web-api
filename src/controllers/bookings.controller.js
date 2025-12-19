@@ -89,6 +89,8 @@ exports.createBooking = async (req, res) => {
 
     // Prepare booking data mapping frontend fields to database fields
     const bookingData = {
+      user_id: userId, // Link booking to authenticated user
+      guest_email: null, // Authenticated bookings don't use guest_email
       project_name: order_name,
       description: description || null,
       event_type: event_type || content_type || project_type || null,

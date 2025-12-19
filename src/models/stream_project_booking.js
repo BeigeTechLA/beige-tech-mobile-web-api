@@ -7,6 +7,18 @@ module.exports = function(sequelize, DataTypes) {
       allowNull: false,
       primaryKey: true
     },
+    user_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'users',
+        key: 'user_id'
+      }
+    },
+    guest_email: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
     project_name: {
       type: DataTypes.STRING(255),
       allowNull: false

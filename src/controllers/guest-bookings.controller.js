@@ -95,8 +95,10 @@ exports.createGuestBooking = async (req, res) => {
     }
 
     // Prepare booking data mapping frontend fields to database fields
-    // Note: user_id is set to NULL for guest bookings
+    // Note: user_id is NULL for guest bookings, guest_email is used instead
     const bookingData = {
+      user_id: null, // Guest bookings have no user_id
+      guest_email: guest_email, // Store guest email for contact
       project_name: order_name,
       description: description || null,
       event_type: event_type || content_type || project_type || null,
@@ -127,13 +129,8 @@ exports.createGuestBooking = async (req, res) => {
       is_active: 1
     };
 
-    // Create guest booking
+    // Create guest booking with email stored in database
     const booking = await stream_project_booking.create(bookingData);
-
-    // Store guest_email separately for future reference
-    // For now, we'll include it in the response
-    // TODO: Consider adding a guest_email field to the database schema
-    // or creating a separate guest_bookings_metadata table
 
     res.status(constants.CREATED.code).json({
       success: true,
