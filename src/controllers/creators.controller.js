@@ -3,21 +3,68 @@ const { Op } = require('sequelize');
 const { parseLocation, filterByProximity, formatLocationResponse } = require('../utils/locationHelpers');
 
 /**
+ * Helper function to parse skills from various formats
+ * Handles: JSON arrays, comma-separated strings, plain strings
+ * Returns normalized array of skill strings
+ */
+const parseSkills = (skillsValue) => {
+  if (!skillsValue) return [];
+
+  // Already an array
+  if (Array.isArray(skillsValue)) {
+    return skillsValue.map(s => String(s).trim()).filter(s => s);
+  }
+
+  // String - try JSON parse first, then CSV fallback
+  if (typeof skillsValue === 'string') {
+    try {
+      const parsed = JSON.parse(skillsValue);
+      if (Array.isArray(parsed)) {
+        return parsed.map(s => String(s).trim()).filter(s => s);
+      }
+      // Single string in JSON
+      return [String(parsed).trim()].filter(s => s);
+    } catch {
+      // Not JSON - treat as comma-separated or single value
+      return skillsValue.split(',').map(s => s.trim()).filter(s => s);
+    }
+  }
+
+  return [];
+};
+
+/**
  * Search creators with filters
  * GET /api/creators/search
- * Query params: budget, location, skills, content_type, maxDistance, page, limit
- * Location can be:
- * - Plain string: "Los Angeles, CA"
- * - Mapbox JSON: {"lat":34.0522,"lng":-118.2437,"address":"Los Angeles, CA"}
- * maxDistance: Optional distance in miles for proximity search (requires lat/lng in location)
+ * Query params:
+ * - budget: Max hourly rate (backward compatibility) OR use min_budget/max_budget for range
+ * - min_budget: Minimum hourly rate
+ * - max_budget: Maximum hourly rate
+ * - location: Plain string or Mapbox JSON {"lat":34.0522,"lng":-118.2437,"address":"Los Angeles, CA"}
+ * - skills: Skills to match (comma-separated or JSON array)
+ * - content_type: Single role ID (backward compatibility)
+ * - content_types: Array of role IDs for multiple roles
+ * - maxDistance: Distance in miles for proximity search (requires lat/lng in location)
+ * - page: Page number (default: 1)
+ * - limit: Results per page (default: 20)
+ *
+ * Features:
+ * - Skill overlap scoring: Ranks creators by number of matching skills
+ * - Budget range filtering: Filter by min/max hourly rate
+ * - Multiple roles: Search across multiple role types
+ * - Proximity search: Filter by geographic distance
+ * - Hybrid approach: DB filtering + in-memory scoring for best performance
  */
 exports.searchCreators = async (req, res) => {
   try {
     const {
       budget,
+      min_budget,
+      max_budget,
       location,
       skills,
       content_type,
+      content_types,
       maxDistance,
       page = 1,
       limit = 20
@@ -45,12 +92,22 @@ exports.searchCreators = async (req, res) => {
       is_draft: 0
     };
 
-    // Budget filter (hourly_rate)
-    if (budget) {
-      const budgetValue = parseFloat(budget);
-      whereClause.hourly_rate = {
-        [Op.lte]: budgetValue
-      };
+    // Budget filter - support range (min_budget/max_budget) or legacy max (budget)
+    if (min_budget || max_budget || budget) {
+      whereClause.hourly_rate = {};
+
+      // Use min_budget/max_budget if provided
+      if (min_budget) {
+        whereClause.hourly_rate[Op.gte] = parseFloat(min_budget);
+      }
+      if (max_budget) {
+        whereClause.hourly_rate[Op.lte] = parseFloat(max_budget);
+      }
+
+      // Backward compatibility: budget param means max rate
+      if (budget && !max_budget) {
+        whereClause.hourly_rate[Op.lte] = parseFloat(budget);
+      }
     }
 
     // Location filter - use text search if no coordinates or no maxDistance
@@ -67,16 +124,30 @@ exports.searchCreators = async (req, res) => {
       };
     }
 
-    // Content type filter via primary_role
-    if (content_type) {
-      // If content_type is passed as role_id, use it directly
+    // Content type filter via primary_role - support multiple roles
+    if (content_types) {
+      // Parse content_types (can be array or comma-separated string)
+      let rolesArray = Array.isArray(content_types) ? content_types : content_types.split(',');
+      rolesArray = rolesArray.map(r => parseInt(r.trim())).filter(r => !isNaN(r));
+
+      if (rolesArray.length > 0) {
+        whereClause.primary_role = {
+          [Op.in]: rolesArray
+        };
+      }
+    } else if (content_type) {
+      // Backward compatibility: single content_type
       if (!isNaN(content_type)) {
         whereClause.primary_role = parseInt(content_type);
       }
     }
 
     // Execute search query
-    // If using proximity search, fetch without pagination first, then filter by distance
+    // If using proximity search OR skill scoring, fetch without pagination first
+    // then filter/score and paginate after
+    const useSkillScoring = Boolean(skills);
+    const needsPostProcessing = useProximitySearch || useSkillScoring;
+
     const queryOptions = {
       where: whereClause,
       include: [
@@ -107,8 +178,8 @@ exports.searchCreators = async (req, res) => {
       ]
     };
 
-    // Only apply limit/offset if NOT using proximity search (we'll paginate after filtering)
-    if (!useProximitySearch) {
+    // Only apply limit/offset if NOT using post-processing (we'll paginate after filtering/scoring)
+    if (!needsPostProcessing) {
       queryOptions.limit = parseInt(limit);
       queryOptions.offset = offset;
     }
@@ -159,10 +230,44 @@ exports.searchCreators = async (req, res) => {
         parseFloat(maxDistance),
         'location'
       );
-
       finalCount = transformedCreators.length;
+    }
 
-      // Manual pagination after filtering
+    // Apply skill-based scoring if skills provided
+    if (useSkillScoring) {
+      const requestedSkills = parseSkills(skills);
+
+      transformedCreators = transformedCreators.map(creator => {
+        const creatorSkills = parseSkills(creator.skills);
+
+        // Find matching skills (case-insensitive partial matching)
+        const matchingSkills = creatorSkills.filter(creatorSkill =>
+          requestedSkills.some(requestedSkill =>
+            creatorSkill.toLowerCase().includes(requestedSkill.toLowerCase()) ||
+            requestedSkill.toLowerCase().includes(creatorSkill.toLowerCase())
+          )
+        );
+
+        return {
+          ...creator,
+          matchScore: matchingSkills.length,
+          matchingSkills: matchingSkills  // Optional: for debugging/display
+        };
+      });
+
+      // Sort by matchScore (DESC), then rating (DESC)
+      transformedCreators.sort((a, b) => {
+        const scoreDiff = (b.matchScore || 0) - (a.matchScore || 0);
+        if (scoreDiff !== 0) return scoreDiff;
+        return b.rating - a.rating;
+      });
+
+      // Update count after scoring (all results passed scoring, but sorted differently)
+      finalCount = transformedCreators.length;
+    }
+
+    // Manual pagination after all filtering and scoring
+    if (needsPostProcessing) {
       transformedCreators = transformedCreators.slice(offset, offset + parseInt(limit));
     }
 
