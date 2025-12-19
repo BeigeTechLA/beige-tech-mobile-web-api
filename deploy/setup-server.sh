@@ -40,49 +40,20 @@ rsync -av --exclude='node_modules' --exclude='.git' --exclude='deploy' --exclude
     "$(dirname $(dirname $0))/" "$DEPLOY_DIR/"
 
 # Create production .env file
-echo "🔧 Creating production environment configuration..."
-cat > "$DEPLOY_DIR/.env" << 'EOF'
-# Database Configuration - AWS RDS Production
-DATABASE_HOST=beige-common-db.cw9m48mwcxj2.us-east-1.rds.amazonaws.com
-DATABASE_PORT=3306
-DATABASE_NAME=revurge
-DATABASE_USER=admin
-DATABASE_PASS=YOUR_DB_PASSWORD
+echo "🔧 Checking for environment configuration..."
 
-# Server Configuration
-PORT=5001
-NODE_ENV=production
-
-# JWT Configuration
-JWT_SECRET=YOUR_JWT_SECRET
-JWT_EXPIRES_IN=7d
-
-# AWS S3 Configuration
-S3_BUCKET_ACCESS_KEY_ID=YOUR_AWS_ACCESS_KEY_ID
-S3_BUCKET_SECRET_ACCESS_KEY=YOUR_AWS_SECRET_ACCESS_KEY
-S3_BUCKET_NAME=beigexmemehouse
-S3_BUCKET_REGION=eu-north-1
-S3_SUB_FOLDER=beige
-
-# File Upload Configuration
-FILEPATH_MEDIA=public/uploads/media/
-
-# Email Configuration (Gmail SMTP)
-EMAIL_USER=os.beige.app@gmail.com
-EMAIL_APP_PASSWORD=YOUR_EMAIL_APP_PASSWORD
-EMAIL_FROM_NAME=Revurge Platform
-
-# Frontend URL (Update with your production frontend URL)
-FRONTEND_URL=http://localhost:3000
-
-# Stripe Configuration (Update with your production keys)
-STRIPE_SECRET_KEY=sk_test_your_key_here
-STRIPE_PUBLISHABLE_KEY=pk_test_your_key_here
-STRIPE_WEBHOOK_SECRET=whsec_your_webhook_secret_here
-
-# CORS Origins (Update with your production frontend URLs)
-CORS_ORIGINS=http://localhost:3000,http://localhost:3001
-EOF
+if [ -f "$(dirname $(dirname $0))/.env.production" ]; then
+    echo "📄 Found .env.production, using it for deployment..."
+    cp "$(dirname $(dirname $0))/.env.production" "$DEPLOY_DIR/.env"
+elif [ -f "$(dirname $(dirname $0))/.env" ]; then
+    echo "⚠️  No .env.production found, using .env instead..."
+    cp "$(dirname $(dirname $0))/.env" "$DEPLOY_DIR/.env"
+else
+    echo "❌ Error: No .env or .env.production file found!"
+    echo "Please create one based on env.example before deploying."
+    rm -rf "$DEPLOY_DIR"
+    exit 1
+fi
 
 # Transfer files to EC2
 echo "📤 Transferring files to EC2 instance..."

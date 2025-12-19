@@ -283,4 +283,64 @@ exports.getCategories = async (req, res) => {
   }
 };
 
+/**
+ * Get equipment by creator/owner
+ * GET /api/equipment/by-creator/:creatorId
+ */
+exports.getByCreator = async (req, res) => {
+  try {
+    const { creatorId } = req.params;
+
+    const equipmentList = await equipment.findAll({
+      where: {
+        owner_id: parseInt(creatorId),
+        is_active: 1
+      },
+      include: [
+        {
+          model: equipment_category,
+          as: 'category',
+          attributes: ['category_id', 'category_name'],
+          required: false
+        }
+      ],
+      attributes: [
+        'equipment_id',
+        'equipment_name',
+        'description',
+        'rental_price_per_day',
+        'storage_location',
+        'category_id'
+      ],
+      order: [['equipment_name', 'ASC']]
+    });
+
+    const transformedEquipment = equipmentList.map(eq => {
+      const eqData = eq.toJSON();
+      return {
+        equipment_id: eqData.equipment_id,
+        name: eqData.equipment_name,
+        description: eqData.description,
+        rental_price_per_day: parseFloat(eqData.rental_price_per_day || 0),
+        location: eqData.storage_location,
+        category: eqData.category ? eqData.category.category_name : null,
+        category_id: eqData.category_id
+      };
+    });
+
+    res.json({
+      success: true,
+      data: transformedEquipment
+    });
+
+  } catch (error) {
+    console.error('Error fetching equipment by creator:', error);
+    res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to fetch equipment by creator',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
 module.exports = exports;

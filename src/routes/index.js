@@ -35,4 +35,5 @@ router.use('/payments', require('./payments.routes'));
 router.use('/waitlist', require('./waitlist.routes'));
 router.use('/admin', require('./admin.routes'));
 router.use('/creator', require('./creator.routes'));
+router.use('/reviews', require('./reviews.routes'));
 module.exports = router;

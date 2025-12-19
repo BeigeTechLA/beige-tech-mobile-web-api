@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const equipmentController = require('../controllers/equipment.controller');
+console.log('✅ equipment.routes.js loaded');
 
 /**
  * Equipment Routes
@@ -28,6 +29,14 @@ router.get('/search', equipmentController.searchEquipment);
  * @access  Public
  */
 router.get('/categories', equipmentController.getCategories);
+
+/**
+ * @route   GET /api/equipment/by-creator/:creatorId
+ * @desc    Get all equipment owned by a creator
+ * @param   creatorId - crew_member_id of the creator/owner
+ * @access  Public
+ */
+router.get('/by-creator/:creatorId', equipmentController.getByCreator);
 
 /**
  * @route   GET /api/equipment/:id

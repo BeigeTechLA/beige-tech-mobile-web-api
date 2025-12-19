@@ -1,9 +1,175 @@
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const db = require('../models');
-const { generateConfirmationNumber } = require('../utils/confirmationNumber');
+
+// Get Beige margin percentage from environment, default to 25%
+const BEIGE_MARGIN_PERCENT = parseFloat(process.env.BEIGE_MARGIN_PERCENT || '25.00');
 
 /**
- * Process payment and create booking
+ * Calculate pricing breakdown for CP + equipment booking
+ * @param {number} hours - Number of hours
+ * @param {number} hourlyRate - CP hourly rate
+ * @param {Array} equipmentItems - Array of equipment with prices
+ * @param {number} marginPercent - Platform margin percentage
+ * @returns {Object} Pricing breakdown
+ */
+function calculatePricing(hours, hourlyRate, equipmentItems = [], marginPercent = BEIGE_MARGIN_PERCENT) {
+  const cp_cost = parseFloat((hours * hourlyRate).toFixed(2));
+  const equipment_cost = equipmentItems.reduce((sum, item) => sum + parseFloat(item.price), 0);
+  const subtotal = parseFloat((cp_cost + equipment_cost).toFixed(2));
+  const beige_margin_amount = parseFloat((subtotal * (marginPercent / 100)).toFixed(2));
+  const total_amount = parseFloat((subtotal + beige_margin_amount).toFixed(2));
+
+  return {
+    cp_cost,
+    equipment_cost,
+    subtotal,
+    beige_margin_percent: marginPercent,
+    beige_margin_amount,
+    total_amount
+  };
+}
+
+/**
+ * Create payment intent for CP + equipment booking
+ * POST /api/payments/create-intent
+ */
+exports.createPaymentIntent = async (req, res) => {
+  try {
+    const {
+      creator_id,
+      hours,
+      hourly_rate,
+      equipment = [], // Array of { equipment_id, price }
+      shoot_date,
+      location,
+      shoot_type,
+      notes,
+      user_id,
+      guest_email
+    } = req.body;
+
+    // Validation
+    if (!creator_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Creator ID (CP) is required'
+      });
+    }
+
+    if (!hours || hours <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid hours value is required'
+      });
+    }
+
+    if (!hourly_rate || hourly_rate < 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid hourly rate is required'
+      });
+    }
+
+    if (!shoot_date) {
+      return res.status(400).json({
+        success: false,
+        message: 'Shoot date is required'
+      });
+    }
+
+    if (!location) {
+      return res.status(400).json({
+        success: false,
+        message: 'Location is required'
+      });
+    }
+
+    // Validate guest or user
+    if (!user_id && !guest_email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Either user_id or guest_email is required'
+      });
+    }
+
+    // Verify creator exists
+    const creator = await db.crew_members.findByPk(creator_id);
+    if (!creator) {
+      return res.status(404).json({
+        success: false,
+        message: 'Creator (CP) not found'
+      });
+    }
+
+    // Verify equipment exists if provided
+    if (equipment.length > 0) {
+      const equipmentIds = equipment.map(e => e.equipment_id);
+      const foundEquipment = await db.equipment.findAll({
+        where: { equipment_id: equipmentIds }
+      });
+
+      if (foundEquipment.length !== equipmentIds.length) {
+        return res.status(404).json({
+          success: false,
+          message: 'One or more equipment items not found'
+        });
+      }
+    }
+
+    // Calculate pricing
+    const pricing = calculatePricing(hours, hourly_rate, equipment);
+
+    // Create Stripe PaymentIntent
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: Math.round(pricing.total_amount * 100), // Convert to cents
+      currency: 'usd',
+      metadata: {
+        creator_id: creator_id.toString(),
+        user_id: user_id ? user_id.toString() : 'guest',
+        guest_email: guest_email || '',
+        hours: hours.toString(),
+        hourly_rate: hourly_rate.toString(),
+        shoot_date: shoot_date,
+        location: location,
+        cp_cost: pricing.cp_cost.toString(),
+        equipment_cost: pricing.equipment_cost.toString(),
+        subtotal: pricing.subtotal.toString(),
+        beige_margin_percent: pricing.beige_margin_percent.toString(),
+        beige_margin_amount: pricing.beige_margin_amount.toString()
+      }
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        clientSecret: paymentIntent.client_secret,
+        paymentIntentId: paymentIntent.id,
+        pricing: {
+          hours,
+          hourly_rate,
+          cp_cost: pricing.cp_cost,
+          equipment_cost: pricing.equipment_cost,
+          subtotal: pricing.subtotal,
+          beige_margin_percent: pricing.beige_margin_percent,
+          beige_margin_amount: pricing.beige_margin_amount,
+          total_amount: pricing.total_amount
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Create Payment Intent Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to create payment intent',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+    });
+  }
+};
+
+/**
+ * Confirm payment and save to payment_transactions
  * POST /api/payments/confirm
  */
 exports.confirmPayment = async (req, res) => {
@@ -12,12 +178,19 @@ exports.confirmPayment = async (req, res) => {
   try {
     const {
       paymentIntentId,
-      bookingData,
-      amount,
-      currency = 'USD'
+      creator_id,
+      user_id,
+      guest_email,
+      hours,
+      hourly_rate,
+      equipment = [], // Array of { equipment_id, price }
+      shoot_date,
+      location,
+      shoot_type,
+      notes
     } = req.body;
 
-    // Validate required fields
+    // Validation
     if (!paymentIntentId) {
       return res.status(400).json({
         success: false,
@@ -25,10 +198,17 @@ exports.confirmPayment = async (req, res) => {
       });
     }
 
-    if (!bookingData) {
+    if (!creator_id || !hours || !hourly_rate || !shoot_date || !location) {
       return res.status(400).json({
         success: false,
-        message: 'Booking data is required'
+        message: 'Missing required booking data'
+      });
+    }
+
+    if (!user_id && !guest_email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Either user_id or guest_email is required'
       });
     }
 
@@ -43,61 +223,59 @@ exports.confirmPayment = async (req, res) => {
       });
     }
 
-    // Create booking in stream_project_booking table
-    const booking = await db.stream_project_booking.create({
-      project_name: bookingData.project_name,
-      description: bookingData.description,
-      event_type: bookingData.event_type,
-      event_date: bookingData.event_date,
-      duration_hours: bookingData.duration_hours,
-      start_time: bookingData.start_time,
-      end_time: bookingData.end_time,
-      budget: amount,
-      expected_viewers: bookingData.expected_viewers,
-      stream_quality: bookingData.stream_quality,
-      crew_size_needed: bookingData.crew_size_needed,
-      event_location: bookingData.event_location,
-      streaming_platforms: JSON.stringify(bookingData.streaming_platforms || []),
-      crew_roles: JSON.stringify(bookingData.crew_roles || []),
-      skills_needed: JSON.stringify(bookingData.skills_needed || []),
-      equipments_needed: JSON.stringify(bookingData.equipments_needed || []),
-      is_draft: false,
-      is_completed: false,
-      is_cancelled: false,
-      is_active: true
-    }, { transaction });
+    // Check if payment already processed
+    const existingPayment = await db.payment_transactions.findOne({
+      where: { stripe_payment_intent_id: paymentIntentId }
+    });
 
-    // Generate confirmation number
-    let confirmationNumber;
-    let isUnique = false;
-    let attempts = 0;
-    const maxAttempts = 10;
-
-    while (!isUnique && attempts < maxAttempts) {
-      confirmationNumber = generateConfirmationNumber();
-      const existingPayment = await db.payments.findOne({
-        where: { confirmation_number: confirmationNumber }
+    if (existingPayment) {
+      return res.status(409).json({
+        success: false,
+        message: 'Payment already processed',
+        data: {
+          payment_id: existingPayment.payment_id
+        }
       });
-      if (!existingPayment) {
-        isUnique = true;
-      }
-      attempts++;
     }
 
-    if (!isUnique) {
-      throw new Error('Failed to generate unique confirmation number');
-    }
+    // Calculate pricing
+    const pricing = calculatePricing(hours, hourly_rate, equipment);
 
-    // Create payment record
-    const payment = await db.payments.create({
-      booking_id: booking.stream_project_booking_id,
-      user_id: req.userId || null,
-      amount: amount,
-      currency: currency.toUpperCase(),
-      stripe_transaction_id: paymentIntent.id,
-      status: 'succeeded',
-      confirmation_number: confirmationNumber
+    // Get charge ID from payment intent
+    const chargeId = paymentIntent.charges?.data[0]?.id || null;
+
+    // Create payment transaction record
+    const payment = await db.payment_transactions.create({
+      stripe_payment_intent_id: paymentIntentId,
+      stripe_charge_id: chargeId,
+      creator_id,
+      user_id: user_id || null,
+      guest_email: guest_email || null,
+      hours,
+      hourly_rate,
+      cp_cost: pricing.cp_cost,
+      equipment_cost: pricing.equipment_cost,
+      subtotal: pricing.subtotal,
+      beige_margin_percent: pricing.beige_margin_percent,
+      beige_margin_amount: pricing.beige_margin_amount,
+      total_amount: pricing.total_amount,
+      shoot_date,
+      location,
+      shoot_type: shoot_type || null,
+      notes: notes || null,
+      status: 'succeeded'
     }, { transaction });
+
+    // Create payment_equipment records if equipment provided
+    if (equipment.length > 0) {
+      const equipmentRecords = equipment.map(item => ({
+        payment_id: payment.payment_id,
+        equipment_id: item.equipment_id,
+        equipment_price: item.price
+      }));
+
+      await db.payment_equipment.bulkCreate(equipmentRecords, { transaction });
+    }
 
     await transaction.commit();
 
@@ -106,11 +284,18 @@ exports.confirmPayment = async (req, res) => {
       message: 'Payment confirmed and booking created',
       data: {
         payment_id: payment.payment_id,
-        booking_id: booking.stream_project_booking_id,
-        confirmation_number: confirmationNumber,
-        transaction_id: paymentIntent.id,
-        amount: amount,
-        currency: currency,
+        stripe_payment_intent_id: paymentIntentId,
+        stripe_charge_id: chargeId,
+        creator_id,
+        shoot_date,
+        location,
+        pricing: {
+          cp_cost: pricing.cp_cost,
+          equipment_cost: pricing.equipment_cost,
+          subtotal: pricing.subtotal,
+          beige_margin_amount: pricing.beige_margin_amount,
+          total_amount: pricing.total_amount
+        },
         status: 'succeeded'
       }
     });
@@ -129,30 +314,40 @@ exports.confirmPayment = async (req, res) => {
 };
 
 /**
- * Get payment status
+ * Get payment status by payment_id or stripe_payment_intent_id
  * GET /api/payments/:id/status
  */
 exports.getPaymentStatus = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Find payment by payment_id or confirmation_number
-    const payment = await db.payments.findOne({
+    // Find payment by payment_id or stripe_payment_intent_id
+    const payment = await db.payment_transactions.findOne({
       where: db.Sequelize.or(
         { payment_id: id },
-        { confirmation_number: id }
+        { stripe_payment_intent_id: id }
       ),
       include: [
         {
-          model: db.stream_project_booking,
-          as: 'booking',
-          attributes: [
-            'stream_project_booking_id',
-            'project_name',
-            'event_date',
-            'event_location',
-            'is_completed',
-            'is_cancelled'
+          model: db.crew_members,
+          as: 'creator',
+          attributes: ['crew_member_id', 'first_name', 'last_name', 'email']
+        },
+        {
+          model: db.users,
+          as: 'user',
+          attributes: ['id', 'name', 'email'],
+          required: false
+        },
+        {
+          model: db.payment_equipment,
+          as: 'equipment_items',
+          include: [
+            {
+              model: db.equipment,
+              as: 'equipment',
+              attributes: ['equipment_id', 'equipment_name', 'manufacturer', 'model_number']
+            }
           ]
         }
       ]
@@ -169,14 +364,29 @@ exports.getPaymentStatus = async (req, res) => {
       success: true,
       data: {
         payment_id: payment.payment_id,
-        booking_id: payment.booking_id,
-        amount: payment.amount,
-        currency: payment.currency,
+        stripe_payment_intent_id: payment.stripe_payment_intent_id,
+        stripe_charge_id: payment.stripe_charge_id,
+        creator: payment.creator,
+        user: payment.user,
+        guest_email: payment.guest_email,
+        hours: payment.hours,
+        hourly_rate: payment.hourly_rate,
+        pricing: {
+          cp_cost: payment.cp_cost,
+          equipment_cost: payment.equipment_cost,
+          subtotal: payment.subtotal,
+          beige_margin_percent: payment.beige_margin_percent,
+          beige_margin_amount: payment.beige_margin_amount,
+          total_amount: payment.total_amount
+        },
+        shoot_date: payment.shoot_date,
+        location: payment.location,
+        shoot_type: payment.shoot_type,
+        notes: payment.notes,
+        equipment: payment.equipment_items,
         status: payment.status,
-        confirmation_number: payment.confirmation_number,
-        transaction_id: payment.stripe_transaction_id,
         created_at: payment.created_at,
-        booking: payment.booking
+        updated_at: payment.updated_at
       }
     });
 
@@ -186,50 +396,6 @@ exports.getPaymentStatus = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Failed to retrieve payment status',
-      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
-    });
-  }
-};
-
-/**
- * Create payment intent (for frontend to initiate payment)
- * POST /api/payments/create-intent
- */
-exports.createPaymentIntent = async (req, res) => {
-  try {
-    const { amount, currency = 'USD', metadata = {} } = req.body;
-
-    if (!amount || amount <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Valid amount is required'
-      });
-    }
-
-    // Create payment intent with Stripe
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: Math.round(amount * 100), // Convert to cents
-      currency: currency.toLowerCase(),
-      metadata: {
-        userId: req.userId || 'guest',
-        ...metadata
-      }
-    });
-
-    return res.status(200).json({
-      success: true,
-      data: {
-        clientSecret: paymentIntent.client_secret,
-        paymentIntentId: paymentIntent.id
-      }
-    });
-
-  } catch (error) {
-    console.error('Create Payment Intent Error:', error);
-
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to create payment intent',
       error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     });
   }

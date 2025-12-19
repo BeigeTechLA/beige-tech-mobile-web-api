@@ -19,6 +19,14 @@ module.exports = function(sequelize, DataTypes) {
         key: 'category_id'
       }
     },
+    owner_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'crew_members',
+        key: 'crew_member_id'
+      }
+    },
     manufacturer: {
       type: DataTypes.STRING(100),
       allowNull: true
@@ -121,6 +129,13 @@ module.exports = function(sequelize, DataTypes) {
         using: "BTREE",
         fields: [
           { name: "category_id" },
+        ]
+      },
+      {
+        name: "idx_equipment_owner_id",
+        using: "BTREE",
+        fields: [
+          { name: "owner_id" },
         ]
       },
     ]

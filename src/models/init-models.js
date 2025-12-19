@@ -5,6 +5,7 @@ var _assignment_checklist = require("./assignment_checklist");
 var _certifications_master = require("./certifications_master");
 var _checklist_master = require("./checklist_master");
 var _crew_member_files = require("./crew_member_files");
+var _crew_member_reviews = require("./crew_member_reviews");
 var _crew_members = require("./crew_members");
 var _crew_roles = require("./crew_roles");
 var _equipment = require("./equipment");
@@ -19,6 +20,8 @@ var _equipment_returns = require("./equipment_returns");
 var _equipment_specs = require("./equipment_specs");
 var _event_type_master = require("./event_type_master");
 var _payments = require("./payments");
+var _payment_transactions = require("./payment_transactions");
+var _payment_equipment = require("./payment_equipment");
 var _project_brief = require("./project_brief");
 var _skills_master = require("./skills_master");
 var _stream_project_booking = require("./stream_project_booking");
@@ -34,6 +37,7 @@ function initModels(sequelize) {
   var certifications_master = _certifications_master(sequelize, DataTypes);
   var checklist_master = _checklist_master(sequelize, DataTypes);
   var crew_member_files = _crew_member_files(sequelize, DataTypes);
+  var crew_member_reviews = _crew_member_reviews(sequelize, DataTypes);
   var crew_members = _crew_members(sequelize, DataTypes);
   var crew_roles = _crew_roles(sequelize, DataTypes);
   var equipment = _equipment(sequelize, DataTypes);
@@ -48,6 +52,8 @@ function initModels(sequelize) {
   var equipment_specs = _equipment_specs(sequelize, DataTypes);
   var event_type_master = _event_type_master(sequelize, DataTypes);
   var payments = _payments(sequelize, DataTypes);
+  var payment_transactions = _payment_transactions(sequelize, DataTypes);
+  var payment_equipment = _payment_equipment(sequelize, DataTypes);
   var project_brief = _project_brief(sequelize, DataTypes);
   var skills_master = _skills_master(sequelize, DataTypes);
   var stream_project_booking = _stream_project_booking(sequelize, DataTypes);
@@ -62,6 +68,12 @@ function initModels(sequelize) {
   crew_members.hasMany(assigned_crew, { as: "assigned_crews", foreignKey: "crew_member_id"});
   crew_member_files.belongsTo(crew_members, { as: "crew_member", foreignKey: "crew_member_id"});
   crew_members.hasMany(crew_member_files, { as: "crew_member_files", foreignKey: "crew_member_id"});
+  crew_member_reviews.belongsTo(crew_members, { as: "crew_member", foreignKey: "crew_member_id"});
+  crew_members.hasMany(crew_member_reviews, { as: "crew_member_reviews", foreignKey: "crew_member_id"});
+  crew_member_reviews.belongsTo(users, { as: "user", foreignKey: "user_id"});
+  users.hasMany(crew_member_reviews, { as: "crew_member_reviews", foreignKey: "user_id"});
+  equipment.belongsTo(crew_members, { as: "owner", foreignKey: "owner_id"});
+  crew_members.hasMany(equipment, { as: "owned_equipment", foreignKey: "owner_id"});
   equipment_assignments.belongsTo(crew_members, { as: "crew_member", foreignKey: "crew_member_id"});
   crew_members.hasMany(equipment_assignments, { as: "equipment_assignments", foreignKey: "crew_member_id"});
   tasks.belongsTo(crew_members, { as: "assigned_to_crew_member", foreignKey: "assigned_to"});
@@ -112,11 +124,23 @@ function initModels(sequelize) {
     constraints: false
   });
 
-  // Payment relationships
+  // Payment relationships (old system)
   payments.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id"});
   stream_project_booking.hasMany(payments, { as: "payments", foreignKey: "booking_id"});
   payments.belongsTo(users, { as: "user", foreignKey: "user_id"});
   users.hasMany(payments, { as: "payments", foreignKey: "user_id"});
+
+  // Payment Transactions relationships (new system for CP + equipment)
+  payment_transactions.belongsTo(crew_members, { as: "creator", foreignKey: "creator_id"});
+  crew_members.hasMany(payment_transactions, { as: "payment_transactions", foreignKey: "creator_id"});
+  payment_transactions.belongsTo(users, { as: "user", foreignKey: "user_id"});
+  users.hasMany(payment_transactions, { as: "payment_transactions", foreignKey: "user_id"});
+
+  // Payment Equipment relationships
+  payment_equipment.belongsTo(payment_transactions, { as: "payment", foreignKey: "payment_id"});
+  payment_transactions.hasMany(payment_equipment, { as: "equipment_items", foreignKey: "payment_id"});
+  payment_equipment.belongsTo(equipment, { as: "equipment", foreignKey: "equipment_id"});
+  equipment.hasMany(payment_equipment, { as: "payment_equipment", foreignKey: "equipment_id"});
 
   return {
     assigned_crew,
@@ -125,6 +149,7 @@ function initModels(sequelize) {
     certifications_master,
     checklist_master,
     crew_member_files,
+    crew_member_reviews,
     crew_members,
     crew_roles,
     equipment,
@@ -139,6 +164,8 @@ function initModels(sequelize) {
     equipment_specs,
     event_type_master,
     payments,
+    payment_transactions,
+    payment_equipment,
     project_brief,
     skills_master,
     stream_project_booking,
