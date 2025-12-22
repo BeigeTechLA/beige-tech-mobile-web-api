@@ -29,6 +29,7 @@ var _tasks = require("./tasks");
 var _user_type = require("./user_type");
 var _users = require("./users");
 var _waitlist = require("./waitlist");
+var _investors = require("./investors");
 
 function initModels(sequelize) {
   var assigned_crew = _assigned_crew(sequelize, DataTypes);
@@ -61,6 +62,7 @@ function initModels(sequelize) {
   var user_type = _user_type(sequelize, DataTypes);
   var users = _users(sequelize, DataTypes);
   var waitlist = _waitlist(sequelize, DataTypes);
+  var investors = _investors(sequelize, DataTypes);
 
   assignment_checklist.belongsTo(checklist_master, { as: "checklist", foreignKey: "checklist_id"});
   checklist_master.hasMany(assignment_checklist, { as: "assignment_checklists", foreignKey: "checklist_id"});
@@ -173,6 +175,7 @@ function initModels(sequelize) {
     user_type,
     users,
     waitlist,
+    investors,
   };
 }
 module.exports = initModels;
