@@ -33,3 +33,4 @@ router.patch('/:id/status', authenticate, authorize('admin'), investorController
 
 module.exports = router;
 
+

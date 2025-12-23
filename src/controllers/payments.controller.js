@@ -1,5 +1,6 @@
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const db = require('../models');
+const affiliateController = require('./affiliate.controller');
 
 // Get Beige margin percentage from environment, default to 25%
 const BEIGE_MARGIN_PERCENT = parseFloat(process.env.BEIGE_MARGIN_PERCENT || '25.00');
@@ -45,7 +46,8 @@ exports.createPaymentIntent = async (req, res) => {
       shoot_type,
       notes,
       user_id,
-      guest_email
+      guest_email,
+      referral_code
     } = req.body;
 
     // Validation
@@ -135,7 +137,8 @@ exports.createPaymentIntent = async (req, res) => {
         equipment_cost: pricing.equipment_cost.toString(),
         subtotal: pricing.subtotal.toString(),
         beige_margin_percent: pricing.beige_margin_percent.toString(),
-        beige_margin_amount: pricing.beige_margin_amount.toString()
+        beige_margin_amount: pricing.beige_margin_amount.toString(),
+        referral_code: referral_code || ''
       }
     });
 
@@ -187,7 +190,8 @@ exports.confirmPayment = async (req, res) => {
       shoot_date,
       location,
       shoot_type,
-      notes
+      notes,
+      referral_code
     } = req.body;
 
     // Validation
@@ -263,6 +267,7 @@ exports.confirmPayment = async (req, res) => {
       location,
       shoot_type: shoot_type || null,
       notes: notes || null,
+      referral_code: referral_code || null,
       status: 'succeeded'
     }, { transaction });
 
@@ -275,6 +280,33 @@ exports.confirmPayment = async (req, res) => {
       }));
 
       await db.payment_equipment.bulkCreate(equipmentRecords, { transaction });
+    }
+
+    // Process referral if referral code was provided
+    let referralData = null;
+    if (referral_code) {
+      try {
+        const referral = await affiliateController.processReferral(
+          referral_code,
+          payment.payment_id,
+          pricing.total_amount,
+          user_id || null,
+          guest_email || null,
+          transaction
+        );
+        if (referral) {
+          referralData = {
+            referral_id: referral.referral_id,
+            commission_amount: parseFloat(referral.commission_amount)
+          };
+          // Update payment with referral_id
+          payment.referral_id = referral.referral_id;
+          await payment.save({ transaction });
+        }
+      } catch (referralError) {
+        console.error('Failed to process referral:', referralError);
+        // Don't fail the payment if referral processing fails
+      }
     }
 
     await transaction.commit();

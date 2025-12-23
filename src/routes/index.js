@@ -37,4 +37,5 @@ router.use('/investors', require('./investor.routes'));
 router.use('/admin', require('./admin.routes'));
 router.use('/creator', require('./creator.routes'));
 router.use('/reviews', require('./reviews.routes'));
+router.use('/affiliates', require('./affiliate.routes'));
 module.exports = router;

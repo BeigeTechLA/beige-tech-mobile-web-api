@@ -8,6 +8,7 @@ const User = common_model.getTableNameDirect(constants.TABLES.USERS);
 const UserType = common_model.getTableNameDirect(constants.TABLES.USER_TYPE);
 const CrewMember = common_model.getTableNameDirect(constants.TABLES.CREW_MEMBERS);
 const { crew_members, crew_member_files } = require('../models');
+const affiliateController = require('./affiliate.controller');
 const config = require('../config/config');
 const crypto = require('crypto');
 const { S3UploadFiles } = require('../utils/common.js');
@@ -196,6 +197,21 @@ exports.register = async (req, res) => {
       email_verified: 0
     });
 
+    // Auto-create affiliate account for the new user
+    let affiliateData = null;
+    try {
+      const affiliate = await affiliateController.createAffiliate(newUser.id);
+      if (affiliate) {
+        affiliateData = {
+          affiliate_id: affiliate.affiliate_id,
+          referral_code: affiliate.referral_code
+        };
+      }
+    } catch (affiliateError) {
+      console.error('Failed to create affiliate account:', affiliateError);
+      // Don't fail registration if affiliate creation fails
+    }
+
     // Generate tokens
     const { token, refreshToken } = generateTokens(newUser.id, role);
     const permissions = getPermissionsForRole(role);
@@ -211,6 +227,7 @@ exports.register = async (req, res) => {
         instagram_handle: newUser.instagram_handle,
         role: role
       },
+      affiliate: affiliateData,
       token,
       refreshToken,
       permissions
@@ -396,6 +413,21 @@ exports.quickRegister = async (req, res) => {
       email_verified: 0
     });
 
+    // Auto-create affiliate account for the new user
+    let affiliateData = null;
+    try {
+      const affiliate = await affiliateController.createAffiliate(newUser.id);
+      if (affiliate) {
+        affiliateData = {
+          affiliate_id: affiliate.affiliate_id,
+          referral_code: affiliate.referral_code
+        };
+      }
+    } catch (affiliateError) {
+      console.error('Failed to create affiliate account:', affiliateError);
+      // Don't fail registration if affiliate creation fails
+    }
+
     // Generate tokens
     const { token, refreshToken } = generateTokens(newUser.id, 'client');
     const permissions = getPermissionsForRole('client');
@@ -410,6 +442,7 @@ exports.quickRegister = async (req, res) => {
         phone_number: newUser.phone_number,
         role: 'client'
       },
+      affiliate: affiliateData,
       token,
       refreshToken,
       permissions,
@@ -570,10 +603,26 @@ exports.register = async (req, res) => {
             user_type: userType,
         });
 
+        // Auto-create affiliate account for the new user
+        let affiliateData = null;
+        try {
+            const affiliate = await affiliateController.createAffiliate(newUser.id);
+            if (affiliate) {
+                affiliateData = {
+                    affiliate_id: affiliate.affiliate_id,
+                    referral_code: affiliate.referral_code
+                };
+            }
+        } catch (affiliateError) {
+            console.error('Failed to create affiliate account:', affiliateError);
+            // Don't fail registration if affiliate creation fails
+        }
+
         return res.status(201).json({
             message: 'User registered successfully. Please use verification code 123456 to verify your email.',
             userId: newUser.id,
-            verificationCode: STATIC_VERIFICATION_CODE
+            verificationCode: STATIC_VERIFICATION_CODE,
+            affiliate: affiliateData
         });
 
     } catch (error) {

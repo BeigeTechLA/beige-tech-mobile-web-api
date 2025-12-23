@@ -103,6 +103,20 @@ module.exports = function(sequelize, DataTypes) {
       allowNull: true,
       comment: 'Additional booking notes'
     },
+    referral_code: {
+      type: DataTypes.STRING(20),
+      allowNull: true,
+      comment: 'Referral code used for this booking'
+    },
+    referral_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      comment: 'FK to referrals table',
+      references: {
+        model: 'referrals',
+        key: 'referral_id'
+      }
+    },
     status: {
       type: DataTypes.ENUM('pending', 'succeeded', 'failed', 'refunded'),
       allowNull: false,

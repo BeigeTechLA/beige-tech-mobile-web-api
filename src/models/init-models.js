@@ -30,6 +30,9 @@ var _user_type = require("./user_type");
 var _users = require("./users");
 var _waitlist = require("./waitlist");
 var _investors = require("./investors");
+var _affiliates = require("./affiliates");
+var _referrals = require("./referrals");
+var _affiliate_payouts = require("./affiliate_payouts");
 
 function initModels(sequelize) {
   var assigned_crew = _assigned_crew(sequelize, DataTypes);
@@ -63,6 +66,9 @@ function initModels(sequelize) {
   var users = _users(sequelize, DataTypes);
   var waitlist = _waitlist(sequelize, DataTypes);
   var investors = _investors(sequelize, DataTypes);
+  var affiliates = _affiliates(sequelize, DataTypes);
+  var referrals = _referrals(sequelize, DataTypes);
+  var affiliate_payouts = _affiliate_payouts(sequelize, DataTypes);
 
   assignment_checklist.belongsTo(checklist_master, { as: "checklist", foreignKey: "checklist_id"});
   checklist_master.hasMany(assignment_checklist, { as: "assignment_checklists", foreignKey: "checklist_id"});
@@ -144,6 +150,24 @@ function initModels(sequelize) {
   payment_equipment.belongsTo(equipment, { as: "equipment", foreignKey: "equipment_id"});
   equipment.hasMany(payment_equipment, { as: "payment_equipment", foreignKey: "equipment_id"});
 
+  // Affiliate relationships
+  affiliates.belongsTo(users, { as: "user", foreignKey: "user_id"});
+  users.hasOne(affiliates, { as: "affiliate", foreignKey: "user_id"});
+
+  // Referral relationships
+  referrals.belongsTo(affiliates, { as: "affiliate", foreignKey: "affiliate_id"});
+  affiliates.hasMany(referrals, { as: "referrals", foreignKey: "affiliate_id"});
+  referrals.belongsTo(payment_transactions, { as: "payment", foreignKey: "payment_id"});
+  payment_transactions.hasOne(referrals, { as: "referral", foreignKey: "payment_id"});
+  referrals.belongsTo(users, { as: "referred_user", foreignKey: "referred_user_id"});
+  users.hasMany(referrals, { as: "referred_bookings", foreignKey: "referred_user_id"});
+
+  // Affiliate Payout relationships
+  affiliate_payouts.belongsTo(affiliates, { as: "affiliate", foreignKey: "affiliate_id"});
+  affiliates.hasMany(affiliate_payouts, { as: "payouts", foreignKey: "affiliate_id"});
+  affiliate_payouts.belongsTo(users, { as: "processor", foreignKey: "processed_by"});
+  users.hasMany(affiliate_payouts, { as: "processed_payouts", foreignKey: "processed_by"});
+
   return {
     assigned_crew,
     assigned_equipment,
@@ -176,6 +200,9 @@ function initModels(sequelize) {
     users,
     waitlist,
     investors,
+    affiliates,
+    referrals,
+    affiliate_payouts,
   };
 }
 module.exports = initModels;
