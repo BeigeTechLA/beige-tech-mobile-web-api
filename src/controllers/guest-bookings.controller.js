@@ -156,3 +156,73 @@ exports.createGuestBooking = async (req, res) => {
     });
   }
 };
+
+/**
+ * Get a guest booking by ID
+ * GET /api/guest-bookings/:id
+ * Params: id - booking ID
+ * Headers: No authentication required
+ */
+exports.getGuestBookingById = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Booking ID is required'
+      });
+    }
+
+    const booking = await stream_project_booking.findOne({
+      where: {
+        stream_project_booking_id: id,
+        is_active: 1
+      }
+    });
+
+    if (!booking) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Guest booking not found'
+      });
+    }
+
+    res.status(constants.OK.code).json({
+      success: true,
+      data: {
+        booking_id: booking.stream_project_booking_id,
+        project_name: booking.project_name,
+        guest_email: booking.guest_email,
+        description: booking.description,
+        event_type: booking.event_type,
+        event_date: booking.event_date,
+        duration_hours: booking.duration_hours,
+        start_time: booking.start_time,
+        end_time: booking.end_time,
+        budget: booking.budget,
+        expected_viewers: booking.expected_viewers,
+        stream_quality: booking.stream_quality,
+        crew_size_needed: booking.crew_size_needed,
+        event_location: formatLocationResponse(booking.event_location),
+        streaming_platforms: booking.streaming_platforms,
+        crew_roles: booking.crew_roles,
+        skills_needed: booking.skills_needed,
+        equipments_needed: booking.equipments_needed,
+        is_draft: booking.is_draft === 1,
+        is_completed: booking.is_completed === 1,
+        is_cancelled: booking.is_cancelled === 1,
+        created_at: booking.created_at,
+        updated_at: booking.updated_at
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching guest booking:', error);
+    res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to fetch guest booking',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};

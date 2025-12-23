@@ -21,4 +21,12 @@ const guestBookingsController = require('../controllers/guest-bookings.controlle
  */
 router.post('/create', guestBookingsController.createGuestBooking);
 
+/**
+ * @route   GET /api/guest-bookings/:id
+ * @desc    Get a guest booking by ID
+ * @params  id - booking ID
+ * @access  Public (no authentication required)
+ */
+router.get('/:id', guestBookingsController.getGuestBookingById);
+
 module.exports = router;
