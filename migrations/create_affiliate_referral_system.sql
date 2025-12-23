@@ -107,9 +107,11 @@ ALTER TABLE payment_transactions
 -- ============================================================================
 -- CONSTRAINTS
 -- ============================================================================
+-- Note: Skipping chk_referred_user_or_guest constraint as MySQL doesn't allow 
+-- CHECK constraints on columns with FK SET NULL actions. Validation is handled
+-- in application code instead.
 ALTER TABLE referrals
-  ADD CONSTRAINT chk_commission_positive CHECK (commission_amount >= 0),
-  ADD CONSTRAINT chk_referred_user_or_guest CHECK (referred_user_id IS NOT NULL OR referred_guest_email IS NOT NULL);
+  ADD CONSTRAINT chk_commission_positive CHECK (commission_amount >= 0);
 
 ALTER TABLE affiliate_payouts
   ADD CONSTRAINT chk_payout_amount_positive CHECK (amount > 0);
