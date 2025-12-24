@@ -448,12 +448,12 @@ exports.verifyEmail = async (req, res) => {
       });
     }
 
-    // Mark email as verified
+    // Mark email as verified and clear verification code
     await User.update(
       {
         email_verified: 1,
-        verification_code: null,
-        otp_expiry: null
+        verification_code: null
+        // otp_expiry left as-is (already expired, no need to null)
       },
       { where: { email } }
     );
@@ -662,9 +662,9 @@ exports.login = async (req, res) => {
         });
       }
 
-      // Clear OTP
+      // Clear OTP code (otp_expiry left as-is since it doesn't allow null)
       await User.update(
-        { otp_code: null, otp_expiry: null },
+        { otp_code: null },
         { where: { id: user.id } }
       );
 
