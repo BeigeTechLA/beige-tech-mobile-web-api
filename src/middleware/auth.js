@@ -97,5 +97,6 @@ const optionalAuth = (req, res, next) => {
 
 module.exports = {
   authMiddleware,
+  authenticate: authMiddleware,  // Alias for compatibility
   optionalAuth
 };

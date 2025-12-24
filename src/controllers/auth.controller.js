@@ -1,22 +1,23 @@
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { Op } = require('sequelize');
-const { users, user_type } = require('../models');
+const { users, user_type, crew_members, crew_member_files } = require('../models');
 const constants = require('../utils/constants');
 const common_model = require('../utils/common_model');
 const User = common_model.getTableNameDirect(constants.TABLES.USERS);
 const UserType = common_model.getTableNameDirect(constants.TABLES.USER_TYPE);
 const CrewMember = common_model.getTableNameDirect(constants.TABLES.CREW_MEMBERS);
-const { crew_members, crew_member_files } = require('../models');
 const affiliateController = require('./affiliate.controller');
 const config = require('../config/config');
-const crypto = require('crypto');
 const { S3UploadFiles } = require('../utils/common.js');
 const multer = require('multer');
 const path = require('path');
-const STATIC_VERIFICATION_CODE = '123456';
 
+// Import new utilities
+const otpService = require('../utils/otpService');
+const emailService = require('../utils/emailService');
 
+// Multer configuration for file uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, path.join(__dirname, '../../public/uploads/media'));
@@ -38,20 +39,6 @@ const upload = multer({
     cb(null, true);
   },
 });
-
-function uploadFiles(files) {
-  const filePaths = [];
-  if (files) {
-    for (let fileKey in files) {
-      const file = files[fileKey];
-      filePaths.push({
-        file_type: fileKey,
-        file_path: `/uploads/${file[0].filename}`,
-      });
-    }
-  }
-  return filePaths;
-}
 
 // Role-based permission mapping
 const PERMISSIONS_MAP = {
@@ -98,7 +85,9 @@ const PERMISSIONS_MAP = {
   ]
 };
 
-// Generate JWT tokens
+/**
+ * Generate JWT tokens
+ */
 const generateTokens = (userId, userRole) => {
   const token = jwt.sign(
     { userId, userRole },
@@ -115,10 +104,14 @@ const generateTokens = (userId, userRole) => {
   return { token, refreshToken };
 };
 
-// Get permissions for a role
+/**
+ * Get permissions for a role
+ */
 const getPermissionsForRole = (role) => {
   return PERMISSIONS_MAP[role] || [];
 };
+
+// ==================== REGISTRATION ====================
 
 /**
  * Register new user
@@ -126,7 +119,7 @@ const getPermissionsForRole = (role) => {
  */
 exports.register = async (req, res) => {
   try {
-    const { name, email, phone_number, instagram_handle, password, role = 'client' } = req.body;
+    const { name, email, phone_number, instagram_handle, password, userType = 1 } = req.body;
 
     // Validate required fields
     if (!name || !password) {
@@ -144,12 +137,11 @@ exports.register = async (req, res) => {
       });
     }
 
-    // Validate role
-    const validRoles = ['client', 'sales_rep', 'creator', 'admin'];
-    if (!validRoles.includes(role)) {
+    // Validate userType
+    if (![1, 2].includes(userType)) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid role. Must be: client, sales_rep, creator, or admin'
+        message: 'Invalid user type'
       });
     }
 
@@ -159,7 +151,7 @@ exports.register = async (req, res) => {
     if (phone_number) conditions.push({ phone_number });
     if (instagram_handle) conditions.push({ instagram_handle });
 
-    const userExists = await users.findOne({
+    const userExists = await User.findOne({
       where: { [Op.or]: conditions }
     });
 
@@ -170,32 +162,38 @@ exports.register = async (req, res) => {
       });
     }
 
-    // Get user_type_id for role
-    const userTypeRecord = await user_type.findOne({
-      where: { user_role: role }
-    });
-
-    if (!userTypeRecord) {
-      return res.status(500).json({
-        success: false,
-        message: 'User role configuration error'
-      });
-    }
-
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
+    // Generate OTP for email verification
+    const otp = otpService.generateOTP();
+    const otpExpiry = otpService.generateOTPExpiry(10); // 10 minutes
+
     // Create user
-    const newUser = await users.create({
+    const newUser = await User.create({
       name,
       email,
       phone_number,
       instagram_handle,
       password_hash: hashedPassword,
-      user_type: userTypeRecord.user_type_id,
+      user_type: userType,
       is_active: 1,
-      email_verified: 0
+      email_verified: 0,
+      verification_code: otp,
+      otp_expiry: otpExpiry
     });
+
+    // Send verification email if email provided
+    if (email) {
+      const emailResult = await emailService.sendVerificationOTP(
+        { name, email },
+        otp
+      );
+
+      if (!emailResult.success) {
+        console.error('Failed to send verification email:', emailResult.error);
+      }
+    }
 
     // Auto-create affiliate account for the new user
     let affiliateData = null;
@@ -212,25 +210,14 @@ exports.register = async (req, res) => {
       // Don't fail registration if affiliate creation fails
     }
 
-    // Generate tokens
-    const { token, refreshToken } = generateTokens(newUser.id, role);
-    const permissions = getPermissionsForRole(role);
-
     return res.status(201).json({
       success: true,
-      message: 'User registered successfully',
-      user: {
-        id: newUser.id,
-        name: newUser.name,
-        email: newUser.email,
-        phone_number: newUser.phone_number,
-        instagram_handle: newUser.instagram_handle,
-        role: role
-      },
-      affiliate: affiliateData,
-      token,
-      refreshToken,
-      permissions
+      message: email
+        ? 'User registered successfully. Please check your email for verification code.'
+        : 'User registered successfully. Please verify your account.',
+      userId: newUser.id,
+      email: newUser.email,
+      affiliate: affiliateData
     });
 
   } catch (error) {
@@ -243,31 +230,25 @@ exports.register = async (req, res) => {
   }
 };
 
-/**
- * Login user with email and password
- * POST /auth/login
- */
-exports.login = async (req, res) => {
-  try {
-    const { email, password } = req.body;
+// ==================== EMAIL VERIFICATION ====================
 
-    // Validate inputs
-    if (!email || !password) {
+/**
+ * Send OTP to email
+ * POST /auth/send-otp
+ */
+exports.sendOTP = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
       return res.status(400).json({
         success: false,
-        message: 'Email and password are required'
+        message: 'Email is required'
       });
     }
 
-    // Find user with user_type association
-    const user = await users.findOne({
-      where: { email },
-      include: [{
-        model: user_type,
-        as: 'userType',
-        attributes: ['user_type_id', 'user_role']
-      }]
-    });
+    // Find user
+    const user = await User.findOne({ where: { email } });
 
     if (!user) {
       return res.status(404).json({
@@ -276,52 +257,452 @@ exports.login = async (req, res) => {
       });
     }
 
-    // Check if user is active
-    if (!user.is_active) {
-      return res.status(403).json({
+    // Check if already verified
+    if (user.email_verified === 1) {
+      return res.status(400).json({
         success: false,
-        message: 'Account is inactive. Please contact support'
+        message: 'Email already verified'
       });
     }
 
-    // Verify password
-    if (!user.password_hash) {
+    // Check rate limiting
+    const rateLimit = otpService.checkOTPRateLimit(user.otp_expiry, 1);
+    if (!rateLimit.allowed) {
+      return res.status(429).json({
+        success: false,
+        message: rateLimit.message,
+        remainingTime: rateLimit.remainingTime
+      });
+    }
+
+    // Generate new OTP
+    const otp = otpService.generateOTP();
+    const otpExpiry = otpService.generateOTPExpiry(10); // 10 minutes
+
+    // Update user with new OTP
+    await User.update(
+      {
+        verification_code: otp,
+        otp_expiry: otpExpiry
+      },
+      { where: { email } }
+    );
+
+    // Send OTP email
+    const emailResult = await emailService.sendVerificationOTP(
+      { name: user.name, email },
+      otp
+    );
+
+    if (!emailResult.success) {
       return res.status(500).json({
         success: false,
-        message: 'Account configuration error'
+        message: 'Failed to send verification email'
       });
     }
 
-    const isPasswordValid = await bcrypt.compare(password, user.password_hash);
-    if (!isPasswordValid) {
-      return res.status(401).json({
+    return res.status(200).json({
+      success: true,
+      message: 'Verification code sent to your email'
+    });
+
+  } catch (error) {
+    console.error('Send OTP Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error sending OTP',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * Resend OTP
+ * POST /auth/resend-otp
+ */
+exports.resendOTP = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
         success: false,
-        message: 'Invalid password'
+        message: 'Email is required'
       });
     }
 
-    // Get user role
-    const role = user.userType?.user_role || 'client';
+    // Find user
+    const user = await User.findOne({ where: { email } });
 
-    // Generate tokens
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Check if already verified
+    if (user.email_verified === 1) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email already verified'
+      });
+    }
+
+    // Check rate limiting (60 seconds)
+    const rateLimit = otpService.checkOTPRateLimit(user.otp_expiry, 1);
+    if (!rateLimit.allowed) {
+      return res.status(429).json({
+        success: false,
+        message: rateLimit.message,
+        remainingTime: rateLimit.remainingTime
+      });
+    }
+
+    // Generate new OTP
+    const otp = otpService.generateOTP();
+    const otpExpiry = otpService.generateOTPExpiry(10);
+
+    // Update user
+    await User.update(
+      {
+        verification_code: otp,
+        otp_expiry: otpExpiry
+      },
+      { where: { email } }
+    );
+
+    // Send OTP email
+    const emailResult = await emailService.sendVerificationOTP(
+      { name: user.name, email },
+      otp
+    );
+
+    if (!emailResult.success) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to send verification email'
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'New verification code sent to your email'
+    });
+
+  } catch (error) {
+    console.error('Resend OTP Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error resending OTP',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * Verify email with OTP
+ * POST /auth/verify-email
+ */
+exports.verifyEmail = async (req, res) => {
+  try {
+    const { email, verificationCode } = req.body;
+
+    if (!email || !verificationCode) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email and verification code are required'
+      });
+    }
+
+    // Find user
+    const user = await User.findOne({ where: { email } });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Check if already verified
+    if (user.email_verified === 1) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email already verified'
+      });
+    }
+
+    // Validate OTP
+    const validation = otpService.validateOTP(
+      verificationCode,
+      user.verification_code,
+      user.otp_expiry
+    );
+
+    if (!validation.valid) {
+      return res.status(400).json({
+        success: false,
+        message: validation.message,
+        error: validation.error
+      });
+    }
+
+    // Mark email as verified
+    await User.update(
+      {
+        email_verified: 1,
+        verification_code: null,
+        otp_expiry: null
+      },
+      { where: { email } }
+    );
+
+    // Send welcome email
+    await emailService.sendWelcomeEmail({ name: user.name, email });
+
+    // Generate tokens for auto-login
+    const userTypeRecord = await user_type.findOne({
+      where: { user_type_id: user.user_type }
+    });
+
+    const role = userTypeRecord?.user_role || 'client';
     const { token, refreshToken } = generateTokens(user.id, role);
     const permissions = getPermissionsForRole(role);
 
     return res.status(200).json({
       success: true,
-      message: 'Login successful',
+      message: 'Email verified successfully',
       user: {
         id: user.id,
         name: user.name,
         email: user.email,
-        phone_number: user.phone_number,
-        instagram_handle: user.instagram_handle,
-        role: role,
-        email_verified: user.email_verified
+        role: role
       },
       token,
       refreshToken,
       permissions
+    });
+
+  } catch (error) {
+    console.error('Verify Email Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error verifying email',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// ==================== LOGIN ====================
+
+/**
+ * Login user with email/password or phone/OTP
+ * POST /auth/login
+ */
+exports.login = async (req, res) => {
+  try {
+    const { email, password, mobile, otp } = req.body;
+
+    // EMAIL/PASSWORD LOGIN
+    if (email) {
+      if (!password) {
+        return res.status(400).json({
+          success: false,
+          message: 'Password is required'
+        });
+      }
+
+      // Find user with user_type association
+      const user = await User.findOne({
+        where: { email },
+        include: [{
+          model: UserType,
+          as: 'userType',
+          attributes: ['user_type_id', 'user_role']
+        }]
+      });
+
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: 'Invalid credentials'
+        });
+      }
+
+      // Check if user is active
+      if (!user.is_active) {
+        return res.status(403).json({
+          success: false,
+          message: 'Account is inactive. Please contact support'
+        });
+      }
+
+      // Verify password
+      if (!user.password_hash) {
+        return res.status(500).json({
+          success: false,
+          message: 'Account configuration error'
+        });
+      }
+
+      const isPasswordValid = await bcrypt.compare(password, user.password_hash);
+      if (!isPasswordValid) {
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid credentials'
+        });
+      }
+
+      // Get user role
+      const role = user.userType?.user_role || 'client';
+
+      // Get crew_member_id if creator
+      let crew_member_id = null;
+      if (user.userType && user.userType.user_type_id === 2) {
+        const crew = await CrewMember.findOne({
+          where: { email: user.email },
+          attributes: ['crew_member_id']
+        });
+        crew_member_id = crew ? crew.crew_member_id : null;
+      }
+
+      // Generate tokens
+      const { token, refreshToken } = generateTokens(user.id, role);
+      const permissions = getPermissionsForRole(role);
+
+      return res.status(200).json({
+        success: true,
+        message: 'Login successful',
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          phone_number: user.phone_number,
+          instagram_handle: user.instagram_handle,
+          role: role,
+          email_verified: user.email_verified,
+          crew_member_id
+        },
+        token,
+        refreshToken,
+        permissions
+      });
+    }
+
+    // PHONE/OTP LOGIN
+    if (mobile) {
+      // If no OTP provided, send OTP
+      if (!otp) {
+        const user = await User.findOne({
+          where: { phone_number: mobile }
+        });
+
+        if (!user) {
+          return res.status(404).json({
+            success: false,
+            message: 'User not found. Please register first.'
+          });
+        }
+
+        // Generate and save OTP
+        const generatedOTP = otpService.generateOTP();
+        const otpExpiry = otpService.generateOTPExpiry(10);
+
+        await User.update(
+          {
+            otp_code: generatedOTP,
+            otp_expiry: otpExpiry
+          },
+          { where: { id: user.id } }
+        );
+
+        // TODO: Integrate SMS service to send OTP
+        // For now, return OTP in development mode
+        const response = {
+          success: true,
+          message: 'OTP sent successfully'
+        };
+
+        if (process.env.NODE_ENV === 'development') {
+          response.otp = generatedOTP; // Only in development
+        }
+
+        return res.json(response);
+      }
+
+      // Verify OTP and login
+      const user = await User.findOne({
+        where: { phone_number: mobile },
+        include: [{
+          model: UserType,
+          as: 'userType',
+          attributes: ['user_type_id', 'user_role']
+        }]
+      });
+
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          message: 'User not found'
+        });
+      }
+
+      // Validate OTP
+      const validation = otpService.validateOTP(
+        otp,
+        user.otp_code,
+        user.otp_expiry
+      );
+
+      if (!validation.valid) {
+        return res.status(401).json({
+          success: false,
+          message: validation.message
+        });
+      }
+
+      // Clear OTP
+      await User.update(
+        { otp_code: null, otp_expiry: null },
+        { where: { id: user.id } }
+      );
+
+      const role = user.userType?.user_role || 'client';
+
+      // Get crew_member_id if creator
+      let crew_member_id = null;
+      if (user.userType && user.userType.user_type_id === 2) {
+        const crew = await CrewMember.findOne({
+          where: { email: user.email },
+          attributes: ['crew_member_id']
+        });
+        crew_member_id = crew ? crew.crew_member_id : null;
+      }
+
+      const { token, refreshToken } = generateTokens(user.id, role);
+      const permissions = getPermissionsForRole(role);
+
+      return res.json({
+        success: true,
+        message: 'OTP login successful',
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          phone_number: user.phone_number,
+          role: role,
+          crew_member_id
+        },
+        token,
+        refreshToken,
+        permissions
+      });
+    }
+
+    return res.status(400).json({
+      success: false,
+      message: 'Provide email/password or mobile number for OTP login'
     });
 
   } catch (error) {
@@ -334,165 +715,197 @@ exports.login = async (req, res) => {
   }
 };
 
-/**
- * Quick registration during booking flow
- * POST /auth/quick-register
- */
-exports.quickRegister = async (req, res) => {
-  try {
-    const { name, email, phone_number } = req.body;
+// ==================== PASSWORD MANAGEMENT ====================
 
-    // Validate required fields
-    if (!name || (!email && !phone_number)) {
+/**
+ * Change password for authenticated user
+ * POST /auth/change-password
+ */
+exports.changePassword = async (req, res) => {
+  try {
+    const { oldPassword, newPassword, confirmPassword, userId } = req.body;
+
+    if (!userId || !oldPassword || !newPassword || !confirmPassword) {
       return res.status(400).json({
         success: false,
-        message: 'Name and either email or phone number are required'
+        message: 'All fields are required'
       });
     }
 
-    // Check if user already exists
-    const conditions = [];
-    if (email) conditions.push({ email });
-    if (phone_number) conditions.push({ phone_number });
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'New password and confirm password do not match'
+      });
+    }
 
-    const existingUser = await users.findOne({
-      where: { [Op.or]: conditions },
-      include: [{
-        model: user_type,
-        as: 'userType',
-        attributes: ['user_type_id', 'user_role']
-      }]
+    const user = await User.findOne({ where: { id: userId } });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const isMatch = await bcrypt.compare(oldPassword, user.password_hash);
+    if (!isMatch) {
+      return res.status(400).json({
+        success: false,
+        message: 'Old password is incorrect'
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    await User.update(
+      { password_hash: hashedPassword },
+      { where: { id: user.id } }
+    );
+
+    return res.json({
+      success: true,
+      message: 'Password changed successfully'
     });
 
-    // If user exists, return user info
-    if (existingUser) {
-      const role = existingUser.userType?.user_role || 'client';
-      const { token, refreshToken } = generateTokens(existingUser.id, role);
-      const permissions = getPermissionsForRole(role);
+  } catch (error) {
+    console.error('Change Password Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
 
-      return res.status(200).json({
+/**
+ * Request password reset
+ * POST /auth/forgot-password
+ */
+exports.forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email is required'
+      });
+    }
+
+    const user = await User.findOne({ where: { email } });
+
+    if (!user) {
+      // Don't reveal if user exists - security best practice
+      return res.json({
         success: true,
-        message: 'User already exists',
-        user: {
-          id: existingUser.id,
-          name: existingUser.name,
-          email: existingUser.email,
-          phone_number: existingUser.phone_number,
-          role: role
-        },
-        token,
-        refreshToken,
-        permissions
+        message: 'If an account with that email exists, a password reset link has been sent.'
       });
     }
 
-    // Get client role user_type_id
-    const clientType = await user_type.findOne({
-      where: { user_role: 'client' }
-    });
+    // Generate reset token
+    const resetToken = otpService.generateResetToken();
+    const tokenExpiry = otpService.generateTokenExpiry(1); // 1 hour
 
-    if (!clientType) {
-      return res.status(500).json({
-        success: false,
-        message: 'User role configuration error'
-      });
-    }
-
-    // Create temporary password (user can set later)
-    const tempPassword = Math.random().toString(36).slice(-8);
-    const hashedPassword = await bcrypt.hash(tempPassword, 10);
-
-    // Create new client user
-    const newUser = await users.create({
-      name,
-      email,
-      phone_number,
-      password_hash: hashedPassword,
-      user_type: clientType.user_type_id,
-      is_active: 1,
-      email_verified: 0
-    });
-
-    // Auto-create affiliate account for the new user
-    let affiliateData = null;
-    try {
-      const affiliate = await affiliateController.createAffiliate(newUser.id);
-      if (affiliate) {
-        affiliateData = {
-          affiliate_id: affiliate.affiliate_id,
-          referral_code: affiliate.referral_code
-        };
-      }
-    } catch (affiliateError) {
-      console.error('Failed to create affiliate account:', affiliateError);
-      // Don't fail registration if affiliate creation fails
-    }
-
-    // Generate tokens
-    const { token, refreshToken } = generateTokens(newUser.id, 'client');
-    const permissions = getPermissionsForRole('client');
-
-    return res.status(201).json({
-      success: true,
-      message: 'Quick registration successful',
-      user: {
-        id: newUser.id,
-        name: newUser.name,
-        email: newUser.email,
-        phone_number: newUser.phone_number,
-        role: 'client'
+    await User.update(
+      {
+        reset_token: resetToken,
+        reset_token_expiry: tokenExpiry
       },
-      affiliate: affiliateData,
-      token,
-      refreshToken,
-      permissions,
-      tempPassword: tempPassword // Send temp password for user to set new one
+      { where: { email } }
+    );
+
+    // Send password reset email
+    const emailResult = await emailService.sendPasswordResetEmail(
+      { name: user.name, email },
+      resetToken
+    );
+
+    if (!emailResult.success) {
+      console.error('Failed to send reset email:', emailResult.error);
+    }
+
+    return res.json({
+      success: true,
+      message: 'If an account with that email exists, a password reset link has been sent.'
     });
 
   } catch (error) {
-    console.error('Quick Register Error:', error);
+    console.error('Forgot Password Error:', error);
     return res.status(500).json({
       success: false,
-      message: 'Server error during quick registration',
+      message: 'Server error',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
 
 /**
- * Get permissions for a specific role
- * GET /auth/permissions/:role
+ * Reset password with token
+ * POST /auth/reset-password
  */
-exports.getPermissions = async (req, res) => {
+exports.resetPassword = async (req, res) => {
   try {
-    const { role } = req.params;
+    const { resetToken, newPassword, confirmPassword } = req.body;
 
-    // Validate role
-    const validRoles = ['client', 'sales_rep', 'creator', 'admin'];
-    if (!validRoles.includes(role)) {
+    if (!resetToken || !newPassword || !confirmPassword) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid role. Must be: client, sales_rep, creator, or admin'
+        message: 'All fields are required'
       });
     }
 
-    const permissions = getPermissionsForRole(role);
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Passwords do not match'
+      });
+    }
 
-    return res.status(200).json({
+    const user = await User.findOne({ where: { reset_token: resetToken } });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'Invalid or expired reset token'
+      });
+    }
+
+    // Check if token is expired
+    if (user.reset_token_expiry < Date.now()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Reset token has expired'
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    await User.update(
+      {
+        password_hash: hashedPassword,
+        reset_token: null,
+        reset_token_expiry: null
+      },
+      { where: { id: user.id } }
+    );
+
+    return res.json({
       success: true,
-      role,
-      permissions
+      message: 'Password has been reset successfully'
     });
 
   } catch (error) {
-    console.error('Get Permissions Error:', error);
+    console.error('Reset Password Error:', error);
     return res.status(500).json({
       success: false,
-      message: 'Server error fetching permissions',
+      message: 'Server error',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
+
+// ==================== USER INFO ====================
 
 /**
  * Get current user info from JWT
@@ -501,7 +914,7 @@ exports.getPermissions = async (req, res) => {
 exports.getCurrentUser = async (req, res) => {
   try {
     // User ID should be set by auth middleware
-    const userId = req.userId;
+    const userId = req.user?.userId;
 
     if (!userId) {
       return res.status(401).json({
@@ -511,10 +924,10 @@ exports.getCurrentUser = async (req, res) => {
     }
 
     // Find user with user_type
-    const user = await users.findOne({
+    const user = await User.findOne({
       where: { id: userId },
       include: [{
-        model: user_type,
+        model: UserType,
         as: 'userType',
         attributes: ['user_type_id', 'user_role']
       }]
@@ -562,357 +975,169 @@ exports.getCurrentUser = async (req, res) => {
   }
 };
 
-
-
-exports.register = async (req, res) => {
-    const { name, email, phone_number, instagram_handle, password, userType } = req.body;
-
-    try {
-        if (![1, 2].includes(userType)) {
-            return res.status(400).json({ message: "Invalid user type" });
-        }
-
-        const conditions = [];
-        if (email) conditions.push({ email });
-        if (phone_number) conditions.push({ phone_number });
-        if (instagram_handle) conditions.push({ instagram_handle });
-
-        if (conditions.length === 0) {
-            return res.status(400).json({ message: "Provide email, phone number, or Instagram handle." });
-        }
-
-        const userExists = await User.findOne({
-            where: { [Op.or]: conditions }
-        });
-
-        if (userExists) {
-            return res.status(400).json({ message: 'User already exists' });
-        }
-
-        const hashedPassword = await bcrypt.hash(password, 10);
-
-        const newUser = await User.create({
-            name,
-            email,
-            phone_number,
-            instagram_handle,
-            password_hash: hashedPassword,
-            is_active: 1,
-            email_verified: 0,
-            verification_code: STATIC_VERIFICATION_CODE,
-            user_type: userType,
-        });
-
-        // Auto-create affiliate account for the new user
-        let affiliateData = null;
-        try {
-            const affiliate = await affiliateController.createAffiliate(newUser.id);
-            if (affiliate) {
-                affiliateData = {
-                    affiliate_id: affiliate.affiliate_id,
-                    referral_code: affiliate.referral_code
-                };
-            }
-        } catch (affiliateError) {
-            console.error('Failed to create affiliate account:', affiliateError);
-            // Don't fail registration if affiliate creation fails
-        }
-
-        return res.status(201).json({
-            message: 'User registered successfully. Please use verification code 123456 to verify your email.',
-            userId: newUser.id,
-            verificationCode: STATIC_VERIFICATION_CODE,
-            affiliate: affiliateData
-        });
-
-    } catch (error) {
-        return res.status(500).json({ message: 'Server error', error: error.message });
-    }
-};
-
-
-exports.verifyEmail = async (req, res) => {
-    const { email, verificationCode } = req.body;
-
-    try {
-        if (!email || !verificationCode) {
-            return res.status(400).json({ message: "Email and verification code required" });
-        }
-
-        const user = await User.findOne({ where: { email } });
-
-        if (!user) {
-            return res.status(400).json({ message: 'User not found' });
-        }
-
-        if (user.verification_code !== verificationCode) {
-            return res.status(400).json({ message: 'Invalid verification code' });
-        }
-
-        await User.update({ email_verified: 1 }, { where: { email } });
-
-        return res.status(200).json({ message: 'Email verified successfully' });
-
-    } catch (error) {
-        return res.status(500).json({ message: 'Server error', error: error.message });
-    }
-};
-
-exports.login = async (req, res) => {
+/**
+ * Get permissions for a specific role
+ * GET /auth/permissions/:role
+ */
+exports.getPermissions = async (req, res) => {
   try {
-    const { email, password, mobile, otp } = req.body;
+    const { role } = req.params;
 
-    if (email) {
-      if (!password) {
-        return res.status(400).json({ message: "Password is required" });
-      }
-
-      const user = await User.findOne({
-        where: { email },
-        include: [
-          {
-            model: UserType,
-            as: "userType",
-            attributes: ["user_type_id", "user_role"]
-          }
-        ]
+    const validRoles = ['client', 'sales_rep', 'creator', 'admin'];
+    if (!validRoles.includes(role)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid role. Must be: client, sales_rep, creator, or admin'
       });
+    }
 
-      if (!user) {
-        return res.status(404).json({ message: "User not found" });
-      }
+    const permissions = getPermissionsForRole(role);
 
-      if (!user.password_hash) {
-        return res.status(500).json({ message: "User has no password stored!" });
-      }
+    return res.status(200).json({
+      success: true,
+      role,
+      permissions
+    });
 
-      const isMatch = await bcrypt.compare(password, user.password_hash);
-      if (!isMatch) {
-        return res.status(401).json({ message: "Invalid password" });
-      }
+  } catch (error) {
+    console.error('Get Permissions Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error fetching permissions',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
 
-      let crew_member_id = null;
-      if (user.userType.user_type_id === 2) {
-        const crew = await CrewMember.findOne({
-          where: { email: user.email },
-          attributes: ["crew_member_id"]
-        });
+/**
+ * Quick registration during booking flow
+ * POST /auth/quick-register
+ */
+exports.quickRegister = async (req, res) => {
+  try {
+    const { name, email, phone_number } = req.body;
 
-        crew_member_id = crew ? crew.crew_member_id : null;
-      }
+    if (!name || (!email && !phone_number)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name and either email or phone number are required'
+      });
+    }
 
-      const token = jwt.sign(
-        {
-          userId: user.id,
-          userTypeId: user.userType.user_type_id,
-          userRole: user.userType.user_role
-        },
-        process.env.JWT_SECRET,
-        { expiresIn: "7d" }
-      );
+    // Check if user already exists
+    const conditions = [];
+    if (email) conditions.push({ email });
+    if (phone_number) conditions.push({ phone_number });
 
-      return res.json({
-        message: `${user.userType.user_role} login successful`,
-        token,
+    const existingUser = await User.findOne({
+      where: { [Op.or]: conditions },
+      include: [{
+        model: UserType,
+        as: 'userType',
+        attributes: ['user_type_id', 'user_role']
+      }]
+    });
+
+    // If user exists, return user info
+    if (existingUser) {
+      const role = existingUser.userType?.user_role || 'client';
+      const { token, refreshToken } = generateTokens(existingUser.id, role);
+      const permissions = getPermissionsForRole(role);
+
+      return res.status(200).json({
+        success: true,
+        message: 'User already exists',
         user: {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          userTypeId: user.userType.user_type_id,
-          userRole: user.userType.user_role,
-          crew_member_id
-        }
-      });
-    }
-    if (mobile) {
-      const STATIC_OTP = "1234";
-
-      if (!otp) {
-        const user = await User.findOne({
-          where: { phone_number: mobile },
-          include: [
-            {
-              model: UserType,
-              as: "userType",
-              attributes: ["user_type_id", "user_role"]
-            }
-          ]
-        });
-
-        if (!user) {
-          return res.status(404).json({
-            message: "User not found. Please register first."
-          });
-        }
-
-        await User.update(
-          { otp_code: STATIC_OTP },
-          { where: { id: user.id } }
-        );
-
-        return res.json({
-          message: "OTP sent successfully"
-        });
-      }
-
-      const user = await User.findOne({
-        where: { phone_number: mobile },
-        include: [
-          {
-            model: UserType,
-            as: "userType",
-            attributes: ["user_type_id", "user_role"]
-          }
-        ]
-      });
-
-      if (!user) {
-        return res.status(404).json({
-          message: "User not found. Please register first."
-        });
-      }
-
-      if (otp !== STATIC_OTP) {
-        return res.status(401).json({ message: "Invalid OTP" });
-      }
-
-      let crew_member_id = null;
-      if (user.userType.user_type_id === 2) {
-        const crew = await CrewMember.findOne({
-          where: { email: user.email },
-          attributes: ["crew_member_id"]
-        });
-
-        crew_member_id = crew ? crew.crew_member_id : null;
-      }
-
-      const token = jwt.sign(
-        {
-          userId: user.id,
-          userTypeId: user.userType.user_type_id,
-          userRole: user.userType.user_role
+          id: existingUser.id,
+          name: existingUser.name,
+          email: existingUser.email,
+          phone_number: existingUser.phone_number,
+          role: role
         },
-        process.env.JWT_SECRET,
-        { expiresIn: "7d" }
-      );
-
-      return res.json({
-        message: `${user.userType.user_role} OTP login successful`,
         token,
-        user: {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          userTypeId: user.userType.user_type_id,
-          userRole: user.userType.user_role,
-          crew_member_id
-        }
+        refreshToken,
+        permissions
       });
     }
 
-    return res.status(400).json({
-      message: "Provide email or mobile number"
+    // Get client role user_type_id
+    const clientType = await user_type.findOne({
+      where: { user_role: 'client' }
+    });
+
+    if (!clientType) {
+      return res.status(500).json({
+        success: false,
+        message: 'User role configuration error'
+      });
+    }
+
+    // Create temporary password (user can set later)
+    const tempPassword = Math.random().toString(36).slice(-8);
+    const hashedPassword = await bcrypt.hash(tempPassword, 10);
+
+    // Create new client user
+    const newUser = await User.create({
+      name,
+      email,
+      phone_number,
+      password_hash: hashedPassword,
+      user_type: clientType.user_type_id,
+      is_active: 1,
+      email_verified: 0
+    });
+
+    // Auto-create affiliate account
+    let affiliateData = null;
+    try {
+      const affiliate = await affiliateController.createAffiliate(newUser.id);
+      if (affiliate) {
+        affiliateData = {
+          affiliate_id: affiliate.affiliate_id,
+          referral_code: affiliate.referral_code
+        };
+      }
+    } catch (affiliateError) {
+      console.error('Failed to create affiliate account:', affiliateError);
+    }
+
+    // Generate tokens
+    const { token, refreshToken } = generateTokens(newUser.id, 'client');
+    const permissions = getPermissionsForRole('client');
+
+    return res.status(201).json({
+      success: true,
+      message: 'Quick registration successful',
+      user: {
+        id: newUser.id,
+        name: newUser.name,
+        email: newUser.email,
+        phone_number: newUser.phone_number,
+        role: 'client'
+      },
+      affiliate: affiliateData,
+      token,
+      refreshToken,
+      permissions,
+      tempPassword: tempPassword // Send temp password for user to set new one
     });
 
   } catch (error) {
-    console.error("Login Error:", error);
-    return res.status(500).json({ message: "Internal Server Error" });
-  }
-};
-
-exports.changePassword = async (req, res) => {
-  const { oldPassword, newPassword, confirmPassword, userId } = req.body;
-
-  try {
-    const user = await User.findOne({ where: { id: userId } });
-
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    const isMatch = await bcrypt.compare(oldPassword, user.password_hash);
-    if (!isMatch) {
-      return res.status(400).json({ message: "Old password is incorrect" });
-    }
-
-    if (newPassword !== confirmPassword) {
-      return res.status(400).json({ message: "New password and confirm password do not match" });
-    }
-
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
-
-    await User.update({ password_hash: hashedPassword }, { where: { id: user.id } });
-
-    return res.json({
-      message: "Password changed successfully",
+    console.error('Quick Register Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error during quick registration',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
-  } catch (error) {
-    console.error('Error in changePassword:', error);
-    return res.status(500).json({ message: 'Internal Server Error', error: error.message });
   }
 };
 
-exports.forgotPassword = async (req, res) => {
-  const { email } = req.body;
+// ==================== CREW MEMBER REGISTRATION ====================
 
-  try {
-    const user = await User.findOne({ where: { email } });
-
-    if (!user) {
-      return res.status(404).json({ message: "User not found" });
-    }
-
-    const resetToken = crypto.randomBytes(16).toString('hex');
-
-    const tokenExpiry = Date.now() + 10 * 60 * 1000;
-    await User.update({ reset_token: resetToken, reset_token_expiry: tokenExpiry }, { where: { email } });
-
-    return res.json({
-      message: 'Password reset token generated. Please use the token to reset your password.',
-      resetToken,
-    });
-
-  } catch (error) {
-    console.error('Error in forgotPassword:', error);
-    return res.status(500).json({ message: 'Internal Server Error', error: error.message });
-  }
-};
-
-exports.resetPassword = async (req, res) => {
-  const { resetToken, newPassword, confirmPassword } = req.body;
-
-  try {
-    const user = await User.findOne({ where: { reset_token: resetToken } });
-
-    if (!user) {
-      return res.status(404).json({ message: "Invalid or expired reset token" });
-    }
-
-    if (user.reset_token_expiry < Date.now()) {
-      return res.status(400).json({ message: "Reset token has expired" });
-    }
-
-    if (newPassword !== confirmPassword) {
-      return res.status(400).json({ message: "New password and confirm password do not match" });
-    }
-
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
-
-    await User.update(
-      { password_hash: hashedPassword, reset_token: null, reset_token_expiry: null },
-      { where: { id: user.id } }
-    );
-
-    return res.json({
-      message: "Password has been reset successfully",
-    });
-
-  } catch (error) {
-    console.error('Error in resetPassword:', error);
-    return res.status(500).json({ message: 'Internal Server Error', error: error.message });
-  }
-};
-
+/**
+ * Register crew member - Step 1: Basic Info
+ * POST /auth/register-crew-step1
+ */
 exports.registerCrewMemberStep1 = [
   upload.fields([
     { name: 'profile_photo', maxCount: 1 }
@@ -920,30 +1145,34 @@ exports.registerCrewMemberStep1 = [
 
   async (req, res) => {
     try {
-      const { first_name, last_name, email, phone_number, location, password, profile_photo, working_distance } = req.body;
+      const { first_name, last_name, email, phone_number, location, password, working_distance } = req.body;
 
       if (!first_name || !last_name || !email || !password) {
         return res.status(400).json({
-          error: true,
-          message: 'First name, last name, email, and password are .'
-        });required
+          success: false,
+          message: 'First name, last name, email, and password are required'
+        });
       }
 
       const hashedPassword = await bcrypt.hash(password, 10);
+
+      // Generate OTP
+      const otp = otpService.generateOTP();
+      const otpExpiry = otpService.generateOTPExpiry(10);
 
       const newUser = await User.create({
         name: `${first_name} ${last_name}`,
         email,
         phone_number,
         password_hash: hashedPassword,
-        user_type: 2, 
+        user_type: 2, // Creator
         is_active: 1,
         email_verified: 0,
-        verification_code: STATIC_VERIFICATION_CODE
+        verification_code: otp,
+        otp_expiry: otpExpiry
       });
 
       const newCrewMember = await crew_members.create({
-        // user_id: newUser.id, 
         first_name,
         last_name,
         email,
@@ -953,59 +1182,70 @@ exports.registerCrewMemberStep1 = [
         is_active: 1,
       });
 
+      // Upload profile photo if provided
       if (req.files && req.files.profile_photo) {
         const filePaths = await S3UploadFiles(req.files);
-        console.log("Uploaded file paths:", filePaths);
 
         if (filePaths && filePaths.length > 0) {
           for (let fileData of filePaths) {
             if (fileData.file_type === 'profile_photo') {
-              console.log("Saving file to database:", fileData);
-              const savedFile = await crew_member_files.create({
+              await crew_member_files.create({
                 crew_member_id: newCrewMember.crew_member_id,
                 file_type: fileData.file_type,
                 file_path: fileData.file_path,
                 file_category: 'profile_photo',
               });
-
-              console.log("File saved to crew_member_files:", savedFile);
             }
           }
         }
       }
 
+      // Send verification email
+      await emailService.sendVerificationOTP(
+        { name: `${first_name} ${last_name}`, email },
+        otp
+      );
+
       return res.status(201).json({
-        message: 'Crew member registered successfully (Step 1)',
+        success: true,
+        message: 'Crew member registered successfully (Step 1). Please check your email for verification code.',
         crew_member_id: newCrewMember.crew_member_id,
-        verificationCode: STATIC_VERIFICATION_CODE
+        user_id: newUser.id
       });
 
     } catch (error) {
       console.error('Register Crew Member Error:', error);
       return res.status(500).json({
-        error: true,
+        success: false,
         message: 'Server error',
-        data: null,
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
   },
 ];
 
+/**
+ * Register crew member - Step 2: Professional Details
+ * POST /auth/register-crew-step2
+ */
 exports.registerCrewMemberStep2 = async (req, res) => {
   try {
     const { crew_member_id, primary_role, years_of_experience, hourly_rate, bio, skills, equipment_ownership } = req.body;
 
     if (!crew_member_id) {
       return res.status(400).json({
-        error: true,
-        message: 'crew_member_id is required.'
+        success: false,
+        message: 'crew_member_id is required'
       });
     }
 
     const existingCrewMember = await crew_members.findOne({ where: { crew_member_id } });
 
     if (!existingCrewMember) {
-      return res.status(400).json({ error: true, message: 'Crew member not found.' });
+      return res.status(400).json({
+        success: false,
+        message: 'Crew member not found'
+      });
     }
 
     existingCrewMember.primary_role = primary_role;
@@ -1018,6 +1258,7 @@ exports.registerCrewMemberStep2 = async (req, res) => {
     await existingCrewMember.save();
 
     return res.status(200).json({
+      success: true,
       message: 'Professional details updated successfully (Step 2)',
       crew_member: existingCrewMember
     });
@@ -1025,13 +1266,17 @@ exports.registerCrewMemberStep2 = async (req, res) => {
   } catch (error) {
     console.error('Register Crew Member Error:', error);
     return res.status(500).json({
-      error: true,
+      success: false,
       message: 'Server error',
-      data: null,
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
 
+/**
+ * Register crew member - Step 3: Additional Details
+ * POST /auth/register-crew-step3
+ */
 exports.registerCrewMemberStep3 = [
   upload.fields([
     { name: 'resume', maxCount: 1 },
@@ -1042,18 +1287,21 @@ exports.registerCrewMemberStep3 = [
 
   async (req, res) => {
     try {
-      const { crew_member_id, availability, certifications, resume, portfolio, social_media_links } = req.body;
+      const { crew_member_id, availability, certifications, social_media_links } = req.body;
 
       if (!crew_member_id) {
         return res.status(400).json({
-          error: true,
-          message: 'crew_member_id is required.'
+          success: false,
+          message: 'crew_member_id is required'
         });
       }
 
       const crewMember = await crew_members.findOne({ where: { crew_member_id } });
       if (!crewMember) {
-        return res.status(400).json({ error: true, message: 'Crew member not found.' });
+        return res.status(400).json({
+          success: false,
+          message: 'Crew member not found'
+        });
       }
 
       crewMember.availability = JSON.stringify(availability);
@@ -1065,6 +1313,7 @@ exports.registerCrewMemberStep3 = [
 
       await crewMember.save();
 
+      // Upload files
       const filePaths = await S3UploadFiles(req.files);
       const files = [];
 
@@ -1093,6 +1342,7 @@ exports.registerCrewMemberStep3 = [
       }
 
       return res.status(200).json({
+        success: true,
         message: 'Project details updated successfully (Step 3)',
         crew_member: crewMember
       });
@@ -1100,21 +1350,25 @@ exports.registerCrewMemberStep3 = [
     } catch (error) {
       console.error('Register Crew Member Error:', error);
       return res.status(500).json({
-        error: true,
+        success: false,
         message: 'Server error',
-        data: null,
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
       });
     }
   }
 ];
 
+/**
+ * Get crew member details
+ * GET /auth/crew-member/:crew_member_id
+ */
 exports.getCrewMemberDetails = async (req, res) => {
   try {
     const { crew_member_id } = req.params;
 
     if (!crew_member_id) {
       return res.status(400).json({
-        error: true,
+        success: false,
         message: 'crew_member_id is required'
       });
     }
@@ -1126,7 +1380,7 @@ exports.getCrewMemberDetails = async (req, res) => {
 
     if (!crewMember) {
       return res.status(404).json({
-        error: true,
+        success: false,
         message: 'Crew member not found'
       });
     }
@@ -1165,7 +1419,7 @@ exports.getCrewMemberDetails = async (req, res) => {
     });
 
     return res.status(200).json({
-      error: false,
+      success: true,
       data: {
         step1: {
           first_name: crewMember.first_name,
@@ -1176,7 +1430,6 @@ exports.getCrewMemberDetails = async (req, res) => {
           working_distance: crewMember.working_distance,
           profile_photo: categorizedFiles.profile_photo
         },
-
         step2: {
           primary_role: crewMember.primary_role,
           years_of_experience: crewMember.years_of_experience,
@@ -1187,7 +1440,6 @@ exports.getCrewMemberDetails = async (req, res) => {
             ? JSON.parse(crewMember.equipment_ownership)
             : []
         },
-
         step3: {
           availability: crewMember.availability
             ? JSON.parse(crewMember.availability)
@@ -1211,9 +1463,9 @@ exports.getCrewMemberDetails = async (req, res) => {
   } catch (error) {
     console.error('Get Crew Member Error:', error);
     return res.status(500).json({
-      error: true,
+      success: false,
       message: 'Server error',
-      data: null
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
