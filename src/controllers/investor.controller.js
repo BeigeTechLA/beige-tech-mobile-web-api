@@ -1,4 +1,5 @@
 const db = require('../models');
+const { appendInvestorToSheet } = require('../utils/googleSheetsService');
 
 /**
  * Submit investor interest
@@ -46,7 +47,7 @@ exports.submitInvestorInterest = async (req, res) => {
       });
     }
 
-    // Create investor entry
+    // Create investor entry in database
     const investorEntry = await db.investors.create({
       first_name: firstName,
       last_name: lastName,
@@ -57,6 +58,20 @@ exports.submitInvestorInterest = async (req, res) => {
       investment_timing: investmentTiming || null,
       investment_amount: investmentAmount || null,
       status: 'pending'
+    });
+
+    // Also append to Google Sheets (async, non-blocking)
+    appendInvestorToSheet({
+      firstName,
+      lastName,
+      email,
+      phoneNumber,
+      country,
+      investmentRounds,
+      investmentTiming,
+      investmentAmount,
+    }).catch(err => {
+      console.error('Google Sheets sync failed (non-critical):', err.message);
     });
 
     return res.status(201).json({
