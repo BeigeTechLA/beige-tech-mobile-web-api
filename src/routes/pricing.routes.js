@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const pricingController = require('../controllers/pricing.controller');
-const { authenticate } = require('../middleware/auth.middleware');
+const { authenticate, optionalAuth } = require('../middleware/auth.middleware');
 
 /**
  * Pricing Routes
@@ -9,32 +9,75 @@ const { authenticate } = require('../middleware/auth.middleware');
  */
 
 /**
- * @route   POST /api/pricing/calculate
- * @desc    Calculate pricing breakdown for creators + equipment
- * @body    creatorIds - array of crew_member_ids
- * @body    equipmentIds - array of equipment_ids
- * @body    hours - number of hours
- * @body    days - number of days
- * @body    beigeMarginPercent - margin percentage (default: 15)
- * @access  Public (no auth required for estimates)
+ * @route   GET /api/pricing/catalog
+ * @desc    Get the full pricing catalog with categories and items
+ * @query   mode - 'general', 'wedding', or omit for all items
+ * @query   event_type - Event type to auto-determine mode
+ * @access  Public
  */
-router.post('/calculate', pricingController.calculatePricing);
+router.get('/catalog', pricingController.getCatalog);
 
 /**
- * @route   GET /api/pricing/estimate/:bookingId
- * @desc    Get pricing estimate for a booking
- * @param   bookingId - stream_project_booking_id
- * @access  Private (requires authentication)
+ * @route   GET /api/pricing/discounts
+ * @desc    Get discount tiers for a pricing mode
+ * @query   mode - 'general' or 'wedding' (default: 'general')
+ * @access  Public
  */
-router.get('/estimate/:bookingId', authenticate, pricingController.getBookingEstimate);
+router.get('/discounts', pricingController.getDiscountTiers);
+
+/**
+ * @route   POST /api/pricing/calculate
+ * @desc    Calculate a quote from selected items
+ * @body    items - Array of {item_id, quantity}
+ * @body    shootHours - Number of shoot hours
+ * @body    eventType - Event type (for auto pricing mode)
+ * @body    marginPercent - Optional margin override
+ * @access  Public
+ */
+router.post('/calculate', pricingController.calculateQuote);
+
+/**
+ * @route   POST /api/pricing/quotes
+ * @desc    Save a quote to the database
+ * @body    items - Array of {item_id, quantity}
+ * @body    shootHours - Number of shoot hours
+ * @body    eventType - Event type
+ * @body    guestEmail - Guest email (optional)
+ * @body    bookingId - Linked booking ID (optional)
+ * @body    notes - Additional notes (optional)
+ * @access  Public (user ID captured if authenticated)
+ */
+router.post('/quotes', optionalAuth, pricingController.saveQuote);
+
+/**
+ * @route   GET /api/pricing/quotes/:quoteId
+ * @desc    Get a saved quote by ID
+ * @param   quoteId - Quote ID
+ * @access  Public
+ */
+router.get('/quotes/:quoteId', pricingController.getQuote);
+
+/**
+ * @route   GET /api/pricing/items
+ * @desc    Get all pricing items (for admin)
+ * @query   category_id - Filter by category
+ * @query   pricing_mode - Filter by mode ('general', 'wedding')
+ * @query   is_active - Filter by active status
+ * @access  Public (can add auth for admin-only later)
+ */
+router.get('/items', pricingController.getAllPricingItems);
+
+/**
+ * @route   GET /api/pricing/items/:itemId
+ * @desc    Get a single pricing item by ID
+ * @param   itemId - Pricing item ID
+ * @access  Public
+ */
+router.get('/items/:itemId', pricingController.getPricingItem);
 
 /**
  * @route   GET /api/pricing/example
- * @desc    Get example pricing breakdown
- * @query   creatorHourlyRate - example hourly rate (default: 100)
- * @query   equipmentDailyRate - example daily rate (default: 50)
- * @query   hours - number of hours (default: 3)
- * @query   beigeMarginPercent - margin percentage (default: 15)
+ * @desc    Get an example pricing calculation
  * @access  Public
  */
 router.get('/example', pricingController.getPricingExample);

@@ -33,6 +33,11 @@ var _investors = require("./investors");
 var _affiliates = require("./affiliates");
 var _referrals = require("./referrals");
 var _affiliate_payouts = require("./affiliate_payouts");
+var _pricing_categories = require("./pricing_categories");
+var _pricing_items = require("./pricing_items");
+var _pricing_discount_tiers = require("./pricing_discount_tiers");
+var _quotes = require("./quotes");
+var _quote_line_items = require("./quote_line_items");
 
 function initModels(sequelize) {
   var assigned_crew = _assigned_crew(sequelize, DataTypes);
@@ -69,6 +74,11 @@ function initModels(sequelize) {
   var affiliates = _affiliates(sequelize, DataTypes);
   var referrals = _referrals(sequelize, DataTypes);
   var affiliate_payouts = _affiliate_payouts(sequelize, DataTypes);
+  var pricing_categories = _pricing_categories(sequelize, DataTypes);
+  var pricing_items = _pricing_items(sequelize, DataTypes);
+  var pricing_discount_tiers = _pricing_discount_tiers(sequelize, DataTypes);
+  var quotes = _quotes(sequelize, DataTypes);
+  var quote_line_items = _quote_line_items(sequelize, DataTypes);
 
   assignment_checklist.belongsTo(checklist_master, { as: "checklist", foreignKey: "checklist_id"});
   checklist_master.hasMany(assignment_checklist, { as: "assignment_checklists", foreignKey: "checklist_id"});
@@ -168,6 +178,20 @@ function initModels(sequelize) {
   affiliate_payouts.belongsTo(users, { as: "processor", foreignKey: "processed_by"});
   users.hasMany(affiliate_payouts, { as: "processed_payouts", foreignKey: "processed_by"});
 
+  // Pricing Catalog relationships
+  pricing_items.belongsTo(pricing_categories, { as: "category", foreignKey: "category_id"});
+  pricing_categories.hasMany(pricing_items, { as: "items", foreignKey: "category_id"});
+
+  // Quote relationships
+  quote_line_items.belongsTo(quotes, { as: "quote", foreignKey: "quote_id"});
+  quotes.hasMany(quote_line_items, { as: "line_items", foreignKey: "quote_id"});
+  quote_line_items.belongsTo(pricing_items, { as: "pricing_item", foreignKey: "item_id"});
+  pricing_items.hasMany(quote_line_items, { as: "quote_line_items", foreignKey: "item_id"});
+  quotes.belongsTo(users, { as: "user", foreignKey: "user_id"});
+  users.hasMany(quotes, { as: "quotes", foreignKey: "user_id"});
+  quotes.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id"});
+  stream_project_booking.hasMany(quotes, { as: "quotes", foreignKey: "booking_id"});
+
   return {
     assigned_crew,
     assigned_equipment,
@@ -203,6 +227,11 @@ function initModels(sequelize) {
     affiliates,
     referrals,
     affiliate_payouts,
+    pricing_categories,
+    pricing_items,
+    pricing_discount_tiers,
+    quotes,
+    quote_line_items,
   };
 }
 module.exports = initModels;

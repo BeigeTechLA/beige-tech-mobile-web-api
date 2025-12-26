@@ -1,266 +1,341 @@
-const { crew_members, equipment, stream_project_booking } = require('../models');
+/**
+ * Pricing Controller
+ * 
+ * Handles API endpoints for the pricing catalog and quote calculation.
+ */
+
+const pricingService = require('../services/pricing.service');
 const constants = require('../utils/constants');
 
 /**
- * Calculate pricing breakdown for a booking
- * POST /api/pricing/calculate
- * Body: { creatorIds: [], equipmentIds: [], hours: number, days: number }
+ * Get pricing catalog
+ * GET /api/pricing/catalog
+ * Query params: mode (optional) - 'general' or 'wedding'
  */
-exports.calculatePricing = async (req, res) => {
+exports.getCatalog = async (req, res) => {
   try {
-    const {
-      creatorIds = [],
-      equipmentIds = [],
-      hours = 0,
-      days = 0,
-      beigeMarginPercent = 25 // Default 25% margin
-    } = req.body;
-
-    // Validate input
-    if (hours < 0 || days < 0) {
-      return res.status(constants.BAD_REQUEST.code).json({
-        success: false,
-        message: 'Hours and days must be non-negative'
-      });
+    const { mode, event_type } = req.query;
+    
+    // Determine mode from event_type if not explicitly provided
+    let pricingMode = mode;
+    if (!pricingMode && event_type) {
+      pricingMode = pricingService.determinePricingMode(event_type);
     }
-
-    // Fetch creators
-    let creatorCosts = [];
-    let totalCreatorCost = 0;
-
-    if (creatorIds.length > 0) {
-      const creators = await crew_members.findAll({
-        where: {
-          crew_member_id: creatorIds,
-          is_active: 1
-        },
-        attributes: ['crew_member_id', 'first_name', 'last_name', 'hourly_rate']
-      });
-
-      creatorCosts = creators.map(creator => {
-        const hourlyRate = parseFloat(creator.hourly_rate || 0);
-        const cost = hourlyRate * hours;
-        totalCreatorCost += cost;
-
-        return {
-          id: creator.crew_member_id,
-          name: `${creator.first_name} ${creator.last_name}`,
-          hourlyRate: hourlyRate,
-          hours: hours,
-          subtotal: cost
-        };
-      });
-    }
-
-    // Fetch equipment
-    let equipmentCosts = [];
-    let totalEquipmentCost = 0;
-
-    if (equipmentIds.length > 0) {
-      const equipmentList = await equipment.findAll({
-        where: {
-          equipment_id: equipmentIds,
-          is_active: 1
-        },
-        attributes: ['equipment_id', 'equipment_name', 'rental_price_per_day', 'rental_price_per_hour']
-      });
-
-      equipmentCosts = equipmentList.map(eq => {
-        const perHour = parseFloat(eq.rental_price_per_hour || 0);
-        const perDay = parseFloat(eq.rental_price_per_day || 0);
-
-        // Calculate cost based on hours or days (whichever is specified)
-        let cost = 0;
-        let rateType = '';
-
-        if (days > 0) {
-          cost = perDay * days;
-          rateType = 'daily';
-        } else if (hours > 0) {
-          cost = perHour * hours;
-          rateType = 'hourly';
-        }
-
-        totalEquipmentCost += cost;
-
-        return {
-          id: eq.equipment_id,
-          name: eq.equipment_name,
-          ratePerHour: perHour,
-          ratePerDay: perDay,
-          rateType: rateType,
-          quantity: days > 0 ? days : hours,
-          subtotal: cost
-        };
-      });
-    }
-
-    // Calculate totals
-    const subtotal = totalCreatorCost + totalEquipmentCost;
-    const beigeMargin = (subtotal * beigeMarginPercent) / 100;
-    const total = subtotal + beigeMargin;
-
-    // Build pricing breakdown
-    const breakdown = {
-      creators: {
-        items: creatorCosts,
-        subtotal: totalCreatorCost
-      },
-      equipment: {
-        items: equipmentCosts,
-        subtotal: totalEquipmentCost
-      },
-      summary: {
-        subtotal: subtotal,
-        beigeMargin: beigeMargin,
-        beigeMarginPercent: beigeMarginPercent,
-        total: total
-      },
-      params: {
-        hours: hours,
-        days: days,
-        creatorCount: creatorIds.length,
-        equipmentCount: equipmentIds.length
-      }
-    };
-
-    res.json({
-      success: true,
-      data: breakdown
-    });
-
-  } catch (error) {
-    console.error('Error calculating pricing:', error);
-    res.status(constants.INTERNAL_SERVER_ERROR.code).json({
-      success: false,
-      message: 'Failed to calculate pricing',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
-};
-
-/**
- * Get pricing estimate for booking
- * GET /api/pricing/estimate/:bookingId
- */
-exports.getBookingEstimate = async (req, res) => {
-  try {
-    const { bookingId } = req.params;
-
-    const booking = await stream_project_booking.findOne({
-      where: {
-        stream_project_booking_id: bookingId,
-        is_active: 1
-      }
-    });
-
-    if (!booking) {
-      return res.status(constants.NOT_FOUND.code).json({
-        success: false,
-        message: 'Booking not found'
-      });
-    }
-
-    const bookingData = booking.toJSON();
-
-    // Extract duration
-    const durationHours = bookingData.duration_hours || 0;
-
-    // Budget from booking
-    const budget = parseFloat(bookingData.budget || 0);
-
-    // Calculate suggested breakdown (example: 70% crew, 30% equipment)
-    const suggestedCrewBudget = budget * 0.70;
-    const suggestedEquipmentBudget = budget * 0.30;
-
+    
+    const catalog = await pricingService.getCatalog(pricingMode);
+    
     res.json({
       success: true,
       data: {
-        bookingId: bookingData.stream_project_booking_id,
-        projectName: bookingData.project_name,
-        totalBudget: budget,
-        duration: {
-          hours: durationHours,
-          days: durationHours > 0 ? Math.ceil(durationHours / 8) : 0
-        },
-        suggestedBreakdown: {
-          creators: suggestedCrewBudget,
-          equipment: suggestedEquipmentBudget,
-          beigeMargin: budget * 0.25 // Example 25% margin
-        },
-        crewSizeNeeded: bookingData.crew_size_needed,
-        location: bookingData.event_location
-      }
+        pricingMode: pricingMode || 'all',
+        categories: catalog,
+      },
     });
-
   } catch (error) {
-    console.error('Error fetching booking estimate:', error);
+    console.error('Error fetching pricing catalog:', error);
     res.status(constants.INTERNAL_SERVER_ERROR.code).json({
       success: false,
-      message: 'Failed to fetch booking estimate',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Failed to fetch pricing catalog',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }
 };
 
 /**
- * Get pricing example
+ * Get discount tiers
+ * GET /api/pricing/discounts
+ * Query params: mode (optional) - 'general' or 'wedding'
+ */
+exports.getDiscountTiers = async (req, res) => {
+  try {
+    const { mode = 'general' } = req.query;
+    
+    const tiers = await pricingService.getDiscountTiers(mode);
+    
+    res.json({
+      success: true,
+      data: {
+        pricingMode: mode,
+        tiers,
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching discount tiers:', error);
+    res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to fetch discount tiers',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+/**
+ * Calculate pricing quote
+ * POST /api/pricing/calculate
+ * Body: {
+ *   items: [{item_id, quantity}],
+ *   shootHours: number,
+ *   eventType: string (optional),
+ *   marginPercent: number (optional, override)
+ * }
+ */
+exports.calculateQuote = async (req, res) => {
+  try {
+    const { items, shootHours, eventType, marginPercent } = req.body;
+    
+    // Validate items
+    if (!items || !Array.isArray(items)) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Items array is required',
+      });
+    }
+    
+    // Validate each item
+    for (const item of items) {
+      if (!item.item_id) {
+        return res.status(constants.BAD_REQUEST.code).json({
+          success: false,
+          message: 'Each item must have an item_id',
+        });
+      }
+      if (item.quantity !== undefined && (item.quantity < 0 || !Number.isFinite(item.quantity))) {
+        return res.status(constants.BAD_REQUEST.code).json({
+          success: false,
+          message: 'Invalid quantity for item ' + item.item_id,
+        });
+      }
+    }
+    
+    // Validate shoot hours
+    const hours = parseFloat(shootHours) || 0;
+    if (hours < 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Shoot hours must be non-negative',
+      });
+    }
+    
+    const quote = await pricingService.calculateQuote({
+      items,
+      shootHours: hours,
+      eventType,
+      marginPercent: marginPercent !== undefined ? parseFloat(marginPercent) : null,
+    });
+    
+    res.json({
+      success: true,
+      data: quote,
+    });
+  } catch (error) {
+    console.error('Error calculating quote:', error);
+    res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to calculate quote',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+/**
+ * Save a quote
+ * POST /api/pricing/quotes
+ * Body: {
+ *   items: [{item_id, quantity}],
+ *   shootHours: number,
+ *   eventType: string,
+ *   guestEmail: string (optional),
+ *   bookingId: number (optional),
+ *   notes: string (optional)
+ * }
+ */
+exports.saveQuote = async (req, res) => {
+  try {
+    const { items, shootHours, eventType, guestEmail, bookingId, notes } = req.body;
+    
+    // Calculate the quote first
+    const quoteData = await pricingService.calculateQuote({
+      items,
+      shootHours: parseFloat(shootHours) || 0,
+      eventType,
+    });
+    
+    // Get user ID from auth if available
+    const userId = req.userId || null;
+    
+    // Save the quote
+    const savedQuote = await pricingService.saveQuote(quoteData, {
+      user_id: userId,
+      guest_email: guestEmail,
+      booking_id: bookingId,
+      notes,
+      status: 'pending',
+      // Quote expires in 7 days
+      expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    });
+    
+    res.status(201).json({
+      success: true,
+      data: savedQuote,
+    });
+  } catch (error) {
+    console.error('Error saving quote:', error);
+    res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to save quote',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+/**
+ * Get a quote by ID
+ * GET /api/pricing/quotes/:quoteId
+ */
+exports.getQuote = async (req, res) => {
+  try {
+    const { quoteId } = req.params;
+    
+    if (!quoteId || isNaN(parseInt(quoteId))) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Valid quote ID is required',
+      });
+    }
+    
+    const quote = await pricingService.getQuoteById(parseInt(quoteId));
+    
+    if (!quote) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Quote not found',
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: quote,
+    });
+  } catch (error) {
+    console.error('Error fetching quote:', error);
+    res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to fetch quote',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+/**
+ * Get pricing item details
+ * GET /api/pricing/items/:itemId
+ */
+exports.getPricingItem = async (req, res) => {
+  try {
+    const { itemId } = req.params;
+    
+    if (!itemId || isNaN(parseInt(itemId))) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Valid item ID is required',
+      });
+    }
+    
+    const item = await pricingService.getPricingItem(parseInt(itemId));
+    
+    if (!item) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Pricing item not found',
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: item,
+    });
+  } catch (error) {
+    console.error('Error fetching pricing item:', error);
+    res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to fetch pricing item',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+/**
+ * Get all pricing items (admin)
+ * GET /api/pricing/items
+ * Query params: category_id, pricing_mode, is_active
+ */
+exports.getAllPricingItems = async (req, res) => {
+  try {
+    const { category_id, pricing_mode, is_active } = req.query;
+    
+    const filters = {};
+    if (category_id) filters.category_id = parseInt(category_id);
+    if (pricing_mode) filters.pricing_mode = pricing_mode;
+    if (is_active !== undefined) filters.is_active = is_active === 'true' ? 1 : 0;
+    
+    const items = await pricingService.getAllPricingItems(filters);
+    
+    res.json({
+      success: true,
+      data: items,
+      count: items.length,
+    });
+  } catch (error) {
+    console.error('Error fetching all pricing items:', error);
+    res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to fetch pricing items',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+/**
+ * Get example pricing breakdown (for testing/documentation)
  * GET /api/pricing/example
- * Shows example pricing breakdown
  */
 exports.getPricingExample = async (req, res) => {
   try {
-    const {
-      creatorHourlyRate = 100,
-      equipmentDailyRate = 50,
-      hours = 3,
-      beigeMarginPercent = 25
-    } = req.query;
-
-    const creatorCost = parseFloat(creatorHourlyRate) * parseFloat(hours);
-    const equipmentCost = parseFloat(equipmentDailyRate);
-    const subtotal = creatorCost + equipmentCost;
-    const beigeMargin = (subtotal * parseFloat(beigeMarginPercent)) / 100;
-    const total = subtotal + beigeMargin;
-
+    // Get catalog to find some sample items
+    const catalog = await pricingService.getCatalog('general');
+    
+    // Find a few sample items
+    const sampleItems = [];
+    for (const category of catalog) {
+      if (category.items && category.items.length > 0) {
+        sampleItems.push({
+          item_id: category.items[0].item_id,
+          quantity: 1,
+        });
+        if (sampleItems.length >= 3) break;
+      }
+    }
+    
+    // Calculate example quote
+    const quote = await pricingService.calculateQuote({
+      items: sampleItems,
+      shootHours: 3,
+      eventType: 'corporate',
+    });
+    
     res.json({
       success: true,
       data: {
-        example: {
-          description: `${hours} hours of crew + equipment cost + ${beigeMarginPercent}% Beige margin`,
-          breakdown: {
-            creator: {
-              hourlyRate: parseFloat(creatorHourlyRate),
-              hours: parseFloat(hours),
-              subtotal: creatorCost
-            },
-            equipment: {
-              dailyRate: parseFloat(equipmentDailyRate),
-              days: 1,
-              subtotal: equipmentCost
-            },
-            beigeMargin: {
-              percent: parseFloat(beigeMarginPercent),
-              amount: beigeMargin
-            }
-          },
-          summary: {
-            subtotal: subtotal,
-            margin: beigeMargin,
-            total: total
-          }
-        }
-      }
+        description: 'Example pricing calculation with 3 sample items for a 3-hour corporate shoot',
+        quote,
+      },
     });
-
   } catch (error) {
     console.error('Error generating pricing example:', error);
     res.status(constants.INTERNAL_SERVER_ERROR.code).json({
       success: false,
       message: 'Failed to generate pricing example',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }
 };
-
-module.exports = exports;
