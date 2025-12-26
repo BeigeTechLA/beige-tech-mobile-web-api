@@ -32,7 +32,8 @@ exports.createGuestBooking = async (req, res) => {
       crew_roles,
       skills_needed,
       equipments_needed,
-      is_draft
+      is_draft,
+      quote_id
     } = req.body;
 
     // Validate required fields
@@ -98,6 +99,7 @@ exports.createGuestBooking = async (req, res) => {
     // Note: user_id is NULL for guest bookings, guest_email is used instead
     const bookingData = {
       user_id: null, // Guest bookings have no user_id
+      quote_id: quote_id || null, // Link to pricing quote if provided
       guest_email: guest_email, // Store guest email for contact
       project_name: order_name,
       description: description || null,
@@ -142,6 +144,7 @@ exports.createGuestBooking = async (req, res) => {
         event_date: booking.event_date,
         event_location: formatLocationResponse(booking.event_location),
         budget: booking.budget,
+        quote_id: booking.quote_id,
         is_draft: booking.is_draft === 1,
         created_at: booking.created_at
       }

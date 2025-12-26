@@ -191,6 +191,10 @@ function initModels(sequelize) {
   users.hasMany(quotes, { as: "quotes", foreignKey: "user_id"});
   quotes.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id"});
   stream_project_booking.hasMany(quotes, { as: "quotes", foreignKey: "booking_id"});
+  
+  // Booking -> Quote relationship (booking can reference a primary quote)
+  stream_project_booking.belongsTo(quotes, { as: "primary_quote", foreignKey: "quote_id"});
+  quotes.hasMany(stream_project_booking, { as: "bookings", foreignKey: "quote_id"});
 
   return {
     assigned_crew,

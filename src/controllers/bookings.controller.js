@@ -41,7 +41,8 @@ exports.createBooking = async (req, res) => {
       crew_roles,
       skills_needed,
       equipments_needed,
-      is_draft
+      is_draft,
+      quote_id
     } = req.body;
 
     // Validate required fields
@@ -90,6 +91,7 @@ exports.createBooking = async (req, res) => {
     // Prepare booking data mapping frontend fields to database fields
     const bookingData = {
       user_id: userId, // Link booking to authenticated user
+      quote_id: quote_id || null, // Link to pricing quote if provided
       guest_email: null, // Authenticated bookings don't use guest_email
       project_name: order_name,
       description: description || null,

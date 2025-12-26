@@ -15,6 +15,14 @@ module.exports = function(sequelize, DataTypes) {
         key: 'user_id'
       }
     },
+    quote_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'quotes',
+        key: 'quote_id'
+      }
+    },
     guest_email: {
       type: DataTypes.STRING(255),
       allowNull: true
