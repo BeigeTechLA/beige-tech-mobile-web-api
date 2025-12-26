@@ -96,6 +96,20 @@ exports.searchCreators = async (req, res) => {
       limit = 20
     } = req.query;
 
+    // DEBUG: Log incoming search parameters
+    console.log('🔍 DEBUG: Creator search params received:', {
+      budget,
+      min_budget,
+      max_budget,
+      location,
+      skills,
+      content_type,
+      content_types,
+      maxDistance,
+      page,
+      limit
+    });
+
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     // Parse location to determine if we have coordinates for proximity search
@@ -137,9 +151,42 @@ exports.searchCreators = async (req, res) => {
     }
 
     // Location filter - use text search if no coordinates or no maxDistance
+    // Extract city/region from full address for better matching
     if (location && !useProximitySearch && parsedLocation) {
+      const address = parsedLocation.address || location;
+
+      // Extract city from full address (e.g., "123 Street, Los Angeles, CA, USA" -> "Los Angeles")
+      // Split by comma and find the city part (usually 2nd element or contains recognizable city names)
+      const addressParts = address.split(',').map(p => p.trim());
+
+      // Common patterns:
+      // - "Street Address, City, State ZIP, Country" -> use 2nd part (City)
+      // - "City, State" -> use 1st part (City)
+      let cityToSearch = address; // Default to full address
+
+      if (addressParts.length >= 2) {
+        // If we have at least 2 parts, use the 2nd one (usually the city)
+        // Unless the first part looks like a city name (no numbers/street indicators)
+        const firstPart = addressParts[0];
+        const secondPart = addressParts[1];
+
+        // If first part has numbers or street keywords, second part is likely the city
+        if (/\d|street|st|avenue|ave|road|rd|boulevard|blvd|drive|dr|lane|ln/i.test(firstPart)) {
+          cityToSearch = secondPart;
+        } else {
+          // First part might be the city
+          cityToSearch = firstPart;
+        }
+      }
+
+      console.log('🔍 DEBUG: Location search -', {
+        original: address,
+        extracted_city: cityToSearch,
+        all_parts: addressParts
+      });
+
       whereClause.location = {
-        [Op.like]: `%${parsedLocation.address || location}%`
+        [Op.like]: `%${cityToSearch}%`
       };
     }
 
@@ -151,14 +198,45 @@ exports.searchCreators = async (req, res) => {
     }
 
     // Content type filter via primary_role - support multiple roles
+    // FIX: Accept both role IDs (numbers) and role names (strings)
     if (content_types) {
       // Parse content_types (can be array or comma-separated string)
       let rolesArray = Array.isArray(content_types) ? content_types : content_types.split(',');
-      rolesArray = rolesArray.map(r => parseInt(r.trim())).filter(r => !isNaN(r));
+      rolesArray = rolesArray.map(r => r.trim()).filter(r => r);
 
-      if (rolesArray.length > 0) {
+      // Map role names to IDs if needed
+      // videographer -> 1, photographer/photographers -> 2
+      const roleNameToId = {
+        'videographer': [1, 3], // Multiple IDs for videographer
+        'photographer': [2, 4], // Multiple IDs for photographer/photographers
+        'photographers': [2, 4],
+        'cinematographer': [1, 3], // Map to videographer IDs
+      };
+
+      let roleIds = [];
+      rolesArray.forEach(role => {
+        const roleLower = role.toLowerCase();
+        // Check if it's a number (role ID)
+        if (!isNaN(role)) {
+          roleIds.push(parseInt(role));
+        }
+        // Check if it's a known role name
+        else if (roleNameToId[roleLower]) {
+          roleIds.push(...roleNameToId[roleLower]);
+        }
+      });
+
+      // Remove duplicates
+      roleIds = [...new Set(roleIds)];
+
+      console.log('🔍 DEBUG: Role mapping -', {
+        input: rolesArray,
+        mapped_ids: roleIds
+      });
+
+      if (roleIds.length > 0) {
         whereClause.primary_role = {
-          [Op.in]: rolesArray
+          [Op.in]: roleIds
         };
       }
     } else if (content_type) {
@@ -210,7 +288,22 @@ exports.searchCreators = async (req, res) => {
       queryOptions.offset = offset;
     }
 
+    console.log('🔍 DEBUG: Final where clause:', JSON.stringify(whereClause, null, 2));
+    console.log('🔍 DEBUG: Query options:', {
+      useProximitySearch,
+      useSkillScoring,
+      needsPostProcessing,
+      limit: queryOptions.limit,
+      offset: queryOptions.offset
+    });
+
     const { count: totalCount, rows: creators } = await crew_members.findAndCountAll(queryOptions);
+
+    console.log('🔍 DEBUG: Query results:', {
+      totalCount,
+      creatorsFound: creators.length,
+      firstCreatorId: creators[0]?.crew_member_id || null
+    });
 
     // Transform data to match expected creator structure
     let transformedCreators = creators.map(creator => {
