@@ -1,6 +1,7 @@
 const { stream_project_booking } = require('../models');
 const constants = require('../utils/constants');
 const { formatLocationResponse } = require('../utils/locationHelpers');
+const { appendBookingToSheet } = require('../utils/googleSheetsService');
 
 /**
  * Create a new guest booking (no authentication required)
@@ -133,6 +134,23 @@ exports.createGuestBooking = async (req, res) => {
 
     // Create guest booking with email stored in database
     const booking = await stream_project_booking.create(bookingData);
+
+    // Sync booking to Google Sheets (async, non-blocking)
+    appendBookingToSheet({
+      stream_project_booking_id: booking.stream_project_booking_id,
+      project_name: booking.project_name,
+      guest_email: guest_email,
+      event_type: booking.event_type,
+      event_date: booking.event_date,
+      event_location: booking.event_location,
+      budget: booking.budget,
+      crew_size_needed: booking.crew_size_needed,
+      skills_needed: booking.skills_needed,
+      description: booking.description,
+      is_draft: booking.is_draft === 1,
+    }).catch(err => {
+      console.error('Google Sheets sync failed (non-critical):', err.message);
+    });
 
     res.status(constants.CREATED.code).json({
       success: true,

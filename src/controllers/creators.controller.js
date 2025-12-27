@@ -170,8 +170,11 @@ exports.searchCreators = async (req, res) => {
         const firstPart = addressParts[0];
         const secondPart = addressParts[1];
 
-        // If first part has numbers or street keywords, second part is likely the city
-        if (/\d|street|st|avenue|ave|road|rd|boulevard|blvd|drive|dr|lane|ln/i.test(firstPart)) {
+        // If first part has numbers or street/road keywords, second part is likely the city
+        // Include: freeway, highway, hwy, expressway, turnpike, pike, parkway, pkwy, circle, cir, court, ct, place, pl, way, terrace, ter, trail, trl
+        const streetPattern = /\d|street|st\b|avenue|ave\b|road|rd\b|boulevard|blvd|drive|dr\b|lane|ln\b|freeway|fwy|highway|hwy|expressway|expy|turnpike|tpke|pike|parkway|pkwy|circle|cir\b|court|ct\b|place|pl\b|way\b|terrace|ter\b|trail|trl\b/i;
+        
+        if (streetPattern.test(firstPart)) {
           cityToSearch = secondPart;
         } else {
           // First part might be the city

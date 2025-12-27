@@ -191,7 +191,8 @@ exports.confirmPayment = async (req, res) => {
       location,
       shoot_type,
       notes,
-      referral_code
+      referral_code,
+      booking_id // Guest booking ID to update status
     } = req.body;
 
     // Validation
@@ -309,6 +310,27 @@ exports.confirmPayment = async (req, res) => {
       }
     }
 
+    // Update booking status to payment completed if booking_id provided
+    if (booking_id) {
+      try {
+        await db.stream_project_booking.update(
+          {
+            is_completed: 1,
+            payment_completed_at: new Date(),
+            payment_id: payment.payment_id,
+          },
+          {
+            where: { stream_project_booking_id: booking_id },
+            transaction
+          }
+        );
+        console.log(`Booking ${booking_id} marked as payment completed`);
+      } catch (bookingUpdateError) {
+        console.error('Failed to update booking status:', bookingUpdateError);
+        // Don't fail the payment if booking update fails
+      }
+    }
+
     await transaction.commit();
 
     return res.status(201).json({
@@ -328,7 +350,9 @@ exports.confirmPayment = async (req, res) => {
           beige_margin_amount: pricing.beige_margin_amount,
           total_amount: pricing.total_amount
         },
-        status: 'succeeded'
+        status: 'succeeded',
+        booking_id: booking_id || null,
+        booking_payment_updated: !!booking_id
       }
     });
 
