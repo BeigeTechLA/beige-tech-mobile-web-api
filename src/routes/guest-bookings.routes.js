@@ -29,4 +29,22 @@ router.post('/create', guestBookingsController.createGuestBooking);
  */
 router.get('/:id', guestBookingsController.getGuestBookingById);
 
+/**
+ * @route   POST /api/guest-bookings/:id/assign-creators
+ * @desc    Assign creators to a guest booking
+ * @body    creator_ids - array of creator IDs
+ * @params  id - booking ID
+ * @access  Public (no authentication required)
+ */
+router.post('/:id/assign-creators', guestBookingsController.assignCreatorsToBooking);
+
+/**
+ * @route   GET /api/guest-bookings/:id/payment-details
+ * @desc    Get booking with assigned creators and payment details
+ * @query   creator_id - optional creator ID to assign
+ * @params  id - booking ID
+ * @access  Public (no authentication required)
+ */
+router.get('/:id/payment-details', guestBookingsController.getBookingPaymentDetails);
+
 module.exports = router;
