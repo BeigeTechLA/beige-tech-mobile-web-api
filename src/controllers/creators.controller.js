@@ -2,6 +2,9 @@ const { crew_members, crew_member_files, crew_roles } = require('../models');
 const { Op } = require('sequelize');
 const { parseLocation, filterByProximity, formatLocationResponse } = require('../utils/locationHelpers');
 
+// Radius expansion steps in miles (progressive expansion)
+const RADIUS_STEPS = [25, 50, 100, 200, 500, 1000, 2000, 5000];
+
 /**
  * Helper function to parse skills from various formats
  * Handles: JSON arrays, comma-separated strings, plain strings
@@ -60,6 +63,19 @@ const generateReviewCount = (rating) => {
 };
 
 /**
+ * Helper function to find the starting index in RADIUS_STEPS
+ * Returns the index of the smallest step >= the given distance
+ */
+const findRadiusStepIndex = (distance) => {
+  if (!distance || isNaN(distance)) return 0;
+  const dist = parseFloat(distance);
+  for (let i = 0; i < RADIUS_STEPS.length; i++) {
+    if (RADIUS_STEPS[i] >= dist) return i;
+  }
+  return RADIUS_STEPS.length - 1;
+};
+
+/**
  * Search creators with filters
  * GET /api/creators/search
  * Query params:
@@ -71,6 +87,7 @@ const generateReviewCount = (rating) => {
  * - content_type: Single role ID (backward compatibility)
  * - content_types: Array of role IDs for multiple roles
  * - maxDistance: Distance in miles for proximity search (requires lat/lng in location)
+ * - required_count: Minimum number of creators to return (enables auto radius expansion)
  * - page: Page number (default: 1)
  * - limit: Results per page (default: 20)
  *
@@ -79,6 +96,7 @@ const generateReviewCount = (rating) => {
  * - Budget range filtering: Filter by min/max hourly rate
  * - Multiple roles: Search across multiple role types
  * - Proximity search: Filter by geographic distance
+ * - Auto radius expansion: If results < required_count, expand radius until enough found
  * - Hybrid approach: DB filtering + in-memory scoring for best performance
  */
 exports.searchCreators = async (req, res) => {
@@ -92,9 +110,13 @@ exports.searchCreators = async (req, res) => {
       content_type,
       content_types,
       maxDistance,
+      required_count,
       page = 1,
       limit = 20
     } = req.query;
+
+    // Parse required_count (minimum creators needed - enables auto radius expansion)
+    const requiredCount = parseInt(required_count) || 1;
 
     // DEBUG: Log incoming search parameters
     console.log('🔍 DEBUG: Creator search params received:', {
@@ -106,6 +128,7 @@ exports.searchCreators = async (req, res) => {
       content_type,
       content_types,
       maxDistance,
+      required_count: requiredCount,
       page,
       limit
     });
@@ -115,14 +138,15 @@ exports.searchCreators = async (req, res) => {
     // Parse location to determine if we have coordinates for proximity search
     let parsedLocation = null;
     let useProximitySearch = false;
+    let initialRadius = maxDistance ? parseFloat(maxDistance) : 50; // Default 50 miles
 
     if (location) {
       parsedLocation = parseLocation(location);
+      // Enable proximity search if we have coordinates (with or without maxDistance)
       useProximitySearch = Boolean(
         parsedLocation &&
         parsedLocation.lat &&
-        parsedLocation.lng &&
-        maxDistance
+        parsedLocation.lng
       );
     }
 
@@ -150,7 +174,7 @@ exports.searchCreators = async (req, res) => {
       }
     }
 
-    // Location filter - use text search if no coordinates or no maxDistance
+    // Location filter - use text search if no coordinates for proximity search
     // Extract city/region from full address for better matching
     if (location && !useProximitySearch && parsedLocation) {
       const address = parsedLocation.address || location;
@@ -250,8 +274,7 @@ exports.searchCreators = async (req, res) => {
     }
 
     // Execute search query
-    // If using proximity search OR skill scoring, fetch without pagination first
-    // then filter/score and paginate after
+    // Always fetch all matching records first for post-processing
     const useSkillScoring = Boolean(skills);
     const needsPostProcessing = useProximitySearch || useSkillScoring;
 
@@ -296,6 +319,7 @@ exports.searchCreators = async (req, res) => {
       useProximitySearch,
       useSkillScoring,
       needsPostProcessing,
+      requiredCount,
       limit: queryOptions.limit,
       offset: queryOptions.offset
     });
@@ -345,15 +369,73 @@ exports.searchCreators = async (req, res) => {
       };
     });
 
-    // Apply proximity filtering if coordinates provided
+    // Apply proximity filtering with auto-expansion if coordinates provided
     let finalCount = totalCount;
+    let actualRadius = null; // Will be set if proximity search is used
+    let radiusExpanded = false;
+
     if (useProximitySearch) {
-      transformedCreators = filterByProximity(
+      // Start with initial radius and expand if needed to meet required_count
+      let currentStepIndex = findRadiusStepIndex(initialRadius);
+      let proximityResults = [];
+      
+      // First try with initial radius
+      proximityResults = filterByProximity(
         transformedCreators,
         parsedLocation,
-        parseFloat(maxDistance),
+        initialRadius,
         'location'
       );
+      actualRadius = initialRadius;
+
+      console.log('🔍 DEBUG: Initial proximity filter:', {
+        initialRadius,
+        resultsFound: proximityResults.length,
+        requiredCount
+      });
+
+      // Auto-expand radius if we don't have enough results
+      while (proximityResults.length < requiredCount && currentStepIndex < RADIUS_STEPS.length) {
+        currentStepIndex++;
+        const newRadius = RADIUS_STEPS[currentStepIndex];
+        
+        if (newRadius) {
+          proximityResults = filterByProximity(
+            transformedCreators,
+            parsedLocation,
+            newRadius,
+            'location'
+          );
+          actualRadius = newRadius;
+          radiusExpanded = true;
+
+          console.log('🔍 DEBUG: Expanded radius:', {
+            newRadius,
+            resultsFound: proximityResults.length,
+            requiredCount
+          });
+        }
+      }
+
+      // If still not enough after all radius steps, include all creators (no distance limit)
+      if (proximityResults.length < requiredCount) {
+        // Get all creators sorted by distance (no max distance filter)
+        proximityResults = filterByProximity(
+          transformedCreators,
+          parsedLocation,
+          null, // No limit - include all
+          'location'
+        );
+        actualRadius = null; // Indicates unlimited
+        radiusExpanded = true;
+
+        console.log('🔍 DEBUG: Removed radius limit (unlimited):', {
+          resultsFound: proximityResults.length,
+          requiredCount
+        });
+      }
+
+      transformedCreators = proximityResults;
       finalCount = transformedCreators.length;
     }
 
@@ -395,7 +477,8 @@ exports.searchCreators = async (req, res) => {
       transformedCreators = transformedCreators.slice(offset, offset + parseInt(limit));
     }
 
-    res.json({
+    // Build response with search metadata
+    const response = {
       success: true,
       data: {
         data: transformedCreators, // Array of creators
@@ -405,9 +488,19 @@ exports.searchCreators = async (req, res) => {
           total: finalCount,
           totalPages: Math.ceil(finalCount / parseInt(limit)),
           hasMore: parseInt(page) < Math.ceil(finalCount / parseInt(limit))
+        },
+        searchMeta: {
+          requestedCount: requiredCount,
+          foundCount: finalCount,
+          initialRadius: useProximitySearch ? initialRadius : null,
+          actualRadius: actualRadius,
+          radiusExpanded: radiusExpanded,
+          radiusUnlimited: actualRadius === null && useProximitySearch
         }
       }
-    });
+    };
+
+    res.json(response);
 
   } catch (error) {
     console.error('Error searching creators:', error);
