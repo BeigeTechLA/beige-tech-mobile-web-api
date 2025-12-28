@@ -82,4 +82,15 @@ router.get('/items/:itemId', pricingController.getPricingItem);
  */
 router.get('/example', pricingController.getPricingExample);
 
+/**
+ * @route   POST /api/pricing/calculate-from-creators
+ * @desc    Calculate pricing based on selected creators
+ * @body    creator_ids - Array of creator/crew member IDs
+ * @body    shoot_hours - Number of shoot hours
+ * @body    event_type - Event type (for auto pricing mode)
+ * @body    add_on_items - Optional array of additional pricing items {item_id, quantity}
+ * @access  Public
+ */
+router.post('/calculate-from-creators', pricingController.calculateFromCreators);
+
 module.exports = router;
