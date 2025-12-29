@@ -1,5 +1,5 @@
 const db = require('../models');
-const { stream_project_booking, assigned_crew, crew_members, quotes, quote_line_items } = require('../models');
+const { stream_project_booking, assigned_crew, crew_members, crew_member_files, quotes, quote_line_items } = require('../models');
 const constants = require('../utils/constants');
 const { formatLocationResponse } = require('../utils/locationHelpers');
 const { appendBookingToSheet } = require('../utils/googleSheetsService');
@@ -388,7 +388,18 @@ exports.getBookingPaymentDetails = async (req, res) => {
                 'hourly_rate',
                 'rating',
                 'bio',
-                'years_of_experience'
+                'years_of_experience',
+                'primary_role'
+              ],
+              include: [
+                {
+                  model: crew_member_files,
+                  as: 'profile_files',
+                  where: { file_type: 'profile_image', is_active: 1 },
+                  required: false,
+                  attributes: ['file_path'],
+                  limit: 1
+                }
               ]
             }
           ]
@@ -444,13 +455,26 @@ exports.getBookingPaymentDetails = async (req, res) => {
       }
     }
 
-    // Format creators for response
-    const creators = assignedCreators.map(ac => ({
-      assignment_id: ac.id,
-      creator_id: ac.crew_member_id,
-      status: ac.status,
-      crew_accept: ac.crew_accept === 1,
-      details: ac.crew_member ? {
+    // Role mapping (same as creators controller)
+    const roleMap = {
+      1: 'Videographer',
+      2: 'Photographer',
+      3: 'Editor',
+      4: 'Producer',
+      5: 'Director',
+      6: 'Cinematographer'
+    };
+
+    // Format creators for response (flattened structure for frontend)
+    const creators = assignedCreators.map(ac => {
+      if (!ac.crew_member) return null;
+
+      const profileImage = ac.crew_member.profile_files && ac.crew_member.profile_files.length > 0
+        ? ac.crew_member.profile_files[0].file_path
+        : null;
+
+      return {
+        assignment_id: ac.id,
         crew_member_id: ac.crew_member.crew_member_id,
         name: `${ac.crew_member.first_name} ${ac.crew_member.last_name}`,
         email: ac.crew_member.email,
@@ -458,9 +482,13 @@ exports.getBookingPaymentDetails = async (req, res) => {
         hourly_rate: parseFloat(ac.crew_member.hourly_rate || 0),
         rating: parseFloat(ac.crew_member.rating || 0),
         bio: ac.crew_member.bio,
-        years_of_experience: ac.crew_member.years_of_experience
-      } : null
-    }));
+        years_of_experience: ac.crew_member.years_of_experience,
+        role_name: roleMap[ac.crew_member.primary_role] || 'Creative Professional',
+        profile_image: profileImage,
+        status: ac.status,
+        crew_accept: ac.crew_accept === 1
+      };
+    }).filter(c => c !== null);
 
     res.status(constants.OK.code).json({
       success: true,
@@ -468,6 +496,7 @@ exports.getBookingPaymentDetails = async (req, res) => {
         booking: {
           booking_id: booking.stream_project_booking_id,
           project_name: booking.project_name,
+          shoot_name: booking.project_name, // Alias for frontend compatibility
           guest_email: booking.guest_email,
           description: booking.description,
           event_type: booking.event_type,
@@ -487,12 +516,21 @@ exports.getBookingPaymentDetails = async (req, res) => {
           quote_id: booking.primary_quote.quote_id,
           shoot_hours: parseFloat(booking.primary_quote.shoot_hours),
           subtotal: parseFloat(booking.primary_quote.subtotal),
-          discount_amount: parseFloat(booking.primary_quote.discount_amount),
+          discountPercent: parseFloat(booking.primary_quote.discount_percent || 0),
+          discountAmount: parseFloat(booking.primary_quote.discount_amount || 0),
           price_after_discount: parseFloat(booking.primary_quote.price_after_discount),
-          margin_amount: parseFloat(booking.primary_quote.margin_amount),
+          marginPercent: parseFloat(booking.primary_quote.margin_percent || 0),
+          marginAmount: parseFloat(booking.primary_quote.margin_amount || 0),
           total: parseFloat(booking.primary_quote.total),
           status: booking.primary_quote.status,
-          line_items: booking.primary_quote.line_items || []
+          lineItems: (booking.primary_quote.line_items || []).map(item => ({
+            item_id: item.item_id,
+            item_name: item.item_name,
+            quantity: item.quantity,
+            rate: parseFloat(item.rate),
+            rate_type: item.rate_type,
+            line_total: parseFloat(item.line_total)
+          }))
         } : null,
         payment_status: booking.payment_id ? 'completed' : 'pending'
       }
