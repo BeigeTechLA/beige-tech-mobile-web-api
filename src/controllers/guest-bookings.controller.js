@@ -394,7 +394,7 @@ exports.getBookingPaymentDetails = async (req, res) => {
               include: [
                 {
                   model: crew_member_files,
-                  as: 'profile_files',
+                  as: 'crew_member_files',
                   where: { file_type: 'profile_image', is_active: 1 },
                   required: false,
                   attributes: ['file_path'],
@@ -469,8 +469,8 @@ exports.getBookingPaymentDetails = async (req, res) => {
     const creators = assignedCreators.map(ac => {
       if (!ac.crew_member) return null;
 
-      const profileImage = ac.crew_member.profile_files && ac.crew_member.profile_files.length > 0
-        ? ac.crew_member.profile_files[0].file_path
+      const profileImage = ac.crew_member.crew_member_files && ac.crew_member.crew_member_files.length > 0
+        ? ac.crew_member.crew_member_files[0].file_path
         : null;
 
       return {
