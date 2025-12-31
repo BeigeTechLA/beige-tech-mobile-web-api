@@ -509,24 +509,26 @@ exports.login = async (req, res) => {
       if (!password) {
         return res.status(400).json({
           success: false,
-          message: 'Password is required'
+          message: "Password is required",
         });
       }
 
       // Find user with user_type association
       const user = await User.findOne({
         where: { email },
-        include: [{
-          model: UserType,
-          as: 'userType',
-          attributes: ['user_type_id', 'user_role']
-        }]
+        include: [
+          {
+            model: UserType,
+            as: "userType",
+            attributes: ["user_type_id", "user_role"],
+          },
+        ],
       });
 
       if (!user) {
         return res.status(404).json({
           success: false,
-          message: 'Invalid credentials'
+          message: "Invalid credentials",
         });
       }
 
@@ -534,7 +536,7 @@ exports.login = async (req, res) => {
       if (!user.is_active) {
         return res.status(403).json({
           success: false,
-          message: 'Account is inactive. Please contact support'
+          message: "Account is inactive. Please contact support",
         });
       }
 
@@ -542,27 +544,31 @@ exports.login = async (req, res) => {
       if (!user.password_hash) {
         return res.status(500).json({
           success: false,
-          message: 'Account configuration error'
+          message: "Account configuration error",
         });
       }
 
-      const isPasswordValid = await bcrypt.compare(password, user.password_hash);
+      const isPasswordValid = await bcrypt.compare(
+        password,
+        user.password_hash
+      );
       if (!isPasswordValid) {
         return res.status(401).json({
           success: false,
-          message: 'Invalid credentials'
+          message: "Invalid credentials",
         });
       }
 
       // Get user role
-      const role = user.userType?.user_role || 'client';
+      const role = user.userType?.user_role || "client";
+      const user_type_id = user.userType?.user_type_id || null;
 
       // Get crew_member_id if creator
       let crew_member_id = null;
       if (user.userType && user.userType.user_type_id === 2) {
         const crew = await CrewMember.findOne({
           where: { email: user.email },
-          attributes: ['crew_member_id']
+          attributes: ["crew_member_id"],
         });
         crew_member_id = crew ? crew.crew_member_id : null;
       }
@@ -573,20 +579,21 @@ exports.login = async (req, res) => {
 
       return res.status(200).json({
         success: true,
-        message: 'Login successful',
+        message: "Login successful",
         user: {
           id: user.id,
           name: user.name,
           email: user.email,
           phone_number: user.phone_number,
           instagram_handle: user.instagram_handle,
-          role: role,
+          role,
+          user_type_id,
           email_verified: user.email_verified,
-          crew_member_id
+          crew_member_id,
         },
         token,
         refreshToken,
-        permissions
+        permissions,
       });
     }
 
@@ -669,6 +676,7 @@ exports.login = async (req, res) => {
       );
 
       const role = user.userType?.user_role || 'client';
+      const user_type_id = user.userType?.user_type_id || null;
 
       // Get crew_member_id if creator
       let crew_member_id = null;
@@ -685,18 +693,22 @@ exports.login = async (req, res) => {
 
       return res.json({
         success: true,
-        message: 'OTP login successful',
+        message: "OTP login successful",
         user: {
           id: user.id,
           name: user.name,
           email: user.email,
           phone_number: user.phone_number,
-          role: role,
-          crew_member_id
+          instagram_handle: user.instagram_handle,
+          role,
+          user_type_id,
+          email_verified: user.email_verified,
+          crew_member_id,
         },
+
         token,
         refreshToken,
-        permissions
+        permissions,
       });
     }
 
@@ -1139,24 +1151,30 @@ exports.quickRegister = async (req, res) => {
  * POST /auth/register-crew-step1
  */
 exports.registerCrewMemberStep1 = [
-  upload.fields([
-    { name: 'profile_photo', maxCount: 1 }
-  ]),
+  upload.fields([{ name: 'profile_photo', maxCount: 1 }]),
 
   async (req, res) => {
     try {
-      const { first_name, last_name, email, phone_number, location, password, working_distance } = req.body;
+      const {
+        first_name,
+        last_name,
+        email,
+        phone_number,
+        location,
+        password,
+        working_distance
+      } = req.body;
 
       if (!first_name || !last_name || !email || !password) {
         return res.status(400).json({
           success: false,
+          code: 'VALIDATION_ERROR',
           message: 'First name, last name, email, and password are required'
         });
       }
 
       const hashedPassword = await bcrypt.hash(password, 10);
 
-      // Generate OTP
       const otp = otpService.generateOTP();
       const otpExpiry = otpService.generateOTPExpiry(10);
 
@@ -1165,7 +1183,7 @@ exports.registerCrewMemberStep1 = [
         email,
         phone_number,
         password_hash: hashedPassword,
-        user_type: 2, // Creator
+        user_type: 2,
         is_active: 1,
         email_verified: 0,
         verification_code: otp,
@@ -1179,28 +1197,24 @@ exports.registerCrewMemberStep1 = [
         phone_number,
         location,
         working_distance,
-        is_active: 1,
+        is_active: 1
       });
 
-      // Upload profile photo if provided
-      if (req.files && req.files.profile_photo) {
+      if (req.files?.profile_photo) {
         const filePaths = await S3UploadFiles(req.files);
 
-        if (filePaths && filePaths.length > 0) {
-          for (let fileData of filePaths) {
-            if (fileData.file_type === 'profile_photo') {
-              await crew_member_files.create({
-                crew_member_id: newCrewMember.crew_member_id,
-                file_type: fileData.file_type,
-                file_path: fileData.file_path,
-                file_category: 'profile_photo',
-              });
-            }
+        for (const fileData of filePaths || []) {
+          if (fileData.file_type === 'profile_photo') {
+            await crew_member_files.create({
+              crew_member_id: newCrewMember.crew_member_id,
+              file_type: fileData.file_type,
+              file_path: fileData.file_path,
+              file_category: 'profile_photo'
+            });
           }
         }
       }
 
-      // Send verification email
       await emailService.sendVerificationOTP(
         { name: `${first_name} ${last_name}`, email },
         otp
@@ -1208,21 +1222,41 @@ exports.registerCrewMemberStep1 = [
 
       return res.status(201).json({
         success: true,
-        message: 'Crew member registered successfully (Step 1). Please check your email for verification code.',
+        message: 'Crew member registered successfully. Please verify your email.',
         crew_member_id: newCrewMember.crew_member_id,
         user_id: newUser.id
       });
 
     } catch (error) {
       console.error('Register Crew Member Error:', error);
+
+      if (error.name === 'SequelizeUniqueConstraintError') {
+        const field = error.errors?.[0]?.path;
+
+        return res.status(409).json({
+          success: false,
+          code: `DUPLICATE_${field?.toUpperCase()}`,
+          message: `${field?.replace('_', ' ')} already exists`
+        });
+      }
+
+      if (error.name === 'SequelizeValidationError') {
+        return res.status(400).json({
+          success: false,
+          code: 'DB_VALIDATION_ERROR',
+          message: error.errors[0]?.message
+        });
+      }
+
       return res.status(500).json({
         success: false,
-        message: 'Server error',
-        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        code: 'SERVER_ERROR',
+        message: 'Something went wrong. Please try again later.'
       });
     }
-  },
+  }
 ];
+
 
 /**
  * Register crew member - Step 2: Professional Details
