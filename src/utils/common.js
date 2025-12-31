@@ -84,8 +84,6 @@ const S3UploadFiles = async (files) => {
 
       await s3Upload(fileObject);
 
-      console.log("DEBUG: S3_BUCKET_NAME is:", process.env.S3_BUCKET_NAME);
-
       filePaths.push({
         file_type: field,
         file_path: file.public_id,
