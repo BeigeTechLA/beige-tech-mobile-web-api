@@ -241,7 +241,7 @@ exports.getPendingRequests = async (req, res) => {
     });
 
     if (pendingRequests.length === 0) {
-      return res.status(404).json({
+      return res.status(200).json({
         error: true,
         message: "No pending requests found for the given crew member.",
       });
@@ -536,6 +536,78 @@ exports.updateRequestStatus = async (req, res) => {
 };
 
 
+// exports.getAcceptedAndUpcomingProjects = async (req, res) => {
+//   try {
+//     const { crew_member_id } = req.body || req.query;
+
+//     if (!crew_member_id) {
+//       return res.status(400).json({
+//         error: true,
+//         message: "crew_member_id is required",
+//       });
+//     }
+
+//     const projects = await assigned_crew.findAll({
+//       where: {
+//         crew_member_id: crew_member_id,
+//         crew_accept: 1,
+//       },
+//       include: [
+//         {
+//           model: stream_project_booking,
+//           as: "project",
+//           required: true,
+//           where: {
+//             event_date: { [Sequelize.Op.gt]: new Date() },
+//           },
+//           attributes: [
+//             "stream_project_booking_id",
+//             "project_name",
+//             "event_date",
+//             "start_time",
+//             "end_time",
+//             "event_location",
+//             "budget",
+//             "is_completed",
+//           ],
+//         },
+//       ],
+//     });
+
+//     if (projects.length === 0) {
+//       return res.status(200).json({
+//         error: true,
+//         message: "No accepted upcoming projects found for the given crew member.",
+//       });
+//     }
+
+//     const projectDetails = projects.map((request) => {
+//       return {
+//         project_id: request.project.stream_project_booking_id,
+//         project_name: request.project.project_name,
+//         event_date: request.project.event_date,
+//         start_time: request.project.start_time,
+//         end_time: request.project.end_time,
+//         event_location: request.project.event_location,
+//         budget: request.project.budget,
+//         is_completed: request.project.is_completed,
+//       };
+//     });
+
+//     return res.status(200).json({
+//       error: false,
+//       message: "Accepted and upcoming projects fetched successfully",
+//       data: projectDetails,
+//     });
+//   } catch (error) {
+//     console.error('Error fetching accepted upcoming projects:', error);
+//     return res.status(500).json({
+//       error: true,
+//       message: 'Something went wrong while fetching accepted upcoming projects',
+//     });
+//   }
+// };
+
 exports.getAcceptedAndUpcomingProjects = async (req, res) => {
   try {
     const { crew_member_id } = req.body || req.query;
@@ -547,9 +619,11 @@ exports.getAcceptedAndUpcomingProjects = async (req, res) => {
       });
     }
 
+    const today = new Date();
+
     const projects = await assigned_crew.findAll({
       where: {
-        crew_member_id: crew_member_id,
+        crew_member_id,
         crew_accept: 1,
       },
       include: [
@@ -557,9 +631,6 @@ exports.getAcceptedAndUpcomingProjects = async (req, res) => {
           model: stream_project_booking,
           as: "project",
           required: true,
-          where: {
-            event_date: { [Sequelize.Op.gt]: new Date() },
-          },
           attributes: [
             "stream_project_booking_id",
             "project_name",
@@ -572,41 +643,54 @@ exports.getAcceptedAndUpcomingProjects = async (req, res) => {
           ],
         },
       ],
+      order: [
+        [
+          Sequelize.literal(`
+            CASE 
+              WHEN project.event_date >= CURDATE() THEN 0 
+              ELSE 1 
+            END
+          `),
+          "ASC",
+        ],
+
+        [{ model: stream_project_booking, as: "project" }, "event_date", "ASC"],
+      ],
     });
 
-    if (projects.length === 0) {
-      return res.status(404).json({
-        error: true,
-        message: "No accepted upcoming projects found for the given crew member.",
+    if (!projects.length) {
+      return res.status(200).json({
+        error: false,
+        message: "No accepted projects found for the given crew member.",
+        data: [],
       });
     }
 
-    const projectDetails = projects.map((request) => {
-      return {
-        project_id: request.project.stream_project_booking_id,
-        project_name: request.project.project_name,
-        event_date: request.project.event_date,
-        start_time: request.project.start_time,
-        end_time: request.project.end_time,
-        event_location: request.project.event_location,
-        budget: request.project.budget,
-        is_completed: request.project.is_completed,
-      };
-    });
+    const projectDetails = projects.map((request) => ({
+      project_id: request.project.stream_project_booking_id,
+      project_name: request.project.project_name,
+      event_date: request.project.event_date,
+      start_time: request.project.start_time,
+      end_time: request.project.end_time,
+      event_location: request.project.event_location,
+      budget: request.project.budget,
+      is_completed: request.project.is_completed,
+    }));
 
     return res.status(200).json({
       error: false,
-      message: "Accepted and upcoming projects fetched successfully",
+      message: "Accepted projects fetched successfully",
       data: projectDetails,
     });
   } catch (error) {
-    console.error('Error fetching accepted upcoming projects:', error);
+    console.error("Error fetching accepted projects:", error);
     return res.status(500).json({
       error: true,
-      message: 'Something went wrong while fetching accepted upcoming projects',
+      message: "Something went wrong while fetching accepted projects",
     });
   }
 };
+
 
 
 exports.getCrewAvailability = async (req, res) => {

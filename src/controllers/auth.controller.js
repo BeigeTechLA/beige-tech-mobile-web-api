@@ -1150,6 +1150,113 @@ exports.quickRegister = async (req, res) => {
  * Register crew member - Step 1: Basic Info
  * POST /auth/register-crew-step1
  */
+// exports.registerCrewMemberStep1 = [
+//   upload.fields([{ name: 'profile_photo', maxCount: 1 }]),
+
+//   async (req, res) => {
+//     try {
+//       const {
+//         first_name,
+//         last_name,
+//         email,
+//         phone_number,
+//         location,
+//         password,
+//         working_distance
+//       } = req.body;
+
+//       if (!first_name || !last_name || !email || !password) {
+//         return res.status(400).json({
+//           success: false,
+//           code: 'VALIDATION_ERROR',
+//           message: 'First name, last name, email, and password are required'
+//         });
+//       }
+
+//       const hashedPassword = await bcrypt.hash(password, 10);
+
+//       const otp = otpService.generateOTP();
+//       const otpExpiry = otpService.generateOTPExpiry(10);
+
+//       const newUser = await User.create({
+//         name: `${first_name} ${last_name}`,
+//         email,
+//         phone_number,
+//         password_hash: hashedPassword,
+//         user_type: 2,
+//         is_active: 1,
+//         email_verified: 0,
+//         verification_code: otp,
+//         otp_expiry: otpExpiry
+//       });
+
+//       const newCrewMember = await crew_members.create({
+//         first_name,
+//         last_name,
+//         email,
+//         phone_number,
+//         location,
+//         working_distance,
+//         is_active: 1
+//       });
+
+//       if (req.files?.profile_photo) {
+//         const filePaths = await S3UploadFiles(req.files);
+
+//         for (const fileData of filePaths || []) {
+//           if (fileData.file_type === 'profile_photo') {
+//             await crew_member_files.create({
+//               crew_member_id: newCrewMember.crew_member_id,
+//               file_type: fileData.file_type,
+//               file_path: fileData.file_path,
+//               file_category: 'profile_photo'
+//             });
+//           }
+//         }
+//       }
+
+//       await emailService.sendVerificationOTP(
+//         { name: `${first_name} ${last_name}`, email },
+//         otp
+//       );
+
+//       return res.status(201).json({
+//         success: true,
+//         message: 'Crew member registered successfully. Please verify your email.',
+//         crew_member_id: newCrewMember.crew_member_id,
+//         user_id: newUser.id
+//       });
+
+//     } catch (error) {
+//       console.error('Register Crew Member Error:', error);
+
+//       if (error.name === 'SequelizeUniqueConstraintError') {
+//         const field = error.errors?.[0]?.path;
+
+//         return res.status(409).json({
+//           success: false,
+//           code: `DUPLICATE_${field?.toUpperCase()}`,
+//           message: `${field?.replace('_', ' ')} already exists`
+//         });
+//       }
+
+//       if (error.name === 'SequelizeValidationError') {
+//         return res.status(400).json({
+//           success: false,
+//           code: 'DB_VALIDATION_ERROR',
+//           message: error.errors[0]?.message
+//         });
+//       }
+
+//       return res.status(500).json({
+//         success: false,
+//         code: 'SERVER_ERROR',
+//         message: 'Something went wrong. Please try again later.'
+//       });
+//     }
+//   }
+// ];
+
 exports.registerCrewMemberStep1 = [
   upload.fields([{ name: 'profile_photo', maxCount: 1 }]),
 
@@ -1173,10 +1280,21 @@ exports.registerCrewMemberStep1 = [
         });
       }
 
-      const hashedPassword = await bcrypt.hash(password, 10);
+      const existingUser = await User.findOne({
+        where: { email }
+      });
 
+      if (existingUser) {
+        return res.status(409).json({
+          success: false,
+          code: 'DUPLICATE_EMAIL',
+          message: 'Email already exists'
+        });
+      }
+
+      const hashedPassword = await bcrypt.hash(password, 10);
       const otp = otpService.generateOTP();
-      const otpExpiry = otpService.generateOTPExpiry(10);
+      const otpExpiry = otpService.generateOTPExpiry(10); // 10 minutes
 
       const newUser = await User.create({
         name: `${first_name} ${last_name}`,
@@ -1201,14 +1319,14 @@ exports.registerCrewMemberStep1 = [
       });
 
       if (req.files?.profile_photo) {
-        const filePaths = await S3UploadFiles(req.files);
+        const uploadedFiles = await S3UploadFiles(req.files);
 
-        for (const fileData of filePaths || []) {
-          if (fileData.file_type === 'profile_photo') {
+        for (const file of uploadedFiles || []) {
+          if (file.file_type === 'profile_photo') {
             await crew_member_files.create({
               crew_member_id: newCrewMember.crew_member_id,
-              file_type: fileData.file_type,
-              file_path: fileData.file_path,
+              file_type: file.file_type,
+              file_path: file.file_path,
               file_category: 'profile_photo'
             });
           }
@@ -1220,11 +1338,26 @@ exports.registerCrewMemberStep1 = [
         otp
       );
 
+      let affiliateData = null;
+
+      try {
+        const affiliate = await affiliateController.createAffiliate(newUser.id);
+        if (affiliate) {
+          affiliateData = {
+            affiliate_id: affiliate.affiliate_id,
+            referral_code: affiliate.referral_code
+          };
+        }
+      } catch (affiliateError) {
+        console.error('Affiliate creation failed:', affiliateError);
+      }
+
       return res.status(201).json({
         success: true,
         message: 'Crew member registered successfully. Please verify your email.',
+        user_id: newUser.id,
         crew_member_id: newCrewMember.crew_member_id,
-        user_id: newUser.id
+        affiliate: affiliateData
       });
 
     } catch (error) {
@@ -1232,7 +1365,6 @@ exports.registerCrewMemberStep1 = [
 
       if (error.name === 'SequelizeUniqueConstraintError') {
         const field = error.errors?.[0]?.path;
-
         return res.status(409).json({
           success: false,
           code: `DUPLICATE_${field?.toUpperCase()}`,
@@ -1256,6 +1388,7 @@ exports.registerCrewMemberStep1 = [
     }
   }
 ];
+
 
 
 /**

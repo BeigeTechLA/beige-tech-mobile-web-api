@@ -43,8 +43,13 @@ app.use((req, res, next) => {
 });
 
 // Body parsing middleware
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
+app.use(bodyParser.json({ limit: '300mb' }));
+app.use(bodyParser.urlencoded({
+  limit: '300mb',
+  extended: true
+}));
+// app.use(bodyParser.json());
+// app.use(bodyParser.urlencoded({ extended: true }));
 
 // Body logging in development
 if (process.env.NODE_ENV === 'development') {
