@@ -103,5 +103,12 @@ router.patch('/admin/payouts/:id/paid', authenticate, affiliateController.markPa
  */
 router.get('/admin/payouts', authenticate, affiliateController.getAllPayouts);
 
+/**
+ * @route   PUT /api/affiliates/update/referral
+ * @query   status, page, limit
+ * @access  Private (requires admin authentication)
+ */
+router.put('/update/referral', affiliateController.updateReferralCode);
+
 module.exports = router;
 

@@ -1,6 +1,10 @@
+const { Common } = require('googleapis');
 const db = require('../models');
+const { Op } = require('sequelize');
 const crypto = require('crypto');
-
+const constants = require('../utils/constants');
+const common_model = require('../utils/common_model');
+const Affiliate = common_model.getTableNameDirect(constants.TABLES.AFFILIATES)
 // Fixed commission amount per successful booking (200 SAR)
 const COMMISSION_AMOUNT = 200.00;
 
@@ -938,3 +942,69 @@ exports.getAllPayouts = async (req, res) => {
   }
 };
 
+exports.updateReferralCode = async (req, res) => {
+  try {
+    const { affiliate_id, referral_code } = req.body;
+
+    // Validation
+    if (!affiliate_id || !referral_code) {
+      return res.status(400).json({
+        success: false,
+        message: "affiliate_id and referral_code are required",
+      });
+    }
+
+    // Normalize referral code (optional but recommended)
+    const normalizedCode = referral_code.trim().toUpperCase();
+
+    // Check affiliate exists
+    const affiliate = await Affiliate.findOne({
+      where: { affiliate_id },
+    });
+
+    if (!affiliate) {
+      return res.status(404).json({
+        success: false,
+        message: "Affiliate not found",
+      });
+    }
+
+    // Check referral code uniqueness (exclude current affiliate)
+    const existingCode = await Affiliate.findOne({
+      where: {
+        referral_code: normalizedCode,
+        affiliate_id: { [Op.ne]: affiliate_id },
+      },
+    });
+
+    if (existingCode) {
+      return res.status(409).json({
+        success: false,
+        message: "Referral code already in use by another affiliate",
+      });
+    }
+
+    // Update referral code
+    await Affiliate.update(
+      { referral_code: normalizedCode },
+      { where: { affiliate_id } }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Referral code updated successfully",
+      data: {
+        affiliate_id,
+        referral_code: normalizedCode,
+      },
+    });
+
+  } catch (error) {
+    console.error("Update Referral Code Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error while updating referral code",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    });
+  }
+};

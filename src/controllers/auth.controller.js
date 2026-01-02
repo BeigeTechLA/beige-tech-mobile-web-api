@@ -7,6 +7,7 @@ const common_model = require('../utils/common_model');
 const User = common_model.getTableNameDirect(constants.TABLES.USERS);
 const UserType = common_model.getTableNameDirect(constants.TABLES.USER_TYPE);
 const CrewMember = common_model.getTableNameDirect(constants.TABLES.CREW_MEMBERS);
+const Affiliate = common_model.getTableNameDirect(constants.TABLES.AFFILIATES)
 const affiliateController = require('./affiliate.controller');
 const config = require('../config/config');
 const { S3UploadFiles } = require('../utils/common.js');
@@ -573,6 +574,13 @@ exports.login = async (req, res) => {
         crew_member_id = crew ? crew.crew_member_id : null;
       }
 
+      let affiliate_id = null;
+      const affiliate = await Affiliate.findOne({
+        where: { user_id: user.id },
+        attributes: ["affiliate_id"],
+      });
+      affiliate_id = affiliate ? affiliate.affiliate_id : null;
+
       // Generate tokens
       const { token, refreshToken } = generateTokens(user.id, role);
       const permissions = getPermissionsForRole(role);
@@ -590,6 +598,7 @@ exports.login = async (req, res) => {
           user_type_id,
           email_verified: user.email_verified,
           crew_member_id,
+           affiliate_id,
         },
         token,
         refreshToken,
@@ -688,6 +697,13 @@ exports.login = async (req, res) => {
         crew_member_id = crew ? crew.crew_member_id : null;
       }
 
+      let affiliate_id = null;
+const affiliate = await Affiliate.findOne({
+  where: { user_id: user.id },
+  attributes: ['affiliate_id']
+});
+affiliate_id = affiliate ? affiliate.affiliate_id : null;
+
       const { token, refreshToken } = generateTokens(user.id, role);
       const permissions = getPermissionsForRole(role);
 
@@ -704,6 +720,7 @@ exports.login = async (req, res) => {
           user_type_id,
           email_verified: user.email_verified,
           crew_member_id,
+          affiliate_id
         },
 
         token,
@@ -1257,6 +1274,138 @@ exports.quickRegister = async (req, res) => {
 //   }
 // ];
 
+// exports.registerCrewMemberStep1 = [
+//   upload.fields([{ name: 'profile_photo', maxCount: 1 }]),
+
+//   async (req, res) => {
+//     try {
+//       const {
+//         first_name,
+//         last_name,
+//         email,
+//         phone_number,
+//         location,
+//         password,
+//         working_distance
+//       } = req.body;
+
+//       if (!first_name || !last_name || !email || !password) {
+//         return res.status(400).json({
+//           success: false,
+//           code: 'VALIDATION_ERROR',
+//           message: 'First name, last name, email, and password are required'
+//         });
+//       }
+
+//       const existingUser = await User.findOne({
+//         where: { email }
+//       });
+
+//       if (existingUser) {
+//         return res.status(409).json({
+//           success: false,
+//           code: 'DUPLICATE_EMAIL',
+//           message: 'Email already exists'
+//         });
+//       }
+
+//       const hashedPassword = await bcrypt.hash(password, 10);
+//       const otp = otpService.generateOTP();
+//       const otpExpiry = otpService.generateOTPExpiry(10); // 10 minutes
+
+//       const newUser = await User.create({
+//         name: `${first_name} ${last_name}`,
+//         email,
+//         phone_number,
+//         password_hash: hashedPassword,
+//         user_type: 2,
+//         is_active: 1,
+//         email_verified: 0,
+//         verification_code: otp,
+//         otp_expiry: otpExpiry
+//       });
+
+//       const newCrewMember = await crew_members.create({
+//         first_name,
+//         last_name,
+//         email,
+//         phone_number,
+//         location,
+//         working_distance,
+//         is_active: 1
+//       });
+
+//       if (req.files?.profile_photo) {
+//         const uploadedFiles = await S3UploadFiles(req.files);
+
+//         for (const file of uploadedFiles || []) {
+//           if (file.file_type === 'profile_photo') {
+//             await crew_member_files.create({
+//               crew_member_id: newCrewMember.crew_member_id,
+//               file_type: file.file_type,
+//               file_path: file.file_path,
+//               file_category: 'profile_photo'
+//             });
+//           }
+//         }
+//       }
+
+//       await emailService.sendVerificationOTP(
+//         { name: `${first_name} ${last_name}`, email },
+//         otp
+//       );
+
+//       let affiliateData = null;
+
+//       try {
+//         const affiliate = await affiliateController.createAffiliate(newUser.id);
+//         if (affiliate) {
+//           affiliateData = {
+//             affiliate_id: affiliate.affiliate_id,
+//             referral_code: affiliate.referral_code
+//           };
+//         }
+//       } catch (affiliateError) {
+//         console.error('Affiliate creation failed:', affiliateError);
+//       }
+
+//       return res.status(201).json({
+//         success: true,
+//         message: 'Crew member registered successfully. Please verify your email.',
+//         user_id: newUser.id,
+//         crew_member_id: newCrewMember.crew_member_id,
+//         affiliate: affiliateData
+//       });
+
+//     } catch (error) {
+//       console.error('Register Crew Member Error:', error);
+
+//       if (error.name === 'SequelizeUniqueConstraintError') {
+//         const field = error.errors?.[0]?.path;
+//         return res.status(409).json({
+//           success: false,
+//           code: `DUPLICATE_${field?.toUpperCase()}`,
+//           message: `${field?.replace('_', ' ')} already exists`
+//         });
+//       }
+
+//       if (error.name === 'SequelizeValidationError') {
+//         return res.status(400).json({
+//           success: false,
+//           code: 'DB_VALIDATION_ERROR',
+//           message: error.errors[0]?.message
+//         });
+//       }
+
+//       return res.status(500).json({
+//         success: false,
+//         code: 'SERVER_ERROR',
+//         message: 'Something went wrong. Please try again later.'
+//       });
+//     }
+//   }
+// ];
+
 exports.registerCrewMemberStep1 = [
   upload.fields([{ name: 'profile_photo', maxCount: 1 }]),
 
@@ -1269,7 +1418,9 @@ exports.registerCrewMemberStep1 = [
         phone_number,
         location,
         password,
-        working_distance
+        working_distance,
+        crew_member_id,
+        user_id // Add user_id to the request body
       } = req.body;
 
       if (!first_name || !last_name || !email || !password) {
@@ -1280,6 +1431,82 @@ exports.registerCrewMemberStep1 = [
         });
       }
 
+      // If both crew_member_id and user_id are sent, update both
+      if (crew_member_id && user_id) {
+        const existingCrewMember = await crew_members.findOne({
+          where: { crew_member_id }
+        });
+
+        if (!existingCrewMember) {
+          return res.status(404).json({
+            success: false,
+            code: 'CREW_MEMBER_NOT_FOUND',
+            message: 'Crew member not found'
+          });
+        }
+
+        // Update crew member data
+        await crew_members.update({
+          first_name,
+          last_name,
+          email,
+          phone_number,
+          location,
+          working_distance
+        }, {
+          where: { crew_member_id }
+        });
+
+        // Update user data using user_id
+        await User.update({
+          name: `${first_name} ${last_name}`,
+          email,
+          phone_number,
+        }, {
+          where: { id: user_id }
+        });
+
+        // Handle profile photo replacement (only if new photo is uploaded)
+        if (req.files?.profile_photo) {
+          // Find the existing profile photo for this crew_member_id
+          const existingProfileFile = await crew_member_files.findOne({
+            where: { crew_member_id, file_type: 'profile_photo' }
+          });
+
+          if (existingProfileFile) {
+            // Optionally delete from S3 if necessary (function for S3 deletion)
+            // await deleteFileFromS3(existingProfileFile.file_path);
+
+            // Delete the old profile photo record from the database
+            await crew_member_files.destroy({
+              where: { crew_member_id, file_type: 'profile_photo' }
+            });
+          }
+
+          // Upload the new profile photo
+          const uploadedFiles = await S3UploadFiles(req.files);
+
+          for (const file of uploadedFiles || []) {
+            if (file.file_type === 'profile_photo') {
+              await crew_member_files.create({
+                crew_member_id,
+                file_type: file.file_type,
+                file_path: file.file_path,
+                file_category: 'profile_photo'
+              });
+            }
+          }
+        }
+
+        return res.status(200).json({
+          success: true,
+          message: 'Crew member details updated successfully',
+          crew_member_id, // Include crew_member_id in the response
+          user_id,         // Include user_id in the response
+        });
+      }
+
+      // If no crew_member_id and user_id, proceed with new registration
       const existingUser = await User.findOne({
         where: { email }
       });
@@ -1293,9 +1520,10 @@ exports.registerCrewMemberStep1 = [
       }
 
       const hashedPassword = await bcrypt.hash(password, 10);
-      const otp = otpService.generateOTP();
-      const otpExpiry = otpService.generateOTPExpiry(10); // 10 minutes
+      // const otp = otpService.generateOTP();
+      // const otpExpiry = otpService.generateOTPExpiry(10);
 
+      // Create new user
       const newUser = await User.create({
         name: `${first_name} ${last_name}`,
         email,
@@ -1308,7 +1536,9 @@ exports.registerCrewMemberStep1 = [
         otp_expiry: otpExpiry
       });
 
+      // Create new crew member
       const newCrewMember = await crew_members.create({
+        user_id: newUser.id,
         first_name,
         last_name,
         email,
@@ -1318,6 +1548,7 @@ exports.registerCrewMemberStep1 = [
         is_active: 1
       });
 
+      // Handle profile photo upload for new crew member
       if (req.files?.profile_photo) {
         const uploadedFiles = await S3UploadFiles(req.files);
 
@@ -1333,13 +1564,8 @@ exports.registerCrewMemberStep1 = [
         }
       }
 
-      await emailService.sendVerificationOTP(
-        { name: `${first_name} ${last_name}`, email },
-        otp
-      );
-
+      // Optionally create an affiliate
       let affiliateData = null;
-
       try {
         const affiliate = await affiliateController.createAffiliate(newUser.id);
         if (affiliate) {
@@ -1352,12 +1578,18 @@ exports.registerCrewMemberStep1 = [
         console.error('Affiliate creation failed:', affiliateError);
       }
 
+      // Send verification OTP email
+      // await emailService.sendVerificationOTP(
+      //   { name: `${first_name} ${last_name}`, email },
+      //   otp
+      // );
+
       return res.status(201).json({
         success: true,
         message: 'Crew member registered successfully. Please verify your email.',
         user_id: newUser.id,
         crew_member_id: newCrewMember.crew_member_id,
-        affiliate: affiliateData
+        affiliate: affiliateData // If no affiliate data, it will be null, but still included
       });
 
     } catch (error) {

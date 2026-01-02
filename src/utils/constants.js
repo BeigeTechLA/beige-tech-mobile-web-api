@@ -100,7 +100,8 @@ module.exports = {
         ASSIGNED_EQUIPMENT: 'assigned_equipment',
         PROJECT_BRIEF: 'project_brief',
         EVENT_TYPE_MASTER: 'event_type_master',
-        USER_TYPE: 'user_type'
+        USER_TYPE: 'user_type',
+        AFFILIATES: 'affiliates'
 
     },
     ASSOCIATION_TABLE_WISE: {
