@@ -97,7 +97,7 @@ const generateTaskAssignmentTemplate = (taskData, assigneeData, taskLink) => {
                     Hi <strong>${assigneeData.first_name} ${assigneeData.last_name}</strong>,
                   </p>
                   <p style="margin: 15px 0 0; font-size: 16px; color: #374151; line-height: 1.6;">
-                    A new task has been assigned to you on the Revurge platform.
+                    A new task has been assigned to you on the BeigeAI platform.
                   </p>
                 </td>
               </tr>
@@ -193,10 +193,10 @@ const generateTaskAssignmentTemplate = (taskData, assigneeData, taskLink) => {
               <tr>
                 <td style="background-color: #f9fafb; padding: 25px 30px; border-top: 1px solid #e5e7eb; text-align: center;">
                   <p style="margin: 0; font-size: 13px; color: #6b7280; line-height: 1.5;">
-                    This is an automated notification from the Revurge Platform.
+                    This is an automated notification from the BeigeAI Platform.
                   </p>
                   <p style="margin: 10px 0 0; font-size: 13px; color: #9ca3af;">
-                    © ${new Date().getFullYear()} Revurge. All rights reserved.
+                    © ${new Date().getFullYear()} BeigeAI. All rights reserved.
                   </p>
                 </td>
               </tr>
@@ -220,7 +220,7 @@ const sendVerificationOTP = async (userData, otp) => {
     const mailOptions = {
       from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_USER}>`,
       to: userData.email,
-      subject: 'Verify Your Email - Revurge',
+      subject: 'Verify Your Email - BeigeAI',
       html: generateVerificationOTPTemplate(userData, otp)
     };
 
@@ -256,7 +256,7 @@ const generateVerificationOTPTemplate = (userData, otp) => {
               <tr>
                 <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 30px; text-align: center;">
                   <h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 700;">Verify Your Email</h1>
-                  <p style="margin: 10px 0 0; color: #e0e7ff; font-size: 14px;">Welcome to Revurge!</p>
+                  <p style="margin: 10px 0 0; color: #e0e7ff; font-size: 14px;">Welcome to BeigeAI!</p>
                 </td>
               </tr>
 
@@ -267,7 +267,7 @@ const generateVerificationOTPTemplate = (userData, otp) => {
                     Hi <strong>${userData.name}</strong>,
                   </p>
                   <p style="margin: 20px 0; font-size: 16px; color: #374151; line-height: 1.6;">
-                    Thank you for signing up with Revurge! To complete your registration, please verify your email address using the verification code below:
+                    Thank you for signing up with BeigeAI! To complete your registration, please verify your email address using the verification code below:
                   </p>
 
                   <!-- OTP Box -->
@@ -288,7 +288,7 @@ const generateVerificationOTPTemplate = (userData, otp) => {
                   <div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 15px; border-radius: 4px; margin-top: 30px;">
                     <p style="margin: 0; font-size: 13px; color: #78350f; font-weight: 600;">Security Notice</p>
                     <p style="margin: 8px 0 0; font-size: 13px; color: #92400e; line-height: 1.5;">
-                      Never share this code with anyone. Revurge will never ask for your verification code via phone or email.
+                      Never share this code with anyone. BeigeAI will never ask for your verification code via phone or email.
                     </p>
                   </div>
 
@@ -302,10 +302,10 @@ const generateVerificationOTPTemplate = (userData, otp) => {
               <tr>
                 <td style="background-color: #f9fafb; padding: 25px 30px; border-top: 1px solid #e5e7eb; text-align: center;">
                   <p style="margin: 0; font-size: 13px; color: #6b7280; line-height: 1.5;">
-                    This is an automated email from Revurge. Please do not reply to this email.
+                    This is an automated email from BeigeAI. Please do not reply to this email.
                   </p>
                   <p style="margin: 10px 0 0; font-size: 13px; color: #9ca3af;">
-                    © ${new Date().getFullYear()} Revurge. All rights reserved.
+                    © ${new Date().getFullYear()} BeigeAI. All rights reserved.
                   </p>
                 </td>
               </tr>
@@ -332,7 +332,7 @@ const sendPasswordResetEmail = async (userData, resetToken) => {
     const mailOptions = {
       from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_USER}>`,
       to: userData.email,
-      subject: 'Reset Your Password - Revurge',
+      subject: 'Reset Your Password - BeigeAI',
       html: generatePasswordResetTemplate(userData, resetLink, resetToken)
     };
 
@@ -415,10 +415,10 @@ const generatePasswordResetTemplate = (userData, resetLink, resetToken) => {
               <tr>
                 <td style="background-color: #f9fafb; padding: 25px 30px; border-top: 1px solid #e5e7eb; text-align: center;">
                   <p style="margin: 0; font-size: 13px; color: #6b7280; line-height: 1.5;">
-                    This is an automated email from Revurge. Please do not reply to this email.
+                    This is an automated email from BeigeAI. Please do not reply to this email.
                   </p>
                   <p style="margin: 10px 0 0; font-size: 13px; color: #9ca3af;">
-                    © ${new Date().getFullYear()} Revurge. All rights reserved.
+                    © ${new Date().getFullYear()} BeigeAI. All rights reserved.
                   </p>
                 </td>
               </tr>
@@ -443,7 +443,7 @@ const sendWelcomeEmail = async (userData) => {
     const mailOptions = {
       from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_USER}>`,
       to: userData.email,
-      subject: 'Welcome to Revurge!',
+      subject: 'Welcome to BeigeAI!',
       html: generateWelcomeTemplate(userData, frontendUrl)
     };
 
@@ -466,7 +466,7 @@ const generateWelcomeTemplate = (userData, frontendUrl) => {
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Welcome to Revurge</title>
+      <title>Welcome to BeigeAI</title>
     </head>
     <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f3f4f6;">
       <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f3f4f6; padding: 40px 20px;">
@@ -477,7 +477,7 @@ const generateWelcomeTemplate = (userData, frontendUrl) => {
               <!-- Header -->
               <tr>
                 <td style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 40px 30px; text-align: center;">
-                  <h1 style="margin: 0; color: #ffffff; font-size: 32px; font-weight: 700;">Welcome to Revurge!</h1>
+                  <h1 style="margin: 0; color: #ffffff; font-size: 32px; font-weight: 700;">Welcome to BeigeAI!</h1>
                   <p style="margin: 10px 0 0; color: #d1fae5; font-size: 16px;">Your account is ready to go</p>
                 </td>
               </tr>
@@ -489,7 +489,7 @@ const generateWelcomeTemplate = (userData, frontendUrl) => {
                     Hi <strong>${userData.name}</strong>,
                   </p>
                   <p style="margin: 20px 0; font-size: 16px; color: #374151; line-height: 1.6;">
-                    Welcome to Revurge! We're excited to have you on board. Your email has been verified and your account is now active.
+                    Welcome to BeigeAI! We're excited to have you on board. Your email has been verified and your account is now active.
                   </p>
 
                   <!-- CTA Button -->
@@ -519,10 +519,10 @@ const generateWelcomeTemplate = (userData, frontendUrl) => {
               <tr>
                 <td style="background-color: #f9fafb; padding: 25px 30px; border-top: 1px solid #e5e7eb; text-align: center;">
                   <p style="margin: 0; font-size: 13px; color: #6b7280; line-height: 1.5;">
-                    This is an automated email from Revurge. Please do not reply to this email.
+                    This is an automated email from BeigeAI. Please do not reply to this email.
                   </p>
                   <p style="margin: 10px 0 0; font-size: 13px; color: #9ca3af;">
-                    © ${new Date().getFullYear()} Revurge. All rights reserved.
+                    © ${new Date().getFullYear()} BeigeAI. All rights reserved.
                   </p>
                 </td>
               </tr>

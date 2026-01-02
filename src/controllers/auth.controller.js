@@ -1532,8 +1532,8 @@ exports.registerCrewMemberStep1 = [
         user_type: 2,
         is_active: 1,
         email_verified: 0,
-        verification_code: otp,
-        otp_expiry: otpExpiry
+        // verification_code: otp,
+        // otp_expiry: otpExpiry
       });
 
       // Create new crew member
