@@ -178,92 +178,129 @@ exports.searchCreators = async (req, res) => {
     // Extract city/region from full address for better matching
     // NOTE: This is a fallback only. Frontend should send geocoded coordinates for accurate proximity search.
     // Format: {"lat":34.1184,"lng":-118.6414,"address":"City, State"}
-    if (location && !useProximitySearch && parsedLocation) {
-      const address = parsedLocation.address || location;
+    // if (location && !useProximitySearch && parsedLocation) {
+    //   const address = parsedLocation.address || location;
 
-      // Extract city and state from full address
-      // e.g., "123 Street, City, State ZIP, Country" -> ["123 Street", "City", "State ZIP", "Country"]
-      const addressParts = address.split(',').map(p => p.trim());
+    //   // Extract city and state from full address
+    //   // e.g., "123 Street, City, State ZIP, Country" -> ["123 Street", "City", "State ZIP", "Country"]
+    //   const addressParts = address.split(',').map(p => p.trim());
 
-      let cityToSearch = null;
-      let stateToSearch = null;
+    //   let cityToSearch = null;
+    //   let stateToSearch = null;
 
-      // Common patterns:
-      // - "Street Address, City, State ZIP, Country" -> City = 2nd part, State = 3rd part
-      // - "City, State" -> City = 1st part, State = 2nd part
-      const streetPattern = /\d|street|st\b|avenue|ave\b|road|rd\b|boulevard|blvd|drive|dr\b|lane|ln\b|freeway|fwy|highway|hwy|expressway|expy|turnpike|tpke|pike|parkway|pkwy|circle|cir\b|court|ct\b|place|pl\b|way\b|terrace|ter\b|trail|trl\b/i;
+    //   // Common patterns:
+    //   // - "Street Address, City, State ZIP, Country" -> City = 2nd part, State = 3rd part
+    //   // - "City, State" -> City = 1st part, State = 2nd part
+    //   const streetPattern = /\d|street|st\b|avenue|ave\b|road|rd\b|boulevard|blvd|drive|dr\b|lane|ln\b|freeway|fwy|highway|hwy|expressway|expy|turnpike|tpke|pike|parkway|pkwy|circle|cir\b|court|ct\b|place|pl\b|way\b|terrace|ter\b|trail|trl\b/i;
 
-      if (addressParts.length >= 3) {
-        // Full address format: "Street, City, State ZIP, Country"
-        if (streetPattern.test(addressParts[0])) {
-          cityToSearch = addressParts[1];
-          // Extract state name/code from "California 91302" -> "California" or "CA"
-          const statePart = addressParts[2].split(' ')[0]; // "California 91302" -> "California"
-          stateToSearch = statePart;
-        }
-      } else if (addressParts.length >= 2) {
-        // Simple format: "City, State"
-        if (streetPattern.test(addressParts[0])) {
-          cityToSearch = addressParts[1];
-        } else {
-          cityToSearch = addressParts[0];
-          stateToSearch = addressParts[1].split(' ')[0]; // Handle "CA 12345" -> "CA"
-        }
-      } else {
-        // Single part - use as-is
-        cityToSearch = addressParts[0];
-      }
+    //   if (addressParts.length >= 3) {
+    //     // Full address format: "Street, City, State ZIP, Country"
+    //     if (streetPattern.test(addressParts[0])) {
+    //       cityToSearch = addressParts[1];
+    //       // Extract state name/code from "California 91302" -> "California" or "CA"
+    //       const statePart = addressParts[2].split(' ')[0]; // "California 91302" -> "California"
+    //       stateToSearch = statePart;
+    //     }
+    //   } else if (addressParts.length >= 2) {
+    //     // Simple format: "City, State"
+    //     if (streetPattern.test(addressParts[0])) {
+    //       cityToSearch = addressParts[1];
+    //     } else {
+    //       cityToSearch = addressParts[0];
+    //       stateToSearch = addressParts[1].split(' ')[0]; // Handle "CA 12345" -> "CA"
+    //     }
+    //   } else {
+    //     // Single part - use as-is
+    //     cityToSearch = addressParts[0];
+    //   }
 
-      console.log('🔍 DEBUG: Location search -', {
-        original: address,
-        extracted_city: cityToSearch,
-        extracted_state: stateToSearch,
-        all_parts: addressParts
-      });
+    //   console.log('🔍 DEBUG: Location search -', {
+    //     original: address,
+    //     extracted_city: cityToSearch,
+    //     extracted_state: stateToSearch,
+    //     all_parts: addressParts
+    //   });
 
-      // Build location filter: match state for broader results when city not found
-      // Note: Calabasas, CA is near Los Angeles - match on California/CA
-      // TODO: This is a fallback. Frontend should send geocoded coordinates for accurate proximity search.
-      if (stateToSearch) {
-        // Match on state name (e.g., "California") or abbreviation (e.g., "CA")
-        // Common state abbreviations mapping
-        const stateAbbreviations = {
-          'alabama': 'AL', 'alaska': 'AK', 'arizona': 'AZ', 'arkansas': 'AR',
-          'california': 'CA', 'colorado': 'CO', 'connecticut': 'CT', 'delaware': 'DE',
-          'florida': 'FL', 'georgia': 'GA', 'hawaii': 'HI', 'idaho': 'ID',
-          'illinois': 'IL', 'indiana': 'IN', 'iowa': 'IA', 'kansas': 'KS',
-          'kentucky': 'KY', 'louisiana': 'LA', 'maine': 'ME', 'maryland': 'MD',
-          'massachusetts': 'MA', 'michigan': 'MI', 'minnesota': 'MN', 'mississippi': 'MS',
-          'missouri': 'MO', 'montana': 'MT', 'nebraska': 'NE', 'nevada': 'NV',
-          'new hampshire': 'NH', 'new jersey': 'NJ', 'new mexico': 'NM', 'new york': 'NY',
-          'north carolina': 'NC', 'north dakota': 'ND', 'ohio': 'OH', 'oklahoma': 'OK',
-          'oregon': 'OR', 'pennsylvania': 'PA', 'rhode island': 'RI', 'south carolina': 'SC',
-          'south dakota': 'SD', 'tennessee': 'TN', 'texas': 'TX', 'utah': 'UT',
-          'vermont': 'VT', 'virginia': 'VA', 'washington': 'WA', 'west virginia': 'WV',
-          'wisconsin': 'WI', 'wyoming': 'WY'
-        };
+    //   // Build location filter: match state for broader results when city not found
+    //   // Note: Calabasas, CA is near Los Angeles - match on California/CA
+    //   // TODO: This is a fallback. Frontend should send geocoded coordinates for accurate proximity search.
+    //   if (stateToSearch) {
+    //     // Match on state name (e.g., "California") or abbreviation (e.g., "CA")
+    //     // Common state abbreviations mapping
+    //     const stateAbbreviations = {
+    //       'alabama': 'AL', 'alaska': 'AK', 'arizona': 'AZ', 'arkansas': 'AR',
+    //       'california': 'CA', 'colorado': 'CO', 'connecticut': 'CT', 'delaware': 'DE',
+    //       'florida': 'FL', 'georgia': 'GA', 'hawaii': 'HI', 'idaho': 'ID',
+    //       'illinois': 'IL', 'indiana': 'IN', 'iowa': 'IA', 'kansas': 'KS',
+    //       'kentucky': 'KY', 'louisiana': 'LA', 'maine': 'ME', 'maryland': 'MD',
+    //       'massachusetts': 'MA', 'michigan': 'MI', 'minnesota': 'MN', 'mississippi': 'MS',
+    //       'missouri': 'MO', 'montana': 'MT', 'nebraska': 'NE', 'nevada': 'NV',
+    //       'new hampshire': 'NH', 'new jersey': 'NJ', 'new mexico': 'NM', 'new york': 'NY',
+    //       'north carolina': 'NC', 'north dakota': 'ND', 'ohio': 'OH', 'oklahoma': 'OK',
+    //       'oregon': 'OR', 'pennsylvania': 'PA', 'rhode island': 'RI', 'south carolina': 'SC',
+    //       'south dakota': 'SD', 'tennessee': 'TN', 'texas': 'TX', 'utah': 'UT',
+    //       'vermont': 'VT', 'virginia': 'VA', 'washington': 'WA', 'west virginia': 'WV',
+    //       'wisconsin': 'WI', 'wyoming': 'WY'
+    //     };
 
-        const stateAbbr = stateAbbreviations[stateToSearch.toLowerCase()];
+    //     const stateAbbr = stateAbbreviations[stateToSearch.toLowerCase()];
 
-        // Match state name or abbreviation using simple LIKE (not OR which has syntax issues)
-        // This will match "California", "CA", etc.
-        if (stateAbbr) {
-          whereClause.location = {
-            [Op.like]: `%${stateAbbr}%`  // Match abbreviation: "Los Angeles, CA"
-          };
-        } else {
-          whereClause.location = {
-            [Op.like]: `%${stateToSearch}%`  // Match full name if no abbreviation
-          };
-        }
-      } else if (cityToSearch) {
-        whereClause.location = {
-          [Op.like]: `%${cityToSearch}%`
-        };
-      }
-    }
+    //     // Match state name or abbreviation using simple LIKE (not OR which has syntax issues)
+    //     // This will match "California", "CA", etc.
+    //     if (stateAbbr) {
+    //       whereClause.location = {
+    //         [Op.like]: `%${stateAbbr}%`  // Match abbreviation: "Los Angeles, CA"
+    //       };
+    //     } else {
+    //       whereClause.location = {
+    //         [Op.like]: `%${stateToSearch}%`  // Match full name if no abbreviation
+    //       };
+    //     }
+    //   } else if (cityToSearch) {
+    //     whereClause.location = {
+    //       [Op.like]: `%${cityToSearch}%`
+    //     };
+    //   }
+    // }
 
-    // Skills filter (TEXT field stored as JSON or comma-separated)
+if (location && !useProximitySearch) {
+  const parts = location
+    .split(',')
+    .map(p => p.trim())
+    .filter(p => p.length > 0 && !/^\d+$/.test(p));
+
+  let city = null;
+  let state = null;
+
+  if (parts.length >= 3) {
+    // Google Maps format: ..., City, State, Country
+    city = parts[parts.length - 3];
+    state = parts[parts.length - 2];
+  } else if (parts.length === 2) {
+    // City, State
+    city = parts[0];
+    state = parts[1];
+  } else if (parts.length === 1) {
+    // City only
+    city = parts[0];
+  }
+
+  if (city) {
+    // 🎯 STRICT city match
+    whereClause.location = {
+      [Op.like]: `%${city}%`
+    };
+  } else if (state) {
+    // fallback only
+    whereClause.location = {
+      [Op.like]: `%${state}%`
+    };
+  }
+
+  console.log('🔍 DEBUG: Location resolved as:', { city, state });
+}
+
+
     if (skills) {
       whereClause.skills = {
         [Op.like]: `%${skills}%`
@@ -280,9 +317,9 @@ exports.searchCreators = async (req, res) => {
       // Map role names to IDs if needed
       // videographer -> 1, photographer/photographers -> 2
       const roleNameToId = {
-        'videographer': [1, 3], // Multiple IDs for videographer
-        'photographer': [2, 4], // Multiple IDs for photographer/photographers
-        'photographers': [2, 4],
+        'videographer': [1, 3, 9], // Multiple IDs for videographer
+        'photographer': [2, 4, 10], // Multiple IDs for photographer/photographers
+        'photographers': [2, 4, 10],
         'cinematographer': [1, 3], // Map to videographer IDs
       };
 
@@ -308,9 +345,22 @@ exports.searchCreators = async (req, res) => {
       });
 
       if (roleIds.length > 0) {
-        whereClause.primary_role = {
-          [Op.in]: roleIds
-        };
+        whereClause[Op.or] = [
+  // Case 1: primary_role is stored as integer
+  {
+    primary_role: {
+      [Op.in]: roleIds
+    }
+  },
+
+  // Case 2: primary_role is stored as JSON / array string
+  ...roleIds.map(roleId => ({
+    primary_role: {
+      [Op.like]: `%${roleId}%`
+    }
+  }))
+];
+
       }
     } else if (content_type) {
       // Backward compatibility: single content_type

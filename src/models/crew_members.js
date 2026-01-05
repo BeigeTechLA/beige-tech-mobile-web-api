@@ -33,7 +33,7 @@ module.exports = function(sequelize, DataTypes) {
       allowNull: true
     },
     primary_role: {
-      type: DataTypes.INTEGER,
+      type: DataTypes.TEXT,
       allowNull: true
     },
     years_of_experience: {

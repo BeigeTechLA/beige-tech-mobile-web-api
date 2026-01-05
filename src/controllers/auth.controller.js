@@ -1629,7 +1629,15 @@ exports.registerCrewMemberStep1 = [
  */
 exports.registerCrewMemberStep2 = async (req, res) => {
   try {
-    const { crew_member_id, primary_role, years_of_experience, hourly_rate, bio, skills, equipment_ownership } = req.body;
+    const {
+      crew_member_id,
+      primary_role,
+      years_of_experience,
+      hourly_rate,
+      bio,
+      skills,
+      equipment_ownership
+    } = req.body;
 
     if (!crew_member_id) {
       return res.status(400).json({
@@ -1638,7 +1646,9 @@ exports.registerCrewMemberStep2 = async (req, res) => {
       });
     }
 
-    const existingCrewMember = await crew_members.findOne({ where: { crew_member_id } });
+    const existingCrewMember = await crew_members.findOne({
+      where: { crew_member_id }
+    });
 
     if (!existingCrewMember) {
       return res.status(400).json({
@@ -1647,12 +1657,21 @@ exports.registerCrewMemberStep2 = async (req, res) => {
       });
     }
 
-    existingCrewMember.primary_role = primary_role;
+    if (Array.isArray(primary_role)) {
+      existingCrewMember.primary_role = JSON.stringify(primary_role);
+    } else if (primary_role !== undefined && primary_role !== null) {
+      existingCrewMember.primary_role = JSON.stringify([primary_role]);
+    } else {
+      existingCrewMember.primary_role = null;
+    }
+
     existingCrewMember.years_of_experience = years_of_experience;
     existingCrewMember.hourly_rate = hourly_rate;
     existingCrewMember.bio = bio;
-    existingCrewMember.skills = JSON.stringify(skills);
-    existingCrewMember.equipment_ownership = JSON.stringify(equipment_ownership);
+    existingCrewMember.skills = skills ? JSON.stringify(skills) : null;
+    existingCrewMember.equipment_ownership = equipment_ownership
+      ? JSON.stringify(equipment_ownership)
+      : null;
 
     await existingCrewMember.save();
 

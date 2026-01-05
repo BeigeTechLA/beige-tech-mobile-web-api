@@ -1,6 +1,7 @@
 const { stream_project_booking, assigned_crew, crew_members, crew_member_files } = require('../models');
 const { Op } = require('sequelize');
 const constants = require('../utils/constants');
+const { Sequelize } = require('sequelize');
 const { parseLocation, formatLocationResponse } = require('../utils/locationHelpers');
 
 /**
@@ -593,6 +594,140 @@ exports.updateBooking = async (req, res) => {
       success: false,
       message: 'Failed to update booking',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.getBookings = async (req, res) => {
+  try {
+    const { user_id } = req.body;
+
+    if (!user_id) {
+      return res.status(400).json({
+        success: false,
+        message: "user_id is required",
+      });
+    }
+
+    const { page = 1, limit = 10, status } = req.query;
+
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    const whereClause = {
+      is_active: 1,
+      user_id: user_id,
+    };
+
+    // Status filter
+    if (status === "draft") {
+      whereClause.is_draft = 1;
+    } else if (status === "completed") {
+      whereClause.is_completed = 1;
+      whereClause.is_draft = 0;
+    } else if (status === "cancelled") {
+      whereClause.is_cancelled = 1;
+    } else if (status === "active") {
+      whereClause.is_draft = 0;
+      whereClause.is_completed = 0;
+      whereClause.is_cancelled = 0;
+    }
+
+    const { count, rows: bookings } =
+      await stream_project_booking.findAndCountAll({
+        where: whereClause,
+        distinct: true,
+        include: [
+          {
+            model: assigned_crew,
+            as: "assigned_crews",
+            required: false,
+            where: { is_active: 1 },
+            attributes: [
+              "id",
+              "project_id",
+              "crew_member_id",
+              "status",
+              "assigned_date",
+              "crew_accept",
+            ],
+            include: [
+              {
+                model: crew_members,
+                as: "crew_member",
+                attributes: [
+                  [
+                    Sequelize.literal(
+                      "CONCAT(`assigned_crews->crew_member`.`first_name`, ' ', `assigned_crews->crew_member`.`last_name`)"
+                    ),
+                    "crew_member_name",
+                  ],
+                ],
+              },
+            ],
+          },
+        ],
+
+        attributes: [
+          "stream_project_booking_id",
+          "user_id",
+          "project_name",
+          "description",
+          "event_type",
+          "event_date",
+          "start_time",
+          "event_location",
+          "budget",
+          "crew_size_needed",
+          "is_draft",
+          "is_completed",
+          "is_cancelled",
+          "created_at",
+        ],
+        limit: parseInt(limit),
+        offset,
+        order: [["created_at", "DESC"]],
+      });
+
+    const transformedBookings = bookings.map((b) => {
+      const booking = b.toJSON();
+
+      return {
+        booking_id: booking.stream_project_booking_id,
+        user_id: booking.user_id,
+        project_name: booking.project_name,
+        description: booking.description,
+        event_type: booking.event_type,
+        event_date: booking.event_date,
+        start_time: booking.start_time,
+        event_location: formatLocationResponse(booking.event_location),
+        budget: parseFloat(booking.budget || 0),
+        crew_size_needed: booking.crew_size_needed,
+        assigned_crew_count: booking.assigned_crews?.length || 0,
+        assigned_crews: booking.assigned_crews || [],
+        is_draft: booking.is_draft === 1,
+        is_completed: booking.is_completed === 1,
+        is_cancelled: booking.is_cancelled === 1,
+        created_at: booking.created_at,
+      };
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        bookings: transformedBookings,
+        pagination: {
+          total: count,
+          page: parseInt(page),
+          limit: parseInt(limit),
+          totalPages: Math.ceil(count / limit),
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching bookings:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch bookings",
     });
   }
 };

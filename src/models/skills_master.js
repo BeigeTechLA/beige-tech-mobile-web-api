@@ -11,6 +11,10 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.STRING(255),
       allowNull: false
     },
+    sub_skills: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
     is_active: {
       type: DataTypes.BOOLEAN,
       allowNull: true,

@@ -13,6 +13,7 @@ const { appendBookingToSheet } = require('../utils/googleSheetsService');
 exports.createGuestBooking = async (req, res) => {
   try {
     const {
+      user_id,
       order_name,
       guest_email,
       project_type,
@@ -100,7 +101,7 @@ exports.createGuestBooking = async (req, res) => {
     // Prepare booking data mapping frontend fields to database fields
     // Note: user_id is NULL for guest bookings, guest_email is used instead
     const bookingData = {
-      user_id: null, // Guest bookings have no user_id
+      user_id: user_id ? parseInt(user_id) : null,
       quote_id: quote_id || null, // Link to pricing quote if provided
       guest_email: guest_email, // Store guest email for contact
       project_name: order_name,

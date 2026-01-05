@@ -48,4 +48,15 @@ router.get('/:id', authenticate, bookingsController.getBooking);
  */
 router.put('/:id', authenticate, bookingsController.updateBooking);
 
+/**
+ * @route   POST /api/bookings/user
+ * @desc    Get user's bookings with pagination and filtering
+ * @query   page - page number (default: 1)
+ * @query   limit - results per page (default: 10)
+ * @query   status - filter by status: draft, active, completed, cancelled
+ * @access  Private (requires authentication)
+ */
+router.post('/user', bookingsController.getBookings);
+
+
 module.exports = router;
