@@ -695,7 +695,7 @@ exports.getAcceptedAndUpcomingProjects = async (req, res) => {
 
 exports.getCrewAvailability = async (req, res) => {
   try {
-    const { crew_member_id, year, month } = req.body || req.query;
+    const { year, month, crew_member_id } = req.body || req.query;
 
     if (!crew_member_id || !year || !month) {
       return res.status(400).json({
@@ -708,6 +708,8 @@ exports.getCrewAvailability = async (req, res) => {
       where: { crew_member_id },
     });
 
+    console.log("Database query result:", crewMember);
+
     if (!crewMember) {
       return res.status(404).json({
         error: true,
@@ -717,10 +719,13 @@ exports.getCrewAvailability = async (req, res) => {
 
     let availability = [];
     try {
-      availability = JSON.parse(crewMember.availability || '[]');
-    } catch (err) {
+      availability = JSON.parse(crewMember.availability || "[]");
+    } catch {
       availability = [];
     }
+
+    const monthStart = moment(`${year}-${month}-01`).startOf("month").toDate();
+    const monthEnd = moment(`${year}-${month}-01`).endOf("month").toDate();
 
     const acceptedProjects = await assigned_crew.findAll({
       where: {
@@ -732,10 +737,18 @@ exports.getCrewAvailability = async (req, res) => {
           model: stream_project_booking,
           as: "project",
           where: {
-            event_date: { [Sequelize.Op.gte]: moment(`${year}-${month}-01`).startOf('month').toDate() },
-            event_date: { [Sequelize.Op.lte]: moment(`${year}-${month}-01`).endOf('month').toDate() },
+            event_date: {
+              [Sequelize.Op.between]: [monthStart, monthEnd],
+            },
           },
-          attributes: ['event_date', 'stream_project_booking_id', 'project_name', 'start_time', 'end_time', 'event_location'],
+          attributes: [
+            "event_date",
+            "stream_project_booking_id",
+            "project_name",
+            "start_time",
+            "end_time",
+            "event_location",
+          ],
         },
       ],
     });
@@ -743,39 +756,97 @@ exports.getCrewAvailability = async (req, res) => {
     const customAvailability = await crew_availability.findAll({
       where: {
         crew_member_id,
-        date: {
-          [Sequelize.Op.gte]: moment(`${year}-${month}-01`).startOf('month').toDate(),
-          [Sequelize.Op.lte]: moment(`${year}-${month}-01`).endOf('month').toDate(),
-        },
+        [Sequelize.Op.or]: [
+          {
+            recurrence: 1,
+            date: { [Sequelize.Op.between]: [monthStart, monthEnd] },
+          },
+          {
+            recurrence: { [Sequelize.Op.ne]: 1 },
+            recurrence_until: { [Sequelize.Op.gte]: monthStart },
+          },
+        ],
       },
     });
 
-    const calendar = {};
+    const appliesOnDate = (rule, dateMoment) => {
+      const start = moment(rule.date);
+      const end = rule.recurrence_until
+        ? moment(rule.recurrence_until)
+        : start;
 
+      if (
+        dateMoment.isBefore(start, "day") ||
+        dateMoment.isAfter(end, "day")
+      ) {
+        return false;
+      }
+
+      switch (rule.recurrence) {
+        case 1:
+          return dateMoment.isSame(start, "day");
+
+        case 2:
+          return true;
+
+        case 3: {
+  if (!rule.recurrence_days) return false;
+
+  const days = JSON.parse(rule.recurrence_days)
+    .map(d => d.toLowerCase().slice(0, 3));
+
+  const currentDay = dateMoment
+    .format("ddd")
+    .toLowerCase();
+
+  return days.includes(currentDay);
+}
+
+
+        case 4:
+          return (
+            dateMoment.date() === Number(rule.recurrence_day_of_month)
+          );
+
+        default:
+          return false;
+      }
+    };
+
+    const calendar = {};
     const daysInMonth = moment(`${year}-${month}`, "YYYY-MM").daysInMonth();
+
     for (let day = 1; day <= daysInMonth; day++) {
       const date = moment(`${year}-${month}-${day}`, "YYYY-MM-DD");
+      const key = date.format("YYYY-MM-DD");
 
-      calendar[date.format('YYYY-MM-DD')] = {
+      calendar[key] = {
         available: false,
         projectAssigned: false,
         projectDetails: null,
         customAvailabilityStatus: null,
       };
 
-      if (availability.includes(date.format('dddd'))) {
-        calendar[date.format('YYYY-MM-DD')].available = true;
+      if (availability.includes(date.format("dddd"))) {
+        calendar[key].available = true;
       }
 
-      const customAvailabilityForDay = customAvailability.find(avail => moment(avail.date).isSame(date, 'day'));
-      if (customAvailabilityForDay) {
-        calendar[date.format('YYYY-MM-DD')].available = customAvailabilityForDay.availability_status === '1';
-        calendar[date.format('YYYY-MM-DD')].customAvailabilityStatus = customAvailabilityForDay.availability_status;
+      const rule = customAvailability.find((r) =>
+        appliesOnDate(r, date)
+      );
+
+      if (rule) {
+        calendar[key].available = rule.availability_status == "1";
+        calendar[key].customAvailabilityStatus =
+          rule.availability_status;
       }
     }
 
-    for (let project of acceptedProjects) {
-      const eventDate = moment(project.project.event_date).format('YYYY-MM-DD');
+    for (const project of acceptedProjects) {
+      const eventDate = moment(
+        project.project.event_date
+      ).format("YYYY-MM-DD");
+
       if (calendar[eventDate]) {
         calendar[eventDate].available = false;
         calendar[eventDate].projectAssigned = true;
@@ -798,10 +869,10 @@ exports.getCrewAvailability = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('Error fetching crew availability:', error);
+    console.error("Error fetching crew availability:", error);
     return res.status(500).json({
       error: true,
-      message: 'Something went wrong while fetching crew availability',
+      message: "Something went wrong while fetching crew availability",
     });
   }
 };
@@ -877,9 +948,12 @@ exports.setCrewAvailability = async (req, res) => {
       start_time,
       end_time,
       location,
-      recurrence,
       notes,
-      is_full_day // NEW FIELD
+      is_full_day = 0,
+      recurrence = 1,
+      recurrence_days = null,
+      recurrence_until = null,
+      recurrence_day_of_month = null
     } = req.body;
 
     if (!crew_member_id || !date || !availability_status) {
@@ -889,60 +963,78 @@ exports.setCrewAvailability = async (req, res) => {
       });
     }
 
-    // Default is_full_day to 0 if not provided
-    const fullDayValue = is_full_day !== undefined ? is_full_day : 0;
-
-    const existingAvailability = await crew_availability.findOne({
-      where: {
-        crew_member_id,
-        date,
-      },
-    });
-
-    if (existingAvailability) {
-      existingAvailability.availability_status = availability_status;
-      existingAvailability.start_time = start_time;
-      existingAvailability.end_time = end_time;
-      existingAvailability.location = location;
-      existingAvailability.recurrence = recurrence;
-      existingAvailability.notes = notes;
-      existingAvailability.is_full_day = fullDayValue; // ✅ update field
-
-      await existingAvailability.save();
-
-      return res.status(200).json({
-        error: false,
-        message: "Crew availability updated successfully",
-        data: existingAvailability,
+    /* Validate recurrence */
+    if (recurrence !== 1 && !recurrence_until) {
+      return res.status(400).json({
+        error: true,
+        message: "recurrence_until is required for recurring availability"
       });
     }
 
-    const newAvailability = await crew_availability.create({
+    if (recurrence === 3 && (!recurrence_days || !recurrence_days.length)) {
+      return res.status(400).json({
+        error: true,
+        message: "recurrence_days required for weekly recurrence"
+      });
+    }
+
+    if (recurrence === 4 && !recurrence_day_of_month) {
+      return res.status(400).json({
+        error: true,
+        message: "recurrence_day_of_month required for monthly recurrence"
+      });
+    }
+
+    const payload = {
       crew_member_id,
       date,
       availability_status,
       start_time,
       end_time,
       location,
-      recurrence,
       notes,
-      is_full_day: fullDayValue, // ✅ insert field
+      is_full_day,
+      recurrence,
+      recurrence_until,
+      recurrence_days: recurrence_days ? JSON.stringify(recurrence_days) : null,
+      recurrence_day_of_month
+    };
+
+    const existing = await crew_availability.findOne({
+      where: { crew_member_id, date }
     });
 
-    return res.status(201).json({
+    let availability;
+
+    if (existing) {
+      await existing.update(payload);
+      availability = existing;
+    } else {
+      availability = await crew_availability.create(payload);
+    }
+
+    // await common.logActivity({
+    //   crew_member_id,
+    //   activity_type: 'availability_updated',
+    //   title: 'Availability Updated',
+    //   description: `Availability set starting ${date}`,
+    //   reference_type: 'availability',
+    //   reference_id: availability.availability_id
+    // });
+
+    return res.status(200).json({
       error: false,
-      message: "Crew availability added successfully",
-      data: newAvailability,
+      message: "Availability saved successfully",
+      data: availability
     });
   } catch (error) {
-    console.error("Error setting crew availability:", error);
+    console.error("setCrewAvailability error:", error);
     return res.status(500).json({
       error: true,
-      message: "Something went wrong while setting crew availability",
+      message: "Something went wrong while setting crew availability"
     });
   }
 };
-
 
 exports.getDashboardRequestCounts = async (req, res) => {
   try {

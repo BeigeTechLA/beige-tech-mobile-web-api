@@ -4,6 +4,7 @@ var _assigned_equipment = require("./assigned_equipment");
 var _assignment_checklist = require("./assignment_checklist");
 var _certifications_master = require("./certifications_master");
 var _checklist_master = require("./checklist_master");
+var _crew_availability = require("./crew_availability");
 var _crew_member_files = require("./crew_member_files");
 var _crew_member_reviews = require("./crew_member_reviews");
 var _crew_members = require("./crew_members");
@@ -79,6 +80,7 @@ function initModels(sequelize) {
   var pricing_discount_tiers = _pricing_discount_tiers(sequelize, DataTypes);
   var quotes = _quotes(sequelize, DataTypes);
   var quote_line_items = _quote_line_items(sequelize, DataTypes);
+    var crew_availability = _crew_availability(sequelize, DataTypes);
 
   assignment_checklist.belongsTo(checklist_master, { as: "checklist", foreignKey: "checklist_id"});
   checklist_master.hasMany(assignment_checklist, { as: "assignment_checklists", foreignKey: "checklist_id"});
@@ -202,6 +204,7 @@ function initModels(sequelize) {
     assignment_checklist,
     certifications_master,
     checklist_master,
+    crew_availability,
     crew_member_files,
     crew_member_reviews,
     crew_members,
