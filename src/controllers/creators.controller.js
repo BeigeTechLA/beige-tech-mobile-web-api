@@ -175,130 +175,134 @@ exports.searchCreators = async (req, res) => {
     }
 
     // Location filter - use text search if no coordinates for proximity search
-    // Extract city/region from full address for better matching
-    // NOTE: This is a fallback only. Frontend should send geocoded coordinates for accurate proximity search.
-    // Format: {"lat":34.1184,"lng":-118.6414,"address":"City, State"}
-    // if (location && !useProximitySearch && parsedLocation) {
-    //   const address = parsedLocation.address || location;
+    if (location && !useProximitySearch) {
+      const parts = location
+        .split(',')
+        .map(p => p.trim())
+        .filter(p => p.length > 0);
 
-    //   // Extract city and state from full address
-    //   // e.g., "123 Street, City, State ZIP, Country" -> ["123 Street", "City", "State ZIP", "Country"]
-    //   const addressParts = address.split(',').map(p => p.trim());
+      let city = null;
 
-    //   let cityToSearch = null;
-    //   let stateToSearch = null;
+      const zipPattern = /^\d{5,6}$/;
+      const streetPattern = /\d+\s+(street|st|road|rd|avenue|ave|lane|ln|highway|hwy|nagar|marg|colony|sector|freeway|fwy|expressway|expy|turnpike|tpke|pike|parkway|pkwy|circle|cir|court|ct|place|pl|way|terrace|ter|trail|trl|drive|dr|boulevard|blvd)/i;
 
-    //   // Common patterns:
-    //   // - "Street Address, City, State ZIP, Country" -> City = 2nd part, State = 3rd part
-    //   // - "City, State" -> City = 1st part, State = 2nd part
-    //   const streetPattern = /\d|street|st\b|avenue|ave\b|road|rd\b|boulevard|blvd|drive|dr\b|lane|ln\b|freeway|fwy|highway|hwy|expressway|expy|turnpike|tpke|pike|parkway|pkwy|circle|cir\b|court|ct\b|place|pl\b|way\b|terrace|ter\b|trail|trl\b/i;
+      const cleanParts = parts.filter(p =>
+        !zipPattern.test(p) &&
+        !streetPattern.test(p.trim()) &&
+        p.length >= 3
+      );
 
-    //   if (addressParts.length >= 3) {
-    //     // Full address format: "Street, City, State ZIP, Country"
-    //     if (streetPattern.test(addressParts[0])) {
-    //       cityToSearch = addressParts[1];
-    //       // Extract state name/code from "California 91302" -> "California" or "CA"
-    //       const statePart = addressParts[2].split(' ')[0]; // "California 91302" -> "California"
-    //       stateToSearch = statePart;
-    //     }
-    //   } else if (addressParts.length >= 2) {
-    //     // Simple format: "City, State"
-    //     if (streetPattern.test(addressParts[0])) {
-    //       cityToSearch = addressParts[1];
-    //     } else {
-    //       cityToSearch = addressParts[0];
-    //       stateToSearch = addressParts[1].split(' ')[0]; // Handle "CA 12345" -> "CA"
-    //     }
-    //   } else {
-    //     // Single part - use as-is
-    //     cityToSearch = addressParts[0];
-    //   }
+      // Step 2: Major US cities + a few Indian cities for testing
+      const majorCities = [
+        // Major US Cities (Top 100+)
+        'new york', 'los angeles', 'chicago', 'houston', 'phoenix', 'philadelphia',
+        'san antonio', 'san diego', 'dallas', 'san jose', 'austin', 'jacksonville',
+        'fort worth', 'columbus', 'charlotte', 'san francisco', 'indianapolis', 'seattle',
+        'denver', 'washington', 'boston', 'el paso', 'nashville', 'detroit', 'oklahoma city',
+        'portland', 'las vegas', 'memphis', 'louisville', 'baltimore', 'milwaukee',
+        'albuquerque', 'tucson', 'fresno', 'mesa', 'sacramento', 'atlanta', 'kansas city',
+        'colorado springs', 'omaha', 'raleigh', 'miami', 'long beach', 'virginia beach',
+        'oakland', 'minneapolis', 'tulsa', 'tampa', 'arlington', 'new orleans', 'wichita',
+        'cleveland', 'bakersfield', 'aurora', 'anaheim', 'honolulu', 'santa ana',
+        'riverside', 'corpus christi', 'lexington', 'stockton', 'henderson', 'saint paul',
+        'cincinnati', 'st. louis', 'pittsburgh', 'greensboro', 'lincoln', 'anchorage',
+        'plano', 'orlando', 'irvine', 'newark', 'toledo', 'durham', 'chula vista',
+        'fort wayne', 'jersey city', 'st. petersburg', 'laredo', 'madison', 'chandler',
+        'buffalo', 'lubbock', 'scottsdale', 'reno', 'glendale', 'gilbert', 'winston-salem',
+        'north las vegas', 'norfolk', 'chesapeake', 'garland', 'irving', 'hialeah',
+        'fremont', 'richmond', 'boise', 'spokane', 'des moines', 'tacoma', 'san bernardino',
 
-    //   console.log('🔍 DEBUG: Location search -', {
-    //     original: address,
-    //     extracted_city: cityToSearch,
-    //     extracted_state: stateToSearch,
-    //     all_parts: addressParts
-    //   });
+        // Indian cities (for testing)
+        'mumbai', 'delhi', 'bangalore', 'bengaluru', 'hyderabad', 'ahmedabad',
+        'chennai', 'kolkata', 'pune', 'jaipur', 'surat'
+      ];
 
-    //   // Build location filter: match state for broader results when city not found
-    //   // Note: Calabasas, CA is near Los Angeles - match on California/CA
-    //   // TODO: This is a fallback. Frontend should send geocoded coordinates for accurate proximity search.
-    //   if (stateToSearch) {
-    //     // Match on state name (e.g., "California") or abbreviation (e.g., "CA")
-    //     // Common state abbreviations mapping
-    //     const stateAbbreviations = {
-    //       'alabama': 'AL', 'alaska': 'AK', 'arizona': 'AZ', 'arkansas': 'AR',
-    //       'california': 'CA', 'colorado': 'CO', 'connecticut': 'CT', 'delaware': 'DE',
-    //       'florida': 'FL', 'georgia': 'GA', 'hawaii': 'HI', 'idaho': 'ID',
-    //       'illinois': 'IL', 'indiana': 'IN', 'iowa': 'IA', 'kansas': 'KS',
-    //       'kentucky': 'KY', 'louisiana': 'LA', 'maine': 'ME', 'maryland': 'MD',
-    //       'massachusetts': 'MA', 'michigan': 'MI', 'minnesota': 'MN', 'mississippi': 'MS',
-    //       'missouri': 'MO', 'montana': 'MT', 'nebraska': 'NE', 'nevada': 'NV',
-    //       'new hampshire': 'NH', 'new jersey': 'NJ', 'new mexico': 'NM', 'new york': 'NY',
-    //       'north carolina': 'NC', 'north dakota': 'ND', 'ohio': 'OH', 'oklahoma': 'OK',
-    //       'oregon': 'OR', 'pennsylvania': 'PA', 'rhode island': 'RI', 'south carolina': 'SC',
-    //       'south dakota': 'SD', 'tennessee': 'TN', 'texas': 'TX', 'utah': 'UT',
-    //       'vermont': 'VT', 'virginia': 'VA', 'washington': 'WA', 'west virginia': 'WV',
-    //       'wisconsin': 'WI', 'wyoming': 'WY'
-    //     };
+      // Step 3: Find major city (exact match first)
+      city = cleanParts.find(part =>
+        majorCities.includes(part.toLowerCase())
+      );
 
-    //     const stateAbbr = stateAbbreviations[stateToSearch.toLowerCase()];
+      // Step 4: If no exact match, find partial match
+      // This handles cases like "Los Angeles" in "Avenue East, Los Angeles, California"
+      if (!city) {
+        city = cleanParts.find(part =>
+          majorCities.some(majorCity => {
+            const partLower = part.toLowerCase();
+            // Check if part contains major city OR major city contains part
+            return partLower.includes(majorCity) || majorCity.includes(partLower);
+          })
+        );
+      }
 
-    //     // Match state name or abbreviation using simple LIKE (not OR which has syntax issues)
-    //     // This will match "California", "CA", etc.
-    //     if (stateAbbr) {
-    //       whereClause.location = {
-    //         [Op.like]: `%${stateAbbr}%`  // Match abbreviation: "Los Angeles, CA"
-    //       };
-    //     } else {
-    //       whereClause.location = {
-    //         [Op.like]: `%${stateToSearch}%`  // Match full name if no abbreviation
-    //       };
-    //     }
-    //   } else if (cityToSearch) {
-    //     whereClause.location = {
-    //       [Op.like]: `%${cityToSearch}%`
-    //     };
-    //   }
-    // }
+      // Step 5: Fallback - skip neighborhood/directional indicators and states
+      if (!city) {
+        const skipPattern = /\b(east|west|north|south|central|suburban|suburb|california|texas|florida|new york|illinois|pennsylvania|ohio|georgia|michigan|north carolina|new jersey|virginia|washington|arizona|massachusetts|tennessee|indiana|missouri|maryland|wisconsin|colorado|minnesota|south carolina|alabama|louisiana|kentucky|oregon|oklahoma|connecticut|utah|iowa|nevada|arkansas|mississippi|kansas|new mexico|nebraska|idaho|hawaii|maine|new hampshire|rhode island|montana|delaware|south dakota|north dakota|alaska|vermont|wyoming|maharashtra|gujarat|karnataka|tamil nadu|rajasthan|uttar pradesh)\b/i;
 
-if (location && !useProximitySearch) {
-  const parts = location
-    .split(',')
-    .map(p => p.trim())
-    .filter(p => p.length > 0 && !/^\d+$/.test(p));
+        city = cleanParts.find(p => !skipPattern.test(p.toLowerCase()));
+      }
 
-  let city = null;
-  let state = null;
+      // Step 6: Last resort - use first clean part
+      if (!city && cleanParts.length > 0) {
+        city = cleanParts[0];
+      }
 
-  if (parts.length >= 3) {
-    // Google Maps format: ..., City, State, Country
-    city = parts[parts.length - 3];
-    state = parts[parts.length - 2];
-  } else if (parts.length === 2) {
-    // City, State
-    city = parts[0];
-    state = parts[1];
-  } else if (parts.length === 1) {
-    // City only
-    city = parts[0];
-  }
+      // Step 7: Clean up city name
+      if (city) {
+        city = city
+          .replace(/\b(suburban|suburb|east|west|north|south|central|greater)\b/gi, '')
+          .trim();
+      }
 
-  if (city) {
-    // 🎯 STRICT city match
-    whereClause.location = {
-      [Op.like]: `%${city}%`
-    };
-  } else if (state) {
-    // fallback only
-    whereClause.location = {
-      [Op.like]: `%${state}%`
-    };
-  }
+      console.log('🔍 DEBUG: Location parsing:', {
+        original: location,
+        parts: parts,
+        cleanParts: cleanParts,
+        extractedCity: city
+      });
 
-  console.log('🔍 DEBUG: Location resolved as:', { city, state });
-}
+      // Apply city filter
+      if (city) {
+        whereClause.location = {
+          [Op.like]: `%${city}%`
+        };
+      }
+    }
+
+// if (location && !useProximitySearch) {
+//   const parts = location
+//     .split(',')
+//     .map(p => p.trim())
+//     .filter(p => p.length > 0 && !/^\d+$/.test(p));
+
+//   let city = null;
+//   let state = null;
+
+//   if (parts.length >= 3) {
+//     city = parts[parts.length - 3];
+//     state = parts[parts.length - 2];
+//   } else if (parts.length === 2) {
+//     // City, State
+//     city = parts[0];
+//     state = parts[1];
+//   } else if (parts.length === 1) {
+//     // City only
+//     city = parts[0];
+//   }
+
+//   if (city) {
+//     // 🎯 STRICT city match
+//     whereClause.location = {
+//       [Op.like]: `%${city}%`
+//     };
+//   } else if (state) {
+//     // fallback only
+//     whereClause.location = {
+//       [Op.like]: `%${state}%`
+//     };
+//   }
+
+//   console.log('🔍 DEBUG: Location resolved as:', { city, state });
+// }
 
 
     if (skills) {
