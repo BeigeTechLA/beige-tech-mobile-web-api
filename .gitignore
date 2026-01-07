@@ -42,3 +42,7 @@ coverage/
 # Production
 dist/
 build/
+
+# Google Cloud Service Account credentials
+revurve.json
+*.json

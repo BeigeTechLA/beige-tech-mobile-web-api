@@ -36,7 +36,19 @@ exports.createGuestBooking = async (req, res) => {
       skills_needed,
       equipments_needed,
       is_draft,
-      quote_id
+      quote_id,
+      // V3 New Fields
+      full_name,
+      phone,
+      edits_needed,
+      video_edit_types,
+      photo_edit_types,
+      team_included,
+      add_team_members,
+      special_instructions,
+      reference_links,
+      matching_method,
+      selected_crew_ids
     } = req.body;
 
     // Validate required fields
@@ -98,6 +110,21 @@ exports.createGuestBooking = async (req, res) => {
       // Plain strings are kept as-is for backward compatibility
     }
 
+    // V3: Combine edit types
+    let combinedEditTypes = edit_type;
+    if (video_edit_types || photo_edit_types) {
+        const vTypes = Array.isArray(video_edit_types) ? video_edit_types : [];
+        const pTypes = Array.isArray(photo_edit_types) ? photo_edit_types : [];
+        combinedEditTypes = [...vTypes, ...pTypes].join(',');
+    }
+
+    // V3: Combine description with new fields
+    let combinedDescription = description || special_instructions || '';
+    if (full_name) combinedDescription += `\n\nContact Name: ${full_name}`;
+    if (phone) combinedDescription += `\nPhone: ${phone}`;
+    if (reference_links) combinedDescription += `\nReference Links: ${reference_links}`;
+    if (matching_method) combinedDescription += `\nMatching Method: ${matching_method}`;
+
     // Prepare booking data mapping frontend fields to database fields
     // Note: user_id is NULL for guest bookings, guest_email is used instead
     const bookingData = {
@@ -105,8 +132,8 @@ exports.createGuestBooking = async (req, res) => {
       quote_id: quote_id || null, // Link to pricing quote if provided
       guest_email: guest_email, // Store guest email for contact
       project_name: order_name,
-      description: description || null,
-      event_type: event_type || content_type || project_type || null,
+      description: combinedDescription || null,
+      event_type: event_type || content_type || project_type || (shoot_type ? shoot_type : null),
       event_date: event_date,
       duration_hours: duration_hours ? parseInt(duration_hours) : null,
       start_time: start_time,
@@ -136,6 +163,23 @@ exports.createGuestBooking = async (req, res) => {
 
     // Create guest booking with email stored in database
     const booking = await stream_project_booking.create(bookingData);
+
+    // V3: Assign selected creators if provided
+    if (selected_crew_ids && Array.isArray(selected_crew_ids) && selected_crew_ids.length > 0) {
+        try {
+            const assignments = selected_crew_ids.map(creator_id => ({
+                project_id: booking.stream_project_booking_id,
+                crew_member_id: creator_id,
+                status: 'selected',
+                is_active: 1,
+                crew_accept: 0
+            }));
+            await assigned_crew.bulkCreate(assignments);
+        } catch (assignError) {
+            console.error("Error assigning V3 creators:", assignError);
+            // Don't fail the whole request, just log it
+        }
+    }
 
     // Sync booking to Google Sheets (async, non-blocking)
     appendBookingToSheet({
