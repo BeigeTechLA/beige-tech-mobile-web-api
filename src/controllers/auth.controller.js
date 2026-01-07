@@ -1698,7 +1698,7 @@ exports.registerCrewMemberStep2 = async (req, res) => {
 exports.registerCrewMemberStep3 = [
   upload.fields([
     { name: 'resume', maxCount: 1 },
-    { name: 'portfolio', maxCount: 1 },
+    { name: 'portfolio', maxCount: 10 },
     { name: 'certifications', maxCount: 10 },
     { name: 'recent_work', maxCount: undefined }
   ]),
@@ -1731,7 +1731,6 @@ exports.registerCrewMemberStep3 = [
 
       await crewMember.save();
 
-      // Upload files
       const filePaths = await S3UploadFiles(req.files);
       const files = [];
 
