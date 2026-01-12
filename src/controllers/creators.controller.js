@@ -319,12 +319,13 @@ exports.searchCreators = async (req, res) => {
       rolesArray = rolesArray.map(r => r.trim()).filter(r => r);
 
       // Map role names to IDs if needed
-      // videographer -> 1, photographer/photographers -> 2
+      // videographer -> 1, photographer/photographers -> 2, editor -> 3
       const roleNameToId = {
-        'videographer': [1, 3, 9], // Multiple IDs for videographer
-        'photographer': [2, 4, 10], // Multiple IDs for photographer/photographers
-        'photographers': [2, 4, 10],
-        'cinematographer': [1, 3], // Map to videographer IDs
+        'videographer': [1, 9], // Videographer role IDs only
+        'photographer': [2, 10], // Photographer role IDs only
+        'photographers': [2, 10],
+        'cinematographer': [1], // Cinematographer maps to videographer ID
+        'editor': [3], // Editor is separate role
       };
 
       let roleIds = [];
