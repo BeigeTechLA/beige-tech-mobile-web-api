@@ -1,0 +1,213 @@
+name: Deploy Backend
+
+on:
+  push:
+    branches:
+      - develop    # Deploy to DEV
+      - staging    # Deploy to STAGING
+      - main       # Deploy to PRODUCTION
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - production
+
+env:
+  NODE_VERSION: '20.x'
+
+jobs:
+  # Determine environment based on branch or manual trigger
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.set-env.outputs.environment }}
+    steps:
+      - name: Set environment
+        id: set-env
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref }}" == "refs/heads/develop" ]; then
+            echo "environment=dev" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref }}" == "refs/heads/staging" ]; then
+            echo "environment=staging" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            echo "environment=production" >> $GITHUB_OUTPUT
+          fi
+
+  # Lint and test
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run linter
+        run: npm run lint --if-present
+
+      - name: Run tests
+        run: npm test --if-present
+
+  # Deploy to DEV
+  deploy-dev:
+    needs: [setup, test]
+    if: needs.setup.outputs.environment == 'dev'
+    runs-on: ubuntu-latest
+    environment: development
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Deploy to DEV
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.DEV_SSH_PRIVATE_KEY }}
+          SERVER_IP: ${{ secrets.DEV_SERVER_IP }}
+          SERVER_USER: ec2-user
+        run: |
+          # Setup SSH
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H $SERVER_IP >> ~/.ssh/known_hosts
+
+          # Deploy
+          rsync -avz --progress \
+            --exclude 'node_modules' \
+            --exclude '.git' \
+            --exclude 'deploy' \
+            --exclude 'logs' \
+            --exclude '.env*' \
+            -e "ssh -i ~/.ssh/deploy_key" \
+            ./ $SERVER_USER@$SERVER_IP:/var/www/revure-backend/
+
+          # Create env file and restart
+          ssh -i ~/.ssh/deploy_key $SERVER_USER@$SERVER_IP << 'EOF'
+            cd /var/www/revure-backend
+            npm install --production
+            pm2 restart revure-backend || pm2 start src/server.js --name revure-backend
+            pm2 save
+          EOF
+
+      - name: Health check
+        run: |
+          sleep 10
+          curl -f http://${{ secrets.DEV_SERVER_IP }}/health || exit 1
+
+  # Deploy to STAGING
+  deploy-staging:
+    needs: [setup, test]
+    if: needs.setup.outputs.environment == 'staging'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Deploy to STAGING
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          SERVER_IP: ${{ secrets.STAGING_SERVER_IP }}
+          SERVER_USER: ec2-user
+        run: |
+          # Setup SSH
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H $SERVER_IP >> ~/.ssh/known_hosts
+
+          # Deploy
+          rsync -avz --progress \
+            --exclude 'node_modules' \
+            --exclude '.git' \
+            --exclude 'deploy' \
+            --exclude 'logs' \
+            --exclude '.env*' \
+            -e "ssh -i ~/.ssh/deploy_key" \
+            ./ $SERVER_USER@$SERVER_IP:/var/www/revure-backend/
+
+          # Restart application
+          ssh -i ~/.ssh/deploy_key $SERVER_USER@$SERVER_IP << 'EOF'
+            cd /var/www/revure-backend
+            npm install --production
+            pm2 restart revure-backend || pm2 start src/server.js --name revure-backend
+            pm2 save
+          EOF
+
+      - name: Health check
+        run: |
+          sleep 10
+          curl -f http://${{ secrets.STAGING_SERVER_IP }}/health || exit 1
+
+  # Deploy to PRODUCTION (requires approval)
+  deploy-production:
+    needs: [setup, test]
+    if: needs.setup.outputs.environment == 'production'
+    runs-on: ubuntu-latest
+    environment: production  # Requires manual approval
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Deploy to PRODUCTION
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+          SERVER_IP: ${{ secrets.PROD_SERVER_IP }}
+          SERVER_USER: ec2-user
+        run: |
+          # Setup SSH
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H $SERVER_IP >> ~/.ssh/known_hosts
+
+          # Deploy
+          rsync -avz --progress \
+            --exclude 'node_modules' \
+            --exclude '.git' \
+            --exclude 'deploy' \
+            --exclude 'logs' \
+            --exclude '.env*' \
+            -e "ssh -i ~/.ssh/deploy_key" \
+            ./ $SERVER_USER@$SERVER_IP:/var/www/revure-backend/
+
+          # Restart application
+          ssh -i ~/.ssh/deploy_key $SERVER_USER@$SERVER_IP << 'EOF'
+            cd /var/www/revure-backend
+            npm install --production
+            pm2 restart revure-backend || pm2 start src/server.js --name revure-backend
+            pm2 save
+          EOF
+
+      - name: Health check
+        run: |
+          sleep 10
+          curl -f http://${{ secrets.PROD_SERVER_IP }}/health || exit 1
+
+      - name: Notify deployment
+        if: success()
+        run: echo "✅ Production deployment successful!"

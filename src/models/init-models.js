@@ -40,6 +40,15 @@ var _pricing_discount_tiers = require("./pricing_discount_tiers");
 var _quotes = require("./quotes");
 var _quote_line_items = require("./quote_line_items");
 
+// CMS Approval States Models
+var _projects = require("./projects");
+var _project_files = require("./project_files");
+var _project_state_history = require("./project_state_history");
+var _project_feedback = require("./project_feedback");
+var _project_assignments = require("./project_assignments");
+var _notifications = require("./notifications");
+var _notification_preferences = require("./notification_preferences");
+
 function initModels(sequelize) {
   var assigned_crew = _assigned_crew(sequelize, DataTypes);
   var assigned_equipment = _assigned_equipment(sequelize, DataTypes);
@@ -80,7 +89,16 @@ function initModels(sequelize) {
   var pricing_discount_tiers = _pricing_discount_tiers(sequelize, DataTypes);
   var quotes = _quotes(sequelize, DataTypes);
   var quote_line_items = _quote_line_items(sequelize, DataTypes);
-    var crew_availability = _crew_availability(sequelize, DataTypes);
+  var crew_availability = _crew_availability(sequelize, DataTypes);
+
+  // CMS Approval States Models
+  var projects = _projects(sequelize, DataTypes);
+  var project_files = _project_files(sequelize, DataTypes);
+  var project_state_history = _project_state_history(sequelize, DataTypes);
+  var project_feedback = _project_feedback(sequelize, DataTypes);
+  var project_assignments = _project_assignments(sequelize, DataTypes);
+  var notifications = _notifications(sequelize, DataTypes);
+  var notification_preferences = _notification_preferences(sequelize, DataTypes);
 
   assignment_checklist.belongsTo(checklist_master, { as: "checklist", foreignKey: "checklist_id"});
   checklist_master.hasMany(assignment_checklist, { as: "assignment_checklists", foreignKey: "checklist_id"});
@@ -193,10 +211,107 @@ function initModels(sequelize) {
   users.hasMany(quotes, { as: "quotes", foreignKey: "user_id"});
   quotes.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id"});
   stream_project_booking.hasMany(quotes, { as: "quotes", foreignKey: "booking_id"});
-  
+
   // Booking -> Quote relationship (booking can reference a primary quote)
   stream_project_booking.belongsTo(quotes, { as: "primary_quote", foreignKey: "quote_id"});
   quotes.hasMany(stream_project_booking, { as: "bookings", foreignKey: "quote_id"});
+
+  // =====================================================
+  // CMS Approval States Relationships
+  // =====================================================
+
+  // Projects -> Booking relationship
+  projects.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id" });
+  stream_project_booking.hasOne(projects, { as: "cms_project", foreignKey: "booking_id" });
+
+  // Projects -> Users relationships (client, creator, editor, QC)
+  projects.belongsTo(users, { as: "client", foreignKey: "client_user_id" });
+  users.hasMany(projects, { as: "client_projects", foreignKey: "client_user_id" });
+
+  projects.belongsTo(users, { as: "creator", foreignKey: "assigned_creator_id" });
+  users.hasMany(projects, { as: "creator_projects", foreignKey: "assigned_creator_id" });
+
+  projects.belongsTo(users, { as: "editor", foreignKey: "assigned_editor_id" });
+  users.hasMany(projects, { as: "editor_projects", foreignKey: "assigned_editor_id" });
+
+  projects.belongsTo(users, { as: "qc_reviewer", foreignKey: "assigned_qc_id" });
+  users.hasMany(projects, { as: "qc_projects", foreignKey: "assigned_qc_id" });
+
+  // Project Files -> Projects relationship
+  project_files.belongsTo(projects, { as: "project", foreignKey: "project_id" });
+  projects.hasMany(project_files, { as: "files", foreignKey: "project_id" });
+
+  // Project Files -> Users (uploaded_by, deleted_by)
+  project_files.belongsTo(users, { as: "uploader", foreignKey: "uploaded_by_user_id" });
+  users.hasMany(project_files, { as: "uploaded_files", foreignKey: "uploaded_by_user_id" });
+
+  project_files.belongsTo(users, { as: "deleter", foreignKey: "deleted_by_user_id" });
+  users.hasMany(project_files, { as: "deleted_files", foreignKey: "deleted_by_user_id" });
+
+  // Project Files -> Self reference (version chain)
+  project_files.belongsTo(project_files, { as: "previous_version", foreignKey: "replaces_file_id" });
+  project_files.hasMany(project_files, { as: "newer_versions", foreignKey: "replaces_file_id" });
+
+  // Project State History -> Projects relationship
+  project_state_history.belongsTo(projects, { as: "project", foreignKey: "project_id" });
+  projects.hasMany(project_state_history, { as: "state_history", foreignKey: "project_id" });
+
+  // Project State History -> Users relationship
+  project_state_history.belongsTo(users, { as: "transitioner", foreignKey: "transitioned_by_user_id" });
+  users.hasMany(project_state_history, { as: "state_transitions", foreignKey: "transitioned_by_user_id" });
+
+  // Project State History -> Project Files relationship
+  project_state_history.belongsTo(project_files, { as: "related_file", foreignKey: "related_file_id" });
+  project_files.hasMany(project_state_history, { as: "triggered_transitions", foreignKey: "related_file_id" });
+
+  // Project Feedback -> Projects relationship
+  project_feedback.belongsTo(projects, { as: "project", foreignKey: "project_id" });
+  projects.hasMany(project_feedback, { as: "feedback", foreignKey: "project_id" });
+
+  // Project Feedback -> Users relationships (submitted_by, translated_by, resolved_by)
+  project_feedback.belongsTo(users, { as: "submitter", foreignKey: "submitted_by_user_id" });
+  users.hasMany(project_feedback, { as: "submitted_feedback", foreignKey: "submitted_by_user_id" });
+
+  project_feedback.belongsTo(users, { as: "translator", foreignKey: "translated_by_user_id" });
+  users.hasMany(project_feedback, { as: "translated_feedback", foreignKey: "translated_by_user_id" });
+
+  project_feedback.belongsTo(users, { as: "resolver", foreignKey: "resolved_by_user_id" });
+  users.hasMany(project_feedback, { as: "resolved_feedback", foreignKey: "resolved_by_user_id" });
+
+  // Project Feedback -> Project Files relationship
+  project_feedback.belongsTo(project_files, { as: "related_file", foreignKey: "related_file_id" });
+  project_files.hasMany(project_feedback, { as: "feedback", foreignKey: "related_file_id" });
+
+  // Project Assignments -> Projects relationship
+  project_assignments.belongsTo(projects, { as: "project", foreignKey: "project_id" });
+  projects.hasMany(project_assignments, { as: "assignments", foreignKey: "project_id" });
+
+  // Project Assignments -> Users relationships (assigned_user, assigned_by)
+  project_assignments.belongsTo(users, { as: "assigned_user", foreignKey: "assigned_user_id" });
+  users.hasMany(project_assignments, { as: "assignments", foreignKey: "assigned_user_id" });
+
+  project_assignments.belongsTo(users, { as: "assigner", foreignKey: "assigned_by_user_id" });
+  users.hasMany(project_assignments, { as: "created_assignments", foreignKey: "assigned_by_user_id" });
+
+  // Notifications -> Users relationship
+  notifications.belongsTo(users, { as: "user", foreignKey: "user_id" });
+  users.hasMany(notifications, { as: "notifications", foreignKey: "user_id" });
+
+  // Notifications -> Projects relationship
+  notifications.belongsTo(projects, { as: "project", foreignKey: "related_project_id" });
+  projects.hasMany(notifications, { as: "notifications", foreignKey: "related_project_id" });
+
+  // Notifications -> Project Files relationship
+  notifications.belongsTo(project_files, { as: "file", foreignKey: "related_file_id" });
+  project_files.hasMany(notifications, { as: "notifications", foreignKey: "related_file_id" });
+
+  // Notifications -> Project Assignments relationship
+  notifications.belongsTo(project_assignments, { as: "assignment", foreignKey: "related_assignment_id" });
+  project_assignments.hasMany(notifications, { as: "notifications", foreignKey: "related_assignment_id" });
+
+  // Notification Preferences -> Users relationship (one-to-one)
+  notification_preferences.belongsTo(users, { as: "user", foreignKey: "user_id" });
+  users.hasOne(notification_preferences, { as: "notification_preferences", foreignKey: "user_id" });
 
   return {
     assigned_crew,
@@ -239,6 +354,14 @@ function initModels(sequelize) {
     pricing_discount_tiers,
     quotes,
     quote_line_items,
+    // CMS Approval States Models
+    projects,
+    project_files,
+    project_state_history,
+    project_feedback,
+    project_assignments,
+    notifications,
+    notification_preferences,
   };
 }
 module.exports = initModels;

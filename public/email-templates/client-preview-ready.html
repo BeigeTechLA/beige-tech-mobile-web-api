@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Your Preview is Ready</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f3f4f6;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f3f4f6; padding: 40px 20px;">
+    <tr>
+      <td align="center">
+        <!-- Main Container -->
+        <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+
+          <!-- Header with Celebration -->
+          <tr>
+            <td style="background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%); padding: 40px 30px; text-align: center;">
+              <div style="font-size: 48px; margin-bottom: 15px;">&#127881;</div>
+              <h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 700;">Your Preview is Ready!</h1>
+              <p style="margin: 10px 0 0; color: rgba(255,255,255,0.9); font-size: 16px;">{{PROJECT_NAME}}</p>
+            </td>
+          </tr>
+
+          <!-- Content -->
+          <tr>
+            <td style="padding: 40px 30px;">
+              <p style="margin: 0; font-size: 16px; color: #374151; line-height: 1.6;">
+                Hi <strong>{{CLIENT_NAME}}</strong>,
+              </p>
+              <p style="margin: 20px 0; font-size: 16px; color: #374151; line-height: 1.6;">
+                We're excited to let you know that your project preview is ready for review! Our team has worked hard to bring your vision to life.
+              </p>
+
+              <!-- Preview Card -->
+              <table width="100%" cellpadding="0" cellspacing="0" style="background: linear-gradient(135deg, #faf5ff 0%, #f3e8ff 100%); border-radius: 12px; border: 2px solid #8b5cf6; margin: 25px 0;">
+                <tr>
+                  <td style="padding: 30px; text-align: center;">
+                    <p style="margin: 0 0 15px; font-size: 14px; color: #6b21a8; text-transform: uppercase; letter-spacing: 1px; font-weight: 600;">Project Preview</p>
+                    <h2 style="margin: 0 0 10px; font-size: 22px; color: #581c87; font-weight: 700;">{{PROJECT_CODE}}</h2>
+                    <p style="margin: 0; font-size: 14px; color: #7c3aed;">Click below to view your preview</p>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Primary CTA -->
+              <div style="text-align: center; margin: 30px 0;">
+                <a href="{{PREVIEW_URL}}" style="display: inline-block; padding: 16px 40px; background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%); color: #ffffff; text-decoration: none; border-radius: 10px; font-size: 18px; font-weight: 700; box-shadow: 0 6px 15px rgba(139, 92, 246, 0.4);">
+                  View Preview
+                </a>
+              </div>
+
+              <!-- Feedback Section -->
+              <div style="background-color: #f9fafb; border-radius: 8px; padding: 25px; margin: 25px 0;">
+                <h3 style="margin: 0 0 15px; font-size: 16px; color: #111827; font-weight: 600;">We Value Your Feedback</h3>
+                <p style="margin: 0 0 15px; font-size: 14px; color: #6b7280; line-height: 1.6;">
+                  After reviewing the preview, please share your feedback. You can:
+                </p>
+                <ul style="margin: 0; padding-left: 20px; color: #6b7280; font-size: 14px; line-height: 1.8;">
+                  <li><strong style="color: #374151;">Approve</strong> - If you're happy with the result</li>
+                  <li><strong style="color: #374151;">Request Changes</strong> - Provide specific feedback for revisions</li>
+                </ul>
+              </div>
+
+              <!-- Deadline Warning -->
+              {{#if FEEDBACK_DEADLINE}}
+              <div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 15px; border-radius: 4px; margin: 20px 0;">
+                <p style="margin: 0; font-size: 14px; color: #78350f; font-weight: 600;">Feedback Deadline</p>
+                <p style="margin: 8px 0 0; font-size: 14px; color: #92400e; line-height: 1.5;">
+                  Please submit your feedback by <strong>{{FEEDBACK_DEADLINE}}</strong> to keep your project on schedule.
+                </p>
+              </div>
+              {{/if}}
+
+              <!-- What to Look For -->
+              <div style="margin: 25px 0;">
+                <h3 style="margin: 0 0 15px; font-size: 16px; color: #111827; font-weight: 600;">What to Look For:</h3>
+                <table width="100%" cellpadding="0" cellspacing="0">
+                  <tr>
+                    <td width="50%" style="padding: 8px 8px 8px 0; vertical-align: top;">
+                      <div style="font-size: 20px; margin-bottom: 5px;">&#127916;</div>
+                      <p style="margin: 0; font-size: 13px; color: #374151; font-weight: 600;">Overall Flow</p>
+                      <p style="margin: 4px 0 0; font-size: 12px; color: #6b7280;">Pacing and transitions</p>
+                    </td>
+                    <td width="50%" style="padding: 8px 0 8px 8px; vertical-align: top;">
+                      <div style="font-size: 20px; margin-bottom: 5px;">&#127912;</div>
+                      <p style="margin: 0; font-size: 13px; color: #374151; font-weight: 600;">Visual Style</p>
+                      <p style="margin: 4px 0 0; font-size: 12px; color: #6b7280;">Color and mood</p>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td width="50%" style="padding: 8px 8px 8px 0; vertical-align: top;">
+                      <div style="font-size: 20px; margin-bottom: 5px;">&#127925;</div>
+                      <p style="margin: 0; font-size: 13px; color: #374151; font-weight: 600;">Audio Quality</p>
+                      <p style="margin: 4px 0 0; font-size: 12px; color: #6b7280;">Sound and music</p>
+                    </td>
+                    <td width="50%" style="padding: 8px 0 8px 8px; vertical-align: top;">
+                      <div style="font-size: 20px; margin-bottom: 5px;">&#128221;</div>
+                      <p style="margin: 0; font-size: 13px; color: #374151; font-weight: 600;">Key Moments</p>
+                      <p style="margin: 4px 0 0; font-size: 12px; color: #6b7280;">Important highlights</p>
+                    </td>
+                  </tr>
+                </table>
+              </div>
+
+              <p style="margin: 30px 0 0; font-size: 14px; color: #6b7280; line-height: 1.6; text-align: center;">
+                Questions? Reply to this email or contact your project coordinator.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="background-color: #f9fafb; padding: 25px 30px; border-top: 1px solid #e5e7eb; text-align: center;">
+              <p style="margin: 0; font-size: 13px; color: #6b7280; line-height: 1.5;">
+                This is an automated notification from Revure.
+              </p>
+              <p style="margin: 10px 0 0; font-size: 12px; color: #9ca3af;">
+                <a href="{{SETTINGS_URL}}" style="color: #667eea; text-decoration: none;">Manage notification preferences</a>
+              </p>
+              <p style="margin: 10px 0 0; font-size: 13px; color: #9ca3af;">
+                &copy; {{YEAR}} Revure. All rights reserved.
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

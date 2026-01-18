@@ -28,7 +28,7 @@ router.use('/auth', require('./auth.routes'));
 router.use('/creators', require('./creators.routes'));
 router.use('/equipment', require('./equipment.routes'));
 router.use('/pricing', require('./pricing.routes'));
-// router.use('/projects', require('./project.routes'));
+router.use('/projects', require('./projects.routes'));
 router.use('/bookings', require('./bookings.routes'));
 router.use('/guest-bookings', require('./guest-bookings.routes'));
 router.use('/payments', require('./payments.routes'));
