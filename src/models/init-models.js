@@ -49,6 +49,13 @@ var _project_assignments = require("./project_assignments");
 var _notifications = require("./notifications");
 var _notification_preferences = require("./notification_preferences");
 
+// Sales System Models
+var _sales_leads = require("./sales_leads");
+var _discount_codes = require("./discount_codes");
+var _discount_code_usage = require("./discount_code_usage");
+var _payment_links = require("./payment_links");
+var _sales_lead_activities = require("./sales_lead_activities");
+
 function initModels(sequelize) {
   var assigned_crew = _assigned_crew(sequelize, DataTypes);
   var assigned_equipment = _assigned_equipment(sequelize, DataTypes);
@@ -99,6 +106,13 @@ function initModels(sequelize) {
   var project_assignments = _project_assignments(sequelize, DataTypes);
   var notifications = _notifications(sequelize, DataTypes);
   var notification_preferences = _notification_preferences(sequelize, DataTypes);
+
+  // Sales System Models
+  var sales_leads = _sales_leads(sequelize, DataTypes);
+  var discount_codes = _discount_codes(sequelize, DataTypes);
+  var discount_code_usage = _discount_code_usage(sequelize, DataTypes);
+  var payment_links = _payment_links(sequelize, DataTypes);
+  var sales_lead_activities = _sales_lead_activities(sequelize, DataTypes);
 
   assignment_checklist.belongsTo(checklist_master, { as: "checklist", foreignKey: "checklist_id"});
   checklist_master.hasMany(assignment_checklist, { as: "assignment_checklists", foreignKey: "checklist_id"});
@@ -313,6 +327,64 @@ function initModels(sequelize) {
   notification_preferences.belongsTo(users, { as: "user", foreignKey: "user_id" });
   users.hasOne(notification_preferences, { as: "notification_preferences", foreignKey: "user_id" });
 
+  // =====================================================
+  // Sales System Relationships
+  // =====================================================
+
+  // Sales Leads relationships
+  sales_leads.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id" });
+  stream_project_booking.hasMany(sales_leads, { as: "sales_leads", foreignKey: "booking_id" });
+
+  sales_leads.belongsTo(users, { as: "user", foreignKey: "user_id" });
+  users.hasMany(sales_leads, { as: "sales_leads", foreignKey: "user_id" });
+
+  sales_leads.belongsTo(users, { as: "assigned_sales_rep", foreignKey: "assigned_sales_rep_id" });
+  users.hasMany(sales_leads, { as: "assigned_leads", foreignKey: "assigned_sales_rep_id" });
+
+  // Discount Codes relationships
+  discount_codes.belongsTo(sales_leads, { as: "lead", foreignKey: "lead_id" });
+  sales_leads.hasMany(discount_codes, { as: "discount_codes", foreignKey: "lead_id" });
+
+  discount_codes.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id" });
+  stream_project_booking.hasMany(discount_codes, { as: "discount_codes", foreignKey: "booking_id" });
+
+  discount_codes.belongsTo(users, { as: "created_by", foreignKey: "created_by_user_id" });
+  users.hasMany(discount_codes, { as: "created_discount_codes", foreignKey: "created_by_user_id" });
+
+  // Discount Code Usage relationships
+  discount_code_usage.belongsTo(discount_codes, { as: "discount_code", foreignKey: "discount_code_id" });
+  discount_codes.hasMany(discount_code_usage, { as: "usage_history", foreignKey: "discount_code_id" });
+
+  discount_code_usage.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id" });
+  stream_project_booking.hasMany(discount_code_usage, { as: "discount_usage", foreignKey: "booking_id" });
+
+  discount_code_usage.belongsTo(users, { as: "user", foreignKey: "user_id" });
+  users.hasMany(discount_code_usage, { as: "discount_usage", foreignKey: "user_id" });
+
+  // Payment Links relationships
+  payment_links.belongsTo(sales_leads, { as: "lead", foreignKey: "lead_id" });
+  sales_leads.hasMany(payment_links, { as: "payment_links", foreignKey: "lead_id" });
+
+  payment_links.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id" });
+  stream_project_booking.hasMany(payment_links, { as: "payment_links", foreignKey: "booking_id" });
+
+  payment_links.belongsTo(discount_codes, { as: "discount_code", foreignKey: "discount_code_id" });
+  discount_codes.hasMany(payment_links, { as: "payment_links", foreignKey: "discount_code_id" });
+
+  payment_links.belongsTo(users, { as: "created_by", foreignKey: "created_by_user_id" });
+  users.hasMany(payment_links, { as: "created_payment_links", foreignKey: "created_by_user_id" });
+
+  // Sales Lead Activities relationships
+  sales_lead_activities.belongsTo(sales_leads, { as: "lead", foreignKey: "lead_id" });
+  sales_leads.hasMany(sales_lead_activities, { as: "activities", foreignKey: "lead_id" });
+
+  sales_lead_activities.belongsTo(users, { as: "performed_by", foreignKey: "performed_by_user_id" });
+  users.hasMany(sales_lead_activities, { as: "performed_activities", foreignKey: "performed_by_user_id" });
+
+  // Quotes -> Discount Codes relationship
+  quotes.belongsTo(discount_codes, { as: "discount_code", foreignKey: "discount_code_id" });
+  discount_codes.hasMany(quotes, { as: "quotes", foreignKey: "discount_code_id" });
+
   return {
     assigned_crew,
     assigned_equipment,
@@ -362,6 +434,12 @@ function initModels(sequelize) {
     project_assignments,
     notifications,
     notification_preferences,
+    // Sales System Models
+    sales_leads,
+    discount_codes,
+    discount_code_usage,
+    payment_links,
+    sales_lead_activities,
   };
 }
 module.exports = initModels;
