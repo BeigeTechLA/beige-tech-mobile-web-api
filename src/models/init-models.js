@@ -39,6 +39,10 @@ var _pricing_items = require("./pricing_items");
 var _pricing_discount_tiers = require("./pricing_discount_tiers");
 var _quotes = require("./quotes");
 var _quote_line_items = require("./quote_line_items");
+var _crew_equipment = require("./crew_equipment");
+var _crew_equipment_photos = require("./crew_equipment_photos");
+var _activity_logs = require("./activity_logs");
+var _equipment_request = require("./equipment_request");
 
 function initModels(sequelize) {
   var assigned_crew = _assigned_crew(sequelize, DataTypes);
@@ -81,6 +85,10 @@ function initModels(sequelize) {
   var quotes = _quotes(sequelize, DataTypes);
   var quote_line_items = _quote_line_items(sequelize, DataTypes);
     var crew_availability = _crew_availability(sequelize, DataTypes);
+    var crew_equipment = _crew_equipment(sequelize, DataTypes);
+  var crew_equipment_photos = _crew_equipment_photos(sequelize, DataTypes);
+  var activity_logs = _activity_logs(sequelize, DataTypes);
+  var equipment_request = _equipment_request(sequelize, DataTypes);
 
   assignment_checklist.belongsTo(checklist_master, { as: "checklist", foreignKey: "checklist_id"});
   checklist_master.hasMany(assignment_checklist, { as: "assignment_checklists", foreignKey: "checklist_id"});
@@ -199,6 +207,7 @@ function initModels(sequelize) {
   quotes.hasMany(stream_project_booking, { as: "bookings", foreignKey: "quote_id"});
 
   return {
+    activity_logs,
     assigned_crew,
     assigned_equipment,
     assignment_checklist,
@@ -239,6 +248,9 @@ function initModels(sequelize) {
     pricing_discount_tiers,
     quotes,
     quote_line_items,
+    crew_equipment,
+    crew_equipment_photos,
+    equipment_request
   };
 }
 module.exports = initModels;

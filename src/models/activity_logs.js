@@ -1,7 +1,7 @@
 const Sequelize = require('sequelize');
 module.exports = function(sequelize, DataTypes) {
-  return sequelize.define('crew_member_files', {
-    crew_files_id: {
+  return sequelize.define('activity_logs', {
+    activity_id: {
       autoIncrement: true,
       type: DataTypes.INTEGER,
       allowNull: false,
@@ -9,41 +9,41 @@ module.exports = function(sequelize, DataTypes) {
     },
     crew_member_id: {
       type: DataTypes.INTEGER,
-      allowNull: false,
-      references: {
-        model: 'crew_members',
-        key: 'crew_member_id'
-      }
+      allowNull: true
     },
-    file_type: {
+    activity_type: {
+      type: DataTypes.STRING(50),
+      allowNull: false
+    },
+    title: {
       type: DataTypes.STRING(255),
       allowNull: false
     },
-    file_path: {
-      type: DataTypes.STRING(255),
-      allowNull: false
+    description: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
+    reference_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
+    reference_type: {
+      type: DataTypes.STRING(50),
+      allowNull: true
     },
     created_at: {
       type: DataTypes.DATE,
-      allowNull: false,
+      allowNull: true,
       defaultValue: Sequelize.Sequelize.fn('current_timestamp')
     },
     is_active: {
       type: DataTypes.BOOLEAN,
-      allowNull: false,
+      allowNull: true,
       defaultValue: 1
-    },
-    title: {
-      type: DataTypes.STRING(255),
-      allowNull: true
-    },
-    tag: {
-      type: DataTypes.STRING(255),
-      allowNull: true
-    },
+    }
   }, {
     sequelize,
-    tableName: 'crew_member_files',
+    tableName: 'activity_logs',
     timestamps: false,
     indexes: [
       {
@@ -51,14 +51,21 @@ module.exports = function(sequelize, DataTypes) {
         unique: true,
         using: "BTREE",
         fields: [
-          { name: "crew_files_id" },
+          { name: "activity_id" },
         ]
       },
       {
-        name: "crew_member_id",
+        name: "idx_crew_member",
         using: "BTREE",
         fields: [
           { name: "crew_member_id" },
+        ]
+      },
+      {
+        name: "idx_created_at",
+        using: "BTREE",
+        fields: [
+          { name: "created_at" },
         ]
       },
     ]

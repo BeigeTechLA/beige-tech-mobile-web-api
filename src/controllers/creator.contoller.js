@@ -24,7 +24,8 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   assigned_equipment,
   project_brief,
   event_type_master,
-  crew_availability } = require('../models');
+  crew_availability,
+  crew_equipment, crew_equipment_photos, activity_logs, equipment_request } = require('../models');
 
 const moment = require('moment');
 
@@ -1350,3 +1351,1110 @@ exports.getCrewEquipmentCounts = [
     }
   },
 ];
+
+exports.getProfile = async (req, res) => {
+  try {
+    const { crew_member_id } = req.body; 
+
+    console.log("Fetching profile for ID:", crew_member_id);
+
+    if (!crew_member_id) {
+      return res.status(400).json({
+        error: true,
+        message: "crew_member_id is required in request body"
+      });
+    }
+
+    let member = await crew_members.findOne({
+      where: { crew_member_id: crew_member_id },
+      include: [
+        {
+          model: crew_member_files,
+          as: 'crew_member_files',
+          attributes: ['crew_files_id','crew_member_id', 'file_type', 'file_path', 'created_at', 'title', 'tag'],
+          where: { is_active: 1 },
+          required: false
+        }
+      ]
+    });
+
+    if (!member) {
+      return res.status(constants.NOT_FOUND.code).json({
+        error: true,
+        code: constants.NOT_FOUND.code,
+        message: `Crew member with ID ${crew_member_id} not found`,
+        data: null,
+      });
+    }
+
+    const loc = member.location;
+    if (loc) {
+      if (typeof loc === 'string' && (loc.startsWith('{') || loc.startsWith('['))) {
+        try {
+          const parsed = JSON.parse(loc);
+          member.location = parsed.address || parsed || loc;
+        } catch {
+          member.location = loc;
+        }
+      }
+    }
+
+    let skillIds = [];
+    try {
+      let raw = member.skills;
+      if (raw) {
+        skillIds = typeof raw === 'string' ? JSON.parse(raw) : raw; 
+        skillIds = skillIds.map(id => parseInt(id));
+      }
+    } catch (err) {
+      console.error("Skills parsing error:", err);
+      skillIds = [];
+    }
+
+    const skillList = await skills_master.findAll({
+      where: { id: skillIds },
+      attributes: ['id', 'name']
+    });
+
+    let result = member.toJSON();
+    result.skills = skillList;
+
+    return res.status(constants.OK.code).json({
+      error: false,
+      code: constants.OK.code,
+      message: "Crew member fetched successfully",
+      data: result,
+    });
+
+  } catch (error) {
+    console.error("Get Crew Member Error:", error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      error: true,
+      code: constants.INTERNAL_SERVER_ERROR.code,
+      message: constants.INTERNAL_SERVER_ERROR.message,
+      data: null,
+    });
+  }
+};
+
+exports.editProfile = async (req, res) => {
+  try {
+    // const crew_member_id = req.body;
+    const {
+      crew_member_id,
+      first_name,
+      last_name,
+      email,
+      phone_number,
+      location,
+      working_distance,
+      primary_role,
+      years_of_experience,
+      hourly_rate,
+      bio,
+      skills,
+      social_media_links
+    } = req.body;
+
+    const crewMember = await crew_members.findOne({
+      where: { crew_member_id }
+    });
+
+    if (!crewMember) {
+      return res.status(constants.NOT_FOUND.code).json({
+        error: true,
+        code: constants.NOT_FOUND.code,
+        message: "Crew member not found",
+        data: null,
+      });
+    }
+
+    if (email && email !== crewMember.email) {
+      const existingEmail = await crew_members.findOne({
+        where: { email, crew_member_id: { [Sequelize.Op.ne]: crew_member_id } }
+      });
+      if (existingEmail) {
+        return res.status(constants.BAD_REQUEST.code).json({
+          error: true,
+          code: constants.BAD_REQUEST.code,
+          message: "Email already exists",
+          data: null,
+        });
+      }
+    }
+
+    // Prepare update data
+    const updateData = {};
+
+    if (first_name !== undefined) updateData.first_name = first_name;
+    if (last_name !== undefined) updateData.last_name = last_name;
+    if (email !== undefined) updateData.email = email;
+    if (phone_number !== undefined) updateData.phone_number = phone_number;
+    if (location !== undefined) updateData.location = JSON.stringify(location);
+    if (working_distance !== undefined) updateData.working_distance = working_distance;
+    if (years_of_experience !== undefined) updateData.years_of_experience = years_of_experience;
+    if (hourly_rate !== undefined) updateData.hourly_rate = hourly_rate;
+    if (bio !== undefined) updateData.bio = bio;
+
+    if (primary_role !== undefined) {
+      updateData.primary_role = Array.isArray(primary_role) 
+        ? JSON.stringify(primary_role) 
+        : primary_role;
+    }
+
+    if (skills !== undefined) {
+      updateData.skills = Array.isArray(skills) ? JSON.stringify(skills) : skills;
+    }
+
+    if (social_media_links !== undefined) {
+      if (Array.isArray(social_media_links)) {
+        const sanitizedLinks = social_media_links
+          .filter(item => item.platform && item.url)
+          .map(item => ({ platform: item.platform, url: item.url }));
+        updateData.social_media_links = JSON.stringify(sanitizedLinks);
+      } else {
+        updateData.social_media_links = social_media_links;
+      }
+    }
+
+    const oldEmail = crewMember.email;
+    await crewMember.update(updateData);
+
+    if (email && email !== oldEmail) {
+      await User.update({ email: email }, { where: { email: oldEmail } });
+    }
+
+    const updatedMember = await crew_members.findOne({
+      where: { crew_member_id },
+      include: [
+        {
+          model: crew_member_files,
+          as: 'crew_member_files',
+          attributes: ['crew_member_id', 'file_type', 'file_path', 'created_at']
+        }
+      ]
+    });
+
+    const responseData = updatedMember.toJSON();
+
+    try {
+      if (responseData.primary_role) {
+        responseData.primary_role = JSON.parse(responseData.primary_role);
+      } else {
+        responseData.primary_role = [];
+      }
+    } catch (e) {
+      responseData.primary_role = responseData.primary_role ? [responseData.primary_role] : [];
+    }
+
+    let skillIds = [];
+    try {
+      if (updatedMember.skills) {
+        skillIds = JSON.parse(updatedMember.skills).map(id => parseInt(id));
+      }
+    } catch (err) { skillIds = []; }
+    
+    responseData.skills = await skills_master.findAll({
+      where: { id: skillIds },
+      attributes: ['id', 'name']
+    });
+
+    try {
+      responseData.social_media_links = responseData.social_media_links ? JSON.parse(responseData.social_media_links) : [];
+    } catch (e) { responseData.social_media_links = []; }
+
+    try {
+      if (typeof responseData.location === 'string') {
+        const parsedLoc = JSON.parse(responseData.location);
+        responseData.location = parsedLoc.address || parsedLoc;
+      }
+    } catch (e) { /* keep as is */ }
+
+    return res.status(constants.OK.code).json({
+      error: false,
+      code: constants.OK.code,
+      message: "Profile updated successfully",
+      data: responseData,
+    });
+
+  } catch (error) {
+    console.error("Edit Profile Error:", error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      error: true,
+      code: constants.INTERNAL_SERVER_ERROR.code,
+      message: constants.INTERNAL_SERVER_ERROR.message,
+      data: null,
+    });
+  }
+};
+
+exports.uploadProfileFiles = [
+  upload.array('files[]', 10),
+
+  async (req, res) => {
+    try {
+      const crew_member_id = req.user?.crew_member_id || req.body.crew_member_id;
+      const { file_type } = req.params;
+
+      const singleFileTypes = [
+        'profile_photo',
+        'resume',
+        'portfolio'
+      ];
+
+      const allowedTypes = [
+        ...singleFileTypes,
+        'certifications',
+        'recent_work',
+        'equipment_photo'
+      ];
+
+      if (!allowedTypes.includes(file_type)) {
+        return res.status(constants.BAD_REQUEST.code).json({
+          error: true,
+          code: constants.BAD_REQUEST.code,
+          message: 'Invalid file type',
+          data: null
+        });
+      }
+
+      if (!req.files || req.files.length === 0) {
+        return res.status(constants.BAD_REQUEST.code).json({
+          error: true,
+          code: constants.BAD_REQUEST.code,
+          message: 'No files uploaded',
+          data: null
+        });
+      }
+
+      const filesForUpload = { [file_type]: req.files };
+      const uploadedFiles = await S3UploadFiles(filesForUpload);
+
+      /* SINGLE FILE TYPES → UPDATE OR CREATE */
+      if (singleFileTypes.includes(file_type)) {
+        await crew_member_files.destroy({
+          where: { crew_member_id, file_type }
+        });
+
+        // Insert only ONE (latest) file
+        await crew_member_files.create({
+          crew_member_id,
+          file_type,
+          file_path: uploadedFiles[0].file_path,
+          // If title/tag provided even for portfolio
+          title: Array.isArray(req.body.title) ? req.body.title[0] : req.body.title || null,
+          tag: Array.isArray(req.body.tag) ? req.body.tag[0] : req.body.tag || "[]"
+        });
+      } 
+      /* MULTI FILE TYPES → BULK CREATE (e.g. recent_work) */
+      else {
+        const records = uploadedFiles.map((file, index) => {
+          let finalTitle = null;
+          let finalTags = "[]";
+
+          if (file_type === 'recent_work') {
+            // Extract Title from body
+            if (req.body.title) {
+              finalTitle = Array.isArray(req.body.title) 
+                ? req.body.title[index] 
+                : req.body.title;
+            }
+
+            // Extract Tags from body
+            if (req.body.tag) {
+              finalTags = Array.isArray(req.body.tag) 
+                ? req.body.tag[index] 
+                : req.body.tag;
+            }
+          } else {
+            // Default logic for certifications/other
+            finalTitle = file_type.charAt(0).toUpperCase() + file_type.slice(1);
+          }
+
+          return {
+            crew_member_id,
+            file_type,
+            file_path: file.file_path,
+            title: finalTitle || "Untitled",
+            tag: finalTags || "[]",
+            is_active: true
+          };
+        });
+
+        await crew_member_files.bulkCreate(records);
+      }
+
+      // await common.logActivity({
+      //   crew_member_id,
+      //   activity_type: 'profile_file_uploaded',
+      //   title: 'Profile File Uploaded',
+      //   description: `${file_type.replace('_', ' ')} uploaded successfully`,
+      //   reference_id: crew_member_id,
+      //   reference_type: 'crew_profile'
+      // });
+
+      return res.status(constants.OK.code).json({
+        error: false,
+        code: constants.OK.code,
+        message: 'Files uploaded successfully',
+        data: {}
+      });
+
+    } catch (err) {
+      console.error(err);
+      return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+        error: true,
+        code: constants.INTERNAL_SERVER_ERROR.code,
+        message: constants.INTERNAL_SERVER_ERROR.message,
+        data: null
+      });
+    }
+  }
+];
+
+exports.deleteProfileFile = async (req, res) => {
+  try {
+    const crew_member_id = req.body.crew_member_id;
+    const { crew_files_id } = req.params;
+
+    if (!crew_files_id) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        error: true,
+        code: constants.BAD_REQUEST.code,
+        message: 'File ID is required',
+        data: null
+      });
+    }
+
+    const file = await crew_member_files.findOne({
+      where: {
+        crew_files_id,
+        crew_member_id,
+        is_active: 1
+      }
+    });
+
+    if (!file) {
+      return res.status(constants.NOT_FOUND.code).json({
+        error: true,
+        code: constants.NOT_FOUND.code,
+        message: 'File not found',
+        data: null
+      });
+    }
+
+    /* OPTIONAL: Delete from S3 */
+    // if (file.file_path) {
+    //   try {
+    //     await deleteFromS3(file.file_path); // your S3 helper
+    //   } catch (s3Err) {
+    //     console.error('S3 delete failed:', s3Err);
+    //     // continue — DB delete should not depend on S3
+    //   }
+    // }
+
+    await file.update({ is_active: 0 });
+
+    return res.status(constants.OK.code).json({
+      error: false,
+      code: constants.OK.code,
+      message: 'File deleted successfully',
+      data: {}
+    });
+
+  } catch (err) {
+    console.error('deleteProfileFile error:', err);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      error: true,
+      code: constants.INTERNAL_SERVER_ERROR.code,
+      message: constants.INTERNAL_SERVER_ERROR.message,
+      data: null
+    });
+  }
+};
+
+exports.getMyEquipment = async (req, res) => {
+  try {
+    const crew_member_id = req.user.crew_member_id || req.body;
+
+    const data = await crew_equipment.findAll({
+      where: {
+        crew_member_id,
+        is_active: 1
+      },
+      include: [{
+        model: equipment,
+        as: 'equipment',
+        attributes: [
+          'equipment_id',
+          'equipment_name',
+          'manufacturer',
+          'model_number'
+        ]
+      },
+      {
+        model: crew_equipment_photos,
+        as: 'crew_equipment_photos',
+        attributes: [
+          'crew_equipment_photo_id',
+          'file_url',
+          'sort_order'
+        ]
+      }],
+      order: [['created_at', 'DESC']]
+    });
+    
+    return res.status(constants.OK.code).json({
+      error: false,
+      code: constants.OK.code,
+      message: constants.OK.message,
+      data: data
+    });
+
+  } catch (err) {
+    console.error(err);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      error: true,
+      code: constants.INTERNAL_SERVER_ERROR.code,
+      message: constants.INTERNAL_SERVER_ERROR.message,
+      data: null,
+    });
+  }
+};
+
+exports.getMyEquipmentById = async (req, res) => {
+  try {
+    const crew_member_id = req.user.crew_member_id || req.body;
+    const { equipment_id } = req.params;
+
+    const record = await crew_equipment.findOne({
+      where: {
+        crew_member_id,
+        equipment_id,
+        is_active: 1
+      },
+      include: [{
+        model: equipment,
+        as: 'equipment',
+        attributes: ['equipment_name', 'manufacturer', 'model_number']
+      }]
+    });
+
+    if (!record) {
+      return res.status(constants.NOT_FOUND.code).json({
+        error: false,
+        code: constants.NOT_FOUND.code,
+        message: constants.NOT_FOUND.message,
+        data: data
+      });
+    }
+
+    return res.status(constants.OK.code).json({
+      error: false,
+      code: constants.OK.code,
+      message: constants.OK.message,
+      data: record
+    });
+
+  } catch (err) {
+    console.error(err);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      error: true,
+      code: constants.INTERNAL_SERVER_ERROR.code,
+      message: constants.INTERNAL_SERVER_ERROR.message,
+      data: null,
+    });
+  }
+};
+
+exports.saveMyEquipment = async (req, res) => {
+  try {
+    const crew_member_id = req.user.crew_member_id || req.body;
+
+    const {
+      crew_equipment_id,
+      equipment_name,
+      category_id,
+      manufacturer,
+      model,
+      model_number,
+      serial_number,
+      description,
+      market_price,
+      rental_price,
+      rental_price_type,
+      is_available_for_rent,
+      storage_location,
+      condition_notes,
+      last_maintenance_date,  // New field added
+      equipment_on_maintenance,  // New field added
+      is_draft = 0
+    } = req.body;
+
+    if (!equipment_name) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        error: true,
+        code: constants.BAD_REQUEST.code,
+        message: 'Equipment name is required',
+        data: null
+      });
+    }
+
+    let record;
+
+    if (!crew_equipment_id) {
+      // Create new equipment record
+      record = await crew_equipment.create({
+        crew_member_id,
+        equipment_name,
+        category_id,
+        manufacturer,
+        model,
+        model_number,
+        serial_number,
+        description,
+        market_price,
+        rental_price,
+        rental_price_type,
+        is_available_for_rent,
+        storage_location,
+        condition_notes,
+        last_maintenance_date,  // Add new field to create
+        equipment_on_maintenance,  // Add new field to create
+        is_draft,
+        is_completed: is_draft ? 0 : 1,
+        is_active: 1
+      });
+      await common.logActivity({
+        crew_member_id,
+        activity_type: 'equipment_added',
+        title: 'Equipment Added',
+        description: `${equipment_name} was added to your equipment list`,
+        reference_id: record.crew_equipment_id,
+        reference_type: 'crew_equipment'
+      });
+    } else {
+      // Update existing equipment record
+      record = await crew_equipment.findOne({
+        where: {
+          crew_equipment_id,
+          crew_member_id,
+          is_active: 1
+        }
+      });
+
+      if (!record) {
+        return res.status(constants.NOT_FOUND.code).json({
+          error: true,
+          code: constants.NOT_FOUND.code,
+          message: 'Equipment not found',
+          data: null
+        });
+      }
+
+      await record.update({
+        equipment_name,
+        category_id,
+        manufacturer,
+        model,
+        model_number,
+        serial_number,
+        description,
+        market_price,
+        rental_price,
+        rental_price_type,
+        is_available_for_rent,
+        storage_location,
+        condition_notes,
+        last_maintenance_date,  // Add new field to update
+        equipment_on_maintenance,  // Add new field to update
+        is_draft,
+        is_completed: is_draft ? 0 : 1
+      });
+      await common.logActivity({
+        crew_member_id,
+        activity_type: 'equipment_updated',
+        title: 'Equipment Updated',
+        description: `${equipment_name} details were updated`,
+        reference_id: record.crew_equipment_id,
+        reference_type: 'crew_equipment'
+      });
+    }
+
+    return res.status(constants.OK.code).json({
+      error: false,
+      code: constants.OK.code,
+      message: 'Crew equipment saved successfully',
+      data: {
+        crew_equipment_id: record.crew_equipment_id
+      }
+    });
+
+  } catch (err) {
+    console.error('saveMyEquipment error:', err);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      error: true,
+      code: constants.INTERNAL_SERVER_ERROR.code,
+      message: constants.INTERNAL_SERVER_ERROR.message,
+      data: null
+    });
+  }
+};
+
+
+exports.uploadCrewEquipmentPhotos = [
+  upload.array('photos[]', 10),
+
+  async (req, res) => {
+    try {
+      const crew_member_id = req.user.crew_member_id || req.body;
+      const { crew_equipment_id } = req.params;
+
+      console.log('FILES:', req.files); // should NOT be empty now
+
+      const equipment = await crew_equipment.findOne({
+        where: {
+          crew_equipment_id: crew_equipment_id,
+          crew_member_id,
+          is_active: 1
+        }
+      });
+
+      if (!equipment) {
+        return res.status(constants.NOT_FOUND.code).json({
+          error: true,
+          code: constants.NOT_FOUND.code,
+          message: 'Crew equipment not found',
+          data: null
+        });
+      }
+
+      if (!req.files || req.files.length === 0) {
+        return res.status(constants.BAD_REQUEST.code).json({
+          error: true,
+          code: constants.BAD_REQUEST.code,
+          message: 'No images uploaded',
+          data: null
+        });
+      }
+
+      const uploadedFiles = await S3UploadFiles({ photos: req.files });
+
+      let sortOrder = 0;
+
+      let files = [];
+      for (const file of uploadedFiles) {
+        files.push({
+          crew_equipment_id,
+          file_url: file.file_path,
+          sort_order: sortOrder++
+        });
+      }
+      await crew_equipment_photos.bulkCreate(files);
+
+      return res.status(constants.OK.code).json({
+        error: false,
+        code: constants.OK.code,
+        message: 'Equipment photos uploaded successfully',
+        data: {}
+      });
+
+    } catch (err) {
+      console.error(err);
+      return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+        error: true,
+        code: constants.INTERNAL_SERVER_ERROR.code,
+        message: constants.INTERNAL_SERVER_ERROR.message,
+        data: null
+      });
+    }
+  }
+];
+
+exports.deleteMyEquipment = async (req, res) => {
+  try {
+    const crew_member_id = req.user.crew_member_id || req.body;
+    const { id } = req.params;
+
+    const record = await crew_equipment.findOne({
+      where: {
+        crew_equipment_id: id,
+        crew_member_id,
+        is_active: 1
+      }
+    });
+
+    if (!record) {
+      return res.status(constants.NOT_FOUND.code).json({
+        error: true,
+        code: constants.NOT_FOUND.code,
+        message: 'Equipment not found',
+        data: null
+      });
+    }
+
+    await record.update({ is_active: 0 });
+
+    return res.status(constants.OK.code).json({
+      error: false,
+      code: constants.OK.code,
+      message: 'Equipment deleted successfully',
+      data: {}
+    });
+
+  } catch (err) {
+    console.error(err);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      error: true,
+      code: constants.INTERNAL_SERVER_ERROR.code,
+      message: constants.INTERNAL_SERVER_ERROR.message,
+      data: null
+    });
+  }
+};
+
+exports.getRecentActivity = async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 10;
+    console.log(req.user.crew_member_id)
+
+    const recentActivities = await activity_logs.findAll({
+      where: {
+        is_active: 1,
+        crew_member_id: req.user.crew_member_id || req.body,
+      },
+      attributes: ['activity_id', 'crew_member_id', 'activity_type', 'title', 'description', 'reference_id', 'reference_type', 'created_at'],
+      include: [
+        {
+          model: crew_members,
+          as: 'crew_member',
+          attributes: ['first_name', 'last_name', 'primary_role'],
+          required: false
+        }
+      ],
+      order: [['created_at', 'DESC']],
+      limit: limit
+    });
+
+    // Map activity types to icons
+    const iconMap = {
+      'project_assigned': 'FileText',
+      'request_accepted': 'Users',
+      'equipment_booked': 'Package',
+      'equipment_assigned': 'Package',
+      'task_assigned': 'CheckSquare',
+      'crew_member_added': 'Users',
+      'equipment_added': 'Package',
+      'equipment_updated': 'Package'
+    };
+
+    // Transform the data to match the expected response format
+    const activities = recentActivities.map(activity => {
+      const crewName = activity.crew_member
+        ? `${activity.crew_member.first_name} ${activity.crew_member.last_name}`
+        : 'System';
+
+      return {
+        type: activity.activity_type,
+        title: activity.title,
+        description: activity.description,
+        timestamp: activity.created_at,
+        icon: iconMap[activity.activity_type] || 'Activity',
+        metadata: {
+          activity_id: activity.activity_id,
+          crew_member_id: activity.crew_member_id,
+          reference_id: activity.reference_id,
+          reference_type: activity.reference_type,
+          crew_name: crewName
+        }
+      };
+    });
+
+    return res.status(constants.OK.code).json({
+      error: false,
+      code: constants.OK.code,
+      message: 'Recent activities retrieved successfully',
+      data: activities,
+      total: activities.length
+    });
+
+  } catch (error) {
+    console.error('Get Recent Activity Error:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      error: true,
+      code: constants.INTERNAL_SERVER_ERROR.code,
+      message: constants.INTERNAL_SERVER_ERROR.message,
+      data: null
+    });
+  }
+};
+
+exports.getEquipment = async (req, res) => {
+  try {
+    const { search, category_id, location_id, group_by } = req.query;
+
+    let where = { is_active: 1 };
+
+    if (search) {
+      where[Op.or] = [
+        { equipment_name: { [Op.like]: `%${search}%` } },
+        { manufacturer: { [Op.like]: `%${search}%` } },
+        { model_number: { [Op.like]: `%${search}%` } },
+        { serial_number: { [Op.like]: `%${search}%` } },
+        { description: { [Op.like]: `%${search}%` } }
+      ];
+    }
+
+    if (category_id) where.category_id = category_id;
+    if (location_id) where.storage_location_id = location_id;
+
+    const list = await equipment.findAll({
+      where,
+      include: [
+        { model: equipment_photos, as: 'equipment_photos', attributes: ['photo_id', 'file_url', 'created_at'] },
+        { model: equipment_documents, as: 'equipment_documents', attributes: ['document_id', 'doc_type', 'file_url', 'created_at'] },
+        { model: equipment_specs, as: 'equipment_specs', attributes: ['spec_id', 'spec_name', 'spec_value'] },
+        { model: equipment_accessories, as: 'equipment_accessories', attributes: ['accessory_id', 'accessory_name'] }
+      ],
+      order: [['equipment_id', 'ASC']]
+    });
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const activeAssignments = await equipment_assignments.findAll({
+      where: {
+        check_out_date: { [Op.lte]: today },
+        expected_return_date: { [Op.gte]: today }
+      }
+    });
+
+    const inUseMap = {};
+    activeAssignments.forEach(a => {
+      inUseMap[a.equipment_id] = a;
+    });
+
+    const processedList = list.map(item => {
+      const loc = item.storage_location; 
+
+      if (!loc) return item;
+
+      if (typeof loc === 'string' && (loc.startsWith('{') || loc.startsWith('['))) {
+        try {
+          const parsed = JSON.parse(loc);
+          return {
+            ...item.toJSON(),
+            storage_location: parsed.address || parsed || loc,
+          };
+        } catch {
+          return { ...item.toJSON(), storage_location: loc };
+        }
+      }
+
+      return { ...item.toJSON(), storage_location: loc };
+    });
+
+    const total_equipment = await equipment.count({ where });
+
+    const status_1_count = processedList.filter(i => i.initial_status_id == 1).length;
+    const status_2_count = processedList.filter(i => i.initial_status_id == 2).length;
+    const status_3_count = processedList.filter(i => i.initial_status_id == 3).length;
+
+    const in_use_today_count = Object.keys(inUseMap).length;
+
+    return res.status(200).json({
+      error: false,
+      code: 200,
+      summary: {
+        total_equipment,
+        status_1_count,
+        status_2_count,
+        status_3_count,
+        in_use_today_count
+      },
+      message: "Equipment fetched successfully",
+      data: processedList
+    });
+
+  } catch (error) {
+    console.error("Get Equipment Error:", error);
+    return res.status(500).json({
+      error: true,
+      code: 500,
+      message: "Internal Server Error",
+      data: null
+    });
+  }
+};
+
+exports.submitEquipmentRequest = async (req, res) => {
+  try {
+    const crew_member_id = req.user.crew_member_id || req.body;
+
+    const { 
+      rental_purpose, 
+      projectId, 
+      otherPurposeReason, 
+      checkoutDate, 
+      expectedReturnDate,
+      equipmentId 
+    } = req.body;
+
+    if (!crew_member_id || !equipmentId || rental_purpose === undefined) {
+      return res.status(400).json({
+        error: true,
+        message: "Crew member ID, equipment ID, and rental purpose are required",
+      });
+    }
+
+    if (rental_purpose === 2) {
+      if (!checkoutDate || !expectedReturnDate) {
+        return res.status(400).json({
+          error: true,
+          message: "Checkout date and expected return date are required for 'Other' rental purpose",
+        });
+      }
+    }
+
+    const crewMember = await crew_members.findOne({
+      where: { crew_member_id },
+    });
+
+    if (!crewMember) {
+      return res.status(404).json({
+        error: true,
+        message: "Crew member not found",
+      });
+    }
+
+    const newRequest = {
+      crew_member_id,
+      rental_purpose: rental_purpose === 1 ? 1 : 2, 
+      project_id: rental_purpose === 1 ? projectId : null,
+      purpose: rental_purpose === 2 ? otherPurposeReason : null,
+      equipment_id: equipmentId,
+      admin_accept: 0,
+      is_active: 1,
+      created_at: new Date(),
+      checkout_date: rental_purpose === 2 ? checkoutDate : null,
+      expected_return_date: rental_purpose === 2 ? expectedReturnDate : null,
+    };
+
+    const equipmentRequest = await equipment_requests.create(newRequest);
+
+    return res.status(201).json({
+      error: false,
+      message: "Equipment request submitted successfully",
+      data: equipmentRequest,
+    });
+  } catch (error) {
+    console.error("Error submitting equipment request:", error);
+    return res.status(500).json({
+      error: true,
+      message: "Something went wrong while submitting the equipment request",
+    });
+  }
+};
+
+exports.getEquipmentRequests = async (req, res) => {
+  try {
+    const crew_member_id = req.user.crew_member_id || req.body;
+
+    if (!crew_member_id) {
+      return res.status(400).json({
+        error: true,
+        message: "Crew member ID is required",
+      });
+    }
+
+    const equipmentRequests = await equipment_requests.findAll({
+      where: { crew_member_id },
+      include: [
+        {
+          model: equipment,
+          as: 'equipment',
+          attributes: ['equipment_id', 'equipment_name'],
+        },
+        {
+          model: stream_project_booking, 
+          as: 'project',
+          attributes: ['stream_project_booking_id', 'project_name', 'event_date'],
+        },
+      ],
+    });
+
+    if (equipmentRequests.length === 0) {
+      return res.status(200).json({
+        error: false,
+        message: "No equipment requests found for this crew member",
+        data: [],
+      });
+    }
+
+    return res.status(200).json({
+      error: false,
+      message: "Equipment requests fetched successfully",
+      data: equipmentRequests.map(request => {
+        return {
+          ...request.toJSON(),
+          equipment: request.equipment,
+          project: request.project,
+        };
+      }),
+    });
+  } catch (error) {
+    console.error("Error fetching equipment requests:", error);
+    return res.status(500).json({
+      error: true,
+      message: "Something went wrong while fetching the equipment requests",
+    });
+  }
+};
+
+exports.deleteEquipmentPhoto = async (req, res) => {
+  try {
+    const { crew_equipment_photo_id } = req.body; 
+
+    if (!crew_equipment_photo_id) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        error: true,
+        code: constants.BAD_REQUEST.code,
+        message: 'Photo ID is required',
+        data: null
+      });
+    }
+
+    const photo = await crew_equipment_photos.findOne({
+      where: { crew_equipment_photo_id }
+    });
+
+    if (!photo) {
+      return res.status(constants.NOT_FOUND.code).json({
+        error: true,
+        code: constants.NOT_FOUND.code,
+        message: 'Photo not found',
+        data: null
+      });
+    }
+
+    // Delete the record from the database
+    await photo.destroy();
+
+    return res.status(constants.OK.code).json({
+      error: false,
+      code: constants.OK.code,
+      message: 'Photo deleted successfully',
+      success: true,
+      data: null
+    });
+
+  } catch (err) {
+    console.error('deleteEquipmentPhoto error:', err);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      error: true,
+      code: constants.INTERNAL_SERVER_ERROR.code,
+      message: constants.INTERNAL_SERVER_ERROR.message,
+      data: null
+    });
+  }
+};

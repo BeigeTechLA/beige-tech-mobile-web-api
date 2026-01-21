@@ -101,7 +101,8 @@ module.exports = {
         PROJECT_BRIEF: 'project_brief',
         EVENT_TYPE_MASTER: 'event_type_master',
         USER_TYPE: 'user_type',
-        AFFILIATES: 'affiliates'
+        AFFILIATES: 'affiliates',
+        CREW_EQUIPMENT: 'crew_equipment'
 
     },
     ASSOCIATION_TABLE_WISE: {
