@@ -377,7 +377,7 @@ exports.createProject = async (req, res) => {
 
 exports.matchCrew = async (req, res) => {
   try {
-    const { crew_roles, required_skills, crew_size_needed, location, hourly_rate } = req.body;
+    const { crew_roles, required_skills, location, hourly_rate } = req.body;
 
     if (!crew_roles || !required_skills) {
       return res.status(400).json({
@@ -393,8 +393,6 @@ exports.matchCrew = async (req, res) => {
     const skillsArr = Array.isArray(required_skills)
       ? required_skills.map(String)
       : [String(required_skills)];
-
-    const sizeNeeded = crew_size_needed ? parseInt(crew_size_needed) : null;
 
     const desiredHourlyRate = hourly_rate ? parseFloat(hourly_rate) : null;
 
@@ -2845,10 +2843,17 @@ exports.createEquipment = [
 
 exports.getEquipment = async (req, res) => {
   try {
-    const { search, category_id, location_id, group_by, limit = 50, page = 1 } = req.query; // Default to 50 records per page and page 1
+    const {
+      search,
+      category_id,
+      location_id,
+      limit = 50,
+      page = 1
+    } = req.query;
 
+    // 1. Build the base filter
     let where = { is_active: 1 };
-
+    
     if (search) {
       where[Op.or] = [
         { equipment_name: { [Op.like]: `%${search}%` } },
@@ -2862,76 +2867,136 @@ exports.getEquipment = async (req, res) => {
     if (category_id) where.category_id = category_id;
     if (location_id) where.storage_location_id = location_id;
 
-    // Calculate offset based on page number
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    // 2. Define "Today" boundaries
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    const endOfToday = new Date();
+    endOfToday.setHours(23, 59, 59, 999);
 
-    // Fetch equipment records with pagination
+    // 3. GET ASSIGNMENTS FOR TODAY (Summing units from both tables)
+    const inUseMap = {}; // equipment_id -> total_units_out
+
+    // A. Random/Manual Assignments
+    const directAssignments = await equipment_assignments.findAll({
+      where: {
+        check_out_date: { [Op.lte]: endOfToday },
+        expected_return_date: { [Op.gte]: startOfToday },
+        is_active: 1
+      },
+      attributes: ['equipment_id'],
+      raw: true
+    });
+    directAssignments.forEach(a => {
+      inUseMap[a.equipment_id] = (inUseMap[a.equipment_id] || 0) + 1;
+    });
+
+    // B. Project Based Assignments (Matched via stream_project_booking event_date)
+    const projectAssignments = await assigned_equipment.findAll({
+      where: { is_active: 1 },
+      include: [{
+        model: stream_project_booking,
+        as: 'project', 
+        where: { event_date: { [Op.between]: [startOfToday, endOfToday] } },
+        attributes: []
+      }],
+      attributes: ['equipment_id'],
+      raw: true
+    });
+    projectAssignments.forEach(a => {
+      inUseMap[a.equipment_id] = (inUseMap[a.equipment_id] || 0) + 1;
+    });
+
+    // 4. CALCULATE GLOBAL SUMMARY (Calculated across all equipment matching filters)
+    const allMatchingEquipment = await equipment.findAll({
+      where,
+      attributes: ['equipment_id', 'quantity', 'initial_status_id'],
+      raw: true
+    });
+
+    let summaryStats = {
+      total_equipment_types: allMatchingEquipment.length,
+      available_equipment_types: 0,
+      in_use_equipment_types: 0,
+      maintenance_equipment_types: 0,
+      // Raw unit counts
+      total_units_count: 0,
+      units_in_use_count: 0
+    };
+
+    allMatchingEquipment.forEach(item => {
+      const unitsOut = inUseMap[item.equipment_id] || 0;
+      const totalQty = parseInt(item.quantity) || 0;
+
+      summaryStats.total_units_count += totalQty;
+      summaryStats.units_in_use_count += unitsOut;
+
+      // Type-based logic (What you asked for):
+      // 1. Available Equipment: Count if at least one unit is NOT in use
+      if (totalQty > unitsOut) {
+        summaryStats.available_equipment_types++;
+      }
+
+      // 2. In Use Equipment: Count if at least one unit IS in use
+      if (unitsOut > 0) {
+        summaryStats.in_use_equipment_types++;
+      }
+
+      // 3. Maintenance Count (Status 2)
+      if (item.initial_status_id == 2) {
+        summaryStats.maintenance_equipment_types++;
+      }
+    });
+
+    // 5. FETCH PAGINATED LIST
+    const offset = (parseInt(page) - 1) * parseInt(limit);
     const list = await equipment.findAll({
       where,
       include: [
-        { model: equipment_photos, as: 'equipment_photos', attributes: ['photo_id', 'file_url', 'created_at'] },
-        { model: equipment_documents, as: 'equipment_documents', attributes: ['document_id', 'doc_type', 'file_url', 'created_at'] },
-        { model: equipment_specs, as: 'equipment_specs', attributes: ['spec_id', 'spec_name', 'spec_value'] },
-        { model: equipment_accessories, as: 'equipment_accessories', attributes: ['accessory_id', 'accessory_name'] }
+        { model: equipment_photos, as: 'equipment_photos', attributes: ['photo_id', 'file_url'] },
+        { model: equipment_documents, as: 'equipment_documents', attributes: ['document_id', 'doc_type', 'file_url'] },
+        { model: equipment_specs, as: 'equipment_specs', attributes: ['spec_name', 'spec_value'] },
+        { model: equipment_accessories, as: 'equipment_accessories', attributes: ['accessory_name'] }
       ],
-      order: [['equipment_id', 'DESC']],
-      limit: parseInt(limit), // Apply limit
-      offset: offset // Calculate offset based on page
+      order: [['equipment_id', 'ASC']],
+      limit: parseInt(limit),
+      offset
     });
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const activeAssignments = await equipment_assignments.findAll({
-      where: {
-        check_out_date: { [Op.lte]: today },
-        expected_return_date: { [Op.gte]: today }
-      }
-    });
-
-    const inUseMap = {};
-    activeAssignments.forEach(a => {
-      inUseMap[a.equipment_id] = a;
-    });
-
-    // Process storage_location similarly to event_location or location
+    // 6. PROCESS PAGINATED LIST
     const processedList = list.map(item => {
-      const loc = item.storage_location;  // Process storage_location field
+      const eq = item.toJSON();
+      const unitsOut = inUseMap[eq.equipment_id] || 0;
+      const totalQty = parseInt(eq.quantity) || 0;
 
-      if (!loc) return item;  // If no location, return item as is
+      eq.units_in_use = unitsOut;
+      eq.units_available = Math.max(0, totalQty - unitsOut);
+      eq.is_available = (totalQty > unitsOut) ? 1 : 0; 
 
-      if (typeof loc === 'string' && (loc.startsWith('{') || loc.startsWith('['))) {
+      if (eq.storage_location && typeof eq.storage_location === 'string' && (eq.storage_location.startsWith('{') || eq.storage_location.startsWith('['))) {
         try {
-          const parsed = JSON.parse(loc);
-          return {
-            ...item.toJSON(),
-            storage_location: parsed.address || parsed || loc,
-          };
-        } catch {
-          return { ...item.toJSON(), storage_location: loc };
-        }
+          const parsed = JSON.parse(eq.storage_location);
+          eq.storage_location = parsed.address || parsed;
+        } catch (e) {}
       }
-
-      return { ...item.toJSON(), storage_location: loc };
+      return eq;
     });
-
-    const total_equipment = await equipment.count({ where });
-
-    const status_1_count = processedList.filter(i => i.initial_status_id == 1).length;
-    const status_2_count = processedList.filter(i => i.initial_status_id == 2).length;
-    const status_3_count = processedList.filter(i => i.initial_status_id == 3).length;
-
-    const in_use_today_count = Object.keys(inUseMap).length;
 
     return res.status(200).json({
       error: false,
       code: 200,
       summary: {
-        total_equipment,
-        status_1_count,
-        status_2_count,
-        status_3_count,
-        in_use_today_count
+        // Equipment Type Counts (Count as 1 even if qty is 10)
+        total_equipment: summaryStats.total_equipment_types,
+        available_equipment: summaryStats.available_equipment_types,
+        in_use_equipment: summaryStats.in_use_equipment_types,
+        maintenance_equipment: summaryStats.maintenance_equipment_types,
+        
+        // Raw Unit Counts (Sum of all quantities)
+        unit_summary: {
+          total_units: summaryStats.total_units_count,
+          units_in_use: summaryStats.units_in_use_count,
+          units_available: summaryStats.total_units_count - summaryStats.units_in_use_count
+        }
       },
       message: "Equipment fetched successfully",
       data: processedList

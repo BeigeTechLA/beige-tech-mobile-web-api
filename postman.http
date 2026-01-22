@@ -1,4 +1,4 @@
-@URL = http://localhost:3000/v1/
+@URL = http://localhost:5001/v1/
 
 ###
 POST {{URL}}creator/upcoming-accepted-project HTTP/1.1
@@ -16,3 +16,51 @@ Content-Type: application/json
   "email": "parth9999@gmail.com",
   "password": "111111"
 }
+
+###
+GET {{URL}}admin/equipment-categories HTTP/1.1
+Content-Type: application/json
+
+###
+GET {{URL}}admin/checklist-templates HTTP/1.1
+Content-Type: application/json
+
+###
+GET {{URL}}admin/skills HTTP/1.1
+Content-Type: application/json
+
+###
+GET {{URL}}admin/certifications HTTP/1.1
+Content-Type: application/json
+
+###
+GET {{URL}}admin/get-projects HTTP/1.1
+Content-Type: application/json
+
+###
+GET {{URL}}admin/get-active-projects HTTP/1.1
+Content-Type: application/json
+
+###
+GET {{URL}}admin/recent-activity HTTP/1.1
+Content-Type: application/json
+
+###
+GET {{URL}}admin/get-project-status HTTP/1.1
+Content-Type: application/json
+
+###
+POST {{URL}}admin/get-crew-members HTTP/1.1
+Content-Type: application/json
+
+{"page":1,"limit":50}
+
+###
+GET {{URL}}admin/get-equipments?limit=50&page=1 HTTP/1.1
+Content-Type: application/json
+
+###
+POST {{URL}}admin/get-crew-members HTTP/1.1
+Content-Type: application/json
+
+{"page":1,"limit":50}
