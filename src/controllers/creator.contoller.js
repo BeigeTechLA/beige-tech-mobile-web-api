@@ -123,12 +123,12 @@ function uploadFiles(files) {
 
 exports.getDashboardCounts = async (req, res) => {
   try {
-    const { creator_id } = req.body || req.query;
+    const { crew_member_id } = req.body || req.query;
 
-    if (!creator_id) {
+    if (!crew_member_id) {
       return res.status(400).json({
         error: true,
-        message: "creator_id is required",
+        message: "crew_member_id is required",
       });
     }
 
@@ -141,7 +141,7 @@ exports.getDashboardCounts = async (req, res) => {
           model: assigned_crew,
           as: "assigned_crews",
           where: {
-            crew_member_id: creator_id,
+            crew_member_id: crew_member_id,
           },
           required: true,
         },
@@ -157,7 +157,7 @@ exports.getDashboardCounts = async (req, res) => {
           model: assigned_crew,
           as: "assigned_crews",
           where: {
-            crew_member_id: creator_id,
+            crew_member_id: crew_member_id,
           },
           required: true,
         },
@@ -167,7 +167,7 @@ exports.getDashboardCounts = async (req, res) => {
     const pendingRequests = await assigned_crew.count({
       where: {
         crew_accept: 0,
-        crew_member_id: creator_id,
+        crew_member_id: crew_member_id,
       },
       include: [
         {
@@ -2455,6 +2455,238 @@ exports.deleteEquipmentPhoto = async (req, res) => {
       code: constants.INTERNAL_SERVER_ERROR.code,
       message: constants.INTERNAL_SERVER_ERROR.message,
       data: null
+    });
+  }
+};
+
+exports.getDashboardDetails = async (req, res) => {
+  try {
+    const crew_member_id = req.user?.crew_member_id || req.body.crew_member_id;
+    const { date_filter, start_date, end_date, status } = req.body;
+
+    const projectWhere = {};
+
+    if (status === 'active') {
+      projectWhere.is_completed = 0;
+      projectWhere.is_cancelled = 0;
+    }
+
+    if (status == 'completed') {
+      projectWhere.is_completed = 1;
+    }
+
+    if (status === 'cancelled') {
+      projectWhere.is_cancelled = 1;
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    if (date_filter === 'today') {
+      projectWhere.event_date = today;
+    }
+
+    if (date_filter === 'upcoming') {
+      projectWhere.event_date = {
+        [Sequelize.Op.gt]: today
+      };
+    }
+
+    if (date_filter === 'this_week') {
+      const startOfWeek = new Date(today);
+      startOfWeek.setDate(today.getDate() - today.getDay());
+
+      const endOfWeek = new Date(startOfWeek);
+      endOfWeek.setDate(startOfWeek.getDate() + 6);
+
+      projectWhere.event_date = {
+        [Sequelize.Op.between]: [startOfWeek, endOfWeek]
+      };
+    }
+
+    if (date_filter === 'this_month') {
+      const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+      const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+
+      projectWhere.event_date = {
+        [Sequelize.Op.between]: [startOfMonth, endOfMonth]
+      };
+    }
+
+    if (date_filter === 'custom' && start_date && end_date) {
+      projectWhere.event_date = {
+        [Sequelize.Op.between]: [start_date, end_date]
+      };
+    }
+
+    console.log("projectWhere---------", projectWhere);
+    const allShoots = await assigned_crew.findAll({
+      where: {
+        crew_accept: 1,
+        crew_member_id: crew_member_id,
+      },
+      include: [
+        {
+          model: stream_project_booking,
+          as: "project",
+          where: projectWhere,
+          required: true,
+        },
+      ],
+      order: [
+        [{ model: stream_project_booking, as: "project" }, "event_date", "ASC"]
+      ]
+    });
+
+    // Pending Requests (Assigned projects with crew_accept = 0)
+    const pendingRequests = await assigned_crew.findAll({
+      where: {
+        crew_accept: 0,
+        crew_member_id: crew_member_id,
+      },
+      include: [
+        {
+          model: stream_project_booking,
+          as: "project",
+          where: {
+            ...projectWhere,
+            is_completed: 0
+          },
+          required: true,
+        },
+      ],
+    });
+
+    return res.status(200).json({
+      error: false,
+      message: 'Dashboard details fetched successfully',
+      data: {
+        allShoots,
+        pendingRequests,
+        equipmentRequests: 5,
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching dashboard details:', error);
+    return res.status(500).json({
+      error: true,
+      message: 'Something went wrong while fetching dashboard details',
+    });
+  }
+};
+
+exports.getCrewShootStats = async (req, res) => {
+  try {
+    const { crew_member_id } = req.body || req.query;
+
+    if (!crew_member_id) {
+      return res.status(400).json({
+        error: true,
+        message: "crew_member_id is required",
+      });
+    }
+
+    const today = new Date();
+
+    /** 1️⃣ Completed Shoots */
+    const completedShoots = await stream_project_booking.count({
+      where: {
+        is_completed: 1,
+      },
+      include: [
+        {
+          model: assigned_crew,
+          as: "assigned_crews",
+          required: true,
+          where: { crew_member_id },
+        },
+      ],
+    });
+
+    /** 2️⃣ Pending Shoots (accepted, upcoming, not completed) */
+    const pendingShoots = await stream_project_booking.count({
+      where: {
+        is_completed: 0,
+        event_date: { [Sequelize.Op.gt]: today },
+      },
+      include: [
+        {
+          model: assigned_crew,
+          as: "assigned_crews",
+          required: true,
+          where: {
+            crew_member_id,
+            crew_accept: 1,
+          },
+        },
+      ],
+    });
+
+    /** 3️⃣ Rejected Shoots */
+    const rejectedShoots = await assigned_crew.count({
+      where: {
+        crew_member_id,
+        crew_accept: 2,
+      },
+      include: [
+        {
+          model: stream_project_booking,
+          as: "project",
+          required: true,
+        },
+      ],
+    });
+
+    /** 4️⃣ Shoot Requests */
+    const shootRequests = await assigned_crew.count({
+      where: {
+        crew_member_id,
+        crew_accept: 0,
+      },
+      include: [
+        {
+          model: stream_project_booking,
+          as: "project",
+          required: true,
+          where: { is_completed: 0 },
+        },
+      ],
+    });
+
+    /** 5️⃣ Photography Shoots (crew_roles + skills_needed from booking table) */
+    const photographyShoots = await stream_project_booking.count({
+      where: {
+        crew_roles: 10,
+        skills_needed: {
+          [Sequelize.Op.like]: "%photographer%",
+        },
+      },
+      include: [
+        {
+          model: assigned_crew,
+          as: "assigned_crews",
+          required: true,
+          where: { crew_member_id },
+        },
+      ],
+    });
+
+    return res.status(200).json({
+      error: false,
+      message: "Crew shoot stats fetched successfully",
+      data: {
+        completedShoots,
+        pendingShoots,
+        rejectedShoots,
+        shootRequests,
+        photographyShoots,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching crew shoot stats:", error);
+    return res.status(500).json({
+      error: true,
+      message: "Something went wrong while fetching crew shoot stats",
     });
   }
 };

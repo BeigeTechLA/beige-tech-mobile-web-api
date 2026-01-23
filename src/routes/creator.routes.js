@@ -32,6 +32,8 @@ router.get('/get-equipments', creator.getEquipment);
 router.post('/request-equipment', creator.submitEquipmentRequest);
 router.get('/my-equipment-requests', creator.getEquipmentRequests);
 router.post('/equipment/delete-photo', creator.deleteEquipmentPhoto);
+router.post('/dashboard-details', creator.getDashboardDetails);
+router.post('/get-crew-stats', creator.getCrewShootStats);
 
 
 module.exports = router;
