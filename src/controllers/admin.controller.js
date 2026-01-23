@@ -23,7 +23,7 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   assigned_crew,
   assigned_equipment,
   project_brief,
-  event_type_master } = require('../models');
+  event_type_master, payment_transactions } = require('../models');
 
 function toArray(value) {
   if (!value) return [];
@@ -3942,3 +3942,295 @@ exports.getCrewCount = async (req, res) => {
     });
   }
 };
+
+exports.getDashboardSummary = async (req, res) => {
+  try {
+    const [
+      total_shoots,
+      active_shoots,
+      completed_shoots,
+      // total_clients,
+      total_CPs
+    ] = await Promise.all([
+      stream_project_booking.count({ where: { is_active: 1 } }),
+
+      stream_project_booking.count({
+        where: { is_active: 1, is_completed: 0, is_cancelled: 0 }
+      }),
+
+      stream_project_booking.count({
+        where: { is_active: 1, is_completed: 1 }
+      }),
+
+      // users.count({
+      //   where: { user_type: 1, is_active: 1 }
+      // }),
+
+      crew_members.count({
+        where: { is_active: 1 }
+      })
+    ]);
+
+    return res.status(200).json({
+      error: false,
+      message: "Dashboard summary fetched successfully",
+      data: {
+        total_shoots: { count: total_shoots, growth: 3 },
+        active_shoots: { count: active_shoots, growth: 3 },
+        completed_shoots: { count: completed_shoots, growth: 3 },
+        // total_clients: { count: total_clients, growth: 3 },
+        total_CPs: { count: total_CPs, growth: 3 }
+      }
+    });
+  } catch (error) {
+    console.error("Get Dashboard Summary:", error);
+    return res.status(500).json({
+      error: true,
+      message: "Internal server error"
+    });
+  }
+};
+
+exports.getTotalRevenue = async (req, res) => {
+  try {
+    const totalRevenue = await payment_transactions.sum('total_amount', {
+      where: { status: 'succeeded' }
+    });
+
+    return res.status(200).json({
+      error: false,
+      data: {
+        total_revenue: Number(totalRevenue || 0)
+      }
+    });
+  } catch (err) {
+    console.error('Total Revenue Error:', err);
+    return res.status(500).json({ error: true, message: 'Server error' });
+  }
+};
+
+exports.getMonthlyRevenue = async (req, res) => {
+  try {
+    const data = await payment_transactions.findAll({
+      attributes: [
+        [Sequelize.fn('DATE_FORMAT', Sequelize.col('created_at'), '%b'), 'month'],
+        [Sequelize.fn('SUM', Sequelize.col('cp_cost')), 'base_revenue'],
+        [Sequelize.fn('SUM', Sequelize.col('beige_margin_amount')), 'margin_revenue'],
+        [Sequelize.fn('SUM', Sequelize.col('total_amount')), 'total_revenue']
+      ],
+      where: { status: 'succeeded' },
+      group: [Sequelize.fn('MONTH', Sequelize.col('created_at'))],
+      order: [[Sequelize.fn('MONTH', Sequelize.col('created_at')), 'ASC']],
+      limit: 6
+    });
+
+    return res.status(200).json({
+      error: false,
+      data
+    });
+  } catch (err) {
+    console.error('Monthly Revenue Error:', err);
+    return res.status(500).json({ error: true });
+  }
+};
+
+exports.getWeeklyRevenue = async (req, res) => {
+  try {
+    const current = await payment_transactions.sum('total_amount', {
+      where: {
+        status: 'succeeded',
+        created_at: {
+          [Op.gte]: Sequelize.literal('DATE_SUB(CURDATE(), INTERVAL 7 DAY)')
+        }
+      }
+    });
+
+    const previous = await payment_transactions.sum('total_amount', {
+      where: {
+        status: 'succeeded',
+        created_at: {
+          [Op.between]: [
+            Sequelize.literal('DATE_SUB(CURDATE(), INTERVAL 14 DAY)'),
+            Sequelize.literal('DATE_SUB(CURDATE(), INTERVAL 7 DAY)')
+          ]
+        }
+      }
+    });
+
+    const growth =
+      previous && previous > 0
+        ? (((current - previous) / previous) * 100).toFixed(1)
+        : 0;
+
+    return res.status(200).json({
+      error: false,
+      data: {
+        weekly_revenue: Number(current || 0),
+        growth_percent: Number(growth)
+      }
+    });
+  } catch (err) {
+    console.error('Weekly Revenue Error:', err);
+    return res.status(500).json({ error: true });
+  }
+};
+
+exports.getShootStatus = async (req, res) => {
+  try {
+    const range = req.query.range || 'all';
+
+    let dateFilter = {};
+    if (range === 'month') {
+      dateFilter = {
+        created_at: {
+          [Op.gte]: Sequelize.literal("DATE_FORMAT(CURDATE(), '%Y-%m-01')")
+        }
+      };
+    }
+
+    const [
+      totalShoots,
+      successfulShoots,
+      pendingShoots,
+      rejectedShoots,
+      cancelledShoots
+    ] = await Promise.all([
+      stream_project_booking.count({ where: { ...dateFilter } }),
+
+      stream_project_booking.count({
+        where: { is_completed: 1, ...dateFilter }
+      }),
+
+      stream_project_booking.count({
+        where: {
+          is_completed: 0,
+          is_cancelled: 0,
+          is_active: 1,
+          ...dateFilter
+        }
+      }),
+
+      stream_project_booking.count({
+        where: { is_cancelled: 1, ...dateFilter }
+      }),
+
+      stream_project_booking.count({
+        where: { is_active: 0, is_cancelled: 1, ...dateFilter }
+      })
+    ]);
+
+    return res.status(200).json({
+      error: false,
+      data: {
+        total: totalShoots,
+        breakdown: [
+          {
+            label: 'Successful Shoots',
+            count: successfulShoots,
+            color: '#A78BFA' // purple
+          },
+          {
+            label: 'Pending Shoots',
+            count: pendingShoots,
+            color: '#38BDF8' // blue
+          },
+          {
+            label: 'Rejected Shoots',
+            count: rejectedShoots,
+            color: '#FBBF24' // yellow
+          },
+          {
+            label: 'Cancelled Shoots',
+            count: cancelledShoots,
+            color: '#34D399' // green
+          }
+        ]
+      }
+    });
+  } catch (err) {
+    console.error('Shoot Status Error:', err);
+    return res.status(500).json({ error: true });
+  }
+};
+
+exports.getTopCreativePartners = async (req, res) => {
+  try {
+    const range = req.query.range || 'month';
+    const limit = Number(req.query.limit || 3);
+
+    let dateFilter = {};
+    if (range === 'month') {
+      dateFilter = {
+        created_at: {
+          [Op.gte]: Sequelize.literal("DATE_FORMAT(CURDATE(), '%Y-%m-01')")
+        }
+      };
+    }
+
+    const partners = await payment_transactions.findAll({
+      attributes: [
+        'creator_id',
+        [Sequelize.fn('SUM', Sequelize.col('total_amount')), 'total_earnings']
+      ],
+      where: {
+        status: 'succeeded',
+        ...dateFilter
+      },
+      include: [
+        {
+          model: crew_members,
+          as: 'creator',
+          attributes: [
+            'crew_member_id',
+            'first_name',
+            'last_name',
+            'email'
+          ],
+          include: [
+            {
+              model: crew_member_files,
+              as: 'crew_member_files',
+              attributes: ['file_path'],
+              where: {
+                file_type: 'profile_photo',
+                is_active: 1
+              },
+              required: false, // important: CP may not have photo
+              separate: true,
+              limit: 1,
+              order: [['created_at', 'DESC']]
+            }
+          ]
+        }
+      ],
+      group: ['creator_id'],
+      order: [[Sequelize.literal('total_earnings'), 'DESC']],
+      limit
+    });
+
+    const result = partners.map(p => {
+      const files = p.creator?.crew_member_files || [];
+      const photo = files.length ? `${files[0].file_path}` : null;
+
+      return {
+        id: p.creator_id,
+        name: `${p.creator.first_name} ${p.creator.last_name}`,
+        email: p.creator.email,
+        total_earnings: Number(p.get('total_earnings') || 0),
+        avatar: photo
+      };
+    });
+
+    return res.status(200).json({
+      error: false,
+      data: result
+    });
+  } catch (err) {
+    console.error('Top Creative Partners Error:', err);
+    return res.status(500).json({
+      error: true,
+      message: 'Internal server error'
+    });
+  }
+};
+

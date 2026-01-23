@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const admin = require('../controllers/admin.controller');
+const { authenticateAdmin } = require('../middleware/auth');
 
 router.post('/create-project', admin.createProject);
 router.post('/match-crew', admin.matchCrew);
@@ -33,7 +34,7 @@ router.post('/return-equipment', admin.returnEquipment)
 router.get('/equipment-categories', admin.getEquipmentCategories);
 router.get('/checklist-templates', admin.getChecklistTemplates);
 router.get('/crew-roles', admin.getCrewRoles);
-router.get('/skills', admin.getSkills);
+router.get('/skills', admin.getSkills); 
 router.get('/certifications', admin.getCertifications);
 router.get('/equipment-by-location', admin.getEquipmentByLocation);
 router.get('/equipment-autocomplete', admin.getEquipmentNameSuggestions);
@@ -41,5 +42,11 @@ router.get('/get-event-types', admin.getEventTypes),
 router.get('/get-crew-member-name', admin.getCrewMembersByName)
 router.get('/get-crew-count', admin.getCrewCount)
 // router.post('/login', auth.login);
+router.get('/get-dashboard-summary', authenticateAdmin, admin.getDashboardSummary)
+router.get('/dashboard/revenue/total', authenticateAdmin, admin.getTotalRevenue)
+router.get('/dashboard/revenue/monthly', authenticateAdmin, admin.getMonthlyRevenue)
+router.get('/dashboard/revenue/weekly', authenticateAdmin, admin.getWeeklyRevenue)
+router.get('/dashboard/shoot-status', authenticateAdmin, admin.getShootStatus)
+router.get('/dashboard/top-creative-partners', authenticateAdmin, admin.getTopCreativePartners)
 
 module.exports = router;
