@@ -34,3 +34,10 @@ ADD COLUMN rental_price_per_hour DECIMAL(10,2) NULL AFTER daily_rental_rate,
 ADD COLUMN availability_status ENUM('available','unavailable','maintenance','rented')
     DEFAULT 'available' AFTER rental_price_per_hour,
 ADD COLUMN condition_status VARCHAR(50) NULL AFTER availability_status;
+
+-- 23-01-26
+
+ALTER TABLE `crew_member_files` ADD `title` VARCHAR(255) NULL AFTER `is_active`, ADD `tag` VARCHAR(255) NULL AFTER `title`;
+ALTER TABLE stream_project_booking
+ADD COLUMN status TINYINT(1) NOT NULL DEFAULT 0
+COMMENT '0=Initiated,1=PreProduction,2=PostProduction,3=Revision,4=Completed,5=Cancelled';

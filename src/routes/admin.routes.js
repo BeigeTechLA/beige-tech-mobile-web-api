@@ -48,5 +48,6 @@ router.get('/dashboard/revenue/monthly', authenticateAdmin, admin.getMonthlyReve
 router.get('/dashboard/revenue/weekly', authenticateAdmin, admin.getWeeklyRevenue)
 router.get('/dashboard/shoot-status', authenticateAdmin, admin.getShootStatus)
 router.get('/dashboard/top-creative-partners', authenticateAdmin, admin.getTopCreativePartners)
+router.post('/dashboard-detail', authenticateAdmin, admin.getDashboardDetails);
 
 module.exports = router;

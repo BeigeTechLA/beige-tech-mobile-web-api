@@ -127,6 +127,12 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.DATE,
       allowNull: false,
       defaultValue: Sequelize.Sequelize.fn('current_timestamp')
+    },
+    status: {
+      type: DataTypes.TINYINT,
+      allowNull: false,
+      defaultValue: 0,
+      comment: '0=Initiated,1=PreProduction,2=PostProduction,3=Revision,4=Completed,5=Cancelled'
     }
   }, {
     sequelize,

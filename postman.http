@@ -40,6 +40,10 @@ GET {{URL}}admin/get-projects HTTP/1.1
 Content-Type: application/json
 
 ###
+GET {{URL}}admin/get-project/164 HTTP/1.1
+Content-Type: application/json
+
+###
 GET {{URL}}admin/get-active-projects HTTP/1.1
 Content-Type: application/json
 
@@ -66,6 +70,37 @@ POST {{URL}}admin/get-crew-members HTTP/1.1
 Content-Type: application/json
 
 {"page":1,"limit":50}
+
+###
+GET {{URL}}admin/crew-member/2047 HTTP/1.1
+Content-Type: application/json
+
+###
+POST {{URL}}creator/get-profile-detail HTTP/1.1
+Content-Type: application/json
+
+{
+  "crew_member_id": "2010"
+}
+
+###
+POST {{URL}}creator/availability HTTP/1.1
+Content-Type: application/json
+
+{
+  "year": "2026",
+  "month": "01",
+  "crew_member_id": "2010"
+}
+
+###
+POST {{URL}}admin/dashboard-detail HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "crew_member_id": "2010"
+}
 
 ###
 # Dashboard summary: total shoots, active, completed, CPs
