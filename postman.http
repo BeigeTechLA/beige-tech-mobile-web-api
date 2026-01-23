@@ -1,5 +1,7 @@
 @URL = http://localhost:5001/v1/
 
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NjkxNjc2ODEsImV4cCI6MTc2OTc3MjQ4MX0.XiLcRpTczj_Kiouey-bN8RJlX3TkagfCwQLEkMa0SaM
+
 ###
 POST {{URL}}creator/upcoming-accepted-project HTTP/1.1
 Content-Type: application/json
@@ -13,8 +15,8 @@ POST {{URL}}auth/login HTTP/1.1
 Content-Type: application/json
 
 {
-  "email": "parth9999@gmail.com",
-  "password": "111111"
+  "email": "harsh.panchal@gmail.com",
+  "password": "1"
 }
 
 ###
@@ -64,3 +66,39 @@ POST {{URL}}admin/get-crew-members HTTP/1.1
 Content-Type: application/json
 
 {"page":1,"limit":50}
+
+###
+# Dashboard summary: total shoots, active, completed, CPs
+GET {{URL}}admin/get-dashboard-summary HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+# Total revenue 
+GET {{URL}}admin/dashboard/revenue/total HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+# Month-wise revenue breakdown for bar chart (base + margin revenue)
+GET {{URL}}admin/dashboard/revenue/monthly HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+# Weekly Revenue
+GET {{URL}}admin/dashboard/revenue/weekly HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+# Shoot status: successful, pending, rejected, cancelled (month/all filter)
+GET {{URL}}admin/dashboard/shoot-status?range=all HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+# Top creative partners (month/all filter)
+GET {{URL}}admin/dashboard/top-creative-partners?range=all HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}

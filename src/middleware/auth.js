@@ -95,8 +95,49 @@ const optionalAuth = (req, res, next) => {
   }
 };
 
+const authenticateAdmin = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({
+        error: true,
+        message: 'Authorization token required'
+      });
+    }
+
+    const token = authHeader.substring(7);
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    req.user = {
+      userId: decoded.userId,
+      userTypeId: decoded.userTypeId,
+      userRole: decoded.userRole
+    };
+
+    console.log(req.user);
+
+    if (decoded.userRole !== 'Admin') {
+      return res.status(403).json({
+        error: true,
+        message: 'Admin access required'
+      });
+    }
+
+    next();
+  } catch (error) {
+    console.error('Authentication error:', error);
+    return res.status(401).json({
+      error: true,
+      message: 'Invalid or expired token'
+    });
+  }
+};
+
 module.exports = {
   authMiddleware,
   authenticate: authMiddleware,  // Alias for compatibility
-  optionalAuth
+  optionalAuth,
+  authenticateAdmin
 };
