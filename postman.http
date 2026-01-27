@@ -40,7 +40,7 @@ GET {{URL}}admin/get-projects HTTP/1.1
 Content-Type: application/json
 
 ###
-GET {{URL}}admin/get-project/164 HTTP/1.1
+GET {{URL}}admin/get-project/475 HTTP/1.1
 Content-Type: application/json
 
 ###
@@ -150,3 +150,17 @@ Content-Type: application/json
 ###
 GET {{URL}}admin/shoot-category-count?tab=photography HTTP/1.1
 Content-Type: application/json
+
+###
+GET {{URL}}admin/get-post-production-members HTTP/1.1
+Content-Type: application/json
+
+
+###
+POST {{URL}}admin/assign-post-production-member HTTP/1.1
+Content-Type: application/json
+
+{
+  "post_production_member_id": 7,
+  "project_id": 485
+}
