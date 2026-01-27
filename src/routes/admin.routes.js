@@ -51,5 +51,7 @@ router.get('/dashboard/top-creative-partners', authenticateAdmin, admin.getTopCr
 router.post('/dashboard-detail', authenticateAdmin, admin.getDashboardDetails);
 router.post('/verify-crew-member', admin.verifyCrewMember);
 router.get('/shoot-category-count', admin.getShootByCategory);
+router.get('/get-post-production-members', admin.getPostProductionMembers);
+router.post('/assign-post-production-member', admin.assignPostProductionMember);
 
 module.exports = router;

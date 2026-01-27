@@ -43,6 +43,8 @@ var _crew_equipment = require("./crew_equipment");
 var _crew_equipment_photos = require("./crew_equipment_photos");
 var _activity_logs = require("./activity_logs");
 var _equipment_request = require("./equipment_request");
+var _post_production_members = require("./post_production_members");
+var _assigned_post_production_member = require("./assigned_post_production_member");
 
 function initModels(sequelize) {
   var assigned_crew = _assigned_crew(sequelize, DataTypes);
@@ -89,6 +91,8 @@ function initModels(sequelize) {
   var crew_equipment_photos = _crew_equipment_photos(sequelize, DataTypes);
   var activity_logs = _activity_logs(sequelize, DataTypes);
   var equipment_request = _equipment_request(sequelize, DataTypes);
+  var post_production_members = _post_production_members(sequelize, DataTypes);
+  var assigned_post_production_member = _assigned_post_production_member(sequelize, DataTypes);
 
   assignment_checklist.belongsTo(checklist_master, { as: "checklist", foreignKey: "checklist_id"});
   checklist_master.hasMany(assignment_checklist, { as: "assignment_checklists", foreignKey: "checklist_id"});
@@ -205,6 +209,16 @@ function initModels(sequelize) {
   // Booking -> Quote relationship (booking can reference a primary quote)
   stream_project_booking.belongsTo(quotes, { as: "primary_quote", foreignKey: "quote_id"});
   quotes.hasMany(stream_project_booking, { as: "bookings", foreignKey: "quote_id"});
+  assigned_post_production_member.belongsTo(post_production_members, { 
+  as: 'post_production_member', 
+  foreignKey: 'post_production_member_id'
+});
+
+post_production_members.hasMany(assigned_post_production_member, { 
+  as: 'assigned_post_production_members', 
+  foreignKey: 'post_production_member_id'
+});
+
 
   return {
     activity_logs,
@@ -250,7 +264,9 @@ function initModels(sequelize) {
     quote_line_items,
     crew_equipment,
     crew_equipment_photos,
-    equipment_request
+    equipment_request,
+    post_production_members,
+    assigned_post_production_member
   };
 }
 module.exports = initModels;

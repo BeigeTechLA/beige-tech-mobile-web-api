@@ -23,7 +23,7 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   assigned_crew,
   assigned_equipment,
   project_brief,
-  event_type_master, payment_transactions } = require('../models');
+  event_type_master, payment_transactions, assigned_post_production_member, post_production_members } = require('../models');
 
 function toArray(value) {
   if (!value) return [];
@@ -755,6 +755,7 @@ exports.getProjectDetails = async (req, res) => {
       });
     }
 
+    // Fetch assigned crew members
     const assignedCrew = await assigned_crew.findAll({
       where: { project_id: project.stream_project_booking_id, is_active: 1 },
       include: [
@@ -766,6 +767,7 @@ exports.getProjectDetails = async (req, res) => {
       ],
     });
 
+    // Fetch assigned equipment
     const assignedEquipment = await assigned_equipment.findAll({
       where: { project_id: project.stream_project_booking_id, is_active: 1 },
       include: [
@@ -777,6 +779,18 @@ exports.getProjectDetails = async (req, res) => {
       ],
     });
 
+    // Fetch assigned post production members
+    const assignedPostProductionMembers = await assigned_post_production_member.findAll({
+      where: { project_id: project.stream_project_booking_id, is_active: 1 },
+      include: [
+        {
+          model: post_production_members,
+          as: 'post_production_member',
+          attributes: ['post_production_member_id', 'first_name', 'last_name', 'email'],
+        },
+      ],
+    });
+
     return res.status(200).json({
       error: false,
       message: 'Project details retrieved successfully',
@@ -784,6 +798,7 @@ exports.getProjectDetails = async (req, res) => {
         project,
         assignedCrew,
         assignedEquipment,
+        assignedPostProductionMembers, // Add this to the response
       },
     });
   } catch (error) {
@@ -4476,5 +4491,90 @@ exports.getShootByCategory = async (req, res) => {
   } catch (error) {
     console.error('Shoot By Category Error:', error);
     return res.status(500).json({ error: true, message: 'Internal server error' });
+  }
+};
+
+// Controller to fetch all post production members
+exports.getPostProductionMembers = async (req, res) => {
+  try {
+    const postProductionMembers = await post_production_members.findAll({
+      where: { is_active: 1 }, // Optional filter for active members
+      attributes: ['post_production_member_id', 'first_name', 'last_name', 'email', 'is_active'],
+    });
+
+    if (!postProductionMembers || postProductionMembers.length === 0) {
+      return res.status(404).json({
+        error: true,
+        message: 'No post-production members found',
+      });
+    }
+
+    return res.status(200).json({
+      error: false,
+      message: 'Post-production members fetched successfully',
+      data: postProductionMembers,
+    });
+  } catch (error) {
+    console.error('Error fetching post production members:', error);
+    return res.status(500).json({
+      error: true,
+      message: 'Internal server error',
+    });
+  }
+};
+
+
+exports.assignPostProductionMember = async (req, res) => {
+  try {
+    const { project_id, post_production_member_id } = req.body;
+
+    if (!project_id || !post_production_member_id) {
+      return res.status(400).json({
+        error: true,
+        message: 'Project ID and Post Production Member ID are required',
+      });
+    }
+
+    const postProductionMember = await post_production_members.findOne({
+      where: { post_production_member_id, is_active: 1 },
+    });
+
+    if (!postProductionMember) {
+      return res.status(404).json({
+        error: true,
+        message: 'Post production member not found or inactive',
+      });
+    }
+
+    const project = await stream_project_booking.findOne({
+      where: { stream_project_booking_id: project_id, is_active: 1 },
+    });
+
+    if (!project) {
+      return res.status(404).json({
+        error: true,
+        message: 'Project not found or inactive',
+      });
+    }
+
+    const assignedPostProductionMember = await assigned_post_production_member.create({
+      project_id,
+      post_production_member_id,
+      assigned_date: new Date(),
+      status: 'assigned',
+      is_active: 1,
+    });
+
+    return res.status(201).json({
+      error: false,
+      message: 'Post production member assigned successfully',
+      data: assignedPostProductionMember,
+    });
+  } catch (error) {
+    console.error('Error assigning post production member:', error);
+    return res.status(500).json({
+      error: true,
+      message: 'Internal server error',
+    });
   }
 };
