@@ -50,3 +50,43 @@ ADD COLUMN is_crew_verified INT(11) DEFAULT 0 COMMENT '1 = verified/approved, 2 
 UPDATE crew_members
 SET is_crew_verified = 1
 WHERE is_crew_verified = 0;
+
+CREATE TABLE post_production_members (
+    post_production_member_id INT(11) AUTO_INCREMENT PRIMARY KEY,
+    first_name VARCHAR(255) NOT NULL,
+    last_name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NOT NULL,
+    phone_number VARCHAR(50),
+    is_active TINYINT(1) DEFAULT 1,
+    created_at DATETIME DEFAULT current_timestamp(),
+    updated_at DATETIME DEFAULT current_timestamp() ON UPDATE current_timestamp()
+);
+
+INSERT INTO post_production_members (first_name, last_name, email, phone_number, is_active, created_at, updated_at)
+VALUES 
+  ('John', 'Doe', 'john.doe@example.com', '1234567890', 1, NOW(), NOW()),
+  ('Jane', 'Smith', 'jane.smith@example.com', '0987654321', 1, NOW(), NOW()),
+  ('Alex', 'Johnson', 'alex.johnson@example.com', '1231231234', 1, NOW(), NOW()),
+  ('Emily', 'Davis', 'emily.davis@example.com', '4564564567', 1, NOW(), NOW()),
+  ('Michael', 'Wilson', 'michael.wilson@example.com', '7897897890', 1, NOW(), NOW()),
+  ('Sophia', 'Brown', 'sophia.brown@example.com', '3213213210', 1, NOW(), NOW()),
+  ('David', 'Taylor', 'david.taylor@example.com', '6546546543', 1, NOW(), NOW()),
+  ('Olivia', 'Anderson', 'olivia.anderson@example.com', '9879879876', 1, NOW(), NOW()),
+  ('James', 'Thomas', 'james.thomas@example.com', '5675675678', 1, NOW(), NOW()),
+  ('Ava', 'Martinez', 'ava.martinez@example.com', '4324324321', 1, NOW(), NOW()),
+  ('William', 'Garcia', 'william.garcia@example.com', '8768768765', 1, NOW(), NOW()),
+  ('Isabella', 'Rodriguez', 'isabella.rodriguez@example.com', '1111111111', 1, NOW(), NOW()),
+  ('Liam', 'Lee', 'liam.lee@example.com', '2222222222', 1, NOW(), NOW()),
+  ('Mia', 'Harris', 'mia.harris@example.com', '3333333333', 1, NOW(), NOW());
+
+CREATE TABLE assigned_post_production_member (
+    id INT(11) AUTO_INCREMENT PRIMARY KEY,
+    project_id INT(11) NOT NULL,
+    post_production_member_id INT(11) NOT NULL,
+    assigned_date DATETIME DEFAULT current_timestamp(),
+    status VARCHAR(20) DEFAULT 'assigned',
+    organization_type INT(11) NOT NULL DEFAULT 1,  -- 1 = BEIGE, 2 = MEMEHOUSE
+    is_active TINYINT(1) NOT NULL DEFAULT 1,
+    created_at DATETIME DEFAULT current_timestamp(),
+    updated_at DATETIME DEFAULT current_timestamp() ON UPDATE current_timestamp()
+);
