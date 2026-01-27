@@ -101,6 +101,11 @@ module.exports = function(sequelize, DataTypes) {
     social_media_links: {
       type: DataTypes.TEXT,
       allowNull: true
+    },
+    is_crew_verified: {
+      type: DataTypes.INTEGER(11),
+      allowNull: false,
+      defaultValue: 0
     }
   }, {
     sequelize,

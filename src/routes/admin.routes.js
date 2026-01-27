@@ -49,5 +49,7 @@ router.get('/dashboard/revenue/weekly', authenticateAdmin, admin.getWeeklyRevenu
 router.get('/dashboard/shoot-status', authenticateAdmin, admin.getShootStatus)
 router.get('/dashboard/top-creative-partners', authenticateAdmin, admin.getTopCreativePartners)
 router.post('/dashboard-detail', authenticateAdmin, admin.getDashboardDetails);
+router.post('/verify-crew-member', admin.verifyCrewMember);
+router.get('/shoot-category-count', admin.getShootByCategory);
 
 module.exports = router;

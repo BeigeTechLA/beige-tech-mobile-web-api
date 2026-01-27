@@ -2247,6 +2247,7 @@ exports.getCrewMembers = async (req, res) => {
         }
       ],
       order: [
+        ['is_crew_verified', 'ASC'],
         ['is_beige_member', 'ASC'],
         ['crew_member_id', 'ASC'],
       ],
@@ -2255,23 +2256,31 @@ exports.getCrewMembers = async (req, res) => {
     });
 
     const processedMembers = members.map((member) => {
+      let status = 'pending';
+      if (member.is_crew_verified === 1) {
+        status = 'approved';
+      } else if (member.is_crew_verified === 2) {
+        status = 'rejected';
+      }
+
       const loc = member.location;
 
-      if (!loc) return member;
+      if (!loc) return { ...member.toJSON(), status };
 
       if (typeof loc === 'string' && (loc.startsWith('{') || loc.startsWith('['))) {
         try {
           const parsed = JSON.parse(loc);
           return {
             ...member.toJSON(),
-            location: parsed.address || parsed || loc, 
+            location: parsed.address || parsed || loc,
+            status,
           };
         } catch {
-          return { ...member.toJSON(), location: loc };
+          return { ...member.toJSON(), location: loc, status };
         }
       }
 
-      return { ...member.toJSON(), location: loc };
+      return { ...member.toJSON(), location: loc, status };
     });
 
     return res.status(200).json({
@@ -2293,6 +2302,43 @@ exports.getCrewMembers = async (req, res) => {
     });
   }
 };
+
+exports.verifyCrewMember = async (req, res) => {
+  try {
+    const { crew_member_id, status } = req.body;
+
+    if (!crew_member_id || (status !== 1 && status !== 2)) {
+      return res.status(400).json({
+        error: true,
+        message: "Missing or invalid 'crew_member_id' or 'status'. 'status' must be 1 (approved) or 2 (rejected).",
+      });
+    }
+
+    const updatedMember = await crew_members.update(
+      { is_crew_verified: status },
+      { where: { crew_member_id } }
+    );
+
+    if (updatedMember[0] === 0) {
+      return res.status(404).json({
+        error: true,
+        message: "Crew member not found.",
+      });
+    }
+
+    return res.status(200).json({
+      error: false,
+      message: `Crew member ${status === 1 ? 'approved' : 'rejected'} successfully.`,
+    });
+  } catch (error) {
+    console.error("Verify Crew Member Error:", error);
+    return res.status(500).json({
+      error: true,
+      message: "Internal server error",
+    });
+  }
+};
+
 
 exports.getCrewMemberById = async (req, res) => {
   try {
@@ -4349,5 +4395,86 @@ exports.getDashboardDetails = async (req, res) => {
       error: true,
       message: 'Something went wrong while fetching dashboard details',
     });
+  }
+};
+
+exports.getShootByCategory = async (req, res) => {
+  try {
+    const activeTab = (req.query.tab || 'all').toLowerCase();
+
+    const videoSkillIds = [1, 2, 3, 4, 11, 12, 13, 14, 17, 24, 29, 30, 31, 32, 33, 34, 35, 36];
+    const photoSkillIds = [5, 6, 7, 8, 15, 16, 37];
+
+    const categoryConfig = {
+      corporate: { label: 'Corporate Events', color: '#3B82F6', matches: ['corporate', '4', '18'] },
+      wedding: { label: 'Wedding', color: '#22C55E', matches: ['wedding', '19', '14', '15'] },
+      private: { label: 'Private Events', color: '#8B5CF6', matches: ['private', '20'] },
+      commercial: { label: 'Commercial & Advertising', color: '#F59E0B', matches: ['brand_product', '1', '2', '6', '21', '26'] },
+      social: { label: 'Social Content', color: '#06B6D4', matches: ['social_content', '3', '5', '22'] },
+      podcasts: { label: 'Podcasts & Shows', color: '#EC4899', matches: ['podcast', 'podcasts', '7', '23'] },
+      music: { label: 'Music Videos', color: '#EF4444', matches: ['music', '24'] },
+      narrative: { label: 'Short Films & Narrative', color: '#6366F1', matches: ['short_films', '25'] }
+    };
+
+    const bookings = await stream_project_booking.findAll({
+      attributes: ['event_type', 'skills_needed', 'stream_project_booking_id'],
+      where: { is_active: 1 },
+      raw: true
+    });
+
+    let grandTotal = 0;
+    const finalResults = {};
+    
+    Object.keys(categoryConfig).forEach(key => {
+      finalResults[key] = { label: categoryConfig[key].label, count: 0, color: categoryConfig[key].color };
+    });
+
+    bookings.forEach(booking => {
+      const skills = String(booking.skills_needed || '').toLowerCase();
+      const eventType = String(booking.event_type || '').toLowerCase();
+
+      let includeInTab = false;
+      
+      if (activeTab === 'all') {
+        includeInTab = true;
+      } else {
+        const isVideo = skills.includes('video') || videoSkillIds.some(id => skills.includes(String(id)));
+        const isPhoto = skills.includes('photo') || photoSkillIds.some(id => skills.includes(String(id)));
+        
+        if (activeTab === 'videography' && isVideo) includeInTab = true;
+        if (activeTab === 'photography' && isPhoto) includeInTab = true;
+      }
+
+      if (includeInTab) {
+        for (const [key, config] of Object.entries(categoryConfig)) {
+          if (config.matches.includes(eventType)) {
+            finalResults[key].count += 1;
+            grandTotal += 1;
+            break;
+          }
+        }
+      }
+    });
+
+    const data = Object.values(finalResults).map(item => ({
+      label: item.label,
+      count: item.count,
+      percentage: grandTotal > 0 ? Math.round((item.count / grandTotal) * 100) : 0,
+      color: item.color
+    }));
+
+    return res.status(200).json({
+      error: false,
+      message: `Stats for ${activeTab} fetched successfully`,
+      data: {
+        active_tab: activeTab,
+        total_count: grandTotal,
+        categories: data
+      }
+    });
+
+  } catch (error) {
+    console.error('Shoot By Category Error:', error);
+    return res.status(500).json({ error: true, message: 'Internal server error' });
   }
 };

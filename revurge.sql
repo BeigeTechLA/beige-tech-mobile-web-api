@@ -41,3 +41,12 @@ ALTER TABLE `crew_member_files` ADD `title` VARCHAR(255) NULL AFTER `is_active`,
 ALTER TABLE stream_project_booking
 ADD COLUMN status TINYINT(1) NOT NULL DEFAULT 0
 COMMENT '0=Initiated,1=PreProduction,2=PostProduction,3=Revision,4=Completed,5=Cancelled';
+
+--27-01-26
+
+ALTER TABLE crew_members
+ADD COLUMN is_crew_verified INT(11) DEFAULT 0 COMMENT '1 = verified/approved, 2 = rejected';
+
+UPDATE crew_members
+SET is_crew_verified = 1
+WHERE is_crew_verified = 0;
