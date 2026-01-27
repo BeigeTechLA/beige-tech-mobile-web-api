@@ -1,13 +1,13 @@
 @URL = http://localhost:5001/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NjkxNjc2ODEsImV4cCI6MTc2OTc3MjQ4MX0.XiLcRpTczj_Kiouey-bN8RJlX3TkagfCwQLEkMa0SaM
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjcsInVzZXJSb2xlIjoiQ3JlYXRvciIsImlhdCI6MTc2OTUxNjgzNSwiZXhwIjoxNzcwMTIxNjM1fQ.agpsa5wOKMjDYsoJYINp2Lu8Z7ceQKJdo7eUn0O-svM
 
 ###
-POST {{URL}}creator/upcoming-accepted-project HTTP/1.1
+POST {{URL}}creator/dashboard-count HTTP/1.1
 Content-Type: application/json
 
 {
-  "crew_member_id": 1951
+  "crew_member_id": 2048
 }
 
 ###
@@ -15,7 +15,7 @@ POST {{URL}}auth/login HTTP/1.1
 Content-Type: application/json
 
 {
-  "email": "harsh.panchal@gmail.com",
+  "email": "parth.panchal0362@gmail.com",
   "password": "1"
 }
 
