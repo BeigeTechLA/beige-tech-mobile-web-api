@@ -218,6 +218,8 @@ post_production_members.hasMany(assigned_post_production_member, {
   as: 'assigned_post_production_members', 
   foreignKey: 'post_production_member_id'
 });
+crew_members.belongsTo(crew_roles, { as: 'role', foreignKey: 'primary_role' });
+  crew_roles.hasMany(crew_members, { as: 'crew_members', foreignKey: 'primary_role' });
 
 
   return {

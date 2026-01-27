@@ -6,7 +6,7 @@ const common_model = require('../utils/common_model');
 const { Op } = require('sequelize');
 const { S3UploadFiles } = require('../utils/common.js');
 const { sendTaskAssignmentEmail } = require('../utils/emailService');
-const { stream_project_booking, crew_members, crew_member_files, tasks, equipment,
+const { stream_project_booking, crew_members, crew_member_files, tasks, equipment, crew_roles,
   equipment_accessories,
   equipment_category,
   equipment_documents,
@@ -2259,7 +2259,12 @@ exports.getCrewMembers = async (req, res) => {
           model: crew_member_files,
           as: 'crew_member_files',
           attributes: ['crew_files_id', 'file_type', 'file_path'],
-        }
+        },
+        {
+          model: crew_roles,
+          as: 'role',
+          attributes: ['role_name'],
+        },
       ],
       order: [
         ['is_crew_verified', 'ASC'],
