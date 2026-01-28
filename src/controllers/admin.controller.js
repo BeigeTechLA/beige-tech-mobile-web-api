@@ -3897,12 +3897,12 @@ exports.getDashboardSummary = async (req, res) => {
       where: { is_active: 1 }
     });
     
-    // Get active bookings (confirmed/pending status)
+    // Get active bookings (not cancelled and not completed)
     const activeBookings = await stream_project_booking.count({
       where: {
-        status: {
-          [Op.in]: ['confirmed', 'pending', 'in_progress']
-        }
+        is_cancelled: 0,
+        is_completed: 0,
+        is_active: 1
       }
     });
     
@@ -3929,11 +3929,11 @@ exports.getDashboardSummary = async (req, res) => {
 exports.getTotalRevenue = async (req, res) => {
   try {
     const completedPayments = await payments.findAll({
-      where: { status: 'completed' },
+      where: { status: 'succeeded' },
       attributes: [
-        [Sequelize.fn('COALESCE', Sequelize.fn('SUM', Sequelize.col('total_amount')), 0), 'total_revenue'],
+        [Sequelize.fn('COALESCE', Sequelize.fn('SUM', Sequelize.col('amount')), 0), 'total_revenue'],
         [Sequelize.fn('COUNT', Sequelize.col('payment_id')), 'total_bookings'],
-        [Sequelize.fn('COALESCE', Sequelize.fn('AVG', Sequelize.col('total_amount')), 0), 'avg_booking_value']
+        [Sequelize.fn('COALESCE', Sequelize.fn('AVG', Sequelize.col('amount')), 0), 'avg_booking_value']
       ],
       raw: true
     });
@@ -3966,14 +3966,14 @@ exports.getMonthlyRevenue = async (req, res) => {
     
     const monthlyData = await payments.findAll({
       where: {
-        status: 'completed',
+        status: 'succeeded',
         created_at: {
           [Op.gte]: twelveMonthsAgo
         }
       },
       attributes: [
         [Sequelize.fn('DATE_FORMAT', Sequelize.col('created_at'), '%Y-%m'), 'month'],
-        [Sequelize.fn('COALESCE', Sequelize.fn('SUM', Sequelize.col('total_amount')), 0), 'revenue'],
+        [Sequelize.fn('COALESCE', Sequelize.fn('SUM', Sequelize.col('amount')), 0), 'revenue'],
         [Sequelize.fn('COUNT', Sequelize.col('payment_id')), 'bookings']
       ],
       group: [Sequelize.fn('DATE_FORMAT', Sequelize.col('created_at'), '%Y-%m')],
@@ -4007,7 +4007,7 @@ exports.getWeeklyRevenue = async (req, res) => {
     
     const weeklyData = await payments.findAll({
       where: {
-        status: 'completed',
+        status: 'succeeded',
         created_at: {
           [Op.gte]: twelveWeeksAgo
         }
@@ -4015,7 +4015,7 @@ exports.getWeeklyRevenue = async (req, res) => {
       attributes: [
         [Sequelize.fn('YEARWEEK', Sequelize.col('created_at')), 'week'],
         [Sequelize.fn('DATE_FORMAT', Sequelize.col('created_at'), '%Y-W%v'), 'week_label'],
-        [Sequelize.fn('COALESCE', Sequelize.fn('SUM', Sequelize.col('total_amount')), 0), 'revenue'],
+        [Sequelize.fn('COALESCE', Sequelize.fn('SUM', Sequelize.col('amount')), 0), 'revenue'],
         [Sequelize.fn('COUNT', Sequelize.col('payment_id')), 'bookings']
       ],
       group: [Sequelize.fn('YEARWEEK', Sequelize.col('created_at'))],
@@ -4050,29 +4050,25 @@ exports.getShootCategoryCount = async (req, res) => {
     
     // Add filter if tab is provided
     if (tab && tab !== 'All') {
-      whereClause['$event_type_master.event_type_name$'] = tab;
+      whereClause.event_type = tab;
     }
     
+    // Group by event_type and count
     const categories = await stream_project_booking.findAll({
       where: whereClause,
       attributes: [
-        [Sequelize.col('event_type_master.event_type_name'), 'category'],
-        [Sequelize.fn('COUNT', Sequelize.col('stream_project_booking.stream_project_booking_id')), 'count']
+        'event_type',
+        [Sequelize.fn('COUNT', Sequelize.col('stream_project_booking_id')), 'count']
       ],
-      include: [{
-        model: event_type_master,
-        attributes: [],
-        required: false
-      }],
-      group: ['event_type_master.event_type_name'],
-      order: [[Sequelize.fn('COUNT', Sequelize.col('stream_project_booking.stream_project_booking_id')), 'DESC']],
+      group: ['event_type'],
+      order: [[Sequelize.fn('COUNT', Sequelize.col('stream_project_booking_id')), 'DESC']],
       raw: true
     });
     
     res.json({
       success: true,
       data: categories.map(row => ({
-        category: row.category || 'Unknown',
+        category: row.event_type || 'Unknown',
         count: parseInt(row.count)
       }))
     });
