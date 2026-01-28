@@ -3877,3 +3877,196 @@ exports.getCrewCount = async (req, res) => {
     });
   }
 };
+
+// =====================================================
+// Dashboard Statistics Endpoints
+// =====================================================
+
+// Get dashboard summary statistics
+exports.getDashboardSummary = async (req, res) => {
+  try {
+    const db = req.mysqlDb;
+    
+    // Get total counts
+    const [projectsCount] = await db.execute(
+      'SELECT COUNT(*) as total FROM projects WHERE deleted_at IS NULL'
+    );
+    
+    const [crewCount] = await db.execute(
+      'SELECT COUNT(*) as total FROM crew_members WHERE is_active = 1'
+    );
+    
+    const [equipmentCount] = await db.execute(
+      'SELECT COUNT(*) as total FROM equipment WHERE is_active = 1'
+    );
+    
+    // Get active projects (not completed or cancelled)
+    const [activeProjects] = await db.execute(
+      `SELECT COUNT(*) as total FROM projects 
+       WHERE state NOT IN ('completed', 'cancelled', 'delivered') 
+       AND deleted_at IS NULL`
+    );
+    
+    res.json({
+      success: true,
+      data: {
+        total_projects: projectsCount[0].total,
+        active_projects: activeProjects[0].total,
+        total_crew: crewCount[0].total,
+        total_equipment: equipmentCount[0].total
+      }
+    });
+  } catch (error) {
+    console.error('Get Dashboard Summary Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch dashboard summary',
+      error: error.message
+    });
+  }
+};
+
+// Get total revenue
+exports.getTotalRevenue = async (req, res) => {
+  try {
+    const db = req.mysqlDb;
+    
+    const [revenue] = await db.execute(
+      `SELECT 
+        COALESCE(SUM(total_amount), 0) as total_revenue,
+        COUNT(*) as total_bookings,
+        COALESCE(AVG(total_amount), 0) as avg_booking_value
+       FROM payments 
+       WHERE status = 'completed'`
+    );
+    
+    res.json({
+      success: true,
+      data: {
+        total_revenue: parseFloat(revenue[0].total_revenue),
+        total_bookings: revenue[0].total_bookings,
+        avg_booking_value: parseFloat(revenue[0].avg_booking_value)
+      }
+    });
+  } catch (error) {
+    console.error('Get Total Revenue Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch total revenue',
+      error: error.message
+    });
+  }
+};
+
+// Get monthly revenue (last 12 months)
+exports.getMonthlyRevenue = async (req, res) => {
+  try {
+    const db = req.mysqlDb;
+    
+    const [monthlyData] = await db.execute(
+      `SELECT 
+        DATE_FORMAT(created_at, '%Y-%m') as month,
+        COALESCE(SUM(total_amount), 0) as revenue,
+        COUNT(*) as bookings
+       FROM payments 
+       WHERE status = 'completed'
+       AND created_at >= DATE_SUB(NOW(), INTERVAL 12 MONTH)
+       GROUP BY DATE_FORMAT(created_at, '%Y-%m')
+       ORDER BY month DESC`
+    );
+    
+    res.json({
+      success: true,
+      data: monthlyData.map(row => ({
+        month: row.month,
+        revenue: parseFloat(row.revenue),
+        bookings: row.bookings
+      }))
+    });
+  } catch (error) {
+    console.error('Get Monthly Revenue Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch monthly revenue',
+      error: error.message
+    });
+  }
+};
+
+// Get weekly revenue (last 12 weeks)
+exports.getWeeklyRevenue = async (req, res) => {
+  try {
+    const db = req.mysqlDb;
+    
+    const [weeklyData] = await db.execute(
+      `SELECT 
+        YEARWEEK(created_at) as week,
+        DATE_FORMAT(created_at, '%Y-W%v') as week_label,
+        COALESCE(SUM(total_amount), 0) as revenue,
+        COUNT(*) as bookings
+       FROM payments 
+       WHERE status = 'completed'
+       AND created_at >= DATE_SUB(NOW(), INTERVAL 12 WEEK)
+       GROUP BY YEARWEEK(created_at)
+       ORDER BY week DESC`
+    );
+    
+    res.json({
+      success: true,
+      data: weeklyData.map(row => ({
+        week: row.week_label,
+        revenue: parseFloat(row.revenue),
+        bookings: row.bookings
+      }))
+    });
+  } catch (error) {
+    console.error('Get Weekly Revenue Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch weekly revenue',
+      error: error.message
+    });
+  }
+};
+
+// Get shoot category count
+exports.getShootCategoryCount = async (req, res) => {
+  try {
+    const db = req.mysqlDb;
+    const { tab } = req.query;
+    
+    let query = `
+      SELECT 
+        et.event_type_name as category,
+        COUNT(p.project_id) as count
+      FROM projects p
+      LEFT JOIN event_type_master et ON p.event_type = et.event_type_id
+      WHERE p.deleted_at IS NULL
+    `;
+    
+    // Add filter if tab is provided
+    if (tab && tab !== 'All') {
+      query += ` AND et.event_type_name = ?`;
+    }
+    
+    query += ` GROUP BY et.event_type_name ORDER BY count DESC`;
+    
+    const params = tab && tab !== 'All' ? [tab] : [];
+    const [categories] = await db.execute(query, params);
+    
+    res.json({
+      success: true,
+      data: categories.map(row => ({
+        category: row.category || 'Unknown',
+        count: row.count
+      }))
+    });
+  } catch (error) {
+    console.error('Get Shoot Category Count Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch shoot category count',
+      error: error.message
+    });
+  }
+};

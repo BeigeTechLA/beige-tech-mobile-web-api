@@ -40,6 +40,14 @@ router.get('/equipment-autocomplete', admin.getEquipmentNameSuggestions);
 router.get('/get-event-types', admin.getEventTypes),
 router.get('/get-crew-member-name', admin.getCrewMembersByName)
 router.get('/get-crew-count', admin.getCrewCount)
+
+// Dashboard statistics routes
+router.get('/get-dashboard-summary', admin.getDashboardSummary);
+router.get('/dashboard/revenue/total', admin.getTotalRevenue);
+router.get('/dashboard/revenue/monthly', admin.getMonthlyRevenue);
+router.get('/dashboard/revenue/weekly', admin.getWeeklyRevenue);
+router.get('/shoot-category-count', admin.getShootCategoryCount);
+
 // router.post('/login', auth.login);
 
 module.exports = router;
