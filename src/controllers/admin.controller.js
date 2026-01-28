@@ -24,8 +24,7 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   assigned_equipment,
   project_brief,
   event_type_master,
-  payments,
-  projects } = require('../models');
+  payments } = require('../models');
 
 function toArray(value) {
   if (!value) return [];
@@ -3888,9 +3887,7 @@ exports.getCrewCount = async (req, res) => {
 exports.getDashboardSummary = async (req, res) => {
   try {
     // Get total counts using Sequelize
-    const totalProjects = await projects.count({
-      where: { deleted_at: null }
-    });
+    const totalBookings = await stream_project_booking.count();
     
     const totalCrew = await crew_members.count({
       where: { is_active: 1 }
@@ -3900,21 +3897,20 @@ exports.getDashboardSummary = async (req, res) => {
       where: { is_active: 1 }
     });
     
-    // Get active projects (not completed or cancelled)
-    const activeProjects = await projects.count({
+    // Get active bookings (confirmed/pending status)
+    const activeBookings = await stream_project_booking.count({
       where: {
-        current_state: {
-          [Op.notIn]: ['COMPLETED', 'CANCELLED', 'DELIVERED']
-        },
-        deleted_at: null
+        status: {
+          [Op.in]: ['confirmed', 'pending', 'in_progress']
+        }
       }
     });
     
     res.json({
       success: true,
       data: {
-        total_projects: totalProjects,
-        active_projects: activeProjects,
+        total_projects: totalBookings,
+        active_projects: activeBookings,
         total_crew: totalCrew,
         total_equipment: totalEquipment
       }
@@ -4050,20 +4046,18 @@ exports.getShootCategoryCount = async (req, res) => {
   try {
     const { tab } = req.query;
     
-    const whereClause = {
-      deleted_at: null
-    };
+    const whereClause = {};
     
     // Add filter if tab is provided
     if (tab && tab !== 'All') {
       whereClause['$event_type_master.event_type_name$'] = tab;
     }
     
-    const categories = await projects.findAll({
+    const categories = await stream_project_booking.findAll({
       where: whereClause,
       attributes: [
         [Sequelize.col('event_type_master.event_type_name'), 'category'],
-        [Sequelize.fn('COUNT', Sequelize.col('projects.project_id')), 'count']
+        [Sequelize.fn('COUNT', Sequelize.col('stream_project_booking.stream_project_booking_id')), 'count']
       ],
       include: [{
         model: event_type_master,
@@ -4071,7 +4065,7 @@ exports.getShootCategoryCount = async (req, res) => {
         required: false
       }],
       group: ['event_type_master.event_type_name'],
-      order: [[Sequelize.fn('COUNT', Sequelize.col('projects.project_id')), 'DESC']],
+      order: [[Sequelize.fn('COUNT', Sequelize.col('stream_project_booking.stream_project_booking_id')), 'DESC']],
       raw: true
     });
     
