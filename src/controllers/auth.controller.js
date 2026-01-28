@@ -566,12 +566,15 @@ exports.login = async (req, res) => {
 
       // Get crew_member_id if creator
       let crew_member_id = null;
+      let is_crew_verified = null;
+
       if (user.userType && user.userType.user_type_id === 2) {
         const crew = await CrewMember.findOne({
           where: { email: user.email },
-          attributes: ["crew_member_id"],
+          attributes: ["crew_member_id", 'is_crew_verified'],
         });
         crew_member_id = crew ? crew.crew_member_id : null;
+        is_crew_verified = crew ? crew.is_crew_verified : null;
       }
 
       let affiliate_id = null;
@@ -599,6 +602,7 @@ exports.login = async (req, res) => {
           email_verified: user.email_verified,
           crew_member_id,
            affiliate_id,
+          is_crew_verified
         },
         token,
         refreshToken,
@@ -692,9 +696,11 @@ exports.login = async (req, res) => {
       if (user.userType && user.userType.user_type_id === 2) {
         const crew = await CrewMember.findOne({
           where: { email: user.email },
-          attributes: ['crew_member_id']
+          attributes: ['crew_member_id', 'is_crew_verified']
         });
+
         crew_member_id = crew ? crew.crew_member_id : null;
+        is_crew_verified = crew ? crew.is_crew_verified : null;
       }
 
       let affiliate_id = null;
@@ -720,7 +726,8 @@ affiliate_id = affiliate ? affiliate.affiliate_id : null;
           user_type_id,
           email_verified: user.email_verified,
           crew_member_id,
-          affiliate_id
+          affiliate_id,
+          is_crew_verified
         },
 
         token,
