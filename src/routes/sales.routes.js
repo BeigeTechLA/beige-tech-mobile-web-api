@@ -4,6 +4,7 @@ const salesLeadsController = require('../controllers/sales-leads.controller');
 const discountsController = require('../controllers/discounts.controller');
 const paymentLinksController = require('../controllers/payment-links.controller');
 const salesDashboardController = require('../controllers/sales-dashboard.controller');
+const { authenticate, requireSalesRepOrAdmin, requireAdmin } = require('../middleware/auth.middleware');
 
 /**
  * Sales Routes
@@ -46,14 +47,14 @@ router.post('/leads/contact-sales', salesLeadsController.createSalesAssistedLead
  * @query   page, limit, status, lead_type, assigned_to, search
  * @access  Sales Rep / Admin
  */
-router.get('/leads', salesLeadsController.getLeads);
+router.get('/leads', authenticate, requireSalesRepOrAdmin, salesLeadsController.getLeads);
 
 /**
  * @route   GET /api/sales/leads/:id
  * @desc    Get lead details by ID
  * @access  Sales Rep / Admin
  */
-router.get('/leads/:id', salesLeadsController.getLeadById);
+router.get('/leads/:id', authenticate, requireSalesRepOrAdmin, salesLeadsController.getLeadById);
 
 /**
  * @route   PUT /api/sales/leads/:id/assign
@@ -61,7 +62,7 @@ router.get('/leads/:id', salesLeadsController.getLeadById);
  * @body    sales_rep_id
  * @access  Sales Rep / Admin
  */
-router.put('/leads/:id/assign', salesLeadsController.assignLead);
+router.put('/leads/:id/assign', authenticate, requireSalesRepOrAdmin, salesLeadsController.assignLead);
 
 /**
  * @route   PUT /api/sales/leads/:id/status
@@ -69,7 +70,7 @@ router.put('/leads/:id/assign', salesLeadsController.assignLead);
  * @body    status
  * @access  Sales Rep / Admin
  */
-router.put('/leads/:id/status', salesLeadsController.updateLeadStatus);
+router.put('/leads/:id/status', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateLeadStatus);
 
 // =====================================================
 // Discount Code Routes
@@ -81,7 +82,7 @@ router.put('/leads/:id/status', salesLeadsController.updateLeadStatus);
  * @body    lead_id, booking_id, discount_type, discount_value, usage_type, max_uses, expires_at
  * @access  Sales Rep / Admin
  */
-router.post('/discount-codes', discountsController.generateDiscountCode);
+router.post('/discount-codes', authenticate, requireSalesRepOrAdmin, discountsController.generateDiscountCode);
 
 /**
  * @route   GET /api/sales/discount-codes/:code/validate
@@ -103,21 +104,21 @@ router.post('/discount-codes/:code/apply', discountsController.applyDiscountCode
  * @desc    Get discount code details and statistics
  * @access  Sales Rep / Admin
  */
-router.get('/discount-codes/:id', discountsController.getDiscountCodeDetails);
+router.get('/discount-codes/:id', authenticate, requireSalesRepOrAdmin, discountsController.getDiscountCodeDetails);
 
 /**
  * @route   DELETE /api/sales/discount-codes/:id
  * @desc    Deactivate discount code
  * @access  Sales Rep / Admin
  */
-router.delete('/discount-codes/:id', discountsController.deactivateDiscountCode);
+router.delete('/discount-codes/:id', authenticate, requireSalesRepOrAdmin, discountsController.deactivateDiscountCode);
 
 /**
  * @route   GET /api/sales/discount-codes/:id/usage
  * @desc    Get discount code usage history
  * @access  Sales Rep / Admin
  */
-router.get('/discount-codes/:id/usage', discountsController.getDiscountCodeUsageHistory);
+router.get('/discount-codes/:id/usage', authenticate, requireSalesRepOrAdmin, discountsController.getDiscountCodeUsageHistory);
 
 // =====================================================
 // Payment Link Routes
@@ -129,7 +130,7 @@ router.get('/discount-codes/:id/usage', discountsController.getDiscountCodeUsage
  * @body    lead_id, booking_id, discount_code_id, expiry_hours
  * @access  Sales Rep / Admin
  */
-router.post('/payment-links', paymentLinksController.generatePaymentLink);
+router.post('/payment-links', authenticate, requireSalesRepOrAdmin, paymentLinksController.generatePaymentLink);
 
 /**
  * @route   GET /api/sales/payment-links/:token
@@ -158,7 +159,7 @@ router.post('/payment-links/:token/mark-used', paymentLinksController.markLinkAs
  * @query   status (all, active, used, expired)
  * @access  Sales Rep / Admin
  */
-router.get('/payment-links/rep/:repId', paymentLinksController.getSalesRepPaymentLinks);
+router.get('/payment-links/rep/:repId', authenticate, requireSalesRepOrAdmin, paymentLinksController.getSalesRepPaymentLinks);
 
 // =====================================================
 // Sales Dashboard Routes
@@ -170,7 +171,7 @@ router.get('/payment-links/rep/:repId', paymentLinksController.getSalesRepPaymen
  * @query   period (7days, 30days, 90days), sales_rep_id
  * @access  Sales Rep / Admin
  */
-router.get('/dashboard/stats', salesDashboardController.getDashboardStats);
+router.get('/dashboard/stats', authenticate, requireSalesRepOrAdmin, salesDashboardController.getDashboardStats);
 
 /**
  * @route   GET /api/sales/dashboard/rep-stats/:repId
@@ -178,14 +179,14 @@ router.get('/dashboard/stats', salesDashboardController.getDashboardStats);
  * @query   period (7days, 30days, 90days)
  * @access  Sales Rep / Admin
  */
-router.get('/dashboard/rep-stats/:repId', salesDashboardController.getSalesRepStats);
+router.get('/dashboard/rep-stats/:repId', authenticate, requireSalesRepOrAdmin, salesDashboardController.getSalesRepStats);
 
 /**
  * @route   GET /api/sales/dashboard/sales-reps
  * @desc    Get all sales reps with workload
  * @access  Admin
  */
-router.get('/dashboard/sales-reps', salesDashboardController.getSalesRepsWorkload);
+router.get('/dashboard/sales-reps', authenticate, requireAdmin, salesDashboardController.getSalesRepsWorkload);
 
 /**
  * @route   GET /api/sales/dashboard/recent-activities
@@ -193,7 +194,7 @@ router.get('/dashboard/sales-reps', salesDashboardController.getSalesRepsWorkloa
  * @query   limit, sales_rep_id
  * @access  Sales Rep / Admin
  */
-router.get('/dashboard/recent-activities', salesDashboardController.getRecentActivities);
+router.get('/dashboard/recent-activities', authenticate, requireSalesRepOrAdmin, salesDashboardController.getRecentActivities);
 
 /**
  * @route   GET /api/sales/dashboard/funnel
@@ -201,6 +202,6 @@ router.get('/dashboard/recent-activities', salesDashboardController.getRecentAct
  * @query   period (7days, 30days, 90days), sales_rep_id
  * @access  Sales Rep / Admin
  */
-router.get('/dashboard/funnel', salesDashboardController.getLeadsFunnelData);
+router.get('/dashboard/funnel', authenticate, requireSalesRepOrAdmin, salesDashboardController.getLeadsFunnelData);
 
 module.exports = router;
