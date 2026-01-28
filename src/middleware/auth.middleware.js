@@ -207,3 +207,58 @@ exports.requireSalesRepOrAdmin = async (req, res, next) => {
     });
   }
 };
+
+/**
+ * Require admin role only
+ * User must be authenticated and have admin role
+ */
+exports.requireAdmin = async (req, res, next) => {
+  try {
+    const { users, user_type } = require('../models');
+    
+    if (!req.userId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      });
+    }
+
+    // Get user with user type
+    const user = await users.findByPk(req.userId, {
+      include: [
+        {
+          model: user_type,
+          as: 'userType',
+          attributes: ['user_role']
+        }
+      ]
+    });
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const userRole = user.userType?.user_role;
+
+    if (userRole !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Admin access required'
+      });
+    }
+
+    req.userRole = userRole; // Attach role to request
+    next();
+
+  } catch (error) {
+    console.error('Admin authorization error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Authorization error',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
