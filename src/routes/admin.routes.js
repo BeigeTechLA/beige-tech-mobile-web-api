@@ -53,5 +53,8 @@ router.post('/verify-crew-member', admin.verifyCrewMember);
 router.get('/shoot-category-count', admin.getShootByCategory);
 router.get('/get-post-production-members', admin.getPostProductionMembers);
 router.post('/assign-post-production-member', admin.assignPostProductionMember);
+router.get('/get-clients', admin.getClients);
+router.put('/edit-client/:client_id', admin.editClient);
+router.delete('/delete-client/:client_id', admin.deleteClient);
 
 module.exports = router;

@@ -6,7 +6,7 @@ const router = express.Router();
 const creator = require('../controllers/creator.contoller');
 const { checkCreatorVerification } = require('../middleware/creatorVerification');
 
-router.use(checkCreatorVerification);
+// router.use(checkCreatorVerification);
 
 router.post('/dashboard-count', creator.getDashboardCounts);
 router.post('/pending-projects', creator.getPendingRequests);

@@ -198,3 +198,17 @@ Authorization: {{TOKEN}}
 ###
 GET {{URL}}admin/get-clients HTTP/1.1
 Content-Type: application/json
+
+###
+PUT {{URL}}admin/edit-client/1 HTTP/1.1
+Content-Type: application/json
+
+{
+  "name": "Gandhi Ronak",
+  "email": "ronak84745@gmail.com",
+  "phone_number": "9638874520"
+}
+
+###
+DELETE {{URL}}admin/delete-client/2 HTTP/1.1
+Content-Type: application/json

@@ -1,5 +1,5 @@
 const constants = require('../utils/constants');
-const { Sequelize } = require('../models')
+const { Sequelize, users } = require('../models')
 const multer = require('multer');
 const path = require('path');
 const common_model = require('../utils/common_model');
@@ -4581,6 +4581,158 @@ exports.assignPostProductionMember = async (req, res) => {
     return res.status(500).json({
       error: true,
       message: 'Internal server error',
+    });
+  }
+};
+
+exports.getClients = async (req, res) => {
+  try {
+    const ClientData = await clients.findAll({
+      where: { is_active: 1 },
+      order: [['name', 'ASC']]
+    });
+
+    if (!ClientData || ClientData.length === 0) {
+      return res.status(404).json({
+        error: true,
+        message: 'No active clients found',
+      });
+    }
+
+    return res.status(200).json({
+      error: false,
+      message: 'Clients fetched successfully',
+      data: ClientData
+    });
+
+  } catch (error) {
+    console.error("Get Clients Error:", error);
+    return res.status(500).json({
+      error: true,
+      message: 'Internal server error',
+    });
+  }
+};
+
+
+exports.editClient = async (req, res) => {
+  try {
+    const { client_id } = req.params;
+    const { name, email, phone_number } = req.body;
+
+    if (!name || !email || !phone_number) {
+      return res.status(400).json({
+        error: true,
+        message: 'Name, email, and phone number are required'
+      });
+    }
+
+    const client = await clients.findOne({
+      where: { client_id, is_active: 1 }
+    });
+
+    if (!client) {
+      return res.status(404).json({
+        error: true,
+        message: 'Client not found or inactive'
+      });
+    }
+
+    const user = await users.findOne({
+      where: { id: client.user_id, is_active: 1 }
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        error: true,
+        message: 'Associated user not found or inactive'
+      });
+    }
+
+    const updatedClient = await clients.update(
+      {
+        name,
+        email,
+        phone_number
+      },
+      {
+        where: { client_id }
+      }
+    );
+
+    const updatedUser = await users.update(
+      {
+        name,
+        email,
+        phone_number
+      },
+      {
+        where: { id: client.user_id }
+      }
+    );
+
+    return res.status(200).json({
+      error: false,
+      message: 'Client and user updated successfully',
+      data: {
+        client: updatedClient,
+        user: updatedUser
+      }
+    });
+
+  } catch (error) {
+    console.error("Error updating client:", error);
+    return res.status(500).json({
+      error: true,
+      message: 'Internal server error'
+    });
+  }
+};
+
+exports.deleteClient = async (req, res) => {
+  try {
+    const { client_id } = req.params; // Assuming client_id is passed as a parameter
+
+    // Find the client by client_id
+    const client = await clients.findOne({
+      where: { client_id, is_active: 1 } // Only proceed if the client is active
+    });
+
+    if (!client) {
+      return res.status(404).json({
+        error: true,
+        message: 'Client not found or already inactive'
+      });
+    }
+
+    // Find the associated user using the user_id from the client
+    const user = await users.findOne({
+      where: { id: client.user_id, is_active: 1 } // Ensure user is active
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        error: true,
+        message: 'Associated user not found or inactive'
+      });
+    }
+
+    // Soft delete the client by setting is_active to 0
+    await client.update({ is_active: 0 });
+
+    // Soft delete the associated user by setting is_active to 0
+    await user.update({ is_active: 0 });
+
+    return res.status(200).json({
+      error: false,
+      message: 'Client and associated user deactivated successfully'
+    });
+
+  } catch (error) {
+    console.error("Error deleting client:", error);
+    return res.status(500).json({
+      error: true,
+      message: 'Internal server error'
     });
   }
 };
