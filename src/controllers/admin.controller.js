@@ -23,7 +23,9 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   assigned_crew,
   assigned_equipment,
   project_brief,
-  event_type_master } = require('../models');
+  event_type_master,
+  payments,
+  projects } = require('../models');
 
 function toArray(value) {
   if (!value) return [];
@@ -3885,35 +3887,36 @@ exports.getCrewCount = async (req, res) => {
 // Get dashboard summary statistics
 exports.getDashboardSummary = async (req, res) => {
   try {
-    const db = req.mysqlDb;
+    // Get total counts using Sequelize
+    const totalProjects = await projects.count({
+      where: { deleted_at: null }
+    });
     
-    // Get total counts
-    const [projectsCount] = await db.execute(
-      'SELECT COUNT(*) as total FROM projects WHERE deleted_at IS NULL'
-    );
+    const totalCrew = await crew_members.count({
+      where: { is_active: 1 }
+    });
     
-    const [crewCount] = await db.execute(
-      'SELECT COUNT(*) as total FROM crew_members WHERE is_active = 1'
-    );
-    
-    const [equipmentCount] = await db.execute(
-      'SELECT COUNT(*) as total FROM equipment WHERE is_active = 1'
-    );
+    const totalEquipment = await equipment.count({
+      where: { is_active: 1 }
+    });
     
     // Get active projects (not completed or cancelled)
-    const [activeProjects] = await db.execute(
-      `SELECT COUNT(*) as total FROM projects 
-       WHERE state NOT IN ('completed', 'cancelled', 'delivered') 
-       AND deleted_at IS NULL`
-    );
+    const activeProjects = await projects.count({
+      where: {
+        current_state: {
+          [Op.notIn]: ['COMPLETED', 'CANCELLED', 'DELIVERED']
+        },
+        deleted_at: null
+      }
+    });
     
     res.json({
       success: true,
       data: {
-        total_projects: projectsCount[0].total,
-        active_projects: activeProjects[0].total,
-        total_crew: crewCount[0].total,
-        total_equipment: equipmentCount[0].total
+        total_projects: totalProjects,
+        active_projects: activeProjects,
+        total_crew: totalCrew,
+        total_equipment: totalEquipment
       }
     });
   } catch (error) {
@@ -3929,23 +3932,24 @@ exports.getDashboardSummary = async (req, res) => {
 // Get total revenue
 exports.getTotalRevenue = async (req, res) => {
   try {
-    const db = req.mysqlDb;
+    const completedPayments = await payments.findAll({
+      where: { status: 'completed' },
+      attributes: [
+        [Sequelize.fn('COALESCE', Sequelize.fn('SUM', Sequelize.col('total_amount')), 0), 'total_revenue'],
+        [Sequelize.fn('COUNT', Sequelize.col('payment_id')), 'total_bookings'],
+        [Sequelize.fn('COALESCE', Sequelize.fn('AVG', Sequelize.col('total_amount')), 0), 'avg_booking_value']
+      ],
+      raw: true
+    });
     
-    const [revenue] = await db.execute(
-      `SELECT 
-        COALESCE(SUM(total_amount), 0) as total_revenue,
-        COUNT(*) as total_bookings,
-        COALESCE(AVG(total_amount), 0) as avg_booking_value
-       FROM payments 
-       WHERE status = 'completed'`
-    );
+    const revenue = completedPayments[0] || { total_revenue: 0, total_bookings: 0, avg_booking_value: 0 };
     
     res.json({
       success: true,
       data: {
-        total_revenue: parseFloat(revenue[0].total_revenue),
-        total_bookings: revenue[0].total_bookings,
-        avg_booking_value: parseFloat(revenue[0].avg_booking_value)
+        total_revenue: parseFloat(revenue.total_revenue),
+        total_bookings: parseInt(revenue.total_bookings),
+        avg_booking_value: parseFloat(revenue.avg_booking_value)
       }
     });
   } catch (error) {
@@ -3961,26 +3965,32 @@ exports.getTotalRevenue = async (req, res) => {
 // Get monthly revenue (last 12 months)
 exports.getMonthlyRevenue = async (req, res) => {
   try {
-    const db = req.mysqlDb;
+    const twelveMonthsAgo = new Date();
+    twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
     
-    const [monthlyData] = await db.execute(
-      `SELECT 
-        DATE_FORMAT(created_at, '%Y-%m') as month,
-        COALESCE(SUM(total_amount), 0) as revenue,
-        COUNT(*) as bookings
-       FROM payments 
-       WHERE status = 'completed'
-       AND created_at >= DATE_SUB(NOW(), INTERVAL 12 MONTH)
-       GROUP BY DATE_FORMAT(created_at, '%Y-%m')
-       ORDER BY month DESC`
-    );
+    const monthlyData = await payments.findAll({
+      where: {
+        status: 'completed',
+        created_at: {
+          [Op.gte]: twelveMonthsAgo
+        }
+      },
+      attributes: [
+        [Sequelize.fn('DATE_FORMAT', Sequelize.col('created_at'), '%Y-%m'), 'month'],
+        [Sequelize.fn('COALESCE', Sequelize.fn('SUM', Sequelize.col('total_amount')), 0), 'revenue'],
+        [Sequelize.fn('COUNT', Sequelize.col('payment_id')), 'bookings']
+      ],
+      group: [Sequelize.fn('DATE_FORMAT', Sequelize.col('created_at'), '%Y-%m')],
+      order: [[Sequelize.fn('DATE_FORMAT', Sequelize.col('created_at'), '%Y-%m'), 'DESC']],
+      raw: true
+    });
     
     res.json({
       success: true,
       data: monthlyData.map(row => ({
         month: row.month,
         revenue: parseFloat(row.revenue),
-        bookings: row.bookings
+        bookings: parseInt(row.bookings)
       }))
     });
   } catch (error) {
@@ -3996,27 +4006,33 @@ exports.getMonthlyRevenue = async (req, res) => {
 // Get weekly revenue (last 12 weeks)
 exports.getWeeklyRevenue = async (req, res) => {
   try {
-    const db = req.mysqlDb;
+    const twelveWeeksAgo = new Date();
+    twelveWeeksAgo.setDate(twelveWeeksAgo.getDate() - (12 * 7));
     
-    const [weeklyData] = await db.execute(
-      `SELECT 
-        YEARWEEK(created_at) as week,
-        DATE_FORMAT(created_at, '%Y-W%v') as week_label,
-        COALESCE(SUM(total_amount), 0) as revenue,
-        COUNT(*) as bookings
-       FROM payments 
-       WHERE status = 'completed'
-       AND created_at >= DATE_SUB(NOW(), INTERVAL 12 WEEK)
-       GROUP BY YEARWEEK(created_at)
-       ORDER BY week DESC`
-    );
+    const weeklyData = await payments.findAll({
+      where: {
+        status: 'completed',
+        created_at: {
+          [Op.gte]: twelveWeeksAgo
+        }
+      },
+      attributes: [
+        [Sequelize.fn('YEARWEEK', Sequelize.col('created_at')), 'week'],
+        [Sequelize.fn('DATE_FORMAT', Sequelize.col('created_at'), '%Y-W%v'), 'week_label'],
+        [Sequelize.fn('COALESCE', Sequelize.fn('SUM', Sequelize.col('total_amount')), 0), 'revenue'],
+        [Sequelize.fn('COUNT', Sequelize.col('payment_id')), 'bookings']
+      ],
+      group: [Sequelize.fn('YEARWEEK', Sequelize.col('created_at'))],
+      order: [[Sequelize.fn('YEARWEEK', Sequelize.col('created_at')), 'DESC']],
+      raw: true
+    });
     
     res.json({
       success: true,
       data: weeklyData.map(row => ({
         week: row.week_label,
         revenue: parseFloat(row.revenue),
-        bookings: row.bookings
+        bookings: parseInt(row.bookings)
       }))
     });
   } catch (error) {
@@ -4032,33 +4048,38 @@ exports.getWeeklyRevenue = async (req, res) => {
 // Get shoot category count
 exports.getShootCategoryCount = async (req, res) => {
   try {
-    const db = req.mysqlDb;
     const { tab } = req.query;
     
-    let query = `
-      SELECT 
-        et.event_type_name as category,
-        COUNT(p.project_id) as count
-      FROM projects p
-      LEFT JOIN event_type_master et ON p.event_type = et.event_type_id
-      WHERE p.deleted_at IS NULL
-    `;
+    const whereClause = {
+      deleted_at: null
+    };
     
     // Add filter if tab is provided
     if (tab && tab !== 'All') {
-      query += ` AND et.event_type_name = ?`;
+      whereClause['$event_type_master.event_type_name$'] = tab;
     }
     
-    query += ` GROUP BY et.event_type_name ORDER BY count DESC`;
-    
-    const params = tab && tab !== 'All' ? [tab] : [];
-    const [categories] = await db.execute(query, params);
+    const categories = await projects.findAll({
+      where: whereClause,
+      attributes: [
+        [Sequelize.col('event_type_master.event_type_name'), 'category'],
+        [Sequelize.fn('COUNT', Sequelize.col('projects.project_id')), 'count']
+      ],
+      include: [{
+        model: event_type_master,
+        attributes: [],
+        required: false
+      }],
+      group: ['event_type_master.event_type_name'],
+      order: [[Sequelize.fn('COUNT', Sequelize.col('projects.project_id')), 'DESC']],
+      raw: true
+    });
     
     res.json({
       success: true,
       data: categories.map(row => ({
         category: row.category || 'Unknown',
-        count: row.count
+        count: parseInt(row.count)
       }))
     });
   } catch (error) {
