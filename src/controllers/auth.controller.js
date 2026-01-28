@@ -7,7 +7,8 @@ const common_model = require('../utils/common_model');
 const User = common_model.getTableNameDirect(constants.TABLES.USERS);
 const UserType = common_model.getTableNameDirect(constants.TABLES.USER_TYPE);
 const CrewMember = common_model.getTableNameDirect(constants.TABLES.CREW_MEMBERS);
-const Affiliate = common_model.getTableNameDirect(constants.TABLES.AFFILIATES)
+const Affiliate = common_model.getTableNameDirect(constants.TABLES.AFFILIATES);
+const Clients = common_model.getTableNameDirect(constants.TABLES.CLIENTS);
 const affiliateController = require('./affiliate.controller');
 const config = require('../config/config');
 const { S3UploadFiles } = require('../utils/common.js');
@@ -118,15 +119,128 @@ const getPermissionsForRole = (role) => {
  * Register new user
  * POST /auth/register
  */
+// exports.register = async (req, res) => {
+//   try {
+//     const { name, email, phone_number, instagram_handle, password, userType = 3 } = req.body;
+
+//     // Validate required fields
+//     if (!name || !password) {
+//       return res.status(400).json({
+//         success: false,
+//         message: 'Name and password are required'
+//       });
+//     }
+
+//     // At least one identifier required
+//     if (!email && !phone_number && !instagram_handle) {
+//       return res.status(400).json({
+//         success: false,
+//         message: 'Provide at least one: email, phone number, or Instagram handle'
+//       });
+//     }
+
+//     // Validate userType
+//     if (![1, 2].includes(userType)) {
+//       return res.status(400).json({
+//         success: false,
+//         message: 'Invalid user type'
+//       });
+//     }
+
+//     // Check if user already exists
+//     const conditions = [];
+//     if (email) conditions.push({ email });
+//     if (phone_number) conditions.push({ phone_number });
+//     if (instagram_handle) conditions.push({ instagram_handle });
+
+//     const userExists = await User.findOne({
+//       where: { [Op.or]: conditions }
+//     });
+
+//     if (userExists) {
+//       return res.status(409).json({
+//         success: false,
+//         message: 'User already exists with provided credentials'
+//       });
+//     }
+
+//     // Hash password
+//     const hashedPassword = await bcrypt.hash(password, 10);
+
+//     // Generate OTP for email verification
+//     const otp = otpService.generateOTP();
+//     const otpExpiry = otpService.generateOTPExpiry(10); // 10 minutes
+
+//     // Create user
+//     const newUser = await User.create({
+//       name,
+//       email,
+//       phone_number,
+//       instagram_handle,
+//       password_hash: hashedPassword,
+//       user_type: userType,
+//       is_active: 1,
+//       email_verified: 0,
+//       verification_code: otp,
+//       otp_expiry: otpExpiry
+//     });
+
+//     // Send verification email if email provided
+//     if (email) {
+//       const emailResult = await emailService.sendVerificationOTP(
+//         { name, email },
+//         otp
+//       );
+
+//       if (!emailResult.success) {
+//         console.error('Failed to send verification email:', emailResult.error);
+//       }
+//     }
+
+//     // Auto-create affiliate account for the new user
+//     let affiliateData = null;
+//     try {
+//       const affiliate = await affiliateController.createAffiliate(newUser.id);
+//       if (affiliate) {
+//         affiliateData = {
+//           affiliate_id: affiliate.affiliate_id,
+//           referral_code: affiliate.referral_code
+//         };
+//       }
+//     } catch (affiliateError) {
+//       console.error('Failed to create affiliate account:', affiliateError);
+//       // Don't fail registration if affiliate creation fails
+//     }
+
+//     return res.status(201).json({
+//       success: true,
+//       message: email
+//         ? 'User registered successfully. Please check your email for verification code.'
+//         : 'User registered successfully. Please verify your account.',
+//       userId: newUser.id,
+//       email: newUser.email,
+//       affiliate: affiliateData
+//     });
+
+//   } catch (error) {
+//     console.error('Register Error:', error);
+//     return res.status(500).json({
+//       success: false,
+//       message: 'Server error during registration',
+//       error: process.env.NODE_ENV === 'development' ? error.message : undefined
+//     });
+//   }
+// };
+
 exports.register = async (req, res) => {
   try {
-    const { name, email, phone_number, instagram_handle, password, userType = 1 } = req.body;
+    const { name, email, phone_number, instagram_handle, password, userType = 3 } = req.body;
 
     // Validate required fields
-    if (!name || !password) {
+    if (!name || !password || !email) {
       return res.status(400).json({
         success: false,
-        message: 'Name and password are required'
+        message: 'Name, email, and password are required'
       });
     }
 
@@ -184,6 +298,14 @@ exports.register = async (req, res) => {
       otp_expiry: otpExpiry
     });
 
+    const newClient = await Clients.create({
+      user_id: newUser.id,
+      name,
+      email,
+      phone_number,
+      is_active: 1
+    });
+
     // Send verification email if email provided
     if (email) {
       const emailResult = await emailService.sendVerificationOTP(
@@ -208,7 +330,6 @@ exports.register = async (req, res) => {
       }
     } catch (affiliateError) {
       console.error('Failed to create affiliate account:', affiliateError);
-      // Don't fail registration if affiliate creation fails
     }
 
     return res.status(201).json({
@@ -218,7 +339,8 @@ exports.register = async (req, res) => {
         : 'User registered successfully. Please verify your account.',
       userId: newUser.id,
       email: newUser.email,
-      affiliate: affiliateData
+      affiliate: affiliateData,
+      clientId: newClient.client_id
     });
 
   } catch (error) {

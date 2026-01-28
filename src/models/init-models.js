@@ -45,6 +45,7 @@ var _activity_logs = require("./activity_logs");
 var _equipment_request = require("./equipment_request");
 var _post_production_members = require("./post_production_members");
 var _assigned_post_production_member = require("./assigned_post_production_member");
+var _clients = require("./clients");
 
 function initModels(sequelize) {
   var assigned_crew = _assigned_crew(sequelize, DataTypes);
@@ -93,6 +94,7 @@ function initModels(sequelize) {
   var equipment_request = _equipment_request(sequelize, DataTypes);
   var post_production_members = _post_production_members(sequelize, DataTypes);
   var assigned_post_production_member = _assigned_post_production_member(sequelize, DataTypes);
+  var clients = _clients(sequelize, DataTypes);
 
   assignment_checklist.belongsTo(checklist_master, { as: "checklist", foreignKey: "checklist_id"});
   checklist_master.hasMany(assignment_checklist, { as: "assignment_checklists", foreignKey: "checklist_id"});
@@ -268,7 +270,8 @@ crew_members.belongsTo(crew_roles, { as: 'role', foreignKey: 'primary_role' });
     crew_equipment_photos,
     equipment_request,
     post_production_members,
-    assigned_post_production_member
+    assigned_post_production_member,
+    clients
   };
 }
 module.exports = initModels;

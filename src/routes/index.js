@@ -38,4 +38,5 @@ router.use('/admin', require('./admin.routes'));
 router.use('/creator', require('./creator.routes'));
 router.use('/reviews', require('./reviews.routes'));
 router.use('/affiliates', require('./affiliate.routes'));
+router.use('/client', require('./client.routes'));
 module.exports = router;

@@ -23,7 +23,7 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   assigned_crew,
   assigned_equipment,
   project_brief,
-  event_type_master, payment_transactions, assigned_post_production_member, post_production_members } = require('../models');
+  event_type_master, payment_transactions, assigned_post_production_member, post_production_members, clients } = require('../models');
 
 function toArray(value) {
   if (!value) return [];
@@ -998,20 +998,16 @@ exports.getAllProjectDetails = async (req, res) => {
         case 'cancelled':
           whereConditions.is_cancelled = 1;
           break;
-
         case 'completed':
           whereConditions.is_completed = 1;
           break;
-
         case 'upcoming':
           whereConditions.is_cancelled = 0;
           whereConditions.event_date = { [Sequelize.Op.gt]: today };
           break;
-
         case 'draft':
           whereConditions.is_draft = 1;
           break;
-
         default:
           return res.status(400).json({
             error: true,
@@ -1057,15 +1053,12 @@ exports.getAllProjectDetails = async (req, res) => {
       stream_project_booking.count({
         where: { is_active: 1, is_cancelled: 0, is_completed: 0, is_draft: 0 }
       }),
-
       stream_project_booking.count({
         where: { is_cancelled: 1 }
       }),
-
       stream_project_booking.count({
         where: { is_completed: 1 }
       }),
-
       stream_project_booking.count({
         where: {
           is_cancelled: 0,
@@ -1073,7 +1066,6 @@ exports.getAllProjectDetails = async (req, res) => {
           event_date: { [Sequelize.Op.gt]: today }
         }
       }),
-
       stream_project_booking.count({
         where: { is_draft: 1 }
       }),
@@ -1115,14 +1107,23 @@ exports.getAllProjectDetails = async (req, res) => {
         ],
       });
 
+      const assignedPostProductionMembers = await assigned_post_production_member.findAll({
+        where: { project_id: project.stream_project_booking_id, is_active: 1 },
+        include: [
+          {
+            model: post_production_members,
+            as: 'post_production_member',
+            attributes: ['post_production_member_id', 'first_name', 'last_name', 'email'],
+          },
+        ],
+      });
+
       return {
         project: {
           ...project.toJSON(),
           event_location: (() => {
             const loc = project.event_location;
-
             if (!loc) return null;
-
             if (typeof loc === "string" && (loc.startsWith("{") || loc.startsWith("["))) {
               try {
                 const parsed = JSON.parse(loc);
@@ -1131,12 +1132,12 @@ exports.getAllProjectDetails = async (req, res) => {
                 return loc;
               }
             }
-
             return loc;
           })()
         },
         assignedCrew,
         assignedEquipment,
+        assignedPostProductionMembers,
       };
     });
 

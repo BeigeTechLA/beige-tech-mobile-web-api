@@ -90,3 +90,28 @@ CREATE TABLE assigned_post_production_member (
     created_at DATETIME DEFAULT current_timestamp(),
     updated_at DATETIME DEFAULT current_timestamp() ON UPDATE current_timestamp()
 );
+
+--28-01-26
+
+INSERT INTO `user_type` (`user_type_id`, `user_role`, `is_active`) VALUES (NULL, 'Client', '1');
+
+CREATE TABLE `clients` (
+  `client_id` int(11) NOT NULL,
+  `user_id` int(11) NOT NULL,
+  `name` varchar(255) NOT NULL,
+  `email` varchar(255) NOT NULL,
+  `phone_number` varchar(20) NOT NULL,
+  `is_active` tinyint(1) DEFAULT 1,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+ALTER TABLE `clients`
+  ADD PRIMARY KEY (`client_id`),
+  ADD KEY `user_id` (`user_id`);
+
+ALTER TABLE `clients`
+  MODIFY `client_id` int(11) NOT NULL AUTO_INCREMENT;
+
+ALTER TABLE `clients`
+  ADD CONSTRAINT `clients_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`);

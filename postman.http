@@ -1,6 +1,6 @@
 @URL = http://localhost:5001/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjcsInVzZXJSb2xlIjoiQ3JlYXRvciIsImlhdCI6MTc2OTUxNjgzNSwiZXhwIjoxNzcwMTIxNjM1fQ.agpsa5wOKMjDYsoJYINp2Lu8Z7ceQKJdo7eUn0O-svM
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3Njk1OTY5MjMsImV4cCI6MTc3MDIwMTcyM30.vZMxAgTkd6FhiTPrWT8CiPfKYsns2MR1FmDrdk3tvUI
 
 ###
 POST {{URL}}creator/dashboard-count HTTP/1.1
@@ -15,8 +15,8 @@ POST {{URL}}auth/login HTTP/1.1
 Content-Type: application/json
 
 {
-  "email": "parth.panchal0362@gmail.com",
-  "password": "1"
+  "email": "harsh.panchal@gmail.com",
+  "password": "password123"
 }
 
 ###
@@ -164,3 +164,37 @@ Content-Type: application/json
   "post_production_member_id": 7,
   "project_id": 485
 }
+
+###
+GET {{URL}}client/get-dashboard-summary HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+GET {{URL}}client/get-shoots-count-by-category HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+GET {{URL}}client/get-shoot-status HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+GET {{URL}}client/get-my-shoots HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+GET {{URL}}client/get-project/500 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+GET {{URL}}client/get-recent-activity HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+GET {{URL}}admin/get-clients HTTP/1.1
+Content-Type: application/json
