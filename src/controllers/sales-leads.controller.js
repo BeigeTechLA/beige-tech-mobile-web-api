@@ -40,6 +40,8 @@ exports.trackEarlyBookingInterest = async (req, res) => {
       guest_email: guest_email,
       project_name: `Draft - ${shoot_type || content_type || 'Booking'}`,
       event_type: shoot_type || content_type || 'general',
+      streaming_platforms: JSON.stringify([]),
+      crew_roles: JSON.stringify([]),
       is_draft: 1,
       is_completed: 0,
       is_cancelled: 0,
