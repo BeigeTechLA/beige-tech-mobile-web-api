@@ -1,6 +1,29 @@
 const { updateCredentials, uploadFile } = require('s3-bucket');
 const util = require('util');
 const path = require('path'); 
+const sharp = require('sharp');
+const fs = require('fs');
+
+// Function to process and compress images
+const processImage = async (filePath, outputPath) => {
+  const isImage = /\.(jpg|jpeg|png|gif|webp)$/i.test(filePath);
+  if (!isImage) return filePath; // Return original path if not an image
+
+  try {
+    await sharp(filePath)
+      .resize(800, null, { // Max width 800px, maintain aspect ratio
+        withoutEnlargement: true // Don't enlarge if smaller
+      })
+      .jpeg({ quality: 80 }) // Compress to 80% quality
+      .png({ quality: 80 })
+      .toFile(outputPath);
+
+    return outputPath; // Return processed image path
+  } catch (error) {
+    console.error('Error processing image:', error);
+    return filePath; // Return original path on error
+  }
+};
 
 const s3Upload = (media, callback = null) => {
     return new Promise((resolve, reject) => {
@@ -76,13 +99,25 @@ const S3UploadFiles = async (files) => {
 
       file.public_id = `${field}_${randomNumber}_${currentImageVersion}.${ext}`;
 
+      // Process image if it's an image file
+      let uploadPath = file.path;
+      if (/\.(jpg|jpeg|png|gif|webp)$/i.test(file.filename)) {
+        const processedPath = path.join(path.dirname(file.path), `processed_${file.filename}`);
+        uploadPath = await processImage(file.path, processedPath);
+      }
+
       const fileObject = {
-        path: file.path,   // IMPORTANT: use multer file path
+        path: uploadPath,   // Use processed path for images
         public_id: file.public_id,
         fileName: file.filename
       };
 
       await s3Upload(fileObject);
+
+      // Clean up processed file if it was created
+      if (uploadPath !== file.path && fs.existsSync(uploadPath)) {
+        fs.unlinkSync(uploadPath);
+      }
 
       filePaths.push({
         file_type: field,
