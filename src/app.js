@@ -29,6 +29,9 @@ const corsConfig = corsOrigins[0] === '*'
 
 app.use(cors(corsConfig));
 
+// Handle preflight requests explicitly
+app.options('*', cors(corsConfig));
+
 // Request logging middleware
 app.use((req, res, next) => {
   const baseUrl = 'http://localhost:3000/api/'; // Define base URL for API
