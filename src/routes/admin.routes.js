@@ -46,6 +46,11 @@ router.get('/get-dashboard-summary', authenticateAdmin, admin.getDashboardSummar
 router.get('/dashboard/revenue/total', authenticateAdmin, admin.getTotalRevenue)
 router.get('/dashboard/revenue/monthly', authenticateAdmin, admin.getMonthlyRevenue)
 router.get('/dashboard/revenue/weekly', authenticateAdmin, admin.getWeeklyRevenue)
+router.get('/dashboard/payout/total', authenticateAdmin, admin.getTotalPayout);
+router.get('/dashboard/payout/weekly-graph', authenticateAdmin, admin.getWeeklyPayoutGraph);
+router.get('/dashboard/payout/pending', authenticateAdmin, admin.getPendingPayout);
+router.get('/dashboard/cp/count', authenticateAdmin, admin.getTotalCPCount);
+router.get('/dashboard/category-wise-cp/count', authenticateAdmin, admin.getCategoryWiseCPs);
 router.get('/dashboard/shoot-status', authenticateAdmin, admin.getShootStatus)
 router.get('/dashboard/top-creative-partners', authenticateAdmin, admin.getTopCreativePartners)
 router.post('/dashboard-detail', authenticateAdmin, admin.getDashboardDetails);

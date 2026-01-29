@@ -127,6 +127,36 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ###
+# Dashboard: Total Pay-out
+GET {{URL}}admin/dashboard/payout/total HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+# Dashboard: Weekly Graph Payments
+GET {{URL}}admin/dashboard/payout/weekly-graph HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+# Dashboard: Pending Payments
+GET {{URL}}admin/dashboard/payout/pending HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+# Dashboard: No Of CPs
+GET {{URL}}admin/dashboard/cp/count HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+# Dashboard: Category Wise CPs
+GET {{URL}}admin/dashboard/category-wise-cp/count HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
 # Shoot status: successful, pending, rejected, cancelled (month/all filter)
 GET {{URL}}admin/dashboard/shoot-status?range=all HTTP/1.1
 Content-Type: application/json
