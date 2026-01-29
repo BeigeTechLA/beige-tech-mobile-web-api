@@ -419,7 +419,7 @@ exports.getLeads = async (req, res) => {
         leads: leads.map(lead => ({
           lead_id: lead.lead_id,
           client_name: lead.client_name,
-          email: lead.guest_email || lead.user?.email,
+          guest_email: lead.guest_email || lead.user?.email,
           lead_type: lead.lead_type,
           lead_status: lead.lead_status,
           assigned_sales_rep: lead.assigned_sales_rep,
