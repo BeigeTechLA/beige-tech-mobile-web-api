@@ -92,7 +92,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage: storage,
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: { fileSize: 25 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowedTypes = ['image/jpeg', 'image/png', 'application/pdf'];
     if (!allowedTypes.includes(file.mimetype)) {
@@ -4140,6 +4140,166 @@ exports.getWeeklyRevenue = async (req, res) => {
   } catch (err) {
     console.error('Weekly Revenue Error:', err);
     return res.status(500).json({ error: true });
+  }
+};
+
+exports.getTotalPayout = async (req, res) => {
+  try {
+    const totalPayout = await payment_transactions.sum('cp_cost', {
+      where: { status: 'succeeded' }
+    });
+
+    return res.status(200).json({
+      error: false,
+      data: {
+        total_payout: Number(totalPayout || 0)
+      }
+    });
+  } catch (err) {
+    console.error('Total Payout Error:', err);
+    return res.status(500).json({ error: true });
+  }
+};
+
+exports.getWeeklyPayoutGraph = async (req, res) => {
+  try {
+    const data = await payment_transactions.findAll({
+      attributes: [
+        [Sequelize.fn('DAYNAME', Sequelize.col('created_at')), 'day'],
+        [Sequelize.fn('SUM', Sequelize.col('cp_cost')), 'amount']
+      ],
+      where: {
+        status: 'succeeded',
+        created_at: {
+          [Op.gte]: Sequelize.literal('DATE_SUB(CURDATE(), INTERVAL 7 DAY)')
+        }
+      },
+      group: [Sequelize.fn('DAYOFWEEK', Sequelize.col('created_at'))],
+      order: [[Sequelize.fn('DAYOFWEEK', Sequelize.col('created_at')), 'ASC']]
+    });
+
+    return res.status(200).json({
+      error: false,
+      data
+    });
+  } catch (err) {
+    console.error('Weekly Payout Graph Error:', err);
+    return res.status(500).json({ error: true });
+  }
+};
+
+exports.getPendingPayout = async (req, res) => {
+  try {
+    const pending = await payment_transactions.sum('cp_cost', {
+      where: { status: 'pending' }
+    });
+
+    return res.status(200).json({
+      error: false,
+      data: {
+        pending_payout: Number(pending || 0),
+        growth_percent: 0
+      }
+    });
+  } catch (err) {
+    console.error('Pending Payout Error:', err);
+    return res.status(500).json({ error: true });
+  }
+};
+
+exports.getTotalCPCount = async (req, res) => {
+  try {
+    const totalCPs = await crew_members.count({
+      where: { is_active: 1 }
+    });
+
+    return res.status(200).json({
+      error: false,
+      data: {
+        total_cps: totalCPs
+      }
+    });
+  } catch (err) {
+    console.error('CP Count Error:', err);
+    return res.status(500).json({ error: true });
+  }
+};
+
+// exports.getCategoryWiseCPs = async (req, res) => {
+//   try {
+//     const data = await crew_members.findAll({
+//       attributes: [
+//         'primary_role',
+//         [Sequelize.fn('COUNT', Sequelize.col('crew_member_id')), 'count']
+//       ],
+//       where: { is_active: 1 },
+//       group: ['primary_role']
+//     });
+
+//     return res.status(200).json({
+//       error: false,
+//       data
+//     });
+//   } catch (err) {
+//     console.error('Category Wise CP Error:', err);
+//     return res.status(500).json({ error: true });
+//   }
+// };
+
+exports.getCategoryWiseCPs = async (req, res) => {
+  try {
+    const data = await crew_roles.findAll({
+      attributes: [
+        'role_id',
+        'role_name',
+        [
+          Sequelize.fn(
+            'COUNT',
+            Sequelize.fn(
+              'DISTINCT',
+              Sequelize.col('crew_members.crew_member_id')
+            )
+          ),
+          'count'
+        ]
+      ],
+      include: [
+        {
+          model: crew_members,
+          as: 'crew_members',
+          attributes: [],
+          required: true,
+          where: {
+            is_active: 1,
+            [Op.or]: [
+              // primary_role = "1"
+              Sequelize.where(
+                Sequelize.col('crew_members.primary_role'),
+                Sequelize.col('crew_roles.role_id')
+              ),
+
+              // primary_role contains "1" inside JSON array
+              Sequelize.literal(
+                `JSON_CONTAINS(crew_members.primary_role, CONCAT('"', crew_roles.role_id, '"'))`
+              )
+            ]
+          }
+        }
+      ],
+      group: ['crew_roles.role_id'],
+      order: [[Sequelize.literal('count'), 'DESC']]
+    });
+
+    return res.status(200).json({
+      error: false,
+      data
+    });
+  } catch (err) {
+    console.error('Category Wise CP Error:', err);
+    return res.status(500).json({
+      error: true,
+      message: 'Failed to fetch category wise CPs'
+    });
   }
 };
 
