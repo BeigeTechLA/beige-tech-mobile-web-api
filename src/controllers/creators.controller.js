@@ -864,3 +864,109 @@ exports.getCreatorReviews = async (req, res) => {
     });
   }
 };
+
+/**
+ * Get random creators (for fallback when no search results)
+ * GET /api/creators/random
+ * Query params:
+ * - limit: Number of random creators to return (default: 10, max: 20)
+ */
+exports.getRandomCreators = async (req, res) => {
+  try {
+    const { limit = 10 } = req.query;
+    const limitInt = Math.min(parseInt(limit) || 10, 20);
+
+    // Role mapping for display
+    const roleMap = {
+      1: 'Videographer',
+      2: 'Photographer',
+      3: 'Editor',
+      4: 'Producer',
+      5: 'Director',
+      6: 'Cinematographer'
+    };
+
+    // Fetch random active, non-draft creators
+    const creators = await crew_members.findAll({
+      where: {
+        is_active: 1,
+        is_draft: 0
+      },
+      include: [
+        {
+          model: crew_member_files,
+          as: 'crew_member_files',
+          where: { file_type: 'profile_image' },
+          required: false,
+          attributes: ['file_path'],
+          limit: 1
+        }
+      ],
+      order: [
+        [crew_members.sequelize.fn('RAND')]
+      ],
+      limit: limitInt
+    });
+
+    // Format creators for response
+    const formattedCreators = creators.map(c => {
+      const profileImage = c.crew_member_files && c.crew_member_files.length > 0
+        ? c.crew_member_files[0].file_path
+        : null;
+
+      // Parse skills
+      const skills = parseSkills(c.skills);
+
+      // Parse primary role (handle both integer and JSON format)
+      let roleName = 'Creative Professional';
+      try {
+        if (typeof c.primary_role === 'number') {
+          roleName = roleMap[c.primary_role] || roleName;
+        } else if (typeof c.primary_role === 'string') {
+          const parsed = JSON.parse(c.primary_role);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            roleName = roleMap[parsed[0]] || roleName;
+          } else if (typeof parsed === 'number') {
+            roleName = roleMap[parsed] || roleName;
+          }
+        }
+      } catch {
+        // Keep default if parsing fails
+      }
+
+      return {
+        crew_member_id: c.crew_member_id,
+        name: `${c.first_name} ${c.last_name}`,
+        first_name: c.first_name,
+        last_name: c.last_name,
+        email: c.email,
+        location: c.location,
+        hourly_rate: parseFloat(c.hourly_rate || 0),
+        rating: parseFloat(c.rating || 0),
+        total_reviews: generateReviewCount(c.rating),
+        bio: c.bio,
+        years_of_experience: c.years_of_experience,
+        skills: skills,
+        role_name: roleName,
+        profile_image: profileImage
+      };
+    });
+
+    res.json({
+      success: true,
+      data: formattedCreators,
+      meta: {
+        count: formattedCreators.length,
+        requested_limit: limitInt
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching random creators:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch random creators',
+      error: error.message
+    });
+  }
+};
