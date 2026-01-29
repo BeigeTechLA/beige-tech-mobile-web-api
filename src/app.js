@@ -29,8 +29,8 @@ const corsConfig = corsOrigins[0] === '*'
 
 app.use(cors(corsConfig));
 
-// Handle preflight requests explicitly
-app.options('*', cors(corsConfig));
+// Handle preflight requests explicitly for all routes
+app.options('/*', cors(corsConfig));
 
 // Request logging middleware
 app.use((req, res, next) => {
