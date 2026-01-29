@@ -47,7 +47,7 @@ router.get('/get-dashboard-summary', admin.getDashboardSummary);
 router.get('/dashboard/revenue/total', admin.getTotalRevenue);
 router.get('/dashboard/revenue/monthly', admin.getMonthlyRevenue);
 router.get('/dashboard/revenue/weekly', admin.getWeeklyRevenue);
-router.get('/shoot-category-count', admin.getShootCategoryCount);
+// router.get('/shoot-category-count', admin.getShootCategoryCount); // TODO: Implement this function
 
 // router.post('/login', auth.login);
 router.get('/get-dashboard-summary', authenticateAdmin, admin.getDashboardSummary)
