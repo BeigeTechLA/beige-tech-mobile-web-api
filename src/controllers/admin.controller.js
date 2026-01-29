@@ -23,7 +23,12 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   assigned_crew,
   assigned_equipment,
   project_brief,
-  event_type_master, payment_transactions, assigned_post_production_member, post_production_members, clients } = require('../models');
+  event_type_master,
+  payment_transactions,
+  assigned_post_production_member,
+  post_production_members,
+  clients,
+  payments } = require('../models');
 
 function toArray(value) {
   if (!value) return [];

@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QC Review - Changes Required</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f3f4f6;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f3f4f6; padding: 40px 20px;">
+    <tr>
+      <td align="center">
+        <!-- Main Container -->
+        <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+
+          <!-- Header -->
+          <tr>
+            <td style="background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); padding: 40px 30px; text-align: center;">
+              <div style="font-size: 40px; margin-bottom: 10px;">&#9888;&#65039;</div>
+              <h1 style="margin: 0; color: #ffffff; font-size: 24px; font-weight: 700;">QC Review - Changes Required</h1>
+              <p style="margin: 10px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">{{PROJECT_CODE}}</p>
+            </td>
+          </tr>
+
+          <!-- Content -->
+          <tr>
+            <td style="padding: 40px 30px;">
+              <p style="margin: 0; font-size: 16px; color: #374151; line-height: 1.6;">
+                Hi <strong>{{USER_NAME}}</strong>,
+              </p>
+              <p style="margin: 20px 0; font-size: 16px; color: #374151; line-height: 1.6;">
+                Your submission for project <strong>"{{PROJECT_NAME}}"</strong> did not pass {{QC_TYPE}} review. Please review the feedback below and make the necessary corrections.
+              </p>
+
+              <!-- Rejection Summary Card -->
+              <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #fef2f2; border-radius: 8px; border: 1px solid #fecaca; margin: 20px 0;">
+                <tr>
+                  <td style="padding: 25px;">
+                    <!-- Status Badge -->
+                    <div style="margin-bottom: 15px;">
+                      <span style="display: inline-block; padding: 8px 16px; background-color: #dc2626; color: #ffffff; font-size: 14px; font-weight: 600; border-radius: 6px; text-transform: uppercase; letter-spacing: 0.5px;">
+                        {{QC_TYPE}} Failed
+                      </span>
+                    </div>
+
+                    <!-- Reviewed By & Date -->
+                    <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 15px;">
+                      <tr>
+                        <td style="font-size: 14px; color: #6b7280;">
+                          <strong style="color: #374151;">Reviewed by:</strong> {{REVIEWER_NAME}}
+                        </td>
+                        <td style="font-size: 14px; color: #6b7280; text-align: right;">
+                          {{REVIEW_DATE}}
+                        </td>
+                      </tr>
+                    </table>
+
+                    <!-- Rejection Reason -->
+                    <div style="background-color: #ffffff; border-radius: 6px; padding: 15px; border: 1px solid #fecaca;">
+                      <p style="margin: 0 0 10px; font-size: 13px; color: #991b1b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">
+                        Reason for Rejection:
+                      </p>
+                      <p style="margin: 0; font-size: 14px; color: #7f1d1d; line-height: 1.6;">
+                        {{REJECTION_REASON}}
+                      </p>
+                    </div>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Issues List (if multiple) -->
+              {{#if ISSUES}}
+              <div style="background-color: #f9fafb; border-radius: 8px; padding: 20px; margin: 20px 0;">
+                <h3 style="margin: 0 0 15px; font-size: 15px; color: #111827; font-weight: 600;">Issues to Address:</h3>
+                <table width="100%" cellpadding="0" cellspacing="0">
+                  {{#each ISSUES}}
+                  <tr>
+                    <td style="padding: 10px 0; border-bottom: 1px solid #e5e7eb;">
+                      <table cellpadding="0" cellspacing="0" width="100%">
+                        <tr>
+                          <td style="width: 30px; vertical-align: top;">
+                            <span style="display: inline-block; width: 24px; height: 24px; background-color: {{SEVERITY_COLOR}}; color: #ffffff; border-radius: 50%; text-align: center; line-height: 24px; font-size: 12px; font-weight: 600;">
+                              {{INDEX}}
+                            </span>
+                          </td>
+                          <td style="vertical-align: top; padding-left: 10px;">
+                            <p style="margin: 0; font-size: 14px; color: #374151; font-weight: 600;">{{ISSUE_TITLE}}</p>
+                            <p style="margin: 4px 0 0; font-size: 13px; color: #6b7280; line-height: 1.5;">{{ISSUE_DESCRIPTION}}</p>
+                            {{#if TIMESTAMP}}
+                            <p style="margin: 4px 0 0; font-size: 12px; color: #9ca3af;">Timestamp: {{TIMESTAMP}}</p>
+                            {{/if}}
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                  {{/each}}
+                </table>
+              </div>
+              {{/if}}
+
+              <!-- Next Steps -->
+              <div style="background-color: #eff6ff; border-left: 4px solid #3b82f6; padding: 15px; border-radius: 4px; margin: 20px 0;">
+                <p style="margin: 0; font-size: 14px; color: #1e40af; font-weight: 600;">Next Steps</p>
+                <ol style="margin: 10px 0 0; padding-left: 20px; font-size: 14px; color: #1e3a8a; line-height: 1.8;">
+                  <li>Review the feedback above carefully</li>
+                  <li>Make the necessary corrections to your files</li>
+                  <li>Re-upload the corrected version</li>
+                  <li>Submit for QC review again</li>
+                </ol>
+              </div>
+
+              <!-- CTA Button -->
+              <div style="text-align: center; margin: 30px 0;">
+                <a href="{{PROJECT_URL}}" style="display: inline-block; padding: 14px 32px; background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); color: #ffffff; text-decoration: none; border-radius: 8px; font-size: 16px; font-weight: 600; box-shadow: 0 4px 6px rgba(59, 130, 246, 0.3);">
+                  View Project & Fix Issues
+                </a>
+              </div>
+
+              <!-- Deadline Warning (if applicable) -->
+              {{#if NEW_DEADLINE}}
+              <div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 15px; border-radius: 4px; margin: 20px 0;">
+                <p style="margin: 0; font-size: 14px; color: #78350f; font-weight: 600;">Updated Deadline</p>
+                <p style="margin: 8px 0 0; font-size: 14px; color: #92400e; line-height: 1.5;">
+                  Please submit your corrected files by <strong>{{NEW_DEADLINE}}</strong>.
+                </p>
+              </div>
+              {{/if}}
+
+              <!-- Help Text -->
+              <p style="margin: 30px 0 0; font-size: 14px; color: #6b7280; line-height: 1.6; text-align: center;">
+                Need clarification on the feedback? Contact your project coordinator or reply to this email.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="background-color: #f9fafb; padding: 25px 30px; border-top: 1px solid #e5e7eb; text-align: center;">
+              <p style="margin: 0; font-size: 13px; color: #6b7280; line-height: 1.5;">
+                This is an automated notification from Revure.
+              </p>
+              <p style="margin: 10px 0 0; font-size: 12px; color: #9ca3af;">
+                <a href="{{SETTINGS_URL}}" style="color: #667eea; text-decoration: none;">Manage notification preferences</a>
+              </p>
+              <p style="margin: 10px 0 0; font-size: 13px; color: #9ca3af;">
+                &copy; {{YEAR}} Revure. All rights reserved.
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
