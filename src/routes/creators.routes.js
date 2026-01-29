@@ -22,6 +22,14 @@ const creatorsController = require('../controllers/creators.controller');
 router.get('/search', creatorsController.searchCreators);
 
 /**
+ * @route   GET /api/creators/random
+ * @desc    Get random creators (fallback for no search results)
+ * @query   limit - number of creators to return (default: 10, max: 20)
+ * @access  Public
+ */
+router.get('/random', creatorsController.getRandomCreators);
+
+/**
  * @route   GET /api/creators/:id
  * @desc    Get full creator profile
  * @param   id - crew_member_id

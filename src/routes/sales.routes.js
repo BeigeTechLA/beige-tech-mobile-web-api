@@ -17,6 +17,13 @@ const { authenticate, requireSalesRepOrAdmin, requireAdmin } = require('../middl
 // =====================================================
 
 /**
+ * @route   POST /api/sales/leads/track-early-interest
+ * @desc    Track early booking interest - create draft booking and lead
+ * @access  Public
+ */
+router.post('/leads/track-early-interest', salesLeadsController.trackEarlyBookingInterest);
+
+/**
  * @route   POST /api/sales/leads/track-start
  * @desc    Track booking start - create lead
  * @access  Public

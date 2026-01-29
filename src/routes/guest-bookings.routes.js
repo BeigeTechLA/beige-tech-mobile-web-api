@@ -30,6 +30,15 @@ router.post('/create', guestBookingsController.createGuestBooking);
 router.get('/:id', guestBookingsController.getGuestBookingById);
 
 /**
+ * @route   PUT /api/guest-bookings/:id
+ * @desc    Update a guest booking (convert draft to final)
+ * @params  id - booking ID
+ * @body    booking data to update
+ * @access  Public (no authentication required)
+ */
+router.put('/:id', guestBookingsController.updateGuestBooking);
+
+/**
  * @route   POST /api/guest-bookings/:id/assign-creators
  * @desc    Assign creators to a guest booking
  * @body    creator_ids - array of creator IDs

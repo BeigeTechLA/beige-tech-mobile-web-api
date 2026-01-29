@@ -4,6 +4,125 @@ const constants = require('../utils/constants');
 const leadAssignmentService = require('../services/lead-assignment.service');
 
 /**
+ * Track early booking interest - Create draft booking and lead when user shows interest
+ * POST /api/sales/leads/track-early-interest
+ */
+exports.trackEarlyBookingInterest = async (req, res) => {
+  try {
+    const {
+      guest_email,
+      user_id,
+      content_type,
+      shoot_type,
+      client_name
+    } = req.body;
+
+    // Validate required fields
+    if (!guest_email) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Email is required'
+      });
+    }
+
+    // Basic email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(guest_email)) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Invalid email format'
+      });
+    }
+
+    // Create minimal draft booking
+    const bookingData = {
+      user_id: user_id ? parseInt(user_id) : null,
+      guest_email: guest_email,
+      project_name: `Draft - ${shoot_type || content_type || 'Booking'}`,
+      event_type: shoot_type || content_type || 'general',
+      is_draft: 1,
+      is_completed: 0,
+      is_cancelled: 0,
+      is_active: 1
+    };
+
+    const booking = await stream_project_booking.create(bookingData);
+
+    // Check if lead already exists for this email (in case user refreshed)
+    const existingLead = await sales_leads.findOne({
+      where: { 
+        guest_email,
+        lead_status: 'in_progress_self_serve'
+      },
+      order: [['created_at', 'DESC']]
+    });
+
+    if (existingLead) {
+      // Update existing lead with new booking
+      await existingLead.update({
+        booking_id: booking.stream_project_booking_id,
+        last_activity_at: new Date()
+      });
+
+      return res.json({
+        success: true,
+        message: 'Lead tracking updated',
+        data: {
+          lead_id: existingLead.lead_id,
+          booking_id: booking.stream_project_booking_id,
+          is_new: false
+        }
+      });
+    }
+
+    // Create new lead
+    const lead = await sales_leads.create({
+      booking_id: booking.stream_project_booking_id,
+      user_id: user_id || null,
+      guest_email: guest_email,
+      client_name: client_name || null,
+      lead_type: 'self_serve',
+      lead_status: 'in_progress_self_serve'
+    });
+
+    // Log activity
+    await sales_lead_activities.create({
+      lead_id: lead.lead_id,
+      activity_type: 'created',
+      activity_data: {
+        source: 'early_interest',
+        user_id,
+        guest_email,
+        content_type,
+        shoot_type
+      }
+    });
+
+    // Auto-assign lead
+    const assignedRep = await leadAssignmentService.autoAssignLead(lead.lead_id);
+
+    res.status(constants.CREATED.code).json({
+      success: true,
+      message: 'Lead tracking started',
+      data: {
+        lead_id: lead.lead_id,
+        booking_id: booking.stream_project_booking_id,
+        is_new: true,
+        assigned_to: assignedRep
+      }
+    });
+
+  } catch (error) {
+    console.error('Error tracking early booking interest:', error);
+    res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to track booking interest',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
  * Track booking start - Create lead when client starts booking flow
  * POST /api/sales/leads/track-start
  */
