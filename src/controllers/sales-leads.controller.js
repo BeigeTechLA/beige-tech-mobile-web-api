@@ -2,6 +2,8 @@ const { sales_leads, sales_lead_activities, stream_project_booking, users, disco
 const { Op } = require('sequelize');
 const constants = require('../utils/constants');
 const leadAssignmentService = require('../services/lead-assignment.service');
+const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
+
 
 /**
  * Track early booking interest - Create draft booking and lead when user shows interest
@@ -17,7 +19,7 @@ exports.trackEarlyBookingInterest = async (req, res) => {
       client_name
     } = req.body;
 
-    // Validate required fields
+    // 1. Validate required fields
     if (!guest_email) {
       return res.status(constants.BAD_REQUEST.code).json({
         success: false,
@@ -34,7 +36,7 @@ exports.trackEarlyBookingInterest = async (req, res) => {
       });
     }
 
-    // Create minimal draft booking
+    // 2. Create minimal draft booking
     const bookingData = {
       user_id: user_id ? parseInt(user_id) : null,
       guest_email: guest_email,
@@ -50,7 +52,7 @@ exports.trackEarlyBookingInterest = async (req, res) => {
 
     const booking = await stream_project_booking.create(bookingData);
 
-    // Check if lead already exists for this email (in case user refreshed)
+    // 3. Check if lead already exists
     const existingLead = await sales_leads.findOne({
       where: { 
         guest_email,
@@ -60,11 +62,28 @@ exports.trackEarlyBookingInterest = async (req, res) => {
     });
 
     if (existingLead) {
-      // Update existing lead with new booking
+      // Update existing lead
       await existingLead.update({
         booking_id: booking.stream_project_booking_id,
         last_activity_at: new Date()
       });
+
+      // SYNC ALL DATA TO SHEET FOR EXISTING LEAD
+      appendToSheet('leads_data', [
+        existingLead.lead_id,                 // A: Lead ID
+        booking.stream_project_booking_id,    // B: Booking ID
+        user_id || 'N/A',                     // C: User ID
+        client_name || 'N/A',                 // D: Client Name
+        guest_email,                          // E: Email
+        booking.project_name,                 // F: Project Name
+        content_type || 'N/A',                // G: Content Type
+        shoot_type || 'N/A',                  // H: Shoot Type
+        existingLead.lead_type,               // I: Lead Type
+        'Interaction Updated',                // J: Status
+        'Existing Assignment',                // K: Assigned Rep
+        booking.is_draft === 1 ? 'Yes' : 'No',// L: Is Draft
+        new Date().toLocaleString()           // M: Timestamp
+      ]).catch(err => console.error('Sheet Sync Error:', err.message));
 
       return res.json({
         success: true,
@@ -77,7 +96,7 @@ exports.trackEarlyBookingInterest = async (req, res) => {
       });
     }
 
-    // Create new lead
+    // 4. Create new lead
     const lead = await sales_leads.create({
       booking_id: booking.stream_project_booking_id,
       user_id: user_id || null,
@@ -87,7 +106,7 @@ exports.trackEarlyBookingInterest = async (req, res) => {
       lead_status: 'in_progress_self_serve'
     });
 
-    // Log activity
+    // 5. Log activity
     await sales_lead_activities.create({
       lead_id: lead.lead_id,
       activity_type: 'created',
@@ -100,8 +119,25 @@ exports.trackEarlyBookingInterest = async (req, res) => {
       }
     });
 
-    // Auto-assign lead
+    // 6. Auto-assign lead
     const assignedRep = await leadAssignmentService.autoAssignLead(lead.lead_id);
+
+    // 7. --- SYNC ALL DATA TO SHEET FOR NEW LEAD ---
+    appendToSheet('leads_data', [
+      lead.lead_id,                         // A: Lead ID
+      booking.stream_project_booking_id,    // B: Booking ID
+      user_id || 'Guest',                   // C: User ID
+      client_name || 'N/A',                 // D: Client Name
+      guest_email,                          // E: Email
+      booking.project_name,                 // F: Project Name
+      content_type || 'N/A',                // G: Content Type
+      shoot_type || 'N/A',                  // H: Shoot Type
+      lead.lead_type,                       // I: Lead Type
+      lead.lead_status,                     // J: Status
+      assignedRep ? JSON.stringify(assignedRep) : 'Pending', // K: Assigned Rep
+      booking.is_draft === 1 ? 'Yes' : 'No',// L: Is Draft
+      new Date().toLocaleString()           // M: Timestamp
+    ]).catch(err => console.error('Sheet Sync Error:', err.message));
 
     res.status(constants.CREATED.code).json({
       success: true,

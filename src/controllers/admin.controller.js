@@ -29,6 +29,7 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   post_production_members,
   clients,
   payments } = require('../models');
+  const { deleteSheetRow, updateSheetRow } = require('../utils/googleSheets');
 
 function toArray(value) {
   if (!value) return [];
@@ -2336,7 +2337,7 @@ exports.verifyCrewMember = async (req, res) => {
     if (!crew_member_id || (status !== 1 && status !== 2)) {
       return res.status(400).json({
         error: true,
-        message: "Missing or invalid 'crew_member_id' or 'status'. 'status' must be 1 (approved) or 2 (rejected).",
+        message: "Missing or invalid 'crew_member_id' or 'status'.",
       });
     }
 
@@ -2346,22 +2347,28 @@ exports.verifyCrewMember = async (req, res) => {
     );
 
     if (updatedMember[0] === 0) {
-      return res.status(404).json({
-        error: true,
-        message: "Crew member not found.",
-      });
+      return res.status(404).json({ error: true, message: "Crew member not found." });
+    }
+
+    try {
+      if (status === 1) {
+        await deleteSheetRow('Crew_data', crew_member_id);
+      } else if (status === 2) {
+        await updateSheetRow('Crew_data', crew_member_id, {
+          'H': 'rejected'
+        });
+      }
+    } catch (sheetErr) {
+      console.error("Google Sheets Sync Error:", sheetErr.message);
     }
 
     return res.status(200).json({
       error: false,
-      message: `Crew member ${status === 1 ? 'approved' : 'rejected'} successfully.`,
+      message: `Crew member ${status === 1 ? 'approved and removed from sheet' : 'rejected in sheet'} successfully.`,
     });
   } catch (error) {
     console.error("Verify Crew Member Error:", error);
-    return res.status(500).json({
-      error: true,
-      message: "Internal server error",
-    });
+    return res.status(500).json({ error: true, message: "Internal server error" });
   }
 };
 
