@@ -298,13 +298,16 @@ exports.register = async (req, res) => {
       otp_expiry: otpExpiry
     });
 
-    const newClient = await Clients.create({
-      user_id: newUser.id,
-      name,
-      email,
-      phone_number,
-      is_active: 1
-    });
+    let newClient = {};
+    if (userType == 3) {
+      newClient = await Clients.create({
+        user_id: newUser.id,
+        name,
+        email,
+        phone_number,
+        is_active: 1
+      });
+    }
 
     // Send verification email if email provided
     if (email) {
@@ -340,7 +343,7 @@ exports.register = async (req, res) => {
       userId: newUser.id,
       email: newUser.email,
       affiliate: affiliateData,
-      clientId: newClient.client_id
+      clientId: newClient ? newClient.client_id : null
     });
 
   } catch (error) {
