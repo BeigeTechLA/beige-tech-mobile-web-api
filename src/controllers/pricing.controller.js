@@ -428,10 +428,15 @@ exports.calculateFromCreators = async (req, res) => {
     const allItems = [...pricingItems, ...add_on_items];
 
     // Calculate quote using existing service
+    // Extract skip flags from request body
+    const { skip_discount = false, skip_margin = false } = req.body;
+    
     const quote = await pricingService.calculateQuote({
       items: allItems,
       shootHours: parseFloat(shoot_hours),
-      eventType: event_type
+      eventType: event_type,
+      skipDiscount: skip_discount,
+      skipMargin: skip_margin,
     });
 
     // Add creator details to response
