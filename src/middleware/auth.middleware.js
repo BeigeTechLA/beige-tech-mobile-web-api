@@ -98,3 +98,167 @@ exports.optionalAuth = async (req, res, next) => {
     next();
   }
 };
+
+/**
+ * Require sales rep role
+ * User must be authenticated and have sales_rep role
+ */
+exports.requireSalesRep = async (req, res, next) => {
+  try {
+    const { users, user_type } = require('../models');
+    
+    if (!req.userId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      });
+    }
+
+    // Get user with user type
+    const user = await users.findByPk(req.userId, {
+      include: [
+        {
+          model: user_type,
+          as: 'userType',
+          attributes: ['user_role']
+        }
+      ]
+    });
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const userRole = user.userType?.user_role;
+
+    if (userRole !== 'sales_rep') {
+      return res.status(403).json({
+        success: false,
+        message: 'Sales rep access required'
+      });
+    }
+
+    next();
+
+  } catch (error) {
+    console.error('Sales rep authorization error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Authorization error',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * Require sales rep or admin role
+ * User must be authenticated and have sales_rep or admin role
+ */
+exports.requireSalesRepOrAdmin = async (req, res, next) => {
+  try {
+    const { users, user_type } = require('../models');
+    
+    if (!req.userId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      });
+    }
+
+    // Get user with user type
+    const user = await users.findByPk(req.userId, {
+      include: [
+        {
+          model: user_type,
+          as: 'userType',
+          attributes: ['user_role']
+        }
+      ]
+    });
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const userRole = user.userType?.user_role;
+
+    if (userRole !== 'sales_rep' && userRole !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Sales rep or admin access required'
+      });
+    }
+
+    req.userRole = userRole; // Attach role to request
+    next();
+
+  } catch (error) {
+    console.error('Sales rep/admin authorization error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Authorization error',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * Require admin role only
+ * User must be authenticated and have admin role
+ */
+exports.requireAdmin = async (req, res, next) => {
+  try {
+    const { users, user_type } = require('../models');
+    
+    if (!req.userId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      });
+    }
+
+    // Get user with user type
+    const user = await users.findByPk(req.userId, {
+      include: [
+        {
+          model: user_type,
+          as: 'userType',
+          attributes: ['user_role']
+        }
+      ]
+    });
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const userRole = user.userType?.user_role;
+
+    if (userRole !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Admin access required'
+      });
+    }
+
+    req.userRole = userRole; // Attach role to request
+    next();
+
+  } catch (error) {
+    console.error('Admin authorization error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Authorization error',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};

@@ -1,0 +1,128 @@
+const Sequelize = require('sequelize');
+
+module.exports = function(sequelize, DataTypes) {
+  return sequelize.define('sales_leads', {
+    lead_id: {
+      autoIncrement: true,
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      primaryKey: true
+    },
+    booking_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'stream_project_booking',
+        key: 'stream_project_booking_id'
+      }
+    },
+    user_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'users',
+        key: 'id'
+      }
+    },
+    guest_email: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
+    client_name: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
+    lead_type: {
+      type: DataTypes.ENUM('self_serve', 'sales_assisted'),
+      allowNull: false
+    },
+    lead_status: {
+      type: DataTypes.ENUM(
+        'in_progress_self_serve',
+        'in_progress_sales_assisted',
+        'payment_link_sent',
+        'discount_applied',
+        'booked',
+        'abandoned'
+      ),
+      allowNull: false,
+      defaultValue: 'in_progress_self_serve'
+    },
+    assigned_sales_rep_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'users',
+        key: 'id'
+      }
+    },
+    last_activity_at: {
+      type: DataTypes.DATE,
+      allowNull: false,
+      defaultValue: Sequelize.Sequelize.fn('current_timestamp')
+    },
+    contacted_sales_at: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    created_at: {
+      type: DataTypes.DATE,
+      allowNull: false,
+      defaultValue: Sequelize.Sequelize.fn('current_timestamp')
+    },
+    updated_at: {
+      type: DataTypes.DATE,
+      allowNull: false,
+      defaultValue: Sequelize.Sequelize.fn('current_timestamp')
+    }
+  }, {
+    sequelize,
+    tableName: 'sales_leads',
+    timestamps: false,
+    indexes: [
+      {
+        name: "PRIMARY",
+        unique: true,
+        using: "BTREE",
+        fields: [
+          { name: "lead_id" },
+        ]
+      },
+      {
+        name: "idx_lead_status",
+        using: "BTREE",
+        fields: [
+          { name: "lead_status" },
+        ]
+      },
+      {
+        name: "idx_assigned_rep",
+        using: "BTREE",
+        fields: [
+          { name: "assigned_sales_rep_id" },
+        ]
+      },
+      {
+        name: "idx_booking",
+        using: "BTREE",
+        fields: [
+          { name: "booking_id" },
+        ]
+      },
+      {
+        name: "idx_last_activity",
+        using: "BTREE",
+        fields: [
+          { name: "last_activity_at" },
+        ]
+      },
+      {
+        name: "idx_lead_type",
+        using: "BTREE",
+        fields: [
+          { name: "lead_type" },
+        ]
+      },
+    ]
+  });
+};

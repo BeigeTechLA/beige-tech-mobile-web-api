@@ -225,6 +225,214 @@ exports.createGuestBooking = async (req, res) => {
 };
 
 /**
+ * Update a guest booking (convert draft to final)
+ * PUT /api/guest-bookings/:id
+ * Params: id - booking ID
+ * Body: booking data to update
+ * Headers: No authentication required
+ */
+exports.updateGuestBooking = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      order_name,
+      guest_email,
+      project_type,
+      content_type,
+      shoot_type,
+      edit_type,
+      description,
+      event_type,
+      start_date_time,
+      duration_hours,
+      end_time,
+      budget_min,
+      budget_max,
+      expected_viewers,
+      stream_quality,
+      crew_size,
+      location,
+      streaming_platforms,
+      crew_roles,
+      skills_needed,
+      equipments_needed,
+      is_draft,
+      quote_id,
+      // V3 New Fields
+      full_name,
+      phone,
+      edits_needed,
+      video_edit_types,
+      photo_edit_types,
+      team_included,
+      add_team_members,
+      special_instructions,
+      reference_links,
+      matching_method,
+      selected_crew_ids
+    } = req.body;
+
+    if (!id) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Booking ID is required'
+      });
+    }
+
+    // Find existing booking
+    const booking = await stream_project_booking.findOne({
+      where: {
+        stream_project_booking_id: id,
+        is_active: 1
+      }
+    });
+
+    if (!booking) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Booking not found'
+      });
+    }
+
+    // Parse date and time from start_date_time
+    let event_date = null;
+    let start_time = null;
+
+    if (start_date_time) {
+      try {
+        const dateObj = new Date(start_date_time);
+        event_date = dateObj.toISOString().split('T')[0];
+        start_time = dateObj.toTimeString().split(' ')[0];
+      } catch (error) {
+        console.error('Error parsing start_date_time:', error);
+      }
+    }
+
+    // Calculate budget
+    let budget = null;
+    if (budget_max) {
+      budget = budget_max;
+    } else if (budget_min && budget_max) {
+      budget = (parseFloat(budget_min) + parseFloat(budget_max)) / 2;
+    } else if (budget_min) {
+      budget = budget_min;
+    }
+
+    // Parse and normalize location
+    let normalizedLocation = location;
+    if (location) {
+      if (typeof location === 'object') {
+        normalizedLocation = JSON.stringify(location);
+      }
+    }
+
+    // V3: Combine edit types
+    let combinedEditTypes = edit_type;
+    if (video_edit_types || photo_edit_types) {
+      const vTypes = Array.isArray(video_edit_types) ? video_edit_types : [];
+      const pTypes = Array.isArray(photo_edit_types) ? photo_edit_types : [];
+      combinedEditTypes = [...vTypes, ...pTypes].join(',');
+    }
+
+    // V3: Combine description with new fields
+    let combinedDescription = description || special_instructions || '';
+    if (full_name) combinedDescription += `\n\nContact Name: ${full_name}`;
+    if (phone) combinedDescription += `\nPhone: ${phone}`;
+    if (reference_links) combinedDescription += `\nReference Links: ${reference_links}`;
+    if (matching_method) combinedDescription += `\nMatching Method: ${matching_method}`;
+
+    // Prepare update data
+    const updateData = {};
+    if (order_name) updateData.project_name = order_name;
+    if (guest_email) updateData.guest_email = guest_email;
+    if (combinedDescription) updateData.description = combinedDescription;
+    if (event_type || content_type || project_type || shoot_type) {
+      updateData.event_type = event_type || content_type || project_type || shoot_type;
+    }
+    if (event_date) updateData.event_date = event_date;
+    if (duration_hours) updateData.duration_hours = parseInt(duration_hours);
+    if (start_time) updateData.start_time = start_time;
+    if (end_time) updateData.end_time = end_time;
+    if (budget) updateData.budget = budget;
+    if (expected_viewers) updateData.expected_viewers = parseInt(expected_viewers);
+    if (stream_quality) updateData.stream_quality = stream_quality;
+    if (crew_size) updateData.crew_size_needed = parseInt(crew_size);
+    if (normalizedLocation) updateData.event_location = normalizedLocation;
+    if (streaming_platforms) {
+      updateData.streaming_platforms = typeof streaming_platforms === 'string' 
+        ? streaming_platforms 
+        : JSON.stringify(streaming_platforms);
+    }
+    if (crew_roles) {
+      updateData.crew_roles = typeof crew_roles === 'string' 
+        ? crew_roles 
+        : JSON.stringify(crew_roles);
+    }
+    if (skills_needed) {
+      updateData.skills_needed = typeof skills_needed === 'string' 
+        ? skills_needed 
+        : JSON.stringify(skills_needed);
+    }
+    if (equipments_needed) {
+      updateData.equipments_needed = typeof equipments_needed === 'string' 
+        ? equipments_needed 
+        : JSON.stringify(equipments_needed);
+    }
+    if (quote_id) updateData.quote_id = quote_id;
+    if (typeof is_draft !== 'undefined') updateData.is_draft = is_draft ? 1 : 0;
+
+    // Update booking
+    await booking.update(updateData);
+
+    // V3: Update selected creators if provided
+    if (selected_crew_ids && Array.isArray(selected_crew_ids) && selected_crew_ids.length > 0) {
+      try {
+        // Remove old assignments
+        await assigned_crew.destroy({
+          where: { project_id: id }
+        });
+        
+        // Create new assignments
+        const assignments = selected_crew_ids.map(creator_id => ({
+          project_id: id,
+          crew_member_id: creator_id,
+          status: 'selected',
+          is_active: 1,
+          crew_accept: 0
+        }));
+        await assigned_crew.bulkCreate(assignments);
+      } catch (assignError) {
+        console.error("Error updating V3 creators:", assignError);
+      }
+    }
+
+    res.status(constants.OK.code).json({
+      success: true,
+      message: is_draft ? 'Draft booking updated' : 'Booking updated successfully',
+      data: {
+        booking_id: booking.stream_project_booking_id,
+        project_name: booking.project_name,
+        guest_email: booking.guest_email,
+        event_date: booking.event_date,
+        event_location: formatLocationResponse(booking.event_location),
+        budget: booking.budget,
+        quote_id: booking.quote_id,
+        is_draft: booking.is_draft === 1,
+        updated_at: booking.updated_at
+      }
+    });
+
+  } catch (error) {
+    console.error('Error updating guest booking:', error);
+    res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to update guest booking',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
  * Get a guest booking by ID
  * GET /api/guest-bookings/:id
  * Params: id - booking ID

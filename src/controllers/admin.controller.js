@@ -23,7 +23,12 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   assigned_crew,
   assigned_equipment,
   project_brief,
-  event_type_master, payment_transactions, assigned_post_production_member, post_production_members, clients } = require('../models');
+  event_type_master,
+  payment_transactions,
+  assigned_post_production_member,
+  post_production_members,
+  clients,
+  payments } = require('../models');
 
 function toArray(value) {
   if (!value) return [];
@@ -92,7 +97,7 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage: storage,
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: { fileSize: 25 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowedTypes = ['image/jpeg', 'image/png', 'application/pdf'];
     if (!allowedTypes.includes(file.mimetype)) {

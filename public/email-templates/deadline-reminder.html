@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Deadline Approaching</title>
+</head>
+<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f3f4f6;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f3f4f6; padding: 40px 20px;">
+    <tr>
+      <td align="center">
+        <!-- Main Container -->
+        <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+
+          <!-- Header -->
+          <tr>
+            <td style="background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); padding: 40px 30px; text-align: center;">
+              <div style="font-size: 48px; margin-bottom: 10px;">&#9200;</div>
+              <h1 style="margin: 0; color: #ffffff; font-size: 24px; font-weight: 700;">Deadline Approaching</h1>
+              <p style="margin: 10px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">Action required for {{PROJECT_CODE}}</p>
+            </td>
+          </tr>
+
+          <!-- Content -->
+          <tr>
+            <td style="padding: 40px 30px;">
+              <p style="margin: 0; font-size: 16px; color: #374151; line-height: 1.6;">
+                Hi <strong>{{USER_NAME}}</strong>,
+              </p>
+              <p style="margin: 20px 0; font-size: 16px; color: #374151; line-height: 1.6;">
+                This is a reminder that a deadline is approaching for your assigned project.
+              </p>
+
+              <!-- Countdown Card -->
+              <table width="100%" cellpadding="0" cellspacing="0" style="background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%); border-radius: 12px; border: 2px solid #ef4444; margin: 25px 0;">
+                <tr>
+                  <td style="padding: 30px; text-align: center;">
+                    <p style="margin: 0 0 10px; font-size: 14px; color: #991b1b; text-transform: uppercase; letter-spacing: 1px; font-weight: 600;">{{DEADLINE_TYPE}} Deadline</p>
+                    <p style="margin: 0; font-size: 36px; font-weight: 800; color: #dc2626;">{{DEADLINE_DATE}}</p>
+                    <p style="margin: 10px 0 0; font-size: 16px; color: #7f1d1d;">{{TIME_REMAINING}}</p>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Project Details -->
+              <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb; margin: 20px 0;">
+                <tr>
+                  <td style="padding: 20px;">
+                    <table width="100%" cellpadding="0" cellspacing="0">
+                      <tr>
+                        <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">
+                          <strong style="color: #374151;">Project:</strong>
+                        </td>
+                        <td style="padding: 8px 0; font-size: 14px; color: #374151; text-align: right;">
+                          {{PROJECT_NAME}}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">
+                          <strong style="color: #374151;">Your Role:</strong>
+                        </td>
+                        <td style="padding: 8px 0; font-size: 14px; color: #374151; text-align: right;">
+                          {{USER_ROLE}}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">
+                          <strong style="color: #374151;">Current Status:</strong>
+                        </td>
+                        <td style="padding: 8px 0; font-size: 14px; color: #374151; text-align: right;">
+                          {{CURRENT_STATE}}
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Required Action -->
+              <div style="background-color: #fffbeb; border-left: 4px solid #f59e0b; padding: 15px; border-radius: 4px; margin: 20px 0;">
+                <p style="margin: 0; font-size: 14px; color: #78350f; font-weight: 600;">Required Action</p>
+                <p style="margin: 8px 0 0; font-size: 14px; color: #92400e; line-height: 1.5;">
+                  {{REQUIRED_ACTION}}
+                </p>
+              </div>
+
+              <!-- CTA Button -->
+              <div style="text-align: center; margin: 30px 0;">
+                <a href="{{ACTION_URL}}" style="display: inline-block; padding: 16px 40px; background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); color: #ffffff; text-decoration: none; border-radius: 8px; font-size: 18px; font-weight: 700; box-shadow: 0 6px 15px rgba(239, 68, 68, 0.4);">
+                  Take Action Now
+                </a>
+              </div>
+
+              <!-- Help Text -->
+              <p style="margin: 30px 0 0; font-size: 14px; color: #6b7280; line-height: 1.6; text-align: center;">
+                If you need an extension or have any issues, please contact your project coordinator immediately.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="background-color: #f9fafb; padding: 25px 30px; border-top: 1px solid #e5e7eb; text-align: center;">
+              <p style="margin: 0; font-size: 13px; color: #6b7280; line-height: 1.5;">
+                This is an automated reminder from Revure.
+              </p>
+              <p style="margin: 10px 0 0; font-size: 12px; color: #9ca3af;">
+                <a href="{{SETTINGS_URL}}" style="color: #667eea; text-decoration: none;">Manage notification preferences</a>
+              </p>
+              <p style="margin: 10px 0 0; font-size: 13px; color: #9ca3af;">
+                &copy; {{YEAR}} Revure. All rights reserved.
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
