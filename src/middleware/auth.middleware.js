@@ -188,7 +188,7 @@ exports.requireSalesRepOrAdmin = async (req, res, next) => {
 
     const userRole = user.userType?.user_role;
 
-    if (userRole !== 'sales_rep' && userRole !== 'admin') {
+    if (userRole !== 'sales_rep' && userRole !== 'admin' && userRole !== 'Admin') {
       return res.status(403).json({
         success: false,
         message: 'Sales rep or admin access required'
