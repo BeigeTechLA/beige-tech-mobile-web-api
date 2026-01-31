@@ -995,9 +995,9 @@ exports.getBookingPaymentDetails = async (req, res) => {
             item_id: item.item_id,
             item_name: item.item_name,
             quantity: item.quantity,
-            rate: parseFloat(item.rate),
+            rate: item.rate == null ? null : parseFloat(item.rate),
             rate_type: item.rate_type,
-            line_total: parseFloat(item.line_total)
+            line_total: parseFloat(item.line_total || 0)
           }))
         } : null,
         payment_status: booking.payment_id ? 'completed' : 'pending'

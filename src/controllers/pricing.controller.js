@@ -350,128 +350,274 @@ exports.getPricingExample = async (req, res) => {
  *   add_on_items: [{item_id, quantity}] (optional)
  * }
  */
+// exports.calculateFromCreators = async (req, res) => {
+
+//   try {
+//     const { creator_ids, shoot_hours, event_type, add_on_items = [] } = req.body;
+
+//     if (!creator_ids || !Array.isArray(creator_ids) || creator_ids.length === 0) {
+//       return res.status(constants.BAD_REQUEST.code).json({
+//         success: false,
+//         message: 'creator_ids must be a non-empty array'
+//       });
+//     }
+
+//     if (shoot_hours === undefined || shoot_hours < 0) {
+//       return res.status(constants.BAD_REQUEST.code).json({
+//         success: false,
+//         message: 'shoot_hours is required and must be non-negative'
+//       });
+//     }
+
+//     const db = require('../models');
+//     const creators = await db.crew_members.findAll({
+//       where: {
+//         crew_member_id: creator_ids,
+//         is_active: 1
+//       },
+//       attributes: ['crew_member_id', 'first_name', 'last_name', 'primary_role', 'hourly_rate']
+//     });
+
+//     if (creators.length !== creator_ids.length) {
+//       return res.status(constants.BAD_REQUEST.code).json({
+//         success: false,
+//         message: 'One or more creator IDs are invalid'
+//       });
+//     }
+
+//     const ROLE_TO_ITEM_MAP = {
+//       1: 11,  // Videographer
+//       2: 10,  // Photographer
+//       3: 11,  // Videographer (alternate)
+//       4: 10,  // Photographer (alternate)
+//       9: 11,  // e.g., Lead Videographer -> Item 11
+//       10: 10, // e.g., Lead Photographer -> Item 10
+//       11: 11  // e.g., Cinematographer -> Item 11
+//     };
+
+//     const roleCounts = {};
+//     creators.forEach(creator => {
+//       let roles = creator.primary_role;
+
+//       if (typeof roles === 'string' && (roles.startsWith('[') || roles.startsWith('{'))) {
+//         try {
+//           roles = JSON.parse(roles);
+//         } catch (e) {
+//           console.error("Failed to parse role JSON string:", roles);
+//         }
+//       }
+
+//       const rolesArray = Array.isArray(roles) ? roles : [roles];
+
+//       rolesArray.forEach(roleId => {
+//         const parsedId = parseInt(roleId);
+//         if (!isNaN(parsedId)) {
+//           roleCounts[parsedId] = (roleCounts[parsedId] || 0) + 1;
+//         }
+//       });
+//     });
+
+//     const pricingItems = [];
+//     Object.entries(roleCounts).forEach(([roleId, count]) => {
+//       const itemId = ROLE_TO_ITEM_MAP[parseInt(roleId)];
+//       if (itemId) {
+//         pricingItems.push({
+//           item_id: itemId,
+//           quantity: count
+//         });
+//       } else {
+//         console.warn(`Warning: role_id ${roleId} has no mapping in ROLE_TO_ITEM_MAP`);
+//       }
+//     });
+
+//     if (pricingItems.length === 0 && add_on_items.length === 0) {
+//       return res.status(constants.BAD_REQUEST.code).json({
+//         success: false,
+//         message: 'No valid pricing items could be generated from selected creators'
+//       });
+//     }
+
+//     const allItems = [...pricingItems, ...add_on_items];
+
+//     // Calculate quote using existing service
+//     // Extract skip flags from request body
+//     const { skip_discount = false, skip_margin = false } = req.body;
+//     const quote = await pricingService.calculateQuote({
+//       items: allItems,
+//       shootHours: parseFloat(shoot_hours),
+//       eventType: event_type,
+//       skipDiscount: skip_discount,
+//       skipMargin: skip_margin,
+//     });
+
+//     const creatorDetails = creators.map(c => ({
+//       crew_member_id: c.crew_member_id,
+//       name: `${c.first_name} ${c.last_name}`,
+//       role_id: c.primary_role, 
+//       hourly_rate: parseFloat(c.hourly_rate || 0)
+//     }));
+
+//     res.json({
+//       success: true,
+//       data: {
+//         quote: {
+//           ...quote,
+//           creators: creatorDetails
+//         }
+//       }
+//     });
+
+//   } catch (error) {
+//     console.error('Error calculating pricing from creators:', error);
+//     res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+//       success: false,
+//       message: 'Failed to calculate pricing from creators',
+//       error: process.env.NODE_ENV === 'development' ? error.message : undefined
+//     });
+//   }
+// };
+
+/**
+ * Calculate pricing from selected creators OR roleCounts fallback
+ *
+ * Priority:
+ * 1. creator_ids → derive roles from creators
+ * 2. role_counts → derive pricing directly
+ */
 exports.calculateFromCreators = async (req, res) => {
   try {
-    const { creator_ids, shoot_hours, event_type, add_on_items = [] } = req.body;
+    const {
+      creator_ids = [],
+      role_counts = {},        
+      shoot_hours,
+      event_type,
+      add_on_items = [],
+      skip_discount = false,
+      skip_margin = false,
+    } = req.body;
 
-    if (!creator_ids || !Array.isArray(creator_ids) || creator_ids.length === 0) {
-      return res.status(constants.BAD_REQUEST.code).json({
+    if (!shoot_hours || shoot_hours <= 0) {
+      return res.status(400).json({
         success: false,
-        message: 'creator_ids must be a non-empty array'
-      });
-    }
-
-    if (shoot_hours === undefined || shoot_hours < 0) {
-      return res.status(constants.BAD_REQUEST.code).json({
-        success: false,
-        message: 'shoot_hours is required and must be non-negative'
-      });
-    }
-
-    const db = require('../models');
-    const creators = await db.crew_members.findAll({
-      where: {
-        crew_member_id: creator_ids,
-        is_active: 1
-      },
-      attributes: ['crew_member_id', 'first_name', 'last_name', 'primary_role', 'hourly_rate']
-    });
-
-    if (creators.length !== creator_ids.length) {
-      return res.status(constants.BAD_REQUEST.code).json({
-        success: false,
-        message: 'One or more creator IDs are invalid'
+        message: 'shoot_hours is required and must be > 0',
       });
     }
 
     const ROLE_TO_ITEM_MAP = {
-      1: 11,  // Videographer
-      2: 10,  // Photographer
-      3: 11,  // Videographer (alternate)
-      4: 10,  // Photographer (alternate)
-      9: 11,  // e.g., Lead Videographer -> Item 11
-      10: 10, // e.g., Lead Photographer -> Item 10
-      11: 11  // e.g., Cinematographer -> Item 11
+      videographer: 11,
+      photographer: 10,
+      cinematographer: 12,
     };
 
-    const roleCounts = {};
-    creators.forEach(creator => {
-      let roles = creator.primary_role;
+    const pricingItems = [];
+    let creators = [];
 
-      if (typeof roles === 'string' && (roles.startsWith('[') || roles.startsWith('{'))) {
-        try {
-          roles = JSON.parse(roles);
-        } catch (e) {
-          console.error("Failed to parse role JSON string:", roles);
-        }
+    if (Array.isArray(creator_ids) && creator_ids.length > 0) {
+      const db = require('../models');
+
+      creators = await db.crew_members.findAll({
+        where: {
+          crew_member_id: creator_ids,
+          is_active: 1,
+        },
+        attributes: [
+          'crew_member_id',
+          'first_name',
+          'last_name',
+          'primary_role',
+          'hourly_rate',
+        ],
+      });
+
+      if (creators.length !== creator_ids.length) {
+        return res.status(400).json({
+          success: false,
+          message: 'One or more creator IDs are invalid',
+        });
       }
 
-      const rolesArray = Array.isArray(roles) ? roles : [roles];
+      const roleCounts = {};
 
-      rolesArray.forEach(roleId => {
-        const parsedId = parseInt(roleId);
-        if (!isNaN(parsedId)) {
-          roleCounts[parsedId] = (roleCounts[parsedId] || 0) + 1;
+      creators.forEach((c) => {
+        let roles = c.primary_role;
+
+        if (typeof roles === 'string') {
+          try {
+            roles = JSON.parse(roles);
+          } catch {
+            roles = [roles];
+          }
+        }
+
+        const rolesArr = Array.isArray(roles) ? roles : [roles];
+
+        rolesArr.forEach((r) => {
+          const roleKey =
+            r === 11 ? 'videographer' :
+            r === 10 ? 'photographer' :
+            r === 12 ? 'cinematographer' :
+            null;
+
+          if (roleKey) {
+            roleCounts[roleKey] = (roleCounts[roleKey] || 0) + 1;
+          }
+        });
+      });
+
+      Object.entries(roleCounts).forEach(([role, count]) => {
+        const itemId = ROLE_TO_ITEM_MAP[role];
+        if (itemId && count > 0) {
+          pricingItems.push({ item_id: itemId, quantity: count });
         }
       });
-    });
+    }
 
-    const pricingItems = [];
-    Object.entries(roleCounts).forEach(([roleId, count]) => {
-      const itemId = ROLE_TO_ITEM_MAP[parseInt(roleId)];
-      if (itemId) {
-        pricingItems.push({
-          item_id: itemId,
-          quantity: count
-        });
-      } else {
-        console.warn(`Warning: role_id ${roleId} has no mapping in ROLE_TO_ITEM_MAP`);
-      }
-    });
+    /* --------------------------------------------
+     * CASE 2: No creators → fallback to role_counts
+     * ------------------------------------------ */
+    if (pricingItems.length === 0 && role_counts) {
+      Object.entries(role_counts).forEach(([role, count]) => {
+        const itemId = ROLE_TO_ITEM_MAP[role];
+        if (itemId && count > 0) {
+          pricingItems.push({ item_id: itemId, quantity: count });
+        }
+      });
+    }
 
     if (pricingItems.length === 0 && add_on_items.length === 0) {
-      return res.status(constants.BAD_REQUEST.code).json({
+      return res.status(400).json({
         success: false,
-        message: 'No valid pricing items could be generated from selected creators'
+        message: 'No pricing items resolved',
       });
     }
 
     const allItems = [...pricingItems, ...add_on_items];
 
-    // Calculate quote using existing service
-    // Extract skip flags from request body
-    const { skip_discount = false, skip_margin = false } = req.body;
     const quote = await pricingService.calculateQuote({
       items: allItems,
-      shootHours: parseFloat(shoot_hours),
+      shootHours: Number(shoot_hours),
       eventType: event_type,
       skipDiscount: skip_discount,
       skipMargin: skip_margin,
     });
 
-    const creatorDetails = creators.map(c => ({
-      crew_member_id: c.crew_member_id,
-      name: `${c.first_name} ${c.last_name}`,
-      role_id: c.primary_role, 
-      hourly_rate: parseFloat(c.hourly_rate || 0)
-    }));
-
     res.json({
       success: true,
       data: {
-        quote: {
-          ...quote,
-          creators: creatorDetails
-        }
-      }
+        quote,
+        creators: creators.map((c) => ({
+          crew_member_id: c.crew_member_id,
+          name: `${c.first_name} ${c.last_name}`,
+          role: c.primary_role,
+          hourly_rate: Number(c.hourly_rate || 0),
+        })),
+      },
     });
-
-  } catch (error) {
-    console.error('Error calculating pricing from creators:', error);
-    res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+  } catch (err) {
+    console.error('calculateFromCreators error:', err);
+    res.status(500).json({
       success: false,
-      message: 'Failed to calculate pricing from creators',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Failed to calculate pricing',
     });
   }
 };

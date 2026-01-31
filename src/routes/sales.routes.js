@@ -211,4 +211,16 @@ router.get('/dashboard/recent-activities', authenticate, requireSalesRepOrAdmin,
  */
 router.get('/dashboard/funnel', authenticate, requireSalesRepOrAdmin, salesDashboardController.getLeadsFunnelData);
 
+/**
+ * @route   PATCH /api/bookings/:bookingId/crew
+ * @desc    Update the crew assigned to a booking   
+ * @param   bookingId - ID of the booking to update
+ * @body    crew - Array of crew member objects to assign
+ * @access  Private (requires authentication)
+ */
+router.patch(
+  '/bookings/:bookingId/crew',
+  salesLeadsController.updateBookingCrew,
+);
+
 module.exports = router;
