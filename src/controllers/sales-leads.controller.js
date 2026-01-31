@@ -1,4 +1,5 @@
-const { sales_leads, sales_lead_activities, stream_project_booking, users, discount_codes, payment_links } = require('../models');
+const { sales_leads, sales_lead_activities, stream_project_booking, users, discount_codes, payment_links,  quotes,
+  quote_line_items } = require('../models');
 const { Op } = require('sequelize');
 const constants = require('../utils/constants');
 const leadAssignmentService = require('../services/lead-assignment.service');
@@ -664,6 +665,62 @@ exports.updateLeadStatus = async (req, res) => {
       success: false,
       message: 'Failed to update lead status',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.updateBookingCrew = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const { crew_roles } = req.body;
+
+    if (!crew_roles || typeof crew_roles !== 'object') {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'crew_roles object is required'
+      });
+    }
+
+    const booking = await stream_project_booking.findOne({
+      where: {
+        stream_project_booking_id: bookingId,
+        is_active: 1
+      }
+    });
+
+    if (!booking) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Booking not found'
+      });
+    }
+
+    if (booking.is_completed === 1) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Cannot modify completed booking'
+      });
+    }
+
+    // ONLY persist crew selection
+    await booking.update({
+      crew_roles: JSON.stringify(crew_roles)
+    });
+
+    return res.json({
+      success: true,
+      message: 'Crew roles saved',
+      data: {
+        booking_id: bookingId,
+        crew_roles
+      }
+    });
+
+  } catch (error) {
+    console.error('Error updating booking crew:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to update crew details'
     });
   }
 };
