@@ -4065,7 +4065,26 @@ exports.getCrewCount = async (req, res) => {
 
 exports.getDashboardSummary = async (req, res) => {
   try {
-    const dateFilter = buildDateFilter(req);
+    const { date_on } = req.query;
+    
+    let standardDateFilter = buildDateFilter(req);
+
+    let bookingDateFilter = { ...standardDateFilter };
+
+    if (date_on) {
+      if (date_on.match(/^\d{4}-\d{2}-\d{2}$/)) {
+        const dayRange = {
+          [Op.between]: [`${date_on} 00:00:00`, `${date_on} 23:59:59`]
+        };
+
+        bookingDateFilter = { event_date: dayRange };
+        standardDateFilter = { created_at: dayRange };
+      } 
+      
+      else if (date_on === 'event_date' && standardDateFilter.created_at) {
+        bookingDateFilter = { event_date: standardDateFilter.created_at };
+      }
+    }
 
     const [
       total_shoots,
@@ -4075,23 +4094,23 @@ exports.getDashboardSummary = async (req, res) => {
       total_CPs
     ] = await Promise.all([
       stream_project_booking.count({
-        where: { is_active: 1, ...dateFilter }
+        where: { is_active: 1, ...bookingDateFilter }
       }),
 
       stream_project_booking.count({
-        where: { is_active: 1, is_completed: 0, is_cancelled: 0, ...dateFilter }
+        where: { is_active: 1, is_completed: 0, is_cancelled: 0, ...bookingDateFilter }
       }),
 
       stream_project_booking.count({
-        where: { is_active: 1, is_completed: 1, ...dateFilter }
+        where: { is_active: 1, is_completed: 1, ...bookingDateFilter }
       }),
 
       clients.count({
-        where: { is_active: 1, ...dateFilter }
+        where: { is_active: 1, ...standardDateFilter }
       }),
 
       crew_members.count({
-        where: { is_active: 1, ...dateFilter }
+        where: { is_active: 1, ...standardDateFilter }
       })
     ]);
 
