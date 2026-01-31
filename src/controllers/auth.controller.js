@@ -256,7 +256,7 @@ exports.register = async (req, res) => {
     }
 
     // Validate userType
-    if (![1, 2, 3].includes(userType)) {
+    if (![1, 2, 3, 4].includes(userType)) {
       return res.status(400).json({
         success: false,
         message: 'Invalid user type'
@@ -301,13 +301,16 @@ exports.register = async (req, res) => {
       otp_expiry: otpExpiry
     });
 
-    const newClient = await Clients.create({
-      user_id: newUser.id,
-      name,
-      email,
-      phone_number,
-      is_active: 1
-    });
+    let newClient = {};
+    if (userType == 3) {
+      newClient = await Clients.create({
+        user_id: newUser.id,
+        name,
+        email,
+        phone_number,
+        is_active: 1
+      });
+    }
 
     // Send verification email if email provided
     if (email) {
@@ -343,7 +346,7 @@ exports.register = async (req, res) => {
       userId: newUser.id,
       email: newUser.email,
       affiliate: affiliateData,
-      clientId: newClient.client_id
+      clientId: newClient ? newClient.client_id : null
     });
 
   } catch (error) {

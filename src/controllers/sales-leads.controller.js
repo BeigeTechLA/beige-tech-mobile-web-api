@@ -531,6 +531,11 @@ exports.getLeadById = async (req, res) => {
             }
           ],
           order: [['created_at', 'DESC']]
+        },
+        {
+          model: users,
+          as: 'user',
+          attributes: ['phone_number']
         }
       ]
     });
