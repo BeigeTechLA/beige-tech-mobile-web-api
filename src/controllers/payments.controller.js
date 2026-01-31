@@ -520,7 +520,7 @@ exports.confirmPaymentMulti = async (req, res) => {
       cp_cost: 0,
       equipment_cost: 0,
       subtotal: totalAmount,
-      beige_margin_percent: BEIGE_MARGIN_PERCENT,
+      beige_margin_percent: 0, // No margin applied for multi-creator bookings
       beige_margin_amount: 0,
       total_amount: totalAmount,
       shoot_date: booking.shoot_date,

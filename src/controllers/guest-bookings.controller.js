@@ -984,12 +984,12 @@ exports.getBookingPaymentDetails = async (req, res) => {
           quote_id: booking.primary_quote.quote_id,
           shoot_hours: parseFloat(booking.primary_quote.shoot_hours),
           subtotal: parseFloat(booking.primary_quote.subtotal),
-          discountPercent: parseFloat(booking.primary_quote.discount_percent || 0),
-          discountAmount: parseFloat(booking.primary_quote.discount_amount || 0),
-          price_after_discount: parseFloat(booking.primary_quote.price_after_discount),
-          marginPercent: parseFloat(booking.primary_quote.margin_percent || 0),
-          marginAmount: parseFloat(booking.primary_quote.margin_amount || 0),
-          total: parseFloat(booking.primary_quote.total),
+          discountPercent: 0, // Remove discount display
+          discountAmount: 0, // Remove discount display
+          price_after_discount: parseFloat(booking.primary_quote.subtotal), // Use subtotal
+          marginPercent: 0, // Remove margin display
+          marginAmount: 0, // Remove margin display
+          total: parseFloat(booking.primary_quote.subtotal), // Use subtotal as total
           status: booking.primary_quote.status,
           lineItems: (booking.primary_quote.line_items || []).map(item => ({
             item_id: item.item_id,
