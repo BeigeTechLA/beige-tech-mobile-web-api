@@ -122,6 +122,46 @@ function uploadFiles(files) {
   return filePaths;
 }
 
+function buildDateFilter(req) {
+  const { range, start_date, end_date } = req.query;
+
+  if (start_date && end_date) {
+    return {
+      created_at: {
+        [Op.between]: [
+          `${start_date} 00:00:00`,
+          `${end_date} 23:59:59`
+        ]
+      }
+    };
+  }
+
+  if (range === 'month') {
+    return {
+      created_at: {
+        [Op.gte]: Sequelize.literal("DATE_FORMAT(CURDATE(), '%Y-%m-01')")
+      }
+    };
+  }
+
+  if (range === 'week') {
+    return {
+      created_at: {
+        [Op.gte]: Sequelize.literal("DATE_SUB(NOW(), INTERVAL 7 DAY)")
+      }
+    };
+  }
+
+  if (range === 'year') {
+    return {
+      created_at: {
+        [Op.gte]: Sequelize.literal("DATE_FORMAT(CURDATE(), '%Y-01-01')")
+      }
+    };
+  }
+
+  return {};
+}
 
 // exports.createProject = async (req, res) => {
 //   try {
@@ -4025,29 +4065,33 @@ exports.getCrewCount = async (req, res) => {
 
 exports.getDashboardSummary = async (req, res) => {
   try {
+    const dateFilter = buildDateFilter(req);
+
     const [
       total_shoots,
       active_shoots,
       completed_shoots,
-      // total_clients,
+      total_clients,
       total_CPs
     ] = await Promise.all([
-      stream_project_booking.count({ where: { is_active: 1 } }),
-
       stream_project_booking.count({
-        where: { is_active: 1, is_completed: 0, is_cancelled: 0 }
+        where: { is_active: 1, ...dateFilter }
       }),
 
       stream_project_booking.count({
-        where: { is_active: 1, is_completed: 1 }
+        where: { is_active: 1, is_completed: 0, is_cancelled: 0, ...dateFilter }
       }),
 
-      // users.count({
-      //   where: { user_type: 1, is_active: 1 }
-      // }),
+      stream_project_booking.count({
+        where: { is_active: 1, is_completed: 1, ...dateFilter }
+      }),
+
+      clients.count({
+        where: { is_active: 1, ...dateFilter }
+      }),
 
       crew_members.count({
-        where: { is_active: 1 }
+        where: { is_active: 1, ...dateFilter }
       })
     ]);
 
@@ -4058,7 +4102,7 @@ exports.getDashboardSummary = async (req, res) => {
         total_shoots: { count: total_shoots, growth: 3 },
         active_shoots: { count: active_shoots, growth: 3 },
         completed_shoots: { count: completed_shoots, growth: 3 },
-        // total_clients: { count: total_clients, growth: 3 },
+        total_clients: { count: total_clients, growth: 3 },
         total_CPs: { count: total_CPs, growth: 3 }
       }
     });
