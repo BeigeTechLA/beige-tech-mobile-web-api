@@ -1,4 +1,5 @@
 const { payment_links, sales_leads, sales_lead_activities, discount_codes, stream_project_booking } = require('../models');
+const db = require('../models');
 const paymentLinksService = require('../services/payment-links.service');
 const constants = require('../utils/constants');
 
@@ -238,7 +239,7 @@ exports.validatePaymentLink = async (req, res) => {
  * POST /api/sales/payment-links/:token/mark-used
  */
 exports.markLinkAsUsed = async (req, res) => {
-  const transaction = await require('../db').sequelize.transaction();
+  const transaction = await db.sequelize.transaction();
 
   try {
     const { token } = req.params;

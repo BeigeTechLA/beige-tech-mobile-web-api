@@ -1,4 +1,5 @@
 const { discount_codes, sales_leads, sales_lead_activities, quotes } = require('../models');
+const db = require('../models');
 const discountService = require('../services/discount.service');
 const constants = require('../utils/constants');
 
@@ -174,7 +175,7 @@ exports.validateDiscountCode = async (req, res) => {
  * POST /api/sales/discount-codes/:code/apply
  */
 exports.applyDiscountCode = async (req, res) => {
-  const transaction = await require('../db').sequelize.transaction();
+  const transaction = await db.sequelize.transaction();
 
   try {
     const { code } = req.params;
