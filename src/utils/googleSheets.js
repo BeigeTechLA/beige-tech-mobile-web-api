@@ -1,24 +1,11 @@
 const { google } = require('googleapis');
 
-// --- DEBUG LOGS ---
-console.log("--- GOOGLE SHEETS AUTH DEBUG ---");
-console.log("SHEET_ID exists:", !!process.env.GOOGLE_SHEET_ID);
-console.log("EMAIL exists:", !!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL);
-console.log("EMAIL value:", process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL);
-
-const rawKey = process.env.GOOGLE_PRIVATE_KEY;
-console.log("PRIVATE_KEY exists:", !!rawKey);
-
-if (rawKey) {
-  console.log("Key Length:", rawKey.length);
-  console.log("Key Starts with:", rawKey.substring(0, 30));
-  console.log("Key Ends with:", rawKey.substring(rawKey.length - 30));
-  console.log("Contains \\n (escaped):", rawKey.includes('\\n'));
+// --- AUTH SETUP ---
+let rawKey = process.env.GOOGLE_PRIVATE_KEY || "";
+if (rawKey.startsWith('"') && rawKey.endsWith('"')) {
+  rawKey = rawKey.substring(1, rawKey.length - 1);
 }
-console.log("---------------------------------");
-
-// Format the key correctly
-const formattedKey = rawKey ? rawKey.replace(/\\n/g, '\n') : undefined;
+const formattedKey = rawKey.replace(/\\n/g, '\n');
 
 const auth = new google.auth.GoogleAuth({
   credentials: {
@@ -31,61 +18,95 @@ const auth = new google.auth.GoogleAuth({
 const sheets = google.sheets({ version: 'v4', auth });
 const spreadsheetId = process.env.GOOGLE_SHEET_ID;
 
-async function appendToSheet(dataArray) {
+/**
+ * HELPER: Find the internal numerical ID of a tab by its name
+ */
+async function getSheetIdByName(tabName) {
+  const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
+  const sheet = spreadsheet.data.sheets.find(s => s.properties.title === tabName);
+  return sheet ? sheet.properties.sheetId : null;
+}
+
+async function appendToSheet(tabName, dataArray) {
   try {
-    console.log("Attempting to append data to sheet...");
-    const response = await sheets.spreadsheets.values.append({
+    await sheets.spreadsheets.values.append({
       spreadsheetId,
-      range: 'Sheet1!A:Z',
+      range: `${tabName}!A:Z`,
       valueInputOption: 'USER_ENTERED',
       resource: { values: [dataArray] },
     });
-    console.log("Successfully appended to sheet!");
-    return response;
-  } catch (error) {
-    console.error("--- SHEETS APPEND ERROR DETAIL ---");
-    console.error("Message:", error.message);
-    if (error.message.includes("DECODER")) {
-      console.error("CRITICAL: Your private key format is still invalid.");
-    }
-    throw error;
-  }
+    console.log(`Successfully appended to ${tabName}`);
+  } catch (error) { console.error("Append Error:", error.message); throw error; }
 }
 
-async function updateSheetRow(crew_member_id, updatedDataMap) {
+async function updateSheetRow(tabName, id, updatedDataMap) {
   try {
-    console.log(`Searching for Row ID: ${crew_member_id}`);
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: 'Sheet1!A:A',
+      range: `${tabName}!A:A`,
     });
     const rows = response.data.values;
-    if (!rows) {
-      console.log("Sheet is empty.");
-      return;
-    }
-
-    const rowIndex = rows.findIndex(row => row[0] == crew_member_id);
-    if (rowIndex === -1) {
-      console.log("Crew Member ID not found in sheet.");
-      return;
-    }
+    if (!rows) return;
+    const rowIndex = rows.findIndex(row => row[0] == id);
+    if (rowIndex === -1) return;
 
     const rowNum = rowIndex + 1;
     for (const [column, value] of Object.entries(updatedDataMap)) {
       await sheets.spreadsheets.values.update({
         spreadsheetId,
-        range: `Sheet1!${column}${rowNum}`,
+        range: `${tabName}!${column}${rowNum}`,
         valueInputOption: 'USER_ENTERED',
         resource: { values: [[value]] },
       });
     }
-    console.log("Successfully updated sheet row!");
+    console.log(`Successfully updated row in ${tabName}`);
+  } catch (error) { console.error("Update Error:", error.message); throw error; }
+}
+
+/**
+ * DELETE A ROW BY ID
+ * @param {string} tabName - Tab name
+ * @param {string|number} id - ID to find in Column A
+ */
+async function deleteSheetRow(tabName, id) {
+  try {
+    // 1. Find the row index
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${tabName}!A:A`,
+    });
+    const rows = response.data.values;
+    if (!rows) return;
+    const rowIndex = rows.findIndex(row => row[0] == id);
+    if (rowIndex === -1) return;
+
+    // 2. Get the numerical sheet ID
+    const internalSheetId = await getSheetIdByName(tabName);
+    if (internalSheetId === null) throw new Error("Sheet Tab not found");
+
+    // 3. Delete the row
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId,
+      resource: {
+        requests: [
+          {
+            deleteDimension: {
+              range: {
+                sheetId: internalSheetId,
+                dimension: "ROWS",
+                startIndex: rowIndex,
+                endIndex: rowIndex + 1,
+              },
+            },
+          },
+        ],
+      },
+    });
+    console.log(`Successfully deleted ID ${id} from ${tabName}`);
   } catch (error) {
-    console.error("--- SHEETS UPDATE ERROR DETAIL ---");
-    console.error(error.message);
+    console.error("Delete Error:", error.message);
     throw error;
   }
 }
 
-module.exports = { appendToSheet, updateSheetRow };
+module.exports = { appendToSheet, updateSheetRow, deleteSheetRow };

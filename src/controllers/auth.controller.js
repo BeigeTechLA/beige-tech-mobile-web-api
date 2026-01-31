@@ -9,11 +9,14 @@ const UserType = common_model.getTableNameDirect(constants.TABLES.USER_TYPE);
 const CrewMember = common_model.getTableNameDirect(constants.TABLES.CREW_MEMBERS);
 const Affiliate = common_model.getTableNameDirect(constants.TABLES.AFFILIATES);
 const Clients = common_model.getTableNameDirect(constants.TABLES.CLIENTS);
+const Crew_roles = common_model.getTableNameDirect(constants.TABLES.CREW_ROLES);
+const Skills_master = common_model.getTableNameDirect(constants.TABLES.SKILLS_MASTER);
 const affiliateController = require('./affiliate.controller');
 const config = require('../config/config');
 const { S3UploadFiles } = require('../utils/common.js');
 const multer = require('multer');
 const path = require('path');
+const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 
 // Import new utilities
 const otpService = require('../utils/otpService');
@@ -1906,7 +1909,6 @@ exports.quickRegister = async (req, res) => {
 
 
 // Google Sheets Utilities
-const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 
 /**
  * STEP 1: Basic Registration
@@ -1928,8 +1930,14 @@ exports.registerCrewMemberStep1 = [
         await User.update({ name: `${first_name} ${last_name}`, email, phone_number }, { where: { id: user_id } });
 
         // Update Google Sheets
-        await updateSheetRow(crew_member_id, {
-          'B': first_name, 'C': last_name, 'D': email, 'E': phone_number, 'F': location, 'G': working_distance
+        await updateSheetRow('Crew_data', crew_member_id, {
+          'B': first_name, 
+          'C': last_name, 
+          'D': email, 
+          'E': phone_number, 
+          'F': location, 
+          'G': working_distance, 
+          'H': 'pending'
         });
 
         return res.status(200).json({ success: true, message: 'Step 1 updated', crew_member_id, user_id });
@@ -1967,15 +1975,15 @@ exports.registerCrewMemberStep1 = [
         }
       }
 
-      // --- GOOGLE SHEETS: ADD NEW ROW ---
-      // Columns: A=ID, B=FirstName, C=LastName, D=Email, E=Phone, F=Location
-      await appendToSheet([
+       await appendToSheet('Crew_data', [
         newCrewMember.crew_member_id, 
         first_name, 
         last_name, 
         email, 
         phone_number, 
-        location
+        location,
+        working_distance,
+        'pending'
       ]);
 
       return res.status(201).json({
@@ -2004,7 +2012,24 @@ exports.registerCrewMemberStep2 = async (req, res) => {
     const member = await crew_members.findOne({ where: { crew_member_id } });
     if (!member) return res.status(404).json({ success: false, message: 'Member not found' });
 
-    // Update DB
+    const roleNames = await Crew_roles.findAll({
+      where: {
+        role_id: primary_role
+      },
+      attributes: ['role_name']
+    });
+
+    const primaryRoleNames = roleNames.map(role => role.role_name);
+
+    const skillNames = await Skills_master.findAll({
+      where: {
+        id: skills
+      },
+      attributes: ['name']
+    });
+
+    const skillNameList = skillNames.map(skill => skill.name);
+
     member.primary_role = JSON.stringify(primary_role);
     member.years_of_experience = years_of_experience;
     member.hourly_rate = hourly_rate;
@@ -2013,14 +2038,12 @@ exports.registerCrewMemberStep2 = async (req, res) => {
     member.equipment_ownership = JSON.stringify(equipment_ownership);
     await member.save();
 
-    // --- GOOGLE SHEETS: UPDATE ROW ---
-    // Columns: G=Role, H=Exp, I=Rate, J=Bio, K=Skills
-    await updateSheetRow(crew_member_id, {
-      'H': Array.isArray(primary_role) ? primary_role.join(', ') : primary_role,
-      'I': years_of_experience,
-      'J': hourly_rate,
-      'K': bio,
-      'L': Array.isArray(skills) ? skills.join(', ') : JSON.stringify(skills)
+     await updateSheetRow('Crew_data', crew_member_id, {
+      'I': primaryRoleNames.join(', '),
+      'J': years_of_experience,
+      'K': hourly_rate,
+      'L': bio,
+      'M': skillNameList.join(', ')
     });
 
     return res.status(200).json({ success: true, message: 'Step 2 completed' });
@@ -2068,12 +2091,9 @@ exports.registerCrewMemberStep3 = [
         await crew_member_files.bulkCreate(filesToCreate);
       }
 
-      // --- GOOGLE SHEETS: UPDATE ROW ---
-      // Columns: L=Availability, M=Certs, N=Social Links
-      await updateSheetRow(crew_member_id, {
-        'M': JSON.stringify(social_media_links),
-        'N': 'pending'
-
+      await updateSheetRow('Crew_data', crew_member_id, {
+        'N': JSON.stringify(social_media_links),
+        // 'O': 'pending'
       });
 
       return res.status(200).json({ success: true, message: 'Step 3 completed. Registration finished!' });
