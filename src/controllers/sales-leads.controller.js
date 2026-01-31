@@ -1,6 +1,6 @@
 const { sales_leads, sales_lead_activities, stream_project_booking, users, discount_codes, payment_links,  quotes,
   quote_line_items } = require('../models');
-const { Op } = require('sequelize');
+const { Op, Sequelize } = require('sequelize');
 const constants = require('../utils/constants');
 const leadAssignmentService = require('../services/lead-assignment.service');
 const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
@@ -391,6 +391,9 @@ exports.createSalesAssistedLead = async (req, res) => {
  * Get all leads with filters and pagination
  * GET /api/sales/leads
  */
+// Ensure these are at the top of sales-leads.controller.js
+// const { Op, Sequelize } = require('sequelize'); 
+
 exports.getLeads = async (req, res) => {
   try {
     const {
@@ -399,13 +402,34 @@ exports.getLeads = async (req, res) => {
       status,
       lead_type,
       assigned_to,
-      search
+      search,
+      range,        // Added
+      start_date,   // Added
+      end_date      // Added
     } = req.query;
 
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
-    // Build where clause
     const whereClause = {};
+
+    if (start_date && end_date) {
+      whereClause.created_at = {
+        [Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`]
+      };
+    } else if (range === 'month') {
+      whereClause[Op.and] = [
+        Sequelize.where(Sequelize.fn('MONTH', Sequelize.col('sales_leads.created_at')), Sequelize.fn('MONTH', Sequelize.fn('CURDATE'))),
+        Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('sales_leads.created_at')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
+      ];
+    } else if (range === 'week') {
+      whereClause[Op.and] = [
+        Sequelize.where(Sequelize.fn('YEARWEEK', Sequelize.col('sales_leads.created_at'), 1), Sequelize.fn('YEARWEEK', Sequelize.fn('CURDATE'), 1))
+      ];
+    } else if (range === 'year') {
+      whereClause[Op.and] = [
+        Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('sales_leads.created_at')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
+      ];
+    }
 
     if (status) {
       whereClause.lead_status = status;
@@ -424,10 +448,18 @@ exports.getLeads = async (req, res) => {
     }
 
     if (search) {
-      whereClause[Op.or] = [
-        { client_name: { [Op.like]: `%${search}%` } },
-        { guest_email: { [Op.like]: `%${search}%` } }
-      ];
+      const searchCondition = {
+        [Op.or]: [
+          { client_name: { [Op.like]: `%${search}%` } },
+          { guest_email: { [Op.like]: `%${search}%` } }
+        ]
+      };
+      
+      if (whereClause[Op.and]) {
+        whereClause[Op.and].push(searchCondition);
+      } else {
+        whereClause[Op.and] = [searchCondition];
+      }
     }
 
     // Fetch leads
@@ -447,7 +479,7 @@ exports.getLeads = async (req, res) => {
       ],
       limit: parseInt(limit),
       offset: offset,
-      order: [['last_activity_at', 'DESC']]
+      order: [['created_at', 'DESC']] 
     });
 
     res.json({
@@ -476,7 +508,7 @@ exports.getLeads = async (req, res) => {
 
   } catch (error) {
     console.error('Error fetching leads:', error);
-    res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+    res.status(500).json({
       success: false,
       message: 'Failed to fetch leads',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
