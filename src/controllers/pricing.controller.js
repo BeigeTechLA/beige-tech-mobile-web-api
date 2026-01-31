@@ -441,7 +441,6 @@ exports.calculateFromCreators = async (req, res) => {
     // Calculate quote using existing service
     // Extract skip flags from request body
     const { skip_discount = false, skip_margin = false } = req.body;
-    
     const quote = await pricingService.calculateQuote({
       items: allItems,
       shootHours: parseFloat(shoot_hours),
