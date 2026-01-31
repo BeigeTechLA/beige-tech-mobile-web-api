@@ -403,7 +403,6 @@ exports.getLeads = async (req, res) => {
 
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
-    // Build where clause
     const whereClause = {};
 
     if (status) {
