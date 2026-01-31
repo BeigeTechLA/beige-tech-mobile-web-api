@@ -195,8 +195,8 @@ POST {{URL}}admin/verify-crew-member HTTP/1.1
 Content-Type: application/json
 
 {
-  "crew_member_id": 2050,
-  "status": 1
+  "crew_member_id": 2066,
+  "status": 2
 }
 
 ###

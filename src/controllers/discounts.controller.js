@@ -1,4 +1,5 @@
 const { discount_codes, sales_leads, sales_lead_activities, quotes } = require('../models');
+const db = require('../models');
 const discountService = require('../services/discount.service');
 const constants = require('../utils/constants');
 
@@ -119,6 +120,7 @@ exports.generateDiscountCode = async (req, res) => {
 exports.validateDiscountCode = async (req, res) => {
   try {
     const { code } = req.params;
+    const { booking_id } = req.query; // Optional query param for booking validation
 
     if (!code) {
       return res.status(constants.BAD_REQUEST.code).json({
@@ -127,7 +129,11 @@ exports.validateDiscountCode = async (req, res) => {
       });
     }
 
-    const result = await discountService.checkCodeAvailability(code.toUpperCase());
+    // Validate with optional booking_id
+    const result = await discountService.checkCodeAvailability(
+      code.toUpperCase(),
+      booking_id ? parseInt(booking_id) : null
+    );
 
     if (!result.valid) {
       return res.status(constants.BAD_REQUEST.code).json({
@@ -169,7 +175,7 @@ exports.validateDiscountCode = async (req, res) => {
  * POST /api/sales/discount-codes/:code/apply
  */
 exports.applyDiscountCode = async (req, res) => {
-  const transaction = await require('../db').sequelize.transaction();
+  const transaction = await db.sequelize.transaction();
 
   try {
     const { code } = req.params;
@@ -183,8 +189,25 @@ exports.applyDiscountCode = async (req, res) => {
       });
     }
 
-    // Validate discount code
-    const result = await discountService.checkCodeAvailability(code.toUpperCase());
+    // Get quote first to extract booking_id if not provided
+    const quote = await quotes.findByPk(quote_id);
+
+    if (!quote) {
+      await transaction.rollback();
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Quote not found'
+      });
+    }
+
+    // Use booking_id from request body or quote's booking_id
+    const effectiveBookingId = booking_id || quote.booking_id;
+
+    // Validate discount code with booking_id
+    const result = await discountService.checkCodeAvailability(
+      code.toUpperCase(),
+      effectiveBookingId
+    );
 
     if (!result.valid) {
       await transaction.rollback();
@@ -195,17 +218,6 @@ exports.applyDiscountCode = async (req, res) => {
     }
 
     const discountCode = result.discountCode;
-
-    // Get quote
-    const quote = await quotes.findByPk(quote_id);
-
-    if (!quote) {
-      await transaction.rollback();
-      return res.status(constants.NOT_FOUND.code).json({
-        success: false,
-        message: 'Quote not found'
-      });
-    }
 
     // Calculate discount
     const subtotal = parseFloat(quote.subtotal);
@@ -229,13 +241,13 @@ exports.applyDiscountCode = async (req, res) => {
       total: newTotal
     }, { transaction });
 
-    // Increment usage count
-    await discountService.incrementUsageCount(discountCode.discount_code_id);
+    // Increment usage count (within transaction)
+    await discountService.incrementUsageCount(discountCode.discount_code_id, transaction);
 
     // Log usage
     await discountService.logUsage(
       discountCode.discount_code_id,
-      booking_id,
+      effectiveBookingId,
       user_id || null,
       guest_email || null,
       subtotal,

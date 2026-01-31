@@ -139,9 +139,11 @@ async function getDiscountPercent(hours, mode = 'general') {
  * @param {number} params.shootHours - Total shoot hours (for services and discounts)
  * @param {string} params.eventType - Event type (determines pricing mode)
  * @param {number} [params.marginPercent] - Override margin percentage
+ * @param {boolean} [params.skipDiscount] - Skip hour-based discount calculation
+ * @param {boolean} [params.skipMargin] - Skip beige margin calculation
  * @returns {Promise<Object>} Calculated quote breakdown
  */
-async function calculateQuote({ items, shootHours = 0, eventType = null, marginPercent = null }) {
+async function calculateQuote({ items, shootHours = 0, eventType = null, marginPercent = null, skipDiscount = false, skipMargin = false }) {
   try {
     const pricingMode = determinePricingMode(eventType);
     const effectiveMargin = marginPercent !== null ? marginPercent : DEFAULT_MARGIN_PERCENT;
@@ -156,9 +158,11 @@ async function calculateQuote({ items, shootHours = 0, eventType = null, marginP
         discountPercent: 0,
         discountAmount: 0,
         priceAfterDiscount: 0,
-        marginPercent: effectiveMargin,
+        marginPercent: skipMargin ? 0 : effectiveMargin,
         marginAmount: 0,
         total: 0,
+        discountSkipped: skipDiscount,
+        marginSkipped: skipMargin,
       };
     }
 
@@ -238,13 +242,14 @@ async function calculateQuote({ items, shootHours = 0, eventType = null, marginP
 
     subtotal = parseFloat(subtotal.toFixed(2));
 
-    // Get discount based on shoot hours
-    const discountPercent = await getDiscountPercent(shootHours, pricingMode);
+    // Get discount based on shoot hours (skip if requested)
+    const discountPercent = skipDiscount ? 0 : await getDiscountPercent(shootHours, pricingMode);
     const discountAmount = parseFloat((subtotal * discountPercent / 100).toFixed(2));
     const priceAfterDiscount = parseFloat((subtotal - discountAmount).toFixed(2));
 
-    // Calculate margin
-    const marginAmount = parseFloat((priceAfterDiscount * effectiveMargin / 100).toFixed(2));
+    // Calculate margin (skip if requested)
+    const effectiveMarginToApply = skipMargin ? 0 : effectiveMargin;
+    const marginAmount = parseFloat((priceAfterDiscount * effectiveMarginToApply / 100).toFixed(2));
     const total = parseFloat((priceAfterDiscount + marginAmount).toFixed(2));
 
     return {
@@ -255,9 +260,12 @@ async function calculateQuote({ items, shootHours = 0, eventType = null, marginP
       discountPercent,
       discountAmount,
       priceAfterDiscount,
-      marginPercent: effectiveMargin,
+      marginPercent: effectiveMarginToApply,
       marginAmount,
       total,
+      // Add flags for transparency
+      discountSkipped: skipDiscount,
+      marginSkipped: skipMargin,
     };
   } catch (error) {
     console.error('Error calculating quote:', error);

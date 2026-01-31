@@ -5,6 +5,11 @@ const affiliateController = require('./affiliate.controller');
 // Get Beige margin percentage from environment, default to 25%
 const BEIGE_MARGIN_PERCENT = parseFloat(process.env.BEIGE_MARGIN_PERCENT || '25.00');
 
+// System creator ID for multi-creator bookings
+// This is a placeholder since payment_transactions.creator_id is required but doesn't apply to multi-creator bookings
+// System creator: email = 'system-multi-creator@beige.app', crew_member_id = 228
+const SYSTEM_MULTI_CREATOR_ID = 228;
+
 /**
  * Calculate pricing breakdown for CP + equipment booking
  * @param {number} hours - Number of hours
@@ -495,6 +500,7 @@ exports.confirmPaymentMulti = async (req, res) => {
 
     // Fetch booking details
     const booking = await db.stream_project_booking.findByPk(booking_id);
+    
     if (!booking) {
       return res.status(404).json({
         success: false,
@@ -512,23 +518,23 @@ exports.confirmPaymentMulti = async (req, res) => {
     const payment = await db.payment_transactions.create({
       stripe_payment_intent_id: paymentIntentId,
       stripe_charge_id: chargeId,
-      creator_id: null, // Multi-creator, so no single creator_id
+      creator_id: SYSTEM_MULTI_CREATOR_ID, // System placeholder for multi-creator bookings
       user_id: booking.user_id || null,
       guest_email: booking.guest_email || null,
-      hours: booking.shoot_hours || 0,
+      hours: booking.duration_hours || 0,
       hourly_rate: 0, // Multi-creator doesn't have single hourly rate
       cp_cost: 0,
       equipment_cost: 0,
       subtotal: totalAmount,
-      beige_margin_percent: BEIGE_MARGIN_PERCENT,
+      beige_margin_percent: 0, // No margin applied for multi-creator bookings
       beige_margin_amount: 0,
       total_amount: totalAmount,
-      shoot_date: booking.shoot_date,
+      shoot_date: booking.event_date, // Changed from shoot_date to event_date
       location: booking.event_location ? 
         (typeof booking.event_location === 'string' ? booking.event_location : JSON.stringify(booking.event_location)) 
         : null,
-      shoot_type: booking.shoot_type || null,
-      notes: booking.special_requests || null,
+      shoot_type: booking.event_type || null,
+      notes: booking.description || null,
       referral_code: referral_code || null,
       status: 'succeeded'
     }, { transaction });

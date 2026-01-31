@@ -57,9 +57,10 @@ function validateCodeFormat(code) {
 /**
  * Check if a discount code is available and valid
  * @param {string} code - Code to check
+ * @param {number|null} bookingId - Optional booking ID to validate discount is for specific booking
  * @returns {Promise<{valid: boolean, reason?: string, discountCode?: Object}>}
  */
-async function checkCodeAvailability(code) {
+async function checkCodeAvailability(code, bookingId = null) {
   if (!validateCodeFormat(code)) {
     return { valid: false, reason: 'Invalid code format' };
   }
@@ -93,6 +94,11 @@ async function checkCodeAvailability(code) {
     return { valid: false, reason: 'Code has reached usage limit' };
   }
   
+  // Check if discount is restricted to a specific booking
+  if (discountCode.booking_id && bookingId && discountCode.booking_id !== parseInt(bookingId)) {
+    return { valid: false, reason: 'This discount code is not valid for this booking' };
+  }
+  
   return { valid: true, discountCode };
 }
 
@@ -124,12 +130,19 @@ function calculateDiscountAmount(subtotal, discountCode) {
 /**
  * Increment usage count for a discount code
  * @param {number} discountCodeId - Discount code ID
+ * @param {Object} transaction - Sequelize transaction
  * @returns {Promise<void>}
  */
-async function incrementUsageCount(discountCodeId) {
-  await discount_codes.increment('current_uses', {
+async function incrementUsageCount(discountCodeId, transaction = null) {
+  const options = {
     where: { discount_code_id: discountCodeId }
-  });
+  };
+  
+  if (transaction) {
+    options.transaction = transaction;
+  }
+  
+  await discount_codes.increment('current_uses', options);
 }
 
 /**
