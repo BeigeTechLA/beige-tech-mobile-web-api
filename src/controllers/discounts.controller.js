@@ -241,8 +241,8 @@ exports.applyDiscountCode = async (req, res) => {
       total: newTotal
     }, { transaction });
 
-    // Increment usage count
-    await discountService.incrementUsageCount(discountCode.discount_code_id);
+    // Increment usage count (within transaction)
+    await discountService.incrementUsageCount(discountCode.discount_code_id, transaction);
 
     // Log usage
     await discountService.logUsage(

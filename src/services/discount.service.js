@@ -130,12 +130,19 @@ function calculateDiscountAmount(subtotal, discountCode) {
 /**
  * Increment usage count for a discount code
  * @param {number} discountCodeId - Discount code ID
+ * @param {Object} transaction - Sequelize transaction
  * @returns {Promise<void>}
  */
-async function incrementUsageCount(discountCodeId) {
-  await discount_codes.increment('current_uses', {
+async function incrementUsageCount(discountCodeId, transaction = null) {
+  const options = {
     where: { discount_code_id: discountCodeId }
-  });
+  };
+  
+  if (transaction) {
+    options.transaction = transaction;
+  }
+  
+  await discount_codes.increment('current_uses', options);
 }
 
 /**
