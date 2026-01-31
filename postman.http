@@ -71,7 +71,7 @@ GET {{URL}}admin/get-active-projects HTTP/1.1
 Content-Type: application/json
 
 ###
-GET {{URL}}admin/recent-activity HTTP/1.1
+GET {{URL}}admin/recent-activity?range=month HTTP/1.1
 Content-Type: application/json
 
 ###
@@ -82,7 +82,7 @@ Content-Type: application/json
 POST {{URL}}admin/get-crew-members HTTP/1.1
 Content-Type: application/json
 
-{"page":1,"limit":50}
+{"page":1,"limit":50,"range":"month"}
 
 ###
 GET {{URL}}admin/get-equipments?limit=50&page=1 HTTP/1.1
@@ -181,7 +181,7 @@ Authorization: {{TOKEN}}
 
 ###
 # Shoot status: successful, pending, rejected, cancelled (month/all filter)
-GET {{URL}}admin/dashboard/shoot-status?range=all HTTP/1.1
+GET {{URL}}admin/dashboard/shoot-status?range=month HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 

@@ -2268,30 +2268,63 @@ exports.createCrewMember = [
 
 exports.getCrewMembers = async (req, res) => {
   try {
-    let { page = 1, limit = 20, search, location } = req.body;
+    let { 
+        page = 1, 
+        limit = 20, 
+        search, 
+        location, 
+        status, 
+        range, 
+        start_date, 
+        end_date 
+    } = req.body;
+
     page = parseInt(page);
     limit = parseInt(limit);
-
     const offset = (page - 1) * limit;
 
-    const whereConditions = {
-      is_active: 1,
-    };
+    // Use an array for conditions
+    let conditions = [{ is_active: 1 }];
 
+    // ----------- 1. STATUS FILTER -----------
+    if (status) {
+      if (status === 'pending') conditions.push({ is_crew_verified: 0 });
+      else if (status === 'approved') conditions.push({ is_crew_verified: 1 });
+      else if (status === 'rejected') conditions.push({ is_crew_verified: 2 });
+    }
+
+    // ----------- 2. DATE RANGE FILTER (Fixed Ambiguity) -----------
+    // We add 'crew_members.' prefix to column names to avoid the ambiguous error
+    if (start_date && end_date) {
+      conditions.push({
+        'created_at': { [Sequelize.Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`] }
+      });
+    } else if (range === 'month') {
+      conditions.push(
+        Sequelize.where(Sequelize.fn('MONTH', Sequelize.col('crew_members.created_at')), Sequelize.fn('MONTH', Sequelize.fn('CURDATE'))),
+        Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('crew_members.created_at')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
+      );
+    } else if (range === 'week') {
+      conditions.push(
+        Sequelize.where(Sequelize.fn('YEARWEEK', Sequelize.col('crew_members.created_at'), 1), Sequelize.fn('YEARWEEK', Sequelize.fn('CURDATE'), 1))
+      );
+    } else if (range === 'year') {
+      conditions.push(
+        Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('crew_members.created_at')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
+      );
+    }
+
+    // ----------- 3. SEARCH & LOCATION FILTERS -----------
     if (search) {
-      whereConditions.first_name = {
-        [Sequelize.Op.like]: `%${search}%`,
-      };
+      conditions.push({ first_name: { [Sequelize.Op.like]: `%${search}%` } });
     }
-
     if (location) {
-      whereConditions.location = {
-        [Sequelize.Op.like]: `%${location}%`,
-      };
+      conditions.push({ location: { [Sequelize.Op.like]: `%${location}%` } });
     }
 
+    // ----------- 4. DATABASE QUERY -----------
     const { count, rows: members } = await crew_members.findAndCountAll({
-      where: whereConditions,
+      where: { [Sequelize.Op.and]: conditions },
       include: [
         {
           model: crew_member_files,
@@ -2307,38 +2340,33 @@ exports.getCrewMembers = async (req, res) => {
       order: [
         ['is_crew_verified', 'ASC'],
         ['is_beige_member', 'ASC'],
-        ['crew_member_id', 'ASC'],
+        ['crew_member_id', 'DESC'], 
       ],
       limit,
       offset,
     });
 
+    // ----------- 5. DATA PROCESSING -----------
     const processedMembers = members.map((member) => {
-      let status = 'pending';
-      if (member.is_crew_verified === 1) {
-        status = 'approved';
-      } else if (member.is_crew_verified === 2) {
-        status = 'rejected';
-      }
+      let statusLabel = 'pending';
+      if (member.is_crew_verified === 1) statusLabel = 'approved';
+      else if (member.is_crew_verified === 2) statusLabel = 'rejected';
 
       const loc = member.location;
+      let finalLocation = loc;
 
-      if (!loc) return { ...member.toJSON(), status };
-
-      if (typeof loc === 'string' && (loc.startsWith('{') || loc.startsWith('['))) {
+      if (loc && typeof loc === 'string' && (loc.startsWith('{') || loc.startsWith('['))) {
         try {
           const parsed = JSON.parse(loc);
-          return {
-            ...member.toJSON(),
-            location: parsed.address || parsed || loc,
-            status,
-          };
-        } catch {
-          return { ...member.toJSON(), location: loc, status };
-        }
+          finalLocation = parsed.address || parsed || loc;
+        } catch { finalLocation = loc; }
       }
 
-      return { ...member.toJSON(), location: loc, status };
+      return { 
+        ...member.toJSON(), 
+        location: finalLocation, 
+        status: statusLabel 
+      };
     });
 
     return res.status(200).json({
@@ -2354,10 +2382,7 @@ exports.getCrewMembers = async (req, res) => {
     });
   } catch (error) {
     console.error("Get Crew Members Error:", error);
-    return res.status(500).json({
-      error: true,
-      message: "Internal server error",
-    });
+    return res.status(500).json({ error: true, message: "Internal server error" });
   }
 };
 
@@ -4371,15 +4396,37 @@ exports.getCategoryWiseCPs = async (req, res) => {
 
 exports.getShootStatus = async (req, res) => {
   try {
-    const range = req.query.range || 'all';
+    const { range, start_date, end_date } = req.query;
 
     let dateFilter = {};
-    if (range === 'month') {
+
+    if (start_date && end_date) {
       dateFilter = {
-        created_at: {
-          [Op.gte]: Sequelize.literal("DATE_FORMAT(CURDATE(), '%Y-%m-01')")
+        event_date: {
+          [Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`]
         }
       };
+    } else if (range === 'month') {
+      dateFilter = {
+        [Op.and]: [
+          Sequelize.where(Sequelize.fn('MONTH', Sequelize.col('event_date')), Sequelize.fn('MONTH', Sequelize.fn('CURDATE'))),
+          Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('event_date')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
+        ]
+      };
+    } else if (range === 'week') {
+      dateFilter = {
+        [Op.and]: [
+          Sequelize.where(Sequelize.fn('YEARWEEK', Sequelize.col('event_date'), 1), Sequelize.fn('YEARWEEK', Sequelize.fn('CURDATE'), 1))
+        ]
+      };
+    } else if (range === 'year') {
+      dateFilter = {
+        [Op.and]: [
+          Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('event_date')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
+        ]
+      };
+    } else if (range === 'all' || !range) {
+      dateFilter = {};
     }
 
     const [
@@ -4389,7 +4436,9 @@ exports.getShootStatus = async (req, res) => {
       rejectedShoots,
       cancelledShoots
     ] = await Promise.all([
-      stream_project_booking.count({ where: { ...dateFilter } }),
+      stream_project_booking.count({ 
+        where: { ...dateFilter } 
+      }),
 
       stream_project_booking.count({
         where: { is_completed: 1, ...dateFilter }
@@ -4415,6 +4464,7 @@ exports.getShootStatus = async (req, res) => {
 
     return res.status(200).json({
       error: false,
+      message: "Shoot status summary fetched successfully",
       data: {
         total: totalShoots,
         breakdown: [
@@ -4443,7 +4493,10 @@ exports.getShootStatus = async (req, res) => {
     });
   } catch (err) {
     console.error('Shoot Status Error:', err);
-    return res.status(500).json({ error: true });
+    return res.status(500).json({ 
+      error: true, 
+      message: "Internal server error" 
+    });
   }
 };
 
