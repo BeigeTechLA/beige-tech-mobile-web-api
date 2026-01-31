@@ -280,14 +280,11 @@ exports.register = async (req, res) => {
       });
     }
 
-    // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Generate OTP for email verification
     const otp = otpService.generateOTP();
-    const otpExpiry = otpService.generateOTPExpiry(10); // 10 minutes
+    const otpExpiry = otpService.generateOTPExpiry(10); 
 
-    // Create user
     const newUser = await User.create({
       name,
       email,
@@ -301,7 +298,8 @@ exports.register = async (req, res) => {
       otp_expiry: otpExpiry
     });
 
-    let newClient = {};
+    let newClient = null;
+    
     if (userType == 3) {
       newClient = await Clients.create({
         user_id: newUser.id,
@@ -310,6 +308,15 @@ exports.register = async (req, res) => {
         phone_number,
         is_active: 1
       });
+
+      appendToSheet('Client_data', [
+        newClient.client_id,
+        newUser.id,
+        name,                  
+        email,             
+        phone_number || 'N/A',  
+        'Active'               
+      ]).catch(err => console.error('Google Sheets Client Sync Error:', err.message));
     }
 
     // Send verification email if email provided
@@ -324,7 +331,7 @@ exports.register = async (req, res) => {
       }
     }
 
-    // Auto-create affiliate account for the new user
+    // Auto-create affiliate account
     let affiliateData = null;
     try {
       const affiliate = await affiliateController.createAffiliate(newUser.id);
