@@ -57,9 +57,10 @@ function validateCodeFormat(code) {
 /**
  * Check if a discount code is available and valid
  * @param {string} code - Code to check
+ * @param {number|null} bookingId - Optional booking ID to validate discount is for specific booking
  * @returns {Promise<{valid: boolean, reason?: string, discountCode?: Object}>}
  */
-async function checkCodeAvailability(code) {
+async function checkCodeAvailability(code, bookingId = null) {
   if (!validateCodeFormat(code)) {
     return { valid: false, reason: 'Invalid code format' };
   }
@@ -91,6 +92,11 @@ async function checkCodeAvailability(code) {
       discountCode.max_uses && 
       discountCode.current_uses >= discountCode.max_uses) {
     return { valid: false, reason: 'Code has reached usage limit' };
+  }
+  
+  // Check if discount is restricted to a specific booking
+  if (discountCode.booking_id && bookingId && discountCode.booking_id !== parseInt(bookingId)) {
+    return { valid: false, reason: 'This discount code is not valid for this booking' };
   }
   
   return { valid: true, discountCode };
