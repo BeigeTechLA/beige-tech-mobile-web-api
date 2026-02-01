@@ -989,7 +989,11 @@ exports.getBookingPaymentDetails = async (req, res) => {
           price_after_discount: parseFloat(booking.primary_quote.subtotal), // Use subtotal
           marginPercent: 0, // Remove margin display
           marginAmount: 0, // Remove margin display
-          total: parseFloat(booking.primary_quote.subtotal), // Use subtotal as total
+          total: parseFloat(
+            booking.primary_quote.total ??
+            booking.primary_quote.price_after_discount ??
+            booking.primary_quote.subtotal
+          ),
           status: booking.primary_quote.status,
           lineItems: (booking.primary_quote.line_items || []).map(item => ({
             item_id: item.item_id,
