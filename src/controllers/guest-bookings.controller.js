@@ -819,6 +819,216 @@ exports.assignCreatorsToBooking = async (req, res) => {
  * Query: creator_id (optional) - if provided, will be assigned to booking
  * Headers: No authentication required
  */
+// exports.getBookingPaymentDetails = async (req, res) => {
+//   try {
+//     const { id } = req.params;
+//     const { creator_id } = req.query;
+
+//     if (!id) {
+//       return res.status(constants.BAD_REQUEST.code).json({
+//         success: false,
+//         message: 'Booking ID is required'
+//       });
+//     }
+
+//     // Fetch booking with assigned creators
+//     const booking = await stream_project_booking.findOne({
+//       where: {
+//         stream_project_booking_id: id,
+//         is_active: 1
+//       },
+//       include: [
+//         {
+//           model: assigned_crew,
+//           as: 'assigned_crews',
+//           where: { is_active: 1 },
+//           required: false,
+//           include: [
+//             {
+//               model: crew_members,
+//               as: 'crew_member',
+//               attributes: [
+//                 'crew_member_id',
+//                 'first_name',
+//                 'last_name',
+//                 'email',
+//                 'location',
+//                 'hourly_rate',
+//                 'rating',
+//                 'bio',
+//                 'years_of_experience',
+//                 'primary_role'
+//               ],
+//               include: [
+//                 {
+//                   model: crew_member_files,
+//                   as: 'crew_member_files',
+//                   where: { file_type: 'profile_image' },
+//                   required: false,
+//                   attributes: ['file_path'],
+//                   limit: 1
+//                 }
+//               ]
+//             }
+//           ]
+//         },
+//         {
+//           model: quotes,
+//           as: 'primary_quote',
+//           required: false,
+//           include: [
+//             {
+//               model: quote_line_items,
+//               as: 'line_items',
+//               required: false
+//             }
+//           ]
+//         }
+//       ]
+//     });
+
+//     if (!booking) {
+//       return res.status(constants.NOT_FOUND.code).json({
+//         success: false,
+//         message: 'Booking not found'
+//       });
+//     }
+
+//     // If creator_id is provided and not already assigned, assign it
+//     let assignedCreators = booking.assigned_crews || [];
+//     if (creator_id) {
+//       const alreadyAssigned = assignedCreators.some(
+//         ac => ac.crew_member_id === parseInt(creator_id)
+//       );
+
+//       if (!alreadyAssigned) {
+//         // Verify creator exists
+//         const creator = await crew_members.findByPk(creator_id);
+//         if (creator) {
+//           // Assign creator to booking
+//           const newAssignment = await assigned_crew.create({
+//             project_id: id,
+//             crew_member_id: creator_id,
+//             status: 'selected',
+//             is_active: 1,
+//             crew_accept: 0
+//           });
+
+//           // Add to response
+//           assignedCreators.push({
+//             ...newAssignment.toJSON(),
+//             crew_member: creator
+//           });
+//         }
+//       }
+//     }
+
+//     // Role mapping (same as creators controller)
+//     const roleMap = {
+//       1: 'Videographer',
+//       2: 'Photographer',
+//       3: 'Editor',
+//       4: 'Producer',
+//       5: 'Director',
+//       6: 'Cinematographer'
+//     };
+
+//     // Format creators for response (flattened structure for frontend)
+//     const creators = assignedCreators.map(ac => {
+//       if (!ac.crew_member) return null;
+
+//       const profileImage = ac.crew_member.crew_member_files && ac.crew_member.crew_member_files.length > 0
+//         ? ac.crew_member.crew_member_files[0].file_path
+//         : null;
+
+//       return {
+//         assignment_id: ac.id,
+//         crew_member_id: ac.crew_member.crew_member_id,
+//         name: `${ac.crew_member.first_name} ${ac.crew_member.last_name}`,
+//         email: ac.crew_member.email,
+//         location: ac.crew_member.location,
+//         hourly_rate: parseFloat(ac.crew_member.hourly_rate || 0),
+//         rating: parseFloat(ac.crew_member.rating || 0),
+//         bio: ac.crew_member.bio,
+//         years_of_experience: ac.crew_member.years_of_experience,
+//         role_name: roleMap[ac.crew_member.primary_role] || 'Creative Professional',
+//         profile_image: profileImage,
+//         status: ac.status,
+//         crew_accept: ac.crew_accept === 1
+//       };
+//     }).filter(c => c !== null);
+
+//     res.status(constants.OK.code).json({
+//       success: true,
+//       data: {
+//         booking: {
+//           booking_id: booking.stream_project_booking_id,
+//           project_name: booking.project_name,
+//           shoot_name: booking.project_name, // Alias for frontend compatibility
+//           guest_email: booking.guest_email,
+//           description: booking.description,
+//           event_type: booking.event_type,
+//           event_date: booking.event_date,
+//           duration_hours: booking.duration_hours,
+//           start_time: booking.start_time,
+//           end_time: booking.end_time,
+//           budget: parseFloat(booking.budget || 0),
+//           event_location: formatLocationResponse(booking.event_location),
+//           is_draft: booking.is_draft === 1,
+//           is_completed: booking.is_completed === 1,
+//           payment_completed_at: booking.payment_completed_at,
+//           created_at: booking.created_at
+//         },
+//         creators: creators,
+//         quote: booking.primary_quote ? {
+//           quote_id: booking.primary_quote.quote_id,
+//           shoot_hours: parseFloat(booking.primary_quote.shoot_hours),
+//           subtotal: parseFloat(booking.primary_quote.subtotal),
+//           discountPercent: 0, // Remove discount display
+//           discountAmount: 0, // Remove discount display
+//           price_after_discount: parseFloat(booking.primary_quote.subtotal), // Use subtotal
+//           marginPercent: 0, // Remove margin display
+//           marginAmount: 0, // Remove margin display
+//           total: parseFloat(
+//             booking.primary_quote.total ??
+//             booking.primary_quote.price_after_discount ??
+//             booking.primary_quote.subtotal
+//           ),
+//           status: booking.primary_quote.status,
+//           lineItems: (booking.primary_quote.line_items || []).map(item => ({
+//             item_id: item.item_id,
+//             item_name: item.item_name,
+//             quantity: item.quantity,
+//             rate: item.rate == null ? null : parseFloat(item.rate),
+//             rate_type: item.rate_type,
+//             line_total: parseFloat(item.line_total || 0)
+//           }))
+//         } : null,
+//         payment_status: booking.payment_id ? 'completed' : 'pending'
+//       }
+//     });
+
+//   } catch (error) {
+//     console.error('Error fetching booking payment details:', error);
+//     console.error('Error stack:', error.stack);
+//     console.error('Error name:', error.name);
+//     console.error('Error message:', error.message);
+//     res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+//       success: false,
+//       message: 'Failed to fetch booking payment details',
+//       error: error.message,
+//       stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+//     });
+//   }
+// };
+
+
+/**
+ * Get booking with assigned creators and payment details
+ * GET /api/guest-bookings/:id/payment-details
+ * Query: creator_id (optional) - if provided, will be assigned to booking
+ * Headers: No authentication required
+ */
 exports.getBookingPaymentDetails = async (req, res) => {
   try {
     const { id } = req.params;
@@ -984,24 +1194,20 @@ exports.getBookingPaymentDetails = async (req, res) => {
           quote_id: booking.primary_quote.quote_id,
           shoot_hours: parseFloat(booking.primary_quote.shoot_hours),
           subtotal: parseFloat(booking.primary_quote.subtotal),
-          discountPercent: 0, // Remove discount display
-          discountAmount: 0, // Remove discount display
-          price_after_discount: parseFloat(booking.primary_quote.subtotal), // Use subtotal
-          marginPercent: 0, // Remove margin display
-          marginAmount: 0, // Remove margin display
-          total: parseFloat(
-            booking.primary_quote.total ??
-            booking.primary_quote.price_after_discount ??
-            booking.primary_quote.subtotal
-          ),
+          discountPercent: parseFloat(booking.primary_quote.discount_percent || 0),
+          discountAmount: parseFloat(booking.primary_quote.discount_amount || 0),
+          price_after_discount: parseFloat(booking.primary_quote.price_after_discount || booking.primary_quote.subtotal),
+          marginPercent: parseFloat(booking.primary_quote.margin_percent || 0),
+          marginAmount: parseFloat(booking.primary_quote.margin_amount || 0),
+          total: parseFloat(booking.primary_quote.total || booking.primary_quote.subtotal),
           status: booking.primary_quote.status,
           lineItems: (booking.primary_quote.line_items || []).map(item => ({
             item_id: item.item_id,
             item_name: item.item_name,
             quantity: item.quantity,
-            rate: item.rate == null ? null : parseFloat(item.rate),
+            rate: parseFloat(item.rate),
             rate_type: item.rate_type,
-            line_total: parseFloat(item.line_total || 0)
+            line_total: parseFloat(item.line_total)
           }))
         } : null,
         payment_status: booking.payment_id ? 'completed' : 'pending'
