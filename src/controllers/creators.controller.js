@@ -236,7 +236,7 @@ exports.searchCreators = async (req, res) => {
 
       // Step 5: Fallback - skip neighborhood/directional indicators and states
       if (!city) {
-        const skipPattern = /\b(east|west|north|south|central|suburban|suburb|california|texas|florida|new york|illinois|pennsylvania|ohio|georgia|michigan|north carolina|new jersey|virginia|washington|arizona|massachusetts|tennessee|indiana|missouri|maryland|wisconsin|colorado|minnesota|south carolina|alabama|louisiana|kentucky|oregon|oklahoma|connecticut|utah|iowa|nevada|arkansas|mississippi|kansas|new mexico|nebraska|idaho|hawaii|maine|new hampshire|rhode island|montana|delaware|south dakota|north dakota|alaska|vermont|wyoming|maharashtra|gujarat|karnataka|tamil nadu|rajasthan|uttar pradesh)\b/i;
+        const skipPattern = /\b(east|west|north|south|central|suburban|suburb|california|texas|florida|new york|illinois|pennsylvania|ohio|georgia|michigan|north carolina|new jersey|virginia|washington|arizona|massachusetts|tennessee|indiana|missouri|maryland|wisconsin|colorado|minnesota|south carolina|alabama|louisiana|kentucky|oregon|oklahoma|connecticut|utah|iowa|nevada|arkansas|mississippi|kansas|new mexico|nebraska|idaho|hawaii|maine|new hampshire|rhode island|montana|delaware|south dakota|north dakota|alaska|vermont|wyoming|maharashtra|gujarat|karnataka|tamil nadu|rajasthan|uttar Pradesh)\b/i;
 
         city = cleanParts.find(p => !skipPattern.test(p.toLowerCase()));
       }
@@ -268,7 +268,13 @@ exports.searchCreators = async (req, res) => {
       }
     }
 
-// if (location && !useProximitySearch) {
+    if (skills) {
+      whereClause.skills = {
+        [Op.like]: `%${skills}%`
+      };
+    }
+
+    // if (location && !useProximitySearch) {
 //   const parts = location
 //     .split(',')
 //     .map(p => p.trim())
@@ -304,44 +310,32 @@ exports.searchCreators = async (req, res) => {
 //   console.log('🔍 DEBUG: Location resolved as:', { city, state });
 // }
 
-
-    if (skills) {
-      whereClause.skills = {
-        [Op.like]: `%${skills}%`
-      };
-    }
-
     // Content type filter via primary_role - support multiple roles
-    // FIX: Accept both role IDs (numbers) and role names (strings)
-    if (content_types) {
-      // Parse content_types (can be array or comma-separated string)
-      let rolesArray = Array.isArray(content_types) ? content_types : content_types.split(',');
+    // UPDATED: Strict matching to avoid ID "1" matching ID "10", and exclude NULLs
+    if (content_types || content_type) {
+      const rawInput = content_types || content_type;
+      let rolesArray = Array.isArray(rawInput) ? rawInput : String(rawInput).split(',');
       rolesArray = rolesArray.map(r => r.trim()).filter(r => r);
 
-      // Map role names to IDs if needed
-      // videographer -> 1, photographer/photographers -> 2, editor -> 3
+      // Map role names to IDs
       const roleNameToId = {
-        'videographer': [1, 9], // Videographer role IDs only
-        'photographer': [2, 10], // Photographer role IDs only
+        'videographer': [1, 9], 
+        'photographer': [2, 10],
         'photographers': [2, 10],
-        'cinematographer': [1], // Cinematographer maps to videographer ID
-        'editor': [3], // Editor is separate role
+        'cinematographer': [1], 
+        'editor': [3, 11], 
       };
 
       let roleIds = [];
       rolesArray.forEach(role => {
         const roleLower = role.toLowerCase();
-        // Check if it's a number (role ID)
         if (!isNaN(role)) {
           roleIds.push(parseInt(role));
-        }
-        // Check if it's a known role name
-        else if (roleNameToId[roleLower]) {
+        } else if (roleNameToId[roleLower]) {
           roleIds.push(...roleNameToId[roleLower]);
         }
       });
 
-      // Remove duplicates
       roleIds = [...new Set(roleIds)];
 
       console.log('🔍 DEBUG: Role mapping -', {
@@ -350,27 +344,29 @@ exports.searchCreators = async (req, res) => {
       });
 
       if (roleIds.length > 0) {
-        whereClause[Op.or] = [
-  // Case 1: primary_role is stored as integer
-  {
-    primary_role: {
-      [Op.in]: roleIds
-    }
-  },
+        const roleConditions = [];
 
-  // Case 2: primary_role is stored as JSON / array string
-  ...roleIds.map(roleId => ({
-    primary_role: {
-      [Op.like]: `%${roleId}%`
-    }
-  }))
-];
+        roleIds.forEach(id => {
+          // Case 1: Match exact integer (e.g. 1)
+          roleConditions.push({ primary_role: id });
 
-      }
-    } else if (content_type) {
-      // Backward compatibility: single content_type
-      if (!isNaN(content_type)) {
-        whereClause.primary_role = parseInt(content_type);
+          // Case 2: Match strictly within JSON array/string to avoid 1 matching 10
+          // Checks for: "[1]", "[1, ...", "..., 1]", and "..., 1, ..."
+          roleConditions.push({ primary_role: { [Op.like]: `[${id}]` } });
+          roleConditions.push({ primary_role: { [Op.like]: `[${id},%` } });
+          roleConditions.push({ primary_role: { [Op.like]: `%,${id}]` } });
+          roleConditions.push({ primary_role: { [Op.like]: `%,${id},%` } });
+          
+          // Case 3: Match quoted string IDs if stored as ["1", "2"]
+          roleConditions.push({ primary_role: { [Op.like]: `%\"${id}\"%` } });
+        });
+
+        // Use Op.and to ensure we only get records that are NOT NULL AND match our roles
+        whereClause[Op.and] = [
+          ...(whereClause[Op.and] || []),
+          { primary_role: { [Op.ne]: null } }, // STRICTLY exclude null primary_role
+          { [Op.or]: roleConditions }           // Must match one of the mapped IDs
+        ];
       }
     }
 
@@ -442,22 +438,57 @@ exports.searchCreators = async (req, res) => {
         || creatorData.crew_member_files?.find(f => f.file_type.includes('image'))
         || null;
 
-      // Map role ID to role name
+      let dbRoleIds = [];
+      if (creatorData.primary_role) {
+        if (typeof creatorData.primary_role === 'number') {
+          dbRoleIds = [creatorData.primary_role];
+        } else {
+          try {
+            const parsed = JSON.parse(creatorData.primary_role);
+            dbRoleIds = Array.isArray(parsed) ? parsed : [parsed];
+          } catch (e) {
+            dbRoleIds = String(creatorData.primary_role).split(',').map(r => parseInt(r.trim())).filter(r => !isNaN(r));
+          }
+        }
+      }
+
       const roleMap = {
         1: 'Videographer',
         2: 'Photographer',
         3: 'Editor',
         4: 'Producer',
-        5: 'Director'
+        5: 'Director',
+        9: 'Videographer',
+        10: 'Photographer',
+        11: 'Editor'
       };
 
       const rating = parseFloat(creatorData.rating || 0);
+
+       let matchedRoleNames = [];
+      dbRoleIds.forEach(id => {
+        if (roleMap[id]) {
+          matchedRoleNames.push(roleMap[id]);
+        }
+      });
+
+      // let roleName = 'Creative Professional';
+      // for (const roleId of dbRoleIds) {
+      //   if (roleMap[roleId]) {
+      //     roleName = roleMap[roleId];
+      //     break;
+      //   }
+      // }
+      
+       const roleName = matchedRoleNames.length > 0 
+        ? matchedRoleNames.join(', ') 
+        : 'Creative Professional';
 
       return {
         crew_member_id: creatorData.crew_member_id,
         name: `${creatorData.first_name} ${creatorData.last_name}`,
         role_id: creatorData.primary_role,
-        role_name: roleMap[creatorData.primary_role] || 'Creative Professional',
+        role_name: roleName,
         hourly_rate: parseFloat(creatorData.hourly_rate || 0),
         rating: rating,
         total_reviews: generateReviewCount(rating), // Generate realistic count based on rating

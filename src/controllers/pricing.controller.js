@@ -158,6 +158,8 @@ exports.saveQuote = async (req, res) => {
       items,
       shootHours: parseFloat(shootHours) || 0,
       eventType,
+      skipDiscount: true,
+      skipMargin: true
     });
     
     // Get user ID from auth if available

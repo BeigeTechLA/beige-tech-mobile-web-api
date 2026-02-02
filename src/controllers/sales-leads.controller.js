@@ -394,6 +394,128 @@ exports.createSalesAssistedLead = async (req, res) => {
 // Ensure these are at the top of sales-leads.controller.js
 // const { Op, Sequelize } = require('sequelize'); 
 
+// exports.getLeads = async (req, res) => {
+//   try {
+//     const {
+//       page = 1,
+//       limit = 20,
+//       status,
+//       lead_type,
+//       assigned_to,
+//       search,
+//       range,        // Added
+//       start_date,   // Added
+//       end_date      // Added
+//     } = req.query;
+
+//     const offset = (parseInt(page) - 1) * parseInt(limit);
+
+//     const whereClause = {};
+
+//     if (start_date && end_date) {
+//       whereClause.created_at = {
+//         [Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`]
+//       };
+//     } else if (range === 'month') {
+//       whereClause[Op.and] = [
+//         Sequelize.where(Sequelize.fn('MONTH', Sequelize.col('sales_leads.created_at')), Sequelize.fn('MONTH', Sequelize.fn('CURDATE'))),
+//         Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('sales_leads.created_at')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
+//       ];
+//     } else if (range === 'week') {
+//       whereClause[Op.and] = [
+//         Sequelize.where(Sequelize.fn('YEARWEEK', Sequelize.col('sales_leads.created_at'), 1), Sequelize.fn('YEARWEEK', Sequelize.fn('CURDATE'), 1))
+//       ];
+//     } else if (range === 'year') {
+//       whereClause[Op.and] = [
+//         Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('sales_leads.created_at')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
+//       ];
+//     }
+
+//     if (status) {
+//       whereClause.lead_status = status;
+//     }
+
+//     if (lead_type) {
+//       whereClause.lead_type = lead_type;
+//     }
+
+//     if (assigned_to) {
+//       if (assigned_to === 'unassigned') {
+//         whereClause.assigned_sales_rep_id = null;
+//       } else {
+//         whereClause.assigned_sales_rep_id = parseInt(assigned_to);
+//       }
+//     }
+
+//     if (search) {
+//       const searchCondition = {
+//         [Op.or]: [
+//           { client_name: { [Op.like]: `%${search}%` } },
+//           { guest_email: { [Op.like]: `%${search}%` } }
+//         ]
+//       };
+      
+//       if (whereClause[Op.and]) {
+//         whereClause[Op.and].push(searchCondition);
+//       } else {
+//         whereClause[Op.and] = [searchCondition];
+//       }
+//     }
+
+//     // Fetch leads
+//     const { count, rows: leads } = await sales_leads.findAndCountAll({
+//       where: whereClause,
+//       include: [
+//         {
+//           model: users,
+//           as: 'assigned_sales_rep',
+//           attributes: ['id', 'name', 'email']
+//         },
+//         {
+//           model: stream_project_booking,
+//           as: 'booking',
+//           attributes: ['stream_project_booking_id', 'project_name', 'event_date', 'event_type', 'budget']
+//         }
+//       ],
+//       limit: parseInt(limit),
+//       offset: offset,
+//       order: [['created_at', 'DESC']] 
+//     });
+
+//     res.json({
+//       success: true,
+//       data: {
+//         leads: leads.map(lead => ({
+//           lead_id: lead.lead_id,
+//           client_name: lead.client_name,
+//           guest_email: lead.guest_email || lead.user?.email,
+//           lead_type: lead.lead_type,
+//           lead_status: lead.lead_status,
+//           assigned_sales_rep: lead.assigned_sales_rep,
+//           booking: lead.booking,
+//           last_activity_at: lead.last_activity_at,
+//           contacted_sales_at: lead.contacted_sales_at,
+//           created_at: lead.created_at
+//         })),
+//         pagination: {
+//           total: count,
+//           page: parseInt(page),
+//           limit: parseInt(limit),
+//           totalPages: Math.ceil(count / parseInt(limit))
+//         }
+//       }
+//     });
+
+//   } catch (error) {
+//     console.error('Error fetching leads:', error);
+//     res.status(500).json({
+//       success: false,
+//       message: 'Failed to fetch leads',
+//       error: process.env.NODE_ENV === 'development' ? error.message : undefined
+//     });
+//   }
+// };
+
 exports.getLeads = async (req, res) => {
   try {
     const {
@@ -403,42 +525,38 @@ exports.getLeads = async (req, res) => {
       lead_type,
       assigned_to,
       search,
-      range,        // Added
-      start_date,   // Added
-      end_date      // Added
+      range,
+      start_date,
+      end_date
     } = req.query;
 
     const offset = (parseInt(page) - 1) * parseInt(limit);
-
-    const whereClause = {};
+    const whereClause = { [Op.and]: [] };
 
     if (start_date && end_date) {
       whereClause.created_at = {
         [Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`]
       };
     } else if (range === 'month') {
-      whereClause[Op.and] = [
+      whereClause[Op.and].push(
         Sequelize.where(Sequelize.fn('MONTH', Sequelize.col('sales_leads.created_at')), Sequelize.fn('MONTH', Sequelize.fn('CURDATE'))),
         Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('sales_leads.created_at')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
-      ];
+      );
     } else if (range === 'week') {
-      whereClause[Op.and] = [
+      whereClause[Op.and].push(
         Sequelize.where(Sequelize.fn('YEARWEEK', Sequelize.col('sales_leads.created_at'), 1), Sequelize.fn('YEARWEEK', Sequelize.fn('CURDATE'), 1))
-      ];
+      );
     } else if (range === 'year') {
-      whereClause[Op.and] = [
+      whereClause[Op.and].push(
         Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('sales_leads.created_at')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
-      ];
+      );
     }
 
-    if (status) {
-      whereClause.lead_status = status;
-    }
+    // Status & Type
+    if (status) whereClause.lead_status = status;
+    if (lead_type) whereClause.lead_type = lead_type;
 
-    if (lead_type) {
-      whereClause.lead_type = lead_type;
-    }
-
+    // Assignment Logic
     if (assigned_to) {
       if (assigned_to === 'unassigned') {
         whereClause.assigned_sales_rep_id = null;
@@ -448,18 +566,12 @@ exports.getLeads = async (req, res) => {
     }
 
     if (search) {
-      const searchCondition = {
+      whereClause[Op.and].push({
         [Op.or]: [
           { client_name: { [Op.like]: `%${search}%` } },
           { guest_email: { [Op.like]: `%${search}%` } }
         ]
-      };
-      
-      if (whereClause[Op.and]) {
-        whereClause[Op.and].push(searchCondition);
-      } else {
-        whereClause[Op.and] = [searchCondition];
-      }
+      });
     }
 
     // Fetch leads
@@ -479,7 +591,10 @@ exports.getLeads = async (req, res) => {
       ],
       limit: parseInt(limit),
       offset: offset,
-      order: [['created_at', 'DESC']] 
+      order: [
+        ['created_at', 'DESC'],
+        ['lead_id', 'DESC'] 
+      ] 
     });
 
     res.json({
