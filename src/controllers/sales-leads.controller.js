@@ -73,7 +73,7 @@ exports.trackEarlyBookingInterest = async (req, res) => {
       appendToSheet('leads_data', [
         existingLead.lead_id,                 // A: Lead ID
         booking.stream_project_booking_id,    // B: Booking ID
-        user_id || 'N/A',                     // C: User ID
+        user_id || 'Guest',                     // C: User ID
         client_name || 'N/A',                 // D: Client Name
         guest_email,                          // E: Email
         booking.project_name,                 // F: Project Name
@@ -81,8 +81,6 @@ exports.trackEarlyBookingInterest = async (req, res) => {
         shoot_type || 'N/A',                  // H: Shoot Type
         existingLead.lead_type,               // I: Lead Type
         'Interaction Updated',                // J: Status
-        'Existing Assignment',                // K: Assigned Rep
-        booking.is_draft === 1 ? 'Yes' : 'No',// L: Is Draft
         new Date().toLocaleString()           // M: Timestamp
       ]).catch(err => console.error('Sheet Sync Error:', err.message));
 
