@@ -5033,3 +5033,121 @@ exports.deleteClient = async (req, res) => {
     });
   }
 };
+
+exports.deleteProject = async (req, res) => {
+  try {
+    const { project_id } = req.params;
+
+    if (!project_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Project ID is required'
+      });
+    }
+
+    const project = await stream_project_booking.findOne({
+      where: { stream_project_booking_id: project_id }
+    });
+
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        message: 'Project not found'
+      });
+    }
+
+    await assigned_crew.destroy({ where: { project_id: project.stream_project_booking_id } });
+    await assigned_equipment.destroy({ where: { project_id: project.stream_project_booking_id } });
+    await assigned_post_production_member.destroy({ where: { project_id: project.stream_project_booking_id } });
+
+    await project.destroy();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Project deleted successfully'
+    });
+
+  } catch (error) {
+    console.error('Error deleting project:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error during project deletion',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.uploadProfilePhoto = [
+  upload.single('profile_photo'),
+
+  async (req, res) => {
+    try {
+      const { crew_member_id } = req.body;
+      const file = req.file;
+
+      if (!file) {
+        return res.status(constants.BAD_REQUEST.code).json({
+          error: true,
+          code: constants.BAD_REQUEST.code,
+          message: 'Profile photo is required.',
+          data: null,
+        });
+      }
+
+      console.log('Uploaded file:', file);
+
+      const existingProfilePhoto = await crew_member_files.findOne({
+        where: {
+          crew_member_id,
+          file_type: 'profile_photo'
+        }
+      });
+
+      const filePaths = await S3UploadFiles({ profile_photo: [file] });
+
+      const filePath = filePaths.length > 0 ? filePaths[0].file_path : null;
+
+      if (!filePath) {
+        return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+          error: true,
+          code: constants.INTERNAL_SERVER_ERROR.code,
+          message: 'Error uploading the profile photo.',
+          data: null,
+        });
+      }
+
+      if (existingProfilePhoto) {
+        await crew_member_files.update({
+          file_type: 'profile_photo',
+          file_path: filePath,
+        }, {
+          where: {
+            crew_member_id,
+            file_type: 'profile_photo'
+          }
+        });
+      } else {
+        await crew_member_files.create({
+          crew_member_id,
+          file_type: 'profile_photo',
+          file_path: filePath, 
+        });
+      }
+
+      return res.status(constants.CREATED.code).json({
+        error: false,
+        code: constants.CREATED.code,
+        message: 'Profile photo uploaded and replaced successfully.',
+        data: { file_path: filePath },
+      });
+    } catch (error) {
+      console.error('Error in uploading profile photo:', error);
+      return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+        error: true,
+        code: constants.INTERNAL_SERVER_ERROR.code,
+        message: constants.INTERNAL_SERVER_ERROR.message,
+        data: null,
+      });
+    }
+  },
+];

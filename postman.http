@@ -59,7 +59,7 @@ GET {{URL}}admin/certifications HTTP/1.1
 Content-Type: application/json
 
 ###
-GET {{URL}}admin/get-projects?status=cancelled HTTP/1.1
+GET {{URL}}admin/get-projects HTTP/1.1
 Content-Type: application/json
 
 ###
@@ -282,10 +282,10 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "lead_id": 3,
-  "booking_id": 103,
-  "discount_type": "percentage",
-  "discount_value": 10,
+  "lead_id": 46,
+  "booking_id": 593,
+  "discount_type": "fixed_amount",
+  "discount_value": 500,
   "usage_type": "one_time"
 }
 
@@ -302,3 +302,28 @@ Authorization: {{TOKEN}}
   "usage_type": "multi_use",
   "max_uses": 5
 }
+
+### generate discount: multi-use
+POST {{URL}}auth/change-password-client HTTP/1.1
+Content-Type: application/json
+
+{
+  "user_id": 155,
+  "currentPassword": "newPassword456",
+  "newPassword": "12345678"
+}
+
+###
+POST {{URL}}auth/change-password-crew HTTP/1.1
+Content-Type: application/json
+
+{
+  "user_id": 1,
+  "currentPassword": "oldPassword123",
+  "newPassword": "newPassword456"
+}
+
+
+###
+DELETE {{URL}}admin/delete-project/593 HTTP/1.1
+Content-Type: application/json

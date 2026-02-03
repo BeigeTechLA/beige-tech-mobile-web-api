@@ -69,5 +69,7 @@ router.post('/assign-post-production-member', admin.assignPostProductionMember);
 router.get('/get-clients', admin.getClients);
 router.put('/edit-client/:client_id', admin.editClient);
 router.delete('/delete-client/:client_id', admin.deleteClient);
+router.delete('/delete-project/:project_id', admin.deleteProject);
+router.post('/upload-profile-photo', admin.uploadProfilePhoto);
 
 module.exports = router;
