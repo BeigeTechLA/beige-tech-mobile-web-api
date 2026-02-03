@@ -153,7 +153,8 @@ exports.searchCreators = async (req, res) => {
     // Build dynamic where clause
     const whereClause = {
       is_active: 1,
-      is_draft: 0
+      is_draft: 0,
+      is_crew_verified: 1
     };
 
     // Budget filter - support range (min_budget/max_budget) or legacy max (budget)
