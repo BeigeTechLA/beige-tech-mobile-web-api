@@ -5056,11 +5056,11 @@ exports.deleteProject = async (req, res) => {
       });
     }
 
-    await assigned_crew.destroy({ where: { project_id: project.stream_project_booking_id } });
-    await assigned_equipment.destroy({ where: { project_id: project.stream_project_booking_id } });
-    await assigned_post_production_member.destroy({ where: { project_id: project.stream_project_booking_id } });
+    await assigned_crew.update({ is_active: 0 }, { where: { project_id: project.stream_project_booking_id } });
+    await assigned_equipment.update({ is_active: 0 }, { where: { project_id: project.stream_project_booking_id } });
+    await assigned_post_production_member.update({ is_active: 0 }, { where: { project_id: project.stream_project_booking_id } });
 
-    await project.destroy();
+    await project.update({ is_active: 0 });
 
     return res.status(200).json({
       success: true,
