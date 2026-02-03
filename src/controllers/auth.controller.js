@@ -2225,3 +2225,120 @@ exports.getCrewMemberDetails = async (req, res) => {
     });
   }
 };
+
+exports.changePasswordclient = async (req, res) => {
+  try {
+    const { user_id, currentPassword, newPassword } = req.body;
+
+    if (!user_id || !currentPassword || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'User ID, current password, and new password are required'
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'New password must be at least 6 characters long'
+      });
+    }
+
+    // Find the user by user_id directly
+    const user = await User.findOne({ where: { id: user_id } });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Check if the current password is correct
+    const isPasswordCorrect = await bcrypt.compare(currentPassword, user.password_hash);
+
+    if (!isPasswordCorrect) {
+      return res.status(400).json({
+        success: false,
+        message: 'Current password is incorrect'
+      });
+    }
+
+    // Hash the new password
+    const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update the user's password in the database
+    user.password_hash = hashedNewPassword;
+    await user.save();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Password changed successfully'
+    });
+
+  } catch (error) {
+    console.error('Change Password Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error during password change',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+
+exports.changePasswordCrewMember = async (req, res) => {
+  try {
+    const { user_id, currentPassword, newPassword } = req.body;
+
+    if (!user_id || !currentPassword || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'User ID, current password, and new password are required'
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'New password must be at least 6 characters long'
+      });
+    }
+
+    const user = await User.findOne({ where: { id: user_id } });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const isPasswordCorrect = await bcrypt.compare(currentPassword, user.password_hash);
+
+    if (!isPasswordCorrect) {
+      return res.status(400).json({
+        success: false,
+        message: 'Current password is incorrect'
+      });
+    }
+
+    const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+
+    user.password_hash = hashedNewPassword;
+    await user.save();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Password changed successfully'
+    });
+
+  } catch (error) {
+    console.error('Change Password Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error during password change',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};

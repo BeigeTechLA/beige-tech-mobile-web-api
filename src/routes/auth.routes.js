@@ -44,4 +44,7 @@ router.get('/permissions/:role', authController.getPermissions);
 // GET /auth/me - Get current user info
 router.get('/me', authenticate, authController.getCurrentUser);
 
+router.post('/change-password-client', authController.changePasswordclient);
+router.post('/change-password-crew', authController.changePasswordCrewMember);
+
 module.exports = router;
