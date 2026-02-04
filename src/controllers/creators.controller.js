@@ -434,8 +434,8 @@ exports.searchCreators = async (req, res) => {
     let transformedCreators = creators.map(creator => {
       const creatorData = creator.toJSON();
 
-      // Get profile image (prefer 'profile_image' type, fallback to first image)
-      const profileImage = creatorData.crew_member_files?.find(f => f.file_type === 'profile_image')
+      // Get profile image (prefer 'profile_photo' type, fallback to first image)
+      const profilePhoto = creatorData.crew_member_files?.find(f => f.file_type === 'profile_photo')
         || creatorData.crew_member_files?.find(f => f.file_type.includes('image'))
         || null;
 
@@ -493,7 +493,7 @@ exports.searchCreators = async (req, res) => {
         hourly_rate: parseFloat(creatorData.hourly_rate || 0),
         rating: rating,
         total_reviews: generateReviewCount(rating), // Generate realistic count based on rating
-        profile_image: profileImage ? profileImage.file_path : null,
+        profile_photo: profilePhoto ? profilePhoto.file_path : null,
         location: creatorData.location,
         experience_years: creatorData.years_of_experience,
         bio: creatorData.bio,
@@ -677,8 +677,8 @@ exports.getCreatorProfile = async (req, res) => {
 
     const creatorData = creator.toJSON();
 
-    // Get profile image
-    const profileImage = creatorData.crew_member_files?.find(f => f.file_type === 'profile_image')
+    // Get profile photo
+    const profilePhoto = creatorData.crew_member_files?.find(f => f.file_type === 'profile_photo')
       || creatorData.crew_member_files?.find(f => f.file_type.includes('image'))
       || null;
 
@@ -730,7 +730,7 @@ exports.getCreatorProfile = async (req, res) => {
       role: creatorData.primary_role,
       price: parseFloat(creatorData.hourly_rate || 0),
       rating: parseFloat(creatorData.rating || 0),
-      image: profileImage ? profileImage.file_path : null,
+      profile_photo: profilePhoto ? profilePhoto.file_path : null,
       location: formatLocationResponse(creatorData.location),
       workingDistance: creatorData.working_distance,
       experience: creatorData.years_of_experience,
@@ -928,7 +928,7 @@ exports.getRandomCreators = async (req, res) => {
         {
           model: crew_member_files,
           as: 'crew_member_files',
-          where: { file_type: 'profile_image' },
+          where: { file_type: 'profile_photo' },
           required: false,
           attributes: ['file_path'],
           limit: 1
@@ -942,7 +942,7 @@ exports.getRandomCreators = async (req, res) => {
 
     // Format creators for response
     const formattedCreators = creators.map(c => {
-      const profileImage = c.crew_member_files && c.crew_member_files.length > 0
+      const profilePhoto = c.crew_member_files && c.crew_member_files.length > 0
         ? c.crew_member_files[0].file_path
         : null;
 
@@ -980,7 +980,7 @@ exports.getRandomCreators = async (req, res) => {
         years_of_experience: c.years_of_experience,
         skills: skills,
         role_name: roleName,
-        profile_image: profileImage
+        profile_photo: profilePhoto ? profilePhoto.file_path : null
       };
     });
 
