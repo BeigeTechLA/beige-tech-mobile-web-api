@@ -149,30 +149,69 @@ exports.calculateQuote = async (req, res) => {
  *   notes: string (optional)
  * }
  */
+// exports.saveQuote = async (req, res) => {
+//   try {
+//     const { items, shootHours, eventType, guestEmail, bookingId, notes } = req.body;
+    
+//     // Calculate the quote first
+//     const quoteData = await pricingService.calculateQuote({
+//       items,
+//       shootHours: parseFloat(shootHours) || 0,
+//       eventType,
+//       skipDiscount: true,
+//       skipMargin: true
+//     });
+    
+//     // Get user ID from auth if available
+//     const userId = req.userId || null;
+    
+//     // Save the quote
+//     const savedQuote = await pricingService.saveQuote(quoteData, {
+//       user_id: userId,
+//       guest_email: guestEmail,
+//       booking_id: bookingId,
+//       notes,
+//       status: 'pending',
+//       // Quote expires in 7 days
+//       expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+//     });
+    
+//     res.status(201).json({
+//       success: true,
+//       data: savedQuote,
+//     });
+//   } catch (error) {
+//     console.error('Error saving quote:', error);
+//     res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+//       success: false,
+//       message: 'Failed to save quote',
+//       error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+//     });
+//   }
+// };
+
+
 exports.saveQuote = async (req, res) => {
   try {
-    const { items, shootHours, eventType, guestEmail, bookingId, notes } = req.body;
+    const { items, shootHours, eventType, guestEmail, bookingId, notes, shoot_start_date } = req.body;
     
-    // Calculate the quote first
     const quoteData = await pricingService.calculateQuote({
       items,
       shootHours: parseFloat(shootHours) || 0,
       eventType,
+      shootStartDate: shoot_start_date,
       skipDiscount: true,
       skipMargin: true
     });
     
-    // Get user ID from auth if available
     const userId = req.userId || null;
     
-    // Save the quote
     const savedQuote = await pricingService.saveQuote(quoteData, {
       user_id: userId,
       guest_email: guestEmail,
       booking_id: bookingId,
       notes,
       status: 'pending',
-      // Quote expires in 7 days
       expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
     });
     
@@ -182,10 +221,9 @@ exports.saveQuote = async (req, res) => {
     });
   } catch (error) {
     console.error('Error saving quote:', error);
-    res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+    res.status(500).json({
       success: false,
-      message: 'Failed to save quote',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      message: 'Failed to save quote'
     });
   }
 };
@@ -493,6 +531,7 @@ exports.calculateFromCreators = async (req, res) => {
       role_counts = {},        
       shoot_hours,
       event_type,
+      shoot_start_date,
       add_on_items = [],
       skip_discount = false,
       skip_margin = false,
@@ -599,6 +638,7 @@ exports.calculateFromCreators = async (req, res) => {
       items: allItems,
       shootHours: Number(shoot_hours),
       eventType: event_type,
+      shootStartDate: shoot_start_date,
       skipDiscount: skip_discount,
       skipMargin: skip_margin,
     });
