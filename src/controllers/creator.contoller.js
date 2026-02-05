@@ -25,7 +25,7 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   project_brief,
   event_type_master,
   crew_availability,
-  crew_equipment, crew_equipment_photos, activity_logs, equipment_request } = require('../models');
+  crew_equipment, crew_equipment_photos, activity_logs, equipment_request , crew_roles} = require('../models');
 
 const moment = require('moment');
 
@@ -2687,6 +2687,64 @@ exports.getCrewShootStats = async (req, res) => {
     return res.status(500).json({
       error: true,
       message: "Something went wrong while fetching crew shoot stats",
+    });
+  }
+};
+
+
+exports.getRandomCrewMembers = async (req, res) => {
+  try {
+    const members = await crew_members.findAll({
+      where: {
+        is_active: 1,
+        is_crew_verified: 1, // only approved crew (optional – remove if not needed)
+      },
+      include: [
+        {
+          model: crew_member_files,
+          as: 'crew_member_files',
+          attributes: ['crew_files_id', 'file_type', 'file_path'],
+        },
+        {
+          model: crew_roles,
+          as: 'role',
+          attributes: ['role_name'],
+        },
+      ],
+      order: Sequelize.literal('RAND()'),
+      limit: 5,
+    });
+
+    const processedMembers = members.map((member) => {
+      let loc = member.location;
+      let finalLocation = loc;
+
+      if (loc && typeof loc === 'string' && (loc.startsWith('{') || loc.startsWith('['))) {
+        try {
+          const parsed = JSON.parse(loc);
+          finalLocation = parsed.address || parsed || loc;
+        } catch {
+          finalLocation = loc;
+        }
+      }
+
+      return {
+        ...member.toJSON(),
+        location: finalLocation,
+        status: 'approved',
+      };
+    });
+
+    return res.status(200).json({
+      error: false,
+      message: 'Random crew members fetched successfully',
+      data: processedMembers,
+    });
+  } catch (error) {
+    console.error('Get Random Crew Members Error:', error);
+    return res.status(500).json({
+      error: true,
+      message: 'Internal server error',
     });
   }
 };
