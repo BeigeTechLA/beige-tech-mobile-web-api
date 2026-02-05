@@ -193,19 +193,34 @@ exports.calculateQuote = async (req, res) => {
 
 exports.saveQuote = async (req, res) => {
   try {
-    const { items, shootHours, eventType, guestEmail, bookingId, notes, shoot_start_date } = req.body;
+    const { 
+      items, 
+      shootHours, 
+      eventType, 
+      guestEmail, 
+      bookingId, 
+      notes, 
+      shoot_start_date,
+      // 1. Extract these from the request body
+      video_edit_types = [], 
+      photo_edit_types = [] 
+    } = req.body;
     
+    // 2. Pass them to the service calculation
     const quoteData = await pricingService.calculateQuote({
       items,
       shootHours: parseFloat(shootHours) || 0,
       eventType,
       shootStartDate: shoot_start_date,
+      videoEditTypes: video_edit_types, // Pass video edits
+      photoEditTypes: photo_edit_types, // Pass photo edits
       skipDiscount: true,
       skipMargin: true
     });
     
     const userId = req.userId || null;
     
+    // 3. Save the result (quoteData now includes the calculated editing lines)
     const savedQuote = await pricingService.saveQuote(quoteData, {
       user_id: userId,
       guest_email: guestEmail,
@@ -227,7 +242,6 @@ exports.saveQuote = async (req, res) => {
     });
   }
 };
-
 /**
  * Get a quote by ID
  * GET /api/pricing/quotes/:quoteId
@@ -533,6 +547,8 @@ exports.calculateFromCreators = async (req, res) => {
       event_type,
       shoot_start_date,
       add_on_items = [],
+      video_edit_types = [], // Added
+      photo_edit_types = [], 
       skip_discount = false,
       skip_margin = false,
     } = req.body;
@@ -641,6 +657,8 @@ exports.calculateFromCreators = async (req, res) => {
       shootStartDate: shoot_start_date,
       skipDiscount: skip_discount,
       skipMargin: skip_margin,
+      videoEditTypes: video_edit_types, // Sent to service
+      photoEditTypes: photo_edit_types,
     });
 
     res.json({

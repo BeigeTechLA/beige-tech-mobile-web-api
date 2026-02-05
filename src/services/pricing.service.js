@@ -445,10 +445,12 @@ function calculateRushFee(shootStartDate) {
  * @param {boolean} [params.skipMargin] - Skip beige margin calculation
  */
 async function calculateQuote({ 
-  items, 
+  items = [], 
   shootHours = 0, 
   eventType = null, 
   shootStartDate = null, 
+  videoEditTypes = [], 
+  photoEditTypes = [],
   marginPercent = null, 
   skipDiscount = false, 
   skipMargin = false 
@@ -459,66 +461,83 @@ async function calculateQuote({
     const normalizedType = eventType ? eventType.toLowerCase().replace(/\s+/g, '_') : 'general';
     const isPodcast = (normalizedType === 'podcast' || normalizedType === 'podcast_shows');
 
-    if (!items || items.length === 0) {
-      return { pricingMode, shootHours, lineItems: [], subtotal: 0, total: 0 };
-    }
+    // 1. Fetch all relevant items from DB in one go
+    // We fetch by ID (for crew) and by SLUG (for edits)
+    const creatorItemIds = items.map(i => i.item_id).filter(id => id !== null);
+    const editSlugs = [...videoEditTypes, ...photoEditTypes];
 
-    // 1. Fetch catalog items
-    const itemIds = items.map(i => i.item_id);
-    const pricingItems = await db.pricing_items.findAll({
-      where: { item_id: { [Op.in]: itemIds }, is_active: 1 },
+    const pricingItemsFromDb = await db.pricing_items.findAll({
+      where: { 
+        [Op.or]: [
+          { item_id: { [Op.in]: creatorItemIds } },
+          { slug: { [Op.in]: editSlugs } }
+        ],
+        is_active: 1 
+      },
       include: [{ model: db.pricing_categories, as: 'category', attributes: ['name', 'slug'] }],
     });
 
-    const itemMap = new Map();
-    pricingItems.forEach(item => itemMap.set(item.item_id, item.toJSON()));
+    const itemMap = new Map(); // Map by ID
+    const slugMap = new Map(); // Map by Slug
+    pricingItemsFromDb.forEach(item => {
+      const plain = item.toJSON();
+      itemMap.set(plain.item_id, plain);
+      slugMap.set(plain.slug, plain);
+    });
 
     const lineItems = [];
     let subtotal = 0;
 
-    // 2. Calculate Base Selected Items
+    // 2. Process Crew / Base Items
     for (const selectedItem of items) {
-      // If it's a podcast, ignore any manual "Additional Camera" (ID 50) 
-      // because we handle the mandatory $500 fee separately below.
-      if (isPodcast && selectedItem.item_id === 50) {
-        continue; 
-      }
-      // -------------------------
-
-      const pricingItem = itemMap.get(selectedItem.item_id);
-      if (!pricingItem) continue;
+      if (isPodcast && selectedItem.item_id === 50) continue; 
+      const dbItem = itemMap.get(selectedItem.item_id);
+      if (!dbItem) continue;
 
       const quantity = selectedItem.quantity || 1;
-      const unitPrice = parseFloat(pricingItem.rate);
-      let lineTotal;
+      const unitPrice = parseFloat(dbItem.rate);
+      let lineTotal = dbItem.rate_type === 'per_hour' ? unitPrice * shootHours * quantity : unitPrice * quantity;
 
-      if (pricingItem.rate_type === 'per_hour') {
-        lineTotal = unitPrice * shootHours * quantity;
-      } else {
-        lineTotal = unitPrice * quantity;
-      }
-
-      lineTotal = parseFloat(lineTotal.toFixed(2));
       subtotal += lineTotal;
-
       lineItems.push({
-        item_id: pricingItem.item_id,
-        item_name: pricingItem.name,
-        category_name: pricingItem.category?.name || 'Services',
+        item_id: dbItem.item_id,
+        item_name: dbItem.name,
+        category_name: dbItem.category?.name || 'Crew',
+        category_slug: dbItem.category?.slug || 'crew',
         quantity,
         unit_price: unitPrice,
-        line_total: lineTotal,
+        line_total: parseFloat(lineTotal.toFixed(2)),
         is_mandatory: false
       });
     }
 
+    // 3. Process Edits (Video & Photo)
+    for (const slug of editSlugs) {
+      const dbEdit = slugMap.get(slug);
+      if (!dbEdit) continue;
+
+      const unitPrice = parseFloat(dbEdit.rate);
+      subtotal += unitPrice;
+      lineItems.push({
+        item_id: dbEdit.item_id,
+        item_name: dbEdit.name,
+        category_name: "Editing Services",
+        category_slug: "editing",
+        quantity: 1,
+        unit_price: unitPrice,
+        line_total: unitPrice,
+        is_mandatory: false
+      });
+    }
+
+    // 4. Pre-Production Fees
     const preProdMap = {
       photo: { wedding: 500, corporate: 500, private: 250, brand_product: 500, social_content: 250, people_teams: 500, behind_scenes: 250 },
       video: { wedding: 500, corporate: 500, private: 250, advertising: 250, social_content: 250, podcast: 250, short_film: 250, music: 750, podcast_shows: 250 }
     };
 
-    const hasPhoto = lineItems.some(li => li.item_name.toLowerCase().includes('photo'));
-    const hasVideo = lineItems.some(li => li.item_name.toLowerCase().includes('video') || li.item_name.toLowerCase().includes('cinematographer'));
+    const hasPhoto = lineItems.some(li => li.category_slug === 'photography' || li.item_name.toLowerCase().includes('photo'));
+    const hasVideo = lineItems.some(li => li.category_slug === 'videography' || li.item_name.toLowerCase().includes('video'));
 
     let preProdTotal = 0;
     if (hasPhoto && preProdMap.photo[normalizedType]) preProdTotal += preProdMap.photo[normalizedType];
@@ -527,59 +546,33 @@ async function calculateQuote({
     if (preProdTotal > 0) {
       subtotal += preProdTotal;
       lineItems.push({
-        item_id: null,
         item_name: "Pre-Production Fee",
         quantity: 1,
         unit_price: preProdTotal,
         line_total: preProdTotal,
         is_mandatory: true,
-        hidden: true
+        hidden: true // Keep hidden as it's rolled into "Shoot Cost" on frontend
       });
     }
 
-    // 4. MANDATORY SHOOT-SPECIFIC ADD-ONS
-    
+    // 5. Podcast Mandatory Equipment
     if (isPodcast) {
-      const podcastFee = 500;
-      subtotal += podcastFee;
+      subtotal += 500;
       lineItems.push({
-        item_id: 50, 
-        item_name: "Mandatory Podcast Equipment (2 Cameras)",
-        quantity: 2,
-        unit_price: 250.00,
-        line_total: 500.00,
-        is_mandatory: true
+        item_id: 50, item_name: "Mandatory Podcast Equipment (2 Cameras)", quantity: 2, unit_price: 250, line_total: 500, is_mandatory: true
       });
     }
 
-    if (normalizedType === 'short_film' || normalizedType === 'movie') {
-      const crewHourlyRate = 950;
-      const crewTotal = crewHourlyRate * shootHours;
-      subtotal += crewTotal;
-      lineItems.push({
-        item_id: null,
-        item_name: "Mandatory Crew Add-on (PA, Sound, Director, Gaffer)",
-        quantity: 1,
-        unit_price: crewHourlyRate,
-        line_total: crewTotal,
-        is_mandatory: true
-      });
-    }
-
+    // 6. Rush Fee
     const rushFee = calculateRushFee(shootStartDate);
     if (rushFee > 0) {
       subtotal += rushFee;
       lineItems.push({
-        item_id: null,
-        item_name: "Rush Order Fee",
-        quantity: 1,
-        unit_price: rushFee,
-        line_total: rushFee,
-        is_mandatory: true
+        item_name: "Rush Order Fee", quantity: 1, unit_price: rushFee, line_total: rushFee, is_mandatory: true
       });
     }
 
-    subtotal = parseFloat(subtotal.toFixed(2));
+    // Final Math
     const discountPercent = skipDiscount ? 0 : await getDiscountPercent(shootHours, pricingMode);
     const discountAmount = parseFloat((subtotal * discountPercent / 100).toFixed(2));
     const priceAfterDiscount = parseFloat((subtotal - discountAmount).toFixed(2));
