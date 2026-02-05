@@ -70,9 +70,63 @@ exports.createAffiliate = async (userId, transaction = null) => {
  * Validate a referral code
  * GET /api/affiliates/validate/:code
  */
+// exports.validateReferralCode = async (req, res) => {
+//   try {
+//     const { code } = req.params;
+
+//     if (!code || code.length < 4) {
+//       return res.status(400).json({
+//         success: false,
+//         message: 'Invalid referral code format'
+//       });
+//     }
+
+//     const affiliate = await db.affiliates.findOne({
+//       where: { 
+//         referral_code: code.toUpperCase(),
+//         status: 'active'
+//       },
+//       include: [{
+//         model: db.users,
+//         as: 'user',
+//         attributes: ['id', 'name']
+//       }]
+//     });
+
+//     if (!affiliate) {
+//       return res.status(404).json({
+//         success: false,
+//         message: 'Referral code not found or inactive',
+//         valid: false
+//       });
+//     }
+
+//     return res.status(200).json({
+//       success: true,
+//       valid: true,
+//       data: {
+//         referral_code: affiliate.referral_code,
+//         affiliate_name: affiliate.user?.name || 'Beige Partner'
+//       }
+//     });
+
+//   } catch (error) {
+//     console.error('Validate Referral Code Error:', error);
+
+//     return res.status(500).json({
+//       success: false,
+//       message: 'Failed to validate referral code',
+//       error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+//     });
+//   }
+// };
+
 exports.validateReferralCode = async (req, res) => {
   try {
     const { code } = req.params;
+    
+    // 1. Get user_id ONLY from query params (e.g., /validate/CODE?user_id=123)
+    const queryUserId = req.query.user_id;
 
     if (!code || code.length < 4) {
       return res.status(400).json({
@@ -81,6 +135,7 @@ exports.validateReferralCode = async (req, res) => {
       });
     }
 
+    // 2. Find the affiliate in the database
     const affiliate = await db.affiliates.findOne({
       where: { 
         referral_code: code.toUpperCase(),
@@ -88,11 +143,12 @@ exports.validateReferralCode = async (req, res) => {
       },
       include: [{
         model: db.users,
-        as: 'user',
+        as: 'user', // matches your initModels alias
         attributes: ['id', 'name']
       }]
     });
 
+    // 3. If no affiliate found, return error
     if (!affiliate) {
       return res.status(404).json({
         success: false,
@@ -101,18 +157,30 @@ exports.validateReferralCode = async (req, res) => {
       });
     }
 
+    // 4. OWNERSHIP CHECK: 
+    // ONLY check this if user_id was actually provided in the query string
+    if (queryUserId) {
+      if (Number(affiliate.user_id) === Number(queryUserId)) {
+        return res.status(400).json({
+          success: false,
+          message: 'You cannot use your own referral code',
+          valid: false
+        });
+      }
+    }
+
+    // 5. SUCCESS: If user_id wasn't provided, or it's not their own code
     return res.status(200).json({
       success: true,
       valid: true,
       data: {
         referral_code: affiliate.referral_code,
-        affiliate_name: affiliate.user?.name || 'Beige Partner'
+        affiliate_name: affiliate.user?.name || 'Partner'
       }
     });
 
   } catch (error) {
     console.error('Validate Referral Code Error:', error);
-
     return res.status(500).json({
       success: false,
       message: 'Failed to validate referral code',
