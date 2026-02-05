@@ -58,10 +58,10 @@ const sendTaskAssignmentEmail = async (taskData, assigneeData) => {
 const generateTaskAssignmentTemplate = (taskData, assigneeData, taskLink) => {
   const dueDate = taskData.due_date
     ? new Date(taskData.due_date).toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric'
-      })
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    })
     : 'Not specified';
 
   const priority = taskData.priority_id === 1 ? 'Low' : taskData.priority_id === 2 ? 'Medium' : 'High';
@@ -245,35 +245,31 @@ const generateVerificationOTPTemplate = (userData, otp) => {
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
       <title>Email Verification</title>
     </head>
-    <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f3f4f6;">
-      <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f3f4f6; padding: 40px 20px;">
+    <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #0A0F0D;">
+      <table width="100%" height="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #0A0F0D; background: linear-gradient(0deg, #0A0F0D 77.1%, rgba(76, 57, 23, 0.10) 126.11%); padding: 60px 20px;">
         <tr>
-          <td align="center">
-            <!-- Main Container -->
-            <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+          <td align="center" valign="top">
+            <table width="600" cellpadding="0" cellspacing="0" style="background-color: #000000; border: 1px solid rgba(232, 209, 171, 0.15); border-radius: 12px; overflow: hidden; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);">
 
-              <!-- Header -->
               <tr>
-                <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 30px; text-align: center;">
-                  <h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 700;">Verify Your Email</h1>
-                  <p style="margin: 10px 0 0; color: #e0e7ff; font-size: 14px;">Welcome to BeigeAI!</p>
+                <td style="background-color: rgba(232, 209, 171, 0.05); padding: 40px 30px; text-align: center; border-bottom: 1px solid rgba(232, 209, 171, 0.1);">
+                  <h1 style="margin: 0; color: #E8D1AB; font-size: 32px; font-weight: 500;">Verify Your Email</h1>
+                  <p style="margin: 10px 0 0; color: #E8D1AB; font-size: 14px;">Welcome to BeigeAI!</p>
                 </td>
               </tr>
 
-              <!-- Content -->
               <tr>
                 <td style="padding: 40px 30px;">
-                  <p style="margin: 0; font-size: 16px; color: #374151; line-height: 1.6;">
+                  <p style="margin: 0; font-size: 16px; color: #ffffff; line-height: 1.6;">
                     Hi <strong>${userData.name}</strong>,
                   </p>
-                  <p style="margin: 20px 0; font-size: 16px; color: #374151; line-height: 1.6;">
+                  <p style="margin: 20px 0; font-size: 16px; color: #9ca3af; line-height: 1.6;">
                     Thank you for signing up with BeigeAI! To complete your registration, please verify your email address using the verification code below:
                   </p>
 
-                  <!-- OTP Box -->
                   <div style="text-align: center; margin: 30px 0;">
-                    <div style="display: inline-block; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px 40px; border-radius: 12px; box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);">
-                      <p style="margin: 0; font-size: 14px; color: #e0e7ff; text-transform: uppercase; letter-spacing: 1px; font-weight: 600;">Verification Code</p>
+                    <div style="display: inline-block; background: linear-gradient(0deg, #0A0F0D 77.1%, rgba(76, 57, 23, 0.1) 126.11%); border: 1px solid rgba(232, 209, 171, 0.3); padding: 20px 40px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);">
+                      <p style="margin: 0; font-size: 14px; color: #E8D1AB; text-transform: uppercase; letter-spacing: 1px; font-weight: 600;">Verification Code</p>
                       <p style="margin: 10px 0 0; font-size: 36px; color: #ffffff; font-weight: 700; letter-spacing: 8px; font-family: 'Courier New', monospace;">
                         ${otp}
                       </p>
@@ -281,13 +277,12 @@ const generateVerificationOTPTemplate = (userData, otp) => {
                   </div>
 
                   <p style="margin: 20px 0; font-size: 14px; color: #6b7280; line-height: 1.6; text-align: center;">
-                    This code will expire in <strong>10 minutes</strong>
+                    This code will expire in <strong style="color: #E8D1AB;">10 minutes</strong>
                   </p>
 
-                  <!-- Security Notice -->
-                  <div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 15px; border-radius: 4px; margin-top: 30px;">
-                    <p style="margin: 0; font-size: 13px; color: #78350f; font-weight: 600;">Security Notice</p>
-                    <p style="margin: 8px 0 0; font-size: 13px; color: #92400e; line-height: 1.5;">
+                  <div style="background-color: rgba(232, 209, 171, 0.05); border-left: 4px solid #4c3917; padding: 15px; border-radius: 4px; margin-top: 30px;">
+                    <p style="margin: 0; font-size: 13px; color: #E8D1AB; font-weight: 600;">Security Notice</p>
+                    <p style="margin: 8px 0 0; font-size: 13px; color: #9ca3af; line-height: 1.5;">
                       Never share this code with anyone. BeigeAI will never ask for your verification code via phone or email.
                     </p>
                   </div>
@@ -298,13 +293,12 @@ const generateVerificationOTPTemplate = (userData, otp) => {
                 </td>
               </tr>
 
-              <!-- Footer -->
               <tr>
-                <td style="background-color: #f9fafb; padding: 25px 30px; border-top: 1px solid #e5e7eb; text-align: center;">
+                <td style="background-color: rgba(232, 209, 171, 0.02); padding: 25px 30px; border-top: 1px solid rgba(232, 209, 171, 0.1); text-align: center;">
                   <p style="margin: 0; font-size: 13px; color: #6b7280; line-height: 1.5;">
                     This is an automated email from BeigeAI. Please do not reply to this email.
                   </p>
-                  <p style="margin: 10px 0 0; font-size: 13px; color: #9ca3af;">
+                  <p style="margin: 10px 0 0; font-size: 13px; color: #4b5563;">
                     © ${new Date().getFullYear()} BeigeAI. All rights reserved.
                   </p>
                 </td>
@@ -463,70 +457,134 @@ const generateWelcomeTemplate = (userData, frontendUrl) => {
   return `
     <!DOCTYPE html>
     <html lang="en">
+
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Welcome to BeigeAI</title>
+      <title>Welcome to Beige</title>
     </head>
-    <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f3f4f6;">
-      <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f3f4f6; padding: 40px 20px;">
+
+    <body
+      style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #0A0F0D;">
+      <table width="100%" height="100%" cellpadding="0" cellspacing="0" border="0"
+        style="background-color: #0A0F0D; background: linear-gradient(0deg, #0A0F0D 77.1%, rgba(76, 57, 23, 0.10) 126.11%); padding: 60px 20px;">
         <tr>
-          <td align="center">
-            <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
-
-              <!-- Header -->
+          <td align="center" valign="top">
+            <table width="600" cellpadding="0" cellspacing="0" border="0"
+              style="background-color: #000000; border: 1px solid rgba(232, 209, 171, 0.15); border-radius: 24px; overflow: hidden; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);">
               <tr>
-                <td style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 40px 30px; text-align: center;">
-                  <h1 style="margin: 0; color: #ffffff; font-size: 32px; font-weight: 700;">Welcome to BeigeAI!</h1>
-                  <p style="margin: 10px 0 0; color: #d1fae5; font-size: 16px;">Your account is ready to go</p>
-                </td>
-              </tr>
-
-              <!-- Content -->
-              <tr>
-                <td style="padding: 40px 30px;">
-                  <p style="margin: 0; font-size: 18px; color: #374151; line-height: 1.6;">
-                    Hi <strong>${userData.name}</strong>,
-                  </p>
-                  <p style="margin: 20px 0; font-size: 16px; color: #374151; line-height: 1.6;">
-                    Welcome to BeigeAI! We're excited to have you on board. Your email has been verified and your account is now active.
-                  </p>
-
-                  <!-- CTA Button -->
-                  <div style="text-align: center; margin: 30px 0;">
-                    <a href="${frontendUrl}" style="display: inline-block; padding: 14px 32px; background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: #ffffff; text-decoration: none; border-radius: 8px; font-size: 16px; font-weight: 600; box-shadow: 0 4px 6px rgba(16, 185, 129, 0.3);">
-                      Get Started
-                    </a>
+                <td align="center" style="padding: 40px 0;">
+                  <div
+                    style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 30px; border-radius: 100px; background-color: #000000;">
+                    <img
+                      src="https://raw.githubusercontent.com/BeigeTechLA/beige-web-mobile-front/main/public/images/logos/beige_logo_vb.png"
+                      alt="Beige Logo" width="120" style="display: block; border: 0; outline: none;">
                   </div>
-
-                  <p style="margin: 30px 0 15px; font-size: 16px; color: #374151; font-weight: 600;">
-                    What's Next?
-                  </p>
-                  <ul style="margin: 0; padding-left: 20px; color: #6b7280; line-height: 1.8;">
-                    <li>Complete your profile</li>
-                    <li>Explore our creator community</li>
-                    <li>Book your first project</li>
-                    <li>Join our affiliate program</li>
-                  </ul>
-
-                  <p style="margin: 30px 0 0; font-size: 14px; color: #6b7280; line-height: 1.6;">
-                    If you have any questions, feel free to reach out to our support team. We're here to help!
-                  </p>
                 </td>
               </tr>
-
-              <!-- Footer -->
               <tr>
-                <td style="background-color: #f9fafb; padding: 25px 30px; border-top: 1px solid #e5e7eb; text-align: center;">
-                  <p style="margin: 0; font-size: 13px; color: #6b7280; line-height: 1.5;">
-                    This is an automated email from BeigeAI. Please do not reply to this email.
-                  </p>
-                  <p style="margin: 10px 0 0; font-size: 13px; color: #9ca3af;">
-                    © ${new Date().getFullYear()} BeigeAI. All rights reserved.
+                <td style="padding: 10px 40px 30px; text-align: center;">
+                  <p style="margin: 0; color: #E8D1AB; font-size: 14px; letter-spacing: 0.5px;">Hi ${userData.name},</p>
+                  <h1
+                    style="margin: 50px 0 5px; color: #E1CAA1; font-size: 52px; font-weight: 500; letter-spacing: -1px; line-height: 1.1;">
+                    Welcome to Beige</h1>
+                  <p style="margin: 0; color: #E8D1AB; font-size: 32px; font-weight: 500; letter-spacing: -0.5px;">The
+                    modern content engine.</p>
+                  <p style="margin: 30px 0 0; font-size: 15px; color: #9ca3af; line-height: 1.8;">
+                    Beige is a unified platform for booking professional videography, photography, locations, and
+                    post-production, designed to remove friction from the content creation process.
                   </p>
                 </td>
               </tr>
 
+              <tr>
+                <td style="padding: 0 40px;">
+                  <div style="background-color: rgba(80, 55, 17, 0.20); border-radius: 16px; padding: 30px; ">
+                    <p style="margin: 0 0 20px; color: #ffffff; font-size: 18px; font-weight: 700;">What Sets Beige Apart:
+                    </p>
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td valign="top" style="padding-bottom: 15px;"><span style="color: #ffffff;">&#10003;</span></td>
+                        <td style="padding-bottom: 15px; color: #FFFFFF99; font-size: 14px; line-height: 1.4;">Curated,
+                          vetted
+                          creators across the US.</td>
+                      </tr>
+                      <tr>
+                        <td valign="top" style="padding-bottom: 15px;"><span style="color: #ffffff;">&#10003;</span></td>
+                        <td style="padding-bottom: 15px; color: #FFFFFF99; font-size: 14px; line-height: 1.4;">Transparent
+                          pricing and availability at the point of booking.</td>
+                      </tr>
+                      <tr>
+                        <td valign="top" style="padding-bottom: 15px;"><span style="color: #ffffff;">&#10003;</span></td>
+                        <td style="padding-bottom: 15px; color: #FFFFFF99; font-size: 14px; line-height: 1.4;">End-to-end
+                          production, from shoot to final delivery.</td>
+                      </tr>
+                      <tr>
+                        <td valign="top" style="padding-bottom: 15px;"><span style="color: #ffffff;">&#10003;</span></td>
+                        <td style="padding-bottom: 15px; color: #FFFFFF99; font-size: 14px; line-height: 1.4;">A streamlined
+                          experience built for speed, quality, and consistency.</td>
+                      </tr>
+                      <tr>
+                        <td valign="top"><span style="color: #ffffff;">&#10003;</span></td>
+                        <td style="color: #FFFFFF99; font-size: 14px; line-height: 1.4;">Smart automation integrated into
+                          the
+                          platform to enhance matching, workflows, and delivery.</td>
+                      </tr>
+                    </table>
+                  </div>
+                </td>
+              </tr>
+
+              <tr>
+                <td style="padding: 50px 40px; text-align: center;">
+                  <hr style="border: none; border-top: 1px solid #E1CAA1; width: 128px; margin: 0 auto 30px;">
+                  <h2
+                    style="margin: 0 0 24px; color: #E1CAA1; font-size: 52px; font-weight: 500; letter-spacing: -1.677px;">
+                    Your creative workspace is ready.</h2>
+                  <p style="margin: 0 0 24px; font-size: 15px; color: #F0F0F0; line-height: 1.8; font-weight: 300;">
+                    Whether you are producing content for a brand, event, or personal project, Beige simplifies execution so
+                    you can focus on the outcome.
+                  </p>
+
+                  <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: auto;">
+                    <tr>
+                      <td
+                        style="border-radius: 100px; background: linear-gradient(180deg, #3D342A -17.11%, #C79233 141.45%);">
+                        <a href="${frontendUrl}"
+                          style="padding: 18px 36px; font-size: 18px; font-weight: 600; line-height: 28px; letter-spacing: 2.261px; color: #ffffff; text-decoration: underline; display: inline-block; text-transform: uppercase; ">
+                          BOOK YOUR SHOOT IN MINUTES &rarr;
+                        </a>
+                      </td>
+                    </tr>
+                  </table>
+
+                  <p style="margin:24px 0 0; font-size: 15px; color: #F0F0F0; line-height: 1.8; font-weight: 300;">
+                    If you need assistance selecting the right setup, simply reply to this email and our team will support
+                    you.
+                  </p>
+                  <hr style="border: none; border-top: 1px solid #E1CAA1; width: 128px; margin: 24px auto 0;">
+                </td>
+              </tr>
+
+              <tr>
+                <td style="padding: 0 30px 30px; text-align: center; border-top: 2px solid #F5EBDA;">
+                  <p style="margin: 30px 0 0; font-size: 11px; color: #8C8C8C; text-transform: capitalize;">
+                    Help Center &nbsp;•&nbsp; Privacy Policy &nbsp;•&nbsp; Terms of Service
+                  </p>
+                  <p style="margin: 15px 0 0; font-size: 11px; color: #8C8C8C;text-transform: uppercase; ">
+                    Beige AI
+                    <!-- &nbsp;|&nbsp; 123 Creative Street, Design City, DC 10101 -->
+                  </p>
+                </td>
+              </tr>
+
+              <tr>
+                <td style="padding: 20px; text-align: center;">
+                  <img
+                    src="https://raw.githubusercontent.com/BeigeTechLA/beige-web-mobile-front/main/public/images/logos/beige_logo_vb.png"
+                    alt="Beige Logo" width="180" style="display: inline-block; border: 0; outline: none; opacity: 1;">
+                </td>
+              </tr>
             </table>
           </td>
         </tr>
