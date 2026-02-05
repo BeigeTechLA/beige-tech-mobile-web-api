@@ -17,11 +17,11 @@ POST {{URL}}auth/register HTTP/1.1
 Content-Type: application/json
 
 {
-  "name": "Amit Sales",
-  "email": "amit.sales@gmail.com",
-  "phone_number": "9998887777",
-  "password": "123",
-  "userType": 4
+  "name": "Dev Test",
+  "email": "dev.shambhavi0105@gmail.com",
+  "phone_number": "9990887777",
+  "password": "1",
+  "userType": 3
 }
 
 ###
@@ -29,8 +29,8 @@ POST {{URL}}auth/login HTTP/1.1
 Content-Type: application/json
 
 {
-  "email": "amit.sales@gmail.com",
-  "password": "123"
+  "email": "dev.shambhavi0105@gmail.com",
+  "password": "1"
 }
 
 ###
