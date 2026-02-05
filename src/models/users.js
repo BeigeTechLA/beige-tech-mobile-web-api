@@ -55,7 +55,7 @@ module.exports = function(sequelize, DataTypes) {
     },
     is_active: {
       type: DataTypes.BOOLEAN,
-      allowNull: true,
+      allowNull: false,
       defaultValue: 1
     },
     user_type: {
@@ -108,6 +108,16 @@ module.exports = function(sequelize, DataTypes) {
           { name: "instagram_handle" },
         ]
       },
-    ]
+    ],
+    defaultScope: {
+      where: {
+        is_active: 1
+      }
+    },
+    scopes: {
+      all: {
+        where: {}
+      }
+    },
   });
 };
