@@ -477,7 +477,7 @@ const generateWelcomeTemplate = (userData, frontendUrl) => {
                   <div
                     style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 30px; border-radius: 100px; background-color: #000000;">
                     <img
-                      src="https://raw.githubusercontent.com/BeigeTechLA/beige-web-mobile-front/main/public/images/logos/beige_logo_vb.png"
+                      src="https://beigexmemehouse.s3.eu-north-1.amazonaws.com/beige/beige_logo_vb.png"
                       alt="Beige Logo" width="120" style="display: block; border: 0; outline: none;">
                   </div>
                 </td>
@@ -581,7 +581,7 @@ const generateWelcomeTemplate = (userData, frontendUrl) => {
               <tr>
                 <td style="padding: 20px; text-align: center;">
                   <img
-                    src="https://raw.githubusercontent.com/BeigeTechLA/beige-web-mobile-front/main/public/images/logos/beige_logo_vb.png"
+                    src="https://beigexmemehouse.s3.eu-north-1.amazonaws.com/beige/beige_logo_vb.png"
                     alt="Beige Logo" width="180" style="display: inline-block; border: 0; outline: none; opacity: 1;">
                 </td>
               </tr>
