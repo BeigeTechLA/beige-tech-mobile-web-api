@@ -235,18 +235,243 @@ const getPermissionsForRole = (role) => {
 //   }
 // };
 
+// exports.register = async (req, res) => {
+//   try {
+//     let { name, email, phone_number, instagram_handle, password, userType = 3 } = req.body;
+
+//     // Normalize email
+//     email = email?.toLowerCase().trim();
+
+//     // Validate required fields
+//     if (!name || !password || !email) {
+//       return res.status(400).json({
+//         success: false,
+//         message: 'Name, email, and password are required'
+//       });
+//     }
+
+//     // Validate userType
+//     if (![1, 2, 3, 4, 5].includes(userType)) {
+//       return res.status(400).json({
+//         success: false,
+//         message: 'Invalid user type'
+//       });
+//     }
+
+//     // Build uniqueness conditions
+//     const conditions = [];
+//     if (email) conditions.push({ email });
+//     if (phone_number) conditions.push({ phone_number });
+//     if (instagram_handle) conditions.push({ instagram_handle });
+
+//     const userExists = await User.scope('all').findOne({
+//       where: { [Op.or]: conditions }
+//     });
+
+//     /* =========================
+//        REACTIVATION FLOW
+//     ========================= */
+//     if (userExists) {
+//       if (userExists.is_active == 0) {
+//         const hashedPassword = await bcrypt.hash(password, 10);
+//         const otp = otpService.generateOTP();
+//         const otpExpiry = otpService.generateOTPExpiry(10);
+
+//         await userExists.update({
+//           is_active: 1,
+//           name,
+//           email,
+//           phone_number,
+//           instagram_handle,
+//           password_hash: hashedPassword,
+//           user_type: userType,
+//           email_verified: 0,
+//           verification_code: otp,
+//           otp_expiry: otpExpiry
+//         });
+
+//         // Handle affiliate reactivation
+//         let affiliate = await Affiliate.findOne({
+//           where: { user_id: userExists.id }
+//         });
+
+//         if (affiliate) {
+//           // If affiliate exists but inactive
+//           if (affiliate.is_active === 0) {
+//             await affiliate.update({ is_active: 1 });
+//           }
+//         } else {
+//           // If affiliate never existed, create it
+//           try {
+//             affiliate = await affiliateController.createAffiliate(userExists.id);
+//           } catch (err) {
+//             console.error('Affiliate reactivation failed:', err.message);
+//           }
+//         }
+
+//         let affiliateData = null;
+
+//         if (affiliate) {
+//           affiliateData = {
+//             affiliate_id: affiliate.affiliate_id,
+//             referral_code: affiliate.referral_code
+//           };
+//         }
+
+//         let clientId = null;
+
+//         // Handle client role
+//         if (userType === 3) {
+//           let client = await Clients.findOne({
+//             where: { user_id: userExists.id }
+//           });
+
+//           if (client) {
+//             await client.update({
+//               name,
+//               email,
+//               phone_number,
+//               is_active: 1
+//             });
+//           } else {
+//             client = await Clients.create({
+//               user_id: userExists.id,
+//               name,
+//               email,
+//               phone_number,
+//               is_active: 1
+//             });
+
+//             await appendToSheet('Client_data', [
+//               client.client_id,
+//               userExists.id,
+//               name,
+//               email,
+//               phone_number || 'N/A',
+//               'Active'
+//             ]).catch(err =>
+//               console.error('Google Sheets Client Sync Error:', err.message)
+//             );
+//           }
+
+//           clientId = client.client_id;
+//         }
+
+//         await emailService.sendVerificationOTP({ name, email }, otp);
+
+//         return res.status(200).json({
+//           success: true,
+//           message: 'Account reactivated successfully. Please verify your email.',
+//           userId: userExists.id,
+//           email: userExists.email,
+//           affiliate: affiliateData,
+//           clientId
+//         });
+//       }
+
+//       return res.status(409).json({
+//         success: false,
+//         message: 'User already exists'
+//       });
+//     }
+
+//     /* =========================
+//        NEW REGISTRATION FLOW
+//     ========================= */
+//     const hashedPassword = await bcrypt.hash(password, 10);
+//     const otp = otpService.generateOTP();
+//     const otpExpiry = otpService.generateOTPExpiry(10);
+
+//     const newUser = await User.create({
+//       name,
+//       email,
+//       phone_number,
+//       instagram_handle,
+//       password_hash: hashedPassword,
+//       user_type: userType,
+//       is_active: 1,
+//       email_verified: 0,
+//       verification_code: otp,
+//       otp_expiry: otpExpiry
+//     });
+
+//     let clientId = null;
+
+//     if (userType === 3) {
+//       const client = await Clients.create({
+//         user_id: newUser.id,
+//         name,
+//         email,
+//         phone_number,
+//         is_active: 1
+//       });
+
+//       clientId = client.client_id;
+
+//       await appendToSheet('Client_data', [
+//         client.client_id,
+//         newUser.id,
+//         name,
+//         email,
+//         phone_number || 'N/A',
+//         'Active'
+//       ]).catch(err =>
+//         console.error('Google Sheets Client Sync Error:', err.message)
+//       );
+//     }
+
+//     await emailService.sendVerificationOTP({ name, email }, otp);
+
+//     // Auto-create affiliate account
+//     let affiliateData = null;
+//     try {
+//       const affiliate = await affiliateController.createAffiliate(newUser.id);
+//       if (affiliate) {
+//         affiliateData = {
+//           affiliate_id: affiliate.affiliate_id,
+//           referral_code: affiliate.referral_code
+//         };
+//       }
+//     } catch (err) {
+//       console.error('Affiliate creation failed:', err.message);
+//     }
+
+//     return res.status(201).json({
+//       success: true,
+//       message: 'User registered successfully. Please check your email for verification code.',
+//       userId: newUser.id,
+//       email: newUser.email,
+//       affiliate: affiliateData,
+//       clientId
+//     });
+
+//   } catch (error) {
+//     console.error('Register Error:', error);
+//     return res.status(500).json({
+//       success: false,
+//       message: 'Server error during registration',
+//       error: process.env.NODE_ENV === 'development' ? error.message : undefined
+//     });
+//   }
+// };
+
 exports.register = async (req, res) => {
   try {
-    let { name, email, phone_number, instagram_handle, password, userType = 3 } = req.body;
-
-    // Normalize email
-    email = email?.toLowerCase().trim();
+    const { name, email, phone_number, instagram_handle, password, userType = 3 } = req.body;
 
     // Validate required fields
     if (!name || !password || !email) {
       return res.status(400).json({
         success: false,
         message: 'Name, email, and password are required'
+      });
+    }
+
+    // At least one identifier required
+    if (!email && !phone_number && !instagram_handle) {
+      return res.status(400).json({
+        success: false,
+        message: 'Provide at least one: email, phone number, or Instagram handle'
       });
     }
 
@@ -258,129 +483,28 @@ exports.register = async (req, res) => {
       });
     }
 
-    // Build uniqueness conditions
+    // Check if user already exists
     const conditions = [];
     if (email) conditions.push({ email });
     if (phone_number) conditions.push({ phone_number });
     if (instagram_handle) conditions.push({ instagram_handle });
 
-    const userExists = await User.scope('all').findOne({
+    // by default it adds is_active = 1 condition using defaultScope
+    const userExists = await User.findOne({
       where: { [Op.or]: conditions }
     });
 
-    /* =========================
-       REACTIVATION FLOW
-    ========================= */
     if (userExists) {
-      if (userExists.is_active == 0) {
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const otp = otpService.generateOTP();
-        const otpExpiry = otpService.generateOTPExpiry(10);
-
-        await userExists.update({
-          is_active: 1,
-          name,
-          email,
-          phone_number,
-          instagram_handle,
-          password_hash: hashedPassword,
-          user_type: userType,
-          email_verified: 0,
-          verification_code: otp,
-          otp_expiry: otpExpiry
-        });
-
-        // Handle affiliate reactivation
-        let affiliate = await Affiliate.findOne({
-          where: { user_id: userExists.id }
-        });
-
-        if (affiliate) {
-          // If affiliate exists but inactive
-          if (affiliate.is_active === 0) {
-            await affiliate.update({ is_active: 1 });
-          }
-        } else {
-          // If affiliate never existed, create it
-          try {
-            affiliate = await affiliateController.createAffiliate(userExists.id);
-          } catch (err) {
-            console.error('Affiliate reactivation failed:', err.message);
-          }
-        }
-
-        let affiliateData = null;
-
-        if (affiliate) {
-          affiliateData = {
-            affiliate_id: affiliate.affiliate_id,
-            referral_code: affiliate.referral_code
-          };
-        }
-
-        let clientId = null;
-
-        // Handle client role
-        if (userType === 3) {
-          let client = await Clients.findOne({
-            where: { user_id: userExists.id }
-          });
-
-          if (client) {
-            await client.update({
-              name,
-              email,
-              phone_number,
-              is_active: 1
-            });
-          } else {
-            client = await Clients.create({
-              user_id: userExists.id,
-              name,
-              email,
-              phone_number,
-              is_active: 1
-            });
-
-            await appendToSheet('Client_data', [
-              client.client_id,
-              userExists.id,
-              name,
-              email,
-              phone_number || 'N/A',
-              'Active'
-            ]).catch(err =>
-              console.error('Google Sheets Client Sync Error:', err.message)
-            );
-          }
-
-          clientId = client.client_id;
-        }
-
-        await emailService.sendVerificationOTP({ name, email }, otp);
-
-        return res.status(200).json({
-          success: true,
-          message: 'Account reactivated successfully. Please verify your email.',
-          userId: userExists.id,
-          email: userExists.email,
-          affiliate: affiliateData,
-          clientId
-        });
-      }
-
       return res.status(409).json({
         success: false,
         message: 'User already exists'
       });
     }
 
-    /* =========================
-       NEW REGISTRATION FLOW
-    ========================= */
     const hashedPassword = await bcrypt.hash(password, 10);
+
     const otp = otpService.generateOTP();
-    const otpExpiry = otpService.generateOTPExpiry(10);
+    const otpExpiry = otpService.generateOTPExpiry(10); 
 
     const newUser = await User.create({
       name,
@@ -395,10 +519,10 @@ exports.register = async (req, res) => {
       otp_expiry: otpExpiry
     });
 
-    let clientId = null;
-
-    if (userType === 3) {
-      const client = await Clients.create({
+    let newClient = null;
+    
+    if (userType == 3) {
+      newClient = await Clients.create({
         user_id: newUser.id,
         name,
         email,
@@ -406,21 +530,27 @@ exports.register = async (req, res) => {
         is_active: 1
       });
 
-      clientId = client.client_id;
-
-      await appendToSheet('Client_data', [
-        client.client_id,
+      appendToSheet('Client_data', [
+        newClient.client_id,
         newUser.id,
-        name,
-        email,
-        phone_number || 'N/A',
-        'Active'
-      ]).catch(err =>
-        console.error('Google Sheets Client Sync Error:', err.message)
-      );
+        name,                  
+        email,             
+        phone_number || 'N/A',  
+        'Active'               
+      ]).catch(err => console.error('Google Sheets Client Sync Error:', err.message));
     }
 
-    await emailService.sendVerificationOTP({ name, email }, otp);
+    // Send verification email if email provided
+    if (email) {
+      const emailResult = await emailService.sendVerificationOTP(
+        { name, email },
+        otp
+      );
+
+      if (!emailResult.success) {
+        console.error('Failed to send verification email:', emailResult.error);
+      }
+    }
 
     // Auto-create affiliate account
     let affiliateData = null;
@@ -432,17 +562,19 @@ exports.register = async (req, res) => {
           referral_code: affiliate.referral_code
         };
       }
-    } catch (err) {
-      console.error('Affiliate creation failed:', err.message);
+    } catch (affiliateError) {
+      console.error('Failed to create affiliate account:', affiliateError);
     }
 
     return res.status(201).json({
       success: true,
-      message: 'User registered successfully. Please check your email for verification code.',
+      message: email
+        ? 'User registered successfully. Please check your email for verification code.'
+        : 'User registered successfully. Please verify your account.',
       userId: newUser.id,
       email: newUser.email,
       affiliate: affiliateData,
-      clientId
+      clientId: newClient ? newClient.client_id : null
     });
 
   } catch (error) {
@@ -2045,6 +2177,24 @@ exports.registerCrewMemberStep1 = [
       // CASE: NEW REGISTRATION
       const existingUser = await User.findOne({ where: { email } });
       if (existingUser) return res.status(409).json({ success: false, message: 'Email already exists' });
+
+      const existingCrew = await crew_members.findOne({
+        where: { email }
+      });
+
+      if (existingCrew) {
+        // if (existingCrew.is_active == 0) {
+        //   return res.status(409).json({
+        //     success: false,
+        //     message: 'Crew member with this email was deleted. Please contact support.'
+        //   });
+        // }
+
+        return res.status(409).json({
+          success: false,
+          message: 'Crew member with this email already exists'
+        });
+      }
 
       const hashedPassword = await bcrypt.hash(password, 10);
       const newUser = await User.create({

@@ -109,15 +109,5 @@ module.exports = function(sequelize, DataTypes) {
         ]
       },
     ],
-    defaultScope: {
-      where: {
-        is_active: 1
-      }
-    },
-    scopes: {
-      all: {
-        where: {}
-      }
-    },
   });
 };
