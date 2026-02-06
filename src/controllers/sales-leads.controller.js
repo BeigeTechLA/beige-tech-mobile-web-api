@@ -10,31 +10,169 @@ const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
  * Track early booking interest - Create draft booking and lead when user shows interest
  * POST /api/sales/leads/track-early-interest
  */
+// exports.trackEarlyBookingInterest = async (req, res) => {
+//   try {
+//     const {
+//       guest_email,
+//       user_id,
+//       content_type,
+//       shoot_type,
+//       client_name
+//     } = req.body;
+
+//     // 1. Validate required fields
+//     if (!guest_email) {
+//       return res.status(constants.BAD_REQUEST.code).json({
+//         success: false,
+//         message: 'Email is required'
+//       });
+//     }
+
+//     // Basic email validation
+//     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+//     if (!emailRegex.test(guest_email)) {
+//       return res.status(constants.BAD_REQUEST.code).json({
+//         success: false,
+//         message: 'Invalid email format'
+//       });
+//     }
+
+//     // 2. Create minimal draft booking
+//     const bookingData = {
+//       user_id: user_id ? parseInt(user_id) : null,
+//       guest_email: guest_email,
+//       project_name: `Draft - ${shoot_type || content_type || 'Booking'}`,
+//       event_type: shoot_type || content_type || 'general',
+//       streaming_platforms: JSON.stringify([]),
+//       crew_roles: JSON.stringify([]),
+//       is_draft: 1,
+//       is_completed: 0,
+//       is_cancelled: 0,
+//       is_active: 1
+//     };
+
+//     const booking = await stream_project_booking.create(bookingData);
+
+//     // 3. Check if lead already exists
+//     const existingLead = await sales_leads.findOne({
+//       where: { 
+//         guest_email,
+//         lead_status: 'in_progress_self_serve'
+//       },
+//       order: [['created_at', 'DESC']]
+//     });
+
+//     if (existingLead) {
+//       // Update existing lead
+//       await existingLead.update({
+//         booking_id: booking.stream_project_booking_id,
+//         last_activity_at: new Date()
+//       });
+
+//       // SYNC ALL DATA TO SHEET FOR EXISTING LEAD
+//       appendToSheet('leads_data', [
+//         existingLead.lead_id,                 // A: Lead ID
+//         booking.stream_project_booking_id,    // B: Booking ID
+//         user_id || 'Guest',                     // C: User ID
+//         client_name || 'N/A',                 // D: Client Name
+//         guest_email,                          // E: Email
+//         booking.project_name,                 // F: Project Name
+//         content_type || 'N/A',                // G: Content Type
+//         shoot_type || 'N/A',                  // H: Shoot Type
+//         existingLead.lead_type,               // I: Lead Type
+//         'Interaction Updated',                // J: Status
+//         new Date().toLocaleString()           // M: Timestamp
+//       ]).catch(err => console.error('Sheet Sync Error:', err.message));
+
+//       return res.json({
+//         success: true,
+//         message: 'Lead tracking updated',
+//         data: {
+//           lead_id: existingLead.lead_id,
+//           booking_id: booking.stream_project_booking_id,
+//           is_new: false
+//         }
+//       });
+//     }
+
+//     // 4. Create new lead
+//     const lead = await sales_leads.create({
+//       booking_id: booking.stream_project_booking_id,
+//       user_id: user_id || null,
+//       guest_email: guest_email,
+//       client_name: client_name || null,
+//       lead_type: 'self_serve',
+//       lead_status: 'in_progress_self_serve'
+//     });
+
+//     // 5. Log activity
+//     await sales_lead_activities.create({
+//       lead_id: lead.lead_id,
+//       activity_type: 'created',
+//       activity_data: {
+//         source: 'early_interest',
+//         user_id,
+//         guest_email,
+//         content_type,
+//         shoot_type
+//       }
+//     });
+
+//     // 6. Auto-assign lead
+//     const assignedRep = await leadAssignmentService.autoAssignLead(lead.lead_id);
+
+//     // 7. --- SYNC ALL DATA TO SHEET FOR NEW LEAD ---
+//     appendToSheet('leads_data', [
+//       lead.lead_id,                         // A: Lead ID
+//       booking.stream_project_booking_id,    // B: Booking ID
+//       user_id || 'Guest',                   // C: User ID
+//       client_name || 'N/A',                 // D: Client Name
+//       guest_email,                          // E: Email
+//       booking.project_name,                 // F: Project Name
+//       content_type || 'N/A',                // G: Content Type
+//       shoot_type || 'N/A',                  // H: Shoot Type
+//       lead.lead_type,                       // I: Lead Type
+//       lead.lead_status,                     // J: Status
+//       assignedRep ? JSON.stringify(assignedRep) : 'Pending', // K: Assigned Rep
+//       booking.is_draft === 1 ? 'Yes' : 'No',// L: Is Draft
+//       new Date().toLocaleString()           // M: Timestamp
+//     ]).catch(err => console.error('Sheet Sync Error:', err.message));
+
+//     res.status(constants.CREATED.code).json({
+//       success: true,
+//       message: 'Lead tracking started',
+//       data: {
+//         lead_id: lead.lead_id,
+//         booking_id: booking.stream_project_booking_id,
+//         is_new: true,
+//         assigned_to: assignedRep
+//       }
+//     });
+
+//   } catch (error) {
+//     console.error('Error tracking early booking interest:', error);
+//     res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+//       success: false,
+//       message: 'Failed to track booking interest',
+//       error: process.env.NODE_ENV === 'development' ? error.message : undefined
+//     });
+//   }
+// };
+
+
+
 exports.trackEarlyBookingInterest = async (req, res) => {
   try {
-    const {
-      guest_email,
-      user_id,
-      content_type,
-      shoot_type,
-      client_name
-    } = req.body;
+    const { guest_email, user_id, content_type, shoot_type, client_name } = req.body;
 
     // 1. Validate required fields
     if (!guest_email) {
-      return res.status(constants.BAD_REQUEST.code).json({
-        success: false,
-        message: 'Email is required'
-      });
+      return res.status(constants.BAD_REQUEST.code).json({ success: false, message: 'Email is required' });
     }
 
-    // Basic email validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(guest_email)) {
-      return res.status(constants.BAD_REQUEST.code).json({
-        success: false,
-        message: 'Invalid email format'
-      });
+      return res.status(constants.BAD_REQUEST.code).json({ success: false, message: 'Invalid email format' });
     }
 
     // 2. Create minimal draft booking
@@ -55,25 +193,22 @@ exports.trackEarlyBookingInterest = async (req, res) => {
 
     // 3. Check if lead already exists
     const existingLead = await sales_leads.findOne({
-      where: { 
-        guest_email,
-        lead_status: 'in_progress_self_serve'
-      },
+      where: { guest_email, lead_status: 'in_progress_self_serve' },
       order: [['created_at', 'DESC']]
     });
 
     if (existingLead) {
-      // Update existing lead
       await existingLead.update({
         booking_id: booking.stream_project_booking_id,
         last_activity_at: new Date()
       });
 
-      // SYNC ALL DATA TO SHEET FOR EXISTING LEAD
-      appendToSheet('leads_data', [
-        existingLead.lead_id,                 // A: Lead ID
+      // --- FIX: USE UPDATE LOGIC INSTEAD OF APPEND ---
+      // We send the Lead ID (existingLead.lead_id) as the key to find and update the existing row
+      updateSheetRow('leads_data', existingLead.lead_id, [
+        existingLead.lead_id,                 // A: Lead ID (Key)
         booking.stream_project_booking_id,    // B: Booking ID
-        user_id || 'Guest',                     // C: User ID
+        user_id || 'Guest',                   // C: User ID
         client_name || 'N/A',                 // D: Client Name
         guest_email,                          // E: Email
         booking.project_name,                 // F: Project Name
@@ -81,17 +216,15 @@ exports.trackEarlyBookingInterest = async (req, res) => {
         shoot_type || 'N/A',                  // H: Shoot Type
         existingLead.lead_type,               // I: Lead Type
         'Interaction Updated',                // J: Status
-        new Date().toLocaleString()           // M: Timestamp
-      ]).catch(err => console.error('Sheet Sync Error:', err.message));
+        '',                                   // K: (Keep Rep Same)
+        'Yes',                                // L: Is Draft
+        new Date().toLocaleString()           // M: Timestamp (Updates in same row)
+      ]).catch(err => console.error('Sheet Update Error:', err.message));
 
       return res.json({
         success: true,
         message: 'Lead tracking updated',
-        data: {
-          lead_id: existingLead.lead_id,
-          booking_id: booking.stream_project_booking_id,
-          is_new: false
-        }
+        data: { lead_id: existingLead.lead_id, booking_id: booking.stream_project_booking_id, is_new: false }
       });
     }
 
@@ -109,19 +242,13 @@ exports.trackEarlyBookingInterest = async (req, res) => {
     await sales_lead_activities.create({
       lead_id: lead.lead_id,
       activity_type: 'created',
-      activity_data: {
-        source: 'early_interest',
-        user_id,
-        guest_email,
-        content_type,
-        shoot_type
-      }
+      activity_data: { source: 'early_interest', user_id, guest_email, content_type, shoot_type }
     });
 
     // 6. Auto-assign lead
     const assignedRep = await leadAssignmentService.autoAssignLead(lead.lead_id);
 
-    // 7. --- SYNC ALL DATA TO SHEET FOR NEW LEAD ---
+    // 7. --- FIX: ONLY STORE NAME AND APPEND NEW ROW ---
     appendToSheet('leads_data', [
       lead.lead_id,                         // A: Lead ID
       booking.stream_project_booking_id,    // B: Booking ID
@@ -133,7 +260,7 @@ exports.trackEarlyBookingInterest = async (req, res) => {
       shoot_type || 'N/A',                  // H: Shoot Type
       lead.lead_type,                       // I: Lead Type
       lead.lead_status,                     // J: Status
-      assignedRep ? JSON.stringify(assignedRep) : 'Pending', // K: Assigned Rep
+      assignedRep ? assignedRep.name : 'Pending', // <--- FIX: Access .name only
       booking.is_draft === 1 ? 'Yes' : 'No',// L: Is Draft
       new Date().toLocaleString()           // M: Timestamp
     ]).catch(err => console.error('Sheet Sync Error:', err.message));
@@ -141,24 +268,17 @@ exports.trackEarlyBookingInterest = async (req, res) => {
     res.status(constants.CREATED.code).json({
       success: true,
       message: 'Lead tracking started',
-      data: {
-        lead_id: lead.lead_id,
-        booking_id: booking.stream_project_booking_id,
-        is_new: true,
-        assigned_to: assignedRep
-      }
+      data: { lead_id: lead.lead_id, booking_id: booking.stream_project_booking_id, is_new: true, assigned_to: assignedRep }
     });
 
   } catch (error) {
     console.error('Error tracking early booking interest:', error);
     res.status(constants.INTERNAL_SERVER_ERROR.code).json({
       success: false,
-      message: 'Failed to track booking interest',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Failed to track booking interest'
     });
   }
 };
-
 /**
  * Track booking start - Create lead when client starts booking flow
  * POST /api/sales/leads/track-start
