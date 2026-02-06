@@ -18,7 +18,7 @@ Content-Type: application/json
 
 {
   "name": "Dev Test",
-  "email": "dev.shambhavi0105@gmail.com",
+  "email": "dev.test@gmail.com",
   "phone_number": "9990887777",
   "password": "1",
   "userType": 3
@@ -29,7 +29,7 @@ POST {{URL}}auth/login HTTP/1.1
 Content-Type: application/json
 
 {
-  "email": "dev.shambhavi0105@gmail.com",
+  "email": "dev.test@gmail.com",
   "password": "1"
 }
 
@@ -49,7 +49,7 @@ Shah
 ------WebKitFormBoundary7MA4YWxkTrZu0gW
 Content-Disposition: form-data; name="email"
 
-dev.shambhavi0105@gmail.com
+dev.test@gmail.com
 ------WebKitFormBoundary7MA4YWxkTrZu0gW
 Content-Disposition: form-data; name="password"
 
