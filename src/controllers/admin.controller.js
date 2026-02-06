@@ -5,6 +5,7 @@ const path = require('path');
 const common_model = require('../utils/common_model');
 const { Op } = require('sequelize');
 const { S3UploadFiles } = require('../utils/common.js');
+const moment = require('moment');
 const { sendTaskAssignmentEmail } = require('../utils/emailService');
 const { stream_project_booking, crew_members, crew_member_files, tasks, equipment, crew_roles,
   equipment_accessories,
@@ -782,77 +783,96 @@ exports.getProjectDetails = async (req, res) => {
     const { project_id } = req.params;
 
     if (!project_id) {
-      return res.status(400).json({
-        error: true,
-        message: 'Project ID is required',
-      });
+      return res.status(400).json({ error: true, message: 'Project ID is required' });
     }
 
-    console.log('Project ID:', project_id);
-
-    const project = await stream_project_booking.findOne({
-      where: { stream_project_booking_id: project_id, is_active: 1 },
-    });
+    const [project, allEventMasterTypes, allRoles] = await Promise.all([
+      stream_project_booking.findOne({
+        where: { stream_project_booking_id: project_id, is_active: 1 },
+      }),
+      event_type_master.findAll({ attributes: ['event_type_id', 'event_type_name'], raw: true }),
+      crew_roles.findAll({ attributes: ['role_id', 'role_name'], raw: true })
+    ]);
 
     if (!project) {
-      return res.status(404).json({
-        error: true,
-        message: 'Project not found',
-      });
+      return res.status(404).json({ error: true, message: 'Project not found' });
     }
 
-    // Fetch assigned crew members
-    const assignedCrew = await assigned_crew.findAll({
-      where: { project_id: project.stream_project_booking_id, is_active: 1 },
-      include: [
-        {
-          model: crew_members,
-          as: 'crew_member',
-          attributes: ['crew_member_id', 'first_name', 'last_name', 'primary_role'],
-        },
-      ],
+    const [crew, equip, postProd] = await Promise.all([
+      assigned_crew.findAll({
+        where: { project_id: project.stream_project_booking_id, is_active: 1 },
+        include: [{ 
+            model: crew_members, 
+            as: 'crew_member', 
+            attributes: ['crew_member_id', 'first_name', 'last_name', 'primary_role'] 
+        }],
+      }),
+      assigned_equipment.findAll({
+        where: { project_id: project.stream_project_booking_id, is_active: 1 },
+        include: [{ model: equipment, as: 'equipment', attributes: ['equipment_id', 'equipment_name'] }],
+      }),
+      assigned_post_production_member.findAll({
+        where: { project_id: project.stream_project_booking_id, is_active: 1 },
+        include: [{ model: post_production_members, as: 'post_production_member', attributes: ['post_production_member_id', 'first_name', 'last_name', 'email'] }],
+      })
+    ]);
+
+    const rawTypes = project.event_type ? project.event_type.split(',') : [];
+    const eventTypeLabels = rawTypes.map(t => {
+      const val = t.trim();
+      const masterMatch = allEventMasterTypes.find(m => String(m.event_type_id) === val);
+      if (masterMatch) return masterMatch.event_type_name;
+
+      const stringMap = { 'videographer': 'Videography', 'photographer': 'Photography' };
+      return stringMap[val.toLowerCase()] || val.charAt(0).toUpperCase() + val.slice(1);
     });
 
-    // Fetch assigned equipment
-    const assignedEquipment = await assigned_equipment.findAll({
-      where: { project_id: project.stream_project_booking_id, is_active: 1 },
-      include: [
-        {
-          model: equipment,
-          as: 'equipment',
-          attributes: ['equipment_id', 'equipment_name'],
-        },
-      ],
-    });
+    const processedCrew = crew.map(assignment => {
+      const crewMember = assignment.crew_member ? assignment.crew_member.toJSON() : null;
+      let roleName = "N/A";
 
-    // Fetch assigned post production members
-    const assignedPostProductionMembers = await assigned_post_production_member.findAll({
-      where: { project_id: project.stream_project_booking_id, is_active: 1 },
-      include: [
-        {
-          model: post_production_members,
-          as: 'post_production_member',
-          attributes: ['post_production_member_id', 'first_name', 'last_name', 'email'],
-        },
-      ],
+      if (crewMember && crewMember.primary_role) {
+        try {
+          let roleIds = [];
+          const rawRole = crewMember.primary_role;
+          if (rawRole.startsWith('[') || rawRole.startsWith('{')) {
+            roleIds = JSON.parse(rawRole);
+          } else {
+            roleIds = [rawRole];
+          }
+
+          const names = allRoles
+            .filter(r => roleIds.includes(String(r.role_id)) || roleIds.includes(Number(r.role_id)))
+            .map(r => r.role_name);
+          
+          if (names.length > 0) roleName = names.join(", ");
+        } catch (e) {
+          console.error("Role processing error for crew member:", crewMember.crew_member_id, e);
+        }
+      }
+
+      return {
+        ...assignment.toJSON(),
+        crew_member: crewMember ? { ...crewMember, role_name: roleName } : null
+      };
     });
 
     return res.status(200).json({
       error: false,
       message: 'Project details retrieved successfully',
       data: {
-        project,
-        assignedCrew,
-        assignedEquipment,
-        assignedPostProductionMembers, // Add this to the response
+        project: {
+          ...project.toJSON(),
+          event_type_labels: eventTypeLabels.join(', ')
+        },
+        assignedCrew: processedCrew,
+        assignedEquipment: equip,
+        assignedPostProductionMembers: postProd,
       },
     });
   } catch (error) {
     console.error('Error fetching project details:', error);
-    return res.status(500).json({
-      error: true,
-      message: 'Internal server error',
-    });
+    return res.status(500).json({ error: true, message: 'Internal server error' });
   }
 };
 
@@ -1017,127 +1037,256 @@ exports.getProjectDetails = async (req, res) => {
 // };
 
 
+// exports.getAllProjectDetails = async (req, res) => {
+//   try {
+//     let { status, event_type, search, limit, page, range, start_date, end_date } = req.query;
+//     const today = new Date();
+
+//     const noPagination = !limit && !page;
+
+//     let pageNumber = null;
+//     let pageSize = null;
+//     let offset = null;
+
+//     if (!noPagination) {
+//       pageNumber = parseInt(page ?? 1, 10);
+//       pageSize = parseInt(limit ?? 10, 10);
+//       offset = (pageNumber - 1) * pageSize;
+//     }
+
+//     // ----------- IMPROVED DATE RANGE FILTER LOGIC -----------
+//     let dateFilter = {};
+
+//     if (start_date && end_date) {
+//       dateFilter = {
+//         event_date: {
+//           [Sequelize.Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`]
+//         }
+//       };
+//     } else if (range === 'month') {
+//       dateFilter = {
+//         [Sequelize.Op.and]: [
+//             Sequelize.where(Sequelize.fn('MONTH', Sequelize.col('event_date')), Sequelize.fn('MONTH', Sequelize.fn('CURDATE'))),
+//             Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('event_date')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
+//         ]
+//       };
+//     } else if (range === 'week') {
+//       dateFilter = {
+//         [Sequelize.Op.and]: [
+//             Sequelize.where(Sequelize.fn('YEARWEEK', Sequelize.col('event_date'), 1), Sequelize.fn('YEARWEEK', Sequelize.fn('CURDATE'), 1))
+//         ]
+//       };
+//     } else if (range === 'year') {
+//       dateFilter = {
+//         [Sequelize.Op.and]: [
+//             Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('event_date')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
+//         ]
+//       };
+//     }
+
+//     const whereConditions = {
+//       is_active: 1,
+//       ...dateFilter
+//     };
+
+//     // ----------- STATUS FILTER -----------
+//     if (status) {
+//       switch (status) {
+//         case 'cancelled':
+//           whereConditions.is_cancelled = 1;
+//           break;
+//         case 'completed':
+//           whereConditions.is_completed = 1;
+//           break;
+//         case 'upcoming':
+//           whereConditions.is_cancelled = 0;
+//           whereConditions.is_draft = 0;
+//           whereConditions.event_date = {
+//             ...(dateFilter.event_date || {}),
+//             [Sequelize.Op.gt]: today
+//           };
+//           break;
+//         case 'draft':
+//           whereConditions.is_draft = 1;
+//           break;
+//         default:
+//           return res.status(400).json({ error: true, message: 'Invalid status filter' });
+//       }
+//     }
+
+//     // ----------- EVENT TYPE FILTER -----------
+//     if (event_type) {
+//       whereConditions.event_type = event_type;
+//     }
+
+//     // ----------- SEARCH FILTER -----------
+//     if (search) {
+//       whereConditions.project_name = Sequelize.where(
+//         Sequelize.fn('LOWER', Sequelize.col('project_name')),
+//         { [Sequelize.Op.like]: `%${search.toLowerCase()}%` }
+//       );
+//     }
+
+//     // ----------- STATS COUNTS (Respecting Date Filter) -----------
+//     const [
+//       total_active,
+//       total_cancelled,
+//       total_completed,
+//       total_upcoming,
+//       total_draft
+//     ] = await Promise.all([
+//       stream_project_booking.count({
+//         where: { is_active: 1, is_cancelled: 0, is_completed: 0, is_draft: 0, ...dateFilter }
+//       }),
+//       stream_project_booking.count({
+//         where: { is_cancelled: 1, ...dateFilter }
+//       }),
+//       stream_project_booking.count({
+//         where: { is_completed: 1, ...dateFilter }
+//       }),
+//       stream_project_booking.count({
+//         where: {
+//           is_cancelled: 0,
+//           is_draft: 0,
+//           ...dateFilter,
+//           event_date: {
+//             ...(dateFilter.event_date || {}),
+//             [Sequelize.Op.gt]: today
+//           }
+//         }
+//       }),
+//       stream_project_booking.count({
+//         where: { is_draft: 1, ...dateFilter }
+//       }),
+//     ]);
+
+//     const projects = await stream_project_booking.findAll({
+//       where: whereConditions,
+//       ...(noPagination ? {} : { limit: pageSize, offset }),
+//       order: [['event_date', 'DESC']],
+//     });
+
+//     if (!projects || projects.length === 0) {
+//       return res.status(200).json({
+//         error: false,
+//         message: 'No projects found',
+//         data: {
+//             stats: { total_active, total_cancelled, total_completed, total_upcoming, total_draft },
+//             projects: []
+//         }
+//       });
+//     }
+
+//     const projectDetailsPromises = projects.map(async (project) => {
+//       const assignedCrew = await assigned_crew.findAll({
+//         where: { project_id: project.stream_project_booking_id, is_active: 1 },
+//         include: [{ model: crew_members, as: 'crew_member', attributes: ['crew_member_id', 'first_name', 'last_name', 'primary_role'] }],
+//       });
+
+//       const assignedEquipment = await assigned_equipment.findAll({
+//         where: { project_id: project.stream_project_booking_id, is_active: 1 },
+//         include: [{ model: equipment, as: 'equipment', attributes: ['equipment_id', 'equipment_name'] }],
+//       });
+
+//       const assignedPostProd = await assigned_post_production_member.findAll({
+//         where: { project_id: project.stream_project_booking_id, is_active: 1 },
+//         include: [{ model: post_production_members, as: 'post_production_member', attributes: ['post_production_member_id', 'first_name', 'last_name', 'email'] }],
+//       });
+
+//       return {
+//         project: {
+//           ...project.toJSON(),
+//           event_location: (() => {
+//             const loc = project.event_location;
+//             if (!loc) return null;
+//             try {
+//               if (typeof loc === "string" && (loc.startsWith("{") || loc.startsWith("["))) {
+//                 const parsed = JSON.parse(loc);
+//                 return parsed.address || parsed;
+//               }
+//             } catch (e) { return loc; }
+//             return loc;
+//           })()
+//         },
+//         assignedCrew,
+//         assignedEquipment,
+//         assignedPostProductionMembers: assignedPostProd,
+//       };
+//     });
+
+//     const projectDetails = await Promise.all(projectDetailsPromises);
+
+//     return res.status(200).json({
+//       error: false,
+//       message: 'All project details retrieved successfully',
+//       data: {
+//         stats: { total_active, total_cancelled, total_completed, total_upcoming, total_draft },
+//         projects: projectDetails,
+//         pagination: noPagination ? null : {
+//             page: pageNumber,
+//             limit: pageSize,
+//             totalRecords: total_active + total_cancelled + total_completed + total_upcoming + total_draft,
+//           }
+//       },
+//     });
+//   } catch (error) {
+//     console.error('Error fetching project details:', error);
+//     return res.status(500).json({ error: true, message: 'Internal server error' });
+//   }
+// };
+
 exports.getAllProjectDetails = async (req, res) => {
   try {
     let { status, event_type, search, limit, page, range, start_date, end_date } = req.query;
     const today = new Date();
-
     const noPagination = !limit && !page;
 
-    let pageNumber = null;
-    let pageSize = null;
-    let offset = null;
-
+    let pageNumber = null, pageSize = null, offset = null;
     if (!noPagination) {
       pageNumber = parseInt(page ?? 1, 10);
       pageSize = parseInt(limit ?? 10, 10);
       offset = (pageNumber - 1) * pageSize;
     }
 
-    // ----------- IMPROVED DATE RANGE FILTER LOGIC -----------
+    // 1. Setup Date Filters
     let dateFilter = {};
-
     if (start_date && end_date) {
-      dateFilter = {
-        event_date: {
-          [Sequelize.Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`]
-        }
-      };
+      dateFilter = { event_date: { [Sequelize.Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`] } };
     } else if (range === 'month') {
-      dateFilter = {
-        [Sequelize.Op.and]: [
-            Sequelize.where(Sequelize.fn('MONTH', Sequelize.col('event_date')), Sequelize.fn('MONTH', Sequelize.fn('CURDATE'))),
-            Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('event_date')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
-        ]
-      };
-    } else if (range === 'week') {
-      dateFilter = {
-        [Sequelize.Op.and]: [
-            Sequelize.where(Sequelize.fn('YEARWEEK', Sequelize.col('event_date'), 1), Sequelize.fn('YEARWEEK', Sequelize.fn('CURDATE'), 1))
-        ]
-      };
-    } else if (range === 'year') {
-      dateFilter = {
-        [Sequelize.Op.and]: [
-            Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('event_date')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
-        ]
-      };
+      dateFilter = { [Sequelize.Op.and]: [
+        Sequelize.where(Sequelize.fn('MONTH', Sequelize.col('event_date')), Sequelize.fn('MONTH', Sequelize.fn('CURDATE'))),
+        Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('event_date')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
+      ]};
     }
 
-    const whereConditions = {
-      is_active: 1,
-      ...dateFilter
-    };
+    const whereConditions = { is_active: 1, ...dateFilter };
 
-    // ----------- STATUS FILTER -----------
+    // 2. Status & Search Filters
     if (status) {
-      switch (status) {
-        case 'cancelled':
-          whereConditions.is_cancelled = 1;
-          break;
-        case 'completed':
-          whereConditions.is_completed = 1;
-          break;
-        case 'upcoming':
-          whereConditions.is_cancelled = 0;
-          whereConditions.is_draft = 0;
-          whereConditions.event_date = {
-            ...(dateFilter.event_date || {}),
-            [Sequelize.Op.gt]: today
-          };
-          break;
-        case 'draft':
-          whereConditions.is_draft = 1;
-          break;
-        default:
-          return res.status(400).json({ error: true, message: 'Invalid status filter' });
+      if (status === 'cancelled') whereConditions.is_cancelled = 1;
+      else if (status === 'completed') whereConditions.is_completed = 1;
+      else if (status === 'upcoming') {
+        whereConditions.is_cancelled = 0; whereConditions.is_draft = 0;
+        whereConditions.event_date = { ...(dateFilter.event_date || {}), [Sequelize.Op.gt]: today };
       }
+      else if (status === 'draft') whereConditions.is_draft = 1;
     }
-
-    // ----------- EVENT TYPE FILTER -----------
-    if (event_type) {
-      whereConditions.event_type = event_type;
-    }
-
-    // ----------- SEARCH FILTER -----------
+    if (event_type) whereConditions.event_type = event_type;
     if (search) {
-      whereConditions.project_name = Sequelize.where(
-        Sequelize.fn('LOWER', Sequelize.col('project_name')),
-        { [Sequelize.Op.like]: `%${search.toLowerCase()}%` }
-      );
+      whereConditions.project_name = Sequelize.where(Sequelize.fn('LOWER', Sequelize.col('project_name')), { [Sequelize.Op.like]: `%${search.toLowerCase()}%` });
     }
 
-    // ----------- STATS COUNTS (Respecting Date Filter) -----------
+    // 3. Fetch Stats + Event Type Master in parallel
     const [
-      total_active,
-      total_cancelled,
-      total_completed,
-      total_upcoming,
-      total_draft
+      total_active, total_cancelled, total_completed, total_upcoming, total_draft,
+      allEventMasterTypes // Fetch names for numeric IDs like '6'
     ] = await Promise.all([
-      stream_project_booking.count({
-        where: { is_active: 1, is_cancelled: 0, is_completed: 0, is_draft: 0, ...dateFilter }
-      }),
-      stream_project_booking.count({
-        where: { is_cancelled: 1, ...dateFilter }
-      }),
-      stream_project_booking.count({
-        where: { is_completed: 1, ...dateFilter }
-      }),
-      stream_project_booking.count({
-        where: {
-          is_cancelled: 0,
-          is_draft: 0,
-          ...dateFilter,
-          event_date: {
-            ...(dateFilter.event_date || {}),
-            [Sequelize.Op.gt]: today
-          }
-        }
-      }),
-      stream_project_booking.count({
-        where: { is_draft: 1, ...dateFilter }
-      }),
+      stream_project_booking.count({ where: { is_active: 1, is_cancelled: 0, is_completed: 0, is_draft: 0, ...dateFilter } }),
+      stream_project_booking.count({ where: { is_cancelled: 1, ...dateFilter } }),
+      stream_project_booking.count({ where: { is_completed: 1, ...dateFilter } }),
+      stream_project_booking.count({ where: { is_cancelled: 0, is_draft: 0, ...dateFilter, event_date: { [Sequelize.Op.gt]: today } } }),
+      stream_project_booking.count({ where: { is_draft: 1, ...dateFilter } }),
+      event_type_master.findAll({ attributes: ['event_type_id', 'event_type_name'], raw: true })
     ]);
 
     const projects = await stream_project_booking.findAll({
@@ -1146,36 +1295,43 @@ exports.getAllProjectDetails = async (req, res) => {
       order: [['event_date', 'DESC']],
     });
 
-    if (!projects || projects.length === 0) {
-      return res.status(200).json({
-        error: false,
-        message: 'No projects found',
-        data: {
-            stats: { total_active, total_cancelled, total_completed, total_upcoming, total_draft },
-            projects: []
-        }
-      });
-    }
+    // 4. Processing Loop
+    const projectDetails = await Promise.all(projects.map(async (project) => {
+      const [assignedCrewData, assignedEquipData, assignedPostProdData] = await Promise.all([
+        assigned_crew.findAll({
+          where: { project_id: project.stream_project_booking_id, is_active: 1 },
+          include: [{ model: crew_members, as: 'crew_member', attributes: ['crew_member_id', 'first_name', 'last_name', 'primary_role'] }],
+        }),
+        assigned_equipment.findAll({
+          where: { project_id: project.stream_project_booking_id, is_active: 1 },
+          include: [{ model: equipment, as: 'equipment', attributes: ['equipment_id', 'equipment_name'] }],
+        }),
+        assigned_post_production_member.findAll({
+          where: { project_id: project.stream_project_booking_id, is_active: 1 },
+          include: [{ model: post_production_members, as: 'post_production_member', attributes: ['post_production_member_id', 'first_name', 'last_name', 'email'] }],
+        })
+      ]);
 
-    const projectDetailsPromises = projects.map(async (project) => {
-      const assignedCrew = await assigned_crew.findAll({
-        where: { project_id: project.stream_project_booking_id, is_active: 1 },
-        include: [{ model: crew_members, as: 'crew_member', attributes: ['crew_member_id', 'first_name', 'last_name', 'primary_role'] }],
-      });
+      // --- NEW LOGIC: Map Event Type to Labels ---
+      const rawTypes = project.event_type ? project.event_type.split(',') : [];
+      const formattedTypes = rawTypes.map(t => {
+        const val = t.trim();
+        // Check if it's a numeric ID in the master table
+        const masterMatch = allEventMasterTypes.find(m => String(m.event_type_id) === val);
+        if (masterMatch) return masterMatch.event_type_name;
 
-      const assignedEquipment = await assigned_equipment.findAll({
-        where: { project_id: project.stream_project_booking_id, is_active: 1 },
-        include: [{ model: equipment, as: 'equipment', attributes: ['equipment_id', 'equipment_name'] }],
-      });
-
-      const assignedPostProd = await assigned_post_production_member.findAll({
-        where: { project_id: project.stream_project_booking_id, is_active: 1 },
-        include: [{ model: post_production_members, as: 'post_production_member', attributes: ['post_production_member_id', 'first_name', 'last_name', 'email'] }],
+        // Custom mapping for string-based database values
+        const stringMap = {
+          'videographer': 'Videography',
+          'photographer': 'Photography'
+        };
+        return stringMap[val.toLowerCase()] || val.charAt(0).toUpperCase() + val.slice(1);
       });
 
       return {
         project: {
           ...project.toJSON(),
+          event_type_labels: formattedTypes.join(', '), // New field: "Videography, Photography"
           event_location: (() => {
             const loc = project.event_location;
             if (!loc) return null;
@@ -1188,13 +1344,11 @@ exports.getAllProjectDetails = async (req, res) => {
             return loc;
           })()
         },
-        assignedCrew,
-        assignedEquipment,
-        assignedPostProductionMembers: assignedPostProd,
+        assignedCrew: assignedCrewData,
+        assignedEquipment: assignedEquipData,
+        assignedPostProductionMembers: assignedPostProdData,
       };
-    });
-
-    const projectDetails = await Promise.all(projectDetailsPromises);
+    }));
 
     return res.status(200).json({
       error: false,
@@ -1206,7 +1360,7 @@ exports.getAllProjectDetails = async (req, res) => {
             page: pageNumber,
             limit: pageSize,
             totalRecords: total_active + total_cancelled + total_completed + total_upcoming + total_draft,
-          }
+        }
       },
     });
   } catch (error) {
@@ -2283,78 +2437,63 @@ exports.getCrewMembers = async (req, res) => {
     limit = parseInt(limit);
     const offset = (page - 1) * limit;
 
-    // Use an array for conditions
     let conditions = [{ is_active: 1 }];
 
-    // ----------- 1. STATUS FILTER -----------
     if (status) {
       if (status === 'pending') conditions.push({ is_crew_verified: 0 });
       else if (status === 'approved') conditions.push({ is_crew_verified: 1 });
       else if (status === 'rejected') conditions.push({ is_crew_verified: 2 });
     }
 
-    // ----------- 2. DATE RANGE FILTER (Fixed Ambiguity) -----------
-    // We add 'crew_members.' prefix to column names to avoid the ambiguous error
     if (start_date && end_date) {
       conditions.push({
         'created_at': { [Sequelize.Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`] }
       });
     } else if (range === 'month') {
-      conditions.push(
-        Sequelize.where(Sequelize.fn('MONTH', Sequelize.col('crew_members.created_at')), Sequelize.fn('MONTH', Sequelize.fn('CURDATE'))),
-        Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('crew_members.created_at')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
-      );
-    } else if (range === 'week') {
-      conditions.push(
-        Sequelize.where(Sequelize.fn('YEARWEEK', Sequelize.col('crew_members.created_at'), 1), Sequelize.fn('YEARWEEK', Sequelize.fn('CURDATE'), 1))
-      );
-    } else if (range === 'year') {
-      conditions.push(
-        Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('crew_members.created_at')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
-      );
+        conditions.push(
+            Sequelize.where(Sequelize.fn('MONTH', Sequelize.col('crew_members.created_at')), Sequelize.fn('MONTH', Sequelize.fn('CURDATE'))),
+            Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('crew_members.created_at')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
+        );
     }
 
-    // ----------- 3. SEARCH & LOCATION FILTERS -----------
-    if (search) {
-      conditions.push({ first_name: { [Sequelize.Op.like]: `%${search}%` } });
-    }
-    if (location) {
-      conditions.push({ location: { [Sequelize.Op.like]: `%${location}%` } });
-    }
+    if (search) conditions.push({ first_name: { [Sequelize.Op.like]: `%${search}%` } });
+    if (location) conditions.push({ location: { [Sequelize.Op.like]: `%${location}%` } });
 
-    // ----------- 4. DATABASE QUERY -----------
-    const { count, rows: members } = await crew_members.findAndCountAll({
-      where: { [Sequelize.Op.and]: conditions },
-      include: [
-        {
-          model: crew_member_files,
-          as: 'crew_member_files',
-          attributes: ['crew_files_id', 'file_type', 'file_path'],
-        },
-        {
-          model: crew_roles,
-          as: 'role',
-          attributes: ['role_name'],
-        },
-      ],
-      order: [
-        ['is_crew_verified', 'ASC'],
-        ['is_beige_member', 'ASC'],
-        ['crew_member_id', 'DESC'], 
-      ],
-      limit,
-      offset,
-    });
+    // 1. Fetch members and ALL roles in parallel
+    const [{ count, rows: members }, allRoles] = await Promise.all([
+      crew_members.findAndCountAll({
+        where: { [Sequelize.Op.and]: conditions },
+        include: [
+          {
+            model: crew_member_files,
+            as: 'crew_member_files',
+            attributes: ['crew_files_id', 'file_type', 'file_path'],
+          }
+          // Removed failing role include here because of JSON format
+        ],
+        order: [
+          ['is_crew_verified', 'ASC'],
+          ['is_beige_member', 'ASC'],
+          ['crew_member_id', 'DESC'], 
+        ],
+        limit,
+        offset,
+      }),
+      crew_roles.findAll({ attributes: ['role_id', 'role_name'], raw: true })
+    ]);
 
-    // ----------- 5. DATA PROCESSING -----------
+    // ----------- 2. DATA PROCESSING -----------
     const processedMembers = members.map((member) => {
+      const memberData = member.toJSON();
+      
+      // Handle Status
       let statusLabel = 'pending';
       if (member.is_crew_verified === 1) statusLabel = 'approved';
       else if (member.is_crew_verified === 2) statusLabel = 'rejected';
 
+      // Handle Location Parsing
       const loc = member.location;
       let finalLocation = loc;
-
       if (loc && typeof loc === 'string' && (loc.startsWith('{') || loc.startsWith('['))) {
         try {
           const parsed = JSON.parse(loc);
@@ -2362,10 +2501,26 @@ exports.getCrewMembers = async (req, res) => {
         } catch { finalLocation = loc; }
       }
 
+      // --- FIX: Handle Role Mapping from JSON Array ---
+      let roleNames = [];
+      try {
+        // Parse the primary_role (e.g. '["9"]' becomes [9])
+        const roleIds = JSON.parse(memberData.primary_role || "[]");
+        
+        // Find matching role names from our allRoles list
+        roleNames = allRoles
+            .filter(r => roleIds.includes(String(r.role_id)) || roleIds.includes(Number(r.role_id)))
+            .map(r => r.role_name);
+            
+      } catch (e) {
+        console.error("Role parsing error", e);
+      }
+
       return { 
-        ...member.toJSON(), 
+        ...memberData, 
         location: finalLocation, 
-        status: statusLabel 
+        status: statusLabel,
+        role: roleNames.length > 0 ? { role_name: roleNames.join(", ") } : null 
       };
     });
 
@@ -4107,14 +4262,17 @@ exports.getDashboardSummary = async (req, res) => {
       active_shoots,
       completed_shoots,
       total_clients,
-      total_CPs
+      total_CPs,
+      approved_CPs,
+      pending_CPs,
+      rejected_CPs
     ] = await Promise.all([
       stream_project_booking.count({
-        where: { is_active: 1, ...bookingDateFilter }
+        where: { is_active: 1, is_draft: 0, ...bookingDateFilter }
       }),
 
       stream_project_booking.count({
-        where: { is_active: 1, is_completed: 0, is_cancelled: 0, ...bookingDateFilter }
+        where: { is_active: 1, is_completed: 0, is_cancelled: 0, is_draft: 0, ...bookingDateFilter }
       }),
 
       stream_project_booking.count({
@@ -4127,6 +4285,18 @@ exports.getDashboardSummary = async (req, res) => {
 
       crew_members.count({
         where: { is_active: 1, ...standardDateFilter }
+      }),
+
+      crew_members.count({
+        where: { is_active: 1, is_crew_verified: 1, ...standardDateFilter }
+      }),
+
+      crew_members.count({
+        where: { is_active: 1, is_crew_verified: 0, ...standardDateFilter }
+      }),
+
+      crew_members.count({
+        where: { is_active: 1, is_crew_verified: 2, ...standardDateFilter }
       })
     ]);
 
@@ -4138,7 +4308,10 @@ exports.getDashboardSummary = async (req, res) => {
         active_shoots: { count: active_shoots, growth: 3 },
         completed_shoots: { count: completed_shoots, growth: 3 },
         total_clients: { count: total_clients, growth: 3 },
-        total_CPs: { count: total_CPs, growth: 3 }
+        total_CPs: { count: total_CPs, growth: 3 },
+        approved_CPs: { count: approved_CPs, growth: 3 },
+        pending_CPs: { count: pending_CPs, growth: 3 },
+        rejected_CPs: { count: rejected_CPs, growth: 3 }
       }
     });
   } catch (error) {
@@ -4148,6 +4321,131 @@ exports.getDashboardSummary = async (req, res) => {
       message: "Internal server error"
     });
   }
+};
+
+
+exports.getDashboardChartData = async (req, res) => {
+    try {
+        const { date_on } = req.query;
+
+        let standardDateFilter = buildDateFilter(req);
+        let bookingDateFilter = { ...standardDateFilter };
+
+        if (date_on) {
+            if (date_on.match(/^\d{4}-\d{2}-\d{2}$/)) {
+                const dayRange = { [Op.between]: [`${date_on} 00:00:00`, `${date_on} 23:59:59`] };
+                bookingDateFilter = { event_date: dayRange };
+                standardDateFilter = { created_at: dayRange };
+            } else if (date_on === 'event_date' && standardDateFilter.created_at) {
+                bookingDateFilter = { event_date: standardDateFilter.created_at };
+            }
+        }
+
+        const chartStartDate = moment().subtract(5, 'months').startOf('month').format('YYYY-MM-DD HH:mm:ss');
+        const chartEndDate = moment().endOf('day').format('YYYY-MM-DD HH:mm:ss');
+        const chartMonthRange = { [Op.between]: [chartStartDate, chartEndDate] };
+
+        const shootDateCol = (date_on === 'event_date') ? 'event_date' : 'created_at';
+
+        const [
+            total_shoots, active_shoots, completed_shoots, total_clients, total_CPs,
+            approved_CPs, pending_CPs, rejected_CPs,
+            chartShoots, chartClients, chartCPs
+        ] = await Promise.all([
+            stream_project_booking.count({ where: { is_active: 1, is_draft: 0, ...bookingDateFilter } }),
+            stream_project_booking.count({ where: { is_active: 1, is_completed: 0, is_cancelled: 0, is_draft: 0, ...bookingDateFilter } }),
+            stream_project_booking.count({ where: { is_active: 1, is_completed: 1, ...bookingDateFilter } }),
+            clients.count({ where: { is_active: 1, ...standardDateFilter } }),
+            crew_members.count({ where: { is_active: 1, ...standardDateFilter } }),
+            crew_members.count({ where: { is_active: 1, is_crew_verified: 1, ...standardDateFilter } }),
+            crew_members.count({ where: { is_active: 1, is_crew_verified: 0, ...standardDateFilter } }),
+            crew_members.count({ where: { is_active: 1, is_crew_verified: 2, ...standardDateFilter } }),
+
+            stream_project_booking.findAll({
+                attributes: [
+                    [Sequelize.fn('DATE_FORMAT', Sequelize.col(shootDateCol), '%Y-%m'), 'month'],
+                    [Sequelize.literal('SUM(CASE WHEN is_completed = 0 AND is_cancelled = 0 THEN 1 ELSE 0 END)'), 'active'],
+                    [Sequelize.literal('SUM(CASE WHEN is_completed = 1 THEN 1 ELSE 0 END)'), 'completed'],
+                    [Sequelize.fn('COUNT', Sequelize.literal('*')), 'total']
+                ],
+                where: { is_active: 1, [shootDateCol]: chartMonthRange },
+                group: [Sequelize.fn('DATE_FORMAT', Sequelize.col(shootDateCol), '%Y-%m')],
+                raw: true
+            }),
+            clients.findAll({
+                attributes: [
+                    [Sequelize.fn('DATE_FORMAT', Sequelize.col('created_at'), '%Y-%m'), 'month'],
+                    [Sequelize.fn('COUNT', Sequelize.literal('*')), 'count']
+                ],
+                where: { is_active: 1, created_at: chartMonthRange },
+                group: [Sequelize.fn('DATE_FORMAT', Sequelize.col('created_at'), '%Y-%m')],
+                raw: true
+            }),
+            crew_members.findAll({
+                attributes: [
+                    [Sequelize.fn('DATE_FORMAT', Sequelize.col('created_at'), '%Y-%m'), 'month'],
+                    [Sequelize.fn('COUNT', Sequelize.literal('*')), 'count']
+                ],
+                where: { is_active: 1, created_at: chartMonthRange },
+                group: [Sequelize.fn('DATE_FORMAT', Sequelize.col('created_at'), '%Y-%m')],
+                raw: true
+            })
+        ]);
+
+        const generateSixMonthData = (dbResults, type) => {
+            const result = [];
+            for (let i = 5; i >= 0; i--) {
+                const m = moment().subtract(i, 'months');
+                const monthKey = m.format('YYYY-MM');
+                const dbRow = dbResults.find(r => r.month === monthKey);
+
+                if (type === 'shoots') {
+                    result.push({
+                        label: m.format('MMM'),
+                        total: dbRow ? parseInt(dbRow.total) || 0 : 0,
+                        active: dbRow ? parseInt(dbRow.active) || 0 : 0,
+                        completed: dbRow ? parseInt(dbRow.completed) || 0 : 0
+                    });
+                } else {
+                    result.push({
+                        label: m.format('MMM'),
+                        count: dbRow ? parseInt(dbRow.count) || 0 : 0
+                    });
+                }
+            }
+            return result;
+        };
+
+        const shootChartData = generateSixMonthData(chartShoots, 'shoots');
+        const clientChartData = generateSixMonthData(chartClients, 'others');
+        const cpChartData = generateSixMonthData(chartCPs, 'others');
+
+        return res.status(200).json({
+            error: false,
+            message: "Dashboard data fetched successfully",
+            summary: {
+                total_shoots: { count: total_shoots, growth: 3 },
+                active_shoots: { count: active_shoots, growth: 3 },
+                completed_shoots: { count: completed_shoots, growth: 3 },
+                total_clients: { count: total_clients, growth: 0 },
+                total_CPs: { count: total_CPs, growth: 3 },
+                approved_CPs: { count: approved_CPs, growth: 3 },
+                pending_CPs: { count: pending_CPs, growth: 3 },
+                rejected_CPs: { count: rejected_CPs, growth: 3 }
+            },
+            charts: {
+                total_shoots: shootChartData.map(d => ({ label: d.label, value: d.total })),
+                active_shoots: shootChartData.map(d => ({ label: d.label, value: d.active })),
+                completed_shoots: shootChartData.map(d => ({ label: d.label, value: d.completed })),
+                total_clients: clientChartData.map(d => ({ label: d.label, value: d.count })),
+                total_CPs: cpChartData.map(d => ({ label: d.label, value: d.count }))
+            }
+        });
+
+    } catch (error) {
+        console.error("Dashboard API Error:", error);
+        return res.status(500).json({ error: true, message: "Internal server error" });
+    }
 };
 
 exports.getTotalRevenue = async (req, res) => {

@@ -44,6 +44,7 @@ router.get('/get-crew-count', admin.getCrewCount)
 
 // Dashboard statistics routes
 router.get('/get-dashboard-summary', admin.getDashboardSummary);
+router.get('/dashboard-chart-data', admin.getDashboardChartData);
 router.get('/dashboard/revenue/total', admin.getTotalRevenue);
 router.get('/dashboard/revenue/monthly', admin.getMonthlyRevenue);
 router.get('/dashboard/revenue/weekly', admin.getWeeklyRevenue);

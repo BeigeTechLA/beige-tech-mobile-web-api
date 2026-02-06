@@ -331,3 +331,7 @@ Content-Type: application/json
 ### get lead by id (3 is lead_id)
 GET {{URL}}creator/get-random-crew HTTP/1.1
 Content-Type: application/json
+
+### 
+GET {{URL}}admin/dashboard-chart-data HTTP/1.1
+Content-Type: application/json
