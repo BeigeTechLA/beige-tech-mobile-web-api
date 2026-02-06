@@ -124,3 +124,8 @@ UPDATE `user_type` SET `user_role` = 'Creative' WHERE `user_type`.`user_type_id`
 -- 05-02-26
 
 ALTER TABLE `users` CHANGE `is_active` `is_active` TINYINT(1) NOT NULL DEFAULT '1';
+
+-- 06-02-26
+ALTER TABLE `users` DROP INDEX `email`;
+ALTER TABLE `users` DROP INDEX `phone_number`;
+ALTER TABLE `users` DROP INDEX `instagram_handle`;
