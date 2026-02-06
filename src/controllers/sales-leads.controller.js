@@ -637,12 +637,14 @@ exports.getLeadById = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const lead = await sales_leads.findByPk(id, {
+    const lead = await sales_leads.findOne({
+      where: { lead_id: id }, 
       include: [
         {
           model: users,
           as: 'assigned_sales_rep',
-          attributes: ['id', 'name', 'email']
+          attributes: ['id', 'name', 'email'],
+          required: false
         },
         {
           model: stream_project_booking,
@@ -656,40 +658,48 @@ exports.getLeadById = async (req, res) => {
             'duration_hours',
             'budget',
             'description'
-          ]
+          ],
+          required: false
         },
         {
           model: discount_codes,
-          as: 'discount_codes'
+          as: 'discount_codes',
+          required: false
         },
         {
           model: payment_links,
-          as: 'payment_links'
+          as: 'payment_links',
+          required: false
         },
         {
           model: sales_lead_activities,
           as: 'activities',
+          required: false,
           include: [
             {
               model: users,
               as: 'performed_by',
-              attributes: ['id', 'name']
+              attributes: ['id', 'name'],
+              required: false
             }
-          ],
-          order: [['created_at', 'DESC']]
+          ]
         },
         {
           model: users,
           as: 'user',
-          attributes: ['phone_number']
+          attributes: ['phone_number'],
+          required: false
         }
+      ],
+      order: [
+        [{ model: sales_lead_activities, as: 'activities' }, 'created_at', 'DESC']
       ]
     });
 
     if (!lead) {
-      return res.status(constants.NOT_FOUND.code).json({
+      return res.status(404).json({
         success: false,
-        message: 'Lead not found'
+        message: `Lead with ID ${id} not found in the database.`
       });
     }
 
@@ -700,10 +710,10 @@ exports.getLeadById = async (req, res) => {
 
   } catch (error) {
     console.error('Error fetching lead details:', error);
-    res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+    res.status(500).json({
       success: false,
       message: 'Failed to fetch lead details',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: error.message
     });
   }
 };
