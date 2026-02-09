@@ -99,7 +99,7 @@ GET {{URL}}admin/get-projects HTTP/1.1
 Content-Type: application/json
 
 ###
-GET {{URL}}admin/get-project/475 HTTP/1.1
+GET {{URL}}admin/get-project/713 HTTP/1.1
 Content-Type: application/json
 
 ###
@@ -370,4 +370,8 @@ Content-Type: application/json
 
 ### 
 GET {{URL}}admin/dashboard-chart-data HTTP/1.1
+Content-Type: application/json
+
+### 
+GET {{URL}}admin/get-pending-cp HTTP/1.1
 Content-Type: application/json

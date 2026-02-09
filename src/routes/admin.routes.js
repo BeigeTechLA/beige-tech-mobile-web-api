@@ -40,7 +40,8 @@ router.get('/equipment-by-location', admin.getEquipmentByLocation);
 router.get('/equipment-autocomplete', admin.getEquipmentNameSuggestions);
 router.get('/get-event-types', admin.getEventTypes),
 router.get('/get-crew-member-name', admin.getCrewMembersByName)
-router.get('/get-crew-count', admin.getCrewCount)
+router.get('/get-crew-count', admin.getCrewCount);
+router.get('/get-pending-cp', admin.getAllPendingCrewMembers);
 
 // Dashboard statistics routes
 router.get('/get-dashboard-summary', admin.getDashboardSummary);
