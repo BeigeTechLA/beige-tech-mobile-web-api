@@ -159,8 +159,6 @@ const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 //   }
 // };
 
-
-
 exports.trackEarlyBookingInterest = async (req, res) => {
   try {
     const { guest_email, user_id, content_type, shoot_type, client_name } = req.body;
@@ -203,8 +201,6 @@ exports.trackEarlyBookingInterest = async (req, res) => {
         last_activity_at: new Date()
       });
 
-      // --- FIX: USE UPDATE LOGIC INSTEAD OF APPEND ---
-      // We send the Lead ID (existingLead.lead_id) as the key to find and update the existing row
       updateSheetRow('leads_data', existingLead.lead_id, [
         existingLead.lead_id,                 // A: Lead ID (Key)
         booking.stream_project_booking_id,    // B: Booking ID
@@ -634,6 +630,121 @@ exports.createSalesAssistedLead = async (req, res) => {
 //   }
 // };
 
+// exports.getLeads = async (req, res) => {
+//   try {
+//     const {
+//       page = 1,
+//       limit = 20,
+//       status,
+//       lead_type,
+//       assigned_to,
+//       search,
+//       range,
+//       start_date,
+//       end_date
+//     } = req.query;
+
+//     const offset = (parseInt(page) - 1) * parseInt(limit);
+//     const whereClause = { [Op.and]: [] };
+
+//     if (start_date && end_date) {
+//       whereClause.created_at = {
+//         [Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`]
+//       };
+//     } else if (range === 'month') {
+//       whereClause[Op.and].push(
+//         Sequelize.where(Sequelize.fn('MONTH', Sequelize.col('sales_leads.created_at')), Sequelize.fn('MONTH', Sequelize.fn('CURDATE'))),
+//         Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('sales_leads.created_at')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
+//       );
+//     } else if (range === 'week') {
+//       whereClause[Op.and].push(
+//         Sequelize.where(Sequelize.fn('YEARWEEK', Sequelize.col('sales_leads.created_at'), 1), Sequelize.fn('YEARWEEK', Sequelize.fn('CURDATE'), 1))
+//       );
+//     } else if (range === 'year') {
+//       whereClause[Op.and].push(
+//         Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('sales_leads.created_at')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
+//       );
+//     }
+
+//     // Status & Type
+//     if (status) whereClause.lead_status = status;
+//     if (lead_type) whereClause.lead_type = lead_type;
+
+//     // Assignment Logic
+//     if (assigned_to) {
+//       if (assigned_to === 'unassigned') {
+//         whereClause.assigned_sales_rep_id = null;
+//       } else {
+//         whereClause.assigned_sales_rep_id = parseInt(assigned_to);
+//       }
+//     }
+
+//     if (search) {
+//       whereClause[Op.and].push({
+//         [Op.or]: [
+//           { client_name: { [Op.like]: `%${search}%` } },
+//           { guest_email: { [Op.like]: `%${search}%` } }
+//         ]
+//       });
+//     }
+
+//     // Fetch leads
+//     const { count, rows: leads } = await sales_leads.findAndCountAll({
+//       where: whereClause,
+//       include: [
+//         {
+//           model: users,
+//           as: 'assigned_sales_rep',
+//           attributes: ['id', 'name', 'email']
+//         },
+//         {
+//           model: stream_project_booking,
+//           as: 'booking',
+//           attributes: ['stream_project_booking_id', 'project_name', 'event_date', 'event_type', 'budget']
+//         }
+//       ],
+//       limit: parseInt(limit),
+//       offset: offset,
+//       order: [
+//         ['created_at', 'DESC'],
+//         ['lead_id', 'DESC'] 
+//       ] 
+//     });
+
+//     res.json({
+//       success: true,
+//       data: {
+//         leads: leads.map(lead => ({
+//           lead_id: lead.lead_id,
+//           client_name: lead.client_name,
+//           guest_email: lead.guest_email || lead.user?.email,
+//           lead_type: lead.lead_type,
+//           lead_status: lead.lead_status,
+//           assigned_sales_rep: lead.assigned_sales_rep,
+//           booking: lead.booking,
+//           last_activity_at: lead.last_activity_at,
+//           contacted_sales_at: lead.contacted_sales_at,
+//           created_at: lead.created_at
+//         })),
+//         pagination: {
+//           total: count,
+//           page: parseInt(page),
+//           limit: parseInt(limit),
+//           totalPages: Math.ceil(count / parseInt(limit))
+//         }
+//       }
+//     });
+
+//   } catch (error) {
+//     console.error('Error fetching leads:', error);
+//     res.status(500).json({
+//       success: false,
+//       message: 'Failed to fetch leads',
+//       error: process.env.NODE_ENV === 'development' ? error.message : undefined
+//     });
+//   }
+// };
+
 exports.getLeads = async (req, res) => {
   try {
     const {
@@ -670,11 +781,9 @@ exports.getLeads = async (req, res) => {
       );
     }
 
-    // Status & Type
     if (status) whereClause.lead_status = status;
     if (lead_type) whereClause.lead_type = lead_type;
 
-    // Assignment Logic
     if (assigned_to) {
       if (assigned_to === 'unassigned') {
         whereClause.assigned_sales_rep_id = null;
@@ -704,7 +813,8 @@ exports.getLeads = async (req, res) => {
         {
           model: stream_project_booking,
           as: 'booking',
-          attributes: ['stream_project_booking_id', 'project_name', 'event_date', 'event_type', 'budget']
+          attributes: ['stream_project_booking_id', 'project_name', 'event_date', 'event_type', 'budget', 'payment_id'],
+          required: false 
         }
       ],
       limit: parseInt(limit),
@@ -718,18 +828,23 @@ exports.getLeads = async (req, res) => {
     res.json({
       success: true,
       data: {
-        leads: leads.map(lead => ({
-          lead_id: lead.lead_id,
-          client_name: lead.client_name,
-          guest_email: lead.guest_email || lead.user?.email,
-          lead_type: lead.lead_type,
-          lead_status: lead.lead_status,
-          assigned_sales_rep: lead.assigned_sales_rep,
-          booking: lead.booking,
-          last_activity_at: lead.last_activity_at,
-          contacted_sales_at: lead.contacted_sales_at,
-          created_at: lead.created_at
-        })),
+        leads: leads.map(lead => {
+          const isPaid = lead.booking && lead.booking.payment_id !== null;
+          return {
+            lead_id: lead.lead_id,
+            client_name: lead.client_name,
+            guest_email: lead.guest_email || lead.user?.email,
+            lead_type: lead.lead_type,
+            lead_status: lead.lead_status,
+            assigned_sales_rep: lead.assigned_sales_rep,
+            booking: lead.booking,
+            payment_status: isPaid ? 'paid' : 'unpaid',
+            payment_id: lead.booking ? lead.booking.payment_id : null,
+            last_activity_at: lead.last_activity_at,
+            contacted_sales_at: lead.contacted_sales_at,
+            created_at: lead.created_at
+          };
+        }),
         pagination: {
           total: count,
           page: parseInt(page),

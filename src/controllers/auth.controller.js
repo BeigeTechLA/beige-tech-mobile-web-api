@@ -2155,12 +2155,10 @@ exports.registerCrewMemberStep1 = [
         return res.status(400).json({ success: false, message: 'Required fields missing' });
       }
 
-      // CASE: UPDATE EXISTING (If user is coming back to edit step 1)
       if (crew_member_id && user_id) {
         await crew_members.update({ first_name, last_name, email, phone_number, location, working_distance }, { where: { crew_member_id } });
         await User.update({ name: `${first_name} ${last_name}`, email, phone_number }, { where: { id: user_id } });
 
-        // Update Google Sheets
         await updateSheetRow('Crew_data', crew_member_id, {
           'B': first_name, 
           'C': last_name, 
@@ -2174,7 +2172,6 @@ exports.registerCrewMemberStep1 = [
         return res.status(200).json({ success: true, message: 'Step 1 updated', crew_member_id, user_id });
       }
 
-      // CASE: NEW REGISTRATION
       const existingUser = await User.findOne({ where: { email } });
       if (existingUser) return res.status(409).json({ success: false, message: 'Email already exists' });
 
@@ -2183,16 +2180,27 @@ exports.registerCrewMemberStep1 = [
       });
 
       if (existingCrew) {
-        // if (existingCrew.is_active == 0) {
-        //   return res.status(409).json({
-        //     success: false,
-        //     message: 'Crew member with this email was deleted. Please contact support.'
-        //   });
-        // }
 
+        if (existingCrew.is_active == 0) {
+          return res.status(409).json({
+            success: false,
+            message: 'Crew member with this email was deleted. Please contact support.'
+          });
+        }
         return res.status(409).json({
           success: false,
           message: 'Crew member with this email already exists'
+        });
+      }
+
+      const existingPhoneUser = await User.findOne({
+        where: { phone_number }
+      });
+
+      if (existingPhoneUser) {
+        return res.status(409).json({
+          success: false,
+          message: 'Phone number already exists'
         });
       }
 
@@ -2209,7 +2217,6 @@ exports.registerCrewMemberStep1 = [
         first_name, last_name, email, phone_number, location, working_distance, is_active: 1
       });
 
-      // Handle profile photo upload
       if (req.files?.profile_photo) {
         const uploadedFiles = await S3UploadFiles(req.files);
         for (const file of uploadedFiles || []) {
@@ -2224,7 +2231,7 @@ exports.registerCrewMemberStep1 = [
         }
       }
 
-       await appendToSheet('Crew_data', [
+      await appendToSheet('Crew_data', [
         newCrewMember.crew_member_id, 
         first_name, 
         last_name, 

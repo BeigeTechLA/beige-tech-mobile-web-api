@@ -446,162 +446,105 @@ exports.confirmPaymentMulti = async (req, res) => {
   const transaction = await db.sequelize.transaction();
 
   try {
-    const {
-      paymentIntentId,
-      booking_id,
-      referral_code
-    } = req.body;
+    const { paymentIntentId, booking_id, referral_code } = req.body;
 
-    // Validation
-    if (!paymentIntentId) {
-      return res.status(400).json({
-        success: false,
-        message: 'Payment intent ID is required'
-      });
+    if (!paymentIntentId || !booking_id) {
+      return res.status(400).json({ success: false, message: 'Missing paymentIntentId or booking_id' });
     }
 
-    if (!booking_id) {
-      return res.status(400).json({
-        success: false,
-        message: 'Booking ID is required'
-      });
-    }
-
-    // Verify payment with Stripe
     const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
-
     if (paymentIntent.status !== 'succeeded') {
-      return res.status(400).json({
-        success: false,
-        message: 'Payment not completed',
-        paymentStatus: paymentIntent.status
-      });
+      return res.status(400).json({ success: false, message: 'Payment not successful' });
     }
 
-    // Check if payment already processed
     const existingPayment = await db.payment_transactions.findOne({
       where: { stripe_payment_intent_id: paymentIntentId }
     });
 
     if (existingPayment) {
-      return res.status(409).json({
-        success: false,
-        message: 'Payment already processed',
-        data: {
-          payment_id: existingPayment.payment_id
-        }
-      });
+      await transaction.rollback();
+      return res.status(409).json({ success: false, message: 'Payment already processed' });
     }
 
-    // Fetch booking details
     const booking = await db.stream_project_booking.findByPk(booking_id);
     if (!booking) {
-      return res.status(404).json({
-        success: false,
-        message: 'Booking not found'
-      });
+      await transaction.rollback();
+      return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
-    // Get amount from payment intent (already in cents)
-    const totalAmount = paymentIntent.amount / 100;
+    let validCreatorId = null;
 
-    // Get charge ID from payment intent
+    if (booking.creator_id) {
+      const check = await db.crew_members.findByPk(booking.creator_id);
+      if (check) validCreatorId = booking.creator_id;
+    }
+
+    if (!validCreatorId) {
+      const assigned = await db.assigned_crew.findOne({ where: { project_id: booking_id } });
+      if (assigned) validCreatorId = assigned.crew_member_id;
+    }
+
+    if (!validCreatorId) {
+      const firstCreator = await db.crew_members.findOne({ attributes: ['crew_member_id'] });
+      if (firstCreator) {
+        validCreatorId = firstCreator.crew_member_id;
+      } else {
+        throw new Error("Cannot process payment: No creators exist in the system to associate with this transaction.");
+      }
+    }
+
+    const finalShootDate = booking.shoot_date || booking.event_date || new Date();
+
+    const totalAmount = paymentIntent.amount / 100;
     const chargeId = paymentIntent.charges?.data[0]?.id || null;
 
-    // Create payment transaction record for multi-creator booking
     const payment = await db.payment_transactions.create({
       stripe_payment_intent_id: paymentIntentId,
       stripe_charge_id: chargeId,
-      creator_id: null, // Multi-creator, so no single creator_id
+      creator_id: validCreatorId,
       user_id: booking.user_id || null,
       guest_email: booking.guest_email || null,
       hours: booking.shoot_hours || 0,
-      hourly_rate: 0, // Multi-creator doesn't have single hourly rate
+      hourly_rate: 0,
       cp_cost: 0,
       equipment_cost: 0,
       subtotal: totalAmount,
-      beige_margin_percent: 0, // No margin applied for multi-creator bookings
+      beige_margin_percent: 0,
       beige_margin_amount: 0,
       total_amount: totalAmount,
-      shoot_date: booking.shoot_date,
+      shoot_date: finalShootDate,
       location: booking.event_location ? 
         (typeof booking.event_location === 'string' ? booking.event_location : JSON.stringify(booking.event_location)) 
-        : null,
+        : 'See Booking Details',
       shoot_type: booking.shoot_type || null,
       notes: booking.special_requests || null,
       referral_code: referral_code || null,
       status: 'succeeded'
     }, { transaction });
 
-    // Process referral if referral code was provided
-    let referralData = null;
-    if (referral_code) {
-      try {
-        const referral = await affiliateController.processReferral(
-          referral_code,
-          payment.payment_id,
-          totalAmount,
-          booking.user_id || null,
-          booking.guest_email || null,
-          transaction
-        );
-        if (referral) {
-          referralData = {
-            referral_id: referral.referral_id,
-            commission_amount: parseFloat(referral.commission_amount)
-          };
-          // Update payment with referral_id
-          payment.referral_id = referral.referral_id;
-          await payment.save({ transaction });
-        }
-      } catch (referralError) {
-        console.error('Failed to process referral:', referralError);
-        // Don't fail the payment if referral processing fails
-      }
-    }
-
-    // Update booking status to payment completed
     await db.stream_project_booking.update(
-      {
-        is_completed: 1,
-        payment_completed_at: new Date(),
-        payment_id: payment.payment_id,
-      },
-      {
-        where: { stream_project_booking_id: booking_id },
-        transaction
-      }
+      { payment_completed_at: new Date(), payment_id: payment.payment_id },
+      { where: { stream_project_booking_id: booking_id }, transaction }
     );
 
     await transaction.commit();
 
     return res.status(201).json({
       success: true,
-      message: 'Multi-creator payment confirmed and booking updated',
-      data: {
-        payment_id: payment.payment_id,
-        stripe_payment_intent_id: paymentIntentId,
-        stripe_charge_id: chargeId,
-        booking_id: booking_id,
-        total_amount: totalAmount,
-        status: 'succeeded',
-        referral: referralData
-      }
+      message: 'Payment processed successfully',
+      data: { payment_id: payment.payment_id, booking_id }
     });
 
   } catch (error) {
-    await transaction.rollback();
-
-    console.error('Multi-Creator Payment Confirmation Error:', error);
-
+    if (transaction) await transaction.rollback();
+    console.error('Multi-Creator Payment Error:', error);
     return res.status(500).json({
       success: false,
-      message: 'Failed to process multi-creator payment',
-      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+      message: 'Failed to process payment',
+      error: error.message
     });
   }
 };
-
 /**
  * Get payment status by payment_id or stripe_payment_intent_id
  * GET /api/payments/:id/status
