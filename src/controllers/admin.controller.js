@@ -5395,22 +5395,52 @@ exports.assignPostProductionMember = async (req, res) => {
 
 exports.getClients = async (req, res) => {
   try {
-    const ClientData = await clients.findAll({
-      where: { is_active: 1 },
-      order: [['name', 'ASC']]
+    let { page = 1, limit = 20, search } = req.query;
+
+    page = parseInt(page);
+    limit = parseInt(limit);
+    const offset = (page - 1) * limit;
+
+    const whereConditions = { is_active: 1 };
+
+    if (search) {
+      whereConditions[Op.or] = [
+        { name: { [Op.like]: `%${search}%` } },
+        { email: { [Op.like]: `%${search}%` } }
+      ];
+    }
+
+    const { count, rows: clientData } = await clients.findAndCountAll({
+      where: whereConditions,
+      order: [['name', 'ASC']],
+      limit: limit,
+      offset: offset
     });
 
-    if (!ClientData || ClientData.length === 0) {
-      return res.status(404).json({
-        error: true,
-        message: 'No active clients found',
+    if (!clientData || clientData.length === 0) {
+      return res.status(200).json({
+        error: false,
+        message: 'No clients found matching the criteria',
+        data: [],
+        pagination: {
+            total_records: 0,
+            current_page: page,
+            per_page: limit,
+            total_pages: 0
+        }
       });
     }
 
     return res.status(200).json({
       error: false,
       message: 'Clients fetched successfully',
-      data: ClientData
+      data: clientData,
+      pagination: {
+        total_records: count,
+        current_page: page,
+        per_page: limit,
+        total_pages: Math.ceil(count / limit)
+      }
     });
 
   } catch (error) {
@@ -5421,7 +5451,6 @@ exports.getClients = async (req, res) => {
     });
   }
 };
-
 
 exports.editClient = async (req, res) => {
   try {
