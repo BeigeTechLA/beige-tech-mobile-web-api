@@ -1,7 +1,8 @@
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const db = require('../models');
 const affiliateController = require('./affiliate.controller');
-
+const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
+const googleSheetService = require('../utils/googleSheetsService');
 // Get Beige margin percentage from environment, default to 25%
 const BEIGE_MARGIN_PERCENT = parseFloat(process.env.BEIGE_MARGIN_PERCENT || '25.00');
 
@@ -441,6 +442,10 @@ exports.createPaymentIntentMulti = async (req, res) => {
 /**
  * Confirm multi-creator payment and update booking status
  * POST /api/payments/confirm-multi
+
+/**
+ * Confirm multi-creator payment and update booking status + Google Sheet
+ * POST /api/payments/confirm-multi
  */
 exports.confirmPaymentMulti = async (req, res) => {
   const transaction = await db.sequelize.transaction();
@@ -448,15 +453,18 @@ exports.confirmPaymentMulti = async (req, res) => {
   try {
     const { paymentIntentId, booking_id, referral_code } = req.body;
 
+    // 1. Basic Validation
     if (!paymentIntentId || !booking_id) {
       return res.status(400).json({ success: false, message: 'Missing paymentIntentId or booking_id' });
     }
 
+    // 2. Verify Payment with Stripe
     const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
     if (paymentIntent.status !== 'succeeded') {
       return res.status(400).json({ success: false, message: 'Payment not successful' });
     }
 
+    // 3. Prevent Double Processing
     const existingPayment = await db.payment_transactions.findOne({
       where: { stripe_payment_intent_id: paymentIntentId }
     });
@@ -466,38 +474,38 @@ exports.confirmPaymentMulti = async (req, res) => {
       return res.status(409).json({ success: false, message: 'Payment already processed' });
     }
 
+    // 4. Fetch Booking Details
     const booking = await db.stream_project_booking.findByPk(booking_id);
     if (!booking) {
       await transaction.rollback();
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
+    // 5. SATISFY DATABASE CONSTRAINTS (creator_id and shoot_date)
     let validCreatorId = null;
-
     if (booking.creator_id) {
       const check = await db.crew_members.findByPk(booking.creator_id);
       if (check) validCreatorId = booking.creator_id;
     }
-
     if (!validCreatorId) {
       const assigned = await db.assigned_crew.findOne({ where: { project_id: booking_id } });
       if (assigned) validCreatorId = assigned.crew_member_id;
     }
-
     if (!validCreatorId) {
       const firstCreator = await db.crew_members.findOne({ attributes: ['crew_member_id'] });
-      if (firstCreator) {
-        validCreatorId = firstCreator.crew_member_id;
-      } else {
-        throw new Error("Cannot process payment: No creators exist in the system to associate with this transaction.");
-      }
+      validCreatorId = firstCreator ? firstCreator.crew_member_id : null;
+    }
+
+    // If still no creator, we cannot satisfy the DB foreign key
+    if (!validCreatorId) {
+       throw new Error("Cannot process payment: No valid creator found in system to link transaction.");
     }
 
     const finalShootDate = booking.shoot_date || booking.event_date || new Date();
-
     const totalAmount = paymentIntent.amount / 100;
     const chargeId = paymentIntent.charges?.data[0]?.id || null;
 
+    // 6. Create Payment Transaction in MySQL
     const payment = await db.payment_transactions.create({
       stripe_payment_intent_id: paymentIntentId,
       stripe_charge_id: chargeId,
@@ -522,16 +530,38 @@ exports.confirmPaymentMulti = async (req, res) => {
       status: 'succeeded'
     }, { transaction });
 
+    // 7. Update Booking record
     await db.stream_project_booking.update(
-      { payment_completed_at: new Date(), payment_id: payment.payment_id },
+      { 
+        payment_completed_at: new Date(), 
+        payment_id: payment.payment_id,
+        is_draft: 0 // Move from draft to active
+      },
       { where: { stream_project_booking_id: booking_id }, transaction }
     );
 
+    // 8. Commit the Database Transaction
     await transaction.commit();
+
+    // 9. GOOGLE SHEET SYNC (Using your new helper)
+    try {
+      const lead = await db.sales_leads.findOne({ where: { booking_id: booking_id } });
+      if (lead) {
+        // Your helper takes: tabName, id (from Col A), and an object map of columns to update
+        // J is Status, L is Is Draft, M is Last Activity
+        await updateSheetRow('leads_data', lead.lead_id, {
+          'J': 'Paid',
+          'L': 'No',
+          'M': new Date().toLocaleString()
+        });
+      }
+    } catch (sheetError) {
+      console.error('Google Sheet Sync Error:', sheetError.message);
+    }
 
     return res.status(201).json({
       success: true,
-      message: 'Payment processed successfully',
+      message: 'Payment confirmed successfully',
       data: { payment_id: payment.payment_id, booking_id }
     });
 

@@ -2173,7 +2173,7 @@ exports.registerCrewMemberStep1 = [
       }
 
       const existingUser = await User.findOne({ where: { email } });
-      if (existingUser) return res.status(409).json({ success: false, message: 'Email already exists' });
+      if (existingUser) return res.status(409).json({ success: false, message: 'Email already exists.' });
 
       const existingCrew = await crew_members.findOne({
         where: { email }
@@ -2189,7 +2189,7 @@ exports.registerCrewMemberStep1 = [
         }
         return res.status(409).json({
           success: false,
-          message: 'Crew member with this email already exists'
+          message: 'Crew member with this email already exists.'
         });
       }
 
@@ -2200,7 +2200,7 @@ exports.registerCrewMemberStep1 = [
       if (existingPhoneUser) {
         return res.status(409).json({
           success: false,
-          message: 'Phone number already exists'
+          message: 'Phone number already exists.'
         });
       }
 
