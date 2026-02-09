@@ -243,14 +243,27 @@ const generateVerificationOTPTemplate = (userData, otp) => {
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta name="color-scheme" content="dark light">
+      <meta name="supported-color-schemes" content="dark light">
       <title>Email Verification</title>
+      <style>
+        /* Specific override for iOS auto-linking and light-mode switching */
+        .otp-text {
+          color: #ffffff !important;
+          -webkit-text-fill-color: #ffffff !important;
+        }
+        /* Prevent iOS from turning numbers into blue links */
+        a[x-apple-data-detectors] {
+          color: inherit !important;
+          text-decoration: none !important;
+        }
+      </style>
     </head>
     <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #0A0F0D;">
       <table width="100%" height="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #0A0F0D; background: linear-gradient(0deg, #0A0F0D 77.1%, rgba(76, 57, 23, 0.10) 126.11%); padding: 60px 20px;">
         <tr>
           <td align="center" valign="top">
             <table width="600" cellpadding="0" cellspacing="0" style="background-color: #000000; border: 1px solid rgba(232, 209, 171, 0.15); border-radius: 12px; overflow: hidden; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);">
-
               <tr>
                 <td style="background-color: rgba(232, 209, 171, 0.05); padding: 40px 30px; text-align: center; border-bottom: 1px solid rgba(232, 209, 171, 0.1);">
                   <h1 style="margin: 0; color: #E8D1AB; font-size: 32px; font-weight: 500;">Verify Your Email</h1>
@@ -270,8 +283,8 @@ const generateVerificationOTPTemplate = (userData, otp) => {
                   <div style="text-align: center; margin: 30px 0;">
                     <div style="display: inline-block; background: linear-gradient(0deg, #0A0F0D 77.1%, rgba(76, 57, 23, 0.1) 126.11%); border: 1px solid rgba(232, 209, 171, 0.3); padding: 20px 40px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);">
                       <p style="margin: 0; font-size: 14px; color: #E8D1AB; text-transform: uppercase; letter-spacing: 1px; font-weight: 600;">Verification Code</p>
-                      <p style="margin: 10px 0 0; font-size: 36px; color: #ffffff; font-weight: 700; letter-spacing: 8px; font-family: 'Courier New', monospace;">
-                        ${otp}
+                      <p style="margin: 10px 0 0; font-size: 36px; font-weight: 700; letter-spacing: 8px; font-family: 'Courier New', monospace;">
+                        <span class="otp-text" style="color: #ffffff !important; -webkit-text-fill-color: #ffffff !important;">${otp}</span>
                       </p>
                     </div>
                   </div>
