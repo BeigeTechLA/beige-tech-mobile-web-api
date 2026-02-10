@@ -18,6 +18,7 @@ router.get('/get-upcoming-projects', admin.getUpcomingEvents);
 router.get('/get-project-status', admin.getProjectStats);
 router.post('/final-project-brief', admin.createProjectBrief);
 router.post('/get-crew-members', admin.getCrewMembers);
+router.post('/get-approved-crew-members', admin.getApprovedCrewMembers);
 router.get('/crew-member/:crew_member_id', admin.getCrewMemberById);
 router.delete('/delete-crew-member/:crew_member_id', admin.deleteCrewMember);
 router.put('/edit-crew-member/:crew_member_id', admin.updateCrewMember);

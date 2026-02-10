@@ -38,6 +38,7 @@ router.post('/equipment/delete-photo', creator.deleteEquipmentPhoto);
 router.post('/dashboard-details', creator.getDashboardDetails);
 router.post('/get-crew-stats', creator.getCrewShootStats);
 router.get('/get-random-crew', creator.getRandomCrewMembers);
+router.post('/check-verification-status', creator.checkVerificationStatus);
 
 
 module.exports = router;

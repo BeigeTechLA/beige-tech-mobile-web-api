@@ -709,8 +709,6 @@ exports.getCrewAvailability = async (req, res) => {
       where: { crew_member_id },
     });
 
-    console.log("Database query result:", crewMember);
-
     if (!crewMember) {
       return res.status(404).json({
         error: true,
@@ -749,6 +747,7 @@ exports.getCrewAvailability = async (req, res) => {
             "start_time",
             "end_time",
             "event_location",
+            "status"
           ],
         },
       ],
@@ -768,6 +767,7 @@ exports.getCrewAvailability = async (req, res) => {
           },
         ],
       },
+      order: [["created_at", "DESC"]],
     });
 
     const appliesOnDate = (rule, dateMoment) => {
@@ -791,18 +791,17 @@ exports.getCrewAvailability = async (req, res) => {
           return true;
 
         case 3: {
-  if (!rule.recurrence_days) return false;
+          if (!rule.recurrence_days) return false;
 
-  const days = JSON.parse(rule.recurrence_days)
-    .map(d => d.toLowerCase().slice(0, 3));
+          const days = JSON.parse(rule.recurrence_days)
+            .map(d => d.toLowerCase().slice(0, 3));
 
-  const currentDay = dateMoment
-    .format("ddd")
-    .toLowerCase();
+          const currentDay = dateMoment
+            .format("ddd")
+            .toLowerCase();
 
-  return days.includes(currentDay);
-}
-
+          return days.includes(currentDay);
+        }
 
         case 4:
           return (
@@ -826,6 +825,9 @@ exports.getCrewAvailability = async (req, res) => {
         projectAssigned: false,
         projectDetails: null,
         customAvailabilityStatus: null,
+        start_time: null,
+        end_time: null,
+        is_full_day: 1,
       };
 
       if (availability.includes(date.format("dddd"))) {
@@ -840,6 +842,11 @@ exports.getCrewAvailability = async (req, res) => {
         calendar[key].available = rule.availability_status == "1";
         calendar[key].customAvailabilityStatus =
           rule.availability_status;
+
+        if (rule.is_full_day === 0) {
+          calendar[key].start_time = rule.start_time;
+          calendar[key].end_time = rule.end_time;
+        }
       }
     }
 
@@ -857,6 +864,7 @@ exports.getCrewAvailability = async (req, res) => {
           start_time: project.project.start_time,
           end_time: project.project.end_time,
           event_location: project.project.event_location,
+          status: project.project.status
         };
       }
     }
@@ -2745,6 +2753,53 @@ exports.getRandomCrewMembers = async (req, res) => {
     return res.status(500).json({
       error: true,
       message: 'Internal server error',
+    });
+  }
+};
+
+exports.checkVerificationStatus = async (req, res) => {
+  try {
+    const { crew_member_id } = req.body;
+
+    if (!crew_member_id) {
+      return res.status(400).json({
+        error: true,
+        message: "crew_member_id is required"
+      });
+    }
+
+    const member = await crew_members.findOne({
+      where: { crew_member_id: crew_member_id },
+      attributes: ['crew_member_id', 'is_crew_verified', 'first_name', 'email']
+    });
+
+    if (!member) {
+      return res.status(constants.NOT_FOUND.code).json({
+        error: true,
+        code: constants.NOT_FOUND.code,
+        message: `Crew member not found`,
+        data: null,
+      });
+    }
+
+    return res.status(constants.OK.code).json({
+      error: false,
+      code: constants.OK.code,
+      message: "Status fetched successfully",
+      data: {
+        is_crew_verified: member.is_crew_verified,
+        name: member.name,
+        email: member.email
+      },
+    });
+
+  } catch (error) {
+    console.error("Check Verification Error:", error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      error: true,
+      code: constants.INTERNAL_SERVER_ERROR.code,
+      message: constants.INTERNAL_SERVER_ERROR.message,
+      data: null,
     });
   }
 };

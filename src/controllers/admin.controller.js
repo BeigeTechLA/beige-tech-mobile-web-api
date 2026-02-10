@@ -1382,9 +1382,163 @@ exports.getProjectDetails = async (req, res) => {
 // };
 
 
+// exports.getAllProjectDetails = async (req, res) => {
+//   try {
+//     let { status, event_type, search, limit, page, range, start_date, end_date, date_on } = req.query;
+//     const today = new Date();
+//     const noPagination = !limit && !page;
+
+//     let pageNumber = null, pageSize = null, offset = null;
+//     if (!noPagination) {
+//       pageNumber = parseInt(page ?? 1, 10);
+//       pageSize = parseInt(limit ?? 10, 10);
+//       offset = (pageNumber - 1) * pageSize;
+//     }
+
+//     // 1. Setup Date Filters
+//     let dateFilter = {};
+    
+//     if (start_date && end_date) {
+//       dateFilter = { event_date: { [Sequelize.Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`] } };
+//     } else if (range === 'month') {
+//       dateFilter = { [Sequelize.Op.and]: [
+//         Sequelize.where(Sequelize.fn('MONTH', Sequelize.col('event_date')), Sequelize.fn('MONTH', Sequelize.fn('CURDATE'))),
+//         Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('event_date')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
+//       ]};
+//     } else if (range === 'week') {
+//       dateFilter = { [Sequelize.Op.and]: [
+//         Sequelize.where(Sequelize.fn('WEEK', Sequelize.col('event_date')), Sequelize.fn('WEEK', Sequelize.fn('CURDATE'))),
+//         Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('event_date')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
+//       ]};
+//     } else if (range === 'all') {
+//       dateFilter = { event_date: { [Sequelize.Op.ne]: null } };  // Optional check to ensure event_date is not null
+//     } else if (date_on) {
+//       // If custom date is provided
+//       dateFilter = { event_date: { [Sequelize.Op.eq]: `${date_on} 00:00:00` } };
+//     }
+
+//     // --- Filter for Paid Projects Only ---
+//     const paidOnlyFilter = { 
+//       payment_id: { [Sequelize.Op.ne]: null },
+//       is_active: 1 
+//     };
+
+//     const whereConditions = { ...paidOnlyFilter, ...dateFilter };
+
+//     // 2. Status & Search Filters
+//     if (status) {
+//       if (status === 'cancelled') whereConditions.is_cancelled = 1;
+//       else if (status === 'completed') whereConditions.is_completed = 1;
+//       else if (status === 'upcoming') {
+//         whereConditions.is_cancelled = 0; 
+//         whereConditions.is_draft = 0;
+//         whereConditions.event_date = { ...(dateFilter.event_date || {}), [Sequelize.Op.gt]: today };
+//       }
+//       else if (status === 'draft') whereConditions.is_draft = 1;
+//     }
+    
+//     if (event_type) whereConditions.event_type = event_type;
+    
+//     if (search) {
+//       whereConditions.project_name = Sequelize.where(Sequelize.fn('LOWER', Sequelize.col('project_name')), { 
+//         [Sequelize.Op.like]: `%${search.toLowerCase()}%` 
+//       });
+//     }
+
+//     const [
+//       total_active, total_cancelled, total_completed, total_upcoming, total_draft,
+//       allEventMasterTypes 
+//     ] = await Promise.all([
+//       stream_project_booking.count({ where: { ...paidOnlyFilter, is_cancelled: 0, is_completed: 0, is_draft: 0, ...dateFilter } }),
+//       stream_project_booking.count({ where: { ...paidOnlyFilter, is_cancelled: 1, ...dateFilter } }),
+//       stream_project_booking.count({ where: { ...paidOnlyFilter, is_completed: 1, ...dateFilter } }),
+//       stream_project_booking.count({ where: { ...paidOnlyFilter, is_cancelled: 0, is_draft: 0, ...dateFilter, event_date: { [Sequelize.Op.gt]: today } } }),
+//       stream_project_booking.count({ where: { ...paidOnlyFilter, is_draft: 1, ...dateFilter } }),
+//       event_type_master.findAll({ attributes: ['event_type_id', 'event_type_name'], raw: true })
+//     ]);
+
+//     const projects = await stream_project_booking.findAll({
+//       where: whereConditions,
+//       ...(noPagination ? {} : { limit: pageSize, offset }),
+//       order: [['event_date', 'ASC']],
+//     });
+
+//     const projectDetails = await Promise.all(projects.map(async (project) => {
+//       const [assignedCrewData, assignedEquipData, assignedPostProdData, paymentData] = await Promise.all([
+//         assigned_crew.findAll({
+//           where: { project_id: project.stream_project_booking_id, is_active: 1 },
+//           include: [{ model: crew_members, as: 'crew_member', attributes: ['crew_member_id', 'first_name', 'last_name', 'primary_role'] }],
+//         }),
+//         assigned_equipment.findAll({
+//           where: { project_id: project.stream_project_booking_id, is_active: 1 },
+//           include: [{ model: equipment, as: 'equipment', attributes: ['equipment_id', 'equipment_name'] }],
+//         }),
+//         assigned_post_production_member.findAll({
+//           where: { project_id: project.stream_project_booking_id, is_active: 1 },
+//           include: [{ model: post_production_members, as: 'post_production_member', attributes: ['post_production_member_id', 'first_name', 'last_name', 'email'] }],
+//         }),
+//         payment_transactions.findOne({
+//           where: { payment_id: project.payment_id },
+//           attributes: ['total_amount']
+//         })
+//       ]);
+
+//       const rawTypes = project.event_type ? project.event_type.split(',') : [];
+//       const formattedTypes = rawTypes.map(t => {
+//         const val = t.trim();
+//         const masterMatch = allEventMasterTypes.find(m => String(m.event_type_id) === val);
+//         if (masterMatch) return masterMatch.event_type_name;
+//         const stringMap = { 'videographer': 'Videography', 'photographer': 'Photography' };
+//         return stringMap[val.toLowerCase()] || val.charAt(0).toUpperCase() + val.slice(1);
+//       });
+
+//       return {
+//         project: {
+//           ...project.toJSON(),
+//           total_paid_amount: paymentData ? paymentData.total_amount : 0,
+//           event_type_labels: formattedTypes.join(', '),
+//           event_location: (() => {
+//             const loc = project.event_location;
+//             if (!loc) return null;
+//             try {
+//               if (typeof loc === "string" && (loc.startsWith("{") || loc.startsWith("["))) {
+//                 const parsed = JSON.parse(loc);
+//                 return parsed.address || parsed;
+//               }
+//             } catch (e) { return loc; }
+//             return loc;
+//           })()
+//         },
+//         assignedCrew: assignedCrewData,
+//         assignedEquipment: assignedEquipData,
+//         assignedPostProductionMembers: assignedPostProdData,
+//       };
+//     }));
+
+//     return res.status(200).json({
+//       error: false,
+//       message: 'Paid project details with amounts retrieved successfully',
+//       data: {
+//         stats: { total_active, total_cancelled, total_completed, total_upcoming, total_draft },
+//         projects: projectDetails,
+//         pagination: noPagination ? null : {
+//             page: pageNumber,
+//             limit: pageSize,
+//             totalRecords: total_active + total_cancelled + total_completed + total_upcoming + total_draft,
+//         }
+//       },
+//     });
+//   } catch (error) {
+//     console.error('Error fetching project details:', error);
+//     return res.status(500).json({ error: true, message: 'Internal server error' });
+//   }
+// };
+
+
 exports.getAllProjectDetails = async (req, res) => {
   try {
-    let { status, event_type, search, limit, page, range, start_date, end_date } = req.query;
+    // 1. Added 'category' to the query parameters
+    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category } = req.query;
     const today = new Date();
     const noPagination = !limit && !page;
 
@@ -1395,7 +1549,19 @@ exports.getAllProjectDetails = async (req, res) => {
       offset = (pageNumber - 1) * pageSize;
     }
 
-    // 1. Setup Date Filters
+    // --- Category Keyword Configuration (Matches your other API) ---
+    const categoryConfig = {
+      corporate: ['corporate'],
+      wedding: ['wedding'],
+      private: ['private'],
+      commercial: ['commercial', 'brand', 'advertising'],
+      social: ['social'],
+      podcasts: ['podcast'],
+      music: ['music'],
+      narrative: ['narrative', 'short film']
+    };
+
+    // Setup Date Filters
     let dateFilter = {};
     if (start_date && end_date) {
       dateFilter = { event_date: { [Sequelize.Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`] } };
@@ -1404,17 +1570,40 @@ exports.getAllProjectDetails = async (req, res) => {
         Sequelize.where(Sequelize.fn('MONTH', Sequelize.col('event_date')), Sequelize.fn('MONTH', Sequelize.fn('CURDATE'))),
         Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('event_date')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
       ]};
+    } else if (range === 'week') {
+      dateFilter = { [Sequelize.Op.and]: [
+        Sequelize.where(Sequelize.fn('WEEK', Sequelize.col('event_date')), Sequelize.fn('WEEK', Sequelize.fn('CURDATE'))),
+        Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('event_date')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
+      ]};
+    } else if (range === 'all') {
+      dateFilter = { event_date: { [Sequelize.Op.ne]: null } };
+    } else if (date_on) {
+      dateFilter = { event_date: { [Sequelize.Op.eq]: `${date_on} 00:00:00` } };
     }
 
-    // --- Filter for Paid Projects Only ---
     const paidOnlyFilter = { 
       payment_id: { [Sequelize.Op.ne]: null },
       is_active: 1 
     };
 
-    const whereConditions = { ...paidOnlyFilter, ...dateFilter };
+    let whereConditions = { ...paidOnlyFilter, ...dateFilter };
 
-    // 2. Status & Search Filters
+    // 2. NEW: Category Filter Logic
+    // This checks if project_name contains any of the keywords for the selected category
+    if (category && categoryConfig[category.toLowerCase()]) {
+      const keywords = categoryConfig[category.toLowerCase()];
+      const categoryConditions = keywords.map(word => ({
+        project_name: { [Sequelize.Op.like]: `%${word}%` }
+      }));
+      
+      // We use [Sequelize.Op.or] because a commercial project might be 'brand' OR 'advertising'
+      whereConditions = {
+        ...whereConditions,
+        [Sequelize.Op.or]: categoryConditions
+      };
+    }
+
+    // 3. Status & Search Filters
     if (status) {
       if (status === 'cancelled') whereConditions.is_cancelled = 1;
       else if (status === 'completed') whereConditions.is_completed = 1;
@@ -1429,27 +1618,44 @@ exports.getAllProjectDetails = async (req, res) => {
     if (event_type) whereConditions.event_type = event_type;
     
     if (search) {
-      whereConditions.project_name = Sequelize.where(Sequelize.fn('LOWER', Sequelize.col('project_name')), { 
+      // If category filter is already using Op.or, we must be careful not to overwrite it
+      const searchCondition = Sequelize.where(Sequelize.fn('LOWER', Sequelize.col('project_name')), { 
         [Sequelize.Op.like]: `%${search.toLowerCase()}%` 
       });
+      
+      if (whereConditions[Sequelize.Op.or]) {
+        // If both category AND search are used, we wrap them in an Op.and
+        whereConditions = {
+            [Sequelize.Op.and]: [
+                { [Sequelize.Op.or]: whereConditions[Sequelize.Op.or] },
+                searchCondition
+            ],
+            ...paidOnlyFilter,
+            ...dateFilter
+        };
+      } else {
+        whereConditions.project_name = searchCondition;
+      }
     }
 
+    // 4. Get Counts and Projects
+    // Note: I updated the counts to use 'whereConditions' so they react to the category filter
     const [
       total_active, total_cancelled, total_completed, total_upcoming, total_draft,
       allEventMasterTypes 
     ] = await Promise.all([
-      stream_project_booking.count({ where: { ...paidOnlyFilter, is_cancelled: 0, is_completed: 0, is_draft: 0, ...dateFilter } }),
-      stream_project_booking.count({ where: { ...paidOnlyFilter, is_cancelled: 1, ...dateFilter } }),
-      stream_project_booking.count({ where: { ...paidOnlyFilter, is_completed: 1, ...dateFilter } }),
-      stream_project_booking.count({ where: { ...paidOnlyFilter, is_cancelled: 0, is_draft: 0, ...dateFilter, event_date: { [Sequelize.Op.gt]: today } } }),
-      stream_project_booking.count({ where: { ...paidOnlyFilter, is_draft: 1, ...dateFilter } }),
+      stream_project_booking.count({ where: { ...whereConditions, is_cancelled: 0, is_completed: 0, is_draft: 0 } }),
+      stream_project_booking.count({ where: { ...whereConditions, is_cancelled: 1 } }),
+      stream_project_booking.count({ where: { ...whereConditions, is_completed: 1 } }),
+      stream_project_booking.count({ where: { ...whereConditions, is_cancelled: 0, is_draft: 0, event_date: { [Sequelize.Op.gt]: today } } }),
+      stream_project_booking.count({ where: { ...whereConditions, is_draft: 1 } }),
       event_type_master.findAll({ attributes: ['event_type_id', 'event_type_name'], raw: true })
     ]);
 
     const projects = await stream_project_booking.findAll({
       where: whereConditions,
       ...(noPagination ? {} : { limit: pageSize, offset }),
-      order: [['event_date', 'DESC']],
+      order: [['event_date', 'ASC']],
     });
 
     const projectDetails = await Promise.all(projects.map(async (project) => {
@@ -1506,7 +1712,7 @@ exports.getAllProjectDetails = async (req, res) => {
 
     return res.status(200).json({
       error: false,
-      message: 'Paid project details with amounts retrieved successfully',
+      message: 'Filtered project details retrieved successfully',
       data: {
         stats: { total_active, total_cancelled, total_completed, total_upcoming, total_draft },
         projects: projectDetails,
@@ -2575,124 +2781,119 @@ exports.createCrewMember = [
 // };
 
 exports.getCrewMembers = async (req, res) => {
-  try {
-    let { 
-        page = 1, 
-        limit = 20, 
-        search, 
-        location, 
-        status, 
-        range, 
-        start_date, 
-        end_date 
-    } = req.body;
+    try {
+        let {
+            page = 1,
+            limit = 20,
+            search,
+            location,
+            status,
+            range,
+            start_date,
+            end_date
+        } = req.body;
 
-    page = parseInt(page);
-    limit = parseInt(limit);
-    const offset = (page - 1) * limit;
+        page = parseInt(page);
+        limit = parseInt(limit);
+        const offset = (page - 1) * limit;
 
-    let conditions = [{ is_active: 1 }];
+        let conditions = [{ is_active: 1 }];
 
-    if (status) {
-      if (status === 'pending') conditions.push({ is_crew_verified: 0 });
-      else if (status === 'approved') conditions.push({ is_crew_verified: 1 });
-      else if (status === 'rejected') conditions.push({ is_crew_verified: 2 });
+        if (status) {
+            if (status === 'pending') conditions.push({ is_crew_verified: 0 });
+            else if (status === 'approved') conditions.push({ is_crew_verified: 1 });
+            else if (status === 'rejected') conditions.push({ is_crew_verified: 2 });
+        }
+
+        if (start_date && end_date) {
+            conditions.push({
+                'created_at': { [Sequelize.Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`] }
+            });
+        } else if (range === 'month') {
+            conditions.push(
+                Sequelize.where(Sequelize.fn('MONTH', Sequelize.col('crew_members.created_at')), Sequelize.fn('MONTH', Sequelize.fn('CURDATE'))),
+                Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('crew_members.created_at')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
+            );
+        }
+
+        if (search) conditions.push({ first_name: { [Sequelize.Op.like]: `%${search}%` } });
+        if (location) conditions.push({ location: { [Sequelize.Op.like]: `%${location}%` } });
+
+        const [{ count, rows: members }, allRoles] = await Promise.all([
+            crew_members.findAndCountAll({
+                where: { [Sequelize.Op.and]: conditions },
+                distinct: true,
+                col: 'crew_member_id',
+                include: [{
+                    model: crew_member_files,
+                    as: 'crew_member_files',
+                    attributes: ['crew_files_id', 'file_type', 'file_path'],
+                }],
+                order: [
+                    ['is_crew_verified', 'ASC'],
+                    ['is_beige_member', 'ASC'],
+                    ['crew_member_id', 'DESC'],
+                ],
+                limit,
+                offset,
+            }),
+            crew_roles.findAll({ attributes: ['role_id', 'role_name'], raw: true })
+        ]);
+
+        const processedMembers = members.map((member) => {
+            const memberData = member.get({ clone: true });
+
+            let statusLabel = 'pending';
+            if (member.is_crew_verified === 1) statusLabel = 'approved';
+            else if (member.is_crew_verified === 2) statusLabel = 'rejected';
+
+            let finalLocation = memberData.location;
+            if (finalLocation && typeof finalLocation === 'string' && (finalLocation.startsWith('{') || finalLocation.startsWith('['))) {
+                try {
+                    const parsed = JSON.parse(finalLocation);
+                    finalLocation = parsed.address || parsed || finalLocation;
+                } catch { }
+            }
+
+            let roleNames = [];
+            const rawRole = memberData.primary_role;
+            if (rawRole) {
+                let roleIds = [];
+                try {
+                    const parsed = JSON.parse(rawRole);
+                    roleIds = Array.isArray(parsed) ? parsed.map(String) : [String(parsed)];
+                } catch (e) {
+                    roleIds = [String(rawRole)];
+                }
+                roleNames = allRoles
+                    .filter(r => roleIds.includes(String(r.role_id)))
+                    .map(r => r.role_name);
+            }
+
+            return {
+                ...memberData,
+                location: finalLocation,
+                status: statusLabel,
+                role: roleNames.length > 0 ? { role_name: roleNames.join(", ") } : null
+            };
+        });
+
+        return res.status(200).json({
+            error: false,
+            message: "Crew members fetched successfully",
+            pagination: {
+                total_records: count,
+                current_page: page,
+                per_page: limit,
+                total_pages: Math.ceil(count / limit),
+            },
+            data: processedMembers,
+        });
+
+    } catch (error) {
+        console.error("Get Crew Members Error:", error);
+        return res.status(500).json({ error: true, message: "Internal server error" });
     }
-
-    if (start_date && end_date) {
-      conditions.push({
-        'created_at': { [Sequelize.Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`] }
-      });
-    } else if (range === 'month') {
-        conditions.push(
-            Sequelize.where(Sequelize.fn('MONTH', Sequelize.col('crew_members.created_at')), Sequelize.fn('MONTH', Sequelize.fn('CURDATE'))),
-            Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('crew_members.created_at')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
-        );
-    }
-
-    if (search) conditions.push({ first_name: { [Sequelize.Op.like]: `%${search}%` } });
-    if (location) conditions.push({ location: { [Sequelize.Op.like]: `%${location}%` } });
-
-    // 1. Fetch members and ALL roles in parallel
-    const [{ count, rows: members }, allRoles] = await Promise.all([
-      crew_members.findAndCountAll({
-        where: { [Sequelize.Op.and]: conditions },
-        include: [
-          {
-            model: crew_member_files,
-            as: 'crew_member_files',
-            attributes: ['crew_files_id', 'file_type', 'file_path'],
-          }
-          // Removed failing role include here because of JSON format
-        ],
-        order: [
-          ['is_crew_verified', 'ASC'],
-          ['is_beige_member', 'ASC'],
-          ['crew_member_id', 'DESC'], 
-        ],
-        limit,
-        offset,
-      }),
-      crew_roles.findAll({ attributes: ['role_id', 'role_name'], raw: true })
-    ]);
-
-    // ----------- 2. DATA PROCESSING -----------
-    const processedMembers = members.map((member) => {
-      const memberData = member.toJSON();
-      
-      // Handle Status
-      let statusLabel = 'pending';
-      if (member.is_crew_verified === 1) statusLabel = 'approved';
-      else if (member.is_crew_verified === 2) statusLabel = 'rejected';
-
-      // Handle Location Parsing
-      const loc = member.location;
-      let finalLocation = loc;
-      if (loc && typeof loc === 'string' && (loc.startsWith('{') || loc.startsWith('['))) {
-        try {
-          const parsed = JSON.parse(loc);
-          finalLocation = parsed.address || parsed || loc;
-        } catch { finalLocation = loc; }
-      }
-
-      // --- FIX: Handle Role Mapping from JSON Array ---
-      let roleNames = [];
-      try {
-        // Parse the primary_role (e.g. '["9"]' becomes [9])
-        const roleIds = JSON.parse(memberData.primary_role || "[]");
-        
-        // Find matching role names from our allRoles list
-        roleNames = allRoles
-            .filter(r => roleIds.includes(String(r.role_id)) || roleIds.includes(Number(r.role_id)))
-            .map(r => r.role_name);
-            
-      } catch (e) {
-        console.error("Role parsing error", e);
-      }
-
-      return { 
-        ...memberData, 
-        location: finalLocation, 
-        status: statusLabel,
-        role: roleNames.length > 0 ? { role_name: roleNames.join(", ") } : null 
-      };
-    });
-
-    return res.status(200).json({
-      error: false,
-      message: "Crew members fetched successfully",
-      pagination: {
-        total_records: count,
-        current_page: page,
-        per_page: limit,
-        total_pages: Math.ceil(count / limit),
-      },
-      data: processedMembers,
-    });
-  } catch (error) {
-    console.error("Get Crew Members Error:", error);
-    return res.status(500).json({ error: true, message: "Internal server error" });
-  }
 };
 
 exports.verifyCrewMember = async (req, res) => {
@@ -2739,82 +2940,73 @@ exports.verifyCrewMember = async (req, res) => {
 
 
 exports.getCrewMemberById = async (req, res) => {
-  try {
-    const { crew_member_id } = req.params;
-
-    let member = await crew_members.findOne({
-      where: { crew_member_id },
-      include: [
-        {
-          model: crew_member_files,
-          as: 'crew_member_files',
-          attributes: ['crew_member_id', 'file_type', 'file_path', 'created_at', 'title', 'tag'],
-          where: { is_active: 1 },
-          required: false
-        }
-      ]
-    });
-
-    if (!member) {
-      return res.status(constants.NOT_FOUND.code).json({
-        error: true,
-        code: constants.NOT_FOUND.code,
-        message: "Crew member not found",
-        data: null,
-      });
-    }
-
-    const loc = member.location;
-
-    if (loc) {
-      if (typeof loc === 'string' && (loc.startsWith('{') || loc.startsWith('['))) {
-        try {
-          const parsed = JSON.parse(loc);
-          member.location = parsed.address || parsed || loc;
-        } catch {
-          member.location = loc;
-        }
-      } else {
-        member.location = loc;
-      }
-    }
-
-    let skillIds = [];
     try {
-      let raw = member.skills;
+        const { crew_member_id } = req.params;
 
-      if (raw) {
-        skillIds = typeof raw === 'string' ? JSON.parse(raw) : raw; 
-        skillIds = skillIds.map(id => parseInt(id));
-      }
-    } catch (err) {
-      skillIds = [];
+        let member = await crew_members.findOne({
+            where: { crew_member_id },
+            include: [{
+                model: crew_member_files,
+                as: 'crew_member_files',
+                attributes: ['crew_member_id', 'file_type', 'file_path', 'created_at', 'title', 'tag'],
+                where: { is_active: 1 },
+                required: false
+            }]
+        });
+
+        if (!member) {
+            return res.status(404).json({ error: true, message: "Crew member not found" });
+        }
+
+        const loc = member.location;
+        if (loc && typeof loc === 'string' && (loc.startsWith('{') || loc.startsWith('['))) {
+            try {
+                const parsed = JSON.parse(loc);
+                member.location = parsed.address || parsed || loc;
+            } catch { }
+        }
+
+        let skillIds = [];
+        try {
+            const rawSkills = member.skills;
+            if (rawSkills) {
+                const parsedSkills = typeof rawSkills === 'string' ? JSON.parse(rawSkills) : rawSkills;
+                skillIds = Array.isArray(parsedSkills) ? parsedSkills.map(id => parseInt(id)) : [parseInt(parsedSkills)];
+            }
+        } catch (err) { skillIds = []; }
+
+        let roleIds = [];
+        try {
+            const rawRole = member.primary_role;
+            if (rawRole) {
+                const parsedRole = (typeof rawRole === 'string' && (rawRole.startsWith('[') || rawRole.startsWith('{'))) 
+                    ? JSON.parse(rawRole) 
+                    : rawRole;
+                roleIds = Array.isArray(parsedRole) ? parsedRole.map(id => String(id)) : [String(parsedRole)];
+            }
+        } catch (err) { roleIds = []; }
+
+        const [skillList, roleList] = await Promise.all([
+            skills_master.findAll({ where: { id: skillIds }, attributes: ['id', 'name'] }),
+            crew_roles.findAll({ where: { role_id: roleIds }, attributes: ['role_id', 'role_name'] })
+        ]);
+
+        const memberJson = member.toJSON();
+        memberJson.skills = skillList;
+        memberJson.role = roleList.length > 0 
+            ? { role_name: roleList.map(r => r.role_name).join(", ") } 
+            : null;
+
+        return res.status(200).json({
+            error: false,
+            message: "Crew member fetched successfully",
+            data: memberJson,
+        });
+
+    } catch (error) {
+        console.error("Get Crew Member By ID Error:", error);
+        return res.status(500).json({ error: true, message: "Internal server error" });
     }
-
-    const skillList = await skills_master.findAll({
-      where: { id: skillIds },
-      attributes: ['id', 'name']
-    });
-
-    member = member.toJSON();
-    member.skills = skillList;
-
-    return res.status(constants.OK.code).json({
-      error: false,
-      code: constants.OK.code,
-      message: "Crew member fetched successfully",
-      data: member,
-    });
-
-  } catch (error) {
-    console.error("Get Crew Member Error:", error);
-    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
-      error: true,
-      code: constants.INTERNAL_SERVER_ERROR.code,
-      message: constants.INTERNAL_SERVER_ERROR.message,
-      data: null,
-    });
-  }
 };
 
 
@@ -5395,7 +5587,7 @@ exports.assignPostProductionMember = async (req, res) => {
 
 exports.getClients = async (req, res) => {
   try {
-    let { page = 1, limit = 20, search } = req.query;
+    let { page = 1, limit = 20, search, range, start_date, end_date } = req.query;
 
     page = parseInt(page);
     limit = parseInt(limit);
@@ -5403,33 +5595,42 @@ exports.getClients = async (req, res) => {
 
     const whereConditions = { is_active: 1 };
 
-    if (search) {
-      whereConditions[Op.or] = [
-        { name: { [Op.like]: `%${search}%` } },
-        { email: { [Op.like]: `%${search}%` } }
+    if (start_date && end_date) {
+      whereConditions.created_at = { 
+        [Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`] 
+      };
+    } else if (range === 'month') {
+      whereConditions[Op.and] = [
+        Sequelize.where(Sequelize.fn('MONTH', Sequelize.col('created_at')), Sequelize.fn('MONTH', Sequelize.fn('CURDATE'))),
+        Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('created_at')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
       ];
+    } else if (range === 'week') {
+        whereConditions[Op.and] = [
+          Sequelize.where(Sequelize.fn('WEEK', Sequelize.col('created_at')), Sequelize.fn('WEEK', Sequelize.fn('CURDATE'))),
+          Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('created_at')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
+        ];
+    }
+
+    if (search) {
+      const searchFilter = {
+        [Op.or]: [
+          { name: { [Op.like]: `%${search}%` } },
+          { email: { [Op.like]: `%${search}%` } }
+        ]
+      };
+      if (whereConditions[Op.and]) {
+        whereConditions[Op.and].push(searchFilter);
+      } else {
+        whereConditions[Op.or] = searchFilter[Op.or];
+      }
     }
 
     const { count, rows: clientData } = await clients.findAndCountAll({
       where: whereConditions,
-      order: [['name', 'ASC']],
+      order: [['created_at', 'DESC']],
       limit: limit,
       offset: offset
     });
-
-    if (!clientData || clientData.length === 0) {
-      return res.status(200).json({
-        error: false,
-        message: 'No clients found matching the criteria',
-        data: [],
-        pagination: {
-            total_records: 0,
-            current_page: page,
-            per_page: limit,
-            total_pages: 0
-        }
-      });
-    }
 
     return res.status(200).json({
       error: false,
@@ -5445,10 +5646,7 @@ exports.getClients = async (req, res) => {
 
   } catch (error) {
     console.error("Get Clients Error:", error);
-    return res.status(500).json({
-      error: true,
-      message: 'Internal server error',
-    });
+    return res.status(500).json({ error: true, message: 'Internal server error' });
   }
 };
 
@@ -5756,4 +5954,98 @@ exports.getAllPendingCrewMembers = async (req, res) => {
     console.error("Get All Pending Crew Members Error:", error);
     return res.status(500).json({ error: true, message: "Internal server error" });
   }
+};
+
+exports.getApprovedCrewMembers = async (req, res) => {
+    try {
+        let {
+            page = 1,
+            limit = 20,
+            search,
+            location,
+            range,
+            start_date,
+            end_date
+        } = req.body;
+
+        page = parseInt(page);
+        limit = parseInt(limit);
+        const offset = (page - 1) * limit;
+
+        let conditions = [{ is_active: 1 }, { is_crew_verified: 1 }];
+
+        if (start_date && end_date) {
+            conditions.push({ 'created_at': { [Sequelize.Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`] } });
+        }
+        if (search) conditions.push({ first_name: { [Sequelize.Op.like]: `%${search}%` } });
+        if (location) conditions.push({ location: { [Sequelize.Op.like]: `%${location}%` } });
+
+        const [{ count, rows: members }, allRoles] = await Promise.all([
+            crew_members.findAndCountAll({
+                where: { [Sequelize.Op.and]: conditions },
+                distinct: true,
+                col: 'crew_member_id',
+                include: [{
+                    model: crew_member_files,
+                    as: 'crew_member_files',
+                    attributes: ['crew_files_id', 'file_type', 'file_path'],
+                }],
+                order: [['crew_member_id', 'DESC']],
+                limit,
+                offset,
+            }),
+            crew_roles.findAll({ attributes: ['role_id', 'role_name'], raw: true })
+        ]);
+
+        const processedMembers = members.map((member) => {
+            const memberData = member.get({ clone: true });
+
+            // Location
+            let finalLocation = memberData.location;
+            if (finalLocation && typeof finalLocation === 'string' && (finalLocation.startsWith('{') || finalLocation.startsWith('['))) {
+                try {
+                    const parsed = JSON.parse(finalLocation);
+                    finalLocation = parsed.address || parsed || finalLocation;
+                } catch { }
+            }
+
+            let roleNames = [];
+            const rawRole = memberData.primary_role;
+            if (rawRole) {
+                let roleIds = [];
+                try {
+                    const parsed = JSON.parse(rawRole);
+                    roleIds = Array.isArray(parsed) ? parsed.map(String) : [String(parsed)];
+                } catch (e) {
+                    roleIds = [String(rawRole)];
+                }
+                roleNames = allRoles
+                    .filter(r => roleIds.includes(String(r.role_id)))
+                    .map(r => r.role_name);
+            }
+
+            return {
+                ...memberData,
+                location: finalLocation,
+                status: 'approved',
+                role: roleNames.length > 0 ? { role_name: roleNames.join(", ") } : null
+            };
+        });
+
+        return res.status(200).json({
+            error: false,
+            message: "Approved crew members fetched successfully",
+            pagination: {
+                total_records: count,
+                current_page: page,
+                per_page: limit,
+                total_pages: Math.ceil(count / limit),
+            },
+            data: processedMembers,
+        });
+
+    } catch (error) {
+        console.error("Get Approved Crew Error:", error);
+        return res.status(500).json({ error: true, message: "Internal server error" });
+    }
 };
