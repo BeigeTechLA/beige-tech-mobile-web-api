@@ -17,11 +17,10 @@ POST {{URL}}auth/register HTTP/1.1
 Content-Type: application/json
 
 {
-  "name": "Dev Test",
-  "email": "dev.@gmail.com",
-  "phone_number": "9990887777",
-  "password": "1",
-  "userType": 3
+  "name": "Production Manager",
+  "email": "production@beigecorporation.io",
+  "password": "Prod@2026!",
+  "userType": 6
 }
 
 ###

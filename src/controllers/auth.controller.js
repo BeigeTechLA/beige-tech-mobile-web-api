@@ -476,7 +476,7 @@ exports.register = async (req, res) => {
     }
 
     // Validate userType
-    if (![1, 2, 3, 4, 5].includes(userType)) {
+    if (![1, 2, 3, 4, 5, 6].includes(userType)) {
       return res.status(400).json({
         success: false,
         message: 'Invalid user type'

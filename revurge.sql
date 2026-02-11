@@ -129,3 +129,7 @@ ALTER TABLE `users` CHANGE `is_active` `is_active` TINYINT(1) NOT NULL DEFAULT '
 ALTER TABLE `users` DROP INDEX `email`;
 ALTER TABLE `users` DROP INDEX `phone_number`;
 ALTER TABLE `users` DROP INDEX `instagram_handle`;
+
+-- 11-02-26
+-- INSERT INTO `user_type` (`user_type_id`, `user_role`, `is_active`) VALUES (NULL, 'production_manager', '1');
+-- INSERT INTO `users` (`id`, `name`, `email`, `phone_number`, `instagram_handle`, `password_hash`, `otp_code`, `otp_expiry`, `email_verified`, `verification_code`, `created_at`, `is_active`, `user_type`, `reset_token`, `reset_token_expiry`) VALUES (NULL, 'Production Manager', 'production@beigecorporation.io', NULL, NULL, '$2b$10$Iu5MhthnoDvhPSc.v0t7Ru/2M3zlEMQAmyOL3A.cyMUD/etk9XO82', NULL, '2026-02-11 05:41:21', '0', '995983', '2026-02-11 05:31:21', '1', '6', NULL, NULL);
