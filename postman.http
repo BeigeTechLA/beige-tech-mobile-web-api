@@ -372,5 +372,9 @@ GET {{URL}}admin/dashboard-chart-data HTTP/1.1
 Content-Type: application/json
 
 ### 
+GET {{URL}}admin/dashboard-chart-data?range=custom&date_on=2026-02-11 HTTP/1.1
+Content-Type: application/json
+
+### 
 GET {{URL}}admin/get-pending-cp HTTP/1.1
 Content-Type: application/json

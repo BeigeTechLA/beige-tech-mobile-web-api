@@ -4674,24 +4674,28 @@ exports.getDashboardChartData = async (req, res) => {
     try {
         const { date_on } = req.query;
 
-        let standardDateFilter = buildDateFilter(req);
-        let bookingDateFilter = { ...standardDateFilter };
+        let standardDateFilter = {};
+        let bookingDateFilter = {};
 
-        if (date_on) {
-            if (date_on.match(/^\d{4}-\d{2}-\d{2}$/)) {
-                const dayRange = { [Op.between]: [`${date_on} 00:00:00`, `${date_on} 23:59:59`] };
-                bookingDateFilter = { event_date: dayRange };
-                standardDateFilter = { created_at: dayRange };
-            } else if (date_on === 'event_date' && standardDateFilter.created_at) {
-                bookingDateFilter = { event_date: standardDateFilter.created_at };
+        if (date_on && date_on.match(/^\d{4}-\d{2}-\d{2}$/)) {
+          bookingDateFilter = {
+            event_date: date_on
+          };
+
+          standardDateFilter = {
+            created_at: {
+              [Op.gte]: moment(date_on).startOf('day').toDate(),
+              [Op.lte]: moment(date_on).endOf('day').toDate()
             }
+          };
         }
 
-        const chartStartDate = moment().subtract(5, 'months').startOf('month').format('YYYY-MM-DD HH:mm:ss');
-        const chartEndDate = moment().endOf('day').format('YYYY-MM-DD HH:mm:ss');
+        const baseDate = (date_on && date_on.match(/^\d{4}-\d{2}-\d{2}$/)) ? moment(date_on) : moment();
+        const chartStartDate = baseDate.clone().subtract(5, 'months').startOf('month').toDate();
+        const chartEndDate = baseDate.clone().endOf('day').toDate();
         const chartMonthRange = { [Op.between]: [chartStartDate, chartEndDate] };
 
-        const shootDateCol = (date_on === 'event_date') ? 'event_date' : 'created_at';
+        const shootDateCol = 'event_date';
         const paidShootFilter = { payment_id: { [Op.ne]: null } };
 
         const [
@@ -4779,7 +4783,7 @@ exports.getDashboardChartData = async (req, res) => {
         const generateSixMonthData = (dbResults, type) => {
             const result = [];
             for (let i = 5; i >= 0; i--) {
-                const m = moment().subtract(i, 'months');
+                const m = baseDate.clone().subtract(i, 'months');
                 const monthKey = m.format('YYYY-MM');
                 const dbRow = dbResults.find(r => r.month === monthKey);
 
