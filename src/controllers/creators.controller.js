@@ -485,9 +485,19 @@ exports.searchCreators = async (req, res) => {
         ? matchedRoleNames.join(', ') 
         : 'Creative Professional';
 
+      const capitalize = (str) => {
+        if (!str) return '';
+        return str.charAt(0).toUpperCase() + str.slice(1).toLowerCase();
+      };
+
+      const firstName = capitalize(creatorData.first_name);
+      const lastInitial = creatorData.last_name
+        ? creatorData.last_name.charAt(0).toUpperCase()
+        : '';
+
       return {
         crew_member_id: creatorData.crew_member_id,
-        name: `${creatorData.first_name} ${creatorData.last_name}`,
+        name: `${firstName} ${lastInitial}`,
         role_id: creatorData.primary_role,
         role_name: roleName,
         hourly_rate: parseFloat(creatorData.hourly_rate || 0),

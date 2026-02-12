@@ -118,7 +118,9 @@ const authenticateAdmin = async (req, res, next) => {
 
     console.log(req.user);
 
-    if (decoded.userRole !== 'Admin') {
+    const allowedRoles = ['Admin', 'production_manager'];
+
+    if (!allowedRoles.includes(decoded.userRole)) {
       return res.status(403).json({
         error: true,
         message: 'Admin access required'
