@@ -696,6 +696,7 @@ exports.getAcceptedAndUpcomingProjects = async (req, res) => {
 
 exports.getCrewAvailability = async (req, res) => {
   try {
+    // const crew_member_id = req.body;
     const { year, month, crew_member_id } = req.body || req.query;
 
     if (!crew_member_id || !year || !month) {
@@ -747,7 +748,6 @@ exports.getCrewAvailability = async (req, res) => {
             "start_time",
             "end_time",
             "event_location",
-            "status"
           ],
         },
       ],
@@ -767,7 +767,7 @@ exports.getCrewAvailability = async (req, res) => {
           },
         ],
       },
-      order: [["created_at", "DESC"]],
+      order: [["created_at", "DESC"]], // Always fetch the latest entry
     });
 
     const appliesOnDate = (rule, dateMoment) => {
@@ -864,7 +864,6 @@ exports.getCrewAvailability = async (req, res) => {
           start_time: project.project.start_time,
           end_time: project.project.end_time,
           event_location: project.project.event_location,
-          status: project.project.status
         };
       }
     }
@@ -950,6 +949,7 @@ exports.getCrewAvailability = async (req, res) => {
 
 exports.setCrewAvailability = async (req, res) => {
   try {
+    // const crew_member_id = req.user.crew_member_id;
     const {
       crew_member_id,
       date,
@@ -1009,18 +1009,7 @@ exports.setCrewAvailability = async (req, res) => {
       recurrence_day_of_month
     };
 
-    const existing = await crew_availability.findOne({
-      where: { crew_member_id, date }
-    });
-
-    let availability;
-
-    if (existing) {
-      await existing.update(payload);
-      availability = existing;
-    } else {
-      availability = await crew_availability.create(payload);
-    }
+    const availability = await crew_availability.create(payload);
 
     // await common.logActivity({
     //   crew_member_id,

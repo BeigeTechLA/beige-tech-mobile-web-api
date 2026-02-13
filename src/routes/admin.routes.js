@@ -74,5 +74,7 @@ router.put('/edit-client/:client_id', admin.editClient);
 router.delete('/delete-client/:client_id', admin.deleteClient);
 router.delete('/delete-project/:project_id', admin.deleteProject);
 router.post('/upload-profile-photo', admin.uploadProfilePhoto);
+router.get('/get-client-by-id/:id', admin.getClientById);
+router.get('/get-clients-shoots/:clientId', admin.getClientsShoots);
 
 module.exports = router;
