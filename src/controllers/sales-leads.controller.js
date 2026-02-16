@@ -4,6 +4,78 @@ const { Op, Sequelize } = require('sequelize');
 const constants = require('../utils/constants');
 const leadAssignmentService = require('../services/lead-assignment.service');
 const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
+const pricingService = require('../services/pricing.service');
+
+
+const calculateLeadPricing = async (booking) => {
+    if (!booking) return null;
+
+    try {
+        const ROLE_TO_ITEM_MAP = {
+            videographer: 11,
+            photographer: 10,
+            cinematographer: 12,
+        };
+
+        let crewRoles = {};
+        try {
+            crewRoles = typeof booking.crew_roles === 'string' 
+                ? JSON.parse(booking.crew_roles || '{}') 
+                : (booking.crew_roles || {});
+        } catch (e) { 
+            crewRoles = {}; 
+        }
+
+        const items = Object.entries(crewRoles).map(([role, count]) => ({
+            item_id: ROLE_TO_ITEM_MAP[role.toLowerCase()],
+            quantity: count
+        })).filter(item => item.item_id);
+
+        let hours = Number(booking.duration_hours);
+        
+        if (!hours || hours <= 0) {
+            if (booking.start_time && booking.end_time) {
+                const [sH, sM] = booking.start_time.split(':').map(Number);
+                const [eH, eM] = booking.end_time.split(':').map(Number);
+                
+                const start = new Date(2000, 0, 1, sH, sM);
+                const end = new Date(2000, 0, 1, eH, eM);
+                
+                let diff = (end - start) / (1000 * 60 * 60);
+                if (diff < 0) diff += 24;
+                hours = Math.round(diff);
+            } else {
+                hours = 8; 
+            }
+        }
+
+        const parseEdits = (val) => {
+            if (!val) return [];
+            if (Array.isArray(val)) return val;
+            try { return JSON.parse(val); } catch { return []; }
+        };
+
+        const vEdits = parseEdits(booking.video_edit_types);
+        const pEdits = parseEdits(booking.photo_edit_types);
+
+        const quote = await pricingService.calculateQuote({
+            items: items,
+            shootHours: hours,
+            eventType: booking.shoot_type || booking.event_type || 'general',
+            shootStartDate: booking.event_date,
+            videoEditTypes: vEdits,
+            photoEditTypes: pEdits,
+            skipDiscount: true, 
+            skipMargin: true
+        });
+
+        return quote;
+    } catch (error) {
+        console.error('Lead Pricing calculation failed:', error);
+        return null;
+    }
+};
+
 
 
 /**
@@ -883,213 +955,117 @@ exports.createSalesAssistedLead = async (req, res) => {
 // };
 
 exports.getLeads = async (req, res) => {
-  try {
-    const {
-      page = 1,
-      limit = 20,
-      status,
-      lead_type,
-      assigned_to,
-      search,
-      range,
-      start_date,
-      end_date
-    } = req.query;
+    try {
+        const { page = 1, limit = 20, status, lead_type, assigned_to, search, range, start_date, end_date } = req.query;
+        const offset = (parseInt(page) - 1) * parseInt(limit);
+        const whereClause = { [Op.and]: [] };
 
-    const offset = (parseInt(page) - 1) * parseInt(limit);
-    const whereClause = { [Op.and]: [] };
-
-    if (start_date && end_date) {
-      whereClause.created_at = {
-        [Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`]
-      };
-    } else if (range === 'month') {
-      whereClause[Op.and].push(
-        Sequelize.where(Sequelize.fn('MONTH', Sequelize.col('sales_leads.created_at')), Sequelize.fn('MONTH', Sequelize.fn('CURDATE'))),
-        Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('sales_leads.created_at')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
-      );
-    } else if (range === 'week') {
-      whereClause[Op.and].push(
-        Sequelize.where(Sequelize.fn('YEARWEEK', Sequelize.col('sales_leads.created_at'), 1), Sequelize.fn('YEARWEEK', Sequelize.fn('CURDATE'), 1))
-      );
-    } else if (range === 'year') {
-      whereClause[Op.and].push(
-        Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('sales_leads.created_at')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
-      );
-    }
-
-    if (status) whereClause.lead_status = status;
-    if (lead_type) whereClause.lead_type = lead_type;
-
-    if (assigned_to) {
-      if (assigned_to === 'unassigned') {
-        whereClause.assigned_sales_rep_id = null;
-      } else {
-        whereClause.assigned_sales_rep_id = parseInt(assigned_to);
-      }
-    }
-
-    if (search) {
-      whereClause[Op.and].push({
-        [Op.or]: [
-          { client_name: { [Op.like]: `%${search}%` } },
-          { guest_email: { [Op.like]: `%${search}%` } }
-        ]
-      });
-    }
-
-    // Fetch leads
-    const { count, rows: leads } = await sales_leads.findAndCountAll({
-      where: whereClause,
-      include: [
-        {
-          model: users,
-          as: 'assigned_sales_rep',
-          attributes: ['id', 'name', 'email']
-        },
-        {
-          model: stream_project_booking,
-          as: 'booking',
-          attributes: ['stream_project_booking_id', 'project_name', 'event_date', 'event_type', 'budget', 'payment_id'],
-          required: false 
+        // Filtering logic
+        if (start_date && end_date) {
+            whereClause.created_at = { [Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`] };
         }
-      ],
-      limit: parseInt(limit),
-      offset: offset,
-      order: [
-        ['created_at', 'DESC'],
-        ['lead_id', 'DESC'] 
-      ] 
-    });
-
-    res.json({
-      success: true,
-      data: {
-        leads: leads.map(lead => {
-          const isPaid = lead.booking && lead.booking.payment_id !== null;
-          return {
-            lead_id: lead.lead_id,
-            client_name: lead.client_name,
-            guest_email: lead.guest_email || lead.user?.email,
-            lead_type: lead.lead_type,
-            lead_status: lead.lead_status,
-            assigned_sales_rep: lead.assigned_sales_rep,
-            booking: lead.booking,
-            payment_status: isPaid ? 'paid' : 'unpaid',
-            payment_id: lead.booking ? lead.booking.payment_id : null,
-            last_activity_at: lead.last_activity_at,
-            contacted_sales_at: lead.contacted_sales_at,
-            created_at: lead.created_at
-          };
-        }),
-        pagination: {
-          total: count,
-          page: parseInt(page),
-          limit: parseInt(limit),
-          totalPages: Math.ceil(count / parseInt(limit))
+        if (status) whereClause.lead_status = status;
+        if (lead_type) whereClause.lead_type = lead_type;
+        if (assigned_to) {
+            whereClause.assigned_sales_rep_id = assigned_to === 'unassigned' ? null : parseInt(assigned_to);
         }
-      }
-    });
 
-  } catch (error) {
-    console.error('Error fetching leads:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch leads',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
-    });
-  }
+        if (search) {
+            whereClause[Op.and].push({
+                [Op.or]: [
+                    { client_name: { [Op.like]: `%${search}%` } },
+                    { guest_email: { [Op.like]: `%${search}%` } }
+                ]
+            });
+        }
+
+        const { count, rows: leads } = await sales_leads.findAndCountAll({
+            where: whereClause,
+            include: [
+                { model: users, as: 'assigned_sales_rep', attributes: ['id', 'name', 'email'] },
+                { 
+                    model: stream_project_booking, 
+                    as: 'booking',
+                    attributes: [
+                        'stream_project_booking_id', 'event_date', 'event_type', 'shoot_type',
+                        'duration_hours', 'crew_roles', 'payment_id', 'start_time', 'end_time',
+                        'video_edit_types', 'photo_edit_types'
+                    ]
+                }
+            ],
+            limit: parseInt(limit),
+            offset: offset,
+            order: [['created_at', 'DESC']]
+        });
+
+        const leadsWithPricing = await Promise.all(leads.map(async (lead) => {
+            const quote = await calculateLeadPricing(lead.booking);
+            const leadJson = lead.toJSON();
+
+            return {
+                ...leadJson,
+                potential_value: quote ? quote.total : 0,
+                payment_status: lead.booking?.payment_id ? 'paid' : 'unpaid'
+            };
+        }));
+
+        res.json({
+            success: true,
+            data: {
+                leads: leadsWithPricing,
+                pagination: {
+                    total: count,
+                    page: parseInt(page),
+                    totalPages: Math.ceil(count / limit)
+                }
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Failed to fetch leads', error: error.message });
+    }
 };
 
 /**
- * Get lead details by ID
- * GET /api/sales/leads/:id
+ * GET LEAD BY ID
  */
 exports.getLeadById = async (req, res) => {
-  try {
-    const { id } = req.params;
+    try {
+        const { id } = req.params;
 
-    const lead = await sales_leads.findOne({
-      where: { lead_id: id }, 
-      include: [
-        {
-          model: users,
-          as: 'assigned_sales_rep',
-          attributes: ['id', 'name', 'email'],
-          required: false
-        },
-        {
-          model: stream_project_booking,
-          as: 'booking',
-          attributes: [
-            'stream_project_booking_id', 
-            'project_name', 
-            'event_date', 
-            'event_type', 
-            'event_location',
-            'duration_hours',
-            'budget',
-            'description'
-          ],
-          required: false
-        },
-        {
-          model: discount_codes,
-          as: 'discount_codes',
-          required: false
-        },
-        {
-          model: payment_links,
-          as: 'payment_links',
-          required: false
-        },
-        {
-          model: sales_lead_activities,
-          as: 'activities',
-          required: false,
-          include: [
-            {
-              model: users,
-              as: 'performed_by',
-              attributes: ['id', 'name'],
-              required: false
+        const lead = await sales_leads.findOne({
+            where: { lead_id: id }, 
+            include: [
+                { model: users, as: 'assigned_sales_rep', attributes: ['id', 'name', 'email'] },
+                { 
+                    model: stream_project_booking, 
+                    as: 'booking',
+                },
+                { model: discount_codes, as: 'discount_codes' },
+                { model: payment_links, as: 'payment_links' },
+                { 
+                    model: sales_lead_activities, as: 'activities', 
+                    include: [{ model: users, as: 'performed_by', attributes: ['id', 'name'] }] 
+                }
+            ],
+            order: [[{ model: sales_lead_activities, as: 'activities' }, 'created_at', 'DESC']]
+        });
+
+        if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
+
+        const quoteBreakdown = await calculateLeadPricing(lead.booking);
+
+        res.json({
+            success: true,
+            data: {
+                ...lead.toJSON(),
+                projected_quote: quoteBreakdown
             }
-          ]
-        },
-        {
-          model: users,
-          as: 'user',
-          attributes: ['phone_number'],
-          required: false
-        }
-      ],
-      order: [
-        [{ model: sales_lead_activities, as: 'activities' }, 'created_at', 'DESC']
-      ]
-    });
+        });
 
-    if (!lead) {
-      return res.status(404).json({
-        success: false,
-        message: `Lead with ID ${id} not found in the database.`
-      });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Failed to fetch lead details', error: error.message });
     }
-
-    res.json({
-      success: true,
-      data: lead
-    });
-
-  } catch (error) {
-    console.error('Error fetching lead details:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch lead details',
-      error: error.message
-    });
-  }
 };
-
 /**
  * Assign or reassign lead to sales rep
  * PUT /api/sales/leads/:id/assign
