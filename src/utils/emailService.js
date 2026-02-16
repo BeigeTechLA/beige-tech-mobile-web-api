@@ -247,19 +247,34 @@ const generateVerificationOTPTemplate = (userData, otp) => {
       <meta name="supported-color-schemes" content="dark light">
       <title>Email Verification</title>
       <style>
-        /* Specific override for iOS auto-linking and light-mode switching */
+        /* 1. Standard Media Query for iOS/Android/Desktop Browsers */
+        @media (prefers-color-scheme: dark) {
+          .body { background-color: #0A0F0D !important; }
+          .white-text { color: #ffffff !important; }
+          .muted-text { color: #6b7280 !important; } /* Slightly off-white for better readability */
+        }
+
+        /* 2. Outlook.com and Web App targeting */
+        [data-ogsc] .white-text { color: #ffffff !important; }
+        [data-ogsc] .muted-text { color: #6b7280 !important; }
+
+        /* 3. Handling iOS Auto-linking */
+        a[x-apple-data-detectors] {
+          color: inherit !important;
+          text-decoration: none !important;
+          font-size: inherit !important;
+          font-family: inherit !important;
+          font-weight: inherit !important;
+          line-height: inherit !important;
+        }
+
         .otp-text {
           color: #ffffff !important;
           -webkit-text-fill-color: #ffffff !important;
         }
-        /* Prevent iOS from turning numbers into blue links */
-        a[x-apple-data-detectors] {
-          color: inherit !important;
-          text-decoration: none !important;
-        }
       </style>
     </head>
-    <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #0A0F0D;">
+    <body class="body" style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #0A0F0D;">
       <table width="100%" height="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #0A0F0D; background: linear-gradient(0deg, #0A0F0D 77.1%, rgba(76, 57, 23, 0.10) 126.11%); padding: 60px 20px;">
         <tr>
           <td align="center" valign="top">
@@ -273,10 +288,11 @@ const generateVerificationOTPTemplate = (userData, otp) => {
 
               <tr>
                 <td style="padding: 40px 30px;">
-                  <p style="margin: 0; font-size: 16px; color: #ffffff; line-height: 1.6;">
+                  <p class="white-text" style="margin: 0; font-size: 16px; color: #ffffff; line-height: 1.6;">
                     Hi <strong>${userData.name}</strong>,
                   </p>
-                  <p style="margin: 20px 0; font-size: 16px; color: #9ca3af; line-height: 1.6;">
+
+                  <p class="muted-text" style="margin: 20px 0; font-size: 16px; color: #9ca3af; line-height: 1.6;">
                     Thank you for signing up with BeigeAI! To complete your registration, please verify your email address using the verification code below:
                   </p>
 
@@ -284,23 +300,23 @@ const generateVerificationOTPTemplate = (userData, otp) => {
                     <div style="display: inline-block; background: linear-gradient(0deg, #0A0F0D 77.1%, rgba(76, 57, 23, 0.1) 126.11%); border: 1px solid rgba(232, 209, 171, 0.3); padding: 20px 40px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);">
                       <p style="margin: 0; font-size: 14px; color: #E8D1AB; text-transform: uppercase; letter-spacing: 1px; font-weight: 600;">Verification Code</p>
                       <p style="margin: 10px 0 0; font-size: 36px; font-weight: 700; letter-spacing: 8px; font-family: 'Courier New', monospace;">
-                        <span class="otp-text" style="color: #ffffff !important; -webkit-text-fill-color: #ffffff !important;">${otp}</span>
+                        <span class="otp-text" style="color: #ffffff !important;">${otp}</span>
                       </p>
                     </div>
                   </div>
 
-                  <p style="margin: 20px 0; font-size: 14px; color: #6b7280; line-height: 1.6; text-align: center;">
+                  <p class="muted-text" style="margin: 20px 0; font-size: 14px; color: #6b7280; line-height: 1.6; text-align: center;">
                     This code will expire in <strong style="color: #E8D1AB;">10 minutes</strong>
                   </p>
 
                   <div style="background-color: rgba(232, 209, 171, 0.05); border-left: 4px solid #4c3917; padding: 15px; border-radius: 4px; margin-top: 30px;">
                     <p style="margin: 0; font-size: 13px; color: #E8D1AB; font-weight: 600;">Security Notice</p>
-                    <p style="margin: 8px 0 0; font-size: 13px; color: #9ca3af; line-height: 1.5;">
+                    <p class="muted-text" style="margin: 8px 0 0; font-size: 13px; color: #9ca3af; line-height: 1.5;">
                       Never share this code with anyone. BeigeAI will never ask for your verification code via phone or email.
                     </p>
                   </div>
 
-                  <p style="margin: 30px 0 0; font-size: 14px; color: #6b7280; line-height: 1.6;">
+                  <p class="muted-text" style="margin: 30px 0 0; font-size: 14px; color: #6b7280; line-height: 1.6;">
                     If you didn't request this code, please ignore this email or contact our support team.
                   </p>
                 </td>
@@ -308,10 +324,10 @@ const generateVerificationOTPTemplate = (userData, otp) => {
 
               <tr>
                 <td style="background-color: rgba(232, 209, 171, 0.02); padding: 25px 30px; border-top: 1px solid rgba(232, 209, 171, 0.1); text-align: center;">
-                  <p style="margin: 0; font-size: 13px; color: #6b7280; line-height: 1.5;">
+                  <p class="muted-text" style="margin: 0; font-size: 13px; color: #6b7280; line-height: 1.5;">
                     This is an automated email from BeigeAI. Please do not reply to this email.
                   </p>
-                  <p style="margin: 10px 0 0; font-size: 13px; color: #4b5563;">
+                  <p class="muted-text" style="margin: 10px 0 0; font-size: 13px; color: #4b5563;">
                     © ${new Date().getFullYear()} BeigeAI. All rights reserved.
                   </p>
                 </td>
