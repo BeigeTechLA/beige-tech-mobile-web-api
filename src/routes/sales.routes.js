@@ -223,4 +223,6 @@ router.patch(
   salesLeadsController.updateBookingCrew,
 );
 
+router.post('/leads/intent', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateLeadIntent);
+
 module.exports = router;

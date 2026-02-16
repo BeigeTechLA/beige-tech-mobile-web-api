@@ -19,6 +19,11 @@ if (models.users) {
   });
 }
 
+models.clients.belongsTo(models.users, {
+  foreignKey: 'user_id',
+  as: 'user'
+});
+
 models.sequelize = sequelize;
 models.Sequelize = require('sequelize');
 

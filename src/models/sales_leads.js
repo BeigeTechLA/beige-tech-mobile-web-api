@@ -48,6 +48,10 @@ module.exports = function(sequelize, DataTypes) {
       allowNull: false,
       defaultValue: 'in_progress_self_serve'
     },
+    intent: {
+      type: DataTypes.ENUM('Hot','Warm','Cold'),
+      allowNull: true
+    },
     assigned_sales_rep_id: {
       type: DataTypes.INTEGER,
       allowNull: true,
@@ -74,6 +78,14 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.DATE,
       allowNull: false,
       defaultValue: Sequelize.Sequelize.fn('current_timestamp')
+    },
+    intent_updated_by: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
+    intent_updated_at: {
+      type: DataTypes.DATE,
+      allowNull: true
     }
   }, {
     sequelize,
@@ -121,6 +133,13 @@ module.exports = function(sequelize, DataTypes) {
         using: "BTREE",
         fields: [
           { name: "lead_type" },
+        ]
+      },
+      {
+        name: "user_id",
+        using: "BTREE",
+        fields: [
+          { name: "user_id" },
         ]
       },
     ]

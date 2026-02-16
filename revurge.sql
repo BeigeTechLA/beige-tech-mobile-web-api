@@ -141,3 +141,14 @@ ADD COLUMN `shoot_type` VARCHAR(100) DEFAULT NULL AFTER `event_type`,
 ADD COLUMN `content_type` VARCHAR(255) DEFAULT NULL AFTER `shoot_type`,
 ADD COLUMN `reference_links` TEXT DEFAULT NULL AFTER `equipments_needed`;
 ALTER TABLE `stream_project_booking` ADD `special_instructions` TEXT NULL DEFAULT NULL AFTER `photo_edit_types`;
+
+ALTER TABLE sales_leads
+ADD COLUMN intent ENUM('Hot','Warm','Cold') DEFAULT NULL AFTER lead_status,
+ADD COLUMN intent_updated_by INT DEFAULT NULL,
+ADD COLUMN intent_updated_at TIMESTAMP NULL;
+
+ALTER TABLE stream_project_booking
+  ADD COLUMN edits_needed TINYINT(1) DEFAULT 0 AFTER reference_links,
+  ADD COLUMN video_edit_types TEXT DEFAULT NULL AFTER edits_needed,
+  ADD COLUMN photo_edit_types TEXT DEFAULT NULL AFTER video_edit_types,
+  ADD COLUMN special_instructions TEXT DEFAULT NULL AFTER photo_edit_types;

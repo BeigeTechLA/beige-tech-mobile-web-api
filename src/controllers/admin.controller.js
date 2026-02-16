@@ -31,6 +31,7 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   clients,sales_leads,
   payments } = require('../models');
   const { deleteSheetRow, updateSheetRow } = require('../utils/googleSheets');
+const leadAssignmentService = require('../services/lead-assignment.service');
 
 function toArray(value) {
   if (!value) return [];
@@ -101,7 +102,7 @@ const upload = multer({
   storage: storage,
   limits: { fileSize: 25 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowedTypes = ['image/jpeg', 'image/png','image/webp', 'image/jfif', 'image/jpg', 'application/pdf'];
+    const allowedTypes = ['image/jpeg', 'image/png', 'application/pdf'];
     if (!allowedTypes.includes(file.mimetype)) {
       return cb(new Error('Invalid file type. Only JPEG, PNG, and PDF are allowed.'));
     }
@@ -5637,19 +5638,31 @@ exports.getClients = async (req, res) => {
     const whereConditions = { is_active: 1 };
 
     if (start_date && end_date) {
-      whereConditions.created_at = { 
-        [Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`] 
+      whereConditions.created_at = {
+        [Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`]
       };
     } else if (range === 'month') {
       whereConditions[Op.and] = [
-        Sequelize.where(Sequelize.fn('MONTH', Sequelize.col('created_at')), Sequelize.fn('MONTH', Sequelize.fn('CURDATE'))),
-        Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('created_at')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
+        Sequelize.where(
+          Sequelize.fn('MONTH', Sequelize.col('clients.created_at')),
+          Sequelize.fn('MONTH', Sequelize.fn('CURDATE'))
+        ),
+        Sequelize.where(
+          Sequelize.fn('YEAR', Sequelize.col('clients.created_at')),
+          Sequelize.fn('YEAR', Sequelize.fn('CURDATE'))
+        )
       ];
     } else if (range === 'week') {
-        whereConditions[Op.and] = [
-          Sequelize.where(Sequelize.fn('WEEK', Sequelize.col('created_at')), Sequelize.fn('WEEK', Sequelize.fn('CURDATE'))),
-          Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('created_at')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
-        ];
+      whereConditions[Op.and] = [
+        Sequelize.where(
+          Sequelize.fn('WEEK', Sequelize.col('clients.created_at')),
+          Sequelize.fn('WEEK', Sequelize.fn('CURDATE'))
+        ),
+        Sequelize.where(
+          Sequelize.fn('YEAR', Sequelize.col('clients.created_at')),
+          Sequelize.fn('YEAR', Sequelize.fn('CURDATE'))
+        )
+      ];
     }
 
     if (search) {
@@ -5659,6 +5672,7 @@ exports.getClients = async (req, res) => {
           { email: { [Op.like]: `%${search}%` } }
         ]
       };
+
       if (whereConditions[Op.and]) {
         whereConditions[Op.and].push(searchFilter);
       } else {
@@ -5666,17 +5680,52 @@ exports.getClients = async (req, res) => {
       }
     }
 
-    const { count, rows: clientData } = await clients.findAndCountAll({
+    const { count, rows } = await clients.findAndCountAll({
       where: whereConditions,
+      limit,
+      offset,
       order: [['created_at', 'DESC']],
-      limit: limit,
-      offset: offset
+      include: [
+        {
+          model: users,
+          as: 'user',
+          attributes: ['id'],
+          include: [
+            {
+              model: sales_leads,
+              as: 'sales_leads', 
+              required: false,
+              separate: true,
+              limit: 1,
+              order: [['created_at', 'DESC']],
+              include: [
+                {
+                  model: stream_project_booking,
+                  as: 'booking',
+                  required: false
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    });
+
+    const data = rows.map(client => {
+      const lead = client.user?.sales_leads?.[0] || null;
+      const booking = lead?.booking || null;
+
+      return {
+        ...client.toJSON(),
+        intent: leadAssignmentService.getClientIntent({ lead, booking }),
+        booking_status: leadAssignmentService.getClientBookingStatus(booking)
+      };
     });
 
     return res.status(200).json({
       error: false,
       message: 'Clients fetched successfully',
-      data: clientData,
+      data,
       pagination: {
         total_records: count,
         current_page: page,
@@ -5687,9 +5736,13 @@ exports.getClients = async (req, res) => {
 
   } catch (error) {
     console.error("Get Clients Error:", error);
-    return res.status(500).json({ error: true, message: 'Internal server error' });
+    return res.status(500).json({
+      error: true,
+      message: 'Internal server error'
+    });
   }
 };
+
 
 exports.editClient = async (req, res) => {
   try {

@@ -1002,10 +1002,20 @@ exports.getLeads = async (req, res) => {
             const quote = await calculateLeadPricing(lead.booking);
             const leadJson = lead.toJSON();
 
+            const intent =
+              lead.intent ??
+              leadAssignmentService.getLeadIntent({ lead, booking: lead.booking });
+
             return {
                 ...leadJson,
                 potential_value: quote ? quote.total : 0,
-                payment_status: lead.booking?.payment_id ? 'paid' : 'unpaid'
+                payment_status: lead.booking?.payment_id ? 'paid' : 'unpaid',
+                booking_status: leadAssignmentService.getLeadBookingStatus(
+                  lead,
+                  lead.booking
+                ),
+                intent,
+                intent_source: lead.intent ? 'manual' : 'system'
             };
         }));
 
@@ -1231,8 +1241,7 @@ exports.updateLeadStatus = async (req, res) => {
 exports.updateBookingCrew = async (req, res) => {
   try {
     const { bookingId } = req.params;
-    // EXTRACT NEW FIELDS FROM BODY
-    const { crew_roles, location, description, reference_links } = req.body;
+    const { crew_roles } = req.body;
 
     if (!crew_roles || typeof crew_roles !== 'object') {
       return res.status(constants.BAD_REQUEST.code).json({
@@ -1279,6 +1288,45 @@ exports.updateBookingCrew = async (req, res) => {
     return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
       success: false,
       message: 'Failed to update details'
+    });
+  }
+};
+
+exports.updateLeadIntent = async (req, res) => {
+  try {
+    const { lead_id, intent, notes } = req.body;
+    const salesUserId = req.userId;
+
+    if (!['Hot', 'Warm', 'Cold'].includes(intent)) {
+      return res.status(400).json({ message: 'Invalid intent' });
+    }
+
+    const lead = await sales_leads.findByPk(lead_id);
+    if (!lead) {
+      return res.status(404).json({ message: 'Lead not found' });
+    }
+
+    await lead.update({
+      intent,
+      intent_updated_by: salesUserId,
+      intent_updated_at: new Date()
+    });
+
+    await sales_lead_activities.create({
+      lead_id,
+      activity_type: 'intent_updated',
+      activity_data: { intent, notes }
+    });
+
+    return res.json({
+      success: true,
+      message: 'Lead intent updated successfully'
+    });
+  } catch (error) {
+    console.error('Error updating booking crew:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to update crew details'
     });
   }
 };

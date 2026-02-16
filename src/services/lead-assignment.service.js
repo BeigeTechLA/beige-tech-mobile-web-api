@@ -261,6 +261,125 @@ async function unassignLead(leadId, performedByUserId) {
   });
 }
 
+const getLeadBookingStatus = (lead, booking) => {
+  if (lead.lead_status === 'abandoned') {
+    return 'Closed – Lost';
+  }
+
+  if (booking?.payment_id) {
+    return 'Booked';
+  }
+
+  if (lead.lead_status === 'payment_link_sent') {
+    return 'Payment Sent';
+  }
+
+  if (booking && booking.is_draft === 0) {
+    return 'Ready for Payment';
+  }
+
+  if (booking && booking.is_draft === 1) {
+    return 'Booking In Progress';
+  }
+
+  if (!booking && lead.lead_type === 'sales_assisted') {
+    return 'Manual – Lead Created';
+  }
+
+  return 'Lead Created';
+};
+
+const getLeadIntent = ({ lead, booking }) => {
+  // 1. Manual override (highest priority)
+  if (lead?.intent) {
+    return {
+      intent: lead.intent,
+      source: 'manual'
+    };
+  }
+
+  // 2. Payment done
+  if (booking?.payment_id) {
+    return {
+      intent: 'Hot',
+      source: 'system'
+    };
+  }
+
+  // 3. Checkout reached (non-draft booking)
+  if (booking && booking.is_draft === false) {
+    return {
+      intent: 'Hot',
+      source: 'system'
+    };
+  }
+
+  // 4. Draft booking
+  if (booking && booking.is_draft === true) {
+    return {
+      intent: 'Warm',
+      source: 'system'
+    };
+  }
+
+  // 5. Lead exists, no booking yet
+  if (lead) {
+    return {
+      intent: 'Cold',
+      source: 'system'
+    };
+  }
+
+  return {
+    intent: 'Cold',
+    source: 'system'
+  };
+};
+
+const getClientIntent = ({ booking }) => {
+  // Paid client
+  if (booking?.payment_id) {
+    return 'Hot';
+  }
+
+  // Booking in progress
+  if (booking && booking.is_draft === true) {
+    return 'Warm';
+  }
+
+  // Booking created but checkout reached
+  if (booking && booking.is_draft === false) {
+    return 'Hot';
+  }
+
+  // Signed up / lead created only
+  return 'Cold';
+};
+
+const getClientBookingStatus = (booking) => {
+  if (!booking) {
+    return 'Signed Up – Lead Created';
+  }
+
+  if (booking.is_cancelled) {
+    return 'Closed – Lost';
+  }
+
+  if (booking.payment_id) {
+    return 'Booked';
+  }
+
+  if (booking.is_draft === true || booking.is_draft === 1) {
+    return 'Booking In Progress';
+  }
+
+  if (booking.is_draft === false || booking.is_draft === 0) {
+    return 'Ready for Payment';
+  }
+
+  return 'Signed Up – Lead Created';
+};
+
 module.exports = {
   getActiveSalesReps,
   getLeadCountsPerRep,
@@ -268,5 +387,9 @@ module.exports = {
   autoAssignLead,
   manuallyAssignLead,
   getSalesRepWorkload,
-  unassignLead
+  unassignLead,
+  getLeadBookingStatus,
+  getLeadIntent,
+  getClientIntent,
+  getClientBookingStatus
 };
