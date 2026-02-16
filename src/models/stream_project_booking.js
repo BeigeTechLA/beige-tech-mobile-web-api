@@ -39,6 +39,14 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.STRING(100),
       allowNull: true
     },
+    shoot_type: {
+      type: DataTypes.STRING(100),
+      allowNull: true
+    },
+    content_type: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
     event_date: {
       type: DataTypes.DATEONLY,
       allowNull: true
@@ -88,6 +96,41 @@ module.exports = function(sequelize, DataTypes) {
       allowNull: true
     },
     equipments_needed: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
+    reference_links: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
+    edits_needed: {
+      type: DataTypes.BOOLEAN,
+      allowNull: true,
+      defaultValue: 0
+    },
+    video_edit_types: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      get() {
+        const val = this.getDataValue('video_edit_types');
+        return val ? JSON.parse(val) : [];
+      },
+      set(val) {
+        this.setDataValue('video_edit_types', JSON.stringify(val));
+      }
+    },
+    photo_edit_types: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      get() {
+        const val = this.getDataValue('photo_edit_types');
+        return val ? JSON.parse(val) : [];
+      },
+      set(val) {
+        this.setDataValue('photo_edit_types', JSON.stringify(val));
+      }
+    },
+    special_instructions: {
       type: DataTypes.TEXT,
       allowNull: true
     },
