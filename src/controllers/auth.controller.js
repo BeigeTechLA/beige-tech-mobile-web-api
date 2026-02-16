@@ -2317,7 +2317,7 @@ exports.registerCrewMemberStep3 = [
     { name: 'resume', maxCount: 1 },
     { name: 'portfolio', maxCount: 10 },
     { name: 'certifications', maxCount: 10 },
-    { name: 'recent_work', maxCount: 5 }
+    { name: 'recent_work', maxCount: 50 }
   ]),
 
   async (req, res) => {

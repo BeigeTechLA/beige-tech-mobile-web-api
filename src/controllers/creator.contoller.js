@@ -2694,7 +2694,7 @@ exports.getRandomCrewMembers = async (req, res) => {
     const members = await crew_members.findAll({
       where: {
         is_active: 1,
-        is_crew_verified: 1, // only approved crew (optional – remove if not needed)
+        is_crew_verified: 1,
       },
       include: [
         {
@@ -2725,8 +2725,19 @@ exports.getRandomCrewMembers = async (req, res) => {
         }
       }
 
+      let firstName = member.first_name || '';
+      let lastName = member.last_name || '';
+
+      const formattedFirstName =
+        firstName.charAt(0).toUpperCase() + firstName.slice(1).toLowerCase();
+
+      const formattedLastName =
+        lastName ? lastName.charAt(0).toUpperCase() : '';
+
       return {
         ...member.toJSON(),
+        first_name: formattedFirstName,
+        last_name: formattedLastName,
         location: finalLocation,
         status: 'approved',
       };
@@ -2745,6 +2756,7 @@ exports.getRandomCrewMembers = async (req, res) => {
     });
   }
 };
+
 
 exports.checkVerificationStatus = async (req, res) => {
   try {
