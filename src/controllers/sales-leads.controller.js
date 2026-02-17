@@ -1,4 +1,4 @@
-const { sales_leads, sales_lead_activities, stream_project_booking, users, discount_codes, payment_links,  quotes,
+const { sales_leads, sales_lead_activities, stream_project_booking, users, discount_codes, payment_links,  quotes, assigned_crew, crew_members,
   quote_line_items } = require('../models');
 const { Op, Sequelize } = require('sequelize');
 const constants = require('../utils/constants');
@@ -11,6 +11,26 @@ const calculateLeadPricing = async (booking) => {
     if (!booking) return null;
 
     try {
+        const q = booking.primary_quote; 
+        
+        if (q) {
+            return {
+                source: 'database',
+                quote_id: q.quote_id,
+                total: parseFloat(q.price_after_discount || q.total || 0),
+                subtotal: parseFloat(q.subtotal || 0),
+                discount_amount: parseFloat(q.discount_amount || 0),
+                shoot_hours: q.shoot_hours,
+                line_items: (q.line_items || []).map(item => ({
+                    item_id: item.item_id,
+                    name: item.item_name,
+                    quantity: item.quantity,
+                    unit_price: parseFloat(item.unit_price),
+                    total: parseFloat(item.line_total)
+                }))
+            };
+        }
+
         const ROLE_TO_ITEM_MAP = {
             videographer: 11,
             photographer: 10,
@@ -22,8 +42,18 @@ const calculateLeadPricing = async (booking) => {
             crewRoles = typeof booking.crew_roles === 'string' 
                 ? JSON.parse(booking.crew_roles || '{}') 
                 : (booking.crew_roles || {});
-        } catch (e) { 
-            crewRoles = {}; 
+        } catch (e) { crewRoles = {}; }
+
+        const isRolesEmpty = !crewRoles || 
+                           (Array.isArray(crewRoles) && crewRoles.length === 0) || 
+                           (typeof crewRoles === 'object' && Object.keys(crewRoles).length === 0);
+
+        if (isRolesEmpty && booking.event_type) {
+            const types = booking.event_type.toLowerCase();
+            crewRoles = {};
+            if (types.includes('videographer')) crewRoles.videographer = 1;
+            if (types.includes('photographer')) crewRoles.photographer = 1;
+            if (types.includes('cinematographer')) crewRoles.cinematographer = 1;
         }
 
         const items = Object.entries(crewRoles).map(([role, count]) => ({
@@ -32,18 +62,15 @@ const calculateLeadPricing = async (booking) => {
         })).filter(item => item.item_id);
 
         let hours = Number(booking.duration_hours);
-        
         if (!hours || hours <= 0) {
             if (booking.start_time && booking.end_time) {
                 const [sH, sM] = booking.start_time.split(':').map(Number);
                 const [eH, eM] = booking.end_time.split(':').map(Number);
-                
                 const start = new Date(2000, 0, 1, sH, sM);
                 const end = new Date(2000, 0, 1, eH, eM);
-                
                 let diff = (end - start) / (1000 * 60 * 60);
                 if (diff < 0) diff += 24;
-                hours = Math.round(diff);
+                hours = diff; 
             } else {
                 hours = 8; 
             }
@@ -55,21 +82,24 @@ const calculateLeadPricing = async (booking) => {
             try { return JSON.parse(val); } catch { return []; }
         };
 
-        const vEdits = parseEdits(booking.video_edit_types);
-        const pEdits = parseEdits(booking.photo_edit_types);
-
-        const quote = await pricingService.calculateQuote({
+        const calculatedQuote = await pricingService.calculateQuote({
             items: items,
-            shootHours: hours,
+            shootHours: hours, 
             eventType: booking.shoot_type || booking.event_type || 'general',
             shootStartDate: booking.event_date,
-            videoEditTypes: vEdits,
-            photoEditTypes: pEdits,
+            videoEditTypes: parseEdits(booking.video_edit_types),
+            photoEditTypes: parseEdits(booking.photo_edit_types),
             skipDiscount: true, 
             skipMargin: true
         });
 
-        return quote;
+        return {
+            source: 'calculated',
+            total: calculatedQuote?.total || 0,
+            subtotal: calculatedQuote?.subtotal || 0,
+            line_items: calculatedQuote?.lineItems || [] 
+        };
+
     } catch (error) {
         console.error('Lead Pricing calculation failed:', error);
         return null;
@@ -956,11 +986,10 @@ exports.createSalesAssistedLead = async (req, res) => {
 
 exports.getLeads = async (req, res) => {
     try {
-        const { page = 1, limit = 20, status, lead_type, assigned_to, search, range, start_date, end_date } = req.query;
+        const { page = 1, limit = 20, status, lead_type, assigned_to, search, start_date, end_date } = req.query;
         const offset = (parseInt(page) - 1) * parseInt(limit);
-        const whereClause = { [Op.and]: [] };
+        const whereClause = {};
 
-        // Filtering logic
         if (start_date && end_date) {
             whereClause.created_at = { [Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`] };
         }
@@ -970,15 +999,6 @@ exports.getLeads = async (req, res) => {
             whereClause.assigned_sales_rep_id = assigned_to === 'unassigned' ? null : parseInt(assigned_to);
         }
 
-        if (search) {
-            whereClause[Op.and].push({
-                [Op.or]: [
-                    { client_name: { [Op.like]: `%${search}%` } },
-                    { guest_email: { [Op.like]: `%${search}%` } }
-                ]
-            });
-        }
-
         const { count, rows: leads } = await sales_leads.findAndCountAll({
             where: whereClause,
             include: [
@@ -986,10 +1006,12 @@ exports.getLeads = async (req, res) => {
                 { 
                     model: stream_project_booking, 
                     as: 'booking',
-                    attributes: [
-                        'stream_project_booking_id', 'event_date', 'event_type', 'shoot_type',
-                        'duration_hours', 'crew_roles', 'payment_id', 'start_time', 'end_time',
-                        'video_edit_types', 'photo_edit_types'
+                    include: [
+                        { 
+                            model: quotes, 
+                            as: 'primary_quote', 
+                            include: [{ model: quote_line_items, as: 'line_items' }] 
+                        }
                     ]
                 }
             ],
@@ -999,23 +1021,15 @@ exports.getLeads = async (req, res) => {
         });
 
         const leadsWithPricing = await Promise.all(leads.map(async (lead) => {
-            const quote = await calculateLeadPricing(lead.booking);
+            const pricingData = await calculateLeadPricing(lead.booking);
             const leadJson = lead.toJSON();
-
-            const intent =
-              lead.intent ??
-              leadAssignmentService.getLeadIntent({ lead, booking: lead.booking });
 
             return {
                 ...leadJson,
-                potential_value: quote ? quote.total : 0,
+                potential_value: pricingData ? pricingData.total : 0,
+                pricing_details: pricingData,
                 payment_status: lead.booking?.payment_id ? 'paid' : 'unpaid',
-                booking_status: leadAssignmentService.getLeadBookingStatus(
-                  lead,
-                  lead.booking
-                ),
-                intent,
-                intent_source: lead.intent ? 'manual' : 'system'
+                intent: lead.intent ?? leadAssignmentService.getLeadIntent({ lead, booking: lead.booking }),
             };
         }));
 
@@ -1049,31 +1063,123 @@ exports.getLeadById = async (req, res) => {
                 { 
                     model: stream_project_booking, 
                     as: 'booking',
+                    include: [
+                        { model: quotes, as: 'primary_quote', include: [{ model: quote_line_items, as: 'line_items' }] },
+                        {
+                            model: assigned_crew,
+                            as: 'assigned_crews',
+                            include: [{ model: crew_members, as: 'crew_member' }]
+                        }
+                    ]
                 },
-                { model: discount_codes, as: 'discount_codes' },
-                { model: payment_links, as: 'payment_links' },
-                { 
-                    model: sales_lead_activities, as: 'activities', 
-                    include: [{ model: users, as: 'performed_by', attributes: ['id', 'name'] }] 
-                }
-            ],
-            order: [[{ model: sales_lead_activities, as: 'activities' }, 'created_at', 'DESC']]
+                { model: sales_lead_activities, as: 'activities' }
+            ]
         });
 
         if (!lead) return res.status(404).json({ success: false, message: 'Lead not found' });
 
-        const quoteBreakdown = await calculateLeadPricing(lead.booking);
+        const pricingData = await calculateLeadPricing(lead.booking);
+        const leadJson = lead.toJSON();
+
+        const ROLE_GROUPS = {
+            videographer: ["9", "1"], 
+            photographer: ["10", "2"],
+            cinematographer: ["11", "3"],
+        };
+
+        const ID_TO_ROLE_MAP = {};
+        Object.entries(ROLE_GROUPS).forEach(([roleName, ids]) => {
+            ids.forEach(id => { ID_TO_ROLE_MAP[String(id)] = roleName; });
+        });
+
+        let fulfillmentSummary = {};
+
+        if (leadJson.booking && leadJson.booking.crew_roles) {
+            let requestedRoles = {};
+            try {
+                requestedRoles = typeof leadJson.booking.crew_roles === 'string' 
+                    ? JSON.parse(leadJson.booking.crew_roles) 
+                    : leadJson.booking.crew_roles;
+            } catch (e) { requestedRoles = {}; }
+
+            Object.keys(requestedRoles).forEach(role => {
+                fulfillmentSummary[role] = {
+                    required: requestedRoles[role],
+                    pending: 0,
+                    accepted: 0,
+                    rejected: 0,
+                    display: `0/${requestedRoles[role]}`
+                };
+            });
+
+            if (leadJson.booking.assigned_crews) {
+                leadJson.booking.assigned_crews.forEach(ac => {
+                    let crewRoleIds = [];
+                    try {
+                        crewRoleIds = typeof ac.crew_member?.primary_role === 'string'
+                            ? JSON.parse(ac.crew_member.primary_role)
+                            : (ac.crew_member?.primary_role || []);
+                    } catch (e) { crewRoleIds = []; }
+
+                    const potentialCategories = [...new Set(crewRoleIds.map(id => ID_TO_ROLE_MAP[String(id)]).filter(Boolean))];
+
+                    let assignedToCategory = null;
+                    
+                    if (ac.crew_accept === 1) {
+                        assignedToCategory = potentialCategories.find(cat => 
+                            fulfillmentSummary[cat] && fulfillmentSummary[cat].accepted < fulfillmentSummary[cat].required
+                        );
+                    } 
+                    if (!assignedToCategory && ac.crew_accept !== 2) {
+                        assignedToCategory = potentialCategories.find(cat => 
+                            fulfillmentSummary[cat] && (fulfillmentSummary[cat].accepted + fulfillmentSummary[cat].pending) < fulfillmentSummary[cat].required
+                        );
+                    }
+                    if (!assignedToCategory) {
+                        assignedToCategory = potentialCategories[0];
+                    }
+
+                    // Increment the specific bucket
+                    if (assignedToCategory && fulfillmentSummary[assignedToCategory]) {
+                        const role = fulfillmentSummary[assignedToCategory];
+                        if (ac.crew_accept === 1) {
+                            role.accepted += 1;
+                        } else if (ac.crew_accept === 0 || ac.crew_accept === null) {
+                            role.pending += 1;
+                        } else if (ac.crew_accept === 2) {
+                            role.rejected += 1;
+                        }
+                    }
+                });
+            }
+
+            Object.keys(fulfillmentSummary).forEach(key => {
+                const item = fulfillmentSummary[key];
+                item.display = `${item.accepted}/${item.required}`;
+                item.needs_attention = item.accepted < item.required;
+            });
+        }
+
+        const statusMap = { 0: 'pending', 1: 'accepted', 2: 'rejected' };
+        if (leadJson.booking?.assigned_crews) {
+            leadJson.booking.assigned_crews = leadJson.booking.assigned_crews.map(ac => ({
+                ...ac,
+                acceptance_status: statusMap[ac.crew_accept] || 'pending'
+            }));
+        }
 
         res.json({
             success: true,
             data: {
-                ...lead.toJSON(),
-                projected_quote: quoteBreakdown
+                ...leadJson,
+                fulfillment_summary: fulfillmentSummary,
+                projected_quote: pricingData
             }
         });
 
     } catch (error) {
-        res.status(500).json({ success: false, message: 'Failed to fetch lead details', error: error.message });
+        console.error('GetLeadById Error:', error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 /**

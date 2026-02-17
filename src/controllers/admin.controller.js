@@ -28,7 +28,7 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   payment_transactions,
   assigned_post_production_member,
   post_production_members,
-  clients,sales_leads,
+  clients,sales_leads, sales_lead_activities,
   payments } = require('../models');
   const { deleteSheetRow, updateSheetRow } = require('../utils/googleSheets');
 const leadAssignmentService = require('../services/lead-assignment.service');
@@ -6453,4 +6453,181 @@ exports.getClientsShoots = async (req, res) => {
     console.error('Admin Get Client Shoots Error:', error);
     return res.status(500).json({ error: true, message: 'Internal server error' });
   }
+};
+
+
+exports.searchCrewForLead = async (req, res) => {
+    try {
+        const { lead_id, role_type, search_query } = req.query;
+
+        const lead = await sales_leads.findOne({
+            where: { lead_id },
+            include: [{ model: stream_project_booking, as: 'booking' }]
+        });
+
+        if (!lead || !lead.booking) return res.status(404).json({ success: false, message: "Lead/Booking not found" });
+        const projectDate = lead.booking.event_date;
+
+        const busyCrewRecords = await assigned_crew.findAll({
+            where: { crew_accept: 1 },
+            include: [{
+                model: stream_project_booking,
+                as: 'project',
+                where: { event_date: projectDate }
+            }],
+            attributes: ['crew_member_id']
+        });
+        const busyIds = busyCrewRecords.map(r => r.crew_member_id);
+
+        const ROLE_GROUPS = {
+            videographer: ["9", "1"],
+            photographer: ["10", "2"],
+            cinematographer: ["11", "3"]
+        };
+        const targetRoleIds = ROLE_GROUPS[role_type.toLowerCase()] || [];
+
+        let crewWhere = {
+            is_active: true,
+            is_available: true,
+            is_crew_verified: 1,
+            crew_member_id: { [Op.notIn]: busyIds }
+        };
+
+        if (targetRoleIds.length > 0) {
+            crewWhere[Op.or] = targetRoleIds.map(id => ({
+                primary_role: { [Op.like]: `%${id}%` }
+            }));
+        }
+
+        if (search_query) {
+            crewWhere[Op.and] = [{
+                [Op.or]: [
+                    { first_name: { [Op.like]: `%${search_query}%` } },
+                    { location: { [Op.like]: `%${search_query}%` } }
+                ]
+            }];
+        }
+
+        const availableCrew = await crew_members.findAll({
+            where: crewWhere,
+            limit: 50
+        });
+
+        res.json({
+            success: true,
+            project_date: projectDate,
+            available_count: availableCrew.length,
+            data: availableCrew
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+
+exports.assignCrewBulkSmart = async (req, res) => {
+    try {
+        const { lead_id, crew_member_ids, assigned_by_user_id } = req.body;
+
+        if (!Array.isArray(crew_member_ids) || crew_member_ids.length === 0) {
+            return res.status(400).json({ success: false, message: "No crew members selected." });
+        }
+
+        const ROLE_GROUPS = {
+            videographer: ["9", "1"],
+            photographer: ["10", "2"],
+            cinematographer: ["11", "3"]
+        };
+
+        const ID_TO_ROLE_MAP = {};
+        Object.entries(ROLE_GROUPS).forEach(([roleName, ids]) => {
+            ids.forEach(id => { ID_TO_ROLE_MAP[String(id)] = roleName; });
+        });
+
+        const lead = await sales_leads.findOne({
+            where: { lead_id },
+            include: [{ 
+                model: stream_project_booking, 
+                as: 'booking',
+                include: [{ 
+                    model: assigned_crew, 
+                    as: 'assigned_crews', 
+                    where: { crew_accept: { [Op.ne]: 2 } }, 
+                    required: false,
+                    include: [{ model: crew_members, as: 'crew_member' }]
+                }]
+            }]
+        });
+
+        const booking = lead.booking;
+        const requestedLimits = typeof booking.crew_roles === 'string' ? JSON.parse(booking.crew_roles) : (booking.crew_roles || {});
+
+        let currentCounts = { videographer: 0, photographer: 0, cinematographer: 0 };
+        if (booking.assigned_crews) {
+            booking.assigned_crews.forEach(ac => {
+                const roles = JSON.parse(ac.crew_member?.primary_role || "[]");
+                roles.forEach(id => {
+                    const roleName = ID_TO_ROLE_MAP[String(id)];
+                    if (roleName) currentCounts[roleName]++;
+                });
+            });
+        }
+
+        const newCrewDetails = await crew_members.findAll({
+            where: { crew_member_id: crew_member_ids }
+        });
+
+        const assignmentsToCreate = [];
+        let errors = [];
+
+        newCrewDetails.forEach(crew => {
+            const roles = JSON.parse(crew.primary_role || "[]");
+            let roleDetected = null;
+
+            roles.forEach(id => {
+                if (ID_TO_ROLE_MAP[String(id)]) roleDetected = ID_TO_ROLE_MAP[String(id)];
+            });
+
+            if (roleDetected) {
+                const limit = requestedLimits[roleDetected] || 0;
+                if (currentCounts[roleDetected] + 1 > limit) {
+                    errors.push(`Cannot add ${crew.first_name} (${roleDetected}). Limit of ${limit} reached.`);
+                } else {
+                    currentCounts[roleDetected]++;
+                    assignmentsToCreate.push({
+                        project_id: booking.stream_project_booking_id,
+                        crew_member_id: crew.crew_member_id,
+                        assigned_date: new Date(),
+                        status: 'selected',
+                        crew_accept: 0,
+                        is_active: 1,
+                        organization_type: 1
+                    });
+                }
+            } else {
+                errors.push(`Crew member ${crew.first_name} has an unknown role and cannot be assigned.`);
+            }
+        });
+
+        if (errors.length > 0) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Some assignments failed validation.", 
+                errors: errors 
+            });
+        }
+
+        await assigned_crew.bulkCreate(assignmentsToCreate);
+        await sales_lead_activities.create({
+            lead_id: lead_id,
+            activity_type: 'bulk_crew_assigned',
+            notes: `Sales rep assigned ${assignmentsToCreate.length} crew members.`,
+            performed_by_user_id: assigned_by_user_id
+        });
+
+        res.json({ success: true, message: `${assignmentsToCreate.length} crew members assigned successfully.` });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
 };
