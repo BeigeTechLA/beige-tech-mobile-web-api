@@ -1241,7 +1241,7 @@ exports.updateLeadStatus = async (req, res) => {
 exports.updateBookingCrew = async (req, res) => {
   try {
     const { bookingId } = req.params;
-    const { crew_roles } = req.body;
+    const { crew_roles, location, description, reference_links } = req.body;
 
     if (!crew_roles || typeof crew_roles !== 'object') {
       return res.status(constants.BAD_REQUEST.code).json({
