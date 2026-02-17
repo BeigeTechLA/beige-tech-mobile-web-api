@@ -19,6 +19,7 @@ module.exports = function(sequelize, DataTypes) {
     activity_type: {
       type: DataTypes.ENUM(
         'created',
+        'booking_updated',
         'status_changed',
         'assigned',
         'contacted_sales',

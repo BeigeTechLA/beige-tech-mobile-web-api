@@ -152,3 +152,5 @@ ALTER TABLE stream_project_booking
   ADD COLUMN video_edit_types TEXT DEFAULT NULL AFTER edits_needed,
   ADD COLUMN photo_edit_types TEXT DEFAULT NULL AFTER video_edit_types,
   ADD COLUMN special_instructions TEXT DEFAULT NULL AFTER photo_edit_types;
+
+ALTER TABLE `sales_lead_activities` CHANGE `activity_type` `activity_type` ENUM('created','booking_updated','status_changed','assigned','contacted_sales','payment_link_generated','discount_code_generated','payment_link_opened','discount_applied','payment_completed') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL;

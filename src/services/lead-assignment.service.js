@@ -292,48 +292,31 @@ const getLeadBookingStatus = (lead, booking) => {
 const getLeadIntent = ({ lead, booking }) => {
   // 1. Manual override (highest priority)
   if (lead?.intent) {
-    return {
-      intent: lead.intent,
-      source: 'manual'
-    };
+    return lead.intent; // Hot | Warm | Cold
   }
 
-  // 2. Payment done
+  // 2. Payment done → always Hot
   if (booking?.payment_id) {
-    return {
-      intent: 'Hot',
-      source: 'system'
-    };
+    return 'Hot';
   }
 
   // 3. Checkout reached (non-draft booking)
   if (booking && booking.is_draft === false) {
-    return {
-      intent: 'Hot',
-      source: 'system'
-    };
+    return 'Hot';
   }
 
-  // 4. Draft booking
+  // 4. Draft booking exists
   if (booking && booking.is_draft === true) {
-    return {
-      intent: 'Warm',
-      source: 'system'
-    };
+    return 'Warm';
   }
 
-  // 5. Lead exists, no booking yet
+  // 5. Lead exists but no booking
   if (lead) {
-    return {
-      intent: 'Cold',
-      source: 'system'
-    };
+    return 'Cold';
   }
 
-  return {
-    intent: 'Cold',
-    source: 'system'
-  };
+  // Fallback
+  return 'Cold';
 };
 
 const getClientIntent = ({ booking }) => {
@@ -380,6 +363,35 @@ const getClientBookingStatus = (booking) => {
   return 'Signed Up – Lead Created';
 };
 
+function getLeadBookingStep(lead, booking, activities = []) {
+  // STEP 4 — Booked (final truth)
+  if (
+    lead.lead_status === 'booked' ||
+    booking?.payment_id
+  ) {
+    return 4;
+  }
+
+  // STEP 3 — Discount applied
+  if (
+    lead.lead_status === 'discount_applied' ||
+    activities.some(a => a.activity_type === 'discount_applied')
+  ) {
+    return 3;
+  }
+
+  // STEP 2 — Payment link sent
+  if (
+    lead.lead_status === 'payment_link_sent' ||
+    activities.some(a => a.activity_type === 'payment_link_generated')
+  ) {
+    return 2;
+  }
+
+  // STEP 1 — In progress (lead exists OR booking started)
+  return 1;
+}
+
 module.exports = {
   getActiveSalesReps,
   getLeadCountsPerRep,
@@ -391,5 +403,6 @@ module.exports = {
   getLeadBookingStatus,
   getLeadIntent,
   getClientIntent,
-  getClientBookingStatus
+  getClientBookingStatus,
+  getLeadBookingStep
 };
