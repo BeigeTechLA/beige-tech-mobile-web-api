@@ -76,5 +76,7 @@ router.delete('/delete-project/:project_id', admin.deleteProject);
 router.post('/upload-profile-photo', admin.uploadProfilePhoto);
 router.get('/get-client-by-id/:id', admin.getClientById);
 router.get('/get-clients-shoots/:clientId', admin.getClientsShoots);
+router.get('/get-crew-for-lead', admin.searchCrewForLead);
+router.post('/assign-crew-from-lead', admin.assignCrewBulkSmart);
 
 module.exports = router;

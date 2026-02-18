@@ -1,7 +1,7 @@
 @URL = http://localhost:5001/v1/
 
 # @TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjE3MywidXNlclJvbGUiOiJzYWxlc19yZXAiLCJpYXQiOjE3Njk3NTUxNzEsImV4cCI6MTc3MDM1OTk3MX0.Xop-g29SS-GXlYG6rLDXSbPdfXU189mdzFYl6YEhqkE
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjE5MywidXNlclJvbGUiOiJzYWxlc19yZXAiLCJpYXQiOjE3NzEyNTA2NzQsImV4cCI6MTc3MTg1NTQ3NH0.0nVXi6aGbg7Lv_HtkpJMhOEdhyKTmQkhkSRGrQ8JWUw
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzEzMzAwMzAsImV4cCI6MTc3MTkzNDgzMH0.mZ0NG3N7ll9S3ntiYWyr0hhCAIM5OP1B-HLZE88OPGY
 
 ###
 POST {{URL}}creator/dashboard-count HTTP/1.1
@@ -410,108 +410,30 @@ Authorization: {{TOKEN}}
     "notes": "Client confirmed budget on call"
 }
 
-### continue of edit screen
-POST {{URL}}guest-bookings/1794 HTTP/1.1
+###
+GET {{URL}}admin/get-crew-for-lead/?lead_id=136&role_type=videographer&search_query=Los Angeles HTTP/1.1
+Content-Type: application/json
+
+### 
+POST {{URL}}admin/assign-crew-from-lead HTTP/1.1
+Content-Type: application/json
+
+{
+    "lead_id": 136,
+    "crew_member_ids": [2047], 
+    "assigned_by_user_id": 180
+}
+
+### generate discount: multi-use
+POST {{URL}}sales/payment-links HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "content_type": "videographer",
-  "shoot_type": "corporate",
-  "start_date_time": "2026-02-25T03:30:00.000Z",
-  "end_time": "2026-02-25T11:30:00.000Z",
-  "duration_hours": 8,
-  "edits_needed": true,
-  "video_edit_types": [
-    "highlight_4_7",
-    "feature_30_40"
-  ],
-  "photo_edit_types": [],
-  "crew_roles": {"videographer":2},
-  "crew_size": "2",
-  "location": "442 Crocker Street, Los Angeles, California 90013, United States",
-  "selected_crew_ids": [132],
-  "matching_method": "manual",
-  "is_draft": false,
-  "skip_discount": true,
-  "skip_margin": true
-}
-
-### show pricing breakdown
-POST {{URL}}pricing/calculate-from-creators HTTP/1.1
-Content-Type: application/json
-Authorization: {{TOKEN}}
-
-{
-  "creator_ids": [132],
-  "shoot_hours": 8,
-  "role_counts": {
-    "videographer": 2
-  },
-  "event_type": "corporate",
-  "shoot_start_date": "2026-02-25T03:30:00.000Z",
-  "video_edit_types": [
-    "social_reel_15_30"
-  ],
-  "photo_edit_types": [
-    "edited_photos"
-  ],
-  "skip_discount": true,
-  "skip_margin": true
-}
-
-### save quote 
-POST {{URL}}pricing/quotes HTTP/1.1
-Content-Type: application/json
-Authorization: {{TOKEN}}
-
-{
-  "items": [
-    {
-      "item_id": 11,
-      "quantity": 2
-    }
-  ],
-  "shootHours": 8,
-  "eventType": "corporate",
-  "shoot_start_date": "2026-02-25T03:30:00.000Z",
-  "video_edit_types": [
-    "social_reel_15_30"
-  ],
-  "photo_edit_types": [
-    "edited_photos"
-  ]
-}
-{
-  "event_type": "corporate",
-
-  "start_date_time": "2026-02-25T03:30:00.000Z",
-  "end_time": "11:30:00",
-  "duration_hours": 8,
-
-  "location": "442 Crocker Street, Los Angeles, California 90013, United States",
-
-  "crew_roles": { "videographer": 2 },
-  "crew_size": 2,
-  "selected_crew_ids": [132],
-
-  "edits_needed": true,
-  "video_edit_types": ["highlight_4_7", "feature_30_40"],
-  "photo_edit_types": [],
-
-  "is_draft": false,
-
-  "skip_discount": true,
-  "skip_margin": true
-}
-
-### save quote id
-POST {{URL}}guest-bookings/1794 HTTP/1.1
-Content-Type: application/json
-Authorization: {{TOKEN}}
-
-{
-  "quote_id": "123"
+  "lead_id": 145,
+  "booking_id": 809,
+  "discount_code_id": 17,
+  "expiry_hours": 48
 }
 
 ### Edit Lead Booking
