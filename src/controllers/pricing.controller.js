@@ -537,6 +537,9 @@ exports.getPricingExample = async (req, res) => {
  * Priority:
  * 1. creator_ids → derive roles from creators
  * 2. role_counts → derive pricing directly
+ * Can be used:
+ * 1) As an API (req, res)
+ * 2) Internally with fakeRes + is_return:true
  */
 exports.calculateFromCreators = async (req, res) => {
   try {
@@ -551,6 +554,7 @@ exports.calculateFromCreators = async (req, res) => {
       photo_edit_types = [], 
       skip_discount = false,
       skip_margin = false,
+      is_return
     } = req.body;
 
     if (!shoot_hours || shoot_hours <= 0) {
@@ -660,8 +664,8 @@ exports.calculateFromCreators = async (req, res) => {
       videoEditTypes: video_edit_types, // Sent to service
       photoEditTypes: photo_edit_types,
     });
-
-    res.json({
+    
+    const responsePayload = {
       success: true,
       data: {
         quote,
@@ -672,7 +676,13 @@ exports.calculateFromCreators = async (req, res) => {
           hourly_rate: Number(c.hourly_rate || 0),
         })),
       },
-    });
+    };
+
+    if (is_return) {
+      return responsePayload.data;
+    }
+
+    return res.json(responsePayload);
   } catch (err) {
     console.error('calculateFromCreators error:', err);
     res.status(500).json({

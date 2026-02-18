@@ -5,110 +5,41 @@ const constants = require('../utils/constants');
 const leadAssignmentService = require('../services/lead-assignment.service');
 const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 const pricingService = require('../services/pricing.service');
+const pricingController = require('../controllers/pricing.controller');
 
 const sequelize = require('../db');
 const db = require('../models');
 
-async function calculatePricingBreakdown(payload, tx) {
-  const {
-    creator_ids = [],
-    role_counts = {},
-    shoot_hours,
-    event_type,
-    shoot_start_date,
-    add_on_items = [],
-    video_edit_types = [],
-    photo_edit_types = [],
-    skip_discount = false,
-    skip_margin = false
-  } = payload || {};
+/**
+ * Internal helper to reuse calculateFromCreators safely.
+ * DO NOT pass real res here.
+ */
+async function calculateFromCreatorsInternally(pricingPayload) {
+  let pricingResult;
 
-  if (!shoot_hours || Number(shoot_hours) <= 0) {
-    throw new Error('shoot_hours is required and must be > 0');
-  }
-
-  const ROLE_TO_ITEM_MAP = {
-    videographer: 11,
-    photographer: 10,
-    cinematographer: 12
-  };
-
-  const pricingItems = [];
-  let creators = [];
-
-  // CASE 1: creator_ids given → derive roleCounts from creators.primary_role
-  if (Array.isArray(creator_ids) && creator_ids.length > 0) {
-    creators = await db.crew_members.findAll({
-      where: { crew_member_id: creator_ids, is_active: 1 },
-      attributes: ['crew_member_id', 'first_name', 'last_name', 'primary_role', 'hourly_rate'],
-      transaction: tx // ✅ keep in same transaction if you want
-    });
-
-    if (creators.length !== creator_ids.length) {
-      throw new Error('One or more creator IDs are invalid');
+  const fakeRes = {
+    status: () => fakeRes,
+    json: (payload) => {
+      pricingResult = payload;
+      return payload;
     }
-
-    const derivedRoleCounts = {};
-    creators.forEach((c) => {
-      let roles = c.primary_role;
-
-      if (typeof roles === 'string') {
-        try { roles = JSON.parse(roles); } catch { roles = [roles]; }
-      }
-      const rolesArr = Array.isArray(roles) ? roles : [roles];
-
-      rolesArr.forEach((r) => {
-        const roleKey =
-          r === 11 ? 'videographer' :
-          r === 10 ? 'photographer' :
-          r === 12 ? 'cinematographer' :
-          null;
-
-        if (roleKey) derivedRoleCounts[roleKey] = (derivedRoleCounts[roleKey] || 0) + 1;
-      });
-    });
-
-    Object.entries(derivedRoleCounts).forEach(([role, count]) => {
-      const itemId = ROLE_TO_ITEM_MAP[role];
-      if (itemId && count > 0) pricingItems.push({ item_id: itemId, quantity: count });
-    });
-  }
-
-  // CASE 2: no creators → use role_counts
-  if (pricingItems.length === 0 && role_counts) {
-    Object.entries(role_counts).forEach(([role, count]) => {
-      const itemId = ROLE_TO_ITEM_MAP[role];
-      if (itemId && count > 0) pricingItems.push({ item_id: itemId, quantity: count });
-    });
-  }
-
-  if (pricingItems.length === 0 && (!Array.isArray(add_on_items) || add_on_items.length === 0)) {
-    throw new Error('No pricing items resolved');
-  }
-
-  const allItems = [...pricingItems, ...(Array.isArray(add_on_items) ? add_on_items : [])];
-
-  // ✅ This returns the "quote breakdown" object you already return from API
-  const quote = await pricingService.calculateQuote({
-    items: allItems,
-    shootHours: Number(shoot_hours),
-    eventType: event_type,
-    shootStartDate: shoot_start_date,
-    skipDiscount: !!skip_discount,
-    skipMargin: !!skip_margin,
-    videoEditTypes: Array.isArray(video_edit_types) ? video_edit_types : [],
-    photoEditTypes: Array.isArray(photo_edit_types) ? photo_edit_types : []
-  });
-
-  return {
-    quote,
-    creators: creators.map((c) => ({
-      crew_member_id: c.crew_member_id,
-      name: `${c.first_name} ${c.last_name}`,
-      role: c.primary_role,
-      hourly_rate: Number(c.hourly_rate || 0)
-    }))
   };
+
+  const fakeReq = {
+    body: {
+      ...pricingPayload,
+      is_return: true
+    }
+  };
+
+  const breakdown = await pricingController.calculateFromCreators(fakeReq, fakeRes);
+  const pricingData = breakdown ?? pricingResult?.data;
+
+  if (!pricingData || !pricingData.quote) {
+    throw new Error('Pricing calculation failed');
+  }
+
+  return pricingData;
 }
 
 function safeJsonStringify(val) {
@@ -138,51 +69,38 @@ function normalizeIsDraft(is_draft) {
 }
 
 /**
- * Create a quote row + quote_line_items based on the breakdown.
- * Adjust field names if your schema differs.
+ * Create quote row + quote_line_items.
  */
-async function persistQuoteFromBreakdown({
-  bookingId,
-  eventType,
-  shootHours,
-  shootStartDate,
-  videoEditTypes,
-  photoEditTypes,
-  breakdown,
-  tx
-}) {
-  // 1) Create quote
+async function persistQuoteFromBreakdown({ bookingId, guest_email, shootHours, breakdown, tx }) {
   const quote = await quotes.create(
     {
-      status: 'pending',
-      source: 'booking_finalize',
-      booking_id: bookingId,            // if your quotes table has it
-      event_type: eventType,
+      booking_id: bookingId,
+      guest_email,
+      pricing_mode: breakdown?.pricingMode ?? null,
       shoot_hours: shootHours,
-      shoot_start_date: shootStartDate,
-      video_edit_types: safeJsonStringify(videoEditTypes || []),
-      photo_edit_types: safeJsonStringify(photoEditTypes || []),
       subtotal: breakdown?.subtotal ?? null,
-      total: breakdown?.total ?? null
+      discount_percent: breakdown?.discountPercent ?? null,
+      discount_amount: breakdown?.discountAmount ?? null,
+      price_after_discount: breakdown?.priceAfterDiscount ?? null,
+      margin_percent: breakdown?.marginPercent ?? null,
+      margin_amount: breakdown?.marginAmount ?? null,
+      total: breakdown?.total ?? null,
+      status: 'pending',
+      expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
     },
     { transaction: tx }
   );
 
-  // 2) Create line items
   const items = Array.isArray(breakdown?.lineItems) ? breakdown.lineItems : [];
   if (items.length) {
     const rows = items.map((li) => ({
-      quote_id: quote.quote_id || quote.id, // depends on your model PK
+      quote_id: quote.quote_id || quote.id,
       item_id: li.item_id ?? null,
-      name: li.name ?? null,
-      slug: li.slug ?? null,
-      kind: li.kind ?? null,
+      item_name: li.name ?? null,
       quantity: li.quantity ?? 1,
       unit_price: li.unit_price ?? null,
-      total_price: li.total_price ?? null,
-      meta: li.meta ? safeJsonStringify(li.meta) : null
+      line_total: li.total_price ?? null
     }));
-
     await quote_line_items.bulkCreate(rows, { transaction: tx });
   }
 
@@ -1751,6 +1669,164 @@ exports.updateLeadIntent = async (req, res) => {
 };
 
 /**
+ * Shared core finalize logic (this is your finalizeGuestBooking logic, reused cleanly).
+ * IMPORTANT: no res/json here, pure function.
+ */
+async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
+  const {
+    content_type, shoot_type,
+    start_date_time,
+    end_time,
+    duration_hours,
+    location,
+    crew_roles,
+    crew_size,
+    selected_crew_ids,
+    edits_needed,
+    video_edit_types,
+    photo_edit_types,
+    event_type,
+    is_draft,
+    skip_discount = true,
+    skip_margin = true
+  } = finalizeBody;
+
+  // 1) booking update
+  const { event_date, start_time } = parseStartDateTime(start_date_time);
+
+  const updateData = {};
+  if (content_type) updateData.content_type = content_type;
+  if (shoot_type) updateData.shoot_type = shoot_type;
+  if (event_type) updateData.event_type = event_type;
+  if (event_date) updateData.event_date = event_date;
+  if (start_time) updateData.start_time = start_time;
+  if (end_time) updateData.end_time = end_time;
+  if (duration_hours != null) updateData.duration_hours = parseInt(duration_hours, 10);
+  if (crew_size != null) updateData.crew_size_needed = parseInt(crew_size, 10);
+  if (location != null) updateData.event_location = safeJsonStringify(location);
+  if (crew_roles != null) updateData.crew_roles = safeJsonStringify(crew_roles);
+
+  if (typeof edits_needed !== 'undefined') {
+    updateData.edits_needed = edits_needed ? 1 : 0;
+  }
+  if (Array.isArray(video_edit_types)) updateData.video_edit_types = safeJsonStringify(video_edit_types);
+  if (Array.isArray(photo_edit_types)) updateData.photo_edit_types = safeJsonStringify(photo_edit_types);
+
+  const draftVal = normalizeIsDraft(is_draft);
+  if (draftVal !== null) updateData.is_draft = draftVal;
+
+  await booking.update(updateData, { transaction: tx });
+
+  // 2) Replace assigned crew (validate FK first!)
+  if (Array.isArray(selected_crew_ids)) {
+    // FK safety: ensure all crew exist
+    if (selected_crew_ids.length > 0) {
+      const existing = await crew_members.findAll({
+        where: { crew_member_id: selected_crew_ids, is_active: 1 },
+        attributes: ['crew_member_id'],
+        transaction: tx
+      });
+
+      const existingIds = new Set(existing.map(x => x.crew_member_id));
+      const missing = selected_crew_ids.filter(id => !existingIds.has(id));
+      if (missing.length) {
+        throw new Error(`Invalid selected_crew_ids: ${missing.join(', ')}`);
+      }
+    }
+
+    await assigned_crew.destroy({ where: { project_id: bookingId }, transaction: tx });
+
+    if (selected_crew_ids.length > 0) {
+      const assignments = selected_crew_ids.map((creator_id) => ({
+        project_id: bookingId,
+        crew_member_id: creator_id,
+        status: 'selected',
+        is_active: 1,
+        crew_accept: 0
+      }));
+      await assigned_crew.bulkCreate(assignments, { transaction: tx });
+    }
+  }
+
+  // 3) pricing payload (exactly like /pricing/calculate-from-creators)
+  const pricingPayload = {
+    creator_ids: Array.isArray(selected_crew_ids) ? selected_crew_ids : [],
+    shoot_hours: duration_hours != null ? parseInt(duration_hours, 10) : booking.duration_hours,
+    role_counts: crew_roles || (booking.crew_roles ? JSON.parse(booking.crew_roles) : {}),
+    event_type: event_type || booking.event_type,
+    shoot_start_date:
+      start_date_time ||
+      (booking.event_date ? `${booking.event_date}T${booking.start_time || '00:00:00.000Z'}` : null),
+    video_edit_types: Array.isArray(video_edit_types) ? video_edit_types : [],
+    photo_edit_types: Array.isArray(photo_edit_types) ? photo_edit_types : [],
+    skip_discount: !!skip_discount,
+    skip_margin: !!skip_margin
+  };
+
+  const pricingData = await calculateFromCreatorsInternally(pricingPayload);
+
+  // 4) expire old quote (don’t delete history)
+  if (booking.quote_id) {
+    await quotes.update(
+      { status: 'expired' },
+      { where: { quote_id: booking.quote_id }, transaction: tx }
+    );
+  }
+
+  // 5) create new quote + line items
+  const quote = await persistQuoteFromBreakdown({
+    bookingId,
+    guest_email: booking.guest_email,
+    shootHours: pricingPayload.shoot_hours,
+    breakdown: {
+      pricingMode: pricingData.quote.pricingMode,
+      subtotal: pricingData.quote.subtotal,
+      discountPercent: pricingData.quote.discountPercent,
+      discountAmount: pricingData.quote.discountAmount,
+      priceAfterDiscount: pricingData.quote.priceAfterDiscount,
+      marginPercent: pricingData.quote.marginPercent,
+      marginAmount: pricingData.quote.marginAmount,
+      total: pricingData.quote.total,
+      lineItems: pricingData.quote.lineItems.map(li => ({
+        item_id: li.item_id,
+        name: li.item_name,
+        quantity: li.quantity,
+        unit_price: li.unit_price,
+        total_price: li.line_total
+      }))
+    },
+    tx
+  });
+
+  const quoteId = quote.quote_id || quote.id;
+
+  // 6) attach quote_id to booking
+  await booking.update({ quote_id: quoteId }, { transaction: tx });
+
+  return {
+    quote_id: quoteId,
+    booking: {
+      stream_project_booking_id: booking.stream_project_booking_id,
+      event_date: booking.event_date,
+      start_time: booking.start_time,
+      end_time: booking.end_time,
+      duration_hours: booking.duration_hours,
+      event_type: booking.event_type,
+      shoot_type: booking.shoot_type,
+      content_type: booking.content_type,
+      event_location: booking.event_location,
+      crew_roles: booking.crew_roles,
+      crew_size_needed: booking.crew_size_needed,
+      video_edit_types: booking.video_edit_types,
+      photo_edit_types: booking.photo_edit_types,
+      edits_needed: booking.edits_needed,
+      is_draft: booking.is_draft === 1
+    },
+    quote: pricingData
+  };
+}
+
+/**
  * POST /v1/guest-bookings/:id/finalize
  * Body: booking fields + creators/roles + edit types + flags
  */
@@ -1760,7 +1836,9 @@ exports.finalizeGuestBooking = async (req, res) => {
     const { id } = req.params;
 
     const {
-      content_type, shoot_type,
+      content_type,
+      shoot_type,
+      event_type,
       start_date_time,
       end_time,
       duration_hours,
@@ -1771,9 +1849,7 @@ exports.finalizeGuestBooking = async (req, res) => {
       edits_needed,
       video_edit_types,
       photo_edit_types,
-      event_type,
       is_draft,
-      // pricing flags (pass-through)
       skip_discount = true,
       skip_margin = true
     } = req.body;
@@ -1794,116 +1870,30 @@ exports.finalizeGuestBooking = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
-    // 2) Build update data (same spirit as updateGuestBooking)
-    const { event_date, start_time } = parseStartDateTime(start_date_time);
-
-    const updateData = {};
-    if (content_type) updateData.content_type = content_type;
-    if (shoot_type) updateData.shoot_type = shoot_type;
-    if (event_type) updateData.event_type = event_type;
-    if (event_date) updateData.event_date = event_date;
-    if (start_time) updateData.start_time = start_time;
-    if (end_time) updateData.end_time = end_time;
-    if (duration_hours != null) updateData.duration_hours = parseInt(duration_hours, 10);
-    if (crew_size != null) updateData.crew_size_needed = parseInt(crew_size, 10);
-
-    if (location != null) updateData.event_location = safeJsonStringify(location);
-
-    if (crew_roles != null) {
-      updateData.crew_roles = safeJsonStringify(crew_roles);
-    }
-
-    // edits
-    if (typeof edits_needed !== 'undefined') {
-      updateData.edits_needed = edits_needed ? 1 : 0; // if your column is TINYINT
-    }
-    if (Array.isArray(video_edit_types)) {
-      updateData.video_edit_types = safeJsonStringify(video_edit_types);
-    }
-    if (Array.isArray(photo_edit_types)) {
-      updateData.photo_edit_types = safeJsonStringify(photo_edit_types);
-    }
-
-    const draftVal = normalizeIsDraft(is_draft);
-    if (draftVal !== null) updateData.is_draft = draftVal;
-
-    // ✅ For “Continue”, you typically want is_draft = 0
-    // If your FE always sends is_draft:false, you’re good.
-
-    await booking.update(updateData, { transaction: tx });
-
-    // 3) Replace assigned crew (only if array provided)
-    if (Array.isArray(selected_crew_ids)) {
-      await assigned_crew.destroy({
-        where: { project_id: id },
-        transaction: tx
-      });
-
-      if (selected_crew_ids.length > 0) {
-        const assignments = selected_crew_ids.map((creator_id) => ({
-          project_id: id,
-          crew_member_id: creator_id,
-          status: 'selected',
-          is_active: 1,
-          crew_accept: 0
-        }));
-
-        await assigned_crew.bulkCreate(assignments, { transaction: tx });
-      }
-    }
-
-    // 4) Calculate pricing breakdown (internal call)
-    // Build payload exactly like your /pricing/calculate-from-creators expects
-    const pricingPayload = {
-      creator_ids: Array.isArray(selected_crew_ids) ? selected_crew_ids : [],
-      shoot_hours: duration_hours != null ? parseInt(duration_hours, 10) : booking.duration_hours,
-      role_counts: crew_roles || (booking.crew_roles ? JSON.parse(booking.crew_roles) : {}),
-      event_type: event_type || booking.event_type,
-      shoot_start_date: start_date_time || (booking.event_date ? `${booking.event_date}T${booking.start_time || '00:00:00.000Z'}` : null),
-      video_edit_types: Array.isArray(video_edit_types) ? video_edit_types : [],
-      photo_edit_types: Array.isArray(photo_edit_types) ? photo_edit_types : [],
-      skip_discount: !!skip_discount,
-      skip_margin: !!skip_margin
-    };
-
-    const breakdown = await calculatePricingBreakdown(pricingPayload, tx);
-
-    // create quote rows from breakdown.quote.lineItems etc.
-    const quote = await persistQuoteFromBreakdown({
-      bookingId: id,
-      eventType: pricingPayload.event_type,
-      shootHours: pricingPayload.shoot_hours,
-      shootStartDate: pricingPayload.shoot_start_date,
-      videoEditTypes: pricingPayload.video_edit_types,
-      photoEditTypes: pricingPayload.photo_edit_types,
-      breakdown: {
-        subtotal: breakdown.quote.subtotal,
-        total: breakdown.quote.total,
-        lineItems: breakdown.quote.lineItems.map(li => ({
-          item_id: li.item_id,
-          name: li.item_name,
-          slug: li.slug || null,
-          kind: li.category_slug || null,
-          quantity: li.quantity,
-          unit_price: li.unit_price,
-          total_price: li.line_total,
-          meta: {
-            category_name: li.category_name,
-            is_mandatory: li.is_mandatory,
-            hidden: li.hidden
-          }
-        }))
+    // 2) Run shared finalize core
+    const finalizeResult = await finalizeBookingCore({
+      booking,
+      bookingId: booking.stream_project_booking_id,
+      finalizeBody: {
+        content_type,
+        shoot_type,
+        event_type,
+        start_date_time,
+        end_time,
+        duration_hours,
+        location,
+        crew_roles,
+        crew_size,
+        selected_crew_ids,
+        edits_needed,
+        video_edit_types,
+        photo_edit_types,
+        is_draft,
+        skip_discount,
+        skip_margin
       },
       tx
     });
-
-    const quoteId = quote.quote_id || quote.id;
-
-    // 6) Attach quote_id to booking
-    await booking.update(
-      { quote_id: quoteId },
-      { transaction: tx }
-    );
 
     await tx.commit();
 
@@ -1912,23 +1902,9 @@ exports.finalizeGuestBooking = async (req, res) => {
       message: 'Booking finalized',
       data: {
         booking_id: booking.stream_project_booking_id,
-        quote_id: quoteId,
-        booking: {
-          stream_project_booking_id: booking.stream_project_booking_id,
-          event_date: booking.event_date,
-          start_time: booking.start_time,
-          end_time: booking.end_time,
-          duration_hours: booking.duration_hours,
-          event_type: booking.event_type,
-          event_location: booking.event_location,
-          crew_roles: booking.crew_roles,
-          crew_size_needed: booking.crew_size_needed,
-          video_edit_types: booking.video_edit_types,
-          photo_edit_types: booking.photo_edit_types,
-          edits_needed: booking.edits_needed,
-          is_draft: booking.is_draft === 1
-        },
-        quote: breakdown
+        quote_id: finalizeResult.quote_id,
+        booking: finalizeResult.booking,
+        quote: finalizeResult.quote
       }
     });
   } catch (error) {
@@ -1936,6 +1912,182 @@ exports.finalizeGuestBooking = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Failed to finalize booking',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * POST /v1/sales/deals/finalize
+ * Single API for Create New Deal "Continue" button:
+ * - Creates sales_leads + stream_project_booking (draft)
+ * - Runs finalize flow: booking update + assigned crew + pricing + quote + attach quote_id
+ */
+exports.finalizeCreateDeal = async (req, res) => {
+  const tx = await sequelize.transaction();
+  try {
+    const salesRepId = req.user?.id || req.userId || null;
+
+    const {
+      // Client / lead fields
+      user_id = null,
+      client_name = null,
+      guest_email = null,
+      phone = null,
+      lead_type = 'sales_assisted',
+      intent = 'Warm',
+      lead_source = null, // thumbtack / instagram / etc.
+
+      // Booking fields (same as finalizeGuestBooking)
+      content_type,
+      shoot_type,
+      event_type,
+      start_date_time,
+      end_time,
+      duration_hours,
+      location,
+      crew_roles,
+      crew_size,
+      selected_crew_ids,
+      edits_needed,
+      video_edit_types,
+      photo_edit_types,
+      is_draft,
+
+      // pricing flags
+      skip_discount = true,
+      skip_margin = true,
+    } = req.body;
+
+    // For either screen, we need at least guest_email OR user_id
+    if (!user_id && !guest_email) {
+      await tx.rollback();
+      return res.status(400).json({ success: false, message: 'guest_email or user_id is required' });
+    }
+
+    // Load user only when user_id is provided
+    let user = null;
+    if (user_id) {
+      user = await users.findOne({
+        where: { id: user_id, is_active: 1 },
+        transaction: tx
+      });
+
+      if (!user) {
+        await tx.rollback();
+        return res.status(404).json({ success: false, message: 'user not found' });
+      }
+    }
+
+    // Resolve client identity fields
+    const resolvedEmail = guest_email || user?.email || null;
+    const resolvedName = client_name || user?.name || null;
+    const resolvedPhone = phone || user?.phone_number || null;
+
+    if (!resolvedEmail) {
+      await tx.rollback();
+      return res.status(400).json({ success: false, message: 'guest_email is required when user_id is not provided' });
+    }
+
+    // 1) Create booking (draft shell) with NOT NULL safe defaults
+    const booking = await stream_project_booking.create(
+      {
+        user_id: user_id || null,
+        guest_email: resolvedEmail,
+        project_name: resolvedName ? `DEAL - ${resolvedName}` : `DEAL - ${resolvedEmail}`,
+        streaming_platforms: JSON.stringify([]),     // NOT NULL
+        crew_roles: JSON.stringify(crew_roles ?? {}),// NOT NULL
+        is_draft: 1,
+        is_active: 1,
+      },
+      { transaction: tx }
+    );
+
+    // 2) Create lead linked to booking
+    const lead = await sales_leads.create(
+      {
+        booking_id: booking.stream_project_booking_id,
+        user_id: user_id || null,
+        guest_email: resolvedEmail,
+        phone: resolvedPhone,
+        client_name: resolvedName,
+        lead_type,
+        intent,
+        lead_source, // thumbtack etc.
+        lead_status: 'in_progress_sales_assisted', // <-- choose your correct sales portal status
+        assigned_sales_rep_id: salesRepId,
+        is_active: 1,
+      },
+      { transaction: tx }
+    );
+
+    // 3) Create lead activity row
+    await sales_lead_activities.create(
+      {
+        lead_id: lead.lead_id,
+        activity_type: 'created',
+        activity_data: {
+          source: 'sales_portal_create_deal',
+          created_by_user_id: salesRepId,
+          guest_email: resolvedEmail,
+          lead_source: lead_source || null
+        }
+      },
+      { transaction: tx }
+    );
+
+    // OPTIONAL:
+    // If you still want auto-assign when salesRepId is missing, do it here.
+    // (Most recommended: DO NOT auto-assign when a sales rep is logged in.)
+    /*
+    if (!salesRepId) {
+      const assignedRep = await leadAssignmentService.autoAssignLead(lead.lead_id, { transaction: tx });
+    }
+    */
+
+    // 4) Reuse your exact finalize logic (core function, not HTTP)
+    const finalizeResult = await finalizeBookingCore({
+      booking,
+      bookingId: booking.stream_project_booking_id,
+      finalizeBody: {
+        content_type,
+        shoot_type,
+        event_type,
+        start_date_time,
+        end_time,
+        duration_hours,
+        location,
+        crew_roles,
+        crew_size,
+        selected_crew_ids,
+        edits_needed,
+        video_edit_types,
+        photo_edit_types,
+        is_draft,
+        skip_discount,
+        skip_margin,
+      },
+      tx
+    });
+
+    await tx.commit();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Deal created & booking finalized',
+      data: {
+        lead_id: lead.lead_id,
+        booking_id: booking.stream_project_booking_id,
+        quote_id: finalizeResult.quote_id,
+        booking: finalizeResult.booking,
+        quote: finalizeResult.quote
+      }
+    });
+  } catch (error) {
+    try { await tx.rollback(); } catch (_) {}
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to create & finalize deal',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }

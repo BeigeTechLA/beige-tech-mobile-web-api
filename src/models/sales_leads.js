@@ -32,6 +32,10 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.STRING(255),
       allowNull: true
     },
+    phone: {
+      type: DataTypes.STRING(20),
+      allowNull: true
+    },
     lead_type: {
       type: DataTypes.ENUM('self_serve', 'sales_assisted'),
       allowNull: false
@@ -50,6 +54,10 @@ module.exports = function(sequelize, DataTypes) {
     },
     intent: {
       type: DataTypes.ENUM('Hot','Warm','Cold'),
+      allowNull: true
+    },
+    lead_source: {
+      type: DataTypes.STRING(50),
       allowNull: true
     },
     assigned_sales_rep_id: {
