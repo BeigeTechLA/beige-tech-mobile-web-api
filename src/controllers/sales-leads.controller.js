@@ -1189,7 +1189,6 @@ exports.getLeads = async (req, res) => {
 
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
-    // ✅ Use Neha’s flexible whereClause
     const whereClause = { [Op.and]: [] };
 
     if (start_date && end_date) {
@@ -1274,19 +1273,11 @@ exports.getLeads = async (req, res) => {
 
         return {
           ...leadJson,
-
-          // ✅ Pricing (both systems supported)
           potential_value: pricingData ? pricingData.total : 0,
           pricing_details: pricingData || null,
-
-          // ✅ Payment
           payment_status: lead.booking?.payment_id ? 'paid' : 'unpaid',
-
-          // ✅ Intent system
           intent,
           intent_source: lead.intent ? 'manual' : 'system',
-
-          // ✅ Booking status (Neha logic preserved)
           booking_status: leadAssignmentService.getLeadBookingStatus(
             lead,
             lead.booking
@@ -1315,9 +1306,6 @@ exports.getLeads = async (req, res) => {
   }
 };
 
-/**
- * GET LEAD BY ID (MERGED – SAFE)
- */
 exports.getLeadById = async (req, res) => {
   try {
     const { id } = req.params;
@@ -1376,8 +1364,6 @@ exports.getLeadById = async (req, res) => {
 
     const leadJson = lead.toJSON();
 
-    /* -------------------- Neha logic (unchanged) -------------------- */
-
     const selectedCrewIds =
       lead.booking?.assigned_crews?.map(c => c.crew_member_id).filter(Boolean) || [];
 
@@ -1396,8 +1382,6 @@ exports.getLeadById = async (req, res) => {
       lead.activities
     );
     const can_edit_booking = canEditBooking(lead, lead.booking);
-
-    /* -------------------- Parth fulfillment logic -------------------- */
 
     const ROLE_GROUPS = {
       videographer: ['9', '1'],
@@ -1467,8 +1451,6 @@ exports.getLeadById = async (req, res) => {
         acceptance_status: statusMap[ac.crew_accept] || 'pending'
       }));
     }
-
-    /* -------------------- Final response -------------------- */
 
     res.json({
       success: true,

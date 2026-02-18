@@ -311,17 +311,6 @@ GET {{URL}}sales/leads/133 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
-### edit lead booking (130 is lead_id)
-PUT {{URL}}sales/leads/130/booking HTTP/1.1
-Content-Type: application/json
-Authorization: {{TOKEN}}
-
-{
-    "event_date": "2026-03-04",
-    "event_location": "225 South Olive Street, Los Angeles, California 90012, United States",
-    "shoot_type": "Wedding"
-}
-
 ### generate discount: one-time
 POST {{URL}}sales/discount-codes HTTP/1.1
 Content-Type: application/json
