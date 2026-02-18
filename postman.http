@@ -448,6 +448,129 @@ Authorization: {{TOKEN}}
   "skip_margin": true
 }
 
+### Create New Deal
+POST {{URL}}sales/deals/finalize HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "client_name": "Lisa Anderson",
+  "guest_email": "lisa@gmail.com",
+  "phone": "9173961117",
+  "intent": "Warm",
+  "lead_source": "instagram",
+  "content_type": "videographer",
+  "shoot_type": "corporate",
+  "start_date_time": "2026-02-25T03:30:00.000Z",
+  "end_time": "2026-02-25T11:30:00.000Z",
+  "duration_hours": 8,
+  "location": "442 Crocker Street, Los Angeles, California 90013, United States",
+  "crew_roles": { "videographer": 2 },
+  "crew_size": 2,
+  "selected_crew_ids": [2043],
+  "edits_needed": true,
+  "video_edit_types": ["highlight_4_7", "feature_30_40"],
+  "photo_edit_types": [],
+  "is_draft": false,
+  "skip_discount": true,
+  "skip_margin": true
+}
+
+### Create Client Booking
+POST {{URL}}sales/deals/finalize HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "user_id": "182",
+  "content_type": "videographer",
+  "shoot_type": "corporate",
+  "start_date_time": "2026-02-25T03:30:00.000Z",
+  "end_time": "2026-02-25T11:30:00.000Z",
+  "duration_hours": 8,
+  "location": "442 Crocker Street, Los Angeles, California 90013, United States",
+  "crew_roles": { "videographer": 2 },
+  "crew_size": 2,
+  "selected_crew_ids": [2043],
+  "edits_needed": true,
+  "video_edit_types": ["highlight_4_7", "feature_30_40"],
+  "photo_edit_types": [],
+  "is_draft": false,
+  "skip_discount": true,
+  "skip_margin": true
+}
+
+### Create New Deal
+POST {{URL}}sales/deals/finalize HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "client_name": "Lisa Anderson",
+  "guest_email": "lisa@gmail.com",
+  "phone": "9173961117",
+  "intent": "Warm",
+  "lead_source": "instagram",
+  "content_type": "videographer",
+  "shoot_type": "corporate",
+  "start_date_time": "2026-02-25T03:30:00.000Z",
+  "end_time": "2026-02-25T11:30:00.000Z",
+  "duration_hours": 8,
+  "location": "442 Crocker Street, Los Angeles, California 90013, United States",
+  "crew_roles": { "videographer": 2 },
+  "crew_size": 2,
+  "selected_crew_ids": [2043],
+  "edits_needed": true,
+  "video_edit_types": ["highlight_4_7", "feature_30_40"],
+  "photo_edit_types": [],
+  "is_draft": false,
+  "skip_discount": true,
+  "skip_margin": true
+}
+
+### Create Client Booking
+POST {{URL}}sales/deals/finalize HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "user_id": "182",
+  "content_type": "videographer",
+  "shoot_type": "corporate",
+  "start_date_time": "2026-02-25T03:30:00.000Z",
+  "end_time": "2026-02-25T11:30:00.000Z",
+  "duration_hours": 8,
+  "location": "442 Crocker Street, Los Angeles, California 90013, United States",
+  "crew_roles": { "videographer": 2 },
+  "crew_size": 2,
+  "selected_crew_ids": [2043],
+  "edits_needed": true,
+  "video_edit_types": ["highlight_4_7", "feature_30_40"],
+  "photo_edit_types": [],
+  "is_draft": false,
+  "skip_discount": true,
+  "skip_margin": true
+}
+
+### 
+POST {{URL}}admin/remove-assigned-crew HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+    "lead_id": 136,
+    "crew_member_id": 2044
+}
+
+### 
+POST {{URL}}sales/send-invoice HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "booking_id": 814
+}
+
 ### 
 POST {{URL}}admin/remove-assigned-crew HTTP/1.1
 Content-Type: application/json
