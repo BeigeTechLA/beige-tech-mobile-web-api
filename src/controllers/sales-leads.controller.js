@@ -1394,55 +1394,72 @@ exports.getLeadById = async (req, res) => {
       ids.forEach(id => (ID_TO_ROLE_MAP[id] = role));
     });
 
-    let fulfillment_summary = {};
+   let fulfillmentSummary = {};
 
-    if (leadJson.booking?.crew_roles) {
-      let requestedRoles = {};
-      try {
-        requestedRoles =
-          typeof leadJson.booking.crew_roles === 'string'
-            ? JSON.parse(leadJson.booking.crew_roles)
-            : leadJson.booking.crew_roles;
-      } catch (_) {}
+        if (leadJson.booking && leadJson.booking.crew_roles) {
+            let requestedRoles = {};
+            try {
+                requestedRoles = typeof leadJson.booking.crew_roles === 'string' 
+                    ? JSON.parse(leadJson.booking.crew_roles) 
+                    : leadJson.booking.crew_roles;
+            } catch (e) { requestedRoles = {}; }
 
-      Object.keys(requestedRoles).forEach(role => {
-        fulfillment_summary[role] = {
-          required: requestedRoles[role],
-          accepted: 0,
-          pending: 0,
-          rejected: 0,
-          display: `0/${requestedRoles[role]}`,
-          needs_attention: true
-        };
-      });
+            Object.keys(requestedRoles).forEach(role => {
+                fulfillmentSummary[role] = {
+                    required: requestedRoles[role],
+                    pending: 0,
+                    accepted: 0,
+                    rejected: 0,
+                    display: `0/${requestedRoles[role]}`
+                };
+            });
 
-      leadJson.booking.assigned_crews?.forEach(ac => {
-        let roles = [];
-        try {
-          roles =
-            typeof ac.crew_member?.primary_role === 'string'
-              ? JSON.parse(ac.crew_member.primary_role)
-              : ac.crew_member?.primary_role || [];
-        } catch (_) {}
+            if (leadJson.booking.assigned_crews) {
+                leadJson.booking.assigned_crews.forEach(ac => {
+                    let crewRoleIds = [];
+                    try {
+                        crewRoleIds = typeof ac.crew_member?.primary_role === 'string'
+                            ? JSON.parse(ac.crew_member.primary_role)
+                            : (ac.crew_member?.primary_role || []);
+                    } catch (e) { crewRoleIds = []; }
 
-        const categories = roles
-          .map(id => ID_TO_ROLE_MAP[id])
-          .filter(Boolean);
+                    const potentialCategories = [...new Set(crewRoleIds.map(id => ID_TO_ROLE_MAP[String(id)]).filter(Boolean))];
 
-        const target = categories.find(c => fulfillment_summary[c]);
+                    let assignedToCategory = null;
+                    
+                    if (ac.crew_accept === 1) {
+                        assignedToCategory = potentialCategories.find(cat => 
+                            fulfillmentSummary[cat] && fulfillmentSummary[cat].accepted < fulfillmentSummary[cat].required
+                        );
+                    } 
+                    if (!assignedToCategory && ac.crew_accept !== 2) {
+                        assignedToCategory = potentialCategories.find(cat => 
+                            fulfillmentSummary[cat] && (fulfillmentSummary[cat].accepted + fulfillmentSummary[cat].pending) < fulfillmentSummary[cat].required
+                        );
+                    }
+                    if (!assignedToCategory) {
+                        assignedToCategory = potentialCategories[0];
+                    }
 
-        if (target) {
-          if (ac.crew_accept === 1) fulfillment_summary[target].accepted++;
-          else if (ac.crew_accept === 2) fulfillment_summary[target].rejected++;
-          else fulfillment_summary[target].pending++;
+                    if (assignedToCategory && fulfillmentSummary[assignedToCategory]) {
+                        const role = fulfillmentSummary[assignedToCategory];
+                        if (ac.crew_accept === 1) {
+                            role.accepted += 1;
+                        } else if (ac.crew_accept === 0 || ac.crew_accept === null) {
+                            role.pending += 1;
+                        } else if (ac.crew_accept === 2) {
+                            role.rejected += 1;
+                        }
+                    }
+                });
+            }
+
+            Object.keys(fulfillmentSummary).forEach(key => {
+                const item = fulfillmentSummary[key];
+                item.display = `${item.accepted}/${item.required}`;
+                item.needs_attention = item.accepted < item.required;
+            });
         }
-      });
-
-      Object.values(fulfillment_summary).forEach(item => {
-        item.display = `${item.accepted}/${item.required}`;
-        item.needs_attention = item.accepted < item.required;
-      });
-    }
 
     const statusMap = { 0: 'pending', 1: 'accepted', 2: 'rejected' };
     if (leadJson.booking?.assigned_crews) {
@@ -1463,7 +1480,7 @@ exports.getLeadById = async (req, res) => {
         payment_status,
         booking_step,
         can_edit_booking,
-        fulfillment_summary,
+        fulfillmentSummary,
         projected_quote: projectedQuote
       }
     });
