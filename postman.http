@@ -419,10 +419,10 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "lead_id": 145,
-  "booking_id": 809,
-  "discount_code_id": 17,
-  "expiry_hours": 48
+  "lead_id": 151,
+  "booking_id": 815,
+  "discount_code_id": 22,
+  "expiry_hours": 1
 }
 
 ### Edit Lead Booking
@@ -446,4 +446,23 @@ Authorization: {{TOKEN}}
   "is_draft": false,
   "skip_discount": true,
   "skip_margin": true
+}
+
+### 
+POST {{URL}}admin/remove-assigned-crew HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+    "lead_id": 136,
+    "crew_member_id": 2044
+}
+
+### 
+POST {{URL}}sales/send-invoice HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "booking_id": 814
 }

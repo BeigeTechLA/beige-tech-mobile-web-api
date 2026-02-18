@@ -138,6 +138,7 @@ router.get('/discount-codes/:id/usage', authenticate, requireSalesRepOrAdmin, di
  * @access  Sales Rep / Admin
  */
 router.post('/payment-links', authenticate, requireSalesRepOrAdmin, paymentLinksController.generatePaymentLink);
+router.post('/send-invoice', authenticate, requireSalesRepOrAdmin, paymentLinksController.sendStripeInvoice);
 
 /**
  * @route   GET /api/sales/payment-links/:token

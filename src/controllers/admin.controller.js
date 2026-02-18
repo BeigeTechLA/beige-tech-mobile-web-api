@@ -6527,7 +6527,8 @@ exports.searchCrewForLead = async (req, res) => {
 
 exports.assignCrewBulkSmart = async (req, res) => {
     try {
-        const { lead_id, crew_member_ids, assigned_by_user_id } = req.body;
+        const assigned_by_user_id = req.user?.userId;
+        const { lead_id, crew_member_ids } = req.body;
 
         if (!Array.isArray(crew_member_ids) || crew_member_ids.length === 0) {
             return res.status(400).json({ success: false, message: "No crew members selected." });
@@ -6628,6 +6629,69 @@ exports.assignCrewBulkSmart = async (req, res) => {
         res.json({ success: true, message: `${assignmentsToCreate.length} crew members assigned successfully.` });
 
     } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+exports.removeAssignedCrew = async (req, res) => {
+    try {
+      const assigned_by_user_id = req.user?.userId; // Assuming you have user info in req.user
+        const { lead_id, crew_member_id } = req.body;
+
+        if (!lead_id || !crew_member_id) {
+            return res.status(400).json({ success: false, message: "lead_id and crew_member_id are required." });
+        }
+
+        const lead = await sales_leads.findOne({
+            where: { lead_id },
+            attributes: ['lead_id', 'booking_id']
+        });
+
+        if (!lead || !lead.booking_id) {
+            return res.status(404).json({ success: false, message: "Lead or associated booking not found." });
+        }
+
+        const assignment = await assigned_crew.findOne({
+            where: {
+                project_id: lead.booking_id,
+                crew_member_id: crew_member_id,
+                is_active: 1
+            },
+            include: [{ 
+                model: crew_members, 
+                as: 'crew_member', 
+                attributes: ['first_name', 'last_name'] 
+            }]
+        });
+
+        if (!assignment) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "This crew member is not currently assigned to this project or is already inactive." 
+            });
+        }
+
+        await assignment.update({ is_active: 0 });
+
+        const crewName = assignment.crew_member 
+            ? `${assignment.crew_member.first_name} ${assignment.crew_member.last_name}` 
+            : `ID: ${crew_member_id}`;
+
+        await sales_lead_activities.create({
+            lead_id: lead_id,
+            activity_type: 'crew_removed',
+            notes: `Sales rep removed ${crewName} from the project.`,
+            performed_by_user_id: assigned_by_user_id,
+            created_at: new Date()
+        });
+
+        res.json({
+            success: true,
+            message: "Crew member removed from project successfully."
+        });
+
+    } catch (error) {
+        console.error('RemoveCrew Error:', error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

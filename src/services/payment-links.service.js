@@ -1,3 +1,4 @@
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const crypto = require('crypto');
 const { payment_links } = require('../models');
 
@@ -154,6 +155,68 @@ async function cleanupExpiredLinks(daysOld = 30) {
   return result;
 }
 
+async function createStripeInvoice(booking, pricingData) {
+  if (!booking.guest_email) {
+    throw new Error("Booking must have a guest_email to generate an invoice.");
+  }
+
+  // 1. Find or Create Customer
+  const existingCustomers = await stripe.customers.list({
+    email: booking.guest_email,
+    limit: 1,
+  });
+
+  let customer = existingCustomers.data.length > 0 
+    ? existingCustomers.data[0] 
+    : await stripe.customers.create({
+        email: booking.guest_email,
+        name: booking.project_name || 'Guest Customer'
+      });
+
+  // 2. Create Draft Invoice
+  const invoice = await stripe.invoices.create({
+    customer: customer.id,
+    collection_method: 'send_invoice',
+    days_until_due: 7,
+    description: `Invoice for project: ${booking.project_name || 'Service'}`,
+    metadata: { 
+      booking_id: booking.stream_project_booking_id.toString(),
+      source: pricingData.source 
+    }
+  });
+
+  // 3. Add Line Items
+  if (pricingData.line_items && pricingData.line_items.length > 0) {
+    for (const item of pricingData.line_items) {
+      const amountCents = Math.round(parseFloat(item.total || 0) * 100);
+      if (amountCents > 0) {
+          await stripe.invoiceItems.create({
+            customer: customer.id,
+            invoice: invoice.id,
+            amount: amountCents,
+            currency: 'usd',
+            description: `${item.name} (Qty: ${item.quantity || 1})`,
+          });
+      }
+    }
+  }
+
+  // 4. Add Discount
+  const discountCents = Math.round(parseFloat(pricingData.discount_amount || 0) * 100);
+  if (discountCents > 0) {
+      await stripe.invoiceItems.create({
+        customer: customer.id,
+        invoice: invoice.id,
+        amount: -discountCents,
+        currency: 'usd',
+        description: `Applied Discount`,
+      });
+  }
+
+  // 5. Finalize
+  return await stripe.invoices.finalizeInvoice(invoice.id);
+}
+
 module.exports = {
   generateLinkToken,
   buildPaymentUrl,
@@ -161,5 +224,6 @@ module.exports = {
   getDefaultExpiration,
   markLinkAsUsed,
   getSalesRepLinkStats,
-  cleanupExpiredLinks
+  cleanupExpiredLinks,
+  createStripeInvoice
 };

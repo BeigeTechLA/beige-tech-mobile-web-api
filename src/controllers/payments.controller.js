@@ -453,18 +453,15 @@ exports.confirmPaymentMulti = async (req, res) => {
   try {
     const { paymentIntentId, booking_id, referral_code } = req.body;
 
-    // 1. Basic Validation
     if (!paymentIntentId || !booking_id) {
       return res.status(400).json({ success: false, message: 'Missing paymentIntentId or booking_id' });
     }
 
-    // 2. Verify Payment with Stripe
     const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
     if (paymentIntent.status !== 'succeeded') {
       return res.status(400).json({ success: false, message: 'Payment not successful' });
     }
 
-    // 3. Prevent Double Processing
     const existingPayment = await db.payment_transactions.findOne({
       where: { stripe_payment_intent_id: paymentIntentId }
     });
@@ -474,14 +471,12 @@ exports.confirmPaymentMulti = async (req, res) => {
       return res.status(409).json({ success: false, message: 'Payment already processed' });
     }
 
-    // 4. Fetch Booking Details
     const booking = await db.stream_project_booking.findByPk(booking_id);
     if (!booking) {
       await transaction.rollback();
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
-    // 5. SATISFY DATABASE CONSTRAINTS (creator_id and shoot_date)
     let validCreatorId = null;
     if (booking.creator_id) {
       const check = await db.crew_members.findByPk(booking.creator_id);
@@ -496,7 +491,6 @@ exports.confirmPaymentMulti = async (req, res) => {
       validCreatorId = firstCreator ? firstCreator.crew_member_id : null;
     }
 
-    // If still no creator, we cannot satisfy the DB foreign key
     if (!validCreatorId) {
        throw new Error("Cannot process payment: No valid creator found in system to link transaction.");
     }
@@ -505,7 +499,6 @@ exports.confirmPaymentMulti = async (req, res) => {
     const totalAmount = paymentIntent.amount / 100;
     const chargeId = paymentIntent.charges?.data[0]?.id || null;
 
-    // 6. Create Payment Transaction in MySQL
     const payment = await db.payment_transactions.create({
       stripe_payment_intent_id: paymentIntentId,
       stripe_charge_id: chargeId,
@@ -521,34 +514,39 @@ exports.confirmPaymentMulti = async (req, res) => {
       beige_margin_amount: 0,
       total_amount: totalAmount,
       shoot_date: finalShootDate,
-      location: booking.event_location ? 
-        (typeof booking.event_location === 'string' ? booking.event_location : JSON.stringify(booking.event_location)) 
-        : 'See Booking Details',
+      location: booking.event_location ? (typeof booking.event_location === 'string' ? booking.event_location : JSON.stringify(booking.event_location)) : 'See Booking Details',
       shoot_type: booking.shoot_type || null,
       notes: booking.special_requests || null,
       referral_code: referral_code || null,
       status: 'succeeded'
     }, { transaction });
 
-    // 7. Update Booking record
     await db.stream_project_booking.update(
       { 
         payment_completed_at: new Date(), 
         payment_id: payment.payment_id,
-        is_draft: 0 // Move from draft to active
+        is_draft: 0,
+        is_completed: 1
       },
       { where: { stream_project_booking_id: booking_id }, transaction }
     );
 
-    // 8. Commit the Database Transaction
+    await db.sales_leads.update(
+      { 
+        lead_status: 'booked' 
+      },
+      { 
+        where: { booking_id: booking_id }, 
+        transaction 
+      }
+    );
+
     await transaction.commit();
 
-    // 9. GOOGLE SHEET SYNC (Using your new helper)
+    // 4. GOOGLE SHEET SYNC
     try {
       const lead = await db.sales_leads.findOne({ where: { booking_id: booking_id } });
       if (lead) {
-        // Your helper takes: tabName, id (from Col A), and an object map of columns to update
-        // J is Status, L is Is Draft, M is Last Activity
         await updateSheetRow('leads_data', lead.lead_id, {
           'J': 'Paid',
           'L': 'No',
@@ -568,11 +566,7 @@ exports.confirmPaymentMulti = async (req, res) => {
   } catch (error) {
     if (transaction) await transaction.rollback();
     console.error('Multi-Creator Payment Error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Failed to process payment',
-      error: error.message
-    });
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 /**
@@ -660,5 +654,95 @@ exports.getPaymentStatus = async (req, res) => {
       message: 'Failed to retrieve payment status',
       error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     });
+  }
+};
+
+/**
+ * Handle Stripe Webhooks
+ * POST /api/payments/webhook
+ * CRITICAL: This route must use express.raw({type: 'application/json'})
+ */
+exports.handleStripeWebhook = async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  let event;
+
+  try {
+    // Verify the signature using your Webhook Secret from Stripe Dashboard
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
+  } catch (err) {
+    console.error(`Webhook Signature Verification Failed: ${err.message}`);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  // Handle the event
+  try {
+    // We care about 'invoice.paid' (for invoices) or 'payment_intent.succeeded' (for direct checkout)
+    if (event.type === 'invoice.paid' || event.type === 'payment_intent.succeeded') {
+      const dataObject = event.data.object;
+      
+      // Extract Booking ID from metadata we sent in 'createStripeInvoice' or 'createPaymentIntent'
+      const booking_id = dataObject.metadata?.booking_id;
+      
+      if (booking_id) {
+        console.log(`Processing Webhook for Booking ID: ${booking_id}`);
+        
+        const transaction = await db.sequelize.transaction();
+        
+        try {
+          // 1. Check if payment record already exists to prevent duplicates
+          const existing = await db.payment_transactions.findOne({
+            where: { stripe_payment_intent_id: dataObject.payment_intent || dataObject.id }
+          });
+
+          if (!existing) {
+            // 2. Create the Payment Transaction
+            const amountPaid = (dataObject.amount_paid || dataObject.amount_received || dataObject.amount) / 100;
+            
+            const payment = await db.payment_transactions.create({
+              stripe_payment_intent_id: dataObject.payment_intent || dataObject.id,
+              stripe_charge_id: dataObject.charge || null,
+              creator_id: dataObject.metadata?.creator_id || 1, // Fallback to 1
+              guest_email: dataObject.customer_email || dataObject.receipt_email,
+              total_amount: amountPaid,
+              subtotal: amountPaid,
+              status: 'succeeded',
+              shoot_date: new Date(), // Ideally fetch from booking
+              location: 'Stripe Webhook'
+            }, { transaction });
+
+            // 3. Update Booking
+            await db.stream_project_booking.update({
+              is_completed: 1,
+              is_draft: 0,
+              payment_id: payment.payment_id,
+              payment_completed_at: new Date()
+            }, { where: { stream_project_booking_id: booking_id }, transaction });
+
+            // 4. Update Sales Lead
+            await db.sales_leads.update({
+              lead_status: 'booked'
+            }, { where: { booking_id: booking_id }, transaction });
+
+            await transaction.commit();
+            console.log(`✅ Webhook: Booking ${booking_id} successfully marked as PAID.`);
+          } else {
+            await transaction.rollback();
+            console.log(`ℹ️ Webhook: Payment for Booking ${booking_id} already processed.`);
+          }
+        } catch (dbError) {
+          await transaction.rollback();
+          throw dbError;
+        }
+      }
+    }
+
+    return res.status(200).json({ received: true });
+  } catch (error) {
+    console.error('Webhook processing error:', error);
+    return res.status(500).send('Internal Server Error');
   }
 };

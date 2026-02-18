@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const admin = require('../controllers/admin.controller');
-const { authenticateAdmin } = require('../middleware/auth');
+const { authenticateAdmin, authMiddleware } = require('../middleware/auth');
 
 router.post('/create-project', admin.createProject);
 router.post('/match-crew', admin.matchCrew);
@@ -77,6 +77,7 @@ router.post('/upload-profile-photo', admin.uploadProfilePhoto);
 router.get('/get-client-by-id/:id', admin.getClientById);
 router.get('/get-clients-shoots/:clientId', admin.getClientsShoots);
 router.get('/get-crew-for-lead', admin.searchCrewForLead);
-router.post('/assign-crew-from-lead', admin.assignCrewBulkSmart);
+router.post('/assign-crew-from-lead',authMiddleware, admin.assignCrewBulkSmart);
+router.post('/remove-assigned-crew',authMiddleware, admin.removeAssignedCrew);
 
 module.exports = router;
