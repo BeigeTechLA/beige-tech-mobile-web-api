@@ -317,10 +317,10 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "lead_id": 46,
-  "booking_id": 593,
-  "discount_type": "fixed_amount",
-  "discount_value": 500,
+  "lead_id": 155,
+  "booking_id": 819,
+  "discount_type": "percentage",
+  "discount_value": 50,
   "usage_type": "one_time"
 }
 
@@ -330,10 +330,10 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "lead_id": 3,
-  "booking_id": 103,
+  "lead_id": 154,
+  "booking_id": 818,
   "discount_type": "percentage",
-  "discount_value": 15,
+  "discount_value": 50,
   "usage_type": "multi_use",
   "max_uses": 5
 }
@@ -406,11 +406,11 @@ Content-Type: application/json
 ### 
 POST {{URL}}admin/assign-crew-from-lead HTTP/1.1
 Content-Type: application/json
+Authorization: {{TOKEN}}
 
 {
     "lead_id": 136,
     "crew_member_ids": [2047], 
-    "assigned_by_user_id": 180
 }
 
 ### generate discount: multi-use
@@ -419,10 +419,10 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "lead_id": 151,
-  "booking_id": 815,
-  "discount_code_id": 22,
-  "expiry_hours": 1
+  "lead_id": 155,
+  "booking_id": 819,
+  "discount_code_id": 25,
+  "expiry_hours": 2
 }
 
 ### Edit Lead Booking
@@ -587,5 +587,19 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "booking_id": 814
+  "booking_id": 819
 }
+
+
+### 
+POST {{URL}}sales/payment-links/notify HTTP/1.1
+Content-Type: application/json
+
+{
+  "payment_link_id": 18
+}
+
+### 
+GET {{URL}}sales/get-lead-stats/136 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}

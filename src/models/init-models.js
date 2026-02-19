@@ -411,6 +411,10 @@ crew_members.belongsTo(crew_roles, { as: 'role', foreignKey: 'primary_role' });
   quotes.belongsTo(discount_codes, { as: "discount_code", foreignKey: "discount_code_id" });
   discount_codes.hasMany(quotes, { as: "quotes", foreignKey: "discount_code_id" });
 
+  // Add these lines near the other relationship definitions
+stream_project_booking.belongsTo(users, { as: "user", foreignKey: "user_id"});
+users.hasMany(stream_project_booking, { as: "bookings", foreignKey: "user_id"});
+
   return {
     activity_logs,
     assigned_crew,

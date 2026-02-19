@@ -156,32 +156,104 @@ async function cleanupExpiredLinks(daysOld = 30) {
 }
 
 async function createStripeInvoice(booking, pricingData) {
-  if (!booking.guest_email) {
-    throw new Error("Booking must have a guest_email to generate an invoice.");
+  const email = booking.guest_email || (booking.user ? booking.user.email : null);
+  
+  if (!email) {
+    throw new Error("Booking must have an email address to generate an invoice.");
   }
 
-  // 1. Find or Create Customer
-  const existingCustomers = await stripe.customers.list({
-    email: booking.guest_email,
-    limit: 1,
-  });
+  // Determine Customer Name (Same logic as your email service)
+  let recipientName = 'Valued Guest';
+  if (booking.user && booking.user.name) {
+    recipientName = booking.user.name;
+  } else if (booking.project_name) {
+    recipientName = booking.project_name.split(' - ')[1] || 'Valued Guest';
+  }
 
-  let customer = existingCustomers.data.length > 0 
-    ? existingCustomers.data[0] 
-    : await stripe.customers.create({
-        email: booking.guest_email,
-        name: booking.project_name || 'Guest Customer'
-      });
+  // 1. Find or Create Customer in Stripe
+  const customers = await stripe.customers.list({ email: email, limit: 1 });
+  let customer;
+  if (customers.data.length > 0) {
+    customer = customers.data[0];
+  } else {
+    customer = await stripe.customers.create({
+      email: email,
+      name: recipientName,
+      metadata: { booking_id: booking.stream_project_booking_id.toString() }
+    });
+  }
 
-  // 2. Create Draft Invoice
+  // 2. Create the Draft Invoice
   const invoice = await stripe.invoices.create({
     customer: customer.id,
-    collection_method: 'send_invoice',
+    collection_method: 'send_invoice', // This emails the invoice automatically
     days_until_due: 7,
-    description: `Invoice for project: ${booking.project_name || 'Service'}`,
+    description: `Service Invoice for ${booking.project_name || 'Project'}`,
+    footer: "Beige AI Platform - 123 Creative Studio Way, New York, NY 10001",
     metadata: { 
-      booking_id: booking.stream_project_booking_id.toString(),
-      source: pricingData.source 
+      booking_id: booking.stream_project_booking_id.toString() 
+    }
+  });
+
+  // 3. Add Line Items (Calculated from your pricing data)
+  if (pricingData.line_items && pricingData.line_items.length > 0) {
+    for (const item of pricingData.line_items) {
+      const amountCents = Math.round(parseFloat(item.total || 0) * 100);
+      if (amountCents > 0) {
+        await stripe.invoiceItems.create({
+          customer: customer.id,
+          invoice: invoice.id,
+          amount: amountCents,
+          currency: 'usd',
+          description: `${item.name} (Qty: ${item.quantity || 1})`,
+        });
+      }
+    }
+  }
+
+  // 4. Handle Discount (if any)
+  const discountCents = Math.round(parseFloat(pricingData.discount_amount || 0) * 100);
+  if (discountCents > 0) {
+    await stripe.invoiceItems.create({
+      customer: customer.id,
+      invoice: invoice.id,
+      amount: -discountCents,
+      currency: 'usd',
+      description: `Applied Discount`,
+    });
+  }
+
+  // 5. Finalize the invoice (This generates the PDF link and the hosted URL)
+  const finalizedInvoice = await stripe.invoices.finalizeInvoice(invoice.id);
+  
+  // 6. Send the invoice via email through Stripe's system
+  await stripe.invoices.sendInvoice(finalizedInvoice.id);
+
+  return finalizedInvoice;
+}
+/**
+ * Creates a formal invoice for a payment that HAS ALREADY been received.
+ * This is used to generate a professional PDF for historical records.
+ */
+async function createPaidStripeInvoice(booking, pricingData) {
+  const email = (booking.user && booking.user.email) ? booking.user.email : booking.guest_email;
+  const recipientName = booking.user?.name || (booking.project_name ? booking.project_name.split(' - ')[1] : 'Valued Guest');
+
+  // 1. Get/Create Customer
+  const customers = await stripe.customers.list({ email: email, limit: 1 });
+  let customer = customers.data.length > 0 ? customers.data[0] : await stripe.customers.create({ email, name: recipientName });
+
+  // 2. Create the Draft Invoice
+  const invoice = await stripe.invoices.create({
+    customer: customer.id,
+    auto_advance: false, 
+    collection_method: 'send_invoice',
+    days_until_due: 1, // <--- ADD THIS LINE TO FIX THE ERROR
+    description: `PAID: Service Invoice for ${booking.project_name || 'Project'}`,
+    footer: "Beige AI Platform - Payment Received. Thank you.",
+    metadata: { 
+      booking_id: booking.stream_project_booking_id.toString(), 
+      status: 'retrospective_paid' 
     }
   });
 
@@ -190,31 +262,26 @@ async function createStripeInvoice(booking, pricingData) {
     for (const item of pricingData.line_items) {
       const amountCents = Math.round(parseFloat(item.total || 0) * 100);
       if (amountCents > 0) {
-          await stripe.invoiceItems.create({
-            customer: customer.id,
-            invoice: invoice.id,
-            amount: amountCents,
-            currency: 'usd',
-            description: `${item.name} (Qty: ${item.quantity || 1})`,
-          });
+        await stripe.invoiceItems.create({
+          customer: customer.id,
+          invoice: invoice.id,
+          amount: amountCents,
+          currency: 'usd',
+          description: `${item.name} (Qty: ${item.quantity || 1})`,
+        });
       }
     }
   }
 
-  // 4. Add Discount
-  const discountCents = Math.round(parseFloat(pricingData.discount_amount || 0) * 100);
-  if (discountCents > 0) {
-      await stripe.invoiceItems.create({
-        customer: customer.id,
-        invoice: invoice.id,
-        amount: -discountCents,
-        currency: 'usd',
-        description: `Applied Discount`,
-      });
-  }
+  // 4. Finalize the invoice (Generates the PDF)
+  let finalized = await stripe.invoices.finalizeInvoice(invoice.id);
 
-  // 5. Finalize
-  return await stripe.invoices.finalizeInvoice(invoice.id);
+  // 5. Mark as paid immediately so it shows as "Paid" on the PDF
+  finalized = await stripe.invoices.pay(finalized.id, {
+    paid_out_of_band: true
+  });
+
+  return finalized;
 }
 
 module.exports = {
@@ -225,5 +292,6 @@ module.exports = {
   markLinkAsUsed,
   getSalesRepLinkStats,
   cleanupExpiredLinks,
-  createStripeInvoice
+  createStripeInvoice,
+  createPaidStripeInvoice
 };
