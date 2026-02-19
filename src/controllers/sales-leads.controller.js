@@ -1423,6 +1423,111 @@ exports.getLeadById = async (req, res) => {
   }
 };
 
+exports.getLeadFulfillmentStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const lead = await sales_leads.findOne({
+      where: { lead_id: id },
+      include: [
+        {
+          model: stream_project_booking,
+          as: 'booking',
+          attributes: ['event_location', 'crew_roles'],
+          include: [
+            {
+              model: assigned_crew,
+              as: 'assigned_crews',
+              where: { is_active: 1 },
+              required: false,
+              attributes: ['crew_accept'],
+              include: [
+                {
+                  model: crew_members,
+                  as: 'crew_member',
+                  attributes: ['primary_role']
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    });
+
+    if (!lead || !lead.booking) {
+      return res.status(404).json({ success: false, message: 'Lead or Booking not found' });
+    }
+
+    const booking = lead.booking;
+    
+    let requestedRoles = {};
+    try {
+      requestedRoles = typeof booking.crew_roles === 'string' ? JSON.parse(booking.crew_roles) : (booking.crew_roles || {});
+    } catch (e) {
+      requestedRoles = {};
+    }
+
+    const ROLE_GROUPS = { 
+      videographer: ['9', '1'], 
+      photographer: ['10', '2'], 
+      cinematographer: ['11', '3'] 
+    };
+    const ID_TO_ROLE_MAP = {};
+    Object.entries(ROLE_GROUPS).forEach(([role, ids]) => {
+      ids.forEach(id => (ID_TO_ROLE_MAP[String(id)] = role));
+    });
+
+    // 3. Initialize Summary
+    let fulfillment = {};
+    Object.keys(requestedRoles).forEach(role => {
+      fulfillment[role] = {
+        accepted: 0,
+        required: parseInt(requestedRoles[role]) || 0,
+        status_display: `0/${requestedRoles[role]}`
+      };
+    });
+
+    if (booking.assigned_crews) {
+      booking.assigned_crews.forEach(ac => {
+        if (ac.crew_accept === 1) {
+          let crewRoleIds = [];
+          try {
+            crewRoleIds = typeof ac.crew_member?.primary_role === 'string' 
+              ? JSON.parse(ac.crew_member.primary_role) 
+              : (ac.crew_member?.primary_role || []);
+          } catch (e) { crewRoleIds = []; }
+
+          const categories = [...new Set(crewRoleIds.map(id => ID_TO_ROLE_MAP[String(id)]).filter(Boolean))];
+          
+          const targetCategory = categories.find(cat => fulfillment[cat] && fulfillment[cat].accepted < fulfillment[cat].required);
+          
+          if (targetCategory) {
+            fulfillment[targetCategory].accepted += 1;
+          }
+        }
+      });
+    }
+
+    const result = {};
+    Object.keys(fulfillment).forEach(key => {
+      result[key] = `${fulfillment[key].accepted}/${fulfillment[key].required}`;
+    });
+
+    res.json({
+      success: true,
+      data: {
+        lead_id: id,
+        location: booking.event_location,
+        fulfillment_stats: result
+      }
+    });
+
+  } catch (error) {
+    console.error('Fulfillment Status Error:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
 /**
  * Assign or reassign lead to sales rep
  * PUT /api/sales/leads/:id/assign
