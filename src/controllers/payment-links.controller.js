@@ -1,8 +1,9 @@
-const { payment_links, sales_leads, sales_lead_activities, discount_codes, stream_project_booking, quotes, quote_line_items } = require('../models');
+const { payment_links, sales_leads, sales_lead_activities, discount_codes, stream_project_booking, quotes, quote_line_items, users } = require('../models');
 const db = require('../models');
 const paymentLinksService = require('../services/payment-links.service');
 const constants = require('../utils/constants');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const emailService = require('../utils/emailService');
 
 const calculateLeadPricing = async (booking) => {
     if (!booking) return null;
@@ -104,7 +105,7 @@ exports.generatePaymentLink = async (req, res) => {
 
     const createdBy = req.userId;
 
-    // Validation
+    // 1. Basic Validation
     if (!booking_id) {
       return res.status(400).json({
         success: false,
@@ -112,7 +113,7 @@ exports.generatePaymentLink = async (req, res) => {
       });
     }
 
-    // Verify booking exists
+    // 2. Verify booking exists
     const booking = await stream_project_booking.findByPk(booking_id);
 
     if (!booking) {
@@ -122,6 +123,17 @@ exports.generatePaymentLink = async (req, res) => {
       });
     }
 
+    // --- NEW CONDITION: CHECK IF QUOTE EXISTS ---
+    // If quote_id is null, it means the quote hasn't been generated yet
+    if (!booking.quote_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot generate payment link: A quote must be generated and attached to the booking first.'
+      });
+    }
+    // --------------------------------------------
+
+    // 3. Check if already paid
     if (booking.payment_id) {
       return res.status(400).json({
         success: false,
@@ -131,7 +143,7 @@ exports.generatePaymentLink = async (req, res) => {
 
     const token = paymentLinksService.generateLinkToken();
 
-    // Calculate expiration
+    // 4. Calculate expiration
     let expiresAt;
     if (expiry_hours) {
       expiresAt = new Date();
@@ -140,10 +152,10 @@ exports.generatePaymentLink = async (req, res) => {
       expiresAt = paymentLinksService.getDefaultExpiration();
     }
 
-    // Create payment link
+    // 5. Create payment link record
     const paymentLink = await payment_links.create({
       link_token: token,
-      lead_id: lead_id || null,
+      lead_id: lead_id || booking.lead_id || null, // Fallback to lead_id from booking if not in body
       booking_id,
       discount_code_id: discount_code_id || null,
       created_by_user_id: createdBy,
@@ -151,28 +163,29 @@ exports.generatePaymentLink = async (req, res) => {
       is_used: 0
     });
 
-    // Get discount code if provided
+    // 6. Get discount code if provided (to include in the URL)
     let discountCode = null;
     if (discount_code_id) {
       discountCode = await discount_codes.findByPk(discount_code_id);
     }
 
-    // Build payment URL
+    // 7. Build final payment URL
     const paymentUrl = paymentLinksService.buildPaymentUrl(
       token,
       discountCode ? discountCode.code : null
     );
 
-    // Update lead status if associated with lead
-    if (lead_id) {
+    // 8. Update lead status if associated with lead
+    const finalLeadId = lead_id || booking.lead_id;
+    if (finalLeadId) {
       await sales_leads.update(
         { lead_status: 'payment_link_sent' },
-        { where: { lead_id } }
+        { where: { lead_id: finalLeadId } }
       );
 
       // Log activity
       await sales_lead_activities.create({
-        lead_id,
+        lead_id: finalLeadId,
         activity_type: 'payment_link_generated',
         activity_data: {
           payment_link_id: paymentLink.payment_link_id,
@@ -207,6 +220,88 @@ exports.generatePaymentLink = async (req, res) => {
       message: 'Failed to generate payment link',
       error: error.message
     });
+  }
+};
+
+exports.sendPaymentLinkEmail = async (req, res) => {
+  try {
+    const { payment_link_id } = req.body;
+
+    if (!payment_link_id) {
+      return res.status(400).json({ success: false, message: 'Payment link ID is required' });
+    }
+
+    const link = await payment_links.findOne({
+      where: { payment_link_id },
+      include: [
+        {
+          model: stream_project_booking,
+          as: 'booking', 
+          include: [{ model: users, as: 'user', required: false }]
+        }
+      ]
+    });
+
+    if (!link || !link.booking) {
+      return res.status(404).json({ success: false, message: 'Payment link or Booking not found' });
+    }
+
+    let recipientEmail = null;
+    let recipientName = 'Customer';
+
+    if (link.booking.user) {
+      recipientEmail = link.booking.user.email;
+      recipientName = link.booking.user.name;
+    } else if (link.booking.guest_email) {
+      recipientEmail = link.booking.guest_email;
+      recipientName = link.booking.project_name.split(' - ')[1] || 'Valued Guest';
+    }
+
+    if (!recipientEmail) {
+      return res.status(404).json({ success: false, message: 'No email address found for this booking' });
+    }
+
+    const paymentUrl = paymentLinksService.buildPaymentUrl(link.link_token);
+    
+    const paymentData = {
+      projectTitle: link.booking.project_name || 'Service Booking',
+      paymentUrl: paymentUrl,
+      expiresAt: new Date(link.expires_at).toLocaleString('en-US', {
+        dateStyle: 'long',
+        timeStyle: 'short'
+      })
+    };
+
+    const userData = {
+      name: recipientName,
+      email: recipientEmail
+    };
+
+    // 4. Send Email
+    const result = await emailService.sendPaymentLinkEmail(userData, paymentData);
+
+    if (result.success) {
+      // Log Activity
+      if (link.lead_id) {
+        await sales_lead_activities.create({
+          lead_id: link.lead_id,
+          activity_type: 'payment_link_emailed',
+          activity_data: { payment_link_id, sent_to: recipientEmail },
+          performed_by_user_id: req.userId
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: `Payment link email sent successfully to ${recipientEmail}`
+      });
+    } else {
+      throw new Error(result.error);
+    }
+
+  } catch (error) {
+    console.error('Error in sendPaymentLinkEmailAPI:', error);
+    res.status(500).json({ success: false, message: 'Failed to send payment email', error: error.message });
   }
 };
 
@@ -369,78 +464,106 @@ exports.sendStripeInvoice = async (req, res) => {
     const { booking_id } = req.body;
 
     const booking = await db.stream_project_booking.findOne({
-        where: { stream_project_booking_id: booking_id },
-        include: [
-            { 
-                model: db.quotes, 
-                as: 'primary_quote', 
-                include: [{ model: db.quote_line_items, as: 'line_items' }] 
-            }
-        ]
+      where: { stream_project_booking_id: booking_id },
+      include: [
+        {
+          model: db.quotes,
+          as: 'primary_quote',
+          required: false,
+          include: [{ model: db.quote_line_items, as: 'line_items', required: false }]
+        },
+        { model: db.users, as: 'user', required: false }
+      ]
     });
 
     if (!booking) {
-      return res.status(404).json({ success: false, message: 'Booking not found' });
+      return res.status(404).json({ success: false, message: `Booking ID ${booking_id} not found.` });
+    }
+
+    // 1. Determine Recipient (Logic same as your Payment Link API)
+    let recipientEmail = null;
+    let recipientName = 'Customer';
+
+    if (booking.user) {
+      recipientEmail = booking.user.email;
+      recipientName = booking.user.name;
+    } else if (booking.guest_email) {
+      recipientEmail = booking.guest_email;
+      recipientName = booking.project_name ? booking.project_name.split(' - ')[1] : 'Valued Guest';
+    }
+
+    if (!recipientEmail) {
+      return res.status(400).json({ success: false, message: 'No email address associated with this booking.' });
     }
 
     const pricingData = await calculateLeadPricing(booking);
+    let invoiceDetails = null;
 
-    // --- CASE: Booking is already paid ---
+    // --- CASE 1: ALREADY PAID ---
     if (pricingData && pricingData.is_paid) {
-        let invoiceUrl = null;
-        let invoicePdf = null;
-        
-        if (pricingData.stripe_payment_intent_id) {
-            // Retrieve PaymentIntent and expand the charge details
-            const pi = await stripe.paymentIntents.retrieve(pricingData.stripe_payment_intent_id, {
-                expand: ['latest_charge']
-            });
-            
-            // 1. If paid via a formal Stripe Invoice (best for PDF)
-            if (pi.invoice) {
-                const existingInvoice = await stripe.invoices.retrieve(pi.invoice);
-                invoiceUrl = existingInvoice.hosted_invoice_url;
-                invoicePdf = existingInvoice.invoice_pdf; // <--- This is the PDF link
-            } 
-            // 2. If paid via standalone PaymentIntent (Receipt)
-            else {
-                invoiceUrl = pi.latest_charge?.receipt_url;
-                // Standalone receipts don't have a direct PDF API link, 
-                // but users can save the receipt_url as PDF in their browser.
-                invoicePdf = null; 
-            }
-        }
+      let invoiceUrl = null;
+      let invoicePdf = null;
+      let invoiceNumber = 'RECEIPT';
 
-        return res.status(200).json({
-          success: true,
-          message: 'Booking is already paid.',
-          data: {
-            invoice_url: invoiceUrl,
-            invoice_pdf: invoicePdf, // Added this field
-            is_already_paid: true,
-            total_amount: pricingData.total
-          }
+      if (pricingData.stripe_payment_intent_id) {
+        const pi = await stripe.paymentIntents.retrieve(pricingData.stripe_payment_intent_id, {
+          expand: ['latest_charge']
         });
-    }
 
-    // --- CASE: Booking is NOT paid (Create New Invoice) ---
-    if (!pricingData || parseFloat(pricingData.total) <= 0) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Cannot generate invoice for $0. Check project pricing.' 
-      });
-    }
-
-    const stripeInvoice = await paymentLinksService.createStripeInvoice(booking, pricingData);
-
-    res.status(200).json({
-      success: true,
-      message: 'Invoice generated and sent via Stripe',
-      data: {
-        invoice_url: stripeInvoice.hosted_invoice_url,
-        invoice_pdf: stripeInvoice.invoice_pdf, // PDF link for the new invoice
-        total_amount: pricingData.total
+        if (pi.invoice) {
+          const existingInvoice = await stripe.invoices.retrieve(pi.invoice);
+          invoiceUrl = existingInvoice.hosted_invoice_url;
+          invoicePdf = existingInvoice.invoice_pdf;
+          invoiceNumber = existingInvoice.number;
+        } 
+        
+        if (!invoicePdf) {
+          const retrospectiveInvoice = await paymentLinksService.createPaidStripeInvoice(booking, pricingData);
+          invoiceUrl = retrospectiveInvoice.hosted_invoice_url;
+          invoicePdf = retrospectiveInvoice.invoice_pdf;
+          invoiceNumber = retrospectiveInvoice.number;
+        }
       }
+
+      invoiceDetails = {
+        projectTitle: booking.project_name || 'Service Booking',
+        invoiceUrl,
+        invoicePdf,
+        invoiceNumber,
+        totalAmount: pricingData.total,
+        isPaid: true
+      };
+
+    } else {
+      // --- CASE 2: NOT PAID YET ---
+      if (!pricingData || parseFloat(pricingData.total) <= 0) {
+        return res.status(400).json({ success: false, message: 'Cannot generate invoice for $0.' });
+      }
+
+      const stripeInvoice = await paymentLinksService.createStripeInvoice(booking, pricingData);
+      
+      invoiceDetails = {
+        projectTitle: booking.project_name || 'Service Booking',
+        invoiceUrl: stripeInvoice.hosted_invoice_url,
+        invoicePdf: stripeInvoice.invoice_pdf,
+        invoiceNumber: stripeInvoice.number,
+        totalAmount: pricingData.total,
+        isPaid: false
+      };
+    }
+
+    // --- SEND THE EMAIL ---
+    const userData = { name: recipientName, email: recipientEmail };
+    const emailResult = await emailService.sendInvoiceEmail(userData, invoiceDetails);
+
+    if (!emailResult.success) {
+        console.error("Email failed to send but invoice was generated:", emailResult.error);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: invoiceDetails.isPaid ? 'Receipt sent successfully' : 'Invoice sent successfully',
+      data: invoiceDetails
     });
 
   } catch (error) {
@@ -448,6 +571,7 @@ exports.sendStripeInvoice = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
 /**
  * Mark payment link as used (called after successful payment)
  * POST /api/sales/payment-links/:token/mark-used

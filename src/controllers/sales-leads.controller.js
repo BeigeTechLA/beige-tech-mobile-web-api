@@ -6,6 +6,7 @@ const leadAssignmentService = require('../services/lead-assignment.service');
 const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 const pricingService = require('../services/pricing.service');
 const pricingController = require('../controllers/pricing.controller');
+const paymentService = require('../services/payment-links.service');
 
 const sequelize = require('../db');
 const db = require('../models');
@@ -1232,7 +1233,6 @@ exports.getLeadById = async (req, res) => {
       where: { lead_id: id },
       include: [
         { model: users, as: 'assigned_sales_rep', attributes: ['id', 'name', 'email'] },
-
         {
           model: stream_project_booking,
           as: 'booking',
@@ -1252,19 +1252,12 @@ exports.getLeadById = async (req, res) => {
                 {
                   model: crew_members,
                   as: 'crew_member',
-                  attributes: [
-                    'crew_member_id',
-                    'first_name',
-                    'last_name',
-                    'primary_role',
-                    'hourly_rate'
-                  ]
+                  attributes: ['crew_member_id', 'first_name', 'last_name', 'primary_role', 'hourly_rate']
                 }
               ]
             }
           ]
         },
-
         { model: discount_codes, as: 'discount_codes' },
         { model: payment_links, as: 'payment_links' },
         {
@@ -1282,102 +1275,122 @@ exports.getLeadById = async (req, res) => {
 
     const leadJson = lead.toJSON();
 
-    const selectedCrewIds =
-      lead.booking?.assigned_crews?.map(c => c.crew_member_id).filter(Boolean) || [];
+    let active_payment_link = null;
+    const pLinks = leadJson.payment_links || leadJson.paymentLinks;
+    const dCodes = leadJson.discount_codes || leadJson.discountCodes || [];
+
+    if (pLinks && pLinks.length > 0) {
+      const latestLink = [...pLinks].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+      const attachedDiscount = dCodes.find((d) => d.discount_code_id === latestLink.discount_code_id);
+      const baseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+      
+      if (latestLink.link_token) {
+        let fullUrl = `${baseUrl}/payment-link/${latestLink.link_token}`;
+        if (attachedDiscount && attachedDiscount.code) fullUrl += `?discount=${attachedDiscount.code}`;
+        const now = new Date();
+        const expiryDate = latestLink.expires_at ? new Date(latestLink.expires_at) : null;
+        active_payment_link = {
+          payment_link_id: latestLink.payment_link_id || latestLink.id,
+          full_url: fullUrl,
+          token: latestLink.link_token,
+          expires_at: latestLink.expires_at,
+          is_used: !!latestLink.is_used,
+          is_expired: expiryDate ? expiryDate < now : false,
+          discount_details: attachedDiscount ? {
+            code: attachedDiscount.code,
+            type: attachedDiscount.discount_type,
+            value: attachedDiscount.discount_value,
+            is_active: attachedDiscount.is_active
+          } : null
+        };
+      }
+    }
 
     const projectedQuote = await calculateLeadPricing(lead.booking);
 
-    const intent =
-      lead.intent ??
-      leadAssignmentService.getLeadIntent({ lead, booking: lead.booking });
-
-    const intent_source = lead.intent ? 'manual' : 'system';
-    const booking_status = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
-    const payment_status = lead.booking?.payment_id ? 'paid' : 'unpaid';
-    const booking_step = leadAssignmentService.getLeadBookingStep(
-      lead,
-      lead.booking,
-      lead.activities
-    );
-    const can_edit_booking = canEditBooking(lead, lead.booking);
-
-    const ROLE_GROUPS = {
-      videographer: ['9', '1'],
-      photographer: ['10', '2'],
-      cinematographer: ['11', '3']
+    let pricing_breakdown = {
+        shoot_cost: 0,
+        editing_cost: 0,
+        additional_creatives_cost: 0,
+        discount: parseFloat(leadJson.booking?.primary_quote?.discount_amount || 0),
+        total: 0
     };
 
-    const ID_TO_ROLE_MAP = {};
-    Object.entries(ROLE_GROUPS).forEach(([role, ids]) => {
-      ids.forEach(id => (ID_TO_ROLE_MAP[id] = role));
+    const activeQuoteSource = leadJson.booking?.primary_quote || projectedQuote;
+    pricing_breakdown.total = parseFloat(activeQuoteSource?.total || 0);
+
+    const itemsToProcess = activeQuoteSource?.line_items || [];
+
+    itemsToProcess.forEach(item => {
+        const name = (item.item_name || item.name || '').toLowerCase();
+        const lineTotal = parseFloat(item.line_total || item.total || 0);
+        const quantity = parseInt(item.quantity || 1);
+
+        if (name.includes('videographer') || name.includes('photographer')) {
+            const unitPrice = lineTotal / quantity;
+            
+            pricing_breakdown.shoot_cost += unitPrice;
+
+            if (quantity > 1) {
+                pricing_breakdown.additional_creatives_cost += (unitPrice * (quantity - 1));
+            }
+        } 
+        else if (name.includes('reel') || name.includes('edit') || name.includes('highlight')) {
+            pricing_breakdown.editing_cost += lineTotal;
+        } 
+        else {
+            pricing_breakdown.shoot_cost += lineTotal;
+        }
     });
 
-   let fulfillmentSummary = {};
+    const selectedCrewIds = lead.booking?.assigned_crews?.map(c => c.crew_member_id).filter(Boolean) || [];
+    const intent = lead.intent ?? leadAssignmentService.getLeadIntent({ lead, booking: lead.booking });
+    const intent_source = lead.intent ? 'manual' : 'system';
+    const booking_status = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
+    
+    let payment_status = lead.booking?.payment_id ? 'paid' : 'unpaid';
+    if (payment_status === 'unpaid' && active_payment_link) {
+        payment_status = active_payment_link.is_expired ? 'link_expired' : 'link_sent';
+    }
 
-        if (leadJson.booking && leadJson.booking.crew_roles) {
-            let requestedRoles = {};
-            try {
-                requestedRoles = typeof leadJson.booking.crew_roles === 'string' 
-                    ? JSON.parse(leadJson.booking.crew_roles) 
-                    : leadJson.booking.crew_roles;
-            } catch (e) { requestedRoles = {}; }
+    const booking_step = leadAssignmentService.getLeadBookingStep(lead, lead.booking, lead.activities);
+    const can_edit_booking = canEditBooking(lead, lead.booking);
 
-            Object.keys(requestedRoles).forEach(role => {
-                fulfillmentSummary[role] = {
-                    required: requestedRoles[role],
-                    pending: 0,
-                    accepted: 0,
-                    rejected: 0,
-                    display: `0/${requestedRoles[role]}`
-                };
-            });
+    const ROLE_GROUPS = { videographer: ['9', '1'], photographer: ['10', '2'], cinematographer: ['11', '3'] };
+    const ID_TO_ROLE_MAP = {};
+    Object.entries(ROLE_GROUPS).forEach(([role, ids]) => { ids.forEach(id => (ID_TO_ROLE_MAP[id] = role)); });
 
-            if (leadJson.booking.assigned_crews) {
-                leadJson.booking.assigned_crews.forEach(ac => {
-                    let crewRoleIds = [];
-                    try {
-                        crewRoleIds = typeof ac.crew_member?.primary_role === 'string'
-                            ? JSON.parse(ac.crew_member.primary_role)
-                            : (ac.crew_member?.primary_role || []);
-                    } catch (e) { crewRoleIds = []; }
+    let fulfillmentSummary = {};
+    if (leadJson.booking && leadJson.booking.crew_roles) {
+      let requestedRoles = {};
+      try { requestedRoles = typeof leadJson.booking.crew_roles === 'string' ? JSON.parse(leadJson.booking.crew_roles) : leadJson.booking.crew_roles; } catch (e) { requestedRoles = {}; }
+      Object.keys(requestedRoles).forEach(role => {
+        fulfillmentSummary[role] = { required: requestedRoles[role], pending: 0, accepted: 0, rejected: 0, display: `0/${requestedRoles[role]}` };
+      });
 
-                    const potentialCategories = [...new Set(crewRoleIds.map(id => ID_TO_ROLE_MAP[String(id)]).filter(Boolean))];
-
-                    let assignedToCategory = null;
-                    
-                    if (ac.crew_accept === 1) {
-                        assignedToCategory = potentialCategories.find(cat => 
-                            fulfillmentSummary[cat] && fulfillmentSummary[cat].accepted < fulfillmentSummary[cat].required
-                        );
-                    } 
-                    if (!assignedToCategory && ac.crew_accept !== 2) {
-                        assignedToCategory = potentialCategories.find(cat => 
-                            fulfillmentSummary[cat] && (fulfillmentSummary[cat].accepted + fulfillmentSummary[cat].pending) < fulfillmentSummary[cat].required
-                        );
-                    }
-                    if (!assignedToCategory) {
-                        assignedToCategory = potentialCategories[0];
-                    }
-
-                    if (assignedToCategory && fulfillmentSummary[assignedToCategory]) {
-                        const role = fulfillmentSummary[assignedToCategory];
-                        if (ac.crew_accept === 1) {
-                            role.accepted += 1;
-                        } else if (ac.crew_accept === 0 || ac.crew_accept === null) {
-                            role.pending += 1;
-                        } else if (ac.crew_accept === 2) {
-                            role.rejected += 1;
-                        }
-                    }
-                });
-            }
-
-            Object.keys(fulfillmentSummary).forEach(key => {
-                const item = fulfillmentSummary[key];
-                item.display = `${item.accepted}/${item.required}`;
-                item.needs_attention = item.accepted < item.required;
-            });
-        }
+      if (leadJson.booking.assigned_crews) {
+        leadJson.booking.assigned_crews.forEach(ac => {
+          let crewRoleIds = [];
+          try { crewRoleIds = typeof ac.crew_member?.primary_role === 'string' ? JSON.parse(ac.crew_member.primary_role) : (ac.crew_member?.primary_role || []); } catch (e) { crewRoleIds = []; }
+          const potentialCategories = [...new Set(crewRoleIds.map(id => ID_TO_ROLE_MAP[String(id)]).filter(Boolean))];
+          let assignedToCategory = null;
+          if (ac.crew_accept === 1) assignedToCategory = potentialCategories.find(cat => fulfillmentSummary[cat] && fulfillmentSummary[cat].accepted < fulfillmentSummary[cat].required);
+          if (!assignedToCategory && ac.crew_accept !== 2) assignedToCategory = potentialCategories.find(cat => fulfillmentSummary[cat] && (fulfillmentSummary[cat].accepted + fulfillmentSummary[cat].pending) < fulfillmentSummary[cat].required);
+          if (!assignedToCategory) assignedToCategory = potentialCategories[0];
+          if (assignedToCategory && fulfillmentSummary[assignedToCategory]) {
+            const role = fulfillmentSummary[assignedToCategory];
+            if (ac.crew_accept === 1) role.accepted += 1;
+            else if (ac.crew_accept === 0 || ac.crew_accept === null) role.pending += 1;
+            else if (ac.crew_accept === 2) role.rejected += 1;
+          }
+        });
+      }
+      Object.keys(fulfillmentSummary).forEach(key => {
+        const item = fulfillmentSummary[key];
+        item.display = `${item.accepted}/${item.required}`;
+        item.needs_attention = item.accepted < item.required;
+      });
+    }
 
     const statusMap = { 0: 'pending', 1: 'accepted', 2: 'rejected' };
     if (leadJson.booking?.assigned_crews) {
@@ -1396,22 +1409,124 @@ exports.getLeadById = async (req, res) => {
         intent_source,
         booking_status,
         payment_status,
+        active_payment_link,
         booking_step,
         can_edit_booking,
         fulfillmentSummary,
+        pricing_breakdown,
         projected_quote: projectedQuote
       }
     });
   } catch (error) {
     console.error('GetLeadById Error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to fetch lead details',
-      error: error.message
-    });
+    res.status(500).json({ success: false, message: 'Failed to fetch lead details', error: error.message });
   }
 };
 
+exports.getLeadFulfillmentStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const lead = await sales_leads.findOne({
+      where: { lead_id: id },
+      include: [
+        {
+          model: stream_project_booking,
+          as: 'booking',
+          attributes: ['event_location', 'crew_roles'],
+          include: [
+            {
+              model: assigned_crew,
+              as: 'assigned_crews',
+              where: { is_active: 1 },
+              required: false,
+              attributes: ['crew_accept'],
+              include: [
+                {
+                  model: crew_members,
+                  as: 'crew_member',
+                  attributes: ['primary_role']
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    });
+
+    if (!lead || !lead.booking) {
+      return res.status(404).json({ success: false, message: 'Lead or Booking not found' });
+    }
+
+    const booking = lead.booking;
+    
+    let requestedRoles = {};
+    try {
+      requestedRoles = typeof booking.crew_roles === 'string' ? JSON.parse(booking.crew_roles) : (booking.crew_roles || {});
+    } catch (e) {
+      requestedRoles = {};
+    }
+
+    const ROLE_GROUPS = { 
+      videographer: ['9', '1'], 
+      photographer: ['10', '2'], 
+      cinematographer: ['11', '3'] 
+    };
+    const ID_TO_ROLE_MAP = {};
+    Object.entries(ROLE_GROUPS).forEach(([role, ids]) => {
+      ids.forEach(id => (ID_TO_ROLE_MAP[String(id)] = role));
+    });
+
+    // 3. Initialize Summary
+    let fulfillment = {};
+    Object.keys(requestedRoles).forEach(role => {
+      fulfillment[role] = {
+        accepted: 0,
+        required: parseInt(requestedRoles[role]) || 0,
+        status_display: `0/${requestedRoles[role]}`
+      };
+    });
+
+    if (booking.assigned_crews) {
+      booking.assigned_crews.forEach(ac => {
+        if (ac.crew_accept === 1) {
+          let crewRoleIds = [];
+          try {
+            crewRoleIds = typeof ac.crew_member?.primary_role === 'string' 
+              ? JSON.parse(ac.crew_member.primary_role) 
+              : (ac.crew_member?.primary_role || []);
+          } catch (e) { crewRoleIds = []; }
+
+          const categories = [...new Set(crewRoleIds.map(id => ID_TO_ROLE_MAP[String(id)]).filter(Boolean))];
+          
+          const targetCategory = categories.find(cat => fulfillment[cat] && fulfillment[cat].accepted < fulfillment[cat].required);
+          
+          if (targetCategory) {
+            fulfillment[targetCategory].accepted += 1;
+          }
+        }
+      });
+    }
+
+    const result = {};
+    Object.keys(fulfillment).forEach(key => {
+      result[key] = `${fulfillment[key].accepted}/${fulfillment[key].required}`;
+    });
+
+    res.json({
+      success: true,
+      data: {
+        lead_id: id,
+        location: booking.event_location,
+        fulfillment_stats: result
+      }
+    });
+
+  } catch (error) {
+    console.error('Fulfillment Status Error:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
 
 /**
  * Assign or reassign lead to sales rep

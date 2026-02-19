@@ -1,4 +1,4 @@
-const { discount_codes, sales_leads, sales_lead_activities, quotes } = require('../models');
+const { discount_codes, sales_leads, sales_lead_activities, quotes, stream_project_booking } = require('../models');
 const db = require('../models');
 const discountService = require('../services/discount.service');
 const constants = require('../utils/constants');
@@ -21,13 +21,35 @@ exports.generateDiscountCode = async (req, res) => {
 
     const createdBy = req.userId; // From auth middleware
 
-    // Validation
+    // 1. Basic Validation
     if (!discount_type || !discount_value) {
       return res.status(constants.BAD_REQUEST.code).json({
         success: false,
         message: 'Discount type and value are required'
       });
     }
+
+    // --- NEW CONDITION: CHECK IF QUOTE EXISTS ---
+    // We look for the booking to see if it has a quote_id
+    const booking = await stream_project_booking.findOne({
+      where: booking_id ? { stream_project_booking_id: booking_id } : { lead_id: lead_id }
+    });
+
+    if (!booking) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Booking not found for the provided ID'
+      });
+    }
+
+    // Check if the booking has an associated quote
+    if (!booking.quote_id) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Cannot generate discount code: A quote must be generated first.'
+      });
+    }
+    // --------------------------------------------
 
     if (!['percentage', 'fixed_amount'].includes(discount_type)) {
       return res.status(constants.BAD_REQUEST.code).json({
@@ -63,8 +85,8 @@ exports.generateDiscountCode = async (req, res) => {
     // Create discount code
     const discountCode = await discount_codes.create({
       code,
-      lead_id: lead_id || null,
-      booking_id: booking_id || null,
+      lead_id: lead_id || booking.lead_id || null, // Ensure lead_id is captured from booking if not in body
+      booking_id: booking.stream_project_booking_id,
       discount_type,
       discount_value,
       usage_type: usage_type || 'one_time',
@@ -75,9 +97,10 @@ exports.generateDiscountCode = async (req, res) => {
     });
 
     // Log activity if associated with lead
-    if (lead_id) {
+    const finalLeadId = lead_id || booking.lead_id;
+    if (finalLeadId) {
       await sales_lead_activities.create({
-        lead_id,
+        lead_id: finalLeadId,
         activity_type: 'discount_code_generated',
         activity_data: {
           discount_code_id: discountCode.discount_code_id,

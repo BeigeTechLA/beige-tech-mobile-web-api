@@ -139,7 +139,8 @@ router.get('/discount-codes/:id/usage', authenticate, requireSalesRepOrAdmin, di
  */
 router.post('/payment-links', authenticate, requireSalesRepOrAdmin, paymentLinksController.generatePaymentLink);
 router.post('/send-invoice', authenticate, requireSalesRepOrAdmin, paymentLinksController.sendStripeInvoice);
-
+router.post('/payment-links/notify', paymentLinksController.sendPaymentLinkEmail);
+router.get('/get-lead-stats/:id', authenticate, requireSalesRepOrAdmin, salesLeadsController.getLeadFulfillmentStatus);
 /**
  * @route   GET /api/sales/payment-links/:token
  * @desc    Get payment link details
