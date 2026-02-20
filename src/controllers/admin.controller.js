@@ -6456,18 +6456,43 @@ exports.getClientsShoots = async (req, res) => {
 };
 
 
+
 exports.searchCrewForLead = async (req, res) => {
     try {
-        const { lead_id, role_type, search_query } = req.query;
+        const { lead_id, role_type, search_query, date } = req.query;
 
-        const lead = await sales_leads.findOne({
-            where: { lead_id },
-            include: [{ model: stream_project_booking, as: 'booking' }]
-        });
+        let projectDate;
 
-        if (!lead || !lead.booking) return res.status(404).json({ success: false, message: "Lead/Booking not found" });
-        const projectDate = lead.booking.event_date;
+        // -----------------------------
+        // 1️⃣ Resolve Project Date
+        // -----------------------------
+        if (lead_id) {
+            const lead = await sales_leads.findOne({
+                where: { lead_id },
+                include: [{ model: stream_project_booking, as: 'booking' }]
+            });
 
+            if (!lead || !lead.booking) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Lead/Booking not found"
+                });
+            }
+
+            projectDate = lead.booking.event_date;
+        } else {
+            if (!date) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Date is required when lead_id is not provided"
+                });
+            }
+            projectDate = date;
+        }
+
+        // -----------------------------
+        // 2️⃣ Get Busy Crew For That Date
+        // -----------------------------
         const busyCrewRecords = await assigned_crew.findAll({
             where: { crew_accept: 1 },
             include: [{
@@ -6477,20 +6502,41 @@ exports.searchCrewForLead = async (req, res) => {
             }],
             attributes: ['crew_member_id']
         });
+
         const busyIds = busyCrewRecords.map(r => r.crew_member_id);
 
+        // -----------------------------
+        // 3️⃣ Role Mapping
+        // -----------------------------
         const ROLE_GROUPS = {
             videographer: ["9", "1"],
             photographer: ["10", "2"],
             cinematographer: ["11", "3"]
         };
-        const targetRoleIds = ROLE_GROUPS[role_type.toLowerCase()] || [];
 
+        // Support multiple roles
+        const requestedRoles = role_type
+            ? role_type.split(",").map(r => r.trim().toLowerCase())
+            : [];
+
+        let targetRoleIds = [];
+        requestedRoles.forEach(role => {
+            if (ROLE_GROUPS[role]) {
+                targetRoleIds.push(...ROLE_GROUPS[role]);
+            }
+        });
+
+        // Remove duplicates
+        targetRoleIds = [...new Set(targetRoleIds)];
+
+        // -----------------------------
+        // 4️⃣ Crew Filter Conditions
+        // -----------------------------
         let crewWhere = {
             is_active: true,
             is_available: true,
             is_crew_verified: 1,
-            crew_member_id: { [Op.notIn]: busyIds }
+            crew_member_id: { [Op.notIn]: busyIds.length ? busyIds : [0] }
         };
 
         if (targetRoleIds.length > 0) {
@@ -6508,44 +6554,75 @@ exports.searchCrewForLead = async (req, res) => {
             }];
         }
 
+        // -----------------------------
+        // 5️⃣ Fetch Available Crew
+        // -----------------------------
         const availableCrew = await crew_members.findAll({
             where: crewWhere,
             limit: 50
         });
 
+        // -----------------------------
+        // 6️⃣ Safe Role Parsing
+        // -----------------------------
         const crewWithRoles = availableCrew.map(crewMember => {
             let role = null;
+            let roles = [];
 
-            if (crewMember.primary_role) {
-                const roles = JSON.parse(crewMember.primary_role);
-                for (let roleId of roles) {
-                    if (ROLE_GROUPS.videographer.includes(roleId)) {
-                        role = "videographer";
-                        break;
-                    } else if (ROLE_GROUPS.photographer.includes(roleId)) {
-                        role = "photographer";
-                        break;
-                    } else if (ROLE_GROUPS.cinematographer.includes(roleId)) {
-                        role = "editor";
-                        break;
+            try {
+                if (crewMember.primary_role) {
+                    if (Array.isArray(crewMember.primary_role)) {
+                        roles = crewMember.primary_role;
+                    } else if (typeof crewMember.primary_role === "string") {
+                        try {
+                            const parsed = JSON.parse(crewMember.primary_role);
+                            roles = Array.isArray(parsed) ? parsed : [parsed];
+                        } catch {
+                            roles = [crewMember.primary_role];
+                        }
+                    } else {
+                        roles = [crewMember.primary_role];
                     }
+                }
+            } catch {
+                roles = [];
+            }
+
+            for (let roleId of roles) {
+                if (ROLE_GROUPS.videographer.includes(String(roleId))) {
+                    role = "videographer";
+                    break;
+                } else if (ROLE_GROUPS.photographer.includes(String(roleId))) {
+                    role = "photographer";
+                    break;
+                } else if (ROLE_GROUPS.cinematographer.includes(String(roleId))) {
+                    role = "cinematographer";
+                    break;
                 }
             }
 
             return {
                 ...crewMember.toJSON(),
-                role: role || 'Creatve Professional',
+                role: role || "Unspecified"
             };
         });
 
+        // -----------------------------
+        // 7️⃣ Response
+        // -----------------------------
         res.json({
             success: true,
             project_date: projectDate,
-            available_count: availableCrew.length,
+            available_count: crewWithRoles.length,
             data: crewWithRoles
         });
+
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        console.error("searchCrewForLead error:", error);
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
     }
 };
 

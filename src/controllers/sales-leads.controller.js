@@ -1364,19 +1364,43 @@ exports.getLeadById = async (req, res) => {
     if (leadJson.booking && leadJson.booking.crew_roles) {
       let requestedRoles = {};
       try { requestedRoles = typeof leadJson.booking.crew_roles === 'string' ? JSON.parse(leadJson.booking.crew_roles) : leadJson.booking.crew_roles; } catch (e) { requestedRoles = {}; }
-      Object.keys(requestedRoles).forEach(role => {
-        fulfillmentSummary[role] = { required: requestedRoles[role], pending: 0, accepted: 0, rejected: 0, display: `0/${requestedRoles[role]}` };
-      });
+      
+      // Safety check for requestedRoles being an object
+      if (requestedRoles && typeof requestedRoles === 'object') {
+          Object.keys(requestedRoles).forEach(role => {
+            fulfillmentSummary[role] = { required: requestedRoles[role], pending: 0, accepted: 0, rejected: 0, display: `0/${requestedRoles[role]}` };
+          });
+      }
 
       if (leadJson.booking.assigned_crews) {
         leadJson.booking.assigned_crews.forEach(ac => {
           let crewRoleIds = [];
-          try { crewRoleIds = typeof ac.crew_member?.primary_role === 'string' ? JSON.parse(ac.crew_member.primary_role) : (ac.crew_member?.primary_role || []); } catch (e) { crewRoleIds = []; }
+          
+          // FIX: Safer primary_role parsing
+          let rawRole = ac.crew_member?.primary_role;
+          if (typeof rawRole === 'string') {
+              try {
+                  crewRoleIds = JSON.parse(rawRole);
+              } catch (e) {
+                  // If it's a string but not JSON array (e.g. "9"), wrap it in an array
+                  crewRoleIds = [rawRole];
+              }
+          } else if (rawRole !== null && rawRole !== undefined) {
+              crewRoleIds = rawRole;
+          }
+
+          // Ensure crewRoleIds is definitely an array before calling .map
+          if (!Array.isArray(crewRoleIds)) {
+              crewRoleIds = crewRoleIds ? [crewRoleIds] : [];
+          }
+
           const potentialCategories = [...new Set(crewRoleIds.map(id => ID_TO_ROLE_MAP[String(id)]).filter(Boolean))];
+          
           let assignedToCategory = null;
           if (ac.crew_accept === 1) assignedToCategory = potentialCategories.find(cat => fulfillmentSummary[cat] && fulfillmentSummary[cat].accepted < fulfillmentSummary[cat].required);
           if (!assignedToCategory && ac.crew_accept !== 2) assignedToCategory = potentialCategories.find(cat => fulfillmentSummary[cat] && (fulfillmentSummary[cat].accepted + fulfillmentSummary[cat].pending) < fulfillmentSummary[cat].required);
           if (!assignedToCategory) assignedToCategory = potentialCategories[0];
+          
           if (assignedToCategory && fulfillmentSummary[assignedToCategory]) {
             const role = fulfillmentSummary[assignedToCategory];
             if (ac.crew_accept === 1) role.accepted += 1;
@@ -2041,8 +2065,6 @@ exports.finalizeGuestBooking = async (req, res) => {
 exports.finalizeCreateDeal = async (req, res) => {
   const tx = await sequelize.transaction();
   try {
-    const salesRepId = req.user?.id || req.userId || null;
-
     const {
       // Client / lead fields
       user_id = null,
@@ -2051,9 +2073,9 @@ exports.finalizeCreateDeal = async (req, res) => {
       phone = null,
       lead_type = 'sales_assisted',
       intent = 'Warm',
-      lead_source = null, // thumbtack / instagram / etc.
+      lead_source = null,
 
-      // Booking fields (same as finalizeGuestBooking)
+      // Booking fields
       content_type,
       shoot_type,
       event_type,
@@ -2074,13 +2096,15 @@ exports.finalizeCreateDeal = async (req, res) => {
       skip_margin = true,
     } = req.body;
 
-    // For either screen, we need at least guest_email OR user_id
     if (!user_id && !guest_email) {
       await tx.rollback();
-      return res.status(400).json({ success: false, message: 'guest_email or user_id is required' });
+      return res.status(400).json({
+        success: false,
+        message: 'guest_email or user_id is required'
+      });
     }
 
-    // Load user only when user_id is provided
+    // Load user if provided
     let user = null;
     if (user_id) {
       user = await users.findOne({
@@ -2090,35 +2114,42 @@ exports.finalizeCreateDeal = async (req, res) => {
 
       if (!user) {
         await tx.rollback();
-        return res.status(404).json({ success: false, message: 'user not found' });
+        return res.status(404).json({
+          success: false,
+          message: 'user not found'
+        });
       }
     }
 
-    // Resolve client identity fields
     const resolvedEmail = guest_email || user?.email || null;
     const resolvedName = client_name || user?.name || null;
     const resolvedPhone = phone || user?.phone_number || null;
 
     if (!resolvedEmail) {
       await tx.rollback();
-      return res.status(400).json({ success: false, message: 'guest_email is required when user_id is not provided' });
+      return res.status(400).json({
+        success: false,
+        message: 'guest_email is required'
+      });
     }
 
-    // 1) Create booking (draft shell) with NOT NULL safe defaults
+    // 1️⃣ Create booking shell
     const booking = await stream_project_booking.create(
       {
         user_id: user_id || null,
         guest_email: resolvedEmail,
-        project_name: resolvedName ? `DEAL - ${resolvedName}` : `DEAL - ${resolvedEmail}`,
-        streaming_platforms: JSON.stringify([]),     // NOT NULL
-        crew_roles: JSON.stringify(crew_roles ?? {}),// NOT NULL
+        project_name: resolvedName
+          ? `DEAL - ${resolvedName}`
+          : `DEAL - ${resolvedEmail}`,
+        streaming_platforms: JSON.stringify([]),
+        crew_roles: JSON.stringify(crew_roles ?? {}),
         is_draft: 1,
         is_active: 1,
       },
       { transaction: tx }
     );
 
-    // 2) Create lead linked to booking
+    // 2️⃣ Create lead
     const lead = await sales_leads.create(
       {
         booking_id: booking.stream_project_booking_id,
@@ -2128,22 +2159,20 @@ exports.finalizeCreateDeal = async (req, res) => {
         client_name: resolvedName,
         lead_type,
         intent,
-        lead_source, // thumbtack etc.
-        lead_status: 'in_progress_sales_assisted', // <-- choose your correct sales portal status
-        assigned_sales_rep_id: salesRepId,
+        lead_source,
+        lead_status: 'in_progress_sales_assisted',
         is_active: 1,
       },
       { transaction: tx }
     );
 
-    // 3) Create lead activity row
+    // 3️⃣ Create lead activity
     await sales_lead_activities.create(
       {
         lead_id: lead.lead_id,
         activity_type: 'created',
         activity_data: {
           source: 'sales_portal_create_deal',
-          created_by_user_id: salesRepId,
           guest_email: resolvedEmail,
           lead_source: lead_source || null
         }
@@ -2151,16 +2180,19 @@ exports.finalizeCreateDeal = async (req, res) => {
       { transaction: tx }
     );
 
-    // OPTIONAL:
-    // If you still want auto-assign when salesRepId is missing, do it here.
-    // (Most recommended: DO NOT auto-assign when a sales rep is logged in.)
-    /*
-    if (!salesRepId) {
-      const assignedRep = await leadAssignmentService.autoAssignLead(lead.lead_id, { transaction: tx });
+    // 4️⃣ 🔥 AUTO ASSIGN (same as trackEarlyBookingInterest)
+    const assignedRep = await leadAssignmentService.autoAssignLead(
+  lead.lead_id,
+  { transaction: tx }
+);
+    if (assignedRep?.id) {
+      await lead.update(
+        { assigned_sales_rep_id: assignedRep.id },
+        { transaction: tx }
+      );
     }
-    */
 
-    // 4) Reuse your exact finalize logic (core function, not HTTP)
+    // 5️⃣ Finalize booking
     const finalizeResult = await finalizeBookingCore({
       booking,
       bookingId: booking.stream_project_booking_id,
@@ -2194,16 +2226,23 @@ exports.finalizeCreateDeal = async (req, res) => {
         lead_id: lead.lead_id,
         booking_id: booking.stream_project_booking_id,
         quote_id: finalizeResult.quote_id,
+        assigned_to: assignedRep ? assignedRep.name : null,
         booking: finalizeResult.booking,
         quote: finalizeResult.quote
       }
     });
+
   } catch (error) {
     try { await tx.rollback(); } catch (_) {}
+
+    console.error('Error in finalizeCreateDeal:', error);
+
     return res.status(500).json({
       success: false,
       message: 'Failed to create & finalize deal',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: process.env.NODE_ENV === 'development'
+        ? error.message
+        : undefined
     });
   }
 };

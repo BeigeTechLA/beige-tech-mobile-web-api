@@ -400,7 +400,7 @@ Authorization: {{TOKEN}}
 }
 
 ###
-GET {{URL}}admin/get-crew-for-lead/?lead_id=136&role_type=videographer,photographer&search_query=Los Angeles HTTP/1.1
+GET {{URL}}admin/get-crew-for-lead/?date=2026-02-28&role_type=videographer,photographer&search_query=Ahmedabad HTTP/1.1
 Content-Type: application/json
 
 ### 
@@ -509,8 +509,9 @@ Authorization: {{TOKEN}}
   "client_name": "Lisa Anderson",
   "guest_email": "lisa@gmail.com",
   "phone": "9173961117",
-  "intent": "Warm",
+  "intent": "Warm", 
   "lead_source": "instagram",
+  "event_type": "videographer,photographer",
   "content_type": "videographer",
   "shoot_type": "corporate",
   "start_date_time": "2026-02-25T03:30:00.000Z",

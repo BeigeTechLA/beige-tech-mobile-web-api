@@ -90,36 +90,43 @@ function findRepWithFewestLeads(salesReps, leadCounts) {
  * @param {number} leadId - Lead ID to assign
  * @returns {Promise<Object>} Assigned sales rep info
  */
-async function autoAssignLead(leadId) {
+async function autoAssignLead(leadId, options = {}) {
+  const transaction = options.transaction || null;
+
   const autoAssignEnabled = process.env.SALES_AUTO_ASSIGNMENT !== 'false';
   
   if (!autoAssignEnabled) {
     return null;
   }
-  
-  // Get all active sales reps
-  const salesReps = await getActiveSalesReps();
-  
-  if (salesReps.length === 0) {
+
+  // 1️⃣ Get all active sales reps
+  const salesReps = await getActiveSalesReps({ transaction });
+
+  if (!salesReps.length) {
     console.warn('No active sales reps available for auto-assignment');
     return null;
   }
-  
-  // Get lead counts for last 24 hours
+
+  // 2️⃣ Get lead counts for last 24 hours
   const salesRepIds = salesReps.map(rep => rep.id);
-  const leadCounts = await getLeadCountsPerRep(salesRepIds, 24);
-  
-  // Find rep with fewest leads
+  const leadCounts = await getLeadCountsPerRep(salesRepIds, 24, { transaction });
+
+  // 3️⃣ Find rep with fewest leads
   const selectedRep = findRepWithFewestLeads(salesReps, leadCounts);
-  
-  // Update lead with assigned rep
+
+  // 4️⃣ Update lead WITH SAME TRANSACTION
   await sales_leads.update(
     { assigned_sales_rep_id: selectedRep.id },
-    { where: { lead_id: leadId } }
+    { 
+      where: { lead_id: leadId },
+      transaction
+    }
   );
-  
-  console.log(`Lead ${leadId} auto-assigned to sales rep ${selectedRep.name} (ID: ${selectedRep.id})`);
-  
+
+  console.log(
+    `Lead ${leadId} auto-assigned to ${selectedRep.name} (ID: ${selectedRep.id})`
+  );
+
   return {
     id: selectedRep.id,
     name: selectedRep.name,
