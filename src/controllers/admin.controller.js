@@ -6796,3 +6796,202 @@ exports.removeAssignedCrew = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+
+
+exports.getClientFullDetailsByUserId = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    let { status, event_type, search, limit, page, range, start_date, end_date } = req.query;
+
+    if (!userId) {
+      return res.status(400).json({ error: true, message: "User ID is required" });
+    }
+
+    // 1️⃣ Get User, Client, and Affiliate Details
+    const [user, client, affiliate] = await Promise.all([
+      users.findOne({
+        where: { id: userId },
+        attributes: { exclude: ['password_hash'] }
+      }),
+      clients.findOne({
+        where: { user_id: userId, is_active: 1 }
+      }),
+      affiliates.findOne({
+        where: { user_id: userId }
+      })
+    ]);
+
+    if (!user) {
+      return res.status(404).json({ error: true, message: 'User not found' });
+    }
+
+    const today = new Date();
+
+    // -------- 2️⃣ PAGINATION LOGIC --------
+    const noPagination = !limit && !page;
+    let pageNumber = parseInt(page ?? 1, 10);
+    let pageSize = parseInt(limit ?? 10, 10);
+    let offset = (pageNumber - 1) * pageSize;
+
+    // -------- 3️⃣ DATE FILTER LOGIC --------
+    let dateFilter = {};
+    if (start_date && end_date) {
+      dateFilter = {
+        event_date: { [Sequelize.Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`] }
+      };
+    } else if (range === 'month') {
+      dateFilter = {
+        [Sequelize.Op.and]: [
+          Sequelize.where(Sequelize.fn('MONTH', Sequelize.col('event_date')), Sequelize.fn('MONTH', Sequelize.fn('CURDATE'))),
+          Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('event_date')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
+        ]
+      };
+    } else if (range === 'week') {
+      dateFilter = {
+        [Sequelize.Op.and]: [
+          Sequelize.where(Sequelize.fn('YEARWEEK', Sequelize.col('event_date'), 1), Sequelize.fn('YEARWEEK', Sequelize.fn('CURDATE'), 1))
+        ]
+      };
+    }
+
+    // -------- 4️⃣ BASE WHERE CONDITIONS --------
+    const whereConditions = {
+      user_id: userId,
+      is_active: 1,
+      ...dateFilter
+    };
+
+    if (status) {
+      switch (status) {
+        case 'cancelled': whereConditions.is_cancelled = 1; break;
+        case 'completed': whereConditions.is_completed = 1; break;
+        case 'upcoming':
+          whereConditions.is_cancelled = 0;
+          whereConditions.is_draft = 0;
+          whereConditions.event_date = { ...(dateFilter.event_date || {}), [Sequelize.Op.gt]: today };
+          break;
+        case 'draft': whereConditions.is_draft = 1; break;
+      }
+    }
+
+    if (event_type) whereConditions.event_type = event_type;
+    if (search) {
+      whereConditions.project_name = Sequelize.where(
+        Sequelize.fn('LOWER', Sequelize.col('project_name')),
+        { [Sequelize.Op.like]: `%${search.toLowerCase()}%` }
+      );
+    }
+
+    // -------- 5️⃣ STATS COUNTS --------
+    const [
+      total_active, total_cancelled, total_completed, total_upcoming, total_draft
+    ] = await Promise.all([
+      stream_project_booking.count({ where: { user_id: userId, is_active: 1, is_cancelled: 0, is_completed: 0, is_draft: 0 } }),
+      stream_project_booking.count({ where: { user_id: userId, is_cancelled: 1 } }),
+      stream_project_booking.count({ where: { user_id: userId, is_completed: 1 } }),
+      stream_project_booking.count({ where: { user_id: userId, is_cancelled: 0, is_draft: 0, event_date: { [Sequelize.Op.gt]: today } } }),
+      stream_project_booking.count({ where: { user_id: userId, is_draft: 1 } }),
+    ]);
+
+    // -------- 6️⃣ FETCH PROJECTS & ASSOCIATED DATA --------
+    const projects = await stream_project_booking.findAll({
+      where: whereConditions,
+      ...(noPagination ? {} : { limit: pageSize, offset }),
+      order: [['event_date', 'DESC']]
+    });
+
+    const projectDetails = await Promise.all(
+      projects.map(async (project) => {
+        const [assignedCrew, assignedEquipment, assignedPostProd, paymentData] = await Promise.all([
+          assigned_crew.findAll({
+            where: { project_id: project.stream_project_booking_id, is_active: 1 },
+            include: [{ model: crew_members, as: 'crew_member' }]
+          }),
+          assigned_equipment.findAll({
+            where: { project_id: project.stream_project_booking_id, is_active: 1 },
+            include: [{ model: equipment, as: 'equipment' }]
+          }),
+          assigned_post_production_member.findAll({
+            where: { project_id: project.stream_project_booking_id, is_active: 1 },
+            include: [{ model: post_production_members, as: 'post_production_member' }]
+          }),
+          payment_transactions.findOne({
+            where: { payment_id: project.payment_id },
+            attributes: ['total_amount']
+          })
+        ]);
+
+        // Format event types
+        const rawTypes = project.event_type ? project.event_type.split(',') : [];
+        const formattedTypes = rawTypes.map(t => {
+          const val = t.trim().toLowerCase();
+          const map = { 'videographer': 'Videography', 'photographer': 'Photography' };
+          return map[val] || val.charAt(0).toUpperCase() + val.slice(1);
+        });
+
+        return {
+          ...project.toJSON(),
+          total_paid_amount: paymentData ? paymentData.total_amount : 0,
+          event_type_labels: formattedTypes.join(', '),
+          event_location_formatted: (() => {
+            try {
+              const loc = project.event_location;
+              if (typeof loc === "string" && (loc.startsWith("{") || loc.startsWith("["))) {
+                const parsed = JSON.parse(loc);
+                return parsed.address || parsed;
+              }
+              return loc;
+            } catch (e) { return project.event_location; }
+          })(),
+          assignedCrew,
+          assignedEquipment,
+          assignedPostProductionMembers: assignedPostProd
+        };
+      })
+    );
+
+    // -------- 7️⃣ SEPARATE PAID & UNPAID --------
+    const paid = [];
+    const unpaid_or_draft = [];
+    projectDetails.forEach(item => {
+      if (item.payment_id && item.is_draft !== 1) {
+        paid.push(item);
+      } else {
+        unpaid_or_draft.push(item);
+      }
+    });
+
+    // -------- 8️⃣ FINAL RESPONSE --------
+    return res.status(200).json({
+      error: false,
+      message: 'Client full details and shoots fetched successfully',
+      data: {
+        profile: {
+          user,
+          client,
+          affiliate
+        },
+        stats: {
+          total_active,
+          total_cancelled,
+          total_completed,
+          total_upcoming,
+          total_draft
+        },
+        projects: {
+          paid,
+          unpaid_or_draft
+        },
+        pagination: noPagination ? null : {
+          page: pageNumber,
+          limit: pageSize
+        }
+      }
+    });
+
+  } catch (error) {
+    console.error('Get Full Client Details Error:', error);
+    return res.status(500).json({ error: true, message: 'Internal server error' });
+  }
+};
