@@ -569,7 +569,7 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "booking_id": 814
+  "booking_id": 803
 }
 
 ### 
@@ -588,7 +588,7 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "booking_id": 819
+  "booking_id": 803
 }
 
 
@@ -604,3 +604,50 @@ Content-Type: application/json
 GET {{URL}}sales/get-lead-stats/136 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
+
+###
+# Stripe Webhook Test (manual payload; signature verification requires a real Stripe signature)
+# 1) Start app on :5001
+# 2) Use Stripe CLI to forward events to http://localhost:5001/v1/payments/webhook
+# 3) Copy webhook secret from CLI output into STRIPE_WEBHOOK_SECRET
+POST {{URL}}payments/webhook HTTP/1.1
+Content-Type: application/json
+stripe-signature: t=1730000000,v1=replace_with_valid_stripe_signature
+
+{
+  "id": "evt_test_webhook",
+  "object": "event",
+  "type": "payment_intent.succeeded",
+  "data": {
+    "object": {
+      "id": "pi_test_12345",
+      "object": "payment_intent",
+      "amount_received": 25000,
+      "currency": "usd",
+      "metadata": {
+        "booking_id": "819"
+      },
+      "charges": {
+        "data": [
+          {
+            "id": "ch_test_12345"
+          }
+        ]
+      }
+    }
+  }
+}
+
+###
+# Stripe CLI commands (run in terminal)
+# Login (once)
+# stripe login
+#
+# Forward webhook events to your local API
+# stripe listen --forward-to http://localhost:5001/v1/payments/webhook
+#
+# Trigger PaymentIntent success event
+# stripe trigger payment_intent.succeeded
+#
+# Trigger Invoice paid event
+# stripe trigger invoice.paid

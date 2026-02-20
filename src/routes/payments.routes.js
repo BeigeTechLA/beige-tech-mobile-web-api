@@ -4,20 +4,6 @@ const paymentsController = require('../controllers/payments.controller');
 const { authenticate, optionalAuth } = require('../middleware/auth.middleware');
 
 /**
- * @route   POST /api/payments/webhook
- * @desc    Stripe Webhook handler (Handles asynchronous invoice payments)
- * @access  Public (Stripe calls this)
- */
-router.post(
-  '/webhook', 
-  // CRITICAL: We use express.raw so Stripe can verify the signature.
-  // If your main app.js already uses express.json() globally, 
-  // make sure this route is defined BEFORE express.json() is applied.
-  express.raw({ type: 'application/json' }), 
-  paymentsController.handleStripeWebhook
-);
-
-/**
  * @route   POST /api/payments/create-intent
  * @desc    Create Stripe payment intent
  * @access  Public (with optional auth for tracking)

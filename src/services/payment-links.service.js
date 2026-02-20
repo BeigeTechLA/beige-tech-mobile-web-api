@@ -183,7 +183,38 @@ async function createStripeInvoice(booking, pricingData) {
     });
   }
 
-  // 2. Create the Draft Invoice
+  // 2. Reuse existing open invoice for this booking to avoid duplicates.
+  const openInvoices = await stripe.invoices.list({
+    customer: customer.id,
+    status: 'open',
+    limit: 100
+  });
+
+  const existingOpenInvoice = openInvoices.data.find(
+    (inv) => inv.metadata?.booking_id === booking.stream_project_booking_id.toString()
+  );
+
+  if (existingOpenInvoice) {
+    return existingOpenInvoice;
+  }
+
+  // 3. If a draft already exists for this booking, finalize and reuse it.
+  const draftInvoices = await stripe.invoices.list({
+    customer: customer.id,
+    status: 'draft',
+    limit: 100
+  });
+
+  const existingDraftInvoice = draftInvoices.data.find(
+    (inv) => inv.metadata?.booking_id === booking.stream_project_booking_id.toString()
+  );
+
+  if (existingDraftInvoice) {
+    const finalizedExistingDraft = await stripe.invoices.finalizeInvoice(existingDraftInvoice.id);
+    return finalizedExistingDraft;
+  }
+
+  // 4. Create the Draft Invoice
   const invoice = await stripe.invoices.create({
     customer: customer.id,
     collection_method: 'send_invoice', // This emails the invoice automatically
@@ -195,7 +226,7 @@ async function createStripeInvoice(booking, pricingData) {
     }
   });
 
-  // 3. Add Line Items (Calculated from your pricing data)
+  // 5. Add Line Items (Calculated from your pricing data)
   if (pricingData.line_items && pricingData.line_items.length > 0) {
     for (const item of pricingData.line_items) {
       const amountCents = Math.round(parseFloat(item.total || 0) * 100);
@@ -211,7 +242,7 @@ async function createStripeInvoice(booking, pricingData) {
     }
   }
 
-  // 4. Handle Discount (if any)
+  // 6. Handle Discount (if any)
   const discountCents = Math.round(parseFloat(pricingData.discount_amount || 0) * 100);
   if (discountCents > 0) {
     await stripe.invoiceItems.create({
@@ -223,11 +254,8 @@ async function createStripeInvoice(booking, pricingData) {
     });
   }
 
-  // 5. Finalize the invoice (This generates the PDF link and the hosted URL)
+  // 7. Finalize the invoice (This generates the PDF link and the hosted URL)
   const finalizedInvoice = await stripe.invoices.finalizeInvoice(invoice.id);
-  
-  // 6. Send the invoice via email through Stripe's system
-  await stripe.invoices.sendInvoice(finalizedInvoice.id);
 
   return finalizedInvoice;
 }
