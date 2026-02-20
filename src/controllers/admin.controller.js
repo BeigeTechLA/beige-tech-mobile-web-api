@@ -6513,17 +6513,41 @@ exports.searchCrewForLead = async (req, res) => {
             limit: 50
         });
 
+        const crewWithRoles = availableCrew.map(crewMember => {
+            let role = null;
+
+            if (crewMember.primary_role) {
+                const roles = JSON.parse(crewMember.primary_role);
+                for (let roleId of roles) {
+                    if (ROLE_GROUPS.videographer.includes(roleId)) {
+                        role = "videographer";
+                        break;
+                    } else if (ROLE_GROUPS.photographer.includes(roleId)) {
+                        role = "photographer";
+                        break;
+                    } else if (ROLE_GROUPS.cinematographer.includes(roleId)) {
+                        role = "editor";
+                        break;
+                    }
+                }
+            }
+
+            return {
+                ...crewMember.toJSON(),
+                role: role || 'Creatve Professional',
+            };
+        });
+
         res.json({
             success: true,
             project_date: projectDate,
             available_count: availableCrew.length,
-            data: availableCrew
+            data: crewWithRoles
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 
 exports.assignCrewBulkSmart = async (req, res) => {
     try {
