@@ -4,6 +4,7 @@ const bodyParser = require('body-parser');
 const routes = require('./routes');
 const errorHandler = require('./middleware/errorHandler');
 const creatorRoutes = require('./routes/creator.routes');
+const paymentsController = require('./controllers/payments.controller');
 
 const app = express();
 
@@ -30,6 +31,13 @@ const corsConfig = corsOrigins[0] === '*'
 app.use(cors(corsConfig));
 
 // CORS preflight is handled automatically by app.use(cors(corsConfig)) above
+
+// Stripe webhook must receive raw body for signature verification.
+app.post(
+  '/v1/payments/webhook',
+  express.raw({ type: 'application/json' }),
+  paymentsController.handleStripeWebhook
+);
 
 // Request logging middleware
 app.use((req, res, next) => {

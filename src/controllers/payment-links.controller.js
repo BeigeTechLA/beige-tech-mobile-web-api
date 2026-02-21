@@ -462,9 +462,14 @@ exports.validatePaymentLink = async (req, res) => {
 exports.sendStripeInvoice = async (req, res) => {
   try {
     const { booking_id } = req.body;
+    const parsedBookingId = parseInt(booking_id, 10);
+
+    if (!parsedBookingId || Number.isNaN(parsedBookingId)) {
+      return res.status(400).json({ success: false, message: 'Valid booking_id is required.' });
+    }
 
     const booking = await db.stream_project_booking.findOne({
-      where: { stream_project_booking_id: booking_id },
+      where: { stream_project_booking_id: parsedBookingId },
       include: [
         {
           model: db.quotes,
@@ -477,7 +482,7 @@ exports.sendStripeInvoice = async (req, res) => {
     });
 
     if (!booking) {
-      return res.status(404).json({ success: false, message: `Booking ID ${booking_id} not found.` });
+      return res.status(404).json({ success: false, message: `Booking ID ${parsedBookingId} not found.` });
     }
 
     // 1. Determine Recipient (Logic same as your Payment Link API)
