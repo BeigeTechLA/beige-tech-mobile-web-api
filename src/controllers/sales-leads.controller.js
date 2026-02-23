@@ -1892,7 +1892,7 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
     creator_ids: Array.isArray(selected_crew_ids) ? selected_crew_ids : [],
     shoot_hours: duration_hours != null ? parseInt(duration_hours, 10) : booking.duration_hours,
     role_counts: crew_roles || (booking.crew_roles ? JSON.parse(booking.crew_roles) : {}),
-    event_type: event_type || booking.event_type,
+    event_type: shoot_type || event_type || booking.shoot_type || booking.event_type, 
     shoot_start_date:
       start_date_time ||
       (booking.event_date ? `${booking.event_date}T${booking.start_time || '00:00:00.000Z'}` : null),
