@@ -6057,23 +6057,62 @@ exports.getApprovedCrewMembers = async (req, res) => {
             limit = 20,
             search,
             location,
-            range,
             start_date,
-            end_date
+            end_date,
+            sort_by = 'crew_member_id',
+            sort_order = 'DESC'
         } = req.body;
 
         page = parseInt(page);
         limit = parseInt(limit);
         const offset = (page - 1) * limit;
 
+        // 1. Setup Base Conditions
         let conditions = [{ is_active: 1 }, { is_crew_verified: 1 }];
 
         if (start_date && end_date) {
             conditions.push({ 'created_at': { [Sequelize.Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`] } });
         }
-        if (search) conditions.push({ first_name: { [Sequelize.Op.like]: `%${search}%` } });
+        
         if (location) conditions.push({ location: { [Sequelize.Op.like]: `%${location}%` } });
 
+        // 2. Advanced Search Logic (Name, Email, ID AND Roles)
+        if (search) {
+            // First, find any role IDs that match the search string (e.g., "video" matches "Videographer")
+            const matchingRoles = await crew_roles.findAll({
+                where: { role_name: { [Sequelize.Op.like]: `%${search}%` } },
+                attributes: ['role_id'],
+                raw: true
+            });
+
+            const roleIds = matchingRoles.map(r => r.role_id.toString());
+
+            let searchOrConditions = [
+                { first_name: { [Sequelize.Op.like]: `%${search}%` } },
+                { last_name: { [Sequelize.Op.like]: `%${search}%` } },
+                { email: { [Sequelize.Op.like]: `%${search}%` } },
+                { crew_member_id: { [Sequelize.Op.like]: `%${search}%` } }
+            ];
+
+            // If we found matching roles, add a condition to check the primary_role column
+            roleIds.forEach(id => {
+                searchOrConditions.push({ 
+                    primary_role: { [Sequelize.Op.like]: `%${id}%` } 
+                });
+            });
+
+            conditions.push({ [Sequelize.Op.or]: searchOrConditions });
+        }
+
+        // 3. Setup Sorting
+        let orderColumn = 'crew_member_id';
+        if (sort_by === 'first_name') orderColumn = 'first_name';
+        if (sort_by === 'status') orderColumn = 'status';
+        if (sort_by === 'created_at') orderColumn = 'created_at';
+
+        const orderDirection = sort_order.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+
+        // 4. Query Database
         const [{ count, rows: members }, allRoles] = await Promise.all([
             crew_members.findAndCountAll({
                 where: { [Sequelize.Op.and]: conditions },
@@ -6084,25 +6123,17 @@ exports.getApprovedCrewMembers = async (req, res) => {
                     as: 'crew_member_files',
                     attributes: ['crew_files_id', 'file_type', 'file_path'],
                 }],
-                order: [['crew_member_id', 'DESC']],
+                order: [[orderColumn, orderDirection]],
                 limit,
                 offset,
             }),
             crew_roles.findAll({ attributes: ['role_id', 'role_name'], raw: true })
         ]);
 
+        // 5. Process Data for Frontend
         const processedMembers = members.map((member) => {
             const memberData = member.get({ clone: true });
-
-            // Location
-            let finalLocation = memberData.location;
-            if (finalLocation && typeof finalLocation === 'string' && (finalLocation.startsWith('{') || finalLocation.startsWith('['))) {
-                try {
-                    const parsed = JSON.parse(finalLocation);
-                    finalLocation = parsed.address || parsed || finalLocation;
-                } catch { }
-            }
-
+            
             let roleNames = [];
             const rawRole = memberData.primary_role;
             if (rawRole) {
@@ -6110,9 +6141,8 @@ exports.getApprovedCrewMembers = async (req, res) => {
                 try {
                     const parsed = JSON.parse(rawRole);
                     roleIds = Array.isArray(parsed) ? parsed.map(String) : [String(parsed)];
-                } catch (e) {
-                    roleIds = [String(rawRole)];
-                }
+                } catch (e) { roleIds = [String(rawRole)]; }
+                
                 roleNames = allRoles
                     .filter(r => roleIds.includes(String(r.role_id)))
                     .map(r => r.role_name);
@@ -6120,15 +6150,14 @@ exports.getApprovedCrewMembers = async (req, res) => {
 
             return {
                 ...memberData,
-                location: finalLocation,
                 status: 'approved',
-                role: roleNames.length > 0 ? { role_name: roleNames.join(", ") } : null
+                role: { role_name: roleNames.length > 0 ? roleNames.join(", ") : "N/A" }
             };
         });
 
         return res.status(200).json({
             error: false,
-            message: "Approved crew members fetched successfully",
+            message: "Success",
             pagination: {
                 total_records: count,
                 current_page: page,
@@ -6139,11 +6168,10 @@ exports.getApprovedCrewMembers = async (req, res) => {
         });
 
     } catch (error) {
-        console.error("Get Approved Crew Error:", error);
-        return res.status(500).json({ error: true, message: "Internal server error" });
+        console.error("API Error:", error);
+        return res.status(500).json({ error: true, message: "Internal error" });
     }
 };
-
 
 exports.getClientById = async (req, res) => {
   try {
@@ -6514,7 +6542,6 @@ exports.searchCrewForLead = async (req, res) => {
             cinematographer: ["11", "3"]
         };
 
-        // Support multiple roles
         const requestedRoles = role_type
             ? role_type.split(",").map(r => r.trim().toLowerCase())
             : [];
@@ -6526,7 +6553,6 @@ exports.searchCrewForLead = async (req, res) => {
             }
         });
 
-        // Remove duplicates
         targetRoleIds = [...new Set(targetRoleIds)];
 
         // -----------------------------
@@ -6563,47 +6589,52 @@ exports.searchCrewForLead = async (req, res) => {
         });
 
         // -----------------------------
-        // 6️⃣ Safe Role Parsing
+        // 6️⃣ Safe Role Parsing (UPDATED)
         // -----------------------------
         const crewWithRoles = availableCrew.map(crewMember => {
-            let role = null;
-            let roles = [];
+            let matchedRoles = [];
+            let rawRoles = [];
 
             try {
                 if (crewMember.primary_role) {
                     if (Array.isArray(crewMember.primary_role)) {
-                        roles = crewMember.primary_role;
+                        rawRoles = crewMember.primary_role;
                     } else if (typeof crewMember.primary_role === "string") {
                         try {
+                            // Try parsing if it's a JSON string like ["9", "10"]
                             const parsed = JSON.parse(crewMember.primary_role);
-                            roles = Array.isArray(parsed) ? parsed : [parsed];
+                            rawRoles = Array.isArray(parsed) ? parsed : [parsed];
                         } catch {
-                            roles = [crewMember.primary_role];
+                            // If it's a simple string like "9" or "9,10"
+                            rawRoles = crewMember.primary_role.split(',').map(r => r.trim());
                         }
                     } else {
-                        roles = [crewMember.primary_role];
+                        rawRoles = [crewMember.primary_role];
                     }
                 }
-            } catch {
-                roles = [];
+            } catch (e) {
+                rawRoles = [];
             }
 
-            for (let roleId of roles) {
-                if (ROLE_GROUPS.videographer.includes(String(roleId))) {
-                    role = "videographer";
-                    break;
-                } else if (ROLE_GROUPS.photographer.includes(String(roleId))) {
-                    role = "photographer";
-                    break;
-                } else if (ROLE_GROUPS.cinematographer.includes(String(roleId))) {
-                    role = "cinematographer";
-                    break;
-                }
+            // Convert all raw role IDs to strings for comparison
+            const stringRoleIds = rawRoles.map(String);
+
+            // Check against each group and add to array if found
+            if (stringRoleIds.some(id => ROLE_GROUPS.videographer.includes(id))) {
+                matchedRoles.push("videographer");
+            }
+            if (stringRoleIds.some(id => ROLE_GROUPS.photographer.includes(id))) {
+                matchedRoles.push("photographer");
+            }
+            if (stringRoleIds.some(id => ROLE_GROUPS.cinematographer.includes(id))) {
+                matchedRoles.push("cinematographer");
             }
 
             return {
                 ...crewMember.toJSON(),
-                role: role || "Unspecified"
+                // Return as an array or a comma-separated string
+                role_names: matchedRoles.length > 0 ? matchedRoles : ["Unspecified"],
+                role: matchedRoles.length > 0 ? matchedRoles.join(", ") : "Unspecified"
             };
         });
 
@@ -6625,7 +6656,6 @@ exports.searchCrewForLead = async (req, res) => {
         });
     }
 };
-
 exports.assignCrewBulkSmart = async (req, res) => {
     try {
         const assigned_by_user_id = req.user?.userId;
