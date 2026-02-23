@@ -4,6 +4,91 @@ const paymentLinksService = require('../services/payment-links.service');
 const constants = require('../utils/constants');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const emailService = require('../utils/emailService');
+const discountService = require('../services/discount.service');
+const { Op } = require('sequelize');
+
+const applyQuoteDiscountFromLatestPaymentLink = async (booking, performedByUserId = null) => {
+    if (!booking || !booking.primary_quote) return false;
+    if (booking.payment_id || booking.is_completed === 1) return false;
+
+    const existingDiscount = parseFloat(booking.primary_quote.discount_amount || 0);
+    if (existingDiscount > 0 || booking.primary_quote.discount_code_id) return false;
+
+    const linkWithDiscount = await payment_links.findOne({
+        where: {
+            booking_id: booking.stream_project_booking_id,
+            discount_code_id: { [Op.ne]: null }
+        },
+        order: [['created_at', 'DESC']]
+    });
+
+    if (!linkWithDiscount || !linkWithDiscount.discount_code_id) return false;
+
+    const discountCode = await discount_codes.findByPk(linkWithDiscount.discount_code_id);
+    if (!discountCode) return false;
+
+    const codeCheck = await discountService.checkCodeAvailability(
+        discountCode.code,
+        booking.stream_project_booking_id
+    );
+
+    if (!codeCheck.valid) return false;
+
+    const validDiscountCode = codeCheck.discountCode;
+    const subtotal = parseFloat(booking.primary_quote.subtotal || 0);
+    const { discountAmount, finalAmount } = discountService.calculateDiscountAmount(
+        subtotal,
+        validDiscountCode
+    );
+
+    if (discountAmount <= 0) return false;
+
+    const marginPercent = parseFloat(booking.primary_quote.margin_percent || 0);
+    const marginAmount = (finalAmount * marginPercent) / 100;
+    const newTotal = finalAmount + marginAmount;
+
+    await booking.primary_quote.update({
+        discount_code_id: validDiscountCode.discount_code_id,
+        applied_discount_type: validDiscountCode.discount_type,
+        applied_discount_value: validDiscountCode.discount_value,
+        discount_percent: validDiscountCode.discount_type === 'percentage' ? validDiscountCode.discount_value : 0,
+        discount_amount: discountAmount,
+        price_after_discount: finalAmount,
+        total: newTotal
+    });
+
+    await discountService.incrementUsageCount(validDiscountCode.discount_code_id);
+    await discountService.logUsage(
+        validDiscountCode.discount_code_id,
+        booking.stream_project_booking_id,
+        booking.user_id || null,
+        booking.guest_email || null,
+        subtotal,
+        discountAmount,
+        finalAmount
+    );
+
+    if (validDiscountCode.lead_id) {
+        await sales_leads.update(
+            { lead_status: 'discount_applied' },
+            { where: { lead_id: validDiscountCode.lead_id } }
+        );
+
+        await sales_lead_activities.create({
+            lead_id: validDiscountCode.lead_id,
+            activity_type: 'discount_applied',
+            activity_data: {
+                discount_code_id: validDiscountCode.discount_code_id,
+                code: validDiscountCode.code,
+                discount_amount: discountAmount,
+                quote_id: booking.primary_quote.quote_id
+            },
+            performed_by_user_id: performedByUserId
+        });
+    }
+
+    return true;
+};
 
 const calculateLeadPricing = async (booking) => {
     if (!booking) return null;
@@ -532,9 +617,27 @@ exports.sendStripeInvoice = async (req, res) => {
       return res.status(400).json({ success: false, message: 'No email address associated with this booking.' });
     }
 
+    const bookingMarkedPaid = !!(booking.payment_id || booking.is_completed === 1);
+
+    if (!bookingMarkedPaid) {
+      const appliedOnQuote = await applyQuoteDiscountFromLatestPaymentLink(booking, req.userId || null);
+      if (appliedOnQuote) {
+        await booking.reload({
+          include: [
+            {
+              model: db.quotes,
+              as: 'primary_quote',
+              required: false,
+              include: [{ model: db.quote_line_items, as: 'line_items', required: false }]
+            },
+            { model: db.users, as: 'user', required: false }
+          ]
+        });
+      }
+    }
+
     const pricingData = await calculateLeadPricing(booking);
     let invoiceDetails = null;
-    const bookingMarkedPaid = !!(booking.payment_id || booking.is_completed === 1);
 
     // --- CASE 1: ALREADY PAID ---
     if (pricingData && (pricingData.is_paid || bookingMarkedPaid)) {
