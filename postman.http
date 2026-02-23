@@ -76,8 +76,8 @@ POST {{URL}}auth/login HTTP/1.1
 Content-Type: application/json
 
 {
-  "email": "harsh.panchal@gmail.com",
-  "password": "password123"
+  "email": "dev@gmail.com",
+  "password": "12345678"
 }
 
 ###
@@ -387,7 +387,7 @@ GET {{URL}}admin/get-client-by-id/1 HTTP/1.1
 Content-Type: application/json
 
 ###
-GET {{URL}}admin/get-clients-shoots/181 HTTP/1.1
+GET {{URL}}admin/get-clients-shoots/8 HTTP/1.1
 Content-Type: application/json
 
 ### 
