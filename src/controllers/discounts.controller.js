@@ -42,6 +42,13 @@ exports.generateDiscountCode = async (req, res) => {
       });
     }
 
+    if (booking.payment_id || booking.is_completed === 1) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Cannot generate discount code: booking is already paid.'
+      });
+    }
+
     // Check if the booking has an associated quote
     if (!booking.quote_id) {
       return res.status(constants.BAD_REQUEST.code).json({
@@ -225,6 +232,23 @@ exports.applyDiscountCode = async (req, res) => {
 
     // Use booking_id from request body or quote's booking_id
     const effectiveBookingId = booking_id || quote.booking_id;
+
+    const booking = await stream_project_booking.findByPk(effectiveBookingId, { transaction });
+    if (!booking) {
+      await transaction.rollback();
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Booking not found'
+      });
+    }
+
+    if (booking.payment_id || booking.is_completed === 1) {
+      await transaction.rollback();
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Cannot apply discount: booking is already paid.'
+      });
+    }
 
     // Validate discount code with booking_id
     const result = await discountService.checkCodeAvailability(

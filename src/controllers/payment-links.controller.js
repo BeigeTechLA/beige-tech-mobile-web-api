@@ -11,9 +11,6 @@ const applyQuoteDiscountFromLatestPaymentLink = async (booking, performedByUserI
     if (!booking || !booking.primary_quote) return false;
     if (booking.payment_id || booking.is_completed === 1) return false;
 
-    const existingDiscount = parseFloat(booking.primary_quote.discount_amount || 0);
-    if (existingDiscount > 0 || booking.primary_quote.discount_code_id) return false;
-
     const linkWithDiscount = await payment_links.findOne({
         where: {
             booking_id: booking.stream_project_booking_id,
@@ -23,6 +20,15 @@ const applyQuoteDiscountFromLatestPaymentLink = async (booking, performedByUserI
     });
 
     if (!linkWithDiscount || !linkWithDiscount.discount_code_id) return false;
+
+    const latestDiscountCodeId = parseInt(linkWithDiscount.discount_code_id, 10);
+    const currentDiscountCodeId = booking.primary_quote.discount_code_id
+        ? parseInt(booking.primary_quote.discount_code_id, 10)
+        : null;
+    const existingDiscount = parseFloat(booking.primary_quote.discount_amount || 0);
+
+    // Latest-link-wins: if quote already has the same code with a non-zero discount, nothing to do.
+    if (currentDiscountCodeId === latestDiscountCodeId && existingDiscount > 0) return false;
 
     const discountCode = await discount_codes.findByPk(linkWithDiscount.discount_code_id);
     if (!discountCode) return false;
@@ -47,44 +53,84 @@ const applyQuoteDiscountFromLatestPaymentLink = async (booking, performedByUserI
     const marginAmount = (finalAmount * marginPercent) / 100;
     const newTotal = finalAmount + marginAmount;
 
-    await booking.primary_quote.update({
-        discount_code_id: validDiscountCode.discount_code_id,
-        applied_discount_type: validDiscountCode.discount_type,
-        applied_discount_value: validDiscountCode.discount_value,
-        discount_percent: validDiscountCode.discount_type === 'percentage' ? validDiscountCode.discount_value : 0,
-        discount_amount: discountAmount,
-        price_after_discount: finalAmount,
-        total: newTotal
-    });
+    const transaction = await db.sequelize.transaction();
+    try {
+        // If quote previously used a different discount code for this booking, rollback its usage counters/logs.
+        if (
+            currentDiscountCodeId &&
+            currentDiscountCodeId !== parseInt(validDiscountCode.discount_code_id, 10)
+        ) {
+            const previousUsageCount = await db.discount_code_usage.count({
+                where: {
+                    booking_id: booking.stream_project_booking_id,
+                    discount_code_id: currentDiscountCodeId
+                },
+                transaction
+            });
 
-    await discountService.incrementUsageCount(validDiscountCode.discount_code_id);
-    await discountService.logUsage(
-        validDiscountCode.discount_code_id,
-        booking.stream_project_booking_id,
-        booking.user_id || null,
-        booking.guest_email || null,
-        subtotal,
-        discountAmount,
-        finalAmount
-    );
+            if (previousUsageCount > 0) {
+                await db.discount_code_usage.destroy({
+                    where: {
+                        booking_id: booking.stream_project_booking_id,
+                        discount_code_id: currentDiscountCodeId
+                    },
+                    transaction
+                });
 
-    if (validDiscountCode.lead_id) {
-        await sales_leads.update(
-            { lead_status: 'discount_applied' },
-            { where: { lead_id: validDiscountCode.lead_id } }
+                await discount_codes.update({
+                    current_uses: db.sequelize.literal(`GREATEST(current_uses - ${previousUsageCount}, 0)`)
+                }, {
+                    where: { discount_code_id: currentDiscountCodeId },
+                    transaction
+                });
+            }
+        }
+
+        await booking.primary_quote.update({
+            discount_code_id: validDiscountCode.discount_code_id,
+            applied_discount_type: validDiscountCode.discount_type,
+            applied_discount_value: validDiscountCode.discount_value,
+            discount_percent: validDiscountCode.discount_type === 'percentage' ? validDiscountCode.discount_value : 0,
+            discount_amount: discountAmount,
+            price_after_discount: finalAmount,
+            total: newTotal
+        }, { transaction });
+
+        await discountService.incrementUsageCount(validDiscountCode.discount_code_id, transaction);
+        await discountService.logUsage(
+            validDiscountCode.discount_code_id,
+            booking.stream_project_booking_id,
+            booking.user_id || null,
+            booking.guest_email || null,
+            subtotal,
+            discountAmount,
+            finalAmount,
+            transaction
         );
 
-        await sales_lead_activities.create({
-            lead_id: validDiscountCode.lead_id,
-            activity_type: 'discount_applied',
-            activity_data: {
-                discount_code_id: validDiscountCode.discount_code_id,
-                code: validDiscountCode.code,
-                discount_amount: discountAmount,
-                quote_id: booking.primary_quote.quote_id
-            },
-            performed_by_user_id: performedByUserId
-        });
+        if (validDiscountCode.lead_id) {
+            await sales_leads.update(
+                { lead_status: 'discount_applied' },
+                { where: { lead_id: validDiscountCode.lead_id }, transaction }
+            );
+
+            await sales_lead_activities.create({
+                lead_id: validDiscountCode.lead_id,
+                activity_type: 'discount_applied',
+                activity_data: {
+                    discount_code_id: validDiscountCode.discount_code_id,
+                    code: validDiscountCode.code,
+                    discount_amount: discountAmount,
+                    quote_id: booking.primary_quote.quote_id
+                },
+                performed_by_user_id: performedByUserId
+            }, { transaction });
+        }
+
+        await transaction.commit();
+    } catch (error) {
+        await transaction.rollback();
+        throw error;
     }
 
     return true;
@@ -221,7 +267,7 @@ exports.generatePaymentLink = async (req, res) => {
     // --------------------------------------------
 
     // 3. Check if already paid
-    if (booking.payment_id) {
+    if (booking.payment_id || booking.is_completed === 1) {
       return res.status(400).json({
         success: false,
         message: 'Payment for this booking has already been completed. No new link is required.'
@@ -644,6 +690,7 @@ exports.sendStripeInvoice = async (req, res) => {
       let invoiceUrl = null;
       let invoicePdf = null;
       let invoiceNumber = 'RECEIPT';
+      let paidTotalAmount = parseFloat(pricingData.total || 0);
 
       if (pricingData.stripe_payment_intent_id) {
         const pi = await stripe.paymentIntents.retrieve(pricingData.stripe_payment_intent_id, {
@@ -655,6 +702,7 @@ exports.sendStripeInvoice = async (req, res) => {
           invoiceUrl = existingInvoice.hosted_invoice_url;
           invoicePdf = existingInvoice.invoice_pdf;
           invoiceNumber = existingInvoice.number;
+          paidTotalAmount = (existingInvoice.amount_paid || existingInvoice.total || 0) / 100;
         } 
         
         if (!invoicePdf) {
@@ -666,6 +714,7 @@ exports.sendStripeInvoice = async (req, res) => {
           invoiceUrl = retrospectiveInvoice.hosted_invoice_url;
           invoicePdf = retrospectiveInvoice.invoice_pdf;
           invoiceNumber = retrospectiveInvoice.number;
+          paidTotalAmount = (retrospectiveInvoice.amount_paid || retrospectiveInvoice.total || 0) / 100;
         }
       }
 
@@ -674,7 +723,7 @@ exports.sendStripeInvoice = async (req, res) => {
         invoiceUrl,
         invoicePdf,
         invoiceNumber,
-        totalAmount: pricingData.total,
+        totalAmount: paidTotalAmount,
         isPaid: true
       };
 
@@ -692,7 +741,15 @@ exports.sendStripeInvoice = async (req, res) => {
         pricingData,
         {}
       );
-      const invoiceIsPaid = stripeInvoice?.status === 'paid';
+      if (stripeInvoice?.status === 'paid') {
+        await booking.update({
+          invoice_generation_status: 'failed'
+        });
+        return res.status(409).json({
+          success: false,
+          message: 'Payment is completed, but booking status is not updated yet. Please sync payment status and try again.'
+        });
+      }
       
       invoiceDetails = {
         projectTitle: booking.project_name || 'Service Booking',
@@ -700,7 +757,7 @@ exports.sendStripeInvoice = async (req, res) => {
         invoicePdf: stripeInvoice.invoice_pdf,
         invoiceNumber: stripeInvoice.number,
         totalAmount: pricingData.total,
-        isPaid: invoiceIsPaid
+        isPaid: false
       };
     }
 

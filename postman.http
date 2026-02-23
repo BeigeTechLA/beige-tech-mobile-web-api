@@ -518,7 +518,7 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "booking_id": 806
+  "booking_id": 800
 }
 
 ### 
@@ -527,8 +527,8 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "lead_id": 142,
-  "booking_id": 806,
+  "lead_id": 136,
+  "booking_id": 800,
   "discount_type": "percentage",
   "discount_value": 10,
   "usage_type": "one_time"
@@ -540,9 +540,9 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "lead_id": 142,
-  "booking_id": 806,
-  "discount_code_id": 20
+  "lead_id": 136,
+  "booking_id": 800,
+  "discount_code_id": 29
 }
 
 ### 
