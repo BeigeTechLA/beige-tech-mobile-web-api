@@ -46,6 +46,18 @@ module.exports = function(sequelize, DataTypes) {
       allowNull: false,
       defaultValue: 0
     },
+    discount_code_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
+    applied_discount_type: {
+      type: DataTypes.ENUM('percentage', 'fixed_amount'),
+      allowNull: true
+    },
+    applied_discount_value: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true
+    },
     price_after_discount: {
       type: DataTypes.DECIMAL(10, 2),
       allowNull: false,
