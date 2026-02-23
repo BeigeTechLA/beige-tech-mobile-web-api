@@ -166,6 +166,22 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.DATE,
       allowNull: true
     },
+    stripe_customer_id: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
+    stripe_invoice_id: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
+    invoice_generation_status: {
+      type: DataTypes.STRING(32),
+      allowNull: true
+    },
+    invoice_generation_started_at: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
     created_at: {
       type: DataTypes.DATE,
       allowNull: false,

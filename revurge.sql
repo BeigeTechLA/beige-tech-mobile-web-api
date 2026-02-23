@@ -158,3 +158,17 @@ ALTER TABLE `sales_lead_activities` CHANGE `activity_type` `activity_type` ENUM(
 -- 18-02-26
 ALTER TABLE `sales_leads` ADD `phone` VARCHAR(20) NULL AFTER `client_name`;
 ALTER TABLE `sales_leads` ADD `lead_source` VARCHAR(50) NULL AFTER `intent`;
+
+-- 23-02-26
+
+ALTER TABLE stream_project_booking
+  ADD COLUMN stripe_customer_id VARCHAR(255) NULL,
+  ADD COLUMN stripe_invoice_id VARCHAR(255) NULL,
+  ADD COLUMN invoice_generation_status VARCHAR(32) NULL,
+  ADD COLUMN invoice_generation_started_at DATETIME NULL;
+
+CREATE UNIQUE INDEX idx_stream_project_booking_stripe_invoice_id
+  ON stream_project_booking (stripe_invoice_id);
+
+CREATE INDEX idx_stream_project_booking_stripe_customer_id
+  ON stream_project_booking (stripe_customer_id);
