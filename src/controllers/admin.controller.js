@@ -6660,18 +6660,26 @@ exports.assignCrewBulkSmart = async (req, res) => {
                 }]
             }]
         });
+        if (!lead || !lead.booking) {
+            return res.status(404).json({ success: false, message: "Lead or booking not found." });
+        }
 
         const booking = lead.booking;
         const requestedLimits = typeof booking.crew_roles === 'string' ? JSON.parse(booking.crew_roles) : (booking.crew_roles || {});
 
         let currentCounts = { videographer: 0, photographer: 0, cinematographer: 0 };
-        if (booking.assigned_crews) {
+                if (booking.assigned_crews) {
             booking.assigned_crews.forEach(ac => {
-                const roles = JSON.parse(ac.crew_member?.primary_role || "[]");
-                roles.forEach(id => {
-                    const roleName = ID_TO_ROLE_MAP[String(id)];
-                    if (roleName) currentCounts[roleName]++;
-                });
+                if (ac.crew_member?.primary_role) {
+                    try {
+                        const parsed = JSON.parse(ac.crew_member.primary_role);
+                        const roles = Array.isArray(parsed) ? parsed : [parsed];
+                        roles.forEach(id => {
+                            const roleName = ID_TO_ROLE_MAP[String(id)];
+                            if (roleName) currentCounts[roleName]++;
+                        });
+                    } catch (e) { console.error("Parse error in existing crew", e); }
+                }
             });
         }
 
@@ -6681,17 +6689,25 @@ exports.assignCrewBulkSmart = async (req, res) => {
 
         const assignmentsToCreate = [];
         let errors = [];
+        let hasAcceptedCrew = true;
 
         newCrewDetails.forEach(crew => {
-            const roles = JSON.parse(crew.primary_role || "[]");
-            let roleDetected = null;
+            let roles = [];
+            try {
+                const parsed = JSON.parse(crew.primary_role || "[]");
+                roles = Array.isArray(parsed) ? parsed : [parsed];
+            } catch (e) {
+                roles = [crew.primary_role];
+            }
 
+            let roleDetected = null;
             roles.forEach(id => {
                 if (ID_TO_ROLE_MAP[String(id)]) roleDetected = ID_TO_ROLE_MAP[String(id)];
             });
 
             if (roleDetected) {
                 const limit = requestedLimits[roleDetected] || 0;
+                
                 if (currentCounts[roleDetected] + 1 > limit) {
                     errors.push(`Cannot add ${crew.first_name} (${roleDetected}). Limit of ${limit} reached.`);
                 } else {
@@ -6711,25 +6727,32 @@ exports.assignCrewBulkSmart = async (req, res) => {
             }
         });
 
-        if (errors.length > 0) {
+        if (errors.length > 0 && assignmentsToCreate.length === 0) {
             return res.status(400).json({ 
                 success: false, 
-                message: "Some assignments failed validation.", 
+                message: "Assignments failed validation.", 
                 errors: errors 
             });
         }
 
-        await assigned_crew.bulkCreate(assignmentsToCreate);
-        await sales_lead_activities.create({
-            lead_id: lead_id,
-            activity_type: 'bulk_crew_assigned',
-            notes: `Sales rep assigned ${assignmentsToCreate.length} crew members.`,
-            performed_by_user_id: assigned_by_user_id
+        if (assignmentsToCreate.length > 0) {
+            await assigned_crew.bulkCreate(assignmentsToCreate);
+            await sales_lead_activities.create({
+                lead_id: lead_id,
+                activity_type: 'bulk_crew_assigned',
+                notes: `Sales rep assigned ${assignmentsToCreate.length} crew members.`,
+                performed_by_user_id: assigned_by_user_id
+            });
+        }
+
+        res.json({ 
+            success: true, 
+            message: `${assignmentsToCreate.length} crew members assigned successfully.`,
+            errors: errors.length > 0 ? errors : undefined 
         });
 
-        res.json({ success: true, message: `${assignmentsToCreate.length} crew members assigned successfully.` });
-
     } catch (error) {
+        console.error(error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
