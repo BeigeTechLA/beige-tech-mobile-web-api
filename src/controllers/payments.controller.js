@@ -685,38 +685,58 @@ exports.handleStripeWebhook = async (req, res) => {
     }
 
     const dataObject = event.data.object;
-    const bookingIdRaw = dataObject.metadata?.booking_id;
-    const booking_id = bookingIdRaw ? parseInt(bookingIdRaw, 10) : null;
+    let booking_id = null;
+    let paymentIntentId = null;
+
+    if (event.type === 'payment_intent.succeeded') {
+      const bookingIdRaw = dataObject.metadata?.booking_id;
+      booking_id = bookingIdRaw ? parseInt(bookingIdRaw, 10) : null;
+      paymentIntentId = dataObject.id;
+
+      // Fallback: when booking_id is only present on the related invoice metadata.
+      if ((!booking_id || Number.isNaN(booking_id)) && dataObject.invoice) {
+        try {
+          const invoiceId = typeof dataObject.invoice === 'string'
+            ? dataObject.invoice
+            : dataObject.invoice.id;
+          if (invoiceId) {
+            const linkedInvoice = await stripe.invoices.retrieve(invoiceId);
+            const invoiceBookingIdRaw = linkedInvoice.metadata?.booking_id;
+            booking_id = invoiceBookingIdRaw ? parseInt(invoiceBookingIdRaw, 10) : null;
+          }
+        } catch (invoiceLookupError) {
+          console.warn(`Webhook payment_intent.succeeded: failed to fetch linked invoice metadata: ${invoiceLookupError.message}`);
+        }
+      }
+    } else if (event.type === 'invoice.paid') {
+      const bookingIdRaw = dataObject.metadata?.booking_id;
+      booking_id = bookingIdRaw ? parseInt(bookingIdRaw, 10) : null;
+      paymentIntentId = typeof dataObject.payment_intent === 'string'
+        ? dataObject.payment_intent
+        : dataObject.payment_intent?.id;
+    }
 
     if (!booking_id || Number.isNaN(booking_id)) {
       console.log(`Webhook ${event.type} ignored: missing metadata.booking_id`);
       return res.status(200).json({ received: true });
     }
 
-    const paymentIntentId =
-      event.type === 'payment_intent.succeeded'
-        ? dataObject.id
-        : (typeof dataObject.payment_intent === 'string'
-          ? dataObject.payment_intent
-          : dataObject.payment_intent?.id);
-
-    if (!paymentIntentId) {
-      console.log(`Webhook ${event.type} ignored: no payment intent id for booking ${booking_id}`);
-      return res.status(200).json({ received: true });
-    }
-
     const transaction = await db.sequelize.transaction();
 
     try {
-      const existing = await db.payment_transactions.findOne({
-        where: { stripe_payment_intent_id: paymentIntentId },
-        transaction
-      });
+      if (paymentIntentId) {
+        const existing = await db.payment_transactions.findOne({
+          where: { stripe_payment_intent_id: paymentIntentId },
+          transaction
+        });
 
-      if (existing) {
-        await transaction.rollback();
-        console.log(`Webhook: payment already processed for booking ${booking_id}`);
-        return res.status(200).json({ received: true, duplicate: true });
+        if (existing) {
+          await transaction.rollback();
+          console.log(`Webhook: payment already processed for booking ${booking_id}`);
+          return res.status(200).json({ received: true, duplicate: true });
+        }
+      } else {
+        console.log(`Webhook ${event.type}: no payment intent id for booking ${booking_id}, continuing with booking-level idempotency`);
       }
 
       const booking = await db.stream_project_booking.findByPk(booking_id, {
@@ -777,7 +797,7 @@ exports.handleStripeWebhook = async (req, res) => {
         : 'Stripe Webhook';
 
       const payment = await db.payment_transactions.create({
-        stripe_payment_intent_id: paymentIntentId,
+        stripe_payment_intent_id: paymentIntentId || null,
         stripe_charge_id: chargeId,
         creator_id: validCreatorId,
         user_id: booking.user_id || null,
