@@ -841,11 +841,381 @@ const generateInvoiceTemplate = (userData, invoiceData) => {
   `;
 };
 
+/**
+ * Send notification to sales team about a new lead
+ * @param {Object} leadData - { guestEmail, shootType, contentType, eventDate, startTime, endTime, editsNeeded }
+ */
+const sendSalesLeadNotification = async (leadData) => {
+  try {
+    const salesEmail = process.env.SALES_NOTIFICATION_EMAIL;
+    const shootLabel = leadData.shootType ? leadData.shootType.replace('_', ' ').toUpperCase() : 'NEW';
+    
+    const mailOptions = {
+      from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_USER}>`,
+      to: salesEmail,
+      subject: ` NEW ${shootLabel} SHOOT LEAD: ${leadData.guestEmail}`,
+      
+      text: `New ${shootLabel} Lead Captured.\n\nClient: ${leadData.guestEmail}\nShoot Type: ${leadData.shootType}\nContent: ${leadData.contentType}\nDate: ${leadData.eventDate}\nTime: ${leadData.startTime} - ${leadData.endTime}\n\nCheck dashboard: https://beige.app/`,
+      
+      attachments: [{
+        filename: 'logo.png',
+        path: 'https://beigexmemehouse.s3.eu-north-1.amazonaws.com/beige/beige_logo_vb.png',
+        cid: 'beigelogo' 
+      }],
+      html: generateSalesLeadTemplate(leadData)
+    };
+
+    const info = await transporter.sendMail(mailOptions);
+    console.log('Sales notification sent successfully:', info.messageId);
+    return { success: true };
+  } catch (error) {
+    console.error('Error sending sales notification:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * HTML Template with Anti-Spam Preheader and Beige Logo
+ */
+const generateSalesLeadTemplate = (data) => {
+  const loginUrl = 'https://beige.app/';
+  const shootTitle = data.shootType ? data.shootType.replace('_', ' ').toUpperCase() : 'NEW';
+  
+  return `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="UTF-8">
+      <style>
+        :root { color-scheme: dark; }
+      </style>
+    </head>
+    <body style="margin: 0; padding: 0; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #0A0F0D; color: #ffffff;">
+      
+      <!-- SPAM SOLUTION: Preheader text (Invisible in email, shows in preview) -->
+      <div style="display:none; max-height:0px; max-width:0px; opacity:0; overflow:hidden; font-size:1px; line-height:1px;">
+        New interest captured for ${shootTitle} shoot. Client: ${data.guestEmail}. Review details inside the Beige platform.
+      </div>
+
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #0A0F0D; padding: 40px 10px;">
+        <tr>
+          <td align="center">
+            <table width="600" cellpadding="0" cellspacing="0" border="0" style="background-color: #000000; border: 1px solid rgba(232, 209, 171, 0.2); border-radius: 20px; overflow: hidden;">
+              
+              <!-- LOGO -->
+              <tr>
+                <td align="center" style="padding: 40px 0 20px 0;">
+                  <img src="cid:beigelogo" alt="Beige" width="160" style="display: block; border:0;">
+                </td>
+              </tr>
+
+              <!-- HEADER -->
+              <tr>
+                <td style="padding: 20px 40px; text-align: center; border-top: 1px solid rgba(232, 209, 171, 0.1); border-bottom: 1px solid rgba(232, 209, 171, 0.1); background-color: rgba(232, 209, 171, 0.02);">
+                  <h1 style="color: #E1CAA1; font-size: 24px; font-weight: 500; margin: 0; letter-spacing: 2px;">
+                    NEW ${shootTitle} SHOOT LEAD
+                  </h1>
+                </td>
+              </tr>
+
+              <!-- BODY -->
+              <tr>
+                <td style="padding: 40px;">
+                  <table width="100%" cellpadding="0" cellspacing="0">
+                    <tr>
+                      <td style="padding-bottom: 25px;">
+                        <p style="color: #E8D1AB; font-size: 11px; text-transform: uppercase; font-weight: 600; margin: 0 0 5px 0; letter-spacing: 1.5px;">Client Email</p>
+                        <p style="color: #ffffff; font-size: 16px; margin: 0; font-weight: 500;">${data.guestEmail}</p>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td style="padding-bottom: 25px;">
+                        <p style="color: #E8D1AB; font-size: 11px; text-transform: uppercase; font-weight: 600; margin: 0 0 5px 0; letter-spacing: 1.5px;">Service Requested</p>
+                        <p style="color: #ffffff; font-size: 16px; margin: 0; text-transform: capitalize;">${Array.isArray(data.contentType) ? data.contentType.join(' & ') : data.contentType}</p>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td style="padding-bottom: 25px;">
+                        <p style="color: #E8D1AB; font-size: 11px; text-transform: uppercase; font-weight: 600; margin: 0 0 5px 0; letter-spacing: 1.5px;">Event Schedule</p>
+                        <p style="color: #ffffff; font-size: 16px; margin: 0;">${data.eventDate || 'TBD'} • ${data.startTime || '--'} to ${data.endTime || '--'}</p>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td>
+                        <p style="color: #E8D1AB; font-size: 11px; text-transform: uppercase; font-weight: 600; margin: 0 0 5px 0; letter-spacing: 1.5px;">Editing Required</p>
+                        <p style="color: #ffffff; font-size: 16px; margin: 0;">${data.editsNeeded ? 'YES' : 'NO'}</p>
+                      </td>
+                    </tr>
+                  </table>
+
+                  <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-top: 45px;">
+                    <tr>
+                      <td align="center">
+                        <a href="${loginUrl}" style="background: linear-gradient(180deg, #3D342A 0%, #C79233 100%); color: #ffffff; padding: 18px 40px; text-decoration: none; border-radius: 50px; font-weight: 600; display: inline-block; letter-spacing: 1.5px; font-size: 13px; text-transform: uppercase;">
+                          LOGIN TO DASHBOARD &rarr;
+                        </a>
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+
+              <!-- FOOTER -->
+              <tr>
+                <td style="background-color: #050505; padding: 25px; text-align: center; border-top: 1px solid rgba(232, 209, 171, 0.1);">
+                  <p style="color: #4b5563; font-size: 10px; margin: 0; text-transform: uppercase; letter-spacing: 2px;">
+                    Internal Lead Notification • Beige AI Platform
+                  </p>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+  `;
+};
+
+/**
+ * Send notification to sales team when a payment is confirmed
+ */
+const sendPaymentSuccessSalesNotification = async (paymentData) => {
+  try {
+    const salesEmail = process.env.SALES_NOTIFICATION_EMAIL;
+    if (!salesEmail) return;
+
+    const shootLabel = paymentData.shootType ? paymentData.shootType.toUpperCase() : 'PROJECT';
+    
+    const mailOptions = {
+      from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_USER}>`,
+      to: salesEmail,
+      subject: `💰 PAYMENT RECEIVED: ${shootLabel} - ${paymentData.guestEmail}`,
+      text: `Payment of $${paymentData.amount} confirmed for ${paymentData.guestEmail}.`,
+      attachments: [{
+        filename: 'logo.png',
+        path: 'https://beigexmemehouse.s3.eu-north-1.amazonaws.com/beige/beige_logo_vb.png',
+        cid: 'beigelogo' 
+      }],
+      html: generatePaymentSuccessSalesTemplate(paymentData)
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log('Payment success notification sent to sales.');
+  } catch (error) {
+    console.error('Error sending payment success notification:', error);
+  }
+};
+
+/**
+ * HTML Template for Payment Confirmation (Sales View)
+ */
+const generatePaymentSuccessSalesTemplate = (data) => {
+  return `
+    <!DOCTYPE html>
+    <html>
+    <body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #0A0F0D; color: #ffffff;">
+      <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #0A0F0D; padding: 40px 20px;">
+        <tr>
+          <td align="center">
+            <table width="600" style="background-color: #000000; border: 1px solid #22c55e; border-radius: 20px; overflow: hidden;">
+              <tr>
+                <td align="center" style="padding: 30px;">
+                  <img src="cid:beigelogo" alt="Beige" width="140">
+                </td>
+              </tr>
+              <tr>
+                <td style="padding: 0 40px 40px; text-align: center;">
+                  <h1 style="color: #22c55e; font-size: 24px; margin: 0;">PAYMENT CONFIRMED</h1>
+                  <p style="color: #9ca3af; margin-top: 5px;">A new booking has been finalized.</p>
+                  
+                  <div style="margin-top: 30px; background: rgba(34, 197, 94, 0.05); border: 1px solid rgba(34, 197, 94, 0.2); border-radius: 12px; padding: 20px; text-align: left;">
+                    <p style="margin: 0 0 10px; color: #E8D1AB; font-size: 12px; font-weight: 600;">CLIENT EMAIL</p>
+                    <p style="margin: 0 0 20px; color: #ffffff; font-size: 16px;">${data.guestEmail}</p>
+                    
+                    <p style="margin: 0 0 10px; color: #E8D1AB; font-size: 12px; font-weight: 600;">AMOUNT PAID</p>
+                    <p style="margin: 0 0 20px; color: #22c55e; font-size: 24px; font-weight: bold;">$${parseFloat(data.amount).toFixed(2)}</p>
+                    
+                    <p style="margin: 0 0 10px; color: #E8D1AB; font-size: 12px; font-weight: 600;">SHOOT TYPE</p>
+                    <p style="margin: 0 0 20px; color: #ffffff; font-size: 16px; text-transform: capitalize;">${data.shootType || 'N/A'}</p>
+
+                    <p style="margin: 0 0 10px; color: #E8D1AB; font-size: 12px; font-weight: 600;">STRIPE ID</p>
+                    <p style="margin: 0; color: #9ca3af; font-size: 12px;">${data.paymentIntentId}</p>
+                  </div>
+
+                  <a href="https://beige.app/" style="margin-top: 30px; display: inline-block; background: #22c55e; color: #ffffff; padding: 15px 35px; text-decoration: none; border-radius: 50px; font-weight: bold;">OPEN DASHBOARD</a>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+  `;
+};
+
+/**
+ * Send notification to sales team when a new Client (user_type 3) registers
+ */
+const sendNewClientSignupNotification = async (userData) => {
+  try {
+    const salesEmail = process.env.SALES_NOTIFICATION_EMAIL;
+    if (!salesEmail) return;
+
+    const mailOptions = {
+      from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_USER}>`,
+      to: salesEmail,
+      subject: `👤 NEW CLIENT SIGNUP: ${userData.name}`,
+      text: `New Client Registered: ${userData.name} (${userData.email})`,
+      attachments: [{
+        filename: 'logo.png',
+        path: 'https://beigexmemehouse.s3.eu-north-1.amazonaws.com/beige/beige_logo_vb.png',
+        cid: 'beigelogo' 
+      }],
+      html: generateNewClientSignupTemplate(userData)
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log('New client signup notification sent to sales.');
+  } catch (error) {
+    console.error('Error sending client signup notification:', error);
+  }
+};
+
+/**
+ * HTML Template for New Client Signup
+ */
+const generateNewClientSignupTemplate = (data) => {
+  return `
+    <!DOCTYPE html>
+    <html>
+    <body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #0A0F0D; color: #ffffff;">
+      <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #0A0F0D; padding: 40px 20px;">
+        <tr>
+          <td align="center">
+            <table width="600" style="background-color: #000000; border: 1px solid rgba(232, 209, 171, 0.3); border-radius: 20px; overflow: hidden;">
+              <tr>
+                <td align="center" style="padding: 30px;">
+                  <img src="cid:beigelogo" alt="Beige" width="140">
+                </td>
+              </tr>
+              <tr>
+                <td style="padding: 0 40px 40px; text-align: center;">
+                  <h1 style="color: #E1CAA1; font-size: 24px; margin: 0; letter-spacing: 1px;">NEW CLIENT ACCOUNT</h1>
+                  <p style="color: #9ca3af; margin-top: 5px;">A new user has registered on the Beige platform.</p>
+                  
+                  <div style="margin-top: 30px; background: rgba(232, 209, 171, 0.05); border: 1px solid rgba(232, 209, 171, 0.1); border-radius: 12px; padding: 25px; text-align: left;">
+                    <p style="margin: 0 0 5px; color: #E8D1AB; font-size: 11px; font-weight: 600; text-transform: uppercase;">Name</p>
+                    <p style="margin: 0 0 20px; color: #ffffff; font-size: 16px;">${data.name}</p>
+                    
+                    <p style="margin: 0 0 5px; color: #E8D1AB; font-size: 11px; font-weight: 600; text-transform: uppercase;">Email Address</p>
+                    <p style="margin: 0 0 20px; color: #ffffff; font-size: 16px;">${data.email}</p>
+                    
+                    <p style="margin: 0 0 5px; color: #E8D1AB; font-size: 11px; font-weight: 600; text-transform: uppercase;">Phone Number</p>
+                    <p style="margin: 0 0 20px; color: #ffffff; font-size: 16px;">${data.phone_number || 'N/A'}</p>
+
+                    <p style="margin: 0 0 5px; color: #E8D1AB; font-size: 11px; font-weight: 600; text-transform: uppercase;">Instagram</p>
+                    <p style="margin: 0; color: #ffffff; font-size: 16px;">${data.instagram_handle || 'N/A'}</p>
+                  </div>
+
+                  <a href="https://beige.app/" style="margin-top: 35px; display: inline-block; background: linear-gradient(180deg, #3D342A 0%, #C79233 100%); color: #ffffff; padding: 16px 40px; text-decoration: none; border-radius: 50px; font-weight: bold; font-size: 13px; letter-spacing: 1px; text-transform: uppercase;">Open Admin Panel</a>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+  `;
+};
+
+/**
+ * Send notification to sales team when a new Crew Member (Creative) signs up
+ */
+const sendNewCrewSignupNotification = async (crewData) => {
+  try {
+    const salesEmail = process.env.SALES_NOTIFICATION_EMAIL;
+    if (!salesEmail) return;
+
+    const mailOptions = {
+      from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_USER}>`,
+      to: salesEmail,
+      subject: ` NEW CREATIVE SIGNUP: ${crewData.first_name} ${crewData.last_name}`,
+      text: `New Creative Profile: ${crewData.first_name} ${crewData.last_name} (${crewData.email})`,
+      attachments: [{
+        filename: 'logo.png',
+        path: 'https://beigexmemehouse.s3.eu-north-1.amazonaws.com/beige/beige_logo_vb.png',
+        cid: 'beigelogo' 
+      }],
+      html: generateNewCrewSignupTemplate(crewData)
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log('New crew signup notification sent to sales.');
+  } catch (error) {
+    console.error('Error sending crew signup notification:', error);
+  }
+};
+
+/**
+ * HTML Template for New Crew Signup
+ */
+const generateNewCrewSignupTemplate = (data) => {
+  return `
+    <!DOCTYPE html>
+    <html>
+    <body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #0A0F0D; color: #ffffff;">
+      <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #0A0F0D; padding: 40px 20px;">
+        <tr>
+          <td align="center">
+            <table width="600" style="background-color: #000000; border: 1px solid rgba(232, 209, 171, 0.3); border-radius: 20px; overflow: hidden;">
+              <tr>
+                <td align="center" style="padding: 30px;">
+                  <img src="cid:beigelogo" alt="Beige" width="140">
+                </td>
+              </tr>
+              <tr>
+                <td style="padding: 0 40px 40px; text-align: center;">
+                  <h1 style="color: #E1CAA1; font-size: 24px; margin: 0; letter-spacing: 1px;">NEW CREATIVE PROFILE</h1>
+                  <p style="color: #9ca3af; margin-top: 5px;">A new creator has started their application (Step 1).</p>
+                  
+                  <div style="margin-top: 30px; background: rgba(232, 209, 171, 0.05); border: 1px solid rgba(232, 209, 171, 0.1); border-radius: 12px; padding: 25px; text-align: left;">
+                    <p style="margin: 0 0 5px; color: #E8D1AB; font-size: 11px; font-weight: 600; text-transform: uppercase;">Name</p>
+                    <p style="margin: 0 0 20px; color: #ffffff; font-size: 16px;">${data.first_name} ${data.last_name}</p>
+                    
+                    <p style="margin: 0 0 5px; color: #E8D1AB; font-size: 11px; font-weight: 600; text-transform: uppercase;">Email / Contact</p>
+                    <p style="margin: 0 0 20px; color: #ffffff; font-size: 16px;">${data.email} <br> ${data.phone_number || 'No Phone'}</p>
+                    
+                    <p style="margin: 0 0 5px; color: #E8D1AB; font-size: 11px; font-weight: 600; text-transform: uppercase;">Location</p>
+                    <p style="margin: 0 0 20px; color: #ffffff; font-size: 16px;">${data.location || 'Not provided'}</p>
+
+                    <p style="margin: 0 0 5px; color: #E8D1AB; font-size: 11px; font-weight: 600; text-transform: uppercase;">Working Distance</p>
+                    <p style="margin: 0; color: #ffffff; font-size: 16px;">${data.working_distance || 0} miles</p>
+                  </div>
+
+                  <a href="https://beige.app/" style="margin-top: 35px; display: inline-block; background: linear-gradient(180deg, #3D342A 0%, #C79233 100%); color: #ffffff; padding: 16px 40px; text-decoration: none; border-radius: 50px; font-weight: bold; font-size: 13px; letter-spacing: 1px; text-transform: uppercase;">Review Profiles</a>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+    </body>
+    </html>
+  `;
+};
+
 module.exports = {
   sendTaskAssignmentEmail,
   sendVerificationOTP,
   sendPasswordResetEmail,
   sendWelcomeEmail,
   sendPaymentLinkEmail,
-  sendInvoiceEmail
+  sendInvoiceEmail,
+  sendSalesLeadNotification,
+  sendPaymentSuccessSalesNotification,
+  sendNewClientSignupNotification,
+  sendNewCrewSignupNotification
 };

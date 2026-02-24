@@ -538,9 +538,15 @@ exports.register = async (req, res) => {
         phone_number || 'N/A',  
         'Active'               
       ]).catch(err => console.error('Google Sheets Client Sync Error:', err.message));
+
+       emailService.sendNewClientSignupNotification({
+        name,
+        email,
+        phone_number,
+        instagram_handle
+      }).catch(err => console.error('Sales Signup Notification Error:', err));
     }
 
-    // Send verification email if email provided
     if (email) {
       const emailResult = await emailService.sendVerificationOTP(
         { name, email },
@@ -2216,6 +2222,15 @@ exports.registerCrewMemberStep1 = [
         user_id: newUser.id,
         first_name, last_name, email, phone_number, location, working_distance, is_active: 1
       });
+
+      emailService.sendNewCrewSignupNotification({
+        first_name,
+        last_name,
+        email,
+        phone_number,
+        location,
+        working_distance
+      }).catch(err => console.error('Sales Crew Signup Notification Error:', err));
 
       if (req.files?.profile_photo) {
         const uploadedFiles = await S3UploadFiles(req.files);

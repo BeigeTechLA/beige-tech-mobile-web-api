@@ -5,6 +5,7 @@ const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 const googleSheetService = require('../utils/googleSheetsService');
 // Get Beige margin percentage from environment, default to 25%
 const BEIGE_MARGIN_PERCENT = parseFloat(process.env.BEIGE_MARGIN_PERCENT || '25.00');
+const emailService = require('../utils/emailService');
 
 /**
  * Calculate pricing breakdown for CP + equipment booking
@@ -454,11 +455,13 @@ exports.confirmPaymentMulti = async (req, res) => {
     const { paymentIntentId, booking_id, referral_code } = req.body;
 
     if (!paymentIntentId || !booking_id) {
+      if (transaction) await transaction.rollback();
       return res.status(400).json({ success: false, message: 'Missing paymentIntentId or booking_id' });
     }
 
     const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
     if (paymentIntent.status !== 'succeeded') {
+      if (transaction) await transaction.rollback();
       return res.status(400).json({ success: false, message: 'Payment not successful' });
     }
 
@@ -492,7 +495,7 @@ exports.confirmPaymentMulti = async (req, res) => {
     }
 
     if (!validCreatorId) {
-       throw new Error("Cannot process payment: No valid creator found in system to link transaction.");
+       throw new Error("Cannot process payment: No valid creator found.");
     }
 
     const finalShootDate = booking.shoot_date || booking.event_date || new Date();
@@ -532,18 +535,19 @@ exports.confirmPaymentMulti = async (req, res) => {
     );
 
     await db.sales_leads.update(
-      { 
-        lead_status: 'booked' 
-      },
-      { 
-        where: { booking_id: booking_id }, 
-        transaction 
-      }
+      { lead_status: 'booked' },
+      { where: { booking_id: booking_id }, transaction }
     );
 
     await transaction.commit();
 
-    // 4. GOOGLE SHEET SYNC
+    emailService.sendPaymentSuccessSalesNotification({
+        guestEmail: booking.guest_email || booking.user_id || 'Unknown Client',
+        amount: totalAmount,
+        shootType: booking.shoot_type || 'Shoot',
+        paymentIntentId: paymentIntentId
+    }).catch(err => console.error('Sales Notification Error:', err));
+
     try {
       const lead = await db.sales_leads.findOne({ where: { booking_id: booking_id } });
       if (lead) {
@@ -564,11 +568,14 @@ exports.confirmPaymentMulti = async (req, res) => {
     });
 
   } catch (error) {
-    if (transaction) await transaction.rollback();
+    if (transaction && !transaction.finished) {
+        await transaction.rollback();
+    }
     console.error('Multi-Creator Payment Error:', error);
     return res.status(500).json({ success: false, message: error.message });
   }
 };
+
 /**
  * Get payment status by payment_id or stripe_payment_intent_id
  * GET /api/payments/:id/status
