@@ -2312,54 +2312,6 @@ exports.registerCrewMemberStep2 = async (req, res) => {
 /**
  * STEP 3: Additional Details & Files
  */
-// exports.registerCrewMemberStep3 = [
-//   upload.fields([
-//     { name: 'resume', maxCount: 1 },
-//     { name: 'portfolio', maxCount: 10 },
-//     { name: 'certifications', maxCount: 10 },
-//     { name: 'recent_work', maxCount: 50 }
-//   ]),
-
-//   async (req, res) => {
-//     try {
-//       const { crew_member_id, availability, certifications, social_media_links } = req.body;
-
-//       if (!crew_member_id) return res.status(400).json({ success: false, message: 'ID required' });
-
-//       const member = await crew_members.findOne({ where: { crew_member_id } });
-//       if (!member) return res.status(404).json({ success: false, message: 'Member not found' });
-
-//       // Update DB
-//       member.availability = JSON.stringify(availability);
-//       member.certifications = JSON.stringify(certifications);
-//       member.social_media_links = JSON.stringify(social_media_links);
-//       await member.save();
-
-//       // Handle S3 uploads
-//       const filePaths = await S3UploadFiles(req.files);
-//       if (filePaths.length > 0) {
-//         const filesToCreate = filePaths.map(f => ({
-//           crew_member_id,
-//           file_type: f.file_type,
-//           file_path: f.file_path,
-//           file_category: f.fieldname
-//         }));
-//         await crew_member_files.bulkCreate(filesToCreate);
-//       }
-
-//       await updateSheetRow('Crew_data', crew_member_id, {
-//         'N': JSON.stringify(social_media_links),
-//         // 'O': 'pending'
-//       });
-
-//       return res.status(200).json({ success: true, message: 'Step 3 completed. Registration finished!' });
-//     } catch (error) {
-//       console.error('Step 3 Error:', error);
-//       return res.status(500).json({ success: false, message: 'Server error' });
-//     }
-//   }
-// ];
-
 exports.registerCrewMemberStep3 = [
   upload.fields([
     { name: 'resume', maxCount: 1 },
@@ -2370,7 +2322,7 @@ exports.registerCrewMemberStep3 = [
 
   async (req, res) => {
     try {
-      // 1. Destructure portfolio_links from req.body
+      // 1. Added 'portfolio_links' to destructuring
       const { crew_member_id, availability, certifications, social_media_links, portfolio_links } = req.body;
 
       if (!crew_member_id) return res.status(400).json({ success: false, message: 'ID required' });
@@ -2378,58 +2330,145 @@ exports.registerCrewMemberStep3 = [
       const member = await crew_members.findOne({ where: { crew_member_id } });
       if (!member) return res.status(404).json({ success: false, message: 'Member not found' });
 
-      // Update DB for member details
+      // Update DB (Added a small check to fix the "Empty Query" crash on resubmission)
       member.availability = JSON.stringify(availability);
       member.certifications = JSON.stringify(certifications);
       member.social_media_links = JSON.stringify(social_media_links);
-      await member.save();
-
-      let entriesToCreate = [];
-
-      // 2. Handle Physical File Uploads (S3)
-      const filePaths = await S3UploadFiles(req.files);
-      if (filePaths.length > 0) {
-        const fileEntries = filePaths.map(f => ({
-          crew_member_id,
-          file_type: 'file', // Distinguish that this is a physical file
-          file_path: f.file_path,
-          tag: f.fieldname // Use 'tag' to store if it's 'resume', 'portfolio' etc.
-        }));
-        entriesToCreate.push(...fileEntries);
+      
+      if (member.changed()) {
+        await member.save();
       }
 
-      // 3. Handle External Portfolio Links (YouTube/Vimeo)
-      // Expecting portfolio_links to be an array of objects: [{url: '', platform: '', title: ''}]
+      // --- NEW: Handle both Files and Links together ---
+      let itemsToCreate = [];
+
+      // Handle S3 uploads (YOUR OLD LOGIC - UNCHANGED)
+      const filePaths = await S3UploadFiles(req.files);
+      if (filePaths.length > 0) {
+        const filesToCreate = filePaths.map(f => ({
+          crew_member_id,
+          file_type: f.file_type,
+          file_path: f.file_path,
+          file_category: f.fieldname
+        }));
+        itemsToCreate.push(...filesToCreate);
+      }
+
+      // Handle Portfolio Links (NEW LOGIC)
       if (portfolio_links) {
-        // If sent via Form-Data, it might be a string, so we parse it
-        const links = typeof portfolio_links === 'string' ? JSON.parse(portfolio_links) : portfolio_links;
-        
-        const linkEntries = links.map(link => ({
+        const parsedLinks = typeof portfolio_links === 'string' ? JSON.parse(portfolio_links) : portfolio_links;
+        const linksToCreate = parsedLinks.map(link => ({
           crew_member_id,
           file_type: 'link', 
           file_path: link.url,
-          tag: link.platform, // e.g., 'youtube'
-          title: link.title    // e.g., 'My Cinematography Reel'
+          file_category: 'portfolio_link',
+          tag: link.platform || null, // youtube, vimeo, etc.
+          title: link.title || null    // The name of the link
         }));
-        entriesToCreate.push(...linkEntries);
+        itemsToCreate.push(...linksToCreate);
       }
 
-      // 4. Bulk Insert everything into crew_member_files
-      if (entriesToCreate.length > 0) {
-        await crew_member_files.bulkCreate(entriesToCreate);
+      // Bulk create if there is anything to save
+      if (itemsToCreate.length > 0) {
+        await crew_member_files.bulkCreate(itemsToCreate);
       }
+      // ------------------------------------------------
 
       await updateSheetRow('Crew_data', crew_member_id, {
         'N': JSON.stringify(social_media_links),
       });
 
-      return res.status(200).json({ success: true, message: 'Step 3 completed successfully!' });
+      return res.status(200).json({ success: true, message: 'Step 3 completed. Registration finished!' });
     } catch (error) {
       console.error('Step 3 Error:', error);
       return res.status(500).json({ success: false, message: 'Server error' });
     }
   }
 ];
+
+// exports.registerCrewMemberStep3 = [
+//   upload.fields([
+//     { name: 'resume', maxCount: 1 },
+//     { name: 'portfolio', maxCount: 10 },
+//     { name: 'certifications', maxCount: 10 },
+//     { name: 'recent_work', maxCount: 50 }
+//   ]),
+
+//   async (req, res) => {
+//     try {
+//       const { crew_member_id, availability, certifications, social_media_links, portfolio_links } = req.body;
+
+//       if (!crew_member_id) return res.status(400).json({ success: false, message: 'ID required' });
+
+//       // 1. Fetch member
+//       const member = await crew_members.findOne({ where: { crew_member_id } });
+//       if (!member) return res.status(404).json({ success: false, message: 'Member not found' });
+
+//       // 2. Update Member Details only if data is actually different (Fixes ER_EMPTY_QUERY)
+//       const updateData = {
+//         availability: JSON.stringify(availability),
+//         certifications: JSON.stringify(certifications),
+//         social_media_links: JSON.stringify(social_media_links)
+//       };
+      
+//       // We use set() and changed() to check if we actually need to save
+//       member.set(updateData);
+//       if (member.changed()) {
+//         await member.save();
+//       }
+
+//       // 3. Clear OLD data for this step to allow re-submission without duplicates
+//       // We only delete these specific types to protect 'profile_photo' from Step 1
+//       await crew_member_files.destroy({
+//         where: {
+//           crew_member_id,
+//           file_type: ['resume', 'portfolio', 'certifications', 'recent_work', 'portfolio_link']
+//         }
+//       });
+
+//       let entriesToCreate = [];
+
+//       // 4. Handle Physical File Uploads (Using your original file_type naming)
+//       const filePaths = await S3UploadFiles(req.files);
+//       if (filePaths.length > 0) {
+//         const fileEntries = filePaths.map(f => ({
+//           crew_member_id,
+//           file_type: f.fieldname, // This keeps 'resume', 'portfolio' etc. as file_type
+//           file_path: f.file_path,
+//           tag: f.fieldname
+//         }));
+//         entriesToCreate.push(...fileEntries);
+//       }
+
+//       // 5. Handle Portfolio Links (YouTube/Vimeo)
+//       if (portfolio_links) {
+//         const links = typeof portfolio_links === 'string' ? JSON.parse(portfolio_links) : portfolio_links;
+//         const linkEntries = links.map(link => ({
+//           crew_member_id,
+//           file_type: 'portfolio_link', // Distinct type for links
+//           file_path: link.url,
+//           tag: link.platform || 'portfolio',
+//           title: link.title || null
+//         }));
+//         entriesToCreate.push(...linkEntries);
+//       }
+
+//       // 6. Final Bulk Insert
+//       if (entriesToCreate.length > 0) {
+//         await crew_member_files.bulkCreate(entriesToCreate);
+//       }
+
+//       await updateSheetRow('Crew_data', crew_member_id, {
+//         'N': JSON.stringify(social_media_links),
+//       });
+
+//       return res.status(200).json({ success: true, message: 'Step 3 completed successfully!' });
+//     } catch (error) {
+//       console.error('Step 3 Error:', error);
+//       return res.status(500).json({ success: false, message: 'Server error' });
+//     }
+//   }
+// ];
 
 /**
  * Get crew member details
