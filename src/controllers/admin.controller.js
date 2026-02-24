@@ -6483,16 +6483,14 @@ exports.getClientsShoots = async (req, res) => {
   }
 };
 
-
-
 exports.searchCrewForLead = async (req, res) => {
     try {
         const { lead_id, role_type, search_query, date } = req.query;
 
         let projectDate;
+        let currentBookingId = null;
 
         // -----------------------------
-        // 1️⃣ Resolve Project Date
         // -----------------------------
         if (lead_id) {
             const lead = await sales_leads.findOne({
@@ -6508,6 +6506,7 @@ exports.searchCrewForLead = async (req, res) => {
             }
 
             projectDate = lead.booking.event_date;
+            currentBookingId = lead.booking.booking_id; // Store to exclude already assigned
         } else {
             if (!date) {
                 return res.status(400).json({
@@ -6518,9 +6517,11 @@ exports.searchCrewForLead = async (req, res) => {
             projectDate = date;
         }
 
-        // -----------------------------
-        // 2️⃣ Get Busy Crew For That Date
-        // -----------------------------
+        // ---------------------------------------------------------
+        // 2️⃣ Get IDs to Exclude (Busy elsewhere OR already on this lead)
+        // ---------------------------------------------------------
+        
+        // A: Get crew busy on this date (Accepted elsewhere)
         const busyCrewRecords = await assigned_crew.findAll({
             where: { crew_accept: 1 },
             include: [{
@@ -6531,7 +6532,19 @@ exports.searchCrewForLead = async (req, res) => {
             attributes: ['crew_member_id']
         });
 
+        // B: Get crew already assigned to THIS specific lead (Pending, Accepted, or Rejected)
+        let alreadyAssignedToThisLead = [];
+        if (currentBookingId) {
+            const currentAssignments = await assigned_crew.findAll({
+                where: { booking_id: currentBookingId },
+                attributes: ['crew_member_id']
+            });
+            alreadyAssignedToThisLead = currentAssignments.map(a => a.crew_member_id);
+        }
+
+        // Combine unique IDs to exclude
         const busyIds = busyCrewRecords.map(r => r.crew_member_id);
+        const excludeIds = [...new Set([...busyIds, ...alreadyAssignedToThisLead])];
 
         // -----------------------------
         // 3️⃣ Role Mapping
@@ -6562,7 +6575,8 @@ exports.searchCrewForLead = async (req, res) => {
             is_active: true,
             is_available: true,
             is_crew_verified: 1,
-            crew_member_id: { [Op.notIn]: busyIds.length ? busyIds : [0] }
+            // Exclude anyone busy or already on this lead
+            crew_member_id: { [Op.notIn]: excludeIds.length ? excludeIds : [0] }
         };
 
         if (targetRoleIds.length > 0) {
@@ -6575,21 +6589,34 @@ exports.searchCrewForLead = async (req, res) => {
             crewWhere[Op.and] = [{
                 [Op.or]: [
                     { first_name: { [Op.like]: `%${search_query}%` } },
+                    { last_name: { [Op.like]: `%${search_query}%` } }, // Added last name search
                     { location: { [Op.like]: `%${search_query}%` } }
                 ]
             }];
         }
 
         // -----------------------------
-        // 5️⃣ Fetch Available Crew
+        // 5️⃣ Fetch Available Crew (Including Profile Photo)
         // -----------------------------
         const availableCrew = await crew_members.findAll({
             where: crewWhere,
+            include: [
+                {
+                    model: crew_member_files,
+                    as: "crew_member_files",
+                    attributes: ["file_path"],
+                    where: {
+                        is_active: 1,
+                        file_type: "profile_photo",
+                    },
+                    required: false, // Left join
+                }
+            ],
             limit: 50
         });
 
         // -----------------------------
-        // 6️⃣ Safe Role Parsing (UPDATED)
+        // 6️⃣ Safe Role Parsing & Photo Mapping
         // -----------------------------
         const crewWithRoles = availableCrew.map(crewMember => {
             let matchedRoles = [];
@@ -6601,11 +6628,9 @@ exports.searchCrewForLead = async (req, res) => {
                         rawRoles = crewMember.primary_role;
                     } else if (typeof crewMember.primary_role === "string") {
                         try {
-                            // Try parsing if it's a JSON string like ["9", "10"]
                             const parsed = JSON.parse(crewMember.primary_role);
                             rawRoles = Array.isArray(parsed) ? parsed : [parsed];
                         } catch {
-                            // If it's a simple string like "9" or "9,10"
                             rawRoles = crewMember.primary_role.split(',').map(r => r.trim());
                         }
                     } else {
@@ -6616,31 +6641,28 @@ exports.searchCrewForLead = async (req, res) => {
                 rawRoles = [];
             }
 
-            // Convert all raw role IDs to strings for comparison
             const stringRoleIds = rawRoles.map(String);
 
-            // Check against each group and add to array if found
-            if (stringRoleIds.some(id => ROLE_GROUPS.videographer.includes(id))) {
-                matchedRoles.push("videographer");
-            }
-            if (stringRoleIds.some(id => ROLE_GROUPS.photographer.includes(id))) {
-                matchedRoles.push("photographer");
-            }
-            if (stringRoleIds.some(id => ROLE_GROUPS.cinematographer.includes(id))) {
-                matchedRoles.push("cinematographer");
-            }
+            if (stringRoleIds.some(id => ROLE_GROUPS.videographer.includes(id))) matchedRoles.push("videographer");
+            if (stringRoleIds.some(id => ROLE_GROUPS.photographer.includes(id))) matchedRoles.push("photographer");
+            if (stringRoleIds.some(id => ROLE_GROUPS.cinematographer.includes(id))) matchedRoles.push("cinematographer");
+
+            // Extract profile photo path safely
+            const profilePhoto = crewMember.crew_member_files && crewMember.crew_member_files.length > 0 
+                ? crewMember.crew_member_files[0].file_path 
+                : null;
+
+            const crewJson = crewMember.toJSON();
+            delete crewJson.crew_member_files; // Clean up the raw include
 
             return {
-                ...crewMember.toJSON(),
-                // Return as an array or a comma-separated string
+                ...crewJson,
+                profile_photo: profilePhoto,
                 role_names: matchedRoles.length > 0 ? matchedRoles : ["Unspecified"],
                 role: matchedRoles.length > 0 ? matchedRoles.join(", ") : "Unspecified"
             };
         });
 
-        // -----------------------------
-        // 7️⃣ Response
-        // -----------------------------
         res.json({
             success: true,
             project_date: projectDate,
@@ -6656,6 +6678,7 @@ exports.searchCrewForLead = async (req, res) => {
         });
     }
 };
+
 exports.assignCrewBulkSmart = async (req, res) => {
     try {
         const assigned_by_user_id = req.user?.userId;

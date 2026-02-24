@@ -1,5 +1,5 @@
 const { sales_leads, sales_lead_activities, stream_project_booking, users, discount_codes, payment_links,  quotes, assigned_crew, crew_members,
-  quote_line_items } = require('../models');
+  quote_line_items, crew_member_files } = require('../models');
 const { Op, Sequelize } = require('sequelize');
 const constants = require('../utils/constants');
 const leadAssignmentService = require('../services/lead-assignment.service');
@@ -565,7 +565,7 @@ exports.trackEarlyBookingInterest = async (req, res) => {
                 guest_email: guest_email,
                 client_name: client_name || null,
                 lead_type: 'self_serve',
-                lead_status: 'in_progress_self_serve'
+                lead_status: 'book_a_shoot_lead_created'
             });
             
             await sales_lead_activities.create({
@@ -1232,41 +1232,76 @@ exports.getLeadById = async (req, res) => {
     const lead = await sales_leads.findOne({
       where: { lead_id: id },
       include: [
-        { model: users, as: 'assigned_sales_rep', attributes: ['id', 'name', 'email'] },
+        {
+          model: users,
+          as: "assigned_sales_rep",
+          attributes: ["id", "name", "email"],
+        },
         {
           model: stream_project_booking,
-          as: 'booking',
+          as: "booking",
           include: [
             {
               model: quotes,
-              as: 'primary_quote',
-              include: [{ model: quote_line_items, as: 'line_items' }]
+              as: "primary_quote",
+              include: [{ model: quote_line_items, as: "line_items" }],
             },
             {
               model: assigned_crew,
-              as: 'assigned_crews',
+              as: "assigned_crews",
               required: false,
               where: { is_active: 1 },
-              attributes: ['crew_member_id', 'crew_accept', 'status', 'is_active'],
+              attributes: [
+                "crew_member_id",
+                "crew_accept",
+                "status",
+                "is_active",
+              ],
               include: [
                 {
                   model: crew_members,
-                  as: 'crew_member',
-                  attributes: ['crew_member_id', 'first_name', 'last_name', 'primary_role', 'hourly_rate']
-                }
-              ]
-            }
-          ]
+                  as: "crew_member",
+                  attributes: [
+                    "crew_member_id",
+                    "first_name",
+                    "last_name",
+                    "primary_role",
+                    "hourly_rate",
+                  ],
+                  include: [
+                    {
+                      model: crew_member_files,
+                      as: "crew_member_files",
+                      attributes: ["file_path"],
+                      where: {
+                        is_active: 1,
+                        file_type: "profile_photo",
+                      },
+                      required: false,
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
         },
-        { model: discount_codes, as: 'discount_codes' },
-        { model: payment_links, as: 'payment_links' },
+        { model: discount_codes, as: "discount_codes" },
+        { model: payment_links, as: "payment_links" },
         {
           model: sales_lead_activities,
-          as: 'activities',
-          include: [{ model: users, as: 'performed_by', attributes: ['id', 'name'] }]
-        }
+          as: "activities",
+          include: [
+            { model: users, as: "performed_by", attributes: ["id", "name"] },
+          ],
+        },
       ],
-      order: [[{ model: sales_lead_activities, as: 'activities' }, 'created_at', 'DESC']]
+      order: [
+        [
+          { model: sales_lead_activities, as: "activities" },
+          "created_at",
+          "DESC",
+        ],
+      ],
     });
 
     if (!lead) {
@@ -1748,6 +1783,13 @@ exports.updateBookingCrew = async (req, res) => {
       reference_links: reference_links // Store links
     });
 
+    await sales_leads.update(
+  { lead_status: 'booking_in_progress' },
+  { 
+    where: { booking_id: parseInt(bookingId) },
+    limit: 1 // Safety check
+  }
+);
     return res.json({
       success: true,
       message: 'Crew roles and project details saved',

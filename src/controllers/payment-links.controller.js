@@ -716,6 +716,18 @@ exports.sendStripeInvoice = async (req, res) => {
         console.error("Email failed to send but invoice was generated:", emailResult.error);
     }
 
+    const associatedLead = await db.sales_leads.findOne({ where: { booking_id: parsedBookingId } });
+if (associatedLead) {
+    await associatedLead.update({ lead_status: 'proposal_sent' });
+    
+    await db.sales_lead_activities.create({
+        lead_id: associatedLead.lead_id,
+        activity_type: 'invoice_sent',
+        activity_data: { invoice_number: invoiceDetails.invoiceNumber },
+        performed_by_user_id: req.userId
+    });
+}
+
     return res.status(200).json({
       success: true,
       message: invoiceDetails.isPaid ? 'Receipt sent successfully' : 'Invoice sent successfully',

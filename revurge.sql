@@ -172,3 +172,7 @@ CREATE UNIQUE INDEX idx_stream_project_booking_stripe_invoice_id
 
 CREATE INDEX idx_stream_project_booking_stripe_customer_id
   ON stream_project_booking (stripe_customer_id);
+
+--24-02-26
+
+ALTER TABLE sales_leads MODIFY COLUMN lead_status VARCHAR(100) NOT NULL DEFAULT 'book_a_shoot_lead_created';

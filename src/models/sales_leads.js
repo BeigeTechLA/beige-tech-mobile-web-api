@@ -41,14 +41,7 @@ module.exports = function(sequelize, DataTypes) {
       allowNull: false
     },
     lead_status: {
-      type: DataTypes.ENUM(
-        'in_progress_self_serve',
-        'in_progress_sales_assisted',
-        'payment_link_sent',
-        'discount_applied',
-        'booked',
-        'abandoned'
-      ),
+      type: DataTypes.STRING(100),
       allowNull: false,
       defaultValue: 'in_progress_self_serve'
     },
