@@ -1786,6 +1786,138 @@ exports.uploadProfileFiles = [
   }
 ];
 
+exports.addPortfolioLinks = async (req, res) => {
+  try {
+    const crew_member_id = req.user?.crew_member_id || req.body.crew_member_id;
+    const { portfolio_links } = req.body;
+
+    // 1. Validation
+    if (!crew_member_id) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        error: true,
+        code: constants.BAD_REQUEST.code,
+        message: 'Crew member ID is required',
+        data: null
+      });
+    }
+
+    if (!portfolio_links || (Array.isArray(portfolio_links) && portfolio_links.length === 0)) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        error: true,
+        code: constants.BAD_REQUEST.code,
+        message: 'No links provided',
+        data: null
+      });
+    }
+
+    // 2. Parse links if they are sent as a string (common in multipart/form-data)
+    let linksArray = [];
+    try {
+      linksArray = typeof portfolio_links === 'string' ? JSON.parse(portfolio_links) : portfolio_links;
+    } catch (e) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        error: true,
+        code: constants.BAD_REQUEST.code,
+        message: 'Invalid JSON format for links',
+        data: null
+      });
+    }
+
+    // 3. Prepare records for the database
+    const records = linksArray.map((link) => {
+      return {
+        crew_member_id,
+        file_type: 'link',      // Unique type for links
+        file_path: link.url,              // The actual URL (YouTube/Vimeo)
+        title: link.title || "Untitled",  // User provided title
+        tag: link.platform || "other",    // Platform name (youtube, vimeo, drive)
+        is_active: 1
+      };
+    });
+
+    // 4. Save to database
+    await crew_member_files.bulkCreate(records);
+
+    // 5. Success Response (Matching your format)
+    return res.status(constants.OK.code).json({
+      error: false,
+      code: constants.OK.code,
+      message: 'Portfolio links added successfully',
+      data: {}
+    });
+
+  } catch (err) {
+    console.error('addPortfolioLinks error:', err);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      error: true,
+      code: constants.INTERNAL_SERVER_ERROR.code,
+      message: constants.INTERNAL_SERVER_ERROR.message,
+      data: null
+    });
+  }
+};
+
+exports.editPortfolioLink = async (req, res) => {
+  try {
+    const crew_member_id = req.user?.crew_member_id || req.body.crew_member_id;
+    const { crew_files_id } = req.params;
+    const { url, title, platform } = req.body;
+
+    // 1. Validation
+    if (!crew_files_id || !crew_member_id) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        error: true,
+        code: constants.BAD_REQUEST.code,
+        message: 'File ID and Member ID are required',
+        data: null
+      });
+    }
+
+    // 2. Find the existing link record
+    const linkRecord = await crew_member_files.findOne({
+      where: {
+        crew_files_id,
+        crew_member_id,
+        file_type: ['link', 'portfolio_link'], // Ensure we are only editing a link
+        is_active: 1
+      }
+    });
+
+    if (!linkRecord) {
+      return res.status(constants.NOT_FOUND.code).json({
+        error: true,
+        code: constants.NOT_FOUND.code,
+        message: 'Portfolio link not found',
+        data: null
+      });
+    }
+
+    // 3. Update the fields (only if they are provided in the request)
+    await linkRecord.update({
+      file_path: url || linkRecord.file_path,
+      title: title || linkRecord.title,
+      tag: platform || linkRecord.tag
+    });
+
+    // 4. Success Response
+    return res.status(constants.OK.code).json({
+      error: false,
+      code: constants.OK.code,
+      message: 'Portfolio link updated successfully',
+      data: {}
+    });
+
+  } catch (err) {
+    console.error('editPortfolioLink error:', err);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      error: true,
+      code: constants.INTERNAL_SERVER_ERROR.code,
+      message: constants.INTERNAL_SERVER_ERROR.message,
+      data: null
+    });
+  }
+};
+
 exports.deleteProfileFile = async (req, res) => {
   try {
     const crew_member_id = req.body.crew_member_id;

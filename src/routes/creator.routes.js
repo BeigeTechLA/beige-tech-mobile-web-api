@@ -24,6 +24,8 @@ router.post('/get-crew-equipment-count', creator.getCrewEquipmentCounts);
 router.post('/get-profile-detail', creator.getProfile);
 router.post('/edit-profile', creator.editProfile);
 router.post('/profile/files/:file_type', creator.uploadProfileFiles);
+router.post('/profile/add-portfolio-links', creator.addPortfolioLinks);
+router.post('/profile/edit-portfolio-link/:crew_files_id', creator.editPortfolioLink);
 router.delete('/profile-file/:crew_files_id', creator.deleteProfileFile);
 router.get('/equipment', creator.getMyEquipment);
 router.get('/equipment/:equipment_id', creator.getMyEquipmentById);
