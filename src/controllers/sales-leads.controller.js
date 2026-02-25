@@ -577,15 +577,15 @@ exports.trackEarlyBookingInterest = async (req, res) => {
 
             assignedRep = await leadAssignmentService.autoAssignLead(lead.lead_id);
 
-          // emailService.sendSalesLeadNotification({
-          //   guestEmail: guest_email,
-          //   shootType: shoot_type,
-          //   contentType: content_type,
-          //   eventDate: event_date,
-          //   startTime: start_time,
-          //   endTime: end_time,
-          //   editsNeeded: edits_needed
-          // }).catch(err => console.error('Sales Email Error:', err));
+          emailService.sendSalesLeadNotification({
+            guestEmail: guest_email,
+            shootType: shoot_type,
+            contentType: content_type,
+            eventDate: event_date,
+            startTime: start_time,
+            endTime: end_time,
+            editsNeeded: edits_needed
+          }).catch(err => console.error('Sales Email Error:', err));
         } else {
           await lead.update({ last_activity_at: new Date() });
         }
