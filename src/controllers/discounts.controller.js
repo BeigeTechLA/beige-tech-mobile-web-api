@@ -150,7 +150,8 @@ exports.generateDiscountCode = async (req, res) => {
 exports.validateDiscountCode = async (req, res) => {
   try {
     const { code } = req.params;
-    const { booking_id } = req.query; // Optional query param for booking validation
+    const { booking_id } = req.query;
+    const upperCode = code.toUpperCase();
 
     if (!code) {
       return res.status(constants.BAD_REQUEST.code).json({
@@ -159,9 +160,33 @@ exports.validateDiscountCode = async (req, res) => {
       });
     }
 
-    // Validate with optional booking_id
+    if (booking_id) {
+      const booking = await stream_project_booking.findOne({
+        where: { stream_project_booking_id: booking_id },
+        include: [{
+          model: quotes,
+          as: 'primary_quote' 
+        }]
+      });
+
+
+      if (booking && booking.primary_quote && booking.primary_quote.applied_discount_code === upperCode) {
+        return res.json({
+          success: true,
+          valid: true,
+          already_applied: true,
+          data: {
+            code: upperCode,
+            discount_type: booking.primary_quote.discount_type,
+            discount_value: parseFloat(booking.primary_quote.discount_value),
+            discount_amount: parseFloat(booking.primary_quote.discount_total)
+          }
+        });
+      }
+    }
+
     const result = await discountService.checkCodeAvailability(
-      code.toUpperCase(),
+      upperCode,
       booking_id ? parseInt(booking_id) : null
     );
 
@@ -169,12 +194,11 @@ exports.validateDiscountCode = async (req, res) => {
       return res.status(constants.BAD_REQUEST.code).json({
         success: false,
         valid: false,
-        message: result.reason
+        message: result.reason || 'Invalid discount code'
       });
     }
 
     const discountCode = result.discountCode;
-
     res.json({
       success: true,
       valid: true,

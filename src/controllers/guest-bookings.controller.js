@@ -1,5 +1,5 @@
 const db = require('../models');
-const { stream_project_booking, assigned_crew, crew_members, crew_member_files, quotes, quote_line_items } = require('../models');
+const { stream_project_booking, assigned_crew, crew_members, crew_member_files, quotes, quote_line_items, discount_codes } = require('../models');
 const constants = require('../utils/constants');
 const { formatLocationResponse } = require('../utils/locationHelpers');
 const { appendBookingToSheet } = require('../utils/googleSheetsService');
@@ -1091,6 +1091,12 @@ exports.getBookingPaymentDetails = async (req, res) => {
               model: quote_line_items,
               as: 'line_items',
               required: false
+            },
+            {
+              model: discount_codes,
+              as: 'discount_code',
+              required: false,
+              attributes: ['code']
             }
           ]
         }
@@ -1104,7 +1110,7 @@ exports.getBookingPaymentDetails = async (req, res) => {
       });
     }
 
-    // If creator_id is provided and not already assigned, assign it
+    // Logic for creator assignment (keeping your existing code)
     let assignedCreators = booking.assigned_crews || [];
     if (creator_id) {
       const alreadyAssigned = assignedCreators.some(
@@ -1112,10 +1118,8 @@ exports.getBookingPaymentDetails = async (req, res) => {
       );
 
       if (!alreadyAssigned) {
-        // Verify creator exists
         const creator = await crew_members.findByPk(creator_id);
         if (creator) {
-          // Assign creator to booking
           const newAssignment = await assigned_crew.create({
             project_id: id,
             crew_member_id: creator_id,
@@ -1123,8 +1127,6 @@ exports.getBookingPaymentDetails = async (req, res) => {
             is_active: 1,
             crew_accept: 0
           });
-
-          // Add to response
           assignedCreators.push({
             ...newAssignment.toJSON(),
             crew_member: creator
@@ -1133,24 +1135,12 @@ exports.getBookingPaymentDetails = async (req, res) => {
       }
     }
 
-    // Role mapping (same as creators controller)
-    const roleMap = {
-      1: 'Videographer',
-      2: 'Photographer',
-      3: 'Editor',
-      4: 'Producer',
-      5: 'Director',
-      6: 'Cinematographer'
-    };
+    const roleMap = { 1: 'Videographer', 2: 'Photographer', 3: 'Editor', 4: 'Producer', 5: 'Director', 6: 'Cinematographer' };
 
-    // Format creators for response (flattened structure for frontend)
     const creators = assignedCreators.map(ac => {
       if (!ac.crew_member) return null;
-
       const profileImage = ac.crew_member.crew_member_files && ac.crew_member.crew_member_files.length > 0
-        ? ac.crew_member.crew_member_files[0].file_path
-        : null;
-
+        ? ac.crew_member.crew_member_files[0].file_path : null;
       return {
         assignment_id: ac.id,
         crew_member_id: ac.crew_member.crew_member_id,
@@ -1174,7 +1164,7 @@ exports.getBookingPaymentDetails = async (req, res) => {
         booking: {
           booking_id: booking.stream_project_booking_id,
           project_name: booking.project_name,
-          shoot_name: booking.project_name, // Alias for frontend compatibility
+          shoot_name: booking.project_name,
           guest_email: booking.guest_email,
           description: booking.description,
           event_type: booking.event_type,
@@ -1194,6 +1184,11 @@ exports.getBookingPaymentDetails = async (req, res) => {
           quote_id: booking.primary_quote.quote_id,
           shoot_hours: parseFloat(booking.primary_quote.shoot_hours),
           subtotal: parseFloat(booking.primary_quote.subtotal),
+          
+          applied_discount_code: booking.primary_quote.discount_code ? booking.primary_quote.discount_code.code : null,
+          discount_total: parseFloat(booking.primary_quote.discount_amount || 0),
+          discount_percentage: parseFloat(booking.primary_quote.discount_percent || 0),
+          
           discountPercent: parseFloat(booking.primary_quote.discount_percent || 0),
           discountAmount: parseFloat(booking.primary_quote.discount_amount || 0),
           price_after_discount: parseFloat(booking.primary_quote.price_after_discount || booking.primary_quote.subtotal),
@@ -1216,14 +1211,10 @@ exports.getBookingPaymentDetails = async (req, res) => {
 
   } catch (error) {
     console.error('Error fetching booking payment details:', error);
-    console.error('Error stack:', error.stack);
-    console.error('Error name:', error.name);
-    console.error('Error message:', error.message);
     res.status(constants.INTERNAL_SERVER_ERROR.code).json({
       success: false,
       message: 'Failed to fetch booking payment details',
-      error: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      error: error.message
     });
   }
 };
