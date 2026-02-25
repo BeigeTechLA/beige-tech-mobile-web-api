@@ -469,10 +469,14 @@ exports.confirmPaymentMulti = async (req, res) => {
       where: { stripe_payment_intent_id: paymentIntentId }
     });
 
-    if (existingPayment) {
-      await transaction.rollback();
-      return res.status(409).json({ success: false, message: 'Payment already processed' });
-    }
+   if (existingPayment) {
+     await transaction.rollback();
+     return res.status(200).json({
+       success: true,
+       message: "Payment already processed (Webhook completed first)",
+       data: { payment_id: existingPayment.payment_id, booking_id },
+     });
+   }
 
     const booking = await db.stream_project_booking.findByPk(booking_id);
     if (!booking) {
