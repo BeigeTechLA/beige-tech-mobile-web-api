@@ -1321,6 +1321,23 @@ exports.getLeadById = async (req, res) => {
 
     const leadJson = lead.toJSON();
 
+    let final_phone = leadJson.phone || leadJson.phone_number;
+
+    if (!final_phone && leadJson.booking?.description) {
+        const phoneMatch = leadJson.booking.description.match(/Phone:\s*(\d+)/i);
+        if (phoneMatch && phoneMatch[1]) {
+            final_phone = phoneMatch[1];
+        }
+    }
+
+    if (!final_phone && (leadJson.user_id || leadJson.booking?.user_id)) {
+        const targetUserId = leadJson.user_id || leadJson.booking.user_id;
+        const userRecord = await users.findByPk(targetUserId, { attributes: ['phone_number'] });
+        if (userRecord) {
+            final_phone = userRecord.phone_number;
+        }
+    }
+
     let active_payment_link = null;
     const pLinks = leadJson.payment_links || leadJson.paymentLinks;
     const dCodes = leadJson.discount_codes || leadJson.discountCodes || [];
@@ -1411,7 +1428,6 @@ exports.getLeadById = async (req, res) => {
       let requestedRoles = {};
       try { requestedRoles = typeof leadJson.booking.crew_roles === 'string' ? JSON.parse(leadJson.booking.crew_roles) : leadJson.booking.crew_roles; } catch (e) { requestedRoles = {}; }
       
-      // Safety check for requestedRoles being an object
       if (requestedRoles && typeof requestedRoles === 'object') {
           Object.keys(requestedRoles).forEach(role => {
             fulfillmentSummary[role] = { required: requestedRoles[role], pending: 0, accepted: 0, rejected: 0, display: `0/${requestedRoles[role]}` };
@@ -1421,21 +1437,17 @@ exports.getLeadById = async (req, res) => {
       if (leadJson.booking.assigned_crews) {
         leadJson.booking.assigned_crews.forEach(ac => {
           let crewRoleIds = [];
-          
-          // FIX: Safer primary_role parsing
           let rawRole = ac.crew_member?.primary_role;
           if (typeof rawRole === 'string') {
               try {
                   crewRoleIds = JSON.parse(rawRole);
               } catch (e) {
-                  // If it's a string but not JSON array (e.g. "9"), wrap it in an array
                   crewRoleIds = [rawRole];
               }
           } else if (rawRole !== null && rawRole !== undefined) {
               crewRoleIds = rawRole;
           }
 
-          // Ensure crewRoleIds is definitely an array before calling .map
           if (!Array.isArray(crewRoleIds)) {
               crewRoleIds = crewRoleIds ? [crewRoleIds] : [];
           }
@@ -1474,6 +1486,7 @@ exports.getLeadById = async (req, res) => {
       success: true,
       data: {
         ...leadJson,
+        phone: final_phone,
         selected_crew_ids: selectedCrewIds,
         intent,
         intent_source,
