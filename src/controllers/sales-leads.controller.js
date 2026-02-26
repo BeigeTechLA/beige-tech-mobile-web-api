@@ -1104,30 +1104,35 @@ exports.createSalesAssistedLead = async (req, res) => {
 //   }
 // };
 
+
 exports.getLeads = async (req, res) => {
   try {
     const {
       page = 1,
       limit = 20,
-      status,
-      lead_type,
+      status,        // UI Label: "Signed Up - Lead Created"
+      lead_type,     // "self_serve" or "sales_assisted"
       assigned_to,
       search,
       start_date,
-      end_date
+      end_date,
+      intent,
+      booking_status // Fallback key
     } = req.query;
 
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const pageNumber = parseInt(page);
+    const pageLimit = parseInt(limit);
+    const offset = (pageNumber - 1) * pageLimit;
 
-    const whereClause = { [Op.and]: [] };
+    const whereClause = {};
 
+    // 1. Database-level filters
     if (start_date && end_date) {
       whereClause.created_at = {
         [Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`]
       };
     }
 
-    if (status) whereClause.lead_status = status;
     if (lead_type) whereClause.lead_type = lead_type;
 
     if (assigned_to) {
@@ -1136,15 +1141,15 @@ exports.getLeads = async (req, res) => {
     }
 
     if (search) {
-      whereClause[Op.and].push({
-        [Op.or]: [
-          { client_name: { [Op.like]: `%${search}%` } },
-          { guest_email: { [Op.like]: `%${search}%` } }
-        ]
-      });
+      whereClause[Op.or] = [
+        { client_name: { [Op.like]: `%${search}%` } },
+        { guest_email: { [Op.like]: `%${search}%` } },
+        { phone: { [Op.like]: `%${search}%` } }
+      ];
     }
 
-    const { count, rows: leads } = await sales_leads.findAndCountAll({
+    // Fetch leads
+    const leads = await sales_leads.findAll({
       where: whereClause,
       include: [
         {
@@ -1155,79 +1160,75 @@ exports.getLeads = async (req, res) => {
         {
           model: stream_project_booking,
           as: 'booking',
-          attributes: [
-            'stream_project_booking_id',
-            'event_date',
-            'event_type',
-            'shoot_type',
-            'duration_hours',
-            'crew_roles',
-            'payment_id',
-            'start_time',
-            'end_time',
-            'video_edit_types',
-            'photo_edit_types',
-            'is_draft'
-          ],
           include: [
             {
               model: quotes,
               as: 'primary_quote',
-              include: [
-                {
-                  model: quote_line_items,
-                  as: 'line_items'
-                }
-              ]
+              include: [{ model: quote_line_items, as: 'line_items' }]
             }
           ]
         }
       ],
-      limit: parseInt(limit),
-      offset,
       order: [['created_at', 'DESC']]
     });
 
-    const leadsWithPricing = await Promise.all(
+    // 2. Process leads to compute dynamic fields
+    let processedLeads = await Promise.all(
       leads.map(async (lead) => {
         const leadJson = lead.toJSON();
-
         const pricingData = await calculateLeadPricing(lead.booking);
 
-        const intent =
-          lead.intent ??
-          leadAssignmentService.getLeadIntent({
-            lead,
-            booking: lead.booking
-          });
+        // Calculate dynamic status and intent strings
+        const computedIntent = lead.intent ?? leadAssignmentService.getLeadIntent({ lead, booking: lead.booking });
+        const computedBookingStatus = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
 
         return {
           ...leadJson,
           potential_value: pricingData ? pricingData.total : 0,
-          pricing_details: pricingData || null,
+          booking_status: computedBookingStatus, 
+          intent: computedIntent,
           payment_status: lead.booking?.payment_id ? 'paid' : 'unpaid',
-          intent,
-          intent_source: lead.intent ? 'manual' : 'system',
-          booking_status: leadAssignmentService.getLeadBookingStatus(
-            lead,
-            lead.booking
-          )
         };
       })
     );
 
+    // 3. Apply Post-Process Filters (Matches UI strings)
+    
+    // Filter by Booking Status
+    const activeStatusFilter = (status || booking_status);
+    if (activeStatusFilter && activeStatusFilter !== 'All') {
+      processedLeads = processedLeads.filter((lead) => {
+        // Normalize strings: replace en-dashes with hyphens and trim
+        const leadStat = lead.booking_status.replace('–', '-').trim();
+        const filterStat = activeStatusFilter.replace('–', '-').trim();
+        return leadStat === filterStat;
+      });
+    }
+
+    // Filter by Intent
+    if (intent && intent !== 'All') {
+      processedLeads = processedLeads.filter(
+        (lead) => lead.intent.toLowerCase() === intent.toLowerCase().trim()
+      );
+    }
+
+    // 4. Manual Pagination after filtering
+    const total = processedLeads.length;
+    const paginatedLeads = processedLeads.slice(offset, offset + pageLimit);
+
     res.json({
       success: true,
       data: {
-        leads: leadsWithPricing,
+        leads: paginatedLeads,
         pagination: {
-          total: count,
-          page: parseInt(page),
-          totalPages: Math.ceil(count / limit)
+          total,
+          page: pageNumber,
+          totalPages: Math.ceil(total / pageLimit)
         }
       }
     });
   } catch (error) {
+    console.error('getLeads Error:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to fetch leads',
@@ -1235,7 +1236,6 @@ exports.getLeads = async (req, res) => {
     });
   }
 };
-
 exports.getLeadById = async (req, res) => {
   try {
     const { id } = req.params;
@@ -2226,7 +2226,7 @@ exports.finalizeCreateDeal = async (req, res) => {
         lead_type,
         intent,
         lead_source,
-        lead_status: 'in_progress_sales_assisted',
+        lead_status: 'manual_lead_created',
         is_active: 1,
       },
       { transaction: tx }

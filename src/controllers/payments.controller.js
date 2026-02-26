@@ -236,8 +236,9 @@ exports.confirmPayment = async (req, res) => {
     });
 
     if (existingPayment) {
-      return res.status(409).json({
-        success: false,
+      await transaction.rollback();
+      return res.status(200).json({
+        success: true,
         message: 'Payment already processed',
         data: {
           payment_id: existingPayment.payment_id
@@ -258,7 +259,7 @@ exports.confirmPayment = async (req, res) => {
       creator_id,
       user_id: user_id || null,
       guest_email: guest_email || null,
-      hours,
+      hours: parseFloat(hours) > 0 ? parseFloat(hours) : 1,
       hourly_rate,
       cp_cost: pricing.cp_cost,
       equipment_cost: pricing.equipment_cost,
@@ -359,8 +360,9 @@ exports.confirmPayment = async (req, res) => {
     });
 
   } catch (error) {
-    await transaction.rollback();
-
+    if (transaction && !transaction.finished) {
+      await transaction.rollback();
+    }
     console.error('Payment Confirmation Error:', error);
 
     return res.status(500).json({
@@ -469,14 +471,14 @@ exports.confirmPaymentMulti = async (req, res) => {
       where: { stripe_payment_intent_id: paymentIntentId }
     });
 
-   if (existingPayment) {
-     await transaction.rollback();
-     return res.status(200).json({
-       success: true,
-       message: "Payment already processed (Webhook completed first)",
-       data: { payment_id: existingPayment.payment_id, booking_id },
-     });
-   }
+    if (existingPayment) {
+      await transaction.rollback();
+      return res.status(200).json({
+        success: true,
+        message: "Payment already processed (Webhook completed first)",
+        data: { payment_id: existingPayment.payment_id, booking_id },
+      });
+    }
 
     const booking = await db.stream_project_booking.findByPk(booking_id);
     if (!booking) {
@@ -506,13 +508,16 @@ exports.confirmPaymentMulti = async (req, res) => {
     const totalAmount = paymentIntent.amount / 100;
     const chargeId = paymentIntent.charges?.data[0]?.id || null;
 
+    const rawHours = booking.shoot_hours || booking.duration_hours || 1;
+    const finalHours = parseFloat(rawHours) > 0 ? parseFloat(rawHours) : 1;
+
     const payment = await db.payment_transactions.create({
       stripe_payment_intent_id: paymentIntentId,
       stripe_charge_id: chargeId,
       creator_id: validCreatorId,
       user_id: booking.user_id || null,
       guest_email: booking.guest_email || null,
-      hours: booking.shoot_hours || 0,
+      hours: finalHours,
       hourly_rate: 0,
       cp_cost: 0,
       equipment_cost: 0,
