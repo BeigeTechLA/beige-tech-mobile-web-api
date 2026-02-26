@@ -1,4 +1,4 @@
-const { crew_members, crew_member_files, crew_roles } = require('../models');
+const { crew_members, crew_member_files, crew_roles, skills_master, equipment } = require('../models');
 const { Op } = require('sequelize');
 const { parseLocation, filterByProximity, formatLocationResponse } = require('../utils/locationHelpers');
 
@@ -687,49 +687,74 @@ exports.getCreatorProfile = async (req, res) => {
 
     const creatorData = creator.toJSON();
 
-    // Get profile photo
-    const profilePhoto = creatorData.crew_member_files?.find(f => f.file_type === 'profile_photo')
-      || creatorData.crew_member_files?.find(f => f.file_type.includes('image'))
-      || null;
+    /* -------------------------------
+       PROFILE PHOTO
+    -------------------------------- */
+    const profilePhotoFile =
+      creatorData.crew_member_files?.find(f => f.file_type === 'profile_photo') ||
+      null;
 
-    // Parse skills and certifications if stored as JSON strings
-    let parsedSkills = creatorData.skills;
-    let parsedCertifications = creatorData.certifications;
-    let parsedEquipment = creatorData.equipment_ownership;
-    let parsedSocialMedia = creatorData.social_media_links;
+    /* -------------------------------
+       PARSE JSON FIELDS
+    -------------------------------- */
+    let parsedSkills = [];
+    let parsedEquipment = [];
+    let parsedCertifications = null;
+    let parsedSocialMedia = null;
 
     try {
-      if (creatorData.skills && typeof creatorData.skills === 'string') {
-        parsedSkills = JSON.parse(creatorData.skills);
+      if (creatorData.skills) {
+        parsedSkills =
+          typeof creatorData.skills === 'string'
+            ? JSON.parse(creatorData.skills)
+            : creatorData.skills;
       }
-    } catch (e) {
-      parsedSkills = creatorData.skills;
-    }
+    } catch {}
+
+    try {
+      if (creatorData.equipment_ownership) {
+        parsedEquipment =
+          typeof creatorData.equipment_ownership === 'string'
+            ? JSON.parse(creatorData.equipment_ownership)
+            : creatorData.equipment_ownership;
+      }
+    } catch {}
 
     try {
       if (creatorData.certifications && typeof creatorData.certifications === 'string') {
         parsedCertifications = JSON.parse(creatorData.certifications);
       }
-    } catch (e) {
-      parsedCertifications = creatorData.certifications;
-    }
-
-    try {
-      if (creatorData.equipment_ownership && typeof creatorData.equipment_ownership === 'string') {
-        parsedEquipment = JSON.parse(creatorData.equipment_ownership);
-      }
-    } catch (e) {
-      parsedEquipment = creatorData.equipment_ownership;
-    }
+    } catch {}
 
     try {
       if (creatorData.social_media_links && typeof creatorData.social_media_links === 'string') {
         parsedSocialMedia = JSON.parse(creatorData.social_media_links);
       }
-    } catch (e) {
-      parsedSocialMedia = creatorData.social_media_links;
-    }
+    } catch {}
 
+    /* -------------------------------
+       FETCH SKILL NAMES
+    -------------------------------- */
+    const skillList = parsedSkills?.length
+      ? await skills_master.findAll({
+          where: { id: parsedSkills },
+          attributes: ['id', 'name']
+        })
+      : [];
+
+    /* -------------------------------
+       FETCH EQUIPMENT NAMES
+    -------------------------------- */
+    const equipmentList = parsedEquipment?.length
+      ? await equipment.findAll({
+          where: { equipment_id: parsedEquipment },
+          attributes: ['equipment_id', 'equipment_name']
+        })
+      : [];
+
+    /* -------------------------------
+       FINAL RESPONSE
+    -------------------------------- */
     const profile = {
       id: creatorData.crew_member_id,
       name: `${creatorData.first_name} ${creatorData.last_name}`,
@@ -740,16 +765,24 @@ exports.getCreatorProfile = async (req, res) => {
       role: creatorData.primary_role,
       price: parseFloat(creatorData.hourly_rate || 0),
       rating: parseFloat(creatorData.rating || 0),
-      profile_photo: profilePhoto ? profilePhoto.file_path : null,
+
+      profile_photo: profilePhotoFile
+        ? profilePhotoFile.file_path
+        : null,
+
+      files: creatorData.crew_member_files || [],
+
       location: formatLocationResponse(creatorData.location),
       workingDistance: creatorData.working_distance,
       experience: creatorData.years_of_experience,
       bio: creatorData.bio,
       availability: creatorData.availability,
-      skills: parsedSkills,
+
+      skills: skillList,
+      equipment: equipmentList,
       certifications: parsedCertifications,
-      equipment: parsedEquipment,
       socialMedia: parsedSocialMedia,
+
       isBeigeMember: creatorData.is_beige_member === 1,
       isAvailable: creatorData.is_available === 1
     };
