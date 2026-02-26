@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Your Beige booking is confirmed</title>
+</head>
+
+<body
+  style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #0A0F0D;">
+  <table width="100%" height="100%" cellpadding="0" cellspacing="0" border="0"
+    style="background-color: #0A0F0D; background: linear-gradient(0deg, #0A0F0D 77.1%, rgba(76, 57, 23, 0.10) 126.11%); padding: 60px 20px;">
+    <tr>
+      <td align="center" valign="top">
+        <table width="600" cellpadding="0" cellspacing="0" border="0"
+          style="background-color: #000000; border: 1px solid rgba(232, 209, 171, 0.15); border-radius: 24px; overflow: hidden; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);">
+          <tr>
+            <td align="center" style="padding: 40px 0;">
+              <div
+                style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 30px; border-radius: 100px; background-color: #000000;">
+                <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
+                  alt="Beige Logo" width="120" style="display: block; border: 0; outline: none;">
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 10px 40px 0; text-align: center;">
+              <p
+                style="margin: 0; color: #E1CAA1; font-size: 32px; font-weight: 500; letter-spacing: 0.5px;line-height: 43.2px;">
+                Hello ${userData.name},</p>
+              <p style="margin: 0 0; font-size: 16px; font-weight: 400;color: #D6D6D6; line-height: 25.6px;">
+                Your booking with Beige has been successfully confirmed.
+                Below are the details of your shoot for your records.
+              </p>
+            </td>
+          </tr>
+
+          <!-- Booking summary -->
+          <tr>
+            <td align="center" style="padding: 56px 40px 0;">
+              <table width="600" border="0" cellspacing="0" cellpadding="0" style="margin-bottom: 30px; ">
+                <tr>
+                  <td>
+                    <p
+                      style="color: #E1CAA1; font-size: 14px; text-transform: uppercase; font-weight: 500;line-height: 20px; letter-spacing: 1.4px; margin: 0;">
+                      Booking Summary</p>
+                    <h1 style="font-size: 36px; color:#FFF; margin: 8px 0 0; font-weight: 600; line-height: 120%;">
+                      Booking ID: {{booking_id}}</h1>
+                  </td>
+                </tr>
+              </table>
+
+              <table width="600" border="0" cellspacing="0" cellpadding="0"
+                style="background-color: #1A1A1A; border-radius: 16px; padding: 20px;">
+                <tr>
+                  <td>
+                    <table width="100%" border="0" cellspacing="0" cellpadding="0" style="padding: 20px 0;">
+                      <tr>
+                        <td valign="middle" width="40" style="vertical-align: middle;">
+                          <div
+                            style="width: 32px; height: 32px; background-color: #FFEECC33; border-radius: 8px; text-align: center; line-height: 32px; font-size: 0; ">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20"
+                              fill="none" style="display: inline-block; vertical-align: middle;">
+                              <path
+                                d="M13.3334 10.8334L17.6859 13.7351C17.7486 13.7768 17.8215 13.8008 17.8968 13.8044C17.9721 13.808 18.0469 13.7911 18.1134 13.7555C18.1798 13.7199 18.2354 13.667 18.2741 13.6024C18.3129 13.5377 18.3333 13.4638 18.3334 13.3884V6.55839C18.3334 6.48508 18.3141 6.41306 18.2774 6.3496C18.2406 6.28614 18.1878 6.23349 18.1243 6.19697C18.0607 6.16045 17.9886 6.14136 17.9153 6.1416C17.842 6.14185 17.77 6.16144 17.7067 6.19839L13.3334 8.75006"
+                                stroke="#FFEECC" stroke-width="1.66667" stroke-linecap="round"
+                                stroke-linejoin="round" />
+                              <path
+                                d="M11.6666 5H3.33329C2.41282 5 1.66663 5.74619 1.66663 6.66667V13.3333C1.66663 14.2538 2.41282 15 3.33329 15H11.6666C12.5871 15 13.3333 14.2538 13.3333 13.3333V6.66667C13.3333 5.74619 12.5871 5 11.6666 5Z"
+                                stroke="#FFEECC" stroke-width="1.66667" stroke-linecap="round"
+                                stroke-linejoin="round" />
+                            </svg>
+                          </div>
+                        </td>
+                        <td valign="middle" style="vertical-align: middle;">
+                          <p
+                            style="color: #FFFFFF66; font-size: 12px; font-weight: 400; line-height: 16px; letter-spacing: 0.6px; text-transform: uppercase; margin: 0 0 10px 0;">
+                            Service Type</p>
+                          <p
+                            style="font-size: 16px; font-weight: 400;line-height: 24px; color: #fff;margin: 2px 0 16px 0;">
+                            {{Service_type}}</p>
+                          <!-- Following are shoot_types -->
+                          <span
+                            style="background: #FFFFFF0D; border: 1px solid #FFFFFF1A; padding: 6px 12px; border-radius: 20px; font-size: 14px; color: #FFFFFFCC; margin-right: 8px;">Videography</span>
+                          <span
+                            style="background: #FFFFFF0D; border: 1px solid #FFFFFF1A; padding: 6px 12px; border-radius: 20px; font-size: 14px; color:#FFFFFFCC;">Photography</span>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <table width="100%" border="0" cellspacing="0" cellpadding="0"
+                      style="border-top: 1px solid #ffffff0d; padding: 20px 0;">
+                      <tr>
+                        <td valign="middle" width="40" style="vertical-align: middle;">
+                          <div
+                            style="width: 32px; height: 32px; background-color: #FFEECC33; border-radius: 8px; text-align: center; line-height: 32px; font-size: 0; ">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20"
+                              fill="none" style="display: inline-block; vertical-align: middle;">
+                              <path d="M6.66663 1.66663V4.99996" stroke="#FFEECC" stroke-width="1.66667"
+                                stroke-linecap="round" stroke-linejoin="round" />
+                              <path d="M13.3334 1.66663V4.99996" stroke="#FFEECC" stroke-width="1.66667"
+                                stroke-linecap="round" stroke-linejoin="round" />
+                              <path
+                                d="M15.8333 3.33337H4.16667C3.24619 3.33337 2.5 4.07957 2.5 5.00004V16.6667C2.5 17.5872 3.24619 18.3334 4.16667 18.3334H15.8333C16.7538 18.3334 17.5 17.5872 17.5 16.6667V5.00004C17.5 4.07957 16.7538 3.33337 15.8333 3.33337Z"
+                                stroke="#FFEECC" stroke-width="1.66667" stroke-linecap="round"
+                                stroke-linejoin="round" />
+                              <path d="M2.5 8.33337H17.5" stroke="#FFEECC" stroke-width="1.66667" stroke-linecap="round"
+                                stroke-linejoin="round" />
+                            </svg>
+                          </div>
+                        </td>
+                        <td valign="middle" style="vertical-align: middle;">
+                          <p
+                            style="color: #FFFFFF66; font-size: 12px; font-weight: 400; line-height: 16px; letter-spacing: 0.6px; text-transform: uppercase; margin: 0;">
+                            Shoot Date</p>
+                          <p
+                            style="font-size: 16px; font-weight: 400;line-height: 24px; color: #fff;margin: 2px 0 0 0;">
+                            {{date}}</p>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <!-- Start and End Time -->
+                    <table width="100%" border="0" cellspacing="0" cellpadding="0"
+                      style="border-top: 1px solid #ffffff0d; padding: 20px 0;">
+                      <tr>
+                        <td valign="middle" width="40" style="vertical-align: middle;">
+                          <div
+                            style="width: 32px; height: 32px; background-color: #FFEECC33; border-radius: 8px; text-align: center; line-height: 32px; font-size: 0; ">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20"
+                              fill="none" style="display: inline-block; vertical-align: middle;">
+                              <path
+                                d="M9.99996 18.3333C14.6023 18.3333 18.3333 14.6023 18.3333 9.99996C18.3333 5.39759 14.6023 1.66663 9.99996 1.66663C5.39759 1.66663 1.66663 5.39759 1.66663 9.99996C1.66663 14.6023 5.39759 18.3333 9.99996 18.3333Z"
+                                stroke="#FFEECC" stroke-width="1.66667" stroke-linecap="round"
+                                stroke-linejoin="round" />
+                              <path d="M10 5V10L13.3333 11.6667" stroke="#FFEECC" stroke-width="1.66667"
+                                stroke-linecap="round" stroke-linejoin="round" />
+                            </svg>
+                          </div>
+                        </td>
+                        <td valign="middle" style="vertical-align: middle;">
+                          <p
+                            style="color: #FFFFFF66; font-size: 12px; font-weight: 400; line-height: 16px; letter-spacing: 0.6px; text-transform: uppercase; margin: 0;">
+                            Time</p>
+                          <p
+                            style="font-size: 16px; font-weight: 400;line-height: 24px; color: #fff;margin: 2px 0 0 0;">
+                            {{start_time}} – {{end_time}}</p>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <table width="100%" border="0" cellspacing="0" cellpadding="0"
+                      style="border-top: 1px solid #ffffff0d; padding: 20px 0;">
+                      <tr>
+                        <td valign="middle" width="40" style="vertical-align: middle;">
+                          <div
+                            style="width: 32px; height: 32px; background-color: #FFEECC33; border-radius: 8px; text-align: center; line-height: 32px; font-size: 0; ">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20"
+                              fill="none" style="display: inline-block; vertical-align: middle;">
+                              <path
+                                d="M9.99996 18.3333C14.6023 18.3333 18.3333 14.6023 18.3333 9.99996C18.3333 5.39759 14.6023 1.66663 9.99996 1.66663C5.39759 1.66663 1.66663 5.39759 1.66663 9.99996C1.66663 14.6023 5.39759 18.3333 9.99996 18.3333Z"
+                                stroke="#FFEECC" stroke-width="1.66667" stroke-linecap="round"
+                                stroke-linejoin="round" />
+                              <path d="M10 5V10L13.3333 11.6667" stroke="#FFEECC" stroke-width="1.66667"
+                                stroke-linecap="round" stroke-linejoin="round" />
+                            </svg>
+                          </div>
+                        </td>
+                        <td valign="middle" style="vertical-align: middle;">
+                          <p
+                            style="color: #FFFFFF66; font-size: 12px; font-weight: 400; line-height: 16px; letter-spacing: 0.6px; text-transform: uppercase; margin: 0;">
+                            Duration</p>
+                          <p
+                            style="font-size: 16px; font-weight: 400;line-height: 24px; color: #fff;margin: 2px 0 0 0;">
+                            {{duration}}</p>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <table width="100%" border="0" cellspacing="0" cellpadding="0"
+                      style="border-top: 1px solid #ffffff0d; padding: 20px 0;">
+                      <tr>
+                        <td valign="middle" width="40" style="vertical-align: middle;">
+                          <div
+                            style="width: 32px; height: 32px; background-color: #FFEECC33; border-radius: 8px; text-align: center; line-height: 32px; font-size: 0; ">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20"
+                              fill="none" style="display: inline-block; vertical-align: middle;">
+                              <path
+                                d="M16.6667 8.33329C16.6667 12.4941 12.0509 16.8275 10.5009 18.1658C10.3565 18.2744 10.1807 18.3331 10 18.3331C9.81938 18.3331 9.6436 18.2744 9.49921 18.1658C7.94921 16.8275 3.33337 12.4941 3.33337 8.33329C3.33337 6.56518 4.03575 4.86949 5.286 3.61925C6.53624 2.36901 8.23193 1.66663 10 1.66663C11.7682 1.66663 13.4638 2.36901 14.7141 3.61925C15.9643 4.86949 16.6667 6.56518 16.6667 8.33329Z"
+                                stroke="#FFEECC" stroke-width="1.66667" stroke-linecap="round"
+                                stroke-linejoin="round" />
+                              <path
+                                d="M10 10.8334C11.3807 10.8334 12.5 9.71409 12.5 8.33337C12.5 6.95266 11.3807 5.83337 10 5.83337C8.61929 5.83337 7.5 6.95266 7.5 8.33337C7.5 9.71409 8.61929 10.8334 10 10.8334Z"
+                                stroke="#FFEECC" stroke-width="1.66667" stroke-linecap="round"
+                                stroke-linejoin="round" />
+                            </svg>
+                          </div>
+                        </td>
+                        <td valign="middle" style="vertical-align: middle;">
+                          <p
+                            style="color: #FFFFFF66; font-size: 12px; font-weight: 400; line-height: 16px; letter-spacing: 0.6px; text-transform: uppercase; margin: 0;">
+                            Location</p>
+                          <p
+                            style="font-size: 16px; font-weight: 400;line-height: 24px; color: #fff;margin: 2px 0 0 0;">
+                            Bangkok, 62292, Glagah, Lamongan, East Java,
+                            Indonesia</p>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td align="center">
+              <!-- Payment Details -->
+              <table width="600" border="0" cellspacing="0" cellpadding="0"
+                style="background-color: #151410; border: 1px solid #FFEECC1a; border-radius: 16px; overflow: hidden; margin: 24px 0 0;">
+                <tr>
+                  <td>
+                    <table width="100%" border="0" cellspacing="0" cellpadding="0"
+                      style="padding: 16px; border-bottom: solid 1px #FFFFFF1A;">
+                      <tr>
+                        <td>
+                          <h3 style="margin: 0; font-size: 20px; font-weight: 600; line-height: 28px; color: #fff;">
+                            Payment Details</h3>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td>
+                    <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                      <tr>
+                        <td style="padding: 16px;">
+                          <table width="100%" border="0" cellspacing="0" cellpadding="0"
+                            style="background-color: #212018; border-radius: 16px; border-collapse: separate;">
+                            <tr>
+                              <td
+                                style="padding: 16px 0 8px 16px; color: #fFFFFFCC; font-size: 12px; font-weight: 500; line-height: 14px; letter-spacing: 0.6px; text-transform: uppercase;">
+                                TOTAL AMOUNT PAID
+                              </td>
+                              <td align="right"
+                                style="padding: 16px 16px 8px 0; font-size: 18px; font-weight: 600; line-height: 28px; color: #fff; white-space: nowrap;">
+                                $4,500.00
+                              </td>
+                            </tr>
+                            <tr>
+                              <td
+                                style="padding: 8px 0 8px 16px; color: #fFFFFFCC; font-size: 12px; font-weight: 500; line-height: 14px; letter-spacing: 0.6px; text-transform: uppercase;">
+                                Payment Method
+                              </td>
+                              <td align="right"
+                                style="padding: 8px 16px 8px 0; font-size: 16px; font-weight: 600; line-height: 24px; color: #fff; white-space: nowrap;">
+                                {{payment_method}}
+                              </td>
+                            </tr>
+                            <tr>
+                              <td
+                                style="padding: 8px 0 16px 16px; color: #fFFFFFCC; font-size: 12px; font-weight: 500; line-height: 14px; letter-spacing: 0.6px; text-transform: uppercase;">
+                                Transaction ID
+                              </td>
+                              <td align="right"
+                                style="padding: 8px 16px 16px 0; font-size: 16px; font-weight: 600; line-height: 24px; color: #fff; white-space: nowrap;">
+                                {{transaction_id}}
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td style="padding: 0 16px 16px 16px;">
+                    <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                      <tr>
+                        <td>
+                          <p style="color:#FFFFFF99; font-size: 14px; font-weight: 400; line-height: 20px; margin: 0;">
+                            Your payment has been securely processed and received.
+                          </p>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- CP Assignment -->
+              <table width="600" border="0" cellspacing="0" cellpadding="0" style="margin: 24px 0;">
+                <tr>
+                  <td style="background-color: #1C3B7A33; border-radius: 16px; padding: 20px;">
+                    <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                      <tr>
+                        <td width="40" valign="top">
+                          <div
+                            style="width: 40px; height: 40px; background-color: #FFEECC33; border-radius: 10px; text-align: center; line-height: 40px; margin-right: 16px;">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20"
+                              fill="none" style="display: inline-block; vertical-align: middle;">
+                              <path
+                                d="M13.3333 17.5V15.8333C13.3333 14.9493 12.9821 14.1014 12.357 13.4763C11.7319 12.8512 10.884 12.5 9.99996 12.5H4.99996C4.1159 12.5 3.26806 12.8512 2.64294 13.4763C2.01782 14.1014 1.66663 14.9493 1.66663 15.8333V17.5"
+                                stroke="#FFEECC" stroke-width="1.66667" stroke-linecap="round"
+                                stroke-linejoin="round" />
+                              <path
+                                d="M7.49996 9.16667C9.34091 9.16667 10.8333 7.67428 10.8333 5.83333C10.8333 3.99238 9.34091 2.5 7.49996 2.5C5.65901 2.5 4.16663 3.99238 4.16663 5.83333C4.16663 7.67428 5.65901 9.16667 7.49996 9.16667Z"
+                                stroke="#FFEECC" stroke-width="1.66667" stroke-linecap="round"
+                                stroke-linejoin="round" />
+                              <path
+                                d="M18.3334 17.4999V15.8333C18.3328 15.0947 18.087 14.3773 17.6345 13.7935C17.182 13.2098 16.5485 12.7929 15.8334 12.6083"
+                                stroke="#FFEECC" stroke-width="1.66667" stroke-linecap="round"
+                                stroke-linejoin="round" />
+                              <path
+                                d="M13.3334 2.60828C14.0504 2.79186 14.6859 3.20886 15.1397 3.79353C15.5936 4.37821 15.8399 5.0973 15.8399 5.83744C15.8399 6.57758 15.5936 7.29668 15.1397 7.88135C14.6859 8.46603 14.0504 8.88303 13.3334 9.06661"
+                                stroke="#FFEECC" stroke-width="1.66667" stroke-linecap="round"
+                                stroke-linejoin="round" />
+                            </svg>
+                          </div>
+                        </td>
+                        <td>
+                          <p
+                            style="color: #FFFFFF66; font-size: 12px;font-style: normal; font-weight: 400; line-height: 16px; letter-spacing: 0.6px; text-transform: uppercase; margin: 0 0 2px">
+                            Creator Assignment</p>
+                          <p
+                            style="color: #FFF;font-size: 16px;font-style: normal;font-weight: 400;line-height: 24px; margin: 0 0 25px;">
+                            We are currently matching your booking with a vetted Beige Creative Partner.</p>
+                        </td>
+                      </tr>
+
+                      <tr>
+                        <td colspan="2" style="padding-bottom: 25px;">
+                          <table width="100%" border="0" cellspacing="0" cellpadding="0"
+                            style="background-color: #282828; border-radius: 8px; padding:16px 32px;">
+                            <tr>
+                              <td align="center">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+                                  fill="none">
+                                  <path
+                                    d="M13 3.002C12.53 3.00067 12.03 3 11.5 3C7.022 3 4.782 3 3.391 4.391C2 5.782 2 8.021 2 12.5C2 16.978 2 19.218 3.391 20.609C4.782 22 7.021 22 11.5 22C15.978 22 18.218 22 19.609 20.609C21 19.218 21 16.979 21 12.5C21 11.97 20.9993 11.47 20.998 11"
+                                    stroke="#A0A0A0" stroke-width="1.5" stroke-linecap="round" />
+                                  <path
+                                    d="M18.5 2L18.758 2.697C19.096 3.611 19.265 4.068 19.598 4.401C19.932 4.735 20.389 4.904 21.303 5.242L22 5.5L21.303 5.758C20.389 6.096 19.932 6.265 19.599 6.598C19.265 6.932 19.096 7.389 18.758 8.303L18.5 9L18.242 8.303C17.904 7.389 17.735 6.932 17.402 6.599C17.068 6.265 16.611 6.096 15.697 5.758L15 5.5L15.697 5.242C16.611 4.904 17.068 4.735 17.401 4.402C17.735 4.068 17.904 3.611 18.242 2.697L18.5 2Z"
+                                    stroke="#A0A0A0" stroke-width="1.5" stroke-linejoin="round" />
+                                  <path
+                                    d="M7 17.5C9.332 15.058 13.643 14.943 16 17.5M13.995 10C13.995 11.38 12.875 12.5 11.492 12.5C11.1634 12.5005 10.8378 12.4363 10.5341 12.3109C10.2303 12.1854 9.95422 12.0014 9.72165 11.7692C9.48908 11.537 9.30457 11.2612 9.17868 10.9576C9.0528 10.6541 8.988 10.3286 8.988 10C8.988 8.62 10.108 7.5 11.492 7.5C11.8206 7.49961 12.146 7.56398 12.4496 7.68944C12.7533 7.8149 13.0292 7.99899 13.2617 8.23117C13.4942 8.46336 13.6786 8.73909 13.8044 9.0426C13.9302 9.34611 13.995 9.67144 13.995 10Z"
+                                    stroke="#A0A0A0" stroke-width="1.5" stroke-linecap="round" />
+                                </svg>
+                                <p
+                                  style="color:#FFFFFFCC; font-size: 14px;font-style: normal;font-weight: 500;line-height: 20px; margin: 10px 0 0;">
+                                  You’ll receive a confirmation as soon as your creator is assigned. This typically
+                                  happens shortly after booking.
+                                </p>
+                              </td>
+
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+
+                      <tr>
+                        <td valign="middle">
+                          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" fill="none"
+                            style="display: block; margin-top: 2px;">
+                            <g clip-path="url(#clip0_12_13839)">
+                              <path
+                                d="M9.99996 13.3334V10.0001M9.99996 6.66675H10.0083M18.3333 10.0001C18.3333 14.6025 14.6023 18.3334 9.99996 18.3334C5.39759 18.3334 1.66663 14.6025 1.66663 10.0001C1.66663 5.39771 5.39759 1.66675 9.99996 1.66675C14.6023 1.66675 18.3333 5.39771 18.3333 10.0001Z"
+                                stroke="white" stroke-opacity="0.6" stroke-width="2" stroke-linecap="round"
+                                stroke-linejoin="round" />
+                            </g>
+                            <defs>
+                              <clipPath id="clip0_12_13839">
+                                <rect width="20" height="20" fill="white" />
+                              </clipPath>
+                            </defs>
+                          </svg>
+                        </td>
+                        <td>
+                          <p
+                            style="color:#FFFFFF99; font-size: 16px;font-style: normal;font-weight: 400;line-height: 24px; margin: 0;">
+                            No action is needed on your end.</p>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- What Happens Next -->
+              <table width="600" border="0" cellspacing="0" cellpadding="0"
+                style="background: linear-gradient(180deg, #1A1A1A 0%, #111 100%); border-radius: 8px; padding: 24px;margin: 24px 0 0;">
+                <tr>
+                  <td align="center">
+                    <h2
+                      style="color: #F5F0EB; font-weight: 400;font-size: 24px; line-height: 32px; margin: 8px 0 24px;">
+                      What Happens Next</h2>
+                  </td>
+                </tr>
+                <tr>
+                  <td>
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td valign="middle" style="padding-bottom: 10px; padding-right: 10px;">
+                          <span style="color:#FFFFFF99;">●</span>
+                        </td>
+                        <td valign="middle"
+                          style="padding-bottom: 15px; color: #FFFFFF99; font-size: 16px; line-height: 1.4;">
+                          Your shoot details will be confirmed. Please complete the onboarding form if you have not yet
+                          done so.
+                          <a href="#"
+                            style="color: #ffffff; text-decoration: underline; font-weight: 300; font-size: 16px; display: inline-block; line-height: 24px; font-style: italic;">[Insert
+                            Link] &rarr;</a>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td valign="middle" style="padding-bottom: 10px; padding-right: 10px;">
+                          <span style="color:#FFFFFF99;">●</span>
+                        </td>
+                        <td valign="middle"
+                          style="padding-bottom: 15px; color: #FFFFFF99; font-size: 16px; line-height: 1.4;">
+                          Your Beige rep will set up a pre-production call.
+                        </td>
+                      </tr>
+                      <tr>
+                        <td valign="middle" style="padding-bottom: 10px; padding-right: 10px;">
+                          <span style="color:#FFFFFF99;">●</span>
+                        </td>
+                        <td valign="middle"
+                          style="padding-bottom: 15px; color: #FFFFFF99; font-size: 16px; line-height: 1.4;">
+                          Your creative partner will handle production on the scheduled date
+                        </td>
+                      </tr>
+                      <tr>
+                        <td valign="middle" style="padding-bottom: 10px; padding-right: 10px;">
+                          <span style="color:#FFFFFF99;">●</span>
+                        </td>
+                        <td valign="middle"
+                          style="padding-bottom: 15px; color: #FFFFFF99; font-size: 16px; line-height: 1.4;">
+                          Post-production and delivery timelines will follow your shoot
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding: 24px 40px;">
+              <p style="margin:24px 0 0; font-size: 18px; color: #F0F0F0; line-height: 1.8; font-weight: 400;">
+                If you need to update any details or have questions prior to your shoot, simply reply to this email and
+                our team will assist.
+              </p>
+              <p style="margin:24px 0 0; font-size: 18px; color: #F0F0F0; line-height: 1.8; font-weight: 400;">
+                Thank you for choosing Beige.
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding: 24px 40px 40px;">
+              <p style="margin:24px 0 0; font-size: 18px; color: #F0F0F0; line-height: 1.8; font-weight: 400;">
+                The Beige Team
+              </p>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding: 0 30px 30px; text-align: center; border-top: 2px solid #F5EBDA;">
+              <p style="margin: 30px 0 0; font-size: 11px; color: #8C8C8C; text-transform: capitalize;">
+                Help Center &nbsp;•&nbsp; Privacy Policy &nbsp;•&nbsp; Terms of Service
+              </p>
+              <p style="margin: 15px 0 0; font-size: 11px; color: #8C8C8C;text-transform: uppercase; ">
+                Beige AI
+                <!-- &nbsp;|&nbsp; 123 Creative Street, Design City, DC 10101 -->
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding: 20px; text-align: center;">
+              <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
+                alt="Beige Logo" width="180" style="display: inline-block; border: 0; outline: none; opacity: 1;">
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+
+</html>
