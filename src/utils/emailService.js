@@ -1,4 +1,5 @@
 const nodemailer = require('nodemailer');
+const sgMail = require('@sendgrid/mail');
 require('dotenv').config();
 
 /**
@@ -24,6 +25,22 @@ transporter.verify((error, success) => {
     console.log('Email service ready to send emails');
   }
 });
+
+if (process.env.SENDGRID_API_KEY) {
+  sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+}
+
+const CLIENT_SIGNUP_WELCOME_TEMPLATE_ID =
+  process.env.SENDGRID_CLIENT_SIGNUP_TEMPLATE_ID || 'd-2eb6d2008c794ee4aac0e787de9ae4a8';
+const BOOKING_CONFIRMED_TEMPLATE_ID = process.env.SENDGRID_BOOKING_CONFIRMED_TEMPLATE_ID;
+const BOOKING_CONFIRMED_WITH_CP_TEMPLATE_ID = process.env.SENDGRID_BOOKING_CONFIRMED_WITH_CP_TEMPLATE_ID;
+const BOOKING_CONFIRMED_WITHOUT_CP_TEMPLATE_ID = process.env.SENDGRID_BOOKING_CONFIRMED_WITHOUT_CP_TEMPLATE_ID;
+
+const getFirstName = (name, fallbackFirstName) => {
+  if (fallbackFirstName && fallbackFirstName.trim()) return fallbackFirstName.trim();
+  if (!name || !name.trim()) return 'there';
+  return name.trim().split(/\s+/)[0];
+};
 
 /**
  * Send task assignment notification email
@@ -475,6 +492,142 @@ const sendWelcomeEmail = async (userData) => {
     return { success: true, messageId: info.messageId };
   } catch (error) {
     console.error('Error sending welcome email:', error);
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Send client signup welcome email via SendGrid dynamic template
+ * Trigger: successful client registration
+ * @param {Object} userData - User details
+ */
+const sendClientSignupWelcomeEmail = async (userData) => {
+  try {
+    if (!process.env.SENDGRID_API_KEY) {
+      console.error('SendGrid API key missing. Skipping client signup welcome email.');
+      return { success: false, error: 'SENDGRID_API_KEY is not configured' };
+    }
+
+    if (!userData?.email) {
+      return { success: false, error: 'Client email is required' };
+    }
+
+    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    if (!fromEmail) {
+      return { success: false, error: 'Sender email not configured' };
+    }
+
+    const msg = {
+      to: userData.email,
+      from: {
+        email: fromEmail,
+        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+      },
+      templateId: CLIENT_SIGNUP_WELCOME_TEMPLATE_ID,
+      dynamicTemplateData: {
+        first_name: getFirstName(userData.name, userData.first_name),
+        book_a_shoot_url: process.env.BOOK_A_SHOOT_URL || 'https://beige.app/',
+        userData: {
+          name: userData.name || getFirstName(userData.name, userData.first_name)
+        }
+      }
+    };
+
+    await sgMail.send(msg);
+    console.log(`Client signup welcome email sent to ${userData.email} using SendGrid template.`);
+    return { success: true };
+  } catch (error) {
+    console.error(
+      'Error sending client signup welcome email via SendGrid:',
+      error?.response?.body || error.message
+    );
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Send booking confirmation email (Email 2) via SendGrid dynamic template
+ * Trigger: booking payment completed
+ * @param {Object} data - Booking confirmation data
+ */
+const sendBookingConfirmationEmail = async (data) => {
+  try {
+    if (!process.env.SENDGRID_API_KEY) {
+      return { success: false, error: 'SENDGRID_API_KEY is not configured' };
+    }
+
+    const templateId = data?.cp_assigned
+      ? (BOOKING_CONFIRMED_WITH_CP_TEMPLATE_ID || BOOKING_CONFIRMED_TEMPLATE_ID)
+      : (BOOKING_CONFIRMED_WITHOUT_CP_TEMPLATE_ID || BOOKING_CONFIRMED_TEMPLATE_ID);
+
+    if (!templateId) {
+      return {
+        success: false,
+        error: 'Set SENDGRID_BOOKING_CONFIRMED_WITH_CP_TEMPLATE_ID / SENDGRID_BOOKING_CONFIRMED_WITHOUT_CP_TEMPLATE_ID (or fallback SENDGRID_BOOKING_CONFIRMED_TEMPLATE_ID)'
+      };
+    }
+
+    if (!data?.to_email) {
+      return { success: false, error: 'Recipient email is required' };
+    }
+
+    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    if (!fromEmail) {
+      return { success: false, error: 'Sender email not configured' };
+    }
+
+    const payload = {
+      to: data.to_email,
+      from: {
+        email: fromEmail,
+        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+      },
+      subject: 'Your Beige booking is confirmed',
+      templateId,
+      dynamicTemplateData: {
+        first_name: data.first_name || 'there',
+        booking_id: data.booking_id || '',
+        shoot_type: data.shoot_type || '',
+        service_type: data.service_type || data.content_type || '',
+        shoot_date: data.shoot_date || '',
+        start_time: data.start_time || '',
+        end_time: data.end_time || '',
+        duration: data.duration || '',
+        shoot_location_address: data.shoot_location_address || 'TBD',
+        amount_paid: data.amount_paid || '',
+        payment_method: data.payment_method || 'Card',
+        transaction_id: data.transaction_id || '',
+        cp_assigned: !!data.cp_assigned,
+        cp_firstname: data.cp_firstname || '',
+        cp_name: data.cp_name || data.cp_firstname || '',
+        cp_role: data.cp_role || data.service_type || '',
+        cp_photo_url: data.cp_photo_url || 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=120&h=120',
+        onboarding_form_link: data.onboarding_form_link || process.env.CLIENT_ONBOARDING_FORM_URL || 'https://beige.app/',
+        email_subject: 'Your Beige booking is confirmed',
+        userData: {
+          name: data.first_name || 'there'
+        },
+        date: data.shoot_date || '',
+        location: data.shoot_location_address || 'TBD',
+        insert_link: data.onboarding_form_link || process.env.CLIENT_ONBOARDING_FORM_URL || 'https://beige.app/'
+      }
+    };
+
+    const [response] = await sgMail.send(payload);
+    const messageId =
+      response?.headers?.['x-message-id'] ||
+      response?.headers?.['X-Message-Id'] ||
+      null;
+
+    console.log(
+      `Booking confirmation email accepted by SendGrid for ${data.to_email} (booking: ${data.booking_id || 'n/a'}), template=${templateId}, status=${response?.statusCode || 'n/a'}, message_id=${messageId || 'n/a'}`
+    );
+    return { success: true, messageId, statusCode: response?.statusCode };
+  } catch (error) {
+    console.error(
+      'Error sending booking confirmation email via SendGrid:',
+      error?.response?.body || error.message
+    );
     return { success: false, error: error.message };
   }
 };
@@ -1216,6 +1369,8 @@ module.exports = {
   sendInvoiceEmail,
   sendSalesLeadNotification,
   sendPaymentSuccessSalesNotification,
+  sendClientSignupWelcomeEmail,
+  sendBookingConfirmationEmail,
   sendNewClientSignupNotification,
   sendNewCrewSignupNotification
 };

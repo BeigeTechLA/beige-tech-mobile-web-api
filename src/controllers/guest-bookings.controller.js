@@ -345,6 +345,7 @@ exports.createGuestBooking = async (req, res) => {
       guest_email: guest_email,
       project_name: order_name,
       description: combinedDescription || null,
+      content_type: content_type || null,
       event_type: event_type || content_type || project_type || (shoot_type ? shoot_type : null),
       event_date: event_date,
       duration_hours: duration_hours ? parseInt(duration_hours) : null,
@@ -562,6 +563,7 @@ exports.updateGuestBooking = async (req, res) => {
     if (order_name) updateData.project_name = order_name;
     if (guest_email) updateData.guest_email = guest_email;
     if (combinedDescription) updateData.description = combinedDescription;
+    if (content_type) updateData.content_type = content_type;
     if (event_type || content_type || project_type || shoot_type) {
       updateData.event_type = event_type || content_type || project_type || shoot_type;
     }

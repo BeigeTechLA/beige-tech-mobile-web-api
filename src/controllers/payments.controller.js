@@ -32,6 +32,298 @@ function calculatePricing(hours, hourlyRate, equipmentItems = [], marginPercent 
   };
 }
 
+const formatDate = (value) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+};
+
+const formatTime = (value) => {
+  if (!value) return '';
+  const text = String(value);
+  const [hh, mm] = text.split(':');
+  if (hh === undefined || mm === undefined) return text;
+  const hours = Number(hh);
+  if (Number.isNaN(hours)) return text;
+  const suffix = hours >= 12 ? 'PM' : 'AM';
+  const h12 = hours % 12 || 12;
+  return `${h12}:${mm} ${suffix}`;
+};
+
+const formatLocation = (location) => {
+  if (!location) return 'TBD';
+  if (typeof location !== 'string') {
+    if (location && typeof location === 'object') {
+      return (
+        location.address ||
+        location.full_address ||
+        location.formatted_address ||
+        location.place_name ||
+        location.name ||
+        location.text ||
+        location.address_line_1 ||
+        location.location ||
+        location.venue ||
+        'TBD'
+      );
+    }
+    return String(location);
+  }
+  const trimmed = location.trim();
+  if (!trimmed) return 'TBD';
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (typeof parsed === 'string') return parsed;
+    if (parsed && typeof parsed === 'object') {
+      return (
+        parsed.address ||
+        parsed.full_address ||
+        parsed.formatted_address ||
+        parsed.place_name ||
+        parsed.name ||
+        parsed.text ||
+        parsed.address_line_1 ||
+        parsed.location ||
+        parsed.venue ||
+        trimmed
+      );
+    }
+  } catch (_) {
+    // Keep raw value when not JSON
+  }
+  return trimmed;
+};
+
+const toTitleCase = (value) =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+
+const normalizeServiceType = (contentType) => {
+  const raw = String(contentType || '').trim();
+  if (!raw) return '';
+
+  const mapToken = (token) => {
+    const key = token.trim().toLowerCase();
+    if (!key) return '';
+    if (key === 'videographer' || key === 'videography') return 'Videography';
+    if (key === 'photographer' || key === 'photography') return 'Photography';
+    return toTitleCase(token);
+  };
+
+  const parts = raw
+    .split(/[,+/|]/)
+    .map(mapToken)
+    .filter(Boolean);
+
+  const unique = [...new Set(parts)];
+  return unique.length > 0 ? unique.join(' + ') : toTitleCase(raw);
+};
+
+const parseRoleIds = (value) => {
+  if (value == null) return [];
+  if (Array.isArray(value)) return value.map(v => Number(v)).filter(Number.isFinite);
+
+  const raw = String(value).trim();
+  if (!raw) return [];
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed.map(v => Number(v)).filter(Number.isFinite);
+    if (parsed && typeof parsed === 'object') {
+      return Object.keys(parsed).map(v => Number(v)).filter(Number.isFinite);
+    }
+  } catch (_) {
+    // non-JSON input, continue
+  }
+
+  if (/^\d+$/.test(raw)) return [Number(raw)];
+  return raw
+    .split(/[,+/|]/)
+    .map(v => Number(v.trim()))
+    .filter(Number.isFinite);
+};
+
+const resolveCrewRoleLabel = async (rawPrimaryRole, fallbackText) => {
+  const roleIds = parseRoleIds(rawPrimaryRole);
+  if (roleIds.length === 0) {
+    return normalizeServiceType(rawPrimaryRole || fallbackText);
+  }
+
+  try {
+    const roles = await db.crew_roles.findAll({
+      where: { role_id: roleIds },
+      attributes: ['role_id', 'role_name'],
+      raw: true
+    });
+
+    if (!roles || roles.length === 0) {
+      return normalizeServiceType(fallbackText);
+    }
+
+    const byId = new Map(roles.map(r => [Number(r.role_id), r.role_name]));
+    const names = roleIds.map(id => byId.get(Number(id))).filter(Boolean);
+    return names.length > 0 ? names.join(', ') : normalizeServiceType(fallbackText);
+  } catch (error) {
+    console.error('Failed to resolve crew role labels:', error.message);
+    return normalizeServiceType(fallbackText);
+  }
+};
+
+const toAbsoluteBeigeAssetUrl = (pathValue) => {
+  const fallbackBase = 'https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/';
+  const configuredBase = (process.env.BEIGE_ASSET_BASE_URL || fallbackBase).replace(/\/+$/, '/') ;
+
+  const raw = String(pathValue || '').trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw)) return raw;
+
+  // DB stores values after "beige/" so join directly.
+  return `${configuredBase}${raw.replace(/^\/+/, '')}`;
+};
+
+const sendBookingConfirmationForBooking = async ({
+  bookingId,
+  amountPaid,
+  paymentMethod,
+  transactionId
+}) => {
+  try {
+    const booking = await db.stream_project_booking.findByPk(bookingId, {
+      include: [
+        {
+          model: db.users,
+          as: 'user',
+          attributes: ['name', 'email'],
+          required: false
+        },
+        {
+          model: db.assigned_crew,
+          as: 'assigned_crews',
+          required: false,
+          where: { is_active: 1 },
+          attributes: ['crew_member_id', 'crew_accept', 'status', 'updated_at', 'assigned_date'],
+          include: [
+            {
+              model: db.crew_members,
+              as: 'crew_member',
+              attributes: ['first_name', 'last_name', 'primary_role'],
+              include: [
+                {
+                  model: db.crew_member_files,
+                  as: 'crew_member_files',
+                  required: false,
+                  attributes: ['file_type', 'file_path', 'created_at', 'is_active']
+                }
+              ],
+              required: false
+            }
+          ]
+        }
+      ]
+    });
+
+    if (!booking) return;
+
+    const toEmail = booking.user?.email || booking.guest_email;
+    if (!toEmail) {
+      console.warn(`Skipping booking confirmation email for ${bookingId}: no recipient email found`);
+      return;
+    }
+
+    let clientName = booking.user?.name || '';
+    if (!clientName) {
+      const lead = await db.sales_leads.findOne({
+        where: { booking_id: bookingId },
+        attributes: ['client_name', 'guest_email']
+      });
+      clientName = lead?.client_name || '';
+      if (!clientName) {
+        const emailForName = booking.guest_email || lead?.guest_email || '';
+        const localPart = emailForName.includes('@') ? emailForName.split('@')[0] : '';
+        clientName = localPart.replace(/[._-]+/g, ' ').trim();
+      }
+    }
+    if (!clientName && booking.description) {
+      const m = String(booking.description).match(/Contact Name:\s*([^\n\r]+)/i);
+      if (m && m[1]) clientName = m[1].trim();
+    }
+    const firstName = clientName ? clientName.trim().split(/\s+/)[0] : 'there';
+    const assignments = Array.isArray(booking.assigned_crews)
+      ? [...booking.assigned_crews].sort((a, b) => {
+          const ta = new Date(a?.updated_at || a?.assigned_date || 0).getTime();
+          const tb = new Date(b?.updated_at || b?.assigned_date || 0).getTime();
+          return tb - ta;
+        })
+      : [];
+    const selectedAssignment =
+      assignments.find(a => a?.crew_accept === 1) ||
+      assignments.find(a => ['selected', 'assigned', 'confirmed'].includes(String(a?.status || '').toLowerCase())) ||
+      assignments[0] ||
+      null;
+    const cpFirstName = selectedAssignment?.crew_member?.first_name || '';
+    const cpLastName = selectedAssignment?.crew_member?.last_name || '';
+    const cpName = [cpFirstName, cpLastName].filter(Boolean).join(' ');
+    const cpFiles = Array.isArray(selectedAssignment?.crew_member?.crew_member_files)
+      ? [...selectedAssignment.crew_member.crew_member_files]
+          .filter(f => f?.is_active === 1 || f?.is_active === true || typeof f?.is_active === 'undefined')
+          .sort((a, b) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime())
+      : [];
+    const cpPhoto =
+      cpFiles.find(f => String(f?.file_type || '').toLowerCase() === 'profile_photo') ||
+      cpFiles.find(f => String(f?.file_type || '').toLowerCase() === 'profile_image') ||
+      cpFiles.find(f => String(f?.file_type || '').toLowerCase().includes('image')) ||
+      null;
+    const cpPhotoUrl =
+      toAbsoluteBeigeAssetUrl(cpPhoto?.file_path) ||
+      'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=120&h=120';
+    const rawPrimaryRole = selectedAssignment?.crew_member?.primary_role;
+    const cpRole = await resolveCrewRoleLabel(
+      rawPrimaryRole,
+      booking.content_type || booking.event_type || booking.shoot_type
+    );
+
+    console.log(
+      `Attempting booking confirmation email for booking ${bookingId} to ${toEmail}`
+    );
+
+    const emailResult = await emailService.sendBookingConfirmationEmail({
+      to_email: toEmail,
+      first_name: firstName,
+      booking_id: booking.stream_project_booking_id,
+      shoot_type: booking.shoot_type || booking.event_type || '',
+      service_type: normalizeServiceType(booking.content_type || booking.event_type || booking.shoot_type),
+      shoot_date: formatDate(booking.event_date || booking.shoot_date),
+      start_time: formatTime(booking.start_time),
+      end_time: formatTime(booking.end_time),
+      duration: booking.duration_hours ? `${booking.duration_hours} hours` : '',
+      shoot_location_address: formatLocation(booking.event_location),
+      amount_paid: typeof amountPaid === 'number' ? `$${amountPaid.toFixed(2)}` : (amountPaid || ''),
+      payment_method: paymentMethod || 'Card',
+      transaction_id: transactionId || '',
+      cp_assigned: !!selectedAssignment,
+      cp_firstname: cpFirstName,
+      cp_name: cpName,
+      cp_role: cpRole,
+      cp_photo_url: cpPhotoUrl
+    });
+
+    if (!emailResult?.success) {
+      console.error(
+        `Booking confirmation email not sent for booking ${bookingId}:`,
+        emailResult?.error || 'Unknown error'
+      );
+      return;
+    }
+
+    console.log(`Booking confirmation email completed for booking ${bookingId}`);
+  } catch (error) {
+    console.error(`Booking confirmation email flow failed for booking ${bookingId}:`, error.message);
+  }
+};
+
 /**
  * Create payment intent for CP + equipment booking
  * POST /api/payments/create-intent
@@ -336,6 +628,20 @@ exports.confirmPayment = async (req, res) => {
 
     await transaction.commit();
 
+    // if (booking_id) {
+    //   const paymentMethod =
+    //     paymentIntent.charges?.data?.[0]?.payment_method_details?.type ||
+    //     paymentIntent.payment_method_types?.[0] ||
+    //     'card';
+
+    //   sendBookingConfirmationForBooking({
+    //     bookingId: booking_id,
+    //     amountPaid: pricing.total_amount,
+    //     paymentMethod,
+    //     transactionId: paymentIntentId
+    //   }).catch(err => console.error('Booking Confirmation Email Error:', err));
+    // }
+
     return res.status(201).json({
       success: true,
       message: 'Payment confirmed and booking created',
@@ -556,6 +862,17 @@ exports.confirmPaymentMulti = async (req, res) => {
         shootType: booking.shoot_type || 'Shoot',
         paymentIntentId: paymentIntentId
     }).catch(err => console.error('Sales Notification Error:', err));
+
+    const paymentMethod =
+      paymentIntent.charges?.data?.[0]?.payment_method_details?.type ||
+      paymentIntent.payment_method_types?.[0] ||
+      'card';
+    sendBookingConfirmationForBooking({
+      bookingId: booking_id,
+      amountPaid: totalAmount,
+      paymentMethod,
+      transactionId: paymentIntentId
+    }).catch(err => console.error('Booking Confirmation Email Error:', err));
 
     try {
       const lead = await db.sales_leads.findOne({ where: { booking_id: booking_id } });
@@ -852,6 +1169,17 @@ exports.handleStripeWebhook = async (req, res) => {
 
       await transaction.commit();
       console.log(`Webhook: booking ${booking_id} marked as paid`);
+
+      const webhookPaymentMethod =
+        dataObject.payment_method_details?.type ||
+        dataObject.payment_method_types?.[0] ||
+        'card';
+      sendBookingConfirmationForBooking({
+        bookingId: booking_id,
+        amountPaid,
+        paymentMethod: webhookPaymentMethod,
+        transactionId: paymentIntentId
+      }).catch(err => console.error('Booking Confirmation Email Error:', err));
     } catch (dbError) {
       await transaction.rollback();
       throw dbError;
