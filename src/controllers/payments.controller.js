@@ -408,8 +408,8 @@ exports.createPaymentIntentMulti = async (req, res) => {
       return res.status(200).json({
         success: true,
         data: {
-          clientSecret: 'free_checkout_intent_' + booking_id, // Mock secret for frontend
-          paymentIntentId: 'free_promo_' + Date.now(),
+          clientSecret: 'free_checkout_intent_' + booking_id,
+          paymentIntentId: 'free_checkout_intent_' + booking_id,
           amount: 0,
           isFree: true
         }
