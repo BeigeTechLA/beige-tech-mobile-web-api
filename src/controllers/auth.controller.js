@@ -2165,15 +2165,15 @@ exports.registerCrewMemberStep1 = [
         await crew_members.update({ first_name, last_name, email, phone_number, location, working_distance }, { where: { crew_member_id } });
         await User.update({ name: `${first_name} ${last_name}`, email, phone_number }, { where: { id: user_id } });
 
-        await updateSheetRow('Crew_data', crew_member_id, {
-          'B': first_name, 
-          'C': last_name, 
-          'D': email, 
-          'E': phone_number, 
-          'F': location, 
-          'G': working_distance, 
-          'H': 'pending'
-        });
+        // await updateSheetRow('Crew_data', crew_member_id, {
+        //   'B': first_name, 
+        //   'C': last_name, 
+        //   'D': email, 
+        //   'E': phone_number, 
+        //   'F': location, 
+        //   'G': working_distance, 
+        //   'H': 'pending'
+        // });
 
         return res.status(200).json({ success: true, message: 'Step 1 updated', crew_member_id, user_id });
       }
@@ -2246,16 +2246,16 @@ exports.registerCrewMemberStep1 = [
         }
       }
 
-      await appendToSheet('Crew_data', [
-        newCrewMember.crew_member_id, 
-        first_name, 
-        last_name, 
-        email, 
-        phone_number, 
-        location,
-        working_distance,
-        'pending'
-      ]);
+      // await appendToSheet('Crew_data', [
+      //   newCrewMember.crew_member_id, 
+      //   first_name, 
+      //   last_name, 
+      //   email, 
+      //   phone_number, 
+      //   location,
+      //   working_distance,
+      //   'pending'
+      // ]);
 
       return res.status(201).json({
         success: true,
