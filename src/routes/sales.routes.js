@@ -96,6 +96,24 @@ router.post(
   requireSalesRepOrAdmin,
   salesLeadsController.sendFinalAssetsDeliveredWithoutRevision
 );
+router.post(
+  '/leads/:id/revision-request-received',
+  authenticate,
+  requireSalesRepOrAdmin,
+  salesLeadsController.sendRevisionRequestReceived
+);
+router.post(
+  '/leads/:id/revised-content-delivered',
+  authenticate,
+  requireSalesRepOrAdmin,
+  salesLeadsController.sendRevisedContentDelivered
+);
+router.post(
+  '/leads/:id/final-assets-delivered-with-revision',
+  authenticate,
+  requireSalesRepOrAdmin,
+  salesLeadsController.sendFinalAssetsDeliveredWithRevision
+);
 
 // =====================================================
 // Discount Code Routes

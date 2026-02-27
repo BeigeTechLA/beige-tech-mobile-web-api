@@ -2232,6 +2232,553 @@ exports.sendFinalAssetsDeliveredWithoutRevision = async (req, res) => {
   }
 };
 
+/**
+ * Send Revision Request Received email (Email 11b)
+ * POST /api/sales/leads/:id/revision-request-received
+ * Body: { revision_delivery_date: "YYYY-MM-DD" }
+ */
+exports.sendRevisionRequestReceived = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { revision_delivery_date, estimated_delivery_date } = req.body;
+    const performedBy = req.userId || null;
+
+    const rawRevisionDate = revision_delivery_date || estimated_delivery_date;
+    if (!rawRevisionDate) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'revision_delivery_date is required'
+      });
+    }
+
+    const lead = await sales_leads.findByPk(id, {
+      include: [
+        {
+          model: stream_project_booking,
+          as: 'booking',
+          required: false,
+          include: [
+            {
+              model: users,
+              as: 'user',
+              required: false,
+              attributes: ['id', 'name', 'email']
+            }
+          ],
+          attributes: ['stream_project_booking_id', 'guest_email']
+        }
+      ]
+    });
+
+    if (!lead) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Lead not found'
+      });
+    }
+
+    if (!lead.booking) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Booking not found for this lead'
+      });
+    }
+
+    const booking = lead.booking;
+    const toEmail = booking.user?.email || booking.guest_email || lead.guest_email;
+    if (!toEmail) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Client email not found'
+      });
+    }
+
+    const parsedDate = new Date(rawRevisionDate);
+    if (Number.isNaN(parsedDate.getTime())) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'revision_delivery_date is invalid'
+      });
+    }
+
+    const formattedRevisionDate = parsedDate.toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+
+    const baseName = (booking.user?.name || lead.client_name || '').trim();
+    let firstName = 'there';
+    if (baseName) {
+      firstName = baseName.split(/\s+/)[0];
+    } else if (toEmail.includes('@')) {
+      const local = toEmail.split('@')[0].replace(/[._-]+/g, ' ').trim();
+      if (local) firstName = local.split(/\s+/)[0];
+    }
+
+    const emailResult = await emailService.sendRevisionRequestReceivedEmail({
+      to_email: toEmail,
+      booking_id: booking.stream_project_booking_id,
+      first_name: firstName,
+      revision_delivery_date: formattedRevisionDate
+    });
+
+    if (!emailResult?.success) {
+      return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+        success: false,
+        message: emailResult?.error || 'Failed to send revision request received email'
+      });
+    }
+
+    await sales_lead_activities.create({
+      lead_id: parseInt(id, 10),
+      activity_type: 'status_changed',
+      activity_data: {
+        email_event: 'revision_request_received',
+        booking_id: booking.stream_project_booking_id,
+        revision_delivery_date: parsedDate.toISOString().slice(0, 10)
+      },
+      performed_by_user_id: performedBy
+    });
+
+    return res.status(constants.OK.code).json({
+      success: true,
+      message: 'Revision request received email sent successfully',
+      data: {
+        lead_id: parseInt(id, 10),
+        booking_id: booking.stream_project_booking_id,
+        to_email: toEmail,
+        revision_delivery_date: parsedDate.toISOString().slice(0, 10)
+      }
+    });
+  } catch (error) {
+    console.error('Error sending revision request received email:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to send revision request received email',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * Send Revised Content Delivered email (Email 11c)
+ * POST /api/sales/leads/:id/revised-content-delivered
+ * Body: { drive_link?: string, file_manager_link?: string, view_updated_assets_link?: string }
+ */
+exports.sendRevisedContentDelivered = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { drive_link, file_manager_link, view_updated_assets_link } = req.body;
+    const performedBy = req.userId || null;
+
+    const lead = await sales_leads.findByPk(id, {
+      include: [
+        {
+          model: stream_project_booking,
+          as: 'booking',
+          required: false,
+          include: [
+            {
+              model: users,
+              as: 'user',
+              required: false,
+              attributes: ['id', 'name', 'email']
+            },
+            {
+              model: db.projects,
+              as: 'cms_project',
+              required: false,
+              include: [
+                {
+                  model: db.project_files,
+                  as: 'files',
+                  required: false,
+                  where: {
+                    file_category: 'EDIT_REVISION',
+                    upload_status: 'COMPLETED',
+                    is_deleted: 0
+                  },
+                  attributes: ['file_id', 'version_number', 'created_at']
+                }
+              ],
+              attributes: ['project_id']
+            }
+          ],
+          attributes: ['stream_project_booking_id', 'guest_email']
+        }
+      ]
+    });
+
+    if (!lead) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Lead not found'
+      });
+    }
+
+    if (!lead.booking) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Booking not found for this lead'
+      });
+    }
+
+    const booking = lead.booking;
+    const toEmail = booking.user?.email || booking.guest_email || lead.guest_email;
+    if (!toEmail) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Client email not found'
+      });
+    }
+
+    const revisionFiles = Array.isArray(booking.cms_project?.files) ? booking.cms_project.files : [];
+    if (!booking.cms_project || revisionFiles.length === 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Revision folder is empty. Upload revision files before sending this email.'
+      });
+    }
+
+    const finalAssetsLink =
+      (drive_link && String(drive_link).trim()) ||
+      (view_updated_assets_link && String(view_updated_assets_link).trim()) ||
+      (file_manager_link && String(file_manager_link).trim());
+
+    if (!finalAssetsLink) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Provide drive_link or file_manager_link'
+      });
+    }
+
+    const parseActivityData = (activityData) => {
+      if (!activityData) return {};
+      if (typeof activityData === 'object') return activityData;
+      if (typeof activityData === 'string') {
+        try {
+          return JSON.parse(activityData);
+        } catch (_) {
+          return {};
+        }
+      }
+      return {};
+    };
+
+    const activities = await sales_lead_activities.findAll({
+      where: {
+        lead_id: parseInt(id, 10),
+        activity_type: 'status_changed'
+      },
+      attributes: ['activity_data']
+    });
+
+    const hasRevisionRequest = activities.some((row) => {
+      const data = parseActivityData(row.activity_data);
+      return (
+        Number(data.booking_id) === Number(booking.stream_project_booking_id) &&
+        String(data.email_event || '') === 'revision_request_received'
+      );
+    });
+
+    if (!hasRevisionRequest) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Revision request has not been recorded for this booking'
+      });
+    }
+
+    const hasAlreadySent = activities.some((row) => {
+      const data = parseActivityData(row.activity_data);
+      return (
+        Number(data.booking_id) === Number(booking.stream_project_booking_id) &&
+        String(data.email_event || '') === 'revised_content_delivered'
+      );
+    });
+
+    if (hasAlreadySent) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Revised content delivered email already sent for this booking'
+      });
+    }
+
+    const latestRevisionFile = [...revisionFiles].sort((a, b) => {
+      const va = Number(a?.version_number || 0);
+      const vb = Number(b?.version_number || 0);
+      if (vb !== va) return vb - va;
+      return new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime();
+    })[0];
+    const revisionVersion = latestRevisionFile?.version_number ? `v${latestRevisionFile.version_number}` : '';
+
+    const baseName = (booking.user?.name || lead.client_name || '').trim();
+    let firstName = 'there';
+    if (baseName) {
+      firstName = baseName.split(/\s+/)[0];
+    } else if (toEmail.includes('@')) {
+      const local = toEmail.split('@')[0].replace(/[._-]+/g, ' ').trim();
+      if (local) firstName = local.split(/\s+/)[0];
+    }
+
+    const emailResult = await emailService.sendRevisedContentDeliveredEmail({
+      to_email: toEmail,
+      booking_id: booking.stream_project_booking_id,
+      first_name: firstName,
+      view_updated_assets_link: finalAssetsLink,
+      revision_version: revisionVersion
+    });
+
+    if (!emailResult?.success) {
+      return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+        success: false,
+        message: emailResult?.error || 'Failed to send revised content delivered email'
+      });
+    }
+
+    await sales_lead_activities.create({
+      lead_id: parseInt(id, 10),
+      activity_type: 'status_changed',
+      activity_data: {
+        email_event: 'revised_content_delivered',
+        booking_id: booking.stream_project_booking_id,
+        revision_version: revisionVersion || null,
+        drive_link: drive_link || null,
+        file_manager_link: file_manager_link || null,
+        view_updated_assets_link: finalAssetsLink
+      },
+      performed_by_user_id: performedBy
+    });
+
+    return res.status(constants.OK.code).json({
+      success: true,
+      message: 'Revised content delivered email sent successfully',
+      data: {
+        lead_id: parseInt(id, 10),
+        booking_id: booking.stream_project_booking_id,
+        to_email: toEmail,
+        view_updated_assets_link: finalAssetsLink,
+        revision_version: revisionVersion || null,
+        revision_files_count: revisionFiles.length
+      }
+    });
+  } catch (error) {
+    console.error('Error sending revised content delivered email:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to send revised content delivered email',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * Send Final Assets Delivered with Revision email (Email 11d)
+ * POST /api/sales/leads/:id/final-assets-delivered-with-revision
+ * Body: { drive_link?: string, file_manager_link?: string, view_final_assets_link?: string }
+ */
+exports.sendFinalAssetsDeliveredWithRevision = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { drive_link, file_manager_link, view_final_assets_link } = req.body;
+    const performedBy = req.userId || null;
+
+    const lead = await sales_leads.findByPk(id, {
+      include: [
+        {
+          model: stream_project_booking,
+          as: 'booking',
+          required: false,
+          include: [
+            {
+              model: users,
+              as: 'user',
+              required: false,
+              attributes: ['id', 'name', 'email']
+            },
+            {
+              model: db.projects,
+              as: 'cms_project',
+              required: false,
+              include: [
+                {
+                  model: db.project_files,
+                  as: 'files',
+                  required: false,
+                  where: {
+                    upload_status: 'COMPLETED',
+                    is_deleted: 0
+                  },
+                  attributes: ['file_id']
+                }
+              ],
+              attributes: ['project_id']
+            }
+          ],
+          attributes: ['stream_project_booking_id', 'guest_email']
+        }
+      ]
+    });
+
+    if (!lead) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Lead not found'
+      });
+    }
+
+    if (!lead.booking) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Booking not found for this lead'
+      });
+    }
+
+    const booking = lead.booking;
+    const toEmail = booking.user?.email || booking.guest_email || lead.guest_email;
+    if (!toEmail) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Client email not found'
+      });
+    }
+
+    const filesCount = Array.isArray(booking.cms_project?.files) ? booking.cms_project.files.length : 0;
+    if (!booking.cms_project || filesCount === 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'File manager folder is empty. Upload final files before sending this email.'
+      });
+    }
+
+    const finalAssetsLink =
+      (drive_link && String(drive_link).trim()) ||
+      (view_final_assets_link && String(view_final_assets_link).trim()) ||
+      (file_manager_link && String(file_manager_link).trim());
+
+    if (!finalAssetsLink) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Provide drive_link or file_manager_link'
+      });
+    }
+
+    const parseActivityData = (activityData) => {
+      if (!activityData) return {};
+      if (typeof activityData === 'object') return activityData;
+      if (typeof activityData === 'string') {
+        try {
+          return JSON.parse(activityData);
+        } catch (_) {
+          return {};
+        }
+      }
+      return {};
+    };
+
+    const activities = await sales_lead_activities.findAll({
+      where: {
+        lead_id: parseInt(id, 10),
+        activity_type: 'status_changed'
+      },
+      attributes: ['activity_data']
+    });
+
+    const hasRevisionRequest = activities.some((row) => {
+      const data = parseActivityData(row.activity_data);
+      return (
+        Number(data.booking_id) === Number(booking.stream_project_booking_id) &&
+        String(data.email_event || '') === 'revision_request_received'
+      );
+    });
+
+    const hasRevisedDelivered = activities.some((row) => {
+      const data = parseActivityData(row.activity_data);
+      return (
+        Number(data.booking_id) === Number(booking.stream_project_booking_id) &&
+        String(data.email_event || '') === 'revised_content_delivered'
+      );
+    });
+
+    if (!hasRevisionRequest || !hasRevisedDelivered) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Cannot send final with-revision email before revision flow is completed'
+      });
+    }
+
+    const hasAlreadySent = activities.some((row) => {
+      const data = parseActivityData(row.activity_data);
+      return (
+        Number(data.booking_id) === Number(booking.stream_project_booking_id) &&
+        String(data.email_event || '') === 'final_assets_delivered_with_revision'
+      );
+    });
+
+    if (hasAlreadySent) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Final assets delivered (with revision) email already sent for this booking'
+      });
+    }
+
+    const baseName = (booking.user?.name || lead.client_name || '').trim();
+    let firstName = 'there';
+    if (baseName) {
+      firstName = baseName.split(/\s+/)[0];
+    } else if (toEmail.includes('@')) {
+      const local = toEmail.split('@')[0].replace(/[._-]+/g, ' ').trim();
+      if (local) firstName = local.split(/\s+/)[0];
+    }
+
+    const emailResult = await emailService.sendFinalDeliveryWithRevisionEmail({
+      to_email: toEmail,
+      booking_id: booking.stream_project_booking_id,
+      first_name: firstName,
+      view_final_assets_link: finalAssetsLink
+    });
+
+    if (!emailResult?.success) {
+      return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+        success: false,
+        message: emailResult?.error || 'Failed to send final delivery with revision email'
+      });
+    }
+
+    await sales_lead_activities.create({
+      lead_id: parseInt(id, 10),
+      activity_type: 'status_changed',
+      activity_data: {
+        email_event: 'final_assets_delivered_with_revision',
+        booking_id: booking.stream_project_booking_id,
+        drive_link: drive_link || null,
+        file_manager_link: file_manager_link || null,
+        view_final_assets_link: finalAssetsLink
+      },
+      performed_by_user_id: performedBy
+    });
+
+    return res.status(constants.OK.code).json({
+      success: true,
+      message: 'Final delivery with revision email sent successfully',
+      data: {
+        lead_id: parseInt(id, 10),
+        booking_id: booking.stream_project_booking_id,
+        to_email: toEmail,
+        view_final_assets_link: finalAssetsLink,
+        files_count: filesCount
+      }
+    });
+  } catch (error) {
+    console.error('Error sending final delivery with revision email:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to send final delivery with revision email',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
 // exports.updateBookingCrew = async (req, res) => {
 //   try {
 //     const { bookingId } = req.params;
