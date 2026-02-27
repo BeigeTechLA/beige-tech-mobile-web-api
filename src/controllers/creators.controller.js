@@ -672,7 +672,7 @@ exports.getCreatorProfile = async (req, res) => {
         {
           model: crew_member_files,
           as: 'crew_member_files',
-          attributes: ['crew_files_id', 'file_type', 'file_path', 'created_at'],
+          attributes: ['crew_files_id', 'file_type', 'file_path', 'created_at', 'title', 'tag'],
           required: false
         }
       ]

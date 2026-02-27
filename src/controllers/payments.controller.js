@@ -385,7 +385,7 @@ exports.createPaymentIntentMulti = async (req, res) => {
       guest_email
     } = req.body;
 
-    // Validation
+    // 1. Validation
     if (!booking_id) {
       return res.status(400).json({
         success: false,
@@ -393,14 +393,7 @@ exports.createPaymentIntentMulti = async (req, res) => {
       });
     }
 
-    if (!amount || amount <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Valid amount is required'
-      });
-    }
-
-    // Verify booking exists
+    // 2. Verify booking exists
     const booking = await db.stream_project_booking.findByPk(booking_id);
     if (!booking) {
       return res.status(404).json({
@@ -409,7 +402,28 @@ exports.createPaymentIntentMulti = async (req, res) => {
       });
     }
 
-    // Create Stripe PaymentIntent
+    // 3. Handle 100% Discount ($0.00) Case
+    // Stripe does not allow creating intents for $0.00
+    if (parseFloat(amount) === 0) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          clientSecret: 'free_checkout_intent_' + booking_id, // Mock secret for frontend
+          paymentIntentId: 'free_promo_' + Date.now(),
+          amount: 0,
+          isFree: true
+        }
+      });
+    }
+
+    // 4. Standard Stripe logic for paid bookings
+    if (!amount || amount < 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid amount is required'
+      });
+    }
+
     const paymentIntent = await stripe.paymentIntents.create({
       amount: Math.round(amount * 100), // Convert to cents
       currency: 'usd',
@@ -418,7 +432,6 @@ exports.createPaymentIntentMulti = async (req, res) => {
         guest_email: guest_email || booking.guest_email || '',
         type: 'multi-creator',
         shoot_name: booking.shoot_name || '',
-        shoot_type: booking.shoot_type || ''
       }
     });
 
@@ -427,13 +440,13 @@ exports.createPaymentIntentMulti = async (req, res) => {
       data: {
         clientSecret: paymentIntent.client_secret,
         paymentIntentId: paymentIntent.id,
-        amount: amount
+        amount: amount,
+        isFree: false
       }
     });
 
   } catch (error) {
     console.error('Create Multi-Creator Payment Intent Error:', error);
-
     return res.status(500).json({
       success: false,
       message: 'Failed to create payment intent',
@@ -443,11 +456,11 @@ exports.createPaymentIntentMulti = async (req, res) => {
 };
 
 /**
- * Confirm multi-creator payment and update booking status
- * POST /api/payments/confirm-multi
-
-/**
  * Confirm multi-creator payment and update booking status + Google Sheet
+ * POST /api/payments/confirm-multi
+ */
+/**
+ * Confirm multi-creator payment and update booking status
  * POST /api/payments/confirm-multi
  */
 exports.confirmPaymentMulti = async (req, res) => {
@@ -461,12 +474,55 @@ exports.confirmPaymentMulti = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Missing paymentIntentId or booking_id' });
     }
 
-    const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
-    if (paymentIntent.status !== 'succeeded') {
-      if (transaction) await transaction.rollback();
-      return res.status(400).json({ success: false, message: 'Payment not successful' });
+    // 1. Fetch the Booking and the Quote to verify details
+    const booking = await db.stream_project_booking.findOne({
+      where: { stream_project_booking_id: booking_id },
+      include: [{ model: db.quotes, as: 'primary_quote' }]
+    });
+
+    if (!booking) {
+      await transaction.rollback();
+      return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
+    let totalAmount = 0;
+    let chargeId = null;
+
+    // --- UPDATED LOGIC HERE ---
+    // 2. Check if this is a Free Checkout mock ID
+    if (paymentIntentId.startsWith('free_checkout_intent_')) {
+      
+      // SECURITY CHECK: Verify the quote in our DB is actually 0
+      // This prevents users from manually sending a "free_checkout" ID for a paid booking
+      if (!booking.primary_quote || parseFloat(booking.primary_quote.total) !== 0) {
+        await transaction.rollback();
+        return res.status(400).json({ 
+          success: false, 
+          message: 'Security mismatch: This booking is not eligible for free checkout.' 
+        });
+      }
+      
+      totalAmount = 0;
+      chargeId = 'PROMO_100_PERCENT'; // Use a placeholder for free bookings
+
+    } else {
+      try {
+        const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+        
+        if (paymentIntent.status !== 'succeeded') {
+          if (transaction) await transaction.rollback();
+          return res.status(400).json({ success: false, message: 'Payment not successful' });
+        }
+        
+        totalAmount = paymentIntent.amount / 100;
+        chargeId = paymentIntent.charges?.data[0]?.id || null;
+      } catch (stripeError) {
+        if (transaction) await transaction.rollback();
+        return res.status(400).json({ success: false, message: stripeError.message });
+      }
+    }
+
+    // 4. Prevent duplicate processing
     const existingPayment = await db.payment_transactions.findOne({
       where: { stripe_payment_intent_id: paymentIntentId }
     });
@@ -475,17 +531,12 @@ exports.confirmPaymentMulti = async (req, res) => {
       await transaction.rollback();
       return res.status(200).json({
         success: true,
-        message: "Payment already processed (Webhook completed first)",
+        message: "Payment already processed",
         data: { payment_id: existingPayment.payment_id, booking_id },
       });
     }
 
-    const booking = await db.stream_project_booking.findByPk(booking_id);
-    if (!booking) {
-      await transaction.rollback();
-      return res.status(404).json({ success: false, message: 'Booking not found' });
-    }
-
+    // 5. Determine Creator ID (existing logic)
     let validCreatorId = null;
     if (booking.creator_id) {
       const check = await db.crew_members.findByPk(booking.creator_id);
@@ -501,13 +552,11 @@ exports.confirmPaymentMulti = async (req, res) => {
     }
 
     if (!validCreatorId) {
-       throw new Error("Cannot process payment: No valid creator found.");
+       throw new Error("Cannot process booking: No valid creator found.");
     }
 
+    // 6. Create Payment Transaction Record
     const finalShootDate = booking.shoot_date || booking.event_date || new Date();
-    const totalAmount = paymentIntent.amount / 100;
-    const chargeId = paymentIntent.charges?.data[0]?.id || null;
-
     const rawHours = booking.shoot_hours || booking.duration_hours || 1;
     const finalHours = parseFloat(rawHours) > 0 ? parseFloat(rawHours) : 1;
 
@@ -533,6 +582,7 @@ exports.confirmPaymentMulti = async (req, res) => {
       status: 'succeeded'
     }, { transaction });
 
+    // 7. Update Booking and Lead Status
     await db.stream_project_booking.update(
       { 
         payment_completed_at: new Date(), 
@@ -550,29 +600,17 @@ exports.confirmPaymentMulti = async (req, res) => {
 
     await transaction.commit();
 
+    // 8. Background notifications
     emailService.sendPaymentSuccessSalesNotification({
-        guestEmail: booking.guest_email || booking.user_id || 'Unknown Client',
+        guestEmail: booking.guest_email || 'Unknown Client',
         amount: totalAmount,
         shootType: booking.shoot_type || 'Shoot',
         paymentIntentId: paymentIntentId
     }).catch(err => console.error('Sales Notification Error:', err));
 
-    try {
-      const lead = await db.sales_leads.findOne({ where: { booking_id: booking_id } });
-      if (lead) {
-        await updateSheetRow('leads_data', lead.lead_id, {
-          'J': 'Paid',
-          'L': 'No',
-          'M': new Date().toLocaleString()
-        });
-      }
-    } catch (sheetError) {
-      console.error('Google Sheet Sync Error:', sheetError.message);
-    }
-
     return res.status(201).json({
       success: true,
-      message: 'Payment confirmed successfully',
+      message: totalAmount === 0 ? 'Booking confirmed (Free)' : 'Payment confirmed successfully',
       data: { payment_id: payment.payment_id, booking_id }
     });
 
@@ -584,7 +622,6 @@ exports.confirmPaymentMulti = async (req, res) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
-
 /**
  * Get payment status by payment_id or stripe_payment_intent_id
  * GET /api/payments/:id/status

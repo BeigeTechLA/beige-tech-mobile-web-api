@@ -285,11 +285,10 @@ async function getPresignedPost(key, options = {}) {
 
   const expiresIn = options.expiresIn || 3600;
   const conditions = [
-    { bucket: BUCKET_NAME },
-    ['starts-with', '$key', key.split('/').slice(0, -1).join('/') + '/'],
-    { acl: 'private' },
-    { 'x-amz-server-side-encryption': 'AES256' }
-  ];
+  { bucket: BUCKET_NAME },
+  ['starts-with', '$key', key.split('/').slice(0, -1).join('/') + '/'],
+  { 'x-amz-server-side-encryption': 'AES256' }
+];
 
   if (options.maxFileSize) {
     conditions.push(['content-length-range', 0, options.maxFileSize]);
@@ -299,16 +298,16 @@ async function getPresignedPost(key, options = {}) {
     conditions.push(['starts-with', '$Content-Type', options.contentType.split('/')[0] + '/']);
   }
 
-  const params = {
-    Bucket: BUCKET_NAME,
-    Fields: {
-      key,
-      acl: 'private',
-      'x-amz-server-side-encryption': 'AES256'
-    },
-    Expires: expiresIn,
-    Conditions: conditions
-  };
+  // const params = {
+  //   Bucket: BUCKET_NAME,
+  //   Fields: {
+  //     key,
+  //     // acl: 'private',
+  //     'x-amz-server-side-encryption': 'AES256'
+  //   },
+  //   Expires: expiresIn,
+  //   Conditions: conditions
+  // };
 
   try {
     const data = await promisify(s3.createPresignedPost.bind(s3))(params);
