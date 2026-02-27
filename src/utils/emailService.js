@@ -35,6 +35,13 @@ const CLIENT_SIGNUP_WELCOME_TEMPLATE_ID =
 const BOOKING_CONFIRMED_TEMPLATE_ID = process.env.SENDGRID_BOOKING_CONFIRMED_TEMPLATE_ID;
 const BOOKING_CONFIRMED_WITH_CP_TEMPLATE_ID = process.env.SENDGRID_BOOKING_CONFIRMED_WITH_CP_TEMPLATE_ID;
 const BOOKING_CONFIRMED_WITHOUT_CP_TEMPLATE_ID = process.env.SENDGRID_BOOKING_CONFIRMED_WITHOUT_CP_TEMPLATE_ID;
+const SHOOT_REMINDER_5D_TEMPLATE_ID = process.env.SENDGRID_SHOOT_REMINDER_5D_TEMPLATE_ID;
+const SHOOT_REMINDER_2H_TEMPLATE_ID = process.env.SENDGRID_SHOOT_REMINDER_2H_TEMPLATE_ID;
+const SHOOT_COMPLETION_TEMPLATE_ID = process.env.SENDGRID_SHOOT_COMPLETION_TEMPLATE_ID;
+const SHOOT_FINAL_NUDGE_7D_TEMPLATE_ID = process.env.SENDGRID_SHOOT_FINAL_NUDGE_7D_TEMPLATE_ID;
+const POST_PRODUCTION_STATUS_UPDATE_TEMPLATE_ID = process.env.SENDGRID_POST_PRODUCTION_STATUS_UPDATE_TEMPLATE_ID;
+const RAW_FOOTAGE_READY_TEMPLATE_ID = process.env.SENDGRID_RAW_FOOTAGE_READY_TEMPLATE_ID;
+const FINAL_DELIVERY_COMPLETE_TEMPLATE_ID = process.env.SENDGRID_FINAL_DELIVERY_COMPLETE_TEMPLATE_ID;
 
 const getFirstName = (name, fallbackFirstName) => {
   if (fallbackFirstName && fallbackFirstName.trim()) return fallbackFirstName.trim();
@@ -626,6 +633,464 @@ const sendBookingConfirmationEmail = async (data) => {
   } catch (error) {
     console.error(
       'Error sending booking confirmation email via SendGrid:',
+      error?.response?.body || error.message
+    );
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Send shoot reminder email 5 days before event date (Email 4)
+ * Trigger: scheduled job
+ * @param {Object} data - reminder payload
+ */
+const sendShootReminder5DaysEmail = async (data) => {
+  try {
+    if (!process.env.SENDGRID_API_KEY) {
+      return { success: false, error: 'SENDGRID_API_KEY is not configured' };
+    }
+
+    if (!SHOOT_REMINDER_5D_TEMPLATE_ID) {
+      return { success: false, error: 'SENDGRID_SHOOT_REMINDER_5D_TEMPLATE_ID is not configured' };
+    }
+
+    if (!data?.to_email) {
+      return { success: false, error: 'Recipient email is required' };
+    }
+
+    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    if (!fromEmail) {
+      return { success: false, error: 'Sender email not configured' };
+    }
+
+    const payload = {
+      to: data.to_email,
+      from: {
+        email: fromEmail,
+        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+      },
+      subject: 'Upcoming: Your Beige shoot is in 5 days',
+      templateId: SHOOT_REMINDER_5D_TEMPLATE_ID,
+      dynamicTemplateData: {
+        first_name: data.first_name || 'there',
+        shoot_date: data.shoot_date || '',
+        start_time: data.start_time || '',
+        end_time: data.end_time || '',
+        shoot_location_address: data.shoot_location_address || 'TBD',
+        onboarding_form_link: data.onboarding_form_link || process.env.CLIENT_ONBOARDING_FORM_URL || 'https://book.beige.app/',
+        userData: { name: data.first_name || 'there' },
+        date: data.shoot_date || '',
+        location: data.shoot_location_address || 'TBD',
+        insert_link: data.onboarding_form_link || process.env.CLIENT_ONBOARDING_FORM_URL || 'https://book.beige.app/'
+      }
+    };
+
+    const [response] = await sgMail.send(payload);
+    const messageId =
+      response?.headers?.['x-message-id'] ||
+      response?.headers?.['X-Message-Id'] ||
+      null;
+
+    console.log(
+      `Shoot reminder (5d) email accepted by SendGrid for ${data.to_email} (booking: ${data.booking_id || 'n/a'}), template=${SHOOT_REMINDER_5D_TEMPLATE_ID}, status=${response?.statusCode || 'n/a'}, message_id=${messageId || 'n/a'}`
+    );
+
+    return { success: true, messageId, statusCode: response?.statusCode };
+  } catch (error) {
+    console.error(
+      'Error sending shoot reminder (5d) email via SendGrid:',
+      error?.response?.body || error.message
+    );
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Send shoot-day reminder email 2 hours before start (Email 6)
+ * Trigger: scheduled job
+ * @param {Object} data - reminder payload
+ */
+const sendShootReminder2HoursEmail = async (data) => {
+  try {
+    if (!process.env.SENDGRID_API_KEY) {
+      return { success: false, error: 'SENDGRID_API_KEY is not configured' };
+    }
+
+    if (!SHOOT_REMINDER_2H_TEMPLATE_ID) {
+      return { success: false, error: 'SENDGRID_SHOOT_REMINDER_2H_TEMPLATE_ID is not configured' };
+    }
+
+    if (!data?.to_email) {
+      return { success: false, error: 'Recipient email is required' };
+    }
+
+    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    if (!fromEmail) {
+      return { success: false, error: 'Sender email not configured' };
+    }
+
+    const payload = {
+      to: data.to_email,
+      from: {
+        email: fromEmail,
+        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+      },
+      subject: 'Happening Now: Your Beige shoot starts in 2 hours',
+      templateId: SHOOT_REMINDER_2H_TEMPLATE_ID,
+      dynamicTemplateData: {
+        first_name: data.first_name || 'there',
+        start_time: data.start_time || '',
+        end_time: data.end_time || '',
+        shoot_location_address: data.shoot_location_address || 'TBD',
+        cp_name: data.cp_name || 'your Creative Partner',
+        userData: { name: data.first_name || 'there' },
+        location: data.shoot_location_address || 'TBD'
+      }
+    };
+
+    const [response] = await sgMail.send(payload);
+    const messageId =
+      response?.headers?.['x-message-id'] ||
+      response?.headers?.['X-Message-Id'] ||
+      null;
+
+    console.log(
+      `Shoot reminder (2h) email accepted by SendGrid for ${data.to_email} (booking: ${data.booking_id || 'n/a'}), template=${SHOOT_REMINDER_2H_TEMPLATE_ID}, status=${response?.statusCode || 'n/a'}, message_id=${messageId || 'n/a'}`
+    );
+
+    return { success: true, messageId, statusCode: response?.statusCode };
+  } catch (error) {
+    console.error(
+      'Error sending shoot reminder (2h) email via SendGrid:',
+      error?.response?.body || error.message
+    );
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Send shoot completion email on next day (Email 8a)
+ * Trigger: scheduled job
+ * @param {Object} data - completion payload
+ */
+const sendShootCompletionEmail = async (data) => {
+  try {
+    if (!process.env.SENDGRID_API_KEY) {
+      return { success: false, error: 'SENDGRID_API_KEY is not configured' };
+    }
+
+    if (!SHOOT_COMPLETION_TEMPLATE_ID) {
+      return { success: false, error: 'SENDGRID_SHOOT_COMPLETION_TEMPLATE_ID is not configured' };
+    }
+
+    if (!data?.to_email) {
+      return { success: false, error: 'Recipient email is required' };
+    }
+
+    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    if (!fromEmail) {
+      return { success: false, error: 'Sender email not configured' };
+    }
+
+    const payload = {
+      to: data.to_email,
+      from: {
+        email: fromEmail,
+        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+      },
+      subject: 'That\u2019s a wrap! Your shoot is complete',
+      templateId: SHOOT_COMPLETION_TEMPLATE_ID,
+      dynamicTemplateData: {
+        first_name: data.first_name || 'there',
+        cp_name: data.cp_name || 'your Creative Partner',
+        has_editing: !!data.has_editing,
+        raw_only: !!data.raw_only,
+        userData: { name: data.first_name || 'there' }
+      }
+    };
+
+    const [response] = await sgMail.send(payload);
+    const messageId =
+      response?.headers?.['x-message-id'] ||
+      response?.headers?.['X-Message-Id'] ||
+      null;
+
+    console.log(
+      `Shoot completion email accepted by SendGrid for ${data.to_email} (booking: ${data.booking_id || 'n/a'}), template=${SHOOT_COMPLETION_TEMPLATE_ID}, status=${response?.statusCode || 'n/a'}, message_id=${messageId || 'n/a'}`
+    );
+
+    return { success: true, messageId, statusCode: response?.statusCode };
+  } catch (error) {
+    console.error(
+      'Error sending shoot completion email via SendGrid:',
+      error?.response?.body || error.message
+    );
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Send 7-day final nudge email (Email 9.3)
+ * Trigger: scheduled job
+ * @param {Object} data - nudge payload
+ */
+const sendFinalNudge7DaysEmail = async (data) => {
+  try {
+    if (!process.env.SENDGRID_API_KEY) {
+      return { success: false, error: 'SENDGRID_API_KEY is not configured' };
+    }
+
+    if (!SHOOT_FINAL_NUDGE_7D_TEMPLATE_ID) {
+      return { success: false, error: 'SENDGRID_SHOOT_FINAL_NUDGE_7D_TEMPLATE_ID is not configured' };
+    }
+
+    if (!data?.to_email) {
+      return { success: false, error: 'Recipient email is required' };
+    }
+
+    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    if (!fromEmail) {
+      return { success: false, error: 'Sender email not configured' };
+    }
+
+    const reviewLink =
+      data.review_link ||
+      process.env.CLIENT_REVIEW_LINK ||
+      process.env.FRONTEND_URL ||
+      'https://book.beige.app/';
+
+    const payload = {
+      to: data.to_email,
+      from: {
+        email: fromEmail,
+        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+      },
+      subject: 'One last thing about your recent shoot',
+      templateId: SHOOT_FINAL_NUDGE_7D_TEMPLATE_ID,
+      dynamicTemplateData: {
+        first_name: data.first_name || 'there',
+        cp_name: data.cp_name || 'your Creative Partner',
+        review_link: reviewLink,
+        userData: { name: data.first_name || 'there' }
+      }
+    };
+
+    const [response] = await sgMail.send(payload);
+    const messageId =
+      response?.headers?.['x-message-id'] ||
+      response?.headers?.['X-Message-Id'] ||
+      null;
+
+    console.log(
+      `Final nudge (7d) email accepted by SendGrid for ${data.to_email} (booking: ${data.booking_id || 'n/a'}), template=${SHOOT_FINAL_NUDGE_7D_TEMPLATE_ID}, status=${response?.statusCode || 'n/a'}, message_id=${messageId || 'n/a'}`
+    );
+
+    return { success: true, messageId, statusCode: response?.statusCode };
+  } catch (error) {
+    console.error(
+      'Error sending final nudge (7d) email via SendGrid:',
+      error?.response?.body || error.message
+    );
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Send post-production status update email (Email 10)
+ * Trigger: manual action from dashboard
+ * @param {Object} data - status update payload
+ */
+const sendPostProductionStatusUpdateEmail = async (data) => {
+  try {
+    if (!process.env.SENDGRID_API_KEY) {
+      return { success: false, error: 'SENDGRID_API_KEY is not configured' };
+    }
+
+    if (!POST_PRODUCTION_STATUS_UPDATE_TEMPLATE_ID) {
+      return {
+        success: false,
+        error: 'SENDGRID_POST_PRODUCTION_STATUS_UPDATE_TEMPLATE_ID is not configured'
+      };
+    }
+
+    if (!data?.to_email) {
+      return { success: false, error: 'Recipient email is required' };
+    }
+
+    if (!data?.delivery_date) {
+      return { success: false, error: 'delivery_date is required' };
+    }
+
+    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    if (!fromEmail) {
+      return { success: false, error: 'Sender email not configured' };
+    }
+
+    const payload = {
+      to: data.to_email,
+      from: {
+        email: fromEmail,
+        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+      },
+      subject: 'Update: Your Content Is Being Edited',
+      templateId: POST_PRODUCTION_STATUS_UPDATE_TEMPLATE_ID,
+      dynamicTemplateData: {
+        first_name: data.first_name || 'there',
+        delivery_date: data.delivery_date,
+        estimated_delivery: data.delivery_date,
+        userData: { name: data.first_name || 'there' }
+      }
+    };
+
+    const [response] = await sgMail.send(payload);
+    const messageId =
+      response?.headers?.['x-message-id'] ||
+      response?.headers?.['X-Message-Id'] ||
+      null;
+
+    console.log(
+      `Post-production status update email accepted by SendGrid for ${data.to_email} (booking: ${data.booking_id || 'n/a'}), template=${POST_PRODUCTION_STATUS_UPDATE_TEMPLATE_ID}, status=${response?.statusCode || 'n/a'}, message_id=${messageId || 'n/a'}`
+    );
+
+    return { success: true, messageId, statusCode: response?.statusCode };
+  } catch (error) {
+    console.error(
+      'Error sending post-production status update email via SendGrid:',
+      error?.response?.body || error.message
+    );
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Send raw footage ready email (Email 10b)
+ * Trigger: manual action from dashboard
+ * @param {Object} data - raw footage payload
+ */
+const sendRawFootageReadyEmail = async (data) => {
+  try {
+    if (!process.env.SENDGRID_API_KEY) {
+      return { success: false, error: 'SENDGRID_API_KEY is not configured' };
+    }
+
+    if (!RAW_FOOTAGE_READY_TEMPLATE_ID) {
+      return {
+        success: false,
+        error: 'SENDGRID_RAW_FOOTAGE_READY_TEMPLATE_ID is not configured'
+      };
+    }
+
+    if (!data?.to_email) {
+      return { success: false, error: 'Recipient email is required' };
+    }
+
+    if (!data?.access_files_link) {
+      return { success: false, error: 'access_files_link is required' };
+    }
+
+    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    if (!fromEmail) {
+      return { success: false, error: 'Sender email not configured' };
+    }
+
+    const payload = {
+      to: data.to_email,
+      from: {
+        email: fromEmail,
+        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+      },
+      subject: 'Your Raw Footage Is Ready',
+      templateId: RAW_FOOTAGE_READY_TEMPLATE_ID,
+      dynamicTemplateData: {
+        first_name: data.first_name || 'there',
+        access_files_link: data.access_files_link,
+        files_link: data.access_files_link,
+        userData: { name: data.first_name || 'there' }
+      }
+    };
+
+    const [response] = await sgMail.send(payload);
+    const messageId =
+      response?.headers?.['x-message-id'] ||
+      response?.headers?.['X-Message-Id'] ||
+      null;
+
+    console.log(
+      `Raw footage ready email accepted by SendGrid for ${data.to_email} (booking: ${data.booking_id || 'n/a'}), template=${RAW_FOOTAGE_READY_TEMPLATE_ID}, status=${response?.statusCode || 'n/a'}, message_id=${messageId || 'n/a'}`
+    );
+
+    return { success: true, messageId, statusCode: response?.statusCode };
+  } catch (error) {
+    console.error(
+      'Error sending raw footage ready email via SendGrid:',
+      error?.response?.body || error.message
+    );
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Send final delivery complete email without revision (Email 11)
+ * Trigger: manual action from dashboard
+ * @param {Object} data - final delivery payload
+ */
+const sendFinalDeliveryCompleteEmail = async (data) => {
+  try {
+    if (!process.env.SENDGRID_API_KEY) {
+      return { success: false, error: 'SENDGRID_API_KEY is not configured' };
+    }
+
+    if (!FINAL_DELIVERY_COMPLETE_TEMPLATE_ID) {
+      return {
+        success: false,
+        error: 'SENDGRID_FINAL_DELIVERY_COMPLETE_TEMPLATE_ID is not configured'
+      };
+    }
+
+    if (!data?.to_email) {
+      return { success: false, error: 'Recipient email is required' };
+    }
+
+    if (!data?.view_assets_link) {
+      return { success: false, error: 'view_assets_link is required' };
+    }
+
+    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    if (!fromEmail) {
+      return { success: false, error: 'Sender email not configured' };
+    }
+
+    const payload = {
+      to: data.to_email,
+      from: {
+        email: fromEmail,
+        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+      },
+      subject: 'Final Delivery Complete - Access Your Assets',
+      templateId: FINAL_DELIVERY_COMPLETE_TEMPLATE_ID,
+      dynamicTemplateData: {
+        first_name: data.first_name || 'there',
+        booking_id: data.booking_id || '',
+        view_assets_link: data.view_assets_link,
+        access_files_link: data.view_assets_link,
+        userData: { name: data.first_name || 'there' }
+      }
+    };
+
+    const [response] = await sgMail.send(payload);
+    const messageId =
+      response?.headers?.['x-message-id'] ||
+      response?.headers?.['X-Message-Id'] ||
+      null;
+
+    console.log(
+      `Final delivery complete email accepted by SendGrid for ${data.to_email} (booking: ${data.booking_id || 'n/a'}), template=${FINAL_DELIVERY_COMPLETE_TEMPLATE_ID}, status=${response?.statusCode || 'n/a'}, message_id=${messageId || 'n/a'}`
+    );
+
+    return { success: true, messageId, statusCode: response?.statusCode };
+  } catch (error) {
+    console.error(
+      'Error sending final delivery complete email via SendGrid:',
       error?.response?.body || error.message
     );
     return { success: false, error: error.message };
@@ -1371,6 +1836,13 @@ module.exports = {
   sendPaymentSuccessSalesNotification,
   sendClientSignupWelcomeEmail,
   sendBookingConfirmationEmail,
+  sendShootReminder5DaysEmail,
+  sendShootReminder2HoursEmail,
+  sendShootCompletionEmail,
+  sendFinalNudge7DaysEmail,
+  sendPostProductionStatusUpdateEmail,
+  sendRawFootageReadyEmail,
+  sendFinalDeliveryCompleteEmail,
   sendNewClientSignupNotification,
   sendNewCrewSignupNotification
 };

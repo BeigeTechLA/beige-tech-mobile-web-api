@@ -625,3 +625,33 @@ stripe-signature: t=1730000000,v1=replace_with_valid_stripe_signature
 #
 # Trigger Invoice paid event
 # stripe trigger invoice.paid
+
+### 
+POST {{URL}}sales/leads/163/post-production-status-update
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "estimated_delivery_date": "2026-03-08"
+}
+
+### 
+POST {{URL}}sales/leads/163/raw-footage-ready
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "drive_link": "https://drive.google.com/drive/folders/xxx",
+  "file_manager_link": "https://your-dashboard/project/123/files"
+}
+
+### 
+POST {{URL}}sales/leads/163/final-assets-delivered-without-revision
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "drive_link": "https://drive.google.com/drive/folders/your-final-assets-folder-link",
+  "file_manager_link": "https://book.beige.app/dashboard/projects/your-project-id/files",
+  "view_assets_link": "https://book.beige.app/dashboard/projects/your-project-id/files"
+}

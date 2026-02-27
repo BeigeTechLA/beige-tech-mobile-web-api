@@ -1717,6 +1717,521 @@ exports.updateLeadStatus = async (req, res) => {
   }
 };
 
+/**
+ * Send Post-Production status update email (Email 10)
+ * POST /api/sales/leads/:id/post-production-status-update
+ * Body: { estimated_delivery_date: "YYYY-MM-DD" }
+ */
+exports.sendPostProductionStatusUpdate = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { estimated_delivery_date, delivery_date } = req.body;
+    const performedBy = req.userId || null;
+
+    const rawDeliveryDate = estimated_delivery_date || delivery_date;
+    if (!rawDeliveryDate) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'estimated_delivery_date is required'
+      });
+    }
+
+    const lead = await sales_leads.findByPk(id, {
+      include: [
+        {
+          model: stream_project_booking,
+          as: 'booking',
+          required: false,
+          include: [
+            {
+              model: users,
+              as: 'user',
+              required: false,
+              attributes: ['id', 'name', 'email']
+            }
+          ],
+          attributes: [
+            'stream_project_booking_id',
+            'guest_email',
+            'content_type',
+            'edits_needed',
+            'video_edit_types',
+            'photo_edit_types'
+          ]
+        }
+      ]
+    });
+
+    if (!lead) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Lead not found'
+      });
+    }
+
+    if (!lead.booking) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Booking not found for this lead'
+      });
+    }
+
+    const booking = lead.booking;
+    const toEmail = booking.user?.email || booking.guest_email || lead.guest_email;
+    if (!toEmail) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Client email not found'
+      });
+    }
+
+    const hasVideoEdits = Array.isArray(booking.video_edit_types) && booking.video_edit_types.length > 0;
+    const hasPhotoEdits = Array.isArray(booking.photo_edit_types) && booking.photo_edit_types.length > 0;
+    const hasEditingService = booking.edits_needed === 1 || booking.edits_needed === true || hasVideoEdits || hasPhotoEdits;
+
+    if (!hasEditingService) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Post-production status update can be sent only for editing bookings'
+      });
+    }
+
+    const parsedDate = new Date(rawDeliveryDate);
+    if (Number.isNaN(parsedDate.getTime())) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'estimated_delivery_date is invalid'
+      });
+    }
+
+    const formattedDeliveryDate = parsedDate.toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+
+    const baseName = (booking.user?.name || lead.client_name || '').trim();
+    let firstName = 'there';
+    if (baseName) {
+      firstName = baseName.split(/\s+/)[0];
+    } else if (toEmail.includes('@')) {
+      const local = toEmail.split('@')[0].replace(/[._-]+/g, ' ').trim();
+      if (local) firstName = local.split(/\s+/)[0];
+    }
+
+    const emailResult = await emailService.sendPostProductionStatusUpdateEmail({
+      to_email: toEmail,
+      booking_id: booking.stream_project_booking_id,
+      first_name: firstName,
+      delivery_date: formattedDeliveryDate
+    });
+
+    if (!emailResult?.success) {
+      return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+        success: false,
+        message: emailResult?.error || 'Failed to send post-production status update email'
+      });
+    }
+
+    await sales_lead_activities.create({
+      lead_id: parseInt(id, 10),
+      activity_type: 'status_changed',
+      activity_data: {
+        email_event: 'post_production_status_update',
+        booking_id: booking.stream_project_booking_id,
+        estimated_delivery_date: parsedDate.toISOString().slice(0, 10)
+      },
+      performed_by_user_id: performedBy
+    });
+
+    return res.status(constants.OK.code).json({
+      success: true,
+      message: 'Post-production status update email sent successfully',
+      data: {
+        lead_id: parseInt(id, 10),
+        booking_id: booking.stream_project_booking_id,
+        to_email: toEmail,
+        estimated_delivery_date: parsedDate.toISOString().slice(0, 10)
+      }
+    });
+  } catch (error) {
+    console.error('Error sending post-production status update email:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to send post-production status update email',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * Send Raw Footage Ready email (Email 10b)
+ * POST /api/sales/leads/:id/raw-footage-ready
+ * Body: { drive_link?: string, file_manager_link?: string }
+ */
+exports.sendRawFootageReady = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { drive_link, file_manager_link, access_files_link } = req.body;
+    const performedBy = req.userId || null;
+
+    const lead = await sales_leads.findByPk(id, {
+      include: [
+        {
+          model: stream_project_booking,
+          as: 'booking',
+          required: false,
+          include: [
+            {
+              model: users,
+              as: 'user',
+              required: false,
+              attributes: ['id', 'name', 'email']
+            },
+            {
+              model: db.projects,
+              as: 'cms_project',
+              required: false,
+              include: [
+                {
+                  model: db.project_files,
+                  as: 'files',
+                  required: false,
+                  where: {
+                    file_category: 'RAW_FOOTAGE',
+                    upload_status: 'COMPLETED',
+                    is_deleted: 0
+                  },
+                  attributes: ['file_id']
+                }
+              ],
+              attributes: ['project_id']
+            }
+          ],
+          attributes: [
+            'stream_project_booking_id',
+            'guest_email',
+            'edits_needed',
+            'video_edit_types',
+            'photo_edit_types'
+          ]
+        }
+      ]
+    });
+
+    if (!lead) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Lead not found'
+      });
+    }
+
+    if (!lead.booking) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Booking not found for this lead'
+      });
+    }
+
+    const booking = lead.booking;
+    const toEmail = booking.user?.email || booking.guest_email || lead.guest_email;
+    if (!toEmail) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Client email not found'
+      });
+    }
+
+    const hasVideoEdits = Array.isArray(booking.video_edit_types) && booking.video_edit_types.length > 0;
+    const hasPhotoEdits = Array.isArray(booking.photo_edit_types) && booking.photo_edit_types.length > 0;
+    const hasEditingService = booking.edits_needed === 1 || booking.edits_needed === true || hasVideoEdits || hasPhotoEdits;
+    if (hasEditingService) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Raw footage ready email is only for raw-footage-only bookings'
+      });
+    }
+
+    const rawFilesCount = Array.isArray(booking.cms_project?.files) ? booking.cms_project.files.length : 0;
+    if (!booking.cms_project || rawFilesCount === 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Raw footage folder is empty. Upload raw footage files before sending this email.'
+      });
+    }
+
+    const finalAccessLink =
+      (drive_link && String(drive_link).trim()) ||
+      (access_files_link && String(access_files_link).trim()) ||
+      (file_manager_link && String(file_manager_link).trim());
+
+    if (!finalAccessLink) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Provide drive_link or file_manager_link'
+      });
+    }
+
+    const baseName = (booking.user?.name || lead.client_name || '').trim();
+    let firstName = 'there';
+    if (baseName) {
+      firstName = baseName.split(/\s+/)[0];
+    } else if (toEmail.includes('@')) {
+      const local = toEmail.split('@')[0].replace(/[._-]+/g, ' ').trim();
+      if (local) firstName = local.split(/\s+/)[0];
+    }
+
+    const emailResult = await emailService.sendRawFootageReadyEmail({
+      to_email: toEmail,
+      booking_id: booking.stream_project_booking_id,
+      first_name: firstName,
+      access_files_link: finalAccessLink
+    });
+
+    if (!emailResult?.success) {
+      return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+        success: false,
+        message: emailResult?.error || 'Failed to send raw footage ready email'
+      });
+    }
+
+    await sales_lead_activities.create({
+      lead_id: parseInt(id, 10),
+      activity_type: 'status_changed',
+      activity_data: {
+        email_event: 'raw_footage_ready',
+        booking_id: booking.stream_project_booking_id,
+        drive_link: drive_link || null,
+        file_manager_link: file_manager_link || null,
+        access_files_link: finalAccessLink
+      },
+      performed_by_user_id: performedBy
+    });
+
+    return res.status(constants.OK.code).json({
+      success: true,
+      message: 'Raw footage ready email sent successfully',
+      data: {
+        lead_id: parseInt(id, 10),
+        booking_id: booking.stream_project_booking_id,
+        to_email: toEmail,
+        access_files_link: finalAccessLink,
+        raw_files_count: rawFilesCount
+      }
+    });
+  } catch (error) {
+    console.error('Error sending raw footage ready email:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to send raw footage ready email',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * Send Final Assets Delivered (without revision) email (Email 11)
+ * POST /api/sales/leads/:id/final-assets-delivered-without-revision
+ * Body: { drive_link?: string, file_manager_link?: string, view_assets_link?: string }
+ */
+exports.sendFinalAssetsDeliveredWithoutRevision = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { drive_link, file_manager_link, view_assets_link } = req.body;
+    const performedBy = req.userId || null;
+
+    const lead = await sales_leads.findByPk(id, {
+      include: [
+        {
+          model: stream_project_booking,
+          as: 'booking',
+          required: false,
+          include: [
+            {
+              model: users,
+              as: 'user',
+              required: false,
+              attributes: ['id', 'name', 'email']
+            },
+            {
+              model: db.projects,
+              as: 'cms_project',
+              required: false,
+              include: [
+                {
+                  model: db.project_files,
+                  as: 'files',
+                  required: false,
+                  where: {
+                    upload_status: 'COMPLETED',
+                    is_deleted: 0
+                  },
+                  attributes: ['file_id']
+                }
+              ],
+              attributes: ['project_id']
+            }
+          ],
+          attributes: ['stream_project_booking_id', 'guest_email']
+        }
+      ]
+    });
+
+    if (!lead) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Lead not found'
+      });
+    }
+
+    if (!lead.booking) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Booking not found for this lead'
+      });
+    }
+
+    const booking = lead.booking;
+    const toEmail = booking.user?.email || booking.guest_email || lead.guest_email;
+    if (!toEmail) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Client email not found'
+      });
+    }
+
+    const filesCount = Array.isArray(booking.cms_project?.files) ? booking.cms_project.files.length : 0;
+    if (!booking.cms_project || filesCount === 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'File manager folder is empty. Upload deliverables before sending this email.'
+      });
+    }
+
+    const finalAssetsLink =
+      (drive_link && String(drive_link).trim()) ||
+      (view_assets_link && String(view_assets_link).trim()) ||
+      (file_manager_link && String(file_manager_link).trim());
+
+    if (!finalAssetsLink) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Provide drive_link or file_manager_link'
+      });
+    }
+
+    const activities = await sales_lead_activities.findAll({
+      where: {
+        lead_id: parseInt(id, 10),
+        activity_type: 'status_changed'
+      },
+      attributes: ['activity_data']
+    });
+
+    const parseActivityData = (activityData) => {
+      if (!activityData) return {};
+      if (typeof activityData === 'object') return activityData;
+      if (typeof activityData === 'string') {
+        try {
+          return JSON.parse(activityData);
+        } catch (_) {
+          return {};
+        }
+      }
+      return {};
+    };
+
+    const hasAlreadySent = activities.some((row) => {
+      const data = parseActivityData(row.activity_data);
+      return (
+        data.email_event === 'final_assets_delivered_without_revision' &&
+        Number(data.booking_id) === Number(booking.stream_project_booking_id)
+      );
+    });
+
+    if (hasAlreadySent) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Final assets delivered (without revision) email already sent for this booking'
+      });
+    }
+
+    const hasRevisionFlow = activities.some((row) => {
+      const data = parseActivityData(row.activity_data);
+      return (
+        Number(data.booking_id) === Number(booking.stream_project_booking_id) &&
+        [
+          'revision_request_received',
+          'revised_content_delivered',
+          'final_assets_delivered_with_revision'
+        ].includes(String(data.email_event || ''))
+      );
+    });
+
+    if (hasRevisionFlow) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Cannot send without-revision delivery email after revision flow has started'
+      });
+    }
+
+    const baseName = (booking.user?.name || lead.client_name || '').trim();
+    let firstName = 'there';
+    if (baseName) {
+      firstName = baseName.split(/\s+/)[0];
+    } else if (toEmail.includes('@')) {
+      const local = toEmail.split('@')[0].replace(/[._-]+/g, ' ').trim();
+      if (local) firstName = local.split(/\s+/)[0];
+    }
+
+    const emailResult = await emailService.sendFinalDeliveryCompleteEmail({
+      to_email: toEmail,
+      booking_id: booking.stream_project_booking_id,
+      first_name: firstName,
+      view_assets_link: finalAssetsLink
+    });
+
+    if (!emailResult?.success) {
+      return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+        success: false,
+        message: emailResult?.error || 'Failed to send final delivery complete email'
+      });
+    }
+
+    await sales_lead_activities.create({
+      lead_id: parseInt(id, 10),
+      activity_type: 'status_changed',
+      activity_data: {
+        email_event: 'final_assets_delivered_without_revision',
+        booking_id: booking.stream_project_booking_id,
+        drive_link: drive_link || null,
+        file_manager_link: file_manager_link || null,
+        view_assets_link: finalAssetsLink
+      },
+      performed_by_user_id: performedBy
+    });
+
+    return res.status(constants.OK.code).json({
+      success: true,
+      message: 'Final delivery complete email sent successfully',
+      data: {
+        lead_id: parseInt(id, 10),
+        booking_id: booking.stream_project_booking_id,
+        to_email: toEmail,
+        view_assets_link: finalAssetsLink,
+        files_count: filesCount
+      }
+    });
+  } catch (error) {
+    console.error('Error sending final delivery complete email:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to send final delivery complete email',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
 // exports.updateBookingCrew = async (req, res) => {
 //   try {
 //     const { bookingId } = req.params;

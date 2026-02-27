@@ -828,10 +828,8 @@ exports.verifyEmail = async (req, res) => {
       { where: { email } }
     );
 
-    // Send welcome email for non-client roles (client signup welcome is sent at registration)
-    if (user.user_type !== 3) {
-      await emailService.sendWelcomeEmail({ name: user.name, email });
-    }
+    // Send welcome email
+    await emailService.sendWelcomeEmail({ name: user.name, email });
 
     // Generate tokens for auto-login
     const userTypeRecord = await user_type.findOne({
