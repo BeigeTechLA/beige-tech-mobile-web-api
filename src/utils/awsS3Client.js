@@ -22,7 +22,7 @@ const s3 = new AWS.S3({
 });
 
 // Constants
-const BUCKET_NAME = process.env.AWS_S3_BUCKET || 'revure-projects';
+const S3_BUCKET_NAME = process.env.AWS_S3_BUCKET || 'revure-projects';
 const MULTIPART_THRESHOLD = 100 * 1024 * 1024; // 100MB
 const PART_SIZE = 10 * 1024 * 1024; // 10MB chunks
 const MAX_CONCURRENT_PARTS = 5; // Parallel part uploads
@@ -127,7 +127,7 @@ async function uploadLargeFile(filePath, key, options = {}) {
   const fileSize = fileStats.size;
 
   const uploadParams = {
-    Bucket: BUCKET_NAME,
+    Bucket: S3_BUCKET_NAME,
     Key: key,
     Body: fileStream,
     ContentType: options.contentType || detectContentType(filePath),
@@ -211,7 +211,7 @@ async function getSignedDownloadUrl(key, expiresIn = 3600, options = {}) {
   validateConfig();
 
   const params = {
-    Bucket: BUCKET_NAME,
+    Bucket: S3_BUCKET_NAME,
     Key: key,
     Expires: expiresIn
   };
@@ -243,7 +243,7 @@ async function getSignedUploadUrl(key, contentType, expiresIn = 3600, options = 
   validateConfig();
 
   const params = {
-    Bucket: BUCKET_NAME,
+    Bucket: S3_BUCKET_NAME,
     Key: key,
     ContentType: contentType,
     Expires: expiresIn,
@@ -285,10 +285,10 @@ async function getPresignedPost(key, options = {}) {
 
   const expiresIn = options.expiresIn || 3600;
   const conditions = [
-  { bucket: BUCKET_NAME },
-  ['starts-with', '$key', key.split('/').slice(0, -1).join('/') + '/'],
-  { 'x-amz-server-side-encryption': 'AES256' }
-];
+    { bucket: S3_BUCKET_NAME },
+    ['starts-with', '$key', key.split('/').slice(0, -1).join('/') + '/'],
+    { 'x-amz-server-side-encryption': 'AES256' }
+  ];
 
   if (options.maxFileSize) {
     conditions.push(['content-length-range', 0, options.maxFileSize]);
@@ -298,16 +298,16 @@ async function getPresignedPost(key, options = {}) {
     conditions.push(['starts-with', '$Content-Type', options.contentType.split('/')[0] + '/']);
   }
 
-  // const params = {
-  //   Bucket: BUCKET_NAME,
-  //   Fields: {
-  //     key,
-  //     // acl: 'private',
-  //     'x-amz-server-side-encryption': 'AES256'
-  //   },
-  //   Expires: expiresIn,
-  //   Conditions: conditions
-  // };
+  const params = {
+    Bucket: S3_BUCKET_NAME,
+    Fields: {
+      key,
+      // acl: 'private',
+      'x-amz-server-side-encryption': 'AES256'
+    },
+    Expires: expiresIn,
+    Conditions: conditions
+  };
 
   try {
     const data = await promisify(s3.createPresignedPost.bind(s3))(params);
@@ -331,7 +331,7 @@ async function deleteFile(key) {
   validateConfig();
 
   const params = {
-    Bucket: BUCKET_NAME,
+    Bucket: S3_BUCKET_NAME,
     Key: key
   };
 
@@ -370,7 +370,7 @@ async function deleteFiles(keys) {
 
   for (const chunk of chunks) {
     const params = {
-      Bucket: BUCKET_NAME,
+      Bucket: S3_BUCKET_NAME,
       Delete: {
         Objects: chunk.map(key => ({ Key: key })),
         Quiet: false
@@ -417,7 +417,7 @@ async function listFiles(prefix, options = {}) {
   validateConfig();
 
   const params = {
-    Bucket: BUCKET_NAME,
+    Bucket: S3_BUCKET_NAME,
     Prefix: prefix,
     MaxKeys: options.maxKeys || 1000
   };
@@ -480,7 +480,7 @@ async function getFileMetadata(key) {
   validateConfig();
 
   const params = {
-    Bucket: BUCKET_NAME,
+    Bucket: S3_BUCKET_NAME,
     Key: key
   };
 
@@ -535,8 +535,8 @@ async function copyFile(sourceKey, destinationKey, options = {}) {
   validateConfig();
 
   const params = {
-    Bucket: BUCKET_NAME,
-    CopySource: `${BUCKET_NAME}/${sourceKey}`,
+    Bucket: S3_BUCKET_NAME,
+    CopySource: `${S3_BUCKET_NAME}/${sourceKey}`,
     Key: destinationKey,
     ServerSideEncryption: options.serverSideEncryption !== false ? 'AES256' : undefined,
     MetadataDirective: options.metadata ? 'REPLACE' : 'COPY',
@@ -733,7 +733,7 @@ async function uploadFile(filePath, key, options = {}) {
   const fileContent = fs.readFileSync(filePath);
 
   const uploadParams = {
-    Bucket: BUCKET_NAME,
+    Bucket: S3_BUCKET_NAME,
     Key: key,
     Body: fileContent,
     ContentType: options.contentType || detectContentType(filePath),
@@ -758,9 +758,9 @@ async function uploadFile(filePath, key, options = {}) {
     console.log(`S3 upload successful: ${key}`);
 
     const uploadResult = {
-      location: `https://${BUCKET_NAME}.s3.amazonaws.com/${key}`,
+      location: `https://${S3_BUCKET_NAME}.s3.amazonaws.com/${key}`,
       etag: result.ETag,
-      bucket: BUCKET_NAME,
+      bucket: S3_BUCKET_NAME,
       key,
       versionId: result.VersionId,
       checksum,
@@ -816,7 +816,7 @@ async function uploadMultipart(filePath, key, options = {}) {
 
   // Initialize multipart upload
   const createParams = {
-    Bucket: BUCKET_NAME,
+    Bucket: S3_BUCKET_NAME,
     Key: key,
     ContentType: contentType,
     ServerSideEncryption: options.serverSideEncryption !== false ? 'AES256' : undefined,
@@ -868,7 +868,7 @@ async function uploadMultipart(filePath, key, options = {}) {
     fs.closeSync(fd);
 
     const partParams = {
-      Bucket: BUCKET_NAME,
+      Bucket: S3_BUCKET_NAME,
       Key: key,
       PartNumber: partNumber,
       UploadId: uploadId,
@@ -920,7 +920,7 @@ async function uploadMultipart(filePath, key, options = {}) {
 
     // Complete multipart upload
     const completeParams = {
-      Bucket: BUCKET_NAME,
+      Bucket: S3_BUCKET_NAME,
       Key: key,
       UploadId: uploadId,
       MultipartUpload: {
@@ -947,7 +947,7 @@ async function uploadMultipart(filePath, key, options = {}) {
 
     try {
       await s3.abortMultipartUpload({
-        Bucket: BUCKET_NAME,
+        Bucket: S3_BUCKET_NAME,
         Key: key,
         UploadId: uploadId
       }).promise();
@@ -968,7 +968,7 @@ async function getBucketCORS() {
   validateConfig();
 
   const params = {
-    Bucket: BUCKET_NAME
+    Bucket: S3_BUCKET_NAME
   };
 
   try {
@@ -1007,7 +1007,7 @@ async function testConnection() {
 
   try {
     // Test list
-    await s3.listObjectsV2({ Bucket: BUCKET_NAME, MaxKeys: 1 }).promise();
+    await s3.listObjectsV2({ Bucket: S3_BUCKET_NAME, MaxKeys: 1 }).promise();
     results.canList = true;
   } catch (error) {
     results.errors.push({ operation: 'list', message: error.message });
@@ -1016,7 +1016,7 @@ async function testConnection() {
   try {
     // Test write
     await s3.putObject({
-      Bucket: BUCKET_NAME,
+      Bucket: S3_BUCKET_NAME,
       Key: testKey,
       Body: testContent,
       ServerSideEncryption: 'AES256'
@@ -1025,7 +1025,7 @@ async function testConnection() {
 
     // Test read
     const readResult = await s3.getObject({
-      Bucket: BUCKET_NAME,
+      Bucket: S3_BUCKET_NAME,
       Key: testKey
     }).promise();
 
@@ -1035,7 +1035,7 @@ async function testConnection() {
 
     // Test delete
     await s3.deleteObject({
-      Bucket: BUCKET_NAME,
+      Bucket: S3_BUCKET_NAME,
       Key: testKey
     }).promise();
     results.canDelete = true;
@@ -1051,7 +1051,7 @@ module.exports = {
   s3,
 
   // Configuration
-  BUCKET_NAME,
+  S3_BUCKET_NAME,
   FOLDER_STRUCTURE,
   MULTIPART_THRESHOLD,
   PART_SIZE,
