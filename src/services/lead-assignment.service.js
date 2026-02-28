@@ -297,6 +297,49 @@ async function unassignLead(leadId, performedByUserId) {
 // };
 
 // Add/Update this in your service file
+// const getLeadBookingStatus = (lead, booking) => {
+//   // 1. Closed - Lost
+//   if (lead.lead_status === 'abandoned' || booking?.is_cancelled) {
+//     return 'Closed – Lost';
+//   }
+
+//   // 2. Booked (Payment verified)
+//   if (booking?.payment_id || lead.lead_status === 'booked') {
+//     return 'Booked';
+//   }
+
+//   // 3. Proposal Sent (Invoice generated/sent)
+//   if (lead.lead_status === 'proposal_sent') {
+//     return 'Proposal Sent (optional)';
+//   }
+
+//   // 4. Payment Sent (Link generated/emailed)
+//   if (lead.lead_status === 'payment_link_sent') {
+//     return 'Payment Sent';
+//   }
+
+//   // 5. Ready for Payment (Booking finalized but link not sent)
+//   if (booking && booking.is_draft === 0) {
+//     return 'Ready for Payment';
+//   }
+
+//   // 6. Booking In Progress
+//   if (lead.lead_status === 'booking_in_progress' || (booking && booking.is_draft === 1)) {
+//     // If it's a specific "Lead Created" status, show that instead of "In Progress"
+//     if (lead.lead_status === 'book_a_shoot_lead_created') return 'Book a shoot – Lead Created';
+//     if (lead.lead_status === 'manual_lead_created') return 'Manual – Lead Created';
+    
+//     return 'Booking In Progress';
+//   }
+
+//   // 7. Initial Lead States
+//   if (lead.lead_status === 'book_a_shoot_lead_created') return 'Book a shoot – Lead Created';
+//   if (lead.lead_status === 'manual_lead_created') return 'Manual – Lead Created';
+
+//   // Fallback / Default
+//   return 'Signed Up – Lead Created';
+// };
+
 const getLeadBookingStatus = (lead, booking) => {
   // 1. Closed - Lost
   if (lead.lead_status === 'abandoned' || booking?.is_cancelled) {
@@ -305,17 +348,17 @@ const getLeadBookingStatus = (lead, booking) => {
 
   // 2. Booked (Payment verified)
   if (booking?.payment_id || lead.lead_status === 'booked') {
-    return 'Booked';
+    return 'Paid';
   }
 
   // 3. Proposal Sent (Invoice generated/sent)
   if (lead.lead_status === 'proposal_sent') {
-    return 'Proposal Sent (optional)';
+    return 'Payment Link Sent';
   }
 
   // 4. Payment Sent (Link generated/emailed)
   if (lead.lead_status === 'payment_link_sent') {
-    return 'Payment Sent';
+    return 'Payment Link Sent';
   }
 
   // 5. Ready for Payment (Booking finalized but link not sent)
@@ -337,7 +380,7 @@ const getLeadBookingStatus = (lead, booking) => {
   if (lead.lead_status === 'manual_lead_created') return 'Manual – Lead Created';
 
   // Fallback / Default
-  return 'Signed Up – Lead Created';
+  return 'Singed Up';
 };
 
 const getLeadIntent = ({ lead, booking }) => {
@@ -392,7 +435,7 @@ const getClientIntent = ({ booking }) => {
 
 const getClientBookingStatus = (booking) => {
   if (!booking) {
-    return 'Signed Up – Lead Created';
+    return 'Signed Up';
   }
 
   if (booking.is_cancelled) {
@@ -411,7 +454,7 @@ const getClientBookingStatus = (booking) => {
     return 'Ready for Payment';
   }
 
-  return 'Signed Up – Lead Created';
+  return 'Signed Up';
 };
 
 function getLeadBookingStep(lead, booking, activities = []) {

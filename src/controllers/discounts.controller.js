@@ -53,7 +53,7 @@ exports.generateDiscountCode = async (req, res) => {
     if (!booking.quote_id) {
       return res.status(constants.BAD_REQUEST.code).json({
         success: false,
-        message: 'Cannot generate discount code: A quote must be generated first.'
+        message: 'Booking details are still pending. Please complete the booking process before generating the discount code.'
       });
     }
     // --------------------------------------------

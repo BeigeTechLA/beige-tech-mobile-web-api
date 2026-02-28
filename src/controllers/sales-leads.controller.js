@@ -1322,27 +1322,21 @@ exports.getLeadById = async (req, res) => {
     const leadJson = lead.toJSON();
 
     let final_phone = leadJson.phone || leadJson.phone_number;
-
     if (!final_phone && leadJson.booking?.description) {
         const phoneMatch = leadJson.booking.description.match(/Phone:\s*(\d+)/i);
-        if (phoneMatch && phoneMatch[1]) {
-            final_phone = phoneMatch[1];
-        }
+        if (phoneMatch && phoneMatch[1]) final_phone = phoneMatch[1];
     }
-
     if (!final_phone && (leadJson.user_id || leadJson.booking?.user_id)) {
         const targetUserId = leadJson.user_id || leadJson.booking.user_id;
         const userRecord = await users.findByPk(targetUserId, { attributes: ['phone_number'] });
-        if (userRecord) {
-            final_phone = userRecord.phone_number;
-        }
+        if (userRecord) final_phone = userRecord.phone_number;
     }
 
     let active_payment_link = null;
-    const pLinks = leadJson.payment_links || leadJson.paymentLinks;
+    const pLinks = leadJson.payment_links || leadJson.paymentLinks || [];
     const dCodes = leadJson.discount_codes || leadJson.discountCodes || [];
 
-    if (pLinks && pLinks.length > 0) {
+    if (pLinks.length > 0) {
       const latestLink = [...pLinks].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
       const attachedDiscount = dCodes.find((d) => d.discount_code_id === latestLink.discount_code_id);
       const baseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
@@ -1362,38 +1356,44 @@ exports.getLeadById = async (req, res) => {
           discount_details: attachedDiscount ? {
             code: attachedDiscount.code,
             type: attachedDiscount.discount_type,
-            value: attachedDiscount.discount_value,
+            value: parseFloat(attachedDiscount.discount_value),
             is_active: attachedDiscount.is_active
           } : null
         };
       }
     }
 
+    // 4. PRICING BREAKDOWN LOGIC
+    // Determine payment status first
+    let payment_status = lead.booking?.payment_id ? 'paid' : 'unpaid';
+    if (payment_status === 'unpaid' && active_payment_link) {
+        payment_status = active_payment_link.is_expired ? 'link_expired' : 'link_sent';
+    }
+
     const projectedQuote = await calculateLeadPricing(lead.booking);
+    const activeQuoteSource = leadJson.booking?.primary_quote || projectedQuote;
 
     let pricing_breakdown = {
         shoot_cost: 0,
         editing_cost: 0,
         additional_creatives_cost: 0,
-        discount: parseFloat(leadJson.booking?.primary_quote?.discount_amount || 0),
+        discount: 0,
         total: 0
     };
 
-    const activeQuoteSource = leadJson.booking?.primary_quote || projectedQuote;
-    pricing_breakdown.total = parseFloat(activeQuoteSource?.total || 0);
-
     const itemsToProcess = activeQuoteSource?.line_items || [];
+    let subtotal = 0;
 
     itemsToProcess.forEach(item => {
         const name = (item.item_name || item.name || '').toLowerCase();
         const lineTotal = parseFloat(item.line_total || item.total || 0);
         const quantity = parseInt(item.quantity || 1);
 
+        subtotal += lineTotal;
+
         if (name.includes('videographer') || name.includes('photographer')) {
             const unitPrice = lineTotal / quantity;
-            
             pricing_breakdown.shoot_cost += unitPrice;
-
             if (quantity > 1) {
                 pricing_breakdown.additional_creatives_cost += (unitPrice * (quantity - 1));
             }
@@ -1406,16 +1406,30 @@ exports.getLeadById = async (req, res) => {
         }
     });
 
-    const selectedCrewIds = lead.booking?.assigned_crews?.map(c => c.crew_member_id).filter(Boolean) || [];
-    const intent = lead.intent ?? leadAssignmentService.getLeadIntent({ lead, booking: lead.booking });
-    const intent_source = lead.intent ? 'manual' : 'system';
-    const booking_status = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
-    
-    let payment_status = lead.booking?.payment_id ? 'paid' : 'unpaid';
-    if (payment_status === 'unpaid' && active_payment_link) {
-        payment_status = active_payment_link.is_expired ? 'link_expired' : 'link_sent';
+    // --- APPLY DYNAMIC DISCOUNT LOGIC ---
+    if (payment_status === 'paid') {
+        // If already paid, show what was actually recorded in the quote
+        pricing_breakdown.discount = parseFloat(leadJson.booking?.primary_quote?.discount_amount || 0);
+    } else if (active_payment_link && active_payment_link.discount_details) {
+        // If unpaid, use discount from the LATEST payment link
+        const disc = active_payment_link.discount_details;
+        if (disc.type === 'percentage') {
+            pricing_breakdown.discount = (subtotal * (disc.value / 100));
+        } else {
+            pricing_breakdown.discount = disc.value; // Fixed amount
+        }
+    } else {
+        // Fallback to quote discount if no link exists
+        pricing_breakdown.discount = parseFloat(leadJson.booking?.primary_quote?.discount_amount || 0);
     }
 
+    // Final total calculation
+    pricing_breakdown.total = subtotal - pricing_breakdown.discount;
+
+    // 5. Fulfillment Summary Logic
+    const selectedCrewIds = lead.booking?.assigned_crews?.map(c => c.crew_member_id).filter(Boolean) || [];
+    const intent = lead.intent ?? leadAssignmentService.getLeadIntent({ lead, booking: lead.booking });
+    const booking_status = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
     const booking_step = leadAssignmentService.getLeadBookingStep(lead, lead.booking, lead.activities);
     const can_edit_booking = canEditBooking(lead, lead.booking);
 
@@ -1438,19 +1452,9 @@ exports.getLeadById = async (req, res) => {
         leadJson.booking.assigned_crews.forEach(ac => {
           let crewRoleIds = [];
           let rawRole = ac.crew_member?.primary_role;
-          if (typeof rawRole === 'string') {
-              try {
-                  crewRoleIds = JSON.parse(rawRole);
-              } catch (e) {
-                  crewRoleIds = [rawRole];
-              }
-          } else if (rawRole !== null && rawRole !== undefined) {
-              crewRoleIds = rawRole;
-          }
-
-          if (!Array.isArray(crewRoleIds)) {
-              crewRoleIds = crewRoleIds ? [crewRoleIds] : [];
-          }
+          if (typeof rawRole === 'string') { try { crewRoleIds = JSON.parse(rawRole); } catch (e) { crewRoleIds = [rawRole]; } }
+          else if (rawRole != null) { crewRoleIds = rawRole; }
+          if (!Array.isArray(crewRoleIds)) crewRoleIds = crewRoleIds ? [crewRoleIds] : [];
 
           const potentialCategories = [...new Set(crewRoleIds.map(id => ID_TO_ROLE_MAP[String(id)]).filter(Boolean))];
           
@@ -1489,7 +1493,7 @@ exports.getLeadById = async (req, res) => {
         phone: final_phone,
         selected_crew_ids: selectedCrewIds,
         intent,
-        intent_source,
+        intent_source: lead.intent ? 'manual' : 'system',
         booking_status,
         payment_status,
         active_payment_link,
