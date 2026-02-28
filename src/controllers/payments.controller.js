@@ -793,6 +793,7 @@ exports.confirmPaymentMulti = async (req, res) => {
 
     let totalAmount = 0;
     let chargeId = null;
+    let paymentIntent = null;
 
     // --- UPDATED LOGIC HERE ---
     // 2. Check if this is a Free Checkout mock ID
@@ -813,7 +814,7 @@ exports.confirmPaymentMulti = async (req, res) => {
 
     } else {
       try {
-        const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+        paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
         
         if (paymentIntent.status !== 'succeeded') {
           if (transaction) await transaction.rollback();
@@ -914,10 +915,14 @@ exports.confirmPaymentMulti = async (req, res) => {
         paymentIntentId: paymentIntentId
     }).catch(err => console.error('Sales Notification Error:', err));
 
-    const paymentMethod =
-      paymentIntent.charges?.data?.[0]?.payment_method_details?.type ||
-      paymentIntent.payment_method_types?.[0] ||
-      'card';
+    let paymentMethod = 'free'; // default for free checkout
+
+    if (paymentIntent) {
+      paymentMethod =
+        paymentIntent.charges?.data?.[0]?.payment_method_details?.type ||
+        paymentIntent.payment_method_types?.[0] ||
+        'card';
+    }
     sendBookingConfirmationForBooking({
       bookingId: booking_id,
       amountPaid: totalAmount,
