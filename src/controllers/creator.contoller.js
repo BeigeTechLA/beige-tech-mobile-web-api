@@ -522,10 +522,18 @@ exports.updateRequestStatus = async (req, res) => {
     }
 
     if (crew_accept === 2) {
-      await assigned_crew.update(
-        { crew_accept: 2 },
+      const updateResult = await assigned_crew.update(
+        { 
+          crew_accept: 2, 
+          responded_at: new Date()
+        },
         { where: { crew_member_id, project_id, crew_accept: 0 } }
       );
+
+      if (updateResult[0] === 0) {
+        return res.status(404).json({ error: true, message: "No pending request found." });
+      }
+
       return res.status(200).json({ error: false, message: "Request declined successfully." });
     }
 
@@ -591,9 +599,11 @@ exports.updateRequestStatus = async (req, res) => {
         });
       }
 
-      // All good! Proceed with acceptance
       const updateResult = await assigned_crew.update(
-        { crew_accept: 1 },
+        { 
+          crew_accept: 1,
+          responded_at: new Date() 
+        },
         { where: { crew_member_id, project_id, crew_accept: 0 } }
       );
 

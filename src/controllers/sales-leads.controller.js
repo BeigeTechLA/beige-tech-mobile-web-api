@@ -1267,6 +1267,7 @@ exports.getLeadById = async (req, res) => {
                 "crew_accept",
                 "status",
                 "is_active",
+                "responded_at",
               ],
               include: [
                 {
@@ -1363,8 +1364,6 @@ exports.getLeadById = async (req, res) => {
       }
     }
 
-    // 4. PRICING BREAKDOWN LOGIC
-    // Determine payment status first
     let payment_status = lead.booking?.payment_id ? 'paid' : 'unpaid';
     if (payment_status === 'unpaid' && active_payment_link) {
         payment_status = active_payment_link.is_expired ? 'link_expired' : 'link_sent';
@@ -1406,27 +1405,21 @@ exports.getLeadById = async (req, res) => {
         }
     });
 
-    // --- APPLY DYNAMIC DISCOUNT LOGIC ---
     if (payment_status === 'paid') {
-        // If already paid, show what was actually recorded in the quote
         pricing_breakdown.discount = parseFloat(leadJson.booking?.primary_quote?.discount_amount || 0);
     } else if (active_payment_link && active_payment_link.discount_details) {
-        // If unpaid, use discount from the LATEST payment link
         const disc = active_payment_link.discount_details;
         if (disc.type === 'percentage') {
             pricing_breakdown.discount = (subtotal * (disc.value / 100));
         } else {
-            pricing_breakdown.discount = disc.value; // Fixed amount
+            pricing_breakdown.discount = disc.value; 
         }
     } else {
-        // Fallback to quote discount if no link exists
         pricing_breakdown.discount = parseFloat(leadJson.booking?.primary_quote?.discount_amount || 0);
     }
 
-    // Final total calculation
     pricing_breakdown.total = subtotal - pricing_breakdown.discount;
 
-    // 5. Fulfillment Summary Logic
     const selectedCrewIds = lead.booking?.assigned_crews?.map(c => c.crew_member_id).filter(Boolean) || [];
     const intent = lead.intent ?? leadAssignmentService.getLeadIntent({ lead, booking: lead.booking });
     const booking_status = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
@@ -1479,12 +1472,33 @@ exports.getLeadById = async (req, res) => {
     }
 
     const statusMap = { 0: 'pending', 1: 'accepted', 2: 'rejected' };
+    
     if (leadJson.booking?.assigned_crews) {
-      leadJson.booking.assigned_crews = leadJson.booking.assigned_crews.map(ac => ({
-        ...ac,
-        acceptance_status: statusMap[ac.crew_accept] || 'pending'
-      }));
+      leadJson.booking.assigned_crews = leadJson.booking.assigned_crews.map(ac => {
+        const formattedFirstName = ac.crew_member.first_name.charAt(0).toUpperCase() + ac.crew_member.first_name.slice(1).toLowerCase();
+        const formattedLastName = ac.crew_member.last_name.charAt(0).toUpperCase();
+
+        return {
+          ...ac,
+          crew_member: {
+            ...ac.crew_member,
+            first_name: formattedFirstName,
+            last_name: formattedLastName,
+          },
+          acceptance_status: statusMap[ac.crew_accept] || 'pending',
+        };
+      });
     }
+
+    const allCrews = leadJson.booking?.assigned_crews || [];
+
+    const accepted_cp = allCrews
+      .filter(ac => ac.crew_accept === 1)
+      .sort((a, b) => new Date(a.responded_at || 0) - new Date(b.responded_at || 0));
+
+    const rejected_ap = allCrews
+      .filter(ac => ac.crew_accept === 2)
+      .sort((a, b) => new Date(a.responded_at || 0) - new Date(b.responded_at || 0));
 
     res.json({
       success: true,
@@ -1492,6 +1506,8 @@ exports.getLeadById = async (req, res) => {
         ...leadJson,
         phone: final_phone,
         selected_crew_ids: selectedCrewIds,
+        accepted_cp,
+        rejected_ap,
         intent,
         intent_source: lead.intent ? 'manual' : 'system',
         booking_status,
@@ -1509,7 +1525,6 @@ exports.getLeadById = async (req, res) => {
     res.status(500).json({ success: false, message: 'Failed to fetch lead details', error: error.message });
   }
 };
-
 exports.getLeadFulfillmentStatus = async (req, res) => {
   try {
     const { id } = req.params;

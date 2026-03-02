@@ -52,6 +52,10 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.INTEGER,
       allowNull: false,
       defaultValue: 0
+    },
+    responded_at: {
+      type: DataTypes.DATE,
+      allowNull: true
     }
   }, {
     sequelize,
