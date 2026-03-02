@@ -1486,6 +1486,24 @@ exports.getLeadById = async (req, res) => {
       }));
     }
 
+    if (leadJson.booking?.assigned_crews) {
+      leadJson.booking.assigned_crews = leadJson.booking.assigned_crews.map(ac => {
+        const formattedFirstName = ac.crew_member.first_name.charAt(0).toUpperCase() + ac.crew_member.first_name.slice(1).toLowerCase();
+
+        const formattedLastName = ac.crew_member.last_name.charAt(0).toUpperCase();
+
+        return {
+          ...ac,
+          crew_member: {
+            ...ac.crew_member,
+            first_name: formattedFirstName,
+            last_name: formattedLastName,
+          },
+          acceptance_status: statusMap[ac.crew_accept] || 'pending',
+        };
+      });
+    }
+
     res.json({
       success: true,
       data: {

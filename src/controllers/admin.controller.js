@@ -6659,51 +6659,57 @@ exports.searchCrewForLead = async (req, res) => {
         });
 
         // 6️⃣ Format Response
-        const crewWithRoles = availableCrew.map(crewMember => {
-            let matchedRoles = [];
-            let rawRoles = [];
+      const crewWithRoles = availableCrew.map(crewMember => {
+        let matchedRoles = [];
+        let rawRoles = [];
 
-            try {
-                if (crewMember.primary_role) {
-                    if (Array.isArray(crewMember.primary_role)) {
-                        rawRoles = crewMember.primary_role;
-                    } else if (typeof crewMember.primary_role === "string") {
-                        try {
-                            const parsed = JSON.parse(crewMember.primary_role);
-                            rawRoles = Array.isArray(parsed) ? parsed : [parsed];
-                        } catch {
-                            rawRoles = crewMember.primary_role.split(',').map(r => r.trim());
-                        }
-                    }
-                }
-            } catch (e) { rawRoles = []; }
+        try {
+          if (crewMember.primary_role) {
+            if (Array.isArray(crewMember.primary_role)) {
+              rawRoles = crewMember.primary_role;
+            } else if (typeof crewMember.primary_role === "string") {
+              try {
+                const parsed = JSON.parse(crewMember.primary_role);
+                rawRoles = Array.isArray(parsed) ? parsed : [parsed];
+              } catch {
+                rawRoles = crewMember.primary_role.split(',').map(r => r.trim());
+              }
+            }
+          }
+        } catch (e) { rawRoles = []; }
 
-            const stringRoleIds = rawRoles.map(String);
-            if (stringRoleIds.some(id => ROLE_GROUPS.videographer.includes(id))) matchedRoles.push("videographer");
-            if (stringRoleIds.some(id => ROLE_GROUPS.photographer.includes(id))) matchedRoles.push("photographer");
-            if (stringRoleIds.some(id => ROLE_GROUPS.cinematographer.includes(id))) matchedRoles.push("cinematographer");
+        const stringRoleIds = rawRoles.map(String);
+        if (stringRoleIds.some(id => ROLE_GROUPS.videographer.includes(id))) matchedRoles.push("videographer");
+        if (stringRoleIds.some(id => ROLE_GROUPS.photographer.includes(id))) matchedRoles.push("photographer");
+        if (stringRoleIds.some(id => ROLE_GROUPS.cinematographer.includes(id))) matchedRoles.push("cinematographer");
 
-            const profilePhoto = crewMember.crew_member_files && crewMember.crew_member_files.length > 0 
-                ? crewMember.crew_member_files[0].file_path 
-                : null;
+        const profilePhoto = crewMember.crew_member_files && crewMember.crew_member_files.length > 0
+          ? crewMember.crew_member_files[0].file_path
+          : null;
 
-            const crewJson = crewMember.toJSON();
-            delete crewJson.crew_member_files;
+        const crewJson = crewMember.toJSON();
+        delete crewJson.crew_member_files;
 
-            return {
-                ...crewJson,
-                profile_photo: profilePhoto,
-                role_names: matchedRoles.length > 0 ? matchedRoles : ["Unspecified"],
-                role: matchedRoles.length > 0 ? matchedRoles.join(", ") : "Unspecified"
-            };
-        });
+        const formattedFirstName = crewJson.first_name.charAt(0).toUpperCase() + crewJson.first_name.slice(1).toLowerCase();
 
-        res.json({
-            success: true,
-            project_date: projectDate,
-            available_count: crewWithRoles.length,
-            data: crewWithRoles
-        });
+        const formattedLastName = crewJson.last_name.charAt(0).toUpperCase();
+
+        return {
+          ...crewJson,
+          profile_photo: profilePhoto,
+          first_name: formattedFirstName,
+          last_name: formattedLastName,
+          role_names: matchedRoles.length > 0 ? matchedRoles : ["Unspecified"],
+          role: matchedRoles.length > 0 ? matchedRoles.join(", ") : "Unspecified"
+        };
+      });
+
+      res.json({
+        success: true,
+        project_date: projectDate,
+        available_count: crewWithRoles.length,
+        data: crewWithRoles
+      });
 
     } catch (error) {
         console.error("searchCrewForLead error:", error);
