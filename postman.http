@@ -655,3 +655,14 @@ Authorization: {{TOKEN}}
   "file_manager_link": "https://book.beige.app/dashboard/projects/your-project-id/files",
   "view_assets_link": "https://book.beige.app/dashboard/projects/your-project-id/files"
 }
+
+### 
+POST {{URL}}creator/accept-project HTTP/1.1
+Content-Type: application/json
+# Authorization: {{TOKEN}}
+
+{
+  "crew_member_id": 2090,
+  "project_id": 886,
+  "crew_accept": 1
+}

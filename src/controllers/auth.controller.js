@@ -695,32 +695,22 @@ exports.resendOTP = async (req, res) => {
     const { email } = req.body;
 
     if (!email) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email is required'
-      });
+      return res.status(400).json({ success: false, message: 'Email is required' });
     }
 
-    // Find user
     const user = await User.findOne({ where: { email } });
 
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
+      return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    // Check if already verified
     if (user.email_verified === 1) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email already verified'
-      });
+      return res.status(400).json({ success: false, message: 'Email already verified' });
     }
 
-    // Check rate limiting (60 seconds)
-    const rateLimit = otpService.checkOTPRateLimit(user.otp_expiry, 1);
+
+    const rateLimit = otpService.checkOTPRateLimit(user.updatedAt, 1); 
+    
     if (!rateLimit.allowed) {
       return res.status(429).json({
         success: false,
@@ -729,11 +719,9 @@ exports.resendOTP = async (req, res) => {
       });
     }
 
-    // Generate new OTP
     const otp = otpService.generateOTP();
     const otpExpiry = otpService.generateOTPExpiry(10);
 
-    // Update user
     await User.update(
       {
         verification_code: otp,
@@ -764,8 +752,7 @@ exports.resendOTP = async (req, res) => {
     console.error('Resend OTP Error:', error);
     return res.status(500).json({
       success: false,
-      message: 'Server error resending OTP',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Server error resending OTP'
     });
   }
 };
