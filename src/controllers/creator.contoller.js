@@ -1796,6 +1796,88 @@ exports.uploadProfileFiles = [
   }
 ];
 
+exports.uploadCPProfilePhoto = [
+  // Using .single because a profile photo is always just one file
+  upload.single('profile_photo'),
+
+  async (req, res) => {
+    try {
+      const crew_member_id = req.user?.crew_member_id || req.body.crew_member_id;
+
+      // 1. Validation: Check if file exists
+      if (!req.file) {
+        return res.status(constants.BAD_REQUEST.code).json({
+          error: true,
+          code: constants.BAD_REQUEST.code,
+          message: 'No profile photo provided',
+          data: null
+        });
+      }
+
+      // 2. Prepare for S3 Upload (matching your helper's expected format)
+      const filesForUpload = { profile_photo: [req.file] };
+      const uploadedFiles = await S3UploadFiles(filesForUpload);
+
+      if (!uploadedFiles || uploadedFiles.length === 0) {
+          throw new Error("Failed to upload file to S3");
+      }
+
+      const newFilePath = uploadedFiles[0].file_path;
+
+      /**
+       * 3. Handle Database Logic
+       * We remove the existing profile_photo record if it exists 
+       * to ensure the user only ever has one.
+       */
+      await crew_member_files.destroy({
+        where: { 
+          crew_member_id, 
+          file_type: 'profile_photo' 
+        }
+      });
+
+      // 4. Create the new record
+      const newPhoto = await crew_member_files.create({
+        crew_member_id,
+        file_type: 'profile_photo',
+        file_path: newFilePath,
+        title: 'Profile Photo',
+        tag: "[]",
+        is_active: true
+      });
+
+      // Optional: Log Activity
+      /* 
+      await common.logActivity({
+        crew_member_id,
+        activity_type: 'profile_photo_updated',
+        title: 'Profile Photo Updated',
+        description: `Profile photo has been updated successfully`,
+        reference_id: crew_member_id,
+        reference_type: 'crew_profile'
+      });
+      */
+
+      return res.status(constants.OK.code).json({
+        error: false,
+        code: constants.OK.code,
+        message: 'Profile photo updated successfully',
+        data: {
+          file_path: newFilePath
+        }
+      });
+
+    } catch (err) {
+      console.error("Error in uploadCPProfilePhoto:", err);
+      return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+        error: true,
+        code: constants.INTERNAL_SERVER_ERROR.code,
+        message: constants.INTERNAL_SERVER_ERROR.message,
+        data: null
+      });
+    }
+  }
+];
 exports.addPortfolioLinks = async (req, res) => {
   try {
     const crew_member_id = req.user?.crew_member_id || req.body.crew_member_id;

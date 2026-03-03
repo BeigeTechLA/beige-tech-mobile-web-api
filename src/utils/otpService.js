@@ -102,19 +102,16 @@ const generateTokenExpiry = (hours = 1) => {
  */
 const checkOTPRateLimit = (lastOTPSentAt, limitMinutes = 1) => {
   if (!lastOTPSentAt) {
-    return {
-      allowed: true,
-      remainingTime: 0
-    };
+    return { allowed: true, remainingTime: 0 };
   }
 
   const now = new Date();
   const lastSent = new Date(lastOTPSentAt);
   const diffMs = now - lastSent;
-  const diffMinutes = diffMs / 1000 / 60;
+  const limitMs = limitMinutes * 60 * 1000;
 
-  if (diffMinutes < limitMinutes) {
-    const remainingSeconds = Math.ceil((limitMinutes * 60) - (diffMs / 1000));
+  if (diffMs < limitMs) {
+    const remainingSeconds = Math.ceil((limitMs - diffMs) / 1000);
     return {
       allowed: false,
       remainingTime: remainingSeconds,

@@ -1267,6 +1267,7 @@ exports.getLeadById = async (req, res) => {
                 "crew_accept",
                 "status",
                 "is_active",
+                "created_at",
                 "responded_at",
               ],
               include: [

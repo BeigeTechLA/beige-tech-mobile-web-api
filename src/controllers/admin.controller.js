@@ -7229,3 +7229,111 @@ exports.getBookingSummaryById = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+exports.deleteCrewMember = async (req, res) => {
+  const transaction = await crew_members.sequelize.transaction();
+  
+  try {
+    const { crew_member_id } = req.body;
+
+    if (!crew_member_id) {
+      if (transaction) await transaction.rollback();
+      return res.status(400).json({ success: false, message: "crew_member_id is required" });
+    }
+
+    const crew = await crew_members.findOne({
+      where: { crew_member_id: crew_member_id }
+    });
+
+    if (!crew) {
+      if (transaction) await transaction.rollback();
+      return res.status(404).json({ success: false, message: "Crew member not found" });
+    }
+
+    const today = new Date().toISOString().split('T')[0];
+
+    const futureProjects = await assigned_crew.findAll({
+      where: {
+        crew_member_id: crew_member_id,
+        is_active: 1
+      },
+      include: [{
+        model: stream_project_booking,
+        as: 'project',
+        where: {
+          event_date: { [Op.gte]: today }
+        },
+        attributes: ['stream_project_booking_id', 'project_name', 'event_date']
+      }]
+    });
+
+    if (futureProjects && futureProjects.length > 0) {
+      await transaction.rollback();
+      
+      const projectDetails = futureProjects.map((f, index) => 
+        `${index + 1}. Project: ${f.project.project_name} (ID: ${f.project.stream_project_booking_id}) on ${f.project.event_date}`
+      ).join('\n');
+
+      return res.status(400).json({
+        success: false,
+        message: `Action Blocked: This CP is assigned to upcoming shoots.\n\nPlease reassign these projects before deleting:\n\n${projectDetails}`,
+        future_projects: futureProjects.map(f => ({
+          id: f.project.stream_project_booking_id,
+          name: f.project.project_name,
+          date: f.project.event_date
+        }))
+      });
+    }
+
+    const hasHistory = await assigned_crew.count({
+      where: { crew_member_id: crew_member_id }
+    });
+
+    const associatedUser = await users.findOne({ where: { email: crew.email } });
+
+    if (hasHistory > 0) {
+      await crew_members.update(
+        { is_active: 0 }, 
+        { where: { crew_member_id }, transaction }
+      );
+
+      if (associatedUser) {
+        await users.update(
+          { is_active: 0 }, 
+          { where: { email: crew.email }, transaction }
+        );
+      }
+
+      await transaction.commit();
+      return res.json({
+        success: true,
+        type: 'soft_delete',
+        message: "Crew member has past project history. Account has been deactivated (is_active: 0)."
+      });
+    }
+
+    await crew_member_files.destroy({ where: { crew_member_id }, transaction });
+    await assigned_crew.destroy({ where: { crew_member_id }, transaction });
+    await crew_members.destroy({ where: { crew_member_id }, transaction });
+
+    if (associatedUser) {
+      await users.destroy({ where: { email: crew.email }, transaction });
+    }
+
+    await transaction.commit();
+    return res.json({
+      success: true,
+      type: 'hard_delete',
+      message: "Crew member and user account have been permanently deleted (No history found)."
+    });
+
+  } catch (error) {
+    if (transaction) await transaction.rollback();
+    console.error('DeleteCrewMember Error:', error);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+      details: error.message
+    });
+  }
+};
