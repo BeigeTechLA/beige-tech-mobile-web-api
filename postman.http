@@ -666,3 +666,12 @@ Content-Type: application/json
   "project_id": 886,
   "crew_accept": 1
 }
+
+### 
+POST {{URL}}admin/delete-cp HTTP/1.1
+Content-Type: application/json
+# Authorization: {{TOKEN}}
+
+{
+  "crew_member_id": 2092
+}

@@ -81,5 +81,6 @@ router.get('/get-crew-for-lead', admin.searchCrewForLead);
 router.post('/assign-crew-from-lead',authMiddleware, admin.assignCrewBulkSmart);
 router.post('/remove-assigned-crew',authMiddleware, admin.removeAssignedCrew);
 router.get('/get-client-details-with-shoots/:userId', admin.getClientFullDetailsByUserId);
+router.post('/delete-cp', admin.deleteCrewMember);
 
 module.exports = router;
