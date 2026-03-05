@@ -42,6 +42,9 @@ const SHOOT_FINAL_NUDGE_7D_TEMPLATE_ID = process.env.SENDGRID_SHOOT_FINAL_NUDGE_
 const POST_PRODUCTION_STATUS_UPDATE_TEMPLATE_ID = process.env.SENDGRID_POST_PRODUCTION_STATUS_UPDATE_TEMPLATE_ID;
 const RAW_FOOTAGE_READY_TEMPLATE_ID = process.env.SENDGRID_RAW_FOOTAGE_READY_TEMPLATE_ID;
 const FINAL_DELIVERY_COMPLETE_TEMPLATE_ID = process.env.SENDGRID_FINAL_DELIVERY_COMPLETE_TEMPLATE_ID;
+const REVISION_REQUEST_RECEIVED_TEMPLATE_ID = process.env.SENDGRID_REVISION_REQUEST_RECEIVED_TEMPLATE_ID;
+const REVISED_CONTENT_DELIVERED_TEMPLATE_ID = process.env.SENDGRID_REVISED_CONTENT_DELIVERED_TEMPLATE_ID;
+const FINAL_DELIVERY_WITH_REVISION_TEMPLATE_ID = process.env.SENDGRID_FINAL_DELIVERY_WITH_REVISION_TEMPLATE_ID;
 
 const getFirstName = (name, fallbackFirstName) => {
   if (fallbackFirstName && fallbackFirstName.trim()) return fallbackFirstName.trim();
@@ -533,7 +536,7 @@ const sendClientSignupWelcomeEmail = async (userData) => {
       templateId: CLIENT_SIGNUP_WELCOME_TEMPLATE_ID,
       dynamicTemplateData: {
         first_name: getFirstName(userData.name, userData.first_name),
-        book_a_shoot_url: process.env.BOOK_A_SHOOT_URL || 'https://beige.app/',
+        book_a_shoot_url: process.env.BOOK_A_SHOOT_URL || 'https://beige.app/book-a-shoot',
         userData: {
           name: userData.name || getFirstName(userData.name, userData.first_name)
         }
@@ -1091,6 +1094,211 @@ const sendFinalDeliveryCompleteEmail = async (data) => {
   } catch (error) {
     console.error(
       'Error sending final delivery complete email via SendGrid:',
+      error?.response?.body || error.message
+    );
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Send revision request received email (Email 11b)
+ * Trigger: manual action from dashboard
+ * @param {Object} data - revision request payload
+ */
+const sendRevisionRequestReceivedEmail = async (data) => {
+  try {
+    if (!process.env.SENDGRID_API_KEY) {
+      return { success: false, error: 'SENDGRID_API_KEY is not configured' };
+    }
+
+    if (!REVISION_REQUEST_RECEIVED_TEMPLATE_ID) {
+      return {
+        success: false,
+        error: 'SENDGRID_REVISION_REQUEST_RECEIVED_TEMPLATE_ID is not configured'
+      };
+    }
+
+    if (!data?.to_email) {
+      return { success: false, error: 'Recipient email is required' };
+    }
+
+    if (!data?.revision_delivery_date) {
+      return { success: false, error: 'revision_delivery_date is required' };
+    }
+
+    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    if (!fromEmail) {
+      return { success: false, error: 'Sender email not configured' };
+    }
+
+    const payload = {
+      to: data.to_email,
+      from: {
+        email: fromEmail,
+        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+      },
+      subject: 'Revision Request Received - We\u2019re On It',
+      templateId: REVISION_REQUEST_RECEIVED_TEMPLATE_ID,
+      dynamicTemplateData: {
+        first_name: data.first_name || 'there',
+        booking_id: data.booking_id || '',
+        revision_delivery_date: data.revision_delivery_date,
+        estimated_turnaround: data.revision_delivery_date,
+        userData: { name: data.first_name || 'there' }
+      }
+    };
+
+    const [response] = await sgMail.send(payload);
+    const messageId =
+      response?.headers?.['x-message-id'] ||
+      response?.headers?.['X-Message-Id'] ||
+      null;
+
+    console.log(
+      `Revision request received email accepted by SendGrid for ${data.to_email} (booking: ${data.booking_id || 'n/a'}), template=${REVISION_REQUEST_RECEIVED_TEMPLATE_ID}, status=${response?.statusCode || 'n/a'}, message_id=${messageId || 'n/a'}`
+    );
+
+    return { success: true, messageId, statusCode: response?.statusCode };
+  } catch (error) {
+    console.error(
+      'Error sending revision request received email via SendGrid:',
+      error?.response?.body || error.message
+    );
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Send revised content delivered email (Email 11c)
+ * Trigger: manual action from dashboard
+ * @param {Object} data - revised content payload
+ */
+const sendRevisedContentDeliveredEmail = async (data) => {
+  try {
+    if (!process.env.SENDGRID_API_KEY) {
+      return { success: false, error: 'SENDGRID_API_KEY is not configured' };
+    }
+
+    if (!REVISED_CONTENT_DELIVERED_TEMPLATE_ID) {
+      return {
+        success: false,
+        error: 'SENDGRID_REVISED_CONTENT_DELIVERED_TEMPLATE_ID is not configured'
+      };
+    }
+
+    if (!data?.to_email) {
+      return { success: false, error: 'Recipient email is required' };
+    }
+
+    if (!data?.view_updated_assets_link) {
+      return { success: false, error: 'view_updated_assets_link is required' };
+    }
+
+    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    if (!fromEmail) {
+      return { success: false, error: 'Sender email not configured' };
+    }
+
+    const payload = {
+      to: data.to_email,
+      from: {
+        email: fromEmail,
+        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+      },
+      subject: 'Your Revised Content Is Ready',
+      templateId: REVISED_CONTENT_DELIVERED_TEMPLATE_ID,
+      dynamicTemplateData: {
+        first_name: data.first_name || 'there',
+        booking_id: data.booking_id || '',
+        view_updated_assets_link: data.view_updated_assets_link,
+        view_assets_link: data.view_updated_assets_link,
+        revision_version: data.revision_version || '',
+        userData: { name: data.first_name || 'there' }
+      }
+    };
+
+    const [response] = await sgMail.send(payload);
+    const messageId =
+      response?.headers?.['x-message-id'] ||
+      response?.headers?.['X-Message-Id'] ||
+      null;
+
+    console.log(
+      `Revised content delivered email accepted by SendGrid for ${data.to_email} (booking: ${data.booking_id || 'n/a'}), template=${REVISED_CONTENT_DELIVERED_TEMPLATE_ID}, status=${response?.statusCode || 'n/a'}, message_id=${messageId || 'n/a'}`
+    );
+
+    return { success: true, messageId, statusCode: response?.statusCode };
+  } catch (error) {
+    console.error(
+      'Error sending revised content delivered email via SendGrid:',
+      error?.response?.body || error.message
+    );
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Send final delivery complete with revision email (Email 11d)
+ * Trigger: manual action from dashboard
+ * @param {Object} data - final delivery payload
+ */
+const sendFinalDeliveryWithRevisionEmail = async (data) => {
+  try {
+    if (!process.env.SENDGRID_API_KEY) {
+      return { success: false, error: 'SENDGRID_API_KEY is not configured' };
+    }
+
+    if (!FINAL_DELIVERY_WITH_REVISION_TEMPLATE_ID) {
+      return {
+        success: false,
+        error: 'SENDGRID_FINAL_DELIVERY_WITH_REVISION_TEMPLATE_ID is not configured'
+      };
+    }
+
+    if (!data?.to_email) {
+      return { success: false, error: 'Recipient email is required' };
+    }
+
+    if (!data?.view_final_assets_link) {
+      return { success: false, error: 'view_final_assets_link is required' };
+    }
+
+    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    if (!fromEmail) {
+      return { success: false, error: 'Sender email not configured' };
+    }
+
+    const payload = {
+      to: data.to_email,
+      from: {
+        email: fromEmail,
+        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+      },
+      subject: 'Final Delivery - Your Project Is Complete',
+      templateId: FINAL_DELIVERY_WITH_REVISION_TEMPLATE_ID,
+      dynamicTemplateData: {
+        first_name: data.first_name || 'there',
+        booking_id: data.booking_id || '',
+        view_final_assets_link: data.view_final_assets_link,
+        view_assets_link: data.view_final_assets_link,
+        userData: { name: data.first_name || 'there' }
+      }
+    };
+
+    const [response] = await sgMail.send(payload);
+    const messageId =
+      response?.headers?.['x-message-id'] ||
+      response?.headers?.['X-Message-Id'] ||
+      null;
+
+    console.log(
+      `Final delivery with revision email accepted by SendGrid for ${data.to_email} (booking: ${data.booking_id || 'n/a'}), template=${FINAL_DELIVERY_WITH_REVISION_TEMPLATE_ID}, status=${response?.statusCode || 'n/a'}, message_id=${messageId || 'n/a'}`
+    );
+
+    return { success: true, messageId, statusCode: response?.statusCode };
+  } catch (error) {
+    console.error(
+      'Error sending final delivery with revision email via SendGrid:',
       error?.response?.body || error.message
     );
     return { success: false, error: error.message };
@@ -1843,6 +2051,9 @@ module.exports = {
   sendPostProductionStatusUpdateEmail,
   sendRawFootageReadyEmail,
   sendFinalDeliveryCompleteEmail,
+  sendRevisionRequestReceivedEmail,
+  sendRevisedContentDeliveredEmail,
+  sendFinalDeliveryWithRevisionEmail,
   sendNewClientSignupNotification,
   sendNewCrewSignupNotification
 };
