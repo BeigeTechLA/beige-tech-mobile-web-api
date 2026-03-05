@@ -5,8 +5,47 @@ const crypto = require('crypto');
 const constants = require('../utils/constants');
 const common_model = require('../utils/common_model');
 const Affiliate = common_model.getTableNameDirect(constants.TABLES.AFFILIATES)
-// Fixed commission amount per successful booking (200 SAR)
-const COMMISSION_AMOUNT = 200.00;
+const COMMISSION_RATE_PERCENT = 10;
+const COMMISSION_RATE = COMMISSION_RATE_PERCENT / 100;
+
+function calculateCommission(bookingAmount) {
+  const amount = parseFloat(bookingAmount || 0);
+  if (!Number.isFinite(amount) || amount <= 0) return 0;
+  return parseFloat((amount * COMMISSION_RATE).toFixed(2));
+}
+
+async function awardCommissionToAffiliate(
+  affiliate,
+  paymentId,
+  bookingAmount,
+  referredUserId,
+  referredGuestEmail,
+  referralCodeForRecord,
+  transaction = null
+) {
+  const commissionAmount = calculateCommission(bookingAmount);
+  if (commissionAmount <= 0) return null;
+
+  const referral = await db.referrals.create({
+    affiliate_id: affiliate.affiliate_id,
+    payment_id: paymentId,
+    referral_code: (referralCodeForRecord || affiliate.referral_code || '').toUpperCase(),
+    referred_user_id: referredUserId || null,
+    referred_guest_email: referredGuestEmail || null,
+    booking_amount: bookingAmount,
+    commission_amount: commissionAmount,
+    status: 'completed',
+    payout_status: 'pending'
+  }, { transaction });
+
+  affiliate.total_referrals = affiliate.total_referrals + 1;
+  affiliate.successful_referrals = affiliate.successful_referrals + 1;
+  affiliate.total_earnings = parseFloat(affiliate.total_earnings) + commissionAmount;
+  affiliate.pending_earnings = parseFloat(affiliate.pending_earnings) + commissionAmount;
+  await affiliate.save({ transaction });
+
+  return referral;
+}
 
 /**
  * Generate a unique referral code
@@ -329,7 +368,8 @@ exports.getDashboardStats = async (req, res) => {
           total_earnings: parseFloat(affiliate.total_earnings),
           pending_earnings: parseFloat(affiliate.pending_earnings),
           paid_earnings: parseFloat(affiliate.paid_earnings),
-          commission_per_booking: COMMISSION_AMOUNT
+          commission_per_booking: COMMISSION_RATE_PERCENT,
+          commission_rate_percent: COMMISSION_RATE_PERCENT
         },
         recent_referrals: recentReferrals
       }
@@ -516,31 +556,70 @@ exports.processReferral = async (referralCode, paymentId, bookingAmount, referre
       return null;
     }
 
-    // Create referral record
-    const referral = await db.referrals.create({
-      affiliate_id: affiliate.affiliate_id,
-      payment_id: paymentId,
-      referral_code: referralCode.toUpperCase(),
-      referred_user_id: referredUserId || null,
-      referred_guest_email: referredGuestEmail || null,
-      booking_amount: bookingAmount,
-      commission_amount: COMMISSION_AMOUNT,
-      status: 'completed', // Payment already succeeded
-      payout_status: 'pending'
-    }, { transaction });
+    const referral = await awardCommissionToAffiliate(
+      affiliate,
+      paymentId,
+      bookingAmount,
+      referredUserId,
+      referredGuestEmail,
+      referralCode.toUpperCase(),
+      transaction
+    );
 
-    // Update affiliate stats
-    affiliate.total_referrals = affiliate.total_referrals + 1;
-    affiliate.successful_referrals = affiliate.successful_referrals + 1;
-    affiliate.total_earnings = parseFloat(affiliate.total_earnings) + COMMISSION_AMOUNT;
-    affiliate.pending_earnings = parseFloat(affiliate.pending_earnings) + COMMISSION_AMOUNT;
-    await affiliate.save({ transaction });
+    if (!referral) return null;
 
-    console.log(`Referral processed: ${referral.referral_id} for affiliate ${affiliate.affiliate_id}, commission: ${COMMISSION_AMOUNT} SAR`);
+    console.log(`Referral processed: ${referral.referral_id} for affiliate ${affiliate.affiliate_id}, commission: ${referral.commission_amount}`);
 
     return referral;
   } catch (error) {
     console.error('Process Referral Error:', error);
+    throw error;
+  }
+};
+
+/**
+ * Process commission for the buyer's own affiliate account (if any)
+ * Used when a logged-in user completes payment and also has an active affiliate account.
+ */
+exports.processUserAffiliateCommission = async (
+  referredUserId,
+  paymentId,
+  bookingAmount,
+  referredGuestEmail,
+  excludeAffiliateId = null,
+  transaction = null
+) => {
+  try {
+    if (!referredUserId) return null;
+
+    const affiliate = await db.affiliates.findOne({
+      where: {
+        user_id: referredUserId,
+        status: 'active'
+      }
+    });
+
+    if (!affiliate) return null;
+    if (excludeAffiliateId && Number(affiliate.affiliate_id) === Number(excludeAffiliateId)) {
+      return null;
+    }
+
+    const referral = await awardCommissionToAffiliate(
+      affiliate,
+      paymentId,
+      bookingAmount,
+      referredUserId,
+      referredGuestEmail,
+      affiliate.referral_code,
+      transaction
+    );
+
+    if (!referral) return null;
+
+    console.log(`User-affiliate commission processed: ${referral.referral_id} for affiliate ${affiliate.affiliate_id}, commission: ${referral.commission_amount}`);
+    return referral;
+  } catch (error) {
+    console.error('Process User Affiliate Commission Error:', error);
     throw error;
   }
 };

@@ -181,3 +181,9 @@ ALTER TABLE sales_leads MODIFY COLUMN lead_status VARCHAR(100) NOT NULL DEFAULT 
 
 ALTER TABLE `assigned_crew` 
 ADD COLUMN `responded_at` DATETIME NULL AFTER `crew_accept`;
+
+--05-03-26
+
+ALTER TABLE referrals
+MODIFY COLUMN commission_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00
+COMMENT 'Commission amount calculated from booking total';

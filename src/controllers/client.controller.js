@@ -23,7 +23,7 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   assigned_crew,
   assigned_equipment,
   project_brief,
-  event_type_master, payment_transactions, assigned_post_production_member, post_production_members } = require('../models');
+  event_type_master, payment_transactions, assigned_post_production_member, post_production_members, quotes } = require('../models');
 
 function toArray(value) {
   if (!value) return [];
@@ -571,7 +571,7 @@ exports.getAllProjectDetailsForUser = async (req, res) => {
 
     // ----------- FETCH ASSOCIATED DETAILS -----------
     const projectDetailsPromises = projects.map(async (project) => {
-      const [assignedCrew, assignedEquipment, assignedPostProd] = await Promise.all([
+      const [assignedCrew, assignedEquipment, assignedPostProd, quote] = await Promise.all([
         assigned_crew.findAll({
           where: { project_id: project.stream_project_booking_id, is_active: 1 },
           include: [{ model: crew_members, as: 'crew_member', attributes: ['crew_member_id', 'first_name', 'last_name', 'primary_role'] }],
@@ -583,12 +583,22 @@ exports.getAllProjectDetailsForUser = async (req, res) => {
         assigned_post_production_member.findAll({
           where: { project_id: project.stream_project_booking_id, is_active: 1 },
           include: [{ model: post_production_members, as: 'post_production_member', attributes: ['post_production_member_id', 'first_name', 'last_name', 'email'] }],
-        })
+        }),
+        project.quote_id
+          ? quotes.findOne({
+            where: { quote_id: project.quote_id },
+            attributes: ['quote_id', 'subtotal', 'total', 'status']
+          })
+          : Promise.resolve(null)
       ]);
 
       return {
         project: {
           ...project.toJSON(),
+          payment_status: project.payment_id ? 'paid' : 'pending',
+          quote_total: quote ? parseFloat(quote.total) : null,
+          quote_subtotal: quote ? parseFloat(quote.subtotal) : null,
+          quote_status: quote ? quote.status : null,
           event_location: (() => {
             const loc = project.event_location;
             if (!loc) return null;

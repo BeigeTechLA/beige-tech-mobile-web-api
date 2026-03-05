@@ -53,8 +53,8 @@ module.exports = function(sequelize, DataTypes) {
     commission_amount: {
       type: DataTypes.DECIMAL(10, 2),
       allowNull: false,
-      defaultValue: 200.00,
-      comment: 'Fixed commission per booking (200 SAR)'
+      defaultValue: 0.00,
+      comment: 'Commission amount calculated from booking total'
     },
     status: {
       type: DataTypes.ENUM('pending', 'completed', 'cancelled', 'refunded'),
