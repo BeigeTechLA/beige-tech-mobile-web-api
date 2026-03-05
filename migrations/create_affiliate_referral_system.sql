@@ -43,7 +43,7 @@ CREATE TABLE referrals (
   referred_user_id INT NULL COMMENT 'FK to users - the referred customer (null for guests)',
   referred_guest_email VARCHAR(255) NULL COMMENT 'Guest email if not a registered user',
   booking_amount DECIMAL(10,2) NULL COMMENT 'Total booking amount',
-  commission_amount DECIMAL(10,2) NOT NULL DEFAULT 200.00 COMMENT 'Fixed commission per booking (200 SAR)',
+  commission_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00 COMMENT 'Commission amount calculated from booking total',
   status ENUM('pending', 'completed', 'cancelled', 'refunded') NOT NULL DEFAULT 'pending' COMMENT 'Referral status',
   payout_status ENUM('pending', 'approved', 'paid', 'rejected') NOT NULL DEFAULT 'pending' COMMENT 'Payout status for this referral',
   notes TEXT NULL COMMENT 'Admin notes',

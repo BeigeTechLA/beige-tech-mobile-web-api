@@ -70,6 +70,21 @@ function normalizeIsDraft(is_draft) {
   return null;
 }
 
+async function resolveUserId(userId, guestEmail) {
+  if (userId) return parseInt(userId);
+  if (!guestEmail) return null;
+
+  const normalizedEmail = String(guestEmail).trim().toLowerCase();
+  if (!normalizedEmail) return null;
+
+  const existingUser = await users.findOne({
+    where: { email: normalizedEmail },
+    attributes: ['id']
+  });
+
+  return existingUser ? existingUser.id : null;
+}
+
 /**
  * Create quote row + quote_line_items.
  */
@@ -511,14 +526,17 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Email is required' });
         }
 
+        const normalizedGuestEmail = String(guest_email).trim().toLowerCase();
+        const resolvedUserId = await resolveUserId(user_id, normalizedGuestEmail);
+
         const event_date = startDate ? new Date(startDate).toISOString().split('T')[0] : null;
         const start_time = startDate ? new Date(startDate).toTimeString().split(' ')[0] : null;
         const end_time = endDate ? new Date(endDate).toTimeString().split(' ')[0] : null;
 
         const bookingData = {
-            user_id: user_id || null,
-            guest_email: guest_email,
-            project_name: `${shoot_type?.toUpperCase() || 'NEW'} Shoot - ${client_name || guest_email}`,
+            user_id: resolvedUserId,
+            guest_email: normalizedGuestEmail,
+            project_name: `${shoot_type?.toUpperCase() || 'NEW'} Shoot - ${client_name || normalizedGuestEmail}`,
             event_type: content_type || 'general',
             shoot_type: shoot_type,
             content_type: content_type,
@@ -562,8 +580,8 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             isNewLead = true;
             lead = await sales_leads.create({
                 booking_id: booking.stream_project_booking_id,
-                user_id: user_id || null,
-                guest_email: guest_email,
+                user_id: resolvedUserId,
+                guest_email: normalizedGuestEmail,
                 client_name: client_name || null,
                 lead_type: 'self_serve',
                 lead_status: 'book_a_shoot_lead_created'
@@ -572,13 +590,13 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             await sales_lead_activities.create({
                 lead_id: lead.lead_id,
                 activity_type: 'created',
-                activity_data: { source: 'step_1_capture', user_id, guest_email }
+                activity_data: { source: 'step_1_capture', user_id: resolvedUserId, guest_email: normalizedGuestEmail }
             });
 
             assignedRep = await leadAssignmentService.autoAssignLead(lead.lead_id);
 
           emailService.sendSalesLeadNotification({
-            guestEmail: guest_email,
+            guestEmail: normalizedGuestEmail,
             shootType: shoot_type,
             contentType: content_type,
             eventDate: event_date,
@@ -593,9 +611,9 @@ exports.trackEarlyBookingInterest = async (req, res) => {
         const sheetRowData = [
             lead.lead_id,                         // A: Lead ID
             booking.stream_project_booking_id,    // B: Booking ID
-            user_id || 'Guest',                   // C: User ID
+            resolvedUserId || 'Guest',            // C: User ID
             client_name || 'N/A',                 // D: Client Name
-            guest_email,                          // E: Email
+            normalizedGuestEmail,                 // E: Email
             booking.project_name,                 // F: Project Name
             content_type || 'N/A',                // G: Content Type
             shoot_type || 'N/A',                  // H: Shoot Type

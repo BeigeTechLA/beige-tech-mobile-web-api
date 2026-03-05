@@ -1,6 +1,7 @@
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { Op } = require('sequelize');
+const db = require('../models');
 const { users, user_type, crew_members, crew_member_files } = require('../models');
 const constants = require('../utils/constants');
 const common_model = require('../utils/common_model');
@@ -21,6 +22,27 @@ const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 // Import new utilities
 const otpService = require('../utils/otpService');
 const emailService = require('../utils/emailService');
+
+async function linkGuestBookingsToUser(email, userId) {
+  try {
+    if (!email || !userId) return 0;
+
+    const [updatedRows] = await db.stream_project_booking.update(
+      { user_id: userId },
+      {
+        where: {
+          guest_email: email,
+          user_id: { [Op.is]: null }
+        }
+      }
+    );
+
+    return updatedRows || 0;
+  } catch (error) {
+    console.error('Link Guest Bookings Error:', error);
+    return 0;
+  }
+}
 
 // Multer configuration for file uploads
 const storage = multer.diskStorage({
@@ -579,6 +601,8 @@ exports.register = async (req, res) => {
       console.error('Failed to create affiliate account:', affiliateError);
     }
 
+    const linkedBookingsCount = await linkGuestBookingsToUser(email, newUser.id);
+
     return res.status(201).json({
       success: true,
       message: email
@@ -587,7 +611,8 @@ exports.register = async (req, res) => {
       userId: newUser.id,
       email: newUser.email,
       affiliate: affiliateData,
-      clientId: newClient ? newClient.client_id : null
+      clientId: newClient ? newClient.client_id : null,
+      linked_bookings_count: linkedBookingsCount
     });
 
   } catch (error) {
@@ -1493,6 +1518,8 @@ exports.quickRegister = async (req, res) => {
       console.error('Failed to create affiliate account:', affiliateError);
     }
 
+    const linkedBookingsCount = await linkGuestBookingsToUser(email, newUser.id);
+
     // Generate tokens
     const { token, refreshToken } = generateTokens(newUser.id, 'client');
     const permissions = getPermissionsForRole('client');
@@ -1508,6 +1535,7 @@ exports.quickRegister = async (req, res) => {
         role: 'client'
       },
       affiliate: affiliateData,
+      linked_bookings_count: linkedBookingsCount,
       token,
       refreshToken,
       permissions,

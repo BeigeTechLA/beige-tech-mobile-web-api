@@ -6,6 +6,21 @@ const { appendBookingToSheet } = require('../utils/googleSheetsService');
 const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 const { content } = require('googleapis/build/src/apis/content');
 
+async function resolveUserId(userId, guestEmail) {
+  if (userId) return parseInt(userId);
+  if (!guestEmail) return null;
+
+  const normalizedEmail = String(guestEmail).trim().toLowerCase();
+  if (!normalizedEmail) return null;
+
+  const existingUser = await db.users.findOne({
+    where: { email: normalizedEmail },
+    attributes: ['id']
+  });
+
+  return existingUser ? existingUser.id : null;
+}
+
 
 /**
  * Create a new guest booking (no authentication required)
@@ -292,6 +307,9 @@ exports.createGuestBooking = async (req, res) => {
       });
     }
 
+    const normalizedGuestEmail = String(guest_email).trim().toLowerCase();
+    const resolvedUserId = await resolveUserId(user_id, normalizedGuestEmail);
+
     // Parse date and time from start_date_time
     let event_date = null;
     let start_time = null;
@@ -340,9 +358,9 @@ exports.createGuestBooking = async (req, res) => {
     if (matching_method) combinedDescription += `\nMatching Method: ${matching_method}`;
 
     const bookingData = {
-      user_id: user_id ? parseInt(user_id) : null,
+      user_id: resolvedUserId,
       quote_id: quote_id || null,
-      guest_email: guest_email,
+      guest_email: normalizedGuestEmail,
       project_name: order_name,
       description: combinedDescription || null,
       content_type: content_type || null,
@@ -396,7 +414,7 @@ exports.createGuestBooking = async (req, res) => {
       booking.stream_project_booking_id,
       order_name,                    
       content_type || project_type || shoot_type || 'N/A',
-      guest_email,                 
+      normalizedGuestEmail,                 
       full_name || 'N/A',              
       phone || 'N/A',               
       bookingData.event_type,           
@@ -421,7 +439,8 @@ exports.createGuestBooking = async (req, res) => {
       data: {
         booking_id: booking.stream_project_booking_id,
         project_name: booking.project_name,
-        guest_email: guest_email,
+        guest_email: normalizedGuestEmail,
+        user_id: booking.user_id,
         event_date: booking.event_date,
         event_location: formatLocationResponse(booking.event_location),
         budget: booking.budget,
@@ -511,6 +530,10 @@ exports.updateGuestBooking = async (req, res) => {
       });
     }
 
+    const normalizedGuestEmail = guest_email ? String(guest_email).trim().toLowerCase() : null;
+    const lookupEmail = normalizedGuestEmail || booking.guest_email || null;
+    const resolvedUserId = await resolveUserId(null, lookupEmail);
+
     // Parse date and time from start_date_time
     let event_date = null;
     let start_time = null;
@@ -561,7 +584,8 @@ exports.updateGuestBooking = async (req, res) => {
     // Prepare update data
     const updateData = {};
     if (order_name) updateData.project_name = order_name;
-    if (guest_email) updateData.guest_email = guest_email;
+    if (normalizedGuestEmail) updateData.guest_email = normalizedGuestEmail;
+    if (!booking.user_id && resolvedUserId) updateData.user_id = resolvedUserId;
     if (combinedDescription) updateData.description = combinedDescription;
     if (content_type) updateData.content_type = content_type;
     if (event_type || content_type || project_type || shoot_type) {
@@ -631,6 +655,7 @@ exports.updateGuestBooking = async (req, res) => {
         booking_id: booking.stream_project_booking_id,
         project_name: booking.project_name,
         guest_email: booking.guest_email,
+        user_id: booking.user_id,
         event_date: booking.event_date,
         event_location: formatLocationResponse(booking.event_location),
         budget: booking.budget,

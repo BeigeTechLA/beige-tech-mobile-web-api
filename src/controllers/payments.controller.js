@@ -388,6 +388,13 @@ exports.createPaymentIntent = async (req, res) => {
       });
     }
 
+    if (referral_code && !user_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please login or signup if you want to use a referral code'
+      });
+    }
+
     // Verify creator exists
     const creator = await db.crew_members.findByPk(creator_id);
     if (!creator) {
@@ -511,6 +518,13 @@ exports.confirmPayment = async (req, res) => {
       });
     }
 
+    if (referral_code && !user_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please login or signup if you want to use a referral code'
+      });
+    }
+
     // Verify payment with Stripe
     const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
 
@@ -578,8 +592,8 @@ exports.confirmPayment = async (req, res) => {
       await db.payment_equipment.bulkCreate(equipmentRecords, { transaction });
     }
 
-    // Process referral if referral code was provided
-    let referralData = null;
+    // Process referral commissions
+    let primaryReferral = null;
     if (referral_code) {
       try {
         const referral = await affiliateController.processReferral(
@@ -591,18 +605,36 @@ exports.confirmPayment = async (req, res) => {
           transaction
         );
         if (referral) {
-          referralData = {
-            referral_id: referral.referral_id,
-            commission_amount: parseFloat(referral.commission_amount)
-          };
-          // Update payment with referral_id
-          payment.referral_id = referral.referral_id;
-          await payment.save({ transaction });
+          primaryReferral = referral;
         }
       } catch (referralError) {
         console.error('Failed to process referral:', referralError);
         // Don't fail the payment if referral processing fails
       }
+    }
+
+    if (user_id) {
+      try {
+        const userAffiliateReferral = await affiliateController.processUserAffiliateCommission(
+          user_id,
+          payment.payment_id,
+          pricing.total_amount,
+          guest_email || null,
+          primaryReferral ? primaryReferral.affiliate_id : null,
+          transaction
+        );
+
+        if (!primaryReferral && userAffiliateReferral) {
+          primaryReferral = userAffiliateReferral;
+        }
+      } catch (userAffiliateError) {
+        console.error('Failed to process user affiliate commission:', userAffiliateError);
+      }
+    }
+
+    if (primaryReferral) {
+      payment.referral_id = primaryReferral.referral_id;
+      await payment.save({ transaction });
     }
 
     // Update booking status to payment completed if booking_id provided
@@ -791,6 +823,14 @@ exports.confirmPaymentMulti = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
+    if (referral_code && !booking.user_id) {
+      await transaction.rollback();
+      return res.status(400).json({
+        success: false,
+        message: 'Please login or signup if you want to use a referral code'
+      });
+    }
+
     let totalAmount = 0;
     let chargeId = null;
     let paymentIntent = null;
@@ -889,7 +929,53 @@ exports.confirmPaymentMulti = async (req, res) => {
       status: 'succeeded'
     }, { transaction });
 
-    // 7. Update Booking and Lead Status
+    // 7. Process referral commissions
+    let primaryReferral = null;
+    if (referral_code) {
+      try {
+        const referral = await affiliateController.processReferral(
+          referral_code,
+          payment.payment_id,
+          totalAmount,
+          booking.user_id || null,
+          booking.guest_email || null,
+          transaction
+        );
+
+        if (referral) {
+          primaryReferral = referral;
+        }
+      } catch (referralError) {
+        console.error('Failed to process referral (confirm-multi):', referralError);
+        // Don't fail payment if referral processing fails
+      }
+    }
+
+    if (booking.user_id) {
+      try {
+        const userAffiliateReferral = await affiliateController.processUserAffiliateCommission(
+          booking.user_id,
+          payment.payment_id,
+          totalAmount,
+          booking.guest_email || null,
+          primaryReferral ? primaryReferral.affiliate_id : null,
+          transaction
+        );
+
+        if (!primaryReferral && userAffiliateReferral) {
+          primaryReferral = userAffiliateReferral;
+        }
+      } catch (userAffiliateError) {
+        console.error('Failed to process user affiliate commission (confirm-multi):', userAffiliateError);
+      }
+    }
+
+    if (primaryReferral) {
+      payment.referral_id = primaryReferral.referral_id;
+      await payment.save({ transaction });
+    }
+
+    // 8. Update Booking and Lead Status
     await db.stream_project_booking.update(
       { 
         payment_completed_at: new Date(), 
@@ -907,7 +993,7 @@ exports.confirmPaymentMulti = async (req, res) => {
 
     await transaction.commit();
 
-    // 8. Background notifications
+    // 9. Background notifications
     emailService.sendPaymentSuccessSalesNotification({
         guestEmail: booking.guest_email || 'Unknown Client',
         amount: totalAmount,
