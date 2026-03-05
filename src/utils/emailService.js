@@ -1,6 +1,8 @@
 const nodemailer = require('nodemailer');
 const sgMail = require('@sendgrid/mail');
 require('dotenv').config();
+const db = require('../models');
+const { stream_project_booking, assigned_crew, crew_members } = db;
 
 /**
  * Email service using Gmail SMTP
@@ -30,26 +32,115 @@ if (process.env.SENDGRID_API_KEY) {
   sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 }
 
-const CLIENT_SIGNUP_WELCOME_TEMPLATE_ID =
-  process.env.SENDGRID_CLIENT_SIGNUP_TEMPLATE_ID || 'd-2eb6d2008c794ee4aac0e787de9ae4a8';
-const BOOKING_CONFIRMED_TEMPLATE_ID = process.env.SENDGRID_BOOKING_CONFIRMED_TEMPLATE_ID;
-const BOOKING_CONFIRMED_WITH_CP_TEMPLATE_ID = process.env.SENDGRID_BOOKING_CONFIRMED_WITH_CP_TEMPLATE_ID;
-const BOOKING_CONFIRMED_WITHOUT_CP_TEMPLATE_ID = process.env.SENDGRID_BOOKING_CONFIRMED_WITHOUT_CP_TEMPLATE_ID;
-const SHOOT_REMINDER_5D_TEMPLATE_ID = process.env.SENDGRID_SHOOT_REMINDER_5D_TEMPLATE_ID;
-const SHOOT_REMINDER_2H_TEMPLATE_ID = process.env.SENDGRID_SHOOT_REMINDER_2H_TEMPLATE_ID;
-const SHOOT_COMPLETION_TEMPLATE_ID = process.env.SENDGRID_SHOOT_COMPLETION_TEMPLATE_ID;
-const SHOOT_FINAL_NUDGE_7D_TEMPLATE_ID = process.env.SENDGRID_SHOOT_FINAL_NUDGE_7D_TEMPLATE_ID;
-const POST_PRODUCTION_STATUS_UPDATE_TEMPLATE_ID = process.env.SENDGRID_POST_PRODUCTION_STATUS_UPDATE_TEMPLATE_ID;
-const RAW_FOOTAGE_READY_TEMPLATE_ID = process.env.SENDGRID_RAW_FOOTAGE_READY_TEMPLATE_ID;
-const FINAL_DELIVERY_COMPLETE_TEMPLATE_ID = process.env.SENDGRID_FINAL_DELIVERY_COMPLETE_TEMPLATE_ID;
-const REVISION_REQUEST_RECEIVED_TEMPLATE_ID = process.env.SENDGRID_REVISION_REQUEST_RECEIVED_TEMPLATE_ID;
-const REVISED_CONTENT_DELIVERED_TEMPLATE_ID = process.env.SENDGRID_REVISED_CONTENT_DELIVERED_TEMPLATE_ID;
-const FINAL_DELIVERY_WITH_REVISION_TEMPLATE_ID = process.env.SENDGRID_FINAL_DELIVERY_WITH_REVISION_TEMPLATE_ID;
+const {
+  CLIENT_SIGNUP_WELCOME_TEMPLATE_ID,
+  BOOKING_CONFIRMED_WITH_CP_TEMPLATE_ID,
+  BOOKING_CONFIRMED_WITHOUT_CP_TEMPLATE_ID,
+  SHOOT_REMINDER_5D_TEMPLATE_ID,
+  SHOOT_REMINDER_2H_TEMPLATE_ID,
+  SHOOT_COMPLETION_TEMPLATE_ID,
+  SHOOT_FINAL_NUDGE_7D_TEMPLATE_ID,
+  POST_PRODUCTION_STATUS_UPDATE_TEMPLATE_ID,
+  RAW_FOOTAGE_READY_TEMPLATE_ID,
+  FINAL_DELIVERY_COMPLETE_TEMPLATE_ID,
+  REVISION_REQUEST_RECEIVED_TEMPLATE_ID,
+  REVISED_CONTENT_DELIVERED_TEMPLATE_ID,
+  FINAL_DELIVERY_WITH_REVISION_TEMPLATE_ID,
+  CP_ACCEPT_REJECT_TEMPLATE_ID,
+  CP_NEW_BOOKING_REQUEST_TEMPLATE_ID,
+  VERIFICATION_OTP_TEMPLATE_ID,
+  PASSWORD_RESET_TEMPLATE_ID,
+  SALES_PAYMENT_SUCCESS_TEMPLATE_ID,
+  SALES_LEAD_NOTIFICATION_TEMPLATE_ID,
+  CLIENT_SIGNUP_NOTIFICATION_TEMPLATE_ID,
+  CREW_SIGNUP_NOTIFICATION_TEMPLATE_ID
+} = require('../config/sendgridTemplates');
+
+const formatDate = (value) => {
+  if (!value) return '';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  return d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+};
+
+const formatTime = (value) => {
+  if (!value) return '';
+  const txt = String(value);
+  const [hh, mm] = txt.split(':');
+  if (hh === undefined || mm === undefined) return txt;
+  const h = Number(hh);
+  if (Number.isNaN(h)) return txt;
+  const suffix = h >= 12 ? 'PM' : 'AM';
+  const h12 = h % 12 || 12;
+  return `${h12}:${mm} ${suffix}`;
+};
+
+const formatLocation = (location) => {
+  if (!location) return 'TBD';
+  if (typeof location !== 'string') {
+    if (location && typeof location === 'object') {
+      return (
+        location.address ||
+        location.full_address ||
+        location.formatted_address ||
+        location.place_name ||
+        location.name ||
+        'TBD'
+      );
+    }
+    return String(location);
+  }
+  const trimmed = location.trim();
+  if (!trimmed) return 'TBD';
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (typeof parsed === 'string') return parsed;
+    if (parsed && typeof parsed === 'object') {
+      return (
+        parsed.address ||
+        parsed.full_address ||
+        parsed.formatted_address ||
+        parsed.place_name ||
+        parsed.name ||
+        trimmed
+      );
+    }
+  } catch (_) {}
+  return trimmed;
+};
 
 const getFirstName = (name, fallbackFirstName) => {
   if (fallbackFirstName && fallbackFirstName.trim()) return fallbackFirstName.trim();
   if (!name || !name.trim()) return 'there';
   return name.trim().split(/\s+/)[0];
+};
+
+const sendEmail = async ({ to, subject, templateId, dynamicTemplateData }) => {
+  if (!process.env.SENDGRID_API_KEY) return { success: false, error: 'SENDGRID_API_KEY is not configured' };
+  if (!templateId) return { success: false, error: 'Template ID is not configured' };
+  if (!to) return { success: false, error: 'Recipient email is required' };
+
+  const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+  if (!fromEmail) return { success: false, error: 'Sender email not configured' };
+
+  const [response] = await sgMail.send({
+    to,
+    from: {
+      email: fromEmail,
+      name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+    },
+    subject,
+    templateId,
+    dynamicTemplateData
+  });
+
+  console.log(response)
+
+  return {
+    success: true,
+    statusCode: response?.statusCode,
+    messageId: response?.headers?.['x-message-id'] || response?.headers?.['X-Message-Id'] || null
+  };
 };
 
 /**
@@ -244,129 +335,54 @@ const generateTaskAssignmentTemplate = (taskData, assigneeData, taskLink) => {
  */
 const sendVerificationOTP = async (userData, otp) => {
   try {
-    const mailOptions = {
-      from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_USER}>`,
-      to: userData.email,
-      subject: 'Verify Your Email - BeigeAI',
-      html: generateVerificationOTPTemplate(userData, otp)
-    };
+    if (!userData?.email) {
+      return { success: false, error: 'Recipient email is required' };
+    }
 
-    const info = await transporter.sendMail(mailOptions);
-    console.log('Verification OTP email sent:', info.messageId);
-    return { success: true, messageId: info.messageId };
+    if (!process.env.SENDGRID_API_KEY) {
+      return { success: false, error: 'SENDGRID_API_KEY is not configured' };
+    }
+
+    if (!VERIFICATION_OTP_TEMPLATE_ID) {
+      return { success: false, error: 'VERIFICATION_OTP_TEMPLATE_ID is not configured' };
+    }
+
+    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    if (!fromEmail) {
+      return { success: false, error: 'Sender email not configured' };
+    }
+
+    const [response] = await sgMail.send({
+      to: userData.email,
+      from: {
+        email: fromEmail,
+        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+      },
+      subject: 'Verify Your Email - BeigeAI',
+      templateId: VERIFICATION_OTP_TEMPLATE_ID,
+      dynamicTemplateData: {
+        userData: {
+          name: userData.name || 'there'
+        },
+        otp,
+        expiry_minutes: 10,
+        year: new Date().getFullYear()
+      }
+    });
+
+    console.log(response)
+    return {
+      success: true,
+      statusCode: response?.statusCode,
+      messageId:
+        response?.headers?.['x-message-id'] ||
+        response?.headers?.['X-Message-Id'] ||
+        null
+    };
   } catch (error) {
-    console.error('Error sending verification OTP email:', error);
+    console.error('Error sending verification OTP email via SendGrid:', error?.response?.body || error.message);
     return { success: false, error: error.message };
   }
-};
-
-/**
- * Generate HTML email template for verification OTP
- */
-const generateVerificationOTPTemplate = (userData, otp) => {
-  return `
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <meta name="color-scheme" content="dark light">
-      <meta name="supported-color-schemes" content="dark light">
-      <title>Email Verification</title>
-      <style>
-        /* 1. Standard Media Query for iOS/Android/Desktop Browsers */
-        @media (prefers-color-scheme: dark) {
-          .body { background-color: #0A0F0D !important; }
-          .white-text { color: #ffffff !important; }
-          .muted-text { color: #6b7280 !important; } /* Slightly off-white for better readability */
-        }
-
-        /* 2. Outlook.com and Web App targeting */
-        [data-ogsc] .white-text { color: #ffffff !important; }
-        [data-ogsc] .muted-text { color: #6b7280 !important; }
-
-        /* 3. Handling iOS Auto-linking */
-        a[x-apple-data-detectors] {
-          color: inherit !important;
-          text-decoration: none !important;
-          font-size: inherit !important;
-          font-family: inherit !important;
-          font-weight: inherit !important;
-          line-height: inherit !important;
-        }
-
-        .otp-text {
-          color: #ffffff !important;
-          -webkit-text-fill-color: #ffffff !important;
-        }
-      </style>
-    </head>
-    <body class="body" style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #0A0F0D;">
-      <table width="100%" height="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #0A0F0D; background: linear-gradient(0deg, #0A0F0D 77.1%, rgba(76, 57, 23, 0.10) 126.11%); padding: 60px 20px;">
-        <tr>
-          <td align="center" valign="top">
-            <table width="600" cellpadding="0" cellspacing="0" style="background-color: #000000; border: 1px solid rgba(232, 209, 171, 0.15); border-radius: 12px; overflow: hidden; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);">
-              <tr>
-                <td style="background-color: rgba(232, 209, 171, 0.05); padding: 40px 30px; text-align: center; border-bottom: 1px solid rgba(232, 209, 171, 0.1);">
-                  <h1 style="margin: 0; color: #E8D1AB; font-size: 32px; font-weight: 500;">Verify Your Email</h1>
-                  <p style="margin: 10px 0 0; color: #E8D1AB; font-size: 14px;">Welcome to BeigeAI!</p>
-                </td>
-              </tr>
-
-              <tr>
-                <td style="padding: 40px 30px;">
-                  <p class="white-text" style="margin: 0; font-size: 16px; color: #ffffff; line-height: 1.6;">
-                    Hi <strong>${userData.name}</strong>,
-                  </p>
-
-                  <p class="muted-text" style="margin: 20px 0; font-size: 16px; color: #9ca3af; line-height: 1.6;">
-                    Thank you for signing up with BeigeAI! To complete your registration, please verify your email address using the verification code below:
-                  </p>
-
-                  <div style="text-align: center; margin: 30px 0;">
-                    <div style="display: inline-block; background: linear-gradient(0deg, #0A0F0D 77.1%, rgba(76, 57, 23, 0.1) 126.11%); border: 1px solid rgba(232, 209, 171, 0.3); padding: 20px 40px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);">
-                      <p style="margin: 0; font-size: 14px; color: #E8D1AB; text-transform: uppercase; letter-spacing: 1px; font-weight: 600;">Verification Code</p>
-                      <p style="margin: 10px 0 0; font-size: 36px; font-weight: 700; letter-spacing: 8px; font-family: 'Courier New', monospace;">
-                        <span class="otp-text" style="color: #ffffff !important;">${otp}</span>
-                      </p>
-                    </div>
-                  </div>
-
-                  <p class="muted-text" style="margin: 20px 0; font-size: 14px; color: #6b7280; line-height: 1.6; text-align: center;">
-                    This code will expire in <strong style="color: #E8D1AB;">10 minutes</strong>
-                  </p>
-
-                  <div style="background-color: rgba(232, 209, 171, 0.05); border-left: 4px solid #4c3917; padding: 15px; border-radius: 4px; margin-top: 30px;">
-                    <p style="margin: 0; font-size: 13px; color: #E8D1AB; font-weight: 600;">Security Notice</p>
-                    <p class="muted-text" style="margin: 8px 0 0; font-size: 13px; color: #9ca3af; line-height: 1.5;">
-                      Never share this code with anyone. BeigeAI will never ask for your verification code via phone or email.
-                    </p>
-                  </div>
-
-                  <p class="muted-text" style="margin: 30px 0 0; font-size: 14px; color: #6b7280; line-height: 1.6;">
-                    If you didn't request this code, please ignore this email or contact our support team.
-                  </p>
-                </td>
-              </tr>
-
-              <tr>
-                <td style="background-color: rgba(232, 209, 171, 0.02); padding: 25px 30px; border-top: 1px solid rgba(232, 209, 171, 0.1); text-align: center;">
-                  <p class="muted-text" style="margin: 0; font-size: 13px; color: #6b7280; line-height: 1.5;">
-                    This is an automated email from BeigeAI. Please do not reply to this email.
-                  </p>
-                  <p class="muted-text" style="margin: 10px 0 0; font-size: 13px; color: #4b5563;">
-                    © ${new Date().getFullYear()} BeigeAI. All rights reserved.
-                  </p>
-                </td>
-              </tr>
-
-            </table>
-          </td>
-        </tr>
-      </table>
-    </body>
-    </html>
-  `;
 };
 
 /**
@@ -376,110 +392,52 @@ const generateVerificationOTPTemplate = (userData, otp) => {
  */
 const sendPasswordResetEmail = async (userData, resetToken) => {
   try {
+    if (!process.env.SENDGRID_API_KEY) {
+      return { success: false, error: 'SENDGRID_API_KEY is not configured' };
+    }
+
+    if (!PASSWORD_RESET_TEMPLATE_ID) {
+      return { success: false, error: 'PASSWORD_RESET_TEMPLATE_ID is not configured' };
+    }
+
+    if (!userData?.email) {
+      return { success: false, error: 'Recipient email is required' };
+    }
+
+    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    if (!fromEmail) {
+      return { success: false, error: 'Sender email not configured' };
+    }
+
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
     const resetLink = `${frontendUrl}/reset-password?token=${resetToken}`;
 
-    const mailOptions = {
-      from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_USER}>`,
+    const [response] = await sgMail.send({
       to: userData.email,
+      from: {
+        email: fromEmail,
+        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+      },
       subject: 'Reset Your Password - BeigeAI',
-      html: generatePasswordResetTemplate(userData, resetLink, resetToken)
-    };
+      templateId: PASSWORD_RESET_TEMPLATE_ID,
+      dynamicTemplateData: {
+        userData: { name: userData.name || 'there' },
+        reset_link: resetLink,
+        reset_token: resetToken,
+        expiry_hours: 1,
+        year: new Date().getFullYear()
+      }
+    });
 
-    const info = await transporter.sendMail(mailOptions);
-    console.log('Password reset email sent:', info.messageId);
-    return { success: true, messageId: info.messageId };
+    return {
+      success: true,
+      statusCode: response?.statusCode,
+      messageId: response?.headers?.['x-message-id'] || response?.headers?.['X-Message-Id'] || null
+    };
   } catch (error) {
-    console.error('Error sending password reset email:', error);
+    console.error('Error sending password reset email via SendGrid:', error?.response?.body || error.message);
     return { success: false, error: error.message };
   }
-};
-
-/**
- * Generate HTML email template for password reset
- */
-const generatePasswordResetTemplate = (userData, resetLink, resetToken) => {
-  return `
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Password Reset</title>
-    </head>
-    <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f3f4f6;">
-      <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f3f4f6; padding: 40px 20px;">
-        <tr>
-          <td align="center">
-            <table width="600" cellpadding="0" cellspacing="0" style="background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
-
-              <!-- Header -->
-              <tr>
-                <td style="background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); padding: 40px 30px; text-align: center;">
-                  <h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 700;">Reset Your Password</h1>
-                </td>
-              </tr>
-
-              <!-- Content -->
-              <tr>
-                <td style="padding: 40px 30px;">
-                  <p style="margin: 0; font-size: 16px; color: #374151; line-height: 1.6;">
-                    Hi <strong>${userData.name}</strong>,
-                  </p>
-                  <p style="margin: 20px 0; font-size: 16px; color: #374151; line-height: 1.6;">
-                    We received a request to reset your password. Click the button below to create a new password:
-                  </p>
-
-                  <!-- CTA Button -->
-                  <div style="text-align: center; margin: 30px 0;">
-                    <a href="${resetLink}" style="display: inline-block; padding: 14px 32px; background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); color: #ffffff; text-decoration: none; border-radius: 8px; font-size: 16px; font-weight: 600; box-shadow: 0 4px 6px rgba(239, 68, 68, 0.3);">
-                      Reset Password
-                    </a>
-                  </div>
-
-                  <p style="margin: 20px 0; font-size: 14px; color: #6b7280; line-height: 1.6; text-align: center;">
-                    This link will expire in <strong>1 hour</strong>
-                  </p>
-
-                  <!-- Alternative Link -->
-                  <div style="background-color: #f3f4f6; padding: 15px; border-radius: 6px; margin-top: 20px;">
-                    <p style="margin: 0; font-size: 13px; color: #6b7280;">
-                      If the button doesn't work, copy and paste this link into your browser:
-                    </p>
-                    <p style="margin: 8px 0 0; font-size: 12px; color: #667eea; word-break: break-all;">
-                      ${resetLink}
-                    </p>
-                  </div>
-
-                  <!-- Security Notice -->
-                  <div style="background-color: #fee2e2; border-left: 4px solid #ef4444; padding: 15px; border-radius: 4px; margin-top: 30px;">
-                    <p style="margin: 0; font-size: 13px; color: #7f1d1d; font-weight: 600;">Security Notice</p>
-                    <p style="margin: 8px 0 0; font-size: 13px; color: #991b1b; line-height: 1.5;">
-                      If you didn't request a password reset, please ignore this email or contact support if you have concerns about your account security.
-                    </p>
-                  </div>
-                </td>
-              </tr>
-
-              <!-- Footer -->
-              <tr>
-                <td style="background-color: #f9fafb; padding: 25px 30px; border-top: 1px solid #e5e7eb; text-align: center;">
-                  <p style="margin: 0; font-size: 13px; color: #6b7280; line-height: 1.5;">
-                    This is an automated email from BeigeAI. Please do not reply to this email.
-                  </p>
-                  <p style="margin: 10px 0 0; font-size: 13px; color: #9ca3af;">
-                    © ${new Date().getFullYear()} BeigeAI. All rights reserved.
-                  </p>
-                </td>
-              </tr>
-
-            </table>
-          </td>
-        </tr>
-      </table>
-    </body>
-    </html>
-  `;
 };
 
 /**
@@ -567,13 +525,13 @@ const sendBookingConfirmationEmail = async (data) => {
     }
 
     const templateId = data?.cp_assigned
-      ? (BOOKING_CONFIRMED_WITH_CP_TEMPLATE_ID || BOOKING_CONFIRMED_TEMPLATE_ID)
-      : (BOOKING_CONFIRMED_WITHOUT_CP_TEMPLATE_ID || BOOKING_CONFIRMED_TEMPLATE_ID);
+      ? (BOOKING_CONFIRMED_WITH_CP_TEMPLATE_ID)
+      : (BOOKING_CONFIRMED_WITHOUT_CP_TEMPLATE_ID);
 
     if (!templateId) {
       return {
         success: false,
-        error: 'Set SENDGRID_BOOKING_CONFIRMED_WITH_CP_TEMPLATE_ID / SENDGRID_BOOKING_CONFIRMED_WITHOUT_CP_TEMPLATE_ID (or fallback SENDGRID_BOOKING_CONFIRMED_TEMPLATE_ID)'
+        error: 'Set BOOKING_CONFIRMED_WITH_CP_TEMPLATE_ID / BOOKING_CONFIRMED_WITHOUT_CP_TEMPLATE_ID'
       };
     }
 
@@ -654,7 +612,7 @@ const sendShootReminder5DaysEmail = async (data) => {
     }
 
     if (!SHOOT_REMINDER_5D_TEMPLATE_ID) {
-      return { success: false, error: 'SENDGRID_SHOOT_REMINDER_5D_TEMPLATE_ID is not configured' };
+      return { success: false, error: 'SHOOT_REMINDER_5D_TEMPLATE_ID is not configured' };
     }
 
     if (!data?.to_email) {
@@ -680,11 +638,11 @@ const sendShootReminder5DaysEmail = async (data) => {
         start_time: data.start_time || '',
         end_time: data.end_time || '',
         shoot_location_address: data.shoot_location_address || 'TBD',
-        onboarding_form_link: data.onboarding_form_link || process.env.CLIENT_ONBOARDING_FORM_URL || 'https://book.beige.app/',
+        onboarding_form_link: data.onboarding_form_link || process.env.CLIENT_ONBOARDING_FORM_URL || 'https://beige.app/',
         userData: { name: data.first_name || 'there' },
         date: data.shoot_date || '',
         location: data.shoot_location_address || 'TBD',
-        insert_link: data.onboarding_form_link || process.env.CLIENT_ONBOARDING_FORM_URL || 'https://book.beige.app/'
+        insert_link: data.onboarding_form_link || process.env.CLIENT_ONBOARDING_FORM_URL || 'https://beige.app/'
       }
     };
 
@@ -720,7 +678,7 @@ const sendShootReminder2HoursEmail = async (data) => {
     }
 
     if (!SHOOT_REMINDER_2H_TEMPLATE_ID) {
-      return { success: false, error: 'SENDGRID_SHOOT_REMINDER_2H_TEMPLATE_ID is not configured' };
+      return { success: false, error: 'SHOOT_REMINDER_2H_TEMPLATE_ID is not configured' };
     }
 
     if (!data?.to_email) {
@@ -783,7 +741,7 @@ const sendShootCompletionEmail = async (data) => {
     }
 
     if (!SHOOT_COMPLETION_TEMPLATE_ID) {
-      return { success: false, error: 'SENDGRID_SHOOT_COMPLETION_TEMPLATE_ID is not configured' };
+      return { success: false, error: 'SHOOT_COMPLETION_TEMPLATE_ID is not configured' };
     }
 
     if (!data?.to_email) {
@@ -844,7 +802,7 @@ const sendFinalNudge7DaysEmail = async (data) => {
     }
 
     if (!SHOOT_FINAL_NUDGE_7D_TEMPLATE_ID) {
-      return { success: false, error: 'SENDGRID_SHOOT_FINAL_NUDGE_7D_TEMPLATE_ID is not configured' };
+      return { success: false, error: 'SHOOT_FINAL_NUDGE_7D_TEMPLATE_ID is not configured' };
     }
 
     if (!data?.to_email) {
@@ -860,7 +818,7 @@ const sendFinalNudge7DaysEmail = async (data) => {
       data.review_link ||
       process.env.CLIENT_REVIEW_LINK ||
       process.env.FRONTEND_URL ||
-      'https://book.beige.app/';
+      'https://beige.app/';
 
     const payload = {
       to: data.to_email,
@@ -912,7 +870,7 @@ const sendPostProductionStatusUpdateEmail = async (data) => {
     if (!POST_PRODUCTION_STATUS_UPDATE_TEMPLATE_ID) {
       return {
         success: false,
-        error: 'SENDGRID_POST_PRODUCTION_STATUS_UPDATE_TEMPLATE_ID is not configured'
+        error: 'POST_PRODUCTION_STATUS_UPDATE_TEMPLATE_ID is not configured'
       };
     }
 
@@ -979,7 +937,7 @@ const sendRawFootageReadyEmail = async (data) => {
     if (!RAW_FOOTAGE_READY_TEMPLATE_ID) {
       return {
         success: false,
-        error: 'SENDGRID_RAW_FOOTAGE_READY_TEMPLATE_ID is not configured'
+        error: 'RAW_FOOTAGE_READY_TEMPLATE_ID is not configured'
       };
     }
 
@@ -1046,7 +1004,7 @@ const sendFinalDeliveryCompleteEmail = async (data) => {
     if (!FINAL_DELIVERY_COMPLETE_TEMPLATE_ID) {
       return {
         success: false,
-        error: 'SENDGRID_FINAL_DELIVERY_COMPLETE_TEMPLATE_ID is not configured'
+        error: 'FINAL_DELIVERY_COMPLETE_TEMPLATE_ID is not configured'
       };
     }
 
@@ -1114,7 +1072,7 @@ const sendRevisionRequestReceivedEmail = async (data) => {
     if (!REVISION_REQUEST_RECEIVED_TEMPLATE_ID) {
       return {
         success: false,
-        error: 'SENDGRID_REVISION_REQUEST_RECEIVED_TEMPLATE_ID is not configured'
+        error: 'REVISION_REQUEST_RECEIVED_TEMPLATE_ID is not configured'
       };
     }
 
@@ -1182,7 +1140,7 @@ const sendRevisedContentDeliveredEmail = async (data) => {
     if (!REVISED_CONTENT_DELIVERED_TEMPLATE_ID) {
       return {
         success: false,
-        error: 'SENDGRID_REVISED_CONTENT_DELIVERED_TEMPLATE_ID is not configured'
+        error: 'REVISED_CONTENT_DELIVERED_TEMPLATE_ID is not configured'
       };
     }
 
@@ -1251,7 +1209,7 @@ const sendFinalDeliveryWithRevisionEmail = async (data) => {
     if (!FINAL_DELIVERY_WITH_REVISION_TEMPLATE_ID) {
       return {
         success: false,
-        error: 'SENDGRID_FINAL_DELIVERY_WITH_REVISION_TEMPLATE_ID is not configured'
+        error: 'FINAL_DELIVERY_WITH_REVISION_TEMPLATE_ID is not configured'
       };
     }
 
@@ -1672,135 +1630,32 @@ const generateInvoiceTemplate = (userData, invoiceData) => {
  * @param {Object} leadData - { guestEmail, shootType, contentType, eventDate, startTime, endTime, editsNeeded }
  */
 const sendSalesLeadNotification = async (leadData) => {
-  try {
-    const salesEmail = process.env.SALES_NOTIFICATION_EMAIL;
-    const shootLabel = leadData.shootType ? leadData.shootType.replace('_', ' ').toUpperCase() : 'NEW';
-    
-    const mailOptions = {
-      from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_USER}>`,
-      to: salesEmail,
-      subject: ` NEW ${shootLabel} SHOOT LEAD: ${leadData.guestEmail}`,
-      
-      text: `New ${shootLabel} Lead Captured.\n\nClient: ${leadData.guestEmail}\nShoot Type: ${leadData.shootType}\nContent: ${leadData.contentType}\nDate: ${leadData.eventDate}\nTime: ${leadData.startTime} - ${leadData.endTime}\n\nCheck dashboard: https://beige.app/`,
-      
-      attachments: [{
-        filename: 'logo.png',
-        path: 'https://beigexmemehouse.s3.eu-north-1.amazonaws.com/beige/beige_logo_vb.png',
-        cid: 'beigelogo' 
-      }],
-      html: generateSalesLeadTemplate(leadData)
-    };
+try {
+    const to = process.env.SALES_NOTIFICATION_EMAIL;
+    const templateId = SALES_LEAD_NOTIFICATION_TEMPLATE_ID;
 
-    const info = await transporter.sendMail(mailOptions);
-    console.log('Sales notification sent successfully:', info.messageId);
-    return { success: true };
+    return await sendEmail({
+      to,
+      subject: 'New Shoot Lead',
+      templateId,
+      dynamicTemplateData: {
+        guestEmail: leadData?.guestEmail || '',
+        shootType: leadData?.shootType || '',
+        contentType: Array.isArray(leadData?.contentType)
+          ? leadData.contentType.join(', ')
+          : (leadData?.contentType || ''),
+        eventDate: leadData?.eventDate || "TBD",
+        startTime: leadData?.startTime || "--",
+        endTime: leadData?.endTime || "--",
+        editsNeeded: !!leadData?.editsNeeded,
+        loginUrl: process.env.FRONTEND_URL || 'https://beige.app/',
+        year: new Date().getFullYear()
+      }
+    });
   } catch (error) {
-    console.error('Error sending sales notification:', error);
+    console.error('Error sending sales lead notification:', error?.response?.body || error.message);
     return { success: false, error: error.message };
   }
-};
-
-/**
- * HTML Template with Anti-Spam Preheader and Beige Logo
- */
-const generateSalesLeadTemplate = (data) => {
-  const loginUrl = 'https://beige.app/';
-  const shootTitle = data.shootType ? data.shootType.replace('_', ' ').toUpperCase() : 'NEW';
-  
-  return `
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <style>
-        :root { color-scheme: dark; }
-      </style>
-    </head>
-    <body style="margin: 0; padding: 0; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #0A0F0D; color: #ffffff;">
-      
-      <!-- SPAM SOLUTION: Preheader text (Invisible in email, shows in preview) -->
-      <div style="display:none; max-height:0px; max-width:0px; opacity:0; overflow:hidden; font-size:1px; line-height:1px;">
-        New interest captured for ${shootTitle} shoot. Client: ${data.guestEmail}. Review details inside the Beige platform.
-      </div>
-
-      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #0A0F0D; padding: 40px 10px;">
-        <tr>
-          <td align="center">
-            <table width="600" cellpadding="0" cellspacing="0" border="0" style="background-color: #000000; border: 1px solid rgba(232, 209, 171, 0.2); border-radius: 20px; overflow: hidden;">
-              
-              <!-- LOGO -->
-              <tr>
-                <td align="center" style="padding: 40px 0 20px 0;">
-                  <img src="cid:beigelogo" alt="Beige" width="160" style="display: block; border:0;">
-                </td>
-              </tr>
-
-              <!-- HEADER -->
-              <tr>
-                <td style="padding: 20px 40px; text-align: center; border-top: 1px solid rgba(232, 209, 171, 0.1); border-bottom: 1px solid rgba(232, 209, 171, 0.1); background-color: rgba(232, 209, 171, 0.02);">
-                  <h1 style="color: #E1CAA1; font-size: 24px; font-weight: 500; margin: 0; letter-spacing: 2px;">
-                    NEW ${shootTitle} SHOOT LEAD
-                  </h1>
-                </td>
-              </tr>
-
-              <!-- BODY -->
-              <tr>
-                <td style="padding: 40px;">
-                  <table width="100%" cellpadding="0" cellspacing="0">
-                    <tr>
-                      <td style="padding-bottom: 25px;">
-                        <p style="color: #E8D1AB; font-size: 11px; text-transform: uppercase; font-weight: 600; margin: 0 0 5px 0; letter-spacing: 1.5px;">Client Email</p>
-                        <p style="color: #ffffff; font-size: 16px; margin: 0; font-weight: 500;">${data.guestEmail}</p>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td style="padding-bottom: 25px;">
-                        <p style="color: #E8D1AB; font-size: 11px; text-transform: uppercase; font-weight: 600; margin: 0 0 5px 0; letter-spacing: 1.5px;">Service Requested</p>
-                        <p style="color: #ffffff; font-size: 16px; margin: 0; text-transform: capitalize;">${Array.isArray(data.contentType) ? data.contentType.join(' & ') : data.contentType}</p>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td style="padding-bottom: 25px;">
-                        <p style="color: #E8D1AB; font-size: 11px; text-transform: uppercase; font-weight: 600; margin: 0 0 5px 0; letter-spacing: 1.5px;">Event Schedule</p>
-                        <p style="color: #ffffff; font-size: 16px; margin: 0;">${data.eventDate || 'TBD'} • ${data.startTime || '--'} to ${data.endTime || '--'}</p>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td>
-                        <p style="color: #E8D1AB; font-size: 11px; text-transform: uppercase; font-weight: 600; margin: 0 0 5px 0; letter-spacing: 1.5px;">Editing Required</p>
-                        <p style="color: #ffffff; font-size: 16px; margin: 0;">${data.editsNeeded ? 'YES' : 'NO'}</p>
-                      </td>
-                    </tr>
-                  </table>
-
-                  <table width="100%" border="0" cellspacing="0" cellpadding="0" style="margin-top: 45px;">
-                    <tr>
-                      <td align="center">
-                        <a href="${loginUrl}" style="background: linear-gradient(180deg, #3D342A 0%, #C79233 100%); color: #ffffff; padding: 18px 40px; text-decoration: none; border-radius: 50px; font-weight: 600; display: inline-block; letter-spacing: 1.5px; font-size: 13px; text-transform: uppercase;">
-                          LOGIN TO DASHBOARD &rarr;
-                        </a>
-                      </td>
-                    </tr>
-                  </table>
-                </td>
-              </tr>
-
-              <!-- FOOTER -->
-              <tr>
-                <td style="background-color: #050505; padding: 25px; text-align: center; border-top: 1px solid rgba(232, 209, 171, 0.1);">
-                  <p style="color: #4b5563; font-size: 10px; margin: 0; text-transform: uppercase; letter-spacing: 2px;">
-                    Internal Lead Notification • Beige AI Platform
-                  </p>
-                </td>
-              </tr>
-            </table>
-          </td>
-        </tr>
-      </table>
-    </body>
-    </html>
-  `;
 };
 
 /**
@@ -1808,77 +1663,25 @@ const generateSalesLeadTemplate = (data) => {
  */
 const sendPaymentSuccessSalesNotification = async (paymentData) => {
   try {
-    const salesEmail = process.env.SALES_NOTIFICATION_EMAIL;
-    if (!salesEmail) return;
+    const to = process.env.SALES_NOTIFICATION_EMAIL;
+    const templateId = SALES_PAYMENT_SUCCESS_TEMPLATE_ID;
 
-    const shootLabel = paymentData.shootType ? paymentData.shootType.toUpperCase() : 'PROJECT';
-    
-    const mailOptions = {
-      from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_USER}>`,
-      to: salesEmail,
-      subject: `💰 PAYMENT RECEIVED: ${shootLabel} - ${paymentData.guestEmail}`,
-      text: `Payment of $${paymentData.amount} confirmed for ${paymentData.guestEmail}.`,
-      attachments: [{
-        filename: 'logo.png',
-        path: 'https://beigexmemehouse.s3.eu-north-1.amazonaws.com/beige/beige_logo_vb.png',
-        cid: 'beigelogo' 
-      }],
-      html: generatePaymentSuccessSalesTemplate(paymentData)
-    };
-
-    await transporter.sendMail(mailOptions);
-    console.log('Payment success notification sent to sales.');
+    return await sendEmail({
+      to,
+      subject: 'Payment Received',
+      templateId,
+      dynamicTemplateData: {
+        guestEmail: paymentData?.guestEmail || '',
+        amount: Number(paymentData?.amount || 0).toFixed(2),
+        shootType: paymentData?.shootType || "N/A",
+        paymentIntentId: paymentData?.paymentIntentId || '',
+        year: new Date().getFullYear()
+      }
+    });
   } catch (error) {
-    console.error('Error sending payment success notification:', error);
+    console.error('Error sending payment success notification:', error?.response?.body || error.message);
+    return { success: false, error: error.message };
   }
-};
-
-/**
- * HTML Template for Payment Confirmation (Sales View)
- */
-const generatePaymentSuccessSalesTemplate = (data) => {
-  return `
-    <!DOCTYPE html>
-    <html>
-    <body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #0A0F0D; color: #ffffff;">
-      <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #0A0F0D; padding: 40px 20px;">
-        <tr>
-          <td align="center">
-            <table width="600" style="background-color: #000000; border: 1px solid #22c55e; border-radius: 20px; overflow: hidden;">
-              <tr>
-                <td align="center" style="padding: 30px;">
-                  <img src="cid:beigelogo" alt="Beige" width="140">
-                </td>
-              </tr>
-              <tr>
-                <td style="padding: 0 40px 40px; text-align: center;">
-                  <h1 style="color: #22c55e; font-size: 24px; margin: 0;">PAYMENT CONFIRMED</h1>
-                  <p style="color: #9ca3af; margin-top: 5px;">A new booking has been finalized.</p>
-                  
-                  <div style="margin-top: 30px; background: rgba(34, 197, 94, 0.05); border: 1px solid rgba(34, 197, 94, 0.2); border-radius: 12px; padding: 20px; text-align: left;">
-                    <p style="margin: 0 0 10px; color: #E8D1AB; font-size: 12px; font-weight: 600;">CLIENT EMAIL</p>
-                    <p style="margin: 0 0 20px; color: #ffffff; font-size: 16px;">${data.guestEmail}</p>
-                    
-                    <p style="margin: 0 0 10px; color: #E8D1AB; font-size: 12px; font-weight: 600;">AMOUNT PAID</p>
-                    <p style="margin: 0 0 20px; color: #22c55e; font-size: 24px; font-weight: bold;">$${parseFloat(data.amount).toFixed(2)}</p>
-                    
-                    <p style="margin: 0 0 10px; color: #E8D1AB; font-size: 12px; font-weight: 600;">SHOOT TYPE</p>
-                    <p style="margin: 0 0 20px; color: #ffffff; font-size: 16px; text-transform: capitalize;">${data.shootType || 'N/A'}</p>
-
-                    <p style="margin: 0 0 10px; color: #E8D1AB; font-size: 12px; font-weight: 600;">STRIPE ID</p>
-                    <p style="margin: 0; color: #9ca3af; font-size: 12px;">${data.paymentIntentId}</p>
-                  </div>
-
-                  <a href="https://beige.app/" style="margin-top: 30px; display: inline-block; background: #22c55e; color: #ffffff; padding: 15px 35px; text-decoration: none; border-radius: 50px; font-weight: bold;">OPEN DASHBOARD</a>
-                </td>
-              </tr>
-            </table>
-          </td>
-        </tr>
-      </table>
-    </body>
-    </html>
-  `;
 };
 
 /**
@@ -1886,75 +1689,26 @@ const generatePaymentSuccessSalesTemplate = (data) => {
  */
 const sendNewClientSignupNotification = async (userData) => {
   try {
-    const salesEmail = process.env.SALES_NOTIFICATION_EMAIL;
-    if (!salesEmail) return;
+    const to = process.env.SALES_NOTIFICATION_EMAIL;
+    const templateId = CLIENT_SIGNUP_NOTIFICATION_TEMPLATE_ID;
 
-    const mailOptions = {
-      from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_USER}>`,
-      to: salesEmail,
-      subject: `👤 NEW CLIENT SIGNUP: ${userData.name}`,
-      text: `New Client Registered: ${userData.name} (${userData.email})`,
-      attachments: [{
-        filename: 'logo.png',
-        path: 'https://beigexmemehouse.s3.eu-north-1.amazonaws.com/beige/beige_logo_vb.png',
-        cid: 'beigelogo' 
-      }],
-      html: generateNewClientSignupTemplate(userData)
-    };
-
-    await transporter.sendMail(mailOptions);
-    console.log('New client signup notification sent to sales.');
+    return await sendEmail({
+      to,
+      subject: 'New Client Signup',
+      templateId,
+      dynamicTemplateData: {
+        name: userData?.name || '',
+        email: userData?.email || '',
+        phone_number: userData?.phone_number || 'N/A',
+        instagram_handle: userData?.instagram_handle || 'N/A',
+        adminUrl: process.env.FRONTEND_URL || 'https://beige.app/',
+        year: new Date().getFullYear()
+      }
+    });
   } catch (error) {
-    console.error('Error sending client signup notification:', error);
+    console.error('Error sending client signup notification:', error?.response?.body || error.message);
+    return { success: false, error: error.message };
   }
-};
-
-/**
- * HTML Template for New Client Signup
- */
-const generateNewClientSignupTemplate = (data) => {
-  return `
-    <!DOCTYPE html>
-    <html>
-    <body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #0A0F0D; color: #ffffff;">
-      <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #0A0F0D; padding: 40px 20px;">
-        <tr>
-          <td align="center">
-            <table width="600" style="background-color: #000000; border: 1px solid rgba(232, 209, 171, 0.3); border-radius: 20px; overflow: hidden;">
-              <tr>
-                <td align="center" style="padding: 30px;">
-                  <img src="cid:beigelogo" alt="Beige" width="140">
-                </td>
-              </tr>
-              <tr>
-                <td style="padding: 0 40px 40px; text-align: center;">
-                  <h1 style="color: #E1CAA1; font-size: 24px; margin: 0; letter-spacing: 1px;">NEW CLIENT ACCOUNT</h1>
-                  <p style="color: #9ca3af; margin-top: 5px;">A new user has registered on the Beige platform.</p>
-                  
-                  <div style="margin-top: 30px; background: rgba(232, 209, 171, 0.05); border: 1px solid rgba(232, 209, 171, 0.1); border-radius: 12px; padding: 25px; text-align: left;">
-                    <p style="margin: 0 0 5px; color: #E8D1AB; font-size: 11px; font-weight: 600; text-transform: uppercase;">Name</p>
-                    <p style="margin: 0 0 20px; color: #ffffff; font-size: 16px;">${data.name}</p>
-                    
-                    <p style="margin: 0 0 5px; color: #E8D1AB; font-size: 11px; font-weight: 600; text-transform: uppercase;">Email Address</p>
-                    <p style="margin: 0 0 20px; color: #ffffff; font-size: 16px;">${data.email}</p>
-                    
-                    <p style="margin: 0 0 5px; color: #E8D1AB; font-size: 11px; font-weight: 600; text-transform: uppercase;">Phone Number</p>
-                    <p style="margin: 0 0 20px; color: #ffffff; font-size: 16px;">${data.phone_number || 'N/A'}</p>
-
-                    <p style="margin: 0 0 5px; color: #E8D1AB; font-size: 11px; font-weight: 600; text-transform: uppercase;">Instagram</p>
-                    <p style="margin: 0; color: #ffffff; font-size: 16px;">${data.instagram_handle || 'N/A'}</p>
-                  </div>
-
-                  <a href="https://beige.app/" style="margin-top: 35px; display: inline-block; background: linear-gradient(180deg, #3D342A 0%, #C79233 100%); color: #ffffff; padding: 16px 40px; text-decoration: none; border-radius: 50px; font-weight: bold; font-size: 13px; letter-spacing: 1px; text-transform: uppercase;">Open Admin Panel</a>
-                </td>
-              </tr>
-            </table>
-          </td>
-        </tr>
-      </table>
-    </body>
-    </html>
-  `;
 };
 
 /**
@@ -1962,75 +1716,210 @@ const generateNewClientSignupTemplate = (data) => {
  */
 const sendNewCrewSignupNotification = async (crewData) => {
   try {
-    const salesEmail = process.env.SALES_NOTIFICATION_EMAIL;
-    if (!salesEmail) return;
+    const to = process.env.SALES_NOTIFICATION_EMAIL;
+    const templateId = CREW_SIGNUP_NOTIFICATION_TEMPLATE_ID;
 
-    const mailOptions = {
-      from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_USER}>`,
-      to: salesEmail,
-      subject: ` NEW CREATIVE SIGNUP: ${crewData.first_name} ${crewData.last_name}`,
-      text: `New Creative Profile: ${crewData.first_name} ${crewData.last_name} (${crewData.email})`,
-      attachments: [{
-        filename: 'logo.png',
-        path: 'https://beigexmemehouse.s3.eu-north-1.amazonaws.com/beige/beige_logo_vb.png',
-        cid: 'beigelogo' 
-      }],
-      html: generateNewCrewSignupTemplate(crewData)
-    };
+    if (!to) return { success: false, error: 'SALES_NOTIFICATION_EMAIL is not configured' };
 
-    await transporter.sendMail(mailOptions);
-    console.log('New crew signup notification sent to sales.');
+    return await sendEmail({
+      to,
+      subject: 'New Creative Signup',
+      templateId,
+      dynamicTemplateData: {
+        first_name: crewData?.first_name || '',
+        last_name: crewData?.last_name || '',
+        full_name: `${crewData?.first_name || ''} ${crewData?.last_name || ''}`.trim(),
+        email: crewData?.email || '',
+        phone_number: crewData?.phone_number || 'No Phone',
+        location:
+          typeof crewData?.location === 'string'
+            ? crewData.location
+            : (crewData?.location ? JSON.stringify(crewData.location) : 'Not provided'),
+        working_distance: Number(crewData?.working_distance || 0),
+        adminUrl: process.env.FRONTEND_URL || 'https://beige.app/',
+        year: new Date().getFullYear()
+      }
+    });
   } catch (error) {
-    console.error('Error sending crew signup notification:', error);
+    console.error('Error sending crew signup notification:', error?.response?.body || error.message);
+    return { success: false, error: error.message };
   }
 };
 
-/**
- * HTML Template for New Crew Signup
- */
-const generateNewCrewSignupTemplate = (data) => {
-  return `
-    <!DOCTYPE html>
-    <html>
-    <body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #0A0F0D; color: #ffffff;">
-      <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #0A0F0D; padding: 40px 20px;">
-        <tr>
-          <td align="center">
-            <table width="600" style="background-color: #000000; border: 1px solid rgba(232, 209, 171, 0.3); border-radius: 20px; overflow: hidden;">
-              <tr>
-                <td align="center" style="padding: 30px;">
-                  <img src="cid:beigelogo" alt="Beige" width="140">
-                </td>
-              </tr>
-              <tr>
-                <td style="padding: 0 40px 40px; text-align: center;">
-                  <h1 style="color: #E1CAA1; font-size: 24px; margin: 0; letter-spacing: 1px;">NEW CREATIVE PROFILE</h1>
-                  <p style="color: #9ca3af; margin-top: 5px;">A new creator has started their application (Step 1).</p>
-                  
-                  <div style="margin-top: 30px; background: rgba(232, 209, 171, 0.05); border: 1px solid rgba(232, 209, 171, 0.1); border-radius: 12px; padding: 25px; text-align: left;">
-                    <p style="margin: 0 0 5px; color: #E8D1AB; font-size: 11px; font-weight: 600; text-transform: uppercase;">Name</p>
-                    <p style="margin: 0 0 20px; color: #ffffff; font-size: 16px;">${data.first_name} ${data.last_name}</p>
-                    
-                    <p style="margin: 0 0 5px; color: #E8D1AB; font-size: 11px; font-weight: 600; text-transform: uppercase;">Email / Contact</p>
-                    <p style="margin: 0 0 20px; color: #ffffff; font-size: 16px;">${data.email} <br> ${data.phone_number || 'No Phone'}</p>
-                    
-                    <p style="margin: 0 0 5px; color: #E8D1AB; font-size: 11px; font-weight: 600; text-transform: uppercase;">Location</p>
-                    <p style="margin: 0 0 20px; color: #ffffff; font-size: 16px;">${data.location || 'Not provided'}</p>
+const sendCPAcceptRejectStatusEmail = async (data) => {
+  try {
+    if (!process.env.SENDGRID_API_KEY) return { success: false, error: 'SENDGRID_API_KEY is not configured' };
+    if (!data?.to_email) return { success: false, error: 'Recipient email is required' };
 
-                    <p style="margin: 0 0 5px; color: #E8D1AB; font-size: 11px; font-weight: 600; text-transform: uppercase;">Working Distance</p>
-                    <p style="margin: 0; color: #ffffff; font-size: 16px;">${data.working_distance || 0} miles</p>
-                  </div>
+    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    if (!fromEmail) return { success: false, error: 'Sender email not configured' };
 
-                  <a href="https://beige.app/" style="margin-top: 35px; display: inline-block; background: linear-gradient(180deg, #3D342A 0%, #C79233 100%); color: #ffffff; padding: 16px 40px; text-decoration: none; border-radius: 50px; font-weight: bold; font-size: 13px; letter-spacing: 1px; text-transform: uppercase;">Review Profiles</a>
-                </td>
-              </tr>
-            </table>
-          </td>
-        </tr>
-      </table>
-    </body>
-    </html>
-  `;
+    const [response] = await sgMail.send({
+      to: data.to_email,
+      from: {
+        email: fromEmail,
+        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+      },
+      subject: 'CP Acceptance status update',
+      templateId: CP_ACCEPT_REJECT_TEMPLATE_ID,
+      dynamicTemplateData: {
+        userData: { name: data.user_name || 'there' },
+        cp_name: data.cp_name || '',
+        cp_action: data.cp_action || '',
+        cp_status: data.cp_status || '',
+        cp_list: data.cp_list || [],
+        booking_id: data.booking_id || '',
+        client_name: data.client_name || '',
+        Service_type: data.service_type || '',
+        date: data.date || '',
+        start_time: data.start_time || '',
+        end_time: data.end_time || '',
+        duration: data.duration || '',
+        shoot_location_address: data.shoot_location_address || 'TBD',
+        dashboardLink: data.dashboardLink || process.env.CP_STATUS_DASHBOARD_LINK || process.env.FRONTEND_URL || 'https://beige.app/'
+      }
+    });
+
+    console.log("response", response)
+
+    return {
+      success: true,
+      statusCode: response?.statusCode,
+      messageId: response?.headers?.['x-message-id'] || null
+    };
+  } catch (error) {
+    return { success: false, error: error?.response?.body || error.message };
+  }
+};
+
+const sendCPStatusUpdateByRequest = async ({ project_id, crew_member_id, cp_action, cp_status }) => {
+  try {
+    const booking = await stream_project_booking.findOne({
+      where: { stream_project_booking_id: project_id },
+      include: [
+        {
+          model: db.users,
+          as: 'user',
+          required: false,
+          attributes: ['name', 'email']
+        },
+        {
+          model: assigned_crew,
+          as: 'assigned_crews',
+          required: false,
+          include: [
+            {
+              model: crew_members,
+              as: 'crew_member',
+              required: false,
+              attributes: ['crew_member_id', 'first_name', 'last_name']
+            }
+          ]
+        }
+      ]
+    });
+
+    if (!booking) return { success: false, error: 'Booking not found' };
+
+    const currentCrew = await crew_members.findOne({
+      where: { crew_member_id },
+      attributes: ['first_name', 'last_name']
+    });
+
+    const toEmail = process.env.CP_NOTIFICATION_EMAIL;
+    if (!toEmail) {
+      return { success: false, error: 'CP_NOTIFICATION_EMAIL is not configured' };
+    }
+
+    const cpName =
+      [currentCrew?.first_name, currentCrew?.last_name].filter(Boolean).join(' ').trim() || 'Creative Partner';
+
+    const cpList = (booking.assigned_crews || [])
+      .map((ac) => {
+        const name = [ac?.crew_member?.first_name, ac?.crew_member?.last_name].filter(Boolean).join(' ').trim();
+        if (!name) return null;
+        const status = ac?.crew_accept === 1 ? 'Accepted' : ac?.crew_accept === 2 ? 'Declined' : 'Pending';
+        return {
+          name,
+          action: status.toLowerCase(),
+          status
+        };
+      })
+      .filter(Boolean);
+
+    return sendCPAcceptRejectStatusEmail({
+      to_email: toEmail,
+      user_name: 'there',
+      cp_name: cpName,
+      cp_action: cp_action || '',
+      cp_status: cp_status || '',
+      booking_id: booking.stream_project_booking_id,
+      client_name: booking?.user?.name || booking?.guest_email || 'Client',
+      service_type: booking?.content_type || booking?.shoot_type || booking?.event_type || '',
+      date: formatDate(booking?.event_date),
+      start_time: formatTime(booking?.start_time),
+      end_time: formatTime(booking?.end_time),
+      duration: booking?.duration_hours ? `${booking.duration_hours} hours` : '',
+      shoot_location_address: formatLocation(booking?.event_location),
+      dashboardLink: process.env.CP_STATUS_DASHBOARD_LINK || process.env.FRONTEND_URL || 'https://beige.app/',
+      cp_list: cpList
+    });
+
+  } catch (error) {
+    return { success: false, error: error?.response?.body || error.message };
+  }
+};
+
+const sendCPNewBookingRequestEmail = async (data) => {
+  try {
+    if (!process.env.SENDGRID_API_KEY) {
+      return { success: false, error: 'SENDGRID_API_KEY is not configured' };
+    }
+
+    if (!CP_NEW_BOOKING_REQUEST_TEMPLATE_ID) {
+      return { success: false, error: 'CP_NEW_BOOKING_REQUEST_TEMPLATE_ID is not configured' };
+    }
+
+    if (!data?.to_email) {
+      return { success: false, error: 'Recipient email is required' };
+    }
+
+    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    if (!fromEmail) {
+      return { success: false, error: 'Sender email not configured' };
+    }
+
+    const [response] = await sgMail.send({
+      to: data.to_email,
+      from: {
+        email: fromEmail,
+        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+      },
+      subject: 'New Booking Request',
+      templateId: CP_NEW_BOOKING_REQUEST_TEMPLATE_ID,
+      dynamicTemplateData: {
+        userData: {
+          name: data.user_name || 'there'
+        },
+        dashboardLink:
+          data.dashboardLink ||
+          process.env.CP_DASHBOARD_LINK ||
+          process.env.FRONTEND_URL ||
+          'https://beige.app/'
+      }
+    });
+
+    return {
+      success: true,
+      statusCode: response?.statusCode,
+      messageId:
+        response?.headers?.['x-message-id'] ||
+        response?.headers?.['X-Message-Id'] ||
+        null
+    };
+  } catch (error) {
+    return { success: false, error: error?.response?.body || error.message };
+  }
 };
 
 module.exports = {
@@ -2054,6 +1943,8 @@ module.exports = {
   sendRevisionRequestReceivedEmail,
   sendRevisedContentDeliveredEmail,
   sendFinalDeliveryWithRevisionEmail,
+  sendCPStatusUpdateByRequest,
+  sendCPNewBookingRequestEmail,
   sendNewClientSignupNotification,
   sendNewCrewSignupNotification
 };

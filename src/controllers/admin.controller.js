@@ -6,7 +6,7 @@ const common_model = require('../utils/common_model');
 const { Op } = require('sequelize');
 const { S3UploadFiles } = require('../utils/common.js');
 const moment = require('moment');
-const { sendTaskAssignmentEmail } = require('../utils/emailService');
+const { sendTaskAssignmentEmail, sendCPNewBookingRequestEmail } = require('../utils/emailService');
 const { stream_project_booking, crew_members, crew_member_files, tasks, equipment, crew_roles,
   equipment_accessories,
   equipment_category,
@@ -650,15 +650,16 @@ exports.assignCrew = async (req, res) => {
     const { project_id, assigned_crew: crewIds } = req.body;
     console.log("ASSIGN CREW BODY:", req.body);
 
-    // Validate input
-    if (!crewIds || crewIds.length === 0) {
+    if (!Array.isArray(crewIds) || crewIds.length === 0) {
       return res.status(400).json({
         error: true,
         message: "No crew members selected",
       });
     }
 
-    for (const crewId of crewIds) {
+    const uniqueCrewIds = [...new Set(crewIds.map(Number).filter(Boolean))];
+
+    for (const crewId of uniqueCrewIds) {
       await assigned_crew.create({
         project_id,
         crew_member_id: crewId,
@@ -666,6 +667,33 @@ exports.assignCrew = async (req, res) => {
         status: 'assigned',
         is_active: 1,
       });
+    }
+
+    // Non-blocking email trigger
+    try {
+      const crews = await crew_members.findAll({
+        where: { crew_member_id: uniqueCrewIds },
+        attributes: ['crew_member_id', 'first_name', 'last_name', 'email']
+      });
+
+      const dashboardLink =
+        process.env.CP_DASHBOARD_LINK ||
+        process.env.FRONTEND_URL ||
+        'https://beige.app/';
+
+      await Promise.allSettled(
+        crews
+          .filter(c => c.email)
+          .map(c =>
+            sendCPNewBookingRequestEmail({
+              to_email: c.email,
+              user_name: [c.first_name, c.last_name].filter(Boolean).join(' ') || 'there',
+              dashboardLink
+            })
+          )
+      );
+    } catch (mailErr) {
+      console.error('assignCrew email send error:', mailErr?.message || mailErr);
     }
 
     return res.status(200).json({
@@ -6716,6 +6744,7 @@ exports.searchCrewForLead = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 exports.assignCrewBulkSmart = async (req, res) => {
     try {
         const assigned_by_user_id = req.user?.userId;
@@ -6736,53 +6765,59 @@ exports.assignCrewBulkSmart = async (req, res) => {
             ids.forEach(id => { ID_TO_ROLE_MAP[String(id)] = roleName; });
         });
 
-       const lead = await sales_leads.findOne({
-    where: { lead_id },
-    include: [{ 
-        model: stream_project_booking, 
-        as: 'booking',
-        include: [{ 
-            model: assigned_crew, 
-            as: 'assigned_crews', 
-            where: { 
+        const lead = await sales_leads.findOne({
+          where: { lead_id },
+          include: [{
+            model: stream_project_booking,
+            as: 'booking',
+            include: [{
+              model: assigned_crew,
+              as: 'assigned_crews',
+              where: {
                 crew_accept: 1,
                 is_active: 1
-            },
-            required: false,
-            include: [{ model: crew_members, as: 'crew_member' }]
-        }]
-    }]
-});
+              },
+              required: false,
+              include: [{ model: crew_members, as: 'crew_member' }]
+            }]
+          }]
+        });
+
         if (!lead || !lead.booking) {
             return res.status(404).json({ success: false, message: "Lead or booking not found." });
         }
 
         const booking = lead.booking;
-        const requestedLimits = typeof booking.crew_roles === 'string' ? JSON.parse(booking.crew_roles) : (booking.crew_roles || {});
+        const requestedLimits = typeof booking.crew_roles === 'string'
+          ? JSON.parse(booking.crew_roles)
+          : (booking.crew_roles || {});
 
-        let currentCounts = { videographer: 0, photographer: 0, cinematographer: 0 };
-                if (booking.assigned_crews) {
-            booking.assigned_crews.forEach(ac => {
-                if (ac.crew_member?.primary_role) {
-                    try {
-                        const parsed = JSON.parse(ac.crew_member.primary_role);
-                        const roles = Array.isArray(parsed) ? parsed : [parsed];
-                        roles.forEach(id => {
-                            const roleName = ID_TO_ROLE_MAP[String(id)];
-                            if (roleName) currentCounts[roleName]++;
-                        });
-                    } catch (e) { console.error("Parse error in existing crew", e); }
-                }
-            });
+        const currentCounts = { videographer: 0, photographer: 0, cinematographer: 0 };
+
+        if (booking.assigned_crews) {
+          booking.assigned_crews.forEach(ac => {
+            if (ac.crew_member?.primary_role) {
+              try {
+                const parsed = JSON.parse(ac.crew_member.primary_role);
+                const roles = Array.isArray(parsed) ? parsed : [parsed];
+                roles.forEach(id => {
+                  const roleName = ID_TO_ROLE_MAP[String(id)];
+                  if (roleName) currentCounts[roleName]++;
+                });
+              } catch (e) {
+                console.error("Parse error in existing crew", e);
+              }
+            }
+          });
         }
+        const uniqueCrewIds = [...new Set(crew_member_ids.map(Number).filter(Boolean))];
 
         const newCrewDetails = await crew_members.findAll({
-            where: { crew_member_id: crew_member_ids }
+            where: { crew_member_id: uniqueCrewIds }
         });
 
         const assignmentsToCreate = [];
-        let errors = [];
-        let hasAcceptedCrew = true;
+        const errors = [];
 
         newCrewDetails.forEach(crew => {
             let roles = [];
@@ -6831,22 +6866,50 @@ exports.assignCrewBulkSmart = async (req, res) => {
         if (assignmentsToCreate.length > 0) {
             await assigned_crew.bulkCreate(assignmentsToCreate);
             await sales_lead_activities.create({
-                lead_id: lead_id,
+                lead_id,
                 activity_type: 'bulk_crew_assigned',
                 notes: `Sales rep assigned ${assignmentsToCreate.length} crew members.`,
                 performed_by_user_id: assigned_by_user_id
             });
-        }
 
-        res.json({ 
-            success: true, 
-            message: `${assignmentsToCreate.length} crew members assigned successfully.`,
-            errors: errors.length > 0 ? errors : undefined 
-        });
+          // Non-blocking email trigger
+          try {
+            const createdIds = assignmentsToCreate.map(a => a.crew_member_id);
+            const crews = await crew_members.findAll({
+              where: { crew_member_id: createdIds },
+              attributes: ['crew_member_id', 'first_name', 'last_name', 'email']
+            });
+
+            const dashboardLink =
+              process.env.CP_DASHBOARD_LINK ||
+              process.env.FRONTEND_URL ||
+              'https://beige.app/';
+
+            await Promise.allSettled(
+              crews
+                .filter(c => c.email)
+                .map(c =>
+                  sendCPNewBookingRequestEmail({
+                    to_email: c.email,
+                    user_name: [c.first_name, c.last_name].filter(Boolean).join(' ') || 'there',
+                    dashboardLink
+                  })
+                )
+            );
+        } catch (mailErr) {
+          console.error('assignCrewBulkSmart email send error:', mailErr?.message || mailErr);
+        }
+      }
+
+      return res.json({
+        success: true,
+        message: `${assignmentsToCreate.length} crew members assigned successfully.`,
+        errors: errors.length > 0 ? errors : undefined
+      });
 
     } catch (error) {
         console.error(error);
-        res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 

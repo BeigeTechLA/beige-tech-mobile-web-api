@@ -5,7 +5,38 @@ const { formatLocationResponse } = require('../utils/locationHelpers');
 const { appendBookingToSheet } = require('../utils/googleSheetsService');
 const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 const { content } = require('googleapis/build/src/apis/content');
+const { sendCPNewBookingRequestEmail } = require('../utils/emailService');
 
+const notifyAssignedCreators = async (creatorIds = []) => {
+  try {
+    const uniqueIds = [...new Set((creatorIds || []).map(Number).filter(Boolean))];
+    if (!uniqueIds.length) return;
+
+    const creators = await crew_members.findAll({
+      where: { crew_member_id: uniqueIds },
+      attributes: ['crew_member_id', 'first_name', 'last_name', 'email']
+    });
+
+    const dashboardLink =
+      process.env.CP_DASHBOARD_LINK ||
+      process.env.FRONTEND_URL ||
+      'https://beige.app/';
+
+    await Promise.allSettled(
+      creators
+        .filter((c) => c.email)
+        .map((c) =>
+          sendCPNewBookingRequestEmail({
+            to_email: c.email,
+            user_name: [c.first_name, c.last_name].filter(Boolean).join(' ') || 'there',
+            dashboardLink
+          })
+        )
+    );
+  } catch (e) {
+    console.error('notifyAssignedCreators error:', e?.message || e);
+  }
+};
 
 /**
  * Create a new guest booking (no authentication required)
@@ -619,6 +650,9 @@ exports.updateGuestBooking = async (req, res) => {
           crew_accept: 0
         }));
         await assigned_crew.bulkCreate(assignments);
+        
+        // send email to newly selected creators
+        await notifyAssignedCreators(selected_crew_ids);
       } catch (assignError) {
         console.error("Error updating V3 creators:", assignError);
       }
@@ -791,6 +825,9 @@ exports.assignCreatorsToBooking = async (req, res) => {
     }));
 
     const createdAssignments = await assigned_crew.bulkCreate(assignments);
+
+    // send email to assigned creators
+    await notifyAssignedCreators(creator_ids);
 
     res.status(constants.OK.code).json({
       success: true,
