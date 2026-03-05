@@ -8,6 +8,7 @@ const pricingService = require('../services/pricing.service');
 const pricingController = require('../controllers/pricing.controller');
 const paymentService = require('../services/payment-links.service');
 const emailService = require('../utils/emailService');
+const { sendCPNewBookingRequestEmail } = require('../utils/emailService');
 
 const sequelize = require('../db');
 const db = require('../models');
@@ -42,6 +43,37 @@ async function calculateFromCreatorsInternally(pricingPayload) {
   }
 
   return pricingData;
+}
+
+async function notifyAssignedCreators(creatorIds = []) {
+  try {
+    const uniqueIds = [...new Set((creatorIds || []).map(Number).filter(Boolean))];
+    if (!uniqueIds.length) return;
+
+    const creators = await crew_members.findAll({
+      where: { crew_member_id: uniqueIds, is_active: 1 },
+      attributes: ['crew_member_id', 'first_name', 'last_name', 'email']
+    });
+
+    const dashboardLink =
+      process.env.CP_DASHBOARD_LINK ||
+      process.env.FRONTEND_URL ||
+      'https://beige.app/';
+
+    await Promise.allSettled(
+      creators
+        .filter(c => c.email)
+        .map(c =>
+          sendCPNewBookingRequestEmail({
+            to_email: c.email,
+            user_name: [c.first_name, c.last_name].filter(Boolean).join(' ') || 'there',
+            dashboardLink
+          })
+        )
+    );
+  } catch (e) {
+    console.error('notifyAssignedCreators failed:', e?.message || e);
+  }
 }
 
 function safeJsonStringify(val) {
@@ -3022,6 +3054,7 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
 
   await booking.update(updateData, { transaction: tx });
 
+  let assignedCreatorIds = [];
   // 2) Replace assigned crew (validate FK first!)
   if (Array.isArray(selected_crew_ids)) {
     // FK safety: ensure all crew exist
@@ -3050,6 +3083,7 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
         crew_accept: 0
       }));
       await assigned_crew.bulkCreate(assignments, { transaction: tx });
+      assignedCreatorIds = [...new Set(selected_crew_ids.map(Number).filter(Boolean))];
     }
   }
 
@@ -3110,6 +3144,7 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
 
   return {
     quote_id: quoteId,
+    assigned_creator_ids: assignedCreatorIds,
     booking: {
       stream_project_booking_id: booking.stream_project_booking_id,
       event_date: booking.event_date,
@@ -3201,6 +3236,9 @@ exports.finalizeGuestBooking = async (req, res) => {
     });
 
     await tx.commit();
+
+    // send CP new booking request emails
+    await notifyAssignedCreators(finalizeResult.assigned_creator_ids || []);
 
     return res.status(200).json({
       success: true,
@@ -3384,6 +3422,9 @@ exports.finalizeCreateDeal = async (req, res) => {
     });
 
     await tx.commit();
+    
+    // send CP new booking request emails
+    await notifyAssignedCreators(finalizeResult.assigned_creator_ids || []);
 
     return res.status(200).json({
       success: true,
