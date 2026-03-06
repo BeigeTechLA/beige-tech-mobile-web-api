@@ -1495,6 +1495,14 @@ exports.handleStripeWebhook = async (req, res) => {
       await transaction.commit();
       console.log(`Webhook: booking ${booking_id} marked as paid`);
 
+      // Send Sales Notification Email
+      emailService.sendPaymentSuccessSalesNotification({
+        guestEmail: booking.guest_email || 'Unknown Client',
+        amount: amountPaid,
+        shootType: booking.shoot_type || 'Shoot',
+        paymentIntentId: paymentIntentId
+      }).catch(err => console.error('Sales Notification Error:', err));
+
       const webhookPaymentMethod =
         dataObject.payment_method_details?.type ||
         dataObject.payment_method_types?.[0] ||
