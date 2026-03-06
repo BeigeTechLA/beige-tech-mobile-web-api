@@ -32,7 +32,7 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   payments } = require('../models');
   const { deleteSheetRow, updateSheetRow } = require('../utils/googleSheets');
 const leadAssignmentService = require('../services/lead-assignment.service');
-const NodeGeocoder = require('node-geocoder');
+// const NodeGeocoder = require('node-geocoder');
 
 // Initialize geocoder
 // const geocoder = NodeGeocoder({ provider: 'openstreetmap' });
@@ -6576,397 +6576,397 @@ exports.getClientsShoots = async (req, res) => {
 };
 
 
-// exports.searchCrewForLead = async (req, res) => {
-//     try {
-//         const { lead_id, role_type, search_query, max_distance, date } = req.query;
-
-//         let projectDate;
-//         let currentBookingId = null;
-//         let eventLocation = null;
-
-//         // 1️⃣ Get Lead and identify the correct Booking ID
-//         if (lead_id) {
-//             const lead = await sales_leads.findOne({
-//                 where: { lead_id },
-//                 include: [{ model: stream_project_booking, as: 'booking' }]
-//             });
-
-//             if (!lead || !lead.booking) {
-//                 return res.status(404).json({
-//                     success: false,
-//                     message: "Lead or associated Booking not found"
-//                 });
-//             }
-
-//             projectDate = lead.booking.event_date;
-//             eventLocation = lead.booking.event_location;
-//             currentBookingId = lead.booking.stream_project_booking_id;
-//         } else {
-//             if (!date) {
-//                 return res.status(400).json({
-//                     success: false,
-//                     message: "Date is required when lead_id is not provided"
-//                 });
-//             }
-//             projectDate = date;
-//         }
-
-//         // ---------------------------------------------------------
-//         // 2️⃣ Get IDs to Exclude
-//         // ---------------------------------------------------------
-        
-//         // A: Get crew busy on this date (Accepted on ANY other project)
-//         const busyCrewRecords = await assigned_crew.findAll({
-//             where: { 
-//                 crew_accept: 1, // Already Accepted
-//                 is_active: 1 
-//             },
-//             include: [{
-//                 model: stream_project_booking,
-//                 as: 'project',
-//                 where: { event_date: projectDate }
-//             }],
-//             attributes: ['crew_member_id']
-//         });
-
-//         // B: Get crew already assigned to THIS lead who are Pending or Accepted
-//         let alreadyAssignedToThisLead = [];
-//         if (currentBookingId) {
-//             const currentAssignments = await assigned_crew.findAll({
-//                 where: {
-//                     // FIXED: Changed booking_id to project_id based on your screenshot
-//                     project_id: currentBookingId, 
-//                     is_active: 1,
-//                     // EXCLUDE if they are 0 (Pending) or 1 (Accepted)
-//                     // INCLUDE if they are 2 (Rejected) so they appear in search again
-//                     crew_accept: { [Op.in]: [0, 1] } 
-//                 },
-//                 attributes: ['crew_member_id']
-//             });
-
-//             alreadyAssignedToThisLead = currentAssignments.map(a => Number(a.crew_member_id));
-//         }
-
-//         // Combine unique IDs to exclude
-//         const busyIds = busyCrewRecords.map(r => Number(r.crew_member_id));
-//         const excludeIds = [...new Set([...busyIds, ...alreadyAssignedToThisLead])];
-
-//         // -----------------------------
-//         // 3️⃣ Role Mapping
-//         // -----------------------------
-//         const ROLE_GROUPS = {
-//             videographer: ["9", "1"],
-//             photographer: ["10", "2"],
-//             cinematographer: ["11", "3"]
-//         };
-
-//         const requestedRoles = role_type
-//             ? role_type.split(",").map(r => r.trim().toLowerCase())
-//             : [];
-
-//         let targetRoleIds = [];
-//         requestedRoles.forEach(role => {
-//             if (ROLE_GROUPS[role]) {
-//                 targetRoleIds.push(...ROLE_GROUPS[role]);
-//             }
-//         });
-//         targetRoleIds = [...new Set(targetRoleIds)];
-
-//         // -----------------------------
-//         // 4️⃣ Crew Filter Conditions
-//         // -----------------------------
-//         let crewWhere = {
-//             is_active: true,
-//             is_available: true,
-//             is_crew_verified: 1,
-//             // Strict exclusion of the IDs found above
-//             crew_member_id: { [Op.notIn]: excludeIds.length ? excludeIds : [0] }
-//         };
-
-//         if (targetRoleIds.length > 0) {
-//             crewWhere[Op.or] = targetRoleIds.map(id => ({
-//                 primary_role: { [Op.like]: `%${id}%` }
-//             }));
-//         }
-
-//         if (search_query) {
-//             crewWhere[Op.and] = [{
-//                 [Op.or]: [
-//                     { first_name: { [Op.like]: `%${search_query}%` } },
-//                     { last_name: { [Op.like]: `%${search_query}%` } },
-//                     { location: { [Op.like]: `%${search_query}%` } }
-//                 ]
-//             }];
-//         }
-
-//         // 5️⃣ Fetch Available Crew
-//         const availableCrew = await crew_members.findAll({
-//             where: crewWhere,
-//             include: [
-//                 {
-//                     model: crew_member_files,
-//                     as: "crew_member_files",
-//                     attributes: ["file_path"],
-//                     where: { is_active: 1, file_type: "profile_photo" },
-//                     required: false,
-//                 }
-//             ],
-//             limit: 50
-//         });
-
-//         // 6️⃣ Format Response
-//       const crewWithRoles = availableCrew.map(crewMember => {
-//         let matchedRoles = [];
-//         let rawRoles = [];
-
-//         try {
-//           if (crewMember.primary_role) {
-//             if (Array.isArray(crewMember.primary_role)) {
-//               rawRoles = crewMember.primary_role;
-//             } else if (typeof crewMember.primary_role === "string") {
-//               try {
-//                 const parsed = JSON.parse(crewMember.primary_role);
-//                 rawRoles = Array.isArray(parsed) ? parsed : [parsed];
-//               } catch {
-//                 rawRoles = crewMember.primary_role.split(',').map(r => r.trim());
-//               }
-//             }
-//           }
-//         } catch (e) { rawRoles = []; }
-
-//         const stringRoleIds = rawRoles.map(String);
-//         if (stringRoleIds.some(id => ROLE_GROUPS.videographer.includes(id))) matchedRoles.push("videographer");
-//         if (stringRoleIds.some(id => ROLE_GROUPS.photographer.includes(id))) matchedRoles.push("photographer");
-//         if (stringRoleIds.some(id => ROLE_GROUPS.cinematographer.includes(id))) matchedRoles.push("cinematographer");
-
-//         const profilePhoto = crewMember.crew_member_files && crewMember.crew_member_files.length > 0
-//           ? crewMember.crew_member_files[0].file_path
-//           : null;
-
-//         const crewJson = crewMember.toJSON();
-//         delete crewJson.crew_member_files;
-
-//         const formattedFirstName = crewJson.first_name.charAt(0).toUpperCase() + crewJson.first_name.slice(1).toLowerCase();
-
-//         const formattedLastName = crewJson.last_name.charAt(0).toUpperCase();
-
-//         return {
-//           ...crewJson,
-//           profile_photo: profilePhoto,
-//           first_name: formattedFirstName,
-//           last_name: formattedLastName,
-//           role_names: matchedRoles.length > 0 ? matchedRoles : ["Unspecified"],
-//           role: matchedRoles.length > 0 ? matchedRoles.join(", ") : "Unspecified"
-//         };
-//       });
-
-//       res.json({
-//         success: true,
-//         project_date: projectDate,
-//         available_count: crewWithRoles.length,
-//         data: crewWithRoles
-//       });
-
-//     } catch (error) {
-//         console.error("searchCrewForLead error:", error);
-//         res.status(500).json({ success: false, message: error.message });
-//     }
-// };
-
-
-const geocoder = NodeGeocoder({ 
-    provider: 'openstreetmap',
-    httpAdapter: 'fetch',
-    fetchOptions: {
-        headers: { 'User-Agent': 'BeigeCreativeSearch/2.0 (admin@yourdomain.com)' }
-    }
-});
-
-// 2. Global Runtime Cache (Stores coordinates for cities found during searches)
-// This makes the search faster and faster the more you use it.
-const VOLATILE_CITY_CACHE = {
-    'ahmedabad': { lat: 23.0225, lon: 72.5714 },
-    'vadodara': { lat: 22.3072, lon: 73.1812 },
-    'mumbai': { lat: 19.0760, lon: 72.8777 },
-    'new york': { lat: 40.7128, lon: -74.0060 },
-    'los angeles': { lat: 34.0522, lon: -118.2437 }
-};
-
-// 3. Helper: Extract City from Address String
-const extractCity = (address) => {
-    if (!address) return null;
-    const parts = address.split(/[,،]/);
-    if (parts.length < 2) return address.trim().toLowerCase();
-    
-    // For USA: usually "City, State Zip" is at the end. 
-    // We take the last 2-3 parts for better accuracy
-    const cityPart = parts[parts.length - 2] || parts[0];
-    return cityPart.trim().toLowerCase();
-};
-
-// 4. Helper: Haversine distance
-const getDistanceInMiles = (lat1, lon1, lat2, lon2) => {
-    if (!lat1 || !lon1 || !lat2 || !lon2) return null;
-    const R = 3958.8; 
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-              Math.sin(dLon / 2) * Math.sin(dLon / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
-};
-
-const parseWorkingDistance = (distStr) => {
-    if (!distStr) return 100;
-    const lower = distStr.toLowerCase();
-    if (lower.includes("open to traveling") || lower.includes("anywhere")) return 5000;
-    const numbers = distStr.match(/\d+/g);
-    return numbers ? Math.max(...numbers.map(Number)) : 100;
-};
-
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
 exports.searchCrewForLead = async (req, res) => {
     try {
-        const { lead_id, role_type, search_query, date, radius } = req.query;
-        const requestedRadius = radius ? parseFloat(radius) : 0;
+        const { lead_id, role_type, search_query, max_distance, date } = req.query;
 
         let projectDate;
         let currentBookingId = null;
-        let centerCoords = null;
+        let eventLocation = null;
 
-        // 1. Get Project Center Coordinates
-        if (search_query) {
-            const cityKey = extractCity(search_query);
-            if (VOLATILE_CITY_CACHE[cityKey]) {
-                centerCoords = VOLATILE_CITY_CACHE[cityKey];
-            } else {
-                try {
-                    const geo = await geocoder.geocode(search_query);
-                    if (geo.length > 0) {
-                        centerCoords = { lat: geo[0].latitude, lon: geo[0].longitude };
-                        VOLATILE_CITY_CACHE[cityKey] = centerCoords; // Save to cache
-                    }
-                } catch (e) { console.error("Center Geocode Error"); }
-            }
-        }
-
-        // 2. Lead/Date Discovery
+        // 1️⃣ Get Lead and identify the correct Booking ID
         if (lead_id) {
             const lead = await sales_leads.findOne({
                 where: { lead_id },
                 include: [{ model: stream_project_booking, as: 'booking' }]
             });
-            if (lead?.booking) {
-                projectDate = lead.booking.event_date;
-                currentBookingId = lead.booking.stream_project_booking_id;
-            }
-        } else { projectDate = date; }
 
-        // 3. Exclude Busy Crew
-        const busyRecords = await assigned_crew.findAll({
-            where: { crew_accept: 1, is_active: 1 },
-            include: [{ model: stream_project_booking, as: 'project', where: { event_date: projectDate } }],
+            if (!lead || !lead.booking) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Lead or associated Booking not found"
+                });
+            }
+
+            projectDate = lead.booking.event_date;
+            eventLocation = lead.booking.event_location;
+            currentBookingId = lead.booking.stream_project_booking_id;
+        } else {
+            if (!date) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Date is required when lead_id is not provided"
+                });
+            }
+            projectDate = date;
+        }
+
+        // ---------------------------------------------------------
+        // 2️⃣ Get IDs to Exclude
+        // ---------------------------------------------------------
+        
+        // A: Get crew busy on this date (Accepted on ANY other project)
+        const busyCrewRecords = await assigned_crew.findAll({
+            where: { 
+                crew_accept: 1, // Already Accepted
+                is_active: 1 
+            },
+            include: [{
+                model: stream_project_booking,
+                as: 'project',
+                where: { event_date: projectDate }
+            }],
             attributes: ['crew_member_id']
         });
-        const excludeIds = busyRecords.map(r => Number(r.crew_member_id));
 
-        // 4. Database Fetch
-        const ROLE_GROUPS = { videographer: ["9", "1"], photographer: ["10", "2"], cinematographer: ["11", "3"] };
-        const requestedRoles = role_type ? role_type.split(",").map(r => r.trim().toLowerCase()) : [];
+        // B: Get crew already assigned to THIS lead who are Pending or Accepted
+        let alreadyAssignedToThisLead = [];
+        if (currentBookingId) {
+            const currentAssignments = await assigned_crew.findAll({
+                where: {
+                    // FIXED: Changed booking_id to project_id based on your screenshot
+                    project_id: currentBookingId, 
+                    is_active: 1,
+                    // EXCLUDE if they are 0 (Pending) or 1 (Accepted)
+                    // INCLUDE if they are 2 (Rejected) so they appear in search again
+                    crew_accept: { [Op.in]: [0, 1] } 
+                },
+                attributes: ['crew_member_id']
+            });
+
+            alreadyAssignedToThisLead = currentAssignments.map(a => Number(a.crew_member_id));
+        }
+
+        // Combine unique IDs to exclude
+        const busyIds = busyCrewRecords.map(r => Number(r.crew_member_id));
+        const excludeIds = [...new Set([...busyIds, ...alreadyAssignedToThisLead])];
+
+        // -----------------------------
+        // 3️⃣ Role Mapping
+        // -----------------------------
+        const ROLE_GROUPS = {
+            videographer: ["9", "1"],
+            photographer: ["10", "2"],
+            cinematographer: ["11", "3"]
+        };
+
+        const requestedRoles = role_type
+            ? role_type.split(",").map(r => r.trim().toLowerCase())
+            : [];
+
         let targetRoleIds = [];
-        requestedRoles.forEach(role => { if (ROLE_GROUPS[role]) targetRoleIds.push(...ROLE_GROUPS[role]); });
+        requestedRoles.forEach(role => {
+            if (ROLE_GROUPS[role]) {
+                targetRoleIds.push(...ROLE_GROUPS[role]);
+            }
+        });
+        targetRoleIds = [...new Set(targetRoleIds)];
 
+        // -----------------------------
+        // 4️⃣ Crew Filter Conditions
+        // -----------------------------
         let crewWhere = {
             is_active: true,
+            is_available: true,
             is_crew_verified: 1,
+            // Strict exclusion of the IDs found above
             crew_member_id: { [Op.notIn]: excludeIds.length ? excludeIds : [0] }
         };
+
         if (targetRoleIds.length > 0) {
-            crewWhere[Op.or] = targetRoleIds.map(id => ({ primary_role: { [Op.like]: `%${id}%` } }));
+            crewWhere[Op.or] = targetRoleIds.map(id => ({
+                primary_role: { [Op.like]: `%${id}%` }
+            }));
         }
 
-        const allCandidates = await crew_members.findAll({
+        if (search_query) {
+            crewWhere[Op.and] = [{
+                [Op.or]: [
+                    { first_name: { [Op.like]: `%${search_query}%` } },
+                    { last_name: { [Op.like]: `%${search_query}%` } },
+                    { location: { [Op.like]: `%${search_query}%` } }
+                ]
+            }];
+        }
+
+        // 5️⃣ Fetch Available Crew
+        const availableCrew = await crew_members.findAll({
             where: crewWhere,
-            include: [{ model: crew_member_files, as: "crew_member_files", where: { is_active: 1, file_type: "profile_photo" }, required: false }],
-        });
-
-        // 5. SMART RADIUS FILTERING
-        const finalResults = [];
-
-        for (const crew of allCandidates) {
-            const crewJson = crew.toJSON();
-            let distance = null;
-            let isWithinRange = requestedRadius > 0 ? false : true;
-
-            if (requestedRadius > 0 && crewJson.location) {
-                const crewCity = extractCity(crewJson.location);
-                
-                // Text Match Optimization (Instant)
-                if (search_query && crewJson.location.toLowerCase().includes(search_query.toLowerCase())) {
-                    isWithinRange = true;
-                    distance = 0;
-                } 
-                // Coordinate Math
-                else if (centerCoords) {
-                    let crewCoords = VOLATILE_CITY_CACHE[crewCity];
-
-                    if (!crewCoords) {
-                        try {
-                            await delay(800); // Prevent 429
-                            const res = await geocoder.geocode(crewCity); // Geocode ONLY the city
-                            if (res.length > 0) {
-                                crewCoords = { lat: res[0].latitude, lon: res[0].longitude };
-                                VOLATILE_CITY_CACHE[crewCity] = crewCoords; // Cache it
-                            }
-                        } catch (e) { console.error("Crew geocode fail"); }
-                    }
-
-                    if (crewCoords) {
-                        distance = getDistanceInMiles(centerCoords.lat, centerCoords.lon, crewCoords.lat, crewCoords.lon);
-                        const travelLimit = parseWorkingDistance(crewJson.working_distance);
-                        if (distance !== null && distance <= requestedRadius && distance <= travelLimit) {
-                            isWithinRange = true;
-                        }
-                    }
+            include: [
+                {
+                    model: crew_member_files,
+                    as: "crew_member_files",
+                    attributes: ["file_path"],
+                    where: { is_active: 1, file_type: "profile_photo" },
+                    required: false,
                 }
-            }
-
-            if (!isWithinRange) continue;
-
-            // Role formatting
-            let matchedRoles = [];
-            let rawRoles = [];
-            try {
-                const parsed = typeof crewJson.primary_role === "string" ? JSON.parse(crewJson.primary_role) : crewJson.primary_role;
-                rawRoles = Array.isArray(parsed) ? parsed : [parsed];
-            } catch (e) { rawRoles = []; }
-            const strRoles = rawRoles.map(String);
-            if (strRoles.some(id => ROLE_GROUPS.videographer.includes(id))) matchedRoles.push("videographer");
-            if (strRoles.some(id => ROLE_GROUPS.photographer.includes(id))) matchedRoles.push("photographer");
-
-            finalResults.push({
-                ...crewJson,
-                profile_photo: crewJson.crew_member_files?.[0]?.file_path || null,
-                role_names: matchedRoles.length > 0 ? matchedRoles : ["Unspecified"],
-                role: matchedRoles.join(", "),
-                distance_miles: distance !== null ? Math.round(distance * 10) / 10 : 0
-            });
-        }
-
-        res.json({
-            success: true,
-            search_query: search_query,
-            radius: requestedRadius,
-            available_count: finalResults.length,
-            data: finalResults
+            ],
+            limit: 50
         });
+
+        // 6️⃣ Format Response
+      const crewWithRoles = availableCrew.map(crewMember => {
+        let matchedRoles = [];
+        let rawRoles = [];
+
+        try {
+          if (crewMember.primary_role) {
+            if (Array.isArray(crewMember.primary_role)) {
+              rawRoles = crewMember.primary_role;
+            } else if (typeof crewMember.primary_role === "string") {
+              try {
+                const parsed = JSON.parse(crewMember.primary_role);
+                rawRoles = Array.isArray(parsed) ? parsed : [parsed];
+              } catch {
+                rawRoles = crewMember.primary_role.split(',').map(r => r.trim());
+              }
+            }
+          }
+        } catch (e) { rawRoles = []; }
+
+        const stringRoleIds = rawRoles.map(String);
+        if (stringRoleIds.some(id => ROLE_GROUPS.videographer.includes(id))) matchedRoles.push("videographer");
+        if (stringRoleIds.some(id => ROLE_GROUPS.photographer.includes(id))) matchedRoles.push("photographer");
+        if (stringRoleIds.some(id => ROLE_GROUPS.cinematographer.includes(id))) matchedRoles.push("cinematographer");
+
+        const profilePhoto = crewMember.crew_member_files && crewMember.crew_member_files.length > 0
+          ? crewMember.crew_member_files[0].file_path
+          : null;
+
+        const crewJson = crewMember.toJSON();
+        delete crewJson.crew_member_files;
+
+        const formattedFirstName = crewJson.first_name.charAt(0).toUpperCase() + crewJson.first_name.slice(1).toLowerCase();
+
+        const formattedLastName = crewJson.last_name.charAt(0).toUpperCase();
+
+        return {
+          ...crewJson,
+          profile_photo: profilePhoto,
+          first_name: formattedFirstName,
+          last_name: formattedLastName,
+          role_names: matchedRoles.length > 0 ? matchedRoles : ["Unspecified"],
+          role: matchedRoles.length > 0 ? matchedRoles.join(", ") : "Unspecified"
+        };
+      });
+
+      res.json({
+        success: true,
+        project_date: projectDate,
+        available_count: crewWithRoles.length,
+        data: crewWithRoles
+      });
 
     } catch (error) {
+        console.error("searchCrewForLead error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+
+// const geocoder = NodeGeocoder({ 
+//     provider: 'openstreetmap',
+//     httpAdapter: 'fetch',
+//     fetchOptions: {
+//         headers: { 'User-Agent': 'BeigeCreativeSearch/2.0 (admin@yourdomain.com)' }
+//     }
+// });
+
+// // 2. Global Runtime Cache (Stores coordinates for cities found during searches)
+// // This makes the search faster and faster the more you use it.
+// const VOLATILE_CITY_CACHE = {
+//     'ahmedabad': { lat: 23.0225, lon: 72.5714 },
+//     'vadodara': { lat: 22.3072, lon: 73.1812 },
+//     'mumbai': { lat: 19.0760, lon: 72.8777 },
+//     'new york': { lat: 40.7128, lon: -74.0060 },
+//     'los angeles': { lat: 34.0522, lon: -118.2437 }
+// };
+
+// // 3. Helper: Extract City from Address String
+// const extractCity = (address) => {
+//     if (!address) return null;
+//     const parts = address.split(/[,،]/);
+//     if (parts.length < 2) return address.trim().toLowerCase();
+    
+//     // For USA: usually "City, State Zip" is at the end. 
+//     // We take the last 2-3 parts for better accuracy
+//     const cityPart = parts[parts.length - 2] || parts[0];
+//     return cityPart.trim().toLowerCase();
+// };
+
+// // 4. Helper: Haversine distance
+// const getDistanceInMiles = (lat1, lon1, lat2, lon2) => {
+//     if (!lat1 || !lon1 || !lat2 || !lon2) return null;
+//     const R = 3958.8; 
+//     const dLat = (lat2 - lat1) * Math.PI / 180;
+//     const dLon = (lon2 - lon1) * Math.PI / 180;
+//     const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+//               Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+//               Math.sin(dLon / 2) * Math.sin(dLon / 2);
+//     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+//     return R * c;
+// };
+
+// const parseWorkingDistance = (distStr) => {
+//     if (!distStr) return 100;
+//     const lower = distStr.toLowerCase();
+//     if (lower.includes("open to traveling") || lower.includes("anywhere")) return 5000;
+//     const numbers = distStr.match(/\d+/g);
+//     return numbers ? Math.max(...numbers.map(Number)) : 100;
+// };
+
+// const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// exports.searchCrewForLead = async (req, res) => {
+//     try {
+//         const { lead_id, role_type, search_query, date, radius } = req.query;
+//         const requestedRadius = radius ? parseFloat(radius) : 0;
+
+//         let projectDate;
+//         let currentBookingId = null;
+//         let centerCoords = null;
+
+//         // 1. Get Project Center Coordinates
+//         if (search_query) {
+//             const cityKey = extractCity(search_query);
+//             if (VOLATILE_CITY_CACHE[cityKey]) {
+//                 centerCoords = VOLATILE_CITY_CACHE[cityKey];
+//             } else {
+//                 try {
+//                     const geo = await geocoder.geocode(search_query);
+//                     if (geo.length > 0) {
+//                         centerCoords = { lat: geo[0].latitude, lon: geo[0].longitude };
+//                         VOLATILE_CITY_CACHE[cityKey] = centerCoords; // Save to cache
+//                     }
+//                 } catch (e) { console.error("Center Geocode Error"); }
+//             }
+//         }
+
+//         // 2. Lead/Date Discovery
+//         if (lead_id) {
+//             const lead = await sales_leads.findOne({
+//                 where: { lead_id },
+//                 include: [{ model: stream_project_booking, as: 'booking' }]
+//             });
+//             if (lead?.booking) {
+//                 projectDate = lead.booking.event_date;
+//                 currentBookingId = lead.booking.stream_project_booking_id;
+//             }
+//         } else { projectDate = date; }
+
+//         // 3. Exclude Busy Crew
+//         const busyRecords = await assigned_crew.findAll({
+//             where: { crew_accept: 1, is_active: 1 },
+//             include: [{ model: stream_project_booking, as: 'project', where: { event_date: projectDate } }],
+//             attributes: ['crew_member_id']
+//         });
+//         const excludeIds = busyRecords.map(r => Number(r.crew_member_id));
+
+//         // 4. Database Fetch
+//         const ROLE_GROUPS = { videographer: ["9", "1"], photographer: ["10", "2"], cinematographer: ["11", "3"] };
+//         const requestedRoles = role_type ? role_type.split(",").map(r => r.trim().toLowerCase()) : [];
+//         let targetRoleIds = [];
+//         requestedRoles.forEach(role => { if (ROLE_GROUPS[role]) targetRoleIds.push(...ROLE_GROUPS[role]); });
+
+//         let crewWhere = {
+//             is_active: true,
+//             is_crew_verified: 1,
+//             crew_member_id: { [Op.notIn]: excludeIds.length ? excludeIds : [0] }
+//         };
+//         if (targetRoleIds.length > 0) {
+//             crewWhere[Op.or] = targetRoleIds.map(id => ({ primary_role: { [Op.like]: `%${id}%` } }));
+//         }
+
+//         const allCandidates = await crew_members.findAll({
+//             where: crewWhere,
+//             include: [{ model: crew_member_files, as: "crew_member_files", where: { is_active: 1, file_type: "profile_photo" }, required: false }],
+//         });
+
+//         // 5. SMART RADIUS FILTERING
+//         const finalResults = [];
+
+//         for (const crew of allCandidates) {
+//             const crewJson = crew.toJSON();
+//             let distance = null;
+//             let isWithinRange = requestedRadius > 0 ? false : true;
+
+//             if (requestedRadius > 0 && crewJson.location) {
+//                 const crewCity = extractCity(crewJson.location);
+                
+//                 // Text Match Optimization (Instant)
+//                 if (search_query && crewJson.location.toLowerCase().includes(search_query.toLowerCase())) {
+//                     isWithinRange = true;
+//                     distance = 0;
+//                 } 
+//                 // Coordinate Math
+//                 else if (centerCoords) {
+//                     let crewCoords = VOLATILE_CITY_CACHE[crewCity];
+
+//                     if (!crewCoords) {
+//                         try {
+//                             await delay(800); // Prevent 429
+//                             const res = await geocoder.geocode(crewCity); // Geocode ONLY the city
+//                             if (res.length > 0) {
+//                                 crewCoords = { lat: res[0].latitude, lon: res[0].longitude };
+//                                 VOLATILE_CITY_CACHE[crewCity] = crewCoords; // Cache it
+//                             }
+//                         } catch (e) { console.error("Crew geocode fail"); }
+//                     }
+
+//                     if (crewCoords) {
+//                         distance = getDistanceInMiles(centerCoords.lat, centerCoords.lon, crewCoords.lat, crewCoords.lon);
+//                         const travelLimit = parseWorkingDistance(crewJson.working_distance);
+//                         if (distance !== null && distance <= requestedRadius && distance <= travelLimit) {
+//                             isWithinRange = true;
+//                         }
+//                     }
+//                 }
+//             }
+
+//             if (!isWithinRange) continue;
+
+//             // Role formatting
+//             let matchedRoles = [];
+//             let rawRoles = [];
+//             try {
+//                 const parsed = typeof crewJson.primary_role === "string" ? JSON.parse(crewJson.primary_role) : crewJson.primary_role;
+//                 rawRoles = Array.isArray(parsed) ? parsed : [parsed];
+//             } catch (e) { rawRoles = []; }
+//             const strRoles = rawRoles.map(String);
+//             if (strRoles.some(id => ROLE_GROUPS.videographer.includes(id))) matchedRoles.push("videographer");
+//             if (strRoles.some(id => ROLE_GROUPS.photographer.includes(id))) matchedRoles.push("photographer");
+
+//             finalResults.push({
+//                 ...crewJson,
+//                 profile_photo: crewJson.crew_member_files?.[0]?.file_path || null,
+//                 role_names: matchedRoles.length > 0 ? matchedRoles : ["Unspecified"],
+//                 role: matchedRoles.join(", "),
+//                 distance_miles: distance !== null ? Math.round(distance * 10) / 10 : 0
+//             });
+//         }
+
+//         res.json({
+//             success: true,
+//             search_query: search_query,
+//             radius: requestedRadius,
+//             available_count: finalResults.length,
+//             data: finalResults
+//         });
+
+//     } catch (error) {
+//         res.status(500).json({ success: false, message: error.message });
+//     }
+// };
 
 exports.assignCrewBulkSmart = async (req, res) => {
     try {
