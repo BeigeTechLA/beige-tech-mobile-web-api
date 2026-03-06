@@ -542,37 +542,94 @@ exports.confirmPayment = async (req, res) => {
     });
 
     if (existingPayment) {
-      if (referral_code) {
+      if (referral_code || user_id) {
         try {
-          // Backfill referral when payment already exists (e.g., webhook processed first).
-          let attachedReferral = null;
+          // Backfill both referral commission types when payment already exists.
+          const paymentReferrals = await db.referrals.findAll({
+            where: { payment_id: existingPayment.payment_id },
+            transaction
+          });
 
+          let primaryReferral = null;
           if (existingPayment.referral_id) {
-            attachedReferral = await db.referrals.findByPk(existingPayment.referral_id, { transaction });
-          } else {
-            attachedReferral = await db.referrals.findOne({
-              where: { payment_id: existingPayment.payment_id },
+            primaryReferral =
+              paymentReferrals.find(r => Number(r.referral_id) === Number(existingPayment.referral_id)) ||
+              await db.referrals.findByPk(existingPayment.referral_id, { transaction });
+          }
+
+          if (referral_code) {
+            const referralAffiliate = await db.affiliates.findOne({
+              where: {
+                referral_code: referral_code.toUpperCase(),
+                status: 'active'
+              },
               transaction
             });
+
+            const existingCodeReferral = referralAffiliate
+              ? paymentReferrals.find(r => Number(r.affiliate_id) === Number(referralAffiliate.affiliate_id))
+              : null;
+
+            if (existingCodeReferral) {
+              if (!primaryReferral) primaryReferral = existingCodeReferral;
+            } else {
+              const createdReferral = await affiliateController.processReferral(
+                referral_code,
+                existingPayment.payment_id,
+                existingPayment.total_amount,
+                user_id || null,
+                guest_email || null,
+                transaction
+              );
+              if (createdReferral) {
+                paymentReferrals.push(createdReferral);
+                if (!primaryReferral) primaryReferral = createdReferral;
+              }
+            }
           }
 
-          if (!attachedReferral) {
-            attachedReferral = await affiliateController.processReferral(
-              referral_code,
-              existingPayment.payment_id,
-              existingPayment.total_amount,
-              user_id || null,
-              guest_email || null,
+          if (user_id) {
+            const userAffiliate = await db.affiliates.findOne({
+              where: {
+                user_id,
+                status: 'active'
+              },
               transaction
-            );
+            });
+
+            const existingUserAffiliateReferral = userAffiliate
+              ? paymentReferrals.find(r => Number(r.affiliate_id) === Number(userAffiliate.affiliate_id))
+              : null;
+
+            if (existingUserAffiliateReferral) {
+              if (!primaryReferral) primaryReferral = existingUserAffiliateReferral;
+            } else if (userAffiliate) {
+              const userAffiliateReferral = await affiliateController.processUserAffiliateCommission(
+                user_id,
+                existingPayment.payment_id,
+                existingPayment.total_amount,
+                guest_email || null,
+                primaryReferral ? primaryReferral.affiliate_id : null,
+                transaction
+              );
+
+              if (userAffiliateReferral) {
+                paymentReferrals.push(userAffiliateReferral);
+                if (!primaryReferral) primaryReferral = userAffiliateReferral;
+              }
+            }
           }
 
-          if (attachedReferral && !existingPayment.referral_id) {
-            existingPayment.referral_id = attachedReferral.referral_id;
+          if (!primaryReferral && paymentReferrals.length > 0) {
+            primaryReferral = paymentReferrals[0];
+          }
+
+          if (primaryReferral && !existingPayment.referral_id) {
+            existingPayment.referral_id = primaryReferral.referral_id;
             await existingPayment.save({ transaction });
           }
         } catch (referralError) {
-          console.error('Failed to process referral for already processed payment:', referralError);
+          console.error('Failed to process referral/user-affiliate for already processed payment:', referralError);
           // Keep API idempotent even if referral processing fails
         }
       }
@@ -910,37 +967,94 @@ exports.confirmPaymentMulti = async (req, res) => {
     });
 
     if (existingPayment) {
-      if (referral_code) {
+      if (referral_code || booking.user_id) {
         try {
-          // Backfill referral when payment already exists (e.g., webhook processed first).
-          let attachedReferral = null;
+          // Backfill both referral commission types when payment already exists.
+          const paymentReferrals = await db.referrals.findAll({
+            where: { payment_id: existingPayment.payment_id },
+            transaction
+          });
 
+          let primaryReferral = null;
           if (existingPayment.referral_id) {
-            attachedReferral = await db.referrals.findByPk(existingPayment.referral_id, { transaction });
-          } else {
-            attachedReferral = await db.referrals.findOne({
-              where: { payment_id: existingPayment.payment_id },
+            primaryReferral =
+              paymentReferrals.find(r => Number(r.referral_id) === Number(existingPayment.referral_id)) ||
+              await db.referrals.findByPk(existingPayment.referral_id, { transaction });
+          }
+
+          if (referral_code) {
+            const referralAffiliate = await db.affiliates.findOne({
+              where: {
+                referral_code: referral_code.toUpperCase(),
+                status: 'active'
+              },
               transaction
             });
+
+            const existingCodeReferral = referralAffiliate
+              ? paymentReferrals.find(r => Number(r.affiliate_id) === Number(referralAffiliate.affiliate_id))
+              : null;
+
+            if (existingCodeReferral) {
+              if (!primaryReferral) primaryReferral = existingCodeReferral;
+            } else {
+              const createdReferral = await affiliateController.processReferral(
+                referral_code,
+                existingPayment.payment_id,
+                existingPayment.total_amount,
+                booking.user_id || null,
+                booking.guest_email || null,
+                transaction
+              );
+              if (createdReferral) {
+                paymentReferrals.push(createdReferral);
+                if (!primaryReferral) primaryReferral = createdReferral;
+              }
+            }
           }
 
-          if (!attachedReferral) {
-            attachedReferral = await affiliateController.processReferral(
-              referral_code,
-              existingPayment.payment_id,
-              existingPayment.total_amount,
-              booking.user_id || null,
-              booking.guest_email || null,
+          if (booking.user_id) {
+            const userAffiliate = await db.affiliates.findOne({
+              where: {
+                user_id: booking.user_id,
+                status: 'active'
+              },
               transaction
-            );
+            });
+
+            const existingUserAffiliateReferral = userAffiliate
+              ? paymentReferrals.find(r => Number(r.affiliate_id) === Number(userAffiliate.affiliate_id))
+              : null;
+
+            if (existingUserAffiliateReferral) {
+              if (!primaryReferral) primaryReferral = existingUserAffiliateReferral;
+            } else if (userAffiliate) {
+              const userAffiliateReferral = await affiliateController.processUserAffiliateCommission(
+                booking.user_id,
+                existingPayment.payment_id,
+                existingPayment.total_amount,
+                booking.guest_email || null,
+                primaryReferral ? primaryReferral.affiliate_id : null,
+                transaction
+              );
+
+              if (userAffiliateReferral) {
+                paymentReferrals.push(userAffiliateReferral);
+                if (!primaryReferral) primaryReferral = userAffiliateReferral;
+              }
+            }
           }
 
-          if (attachedReferral && !existingPayment.referral_id) {
-            existingPayment.referral_id = attachedReferral.referral_id;
+          if (!primaryReferral && paymentReferrals.length > 0) {
+            primaryReferral = paymentReferrals[0];
+          }
+
+          if (primaryReferral && !existingPayment.referral_id) {
+            existingPayment.referral_id = primaryReferral.referral_id;
             await existingPayment.save({ transaction });
           }
         } catch (referralError) {
-          console.error('Failed to process referral for already processed multi payment:', referralError);
+          console.error('Failed to process referral/user-affiliate for already processed multi payment:', referralError);
           // Keep API idempotent even if referral processing fails
         }
       }

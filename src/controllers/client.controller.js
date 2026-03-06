@@ -517,13 +517,14 @@ exports.getAllProjectDetailsForUser = async (req, res) => {
       );
     }
 
-    // ----------- STATS COUNTS (Restricted by user_id and dateFilter) -----------
+    // ----------- STATS COUNTS & MASTER DATA -----------
     const [
       total_active,
       total_cancelled,
       total_completed,
       total_upcoming,
-      total_draft
+      total_draft,
+      allEventMasterTypes // Added this
     ] = await Promise.all([
       stream_project_booking.count({
         where: { user_id, is_active: 1, is_cancelled: 0, is_completed: 0, is_draft: 0, ...dateFilter }
@@ -549,6 +550,7 @@ exports.getAllProjectDetailsForUser = async (req, res) => {
       stream_project_booking.count({
         where: { user_id, is_draft: 1, ...dateFilter }
       }),
+      event_type_master.findAll({ attributes: ['event_type_id', 'event_type_name'], raw: true }) // Added this
     ]);
 
     // ----------- FETCH PROJECTS -----------
@@ -592,9 +594,20 @@ exports.getAllProjectDetailsForUser = async (req, res) => {
           : Promise.resolve(null)
       ]);
 
+      // --- ADDED: LABEL FORMATTING LOGIC ---
+      const rawTypes = project.event_type ? project.event_type.split(',') : [];
+      const formattedTypes = rawTypes.map(t => {
+        const val = t.trim();
+        const masterMatch = allEventMasterTypes.find(m => String(m.event_type_id) === val);
+        if (masterMatch) return masterMatch.event_type_name;
+        const stringMap = { 'videographer': 'Videography', 'photographer': 'Photography' };
+        return stringMap[val.toLowerCase()] || val.charAt(0).toUpperCase() + val.slice(1);
+      });
+
       return {
         project: {
           ...project.toJSON(),
+          event_type_labels: formattedTypes.join(', '), // Added this line
           payment_status: project.payment_id ? 'paid' : 'pending',
           quote_total: quote ? parseFloat(quote.total) : null,
           quote_subtotal: quote ? parseFloat(quote.subtotal) : null,
