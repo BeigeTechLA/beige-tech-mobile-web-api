@@ -542,7 +542,42 @@ exports.confirmPayment = async (req, res) => {
     });
 
     if (existingPayment) {
-      await transaction.rollback();
+      if (referral_code) {
+        try {
+          // Backfill referral when payment already exists (e.g., webhook processed first).
+          let attachedReferral = null;
+
+          if (existingPayment.referral_id) {
+            attachedReferral = await db.referrals.findByPk(existingPayment.referral_id, { transaction });
+          } else {
+            attachedReferral = await db.referrals.findOne({
+              where: { payment_id: existingPayment.payment_id },
+              transaction
+            });
+          }
+
+          if (!attachedReferral) {
+            attachedReferral = await affiliateController.processReferral(
+              referral_code,
+              existingPayment.payment_id,
+              existingPayment.total_amount,
+              user_id || null,
+              guest_email || null,
+              transaction
+            );
+          }
+
+          if (attachedReferral && !existingPayment.referral_id) {
+            existingPayment.referral_id = attachedReferral.referral_id;
+            await existingPayment.save({ transaction });
+          }
+        } catch (referralError) {
+          console.error('Failed to process referral for already processed payment:', referralError);
+          // Keep API idempotent even if referral processing fails
+        }
+      }
+
+      await transaction.commit();
       return res.status(200).json({
         success: true,
         message: 'Payment already processed',
@@ -875,7 +910,42 @@ exports.confirmPaymentMulti = async (req, res) => {
     });
 
     if (existingPayment) {
-      await transaction.rollback();
+      if (referral_code) {
+        try {
+          // Backfill referral when payment already exists (e.g., webhook processed first).
+          let attachedReferral = null;
+
+          if (existingPayment.referral_id) {
+            attachedReferral = await db.referrals.findByPk(existingPayment.referral_id, { transaction });
+          } else {
+            attachedReferral = await db.referrals.findOne({
+              where: { payment_id: existingPayment.payment_id },
+              transaction
+            });
+          }
+
+          if (!attachedReferral) {
+            attachedReferral = await affiliateController.processReferral(
+              referral_code,
+              existingPayment.payment_id,
+              existingPayment.total_amount,
+              booking.user_id || null,
+              booking.guest_email || null,
+              transaction
+            );
+          }
+
+          if (attachedReferral && !existingPayment.referral_id) {
+            existingPayment.referral_id = attachedReferral.referral_id;
+            await existingPayment.save({ transaction });
+          }
+        } catch (referralError) {
+          console.error('Failed to process referral for already processed multi payment:', referralError);
+          // Keep API idempotent even if referral processing fails
+        }
+      }
+
+      await transaction.commit();
       return res.status(200).json({
         success: true,
         message: "Payment already processed",
