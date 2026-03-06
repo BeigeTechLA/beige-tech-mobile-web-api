@@ -3028,8 +3028,35 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
     skip_margin = true
   } = finalizeBody;
 
-  // 1) booking update
-  const { event_date, start_time } = parseStartDateTime(start_date_time);
+let event_date = null;
+let start_time = null;
+let end_time_only = null;
+
+if (start_date_time && start_date_time.includes(' ')) {
+  const parts = start_date_time.split(' ');
+  event_date = parts[0];
+  start_time = parts[1]; 
+} else if (start_date_time && start_date_time.includes('T')) {
+  const parts = start_date_time.split('T');
+  event_date = parts[0];
+  start_time = parts[1].split('.')[0];
+}
+
+if (end_time && end_time.includes(' ')) {
+  end_time_only = end_time.split(' ')[1];
+} else if (end_time && end_time.includes('T')) {
+  end_time_only = end_time.split('T')[1].split('.')[0];
+} else {
+  end_time_only = end_time;
+}
+
+// const updateData = {};
+// if (content_type) updateData.content_type = content_type;
+// if (shoot_type) updateData.shoot_type = shoot_type;
+// if (event_type) updateData.event_type = event_type;
+// if (event_date) updateData.event_date = event_date;
+// if (start_time) updateData.start_time = start_time;
+// if (end_time_only) updateData.end_time = end_time_only; // Use the parsed time
 
   const updateData = {};
   if (content_type) updateData.content_type = content_type;
@@ -3037,7 +3064,7 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
   if (event_type) updateData.event_type = event_type;
   if (event_date) updateData.event_date = event_date;
   if (start_time) updateData.start_time = start_time;
-  if (end_time) updateData.end_time = end_time;
+  if (end_time_only) updateData.end_time = end_time_only;
   if (duration_hours != null) updateData.duration_hours = parseInt(duration_hours, 10);
   if (crew_size != null) updateData.crew_size_needed = parseInt(crew_size, 10);
   if (location != null) updateData.event_location = safeJsonStringify(location);
