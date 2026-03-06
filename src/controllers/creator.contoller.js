@@ -6,6 +6,8 @@ const common_model = require('../utils/common_model');
 const { Op } = require('sequelize');
 const { S3UploadFiles } = require('../utils/common.js');
 const { sendTaskAssignmentEmail } = require('../utils/emailService');
+const emailService = require("../utils/emailService");
+const db = require("../models");
 const { stream_project_booking, crew_members, crew_member_files, tasks, equipment,
   equipment_accessories,
   equipment_category,
@@ -513,6 +515,7 @@ exports.getProjectDetails = async (req, res) => {
 exports.updateRequestStatus = async (req, res) => {
   try {
     const { crew_member_id, project_id, crew_accept } = req.body;
+    const decision = Number(crew_accept);
 
     if (!crew_member_id || !project_id || crew_accept === undefined) {
       return res.status(400).json({
@@ -521,7 +524,14 @@ exports.updateRequestStatus = async (req, res) => {
       });
     }
 
-    if (crew_accept === 2) {
+    if (![1, 2].includes(decision)) {
+      return res.status(400).json({
+        error: true,
+        message: "crew_accept must be 1 (accept) or 2 (decline).",
+      });
+    }
+
+    if (decision === 2) {
       const updateResult = await assigned_crew.update(
         { 
           crew_accept: 2, 
@@ -534,10 +544,17 @@ exports.updateRequestStatus = async (req, res) => {
         return res.status(404).json({ error: true, message: "No pending request found." });
       }
 
+      const emailRes = await emailService.sendCPStatusUpdateByRequest({
+        project_id,
+        crew_member_id,
+        cp_action: "declined",
+        cp_status: "Declined",
+      });
+      console.log('CP email result:', emailRes);
       return res.status(200).json({ error: false, message: "Request declined successfully." });
     }
 
-    if (crew_accept === 1) {
+    if (decision === 1) {
       const ROLE_GROUPS = {
         videographer: ["9", "1"],
         photographer: ["10", "2"],
@@ -610,6 +627,13 @@ exports.updateRequestStatus = async (req, res) => {
       if (updateResult[0] === 0) {
         return res.status(404).json({ error: true, message: "No pending request found or already accepted." });
       }
+
+      const emailRes = await emailService.sendCPStatusUpdateByRequest({
+        project_id,
+        crew_member_id,
+        cp_action: "accepted",
+        cp_status: "Accepted",
+      });
 
       return res.status(200).json({ error: false, message: "Request accepted successfully." });
     }
