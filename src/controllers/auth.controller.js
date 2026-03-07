@@ -2177,25 +2177,31 @@ exports.registerCrewMemberStep1 = [
 
   async (req, res) => {
     try {
-      const { first_name, last_name, email, phone_number, location, password, working_distance, crew_member_id, user_id } = req.body;
+      const { 
+        first_name, 
+        last_name, 
+        email, 
+        phone_number, 
+        location, 
+        password, 
+        working_distance, 
+        crew_member_id, 
+        user_id 
+      } = req.body;
 
       if (!first_name || !last_name || !email || (!crew_member_id && !password)) {
         return res.status(400).json({ success: false, message: 'Required fields missing' });
       }
 
       if (crew_member_id && user_id) {
-        await crew_members.update({ first_name, last_name, email, phone_number, location, working_distance }, { where: { crew_member_id } });
-        await User.update({ name: `${first_name} ${last_name}`, email, phone_number }, { where: { id: user_id } });
-
-        // await updateSheetRow('Crew_data', crew_member_id, {
-        //   'B': first_name, 
-        //   'C': last_name, 
-        //   'D': email, 
-        //   'E': phone_number, 
-        //   'F': location, 
-        //   'G': working_distance, 
-        //   'H': 'pending'
-        // });
+        await crew_members.update(
+          { first_name, last_name, email, phone_number, location, working_distance }, 
+          { where: { crew_member_id } }
+        );
+        await User.update(
+          { name: `${first_name} ${last_name}`, email, phone_number }, 
+          { where: { id: user_id } }
+        );
 
         return res.status(200).json({ success: true, message: 'Step 1 updated', crew_member_id, user_id });
       }
@@ -2203,56 +2209,43 @@ exports.registerCrewMemberStep1 = [
       const existingUser = await User.findOne({ where: { email } });
       if (existingUser) return res.status(409).json({ success: false, message: 'Email already exists.' });
 
-      const existingCrew = await crew_members.findOne({
-        where: { email }
-      });
+      const existingPhoneUser = await User.findOne({ where: { phone_number } });
+      if (existingPhoneUser) return res.status(409).json({ success: false, message: 'Phone number already exists.' });
 
+      const existingCrew = await crew_members.findOne({ where: { email } });
       if (existingCrew) {
-
         if (existingCrew.is_active == 0) {
-          return res.status(409).json({
-            success: false,
-            message: 'Crew member with this email was deleted. Please contact support.'
-          });
+          return res.status(409).json({ success: false, message: 'Crew member with this email was deleted. Please contact support.' });
         }
-        return res.status(409).json({
-          success: false,
-          message: 'Crew member with this email already exists.'
-        });
-      }
-
-      const existingPhoneUser = await User.findOne({
-        where: { phone_number }
-      });
-
-      if (existingPhoneUser) {
-        return res.status(409).json({
-          success: false,
-          message: 'Phone number already exists.'
-        });
+        return res.status(409).json({ success: false, message: 'Crew member with this email already exists.' });
       }
 
       const hashedPassword = await bcrypt.hash(password, 10);
+      const otp = otpService.generateOTP();
+      const otpExpiry = otpService.generateOTPExpiry(10);
+
       const newUser = await User.create({
         name: `${first_name} ${last_name}`,
-        email, phone_number,
+        email, 
+        phone_number,
         password_hash: hashedPassword,
-        user_type: 2, is_active: 1, email_verified: 0
+        user_type: 2, 
+        is_active: 1, 
+        email_verified: 0,
+        verification_code: otp,
+        otp_expiry: otpExpiry
       });
 
       const newCrewMember = await crew_members.create({
         user_id: newUser.id,
-        first_name, last_name, email, phone_number, location, working_distance, is_active: 1
+        first_name, 
+        last_name, 
+        email, 
+        phone_number, 
+        location, 
+        working_distance, 
+        is_active: 1
       });
-
-      emailService.sendNewCrewSignupNotification({
-        first_name,
-        last_name,
-        email,
-        phone_number,
-        location,
-        working_distance
-      }).catch(err => console.error('Sales Crew Signup Notification Error:', err));
 
       if (req.files?.profile_photo) {
         const uploadedFiles = await S3UploadFiles(req.files);
@@ -2268,26 +2261,46 @@ exports.registerCrewMemberStep1 = [
         }
       }
 
-      // await appendToSheet('Crew_data', [
-      //   newCrewMember.crew_member_id, 
-      //   first_name, 
-      //   last_name, 
-      //   email, 
-      //   phone_number, 
-      //   location,
-      //   working_distance,
-      //   'pending'
-      // ]);
+      emailService.sendNewCrewSignupNotification({
+        first_name, last_name, email, phone_number, location, working_distance
+      }).catch(err => console.error('Admin Notification Error:', err));
+
+      await emailService.sendVerificationOTP(
+        { name: `${first_name} ${last_name}`, email },
+        otp
+      );
+
+      let affiliateData = null;
+      try {
+        const affiliate = await affiliateController.createAffiliate(newUser.id);
+        if (affiliate) {
+          affiliateData = {
+            affiliate_id: affiliate.affiliate_id,
+            referral_code: affiliate.referral_code
+          };
+        }
+      } catch (affiliateError) {
+        console.error('Affiliate creation failed:', affiliateError);
+      }
 
       return res.status(201).json({
         success: true,
-        message: 'Step 1 completed',
+        message: 'Step 1 completed. Please verify your email.',
         user_id: newUser.id,
-        crew_member_id: newCrewMember.crew_member_id
+        crew_member_id: newCrewMember.crew_member_id,
+        affiliate: affiliateData
       });
 
     } catch (error) {
       console.error('Step 1 Error:', error);
+      
+      if (error.name === 'SequelizeUniqueConstraintError') {
+        return res.status(409).json({
+          success: false,
+          message: 'A record with these details already exists.'
+        });
+      }
+
       return res.status(500).json({ success: false, message: 'Server error' });
     }
   }
