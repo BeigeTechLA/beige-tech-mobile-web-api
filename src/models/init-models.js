@@ -415,6 +415,9 @@ crew_members.belongsTo(crew_roles, { as: 'role', foreignKey: 'primary_role' });
 stream_project_booking.belongsTo(users, { as: "user", foreignKey: "user_id"});
 users.hasMany(stream_project_booking, { as: "bookings", foreignKey: "user_id"});
 
+// Add these if they are missing
+assigned_post_production_member.belongsTo(stream_project_booking, { as: "project", foreignKey: "project_id"});
+stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_post_production_members", foreignKey: "project_id"});
   return {
     activity_logs,
     assigned_crew,

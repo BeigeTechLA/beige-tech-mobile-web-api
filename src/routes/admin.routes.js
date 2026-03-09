@@ -83,5 +83,6 @@ router.post('/remove-assigned-crew',authMiddleware, admin.removeAssignedCrew);
 router.get('/get-client-details-with-shoots/:userId', admin.getClientFullDetailsByUserId);
 router.get('/check-cp-delete-status', admin.checkDeleteStatus);
 router.post('/delete-cp', admin.executeDeleteCrewMember);
+router.post('/get-project-fullfillment-stats/:project_id', admin.getProjectFulfillmentStatus);
 
 module.exports = router;
