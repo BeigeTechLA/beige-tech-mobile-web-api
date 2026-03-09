@@ -6,6 +6,7 @@ const { appendBookingToSheet } = require('../utils/googleSheetsService');
 const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 const { content } = require('googleapis/build/src/apis/content');
 const { sendCPNewBookingRequestEmail } = require('../utils/emailService');
+const REFERRAL_DISCOUNT_PERCENT = 10;
 
 async function resolveUserId(userId, guestEmail) {
   if (userId) return parseInt(userId);
@@ -1096,7 +1097,7 @@ exports.assignCreatorsToBooking = async (req, res) => {
 exports.getBookingPaymentDetails = async (req, res) => {
   try {
     const { id } = req.params;
-    const { creator_id } = req.query;
+    const { creator_id, referral_code } = req.query;
 
     if (!id) {
       return res.status(constants.BAD_REQUEST.code).json({
@@ -1222,6 +1223,93 @@ exports.getBookingPaymentDetails = async (req, res) => {
       };
     }).filter(c => c !== null);
 
+    let quoteResponse = null;
+    if (booking.primary_quote) {
+      const baseSubtotal = parseFloat(booking.primary_quote.subtotal || 0);
+      const baseDiscountAmount = parseFloat(booking.primary_quote.discount_amount || 0);
+      const basePriceAfterDiscount = parseFloat(booking.primary_quote.price_after_discount || booking.primary_quote.subtotal || 0);
+      const baseTotal = parseFloat(booking.primary_quote.total || booking.primary_quote.subtotal || 0);
+
+      let normalizedReferralCode = null;
+      let referralAffiliateName = null;
+      let referralDiscountAmount = 0;
+      let referralDiscountPercent = 0;
+
+      if (referral_code) {
+        const candidateCode = String(referral_code).trim().toUpperCase();
+        if (candidateCode.length < 4) {
+          return res.status(constants.BAD_REQUEST.code).json({
+            success: false,
+            message: 'Invalid referral code format'
+          });
+        }
+
+        const referralAffiliate = await db.affiliates.findOne({
+          where: {
+            referral_code: candidateCode,
+            status: 'active'
+          },
+          include: [{
+            model: db.users,
+            as: 'user',
+            attributes: ['name']
+          }]
+        });
+
+        if (!referralAffiliate) {
+          return res.status(constants.BAD_REQUEST.code).json({
+            success: false,
+            message: 'Invalid referral code'
+          });
+        }
+
+        if (booking.user_id && Number(referralAffiliate.user_id) === Number(booking.user_id)) {
+          return res.status(constants.BAD_REQUEST.code).json({
+            success: false,
+            message: 'You cannot use your own referral code'
+          });
+        }
+
+        normalizedReferralCode = referralAffiliate.referral_code;
+        referralAffiliateName = referralAffiliate.user?.name || null;
+        referralDiscountPercent = REFERRAL_DISCOUNT_PERCENT;
+        referralDiscountAmount = parseFloat((baseTotal * (REFERRAL_DISCOUNT_PERCENT / 100)).toFixed(2));
+      }
+
+      const finalTotal = parseFloat((baseTotal - referralDiscountAmount).toFixed(2));
+      const finalPriceAfterDiscount = parseFloat((basePriceAfterDiscount - referralDiscountAmount).toFixed(2));
+
+      quoteResponse = {
+        quote_id: booking.primary_quote.quote_id,
+        shoot_hours: parseFloat(booking.primary_quote.shoot_hours),
+        subtotal: baseSubtotal,
+        applied_discount_code: booking.primary_quote.discount_code ? booking.primary_quote.discount_code.code : null,
+        applied_referral_code: normalizedReferralCode,
+        referral_affiliate_name: referralAffiliateName,
+        discount_total: baseDiscountAmount,
+        discount_percentage: parseFloat(booking.primary_quote.discount_percent || 0),
+        referral_discount_percent: referralDiscountPercent,
+        referral_discount_amount: referralDiscountAmount,
+        discountPercent: parseFloat(booking.primary_quote.discount_percent || 0),
+        discountAmount: baseDiscountAmount,
+        total_discount_with_referral: parseFloat((baseDiscountAmount + referralDiscountAmount).toFixed(2)),
+        price_after_discount: finalPriceAfterDiscount,
+        marginPercent: parseFloat(booking.primary_quote.margin_percent || 0),
+        marginAmount: parseFloat(booking.primary_quote.margin_amount || 0),
+        total_before_referral_discount: baseTotal,
+        total: finalTotal,
+        status: booking.primary_quote.status,
+        lineItems: (booking.primary_quote.line_items || []).map(item => ({
+          item_id: item.item_id,
+          item_name: item.item_name,
+          quantity: item.quantity,
+          rate: parseFloat(item.rate),
+          rate_type: item.rate_type,
+          line_total: parseFloat(item.line_total)
+        }))
+      };
+    }
+
     res.status(constants.OK.code).json({
       success: true,
       data: {
@@ -1244,31 +1332,7 @@ exports.getBookingPaymentDetails = async (req, res) => {
           created_at: booking.created_at
         },
         creators: creators,
-        quote: booking.primary_quote ? {
-          quote_id: booking.primary_quote.quote_id,
-          shoot_hours: parseFloat(booking.primary_quote.shoot_hours),
-          subtotal: parseFloat(booking.primary_quote.subtotal),
-          
-          applied_discount_code: booking.primary_quote.discount_code ? booking.primary_quote.discount_code.code : null,
-          discount_total: parseFloat(booking.primary_quote.discount_amount || 0),
-          discount_percentage: parseFloat(booking.primary_quote.discount_percent || 0),
-          
-          discountPercent: parseFloat(booking.primary_quote.discount_percent || 0),
-          discountAmount: parseFloat(booking.primary_quote.discount_amount || 0),
-          price_after_discount: parseFloat(booking.primary_quote.price_after_discount || booking.primary_quote.subtotal),
-          marginPercent: parseFloat(booking.primary_quote.margin_percent || 0),
-          marginAmount: parseFloat(booking.primary_quote.margin_amount || 0),
-          total: parseFloat(booking.primary_quote.total || booking.primary_quote.subtotal),
-          status: booking.primary_quote.status,
-          lineItems: (booking.primary_quote.line_items || []).map(item => ({
-            item_id: item.item_id,
-            item_name: item.item_name,
-            quantity: item.quantity,
-            rate: parseFloat(item.rate),
-            rate_type: item.rate_type,
-            line_total: parseFloat(item.line_total)
-          }))
-        } : null,
+        quote: quoteResponse,
         payment_status: booking.payment_id ? 'completed' : 'pending'
       }
     });

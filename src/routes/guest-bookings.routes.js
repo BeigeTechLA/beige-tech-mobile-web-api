@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const guestBookingsController = require('../controllers/guest-bookings.controller');
+const { optionalAuth } = require('../middleware/auth.middleware');
 
 /**
  * Guest Booking Routes
@@ -54,6 +55,6 @@ router.post('/:id/assign-creators', guestBookingsController.assignCreatorsToBook
  * @params  id - booking ID
  * @access  Public (no authentication required)
  */
-router.get('/:id/payment-details', guestBookingsController.getBookingPaymentDetails);
+router.get('/:id/payment-details', optionalAuth, guestBookingsController.getBookingPaymentDetails);
 
 module.exports = router;

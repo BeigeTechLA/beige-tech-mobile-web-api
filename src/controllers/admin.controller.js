@@ -28,7 +28,7 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   payment_transactions,
   assigned_post_production_member,
   post_production_members,
-  clients,sales_leads, sales_lead_activities, quotes, quote_line_items,
+  clients,sales_leads, sales_lead_activities, quotes, quote_line_items, discount_codes, payment_links,
   payments } = require('../models');
   const { deleteSheetRow, updateSheetRow } = require('../utils/googleSheets');
 const leadAssignmentService = require('../services/lead-assignment.service');
@@ -871,6 +871,116 @@ exports.saveMatchedEquipment = async (req, res) => {
 };
 
 
+// exports.getProjectDetails = async (req, res) => {
+//   try {
+//     const { project_id } = req.params;
+
+//     if (!project_id) {
+//       return res.status(400).json({ error: true, message: 'Project ID is required' });
+//     }
+
+//     // 1. Fetch main project and masters
+//     const [project, allEventMasterTypes, allRoles] = await Promise.all([
+//       stream_project_booking.findOne({
+//         where: { stream_project_booking_id: project_id, is_active: 1 },
+//       }),
+//       event_type_master.findAll({ attributes: ['event_type_id', 'event_type_name'], raw: true }),
+//       crew_roles.findAll({ attributes: ['role_id', 'role_name'], raw: true })
+//     ]);
+
+//     if (!project) {
+//       return res.status(404).json({ error: true, message: 'Project not found' });
+//     }
+
+//     // 2. Fetch Associations + Payment Amount
+//     const [crew, equip, postProd, paymentData] = await Promise.all([
+//       assigned_crew.findAll({
+//         where: { project_id: project.stream_project_booking_id, is_active: 1 },
+//         include: [{ 
+//             model: crew_members, 
+//             as: 'crew_member', 
+//             attributes: ['crew_member_id', 'first_name', 'last_name', 'primary_role'] 
+//         }],
+//       }),
+//       assigned_equipment.findAll({
+//         where: { project_id: project.stream_project_booking_id, is_active: 1 },
+//         include: [{ model: equipment, as: 'equipment', attributes: ['equipment_id', 'equipment_name'] }],
+//       }),
+//       assigned_post_production_member.findAll({
+//         where: { project_id: project.stream_project_booking_id, is_active: 1 },
+//         include: [{ model: post_production_members, as: 'post_production_member', attributes: ['post_production_member_id', 'first_name', 'last_name', 'email'] }],
+//       }),
+//       // FETCH PAYMENT AMOUNT HERE
+//       payment_transactions.findOne({
+//         where: { payment_id: project.payment_id },
+//         attributes: ['total_amount'],
+//         raw: true
+//       })
+//     ]);
+
+//     // 3. Process Event Type Labels
+//     const rawTypes = project.event_type ? project.event_type.split(',') : [];
+//     const eventTypeLabels = rawTypes.map(t => {
+//       const val = t.trim();
+//       const masterMatch = allEventMasterTypes.find(m => String(m.event_type_id) === val);
+//       if (masterMatch) return masterMatch.event_type_name;
+
+//       const stringMap = { 'videographer': 'Videography', 'photographer': 'Photography' };
+//       return stringMap[val.toLowerCase()] || val.charAt(0).toUpperCase() + val.slice(1);
+//     });
+
+//     // 4. Process Crew Roles
+//     const processedCrew = crew.map(assignment => {
+//       const crewMember = assignment.crew_member ? assignment.crew_member.toJSON() : null;
+//       let roleName = "N/A";
+
+//       if (crewMember && crewMember.primary_role) {
+//         try {
+//           let roleIds = [];
+//           const rawRole = crewMember.primary_role;
+//           if (typeof rawRole === 'string' && (rawRole.startsWith('[') || rawRole.startsWith('{'))) {
+//             roleIds = JSON.parse(rawRole);
+//           } else {
+//             roleIds = [rawRole];
+//           }
+
+//           const names = allRoles
+//             .filter(r => roleIds.includes(String(r.role_id)) || roleIds.includes(Number(r.role_id)))
+//             .map(r => r.role_name);
+          
+//           if (names.length > 0) roleName = names.join(", ");
+//         } catch (e) {
+//           console.error("Role processing error:", e);
+//         }
+//       }
+
+//       return {
+//         ...assignment.toJSON(),
+//         crew_member: crewMember ? { ...crewMember, role_name: roleName } : null
+//       };
+//     });
+
+//     // 5. Final Response
+//     return res.status(200).json({
+//       error: false,
+//       message: 'Project details retrieved successfully',
+//       data: {
+//         project: {
+//           ...project.toJSON(),
+//           total_paid_amount: paymentData ? paymentData.total_amount : 0, // ADDED THIS LINE
+//           event_type_labels: eventTypeLabels.join(', ')
+//         },
+//         assignedCrew: processedCrew,
+//         assignedEquipment: equip,
+//         assignedPostProductionMembers: postProd,
+//       },
+//     });
+//   } catch (error) {
+//     console.error('Error fetching project details:', error);
+//     return res.status(500).json({ error: true, message: 'Internal server error' });
+//   }
+// };
+
 exports.getProjectDetails = async (req, res) => {
   try {
     const { project_id } = req.params;
@@ -879,105 +989,184 @@ exports.getProjectDetails = async (req, res) => {
       return res.status(400).json({ error: true, message: 'Project ID is required' });
     }
 
-    // 1. Fetch main project and masters
-    const [project, allEventMasterTypes, allRoles] = await Promise.all([
-      stream_project_booking.findOne({
-        where: { stream_project_booking_id: project_id, is_active: 1 },
-      }),
+    // 1. Fetch Master Data for Labels/Roles
+    const [allEventMasterTypes, allRoles] = await Promise.all([
       event_type_master.findAll({ attributes: ['event_type_id', 'event_type_name'], raw: true }),
       crew_roles.findAll({ attributes: ['role_id', 'role_name'], raw: true })
     ]);
+
+    // 2. Fetch Project with ALL associations (including Lead)
+    const project = await stream_project_booking.findOne({
+      where: { stream_project_booking_id: project_id },
+      include: [
+        {
+          model: quotes,
+          as: "primary_quote",
+          include: [{ model: quote_line_items, as: "line_items" }],
+        },
+        {
+          model: assigned_crew,
+          as: "assigned_crews",
+          where: { is_active: 1 },
+          required: false,
+          include: [{
+            model: crew_members,
+            as: 'crew_member',
+            include: [{
+              model: crew_member_files,
+              as: "crew_member_files",
+              where: { is_active: 1, file_type: "profile_photo" },
+              required: false
+            }]
+          }]
+        },
+        {
+          model: assigned_equipment,
+          as: 'assigned_equipments',
+          include: [{ model: equipment, as: 'equipment' }]
+        },
+        {
+          model: assigned_post_production_member,
+          as: 'assigned_post_production_members',
+          include: [{ model: post_production_members, as: 'post_production_member' }]
+        },
+        // Include the Lead associated with this project
+        {
+          model: sales_leads,
+          as: "sales_leads",
+          required: false,
+          include: [
+            { model: users, as: "assigned_sales_rep", attributes: ["id", "name", "email"] },
+            { model: payment_links, as: "payment_links" },
+            { model: discount_codes, as: "discount_codes" },
+            { 
+              model: sales_lead_activities, 
+              as: "activities",
+              include: [{ model: users, as: "performed_by", attributes: ["id", "name"] }]
+            }
+          ]
+        }
+      ]
+    });
 
     if (!project) {
       return res.status(404).json({ error: true, message: 'Project not found' });
     }
 
-    // 2. Fetch Associations + Payment Amount
-    const [crew, equip, postProd, paymentData] = await Promise.all([
-      assigned_crew.findAll({
-        where: { project_id: project.stream_project_booking_id, is_active: 1 },
-        include: [{ 
-            model: crew_members, 
-            as: 'crew_member', 
-            attributes: ['crew_member_id', 'first_name', 'last_name', 'primary_role'] 
-        }],
-      }),
-      assigned_equipment.findAll({
-        where: { project_id: project.stream_project_booking_id, is_active: 1 },
-        include: [{ model: equipment, as: 'equipment', attributes: ['equipment_id', 'equipment_name'] }],
-      }),
-      assigned_post_production_member.findAll({
-        where: { project_id: project.stream_project_booking_id, is_active: 1 },
-        include: [{ model: post_production_members, as: 'post_production_member', attributes: ['post_production_member_id', 'first_name', 'last_name', 'email'] }],
-      }),
-      // FETCH PAYMENT AMOUNT HERE
-      payment_transactions.findOne({
-        where: { payment_id: project.payment_id },
-        attributes: ['total_amount'],
-        raw: true
-      })
-    ]);
+    const projectJson = project.toJSON();
+    // Get the first lead associated (usually there's only one)
+    const lead = projectJson.sales_leads?.[0] || null;
 
-    // 3. Process Event Type Labels
-    const rawTypes = project.event_type ? project.event_type.split(',') : [];
+    // 3. Fetch Transaction Total (from payment_transactions table)
+    const paymentData = await payment_transactions.findOne({
+      where: { payment_id: projectJson.payment_id },
+      attributes: ['total_amount'],
+      raw: true
+    });
+
+    // 4. Process Event Type Labels
+    const rawTypes = projectJson.event_type ? projectJson.event_type.split(',') : [];
     const eventTypeLabels = rawTypes.map(t => {
       const val = t.trim();
       const masterMatch = allEventMasterTypes.find(m => String(m.event_type_id) === val);
       if (masterMatch) return masterMatch.event_type_name;
-
       const stringMap = { 'videographer': 'Videography', 'photographer': 'Photography' };
       return stringMap[val.toLowerCase()] || val.charAt(0).toUpperCase() + val.slice(1);
     });
 
-    // 4. Process Crew Roles
-    const processedCrew = crew.map(assignment => {
-      const crewMember = assignment.crew_member ? assignment.crew_member.toJSON() : null;
-      let roleName = "N/A";
+    // 5. Pricing Breakdown logic
+    // Using calculateLeadPricing helper if available, otherwise manual calc
+    const projectedQuote = typeof calculateLeadPricing === 'function' ? await calculateLeadPricing(projectJson) : null;
+    const activeQuoteSource = projectJson.primary_quote || projectedQuote;
+    
+    let pricing_breakdown = { shoot_cost: 0, editing_cost: 0, total: 0, discount: parseFloat(projectJson.primary_quote?.discount_amount || 0) };
+    let subtotal = 0;
 
-      if (crewMember && crewMember.primary_role) {
-        try {
-          let roleIds = [];
-          const rawRole = crewMember.primary_role;
-          if (typeof rawRole === 'string' && (rawRole.startsWith('[') || rawRole.startsWith('{'))) {
-            roleIds = JSON.parse(rawRole);
-          } else {
-            roleIds = [rawRole];
-          }
+    (activeQuoteSource?.line_items || []).forEach(item => {
+        const cost = parseFloat(item.line_total || item.total || 0);
+        subtotal += cost;
+        const name = (item.item_name || '').toLowerCase();
+        if (name.includes('edit') || name.includes('reel') || name.includes('post')) pricing_breakdown.editing_cost += cost;
+        else pricing_breakdown.shoot_cost += cost;
+    });
+    pricing_breakdown.total = subtotal - pricing_breakdown.discount;
 
-          const names = allRoles
-            .filter(r => roleIds.includes(String(r.role_id)) || roleIds.includes(Number(r.role_id)))
-            .map(r => r.role_name);
-          
-          if (names.length > 0) roleName = names.join(", ");
-        } catch (e) {
-          console.error("Role processing error:", e);
-        }
-      }
+    // 6. Crew Processing & Fulfillment Summary
+    const ROLE_GROUPS = { videographer: ['9', '1'], photographer: ['10', '2'], cinematographer: ['11', '3'] };
+    const ID_TO_ROLE_MAP = {};
+    Object.entries(ROLE_GROUPS).forEach(([role, ids]) => ids.forEach(id => ID_TO_ROLE_MAP[id] = role));
 
-      return {
-        ...assignment.toJSON(),
-        crew_member: crewMember ? { ...crewMember, role_name: roleName } : null
-      };
+    let fulfillmentSummary = {};
+    let requestedRoles = {};
+    try { requestedRoles = typeof projectJson.crew_roles === 'string' ? JSON.parse(projectJson.crew_roles) : projectJson.crew_roles || {}; } catch(e){}
+    
+    Object.keys(requestedRoles).forEach(role => {
+        fulfillmentSummary[role] = { required: requestedRoles[role], accepted: 0, display: `0/${requestedRoles[role]}` };
     });
 
-    // 5. Final Response
+    const processedCrew = (projectJson.assigned_crews || []).map(ac => {
+        let roleNames = [];
+        if (ac.crew_member?.primary_role) {
+            try {
+                const raw = ac.crew_member.primary_role;
+                const roleIds = (typeof raw === 'string' && raw.startsWith('[')) ? JSON.parse(raw) : [raw];
+                roleNames = allRoles.filter(r => roleIds.map(String).includes(String(r.role_id))).map(r => r.role_name);
+                
+                if (ac.crew_accept === 1) {
+                    const cat = roleIds.map(id => ID_TO_ROLE_MAP[String(id)]).find(c => fulfillmentSummary[c]);
+                    if (cat) fulfillmentSummary[cat].accepted += 1;
+                }
+            } catch(e){}
+        }
+        return {
+            ...ac,
+            acceptance_status: ac.crew_accept === 1 ? 'accepted' : ac.crew_accept === 2 ? 'rejected' : 'pending',
+            crew_member: { 
+                ...ac.crew_member, 
+                role_name: roleNames.join(', ') || 'N/A',
+                first_name: ac.crew_member?.first_name ? ac.crew_member.first_name.charAt(0).toUpperCase() + ac.crew_member.first_name.slice(1).toLowerCase() : '',
+                last_name: ac.crew_member?.last_name ? ac.crew_member.last_name.charAt(0).toUpperCase() : ''
+            }
+        };
+    });
+
+    Object.keys(fulfillmentSummary).forEach(k => { fulfillmentSummary[k].display = `${fulfillmentSummary[k].accepted}/${fulfillmentSummary[k].required}`; });
+
+    // 7. Payment Link Logic
+    let active_payment_link = null;
+    if (lead?.payment_links?.length > 0) {
+        const latest = [...lead.payment_links].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+        active_payment_link = {
+            ...latest,
+            is_expired: latest.expires_at ? new Date(latest.expires_at) < new Date() : false
+        };
+    }
+
+    // 8. Construct Response
     return res.status(200).json({
       error: false,
       message: 'Project details retrieved successfully',
       data: {
         project: {
-          ...project.toJSON(),
-          total_paid_amount: paymentData ? paymentData.total_amount : 0, // ADDED THIS LINE
-          event_type_labels: eventTypeLabels.join(', ')
+          ...projectJson,
+          total_paid_amount: paymentData ? paymentData.total_amount : 0,
+          event_type_labels: eventTypeLabels.join(', '),
+          sales_leads: undefined // Remove from main object to avoid redundancy
         },
+        lead_details: lead, // Sales rep, activities, etc.
+        pricing_breakdown,
+        payment_status: projectJson.payment_id ? 'paid' : (active_payment_link ? 'link_sent' : 'unpaid'),
+        active_payment_link,
+        fulfillmentSummary,
         assignedCrew: processedCrew,
-        assignedEquipment: equip,
-        assignedPostProductionMembers: postProd,
+        assignedEquipment: projectJson.assigned_equipments || [],
+        assignedPostProductionMembers: projectJson.assigned_post_production_members || []
       },
     });
+
   } catch (error) {
     console.error('Error fetching project details:', error);
-    return res.status(500).json({ error: true, message: 'Internal server error' });
+    return res.status(500).json({ error: true, message: 'Internal server error', details: error.message });
   }
 };
 
@@ -1630,7 +1819,6 @@ exports.getProjectDetails = async (req, res) => {
 
 exports.getAllProjectDetails = async (req, res) => {
   try {
-    // 1. Added 'category' to the query parameters
     let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category } = req.query;
     const today = new Date();
     const noPagination = !limit && !page;
@@ -1642,7 +1830,6 @@ exports.getAllProjectDetails = async (req, res) => {
       offset = (pageNumber - 1) * pageSize;
     }
 
-    // --- Category Keyword Configuration (Matches your other API) ---
     const categoryConfig = {
       corporate: ['corporate'],
       wedding: ['wedding'],
@@ -1654,7 +1841,6 @@ exports.getAllProjectDetails = async (req, res) => {
       narrative: ['narrative', 'short film']
     };
 
-    // Setup Date Filters
     let dateFilter = {};
     if (start_date && end_date) {
       dateFilter = { event_date: { [Sequelize.Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`] } };
@@ -1681,103 +1867,49 @@ exports.getAllProjectDetails = async (req, res) => {
 
     let whereConditions = { ...paidOnlyFilter, ...dateFilter };
 
-    // 2. NEW: Category Filter Logic
-    // This checks if project_name contains any of the keywords for the selected category
     if (category && categoryConfig[category.toLowerCase()]) {
       const keywords = categoryConfig[category.toLowerCase()];
       const categoryConditions = keywords.map(word => ({
         project_name: { [Sequelize.Op.like]: `%${word}%` }
       }));
-      
-      // We use [Sequelize.Op.or] because a commercial project might be 'brand' OR 'advertising'
-      whereConditions = {
-        ...whereConditions,
-        [Sequelize.Op.or]: categoryConditions
-      };
+      whereConditions = { ...whereConditions, [Sequelize.Op.or]: categoryConditions };
     }
 
-    // 3. Status & Search Filters
     if (status) {
-
       const statusLower = status.toLowerCase().replace(/\s+/g, '');
-
-      const statusMap = {
-        'initiated': 0,
-        'preproduction': 1,
-        'postproduction': 2,
-        'revision': 3,
-        'completed': 4,
-        'cancelled': 5
-      };
+      const statusMap = { 'initiated': 0, 'preproduction': 1, 'postproduction': 2, 'revision': 3, 'completed': 4, 'cancelled': 5 };
 
       if (statusMap.hasOwnProperty(statusLower)) {
         whereConditions.status = statusMap[statusLower];
-      }
-
-      else if (statusLower === 'shootday') {
-
-        whereConditions.status = {
-          [Sequelize.Op.notIn]: [4, 5]
-        };
+      } else if (statusLower === 'shootday') {
+        whereConditions.status = { [Sequelize.Op.notIn]: [4, 5] };
         whereConditions = {
           ...whereConditions,
           [Sequelize.Op.and]: [
             ...(whereConditions[Sequelize.Op.and] || []),
-            Sequelize.where(
-              Sequelize.fn('DATE', Sequelize.col('event_date')),
-              Sequelize.fn('CURDATE')
-            )
+            Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), Sequelize.fn('CURDATE'))
           ]
         };
-      }
-
-      else if (statusLower === 'upcoming') {
-
-        whereConditions.status = {
-          [Sequelize.Op.notIn]: [4, 5]
-        };
-
-        whereConditions.event_date = {
-          ...(whereConditions.event_date || {}),
-          [Sequelize.Op.gt]: today
-        };
-      }
-
-      else if (statusLower === 'draft') {
+      } else if (statusLower === 'upcoming') {
+        whereConditions.status = { [Sequelize.Op.notIn]: [4, 5] };
+        whereConditions.event_date = { ...(whereConditions.event_date || {}), [Sequelize.Op.gt]: today };
+      } else if (statusLower === 'draft') {
         whereConditions.is_draft = 1;
       }
     }
 
-    
     if (event_type) whereConditions.event_type = event_type;
     
     if (search) {
-      // If category filter is already using Op.or, we must be careful not to overwrite it
-      const searchCondition = Sequelize.where(Sequelize.fn('LOWER', Sequelize.col('project_name')), { 
-        [Sequelize.Op.like]: `%${search.toLowerCase()}%` 
-      });
-      
+      const searchCondition = Sequelize.where(Sequelize.fn('LOWER', Sequelize.col('project_name')), { [Sequelize.Op.like]: `%${search.toLowerCase()}%` });
       if (whereConditions[Sequelize.Op.or]) {
-        // If both category AND search are used, we wrap them in an Op.and
-        whereConditions = {
-            [Sequelize.Op.and]: [
-                { [Sequelize.Op.or]: whereConditions[Sequelize.Op.or] },
-                searchCondition
-            ],
-            ...paidOnlyFilter,
-            ...dateFilter
-        };
+        whereConditions = { [Sequelize.Op.and]: [{ [Sequelize.Op.or]: whereConditions[Sequelize.Op.or] }, searchCondition], ...paidOnlyFilter, ...dateFilter };
       } else {
         whereConditions.project_name = searchCondition;
       }
     }
 
-    // 4. Get Counts and Projects
-    // Note: I updated the counts to use 'whereConditions' so they react to the category filter
-    const [
-      total_active, total_cancelled, total_completed, total_upcoming, total_draft,
-      allEventMasterTypes 
-    ] = await Promise.all([
+    const [ total_active, total_cancelled, total_completed, total_upcoming, total_draft, allEventMasterTypes ] = await Promise.all([
       stream_project_booking.count({ where: { ...whereConditions, is_cancelled: 0, is_completed: 0, is_draft: 0 } }),
       stream_project_booking.count({ where: { ...whereConditions, is_cancelled: 1 } }),
       stream_project_booking.count({ where: { ...whereConditions, is_completed: 1 } }),
@@ -1789,7 +1921,11 @@ exports.getAllProjectDetails = async (req, res) => {
     const projects = await stream_project_booking.findAll({
       where: whereConditions,
       ...(noPagination ? {} : { limit: pageSize, offset }),
-      order: [['event_date', 'ASC']],
+      order: [
+        [Sequelize.literal(`CASE WHEN DATE(event_date) >= CURDATE() THEN 0 ELSE 1 END`), 'ASC'],
+        [Sequelize.literal(`CASE WHEN DATE(event_date) >= CURDATE() THEN event_date END`), 'ASC'],
+        [Sequelize.literal(`CASE WHEN DATE(event_date) < CURDATE() THEN event_date END`), 'DESC']
+      ],
     });
 
     const projectDetails = await Promise.all(projects.map(async (project) => {
@@ -7654,4 +7790,435 @@ exports.executeDeleteCrewMember = async (req, res) => {
     if (transaction) await transaction.rollback();
     res.status(500).json({ success: false, message: "Internal server error", details: error.message });
   }
+};
+
+exports.getProjectFulfillmentStatus = async (req, res) => {
+  try {
+    const { project_id } = req.params;
+
+    const booking = await stream_project_booking.findOne({
+      where: { stream_project_booking_id: project_id },
+      attributes: ['stream_project_booking_id', 'event_location', 'crew_roles'],
+      include: [
+        {
+          model: sales_leads,
+          as: 'sales_leads',
+          attributes: ['lead_id'],
+          required: false
+        },
+        {
+          model: assigned_crew,
+          as: 'assigned_crews',
+          where: { is_active: 1 },
+          required: false,
+          attributes: ['crew_accept'],
+          include: [
+            {
+              model: crew_members,
+              as: 'crew_member',
+              attributes: ['primary_role']
+            }
+          ]
+        }
+      ]
+    });
+
+    if (!booking) {
+      return res.status(404).json({ success: false, message: 'Project Booking not found' });
+    }
+
+    let requestedRoles = {};
+    try {
+      requestedRoles = typeof booking.crew_roles === 'string' 
+        ? JSON.parse(booking.crew_roles) 
+        : (booking.crew_roles || {});
+    } catch (e) {
+      requestedRoles = {};
+    }
+
+    const ROLE_GROUPS = { 
+      videographer: ['9', '1'], 
+      photographer: ['10', '2'], 
+      cinematographer: ['11', '3'] 
+    };
+    const ID_TO_ROLE_MAP = {};
+    Object.entries(ROLE_GROUPS).forEach(([role, ids]) => {
+      ids.forEach(id => (ID_TO_ROLE_MAP[String(id)] = role));
+    });
+
+    let fulfillment = {};
+    Object.keys(requestedRoles).forEach(role => {
+      fulfillment[role] = {
+        accepted: 0,
+        required: parseInt(requestedRoles[role]) || 0
+      };
+    });
+
+    if (booking.assigned_crews) {
+      booking.assigned_crews.forEach(ac => {
+        if (ac.crew_accept === 1) {
+          let crewRoleIds = [];
+          try {
+            const rawRole = ac.crew_member?.primary_role;
+            crewRoleIds = (typeof rawRole === 'string' && rawRole.startsWith('[')) 
+              ? JSON.parse(rawRole) 
+              : (Array.isArray(rawRole) ? rawRole : [rawRole]);
+          } catch (e) { crewRoleIds = []; }
+
+          const categories = [...new Set(crewRoleIds.map(id => ID_TO_ROLE_MAP[String(id)]).filter(Boolean))];
+          
+          const targetCategory = categories.find(cat => fulfillment[cat] && fulfillment[cat].accepted < fulfillment[cat].required);
+          
+          if (targetCategory) {
+            fulfillment[targetCategory].accepted += 1;
+          }
+        }
+      });
+    }
+
+    const result = {};
+    Object.keys(fulfillment).forEach(key => {
+      result[key] = `${fulfillment[key].accepted}/${fulfillment[key].required}`;
+    });
+
+    const leadId = booking.sales_leads?.[0]?.lead_id || null;
+
+    res.json({
+      success: true,
+      data: {
+        project_id: booking.stream_project_booking_id,
+        lead_id: leadId,
+        location: booking.event_location,
+        fulfillment_stats: result
+      }
+    });
+
+  } catch (error) {
+    console.error('Project Fulfillment Status Error:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+exports.searchCrewForProject = async (req, res) => {
+    try {
+        const { project_id, role_type, search_query, date } = req.query;
+
+        let projectDate;
+        let currentBookingId = null;
+
+        if (project_id) {
+            const booking = await stream_project_booking.findOne({
+                where: { stream_project_booking_id: project_id }
+            });
+
+            if (!booking) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Project Booking not found"
+                });
+            }
+
+            projectDate = booking.event_date;
+            currentBookingId = booking.stream_project_booking_id;
+        } else {
+            if (!date) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Date is required when project_id is not provided"
+                });
+            }
+            projectDate = date;
+        }
+
+        const busyCrewRecords = await assigned_crew.findAll({
+            where: { 
+                crew_accept: 1,
+                is_active: 1 
+            },
+            include: [{
+                model: stream_project_booking,
+                as: 'project',
+                where: { event_date: projectDate }
+            }],
+            attributes: ['crew_member_id']
+        });
+
+        let alreadyAssignedToThisProject = [];
+        if (currentBookingId) {
+            const currentAssignments = await assigned_crew.findAll({
+                where: {
+                    project_id: currentBookingId, 
+                    is_active: 1,
+                    crew_accept: { [Op.in]: [0, 1] } 
+                },
+                attributes: ['crew_member_id']
+            });
+
+            alreadyAssignedToThisProject = currentAssignments.map(a => Number(a.crew_member_id));
+        }
+
+        const busyIds = busyCrewRecords.map(r => Number(r.crew_member_id));
+        const excludeIds = [...new Set([...busyIds, ...alreadyAssignedToThisProject])];
+
+        const ROLE_GROUPS = {
+            videographer: ["9", "1"],
+            photographer: ["10", "2"],
+            cinematographer: ["11", "3"]
+        };
+
+        const requestedRoles = role_type
+            ? role_type.split(",").map(r => r.trim().toLowerCase())
+            : [];
+
+        let targetRoleIds = [];
+        requestedRoles.forEach(role => {
+            if (ROLE_GROUPS[role]) {
+                targetRoleIds.push(...ROLE_GROUPS[role]);
+            }
+        });
+        targetRoleIds = [...new Set(targetRoleIds)];
+
+        let crewWhere = {
+            is_active: true,
+            is_available: true,
+            is_crew_verified: 1,
+            crew_member_id: { [Op.notIn]: excludeIds.length ? excludeIds : [0] }
+        };
+
+        if (targetRoleIds.length > 0) {
+            crewWhere[Op.or] = targetRoleIds.map(id => ({
+                primary_role: { [Op.like]: `%${id}%` }
+            }));
+        }
+
+        if (search_query) {
+            crewWhere[Op.and] = [{
+                [Op.or]: [
+                    { first_name: { [Op.like]: `%${search_query}%` } },
+                    { last_name: { [Op.like]: `%${search_query}%` } },
+                    { location: { [Op.like]: `%${search_query}%` } }
+                ]
+            }];
+        }
+
+        const availableCrew = await crew_members.findAll({
+            where: crewWhere,
+            include: [
+                {
+                    model: crew_member_files,
+                    as: "crew_member_files",
+                    attributes: ["file_path"],
+                    where: { is_active: 1, file_type: "profile_photo" },
+                    required: false,
+                }
+            ],
+            limit: 50
+        });
+
+        const crewWithRoles = availableCrew.map(crewMember => {
+            let matchedRoles = [];
+            let rawRoles = [];
+
+            try {
+                if (crewMember.primary_role) {
+                    const roleData = crewMember.primary_role;
+                    rawRoles = (typeof roleData === 'string' && roleData.startsWith('[')) 
+                        ? JSON.parse(roleData) 
+                        : (Array.isArray(roleData) ? roleData : [roleData]);
+                }
+            } catch (e) { rawRoles = []; }
+
+            const stringRoleIds = rawRoles.map(String);
+            if (stringRoleIds.some(id => ROLE_GROUPS.videographer.includes(id))) matchedRoles.push("videographer");
+            if (stringRoleIds.some(id => ROLE_GROUPS.photographer.includes(id))) matchedRoles.push("photographer");
+            if (stringRoleIds.some(id => ROLE_GROUPS.cinematographer.includes(id))) matchedRoles.push("cinematographer");
+
+            const profilePhoto = crewMember.crew_member_files?.[0]?.file_path || null;
+            const crewJson = crewMember.toJSON();
+            delete crewJson.crew_member_files;
+
+            return {
+                ...crewJson,
+                profile_photo: profilePhoto,
+                first_name: crewJson.first_name.charAt(0).toUpperCase() + crewJson.first_name.slice(1).toLowerCase(),
+                last_name: crewJson.last_name.charAt(0).toUpperCase(),
+                role_names: matchedRoles.length > 0 ? matchedRoles : ["Unspecified"],
+                role: matchedRoles.length > 0 ? matchedRoles.join(", ") : "Unspecified"
+            };
+        });
+
+        res.json({
+            success: true,
+            project_id: currentBookingId,
+            project_date: projectDate,
+            available_count: crewWithRoles.length,
+            data: crewWithRoles
+        });
+
+    } catch (error) {
+        console.error("searchCrewForProject error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+exports.assignProjectCrewBulk = async (req, res) => {
+    try {
+        const assigned_by_user_id = req.user?.userId;
+        const { project_id, crew_member_ids } = req.body;
+
+        if (!project_id) {
+            return res.status(400).json({ success: false, message: "Project ID is required." });
+        }
+
+        if (!Array.isArray(crew_member_ids) || crew_member_ids.length === 0) {
+            return res.status(400).json({ success: false, message: "No crew members selected." });
+        }
+
+        const ROLE_GROUPS = {
+            videographer: ["9", "1"],
+            photographer: ["10", "2"],
+            cinematographer: ["11", "3"]
+        };
+
+        const ID_TO_ROLE_MAP = {};
+        Object.entries(ROLE_GROUPS).forEach(([roleName, ids]) => {
+            ids.forEach(id => { ID_TO_ROLE_MAP[String(id)] = roleName; });
+        });
+
+        const booking = await stream_project_booking.findOne({
+          where: { stream_project_booking_id: project_id },
+          include: [
+            {
+              model: assigned_crew,
+              as: 'assigned_crews',
+              where: { crew_accept: 1, is_active: 1 },
+              required: false,
+              include: [{ model: crew_members, as: 'crew_member' }]
+            },
+            {
+              model: sales_leads,
+              as: 'sales_leads',
+              limit: 1
+            }
+          ]
+        });
+
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Project booking not found." });
+        }
+
+        const leadId = booking.sales_leads?.[0]?.lead_id || null;
+
+        const requestedLimits = typeof booking.crew_roles === 'string'
+          ? JSON.parse(booking.crew_roles)
+          : (booking.crew_roles || {});
+
+        const currentCounts = { videographer: 0, photographer: 0, cinematographer: 0 };
+
+        if (booking.assigned_crews) {
+          booking.assigned_crews.forEach(ac => {
+            if (ac.crew_member?.primary_role) {
+              try {
+                const raw = ac.crew_member.primary_role;
+                const roles = (typeof raw === 'string' && raw.startsWith('[')) ? JSON.parse(raw) : [raw];
+                roles.forEach(id => {
+                  const roleName = ID_TO_ROLE_MAP[String(id)];
+                  if (roleName) currentCounts[roleName]++;
+                });
+              } catch (e) { console.error("Parse error", e); }
+            }
+          });
+        }
+
+        const uniqueCrewIds = [...new Set(crew_member_ids.map(Number).filter(Boolean))];
+        const newCrewDetails = await crew_members.findAll({
+            where: { crew_member_id: uniqueCrewIds }
+        });
+
+        const assignmentsToCreate = [];
+        const errors = [];
+
+        newCrewDetails.forEach(crew => {
+            let roles = [];
+            try {
+                const raw = crew.primary_role;
+                roles = (typeof raw === 'string' && raw.startsWith('[')) ? JSON.parse(raw) : [raw];
+            } catch (e) { roles = [crew.primary_role]; }
+
+            let roleDetected = null;
+            roles.forEach(id => {
+                if (ID_TO_ROLE_MAP[String(id)]) roleDetected = ID_TO_ROLE_MAP[String(id)];
+            });
+
+            if (roleDetected) {
+              const acceptedCount = currentCounts[roleDetected];
+              const limit = requestedLimits[roleDetected] || 0;
+
+              if (limit > 0 && acceptedCount >= limit) {
+                errors.push(`Cannot add ${crew.first_name} (${roleDetected}). Limit of ${limit} reached.`);
+              } else {
+                assignmentsToCreate.push({
+                  project_id: booking.stream_project_booking_id,
+                  crew_member_id: crew.crew_member_id,
+                  assigned_date: new Date(),
+                  status: 'selected',
+                  crew_accept: 0,
+                  is_active: 1,
+                  organization_type: 1
+                });
+              }
+            } else {
+                errors.push(`Crew member ${crew.first_name} has no valid role mapping.`);
+            }
+        });
+
+        if (assignmentsToCreate.length === 0 && errors.length > 0) {
+            return res.status(400).json({ success: false, message: "Assignments failed validation.", errors });
+        }
+
+        if (assignmentsToCreate.length > 0) {
+            await assigned_crew.bulkCreate(assignmentsToCreate);
+
+            if (leadId) {
+                await sales_lead_activities.create({
+                    lead_id: leadId,
+                    activity_type: 'bulk_crew_assigned',
+                    notes: `Assigned ${assignmentsToCreate.length} crew members to project via Project ID.`,
+                    performed_by_user_id: assigned_by_user_id
+                });
+            }
+
+            try {
+                const createdIds = assignmentsToCreate.map(a => a.crew_member_id);
+                const crews = await crew_members.findAll({
+                    where: { crew_member_id: createdIds },
+                    attributes: ['first_name', 'last_name', 'email']
+                });
+
+                const dashboardLink = process.env.CP_DASHBOARD_LINK || 'https://beige.app/';
+
+                await Promise.allSettled(
+                    crews.filter(c => c.email).map(c =>
+                        sendCPNewBookingRequestEmail({
+                            to_email: c.email,
+                            user_name: c.first_name,
+                            dashboardLink
+                        })
+                    )
+                );
+            } catch (mailErr) {
+                console.error('Mail trigger error:', mailErr);
+            }
+        }
+
+        return res.json({
+            success: true,
+            message: `${assignmentsToCreate.length} crew members assigned successfully.`,
+            errors: errors.length > 0 ? errors : undefined
+        });
+
+    } catch (error) {
+        console.error("assignProjectCrewBulk error:", error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
 };
