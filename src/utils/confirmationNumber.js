@@ -15,3 +15,4 @@ const generateConfirmationNumber = () => {
 };
 
 module.exports = { generateConfirmationNumber };
+
