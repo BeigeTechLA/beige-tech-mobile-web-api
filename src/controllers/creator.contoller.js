@@ -6,6 +6,8 @@ const common_model = require('../utils/common_model');
 const { Op } = require('sequelize');
 const { S3UploadFiles } = require('../utils/common.js');
 const { sendTaskAssignmentEmail } = require('../utils/emailService');
+const emailService = require("../utils/emailService");
+const db = require("../models");
 const { stream_project_booking, crew_members, crew_member_files, tasks, equipment,
   equipment_accessories,
   equipment_category,
@@ -513,6 +515,7 @@ exports.getProjectDetails = async (req, res) => {
 exports.updateRequestStatus = async (req, res) => {
   try {
     const { crew_member_id, project_id, crew_accept } = req.body;
+    const decision = Number(crew_accept);
 
     if (!crew_member_id || !project_id || crew_accept === undefined) {
       return res.status(400).json({
@@ -521,15 +524,37 @@ exports.updateRequestStatus = async (req, res) => {
       });
     }
 
-    if (crew_accept === 2) {
-      await assigned_crew.update(
-        { crew_accept: 2 },
+    if (![1, 2].includes(decision)) {
+      return res.status(400).json({
+        error: true,
+        message: "crew_accept must be 1 (accept) or 2 (decline).",
+      });
+    }
+
+    if (decision === 2) {
+      const updateResult = await assigned_crew.update(
+        { 
+          crew_accept: 2, 
+          responded_at: new Date()
+        },
         { where: { crew_member_id, project_id, crew_accept: 0 } }
       );
+
+      if (updateResult[0] === 0) {
+        return res.status(404).json({ error: true, message: "No pending request found." });
+      }
+
+      const emailRes = await emailService.sendCPStatusUpdateByRequest({
+        project_id,
+        crew_member_id,
+        cp_action: "declined",
+        cp_status: "Declined",
+      });
+      console.log('CP email result:', emailRes);
       return res.status(200).json({ error: false, message: "Request declined successfully." });
     }
 
-    if (crew_accept === 1) {
+    if (decision === 1) {
       const ROLE_GROUPS = {
         videographer: ["9", "1"],
         photographer: ["10", "2"],
@@ -591,15 +616,24 @@ exports.updateRequestStatus = async (req, res) => {
         });
       }
 
-      // All good! Proceed with acceptance
       const updateResult = await assigned_crew.update(
-        { crew_accept: 1 },
+        { 
+          crew_accept: 1,
+          responded_at: new Date() 
+        },
         { where: { crew_member_id, project_id, crew_accept: 0 } }
       );
 
       if (updateResult[0] === 0) {
         return res.status(404).json({ error: true, message: "No pending request found or already accepted." });
       }
+
+      const emailRes = await emailService.sendCPStatusUpdateByRequest({
+        project_id,
+        crew_member_id,
+        cp_action: "accepted",
+        cp_status: "Accepted",
+      });
 
       return res.status(200).json({ error: false, message: "Request accepted successfully." });
     }
@@ -1786,6 +1820,88 @@ exports.uploadProfileFiles = [
   }
 ];
 
+exports.uploadCPProfilePhoto = [
+  // Using .single because a profile photo is always just one file
+  upload.single('profile_photo'),
+
+  async (req, res) => {
+    try {
+      const crew_member_id = req.user?.crew_member_id || req.body.crew_member_id;
+
+      // 1. Validation: Check if file exists
+      if (!req.file) {
+        return res.status(constants.BAD_REQUEST.code).json({
+          error: true,
+          code: constants.BAD_REQUEST.code,
+          message: 'No profile photo provided',
+          data: null
+        });
+      }
+
+      // 2. Prepare for S3 Upload (matching your helper's expected format)
+      const filesForUpload = { profile_photo: [req.file] };
+      const uploadedFiles = await S3UploadFiles(filesForUpload);
+
+      if (!uploadedFiles || uploadedFiles.length === 0) {
+          throw new Error("Failed to upload file to S3");
+      }
+
+      const newFilePath = uploadedFiles[0].file_path;
+
+      /**
+       * 3. Handle Database Logic
+       * We remove the existing profile_photo record if it exists 
+       * to ensure the user only ever has one.
+       */
+      await crew_member_files.destroy({
+        where: { 
+          crew_member_id, 
+          file_type: 'profile_photo' 
+        }
+      });
+
+      // 4. Create the new record
+      const newPhoto = await crew_member_files.create({
+        crew_member_id,
+        file_type: 'profile_photo',
+        file_path: newFilePath,
+        title: 'Profile Photo',
+        tag: "[]",
+        is_active: true
+      });
+
+      // Optional: Log Activity
+      /* 
+      await common.logActivity({
+        crew_member_id,
+        activity_type: 'profile_photo_updated',
+        title: 'Profile Photo Updated',
+        description: `Profile photo has been updated successfully`,
+        reference_id: crew_member_id,
+        reference_type: 'crew_profile'
+      });
+      */
+
+      return res.status(constants.OK.code).json({
+        error: false,
+        code: constants.OK.code,
+        message: 'Profile photo updated successfully',
+        data: {
+          file_path: newFilePath
+        }
+      });
+
+    } catch (err) {
+      console.error("Error in uploadCPProfilePhoto:", err);
+      return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+        error: true,
+        code: constants.INTERNAL_SERVER_ERROR.code,
+        message: constants.INTERNAL_SERVER_ERROR.message,
+        data: null
+      });
+    }
+  }
+];
 exports.addPortfolioLinks = async (req, res) => {
   try {
     const crew_member_id = req.user?.crew_member_id || req.body.crew_member_id;

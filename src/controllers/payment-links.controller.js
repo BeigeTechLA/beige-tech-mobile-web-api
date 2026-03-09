@@ -258,12 +258,12 @@ exports.generatePaymentLink = async (req, res) => {
 
     // --- NEW CONDITION: CHECK IF QUOTE EXISTS ---
     // If quote_id is null, it means the quote hasn't been generated yet
-    if (!booking.quote_id) {
-      return res.status(400).json({
-        success: false,
-        message: 'Cannot generate payment link: A quote must be generated and attached to the booking first.'
-      });
-    }
+   if (!booking.quote_id) {
+  return res.status(400).json({
+    success: false,
+    message: 'Payment link cannot be generated: The booking process is still pending. Please complete the booking details before proceeding.'
+  });
+}
     // --------------------------------------------
 
     // 3. Check if already paid

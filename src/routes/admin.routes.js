@@ -43,6 +43,7 @@ router.get('/get-event-types', admin.getEventTypes),
 router.get('/get-crew-member-name', admin.getCrewMembersByName)
 router.get('/get-crew-count', admin.getCrewCount);
 router.get('/get-pending-cp', admin.getAllPendingCrewMembers);
+router.get('/:bookingId/get-booking-summary', admin.getBookingSummaryById);
 
 // Dashboard statistics routes
 router.get('/get-dashboard-summary', admin.getDashboardSummary);
@@ -80,5 +81,7 @@ router.get('/get-crew-for-lead', admin.searchCrewForLead);
 router.post('/assign-crew-from-lead',authMiddleware, admin.assignCrewBulkSmart);
 router.post('/remove-assigned-crew',authMiddleware, admin.removeAssignedCrew);
 router.get('/get-client-details-with-shoots/:userId', admin.getClientFullDetailsByUserId);
+router.get('/check-cp-delete-status', admin.checkDeleteStatus);
+router.post('/delete-cp', admin.executeDeleteCrewMember);
 
 module.exports = router;

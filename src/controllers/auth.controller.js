@@ -1,6 +1,7 @@
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { Op } = require('sequelize');
+const db = require('../models');
 const { users, user_type, crew_members, crew_member_files } = require('../models');
 const constants = require('../utils/constants');
 const common_model = require('../utils/common_model');
@@ -21,6 +22,27 @@ const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 // Import new utilities
 const otpService = require('../utils/otpService');
 const emailService = require('../utils/emailService');
+
+async function linkGuestBookingsToUser(email, userId) {
+  try {
+    if (!email || !userId) return 0;
+
+    const [updatedRows] = await db.stream_project_booking.update(
+      { user_id: userId },
+      {
+        where: {
+          guest_email: email,
+          user_id: { [Op.is]: null }
+        }
+      }
+    );
+
+    return updatedRows || 0;
+  } catch (error) {
+    console.error('Link Guest Bookings Error:', error);
+    return 0;
+  }
+}
 
 // Multer configuration for file uploads
 const storage = multer.diskStorage({
@@ -545,6 +567,13 @@ exports.register = async (req, res) => {
         phone_number,
         instagram_handle
       }).catch(err => console.error('Sales Signup Notification Error:', err));
+
+      if (email) {
+        emailService.sendClientSignupWelcomeEmail({
+          name,
+          email
+        }).catch(err => console.error('Client Signup Welcome Email Error:', err));
+      }
     }
 
     if (email) {
@@ -572,6 +601,8 @@ exports.register = async (req, res) => {
       console.error('Failed to create affiliate account:', affiliateError);
     }
 
+    const linkedBookingsCount = await linkGuestBookingsToUser(email, newUser.id);
+
     return res.status(201).json({
       success: true,
       message: email
@@ -580,7 +611,8 @@ exports.register = async (req, res) => {
       userId: newUser.id,
       email: newUser.email,
       affiliate: affiliateData,
-      clientId: newClient ? newClient.client_id : null
+      clientId: newClient ? newClient.client_id : null,
+      linked_bookings_count: linkedBookingsCount
     });
 
   } catch (error) {
@@ -688,32 +720,22 @@ exports.resendOTP = async (req, res) => {
     const { email } = req.body;
 
     if (!email) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email is required'
-      });
+      return res.status(400).json({ success: false, message: 'Email is required' });
     }
 
-    // Find user
     const user = await User.findOne({ where: { email } });
 
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
+      return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    // Check if already verified
     if (user.email_verified === 1) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email already verified'
-      });
+      return res.status(400).json({ success: false, message: 'Email already verified' });
     }
 
-    // Check rate limiting (60 seconds)
-    const rateLimit = otpService.checkOTPRateLimit(user.otp_expiry, 1);
+
+    const rateLimit = otpService.checkOTPRateLimit(user.updatedAt, 1); 
+    
     if (!rateLimit.allowed) {
       return res.status(429).json({
         success: false,
@@ -722,11 +744,9 @@ exports.resendOTP = async (req, res) => {
       });
     }
 
-    // Generate new OTP
     const otp = otpService.generateOTP();
     const otpExpiry = otpService.generateOTPExpiry(10);
 
-    // Update user
     await User.update(
       {
         verification_code: otp,
@@ -757,8 +777,7 @@ exports.resendOTP = async (req, res) => {
     console.error('Resend OTP Error:', error);
     return res.status(500).json({
       success: false,
-      message: 'Server error resending OTP',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: 'Server error resending OTP'
     });
   }
 };
@@ -1499,6 +1518,8 @@ exports.quickRegister = async (req, res) => {
       console.error('Failed to create affiliate account:', affiliateError);
     }
 
+    const linkedBookingsCount = await linkGuestBookingsToUser(email, newUser.id);
+
     // Generate tokens
     const { token, refreshToken } = generateTokens(newUser.id, 'client');
     const permissions = getPermissionsForRole('client');
@@ -1514,6 +1535,7 @@ exports.quickRegister = async (req, res) => {
         role: 'client'
       },
       affiliate: affiliateData,
+      linked_bookings_count: linkedBookingsCount,
       token,
       refreshToken,
       permissions,
@@ -2155,25 +2177,31 @@ exports.registerCrewMemberStep1 = [
 
   async (req, res) => {
     try {
-      const { first_name, last_name, email, phone_number, location, password, working_distance, crew_member_id, user_id } = req.body;
+      const { 
+        first_name, 
+        last_name, 
+        email, 
+        phone_number, 
+        location, 
+        password, 
+        working_distance, 
+        crew_member_id, 
+        user_id 
+      } = req.body;
 
       if (!first_name || !last_name || !email || (!crew_member_id && !password)) {
         return res.status(400).json({ success: false, message: 'Required fields missing' });
       }
 
       if (crew_member_id && user_id) {
-        await crew_members.update({ first_name, last_name, email, phone_number, location, working_distance }, { where: { crew_member_id } });
-        await User.update({ name: `${first_name} ${last_name}`, email, phone_number }, { where: { id: user_id } });
-
-        await updateSheetRow('Crew_data', crew_member_id, {
-          'B': first_name, 
-          'C': last_name, 
-          'D': email, 
-          'E': phone_number, 
-          'F': location, 
-          'G': working_distance, 
-          'H': 'pending'
-        });
+        await crew_members.update(
+          { first_name, last_name, email, phone_number, location, working_distance }, 
+          { where: { crew_member_id } }
+        );
+        await User.update(
+          { name: `${first_name} ${last_name}`, email, phone_number }, 
+          { where: { id: user_id } }
+        );
 
         return res.status(200).json({ success: true, message: 'Step 1 updated', crew_member_id, user_id });
       }
@@ -2181,56 +2209,43 @@ exports.registerCrewMemberStep1 = [
       const existingUser = await User.findOne({ where: { email } });
       if (existingUser) return res.status(409).json({ success: false, message: 'Email already exists.' });
 
-      const existingCrew = await crew_members.findOne({
-        where: { email }
-      });
+      const existingPhoneUser = await User.findOne({ where: { phone_number } });
+      if (existingPhoneUser) return res.status(409).json({ success: false, message: 'Phone number already exists.' });
 
+      const existingCrew = await crew_members.findOne({ where: { email } });
       if (existingCrew) {
-
         if (existingCrew.is_active == 0) {
-          return res.status(409).json({
-            success: false,
-            message: 'Crew member with this email was deleted. Please contact support.'
-          });
+          return res.status(409).json({ success: false, message: 'Crew member with this email was deleted. Please contact support.' });
         }
-        return res.status(409).json({
-          success: false,
-          message: 'Crew member with this email already exists.'
-        });
-      }
-
-      const existingPhoneUser = await User.findOne({
-        where: { phone_number }
-      });
-
-      if (existingPhoneUser) {
-        return res.status(409).json({
-          success: false,
-          message: 'Phone number already exists.'
-        });
+        return res.status(409).json({ success: false, message: 'Crew member with this email already exists.' });
       }
 
       const hashedPassword = await bcrypt.hash(password, 10);
+      const otp = otpService.generateOTP();
+      const otpExpiry = otpService.generateOTPExpiry(10);
+
       const newUser = await User.create({
         name: `${first_name} ${last_name}`,
-        email, phone_number,
+        email, 
+        phone_number,
         password_hash: hashedPassword,
-        user_type: 2, is_active: 1, email_verified: 0
+        user_type: 2, 
+        is_active: 1, 
+        email_verified: 0,
+        verification_code: otp,
+        otp_expiry: otpExpiry
       });
 
       const newCrewMember = await crew_members.create({
         user_id: newUser.id,
-        first_name, last_name, email, phone_number, location, working_distance, is_active: 1
+        first_name, 
+        last_name, 
+        email, 
+        phone_number, 
+        location, 
+        working_distance, 
+        is_active: 1
       });
-
-      emailService.sendNewCrewSignupNotification({
-        first_name,
-        last_name,
-        email,
-        phone_number,
-        location,
-        working_distance
-      }).catch(err => console.error('Sales Crew Signup Notification Error:', err));
 
       if (req.files?.profile_photo) {
         const uploadedFiles = await S3UploadFiles(req.files);
@@ -2246,26 +2261,46 @@ exports.registerCrewMemberStep1 = [
         }
       }
 
-      await appendToSheet('Crew_data', [
-        newCrewMember.crew_member_id, 
-        first_name, 
-        last_name, 
-        email, 
-        phone_number, 
-        location,
-        working_distance,
-        'pending'
-      ]);
+      emailService.sendNewCrewSignupNotification({
+        first_name, last_name, email, phone_number, location, working_distance
+      }).catch(err => console.error('Admin Notification Error:', err));
+
+      await emailService.sendVerificationOTP(
+        { name: `${first_name} ${last_name}`, email },
+        otp
+      );
+
+      let affiliateData = null;
+      try {
+        const affiliate = await affiliateController.createAffiliate(newUser.id);
+        if (affiliate) {
+          affiliateData = {
+            affiliate_id: affiliate.affiliate_id,
+            referral_code: affiliate.referral_code
+          };
+        }
+      } catch (affiliateError) {
+        console.error('Affiliate creation failed:', affiliateError);
+      }
 
       return res.status(201).json({
         success: true,
-        message: 'Step 1 completed',
+        message: 'Step 1 completed. Please verify your email.',
         user_id: newUser.id,
-        crew_member_id: newCrewMember.crew_member_id
+        crew_member_id: newCrewMember.crew_member_id,
+        affiliate: affiliateData
       });
 
     } catch (error) {
       console.error('Step 1 Error:', error);
+      
+      if (error.name === 'SequelizeUniqueConstraintError') {
+        return res.status(409).json({
+          success: false,
+          message: 'A record with these details already exists.'
+        });
+      }
+
       return res.status(500).json({ success: false, message: 'Server error' });
     }
   }

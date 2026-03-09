@@ -32,6 +32,298 @@ function calculatePricing(hours, hourlyRate, equipmentItems = [], marginPercent 
   };
 }
 
+const formatDate = (value) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+};
+
+const formatTime = (value) => {
+  if (!value) return '';
+  const text = String(value);
+  const [hh, mm] = text.split(':');
+  if (hh === undefined || mm === undefined) return text;
+  const hours = Number(hh);
+  if (Number.isNaN(hours)) return text;
+  const suffix = hours >= 12 ? 'PM' : 'AM';
+  const h12 = hours % 12 || 12;
+  return `${h12}:${mm} ${suffix}`;
+};
+
+const formatLocation = (location) => {
+  if (!location) return 'TBD';
+  if (typeof location !== 'string') {
+    if (location && typeof location === 'object') {
+      return (
+        location.address ||
+        location.full_address ||
+        location.formatted_address ||
+        location.place_name ||
+        location.name ||
+        location.text ||
+        location.address_line_1 ||
+        location.location ||
+        location.venue ||
+        'TBD'
+      );
+    }
+    return String(location);
+  }
+  const trimmed = location.trim();
+  if (!trimmed) return 'TBD';
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (typeof parsed === 'string') return parsed;
+    if (parsed && typeof parsed === 'object') {
+      return (
+        parsed.address ||
+        parsed.full_address ||
+        parsed.formatted_address ||
+        parsed.place_name ||
+        parsed.name ||
+        parsed.text ||
+        parsed.address_line_1 ||
+        parsed.location ||
+        parsed.venue ||
+        trimmed
+      );
+    }
+  } catch (_) {
+    // Keep raw value when not JSON
+  }
+  return trimmed;
+};
+
+const toTitleCase = (value) =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+
+const normalizeServiceType = (contentType) => {
+  const raw = String(contentType || '').trim();
+  if (!raw) return '';
+
+  const mapToken = (token) => {
+    const key = token.trim().toLowerCase();
+    if (!key) return '';
+    if (key === 'videographer' || key === 'videography') return 'Videography';
+    if (key === 'photographer' || key === 'photography') return 'Photography';
+    return toTitleCase(token);
+  };
+
+  const parts = raw
+    .split(/[,+/|]/)
+    .map(mapToken)
+    .filter(Boolean);
+
+  const unique = [...new Set(parts)];
+  return unique.length > 0 ? unique.join(' + ') : toTitleCase(raw);
+};
+
+const parseRoleIds = (value) => {
+  if (value == null) return [];
+  if (Array.isArray(value)) return value.map(v => Number(v)).filter(Number.isFinite);
+
+  const raw = String(value).trim();
+  if (!raw) return [];
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed.map(v => Number(v)).filter(Number.isFinite);
+    if (parsed && typeof parsed === 'object') {
+      return Object.keys(parsed).map(v => Number(v)).filter(Number.isFinite);
+    }
+  } catch (_) {
+    // non-JSON input, continue
+  }
+
+  if (/^\d+$/.test(raw)) return [Number(raw)];
+  return raw
+    .split(/[,+/|]/)
+    .map(v => Number(v.trim()))
+    .filter(Number.isFinite);
+};
+
+const resolveCrewRoleLabel = async (rawPrimaryRole, fallbackText) => {
+  const roleIds = parseRoleIds(rawPrimaryRole);
+  if (roleIds.length === 0) {
+    return normalizeServiceType(rawPrimaryRole || fallbackText);
+  }
+
+  try {
+    const roles = await db.crew_roles.findAll({
+      where: { role_id: roleIds },
+      attributes: ['role_id', 'role_name'],
+      raw: true
+    });
+
+    if (!roles || roles.length === 0) {
+      return normalizeServiceType(fallbackText);
+    }
+
+    const byId = new Map(roles.map(r => [Number(r.role_id), r.role_name]));
+    const names = roleIds.map(id => byId.get(Number(id))).filter(Boolean);
+    return names.length > 0 ? names.join(', ') : normalizeServiceType(fallbackText);
+  } catch (error) {
+    console.error('Failed to resolve crew role labels:', error.message);
+    return normalizeServiceType(fallbackText);
+  }
+};
+
+const toAbsoluteBeigeAssetUrl = (pathValue) => {
+  const fallbackBase = 'https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/';
+  const configuredBase = (process.env.BEIGE_ASSET_BASE_URL || fallbackBase).replace(/\/+$/, '/') ;
+
+  const raw = String(pathValue || '').trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw)) return raw;
+
+  // DB stores values after "beige/" so join directly.
+  return `${configuredBase}${raw.replace(/^\/+/, '')}`;
+};
+
+const sendBookingConfirmationForBooking = async ({
+  bookingId,
+  amountPaid,
+  paymentMethod,
+  transactionId
+}) => {
+  try {
+    const booking = await db.stream_project_booking.findByPk(bookingId, {
+      include: [
+        {
+          model: db.users,
+          as: 'user',
+          attributes: ['name', 'email'],
+          required: false
+        },
+        {
+          model: db.assigned_crew,
+          as: 'assigned_crews',
+          required: false,
+          where: { is_active: 1 },
+          attributes: ['crew_member_id', 'crew_accept', 'status', 'updated_at', 'assigned_date'],
+          include: [
+            {
+              model: db.crew_members,
+              as: 'crew_member',
+              attributes: ['first_name', 'last_name', 'primary_role'],
+              include: [
+                {
+                  model: db.crew_member_files,
+                  as: 'crew_member_files',
+                  required: false,
+                  attributes: ['file_type', 'file_path', 'created_at', 'is_active']
+                }
+              ],
+              required: false
+            }
+          ]
+        }
+      ]
+    });
+
+    if (!booking) return;
+
+    const toEmail = booking.user?.email || booking.guest_email;
+    if (!toEmail) {
+      console.warn(`Skipping booking confirmation email for ${bookingId}: no recipient email found`);
+      return;
+    }
+
+    let clientName = booking.user?.name || '';
+    if (!clientName) {
+      const lead = await db.sales_leads.findOne({
+        where: { booking_id: bookingId },
+        attributes: ['client_name', 'guest_email']
+      });
+      clientName = lead?.client_name || '';
+      if (!clientName) {
+        const emailForName = booking.guest_email || lead?.guest_email || '';
+        const localPart = emailForName.includes('@') ? emailForName.split('@')[0] : '';
+        clientName = localPart.replace(/[._-]+/g, ' ').trim();
+      }
+    }
+    if (!clientName && booking.description) {
+      const m = String(booking.description).match(/Contact Name:\s*([^\n\r]+)/i);
+      if (m && m[1]) clientName = m[1].trim();
+    }
+    const firstName = clientName ? clientName.trim().split(/\s+/)[0] : 'there';
+    const assignments = Array.isArray(booking.assigned_crews)
+      ? [...booking.assigned_crews].sort((a, b) => {
+          const ta = new Date(a?.updated_at || a?.assigned_date || 0).getTime();
+          const tb = new Date(b?.updated_at || b?.assigned_date || 0).getTime();
+          return tb - ta;
+        })
+      : [];
+    const selectedAssignment =
+      assignments.find(a => a?.crew_accept === 1) ||
+      assignments.find(a => ['selected', 'assigned', 'confirmed'].includes(String(a?.status || '').toLowerCase())) ||
+      assignments[0] ||
+      null;
+    const cpFirstName = selectedAssignment?.crew_member?.first_name || '';
+    const cpLastName = selectedAssignment?.crew_member?.last_name || '';
+    const cpName = [cpFirstName, cpLastName].filter(Boolean).join(' ');
+    const cpFiles = Array.isArray(selectedAssignment?.crew_member?.crew_member_files)
+      ? [...selectedAssignment.crew_member.crew_member_files]
+          .filter(f => f?.is_active === 1 || f?.is_active === true || typeof f?.is_active === 'undefined')
+          .sort((a, b) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime())
+      : [];
+    const cpPhoto =
+      cpFiles.find(f => String(f?.file_type || '').toLowerCase() === 'profile_photo') ||
+      cpFiles.find(f => String(f?.file_type || '').toLowerCase() === 'profile_image') ||
+      cpFiles.find(f => String(f?.file_type || '').toLowerCase().includes('image')) ||
+      null;
+    const cpPhotoUrl =
+      toAbsoluteBeigeAssetUrl(cpPhoto?.file_path) ||
+      'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=120&h=120';
+    const rawPrimaryRole = selectedAssignment?.crew_member?.primary_role;
+    const cpRole = await resolveCrewRoleLabel(
+      rawPrimaryRole,
+      booking.content_type || booking.event_type || booking.shoot_type
+    );
+
+    console.log(
+      `Attempting booking confirmation email for booking ${bookingId} to ${toEmail}`
+    );
+
+    const emailResult = await emailService.sendBookingConfirmationEmail({
+      to_email: toEmail,
+      first_name: firstName,
+      booking_id: booking.stream_project_booking_id,
+      shoot_type: booking.shoot_type || booking.event_type || '',
+      service_type: normalizeServiceType(booking.content_type || booking.event_type || booking.shoot_type),
+      shoot_date: formatDate(booking.event_date || booking.shoot_date),
+      start_time: formatTime(booking.start_time),
+      end_time: formatTime(booking.end_time),
+      duration: booking.duration_hours ? `${booking.duration_hours} hours` : '',
+      shoot_location_address: formatLocation(booking.event_location),
+      amount_paid: typeof amountPaid === 'number' ? `$${amountPaid.toFixed(2)}` : (amountPaid || ''),
+      payment_method: paymentMethod || 'Card',
+      transaction_id: transactionId || '',
+      cp_assigned: !!selectedAssignment,
+      cp_firstname: cpFirstName,
+      cp_name: cpName,
+      cp_role: cpRole,
+      cp_photo_url: cpPhotoUrl
+    });
+
+    if (!emailResult?.success) {
+      console.error(
+        `Booking confirmation email not sent for booking ${bookingId}:`,
+        emailResult?.error || 'Unknown error'
+      );
+      return;
+    }
+
+    console.log(`Booking confirmation email completed for booking ${bookingId}`);
+  } catch (error) {
+    console.error(`Booking confirmation email flow failed for booking ${bookingId}:`, error.message);
+  }
+};
+
 /**
  * Create payment intent for CP + equipment booking
  * POST /api/payments/create-intent
@@ -93,6 +385,13 @@ exports.createPaymentIntent = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'Either user_id or guest_email is required'
+      });
+    }
+
+    if (referral_code && !user_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please login or signup if you want to use a referral code'
       });
     }
 
@@ -219,6 +518,13 @@ exports.confirmPayment = async (req, res) => {
       });
     }
 
+    if (referral_code && !user_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please login or signup if you want to use a referral code'
+      });
+    }
+
     // Verify payment with Stripe
     const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
 
@@ -236,8 +542,101 @@ exports.confirmPayment = async (req, res) => {
     });
 
     if (existingPayment) {
-      return res.status(409).json({
-        success: false,
+      if (referral_code || user_id) {
+        try {
+          // Backfill both referral commission types when payment already exists.
+          const paymentReferrals = await db.referrals.findAll({
+            where: { payment_id: existingPayment.payment_id },
+            transaction
+          });
+
+          let primaryReferral = null;
+          if (existingPayment.referral_id) {
+            primaryReferral =
+              paymentReferrals.find(r => Number(r.referral_id) === Number(existingPayment.referral_id)) ||
+              await db.referrals.findByPk(existingPayment.referral_id, { transaction });
+          }
+
+          if (referral_code) {
+            const referralAffiliate = await db.affiliates.findOne({
+              where: {
+                referral_code: referral_code.toUpperCase(),
+                status: 'active'
+              },
+              transaction
+            });
+
+            const existingCodeReferral = referralAffiliate
+              ? paymentReferrals.find(r => Number(r.affiliate_id) === Number(referralAffiliate.affiliate_id))
+              : null;
+
+            if (existingCodeReferral) {
+              if (!primaryReferral) primaryReferral = existingCodeReferral;
+            } else {
+              const createdReferral = await affiliateController.processReferral(
+                referral_code,
+                existingPayment.payment_id,
+                existingPayment.total_amount,
+                user_id || null,
+                guest_email || null,
+                transaction
+              );
+              if (createdReferral) {
+                paymentReferrals.push(createdReferral);
+                if (!primaryReferral) primaryReferral = createdReferral;
+              }
+            }
+          }
+
+          if (user_id) {
+            const userAffiliate = await db.affiliates.findOne({
+              where: {
+                user_id,
+                status: 'active'
+              },
+              transaction
+            });
+
+            const existingUserAffiliateReferral = userAffiliate
+              ? paymentReferrals.find(r => Number(r.affiliate_id) === Number(userAffiliate.affiliate_id))
+              : null;
+
+            if (existingUserAffiliateReferral) {
+              if (!primaryReferral) primaryReferral = existingUserAffiliateReferral;
+            } else if (userAffiliate) {
+              const userAffiliateReferral = await affiliateController.processUserAffiliateCommission(
+                user_id,
+                existingPayment.payment_id,
+                existingPayment.total_amount,
+                guest_email || null,
+                primaryReferral ? primaryReferral.affiliate_id : null,
+                transaction
+              );
+
+              if (userAffiliateReferral) {
+                paymentReferrals.push(userAffiliateReferral);
+                if (!primaryReferral) primaryReferral = userAffiliateReferral;
+              }
+            }
+          }
+
+          if (!primaryReferral && paymentReferrals.length > 0) {
+            primaryReferral = paymentReferrals[0];
+          }
+
+          if (primaryReferral && !existingPayment.referral_id) {
+            existingPayment.referral_id = primaryReferral.referral_id;
+            await existingPayment.save({ transaction });
+          }
+        } catch (referralError) {
+          console.error('Failed to process referral/user-affiliate for already processed payment:', referralError);
+          // Keep API idempotent even if referral processing fails
+        }
+      }
+
+      await transaction.commit();
+      return res.status(200).json({
+        success: true,
         message: 'Payment already processed',
         data: {
           payment_id: existingPayment.payment_id
@@ -258,7 +657,7 @@ exports.confirmPayment = async (req, res) => {
       creator_id,
       user_id: user_id || null,
       guest_email: guest_email || null,
-      hours,
+      hours: parseFloat(hours) > 0 ? parseFloat(hours) : 1,
       hourly_rate,
       cp_cost: pricing.cp_cost,
       equipment_cost: pricing.equipment_cost,
@@ -285,8 +684,8 @@ exports.confirmPayment = async (req, res) => {
       await db.payment_equipment.bulkCreate(equipmentRecords, { transaction });
     }
 
-    // Process referral if referral code was provided
-    let referralData = null;
+    // Process referral commissions
+    let primaryReferral = null;
     if (referral_code) {
       try {
         const referral = await affiliateController.processReferral(
@@ -298,18 +697,36 @@ exports.confirmPayment = async (req, res) => {
           transaction
         );
         if (referral) {
-          referralData = {
-            referral_id: referral.referral_id,
-            commission_amount: parseFloat(referral.commission_amount)
-          };
-          // Update payment with referral_id
-          payment.referral_id = referral.referral_id;
-          await payment.save({ transaction });
+          primaryReferral = referral;
         }
       } catch (referralError) {
         console.error('Failed to process referral:', referralError);
         // Don't fail the payment if referral processing fails
       }
+    }
+
+    if (user_id) {
+      try {
+        const userAffiliateReferral = await affiliateController.processUserAffiliateCommission(
+          user_id,
+          payment.payment_id,
+          pricing.total_amount,
+          guest_email || null,
+          primaryReferral ? primaryReferral.affiliate_id : null,
+          transaction
+        );
+
+        if (!primaryReferral && userAffiliateReferral) {
+          primaryReferral = userAffiliateReferral;
+        }
+      } catch (userAffiliateError) {
+        console.error('Failed to process user affiliate commission:', userAffiliateError);
+      }
+    }
+
+    if (primaryReferral) {
+      payment.referral_id = primaryReferral.referral_id;
+      await payment.save({ transaction });
     }
 
     // Update booking status to payment completed if booking_id provided
@@ -335,6 +752,20 @@ exports.confirmPayment = async (req, res) => {
 
     await transaction.commit();
 
+    // if (booking_id) {
+    //   const paymentMethod =
+    //     paymentIntent.charges?.data?.[0]?.payment_method_details?.type ||
+    //     paymentIntent.payment_method_types?.[0] ||
+    //     'card';
+
+    //   sendBookingConfirmationForBooking({
+    //     bookingId: booking_id,
+    //     amountPaid: pricing.total_amount,
+    //     paymentMethod,
+    //     transactionId: paymentIntentId
+    //   }).catch(err => console.error('Booking Confirmation Email Error:', err));
+    // }
+
     return res.status(201).json({
       success: true,
       message: 'Payment confirmed and booking created',
@@ -359,8 +790,9 @@ exports.confirmPayment = async (req, res) => {
     });
 
   } catch (error) {
-    await transaction.rollback();
-
+    if (transaction && !transaction.finished) {
+      await transaction.rollback();
+    }
     console.error('Payment Confirmation Error:', error);
 
     return res.status(500).json({
@@ -383,7 +815,7 @@ exports.createPaymentIntentMulti = async (req, res) => {
       guest_email
     } = req.body;
 
-    // Validation
+    // 1. Validation
     if (!booking_id) {
       return res.status(400).json({
         success: false,
@@ -391,14 +823,7 @@ exports.createPaymentIntentMulti = async (req, res) => {
       });
     }
 
-    if (!amount || amount <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Valid amount is required'
-      });
-    }
-
-    // Verify booking exists
+    // 2. Verify booking exists
     const booking = await db.stream_project_booking.findByPk(booking_id);
     if (!booking) {
       return res.status(404).json({
@@ -407,7 +832,28 @@ exports.createPaymentIntentMulti = async (req, res) => {
       });
     }
 
-    // Create Stripe PaymentIntent
+    // 3. Handle 100% Discount ($0.00) Case
+    // Stripe does not allow creating intents for $0.00
+    if (parseFloat(amount) === 0) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          clientSecret: 'free_checkout_intent_' + booking_id,
+          paymentIntentId: 'free_checkout_intent_' + booking_id,
+          amount: 0,
+          isFree: true
+        }
+      });
+    }
+
+    // 4. Standard Stripe logic for paid bookings
+    if (!amount || amount < 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid amount is required'
+      });
+    }
+
     const paymentIntent = await stripe.paymentIntents.create({
       amount: Math.round(amount * 100), // Convert to cents
       currency: 'usd',
@@ -416,7 +862,6 @@ exports.createPaymentIntentMulti = async (req, res) => {
         guest_email: guest_email || booking.guest_email || '',
         type: 'multi-creator',
         shoot_name: booking.shoot_name || '',
-        shoot_type: booking.shoot_type || ''
       }
     });
 
@@ -425,13 +870,13 @@ exports.createPaymentIntentMulti = async (req, res) => {
       data: {
         clientSecret: paymentIntent.client_secret,
         paymentIntentId: paymentIntent.id,
-        amount: amount
+        amount: amount,
+        isFree: false
       }
     });
 
   } catch (error) {
     console.error('Create Multi-Creator Payment Intent Error:', error);
-
     return res.status(500).json({
       success: false,
       message: 'Failed to create payment intent',
@@ -441,11 +886,11 @@ exports.createPaymentIntentMulti = async (req, res) => {
 };
 
 /**
- * Confirm multi-creator payment and update booking status
- * POST /api/payments/confirm-multi
-
-/**
  * Confirm multi-creator payment and update booking status + Google Sheet
+ * POST /api/payments/confirm-multi
+ */
+/**
+ * Confirm multi-creator payment and update booking status
  * POST /api/payments/confirm-multi
  */
 exports.confirmPaymentMulti = async (req, res) => {
@@ -459,31 +904,170 @@ exports.confirmPaymentMulti = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Missing paymentIntentId or booking_id' });
     }
 
-    const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
-    if (paymentIntent.status !== 'succeeded') {
-      if (transaction) await transaction.rollback();
-      return res.status(400).json({ success: false, message: 'Payment not successful' });
-    }
-
-    const existingPayment = await db.payment_transactions.findOne({
-      where: { stripe_payment_intent_id: paymentIntentId }
+    // 1. Fetch the Booking and the Quote to verify details
+    const booking = await db.stream_project_booking.findOne({
+      where: { stream_project_booking_id: booking_id },
+      include: [{ model: db.quotes, as: 'primary_quote' }]
     });
 
-   if (existingPayment) {
-     await transaction.rollback();
-     return res.status(200).json({
-       success: true,
-       message: "Payment already processed (Webhook completed first)",
-       data: { payment_id: existingPayment.payment_id, booking_id },
-     });
-   }
-
-    const booking = await db.stream_project_booking.findByPk(booking_id);
     if (!booking) {
       await transaction.rollback();
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
+    if (referral_code && !booking.user_id) {
+      await transaction.rollback();
+      return res.status(400).json({
+        success: false,
+        message: 'Please login or signup if you want to use a referral code'
+      });
+    }
+
+    let totalAmount = 0;
+    let chargeId = null;
+    let paymentIntent = null;
+
+    // --- UPDATED LOGIC HERE ---
+    // 2. Check if this is a Free Checkout mock ID
+    if (paymentIntentId.startsWith('free_checkout_intent_')) {
+      
+      // SECURITY CHECK: Verify the quote in our DB is actually 0
+      // This prevents users from manually sending a "free_checkout" ID for a paid booking
+      if (!booking.primary_quote || parseFloat(booking.primary_quote.total) !== 0) {
+        await transaction.rollback();
+        return res.status(400).json({ 
+          success: false, 
+          message: 'Security mismatch: This booking is not eligible for free checkout.' 
+        });
+      }
+      
+      totalAmount = 0;
+      chargeId = 'PROMO_100_PERCENT'; // Use a placeholder for free bookings
+
+    } else {
+      try {
+        paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+        
+        if (paymentIntent.status !== 'succeeded') {
+          if (transaction) await transaction.rollback();
+          return res.status(400).json({ success: false, message: 'Payment not successful' });
+        }
+        
+        totalAmount = paymentIntent.amount / 100;
+        chargeId = paymentIntent.charges?.data[0]?.id || null;
+      } catch (stripeError) {
+        if (transaction) await transaction.rollback();
+        return res.status(400).json({ success: false, message: stripeError.message });
+      }
+    }
+
+    // 4. Prevent duplicate processing
+    const existingPayment = await db.payment_transactions.findOne({
+      where: { stripe_payment_intent_id: paymentIntentId }
+    });
+
+    if (existingPayment) {
+      if (referral_code || booking.user_id) {
+        try {
+          // Backfill both referral commission types when payment already exists.
+          const paymentReferrals = await db.referrals.findAll({
+            where: { payment_id: existingPayment.payment_id },
+            transaction
+          });
+
+          let primaryReferral = null;
+          if (existingPayment.referral_id) {
+            primaryReferral =
+              paymentReferrals.find(r => Number(r.referral_id) === Number(existingPayment.referral_id)) ||
+              await db.referrals.findByPk(existingPayment.referral_id, { transaction });
+          }
+
+          if (referral_code) {
+            const referralAffiliate = await db.affiliates.findOne({
+              where: {
+                referral_code: referral_code.toUpperCase(),
+                status: 'active'
+              },
+              transaction
+            });
+
+            const existingCodeReferral = referralAffiliate
+              ? paymentReferrals.find(r => Number(r.affiliate_id) === Number(referralAffiliate.affiliate_id))
+              : null;
+
+            if (existingCodeReferral) {
+              if (!primaryReferral) primaryReferral = existingCodeReferral;
+            } else {
+              const createdReferral = await affiliateController.processReferral(
+                referral_code,
+                existingPayment.payment_id,
+                existingPayment.total_amount,
+                booking.user_id || null,
+                booking.guest_email || null,
+                transaction
+              );
+              if (createdReferral) {
+                paymentReferrals.push(createdReferral);
+                if (!primaryReferral) primaryReferral = createdReferral;
+              }
+            }
+          }
+
+          if (booking.user_id) {
+            const userAffiliate = await db.affiliates.findOne({
+              where: {
+                user_id: booking.user_id,
+                status: 'active'
+              },
+              transaction
+            });
+
+            const existingUserAffiliateReferral = userAffiliate
+              ? paymentReferrals.find(r => Number(r.affiliate_id) === Number(userAffiliate.affiliate_id))
+              : null;
+
+            if (existingUserAffiliateReferral) {
+              if (!primaryReferral) primaryReferral = existingUserAffiliateReferral;
+            } else if (userAffiliate) {
+              const userAffiliateReferral = await affiliateController.processUserAffiliateCommission(
+                booking.user_id,
+                existingPayment.payment_id,
+                existingPayment.total_amount,
+                booking.guest_email || null,
+                primaryReferral ? primaryReferral.affiliate_id : null,
+                transaction
+              );
+
+              if (userAffiliateReferral) {
+                paymentReferrals.push(userAffiliateReferral);
+                if (!primaryReferral) primaryReferral = userAffiliateReferral;
+              }
+            }
+          }
+
+          if (!primaryReferral && paymentReferrals.length > 0) {
+            primaryReferral = paymentReferrals[0];
+          }
+
+          if (primaryReferral && !existingPayment.referral_id) {
+            existingPayment.referral_id = primaryReferral.referral_id;
+            await existingPayment.save({ transaction });
+          }
+        } catch (referralError) {
+          console.error('Failed to process referral/user-affiliate for already processed multi payment:', referralError);
+          // Keep API idempotent even if referral processing fails
+        }
+      }
+
+      await transaction.commit();
+      return res.status(200).json({
+        success: true,
+        message: "Payment already processed",
+        data: { payment_id: existingPayment.payment_id, booking_id },
+      });
+    }
+
+    // 5. Determine Creator ID (existing logic)
     let validCreatorId = null;
     if (booking.creator_id) {
       const check = await db.crew_members.findByPk(booking.creator_id);
@@ -499,12 +1083,13 @@ exports.confirmPaymentMulti = async (req, res) => {
     }
 
     if (!validCreatorId) {
-       throw new Error("Cannot process payment: No valid creator found.");
+       throw new Error("Cannot process booking: No valid creator found.");
     }
 
+    // 6. Create Payment Transaction Record
     const finalShootDate = booking.shoot_date || booking.event_date || new Date();
-    const totalAmount = paymentIntent.amount / 100;
-    const chargeId = paymentIntent.charges?.data[0]?.id || null;
+    const rawHours = booking.shoot_hours || booking.duration_hours || 1;
+    const finalHours = parseFloat(rawHours) > 0 ? parseFloat(rawHours) : 1;
 
     const payment = await db.payment_transactions.create({
       stripe_payment_intent_id: paymentIntentId,
@@ -512,7 +1097,7 @@ exports.confirmPaymentMulti = async (req, res) => {
       creator_id: validCreatorId,
       user_id: booking.user_id || null,
       guest_email: booking.guest_email || null,
-      hours: booking.shoot_hours || 0,
+      hours: finalHours,
       hourly_rate: 0,
       cp_cost: 0,
       equipment_cost: 0,
@@ -528,6 +1113,53 @@ exports.confirmPaymentMulti = async (req, res) => {
       status: 'succeeded'
     }, { transaction });
 
+    // 7. Process referral commissions
+    let primaryReferral = null;
+    if (referral_code) {
+      try {
+        const referral = await affiliateController.processReferral(
+          referral_code,
+          payment.payment_id,
+          totalAmount,
+          booking.user_id || null,
+          booking.guest_email || null,
+          transaction
+        );
+
+        if (referral) {
+          primaryReferral = referral;
+        }
+      } catch (referralError) {
+        console.error('Failed to process referral (confirm-multi):', referralError);
+        // Don't fail payment if referral processing fails
+      }
+    }
+
+    if (booking.user_id) {
+      try {
+        const userAffiliateReferral = await affiliateController.processUserAffiliateCommission(
+          booking.user_id,
+          payment.payment_id,
+          totalAmount,
+          booking.guest_email || null,
+          primaryReferral ? primaryReferral.affiliate_id : null,
+          transaction
+        );
+
+        if (!primaryReferral && userAffiliateReferral) {
+          primaryReferral = userAffiliateReferral;
+        }
+      } catch (userAffiliateError) {
+        console.error('Failed to process user affiliate commission (confirm-multi):', userAffiliateError);
+      }
+    }
+
+    if (primaryReferral) {
+      payment.referral_id = primaryReferral.referral_id;
+      await payment.save({ transaction });
+    }
+
+    // 8. Update Booking and Lead Status
     await db.stream_project_booking.update(
       { 
         payment_completed_at: new Date(), 
@@ -545,12 +1177,28 @@ exports.confirmPaymentMulti = async (req, res) => {
 
     await transaction.commit();
 
+    // 9. Background notifications
     emailService.sendPaymentSuccessSalesNotification({
-        guestEmail: booking.guest_email || booking.user_id || 'Unknown Client',
+        guestEmail: booking.guest_email || 'Unknown Client',
         amount: totalAmount,
         shootType: booking.shoot_type || 'Shoot',
         paymentIntentId: paymentIntentId
     }).catch(err => console.error('Sales Notification Error:', err));
+
+    let paymentMethod = 'free'; // default for free checkout
+
+    if (paymentIntent) {
+      paymentMethod =
+        paymentIntent.charges?.data?.[0]?.payment_method_details?.type ||
+        paymentIntent.payment_method_types?.[0] ||
+        'card';
+    }
+    sendBookingConfirmationForBooking({
+      bookingId: booking_id,
+      amountPaid: totalAmount,
+      paymentMethod,
+      transactionId: paymentIntentId
+    }).catch(err => console.error('Booking Confirmation Email Error:', err));
 
     try {
       const lead = await db.sales_leads.findOne({ where: { booking_id: booking_id } });
@@ -567,7 +1215,7 @@ exports.confirmPaymentMulti = async (req, res) => {
 
     return res.status(201).json({
       success: true,
-      message: 'Payment confirmed successfully',
+      message: totalAmount === 0 ? 'Booking confirmed (Free)' : 'Payment confirmed successfully',
       data: { payment_id: payment.payment_id, booking_id }
     });
 
@@ -579,7 +1227,6 @@ exports.confirmPaymentMulti = async (req, res) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
-
 /**
  * Get payment status by payment_id or stripe_payment_intent_id
  * GET /api/payments/:id/status
@@ -847,6 +1494,25 @@ exports.handleStripeWebhook = async (req, res) => {
 
       await transaction.commit();
       console.log(`Webhook: booking ${booking_id} marked as paid`);
+
+      // Send Sales Notification Email
+      emailService.sendPaymentSuccessSalesNotification({
+        guestEmail: booking.guest_email || 'Unknown Client',
+        amount: amountPaid,
+        shootType: booking.shoot_type || 'Shoot',
+        paymentIntentId: paymentIntentId
+      }).catch(err => console.error('Sales Notification Error:', err));
+
+      const webhookPaymentMethod =
+        dataObject.payment_method_details?.type ||
+        dataObject.payment_method_types?.[0] ||
+        'card';
+      sendBookingConfirmationForBooking({
+        bookingId: booking_id,
+        amountPaid,
+        paymentMethod: webhookPaymentMethod,
+        transactionId: paymentIntentId
+      }).catch(err => console.error('Booking Confirmation Email Error:', err));
     } catch (dbError) {
       await transaction.rollback();
       throw dbError;

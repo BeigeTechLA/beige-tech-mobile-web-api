@@ -36,7 +36,8 @@ const s3Upload = (media, callback = null) => {
             uploadFile({
                 Bucket: process.env.S3_BUCKET_NAME, //config.get("multers3.bucket"),
                 filePath: media.path,
-                Key: (process.env.S3_SUB_FOLDER ? process.env.S3_SUB_FOLDER + "/" : "") + media.public_id
+                Key: (process.env.S3_SUB_FOLDER ? process.env.S3_SUB_FOLDER + "/" : "") + media.public_id,
+                ACL: undefined
             }).then(res => {
                 console.log("S3 Upload", res);
                 if (res.url) {
@@ -134,3 +135,4 @@ module.exports = {
   uploadS3File,
   S3UploadFiles
 };
+

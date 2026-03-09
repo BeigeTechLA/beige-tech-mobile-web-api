@@ -96,6 +96,7 @@ exports.createBooking = async (req, res) => {
       guest_email: null, // Authenticated bookings don't use guest_email
       project_name: order_name,
       description: description || null,
+      content_type: content_type || null,
       event_type: event_type || content_type || project_type || null,
       event_date: event_date,
       duration_hours: duration_hours ? parseInt(duration_hours) : null,
@@ -497,6 +498,7 @@ exports.updateBooking = async (req, res) => {
 
     if (order_name !== undefined) updateData.project_name = order_name;
     if (description !== undefined) updateData.description = description;
+    if (content_type !== undefined) updateData.content_type = content_type;
     if (event_type !== undefined) updateData.event_type = event_type;
     if (content_type !== undefined && !event_type) updateData.event_type = content_type;
     if (project_type !== undefined && !event_type && !content_type) updateData.event_type = project_type;

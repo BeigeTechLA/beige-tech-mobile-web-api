@@ -6,7 +6,7 @@ const common_model = require('../utils/common_model');
 const { Op } = require('sequelize');
 const { S3UploadFiles } = require('../utils/common.js');
 const moment = require('moment');
-const { sendTaskAssignmentEmail } = require('../utils/emailService');
+const { sendTaskAssignmentEmail, sendCPNewBookingRequestEmail } = require('../utils/emailService');
 const { stream_project_booking, crew_members, crew_member_files, tasks, equipment, crew_roles,
   equipment_accessories,
   equipment_category,
@@ -28,10 +28,14 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   payment_transactions,
   assigned_post_production_member,
   post_production_members,
-  clients,sales_leads, sales_lead_activities,
+  clients,sales_leads, sales_lead_activities, quotes, quote_line_items,
   payments } = require('../models');
   const { deleteSheetRow, updateSheetRow } = require('../utils/googleSheets');
 const leadAssignmentService = require('../services/lead-assignment.service');
+// const NodeGeocoder = require('node-geocoder');
+
+// Initialize geocoder
+// const geocoder = NodeGeocoder({ provider: 'openstreetmap' });
 
 function toArray(value) {
   if (!value) return [];
@@ -164,6 +168,66 @@ function buildDateFilter(req) {
 
   return {};
 }
+
+const SHOOT_TYPE_TITLES = {
+    corporate: "Corporate Event",
+    wedding: "Wedding",
+    private: "Private Event",
+    commercial: "Commercial & Advertising",
+    social_content: "Social Content",
+    podcast: "Podcasts & Shows",
+    music: "Music Videos",
+    short_film: "Short Films & Narrative",
+    brand_product: "Brand & Product",
+    people_teams: "People & Teams",
+    behind_scenes: "Behind-the-Scenes",
+};
+
+const VIDEO_EDIT_TITLES = {
+    social_reel_15_30: "Social Media Reel (15 sec-30 sec)",
+    social_reel_30_90: "Social Media Reel (30 sec-90 sec)",
+    mini_highlight_1_2: "Mini Highlight Video (1-2 mins)",
+    highlight_4_7: "Highlight Video (4-7 min)",
+    feature_30_40: "Feature Video (30-40 min)",
+    commercial_2_4: "Commercial (2 min-4 min)",
+    commercial_4_10: "Commercial (4 min-10 min)",
+    social_reel_2_4: "Social Media Reel (2 min-4 min)",
+    full_podcast_15_30: "Full Length Podcast (15 min-30 min)",
+    full_podcast_30_60: "Longer Full Length Podcast (30 min-60 min)",
+    music_video_2_3: "Edited Music Video (2-3 min)",
+    music_video_vfx_2_3: "Edited Music Video with VFX (2-3 min)",
+    short_film_2_5: "Edited Short Film (2 Min-5 Min)",
+    short_film_5_10: "Edited Short Film (5 Min-10 Min)",
+};
+
+const PHOTO_EDIT_TITLES = {
+    edited_photos: "Professionally Edited Photos",
+};
+
+// const getDistanceInMiles = (lat1, lon1, lat2, lon2) => {
+//     if (!lat1 || !lon1 || !lat2 || !lon2) return null; 
+//     const R = 3958.8; // Earth's radius in miles
+//     const dLat = (lat2 - lat1) * Math.PI / 180;
+//     const dLon = (lon2 - lon1) * Math.PI / 180;
+//     const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+//               Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+//               Math.sin(dLon / 2) * Math.sin(dLon / 2);
+//     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+//     return R * c;
+// };
+
+// // 3. Helper: Parse "Upto 10 miles" or "Open to travel" into a number
+// const parseWorkingDistance = (distStr) => {
+//     if (!distStr) return 50; // Default radius
+//     const lower = distStr.toLowerCase();
+//     if (lower.includes("open to traveling")) return 5000; // Unlimited travel
+//     const numbers = distStr.match(/\d+/g);
+//     return numbers ? Math.max(...numbers.map(Number)) : 50;
+// };
+
+// // 4. Helper: Delay function to prevent 429 Errors (OSM limits)
+// const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 
 // exports.createProject = async (req, res) => {
 //   try {
@@ -614,15 +678,16 @@ exports.assignCrew = async (req, res) => {
     const { project_id, assigned_crew: crewIds } = req.body;
     console.log("ASSIGN CREW BODY:", req.body);
 
-    // Validate input
-    if (!crewIds || crewIds.length === 0) {
+    if (!Array.isArray(crewIds) || crewIds.length === 0) {
       return res.status(400).json({
         error: true,
         message: "No crew members selected",
       });
     }
 
-    for (const crewId of crewIds) {
+    const uniqueCrewIds = [...new Set(crewIds.map(Number).filter(Boolean))];
+
+    for (const crewId of uniqueCrewIds) {
       await assigned_crew.create({
         project_id,
         crew_member_id: crewId,
@@ -630,6 +695,33 @@ exports.assignCrew = async (req, res) => {
         status: 'assigned',
         is_active: 1,
       });
+    }
+
+    // Non-blocking email trigger
+    try {
+      const crews = await crew_members.findAll({
+        where: { crew_member_id: uniqueCrewIds },
+        attributes: ['crew_member_id', 'first_name', 'last_name', 'email']
+      });
+
+      const dashboardLink =
+        process.env.CP_DASHBOARD_LINK ||
+        process.env.FRONTEND_URL ||
+        'https://beige.app/';
+
+      await Promise.allSettled(
+        crews
+          .filter(c => c.email)
+          .map(c =>
+            sendCPNewBookingRequestEmail({
+              to_email: c.email,
+              user_name: [c.first_name, c.last_name].filter(Boolean).join(' ') || 'there',
+              dashboardLink
+            })
+          )
+      );
+    } catch (mailErr) {
+      console.error('assignCrew email send error:', mailErr?.message || mailErr);
     }
 
     return res.status(200).json({
@@ -6483,15 +6575,16 @@ exports.getClientsShoots = async (req, res) => {
   }
 };
 
+
 exports.searchCrewForLead = async (req, res) => {
     try {
-        const { lead_id, role_type, search_query, date } = req.query;
+        const { lead_id, role_type, search_query, max_distance, date } = req.query;
 
         let projectDate;
         let currentBookingId = null;
+        let eventLocation = null;
 
-        // -----------------------------
-        // -----------------------------
+        // 1️⃣ Get Lead and identify the correct Booking ID
         if (lead_id) {
             const lead = await sales_leads.findOne({
                 where: { lead_id },
@@ -6501,12 +6594,13 @@ exports.searchCrewForLead = async (req, res) => {
             if (!lead || !lead.booking) {
                 return res.status(404).json({
                     success: false,
-                    message: "Lead/Booking not found"
+                    message: "Lead or associated Booking not found"
                 });
             }
 
             projectDate = lead.booking.event_date;
-            currentBookingId = lead.booking.booking_id; // Store to exclude already assigned
+            eventLocation = lead.booking.event_location;
+            currentBookingId = lead.booking.stream_project_booking_id;
         } else {
             if (!date) {
                 return res.status(400).json({
@@ -6518,12 +6612,15 @@ exports.searchCrewForLead = async (req, res) => {
         }
 
         // ---------------------------------------------------------
-        // 2️⃣ Get IDs to Exclude (Busy elsewhere OR already on this lead)
+        // 2️⃣ Get IDs to Exclude
         // ---------------------------------------------------------
         
-        // A: Get crew busy on this date (Accepted elsewhere)
+        // A: Get crew busy on this date (Accepted on ANY other project)
         const busyCrewRecords = await assigned_crew.findAll({
-            where: { crew_accept: 1 },
+            where: { 
+                crew_accept: 1, // Already Accepted
+                is_active: 1 
+            },
             include: [{
                 model: stream_project_booking,
                 as: 'project',
@@ -6532,18 +6629,26 @@ exports.searchCrewForLead = async (req, res) => {
             attributes: ['crew_member_id']
         });
 
-        // B: Get crew already assigned to THIS specific lead (Pending, Accepted, or Rejected)
+        // B: Get crew already assigned to THIS lead who are Pending or Accepted
         let alreadyAssignedToThisLead = [];
         if (currentBookingId) {
             const currentAssignments = await assigned_crew.findAll({
-                where: { booking_id: currentBookingId },
+                where: {
+                    // FIXED: Changed booking_id to project_id based on your screenshot
+                    project_id: currentBookingId, 
+                    is_active: 1,
+                    // EXCLUDE if they are 0 (Pending) or 1 (Accepted)
+                    // INCLUDE if they are 2 (Rejected) so they appear in search again
+                    crew_accept: { [Op.in]: [0, 1] } 
+                },
                 attributes: ['crew_member_id']
             });
-            alreadyAssignedToThisLead = currentAssignments.map(a => a.crew_member_id);
+
+            alreadyAssignedToThisLead = currentAssignments.map(a => Number(a.crew_member_id));
         }
 
         // Combine unique IDs to exclude
-        const busyIds = busyCrewRecords.map(r => r.crew_member_id);
+        const busyIds = busyCrewRecords.map(r => Number(r.crew_member_id));
         const excludeIds = [...new Set([...busyIds, ...alreadyAssignedToThisLead])];
 
         // -----------------------------
@@ -6565,7 +6670,6 @@ exports.searchCrewForLead = async (req, res) => {
                 targetRoleIds.push(...ROLE_GROUPS[role]);
             }
         });
-
         targetRoleIds = [...new Set(targetRoleIds)];
 
         // -----------------------------
@@ -6575,7 +6679,7 @@ exports.searchCrewForLead = async (req, res) => {
             is_active: true,
             is_available: true,
             is_crew_verified: 1,
-            // Exclude anyone busy or already on this lead
+            // Strict exclusion of the IDs found above
             crew_member_id: { [Op.notIn]: excludeIds.length ? excludeIds : [0] }
         };
 
@@ -6589,15 +6693,13 @@ exports.searchCrewForLead = async (req, res) => {
             crewWhere[Op.and] = [{
                 [Op.or]: [
                     { first_name: { [Op.like]: `%${search_query}%` } },
-                    { last_name: { [Op.like]: `%${search_query}%` } }, // Added last name search
+                    { last_name: { [Op.like]: `%${search_query}%` } },
                     { location: { [Op.like]: `%${search_query}%` } }
                 ]
             }];
         }
 
-        // -----------------------------
-        // 5️⃣ Fetch Available Crew (Including Profile Photo)
-        // -----------------------------
+        // 5️⃣ Fetch Available Crew
         const availableCrew = await crew_members.findAll({
             where: crewWhere,
             include: [
@@ -6605,79 +6707,266 @@ exports.searchCrewForLead = async (req, res) => {
                     model: crew_member_files,
                     as: "crew_member_files",
                     attributes: ["file_path"],
-                    where: {
-                        is_active: 1,
-                        file_type: "profile_photo",
-                    },
-                    required: false, // Left join
+                    where: { is_active: 1, file_type: "profile_photo" },
+                    required: false,
                 }
             ],
             limit: 50
         });
 
-        // -----------------------------
-        // 6️⃣ Safe Role Parsing & Photo Mapping
-        // -----------------------------
-        const crewWithRoles = availableCrew.map(crewMember => {
-            let matchedRoles = [];
-            let rawRoles = [];
+        // 6️⃣ Format Response
+      const crewWithRoles = availableCrew.map(crewMember => {
+        let matchedRoles = [];
+        let rawRoles = [];
 
-            try {
-                if (crewMember.primary_role) {
-                    if (Array.isArray(crewMember.primary_role)) {
-                        rawRoles = crewMember.primary_role;
-                    } else if (typeof crewMember.primary_role === "string") {
-                        try {
-                            const parsed = JSON.parse(crewMember.primary_role);
-                            rawRoles = Array.isArray(parsed) ? parsed : [parsed];
-                        } catch {
-                            rawRoles = crewMember.primary_role.split(',').map(r => r.trim());
-                        }
-                    } else {
-                        rawRoles = [crewMember.primary_role];
-                    }
-                }
-            } catch (e) {
-                rawRoles = [];
+        try {
+          if (crewMember.primary_role) {
+            if (Array.isArray(crewMember.primary_role)) {
+              rawRoles = crewMember.primary_role;
+            } else if (typeof crewMember.primary_role === "string") {
+              try {
+                const parsed = JSON.parse(crewMember.primary_role);
+                rawRoles = Array.isArray(parsed) ? parsed : [parsed];
+              } catch {
+                rawRoles = crewMember.primary_role.split(',').map(r => r.trim());
+              }
             }
+          }
+        } catch (e) { rawRoles = []; }
 
-            const stringRoleIds = rawRoles.map(String);
+        const stringRoleIds = rawRoles.map(String);
+        if (stringRoleIds.some(id => ROLE_GROUPS.videographer.includes(id))) matchedRoles.push("videographer");
+        if (stringRoleIds.some(id => ROLE_GROUPS.photographer.includes(id))) matchedRoles.push("photographer");
+        if (stringRoleIds.some(id => ROLE_GROUPS.cinematographer.includes(id))) matchedRoles.push("cinematographer");
 
-            if (stringRoleIds.some(id => ROLE_GROUPS.videographer.includes(id))) matchedRoles.push("videographer");
-            if (stringRoleIds.some(id => ROLE_GROUPS.photographer.includes(id))) matchedRoles.push("photographer");
-            if (stringRoleIds.some(id => ROLE_GROUPS.cinematographer.includes(id))) matchedRoles.push("cinematographer");
+        const profilePhoto = crewMember.crew_member_files && crewMember.crew_member_files.length > 0
+          ? crewMember.crew_member_files[0].file_path
+          : null;
 
-            // Extract profile photo path safely
-            const profilePhoto = crewMember.crew_member_files && crewMember.crew_member_files.length > 0 
-                ? crewMember.crew_member_files[0].file_path 
-                : null;
+        const crewJson = crewMember.toJSON();
+        delete crewJson.crew_member_files;
 
-            const crewJson = crewMember.toJSON();
-            delete crewJson.crew_member_files; // Clean up the raw include
+        const formattedFirstName = crewJson.first_name.charAt(0).toUpperCase() + crewJson.first_name.slice(1).toLowerCase();
 
-            return {
-                ...crewJson,
-                profile_photo: profilePhoto,
-                role_names: matchedRoles.length > 0 ? matchedRoles : ["Unspecified"],
-                role: matchedRoles.length > 0 ? matchedRoles.join(", ") : "Unspecified"
-            };
-        });
+        const formattedLastName = crewJson.last_name.charAt(0).toUpperCase();
 
-        res.json({
-            success: true,
-            project_date: projectDate,
-            available_count: crewWithRoles.length,
-            data: crewWithRoles
-        });
+        return {
+          ...crewJson,
+          profile_photo: profilePhoto,
+          first_name: formattedFirstName,
+          last_name: formattedLastName,
+          role_names: matchedRoles.length > 0 ? matchedRoles : ["Unspecified"],
+          role: matchedRoles.length > 0 ? matchedRoles.join(", ") : "Unspecified"
+        };
+      });
+
+      res.json({
+        success: true,
+        project_date: projectDate,
+        available_count: crewWithRoles.length,
+        data: crewWithRoles
+      });
 
     } catch (error) {
         console.error("searchCrewForLead error:", error);
-        res.status(500).json({
-            success: false,
-            message: error.message
-        });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
+
+
+// const geocoder = NodeGeocoder({ 
+//     provider: 'openstreetmap',
+//     httpAdapter: 'fetch',
+//     fetchOptions: {
+//         headers: { 'User-Agent': 'BeigeCreativeSearch/2.0 (admin@yourdomain.com)' }
+//     }
+// });
+
+// // 2. Global Runtime Cache (Stores coordinates for cities found during searches)
+// // This makes the search faster and faster the more you use it.
+// const VOLATILE_CITY_CACHE = {
+//     'ahmedabad': { lat: 23.0225, lon: 72.5714 },
+//     'vadodara': { lat: 22.3072, lon: 73.1812 },
+//     'mumbai': { lat: 19.0760, lon: 72.8777 },
+//     'new york': { lat: 40.7128, lon: -74.0060 },
+//     'los angeles': { lat: 34.0522, lon: -118.2437 }
+// };
+
+// // 3. Helper: Extract City from Address String
+// const extractCity = (address) => {
+//     if (!address) return null;
+//     const parts = address.split(/[,،]/);
+//     if (parts.length < 2) return address.trim().toLowerCase();
+    
+//     // For USA: usually "City, State Zip" is at the end. 
+//     // We take the last 2-3 parts for better accuracy
+//     const cityPart = parts[parts.length - 2] || parts[0];
+//     return cityPart.trim().toLowerCase();
+// };
+
+// // 4. Helper: Haversine distance
+// const getDistanceInMiles = (lat1, lon1, lat2, lon2) => {
+//     if (!lat1 || !lon1 || !lat2 || !lon2) return null;
+//     const R = 3958.8; 
+//     const dLat = (lat2 - lat1) * Math.PI / 180;
+//     const dLon = (lon2 - lon1) * Math.PI / 180;
+//     const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+//               Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+//               Math.sin(dLon / 2) * Math.sin(dLon / 2);
+//     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+//     return R * c;
+// };
+
+// const parseWorkingDistance = (distStr) => {
+//     if (!distStr) return 100;
+//     const lower = distStr.toLowerCase();
+//     if (lower.includes("open to traveling") || lower.includes("anywhere")) return 5000;
+//     const numbers = distStr.match(/\d+/g);
+//     return numbers ? Math.max(...numbers.map(Number)) : 100;
+// };
+
+// const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// exports.searchCrewForLead = async (req, res) => {
+//     try {
+//         const { lead_id, role_type, search_query, date, radius } = req.query;
+//         const requestedRadius = radius ? parseFloat(radius) : 0;
+
+//         let projectDate;
+//         let currentBookingId = null;
+//         let centerCoords = null;
+
+//         // 1. Get Project Center Coordinates
+//         if (search_query) {
+//             const cityKey = extractCity(search_query);
+//             if (VOLATILE_CITY_CACHE[cityKey]) {
+//                 centerCoords = VOLATILE_CITY_CACHE[cityKey];
+//             } else {
+//                 try {
+//                     const geo = await geocoder.geocode(search_query);
+//                     if (geo.length > 0) {
+//                         centerCoords = { lat: geo[0].latitude, lon: geo[0].longitude };
+//                         VOLATILE_CITY_CACHE[cityKey] = centerCoords; // Save to cache
+//                     }
+//                 } catch (e) { console.error("Center Geocode Error"); }
+//             }
+//         }
+
+//         // 2. Lead/Date Discovery
+//         if (lead_id) {
+//             const lead = await sales_leads.findOne({
+//                 where: { lead_id },
+//                 include: [{ model: stream_project_booking, as: 'booking' }]
+//             });
+//             if (lead?.booking) {
+//                 projectDate = lead.booking.event_date;
+//                 currentBookingId = lead.booking.stream_project_booking_id;
+//             }
+//         } else { projectDate = date; }
+
+//         // 3. Exclude Busy Crew
+//         const busyRecords = await assigned_crew.findAll({
+//             where: { crew_accept: 1, is_active: 1 },
+//             include: [{ model: stream_project_booking, as: 'project', where: { event_date: projectDate } }],
+//             attributes: ['crew_member_id']
+//         });
+//         const excludeIds = busyRecords.map(r => Number(r.crew_member_id));
+
+//         // 4. Database Fetch
+//         const ROLE_GROUPS = { videographer: ["9", "1"], photographer: ["10", "2"], cinematographer: ["11", "3"] };
+//         const requestedRoles = role_type ? role_type.split(",").map(r => r.trim().toLowerCase()) : [];
+//         let targetRoleIds = [];
+//         requestedRoles.forEach(role => { if (ROLE_GROUPS[role]) targetRoleIds.push(...ROLE_GROUPS[role]); });
+
+//         let crewWhere = {
+//             is_active: true,
+//             is_crew_verified: 1,
+//             crew_member_id: { [Op.notIn]: excludeIds.length ? excludeIds : [0] }
+//         };
+//         if (targetRoleIds.length > 0) {
+//             crewWhere[Op.or] = targetRoleIds.map(id => ({ primary_role: { [Op.like]: `%${id}%` } }));
+//         }
+
+//         const allCandidates = await crew_members.findAll({
+//             where: crewWhere,
+//             include: [{ model: crew_member_files, as: "crew_member_files", where: { is_active: 1, file_type: "profile_photo" }, required: false }],
+//         });
+
+//         // 5. SMART RADIUS FILTERING
+//         const finalResults = [];
+
+//         for (const crew of allCandidates) {
+//             const crewJson = crew.toJSON();
+//             let distance = null;
+//             let isWithinRange = requestedRadius > 0 ? false : true;
+
+//             if (requestedRadius > 0 && crewJson.location) {
+//                 const crewCity = extractCity(crewJson.location);
+                
+//                 // Text Match Optimization (Instant)
+//                 if (search_query && crewJson.location.toLowerCase().includes(search_query.toLowerCase())) {
+//                     isWithinRange = true;
+//                     distance = 0;
+//                 } 
+//                 // Coordinate Math
+//                 else if (centerCoords) {
+//                     let crewCoords = VOLATILE_CITY_CACHE[crewCity];
+
+//                     if (!crewCoords) {
+//                         try {
+//                             await delay(800); // Prevent 429
+//                             const res = await geocoder.geocode(crewCity); // Geocode ONLY the city
+//                             if (res.length > 0) {
+//                                 crewCoords = { lat: res[0].latitude, lon: res[0].longitude };
+//                                 VOLATILE_CITY_CACHE[crewCity] = crewCoords; // Cache it
+//                             }
+//                         } catch (e) { console.error("Crew geocode fail"); }
+//                     }
+
+//                     if (crewCoords) {
+//                         distance = getDistanceInMiles(centerCoords.lat, centerCoords.lon, crewCoords.lat, crewCoords.lon);
+//                         const travelLimit = parseWorkingDistance(crewJson.working_distance);
+//                         if (distance !== null && distance <= requestedRadius && distance <= travelLimit) {
+//                             isWithinRange = true;
+//                         }
+//                     }
+//                 }
+//             }
+
+//             if (!isWithinRange) continue;
+
+//             // Role formatting
+//             let matchedRoles = [];
+//             let rawRoles = [];
+//             try {
+//                 const parsed = typeof crewJson.primary_role === "string" ? JSON.parse(crewJson.primary_role) : crewJson.primary_role;
+//                 rawRoles = Array.isArray(parsed) ? parsed : [parsed];
+//             } catch (e) { rawRoles = []; }
+//             const strRoles = rawRoles.map(String);
+//             if (strRoles.some(id => ROLE_GROUPS.videographer.includes(id))) matchedRoles.push("videographer");
+//             if (strRoles.some(id => ROLE_GROUPS.photographer.includes(id))) matchedRoles.push("photographer");
+
+//             finalResults.push({
+//                 ...crewJson,
+//                 profile_photo: crewJson.crew_member_files?.[0]?.file_path || null,
+//                 role_names: matchedRoles.length > 0 ? matchedRoles : ["Unspecified"],
+//                 role: matchedRoles.join(", "),
+//                 distance_miles: distance !== null ? Math.round(distance * 10) / 10 : 0
+//             });
+//         }
+
+//         res.json({
+//             success: true,
+//             search_query: search_query,
+//             radius: requestedRadius,
+//             available_count: finalResults.length,
+//             data: finalResults
+//         });
+
+//     } catch (error) {
+//         res.status(500).json({ success: false, message: error.message });
+//     }
+// };
 
 exports.assignCrewBulkSmart = async (req, res) => {
     try {
@@ -6700,49 +6989,58 @@ exports.assignCrewBulkSmart = async (req, res) => {
         });
 
         const lead = await sales_leads.findOne({
-            where: { lead_id },
-            include: [{ 
-                model: stream_project_booking, 
-                as: 'booking',
-                include: [{ 
-                    model: assigned_crew, 
-                    as: 'assigned_crews', 
-                    where: { crew_accept: { [Op.ne]: 2 } }, 
-                    required: false,
-                    include: [{ model: crew_members, as: 'crew_member' }]
-                }]
+          where: { lead_id },
+          include: [{
+            model: stream_project_booking,
+            as: 'booking',
+            include: [{
+              model: assigned_crew,
+              as: 'assigned_crews',
+              where: {
+                crew_accept: 1,
+                is_active: 1
+              },
+              required: false,
+              include: [{ model: crew_members, as: 'crew_member' }]
             }]
+          }]
         });
+
         if (!lead || !lead.booking) {
             return res.status(404).json({ success: false, message: "Lead or booking not found." });
         }
 
         const booking = lead.booking;
-        const requestedLimits = typeof booking.crew_roles === 'string' ? JSON.parse(booking.crew_roles) : (booking.crew_roles || {});
+        const requestedLimits = typeof booking.crew_roles === 'string'
+          ? JSON.parse(booking.crew_roles)
+          : (booking.crew_roles || {});
 
-        let currentCounts = { videographer: 0, photographer: 0, cinematographer: 0 };
-                if (booking.assigned_crews) {
-            booking.assigned_crews.forEach(ac => {
-                if (ac.crew_member?.primary_role) {
-                    try {
-                        const parsed = JSON.parse(ac.crew_member.primary_role);
-                        const roles = Array.isArray(parsed) ? parsed : [parsed];
-                        roles.forEach(id => {
-                            const roleName = ID_TO_ROLE_MAP[String(id)];
-                            if (roleName) currentCounts[roleName]++;
-                        });
-                    } catch (e) { console.error("Parse error in existing crew", e); }
-                }
-            });
+        const currentCounts = { videographer: 0, photographer: 0, cinematographer: 0 };
+
+        if (booking.assigned_crews) {
+          booking.assigned_crews.forEach(ac => {
+            if (ac.crew_member?.primary_role) {
+              try {
+                const parsed = JSON.parse(ac.crew_member.primary_role);
+                const roles = Array.isArray(parsed) ? parsed : [parsed];
+                roles.forEach(id => {
+                  const roleName = ID_TO_ROLE_MAP[String(id)];
+                  if (roleName) currentCounts[roleName]++;
+                });
+              } catch (e) {
+                console.error("Parse error in existing crew", e);
+              }
+            }
+          });
         }
+        const uniqueCrewIds = [...new Set(crew_member_ids.map(Number).filter(Boolean))];
 
         const newCrewDetails = await crew_members.findAll({
-            where: { crew_member_id: crew_member_ids }
+            where: { crew_member_id: uniqueCrewIds }
         });
 
         const assignmentsToCreate = [];
-        let errors = [];
-        let hasAcceptedCrew = true;
+        const errors = [];
 
         newCrewDetails.forEach(crew => {
             let roles = [];
@@ -6759,22 +7057,22 @@ exports.assignCrewBulkSmart = async (req, res) => {
             });
 
             if (roleDetected) {
-                const limit = requestedLimits[roleDetected] || 0;
-                
-                if (currentCounts[roleDetected] + 1 > limit) {
-                    errors.push(`Cannot add ${crew.first_name} (${roleDetected}). Limit of ${limit} reached.`);
-                } else {
-                    currentCounts[roleDetected]++;
-                    assignmentsToCreate.push({
-                        project_id: booking.stream_project_booking_id,
-                        crew_member_id: crew.crew_member_id,
-                        assigned_date: new Date(),
-                        status: 'selected',
-                        crew_accept: 0,
-                        is_active: 1,
-                        organization_type: 1
-                    });
-                }
+              const acceptedCount = currentCounts[roleDetected];
+              const limit = requestedLimits[roleDetected] || 0;
+
+              if (acceptedCount >= limit) {
+                errors.push(`Cannot add ${crew.first_name} (${roleDetected}). Required crew already accepted.`);
+              } else {
+                assignmentsToCreate.push({
+                  project_id: booking.stream_project_booking_id,
+                  crew_member_id: crew.crew_member_id,
+                  assigned_date: new Date(),
+                  status: 'selected',
+                  crew_accept: 0,
+                  is_active: 1,
+                  organization_type: 1
+                });
+              }
             } else {
                 errors.push(`Crew member ${crew.first_name} has an unknown role and cannot be assigned.`);
             }
@@ -6791,22 +7089,50 @@ exports.assignCrewBulkSmart = async (req, res) => {
         if (assignmentsToCreate.length > 0) {
             await assigned_crew.bulkCreate(assignmentsToCreate);
             await sales_lead_activities.create({
-                lead_id: lead_id,
+                lead_id,
                 activity_type: 'bulk_crew_assigned',
                 notes: `Sales rep assigned ${assignmentsToCreate.length} crew members.`,
                 performed_by_user_id: assigned_by_user_id
             });
-        }
 
-        res.json({ 
-            success: true, 
-            message: `${assignmentsToCreate.length} crew members assigned successfully.`,
-            errors: errors.length > 0 ? errors : undefined 
-        });
+          // Non-blocking email trigger
+          try {
+            const createdIds = assignmentsToCreate.map(a => a.crew_member_id);
+            const crews = await crew_members.findAll({
+              where: { crew_member_id: createdIds },
+              attributes: ['crew_member_id', 'first_name', 'last_name', 'email']
+            });
+
+            const dashboardLink =
+              process.env.CP_DASHBOARD_LINK ||
+              process.env.FRONTEND_URL ||
+              'https://beige.app/';
+
+            await Promise.allSettled(
+              crews
+                .filter(c => c.email)
+                .map(c =>
+                  sendCPNewBookingRequestEmail({
+                    to_email: c.email,
+                    user_name: [c.first_name, c.last_name].filter(Boolean).join(' ') || 'there',
+                    dashboardLink
+                  })
+                )
+            );
+        } catch (mailErr) {
+          console.error('assignCrewBulkSmart email send error:', mailErr?.message || mailErr);
+        }
+      }
+
+      return res.json({
+        success: true,
+        message: `${assignmentsToCreate.length} crew members assigned successfully.`,
+        errors: errors.length > 0 ? errors : undefined
+      });
 
     } catch (error) {
         console.error(error);
-        res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
 
@@ -7069,5 +7395,263 @@ exports.getClientFullDetailsByUserId = async (req, res) => {
   } catch (error) {
     console.error('Get Full Client Details Error:', error);
     return res.status(500).json({ error: true, message: 'Internal server error' });
+  }
+};
+
+exports.getBookingSummaryById = async (req, res) => {
+    try {
+        const { bookingId } = req.params;
+
+        // 1. Fetch data with correct aliases
+        const booking = await stream_project_booking.findOne({
+            where: { stream_project_booking_id: bookingId },
+            include: [
+                {
+                    model: sales_leads,
+                    as: "sales_leads", // Matches your initModels alias
+                    include: [{ model: users, as: "assigned_sales_rep", attributes: ["name"] }]
+                },
+                {
+                    model: quotes,
+                    as: "primary_quote",
+                    include: [{ model: quote_line_items, as: "line_items" }]
+                }
+            ]
+        });
+
+        if (!booking) {
+            return res.status(404).json({ success: false, message: "Booking not found" });
+        }
+
+        const bookingJson = booking.toJSON();
+
+        // 2. Helper to handle Double-Stringified JSON or Object data
+        const safeParseJSON = (val) => {
+            if (!val) return [];
+            if (Array.isArray(val)) return val;
+            try {
+                const parsed = JSON.parse(val);
+                return typeof parsed === 'string' ? JSON.parse(parsed) : parsed;
+            } catch (e) {
+                return [];
+            }
+        };
+
+        // 3. Map Shoot Type Title
+        const fullShootType = SHOOT_TYPE_TITLES[bookingJson.shoot_type] || bookingJson.shoot_type;
+
+        // 4. Map Event Type Label
+        let formattedEventType = "Photography & Videography";
+        const rawEvent = (bookingJson.event_type || "").toLowerCase();
+        const hasVideo = rawEvent.includes('videographer');
+        const hasPhoto = rawEvent.includes('photographer');
+        if (hasVideo && hasPhoto) formattedEventType = "Videography & Photography";
+        else if (hasVideo) formattedEventType = "Videography";
+        else if (hasPhoto) formattedEventType = "Photography";
+
+        // 5. Handle Editing Details (Corrected logic)
+        const vKeys = safeParseJSON(bookingJson.video_edit_types);
+        const pKeys = safeParseJSON(bookingJson.photo_edit_types);
+
+        let editing = {
+            is_needed: (!!bookingJson.edits_needed || bookingJson.edits_needed == 1 || vKeys.length > 0 || pKeys.length > 0),
+            video_edits: vKeys.map(key => VIDEO_EDIT_TITLES[key] || key),
+            photo_edits: pKeys.map(key => PHOTO_EDIT_TITLES[key] || key)
+        };
+
+        // 6. Parse Crew Counts
+        let crewCounts = [];
+        try {
+            const roles = safeParseJSON(bookingJson.crew_roles);
+            crewCounts = Object.entries(roles).map(([role, count]) => ({
+                role: role.charAt(0).toUpperCase() + role.slice(1),
+                count: count
+            }));
+        } catch (e) { crewCounts = []; }
+
+        // 7. Calculate Pricing Breakdown
+        let pricing = {
+            shoot_cost: 0,
+            editing_cost: 0,
+            discount: parseFloat(bookingJson.primary_quote?.discount_amount || 0),
+            subtotal: parseFloat(bookingJson.primary_quote?.subtotal || 0),
+            total: parseFloat(bookingJson.primary_quote?.total || 0)
+        };
+
+        const items = bookingJson.primary_quote?.line_items || [];
+        items.forEach(item => {
+            const name = (item.item_name || "").toLowerCase();
+            const total = parseFloat(item.line_total || 0);
+            // Categorize into breakdown
+            if (name.includes('reel') || name.includes('edit') || name.includes('highlight') || name.includes('photo')) {
+                pricing.editing_cost += total;
+            } else {
+                pricing.shoot_cost += total;
+            }
+        });
+
+        // 8. Return Response
+        res.json({
+            success: true,
+            data: {
+                booking_id: bookingJson.stream_project_booking_id,
+                project_name: bookingJson.project_name,
+                client_email: bookingJson.guest_email,
+                shoot_type: fullShootType,
+                event_type: formattedEventType,
+                location: bookingJson.event_location,
+                date: bookingJson.event_date,
+                start_time: bookingJson.start_time,
+                end_time: bookingJson.end_time,
+                special_instructions: bookingJson.special_instructions || "",
+                editing: editing,
+                crew_counts: crewCounts,
+                pricing: pricing
+            }
+        });
+
+    } catch (error) {
+        console.error("Booking Summary API Error:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+exports.checkDeleteStatus = async (req, res) => {
+  try {
+    const { crew_member_id } = req.query; // Usually GET for checks
+
+    if (!crew_member_id) {
+      return res.status(400).json({ success: false, message: "crew_member_id is required" });
+    }
+
+    const crew = await crew_members.findOne({ where: { crew_member_id } });
+    if (!crew) {
+      return res.status(404).json({ success: false, message: "Crew member not found" });
+    }
+
+    const today = new Date().toISOString().split('T')[0];
+
+    // 1. Check for Future Active Projects (Blocking Condition)
+    const futureProjects = await assigned_crew.findAll({
+      where: {
+        crew_member_id: crew_member_id,
+        is_active: 1 // Only consider active assignments
+      },
+      include: [{
+        model: stream_project_booking,
+        as: 'project',
+        where: { event_date: { [Op.gte]: today } },
+        attributes: ['stream_project_booking_id', 'project_name', 'event_date']
+      }]
+    });
+
+    if (futureProjects.length > 0) {
+      return res.json({
+        success: true,
+        action_type: 'blocked',
+        message: "Action Blocked: This CP is assigned to upcoming shoots.",
+        data: futureProjects.map(f => ({
+          id: f.project.stream_project_booking_id,
+          name: f.project.project_name,
+          date: f.project.event_date
+        }))
+      });
+    }
+
+    // 2. Check for Past Active History (Determines Soft vs Hard Delete)
+    const activeHistoryCount = await assigned_crew.count({
+      where: { 
+        crew_member_id: crew_member_id,
+        is_active: 1 // Only consider active assignments as history
+      }
+    });
+
+    if (activeHistoryCount > 0) {
+      return res.json({
+        success: true,
+        action_type: 'soft_delete',
+        message: "This crew member has project history. They will be deactivated (soft delete).",
+        history_count: activeHistoryCount
+      });
+    }
+
+    // 3. Default to Hard Delete
+    return res.json({
+      success: true,
+      action_type: 'hard_delete',
+      message: "No active project history found. This member and their user account will be permanently deleted."
+    });
+
+  } catch (error) {
+    console.error('CheckDeleteStatus Error:', error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
+
+exports.executeDeleteCrewMember = async (req, res) => {
+  const transaction = await crew_members.sequelize.transaction();
+  
+  try {
+    const { crew_member_id } = req.body;
+
+    const crew = await crew_members.findOne({ where: { crew_member_id } });
+    if (!crew) {
+      await transaction.rollback();
+      return res.status(404).json({ success: false, message: "Crew member not found" });
+    }
+
+    // Double check for future projects (Safety check in case data changed between 'Check' and 'Confirm')
+    const today = new Date().toISOString().split('T')[0];
+    const hasFuture = await assigned_crew.count({
+      where: { crew_member_id, is_active: 1 },
+      include: [{
+        model: stream_project_booking,
+        as: 'project',
+        where: { event_date: { [Op.gte]: today } }
+      }]
+    });
+
+    if (hasFuture > 0) {
+      await transaction.rollback();
+      return res.status(400).json({ success: false, message: "Cannot delete: Future projects detected." });
+    }
+
+    // Check for active history to decide logic
+    const activeHistoryCount = await assigned_crew.count({
+      where: { crew_member_id, is_active: 1 }
+    });
+
+    const associatedUser = await users.findOne({ where: { email: crew.email } });
+
+    if (activeHistoryCount > 0) {
+      // --- SOFT DELETE LOGIC ---
+      await crew_members.update({ is_active: 0 }, { where: { crew_member_id }, transaction });
+      if (associatedUser) {
+        await users.update({ is_active: 0 }, { where: { email: crew.email }, transaction });
+      }
+
+      await transaction.commit();
+      return res.json({ success: true, message: "Crew member deactivated (Soft Delete)." });
+
+    } else {
+      // --- HARD DELETE LOGIC ---
+      await crew_member_files.destroy({ where: { crew_member_id }, transaction });
+      
+      // Note: We destroy all assigned_crew records for this ID, even if is_active was 0, 
+      // because we are doing a full clean-up (Hard Delete).
+      await assigned_crew.destroy({ where: { crew_member_id }, transaction });
+      await crew_members.destroy({ where: { crew_member_id }, transaction });
+
+      if (associatedUser) {
+        await users.destroy({ where: { email: crew.email }, transaction });
+      }
+
+      await transaction.commit();
+      return res.json({ success: true, message: "Crew member permanently deleted (Hard Delete)." });
+    }
+
+  } catch (error) {
+    if (transaction) await transaction.rollback();
+    res.status(500).json({ success: false, message: "Internal server error", details: error.message });
   }
 };

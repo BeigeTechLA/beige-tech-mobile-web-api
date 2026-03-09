@@ -23,7 +23,7 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   assigned_crew,
   assigned_equipment,
   project_brief,
-  event_type_master, payment_transactions, assigned_post_production_member, post_production_members } = require('../models');
+  event_type_master, payment_transactions, assigned_post_production_member, post_production_members, quotes } = require('../models');
 
 function toArray(value) {
   if (!value) return [];
@@ -517,13 +517,14 @@ exports.getAllProjectDetailsForUser = async (req, res) => {
       );
     }
 
-    // ----------- STATS COUNTS (Restricted by user_id and dateFilter) -----------
+    // ----------- STATS COUNTS & MASTER DATA -----------
     const [
       total_active,
       total_cancelled,
       total_completed,
       total_upcoming,
-      total_draft
+      total_draft,
+      allEventMasterTypes // Added this
     ] = await Promise.all([
       stream_project_booking.count({
         where: { user_id, is_active: 1, is_cancelled: 0, is_completed: 0, is_draft: 0, ...dateFilter }
@@ -549,6 +550,7 @@ exports.getAllProjectDetailsForUser = async (req, res) => {
       stream_project_booking.count({
         where: { user_id, is_draft: 1, ...dateFilter }
       }),
+      event_type_master.findAll({ attributes: ['event_type_id', 'event_type_name'], raw: true }) // Added this
     ]);
 
     // ----------- FETCH PROJECTS -----------
@@ -571,7 +573,7 @@ exports.getAllProjectDetailsForUser = async (req, res) => {
 
     // ----------- FETCH ASSOCIATED DETAILS -----------
     const projectDetailsPromises = projects.map(async (project) => {
-      const [assignedCrew, assignedEquipment, assignedPostProd] = await Promise.all([
+      const [assignedCrew, assignedEquipment, assignedPostProd, quote] = await Promise.all([
         assigned_crew.findAll({
           where: { project_id: project.stream_project_booking_id, is_active: 1 },
           include: [{ model: crew_members, as: 'crew_member', attributes: ['crew_member_id', 'first_name', 'last_name', 'primary_role'] }],
@@ -583,12 +585,33 @@ exports.getAllProjectDetailsForUser = async (req, res) => {
         assigned_post_production_member.findAll({
           where: { project_id: project.stream_project_booking_id, is_active: 1 },
           include: [{ model: post_production_members, as: 'post_production_member', attributes: ['post_production_member_id', 'first_name', 'last_name', 'email'] }],
-        })
+        }),
+        project.quote_id
+          ? quotes.findOne({
+            where: { quote_id: project.quote_id },
+            attributes: ['quote_id', 'subtotal', 'total', 'status']
+          })
+          : Promise.resolve(null)
       ]);
+
+      // --- ADDED: LABEL FORMATTING LOGIC ---
+      const rawTypes = project.event_type ? project.event_type.split(',') : [];
+      const formattedTypes = rawTypes.map(t => {
+        const val = t.trim();
+        const masterMatch = allEventMasterTypes.find(m => String(m.event_type_id) === val);
+        if (masterMatch) return masterMatch.event_type_name;
+        const stringMap = { 'videographer': 'Videography', 'photographer': 'Photography' };
+        return stringMap[val.toLowerCase()] || val.charAt(0).toUpperCase() + val.slice(1);
+      });
 
       return {
         project: {
           ...project.toJSON(),
+          event_type_labels: formattedTypes.join(', '), // Added this line
+          payment_status: project.payment_id ? 'paid' : 'pending',
+          quote_total: quote ? parseFloat(quote.total) : null,
+          quote_subtotal: quote ? parseFloat(quote.subtotal) : null,
+          quote_status: quote ? quote.status : null,
           event_location: (() => {
             const loc = project.event_location;
             if (!loc) return null;

@@ -78,6 +78,42 @@ router.put('/leads/:id/assign', authenticate, requireSalesRepOrAdmin, salesLeads
  * @access  Sales Rep / Admin
  */
 router.put('/leads/:id/status', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateLeadStatus);
+router.post(
+  '/leads/:id/post-production-status-update',
+  authenticate,
+  requireSalesRepOrAdmin,
+  salesLeadsController.sendPostProductionStatusUpdate
+);
+router.post(
+  '/leads/:id/raw-footage-ready',
+  authenticate,
+  requireSalesRepOrAdmin,
+  salesLeadsController.sendRawFootageReady
+);
+router.post(
+  '/leads/:id/final-assets-delivered-without-revision',
+  authenticate,
+  requireSalesRepOrAdmin,
+  salesLeadsController.sendFinalAssetsDeliveredWithoutRevision
+);
+router.post(
+  '/leads/:id/revision-request-received',
+  authenticate,
+  requireSalesRepOrAdmin,
+  salesLeadsController.sendRevisionRequestReceived
+);
+router.post(
+  '/leads/:id/revised-content-delivered',
+  authenticate,
+  requireSalesRepOrAdmin,
+  salesLeadsController.sendRevisedContentDelivered
+);
+router.post(
+  '/leads/:id/final-assets-delivered-with-revision',
+  authenticate,
+  requireSalesRepOrAdmin,
+  salesLeadsController.sendFinalAssetsDeliveredWithRevision
+);
 
 // =====================================================
 // Discount Code Routes
