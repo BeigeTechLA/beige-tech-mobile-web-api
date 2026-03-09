@@ -7794,14 +7794,14 @@ exports.executeDeleteCrewMember = async (req, res) => {
 
 exports.getProjectFulfillmentStatus = async (req, res) => {
   try {
-    const { project_id } = req.params; // Using project_id instead of lead_id
+    const { project_id } = req.params;
 
     const booking = await stream_project_booking.findOne({
       where: { stream_project_booking_id: project_id },
       attributes: ['stream_project_booking_id', 'event_location', 'crew_roles'],
       include: [
         {
-          model: sales_leads, // Still include lead if you need the lead_id in the response
+          model: sales_leads,
           as: 'sales_leads',
           attributes: ['lead_id'],
           required: false
@@ -7827,7 +7827,6 @@ exports.getProjectFulfillmentStatus = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Project Booking not found' });
     }
 
-    // 1. Parse Requested Roles
     let requestedRoles = {};
     try {
       requestedRoles = typeof booking.crew_roles === 'string' 
@@ -7837,7 +7836,6 @@ exports.getProjectFulfillmentStatus = async (req, res) => {
       requestedRoles = {};
     }
 
-    // 2. Define Role Mapping (Match your existing logic)
     const ROLE_GROUPS = { 
       videographer: ['9', '1'], 
       photographer: ['10', '2'], 
@@ -7848,7 +7846,6 @@ exports.getProjectFulfillmentStatus = async (req, res) => {
       ids.forEach(id => (ID_TO_ROLE_MAP[String(id)] = role));
     });
 
-    // 3. Initialize Fulfillment Summary
     let fulfillment = {};
     Object.keys(requestedRoles).forEach(role => {
       fulfillment[role] = {
@@ -7857,10 +7854,9 @@ exports.getProjectFulfillmentStatus = async (req, res) => {
       };
     });
 
-    // 4. Calculate Accepted Crew
     if (booking.assigned_crews) {
       booking.assigned_crews.forEach(ac => {
-        if (ac.crew_accept === 1) { // Only count accepted crew
+        if (ac.crew_accept === 1) {
           let crewRoleIds = [];
           try {
             const rawRole = ac.crew_member?.primary_role;
@@ -7869,10 +7865,8 @@ exports.getProjectFulfillmentStatus = async (req, res) => {
               : (Array.isArray(rawRole) ? rawRole : [rawRole]);
           } catch (e) { crewRoleIds = []; }
 
-          // Find which category this crew member belongs to
           const categories = [...new Set(crewRoleIds.map(id => ID_TO_ROLE_MAP[String(id)]).filter(Boolean))];
           
-          // Match the first category that still needs fulfillment
           const targetCategory = categories.find(cat => fulfillment[cat] && fulfillment[cat].accepted < fulfillment[cat].required);
           
           if (targetCategory) {
@@ -7882,13 +7876,11 @@ exports.getProjectFulfillmentStatus = async (req, res) => {
       });
     }
 
-    // 5. Format Output
     const result = {};
     Object.keys(fulfillment).forEach(key => {
       result[key] = `${fulfillment[key].accepted}/${fulfillment[key].required}`;
     });
 
-    // Safely get lead_id if it exists
     const leadId = booking.sales_leads?.[0]?.lead_id || null;
 
     res.json({
@@ -7914,7 +7906,6 @@ exports.searchCrewForProject = async (req, res) => {
         let projectDate;
         let currentBookingId = null;
 
-        // 1️⃣ Get Project Booking directly
         if (project_id) {
             const booking = await stream_project_booking.findOne({
                 where: { stream_project_booking_id: project_id }
@@ -7939,14 +7930,9 @@ exports.searchCrewForProject = async (req, res) => {
             projectDate = date;
         }
 
-        // ---------------------------------------------------------
-        // 2️⃣ Get IDs to Exclude
-        // ---------------------------------------------------------
-        
-        // A: Get crew busy on this date (Accepted on ANY other project)
         const busyCrewRecords = await assigned_crew.findAll({
             where: { 
-                crew_accept: 1, // Already Accepted elsewhere
+                crew_accept: 1,
                 is_active: 1 
             },
             include: [{
@@ -7957,15 +7943,12 @@ exports.searchCrewForProject = async (req, res) => {
             attributes: ['crew_member_id']
         });
 
-        // B: Get crew already assigned to THIS project who are Pending or Accepted
         let alreadyAssignedToThisProject = [];
         if (currentBookingId) {
             const currentAssignments = await assigned_crew.findAll({
                 where: {
                     project_id: currentBookingId, 
                     is_active: 1,
-                    // EXCLUDE if they are 0 (Pending) or 1 (Accepted)
-                    // We allow searching for them again if they were Rejected (2)
                     crew_accept: { [Op.in]: [0, 1] } 
                 },
                 attributes: ['crew_member_id']
@@ -7977,9 +7960,6 @@ exports.searchCrewForProject = async (req, res) => {
         const busyIds = busyCrewRecords.map(r => Number(r.crew_member_id));
         const excludeIds = [...new Set([...busyIds, ...alreadyAssignedToThisProject])];
 
-        // -----------------------------
-        // 3️⃣ Role Mapping
-        // -----------------------------
         const ROLE_GROUPS = {
             videographer: ["9", "1"],
             photographer: ["10", "2"],
@@ -7998,9 +7978,6 @@ exports.searchCrewForProject = async (req, res) => {
         });
         targetRoleIds = [...new Set(targetRoleIds)];
 
-        // -----------------------------
-        // 4️⃣ Crew Filter Conditions
-        // -----------------------------
         let crewWhere = {
             is_active: true,
             is_available: true,
@@ -8024,7 +8001,6 @@ exports.searchCrewForProject = async (req, res) => {
             }];
         }
 
-        // 5️⃣ Fetch Available Crew
         const availableCrew = await crew_members.findAll({
             where: crewWhere,
             include: [
@@ -8039,7 +8015,6 @@ exports.searchCrewForProject = async (req, res) => {
             limit: 50
         });
 
-        // 6️⃣ Format Response (First name Caps, Last name Initial)
         const crewWithRoles = availableCrew.map(crewMember => {
             let matchedRoles = [];
             let rawRoles = [];
@@ -8089,7 +8064,7 @@ exports.searchCrewForProject = async (req, res) => {
 exports.assignProjectCrewBulk = async (req, res) => {
     try {
         const assigned_by_user_id = req.user?.userId;
-        const { project_id, crew_member_ids } = req.body; // Changed lead_id to project_id
+        const { project_id, crew_member_ids } = req.body;
 
         if (!project_id) {
             return res.status(400).json({ success: false, message: "Project ID is required." });
@@ -8110,7 +8085,6 @@ exports.assignProjectCrewBulk = async (req, res) => {
             ids.forEach(id => { ID_TO_ROLE_MAP[String(id)] = roleName; });
         });
 
-        // 1. Find the Booking directly using project_id
         const booking = await stream_project_booking.findOne({
           where: { stream_project_booking_id: project_id },
           include: [
@@ -8122,7 +8096,7 @@ exports.assignProjectCrewBulk = async (req, res) => {
               include: [{ model: crew_members, as: 'crew_member' }]
             },
             {
-              model: sales_leads, // Include lead to log activity later if it exists
+              model: sales_leads,
               as: 'sales_leads',
               limit: 1
             }
@@ -8135,14 +8109,12 @@ exports.assignProjectCrewBulk = async (req, res) => {
 
         const leadId = booking.sales_leads?.[0]?.lead_id || null;
 
-        // 2. Parse Requested Limits from Booking
         const requestedLimits = typeof booking.crew_roles === 'string'
           ? JSON.parse(booking.crew_roles)
           : (booking.crew_roles || {});
 
         const currentCounts = { videographer: 0, photographer: 0, cinematographer: 0 };
 
-        // 3. Count currently ACCEPTED crew
         if (booking.assigned_crews) {
           booking.assigned_crews.forEach(ac => {
             if (ac.crew_member?.primary_role) {
@@ -8158,7 +8130,6 @@ exports.assignProjectCrewBulk = async (req, res) => {
           });
         }
 
-        // 4. Fetch details for the new crew members being assigned
         const uniqueCrewIds = [...new Set(crew_member_ids.map(Number).filter(Boolean))];
         const newCrewDetails = await crew_members.findAll({
             where: { crew_member_id: uniqueCrewIds }
@@ -8167,7 +8138,6 @@ exports.assignProjectCrewBulk = async (req, res) => {
         const assignmentsToCreate = [];
         const errors = [];
 
-        // 5. Smart Validation against limits
         newCrewDetails.forEach(crew => {
             let roles = [];
             try {
@@ -8184,7 +8154,6 @@ exports.assignProjectCrewBulk = async (req, res) => {
               const acceptedCount = currentCounts[roleDetected];
               const limit = requestedLimits[roleDetected] || 0;
 
-              // If limit is already reached for that role, add to error list
               if (limit > 0 && acceptedCount >= limit) {
                 errors.push(`Cannot add ${crew.first_name} (${roleDetected}). Limit of ${limit} reached.`);
               } else {
@@ -8193,7 +8162,7 @@ exports.assignProjectCrewBulk = async (req, res) => {
                   crew_member_id: crew.crew_member_id,
                   assigned_date: new Date(),
                   status: 'selected',
-                  crew_accept: 0, // Set as Pending
+                  crew_accept: 0,
                   is_active: 1,
                   organization_type: 1
                 });
@@ -8203,7 +8172,6 @@ exports.assignProjectCrewBulk = async (req, res) => {
             }
         });
 
-        // 6. Execute Bulk Creation
         if (assignmentsToCreate.length === 0 && errors.length > 0) {
             return res.status(400).json({ success: false, message: "Assignments failed validation.", errors });
         }
@@ -8211,7 +8179,6 @@ exports.assignProjectCrewBulk = async (req, res) => {
         if (assignmentsToCreate.length > 0) {
             await assigned_crew.bulkCreate(assignmentsToCreate);
 
-            // Log activity to lead if lead exists
             if (leadId) {
                 await sales_lead_activities.create({
                     lead_id: leadId,
@@ -8221,7 +8188,6 @@ exports.assignProjectCrewBulk = async (req, res) => {
                 });
             }
 
-            // 7. Non-blocking email notifications
             try {
                 const createdIds = assignmentsToCreate.map(a => a.crew_member_id);
                 const crews = await crew_members.findAll({
