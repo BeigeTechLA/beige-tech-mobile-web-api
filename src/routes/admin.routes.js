@@ -84,5 +84,7 @@ router.get('/get-client-details-with-shoots/:userId', admin.getClientFullDetails
 router.get('/check-cp-delete-status', admin.checkDeleteStatus);
 router.post('/delete-cp', admin.executeDeleteCrewMember);
 router.post('/get-project-fullfillment-stats/:project_id', admin.getProjectFulfillmentStatus);
+router.get('/get-crew-for-shoot', admin.searchCrewForProject);
+router.post('/assign-crew-from-shoot',authMiddleware, admin.assignProjectCrewBulk);
 
 module.exports = router;
