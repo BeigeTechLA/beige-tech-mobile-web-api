@@ -1,11 +1,12 @@
 const db = require('../models');
-const { stream_project_booking, assigned_crew, crew_members, crew_member_files, quotes, quote_line_items, discount_codes } = require('../models');
+const { stream_project_booking, stream_project_booking_days, assigned_crew, crew_members, crew_member_files, quotes, quote_line_items, discount_codes } = require('../models');
 const constants = require('../utils/constants');
 const { formatLocationResponse } = require('../utils/locationHelpers');
 const { appendBookingToSheet } = require('../utils/googleSheetsService');
 const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 const { content } = require('googleapis/build/src/apis/content');
 const { sendCPNewBookingRequestEmail } = require('../utils/emailService');
+const REFERRAL_DISCOUNT_PERCENT = 10;
 
 async function resolveUserId(userId, guestEmail) {
   if (userId) return parseInt(userId);
@@ -311,7 +312,9 @@ exports.createGuestBooking = async (req, res) => {
       special_instructions,
       reference_links,
       matching_method,
-      selected_crew_ids
+      selected_crew_ids,
+      booking_type,
+      booking_days
     } = req.body;
 
     // Validate required fields
@@ -341,7 +344,37 @@ exports.createGuestBooking = async (req, res) => {
     const normalizedGuestEmail = String(guest_email).trim().toLowerCase();
     const resolvedUserId = await resolveUserId(user_id, normalizedGuestEmail);
 
-    // Parse date and time from start_date_time
+    const toTimeParts = (timeStr) => {
+      if (!timeStr) return null;
+      const parts = String(timeStr).split(':').map(Number);
+      if (!parts.length || parts.some((p) => Number.isNaN(p))) return null;
+      const [h, m, s = 0] = parts;
+      return { h, m, s };
+    };
+
+    const calculateDurationHours = (startTime, endTime) => {
+      const startParts = toTimeParts(startTime);
+      const endParts = toTimeParts(endTime);
+      if (!startParts || !endParts) return null;
+      const startMinutes = startParts.h * 60 + startParts.m + startParts.s / 60;
+      const endMinutes = endParts.h * 60 + endParts.m + endParts.s / 60;
+      const diffMinutes = endMinutes - startMinutes;
+      if (diffMinutes <= 0) return null;
+      return Math.round((diffMinutes / 60) * 100) / 100;
+    };
+
+    let normalizedBookingDays = Array.isArray(booking_days) ? booking_days : [];
+    normalizedBookingDays = normalizedBookingDays
+      .filter((d) => d && d.date)
+      .map((d) => ({
+        date: d.date,
+        start_time: d.start_time || d.startTime || null,
+        end_time: d.end_time || d.endTime || null,
+        duration_hours: d.duration_hours != null ? Number(d.duration_hours) : null,
+        time_zone: d.time_zone || d.timeZone || null
+      }));
+
+    // Parse date and time from start_date_time (single day)
     let event_date = null;
     let start_time = null;
 
@@ -352,6 +385,23 @@ exports.createGuestBooking = async (req, res) => {
         start_time = dateObj.toTimeString().split(' ')[0];
       } catch (error) {
         console.error('Error parsing start_date_time:', error);
+      }
+    }
+
+    // If multi-day, derive event_date/start_time from first day
+    let totalDurationHours = null;
+    if (booking_type === 'multi_day' && normalizedBookingDays.length > 0) {
+      normalizedBookingDays.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+      event_date = normalizedBookingDays[0].date;
+      start_time = normalizedBookingDays[0].start_time || null;
+      totalDurationHours = normalizedBookingDays.reduce((sum, d) => {
+        const hours = d.duration_hours != null ? d.duration_hours : calculateDurationHours(d.start_time, d.end_time);
+        return sum + (hours || 0);
+      }, 0);
+      if (totalDurationHours > 0) {
+        totalDurationHours = Math.round(totalDurationHours * 100) / 100;
+      } else {
+        totalDurationHours = null;
       }
     }
 
@@ -397,7 +447,7 @@ exports.createGuestBooking = async (req, res) => {
       content_type: content_type || null,
       event_type: event_type || content_type || project_type || (shoot_type ? shoot_type : null),
       event_date: event_date,
-      duration_hours: duration_hours ? parseInt(duration_hours) : null,
+      duration_hours: duration_hours ? parseInt(duration_hours) : totalDurationHours != null ? totalDurationHours : null,
       start_time: start_time,
       end_time: end_time || null,
       budget: budget,
@@ -423,22 +473,39 @@ exports.createGuestBooking = async (req, res) => {
       is_active: 1
     };
 
-    const booking = await stream_project_booking.create(bookingData);
+    const tx = await db.sequelize.transaction();
+    let booking;
+    try {
+      booking = await stream_project_booking.create(bookingData, { transaction: tx });
 
-    // V3: Assign selected creators if provided
-    if (selected_crew_ids && Array.isArray(selected_crew_ids) && selected_crew_ids.length > 0) {
-        try {
-            const assignments = selected_crew_ids.map(creator_id => ({
-                project_id: booking.stream_project_booking_id,
-                crew_member_id: creator_id,
-                status: 'selected',
-                is_active: 1,
-                crew_accept: 0
-            }));
-            await assigned_crew.bulkCreate(assignments);
-        } catch (assignError) {
-            console.error("Error assigning V3 creators:", assignError);
-        }
+      if (booking_type === 'multi_day' && normalizedBookingDays.length > 0) {
+        const dayRows = normalizedBookingDays.map((d) => ({
+          stream_project_booking_id: booking.stream_project_booking_id,
+          event_date: d.date,
+          start_time: d.start_time || null,
+          end_time: d.end_time || null,
+          duration_hours: d.duration_hours != null ? d.duration_hours : calculateDurationHours(d.start_time, d.end_time),
+          time_zone: d.time_zone || null
+        }));
+        await stream_project_booking_days.bulkCreate(dayRows, { transaction: tx });
+      }
+
+      // V3: Assign selected creators if provided
+      if (selected_crew_ids && Array.isArray(selected_crew_ids) && selected_crew_ids.length > 0) {
+        const assignments = selected_crew_ids.map(creator_id => ({
+          project_id: booking.stream_project_booking_id,
+          crew_member_id: creator_id,
+          status: 'selected',
+          is_active: 1,
+          crew_accept: 0
+        }));
+        await assigned_crew.bulkCreate(assignments, { transaction: tx });
+      }
+
+      await tx.commit();
+    } catch (err) {
+      await tx.rollback();
+      throw err;
     }
 
     appendToSheet('Shoot_data', [
@@ -536,7 +603,9 @@ exports.updateGuestBooking = async (req, res) => {
       special_instructions,
       reference_links,
       matching_method,
-      selected_crew_ids
+      selected_crew_ids,
+      booking_type,
+      booking_days
     } = req.body;
 
     if (!id) {
@@ -551,7 +620,14 @@ exports.updateGuestBooking = async (req, res) => {
       where: {
         stream_project_booking_id: id,
         is_active: 1
-      }
+      },
+      include: [
+        {
+          model: stream_project_booking_days,
+          as: 'booking_days',
+          required: false
+        }
+      ]
     });
 
     if (!booking) {
@@ -565,6 +641,36 @@ exports.updateGuestBooking = async (req, res) => {
     const lookupEmail = normalizedGuestEmail || booking.guest_email || null;
     const resolvedUserId = await resolveUserId(null, lookupEmail);
 
+    const toTimeParts = (timeStr) => {
+      if (!timeStr) return null;
+      const parts = String(timeStr).split(':').map(Number);
+      if (!parts.length || parts.some((p) => Number.isNaN(p))) return null;
+      const [h, m, s = 0] = parts;
+      return { h, m, s };
+    };
+
+    const calculateDurationHours = (startTime, endTime) => {
+      const startParts = toTimeParts(startTime);
+      const endParts = toTimeParts(endTime);
+      if (!startParts || !endParts) return null;
+      const startMinutes = startParts.h * 60 + startParts.m + startParts.s / 60;
+      const endMinutes = endParts.h * 60 + endParts.m + endParts.s / 60;
+      const diffMinutes = endMinutes - startMinutes;
+      if (diffMinutes <= 0) return null;
+      return Math.round((diffMinutes / 60) * 100) / 100;
+    };
+
+    let normalizedBookingDays = Array.isArray(booking_days) ? booking_days : [];
+    normalizedBookingDays = normalizedBookingDays
+      .filter((d) => d && d.date)
+      .map((d) => ({
+        date: d.date,
+        start_time: d.start_time || d.startTime || null,
+        end_time: d.end_time || d.endTime || null,
+        duration_hours: d.duration_hours != null ? Number(d.duration_hours) : null,
+        time_zone: d.time_zone || d.timeZone || null
+      }));
+
     // Parse date and time from start_date_time
     let event_date = null;
     let start_time = null;
@@ -576,6 +682,22 @@ exports.updateGuestBooking = async (req, res) => {
         start_time = dateObj.toTimeString().split(' ')[0];
       } catch (error) {
         console.error('Error parsing start_date_time:', error);
+      }
+    }
+
+    let totalDurationHours = null;
+    if (booking_type === 'multi_day' && normalizedBookingDays.length > 0) {
+      normalizedBookingDays.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+      event_date = normalizedBookingDays[0].date;
+      start_time = normalizedBookingDays[0].start_time || null;
+      totalDurationHours = normalizedBookingDays.reduce((sum, d) => {
+        const hours = d.duration_hours != null ? d.duration_hours : calculateDurationHours(d.start_time, d.end_time);
+        return sum + (hours || 0);
+      }, 0);
+      if (totalDurationHours > 0) {
+        totalDurationHours = Math.round(totalDurationHours * 100) / 100;
+      } else {
+        totalDurationHours = null;
       }
     }
 
@@ -624,6 +746,7 @@ exports.updateGuestBooking = async (req, res) => {
     }
     if (event_date) updateData.event_date = event_date;
     if (duration_hours) updateData.duration_hours = parseInt(duration_hours);
+    if (!duration_hours && totalDurationHours != null) updateData.duration_hours = totalDurationHours;
     if (start_time) updateData.start_time = start_time;
     if (end_time) updateData.end_time = end_time;
     if (budget) updateData.budget = budget;
@@ -654,15 +777,40 @@ exports.updateGuestBooking = async (req, res) => {
     if (quote_id) updateData.quote_id = quote_id;
     if (typeof is_draft !== 'undefined') updateData.is_draft = is_draft ? 1 : 0;
 
-    // Update booking
-    await booking.update(updateData);
+    const tx = await db.sequelize.transaction();
+    try {
+      // Update booking
+      await booking.update(updateData, { transaction: tx });
 
-    // V3: Update selected creators if provided
-    if (selected_crew_ids && Array.isArray(selected_crew_ids) && selected_crew_ids.length > 0) {
-      try {
+      if (booking_type === 'multi_day' && normalizedBookingDays.length > 0) {
+        await stream_project_booking_days.destroy({
+          where: { stream_project_booking_id: id },
+          transaction: tx
+        });
+        const dayRows = normalizedBookingDays.map((d) => ({
+          stream_project_booking_id: id,
+          event_date: d.date,
+          start_time: d.start_time || null,
+          end_time: d.end_time || null,
+          duration_hours: d.duration_hours != null ? d.duration_hours : calculateDurationHours(d.start_time, d.end_time),
+          time_zone: d.time_zone || null
+        }));
+        await stream_project_booking_days.bulkCreate(dayRows, { transaction: tx });
+      }
+
+      if (booking_type === 'single_day') {
+        await stream_project_booking_days.destroy({
+          where: { stream_project_booking_id: id },
+          transaction: tx
+        });
+      }
+
+      // V3: Update selected creators if provided
+      if (selected_crew_ids && Array.isArray(selected_crew_ids) && selected_crew_ids.length > 0) {
         // Remove old assignments
         await assigned_crew.destroy({
-          where: { project_id: id }
+          where: { project_id: id },
+          transaction: tx
         });
         
         // Create new assignments
@@ -673,13 +821,16 @@ exports.updateGuestBooking = async (req, res) => {
           is_active: 1,
           crew_accept: 0
         }));
-        await assigned_crew.bulkCreate(assignments);
+        await assigned_crew.bulkCreate(assignments, { transaction: tx });
         
         // send email to newly selected creators
         await notifyAssignedCreators(selected_crew_ids);
-      } catch (assignError) {
-        console.error("Error updating V3 creators:", assignError);
       }
+
+      await tx.commit();
+    } catch (err) {
+      await tx.rollback();
+      throw err;
     }
 
     res.status(constants.OK.code).json({
@@ -695,7 +846,16 @@ exports.updateGuestBooking = async (req, res) => {
         budget: booking.budget,
         quote_id: booking.quote_id,
         is_draft: booking.is_draft === 1,
-        updated_at: booking.updated_at
+        updated_at: booking.updated_at,
+        booking_days: Array.isArray(booking.booking_days)
+          ? booking.booking_days.map((d) => ({
+            event_date: d.event_date,
+            start_time: d.start_time,
+            end_time: d.end_time,
+            duration_hours: d.duration_hours,
+            time_zone: d.time_zone
+          }))
+          : []
       }
     });
 
@@ -1096,7 +1256,7 @@ exports.assignCreatorsToBooking = async (req, res) => {
 exports.getBookingPaymentDetails = async (req, res) => {
   try {
     const { id } = req.params;
-    const { creator_id } = req.query;
+    const { creator_id, referral_code } = req.query;
 
     if (!id) {
       return res.status(constants.BAD_REQUEST.code).json({
@@ -1163,6 +1323,11 @@ exports.getBookingPaymentDetails = async (req, res) => {
               attributes: ['code']
             }
           ]
+        },
+        {
+          model: stream_project_booking_days,
+          as: 'booking_days',
+          required: false
         }
       ]
     });
@@ -1222,6 +1387,93 @@ exports.getBookingPaymentDetails = async (req, res) => {
       };
     }).filter(c => c !== null);
 
+    let quoteResponse = null;
+    if (booking.primary_quote) {
+      const baseSubtotal = parseFloat(booking.primary_quote.subtotal || 0);
+      const baseDiscountAmount = parseFloat(booking.primary_quote.discount_amount || 0);
+      const basePriceAfterDiscount = parseFloat(booking.primary_quote.price_after_discount || booking.primary_quote.subtotal || 0);
+      const baseTotal = parseFloat(booking.primary_quote.total || booking.primary_quote.subtotal || 0);
+
+      let normalizedReferralCode = null;
+      let referralAffiliateName = null;
+      let referralDiscountAmount = 0;
+      let referralDiscountPercent = 0;
+
+      if (referral_code) {
+        const candidateCode = String(referral_code).trim().toUpperCase();
+        if (candidateCode.length < 4) {
+          return res.status(constants.BAD_REQUEST.code).json({
+            success: false,
+            message: 'Invalid referral code format'
+          });
+        }
+
+        const referralAffiliate = await db.affiliates.findOne({
+          where: {
+            referral_code: candidateCode,
+            status: 'active'
+          },
+          include: [{
+            model: db.users,
+            as: 'user',
+            attributes: ['name']
+          }]
+        });
+
+        if (!referralAffiliate) {
+          return res.status(constants.BAD_REQUEST.code).json({
+            success: false,
+            message: 'Invalid referral code'
+          });
+        }
+
+        if (booking.user_id && Number(referralAffiliate.user_id) === Number(booking.user_id)) {
+          return res.status(constants.BAD_REQUEST.code).json({
+            success: false,
+            message: 'You cannot use your own referral code'
+          });
+        }
+
+        normalizedReferralCode = referralAffiliate.referral_code;
+        referralAffiliateName = referralAffiliate.user?.name || null;
+        referralDiscountPercent = REFERRAL_DISCOUNT_PERCENT;
+        referralDiscountAmount = parseFloat((baseTotal * (REFERRAL_DISCOUNT_PERCENT / 100)).toFixed(2));
+      }
+
+      const finalTotal = parseFloat((baseTotal - referralDiscountAmount).toFixed(2));
+      const finalPriceAfterDiscount = parseFloat((basePriceAfterDiscount - referralDiscountAmount).toFixed(2));
+
+      quoteResponse = {
+        quote_id: booking.primary_quote.quote_id,
+        shoot_hours: parseFloat(booking.primary_quote.shoot_hours),
+        subtotal: baseSubtotal,
+        applied_discount_code: booking.primary_quote.discount_code ? booking.primary_quote.discount_code.code : null,
+        applied_referral_code: normalizedReferralCode,
+        referral_affiliate_name: referralAffiliateName,
+        discount_total: baseDiscountAmount,
+        discount_percentage: parseFloat(booking.primary_quote.discount_percent || 0),
+        referral_discount_percent: referralDiscountPercent,
+        referral_discount_amount: referralDiscountAmount,
+        discountPercent: parseFloat(booking.primary_quote.discount_percent || 0),
+        discountAmount: baseDiscountAmount,
+        total_discount_with_referral: parseFloat((baseDiscountAmount + referralDiscountAmount).toFixed(2)),
+        price_after_discount: finalPriceAfterDiscount,
+        marginPercent: parseFloat(booking.primary_quote.margin_percent || 0),
+        marginAmount: parseFloat(booking.primary_quote.margin_amount || 0),
+        total_before_referral_discount: baseTotal,
+        total: finalTotal,
+        status: booking.primary_quote.status,
+        lineItems: (booking.primary_quote.line_items || []).map(item => ({
+          item_id: item.item_id,
+          item_name: item.item_name,
+          quantity: item.quantity,
+          rate: parseFloat(item.rate),
+          rate_type: item.rate_type,
+          line_total: parseFloat(item.line_total)
+        }))
+      };
+    }
+
     res.status(constants.OK.code).json({
       success: true,
       data: {
@@ -1241,34 +1493,19 @@ exports.getBookingPaymentDetails = async (req, res) => {
           is_draft: booking.is_draft === 1,
           is_completed: booking.is_completed === 1,
           payment_completed_at: booking.payment_completed_at,
-          created_at: booking.created_at
+          created_at: booking.created_at,
+          booking_days: Array.isArray(booking.booking_days)
+            ? booking.booking_days.map((d) => ({
+              event_date: d.event_date,
+              start_time: d.start_time,
+              end_time: d.end_time,
+              duration_hours: d.duration_hours,
+              time_zone: d.time_zone
+            }))
+            : []
         },
         creators: creators,
-        quote: booking.primary_quote ? {
-          quote_id: booking.primary_quote.quote_id,
-          shoot_hours: parseFloat(booking.primary_quote.shoot_hours),
-          subtotal: parseFloat(booking.primary_quote.subtotal),
-          
-          applied_discount_code: booking.primary_quote.discount_code ? booking.primary_quote.discount_code.code : null,
-          discount_total: parseFloat(booking.primary_quote.discount_amount || 0),
-          discount_percentage: parseFloat(booking.primary_quote.discount_percent || 0),
-          
-          discountPercent: parseFloat(booking.primary_quote.discount_percent || 0),
-          discountAmount: parseFloat(booking.primary_quote.discount_amount || 0),
-          price_after_discount: parseFloat(booking.primary_quote.price_after_discount || booking.primary_quote.subtotal),
-          marginPercent: parseFloat(booking.primary_quote.margin_percent || 0),
-          marginAmount: parseFloat(booking.primary_quote.margin_amount || 0),
-          total: parseFloat(booking.primary_quote.total || booking.primary_quote.subtotal),
-          status: booking.primary_quote.status,
-          lineItems: (booking.primary_quote.line_items || []).map(item => ({
-            item_id: item.item_id,
-            item_name: item.item_name,
-            quantity: item.quantity,
-            rate: parseFloat(item.rate),
-            rate_type: item.rate_type,
-            line_total: parseFloat(item.line_total)
-          }))
-        } : null,
+        quote: quoteResponse,
         payment_status: booking.payment_id ? 'completed' : 'pending'
       }
     });

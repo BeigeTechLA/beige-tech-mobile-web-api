@@ -5,6 +5,7 @@ const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 const googleSheetService = require('../utils/googleSheetsService');
 // Get Beige margin percentage from environment, default to 25%
 const BEIGE_MARGIN_PERCENT = parseFloat(process.env.BEIGE_MARGIN_PERCENT || '25.00');
+const REFERRAL_DISCOUNT_PERCENT = 10;
 const emailService = require('../utils/emailService');
 
 /**
@@ -30,6 +31,118 @@ function calculatePricing(hours, hourlyRate, equipmentItems = [], marginPercent 
     beige_margin_amount,
     total_amount
   };
+}
+
+function round2(value) {
+  return parseFloat(Number(value || 0).toFixed(2));
+}
+
+function applyReferralDiscount(totalAmount) {
+  const total = parseFloat(totalAmount || 0);
+  if (!Number.isFinite(total) || total <= 0) {
+    return { discountAmount: 0, finalAmount: 0 };
+  }
+
+  const discountAmount = round2(total * (REFERRAL_DISCOUNT_PERCENT / 100));
+  const finalAmount = round2(total - discountAmount);
+  return { discountAmount, finalAmount };
+}
+
+function getReferralCommissionBaseAmount(paidAmount, quoteTotal = null) {
+  const paid = round2(paidAmount || 0);
+  const fromQuote = round2(quoteTotal || 0);
+
+  if (!Number.isFinite(paid) || paid <= 0) return 0;
+
+  const rate = REFERRAL_DISCOUNT_PERCENT / 100;
+  const grossedUp = rate > 0 && rate < 1
+    ? round2(paid / (1 - rate))
+    : paid;
+
+  return Math.max(paid, fromQuote, grossedUp);
+}
+
+async function persistQuoteReferralDiscount({
+  quote,
+  referralCode,
+  paidTotal,
+  transaction
+}) {
+  if (!quote || !referralCode) return;
+
+  const subtotal = round2(quote.subtotal || 0);
+  const existingDiscountAmount = round2(quote.discount_amount || 0);
+  const baseQuoteTotal = round2(quote.total || quote.price_after_discount || subtotal);
+  const normalizedPaidTotal = round2(paidTotal || 0);
+
+  if (baseQuoteTotal <= 0 || normalizedPaidTotal < 0) return;
+
+  let referralDiscountAmount = round2(baseQuoteTotal - normalizedPaidTotal);
+  if (referralDiscountAmount < 0) referralDiscountAmount = 0;
+
+  const computedByPercent = round2(baseQuoteTotal * (REFERRAL_DISCOUNT_PERCENT / 100));
+  if (referralDiscountAmount === 0 && normalizedPaidTotal < baseQuoteTotal) {
+    referralDiscountAmount = computedByPercent;
+  }
+
+  const updatedDiscountAmount = round2(existingDiscountAmount + referralDiscountAmount);
+  const updatedPriceAfterDiscount = round2(Math.max(0, subtotal - updatedDiscountAmount));
+  const updatedDiscountPercent = subtotal > 0
+    ? round2((updatedDiscountAmount / subtotal) * 100)
+    : 0;
+
+  const referralNote = `Referral applied (${referralCode}): -$${referralDiscountAmount.toFixed(2)} (${REFERRAL_DISCOUNT_PERCENT}%)`;
+  const existingNotes = quote.notes ? String(quote.notes).trim() : '';
+  const hasReferralNote = existingNotes.includes(`Referral applied (${referralCode})`);
+
+  if (hasReferralNote) {
+    await db.quotes.update(
+      { total: normalizedPaidTotal },
+      {
+        where: { quote_id: quote.quote_id },
+        transaction
+      }
+    );
+    return;
+  }
+
+  const nextNotes = existingNotes ? `${existingNotes}\n${referralNote}` : referralNote;
+
+  await db.quotes.update(
+    {
+      discount_amount: updatedDiscountAmount,
+      discount_percent: updatedDiscountPercent,
+      price_after_discount: updatedPriceAfterDiscount,
+      total: normalizedPaidTotal,
+      notes: nextNotes
+    },
+    {
+      where: { quote_id: quote.quote_id },
+      transaction
+    }
+  );
+}
+
+async function getValidReferralAffiliate(referralCode, referredUserId = null, transaction = null) {
+  if (!referralCode) return null;
+
+  const normalizedCode = String(referralCode).trim().toUpperCase();
+  if (!normalizedCode) return null;
+
+  const affiliate = await db.affiliates.findOne({
+    where: {
+      referral_code: normalizedCode,
+      status: 'active'
+    },
+    transaction
+  });
+
+  if (!affiliate) return null;
+  if (referredUserId && Number(affiliate.user_id) === Number(referredUserId)) {
+    return null;
+  }
+
+  return affiliate;
 }
 
 const formatDate = (value) => {
@@ -343,6 +456,7 @@ exports.createPaymentIntent = async (req, res) => {
       guest_email,
       referral_code
     } = req.body;
+    const resolvedUserId = user_id || req.userId || null;
 
     // Validation
     if (!creator_id) {
@@ -381,15 +495,15 @@ exports.createPaymentIntent = async (req, res) => {
     }
 
     // Validate guest or user
-    if (!user_id && !guest_email) {
+    if (!resolvedUserId && !guest_email) {
       return res.status(400).json({
         success: false,
         message: 'Either user_id or guest_email is required'
       });
     }
 
-    if (referral_code && !user_id) {
-      return res.status(400).json({
+    if (referral_code && !req.userId) {
+      return res.status(401).json({
         success: false,
         message: 'Please login or signup if you want to use a referral code'
       });
@@ -421,14 +535,32 @@ exports.createPaymentIntent = async (req, res) => {
 
     // Calculate pricing
     const pricing = calculatePricing(hours, hourly_rate, equipment);
+    let normalizedReferralCode = '';
+    let referralDiscountAmount = 0;
+    let finalPayableAmount = pricing.total_amount;
+
+    if (referral_code) {
+      const referralAffiliate = await getValidReferralAffiliate(referral_code, req.userId);
+      if (!referralAffiliate) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid referral code'
+        });
+      }
+
+      normalizedReferralCode = referralAffiliate.referral_code;
+      const referralDiscount = applyReferralDiscount(pricing.total_amount);
+      referralDiscountAmount = referralDiscount.discountAmount;
+      finalPayableAmount = referralDiscount.finalAmount;
+    }
 
     // Create Stripe PaymentIntent
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: Math.round(pricing.total_amount * 100), // Convert to cents
+      amount: Math.round(finalPayableAmount * 100), // Convert to cents
       currency: 'usd',
       metadata: {
         creator_id: creator_id.toString(),
-        user_id: user_id ? user_id.toString() : 'guest',
+        user_id: resolvedUserId ? resolvedUserId.toString() : 'guest',
         guest_email: guest_email || '',
         hours: hours.toString(),
         hourly_rate: hourly_rate.toString(),
@@ -439,7 +571,9 @@ exports.createPaymentIntent = async (req, res) => {
         subtotal: pricing.subtotal.toString(),
         beige_margin_percent: pricing.beige_margin_percent.toString(),
         beige_margin_amount: pricing.beige_margin_amount.toString(),
-        referral_code: referral_code || ''
+        referral_code: normalizedReferralCode,
+        referral_discount_percent: normalizedReferralCode ? REFERRAL_DISCOUNT_PERCENT.toString() : '0',
+        referral_discount_amount: referralDiscountAmount.toString()
       }
     });
 
@@ -456,7 +590,10 @@ exports.createPaymentIntent = async (req, res) => {
           subtotal: pricing.subtotal,
           beige_margin_percent: pricing.beige_margin_percent,
           beige_margin_amount: pricing.beige_margin_amount,
-          total_amount: pricing.total_amount
+          referral_discount_percent: normalizedReferralCode ? REFERRAL_DISCOUNT_PERCENT : 0,
+          referral_discount_amount: referralDiscountAmount,
+          total_before_referral_discount: pricing.total_amount,
+          total_amount: finalPayableAmount
         }
       }
     });
@@ -495,6 +632,7 @@ exports.confirmPayment = async (req, res) => {
       referral_code,
       booking_id // Guest booking ID to update status
     } = req.body;
+    const resolvedUserId = user_id || req.userId || null;
 
     // Validation
     if (!paymentIntentId) {
@@ -511,15 +649,15 @@ exports.confirmPayment = async (req, res) => {
       });
     }
 
-    if (!user_id && !guest_email) {
+    if (!resolvedUserId && !guest_email) {
       return res.status(400).json({
         success: false,
         message: 'Either user_id or guest_email is required'
       });
     }
 
-    if (referral_code && !user_id) {
-      return res.status(400).json({
+    if (referral_code && !req.userId) {
+      return res.status(401).json({
         success: false,
         message: 'Please login or signup if you want to use a referral code'
       });
@@ -536,15 +674,28 @@ exports.confirmPayment = async (req, res) => {
       });
     }
 
+    let normalizedReferralCode = '';
+    if (referral_code) {
+      const referralAffiliate = await getValidReferralAffiliate(referral_code, req.userId, transaction);
+      if (!referralAffiliate) {
+        await transaction.rollback();
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid referral code'
+        });
+      }
+      normalizedReferralCode = referralAffiliate.referral_code;
+    }
+
     // Check if payment already processed
     const existingPayment = await db.payment_transactions.findOne({
       where: { stripe_payment_intent_id: paymentIntentId }
     });
 
     if (existingPayment) {
-      if (referral_code || user_id) {
+      if (normalizedReferralCode) {
         try {
-          // Backfill both referral commission types when payment already exists.
+          // Backfill referral commission for referral-code owner when payment already exists.
           const paymentReferrals = await db.referrals.findAll({
             where: { payment_id: existingPayment.payment_id },
             transaction
@@ -557,10 +708,10 @@ exports.confirmPayment = async (req, res) => {
               await db.referrals.findByPk(existingPayment.referral_id, { transaction });
           }
 
-          if (referral_code) {
+          if (normalizedReferralCode) {
             const referralAffiliate = await db.affiliates.findOne({
               where: {
-                referral_code: referral_code.toUpperCase(),
+                referral_code: normalizedReferralCode,
                 status: 'active'
               },
               transaction
@@ -573,49 +724,21 @@ exports.confirmPayment = async (req, res) => {
             if (existingCodeReferral) {
               if (!primaryReferral) primaryReferral = existingCodeReferral;
             } else {
-              const createdReferral = await affiliateController.processReferral(
-                referral_code,
-                existingPayment.payment_id,
+              const commissionBaseAmount = getReferralCommissionBaseAmount(
                 existingPayment.total_amount,
-                user_id || null,
+                null
+              );
+              const createdReferral = await affiliateController.processReferral(
+                normalizedReferralCode,
+                existingPayment.payment_id,
+                commissionBaseAmount,
+                req.userId || null,
                 guest_email || null,
                 transaction
               );
               if (createdReferral) {
                 paymentReferrals.push(createdReferral);
                 if (!primaryReferral) primaryReferral = createdReferral;
-              }
-            }
-          }
-
-          if (user_id) {
-            const userAffiliate = await db.affiliates.findOne({
-              where: {
-                user_id,
-                status: 'active'
-              },
-              transaction
-            });
-
-            const existingUserAffiliateReferral = userAffiliate
-              ? paymentReferrals.find(r => Number(r.affiliate_id) === Number(userAffiliate.affiliate_id))
-              : null;
-
-            if (existingUserAffiliateReferral) {
-              if (!primaryReferral) primaryReferral = existingUserAffiliateReferral;
-            } else if (userAffiliate) {
-              const userAffiliateReferral = await affiliateController.processUserAffiliateCommission(
-                user_id,
-                existingPayment.payment_id,
-                existingPayment.total_amount,
-                guest_email || null,
-                primaryReferral ? primaryReferral.affiliate_id : null,
-                transaction
-              );
-
-              if (userAffiliateReferral) {
-                paymentReferrals.push(userAffiliateReferral);
-                if (!primaryReferral) primaryReferral = userAffiliateReferral;
               }
             }
           }
@@ -629,7 +752,7 @@ exports.confirmPayment = async (req, res) => {
             await existingPayment.save({ transaction });
           }
         } catch (referralError) {
-          console.error('Failed to process referral/user-affiliate for already processed payment:', referralError);
+          console.error('Failed to process referral for already processed payment:', referralError);
           // Keep API idempotent even if referral processing fails
         }
       }
@@ -646,6 +769,10 @@ exports.confirmPayment = async (req, res) => {
 
     // Calculate pricing
     const pricing = calculatePricing(hours, hourly_rate, equipment);
+    const { finalAmount: finalPayableAmount, discountAmount: referralDiscountAmount } = normalizedReferralCode
+      ? applyReferralDiscount(pricing.total_amount)
+      : { finalAmount: pricing.total_amount, discountAmount: 0 };
+    const paidAmountFromStripe = round2(paymentIntent.amount / 100);
 
     // Get charge ID from payment intent
     const chargeId = paymentIntent.charges?.data[0]?.id || null;
@@ -655,7 +782,7 @@ exports.confirmPayment = async (req, res) => {
       stripe_payment_intent_id: paymentIntentId,
       stripe_charge_id: chargeId,
       creator_id,
-      user_id: user_id || null,
+      user_id: resolvedUserId || null,
       guest_email: guest_email || null,
       hours: parseFloat(hours) > 0 ? parseFloat(hours) : 1,
       hourly_rate,
@@ -664,12 +791,12 @@ exports.confirmPayment = async (req, res) => {
       subtotal: pricing.subtotal,
       beige_margin_percent: pricing.beige_margin_percent,
       beige_margin_amount: pricing.beige_margin_amount,
-      total_amount: pricing.total_amount,
+      total_amount: paidAmountFromStripe,
       shoot_date,
       location,
       shoot_type: shoot_type || null,
       notes: notes || null,
-      referral_code: referral_code || null,
+      referral_code: normalizedReferralCode || null,
       status: 'succeeded'
     }, { transaction });
 
@@ -686,13 +813,13 @@ exports.confirmPayment = async (req, res) => {
 
     // Process referral commissions
     let primaryReferral = null;
-    if (referral_code) {
+    if (normalizedReferralCode) {
       try {
         const referral = await affiliateController.processReferral(
-          referral_code,
+          normalizedReferralCode,
           payment.payment_id,
           pricing.total_amount,
-          user_id || null,
+          req.userId || null,
           guest_email || null,
           transaction
         );
@@ -702,25 +829,6 @@ exports.confirmPayment = async (req, res) => {
       } catch (referralError) {
         console.error('Failed to process referral:', referralError);
         // Don't fail the payment if referral processing fails
-      }
-    }
-
-    if (user_id) {
-      try {
-        const userAffiliateReferral = await affiliateController.processUserAffiliateCommission(
-          user_id,
-          payment.payment_id,
-          pricing.total_amount,
-          guest_email || null,
-          primaryReferral ? primaryReferral.affiliate_id : null,
-          transaction
-        );
-
-        if (!primaryReferral && userAffiliateReferral) {
-          primaryReferral = userAffiliateReferral;
-        }
-      } catch (userAffiliateError) {
-        console.error('Failed to process user affiliate commission:', userAffiliateError);
       }
     }
 
@@ -776,15 +884,18 @@ exports.confirmPayment = async (req, res) => {
         creator_id,
         shoot_date,
         location,
-        pricing: {
-          cp_cost: pricing.cp_cost,
-          equipment_cost: pricing.equipment_cost,
-          subtotal: pricing.subtotal,
-          beige_margin_amount: pricing.beige_margin_amount,
-          total_amount: pricing.total_amount
-        },
-        status: 'succeeded',
-        booking_id: booking_id || null,
+          pricing: {
+            cp_cost: pricing.cp_cost,
+            equipment_cost: pricing.equipment_cost,
+            subtotal: pricing.subtotal,
+            beige_margin_amount: pricing.beige_margin_amount,
+            referral_discount_percent: normalizedReferralCode ? REFERRAL_DISCOUNT_PERCENT : 0,
+            referral_discount_amount: referralDiscountAmount,
+            total_before_referral_discount: round2(finalPayableAmount + referralDiscountAmount),
+            total_amount: paidAmountFromStripe
+          },
+          status: 'succeeded',
+          booking_id: booking_id || null,
         booking_payment_updated: !!booking_id
       }
     });
@@ -915,12 +1026,17 @@ exports.confirmPaymentMulti = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
-    if (referral_code && !booking.user_id) {
-      await transaction.rollback();
-      return res.status(400).json({
-        success: false,
-        message: 'Please login or signup if you want to use a referral code'
-      });
+    let normalizedReferralCode = '';
+    if (referral_code) {
+      const referralAffiliate = await getValidReferralAffiliate(referral_code, booking.user_id || null, transaction);
+      if (!referralAffiliate) {
+        await transaction.rollback();
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid referral code'
+        });
+      }
+      normalizedReferralCode = referralAffiliate.referral_code;
     }
 
     let totalAmount = 0;
@@ -967,9 +1083,9 @@ exports.confirmPaymentMulti = async (req, res) => {
     });
 
     if (existingPayment) {
-      if (referral_code || booking.user_id) {
+      if (normalizedReferralCode) {
         try {
-          // Backfill both referral commission types when payment already exists.
+          // Backfill referral commission for referral-code owner when payment already exists.
           const paymentReferrals = await db.referrals.findAll({
             where: { payment_id: existingPayment.payment_id },
             transaction
@@ -982,10 +1098,10 @@ exports.confirmPaymentMulti = async (req, res) => {
               await db.referrals.findByPk(existingPayment.referral_id, { transaction });
           }
 
-          if (referral_code) {
+          if (normalizedReferralCode) {
             const referralAffiliate = await db.affiliates.findOne({
               where: {
-                referral_code: referral_code.toUpperCase(),
+                referral_code: normalizedReferralCode,
                 status: 'active'
               },
               transaction
@@ -998,10 +1114,14 @@ exports.confirmPaymentMulti = async (req, res) => {
             if (existingCodeReferral) {
               if (!primaryReferral) primaryReferral = existingCodeReferral;
             } else {
-              const createdReferral = await affiliateController.processReferral(
-                referral_code,
-                existingPayment.payment_id,
+              const commissionBaseAmount = getReferralCommissionBaseAmount(
                 existingPayment.total_amount,
+                booking.primary_quote?.total
+              );
+              const createdReferral = await affiliateController.processReferral(
+                normalizedReferralCode,
+                existingPayment.payment_id,
+                commissionBaseAmount,
                 booking.user_id || null,
                 booking.guest_email || null,
                 transaction
@@ -1009,38 +1129,6 @@ exports.confirmPaymentMulti = async (req, res) => {
               if (createdReferral) {
                 paymentReferrals.push(createdReferral);
                 if (!primaryReferral) primaryReferral = createdReferral;
-              }
-            }
-          }
-
-          if (booking.user_id) {
-            const userAffiliate = await db.affiliates.findOne({
-              where: {
-                user_id: booking.user_id,
-                status: 'active'
-              },
-              transaction
-            });
-
-            const existingUserAffiliateReferral = userAffiliate
-              ? paymentReferrals.find(r => Number(r.affiliate_id) === Number(userAffiliate.affiliate_id))
-              : null;
-
-            if (existingUserAffiliateReferral) {
-              if (!primaryReferral) primaryReferral = existingUserAffiliateReferral;
-            } else if (userAffiliate) {
-              const userAffiliateReferral = await affiliateController.processUserAffiliateCommission(
-                booking.user_id,
-                existingPayment.payment_id,
-                existingPayment.total_amount,
-                booking.guest_email || null,
-                primaryReferral ? primaryReferral.affiliate_id : null,
-                transaction
-              );
-
-              if (userAffiliateReferral) {
-                paymentReferrals.push(userAffiliateReferral);
-                if (!primaryReferral) primaryReferral = userAffiliateReferral;
               }
             }
           }
@@ -1053,8 +1141,17 @@ exports.confirmPaymentMulti = async (req, res) => {
             existingPayment.referral_id = primaryReferral.referral_id;
             await existingPayment.save({ transaction });
           }
+
+          if (booking.primary_quote) {
+            await persistQuoteReferralDiscount({
+              quote: booking.primary_quote,
+              referralCode: normalizedReferralCode,
+              paidTotal: existingPayment.total_amount,
+              transaction
+            });
+          }
         } catch (referralError) {
-          console.error('Failed to process referral/user-affiliate for already processed multi payment:', referralError);
+          console.error('Failed to process referral for already processed multi payment:', referralError);
           // Keep API idempotent even if referral processing fails
         }
       }
@@ -1109,18 +1206,22 @@ exports.confirmPaymentMulti = async (req, res) => {
       location: booking.event_location ? (typeof booking.event_location === 'string' ? booking.event_location : JSON.stringify(booking.event_location)) : 'See Booking Details',
       shoot_type: booking.shoot_type || null,
       notes: booking.special_requests || null,
-      referral_code: referral_code || null,
+      referral_code: normalizedReferralCode || null,
       status: 'succeeded'
     }, { transaction });
 
     // 7. Process referral commissions
     let primaryReferral = null;
-    if (referral_code) {
+    if (normalizedReferralCode) {
       try {
-        const referral = await affiliateController.processReferral(
-          referral_code,
-          payment.payment_id,
+        const commissionBaseAmount = getReferralCommissionBaseAmount(
           totalAmount,
+          booking.primary_quote?.total
+        );
+        const referral = await affiliateController.processReferral(
+          normalizedReferralCode,
+          payment.payment_id,
+          commissionBaseAmount,
           booking.user_id || null,
           booking.guest_email || null,
           transaction
@@ -1135,28 +1236,18 @@ exports.confirmPaymentMulti = async (req, res) => {
       }
     }
 
-    if (booking.user_id) {
-      try {
-        const userAffiliateReferral = await affiliateController.processUserAffiliateCommission(
-          booking.user_id,
-          payment.payment_id,
-          totalAmount,
-          booking.guest_email || null,
-          primaryReferral ? primaryReferral.affiliate_id : null,
-          transaction
-        );
-
-        if (!primaryReferral && userAffiliateReferral) {
-          primaryReferral = userAffiliateReferral;
-        }
-      } catch (userAffiliateError) {
-        console.error('Failed to process user affiliate commission (confirm-multi):', userAffiliateError);
-      }
-    }
-
     if (primaryReferral) {
       payment.referral_id = primaryReferral.referral_id;
       await payment.save({ transaction });
+    }
+
+    if (normalizedReferralCode && booking.primary_quote) {
+      await persistQuoteReferralDiscount({
+        quote: booking.primary_quote,
+        referralCode: normalizedReferralCode,
+        paidTotal: totalAmount,
+        transaction
+      });
     }
 
     // 8. Update Booking and Lead Status
