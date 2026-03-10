@@ -918,3 +918,76 @@ exports.submitProjectForm = async (req, res) => {
         });
     }
 };
+
+exports.getPendingProjectForms = async (req, res) => {
+    try {
+        const user_id = req.user.userId;
+
+        if (!user_id) {
+            return res.status(400).json({ error: true, message: "user_id is required" });
+        }
+
+        // Fetch projects that have payment but NO form submission
+        const pendingProjects = await stream_project_booking.findAll({
+            where: {
+                user_id: user_id,
+                is_active: 1,
+                is_cancelled: 0,
+                is_draft: 0,
+                payment_id: { [Sequelize.Op.ne]: null } // Only payment completed projects
+            },
+            include: [{
+                model: project_form_submissions,
+                as: 'form_submissions', // This must match the alias in your initModels
+                required: false // This makes it a LEFT JOIN
+            }],
+            // Filter: Only return projects where the submission record DOES NOT exist
+            where: {
+                [Sequelize.Op.and]: [
+                    { user_id: user_id },
+                    { is_active: 1 },
+                    { is_cancelled: 0 },
+                    { payment_id: { [Sequelize.Op.ne]: null } },
+                    Sequelize.where(Sequelize.col('form_submissions.id'), 'IS', null)
+                ]
+            },
+            order: [['event_date', 'ASC']] // Show the soonest project first
+        });
+
+        if (!pendingProjects || pendingProjects.length === 0) {
+            return res.status(200).json({
+                error: false,
+                message: 'No pending forms found.',
+                count: 0,
+                projects: []
+            });
+        }
+
+        // Format the response similarly to your other API
+        const formattedProjects = pendingProjects.map(project => {
+            return {
+                project_id: project.stream_project_booking_id,
+                project_name: project.project_name,
+                event_date: project.event_date,
+                event_type: project.event_type,
+                payment_id: project.payment_id,
+                message: "Please fill out the project detail form for this project."
+            };
+        });
+
+        return res.status(200).json({
+            error: false,
+            message: 'Pending project forms retrieved successfully',
+            count: formattedProjects.length,
+            projects: formattedProjects
+        });
+
+    } catch (error) {
+        console.error('Error fetching pending project forms:', error);
+        return res.status(500).json({ 
+            error: true, 
+            message: 'Internal server error', 
+            details: error.message 
+        });
+    }
+};

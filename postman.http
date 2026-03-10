@@ -3,7 +3,7 @@
 @DEV_URL = https://api.dev.beige.app/v1/
 
 # @TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjE3MywidXNlclJvbGUiOiJzYWxlc19yZXAiLCJpYXQiOjE3Njk3NTUxNzEsImV4cCI6MTc3MDM1OTk3MX0.Xop-g29SS-GXlYG6rLDXSbPdfXU189mdzFYl6YEhqkE
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzI3MDI3MDEsImV4cCI6MTc3MzMwNzUwMX0.sC7JvCDs2oNfCcgnGWCut4mn-0mn3e6zrQqQShsDMeE
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjgwLCJ1c2VyUm9sZSI6IkNsaWVudCIsImlhdCI6MTc3MzE0MjAxMiwiZXhwIjoxNzczNzQ2ODEyfQ.oERQax4XbQ1BDtbEst9IjpKxmn-jH5A_7EmcC3o0wjg
 
 ###
 POST {{URL}}creator/dashboard-count HTTP/1.1
@@ -747,3 +747,8 @@ Authorization: {{TOKEN}}
   "wants_to_learn_more": true,
   "form_user_friendliness_rating": 5
 }
+
+### 
+GET {{URL}}client/get-project-form-submission HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
