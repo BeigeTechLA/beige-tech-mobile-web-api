@@ -1,4 +1,4 @@
-const { sales_leads, sales_lead_activities, stream_project_booking, stream_project_booking_days, users, discount_codes, payment_links,  quotes, assigned_crew, crew_members,
+const { sales_leads, sales_lead_activities, stream_project_booking, users, discount_codes, payment_links,  quotes, assigned_crew, crew_members,
   quote_line_items, crew_member_files } = require('../models');
 const { Op, Sequelize } = require('sequelize');
 const constants = require('../utils/constants');
@@ -546,8 +546,6 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             client_name,
             startDate, 
             endDate,
-            booking_type,
-            booking_days,
             location,
             specialInstructions,
             reference_links,
@@ -563,56 +561,9 @@ exports.trackEarlyBookingInterest = async (req, res) => {
         const normalizedGuestEmail = String(guest_email).trim().toLowerCase();
         const resolvedUserId = await resolveUserId(user_id, normalizedGuestEmail);
 
-        const toTimeParts = (timeStr) => {
-            if (!timeStr) return null;
-            const parts = String(timeStr).split(':').map(Number);
-            if (!parts.length || parts.some((p) => Number.isNaN(p))) return null;
-            const [h, m, s = 0] = parts;
-            return { h, m, s };
-        };
-
-        const calculateDurationHours = (startTime, endTime) => {
-            const startParts = toTimeParts(startTime);
-            const endParts = toTimeParts(endTime);
-            if (!startParts || !endParts) return null;
-            const startMinutes = startParts.h * 60 + startParts.m + startParts.s / 60;
-            const endMinutes = endParts.h * 60 + endParts.m + endParts.s / 60;
-            const diffMinutes = endMinutes - startMinutes;
-            if (diffMinutes <= 0) return null;
-            return Math.round((diffMinutes / 60) * 100) / 100;
-        };
-
-        let normalizedBookingDays = Array.isArray(booking_days) ? booking_days : [];
-        normalizedBookingDays = normalizedBookingDays
-            .filter((d) => d && d.date)
-            .map((d) => ({
-                date: d.date,
-                start_time: d.start_time || d.startTime || null,
-                end_time: d.end_time || d.endTime || null,
-                duration_hours: d.duration_hours != null ? Number(d.duration_hours) : null,
-                time_zone: d.time_zone || d.timeZone || null
-            }));
-
-        let event_date = startDate ? new Date(startDate).toISOString().split('T')[0] : null;
-        let start_time = startDate ? new Date(startDate).toTimeString().split(' ')[0] : null;
-        let end_time = endDate ? new Date(endDate).toTimeString().split(' ')[0] : null;
-        let totalDurationHours = null;
-
-        if (booking_type === 'multi_day' && normalizedBookingDays.length > 0) {
-            normalizedBookingDays.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-            event_date = normalizedBookingDays[0].date;
-            start_time = normalizedBookingDays[0].start_time || null;
-            end_time = normalizedBookingDays[0].end_time || null;
-            totalDurationHours = normalizedBookingDays.reduce((sum, d) => {
-                const hours = d.duration_hours != null ? d.duration_hours : calculateDurationHours(d.start_time, d.end_time);
-                return sum + (hours || 0);
-            }, 0);
-            if (totalDurationHours > 0) {
-                totalDurationHours = Math.round(totalDurationHours * 100) / 100;
-            } else {
-                totalDurationHours = null;
-            }
-        }
+        const event_date = startDate ? new Date(startDate).toISOString().split('T')[0] : null;
+        const start_time = startDate ? new Date(startDate).toTimeString().split(' ')[0] : null;
+        const end_time = endDate ? new Date(endDate).toTimeString().split(' ')[0] : null;
 
         const bookingData = {
             user_id: resolvedUserId,
@@ -626,7 +577,6 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             event_date: event_date,
             start_time: start_time,
             end_time: end_time,
-            duration_hours: totalDurationHours,
             event_location: location || null,
             description: specialInstructions || null,
             reference_links: reference_links || null,
@@ -640,45 +590,15 @@ exports.trackEarlyBookingInterest = async (req, res) => {
         };
 
         let booking;
-        const tx = await db.sequelize.transaction();
-        try {
-            if (booking_id) {
-                booking = await stream_project_booking.findByPk(booking_id);
-                if (booking) {
-                    await booking.update(bookingData, { transaction: tx });
-                }
-            } 
-            
-            if (!booking) {
-                booking = await stream_project_booking.create(bookingData, { transaction: tx });
+        if (booking_id) {
+            booking = await stream_project_booking.findByPk(booking_id);
+            if (booking) {
+                await booking.update(bookingData);
             }
-
-            if (booking_type === 'multi_day' && normalizedBookingDays.length > 0) {
-                await stream_project_booking_days.destroy({
-                    where: { stream_project_booking_id: booking.stream_project_booking_id },
-                    transaction: tx
-                });
-                const dayRows = normalizedBookingDays.map((d) => ({
-                    stream_project_booking_id: booking.stream_project_booking_id,
-                    event_date: d.date,
-                    start_time: d.start_time || null,
-                    end_time: d.end_time || null,
-                    duration_hours: d.duration_hours != null ? d.duration_hours : calculateDurationHours(d.start_time, d.end_time),
-                    time_zone: d.time_zone || null
-                }));
-                await stream_project_booking_days.bulkCreate(dayRows, { transaction: tx });
-            }
-            if (booking_type === 'single_day') {
-                await stream_project_booking_days.destroy({
-                    where: { stream_project_booking_id: booking.stream_project_booking_id },
-                    transaction: tx
-                });
-            }
-
-            await tx.commit();
-        } catch (err) {
-            await tx.rollback();
-            throw err;
+        } 
+        
+        if (!booking) {
+            booking = await stream_project_booking.create(bookingData);
         }
 
         let lead = await sales_leads.findOne({
@@ -1453,19 +1373,6 @@ exports.getLeadById = async (req, res) => {
 
     const leadJson = lead.toJSON();
 
-    if (leadJson.booking && !Array.isArray(leadJson.booking.booking_days)) {
-      const days = await stream_project_booking_days.findAll({
-        where: { stream_project_booking_id: leadJson.booking.stream_project_booking_id }
-      });
-      leadJson.booking.booking_days = days.map((d) => ({
-        event_date: d.event_date,
-        start_time: d.start_time,
-        end_time: d.end_time,
-        duration_hours: d.duration_hours,
-        time_zone: d.time_zone
-      }));
-    }
-
     let final_phone = leadJson.phone || leadJson.phone_number;
     if (!final_phone && leadJson.booking?.description) {
         const phoneMatch = leadJson.booking.description.match(/Phone:\s*(\d+)/i);
@@ -1643,11 +1550,6 @@ exports.getLeadById = async (req, res) => {
     const rejected_ap = allCrews
       .filter(ac => ac.crew_accept === 2)
       .sort((a, b) => new Date(a.responded_at || 0) - new Date(b.responded_at || 0));
-
-    const hasMultipleDays = Array.isArray(leadJson.booking?.booking_days) && leadJson.booking.booking_days.length > 0;
-    if (leadJson.booking) {
-      leadJson.booking.is_multiple_day_shoot = hasMultipleDays;
-    }
 
     res.json({
       success: true,
