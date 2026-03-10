@@ -8222,3 +8222,70 @@ exports.assignProjectCrewBulk = async (req, res) => {
         return res.status(500).json({ success: false, message: error.message });
     }
 };
+
+exports.removeProjectAssignedCrew = async (req, res) => {
+    try {
+        const assigned_by_user_id = req.user?.userId;
+        const { project_id, crew_member_id } = req.body; // Changed lead_id to project_id
+
+        if (!project_id || !crew_member_id) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "project_id and crew_member_id are required." 
+            });
+        }
+
+        // 1. Find the assignment directly using project_id
+        const assignment = await assigned_crew.findOne({
+            where: {
+                project_id: project_id,
+                crew_member_id: crew_member_id,
+                is_active: 1
+            },
+            include: [{ 
+                model: crew_members, 
+                as: 'crew_member', 
+                attributes: ['first_name', 'last_name'] 
+            }]
+        });
+
+        if (!assignment) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "This crew member is not currently assigned to this project or is already inactive." 
+            });
+        }
+
+        // 2. Set the assignment to inactive (Soft Delete)
+        await assignment.update({ is_active: 0 });
+
+        // 3. Optional: Log activity if a lead exists for this project
+        const lead = await sales_leads.findOne({
+            where: { booking_id: project_id },
+            attributes: ['lead_id']
+        });
+
+        if (lead) {
+            const crewName = assignment.crew_member 
+                ? `${assignment.crew_member.first_name} ${assignment.crew_member.last_name}` 
+                : `ID: ${crew_member_id}`;
+
+            await sales_lead_activities.create({
+                lead_id: lead.lead_id,
+                activity_type: 'crew_removed',
+                notes: `Removed ${crewName} from the project via Project ID.`,
+                performed_by_user_id: assigned_by_user_id,
+                created_at: new Date()
+            });
+        }
+
+        res.json({
+            success: true,
+            message: "Crew member removed from project successfully."
+        });
+
+    } catch (error) {
+        console.error('RemoveProjectCrew Error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};

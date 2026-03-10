@@ -699,3 +699,13 @@ Content-Type: application/json
 POST {{URL}}admin/get-project-fullfillment-stats/729 HTTP/1.1
 Content-Type: application/json
 # Authorization: {{TOKEN}}
+
+### 
+POST {{URL}}admin/remove-project-crew HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+    "project_id": 715,
+    "crew_member_id": 2065
+}
