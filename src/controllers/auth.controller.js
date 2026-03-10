@@ -2428,6 +2428,19 @@ exports.registerCrewMemberStep3 = [
         'N': JSON.stringify(social_media_links),
       });
 
+      // SEND WELCOME EMAIL
+      const user = await User.findOne({
+        where: { email: member.email },
+        attributes: ['email']
+      });
+
+      if (user) {
+        emailService.sendCPSignupWelcomeEmail({
+          first_name: member.first_name,
+          email: user.email
+        }).catch(err => console.error('CP Welcome Email Error:', err));
+      }
+
       return res.status(200).json({ success: true, message: 'Step 3 completed. Registration finished!' });
     } catch (error) {
       console.error('Step 3 Error:', error);
