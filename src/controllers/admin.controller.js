@@ -8327,7 +8327,7 @@ exports.getProjectFormByProjectId = async (req, res) => {
         });
 
         if (!formDetails) {
-            return res.status(404).json({ 
+            return res.status(200).json({ 
                 error: true, 
                 message: "No form submission found for this project.",
                 is_submitted: false 
