@@ -174,6 +174,8 @@ router.get('/discount-codes/:id/usage', authenticate, requireSalesRepOrAdmin, di
  * @access  Sales Rep / Admin
  */
 router.post('/payment-links', authenticate, requireSalesRepOrAdmin, paymentLinksController.generatePaymentLink);
+router.post('/preview-invoice', paymentLinksController.previewStripeInvoice);
+router.get('/invoice-pdf/:booking_id', paymentLinksController.getStripeInvoicePdf);
 router.post('/send-invoice', paymentLinksController.sendStripeInvoice);
 router.post('/payment-links/notify', paymentLinksController.sendPaymentLinkEmail);
 router.get('/get-lead-stats/:id', authenticate, requireSalesRepOrAdmin, salesLeadsController.getLeadFulfillmentStatus);
