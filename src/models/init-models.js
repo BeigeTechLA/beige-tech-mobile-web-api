@@ -26,6 +26,7 @@ var _payment_equipment = require("./payment_equipment");
 var _project_brief = require("./project_brief");
 var _skills_master = require("./skills_master");
 var _stream_project_booking = require("./stream_project_booking");
+var _stream_project_booking_days = require("./stream_project_booking_days");
 var _tasks = require("./tasks");
 var _user_type = require("./user_type");
 var _users = require("./users");
@@ -62,6 +63,7 @@ var _discount_codes = require("./discount_codes");
 var _discount_code_usage = require("./discount_code_usage");
 var _payment_links = require("./payment_links");
 var _sales_lead_activities = require("./sales_lead_activities");
+var _project_form_submissions = require("./project_form_submissions");
 
 function initModels(sequelize) {
   var assigned_crew = _assigned_crew(sequelize, DataTypes);
@@ -90,6 +92,7 @@ function initModels(sequelize) {
   var project_brief = _project_brief(sequelize, DataTypes);
   var skills_master = _skills_master(sequelize, DataTypes);
   var stream_project_booking = _stream_project_booking(sequelize, DataTypes);
+  var stream_project_booking_days = _stream_project_booking_days(sequelize, DataTypes);
   var tasks = _tasks(sequelize, DataTypes);
   var user_type = _user_type(sequelize, DataTypes);
   var users = _users(sequelize, DataTypes);
@@ -127,6 +130,7 @@ function initModels(sequelize) {
   var discount_code_usage = _discount_code_usage(sequelize, DataTypes);
   var payment_links = _payment_links(sequelize, DataTypes);
   var sales_lead_activities = _sales_lead_activities(sequelize, DataTypes);
+  var project_form_submissions = _project_form_submissions(sequelize, DataTypes);
 
   assignment_checklist.belongsTo(checklist_master, { as: "checklist", foreignKey: "checklist_id"});
   checklist_master.hasMany(assignment_checklist, { as: "assignment_checklists", foreignKey: "checklist_id"});
@@ -393,6 +397,8 @@ crew_members.belongsTo(crew_roles, { as: 'role', foreignKey: 'primary_role' });
 
   payment_links.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id" });
   stream_project_booking.hasMany(payment_links, { as: "payment_links", foreignKey: "booking_id" });
+  stream_project_booking_days.belongsTo(stream_project_booking, { as: "booking", foreignKey: "stream_project_booking_id" });
+  stream_project_booking.hasMany(stream_project_booking_days, { as: "booking_days", foreignKey: "stream_project_booking_id" });
 
   payment_links.belongsTo(discount_codes, { as: "discount_code", foreignKey: "discount_code_id" });
   discount_codes.hasMany(payment_links, { as: "payment_links", foreignKey: "discount_code_id" });
@@ -418,6 +424,10 @@ users.hasMany(stream_project_booking, { as: "bookings", foreignKey: "user_id"});
 // Add these if they are missing
 assigned_post_production_member.belongsTo(stream_project_booking, { as: "project", foreignKey: "project_id"});
 stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_post_production_members", foreignKey: "project_id"});
+
+ project_form_submissions.belongsTo(stream_project_booking, { as: "project", foreignKey: "project_id"});
+ stream_project_booking.hasMany(project_form_submissions, { as: "form_submissions", foreignKey: "project_id"});
+
   return {
     activity_logs,
     assigned_crew,
@@ -447,6 +457,7 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
     project_brief,
     skills_master,
     stream_project_booking,
+    stream_project_booking_days,
     tasks,
     user_type,
     users,
@@ -480,7 +491,8 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
     equipment_request,
     post_production_members,
     assigned_post_production_member,
-    clients
+    clients,
+    project_form_submissions
   };
 }
 module.exports = initModels;

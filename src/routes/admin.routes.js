@@ -87,5 +87,6 @@ router.post('/get-project-fullfillment-stats/:project_id', admin.getProjectFulfi
 router.get('/get-crew-for-shoot', admin.searchCrewForProject);
 router.post('/assign-crew-from-shoot',authMiddleware, admin.assignProjectCrewBulk);
 router.post('/remove-project-crew',authMiddleware, admin.removeProjectAssignedCrew);
+router.get('/get-project-form/:project_id',authMiddleware, admin.getProjectFormByProjectId);
 
 module.exports = router;

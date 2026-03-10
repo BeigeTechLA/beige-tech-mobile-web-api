@@ -28,7 +28,7 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   payment_transactions,
   assigned_post_production_member,
   post_production_members,
-  clients,sales_leads, sales_lead_activities, quotes, quote_line_items, discount_codes, payment_links,
+  clients,sales_leads, sales_lead_activities, quotes, quote_line_items, discount_codes, payment_links, project_form_submissions,
   payments } = require('../models');
   const { deleteSheetRow, updateSheetRow } = require('../utils/googleSheets');
 const leadAssignmentService = require('../services/lead-assignment.service');
@@ -8287,5 +8287,67 @@ exports.removeProjectAssignedCrew = async (req, res) => {
     } catch (error) {
         console.error('RemoveProjectCrew Error:', error);
         res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+exports.getProjectFormByProjectId = async (req, res) => {
+    try {
+        const { project_id } = req.params;
+        const user_id = req.user?.userId;
+
+        if (!project_id) {
+            return res.status(400).json({ 
+                error: true, 
+                message: "project_id is required as a parameter." 
+            });
+        }
+
+        // 1. Security Check: Ensure the project belongs to the requesting user
+        const project = await stream_project_booking.findOne({
+            where: { 
+                stream_project_booking_id: project_id,
+                // user_id: user_id 
+            }
+        });
+
+        if (!project) {
+            return res.status(403).json({ 
+                error: true, 
+                message: "Access denied. You do not have permission to view this project's details." 
+            });
+        }
+
+        // 2. Fetch the Form Submission
+        const formDetails = await project_form_submissions.findOne({
+            where: { 
+                project_id: project_id,
+                is_active: 1 
+            },
+            order: [['created_at', 'DESC']] // Get the most recent submission
+        });
+
+        if (!formDetails) {
+            return res.status(200).json({ 
+                error: true, 
+                message: "No form submission found for this project.",
+                is_submitted: false 
+            });
+        }
+
+        // 3. Return the details
+        return res.status(200).json({
+            error: false,
+            message: "Project form details retrieved successfully.",
+            is_submitted: true,
+            data: formDetails
+        });
+
+    } catch (error) {
+        console.error('Error fetching project form details:', error);
+        return res.status(500).json({ 
+            error: true, 
+            message: "Internal server error", 
+            details: error.message 
+        });
     }
 };
