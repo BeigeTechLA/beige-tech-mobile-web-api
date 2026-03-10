@@ -2,8 +2,8 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-# @TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjE3MywidXNlclJvbGUiOiJzYWxlc19yZXAiLCJpYXQiOjE3Njk3NTUxNzEsImV4cCI6MTc3MDM1OTk3MX0.Xop-g29SS-GXlYG6rLDXSbPdfXU189mdzFYl6YEhqkE
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjgwLCJ1c2VyUm9sZSI6IkNsaWVudCIsImlhdCI6MTc3MzE0MjAxMiwiZXhwIjoxNzczNzQ2ODEyfQ.oERQax4XbQ1BDtbEst9IjpKxmn-jH5A_7EmcC3o0wjg
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJ0eXBlIjoicmVmcmVzaCIsImlhdCI6MTc3MzE0NDY0MSwiZXhwIjoxNzc1NzM2NjQxfQ.5gsqYaIHnsuS4R8ISPEdMVTNM4UgkRiyFJZ9oUquZlE
+# @TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjgwLCJ1c2VyUm9sZSI6IkNsaWVudCIsImlhdCI6MTc3MzE0MjAxMiwiZXhwIjoxNzczNzQ2ODEyfQ.oERQax4XbQ1BDtbEst9IjpKxmn-jH5A_7EmcC3o0wjg
 
 ###
 POST {{URL}}creator/dashboard-count HTTP/1.1
@@ -750,5 +750,10 @@ Authorization: {{TOKEN}}
 
 ### 
 GET {{URL}}client/get-project-form-submission HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### 
+GET {{URL}}admin/get-project-form/921 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}

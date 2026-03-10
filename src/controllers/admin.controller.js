@@ -8293,7 +8293,7 @@ exports.removeProjectAssignedCrew = async (req, res) => {
 exports.getProjectFormByProjectId = async (req, res) => {
     try {
         const { project_id } = req.params;
-        const auth_user_id = req.user?.userId;
+        const user_id = req.user?.userId;
 
         if (!project_id) {
             return res.status(400).json({ 
@@ -8306,7 +8306,7 @@ exports.getProjectFormByProjectId = async (req, res) => {
         const project = await stream_project_booking.findOne({
             where: { 
                 stream_project_booking_id: project_id,
-                user_id: auth_user_id 
+                // user_id: user_id 
             }
         });
 
