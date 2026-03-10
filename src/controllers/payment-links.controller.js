@@ -6,6 +6,7 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const emailService = require('../utils/emailService');
 const discountService = require('../services/discount.service');
 const { Op } = require('sequelize');
+const https = require('https');
 
 const applyQuoteDiscountFromLatestPaymentLink = async (booking, performedByUserId = null) => {
     if (!booking || !booking.primary_quote) return false;
@@ -141,31 +142,18 @@ const calculateLeadPricing = async (booking) => {
 
     try {
         const bookingMarkedPaid = !!(booking.payment_id || booking.is_completed === 1);
+        const paymentTransaction = bookingMarkedPaid
+            ? await db.payment_transactions.findByPk(booking.payment_id)
+            : null;
 
-        if (bookingMarkedPaid) {
-            const transaction = await db.payment_transactions.findByPk(booking.payment_id);
-            if (transaction) {
-                return {
-                    source: 'transaction',
-                    is_paid: true,
-                    stripe_payment_intent_id: transaction.stripe_payment_intent_id,
-                    total: parseFloat(transaction.total_amount || 0),
-                    subtotal: parseFloat(transaction.subtotal || 0),
-                    line_items: [{
-                        name: `Service Payment - ${booking.project_name || 'Project'}`,
-                        quantity: 1,
-                        total: parseFloat(transaction.total_amount || 0)
-                    }]
-                };
-            }
-        }
-
-        // --- CASE 2: Formal Quote exists in Database ---
+        // Prefer quote line items for both paid and unpaid bookings
+        // so invoice/receipt keeps full breakdown (additional creatives, etc.).
         const q = booking.primary_quote; 
         if (q) {
             return {
                 source: 'database',
                 is_paid: bookingMarkedPaid,
+                stripe_payment_intent_id: paymentTransaction?.stripe_payment_intent_id || null,
                 total: parseFloat(q.price_after_discount || q.total || 0),
                 subtotal: parseFloat(q.subtotal || 0),
                 discount_amount: parseFloat(q.discount_amount || 0),
@@ -174,6 +162,21 @@ const calculateLeadPricing = async (booking) => {
                     quantity: item.quantity,
                     total: parseFloat(item.line_total)
                 }))
+            };
+        }
+
+        if (paymentTransaction) {
+            return {
+                source: 'transaction',
+                is_paid: true,
+                stripe_payment_intent_id: paymentTransaction.stripe_payment_intent_id,
+                total: parseFloat(paymentTransaction.total_amount || 0),
+                subtotal: parseFloat(paymentTransaction.subtotal || 0),
+                line_items: [{
+                    name: `Service Payment - ${booking.project_name || 'Project'}`,
+                    quantity: 1,
+                    total: parseFloat(paymentTransaction.total_amount || 0)
+                }]
             };
         }
 
@@ -592,36 +595,40 @@ exports.validatePaymentLink = async (req, res) => {
   }
 };
 
-exports.sendStripeInvoice = async (req, res) => {
+const bookingInvoiceIncludes = [
+  {
+    model: db.quotes,
+    as: 'primary_quote',
+    required: false,
+    include: [{ model: db.quote_line_items, as: 'line_items', required: false }]
+  },
+  { model: db.users, as: 'user', required: false }
+];
+
+const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = null) => {
   let lockTransaction = null;
   try {
-    const { booking_id } = req.body;
-    const parsedBookingId = parseInt(booking_id, 10);
+    const parsedBookingId = parseInt(bookingId, 10);
 
     if (!parsedBookingId || Number.isNaN(parsedBookingId)) {
-      return res.status(400).json({ success: false, message: 'Valid booking_id is required.' });
+      const invalidError = new Error('Valid booking_id is required.');
+      invalidError.statusCode = 400;
+      throw invalidError;
     }
 
     lockTransaction = await db.sequelize.transaction();
 
     const booking = await db.stream_project_booking.findOne({
       where: { stream_project_booking_id: parsedBookingId },
-      include: [
-        {
-          model: db.quotes,
-          as: 'primary_quote',
-          required: false,
-          include: [{ model: db.quote_line_items, as: 'line_items', required: false }]
-        },
-        { model: db.users, as: 'user', required: false }
-      ],
+      include: bookingInvoiceIncludes,
       transaction: lockTransaction,
       lock: lockTransaction.LOCK.UPDATE
     });
 
     if (!booking) {
-      await lockTransaction.rollback();
-      return res.status(404).json({ success: false, message: `Booking ID ${parsedBookingId} not found.` });
+      const notFoundError = new Error(`Booking ID ${parsedBookingId} not found.`);
+      notFoundError.statusCode = 404;
+      throw notFoundError;
     }
 
     const now = new Date();
@@ -630,11 +637,9 @@ exports.sendStripeInvoice = async (req, res) => {
       booking.invoice_generation_started_at &&
       (now - new Date(booking.invoice_generation_started_at)) < 10 * 60 * 1000
     ) {
-      await lockTransaction.rollback();
-      return res.status(409).json({
-        success: false,
-        message: 'Invoice generation is already in progress. Please retry in a few minutes.'
-      });
+      const conflictError = new Error('Invoice generation is already in progress. Please retry in a few minutes.');
+      conflictError.statusCode = 409;
+      throw conflictError;
     }
 
     await booking.update({
@@ -660,25 +665,17 @@ exports.sendStripeInvoice = async (req, res) => {
       await booking.update({
         invoice_generation_status: 'failed'
       });
-      return res.status(400).json({ success: false, message: 'No email address associated with this booking.' });
+      const noEmailError = new Error('No email address associated with this booking.');
+      noEmailError.statusCode = 400;
+      throw noEmailError;
     }
 
     const bookingMarkedPaid = !!(booking.payment_id || booking.is_completed === 1);
 
     if (!bookingMarkedPaid) {
-      const appliedOnQuote = await applyQuoteDiscountFromLatestPaymentLink(booking, req.userId || null);
+      const appliedOnQuote = await applyQuoteDiscountFromLatestPaymentLink(booking, performedByUserId || null);
       if (appliedOnQuote) {
-        await booking.reload({
-          include: [
-            {
-              model: db.quotes,
-              as: 'primary_quote',
-              required: false,
-              include: [{ model: db.quote_line_items, as: 'line_items', required: false }]
-            },
-            { model: db.users, as: 'user', required: false }
-          ]
-        });
+        await booking.reload({ include: bookingInvoiceIncludes });
       }
     }
 
@@ -691,6 +688,11 @@ exports.sendStripeInvoice = async (req, res) => {
       let invoicePdf = null;
       let invoiceNumber = 'RECEIPT';
       let paidTotalAmount = parseFloat(pricingData.total || 0);
+      let shouldGenerateDetailedInvoice = false;
+
+      const expectedLineCount =
+        (pricingData.line_items || []).filter((item) => parseFloat(item.total || 0) > 0).length +
+        (parseFloat(pricingData.discount_amount || 0) > 0 ? 1 : 0);
 
       if (pricingData.stripe_payment_intent_id) {
         const pi = await stripe.paymentIntents.retrieve(pricingData.stripe_payment_intent_id, {
@@ -698,24 +700,34 @@ exports.sendStripeInvoice = async (req, res) => {
         });
 
         if (pi.invoice) {
-          const existingInvoice = await stripe.invoices.retrieve(pi.invoice);
+          const existingInvoice = await stripe.invoices.retrieve(pi.invoice, {
+            expand: ['lines']
+          });
           invoiceUrl = existingInvoice.hosted_invoice_url;
           invoicePdf = existingInvoice.invoice_pdf;
           invoiceNumber = existingInvoice.number;
           paidTotalAmount = (existingInvoice.amount_paid || existingInvoice.total || 0) / 100;
-        } 
-        
-        if (!invoicePdf) {
-          const retrospectiveInvoice = await paymentLinksService.createPaidStripeInvoice(
-            booking,
-            pricingData,
-            {}
-          );
-          invoiceUrl = retrospectiveInvoice.hosted_invoice_url;
-          invoicePdf = retrospectiveInvoice.invoice_pdf;
-          invoiceNumber = retrospectiveInvoice.number;
-          paidTotalAmount = (retrospectiveInvoice.amount_paid || retrospectiveInvoice.total || 0) / 100;
+
+          const existingLineCount = (existingInvoice.lines?.data || [])
+            .filter((line) => Number(line.amount || 0) !== 0)
+            .length;
+
+          if (expectedLineCount > 0 && existingLineCount < expectedLineCount) {
+            shouldGenerateDetailedInvoice = true;
+          }
         }
+      }
+
+      if (!invoicePdf || shouldGenerateDetailedInvoice) {
+        const retrospectiveInvoice = await paymentLinksService.createPaidStripeInvoice(
+          booking,
+          pricingData,
+          {}
+        );
+        invoiceUrl = retrospectiveInvoice.hosted_invoice_url;
+        invoicePdf = retrospectiveInvoice.invoice_pdf;
+        invoiceNumber = retrospectiveInvoice.number;
+        paidTotalAmount = (retrospectiveInvoice.amount_paid || retrospectiveInvoice.total || 0) / 100;
       }
 
       invoiceDetails = {
@@ -733,7 +745,9 @@ exports.sendStripeInvoice = async (req, res) => {
         await booking.update({
           invoice_generation_status: 'failed'
         });
-        return res.status(400).json({ success: false, message: 'Cannot generate invoice for $0.' });
+        const zeroError = new Error('Cannot generate invoice for $0.');
+        zeroError.statusCode = 400;
+        throw zeroError;
       }
 
       const stripeInvoice = await paymentLinksService.createStripeInvoice(
@@ -745,10 +759,9 @@ exports.sendStripeInvoice = async (req, res) => {
         await booking.update({
           invoice_generation_status: 'failed'
         });
-        return res.status(409).json({
-          success: false,
-          message: 'Payment is completed, but booking status is not updated yet. Please sync payment status and try again.'
-        });
+        const paidConflictError = new Error('Payment is completed, but booking status is not updated yet. Please sync payment status and try again.');
+        paidConflictError.statusCode = 409;
+        throw paidConflictError;
       }
       
       invoiceDetails = {
@@ -765,32 +778,12 @@ exports.sendStripeInvoice = async (req, res) => {
       invoice_generation_status: 'completed'
     });
 
-    // --- SEND THE EMAIL ---
-    const userData = { name: recipientName, email: recipientEmail };
-    const emailResult = await emailService.sendInvoiceEmail(userData, invoiceDetails);
-
-    if (!emailResult.success) {
-        console.error("Email failed to send but invoice was generated:", emailResult.error);
-    }
-
-    const associatedLead = await db.sales_leads.findOne({ where: { booking_id: parsedBookingId } });
-if (associatedLead) {
-    await associatedLead.update({ lead_status: 'proposal_sent' });
-    
-    await db.sales_lead_activities.create({
-        lead_id: associatedLead.lead_id,
-        activity_type: 'invoice_sent',
-        activity_data: { invoice_number: invoiceDetails.invoiceNumber },
-        performed_by_user_id: req.userId
-    });
-}
-
-    return res.status(200).json({
-      success: true,
-      message: invoiceDetails.isPaid ? 'Receipt sent successfully' : 'Invoice sent successfully',
-      data: invoiceDetails
-    });
-
+    return {
+      parsedBookingId,
+      recipientName,
+      recipientEmail,
+      invoiceDetails
+    };
   } catch (error) {
     try {
       if (lockTransaction && !lockTransaction.finished) {
@@ -799,19 +792,140 @@ if (associatedLead) {
     } catch (rollbackError) {
       console.error('Failed to rollback invoice generation lock transaction:', rollbackError);
     }
-    try {
-      if (req?.body?.booking_id) {
-        await db.stream_project_booking.update({
-          invoice_generation_status: 'failed'
-        }, {
-          where: { stream_project_booking_id: req.body.booking_id }
-        });
+    if (!error.statusCode) {
+      try {
+        if (bookingId) {
+          await db.stream_project_booking.update({
+            invoice_generation_status: 'failed'
+          }, {
+            where: { stream_project_booking_id: bookingId }
+          });
+        }
+      } catch (updateError) {
+        console.error('Failed to record invoice generation failure:', updateError);
       }
-    } catch (updateError) {
-      console.error('Failed to record invoice generation failure:', updateError);
     }
+    throw error;
+  }
+};
+
+const fetchRemoteFileBuffer = async (url, redirectCount = 0) => {
+  if (!url) throw new Error('File URL is required');
+  if (redirectCount > 5) throw new Error('Too many redirects while fetching file');
+
+  return new Promise((resolve, reject) => {
+    https.get(url, (response) => {
+      const statusCode = response.statusCode || 500;
+      const location = response.headers.location;
+
+      if ([301, 302, 303, 307, 308].includes(statusCode) && location) {
+        response.resume();
+        fetchRemoteFileBuffer(location, redirectCount + 1).then(resolve).catch(reject);
+        return;
+      }
+
+      if (statusCode < 200 || statusCode >= 300) {
+        response.resume();
+        reject(new Error(`Failed to fetch file. Status: ${statusCode}`));
+        return;
+      }
+
+      const chunks = [];
+      response.on('data', (chunk) => chunks.push(chunk));
+      response.on('end', () => {
+        resolve({
+          buffer: Buffer.concat(chunks),
+          contentType: response.headers['content-type'] || 'application/pdf'
+        });
+      });
+      response.on('error', reject);
+    }).on('error', reject);
+  });
+};
+
+exports.previewStripeInvoice = async (req, res) => {
+  try {
+    const { booking_id } = req.body;
+    const { invoiceDetails } = await prepareInvoiceDetailsForBooking(booking_id, req.userId || null);
+
+    return res.status(200).json({
+      success: true,
+      message: invoiceDetails.isPaid ? 'Receipt preview ready' : 'Invoice preview ready',
+      data: invoiceDetails
+    });
+  } catch (error) {
+    console.error('Stripe Invoice Preview Error:', error);
+    const status = error.statusCode || 500;
+    return res.status(status).json({ success: false, message: error.message });
+  }
+};
+
+exports.getStripeInvoicePdf = async (req, res) => {
+  try {
+    const { booking_id } = req.params;
+    const forceDownload = String(req.query.download || '').toLowerCase() === '1' || String(req.query.download || '').toLowerCase() === 'true';
+    const { invoiceDetails } = await prepareInvoiceDetailsForBooking(booking_id, req.userId || null);
+
+    if (!invoiceDetails?.invoicePdf) {
+      return res.status(404).json({
+        success: false,
+        message: 'Invoice PDF is not available for this booking'
+      });
+    }
+
+    const { buffer, contentType } = await fetchRemoteFileBuffer(invoiceDetails.invoicePdf);
+    const safeInvoiceNumber = String(invoiceDetails.invoiceNumber || 'invoice').replace(/[^\w.-]+/g, '_');
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `${forceDownload ? 'attachment' : 'inline'}; filename="${safeInvoiceNumber}.pdf"`);
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    return res.status(200).send(buffer);
+  } catch (error) {
+    console.error('Stripe Invoice PDF Proxy Error:', error);
+    const status = error.statusCode || 500;
+    return res.status(status).json({ success: false, message: error.message });
+  }
+};
+
+exports.sendStripeInvoice = async (req, res) => {
+  try {
+    const { booking_id } = req.body;
+    const {
+      parsedBookingId,
+      recipientName,
+      recipientEmail,
+      invoiceDetails
+    } = await prepareInvoiceDetailsForBooking(booking_id, req.userId || null);
+
+    const userData = { name: recipientName, email: recipientEmail };
+    const emailResult = await emailService.sendInvoiceEmail(userData, invoiceDetails);
+
+    if (!emailResult.success) {
+        console.error("Email failed to send but invoice was generated:", emailResult.error);
+    }
+
+    const associatedLead = await db.sales_leads.findOne({ where: { booking_id: parsedBookingId } });
+    if (associatedLead) {
+      await associatedLead.update({ lead_status: 'proposal_sent' });
+
+      await db.sales_lead_activities.create({
+        lead_id: associatedLead.lead_id,
+        activity_type: 'invoice_sent',
+        activity_data: { invoice_number: invoiceDetails.invoiceNumber },
+        performed_by_user_id: req.userId
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: invoiceDetails.isPaid ? 'Receipt sent successfully' : 'Invoice sent successfully',
+      data: invoiceDetails
+    });
+
+  } catch (error) {
     console.error('Stripe Invoice Error:', error);
-    res.status(500).json({ success: false, message: error.message });
+    const status = error.statusCode || 500;
+    res.status(status).json({ success: false, message: error.message });
   }
 };
 
