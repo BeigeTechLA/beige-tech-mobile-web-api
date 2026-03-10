@@ -10,5 +10,6 @@ router.get('/get-shoot-status', optionalAuth, client.getShootStatusForUser);
 router.get('/get-my-shoots', optionalAuth, client.getAllProjectDetailsForUser);
 router.get('/get-project/:project_id', optionalAuth, client.getProjectDetailsForUser);
 router.get('/get-recent-activity', optionalAuth, client.getRecentActivityForUser);
+router.post('/submit-project-form',optionalAuth, client.submitProjectForm);
 
 module.exports = router;

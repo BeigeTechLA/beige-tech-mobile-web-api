@@ -23,7 +23,8 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   assigned_crew,
   assigned_equipment,
   project_brief,
-  event_type_master, payment_transactions, assigned_post_production_member, post_production_members, quotes } = require('../models');
+  event_type_master, payment_transactions, assigned_post_production_member, post_production_members, quotes, project_form_submissions,
+  sales_leads, sales_lead_activities } = require('../models');
 
 function toArray(value) {
   if (!value) return [];
@@ -802,4 +803,118 @@ exports.getRecentActivityForUser = async (req, res) => {
       message: 'Internal server error',
     });
   }
+};
+
+exports.submitProjectForm = async (req, res) => {
+    try {
+        const user_id = req.user?.userId;
+        const {
+            project_id,
+            email,
+            full_name,
+            phone_number,
+            time_zone,
+            onsite_contact_info,
+            project_types,
+            project_type_other,
+            brief_overview,
+            num_people_attending,
+            event_date,
+            additional_dates,
+            event_agenda,
+            service_times,
+            location_address,
+            google_maps_link,
+            location_specification,
+            location_scouting_refs,
+            shot_list,
+            visual_references,
+            specific_instructions,
+            creative_dress_code,
+            post_production_ideas,
+            preferred_songs,
+            additional_info,
+            wants_to_learn_more,
+            form_user_friendliness_rating
+        } = req.body;
+
+        if (!project_id || !email || !full_name || !phone_number || !time_zone || !brief_overview || !event_date) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Please provide all required fields (Project ID, Email, Name, Phone, Time Zone, Brief Overview, and Event Date)." 
+            });
+        }
+
+        const booking = await stream_project_booking.findByPk(project_id);
+        if (!booking) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Project/Booking not found." 
+            });
+        }
+
+        const submission = await project_form_submissions.create({
+            project_id,
+            email,
+            full_name,
+            phone_number,
+            time_zone,
+            onsite_contact_info: onsite_contact_info || 'N/A',
+            project_types,
+            project_type_other,
+            brief_overview,
+            num_people_attending,
+            event_date,
+            additional_dates,
+            event_agenda: event_agenda || 'TBD',
+            service_times: service_times || 'N/A',
+            location_address,
+            google_maps_link,
+            location_specification: location_specification || 'Indoors',
+            location_scouting_refs,
+            shot_list: shot_list || 'TBD',
+            visual_references: visual_references || 'TBD',
+            specific_instructions,
+            creative_dress_code: creative_dress_code || 'None',
+            post_production_ideas,
+            preferred_songs,
+            additional_info,
+            wants_to_learn_more: wants_to_learn_more ? 1 : 0,
+            form_user_friendliness_rating,
+            created_at: new Date(),
+            created_by: user_id || null
+        });
+
+        const lead = await sales_leads.findOne({
+            where: { booking_id: project_id },
+            attributes: ['lead_id']
+        });
+
+        if (lead) {
+            await sales_lead_activities.create({
+                lead_id: lead.lead_id,
+                activity_type: 'form_submitted',
+                notes: `Client (${full_name}) submitted the detailed Project Form via software.`,
+                performed_by_user_id: user_id || null,
+                created_at: new Date()
+            });
+        }
+
+        res.json({
+            success: true,
+            message: "Project form submitted and saved successfully.",
+            data: {
+                submission_id: submission.id,
+                project_id: submission.project_id
+            }
+        });
+
+    } catch (error) {
+        console.error('SubmitProjectForm Error:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: "Internal Server Error", 
+            error: error.message 
+        });
+    }
 };
