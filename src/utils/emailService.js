@@ -53,7 +53,8 @@ const {
   SALES_PAYMENT_SUCCESS_TEMPLATE_ID,
   SALES_LEAD_NOTIFICATION_TEMPLATE_ID,
   CLIENT_SIGNUP_NOTIFICATION_TEMPLATE_ID,
-  CREW_SIGNUP_NOTIFICATION_TEMPLATE_ID
+  CREW_SIGNUP_NOTIFICATION_TEMPLATE_ID,
+  CP_SIGNUP_WELCOME_TEMPLATE_ID
 } = require('../config/sendgridTemplates');
 
 const formatDate = (value) => {
@@ -507,6 +508,52 @@ const sendClientSignupWelcomeEmail = async (userData) => {
   } catch (error) {
     console.error(
       'Error sending client signup welcome email via SendGrid:',
+      error?.response?.body || error.message
+    );
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Send creative partner signup welcome email via SendGrid dynamic template
+ * Trigger: successful cp registration
+ * @param {Object} userData - User details
+ */
+const sendCPSignupWelcomeEmail = async (userData) => {
+  try {
+    if (!process.env.SENDGRID_API_KEY) {
+      console.error('SendGrid API key missing. Skipping client signup welcome email.');
+      return { success: false, error: 'SENDGRID_API_KEY is not configured' };
+    }
+
+    if (!userData?.email) {
+      return { success: false, error: 'CP email is required' };
+    }
+
+    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    if (!fromEmail) {
+      return { success: false, error: 'Sender email not configured' };
+    }
+
+    const msg = {
+      to: userData.email,
+      from: {
+        email: fromEmail,
+        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+      },
+      templateId: CP_SIGNUP_WELCOME_TEMPLATE_ID,
+      dynamicTemplateData: {
+        first_name: userData.first_name,
+        frontendUrl: `${process.env.FRONTEND_URL}/creator/dashboard`
+      }
+    };
+
+    await sgMail.send(msg);
+    console.log(`CP signup welcome email sent to ${userData.email} using SendGrid template.`);
+    return { success: true };
+  } catch (error) {
+    console.error(
+      'Error sending cp signup welcome email via SendGrid:',
       error?.response?.body || error.message
     );
     return { success: false, error: error.message };
@@ -1946,5 +1993,6 @@ module.exports = {
   sendCPStatusUpdateByRequest,
   sendCPNewBookingRequestEmail,
   sendNewClientSignupNotification,
-  sendNewCrewSignupNotification
+  sendNewCrewSignupNotification,
+  sendCPSignupWelcomeEmail
 };
