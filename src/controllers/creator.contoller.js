@@ -27,7 +27,7 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   project_brief,
   event_type_master,
   crew_availability,
-  crew_equipment, crew_equipment_photos, activity_logs, equipment_request , crew_roles} = require('../models');
+  crew_equipment, crew_equipment_photos, activity_logs, equipment_request , crew_roles, users } = require('../models');
 
 const moment = require('moment');
 
@@ -3126,6 +3126,70 @@ exports.checkVerificationStatus = async (req, res) => {
       code: constants.INTERNAL_SERVER_ERROR.code,
       message: constants.INTERNAL_SERVER_ERROR.message,
       data: null,
+    });
+  }
+};
+
+exports.checkCrewStatus = async (req, res) => {
+  try {
+    if (req.userRole !== 'Creator') {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Only creatives can access this API"
+      });
+    }
+
+    const userId = req.userId;
+
+    const user = await users.findOne({
+      where: { id: userId },
+      attributes: ['email']
+    });
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        status: "inactive",
+        message: "User account no longer exists"
+      });
+    }
+
+    const crew = await crew_members.findOne({
+      where: { email: user.email },
+      attributes: ['crew_member_id', 'is_active']
+    });
+
+    // Crew hard deleted
+    if (!crew) {
+      return res.status(401).json({
+        success: false,
+        status: "inactive",
+        message: "Crew account has been deleted"
+      });
+    }
+
+    // Soft delete
+    if (crew.is_active == 0) {
+      return res.status(401).json({
+        success: false,
+        status: "inactive",
+        message: "Crew account is inactive"
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      status: "active",
+      crew_member_id: crew.crew_member_id,
+      message: "Crew account is active"
+    });
+
+  } catch (error) {
+    console.error("checkCrewStatus error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error"
     });
   }
 };
