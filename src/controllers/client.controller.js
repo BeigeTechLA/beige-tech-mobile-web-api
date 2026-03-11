@@ -693,6 +693,13 @@ exports.getProjectDetailsForUser = async (req, res) => {
           model: crew_members,
           as: 'crew_member',
           attributes: ['crew_member_id', 'first_name', 'last_name', 'primary_role'],
+          include: [
+            {
+              model: crew_member_files,
+              as: 'crew_member_files',
+              where: { file_type: 'profile_photo' }
+            },
+          ],
         },
       ],
     });
