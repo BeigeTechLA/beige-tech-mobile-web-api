@@ -5,6 +5,7 @@ const router = express.Router();
 
 const creator = require('../controllers/creator.contoller');
 const { checkCreatorVerification } = require('../middleware/creatorVerification');
+const { authenticate } = require('../middleware/auth.middleware');
 
 // router.use(checkCreatorVerification);
 
@@ -42,6 +43,7 @@ router.post('/dashboard-details', creator.getDashboardDetails);
 router.post('/get-crew-stats', creator.getCrewShootStats);
 router.get('/get-random-crew', creator.getRandomCrewMembers);
 router.post('/check-verification-status', creator.checkVerificationStatus);
+router.get('/check-cp-status', authenticate, creator.checkCrewStatus);
 
 
 module.exports = router;
