@@ -141,6 +141,8 @@ exports.requireSalesRep = async (req, res, next) => {
       });
     }
 
+    req.userRole = userRole;
+
     next();
 
   } catch (error) {
