@@ -4,7 +4,7 @@ const salesLeadsController = require('../controllers/sales-leads.controller');
 const discountsController = require('../controllers/discounts.controller');
 const paymentLinksController = require('../controllers/payment-links.controller');
 const salesDashboardController = require('../controllers/sales-dashboard.controller');
-const { authenticate, requireSalesRepOrAdmin, requireAdmin } = require('../middleware/auth.middleware');
+const { authenticate, requireSalesRepOrAdmin, requireSalesRep, requireAdmin } = require('../middleware/auth.middleware');
 
 /**
  * Sales Routes

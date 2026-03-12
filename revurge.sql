@@ -259,3 +259,16 @@ ALTER TABLE `project_form_submissions`
   DROP `additional_dates`,
   DROP `service_times`,
   DROP `google_maps_link`;
+
+-- generate affiliate records with referral codes for active users missing affiliates
+INSERT INTO affiliates (user_id, referral_code, status, created_at, updated_at)
+SELECT 
+    u.id,
+    UPPER(SUBSTRING(MD5(RAND()),1,6)),
+    'active',
+    NOW(),
+    NOW()
+FROM users u
+LEFT JOIN affiliates a ON a.user_id = u.id
+WHERE a.user_id IS NULL
+AND u.is_active = 1;
