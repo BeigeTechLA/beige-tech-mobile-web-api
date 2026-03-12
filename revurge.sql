@@ -249,3 +249,13 @@ ALTER TABLE `project_form_submissions`
   MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
 
 ALTER TABLE `project_form_submissions` ADD `is_active` INT NOT NULL DEFAULT '1' AFTER `form_user_friendliness_rating`, ADD `created_by` INT NULL DEFAULT NULL AFTER `is_active`;
+
+ALTER TABLE `project_form_submissions`
+  DROP `email`,
+  DROP `full_name`,
+  DROP `phone_number`,
+  DROP `time_zone`,
+  DROP `event_date`,
+  DROP `additional_dates`,
+  DROP `service_times`,
+  DROP `google_maps_link`;

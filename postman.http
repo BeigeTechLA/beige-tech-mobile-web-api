@@ -755,11 +755,7 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "project_id": 921,
-  "email": "harsh.panchal@revurge.com",
-  "full_name": "Harsh Panchal",
-  "phone_number": "+1 555-010-9988",
-  "time_zone": "Central Time",
+  "project_id": 833,
   "onsite_contact_info": "Jane Doe - 555-0123",
   "project_types": [
     "Corporate Event",
@@ -768,12 +764,8 @@ Authorization: {{TOKEN}}
   "project_type_other": "",
   "brief_overview": "This is a corporate conference with guest speakers and workshops. We need high-quality highlights for our social media.",
   "num_people_attending": "250",
-  "event_date": "2025-06-15",
-  "additional_dates": "June 16th and 17th",
   "event_agenda": "9am: Entrance & Kickoff, 1pm: Keynote Speaker, 5pm: Networking & Drinks",
-  "service_times": "09:00 am (CST) - 06:00 pm (CST)",
   "location_address": "800 N Michigan Ave, Chicago, IL 60611",
-  "google_maps_link": "https://maps.app.goo.gl/example",
   "location_specification": ["Indoors"],
   "location_scouting_refs": "Modern ballroom with high ceilings and natural lighting.",
   "shot_list": "Wide angle shots of the venue, close-ups of the speakers, and candidate reactions from the crowd.",
