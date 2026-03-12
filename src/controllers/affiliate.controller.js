@@ -1132,7 +1132,7 @@ exports.updateReferralCode = async (req, res) => {
     });
 
     if (existingCode) {
-      return res.status(409).json({
+      return res.status(200).json({
         success: false,
         message: "Referral code already in use by another affiliate",
       });
