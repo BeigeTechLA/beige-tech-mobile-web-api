@@ -12,5 +12,6 @@ router.get('/get-project/:project_id', optionalAuth, client.getProjectDetailsFor
 router.get('/get-recent-activity', optionalAuth, client.getRecentActivityForUser);
 router.post('/submit-project-form',optionalAuth, client.submitProjectForm);
 router.get('/get-project-form-submission', optionalAuth, client.getPendingProjectForms);
+router.post('/submit-project-form-guest', client.submitProjectFormGuest);
 
 module.exports = router;
