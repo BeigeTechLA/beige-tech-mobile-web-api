@@ -143,6 +143,14 @@ router.get('/discount-codes/:code/validate', discountsController.validateDiscoun
 router.post('/discount-codes/:code/apply', discountsController.applyDiscountCode);
 
 /**
+ * @route   POST /api/sales/discount-codes/:code/clear
+ * @desc    Clear discount code from quote/booking
+ * @body    quote_id, booking_id
+ * @access  Public
+ */
+router.post('/discount-codes/:code/clear', discountsController.clearDiscountCode);
+
+/**
  * @route   GET /api/sales/discount-codes/:id
  * @desc    Get discount code details and statistics
  * @access  Sales Rep / Admin

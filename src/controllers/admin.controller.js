@@ -32,6 +32,7 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   payments } = require('../models');
   const { deleteSheetRow, updateSheetRow } = require('../utils/googleSheets');
 const leadAssignmentService = require('../services/lead-assignment.service');
+const db = require('../models');
 // const NodeGeocoder = require('node-geocoder');
 
 // Initialize geocoder
@@ -7625,6 +7626,33 @@ exports.getBookingSummaryById = async (req, res) => {
                 pricing.shoot_cost += total;
             }
         });
+
+        // 7b. Paid total + discount breakdown (if available)
+        let paidTotal = pricing.total;
+        let referralCode = null;
+        if (bookingJson.payment_id) {
+            const payment = await db.payment_transactions.findByPk(bookingJson.payment_id);
+            if (payment && payment.total_amount !== null && payment.total_amount !== undefined) {
+                paidTotal = parseFloat(payment.total_amount);
+            }
+            if (payment && payment.referral_code) {
+                referralCode = payment.referral_code;
+            }
+        }
+
+        let referralDiscount = 0;
+        const notes = bookingJson.primary_quote?.notes || '';
+        const referralMatch = String(notes).match(/Referral applied .*?: -\\$(\\d+(?:\\.\\d+)?)/i);
+        if (referralMatch && referralMatch[1]) {
+            referralDiscount = parseFloat(referralMatch[1]);
+        }
+        const discountCodeDiscount = Math.max(0, pricing.discount - referralDiscount);
+
+        pricing.total_paid = paidTotal;
+        pricing.discount_code_discount = discountCodeDiscount;
+        pricing.referral_discount = referralDiscount;
+        pricing.total_before_discounts = parseFloat((paidTotal + discountCodeDiscount + referralDiscount).toFixed(2));
+        pricing.referral_code = referralCode;
 
         // 8. Return Response
         res.json({
