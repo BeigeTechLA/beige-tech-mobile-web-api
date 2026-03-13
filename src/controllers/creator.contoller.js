@@ -227,7 +227,7 @@ exports.getPendingRequests = async (req, res) => {
     const currentCrew = await crew_members.findOne({ where: { crew_member_id } });
     if (!currentCrew) return res.status(404).json({ error: true, message: "Crew member not found" });
 
-    const myRoleIds = JSON.parse(currentCrew.primary_role || "[]");
+    const myRoleIds = toIdArray(currentCrew.primary_role || "[]");
     const myCategories = [...new Set(myRoleIds.map(id => ID_TO_ROLE_MAP[String(id)]).filter(Boolean))];
     const pendingRequests = await assigned_crew.findAll({
       where: { crew_member_id, crew_accept: 0 },
@@ -1164,7 +1164,7 @@ exports.getDashboardRequestCounts = async (req, res) => {
     const currentCrew = await crew_members.findOne({ where: { crew_member_id: creator_id } });
     if (!currentCrew) return res.status(404).json({ error: true, message: "Creator not found" });
 
-    const myRoleIds = JSON.parse(currentCrew.primary_role || "[]");
+    const myRoleIds = toIdArray(currentCrew.primary_role || "[]");
     const myCategories = [...new Set(myRoleIds.map(id => ID_TO_ROLE_MAP[String(id)]).filter(Boolean))];
 
     const pendingRecords = await assigned_crew.findAll({
@@ -1188,7 +1188,7 @@ exports.getDashboardRequestCounts = async (req, res) => {
       let acceptedCounts = { videographer: 0, photographer: 0, cinematographer: 0 };
       if (project.assigned_crews) {
         project.assigned_crews.forEach(ac => {
-          const acRoles = JSON.parse(ac.crew_member?.primary_role || "[]");
+          const acRoles = toIdArray(ac.crew_member?.primary_role || "[]");
           let assignedTo = acRoles.map(id => ID_TO_ROLE_MAP[String(id)]).find(cat => 
             cat && acceptedCounts[cat] < (requestedLimits[cat] || 0)
           );
