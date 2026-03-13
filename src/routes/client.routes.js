@@ -13,5 +13,6 @@ router.get('/get-booking-details/:booking_id', client.getBookingDetailsById);
 router.get('/get-recent-activity', optionalAuth, client.getRecentActivityForUser);
 router.post('/submit-project-form',optionalAuth, client.submitProjectForm);
 router.get('/get-project-form-submission', optionalAuth, client.getPendingProjectForms);
+router.post('/submit-project-form-guest', client.submitProjectFormGuest);
 
 module.exports = router;
