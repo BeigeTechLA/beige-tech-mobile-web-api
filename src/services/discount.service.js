@@ -73,14 +73,13 @@ async function checkCodeAvailability(code, bookingId = null) {
     return { valid: false, reason: 'Code not found' };
   }
   
-  // Check if active
-  if (!discountCode.is_active) {
-    return { valid: false, reason: 'Code is inactive' };
-  }
-  
   // Check expiration
   if (discountCode.expires_at && new Date() > new Date(discountCode.expires_at)) {
     return { valid: false, reason: 'Code has expired' };
+  }
+  
+  if (!discountCode.is_active) {
+    return { valid: false, reason: 'Code is inactive' };
   }
   
   // Check usage limits
