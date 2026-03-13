@@ -15,22 +15,6 @@ module.exports = function(sequelize, DataTypes) {
         key: 'stream_project_booking_id'
       }
     },
-    email: {
-      type: DataTypes.STRING(255),
-      allowNull: true
-    },
-    full_name: {
-      type: DataTypes.STRING(255),
-      allowNull: true
-    },
-    phone_number: {
-      type: DataTypes.STRING(50),
-      allowNull: false
-    },
-    time_zone: {
-      type: DataTypes.STRING(100),
-      allowNull: true
-    },
     onsite_contact_info: {
       type: DataTypes.TEXT,
       allowNull: true,
@@ -59,29 +43,12 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.STRING(100),
       allowNull: true
     },
-    event_date: {
-      type: DataTypes.DATEONLY,
-      allowNull: true
-    },
-    additional_dates: {
-      type: DataTypes.TEXT,
-      allowNull: true
-    },
     event_agenda: {
       type: DataTypes.TEXT,
       allowNull: true,
       comment: 'Program flow or TBD'
     },
-    service_times: {
-      type: DataTypes.STRING(255),
-      allowNull: true,
-      comment: 'e.g. 10:00 am (PST) - 1:00 pm (PST)'
-    },
     location_address: {
-      type: DataTypes.TEXT,
-      allowNull: true
-    },
-    google_maps_link: {
       type: DataTypes.TEXT,
       allowNull: true
     },

@@ -3132,10 +3132,12 @@ exports.checkVerificationStatus = async (req, res) => {
 
 exports.checkCrewStatus = async (req, res) => {
   try {
-    if (req.userRole !== 'Creator') {
+   const allowedRoles = ['Creator', 'Creative', 'creative'];
+
+    if (!allowedRoles.includes(req.userRole)) {
       return res.status(403).json({
         success: false,
-        message: "Access denied. Only creatives can access this API"
+        message: "Access denied. Only Creators or Creatives can access this API",
       });
     }
 

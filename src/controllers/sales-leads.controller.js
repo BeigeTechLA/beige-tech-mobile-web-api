@@ -1255,6 +1255,9 @@ exports.getLeads = async (req, res) => {
     const offset = (pageNumber - 1) * pageLimit;
 
     const whereClause = {};
+    if (req.userRole === 'sales_rep') {
+      whereClause.assigned_sales_rep_id = req.userId;
+    }
 
     // 1. Database-level filters
     if (start_date && end_date) {
@@ -1370,8 +1373,14 @@ exports.getLeadById = async (req, res) => {
   try {
     const { id } = req.params;
 
+    let whereClause = { lead_id: id };
+
+    if (req.userRole === 'sales_rep') {
+      whereClause.assigned_sales_rep_id = req.userId;
+    }
+
     const lead = await sales_leads.findOne({
-      where: { lead_id: id },
+      where: whereClause,
       include: [
         {
           model: users,

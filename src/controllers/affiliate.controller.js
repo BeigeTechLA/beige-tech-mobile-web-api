@@ -1101,8 +1101,15 @@ exports.updateReferralCode = async (req, res) => {
       });
     }
 
-    // Normalize referral code (optional but recommended)
+    // Normalize referral code
     const normalizedCode = referral_code.trim().toUpperCase();
+
+    if (normalizedCode.length < 4 || normalizedCode.length > 20) {
+      return res.status(400).json({
+        success: false,
+        message: "Referral code must be between 4 and 20 characters long",
+      });
+    }
 
     // Check affiliate exists
     const affiliate = await Affiliate.findOne({
@@ -1116,7 +1123,7 @@ exports.updateReferralCode = async (req, res) => {
       });
     }
 
-    // Check referral code uniqueness (exclude current affiliate)
+    // Check referral code uniqueness
     const existingCode = await Affiliate.findOne({
       where: {
         referral_code: normalizedCode,
@@ -1125,7 +1132,7 @@ exports.updateReferralCode = async (req, res) => {
     });
 
     if (existingCode) {
-      return res.status(409).json({
+      return res.status(200).json({
         success: false,
         message: "Referral code already in use by another affiliate",
       });

@@ -817,21 +817,13 @@ exports.submitProjectForm = async (req, res) => {
         const user_id = req.user?.userId;
         const {
             project_id,
-            email,
-            full_name,
-            phone_number,
-            time_zone,
             onsite_contact_info,
             project_types,
             project_type_other,
             brief_overview,
             num_people_attending,
-            event_date,
-            additional_dates,
             event_agenda,
-            service_times,
             location_address,
-            google_maps_link,
             location_specification,
             location_scouting_refs,
             shot_list,
@@ -845,10 +837,10 @@ exports.submitProjectForm = async (req, res) => {
             form_user_friendliness_rating
         } = req.body;
 
-        if (!project_id || !email || !full_name || !phone_number || !time_zone || !brief_overview || !event_date) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Please provide all required fields (Project ID, Email, Name, Phone, Time Zone, Brief Overview, and Event Date)." 
+        if (!project_id || !brief_overview) {
+            return res.status(400).json({
+                success: false,
+                message: "Project ID and brief overview are required."
             });
         }
 
@@ -862,21 +854,13 @@ exports.submitProjectForm = async (req, res) => {
 
         const submission = await project_form_submissions.create({
             project_id,
-            email,
-            full_name,
-            phone_number,
-            time_zone,
             onsite_contact_info: onsite_contact_info || 'N/A',
             project_types,
             project_type_other,
             brief_overview,
             num_people_attending,
-            event_date,
-            additional_dates,
             event_agenda: event_agenda || 'TBD',
-            service_times: service_times || 'N/A',
             location_address,
-            google_maps_link,
             location_specification: location_specification || 'Indoors',
             location_scouting_refs,
             shot_list: shot_list || 'TBD',
@@ -901,7 +885,7 @@ exports.submitProjectForm = async (req, res) => {
             await sales_lead_activities.create({
                 lead_id: lead.lead_id,
                 activity_type: 'form_submitted',
-                notes: `Client (${full_name}) submitted the detailed Project Form via software.`,
+                notes: `Client submitted the detailed Project Form via software.`,
                 performed_by_user_id: user_id || null,
                 created_at: new Date()
             });
