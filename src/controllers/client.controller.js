@@ -1077,7 +1077,7 @@ exports.getPendingProjectForms = async (req, res) => {
 
 exports.submitProjectFormGuest = async (req, res) => {
     try {
-        // const user_id = req.user?.userId;
+        const user_id = req.user?.userId;
         const {
             project_id,
             onsite_contact_info,
