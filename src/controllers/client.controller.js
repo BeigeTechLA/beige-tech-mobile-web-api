@@ -158,6 +158,36 @@ function buildDateFilter(req) {
   return {};
 }
 
+function parseContactFromDescription(description) {
+  if (!description || typeof description !== 'string') {
+    return { name: null, phone: null };
+  }
+
+  const normalized = description.replace(/\r/g, '\n');
+  const nameMatch = normalized.match(/contact\s*name\s*:\s*(.*?)(?:\s*phone\s*:|[\n]|$)/i);
+  const phoneMatch = normalized.match(/phone\s*:\s*([+0-9][0-9\s-]{5,})/i);
+
+  const name = nameMatch ? String(nameMatch[1]).trim() : null;
+  const phone = phoneMatch ? String(phoneMatch[1]).trim() : null;
+
+  return { name: name || null, phone: phone || null };
+}
+
+function parseLocationValue(eventLocation) {
+  if (!eventLocation) return null;
+
+  try {
+    if (typeof eventLocation === "string" && (eventLocation.startsWith("{") || eventLocation.startsWith("["))) {
+      const parsed = JSON.parse(eventLocation);
+      return parsed.address || parsed.name || parsed;
+    }
+  } catch (e) {
+    return eventLocation;
+  }
+
+  return eventLocation;
+}
+
 
 exports.getClientDashboardSummary = async (req, res) => {
   try {
@@ -215,6 +245,68 @@ exports.getClientDashboardSummary = async (req, res) => {
     });
   } catch (error) {
     console.error("Get Client Dashboard Summary:", error);
+    return res.status(500).json({
+      error: true,
+      message: "Internal server error"
+    });
+  }
+};
+
+exports.getBookingDetailsById = async (req, res) => {
+  try {
+    const { booking_id } = req.params;
+    const user_id = req.user?.userId || null;
+
+    if (!booking_id) {
+      return res.status(400).json({
+        error: true,
+        message: "booking_id is required"
+      });
+    }
+
+    const whereConditions = { stream_project_booking_id: booking_id };
+    if (user_id) {
+      whereConditions.user_id = user_id;
+    }
+
+    const booking = await stream_project_booking.findOne({
+      where: whereConditions,
+      attributes: [
+        'stream_project_booking_id',
+        'guest_email',
+        'description',
+        'shoot_type',
+        'special_instructions',
+        'event_location'
+      ],
+      raw: true
+    });
+
+    if (!booking) {
+      return res.status(404).json({
+        error: true,
+        message: "Booking not found"
+      });
+    }
+
+    const contact = parseContactFromDescription(booking.description);
+    const location = parseLocationValue(booking.event_location);
+
+    return res.status(200).json({
+      error: false,
+      message: "Booking details fetched successfully",
+      data: {
+        booking_id: booking.stream_project_booking_id,
+        guest_email: booking.guest_email,
+        contact_name: contact.name,
+        contact_phone: contact.phone,
+        shoot_type: booking.shoot_type,
+        brief_overview: booking.special_instructions,
+        location
+      }
+    });
+  } catch (error) {
+    console.error("Get Booking Details By Id Error:", error);
     return res.status(500).json({
       error: true,
       message: "Internal server error"

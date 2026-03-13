@@ -9,6 +9,7 @@ router.get('/get-shoots-count-by-category', optionalAuth, client.getShootByCateg
 router.get('/get-shoot-status', optionalAuth, client.getShootStatusForUser);
 router.get('/get-my-shoots', optionalAuth, client.getAllProjectDetailsForUser);
 router.get('/get-project/:project_id', optionalAuth, client.getProjectDetailsForUser);
+router.get('/get-booking-details/:booking_id', client.getBookingDetailsById);
 router.get('/get-recent-activity', optionalAuth, client.getRecentActivityForUser);
 router.post('/submit-project-form',optionalAuth, client.submitProjectForm);
 router.get('/get-project-form-submission', optionalAuth, client.getPendingProjectForms);

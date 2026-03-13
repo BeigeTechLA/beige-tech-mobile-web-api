@@ -1,4 +1,4 @@
-const { discount_codes, sales_leads, sales_lead_activities, quotes, stream_project_booking } = require('../models');
+const { discount_codes, discount_code_usage, sales_leads, sales_lead_activities, quotes, stream_project_booking } = require('../models');
 const db = require('../models');
 const discountService = require('../services/discount.service');
 const constants = require('../utils/constants');
@@ -370,6 +370,145 @@ exports.applyDiscountCode = async (req, res) => {
     res.status(constants.INTERNAL_SERVER_ERROR.code).json({
       success: false,
       message: 'Failed to apply discount code',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * Clear discount code from quote/booking
+ * POST /api/sales/discount-codes/:code/clear
+ */
+exports.clearDiscountCode = async (req, res) => {
+  const transaction = await db.sequelize.transaction();
+
+  try {
+    const { code } = req.params;
+    const { quote_id, booking_id } = req.body;
+
+    if (!quote_id && !booking_id) {
+      await transaction.rollback();
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Quote ID or Booking ID is required'
+      });
+    }
+
+    const quote = quote_id
+      ? await quotes.findByPk(quote_id, { transaction })
+      : await quotes.findOne({ where: { booking_id }, transaction });
+
+    if (!quote) {
+      await transaction.rollback();
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Quote not found'
+      });
+    }
+
+    const booking = await stream_project_booking.findByPk(quote.booking_id || booking_id, { transaction });
+    if (!booking) {
+      await transaction.rollback();
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Booking not found'
+      });
+    }
+
+    if (booking.payment_id || booking.is_completed === 1) {
+      await transaction.rollback();
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Cannot clear discount: booking is already paid.'
+      });
+    }
+
+    if (!quote.discount_code_id && !quote.discount_amount) {
+      await transaction.commit();
+      return res.json({
+        success: true,
+        message: 'No discount code to clear',
+        data: {
+          quote_id: quote.quote_id,
+          booking_id: quote.booking_id || booking_id
+        }
+      });
+    }
+
+    if (code && quote.discount_code_id) {
+      const discountCode = await discount_codes.findByPk(quote.discount_code_id, { transaction });
+      if (!discountCode || String(discountCode.code).toUpperCase() !== String(code).toUpperCase()) {
+        await transaction.rollback();
+        return res.status(constants.BAD_REQUEST.code).json({
+          success: false,
+          message: 'Discount code mismatch'
+        });
+      }
+    }
+
+    const subtotal = parseFloat(quote.subtotal || 0);
+    const marginPercent = parseFloat(quote.margin_percent || 0);
+    const marginAmount = parseFloat((subtotal * (marginPercent / 100)).toFixed(2));
+    const total = parseFloat((subtotal + marginAmount).toFixed(2));
+    const discountCodeId = quote.discount_code_id;
+    const effectiveBookingId = quote.booking_id || booking_id;
+
+    await quote.update({
+      discount_code_id: null,
+      applied_discount_type: null,
+      applied_discount_value: null,
+      discount_percent: 0,
+      discount_amount: 0,
+      price_after_discount: subtotal,
+      total: total
+    }, { transaction });
+
+    if (discountCodeId) {
+      const usageCount = await discount_code_usage.count({
+        where: {
+          discount_code_id: discountCodeId,
+          booking_id: effectiveBookingId
+        },
+        transaction
+      });
+
+      if (usageCount > 0) {
+        await discount_code_usage.destroy({
+          where: {
+            discount_code_id: discountCodeId,
+            booking_id: effectiveBookingId
+          },
+          transaction
+        });
+
+        const discountCode = await discount_codes.findByPk(discountCodeId, { transaction });
+        if (discountCode && discountCode.current_uses > 0) {
+          const decrementBy = Math.min(discountCode.current_uses, usageCount);
+          await discountCode.decrement('current_uses', { by: decrementBy, transaction });
+        }
+      }
+    }
+
+    await transaction.commit();
+
+    res.json({
+      success: true,
+      message: 'Discount code cleared successfully',
+      data: {
+        quote_id: quote.quote_id,
+        booking_id: effectiveBookingId,
+        subtotal,
+        margin_amount: marginAmount,
+        total
+      }
+    });
+
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Error clearing discount code:', error);
+    res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to clear discount code',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
