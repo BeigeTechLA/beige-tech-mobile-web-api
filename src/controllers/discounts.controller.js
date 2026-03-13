@@ -86,6 +86,17 @@ exports.generateDiscountCode = async (req, res) => {
       });
     }
 
+    const now = new Date();
+    await discount_codes.update(
+      { is_active: 0, expires_at: now, updated_at: now },
+      {
+        where: {
+          booking_id: booking.stream_project_booking_id,
+          is_active: 1
+        }
+      }
+    );
+
     // Generate unique code
     const code = await discountService.generateUniqueCode();
 
