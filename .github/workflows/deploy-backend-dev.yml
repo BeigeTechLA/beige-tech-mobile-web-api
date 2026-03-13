@@ -1,0 +1,92 @@
+name: Deploy Backend Dev
+
+on:
+  push:
+    branches:
+      - development
+    paths-ignore:
+      - ".github/workflows/deploy-dev.yml"
+      - ".github/workflows/deploy-staging.yml"
+      - ".github/workflows/deploy-prod.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-backend-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH key
+        env:
+          BACKEND_DEV_SSH_KEY: ${{ secrets.BACKEND_DEV_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$BACKEND_DEV_SSH_KEY" > ~/.ssh/backend-dev.pem
+          chmod 600 ~/.ssh/backend-dev.pem
+
+      - name: Add server to known_hosts
+        env:
+          BACKEND_DEV_HOST: ${{ secrets.BACKEND_DEV_HOST }}
+          BACKEND_DEV_PORT: ${{ secrets.BACKEND_DEV_PORT }}
+        run: |
+          PORT="${BACKEND_DEV_PORT:-22}"
+          ssh-keyscan -p "$PORT" -H "$BACKEND_DEV_HOST" >> ~/.ssh/known_hosts
+
+      - name: Test SSH connectivity
+        env:
+          BACKEND_DEV_HOST: ${{ secrets.BACKEND_DEV_HOST }}
+          BACKEND_DEV_PORT: ${{ secrets.BACKEND_DEV_PORT }}
+          BACKEND_DEV_USER: ${{ secrets.BACKEND_DEV_USER }}
+        run: |
+          PORT="${BACKEND_DEV_PORT:-22}"
+          ssh -p "$PORT" -i ~/.ssh/backend-dev.pem -o BatchMode=yes "$BACKEND_DEV_USER@$BACKEND_DEV_HOST" "echo SSH_OK" >/dev/null
+
+      - name: Prepare remote directory
+        env:
+          BACKEND_DEV_HOST: ${{ secrets.BACKEND_DEV_HOST }}
+          BACKEND_DEV_PORT: ${{ secrets.BACKEND_DEV_PORT }}
+          BACKEND_DEV_USER: ${{ secrets.BACKEND_DEV_USER }}
+        run: |
+          PORT="${BACKEND_DEV_PORT:-22}"
+          ssh -p "$PORT" -i ~/.ssh/backend-dev.pem "$BACKEND_DEV_USER@$BACKEND_DEV_HOST" \
+            "sudo mkdir -p /var/www/beige-web-dev && sudo chown -R $BACKEND_DEV_USER:$BACKEND_DEV_USER /var/www/beige-web-dev"
+
+      - name: Upload backend code
+        env:
+          BACKEND_DEV_HOST: ${{ secrets.BACKEND_DEV_HOST }}
+          BACKEND_DEV_PORT: ${{ secrets.BACKEND_DEV_PORT }}
+          BACKEND_DEV_USER: ${{ secrets.BACKEND_DEV_USER }}
+        run: |
+          PORT="${BACKEND_DEV_PORT:-22}"
+          tar czf - \
+            --exclude=node_modules \
+            --exclude=.git \
+            --exclude=deploy \
+            --exclude=.env \
+            --exclude=*.log \
+            --exclude=logs \
+            . | ssh -p "$PORT" -i ~/.ssh/backend-dev.pem "$BACKEND_DEV_USER@$BACKEND_DEV_HOST" \
+            "cd /var/www/beige-web-dev && tar xzf -"
+
+      - name: Install dependencies and restart PM2
+        env:
+          BACKEND_DEV_HOST: ${{ secrets.BACKEND_DEV_HOST }}
+          BACKEND_DEV_PORT: ${{ secrets.BACKEND_DEV_PORT }}
+          BACKEND_DEV_USER: ${{ secrets.BACKEND_DEV_USER }}
+        run: |
+          PORT="${BACKEND_DEV_PORT:-22}"
+          ssh -p "$PORT" -i ~/.ssh/backend-dev.pem "$BACKEND_DEV_USER@$BACKEND_DEV_HOST" << 'EOF'
+          set -euo pipefail
+          cd /var/www/beige-web-dev
+          npm install --omit=dev
+          pm2 delete beige-web-dev >/dev/null 2>&1 || true
+          pm2 start npm --name beige-web-dev -- start
+          pm2 save
+          EOF

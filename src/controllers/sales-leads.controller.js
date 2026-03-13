@@ -1255,6 +1255,9 @@ exports.getLeads = async (req, res) => {
     const offset = (pageNumber - 1) * pageLimit;
 
     const whereClause = {};
+    if (req.userRole === 'sales_rep') {
+      whereClause.assigned_sales_rep_id = req.userId;
+    }
 
     // 1. Database-level filters
     if (start_date && end_date) {
@@ -1370,8 +1373,14 @@ exports.getLeadById = async (req, res) => {
   try {
     const { id } = req.params;
 
+    let whereClause = { lead_id: id };
+
+    if (req.userRole === 'sales_rep') {
+      whereClause.assigned_sales_rep_id = req.userId;
+    }
+
     const lead = await sales_leads.findOne({
-      where: { lead_id: id },
+      where: whereClause,
       include: [
         {
           model: users,
@@ -3109,7 +3118,8 @@ exports.updateLeadIntent = async (req, res) => {
  */
 async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
   const {
-    content_type, shoot_type,
+    content_type,
+    shoot_type,
     start_date_time,
     end_time,
     duration_hours,
@@ -3123,67 +3133,174 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
     event_type,
     is_draft,
     skip_discount = true,
-    skip_margin = true
+    skip_margin = true,
+    booking_type,
+    booking_days
   } = finalizeBody;
 
-let event_date = null;
-let start_time = null;
-let end_time_only = null;
+  /* -----------------------------
+  Normalize booking days
+  ------------------------------*/
 
-if (start_date_time && start_date_time.includes(' ')) {
-  const parts = start_date_time.split(' ');
-  event_date = parts[0];
-  start_time = parts[1]; 
-} else if (start_date_time && start_date_time.includes('T')) {
-  const parts = start_date_time.split('T');
-  event_date = parts[0];
-  start_time = parts[1].split('.')[0];
-}
+  let normalizedBookingDays = Array.isArray(booking_days) ? booking_days : [];
 
-if (end_time && end_time.includes(' ')) {
-  end_time_only = end_time.split(' ')[1];
-} else if (end_time && end_time.includes('T')) {
-  end_time_only = end_time.split('T')[1].split('.')[0];
-} else {
-  end_time_only = end_time;
-}
+  normalizedBookingDays = normalizedBookingDays
+    .filter((d) => d && d.date)
+    .map((d) => ({
+      date: d.date,
+      start_time: d.start_time || d.startTime || null,
+      end_time: d.end_time || d.endTime || null,
+      duration_hours: d.duration_hours != null ? Number(d.duration_hours) : null,
+      time_zone: d.time_zone || d.timeZone || null
+    }));
 
-// const updateData = {};
-// if (content_type) updateData.content_type = content_type;
-// if (shoot_type) updateData.shoot_type = shoot_type;
-// if (event_type) updateData.event_type = event_type;
-// if (event_date) updateData.event_date = event_date;
-// if (start_time) updateData.start_time = start_time;
-// if (end_time_only) updateData.end_time = end_time_only; // Use the parsed time
+  const calculateDurationHours = (startTime, endTime) => {
+    if (!startTime || !endTime) return null;
+
+    const start = new Date(`1970-01-01T${startTime}`);
+    const end = new Date(`1970-01-01T${endTime}`);
+
+    const diff = (end - start) / 3600000;
+
+    return diff > 0 ? Math.round(diff * 100) / 100 : null;
+  };
+
+  /* -----------------------------
+  Parse start_date_time
+  ------------------------------*/
+
+  let event_date = null;
+  let start_time = null;
+  let end_time_only = null;
+
+  if (start_date_time && start_date_time.includes(' ')) {
+    const parts = start_date_time.split(' ');
+    event_date = parts[0];
+    start_time = parts[1];
+  } else if (start_date_time && start_date_time.includes('T')) {
+    const parts = start_date_time.split('T');
+    event_date = parts[0];
+    start_time = parts[1].split('.')[0];
+  }
+
+  if (end_time && end_time.includes(' ')) {
+    end_time_only = end_time.split(' ')[1];
+  } else if (end_time && end_time.includes('T')) {
+    end_time_only = end_time.split('T')[1].split('.')[0];
+  } else {
+    end_time_only = end_time;
+  }
+
+  /* -----------------------------
+  Multi-day override
+  ------------------------------*/
+
+  let totalDurationHours = null;
+
+  if (booking_type === 'multi_day' && normalizedBookingDays.length > 0) {
+
+    normalizedBookingDays.sort(
+      (a, b) => new Date(a.date) - new Date(b.date)
+    );
+
+    event_date = normalizedBookingDays[0].date;
+    start_time = normalizedBookingDays[0].start_time;
+
+    totalDurationHours = normalizedBookingDays.reduce((sum, d) => {
+
+      const hours =
+        d.duration_hours ??
+        calculateDurationHours(d.start_time, d.end_time);
+
+      return sum + (hours || 0);
+
+    }, 0);
+
+    totalDurationHours =
+      totalDurationHours > 0
+        ? Math.round(totalDurationHours * 100) / 100
+        : null;
+  }
+
+  /* -----------------------------
+  Booking update
+  ------------------------------*/
 
   const updateData = {};
+
   if (content_type) updateData.content_type = content_type;
   if (shoot_type) updateData.shoot_type = shoot_type;
   if (event_type) updateData.event_type = event_type;
+
   if (event_date) updateData.event_date = event_date;
   if (start_time) updateData.start_time = start_time;
   if (end_time_only) updateData.end_time = end_time_only;
-  if (duration_hours != null) updateData.duration_hours = parseInt(duration_hours, 10);
-  if (crew_size != null) updateData.crew_size_needed = parseInt(crew_size, 10);
-  if (location != null) updateData.event_location = safeJsonStringify(location);
-  if (crew_roles != null) updateData.crew_roles = safeJsonStringify(crew_roles);
 
-  if (typeof edits_needed !== 'undefined') {
+  if (duration_hours != null)
+    updateData.duration_hours = parseInt(duration_hours, 10);
+  else if (totalDurationHours != null)
+    updateData.duration_hours = totalDurationHours;
+
+  if (crew_size != null)
+    updateData.crew_size_needed = parseInt(crew_size, 10);
+
+  if (location != null)
+    updateData.event_location = safeJsonStringify(location);
+
+  if (crew_roles != null)
+    updateData.crew_roles = safeJsonStringify(crew_roles);
+
+  if (typeof edits_needed !== 'undefined')
     updateData.edits_needed = edits_needed ? 1 : 0;
-  }
-  if (Array.isArray(video_edit_types)) updateData.video_edit_types = safeJsonStringify(video_edit_types);
-  if (Array.isArray(photo_edit_types)) updateData.photo_edit_types = safeJsonStringify(photo_edit_types);
+
+  if (Array.isArray(video_edit_types))
+    updateData.video_edit_types = safeJsonStringify(video_edit_types);
+
+  if (Array.isArray(photo_edit_types))
+    updateData.photo_edit_types = safeJsonStringify(photo_edit_types);
 
   const draftVal = normalizeIsDraft(is_draft);
   if (draftVal !== null) updateData.is_draft = draftVal;
 
   await booking.update(updateData, { transaction: tx });
 
+  /* -----------------------------
+  Save booking days
+  ------------------------------*/
+
+  if (booking_type === 'multi_day' && normalizedBookingDays.length > 0) {
+
+    await stream_project_booking_days.destroy({
+      where: { stream_project_booking_id: bookingId },
+      transaction: tx
+    });
+
+    const dayRows = normalizedBookingDays.map((d) => ({
+      stream_project_booking_id: bookingId,
+      event_date: d.date,
+      start_time: d.start_time,
+      end_time: d.end_time,
+      duration_hours:
+        d.duration_hours ??
+        calculateDurationHours(d.start_time, d.end_time),
+      time_zone: d.time_zone
+    }));
+
+    await stream_project_booking_days.bulkCreate(dayRows, {
+      transaction: tx
+    });
+  }
+
+  /* -----------------------------
+  Assign creators
+  ------------------------------*/
+
   let assignedCreatorIds = [];
-  // 2) Replace assigned crew (validate FK first!)
+
   if (Array.isArray(selected_crew_ids)) {
-    // FK safety: ensure all crew exist
+
     if (selected_crew_ids.length > 0) {
+
       const existing = await crew_members.findAll({
         where: { crew_member_id: selected_crew_ids, is_active: 1 },
         attributes: ['crew_member_id'],
@@ -3191,15 +3308,21 @@ if (end_time && end_time.includes(' ')) {
       });
 
       const existingIds = new Set(existing.map(x => x.crew_member_id));
+
       const missing = selected_crew_ids.filter(id => !existingIds.has(id));
+
       if (missing.length) {
         throw new Error(`Invalid selected_crew_ids: ${missing.join(', ')}`);
       }
     }
 
-    await assigned_crew.destroy({ where: { project_id: bookingId }, transaction: tx });
+    await assigned_crew.destroy({
+      where: { project_id: bookingId },
+      transaction: tx
+    });
 
     if (selected_crew_ids.length > 0) {
+
       const assignments = selected_crew_ids.map((creator_id) => ({
         project_id: bookingId,
         crew_member_id: creator_id,
@@ -3207,29 +3330,49 @@ if (end_time && end_time.includes(' ')) {
         is_active: 1,
         crew_accept: 0
       }));
+
       await assigned_crew.bulkCreate(assignments, { transaction: tx });
-      assignedCreatorIds = [...new Set(selected_crew_ids.map(Number).filter(Boolean))];
+
+      assignedCreatorIds =
+        [...new Set(selected_crew_ids.map(Number).filter(Boolean))];
     }
   }
 
-  // 3) pricing payload (exactly like /pricing/calculate-from-creators)
+  /* -----------------------------
+  Pricing
+  ------------------------------*/
+
   const pricingPayload = {
     creator_ids: Array.isArray(selected_crew_ids) ? selected_crew_ids : [],
-    shoot_hours: duration_hours != null ? parseInt(duration_hours, 10) : booking.duration_hours,
+
+    shoot_hours:
+      duration_hours != null
+        ? parseInt(duration_hours, 10)
+        : totalDurationHours != null
+        ? totalDurationHours
+        : booking.duration_hours,
+
     role_counts: crew_roles || (booking.crew_roles ? JSON.parse(booking.crew_roles) : {}),
-    event_type: shoot_type || event_type || booking.shoot_type || booking.event_type, 
+
+    event_type: shoot_type || event_type || booking.shoot_type || booking.event_type,
+
     shoot_start_date:
       start_date_time ||
       (booking.event_date ? `${booking.event_date}T${booking.start_time || '00:00:00.000Z'}` : null),
+
     video_edit_types: Array.isArray(video_edit_types) ? video_edit_types : [],
     photo_edit_types: Array.isArray(photo_edit_types) ? photo_edit_types : [],
+
     skip_discount: !!skip_discount,
     skip_margin: !!skip_margin
   };
 
   const pricingData = await calculateFromCreatorsInternally(pricingPayload);
 
-  // 4) expire old quote (don’t delete history)
+  /* -----------------------------
+  Quote management
+  ------------------------------*/
+
   if (booking.quote_id) {
     await quotes.update(
       { status: 'expired' },
@@ -3237,7 +3380,6 @@ if (end_time && end_time.includes(' ')) {
     );
   }
 
-  // 5) create new quote + line items
   const quote = await persistQuoteFromBreakdown({
     bookingId,
     guest_email: booking.guest_email,
@@ -3264,7 +3406,6 @@ if (end_time && end_time.includes(' ')) {
 
   const quoteId = quote.quote_id || quote.id;
 
-  // 6) attach quote_id to booking
   await booking.update({ quote_id: quoteId }, { transaction: tx });
 
   return {
@@ -3316,7 +3457,9 @@ exports.finalizeGuestBooking = async (req, res) => {
       photo_edit_types,
       is_draft,
       skip_discount = true,
-      skip_margin = true
+      skip_margin = true,
+      booking_type,
+      booking_days
     } = req.body;
 
     if (!id) {
@@ -3355,7 +3498,9 @@ exports.finalizeGuestBooking = async (req, res) => {
         photo_edit_types,
         is_draft,
         skip_discount,
-        skip_margin
+        skip_margin,
+        booking_type,
+        booking_days
       },
       tx
     });
@@ -3423,6 +3568,8 @@ exports.finalizeCreateDeal = async (req, res) => {
       // pricing flags
       skip_discount = true,
       skip_margin = true,
+      booking_type,
+      booking_days
     } = req.body;
 
     if (!user_id && !guest_email) {
@@ -3542,6 +3689,8 @@ exports.finalizeCreateDeal = async (req, res) => {
         is_draft,
         skip_discount,
         skip_margin,
+        booking_type,
+        booking_days
       },
       tx
     });

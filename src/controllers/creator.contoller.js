@@ -27,7 +27,7 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   project_brief,
   event_type_master,
   crew_availability,
-  crew_equipment, crew_equipment_photos, activity_logs, equipment_request , crew_roles} = require('../models');
+  crew_equipment, crew_equipment_photos, activity_logs, equipment_request , crew_roles, users } = require('../models');
 
 const moment = require('moment');
 
@@ -227,7 +227,7 @@ exports.getPendingRequests = async (req, res) => {
     const currentCrew = await crew_members.findOne({ where: { crew_member_id } });
     if (!currentCrew) return res.status(404).json({ error: true, message: "Crew member not found" });
 
-    const myRoleIds = JSON.parse(currentCrew.primary_role || "[]");
+    const myRoleIds = toIdArray(currentCrew.primary_role || "[]");
     const myCategories = [...new Set(myRoleIds.map(id => ID_TO_ROLE_MAP[String(id)]).filter(Boolean))];
     const pendingRequests = await assigned_crew.findAll({
       where: { crew_member_id, crew_accept: 0 },
@@ -1164,7 +1164,7 @@ exports.getDashboardRequestCounts = async (req, res) => {
     const currentCrew = await crew_members.findOne({ where: { crew_member_id: creator_id } });
     if (!currentCrew) return res.status(404).json({ error: true, message: "Creator not found" });
 
-    const myRoleIds = JSON.parse(currentCrew.primary_role || "[]");
+    const myRoleIds = toIdArray(currentCrew.primary_role || "[]");
     const myCategories = [...new Set(myRoleIds.map(id => ID_TO_ROLE_MAP[String(id)]).filter(Boolean))];
 
     const pendingRecords = await assigned_crew.findAll({
@@ -1188,7 +1188,7 @@ exports.getDashboardRequestCounts = async (req, res) => {
       let acceptedCounts = { videographer: 0, photographer: 0, cinematographer: 0 };
       if (project.assigned_crews) {
         project.assigned_crews.forEach(ac => {
-          const acRoles = JSON.parse(ac.crew_member?.primary_role || "[]");
+          const acRoles = toIdArray(ac.crew_member?.primary_role || "[]");
           let assignedTo = acRoles.map(id => ID_TO_ROLE_MAP[String(id)]).find(cat => 
             cat && acceptedCounts[cat] < (requestedLimits[cat] || 0)
           );
@@ -3126,6 +3126,72 @@ exports.checkVerificationStatus = async (req, res) => {
       code: constants.INTERNAL_SERVER_ERROR.code,
       message: constants.INTERNAL_SERVER_ERROR.message,
       data: null,
+    });
+  }
+};
+
+exports.checkCrewStatus = async (req, res) => {
+  try {
+   const allowedRoles = ['Creator', 'Creative', 'creative'];
+
+    if (!allowedRoles.includes(req.userRole)) {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Only Creators or Creatives can access this API",
+      });
+    }
+
+    const userId = req.userId;
+
+    const user = await users.findOne({
+      where: { id: userId },
+      attributes: ['email']
+    });
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        status: "inactive",
+        message: "User account no longer exists"
+      });
+    }
+
+    const crew = await crew_members.findOne({
+      where: { email: user.email },
+      attributes: ['crew_member_id', 'is_active']
+    });
+
+    // Crew hard deleted
+    if (!crew) {
+      return res.status(401).json({
+        success: false,
+        status: "inactive",
+        message: "Crew account has been deleted"
+      });
+    }
+
+    // Soft delete
+    if (crew.is_active == 0) {
+      return res.status(401).json({
+        success: false,
+        status: "inactive",
+        message: "Crew account is inactive"
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      status: "active",
+      crew_member_id: crew.crew_member_id,
+      message: "Crew account is active"
+    });
+
+  } catch (error) {
+    console.error("checkCrewStatus error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error"
     });
   }
 };

@@ -158,6 +158,36 @@ function buildDateFilter(req) {
   return {};
 }
 
+function parseContactFromDescription(description) {
+  if (!description || typeof description !== 'string') {
+    return { name: null, phone: null };
+  }
+
+  const normalized = description.replace(/\r/g, '\n');
+  const nameMatch = normalized.match(/contact\s*name\s*:\s*(.*?)(?:\s*phone\s*:|[\n]|$)/i);
+  const phoneMatch = normalized.match(/phone\s*:\s*([+0-9][0-9\s-]{5,})/i);
+
+  const name = nameMatch ? String(nameMatch[1]).trim() : null;
+  const phone = phoneMatch ? String(phoneMatch[1]).trim() : null;
+
+  return { name: name || null, phone: phone || null };
+}
+
+function parseLocationValue(eventLocation) {
+  if (!eventLocation) return null;
+
+  try {
+    if (typeof eventLocation === "string" && (eventLocation.startsWith("{") || eventLocation.startsWith("["))) {
+      const parsed = JSON.parse(eventLocation);
+      return parsed.address || parsed.name || parsed;
+    }
+  } catch (e) {
+    return eventLocation;
+  }
+
+  return eventLocation;
+}
+
 
 exports.getClientDashboardSummary = async (req, res) => {
   try {
@@ -215,6 +245,68 @@ exports.getClientDashboardSummary = async (req, res) => {
     });
   } catch (error) {
     console.error("Get Client Dashboard Summary:", error);
+    return res.status(500).json({
+      error: true,
+      message: "Internal server error"
+    });
+  }
+};
+
+exports.getBookingDetailsById = async (req, res) => {
+  try {
+    const { booking_id } = req.params;
+    const user_id = req.user?.userId || null;
+
+    if (!booking_id) {
+      return res.status(400).json({
+        error: true,
+        message: "booking_id is required"
+      });
+    }
+
+    const whereConditions = { stream_project_booking_id: booking_id };
+    if (user_id) {
+      whereConditions.user_id = user_id;
+    }
+
+    const booking = await stream_project_booking.findOne({
+      where: whereConditions,
+      attributes: [
+        'stream_project_booking_id',
+        'guest_email',
+        'description',
+        'shoot_type',
+        'special_instructions',
+        'event_location'
+      ],
+      raw: true
+    });
+
+    if (!booking) {
+      return res.status(404).json({
+        error: true,
+        message: "Booking not found"
+      });
+    }
+
+    const contact = parseContactFromDescription(booking.description);
+    const location = parseLocationValue(booking.event_location);
+
+    return res.status(200).json({
+      error: false,
+      message: "Booking details fetched successfully",
+      data: {
+        booking_id: booking.stream_project_booking_id,
+        guest_email: booking.guest_email,
+        contact_name: contact.name,
+        contact_phone: contact.phone,
+        shoot_type: booking.shoot_type,
+        brief_overview: booking.special_instructions,
+        location
+      }
+    });
+  } catch (error) {
+    console.error("Get Booking Details By Id Error:", error);
     return res.status(500).json({
       error: true,
       message: "Internal server error"
@@ -693,6 +785,13 @@ exports.getProjectDetailsForUser = async (req, res) => {
           model: crew_members,
           as: 'crew_member',
           attributes: ['crew_member_id', 'first_name', 'last_name', 'primary_role'],
+          include: [
+            {
+              model: crew_member_files,
+              as: 'crew_member_files',
+              where: { file_type: 'profile_photo' }
+            },
+          ],
         },
       ],
     });
@@ -810,21 +909,13 @@ exports.submitProjectForm = async (req, res) => {
         const user_id = req.user?.userId;
         const {
             project_id,
-            email,
-            full_name,
-            phone_number,
-            time_zone,
             onsite_contact_info,
             project_types,
             project_type_other,
             brief_overview,
             num_people_attending,
-            event_date,
-            additional_dates,
             event_agenda,
-            service_times,
             location_address,
-            google_maps_link,
             location_specification,
             location_scouting_refs,
             shot_list,
@@ -838,10 +929,10 @@ exports.submitProjectForm = async (req, res) => {
             form_user_friendliness_rating
         } = req.body;
 
-        if (!project_id || !email || !full_name || !phone_number || !time_zone || !brief_overview || !event_date) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Please provide all required fields (Project ID, Email, Name, Phone, Time Zone, Brief Overview, and Event Date)." 
+        if (!project_id || !brief_overview) {
+            return res.status(400).json({
+                success: false,
+                message: "Project ID and brief overview are required."
             });
         }
 
@@ -855,21 +946,13 @@ exports.submitProjectForm = async (req, res) => {
 
         const submission = await project_form_submissions.create({
             project_id,
-            email,
-            full_name,
-            phone_number,
-            time_zone,
             onsite_contact_info: onsite_contact_info || 'N/A',
             project_types,
             project_type_other,
             brief_overview,
             num_people_attending,
-            event_date,
-            additional_dates,
             event_agenda: event_agenda || 'TBD',
-            service_times: service_times || 'N/A',
             location_address,
-            google_maps_link,
             location_specification: location_specification || 'Indoors',
             location_scouting_refs,
             shot_list: shot_list || 'TBD',
@@ -894,7 +977,7 @@ exports.submitProjectForm = async (req, res) => {
             await sales_lead_activities.create({
                 lead_id: lead.lead_id,
                 activity_type: 'form_submitted',
-                notes: `Client (${full_name}) submitted the detailed Project Form via software.`,
+                notes: `Client submitted the detailed Project Form via software.`,
                 performed_by_user_id: user_id || null,
                 created_at: new Date()
             });
@@ -988,6 +1071,104 @@ exports.getPendingProjectForms = async (req, res) => {
             error: true, 
             message: 'Internal server error', 
             details: error.message 
+        });
+    }
+};
+
+exports.submitProjectFormGuest = async (req, res) => {
+    try {
+        const user_id = req.user?.userId;
+        const {
+            project_id,
+            onsite_contact_info,
+            project_types,
+            project_type_other,
+            brief_overview,
+            num_people_attending,
+            event_agenda,
+            location_address,
+            location_specification,
+            location_scouting_refs,
+            shot_list,
+            visual_references,
+            specific_instructions,
+            creative_dress_code,
+            post_production_ideas,
+            preferred_songs,
+            additional_info,
+            wants_to_learn_more,
+            form_user_friendliness_rating
+        } = req.body;
+
+        if (!project_id || !brief_overview) {
+            return res.status(400).json({
+                success: false,
+                message: "Project ID and brief overview are required."
+            });
+        }
+
+        const booking = await stream_project_booking.findByPk(project_id);
+        if (!booking) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Project/Booking not found." 
+            });
+        }
+
+        const submission = await project_form_submissions.create({
+            project_id,
+            onsite_contact_info: onsite_contact_info || 'N/A',
+            project_types,
+            project_type_other,
+            brief_overview,
+            num_people_attending,
+            event_agenda: event_agenda || 'TBD',
+            location_address,
+            location_specification: location_specification || 'Indoors',
+            location_scouting_refs,
+            shot_list: shot_list || 'TBD',
+            visual_references: visual_references || 'TBD',
+            specific_instructions,
+            creative_dress_code: creative_dress_code || 'None',
+            post_production_ideas,
+            preferred_songs,
+            additional_info,
+            wants_to_learn_more: wants_to_learn_more ? 1 : 0,
+            form_user_friendliness_rating,
+            created_at: new Date(),
+            created_by: user_id || null
+        });
+
+        const lead = await sales_leads.findOne({
+            where: { booking_id: project_id },
+            attributes: ['lead_id']
+        });
+
+        if (lead) {
+            await sales_lead_activities.create({
+                lead_id: lead.lead_id,
+                activity_type: 'form_submitted',
+                notes: `Client submitted the detailed Project Form via software.`,
+                performed_by_user_id: user_id || null,
+                created_at: new Date()
+            });
+        }
+
+        res.json({
+            success: true,
+            message: "Project form submitted and saved successfully.",
+            data: {
+                submission_id: submission.id,
+                project_id: submission.project_id
+            }
+        });
+
+    } catch (error) {
+        console.error('SubmitProjectForm Error:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: "Internal Server Error", 
+            error: error.message 
         });
     }
 };

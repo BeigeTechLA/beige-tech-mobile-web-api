@@ -4,7 +4,7 @@ const salesLeadsController = require('../controllers/sales-leads.controller');
 const discountsController = require('../controllers/discounts.controller');
 const paymentLinksController = require('../controllers/payment-links.controller');
 const salesDashboardController = require('../controllers/sales-dashboard.controller');
-const { authenticate, requireSalesRepOrAdmin, requireAdmin } = require('../middleware/auth.middleware');
+const { authenticate, requireSalesRepOrAdmin, requireSalesRep, requireAdmin } = require('../middleware/auth.middleware');
 
 /**
  * Sales Routes
@@ -141,6 +141,14 @@ router.get('/discount-codes/:code/validate', discountsController.validateDiscoun
  * @access  Public
  */
 router.post('/discount-codes/:code/apply', discountsController.applyDiscountCode);
+
+/**
+ * @route   POST /api/sales/discount-codes/:code/clear
+ * @desc    Clear discount code from quote/booking
+ * @body    quote_id, booking_id
+ * @access  Public
+ */
+router.post('/discount-codes/:code/clear', discountsController.clearDiscountCode);
 
 /**
  * @route   GET /api/sales/discount-codes/:id
