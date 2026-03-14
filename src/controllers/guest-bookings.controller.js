@@ -1297,7 +1297,7 @@ exports.getBookingPaymentDetails = async (req, res) => {
                 {
                   model: crew_member_files,
                   as: 'crew_member_files',
-                  where: { file_type: 'profile_image' },
+                  where: { file_type: 'profile_photo' },
                   required: false,
                   attributes: ['file_path'],
                   limit: 1
