@@ -32,6 +32,48 @@ function determinePricingMode(eventType) {
   return 'general';
 }
 
+function normalizeEditTypeCounts(editTypes) {
+  const counts = new Map();
+
+  if (!editTypes) return counts;
+
+  if (Array.isArray(editTypes)) {
+    editTypes.forEach((entry) => {
+      if (!entry) return;
+      if (typeof entry === 'string') {
+        counts.set(entry, (counts.get(entry) || 0) + 1);
+        return;
+      }
+
+      if (typeof entry === 'object') {
+        const slug = entry.slug || entry.key || entry.value;
+        const rawQty = entry.quantity ?? entry.qty ?? entry.count ?? 1;
+        const qty = Number(rawQty);
+        if (!slug || !Number.isFinite(qty) || qty <= 0) return;
+        counts.set(slug, (counts.get(slug) || 0) + qty);
+      }
+    });
+
+    return counts;
+  }
+
+  if (typeof editTypes === 'object') {
+    Object.entries(editTypes).forEach(([slug, rawQty]) => {
+      const qty = Number(rawQty);
+      if (!slug || !Number.isFinite(qty) || qty <= 0) return;
+      counts.set(slug, (counts.get(slug) || 0) + qty);
+    });
+  }
+
+  return counts;
+}
+
+function mergeEditTypeCounts(target, source) {
+  source.forEach((qty, slug) => {
+    target.set(slug, (target.get(slug) || 0) + qty);
+  });
+}
+
 /**
  * Get the full pricing catalog with categories and items
  * @param {string} mode - 'general', 'wedding', or null for all
@@ -428,8 +470,8 @@ function calculateRushFee(shootStartDate) {
   const start = new Date(shootStartDate);
   const diffInHours = (start - now) / (1000 * 60 * 60);
 
-  if (diffInHours <= 24) return 500;
-  if (diffInHours <= 72) return 250;
+  if (diffInHours <= 24) return 250;
+  if (diffInHours <= 72) return 125;
   return 0;
 }
 
@@ -464,7 +506,10 @@ async function calculateQuote({
     // 1. Fetch all relevant items from DB in one go
     // We fetch by ID (for crew) and by SLUG (for edits)
     const creatorItemIds = items.map(i => i.item_id).filter(id => id !== null);
-    const editSlugs = [...videoEditTypes, ...photoEditTypes];
+    const editCounts = new Map();
+    mergeEditTypeCounts(editCounts, normalizeEditTypeCounts(videoEditTypes));
+    mergeEditTypeCounts(editCounts, normalizeEditTypeCounts(photoEditTypes));
+    const editSlugs = Array.from(editCounts.keys());
 
     const pricingItemsFromDb = await db.pricing_items.findAll({
       where: { 
@@ -512,36 +557,37 @@ async function calculateQuote({
     }
 
     // 3. Process Edits (Video & Photo)
-    for (const slug of editSlugs) {
+    for (const [slug, quantity] of editCounts.entries()) {
       const dbEdit = slugMap.get(slug);
       if (!dbEdit) continue;
 
       const unitPrice = parseFloat(dbEdit.rate);
-      subtotal += unitPrice;
+      const lineTotal = unitPrice * quantity;
+      subtotal += lineTotal;
       lineItems.push({
         item_id: dbEdit.item_id,
         item_name: dbEdit.name,
         category_name: "Editing Services",
         category_slug: "editing",
-        quantity: 1,
+        quantity,
         unit_price: unitPrice,
-        line_total: unitPrice,
+        line_total: parseFloat(lineTotal.toFixed(2)),
         is_mandatory: false
       });
     }
 
     // 4. Pre-Production Fees
     const preProdMap = {
-      photo: { wedding: 500, corporate: 500, private: 250, brand_product: 500, social_content: 250, people_teams: 500, behind_scenes: 250 },
-      video: { wedding: 500, corporate: 500, private: 250, advertising: 250, social_content: 250, podcast: 250, short_film: 250, music: 750, podcast_shows: 250 }
+      photo: { wedding: 250, corporate: 250, private: 250, brand_product: 250, social_content: 250, people_teams: 250, behind_scenes: 250 },
+      video: { wedding: 250, corporate: 250, private: 250, advertising: 250, social_content: 250, podcast: 250, short_film: 250, music: 250, podcast_shows: 250 }
     };
 
     const hasPhoto = lineItems.some(li => li.category_slug === 'photography' || li.item_name.toLowerCase().includes('photo'));
     const hasVideo = lineItems.some(li => li.category_slug === 'videography' || li.item_name.toLowerCase().includes('video'));
 
-    let preProdTotal = 0;
-    if (hasPhoto && preProdMap.photo[normalizedType]) preProdTotal += preProdMap.photo[normalizedType];
-    if (hasVideo && preProdMap.video[normalizedType]) preProdTotal += preProdMap.video[normalizedType];
+    const photoPreProd = hasPhoto ? (preProdMap.photo[normalizedType] || 0) : 0;
+    const videoPreProd = hasVideo ? (preProdMap.video[normalizedType] || 0) : 0;
+    const preProdTotal = Math.max(photoPreProd, videoPreProd);
 
     if (preProdTotal > 0) {
       subtotal += preProdTotal;
