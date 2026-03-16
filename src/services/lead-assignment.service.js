@@ -1,4 +1,4 @@
-const { users, sales_leads, user_type } = require('../models');
+const { users, sales_leads, client_leads, user_type } = require('../models');
 const { Op } = require('sequelize');
 const sequelize = require('../db');
 
@@ -31,11 +31,15 @@ async function getActiveSalesReps() {
  * @param {number} hours - Number of hours to look back (default: 24)
  * @returns {Promise<Map>} Map of rep ID to lead count
  */
-async function getLeadCountsPerRep(salesRepIds, hours = 24) {
+async function getLeadCountsPerRep(salesRepIds, hours = 24, options = {}) {
+  const {
+    leadModel = sales_leads,
+    transaction = null
+  } = options;
   const cutoffDate = new Date();
   cutoffDate.setHours(cutoffDate.getHours() - hours);
   
-  const leadCounts = await sales_leads.findAll({
+  const leadCounts = await leadModel.findAll({
     attributes: [
       'assigned_sales_rep_id',
       [sequelize.fn('COUNT', sequelize.col('lead_id')), 'count']
@@ -45,7 +49,8 @@ async function getLeadCountsPerRep(salesRepIds, hours = 24) {
       created_at: { [Op.gte]: cutoffDate }
     },
     group: ['assigned_sales_rep_id'],
-    raw: true
+    raw: true,
+    transaction
   });
   
   // Create map with all reps initialized to 0
@@ -92,6 +97,7 @@ function findRepWithFewestLeads(salesReps, leadCounts) {
  */
 async function autoAssignLead(leadId, options = {}) {
   const transaction = options.transaction || null;
+  const leadModel = options.leadModel || sales_leads;
 
   const autoAssignEnabled = process.env.SALES_AUTO_ASSIGNMENT !== 'false';
   
@@ -109,13 +115,13 @@ async function autoAssignLead(leadId, options = {}) {
 
   // 2️⃣ Get lead counts for last 24 hours
   const salesRepIds = salesReps.map(rep => rep.id);
-  const leadCounts = await getLeadCountsPerRep(salesRepIds, 24, { transaction });
+  const leadCounts = await getLeadCountsPerRep(salesRepIds, 24, { leadModel, transaction });
 
   // 3️⃣ Find rep with fewest leads
   const selectedRep = findRepWithFewestLeads(salesReps, leadCounts);
 
   // 4️⃣ Update lead WITH SAME TRANSACTION
-  await sales_leads.update(
+  await leadModel.update(
     { assigned_sales_rep_id: selectedRep.id },
     { 
       where: { lead_id: leadId },
@@ -380,7 +386,7 @@ const getLeadBookingStatus = (lead, booking) => {
   if (lead.lead_status === 'manual_lead_created') return 'Manual – Lead Created';
 
   // Fallback / Default
-  return 'Singed Up';
+  return 'Signed Up';
 };
 
 const getLeadIntent = ({ lead, booking }) => {

@@ -272,3 +272,88 @@ FROM users u
 LEFT JOIN affiliates a ON a.user_id = u.id
 WHERE a.user_id IS NULL
 AND u.is_active = 1;
+
+-- 16-03-26
+
+ALTER TABLE `sales_leads` ADD `created_from` TINYINT NULL DEFAULT NULL COMMENT '1=Web, 2=App' AFTER `intent_updated_at`;
+ALTER TABLE `users` ADD `created_from` TINYINT NULL DEFAULT NULL COMMENT '1=Web, 2=App';
+ALTER TABLE `crew_members` ADD `created_from` TINYINT NULL DEFAULT NULL COMMENT '1=Web, 2=App';
+ALTER TABLE `sales_lead_activities` CHANGE `activity_data` `activity_data` JSON NULL DEFAULT NULL;
+
+CREATE TABLE IF NOT EXISTS client_leads (
+  lead_id INT PRIMARY KEY AUTO_INCREMENT,
+  booking_id INT NULL,
+  user_id INT NULL,
+  guest_email VARCHAR(255) NULL,
+  client_name VARCHAR(255) NULL,
+  phone VARCHAR(20) NULL,
+  lead_type ENUM('self_serve', 'sales_assisted') NOT NULL,
+  lead_status VARCHAR(100) NOT NULL DEFAULT 'in_progress_self_serve',
+  intent ENUM('Hot', 'Warm', 'Cold') NULL,
+  lead_source VARCHAR(50) NULL,
+  assigned_sales_rep_id INT NULL,
+  last_activity_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  contacted_sales_at TIMESTAMP NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  intent_updated_by INT NULL,
+  intent_updated_at TIMESTAMP NULL,
+  created_from INT NULL,
+  INDEX idx_client_lead_status (lead_status),
+  INDEX idx_client_assigned_rep (assigned_sales_rep_id),
+  INDEX idx_client_booking (booking_id),
+  INDEX idx_client_last_activity (last_activity_at),
+  INDEX idx_client_lead_type (lead_type),
+  INDEX idx_client_user_id (user_id),
+  CONSTRAINT fk_client_leads_booking FOREIGN KEY (booking_id) REFERENCES stream_project_booking(stream_project_booking_id) ON DELETE SET NULL,
+  CONSTRAINT fk_client_leads_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_client_leads_assigned_rep FOREIGN KEY (assigned_sales_rep_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+ALTER TABLE `client_leads` CHANGE `created_from` `created_from` INT(11) NULL DEFAULT NULL COMMENT '1=Web, 2=App';
+
+CREATE TABLE IF NOT EXISTS client_lead_activities (
+  activity_id INT PRIMARY KEY AUTO_INCREMENT,
+  lead_id INT NOT NULL,
+  activity_type ENUM('created', 'booking_updated', 'status_changed', 'assigned', 'contacted_sales', 'payment_link_generated', 'discount_code_generated', 'payment_link_opened', 'discount_applied', 'payment_completed') NOT NULL,
+  activity_data JSON NULL,
+  performed_by_user_id INT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_client_lead_activity_lead (lead_id),
+  INDEX idx_client_lead_activity_type (activity_type),
+  INDEX idx_client_lead_activity_created_at (created_at),
+  CONSTRAINT fk_client_lead_activities_lead FOREIGN KEY (lead_id) REFERENCES client_leads(lead_id) ON DELETE CASCADE,
+  CONSTRAINT fk_client_lead_activities_performed_by FOREIGN KEY (performed_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+ALTER TABLE sales_lead_activities
+MODIFY COLUMN activity_type ENUM(
+  'created',
+  'booking_updated',
+  'status_changed',
+  'assigned',
+  'contacted_sales',
+  'payment_link_generated',
+  'discount_code_generated',
+  'payment_link_opened',
+  'discount_applied',
+  'payment_completed',
+  'intent_updated'
+) NOT NULL;
+
+ALTER TABLE client_lead_activities
+MODIFY COLUMN activity_type ENUM(
+  'created',
+  'booking_updated',
+  'status_changed',
+  'assigned',
+  'contacted_sales',
+  'payment_link_generated',
+  'discount_code_generated',
+  'payment_link_opened',
+  'discount_applied',
+  'payment_completed',
+  'intent_updated'
+) NOT NULL;
+
+ALTER TABLE `client_leads` CHANGE `lead_status` `lead_status` VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL DEFAULT 'in_progress_self_serve';

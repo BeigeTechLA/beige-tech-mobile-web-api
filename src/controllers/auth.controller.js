@@ -37,6 +37,16 @@ async function linkGuestBookingsToUser(email, userId) {
       }
     );
 
+    await db.client_leads.update(
+      { user_id: userId },
+      {
+        where: {
+          guest_email: email,
+          user_id: { [Op.is]: null }
+        }
+      }
+    );
+
     return updatedRows || 0;
   } catch (error) {
     console.error('Link Guest Bookings Error:', error);
@@ -538,7 +548,8 @@ exports.register = async (req, res) => {
       is_active: 1,
       email_verified: 0,
       verification_code: otp,
-      otp_expiry: otpExpiry
+      otp_expiry: otpExpiry,
+      created_from: 1 // 1 = web
     });
 
     let newClient = null;
@@ -574,6 +585,28 @@ exports.register = async (req, res) => {
           email
         }).catch(err => console.error('Client Signup Welcome Email Error:', err));
       }
+
+      const clientLead = await db.client_leads.create({
+        user_id: newUser.id,
+        guest_email: email,
+        client_name: name,
+        phone: phone_number,
+        lead_type: 'self_serve',
+        lead_status: 'signed_up',
+        intent: 'Cold',
+        lead_source: 'register',
+        created_from: 1
+      });
+
+      await db.client_lead_activities.create({
+        lead_id: clientLead.lead_id,
+        activity_type: 'created',
+        activity_data: {
+          source: 'register',
+          guest_email: email,
+          lead_source: 'register'
+        }
+      });
     }
 
     if (email) {
@@ -2233,7 +2266,8 @@ exports.registerCrewMemberStep1 = [
         is_active: 1, 
         email_verified: 0,
         verification_code: otp,
-        otp_expiry: otpExpiry
+        otp_expiry: otpExpiry,
+        created_from: 1 // 1 = web
       });
 
       const newCrewMember = await crew_members.create({
@@ -2244,7 +2278,8 @@ exports.registerCrewMemberStep1 = [
         phone_number, 
         location, 
         working_distance, 
-        is_active: 1
+        is_active: 1,
+        created_from: 1 // 1 = web
       });
 
       if (req.files?.profile_photo) {

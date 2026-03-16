@@ -47,6 +47,8 @@ var _equipment_request = require("./equipment_request");
 var _post_production_members = require("./post_production_members");
 var _assigned_post_production_member = require("./assigned_post_production_member");
 var _clients = require("./clients");
+var _client_leads = require("./client_leads");
+var _client_lead_activities = require("./client_lead_activities");
 
 // CMS Approval States Models
 var _projects = require("./projects");
@@ -114,6 +116,8 @@ function initModels(sequelize) {
   var post_production_members = _post_production_members(sequelize, DataTypes);
   var assigned_post_production_member = _assigned_post_production_member(sequelize, DataTypes);
   var clients = _clients(sequelize, DataTypes);
+  var client_leads = _client_leads(sequelize, DataTypes);
+  var client_lead_activities = _client_lead_activities(sequelize, DataTypes);
 
   // CMS Approval States Models
   var projects = _projects(sequelize, DataTypes);
@@ -364,12 +368,18 @@ crew_members.belongsTo(crew_roles, { as: 'role', foreignKey: 'primary_role' });
   // Sales Leads relationships
   sales_leads.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id" });
   stream_project_booking.hasMany(sales_leads, { as: "sales_leads", foreignKey: "booking_id" });
+  client_leads.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id" });
+  stream_project_booking.hasMany(client_leads, { as: "client_leads", foreignKey: "booking_id" });
 
   sales_leads.belongsTo(users, { as: "user", foreignKey: "user_id" });
   users.hasMany(sales_leads, { as: "sales_leads", foreignKey: "user_id" });
+  client_leads.belongsTo(users, { as: "user", foreignKey: "user_id" });
+  users.hasMany(client_leads, { as: "client_leads", foreignKey: "user_id" });
 
   sales_leads.belongsTo(users, { as: "assigned_sales_rep", foreignKey: "assigned_sales_rep_id" });
   users.hasMany(sales_leads, { as: "assigned_leads", foreignKey: "assigned_sales_rep_id" });
+  client_leads.belongsTo(users, { as: "assigned_sales_rep", foreignKey: "assigned_sales_rep_id" });
+  users.hasMany(client_leads, { as: "assigned_client_leads", foreignKey: "assigned_sales_rep_id" });
 
   // Discount Codes relationships
   discount_codes.belongsTo(sales_leads, { as: "lead", foreignKey: "lead_id" });
@@ -409,9 +419,13 @@ crew_members.belongsTo(crew_roles, { as: 'role', foreignKey: 'primary_role' });
   // Sales Lead Activities relationships
   sales_lead_activities.belongsTo(sales_leads, { as: "lead", foreignKey: "lead_id" });
   sales_leads.hasMany(sales_lead_activities, { as: "activities", foreignKey: "lead_id" });
+  client_lead_activities.belongsTo(client_leads, { as: "lead", foreignKey: "lead_id" });
+  client_leads.hasMany(client_lead_activities, { as: "activities", foreignKey: "lead_id" });
 
   sales_lead_activities.belongsTo(users, { as: "performed_by", foreignKey: "performed_by_user_id" });
   users.hasMany(sales_lead_activities, { as: "performed_activities", foreignKey: "performed_by_user_id" });
+  client_lead_activities.belongsTo(users, { as: "performed_by", foreignKey: "performed_by_user_id" });
+  users.hasMany(client_lead_activities, { as: "performed_client_activities", foreignKey: "performed_by_user_id" });
 
   // Quotes -> Discount Codes relationship
   quotes.belongsTo(discount_codes, { as: "discount_code", foreignKey: "discount_code_id" });
@@ -434,6 +448,8 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
     assigned_equipment,
     assignment_checklist,
     certifications_master,
+    client_leads,
+    client_lead_activities,
     checklist_master,
     crew_availability,
     crew_member_files,
@@ -484,6 +500,7 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
     discount_codes,
     discount_code_usage,
     payment_links,
+    client_lead_activities,
     sales_lead_activities,
     // Crew & Equipment Models
     crew_equipment,

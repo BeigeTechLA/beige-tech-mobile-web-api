@@ -1,4 +1,4 @@
-const { sales_leads, sales_lead_activities, stream_project_booking, stream_project_booking_days, users, discount_codes, payment_links,  quotes, assigned_crew, crew_members,
+const { sales_leads, client_leads, sales_lead_activities, client_lead_activities, stream_project_booking, stream_project_booking_days, users, discount_codes, payment_links,  quotes, assigned_crew, crew_members,
   quote_line_items, crew_member_files } = require('../models');
 const { Op, Sequelize } = require('sequelize');
 const constants = require('../utils/constants');
@@ -696,7 +696,8 @@ exports.trackEarlyBookingInterest = async (req, res) => {
                 guest_email: normalizedGuestEmail,
                 client_name: client_name || null,
                 lead_type: 'self_serve',
-                lead_status: 'book_a_shoot_lead_created'
+                lead_status: 'book_a_shoot_lead_created',
+                created_from: 1 // 1 = web
             });
             
             await sales_lead_activities.create({
@@ -1894,6 +1895,392 @@ exports.updateLeadStatus = async (req, res) => {
   }
 };
 
+exports.updateClientLeadStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+    const performedBy = req.userId;
+
+    const validStatuses = [
+      'in_progress_self_serve',
+      'in_progress_sales_assisted',
+      'payment_link_sent',
+      'discount_applied',
+      'booked',
+      'abandoned',
+      'manual_lead_created',
+      'book_a_shoot_lead_created',
+      'booking_in_progress',
+      'signed_up'
+    ];
+
+    if (!validStatuses.includes(status)) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Invalid status'
+      });
+    }
+
+    const lead = await client_leads.findByPk(id);
+
+    if (!lead) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Client lead not found'
+      });
+    }
+
+    const oldStatus = lead.lead_status;
+
+    await lead.update({
+      lead_status: status,
+      last_activity_at: new Date()
+    });
+
+    await client_lead_activities.create({
+      lead_id: parseInt(id, 10),
+      activity_type: 'status_changed',
+      activity_data: {
+        old_status: oldStatus,
+        new_status: status
+      },
+      performed_by_user_id: performedBy
+    });
+
+    res.json({
+      success: true,
+      message: 'Client lead status updated'
+    });
+  } catch (error) {
+    console.error('Error updating client lead status:', error);
+    res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to update client lead status',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.getClientLeadById = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    let whereClause = { lead_id: id };
+
+    if (req.userRole === 'sales_rep') {
+      whereClause.assigned_sales_rep_id = req.userId;
+    }
+
+    const lead = await client_leads.findOne({
+      where: whereClause,
+      include: [
+        {
+          model: users,
+          as: "assigned_sales_rep",
+          attributes: ["id", "name", "email"],
+        },
+        {
+          model: stream_project_booking,
+          as: "booking",
+          include: [
+            {
+              model: quotes,
+              as: "primary_quote",
+              include: [{ model: quote_line_items, as: "line_items" }],
+            },
+            {
+              model: assigned_crew,
+              as: "assigned_crews",
+              required: false,
+              where: { is_active: 1 },
+              attributes: [
+                "crew_member_id",
+                "crew_accept",
+                "status",
+                "is_active",
+                "created_at",
+                "responded_at",
+              ],
+              include: [
+                {
+                  model: crew_members,
+                  as: "crew_member",
+                  attributes: [
+                    "crew_member_id",
+                    "first_name",
+                    "last_name",
+                    "primary_role",
+                    "hourly_rate",
+                  ],
+                  include: [
+                    {
+                      model: crew_member_files,
+                      as: "crew_member_files",
+                      attributes: ["file_path"],
+                      where: {
+                        is_active: 1,
+                        file_type: "profile_photo",
+                      },
+                      required: false,
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        {
+          model: client_lead_activities,
+          as: "activities",
+          include: [
+            { model: users, as: "performed_by", attributes: ["id", "name"] },
+          ],
+        },
+      ],
+      order: [
+        [
+          { model: client_lead_activities, as: "activities" },
+          "created_at",
+          "DESC",
+        ],
+      ],
+    });
+
+    if (!lead) {
+      return res.status(404).json({ success: false, message: 'Client lead not found' });
+    }
+
+    const leadJson = lead.toJSON();
+
+    if (leadJson.booking && !Array.isArray(leadJson.booking.booking_days)) {
+      const days = await stream_project_booking_days.findAll({
+        where: { stream_project_booking_id: leadJson.booking.stream_project_booking_id }
+      });
+      leadJson.booking.booking_days = days.map((d) => ({
+        event_date: d.event_date,
+        start_time: d.start_time,
+        end_time: d.end_time,
+        duration_hours: d.duration_hours,
+        time_zone: d.time_zone
+      }));
+    }
+
+    const bookingId = leadJson.booking?.stream_project_booking_id || leadJson.booking_id || null;
+
+    leadJson.discount_codes = bookingId
+      ? await discount_codes.findAll({ where: { booking_id: bookingId } })
+      : [];
+    leadJson.payment_links = bookingId
+      ? await payment_links.findAll({ where: { booking_id: bookingId } })
+      : [];
+
+    let final_phone = leadJson.phone || leadJson.phone_number;
+    if (!final_phone && leadJson.booking?.description) {
+      const phoneMatch = leadJson.booking.description.match(/Phone:\s*(\d+)/i);
+      if (phoneMatch && phoneMatch[1]) final_phone = phoneMatch[1];
+    }
+    if (!final_phone && (leadJson.user_id || leadJson.booking?.user_id)) {
+      const targetUserId = leadJson.user_id || leadJson.booking.user_id;
+      const userRecord = await users.findByPk(targetUserId, { attributes: ['phone_number'] });
+      if (userRecord) final_phone = userRecord.phone_number;
+    }
+
+    let active_payment_link = null;
+    const pLinks = leadJson.payment_links || leadJson.paymentLinks || [];
+    const dCodes = leadJson.discount_codes || leadJson.discountCodes || [];
+
+    if (pLinks.length > 0) {
+      const latestLink = [...pLinks].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+      const attachedDiscount = dCodes.find((d) => d.discount_code_id === latestLink.discount_code_id);
+      const baseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+
+      if (latestLink.link_token) {
+        let fullUrl = `${baseUrl}/payment-link/${latestLink.link_token}`;
+        if (attachedDiscount && attachedDiscount.code) fullUrl += `?discount=${attachedDiscount.code}`;
+        const now = new Date();
+        const expiryDate = latestLink.expires_at ? new Date(latestLink.expires_at) : null;
+        active_payment_link = {
+          payment_link_id: latestLink.payment_link_id || latestLink.id,
+          full_url: fullUrl,
+          token: latestLink.link_token,
+          expires_at: latestLink.expires_at,
+          is_used: !!latestLink.is_used,
+          is_expired: expiryDate ? expiryDate < now : false,
+          discount_details: attachedDiscount ? {
+            code: attachedDiscount.code,
+            type: attachedDiscount.discount_type,
+            value: parseFloat(attachedDiscount.discount_value),
+            is_active: attachedDiscount.is_active
+          } : null
+        };
+      }
+    }
+
+    let payment_status = lead.booking?.payment_id ? 'paid' : 'unpaid';
+    if (payment_status === 'unpaid' && active_payment_link) {
+      payment_status = active_payment_link.is_expired ? 'link_expired' : 'link_sent';
+    }
+
+    const projectedQuote = await calculateLeadPricing(lead.booking);
+    const activeQuoteSource = leadJson.booking?.primary_quote || projectedQuote;
+
+    let pricing_breakdown = {
+      shoot_cost: 0,
+      editing_cost: 0,
+      additional_creatives_cost: 0,
+      discount: 0,
+      total: 0
+    };
+
+    const itemsToProcess = activeQuoteSource?.line_items || [];
+    let subtotal = 0;
+
+    itemsToProcess.forEach(item => {
+      const name = (item.item_name || item.name || '').toLowerCase();
+      const lineTotal = parseFloat(item.line_total || item.total || 0);
+      const quantity = parseInt(item.quantity || 1, 10);
+
+      subtotal += lineTotal;
+
+      if (name.includes('videographer') || name.includes('photographer')) {
+        const unitPrice = lineTotal / quantity;
+        pricing_breakdown.shoot_cost += unitPrice;
+        if (quantity > 1) {
+          pricing_breakdown.additional_creatives_cost += (unitPrice * (quantity - 1));
+        }
+      } else if (name.includes('reel') || name.includes('edit') || name.includes('highlight')) {
+        pricing_breakdown.editing_cost += lineTotal;
+      } else {
+        pricing_breakdown.shoot_cost += lineTotal;
+      }
+    });
+
+    if (payment_status === 'paid') {
+      pricing_breakdown.discount = parseFloat(leadJson.booking?.primary_quote?.discount_amount || 0);
+    } else if (active_payment_link && active_payment_link.discount_details) {
+      const disc = active_payment_link.discount_details;
+      if (disc.type === 'percentage') {
+        pricing_breakdown.discount = (subtotal * (disc.value / 100));
+      } else {
+        pricing_breakdown.discount = disc.value;
+      }
+    } else {
+      pricing_breakdown.discount = parseFloat(leadJson.booking?.primary_quote?.discount_amount || 0);
+    }
+
+    pricing_breakdown.total = subtotal - pricing_breakdown.discount;
+
+    const selectedCrewIds = lead.booking?.assigned_crews?.map(c => c.crew_member_id).filter(Boolean) || [];
+    const intent = lead.intent ?? leadAssignmentService.getLeadIntent({ lead, booking: lead.booking });
+    const booking_status = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
+    const booking_step = leadAssignmentService.getLeadBookingStep(lead, lead.booking, lead.activities);
+    const can_edit_booking = canEditBooking(lead, lead.booking);
+
+    const ROLE_GROUPS = { videographer: ['9', '1'], photographer: ['10', '2'], cinematographer: ['11', '3'] };
+    const ID_TO_ROLE_MAP = {};
+    Object.entries(ROLE_GROUPS).forEach(([role, ids]) => { ids.forEach(roleId => (ID_TO_ROLE_MAP[roleId] = role)); });
+
+    let fulfillmentSummary = {};
+    if (leadJson.booking && leadJson.booking.crew_roles) {
+      let requestedRoles = {};
+      try { requestedRoles = typeof leadJson.booking.crew_roles === 'string' ? JSON.parse(leadJson.booking.crew_roles) : leadJson.booking.crew_roles; } catch (e) { requestedRoles = {}; }
+
+      if (requestedRoles && typeof requestedRoles === 'object') {
+        Object.keys(requestedRoles).forEach(role => {
+          fulfillmentSummary[role] = { required: requestedRoles[role], pending: 0, accepted: 0, rejected: 0, display: `0/${requestedRoles[role]}` };
+        });
+      }
+
+      if (leadJson.booking.assigned_crews) {
+        leadJson.booking.assigned_crews.forEach(ac => {
+          let crewRoleIds = [];
+          let rawRole = ac.crew_member?.primary_role;
+          if (typeof rawRole === 'string') { try { crewRoleIds = JSON.parse(rawRole); } catch (e) { crewRoleIds = [rawRole]; } }
+          else if (rawRole != null) { crewRoleIds = rawRole; }
+          if (!Array.isArray(crewRoleIds)) crewRoleIds = crewRoleIds ? [crewRoleIds] : [];
+
+          const potentialCategories = [...new Set(crewRoleIds.map(roleId => ID_TO_ROLE_MAP[String(roleId)]).filter(Boolean))];
+
+          let assignedToCategory = null;
+          if (ac.crew_accept === 1) assignedToCategory = potentialCategories.find(cat => fulfillmentSummary[cat] && fulfillmentSummary[cat].accepted < fulfillmentSummary[cat].required);
+          if (!assignedToCategory && ac.crew_accept !== 2) assignedToCategory = potentialCategories.find(cat => fulfillmentSummary[cat] && (fulfillmentSummary[cat].accepted + fulfillmentSummary[cat].pending) < fulfillmentSummary[cat].required);
+          if (!assignedToCategory) assignedToCategory = potentialCategories[0];
+
+          if (assignedToCategory && fulfillmentSummary[assignedToCategory]) {
+            const role = fulfillmentSummary[assignedToCategory];
+            if (ac.crew_accept === 1) role.accepted += 1;
+            else if (ac.crew_accept === 0 || ac.crew_accept === null) role.pending += 1;
+            else if (ac.crew_accept === 2) role.rejected += 1;
+          }
+        });
+      }
+      Object.keys(fulfillmentSummary).forEach(key => {
+        const item = fulfillmentSummary[key];
+        item.display = `${item.accepted}/${item.required}`;
+        item.needs_attention = item.accepted < item.required;
+      });
+    }
+
+    const statusMap = { 0: 'pending', 1: 'accepted', 2: 'rejected' };
+
+    if (leadJson.booking?.assigned_crews) {
+      leadJson.booking.assigned_crews = leadJson.booking.assigned_crews.map(ac => {
+        const formattedFirstName = ac.crew_member.first_name.charAt(0).toUpperCase() + ac.crew_member.first_name.slice(1).toLowerCase();
+        const formattedLastName = ac.crew_member.last_name.charAt(0).toUpperCase();
+
+        return {
+          ...ac,
+          crew_member: {
+            ...ac.crew_member,
+            first_name: formattedFirstName,
+            last_name: formattedLastName,
+          },
+          acceptance_status: statusMap[ac.crew_accept] || 'pending',
+        };
+      });
+    }
+
+    const allCrews = leadJson.booking?.assigned_crews || [];
+
+    const accepted_cp = allCrews
+      .filter(ac => ac.crew_accept === 1)
+      .sort((a, b) => new Date(a.responded_at || 0) - new Date(b.responded_at || 0));
+
+    const rejected_ap = allCrews
+      .filter(ac => ac.crew_accept === 2)
+      .sort((a, b) => new Date(a.responded_at || 0) - new Date(b.responded_at || 0));
+
+    const hasMultipleDays = Array.isArray(leadJson.booking?.booking_days) && leadJson.booking.booking_days.length > 0;
+    if (leadJson.booking) {
+      leadJson.booking.is_multiple_day_shoot = hasMultipleDays;
+    }
+
+    res.json({
+      success: true,
+      data: {
+        ...leadJson,
+        phone: final_phone,
+        selected_crew_ids: selectedCrewIds,
+        accepted_cp,
+        rejected_ap,
+        intent,
+        intent_source: lead.intent ? 'manual' : 'system',
+        booking_status,
+        payment_status,
+        active_payment_link,
+        booking_step,
+        can_edit_booking,
+        fulfillmentSummary,
+        pricing_breakdown,
+        projected_quote: projectedQuote
+      }
+    });
+  } catch (error) {
+    console.error('GetClientLeadById Error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch client lead details', error: error.message });
+  }
+};
+
 /**
  * Send Post-Production status update email (Email 10)
  * POST /api/sales/leads/:id/post-production-status-update
@@ -3047,12 +3434,20 @@ exports.updateBookingCrew = async (req, res) => {
     });
 
     await sales_leads.update(
-  { lead_status: 'booking_in_progress' },
-  { 
-    where: { booking_id: parseInt(bookingId) },
-    limit: 1 // Safety check
-  }
-);
+      { lead_status: 'booking_in_progress' },
+      {
+        where: { booking_id: parseInt(bookingId, 10) },
+        limit: 1
+      }
+    );
+
+    await client_leads.update(
+      { lead_status: 'booking_in_progress' },
+      {
+        where: { booking_id: parseInt(bookingId, 10) },
+        limit: 1
+      }
+    );
     return res.json({
       success: true,
       message: 'Crew roles and project details saved',
@@ -3108,6 +3503,46 @@ exports.updateLeadIntent = async (req, res) => {
     return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
       success: false,
       message: 'Failed to update crew details'
+    });
+  }
+};
+
+exports.updateClientLeadIntent = async (req, res) => {
+  try {
+    const { lead_id, intent, notes } = req.body;
+    const salesUserId = req.userId;
+
+    if (!['Hot', 'Warm', 'Cold'].includes(intent)) {
+      return res.status(400).json({ message: 'Invalid intent' });
+    }
+
+    const lead = await client_leads.findByPk(lead_id);
+    if (!lead) {
+      return res.status(404).json({ message: 'Client lead not found' });
+    }
+
+    await lead.update({
+      intent,
+      intent_updated_by: salesUserId,
+      intent_updated_at: new Date()
+    });
+
+    await client_lead_activities.create({
+      lead_id,
+      activity_type: 'intent_updated',
+      activity_data: { intent, notes },
+      performed_by_user_id: salesUserId
+    });
+
+    return res.json({
+      success: true,
+      message: 'Client lead intent updated successfully'
+    });
+  } catch (error) {
+    console.error('Error updating client lead intent:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to update client lead intent'
     });
   }
 };
@@ -3626,7 +4061,8 @@ exports.finalizeCreateDeal = async (req, res) => {
     );
 
     // 2️⃣ Create lead
-    const lead = await sales_leads.create(
+    const leadModel = user_id ? client_leads : sales_leads;
+    const lead = await leadModel.create(
       {
         booking_id: booking.stream_project_booking_id,
         user_id: user_id || null,
@@ -3637,30 +4073,45 @@ exports.finalizeCreateDeal = async (req, res) => {
         intent,
         lead_source,
         lead_status: 'manual_lead_created',
-        is_active: 1,
+        created_from: 1 // 1 = web
       },
       { transaction: tx }
     );
 
     // 3️⃣ Create lead activity
-    await sales_lead_activities.create(
-      {
-        lead_id: lead.lead_id,
-        activity_type: 'created',
-        activity_data: {
-          source: 'sales_portal_create_deal',
-          guest_email: resolvedEmail,
-          lead_source: lead_source || null
-        }
-      },
-      { transaction: tx }
-    );
+    if (!user_id) {
+      await sales_lead_activities.create(
+        {
+          lead_id: lead.lead_id,
+          activity_type: 'created',
+          activity_data: {
+            source: 'sales_portal_create_deal',
+            guest_email: resolvedEmail,
+            lead_source: lead_source || null
+          }
+        },
+        { transaction: tx }
+      );
+    } else {
+      await client_lead_activities.create(
+        {
+          lead_id: lead.lead_id,
+          activity_type: 'created',
+          activity_data: {
+            source: 'sales_portal_create_deal',
+            guest_email: resolvedEmail,
+            lead_source: lead_source || null
+          }
+        },
+        { transaction: tx }
+      );
+    }
 
     // 4️⃣ 🔥 AUTO ASSIGN (same as trackEarlyBookingInterest)
     const assignedRep = await leadAssignmentService.autoAssignLead(
-  lead.lead_id,
-  { transaction: tx }
-);
+      lead.lead_id,
+      { transaction: tx, leadModel }
+    );
     if (assignedRep?.id) {
       await lead.update(
         { assigned_sales_rep_id: assignedRep.id },
