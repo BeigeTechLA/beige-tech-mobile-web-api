@@ -749,10 +749,6 @@ exports.getProjectDetailsForUser = async (req, res) => {
     const { project_id } = req.params;
     const user_id = req.user.userId;
 
-    console.log('Received project_id:', project_id);
-    console.log('Received user_id:', user_id);
-    console.log('Requesting user_id from req.user:', req.user);
-
     if (!project_id || !user_id) {
       return res.status(400).json({
         error: true,
@@ -760,16 +756,16 @@ exports.getProjectDetailsForUser = async (req, res) => {
       });
     }
 
-    console.log('Project ID:', project_id);
-    console.log('User ID:', user_id);
-
-    const project = await stream_project_booking.findOne({
-      where: {
-        stream_project_booking_id: project_id,
-        user_id,
-        is_active: 1,
-      },
-    });
+    const [project, allEventMasterTypes] = await Promise.all([
+      stream_project_booking.findOne({
+        where: {
+          stream_project_booking_id: project_id,
+          user_id,
+          is_active: 1,
+        },
+      }),
+      event_type_master.findAll({ attributes: ['event_type_id', 'event_type_name'], raw: true })
+    ]);
 
     if (!project) {
       return res.status(404).json({
@@ -778,51 +774,75 @@ exports.getProjectDetailsForUser = async (req, res) => {
       });
     }
 
-    const assignedCrew = await assigned_crew.findAll({
-      where: { project_id: project.stream_project_booking_id, is_active: 1 },
-      include: [
-        {
-          model: crew_members,
-          as: 'crew_member',
-          attributes: ['crew_member_id', 'first_name', 'last_name', 'primary_role'],
-          include: [
-            {
-              model: crew_member_files,
-              as: 'crew_member_files',
-              where: { file_type: 'profile_photo' }
-            },
-          ],
-        },
-      ],
+    const [assignedCrew, assignedEquipment, assignedPostProductionMembers, quote] = await Promise.all([
+      assigned_crew.findAll({
+        where: { project_id: project.stream_project_booking_id, is_active: 1 },
+        include: [
+          {
+            model: crew_members,
+            as: 'crew_member',
+            attributes: ['crew_member_id', 'first_name', 'last_name', 'primary_role'],
+            include: [
+              {
+                model: crew_member_files,
+                as: 'crew_member_files',
+                where: { file_type: 'profile_photo' },
+                required: false 
+              },
+            ],
+          },
+        ],
+      }),
+      assigned_equipment.findAll({
+        where: { project_id: project.stream_project_booking_id, is_active: 1 },
+        include: [{ model: equipment, as: 'equipment', attributes: ['equipment_id', 'equipment_name'] }],
+      }),
+      assigned_post_production_member.findAll({
+        where: { project_id: project.stream_project_booking_id, is_active: 1 },
+        include: [{ model: post_production_members, as: 'post_production_member', attributes: ['post_production_member_id', 'first_name', 'last_name', 'email'] }],
+      }),
+      project.quote_id
+        ? quotes.findOne({
+            where: { quote_id: project.quote_id },
+            attributes: ['quote_id', 'subtotal', 'total', 'status']
+          })
+        : Promise.resolve(null)
+    ]);
+
+    const rawTypes = project.event_type ? project.event_type.split(',') : [];
+    const formattedTypes = rawTypes.map(t => {
+      const val = t.trim();
+      const masterMatch = allEventMasterTypes.find(m => String(m.event_type_id) === val);
+      if (masterMatch) return masterMatch.event_type_name;
+      const stringMap = { 'videographer': 'Videography', 'photographer': 'Photography' };
+      return stringMap[val.toLowerCase()] || val.charAt(0).toUpperCase() + val.slice(1);
     });
 
-    const assignedEquipment = await assigned_equipment.findAll({
-      where: { project_id: project.stream_project_booking_id, is_active: 1 },
-      include: [
-        {
-          model: equipment,
-          as: 'equipment',
-          attributes: ['equipment_id', 'equipment_name'],
-        },
-      ],
-    });
-
-    const assignedPostProductionMembers = await assigned_post_production_member.findAll({
-      where: { project_id: project.stream_project_booking_id, is_active: 1 },
-      include: [
-        {
-          model: post_production_members,
-          as: 'post_production_member',
-          attributes: ['post_production_member_id', 'first_name', 'last_name', 'email'],
-        },
-      ],
-    });
+    const formattedProject = {
+      ...project.toJSON(),
+      event_type_labels: formattedTypes.join(', '),
+      payment_status: project.payment_id ? 'paid' : 'pending',
+      quote_total: quote ? parseFloat(quote.total) : null,
+      quote_subtotal: quote ? parseFloat(quote.subtotal) : null,
+      quote_status: quote ? quote.status : null,
+      event_location: (() => {
+        const loc = project.event_location;
+        if (!loc) return null;
+        try {
+          if (typeof loc === "string" && (loc.startsWith("{") || loc.startsWith("["))) {
+            const parsed = JSON.parse(loc);
+            return parsed.address || parsed;
+          }
+        } catch (e) { return loc; }
+        return loc;
+      })()
+    };
 
     return res.status(200).json({
       error: false,
       message: 'Project details retrieved successfully',
       data: {
-        project,
+        project: formattedProject,
         assignedCrew,
         assignedEquipment,
         assignedPostProductionMembers,
