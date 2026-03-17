@@ -258,7 +258,7 @@ async function createStripeInvoice(booking, pricingData, options = {}) {
     throw new Error("Booking must have an email address to generate an invoice.");
   }
 
-  // Determine Customer Name (Same logic as your email service)
+  // Determine Customer Name
   let recipientName = 'Valued Guest';
   if (booking.user && booking.user.name) {
     recipientName = booking.user.name;
@@ -266,7 +266,7 @@ async function createStripeInvoice(booking, pricingData, options = {}) {
     recipientName = booking.project_name.split(' - ')[1] || 'Valued Guest';
   }
 
-  // 0. If we already stored an invoice id, reuse it.
+  // 0. Reuse existing invoice if valid
   if (booking.stripe_invoice_id) {
     try {
       const existing = await stripe.invoices.retrieve(booking.stripe_invoice_id);
@@ -289,7 +289,7 @@ async function createStripeInvoice(booking, pricingData, options = {}) {
     }
   }
 
-  // 1. Find or Create Customer in Stripe
+  // 1. Customer Handling
   let customer = null;
   let customersByEmail = [];
   if (!booking.stripe_customer_id && email) {
@@ -340,74 +340,30 @@ async function createStripeInvoice(booking, pricingData, options = {}) {
     }
   }
 
-  // 2. Reuse any existing invoice for this booking to avoid duplicates.
+  // 2. Reuse existing invoice
   const existingInvoice = await findExistingInvoiceForBooking(
     customer.id,
     booking.stream_project_booking_id
   );
 
-  if (existingInvoice) {
-    if (!booking.stripe_invoice_id || booking.stripe_invoice_id !== existingInvoice.id) {
-      await booking.update({ stripe_invoice_id: existingInvoice.id }, { transaction });
+  if (existingInvoice && !isInvoiceTotalMismatch(existingInvoice, expectedTotalCents)) {
+    if (existingInvoice.status === 'draft') {
+       // If it's a draft and somehow empty, it will be finalized below. 
+       // For simplicity, we create a fresh one if total mismatched, or finalize if correct.
+       return stripe.invoices.finalizeInvoice(existingInvoice.id, {}, {
+         idempotencyKey: `inv-finalize-${pricingKey}-${existingInvoice.id}`
+       });
     }
-
-    if (isInvoiceTotalMismatch(existingInvoice, expectedTotalCents)) {
-      await replaceMismatchedInvoice(existingInvoice, booking.stream_project_booking_id);
-      await booking.update({ stripe_invoice_id: null }, { transaction });
-    } else if (existingInvoice.status === 'draft') {
-      const draftWithLines = await stripe.invoices.retrieve(existingInvoice.id, {
-        expand: ['lines']
-      });
-
-      const hasLines = (draftWithLines.lines?.data || []).length > 0;
-
-      if (!hasLines) {
-        for (const [index, item] of (pricingData.line_items || []).entries()) {
-          const amountCents = Math.round(parseFloat(item.total || 0) * 100);
-          if (amountCents > 0) {
-            await stripe.invoiceItems.create({
-              customer: customer.id,
-              invoice: existingInvoice.id,
-              amount: amountCents,
-              currency: 'usd',
-              description: `${item.name} (Qty: ${item.quantity || 1})`,
-            }, {
-              idempotencyKey: `inv-item-${pricingKey}-${existingInvoice.id}-${index}-${amountCents}`
-            });
-          }
-        }
-
-        const discountCents = Math.round(parseFloat(pricingData.discount_amount || 0) * 100);
-        if (discountCents > 0) {
-          await stripe.invoiceItems.create({
-            customer: customer.id,
-            invoice: existingInvoice.id,
-            amount: -discountCents,
-            currency: 'usd',
-            description: `Applied Discount`,
-          }, {
-            idempotencyKey: `inv-discount-${pricingKey}-${existingInvoice.id}-${discountCents}`
-          });
-        }
-      }
-
-      return stripe.invoices.finalizeInvoice(existingInvoice.id, {}, {
-        idempotencyKey: `inv-finalize-${pricingKey}-${existingInvoice.id}`
-      });
-    }
-
-    if (existingInvoice.status === 'open' || existingInvoice.status === 'paid') {
-      return existingInvoice;
-    }
+    return existingInvoice;
   }
 
   // 3. Create the Draft Invoice
   const invoice = await stripe.invoices.create({
     customer: customer.id,
-    collection_method: 'send_invoice', // This emails the invoice automatically
+    collection_method: 'send_invoice',
     days_until_due: 7,
     description: `Service Invoice for ${booking.project_name || 'Project'}`,
-    footer: "Beige AI Platform - 123 Creative Studio Way, New York, NY 10001",
+    footer: "Beige AI Platform - Thank you for your business.",
     metadata: { 
       booking_id: booking.stream_project_booking_id.toString() 
     }
@@ -415,7 +371,7 @@ async function createStripeInvoice(booking, pricingData, options = {}) {
     idempotencyKey: `inv-create-${pricingKey}`
   });
 
-  // 4. Add Line Items (Calculated from your pricing data)
+  // 4. Add Positive Line Items
   if (pricingData.line_items && pricingData.line_items.length > 0) {
     for (const [index, item] of pricingData.line_items.entries()) {
       const amountCents = Math.round(parseFloat(item.total || 0) * 100);
@@ -427,27 +383,60 @@ async function createStripeInvoice(booking, pricingData, options = {}) {
           currency: 'usd',
           description: `${item.name} (Qty: ${item.quantity || 1})`,
         }, {
-          idempotencyKey: `inv-item-${pricingKey}-${invoice.id}-${index}-${amountCents}`
+          idempotencyKey: `inv-item-${pricingKey}-${invoice.id}-${index}`
         });
       }
     }
   }
 
-  // 5. Handle Discount (if any)
-  const discountCents = Math.round(parseFloat(pricingData.discount_amount || 0) * 100);
-  if (discountCents > 0) {
-    await stripe.invoiceItems.create({
-      customer: customer.id,
-      invoice: invoice.id,
-      amount: -discountCents,
-      currency: 'usd',
-      description: `Applied Discount`,
-    }, {
-      idempotencyKey: `inv-discount-${pricingKey}-${invoice.id}-${discountCents}`
-    });
+  // 5. HANDLE DISCOUNTS (SPLIT INTO PROMO AND REFERRAL)
+  const totalSubtotal = parseFloat(pricingData.subtotal || 0);
+  const totalDiscountAmount = parseFloat(pricingData.discount_amount || 0);
+
+  if (totalDiscountAmount > 0) {
+    const quote = booking.primary_quote;
+    let promoDiscountCents = 0;
+
+    // A) Calculate the "Promo Code" part (e.g., the 50%)
+    if (quote) {
+      if (quote.applied_discount_type === 'percentage') {
+        promoDiscountCents = Math.round((totalSubtotal * (parseFloat(quote.applied_discount_value) / 100)) * 100);
+      } else {
+        promoDiscountCents = Math.round(parseFloat(quote.applied_discount_value || 0) * 100);
+      }
+    }
+
+    // Add the Promo Discount Line Item
+    if (promoDiscountCents > 0) {
+      await stripe.invoiceItems.create({
+        customer: customer.id,
+        invoice: invoice.id,
+        amount: -promoDiscountCents, // Negative
+        currency: 'usd',
+        description: `Discount Code: ${quote?.discount_code_id ? 'Applied' : 'Promo'}`,
+      }, {
+        idempotencyKey: `inv-promo-disc-${pricingKey}-${invoice.id}`
+      });
+    }
+
+    // B) Calculate the "Referral" part (The remaining balance of the discount)
+    const totalDiscountCents = Math.round(totalDiscountAmount * 100);
+    const referralDiscountCents = totalDiscountCents - promoDiscountCents;
+
+    if (referralDiscountCents > 0) {
+      await stripe.invoiceItems.create({
+        customer: customer.id,
+        invoice: invoice.id,
+        amount: -referralDiscountCents, // Negative
+        currency: 'usd',
+        description: `Referral Discount Applied`,
+      }, {
+        idempotencyKey: `inv-referral-disc-${pricingKey}-${invoice.id}`
+      });
+    }
   }
 
-  // 6. Finalize the invoice (This generates the PDF link and the hosted URL)
+  // 6. Finalize the invoice
   const finalizedInvoice = await stripe.invoices.finalizeInvoice(invoice.id, {}, {
     idempotencyKey: `inv-finalize-${pricingKey}-${invoice.id}`
   });
@@ -464,174 +453,54 @@ async function createStripeInvoice(booking, pricingData, options = {}) {
  */
 async function createPaidStripeInvoice(booking, pricingData, options = {}) {
   const { transaction } = options;
-  const email = (booking.user && booking.user.email) ? booking.user.email : booking.guest_email;
+  const email = booking.user?.email || booking.guest_email;
   const recipientName = booking.user?.name || (booking.project_name ? booking.project_name.split(' - ')[1] : 'Valued Guest');
 
-  // 1. Get/Create Customer
-  let customer = null;
-  let customersByEmail = [];
-  if (!booking.stripe_customer_id && email) {
-    customersByEmail = await listStripeCustomersByEmail(email);
-  }
+  const customer = await getOrCreateStripeCustomer({ email, name: recipientName, bookingId: booking.stream_project_booking_id });
 
-  if (customersByEmail.length > 0) {
-    const invoiceFromAnyCustomer = await findExistingInvoiceAcrossCustomers({
-      bookingId: booking.stream_project_booking_id,
-      customerIds: customersByEmail.map((c) => c.id)
-    });
-
-    if (invoiceFromAnyCustomer) {
-      const invoiceCustomerId = typeof invoiceFromAnyCustomer.customer === 'string'
-        ? invoiceFromAnyCustomer.customer
-        : invoiceFromAnyCustomer.customer?.id;
-      if (invoiceCustomerId) {
-        await booking.update({
-          stripe_customer_id: invoiceCustomerId,
-          stripe_invoice_id: invoiceFromAnyCustomer.id
-        }, { transaction });
-      }
-      if (invoiceFromAnyCustomer.status === 'draft') {
-        const finalized = await stripe.invoices.finalizeInvoice(invoiceFromAnyCustomer.id, {}, {
-          idempotencyKey: `inv-finalize-${booking.stream_project_booking_id}`
-        });
-        return stripe.invoices.pay(finalized.id, {
-          paid_out_of_band: true
-        }, {
-          idempotencyKey: `inv-pay-${booking.stream_project_booking_id}`
-        });
-      }
-      if (invoiceFromAnyCustomer.status === 'open') {
-        return stripe.invoices.pay(invoiceFromAnyCustomer.id, {
-          paid_out_of_band: true
-        }, {
-          idempotencyKey: `inv-pay-${booking.stream_project_booking_id}`
-        });
-      }
-      if (invoiceFromAnyCustomer.status === 'paid') {
-        return invoiceFromAnyCustomer;
-      }
-    }
-  }
-
-  if (booking.stripe_customer_id) {
-    customer = await getStripeCustomerById(booking.stripe_customer_id);
-  }
-  if (!customer) {
-    customer = await getOrCreateStripeCustomer({
-      email,
-      name: recipientName,
-      bookingId: booking.stream_project_booking_id
-    });
-    if (booking.stripe_customer_id !== customer.id) {
-      await booking.update({ stripe_customer_id: customer.id }, { transaction });
-    }
-  }
-
-  if (booking.stripe_invoice_id) {
-    try {
-      const existing = await stripe.invoices.retrieve(booking.stripe_invoice_id);
-      if (existing) {
-        if (existing.status === 'void' || existing.status === 'uncollectible') {
-          await booking.update({ stripe_invoice_id: null }, { transaction });
-        } else {
-          return existing;
-        }
-      }
-    } catch (error) {
-      if (error && error.statusCode === 404) {
-        await booking.update({ stripe_invoice_id: null }, { transaction });
-      } else {
-        throw error;
-      }
-    }
-  }
-
-  const existingInvoice = await findExistingInvoiceForBooking(
-    customer.id,
-    booking.stream_project_booking_id
-  );
-
-  if (existingInvoice) {
-    if (!booking.stripe_invoice_id || booking.stripe_invoice_id !== existingInvoice.id) {
-      await booking.update({ stripe_invoice_id: existingInvoice.id }, { transaction });
-    }
-
-    if (existingInvoice.status === 'draft') {
-      const finalized = await stripe.invoices.finalizeInvoice(existingInvoice.id, {}, {
-        idempotencyKey: `inv-finalize-${booking.stream_project_booking_id}`
-      });
-      const paid = await stripe.invoices.pay(finalized.id, {
-        paid_out_of_band: true
-      }, {
-        idempotencyKey: `inv-pay-${booking.stream_project_booking_id}`
-      });
-      return paid;
-    }
-
-    if (existingInvoice.status === 'open') {
-      const paid = await stripe.invoices.pay(existingInvoice.id, {
-        paid_out_of_band: true
-      }, {
-        idempotencyKey: `inv-pay-${booking.stream_project_booking_id}`
-      });
-      return paid;
-    }
-
-    if (existingInvoice.status === 'paid') {
-      return existingInvoice;
-    }
-  }
-
-  // 2. Create the Draft Invoice
+  // Create fresh invoice to ensure correct amounts
   const invoice = await stripe.invoices.create({
     customer: customer.id,
     auto_advance: false, 
     collection_method: 'send_invoice',
-    days_until_due: 1, // <--- ADD THIS LINE TO FIX THE ERROR
-    description: `PAID: Service Invoice for ${booking.project_name || 'Project'}`,
-    footer: "Beige AI Platform - Payment Received. Thank you.",
-    metadata: { 
-      booking_id: booking.stream_project_booking_id.toString(), 
-      status: 'retrospective_paid' 
-    }
-  }, {
-    idempotencyKey: `inv-create-${booking.stream_project_booking_id}`
+    days_until_due: 1,
+    description: `PAID: Invoice for ${booking.project_name}`,
+    metadata: { booking_id: booking.stream_project_booking_id.toString(), status: 'paid_receipt' }
   });
 
-  // 3. Add Line Items
-  if (pricingData.line_items && pricingData.line_items.length > 0) {
-    for (const [index, item] of pricingData.line_items.entries()) {
-      const amountCents = Math.round(parseFloat(item.total || 0) * 100);
-      if (amountCents > 0) {
-        await stripe.invoiceItems.create({
-          customer: customer.id,
-          invoice: invoice.id,
-          amount: amountCents,
-          currency: 'usd',
-          description: `${item.name} (Qty: ${item.quantity || 1})`,
-        }, {
-          idempotencyKey: `inv-item-${booking.stream_project_booking_id}-${index}-${amountCents}`
-        });
-      }
+  // Add Items
+  for (const item of (pricingData.line_items || [])) {
+    const amt = Math.round(parseFloat(item.total || 0) * 100);
+    if (amt > 0) {
+      await stripe.invoiceItems.create({ customer: customer.id, invoice: invoice.id, amount: amt, currency: 'usd', description: `${item.name}` });
     }
   }
 
-  // 4. Finalize the invoice (Generates the PDF)
-  let finalized = await stripe.invoices.finalizeInvoice(invoice.id, {}, {
-    idempotencyKey: `inv-finalize-${booking.stream_project_booking_id}`
-  });
+  // Add Discounts
+  const subtotal = parseFloat(pricingData.subtotal || 0);
+  const totalDiscount = parseFloat(pricingData.discount_amount || 0);
 
-  // 5. Mark as paid immediately so it shows as "Paid" on the PDF
-  finalized = await stripe.invoices.pay(finalized.id, {
-    paid_out_of_band: true
-  }, {
-    idempotencyKey: `inv-pay-${booking.stream_project_booking_id}`
-  });
-
-  if (!booking.stripe_invoice_id || booking.stripe_invoice_id !== finalized.id) {
-    await booking.update({ stripe_invoice_id: finalized.id }, { transaction });
+  if (totalDiscount > 0) {
+    const quote = booking.primary_quote;
+    let promoCents = 0;
+    if (quote) {
+      promoCents = quote.applied_discount_type === 'percentage' 
+        ? Math.round((subtotal * (parseFloat(quote.applied_discount_value) / 100)) * 100)
+        : Math.round(parseFloat(quote.applied_discount_value) * 100);
+    }
+    if (promoCents > 0) {
+      await stripe.invoiceItems.create({ customer: customer.id, invoice: invoice.id, amount: -promoCents, currency: 'usd', description: `Discount Code Applied` });
+    }
+    const referralCents = Math.round(totalDiscount * 100) - promoCents;
+    if (referralCents > 0) {
+      await stripe.invoiceItems.create({ customer: customer.id, invoice: invoice.id, amount: -referralCents, currency: 'usd', description: `Referral Discount Applied` });
+    }
   }
 
+  let finalized = await stripe.invoices.finalizeInvoice(invoice.id);
+  finalized = await stripe.invoices.pay(finalized.id, { paid_out_of_band: true });
+
+  await booking.update({ stripe_invoice_id: finalized.id, stripe_customer_id: customer.id }, { transaction });
   return finalized;
 }
 

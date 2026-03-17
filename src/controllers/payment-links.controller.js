@@ -609,15 +609,13 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
   let lockTransaction = null;
   try {
     const parsedBookingId = parseInt(bookingId, 10);
-
     if (!parsedBookingId || Number.isNaN(parsedBookingId)) {
-      const invalidError = new Error('Valid booking_id is required.');
-      invalidError.statusCode = 400;
-      throw invalidError;
+      const error = new Error('Valid booking_id is required.');
+      error.statusCode = 400;
+      throw error;
     }
 
     lockTransaction = await db.sequelize.transaction();
-
     const booking = await db.stream_project_booking.findOne({
       where: { stream_project_booking_id: parsedBookingId },
       include: bookingInvoiceIncludes,
@@ -626,57 +624,35 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
     });
 
     if (!booking) {
-      const notFoundError = new Error(`Booking ID ${parsedBookingId} not found.`);
-      notFoundError.statusCode = 404;
-      throw notFoundError;
+      throw new Error(`Booking ID ${parsedBookingId} not found.`);
     }
 
+    // Lock check logic...
     const now = new Date();
-    if (
-      booking.invoice_generation_status === 'in_progress' &&
-      booking.invoice_generation_started_at &&
-      (now - new Date(booking.invoice_generation_started_at)) < 10 * 60 * 1000
-    ) {
-      const conflictError = new Error('Invoice generation is already in progress. Please retry in a few minutes.');
-      conflictError.statusCode = 409;
-      throw conflictError;
+    if (booking.invoice_generation_status === 'in_progress' && 
+        booking.invoice_generation_started_at && 
+        (now - new Date(booking.invoice_generation_started_at)) < 10 * 60 * 1000) {
+      const error = new Error('Invoice generation in progress.');
+      error.statusCode = 409;
+      throw error;
     }
 
-    await booking.update({
-      invoice_generation_status: 'in_progress',
-      invoice_generation_started_at: now
-    }, { transaction: lockTransaction });
-
+    await booking.update({ invoice_generation_status: 'in_progress', invoice_generation_started_at: now }, { transaction: lockTransaction });
     await lockTransaction.commit();
 
-    // 1. Determine Recipient (Logic same as your Payment Link API)
-    let recipientEmail = null;
-    let recipientName = 'Customer';
-
-    if (booking.user) {
-      recipientEmail = booking.user.email;
-      recipientName = booking.user.name;
-    } else if (booking.guest_email) {
-      recipientEmail = booking.guest_email;
-      recipientName = booking.project_name ? booking.project_name.split(' - ')[1] : 'Valued Guest';
-    }
+    // Determine Recipient
+    let recipientEmail = booking.user?.email || booking.guest_email;
+    let recipientName = booking.user?.name || (booking.project_name ? booking.project_name.split(' - ')[1] : 'Valued Guest');
 
     if (!recipientEmail) {
-      await booking.update({
-        invoice_generation_status: 'failed'
-      });
-      const noEmailError = new Error('No email address associated with this booking.');
-      noEmailError.statusCode = 400;
-      throw noEmailError;
+      await booking.update({ invoice_generation_status: 'failed' });
+      throw new Error('No email address associated with this booking.');
     }
 
     const bookingMarkedPaid = !!(booking.payment_id || booking.is_completed === 1);
-
     if (!bookingMarkedPaid) {
-      const appliedOnQuote = await applyQuoteDiscountFromLatestPaymentLink(booking, performedByUserId || null);
-      if (appliedOnQuote) {
-        await booking.reload({ include: bookingInvoiceIncludes });
-      }
+      await applyQuoteDiscountFromLatestPaymentLink(booking, performedByUserId || null);
+      await booking.reload({ include: bookingInvoiceIncludes });
     }
 
     const pricingData = await calculateLeadPricing(booking);
@@ -684,127 +660,50 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
 
     // --- CASE 1: ALREADY PAID ---
     if (pricingData && (pricingData.is_paid || bookingMarkedPaid)) {
-      let invoiceUrl = null;
-      let invoicePdf = null;
-      let invoiceNumber = 'RECEIPT';
-      let paidTotalAmount = parseFloat(pricingData.total || 0);
-      let shouldGenerateDetailedInvoice = false;
+      let invoiceUrl, invoicePdf, invoiceNumber;
+      let stripeTotalAmount = 0;
+      let needsNewInvoice = false;
 
-      const expectedLineCount =
-        (pricingData.line_items || []).filter((item) => parseFloat(item.total || 0) > 0).length +
-        (parseFloat(pricingData.discount_amount || 0) > 0 ? 1 : 0);
+      // Check existing invoice for amount mismatch
+      if (booking.stripe_invoice_id) {
+        try {
+          const inv = await stripe.invoices.retrieve(booking.stripe_invoice_id);
+          stripeTotalAmount = (inv.total || 0) / 100;
+          const expectedTotal = parseFloat(pricingData.total);
 
-      if (pricingData.stripe_payment_intent_id) {
-        const pi = await stripe.paymentIntents.retrieve(pricingData.stripe_payment_intent_id, {
-          expand: ['latest_charge']
-        });
-
-        if (pi.invoice) {
-          const existingInvoice = await stripe.invoices.retrieve(pi.invoice, {
-            expand: ['lines']
-          });
-          invoiceUrl = existingInvoice.hosted_invoice_url;
-          invoicePdf = existingInvoice.invoice_pdf;
-          invoiceNumber = existingInvoice.number;
-          paidTotalAmount = (existingInvoice.amount_paid || existingInvoice.total || 0) / 100;
-
-          const existingLineCount = (existingInvoice.lines?.data || [])
-            .filter((line) => Number(line.amount || 0) !== 0)
-            .length;
-
-          if (expectedLineCount > 0 && existingLineCount < expectedLineCount) {
-            shouldGenerateDetailedInvoice = true;
+          // If Stripe total ($20,700) != Expected ($9,315), force a new one
+          if (Math.abs(stripeTotalAmount - expectedTotal) > 0.01) {
+            needsNewInvoice = true;
+          } else {
+            invoiceUrl = inv.hosted_invoice_url;
+            invoicePdf = inv.invoice_pdf;
+            invoiceNumber = inv.number;
           }
-        }
+        } catch (e) { needsNewInvoice = true; }
       }
 
-      if (!invoicePdf || shouldGenerateDetailedInvoice) {
-        const retrospectiveInvoice = await paymentLinksService.createPaidStripeInvoice(
-          booking,
-          pricingData,
-          {}
-        );
+      if (!invoicePdf || needsNewInvoice) {
+        const retrospectiveInvoice = await paymentLinksService.createPaidStripeInvoice(booking, pricingData, {});
         invoiceUrl = retrospectiveInvoice.hosted_invoice_url;
         invoicePdf = retrospectiveInvoice.invoice_pdf;
         invoiceNumber = retrospectiveInvoice.number;
-        paidTotalAmount = (retrospectiveInvoice.amount_paid || retrospectiveInvoice.total || 0) / 100;
+        stripeTotalAmount = (retrospectiveInvoice.total || 0) / 100;
       }
 
-      invoiceDetails = {
-        projectTitle: booking.project_name || 'Service Booking',
-        invoiceUrl,
-        invoicePdf,
-        invoiceNumber,
-        totalAmount: paidTotalAmount,
-        isPaid: true
-      };
+      invoiceDetails = { projectTitle: booking.project_name, invoiceUrl, invoicePdf, invoiceNumber, totalAmount: stripeTotalAmount, isPaid: true };
 
     } else {
       // --- CASE 2: NOT PAID YET ---
-      if (!pricingData || parseFloat(pricingData.total) <= 0) {
-        await booking.update({
-          invoice_generation_status: 'failed'
-        });
-        const zeroError = new Error('Cannot generate invoice for $0.');
-        zeroError.statusCode = 400;
-        throw zeroError;
-      }
-
-      const stripeInvoice = await paymentLinksService.createStripeInvoice(
-        booking,
-        pricingData,
-        {}
-      );
-      if (stripeInvoice?.status === 'paid') {
-        await booking.update({
-          invoice_generation_status: 'failed'
-        });
-        const paidConflictError = new Error('Payment is completed, but booking status is not updated yet. Please sync payment status and try again.');
-        paidConflictError.statusCode = 409;
-        throw paidConflictError;
-      }
-      
-      invoiceDetails = {
-        projectTitle: booking.project_name || 'Service Booking',
-        invoiceUrl: stripeInvoice.hosted_invoice_url,
-        invoicePdf: stripeInvoice.invoice_pdf,
-        invoiceNumber: stripeInvoice.number,
-        totalAmount: pricingData.total,
-        isPaid: false
-      };
+      const stripeInvoice = await paymentLinksService.createStripeInvoice(booking, pricingData, {});
+      invoiceDetails = { projectTitle: booking.project_name, invoiceUrl: stripeInvoice.hosted_invoice_url, invoicePdf: stripeInvoice.invoice_pdf, invoiceNumber: stripeInvoice.number, totalAmount: pricingData.total, isPaid: false };
     }
 
-    await booking.update({
-      invoice_generation_status: 'completed'
-    });
+    await booking.update({ invoice_generation_status: 'completed' });
+    return { parsedBookingId, recipientName, recipientEmail, invoiceDetails };
 
-    return {
-      parsedBookingId,
-      recipientName,
-      recipientEmail,
-      invoiceDetails
-    };
   } catch (error) {
-    try {
-      if (lockTransaction && !lockTransaction.finished) {
-        await lockTransaction.rollback();
-      }
-    } catch (rollbackError) {
-      console.error('Failed to rollback invoice generation lock transaction:', rollbackError);
-    }
-    if (!error.statusCode) {
-      try {
-        if (bookingId) {
-          await db.stream_project_booking.update({
-            invoice_generation_status: 'failed'
-          }, {
-            where: { stream_project_booking_id: bookingId }
-          });
-        }
-      } catch (updateError) {
-        console.error('Failed to record invoice generation failure:', updateError);
-      }
-    }
+    if (lockTransaction && !lockTransaction.finished) await lockTransaction.rollback();
+    if (bookingId) await db.stream_project_booking.update({ invoice_generation_status: 'failed' }, { where: { stream_project_booking_id: bookingId } });
     throw error;
   }
 };

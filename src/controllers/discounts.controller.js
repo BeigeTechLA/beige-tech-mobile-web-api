@@ -172,6 +172,33 @@ exports.validateDiscountCode = async (req, res) => {
     }
 
     if (booking_id) {
+      const latestActiveCode = await discount_codes.findOne({
+        where: {
+          booking_id: parseInt(booking_id, 10),
+          is_active: 1
+        },
+        order: [['discount_code_id', 'DESC']]
+      });
+
+      if (latestActiveCode) {
+        if (latestActiveCode.code !== upperCode) {
+          return res.status(constants.BAD_REQUEST.code).json({
+            success: false,
+            valid: false,
+            message: 'Code is inactive'
+          });
+        }
+
+        const isExpired = latestActiveCode.expires_at && new Date() > new Date(latestActiveCode.expires_at);
+        if (isExpired) {
+          return res.status(constants.BAD_REQUEST.code).json({
+            success: false,
+            valid: false,
+            message: 'Code has expired'
+          });
+        }
+      }
+
       const booking = await stream_project_booking.findOne({
         where: { stream_project_booking_id: booking_id },
         include: [{
@@ -180,17 +207,21 @@ exports.validateDiscountCode = async (req, res) => {
         }]
       });
 
+      if (latestActiveCode && latestActiveCode.code === upperCode) {
+        const discountAmount = booking?.primary_quote?.applied_discount_code === upperCode
+          ? parseFloat(booking.primary_quote.discount_total || 0)
+          : undefined;
 
-      if (booking && booking.primary_quote && booking.primary_quote.applied_discount_code === upperCode) {
         return res.json({
           success: true,
           valid: true,
-          already_applied: true,
+          already_applied: booking?.primary_quote?.applied_discount_code === upperCode,
           data: {
+            discount_code_id: latestActiveCode.discount_code_id,
             code: upperCode,
-            discount_type: booking.primary_quote.discount_type,
-            discount_value: parseFloat(booking.primary_quote.discount_value),
-            discount_amount: parseFloat(booking.primary_quote.discount_total)
+            discount_type: latestActiveCode.discount_type,
+            discount_value: parseFloat(latestActiveCode.discount_value),
+            discount_amount: discountAmount
           }
         });
       }
