@@ -20,7 +20,7 @@ function determinePricingMode(eventType) {
   if (!eventType) return 'general';
   const normalizedType = eventType.toLowerCase().trim();
   
-  // Wedding-related keywords
+  // Wedding-related keywordspaymentLinksService
   const weddingKeywords = ['wedding', 'bridal', 'engagement', 'ceremony', 'reception'];
   
   for (const keyword of weddingKeywords) {
@@ -460,21 +460,44 @@ async function getAllPricingItems(filters = {}) {
 
 /**
  * Calculate Rush Fee based on how far in advance the shoot is booked
- * @param {Date} shootStartDate 
+ * @param {Date|string} shootStartDate 
  * @returns {number} Fee amount
  */
 function calculateRushFee(shootStartDate) {
   if (!shootStartDate) return 0;
   
+  const normalizeShootStartDate = (value) => {
+    if (!value) return value;
+    if (value instanceof Date) return value.toISOString();
+    if (typeof value !== 'string') return value;
+    const trimmed = value.trim();
+    if (!trimmed) return trimmed;
+
+    // If no timezone info is present, assume UTC to ensure consistent behavior across servers.
+    const hasTimezone = /[zZ]|[+-]\d{2}:?\d{2}$/.test(trimmed);
+    return hasTimezone ? trimmed : `${trimmed}Z`;
+  };
+
   const now = new Date();
-  const start = new Date(shootStartDate);
-  const diffInHours = (start - now) / (1000 * 60 * 60);
+  const normalizedStart = normalizeShootStartDate(shootStartDate);
+  const start = new Date(normalizedStart);
+  if (isNaN(start.getTime())) return 0;
+  
+  const diffInMs = start - now;
+  const diffInHours = diffInMs / (1000 * 60 * 60);
+
+  console.log(`Current Time (Now): ${now.toISOString()}`);
+  console.log(`Shoot Start: ${start.toISOString()}`);
+  console.log(`Difference in Hours: ${diffInHours}`);
+
+  if (diffInHours < 0) return 0;
 
   if (diffInHours <= 24) return 250;
+  
   if (diffInHours <= 72) return 125;
+  
   return 0;
 }
-
 /**
  * Calculate quote from selected items and inject mandatory fees
  * @param {Object} params - Calculation parameters
