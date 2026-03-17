@@ -150,11 +150,18 @@ const calculateLeadPricing = async (booking) => {
         // so invoice/receipt keeps full breakdown (additional creatives, etc.).
         const q = booking.primary_quote; 
         if (q) {
+            const totalFromQuote = parseFloat(q.total || 0);
+            const totalAfterDiscount = parseFloat(q.price_after_discount || 0);
+            const totalFromPayment = parseFloat(paymentTransaction?.total_amount || 0);
+            let resolvedTotal = totalFromQuote > 0 ? totalFromQuote : totalAfterDiscount;
+            if (bookingMarkedPaid && totalFromPayment > 0 && resolvedTotal <= 0) {
+                resolvedTotal = totalFromPayment;
+            }
             return {
                 source: 'database',
                 is_paid: bookingMarkedPaid,
                 stripe_payment_intent_id: paymentTransaction?.stripe_payment_intent_id || null,
-                total: parseFloat(q.price_after_discount || q.total || 0),
+                total: resolvedTotal,
                 subtotal: parseFloat(q.subtotal || 0),
                 discount_amount: parseFloat(q.discount_amount || 0),
                 line_items: (q.line_items || []).map(item => ({

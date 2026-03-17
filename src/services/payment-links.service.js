@@ -248,208 +248,112 @@ async function replaceMismatchedInvoice(invoice, bookingId) {
   }
 }
 
+/**
+ * Create a Stripe Invoice for an unpaid booking
+ */
 async function createStripeInvoice(booking, pricingData, options = {}) {
   const { transaction } = options;
   const email = booking.guest_email || (booking.user ? booking.user.email : null);
   const expectedTotalCents = getExpectedInvoiceTotalCents(pricingData);
   const pricingKey = `${booking.stream_project_booking_id}-${expectedTotalCents}`;
   
-  if (!email) {
-    throw new Error("Booking must have an email address to generate an invoice.");
-  }
+  if (!email) throw new Error("Booking must have an email address.");
 
-  // Determine Customer Name
-  let recipientName = 'Valued Guest';
-  if (booking.user && booking.user.name) {
-    recipientName = booking.user.name;
-  } else if (booking.project_name) {
-    recipientName = booking.project_name.split(' - ')[1] || 'Valued Guest';
-  }
+  let recipientName = booking.user?.name || (booking.project_name ? booking.project_name.split(' - ')[1] : 'Valued Guest');
 
-  // 0. Reuse existing invoice if valid
-  if (booking.stripe_invoice_id) {
-    try {
-      const existing = await stripe.invoices.retrieve(booking.stripe_invoice_id);
-      if (existing) {
-        if (existing.status === 'void' || existing.status === 'uncollectible') {
-          await booking.update({ stripe_invoice_id: null }, { transaction });
-        } else if (isInvoiceTotalMismatch(existing, expectedTotalCents)) {
-          await replaceMismatchedInvoice(existing, booking.stream_project_booking_id);
-          await booking.update({ stripe_invoice_id: null }, { transaction });
-        } else {
-          return existing;
-        }
-      }
-    } catch (error) {
-      if (error && error.statusCode === 404) {
-        await booking.update({ stripe_invoice_id: null }, { transaction });
-      } else {
-        throw error;
-      }
-    }
-  }
-
-  // 1. Customer Handling
   let customer = null;
-  let customersByEmail = [];
-  if (!booking.stripe_customer_id && email) {
-    customersByEmail = await listStripeCustomersByEmail(email);
-  }
-
-  if (customersByEmail.length > 0) {
-    const invoiceFromAnyCustomer = await findExistingInvoiceAcrossCustomers({
-      bookingId: booking.stream_project_booking_id,
-      customerIds: customersByEmail.map((c) => c.id)
-    });
-
-    if (invoiceFromAnyCustomer) {
-      const invoiceCustomerId = typeof invoiceFromAnyCustomer.customer === 'string'
-        ? invoiceFromAnyCustomer.customer
-        : invoiceFromAnyCustomer.customer?.id;
-      if (invoiceCustomerId) {
-        await booking.update({
-          stripe_customer_id: invoiceCustomerId,
-          stripe_invoice_id: invoiceFromAnyCustomer.id
-        }, { transaction });
-      }
-      if (isInvoiceTotalMismatch(invoiceFromAnyCustomer, expectedTotalCents)) {
-        await replaceMismatchedInvoice(invoiceFromAnyCustomer, booking.stream_project_booking_id);
-        await booking.update({ stripe_invoice_id: null }, { transaction });
-      } else if (invoiceFromAnyCustomer.status === 'draft') {
-        return stripe.invoices.finalizeInvoice(invoiceFromAnyCustomer.id, {}, {
-          idempotencyKey: `inv-finalize-${pricingKey}-${invoiceFromAnyCustomer.id}`
-        });
-      }
-      if (invoiceFromAnyCustomer.status === 'open' || invoiceFromAnyCustomer.status === 'paid') {
-        return invoiceFromAnyCustomer;
-      }
-    }
-  }
-
-  if (booking.stripe_customer_id) {
-    customer = await getStripeCustomerById(booking.stripe_customer_id);
-  }
+  if (booking.stripe_customer_id) customer = await getStripeCustomerById(booking.stripe_customer_id);
   if (!customer) {
-    customer = await getOrCreateStripeCustomer({
-      email,
-      name: recipientName,
-      bookingId: booking.stream_project_booking_id
-    });
-    if (booking.stripe_customer_id !== customer.id) {
-      await booking.update({ stripe_customer_id: customer.id }, { transaction });
-    }
+    customer = await getOrCreateStripeCustomer({ email, name: recipientName, bookingId: booking.stream_project_booking_id });
+    await booking.update({ stripe_customer_id: customer.id }, { transaction });
   }
 
-  // 2. Reuse existing invoice
-  const existingInvoice = await findExistingInvoiceForBooking(
-    customer.id,
-    booking.stream_project_booking_id
-  );
-
-  if (existingInvoice && !isInvoiceTotalMismatch(existingInvoice, expectedTotalCents)) {
-    if (existingInvoice.status === 'draft') {
-       // If it's a draft and somehow empty, it will be finalized below. 
-       // For simplicity, we create a fresh one if total mismatched, or finalize if correct.
-       return stripe.invoices.finalizeInvoice(existingInvoice.id, {}, {
-         idempotencyKey: `inv-finalize-${pricingKey}-${existingInvoice.id}`
-       });
-    }
-    return existingInvoice;
-  }
-
-  // 3. Create the Draft Invoice
   const invoice = await stripe.invoices.create({
     customer: customer.id,
     collection_method: 'send_invoice',
     days_until_due: 7,
     description: `Service Invoice for ${booking.project_name || 'Project'}`,
-    footer: "Beige AI Platform - Thank you for your business.",
-    metadata: { 
-      booking_id: booking.stream_project_booking_id.toString() 
-    }
-  }, {
-    idempotencyKey: `inv-create-${pricingKey}`
-  });
+    metadata: { booking_id: booking.stream_project_booking_id.toString() }
+  }, { idempotencyKey: `inv-create-${pricingKey}` });
 
-  // 4. Add Positive Line Items
+  // --- ITEM CREATION WITH QUANTITY ---
+  let addedItemsTotalCents = 0;
   if (pricingData.line_items && pricingData.line_items.length > 0) {
     for (const [index, item] of pricingData.line_items.entries()) {
-      const amountCents = Math.round(parseFloat(item.total || 0) * 100);
-      if (amountCents > 0) {
+      const lineTotalCents = Math.round(parseFloat(item.total || 0) * 100);
+      const qty = parseInt(item.quantity) || 1;
+      
+      if (lineTotalCents > 0) {
+        addedItemsTotalCents += lineTotalCents;
+        // Calculate unit amount by dividing total by quantity
+        const unitAmountCents = Math.round(lineTotalCents / qty);
+
         await stripe.invoiceItems.create({
           customer: customer.id,
           invoice: invoice.id,
-          amount: amountCents,
+          unit_amount: unitAmountCents, // <--- Corrects Unit Price
+          quantity: qty,               // <--- Corrects Quantity
           currency: 'usd',
-          description: `${item.name} (Qty: ${item.quantity || 1})`,
-        }, {
-          idempotencyKey: `inv-item-${pricingKey}-${invoice.id}-${index}`
-        });
+          description: item.name,
+        }, { idempotencyKey: `inv-item-${pricingKey}-${invoice.id}-${index}` });
       }
     }
   }
 
-  // 5. HANDLE DISCOUNTS (SPLIT INTO PROMO AND REFERRAL)
-  const totalSubtotal = parseFloat(pricingData.subtotal || 0);
-  const totalDiscountAmount = parseFloat(pricingData.discount_amount || 0);
+  // Fallback for subtotal if no line items
+  const pricingSubtotalCents = Math.round(parseFloat(pricingData.subtotal || 0) * 100);
+  if (addedItemsTotalCents <= 0 && pricingSubtotalCents > 0) {
+    await stripe.invoiceItems.create({
+      customer: customer.id,
+      invoice: invoice.id,
+      amount: pricingSubtotalCents,
+      currency: 'usd',
+      description: `Service Base Price`,
+    });
+  }
 
+  // Handle Discounts (Negative amounts)
+  const totalDiscountAmount = parseFloat(pricingData.discount_amount || 0);
   if (totalDiscountAmount > 0) {
     const quote = booking.primary_quote;
+    const totalSubtotal = parseFloat(pricingData.subtotal || 0);
     let promoDiscountCents = 0;
 
-    // A) Calculate the "Promo Code" part (e.g., the 50%)
     if (quote) {
-      if (quote.applied_discount_type === 'percentage') {
-        promoDiscountCents = Math.round((totalSubtotal * (parseFloat(quote.applied_discount_value) / 100)) * 100);
-      } else {
-        promoDiscountCents = Math.round(parseFloat(quote.applied_discount_value || 0) * 100);
-      }
+      promoDiscountCents = quote.applied_discount_type === 'percentage' 
+        ? Math.round((totalSubtotal * (parseFloat(quote.applied_discount_value) / 100)) * 100)
+        : Math.round(parseFloat(quote.applied_discount_value || 0) * 100);
     }
 
-    // Add the Promo Discount Line Item
     if (promoDiscountCents > 0) {
       await stripe.invoiceItems.create({
         customer: customer.id,
         invoice: invoice.id,
-        amount: -promoDiscountCents, // Negative
+        amount: -promoDiscountCents,
         currency: 'usd',
-        description: `Discount Code: ${quote?.discount_code_id ? 'Applied' : 'Promo'}`,
-      }, {
-        idempotencyKey: `inv-promo-disc-${pricingKey}-${invoice.id}`
+        description: `Discount Code Applied`,
       });
     }
 
-    // B) Calculate the "Referral" part (The remaining balance of the discount)
     const totalDiscountCents = Math.round(totalDiscountAmount * 100);
     const referralDiscountCents = totalDiscountCents - promoDiscountCents;
-
     if (referralDiscountCents > 0) {
       await stripe.invoiceItems.create({
         customer: customer.id,
         invoice: invoice.id,
-        amount: -referralDiscountCents, // Negative
+        amount: -referralDiscountCents,
         currency: 'usd',
         description: `Referral Discount Applied`,
-      }, {
-        idempotencyKey: `inv-referral-disc-${pricingKey}-${invoice.id}`
       });
     }
   }
 
-  // 6. Finalize the invoice
-  const finalizedInvoice = await stripe.invoices.finalizeInvoice(invoice.id, {}, {
-    idempotencyKey: `inv-finalize-${pricingKey}-${invoice.id}`
-  });
-
-  if (!booking.stripe_invoice_id || booking.stripe_invoice_id !== finalizedInvoice.id) {
-    await booking.update({ stripe_invoice_id: finalizedInvoice.id }, { transaction });
-  }
-
+  const finalizedInvoice = await stripe.invoices.finalizeInvoice(invoice.id);
+  await booking.update({ stripe_invoice_id: finalizedInvoice.id }, { transaction });
   return finalizedInvoice;
 }
 /**
- * Creates a formal invoice for a payment that HAS ALREADY been received.
- * This is used to generate a professional PDF for historical records.
+ * Creates a formal invoice/receipt for a payment that HAS ALREADY been received.
  */
 async function createPaidStripeInvoice(booking, pricingData, options = {}) {
   const { transaction } = options;
@@ -458,7 +362,11 @@ async function createPaidStripeInvoice(booking, pricingData, options = {}) {
 
   const customer = await getOrCreateStripeCustomer({ email, name: recipientName, bookingId: booking.stream_project_booking_id });
 
-  // Create fresh invoice to ensure correct amounts
+  const safeNumber = (value) => {
+    const parsed = parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+
   const invoice = await stripe.invoices.create({
     customer: customer.id,
     auto_advance: false, 
@@ -468,29 +376,54 @@ async function createPaidStripeInvoice(booking, pricingData, options = {}) {
     metadata: { booking_id: booking.stream_project_booking_id.toString(), status: 'paid_receipt' }
   });
 
-  // Add Items
-  for (const item of (pricingData.line_items || [])) {
-    const amt = Math.round(parseFloat(item.total || 0) * 100);
-    if (amt > 0) {
-      await stripe.invoiceItems.create({ customer: customer.id, invoice: invoice.id, amount: amt, currency: 'usd', description: `${item.name}` });
+  // --- ITEM CREATION WITH QUANTITY ---
+  const lineItems = pricingData?.line_items || [];
+  let lineItemsTotalCents = 0;
+  for (const item of lineItems) {
+    const lineTotalCents = Math.round(safeNumber(item.total) * 100);
+    const qty = parseInt(item.quantity) || 1;
+
+    if (lineTotalCents > 0) {
+      lineItemsTotalCents += lineTotalCents;
+      const unitAmountCents = Math.round(lineTotalCents / qty);
+
+      await stripe.invoiceItems.create({ 
+        customer: customer.id, 
+        invoice: invoice.id, 
+        unit_amount: unitAmountCents, // <--- Corrects Unit Price
+        quantity: qty,               // <--- Corrects Quantity
+        currency: 'usd', 
+        description: `${item.name}` 
+      });
     }
   }
 
-  // Add Discounts
-  const subtotal = parseFloat(pricingData.subtotal || 0);
-  const totalDiscount = parseFloat(pricingData.discount_amount || 0);
+  const pricingSubtotal = safeNumber(pricingData?.subtotal || 0);
+  if (lineItemsTotalCents <= 0 && pricingSubtotal > 0) {
+    await stripe.invoiceItems.create({
+      customer: customer.id,
+      invoice: invoice.id,
+      amount: Math.round(pricingSubtotal * 100),
+      currency: 'usd',
+      description: `Service Base Price`
+    });
+  }
 
+  // Add Discounts (Negative amounts)
+  const totalDiscount = safeNumber(pricingData?.discount_amount || 0);
   if (totalDiscount > 0) {
     const quote = booking.primary_quote;
     let promoCents = 0;
     if (quote) {
       promoCents = quote.applied_discount_type === 'percentage' 
-        ? Math.round((subtotal * (parseFloat(quote.applied_discount_value) / 100)) * 100)
+        ? Math.round((pricingSubtotal * (parseFloat(quote.applied_discount_value) / 100)) * 100)
         : Math.round(parseFloat(quote.applied_discount_value) * 100);
     }
+    
     if (promoCents > 0) {
       await stripe.invoiceItems.create({ customer: customer.id, invoice: invoice.id, amount: -promoCents, currency: 'usd', description: `Discount Code Applied` });
     }
+    
     const referralCents = Math.round(totalDiscount * 100) - promoCents;
     if (referralCents > 0) {
       await stripe.invoiceItems.create({ customer: customer.id, invoice: invoice.id, amount: -referralCents, currency: 'usd', description: `Referral Discount Applied` });
@@ -498,7 +431,9 @@ async function createPaidStripeInvoice(booking, pricingData, options = {}) {
   }
 
   let finalized = await stripe.invoices.finalizeInvoice(invoice.id);
-  finalized = await stripe.invoices.pay(finalized.id, { paid_out_of_band: true });
+  if (finalized.status !== 'paid' && finalized.total !== 0) {
+    finalized = await stripe.invoices.pay(finalized.id, { paid_out_of_band: true });
+  }
 
   await booking.update({ stripe_invoice_id: finalized.id, stripe_customer_id: customer.id }, { transaction });
   return finalized;
