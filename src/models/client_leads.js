@@ -1,7 +1,7 @@
 const Sequelize = require('sequelize');
 
 module.exports = function(sequelize, DataTypes) {
-  return sequelize.define('sales_leads', {
+  return sequelize.define('client_leads', {
     lead_id: {
       autoIncrement: true,
       type: DataTypes.INTEGER,
@@ -46,7 +46,7 @@ module.exports = function(sequelize, DataTypes) {
       defaultValue: 'in_progress_self_serve'
     },
     intent: {
-      type: DataTypes.ENUM('Hot','Warm','Cold'),
+      type: DataTypes.ENUM('Hot', 'Warm', 'Cold'),
       allowNull: true
     },
     lead_source: {
@@ -94,57 +94,57 @@ module.exports = function(sequelize, DataTypes) {
     }
   }, {
     sequelize,
-    tableName: 'sales_leads',
+    tableName: 'client_leads',
     timestamps: false,
     indexes: [
       {
-        name: "PRIMARY",
+        name: 'PRIMARY',
         unique: true,
-        using: "BTREE",
+        using: 'BTREE',
         fields: [
-          { name: "lead_id" },
+          { name: 'lead_id' },
         ]
       },
       {
-        name: "idx_lead_status",
-        using: "BTREE",
+        name: 'idx_client_lead_status',
+        using: 'BTREE',
         fields: [
-          { name: "lead_status" },
+          { name: 'lead_status' },
         ]
       },
       {
-        name: "idx_assigned_rep",
-        using: "BTREE",
+        name: 'idx_client_assigned_rep',
+        using: 'BTREE',
         fields: [
-          { name: "assigned_sales_rep_id" },
+          { name: 'assigned_sales_rep_id' },
         ]
       },
       {
-        name: "idx_booking",
-        using: "BTREE",
+        name: 'idx_client_booking',
+        using: 'BTREE',
         fields: [
-          { name: "booking_id" },
+          { name: 'booking_id' },
         ]
       },
       {
-        name: "idx_last_activity",
-        using: "BTREE",
+        name: 'idx_client_last_activity',
+        using: 'BTREE',
         fields: [
-          { name: "last_activity_at" },
+          { name: 'last_activity_at' },
         ]
       },
       {
-        name: "idx_lead_type",
-        using: "BTREE",
+        name: 'idx_client_lead_type',
+        using: 'BTREE',
         fields: [
-          { name: "lead_type" },
+          { name: 'lead_type' },
         ]
       },
       {
-        name: "user_id",
-        using: "BTREE",
+        name: 'idx_client_user_id',
+        using: 'BTREE',
         fields: [
-          { name: "user_id" },
+          { name: 'user_id' },
         ]
       },
     ]

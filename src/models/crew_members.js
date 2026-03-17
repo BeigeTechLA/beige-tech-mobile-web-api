@@ -106,6 +106,10 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.INTEGER(11),
       allowNull: false,
       defaultValue: 0
+    },
+    created_from: {
+      type: DataTypes.INTEGER,
+      allowNull: true
     }
   }, {
     sequelize,

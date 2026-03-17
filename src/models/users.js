@@ -70,6 +70,10 @@ module.exports = function(sequelize, DataTypes) {
     reset_token_expiry: {
       type: DataTypes.DATE,
       allowNull: true
+    },
+    created_from: {
+      type: DataTypes.INTEGER,
+      allowNull: true
     }
   }, {
     sequelize,

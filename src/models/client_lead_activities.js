@@ -1,7 +1,7 @@
 const Sequelize = require('sequelize');
 
 module.exports = function(sequelize, DataTypes) {
-  return sequelize.define('sales_lead_activities', {
+  return sequelize.define('client_lead_activities', {
     activity_id: {
       autoIncrement: true,
       type: DataTypes.INTEGER,
@@ -12,7 +12,7 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.INTEGER,
       allowNull: false,
       references: {
-        model: 'sales_leads',
+        model: 'client_leads',
         key: 'lead_id'
       }
     },
@@ -51,36 +51,36 @@ module.exports = function(sequelize, DataTypes) {
     }
   }, {
     sequelize,
-    tableName: 'sales_lead_activities',
+    tableName: 'client_lead_activities',
     timestamps: false,
     indexes: [
       {
-        name: "PRIMARY",
+        name: 'PRIMARY',
         unique: true,
-        using: "BTREE",
+        using: 'BTREE',
         fields: [
-          { name: "activity_id" },
+          { name: 'activity_id' },
         ]
       },
       {
-        name: "idx_lead",
-        using: "BTREE",
+        name: 'idx_client_lead_activity_lead',
+        using: 'BTREE',
         fields: [
-          { name: "lead_id" },
+          { name: 'lead_id' },
         ]
       },
       {
-        name: "idx_activity_type",
-        using: "BTREE",
+        name: 'idx_client_lead_activity_type',
+        using: 'BTREE',
         fields: [
-          { name: "activity_type" },
+          { name: 'activity_type' },
         ]
       },
       {
-        name: "idx_created_at",
-        using: "BTREE",
+        name: 'idx_client_lead_activity_created_at',
+        using: 'BTREE',
         fields: [
-          { name: "created_at" },
+          { name: 'created_at' },
         ]
       },
     ]

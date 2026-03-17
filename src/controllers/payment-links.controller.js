@@ -1,4 +1,4 @@
-const { payment_links, sales_leads, sales_lead_activities, discount_codes, stream_project_booking, quotes, quote_line_items, users } = require('../models');
+const { payment_links, sales_leads, client_leads, sales_lead_activities, client_lead_activities, discount_codes, stream_project_booking, quotes, quote_line_items, users } = require('../models');
 const db = require('../models');
 const paymentLinksService = require('../services/payment-links.service');
 const constants = require('../utils/constants');
@@ -7,6 +7,52 @@ const emailService = require('../utils/emailService');
 const discountService = require('../services/discount.service');
 const { Op } = require('sequelize');
 const https = require('https');
+
+const updatePaymentLeadState = async ({
+  leadId = null,
+  clientLeadId = null,
+  newStatus = null,
+  activityType = null,
+  activityData = null,
+  performedByUserId = null,
+  transaction = null
+}) => {
+  if (leadId) {
+    if (newStatus) {
+      await sales_leads.update(
+        { lead_status: newStatus },
+        { where: { lead_id: leadId }, transaction }
+      );
+    }
+
+    if (activityType) {
+      await sales_lead_activities.create({
+        lead_id: leadId,
+        activity_type: activityType,
+        activity_data: activityData,
+        performed_by_user_id: performedByUserId
+      }, { transaction });
+    }
+  }
+
+  if (clientLeadId) {
+    if (newStatus) {
+      await client_leads.update(
+        { lead_status: newStatus },
+        { where: { lead_id: clientLeadId }, transaction }
+      );
+    }
+
+    if (activityType) {
+      await client_lead_activities.create({
+        lead_id: clientLeadId,
+        activity_type: activityType,
+        activity_data: activityData,
+        performed_by_user_id: performedByUserId
+      }, { transaction });
+    }
+  }
+};
 
 const applyQuoteDiscountFromLatestPaymentLink = async (booking, performedByUserId = null) => {
     if (!booking || !booking.primary_quote) return false;
@@ -109,24 +155,20 @@ const applyQuoteDiscountFromLatestPaymentLink = async (booking, performedByUserI
             transaction
         );
 
-        if (validDiscountCode.lead_id) {
-            await sales_leads.update(
-                { lead_status: 'discount_applied' },
-                { where: { lead_id: validDiscountCode.lead_id }, transaction }
-            );
-
-            await sales_lead_activities.create({
-                lead_id: validDiscountCode.lead_id,
-                activity_type: 'discount_applied',
-                activity_data: {
-                    discount_code_id: validDiscountCode.discount_code_id,
-                    code: validDiscountCode.code,
-                    discount_amount: discountAmount,
-                    quote_id: booking.primary_quote.quote_id
-                },
-                performed_by_user_id: performedByUserId
-            }, { transaction });
-        }
+        await updatePaymentLeadState({
+            leadId: validDiscountCode.lead_id || null,
+            clientLeadId: validDiscountCode.client_lead_id || null,
+            newStatus: 'discount_applied',
+            activityType: 'discount_applied',
+            activityData: {
+                discount_code_id: validDiscountCode.discount_code_id,
+                code: validDiscountCode.code,
+                discount_amount: discountAmount,
+                quote_id: booking.primary_quote.quote_id
+            },
+            performedByUserId,
+            transaction
+        });
 
         await transaction.commit();
     } catch (error) {
@@ -241,6 +283,7 @@ exports.generatePaymentLink = async (req, res) => {
   try {
     const {
       lead_id,
+      client_lead_id,
       booking_id,
       discount_code_id,
       expiry_hours
@@ -298,7 +341,8 @@ exports.generatePaymentLink = async (req, res) => {
     // 5. Create payment link record
     const paymentLink = await payment_links.create({
       link_token: token,
-      lead_id: lead_id || booking.lead_id || null, // Fallback to lead_id from booking if not in body
+      lead_id: lead_id || null,
+      client_lead_id: client_lead_id || null,
       booking_id,
       discount_code_id: discount_code_id || null,
       created_by_user_id: createdBy,
@@ -319,26 +363,19 @@ exports.generatePaymentLink = async (req, res) => {
     );
 
     // 8. Update lead status if associated with lead
-    const finalLeadId = lead_id || booking.lead_id;
-    if (finalLeadId) {
-      await sales_leads.update(
-        { lead_status: 'payment_link_sent' },
-        { where: { lead_id: finalLeadId } }
-      );
-
-      // Log activity
-      await sales_lead_activities.create({
-        lead_id: finalLeadId,
-        activity_type: 'payment_link_generated',
-        activity_data: {
-          payment_link_id: paymentLink.payment_link_id,
-          booking_id,
-          discount_code_id,
-          expires_at: expiresAt
-        },
-        performed_by_user_id: createdBy
-      });
-    }
+    await updatePaymentLeadState({
+      leadId: lead_id || null,
+      clientLeadId: client_lead_id || null,
+      newStatus: 'payment_link_sent',
+      activityType: 'payment_link_generated',
+      activityData: {
+        payment_link_id: paymentLink.payment_link_id,
+        booking_id,
+        discount_code_id,
+        expires_at: expiresAt
+      },
+      performedByUserId: createdBy
+    });
 
     res.status(201).json({
       success: true,
@@ -364,6 +401,12 @@ exports.generatePaymentLink = async (req, res) => {
       error: error.message
     });
   }
+};
+
+exports.generateClientPaymentLink = async (req, res) => {
+  req.body.client_lead_id = req.body.client_lead_id || req.body.lead_id || null;
+  delete req.body.lead_id;
+  return exports.generatePaymentLink(req, res);
 };
 
 exports.sendPaymentLinkEmail = async (req, res) => {
@@ -425,14 +468,13 @@ exports.sendPaymentLinkEmail = async (req, res) => {
 
     if (result.success) {
       // Log Activity
-      if (link.lead_id) {
-        await sales_lead_activities.create({
-          lead_id: link.lead_id,
-          activity_type: 'payment_link_emailed',
-          activity_data: { payment_link_id, sent_to: recipientEmail },
-          performed_by_user_id: req.userId
-        });
-      }
+      await updatePaymentLeadState({
+        leadId: link.lead_id || null,
+        clientLeadId: link.client_lead_id || null,
+        activityType: 'payment_link_generated',
+        activityData: { payment_link_id, sent_to: recipientEmail, email_sent: true },
+        performedByUserId: req.userId
+      });
 
       return res.status(200).json({
         success: true,
@@ -811,16 +853,16 @@ exports.sendStripeInvoice = async (req, res) => {
     }
 
     const associatedLead = await db.sales_leads.findOne({ where: { booking_id: parsedBookingId } });
-    if (associatedLead) {
-      await associatedLead.update({ lead_status: 'proposal_sent' });
+    const associatedClientLead = await db.client_leads.findOne({ where: { booking_id: parsedBookingId } });
 
-      await db.sales_lead_activities.create({
-        lead_id: associatedLead.lead_id,
-        activity_type: 'invoice_sent',
-        activity_data: { invoice_number: invoiceDetails.invoiceNumber },
-        performed_by_user_id: req.userId
-      });
-    }
+    await updatePaymentLeadState({
+      leadId: associatedLead?.lead_id || null,
+      clientLeadId: associatedClientLead?.lead_id || null,
+      newStatus: 'proposal_sent',
+      activityType: 'payment_link_generated',
+      activityData: { invoice_number: invoiceDetails.invoiceNumber, invoice_sent: true },
+      performedByUserId: req.userId
+    });
 
     return res.status(200).json({
       success: true,
@@ -861,25 +903,17 @@ exports.markLinkAsUsed = async (req, res) => {
     await paymentLinksService.markLinkAsUsed(token, transaction);
 
     // Update lead status to booked if associated with lead
-    if (paymentLink.lead_id) {
-      await sales_leads.update(
-        { lead_status: 'booked' },
-        { 
-          where: { lead_id: paymentLink.lead_id },
-          transaction
-        }
-      );
-
-      // Log activity
-      await sales_lead_activities.create({
-        lead_id: paymentLink.lead_id,
-        activity_type: 'payment_completed',
-        activity_data: {
-          payment_link_id: paymentLink.payment_link_id,
-          booking_id: paymentLink.booking_id
-        }
-      }, { transaction });
-    }
+    await updatePaymentLeadState({
+      leadId: paymentLink.lead_id || null,
+      clientLeadId: paymentLink.client_lead_id || null,
+      newStatus: 'booked',
+      activityType: 'payment_completed',
+      activityData: {
+        payment_link_id: paymentLink.payment_link_id,
+        booking_id: paymentLink.booking_id
+      },
+      transaction
+    });
 
     await transaction.commit();
 
@@ -942,6 +976,11 @@ exports.getSalesRepPaymentLinks = async (req, res) => {
         {
           model: sales_leads,
           as: 'lead',
+          attributes: ['lead_id', 'client_name', 'lead_status']
+        },
+        {
+          model: client_leads,
+          as: 'client_lead',
           attributes: ['lead_id', 'client_name', 'lead_status']
         }
       ],
