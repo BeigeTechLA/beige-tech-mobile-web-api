@@ -1469,7 +1469,7 @@ const sendPaymentLinkEmail = async (userData, paymentData) => {
       // Embed the logo so it shows automatically
       attachments: [{
         filename: 'logo.png',
-        path: 'https://beigexmemehouse.s3.eu-north-1.amazonaws.com/beige/beige_logo_vb.png',
+        path: 'https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/beige_logo_vb.png',
         cid: 'beigelogo' // Same as in the HTML <img src="cid:beigelogo">
       }],
       html: generatePaymentLinkTemplate(userData, paymentData)

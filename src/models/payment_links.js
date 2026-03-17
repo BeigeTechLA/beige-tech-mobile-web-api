@@ -21,6 +21,14 @@ module.exports = function(sequelize, DataTypes) {
         key: 'lead_id'
       }
     },
+    client_lead_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'client_leads',
+        key: 'lead_id'
+      }
+    },
     booking_id: {
       type: DataTypes.INTEGER,
       allowNull: false,
@@ -96,6 +104,13 @@ module.exports = function(sequelize, DataTypes) {
         using: "BTREE",
         fields: [
           { name: "lead_id" },
+        ]
+      },
+      {
+        name: "idx_client_lead",
+        using: "BTREE",
+        fields: [
+          { name: "client_lead_id" },
         ]
       },
       {

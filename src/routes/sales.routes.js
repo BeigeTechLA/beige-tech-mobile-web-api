@@ -55,6 +55,7 @@ router.post('/leads/contact-sales', salesLeadsController.createSalesAssistedLead
  * @access  Sales Rep / Admin
  */
 router.get('/leads', authenticate, requireSalesRepOrAdmin, salesLeadsController.getLeads);
+router.get('/client-leads', authenticate, requireSalesRepOrAdmin, salesLeadsController.getClientLeads);
 
 /**
  * @route   GET /api/sales/leads/:id
@@ -62,6 +63,7 @@ router.get('/leads', authenticate, requireSalesRepOrAdmin, salesLeadsController.
  * @access  Sales Rep / Admin
  */
 router.get('/leads/:id', authenticate, requireSalesRepOrAdmin, salesLeadsController.getLeadById);
+router.get('/client-leads/:id', authenticate, requireSalesRepOrAdmin, salesLeadsController.getClientLeadById);
 
 /**
  * @route   PUT /api/sales/leads/:id/assign
@@ -78,6 +80,7 @@ router.put('/leads/:id/assign', authenticate, requireSalesRepOrAdmin, salesLeads
  * @access  Sales Rep / Admin
  */
 router.put('/leads/:id/status', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateLeadStatus);
+router.put('/client-leads/:id/status', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateClientLeadStatus);
 router.post(
   '/leads/:id/post-production-status-update',
   authenticate,
@@ -126,6 +129,7 @@ router.post(
  * @access  Sales Rep / Admin
  */
 router.post('/discount-codes', authenticate, requireSalesRepOrAdmin, discountsController.generateDiscountCode);
+router.post('/client-discount-codes', authenticate, requireSalesRepOrAdmin, discountsController.generateClientDiscountCode);
 
 /**
  * @route   GET /api/sales/discount-codes/:code/validate
@@ -182,6 +186,7 @@ router.get('/discount-codes/:id/usage', authenticate, requireSalesRepOrAdmin, di
  * @access  Sales Rep / Admin
  */
 router.post('/payment-links', authenticate, requireSalesRepOrAdmin, paymentLinksController.generatePaymentLink);
+router.post('/client-payment-links', authenticate, requireSalesRepOrAdmin, paymentLinksController.generateClientPaymentLink);
 router.post('/preview-invoice', paymentLinksController.previewStripeInvoice);
 router.get('/invoice-pdf/:booking_id', paymentLinksController.getStripeInvoicePdf);
 router.post('/send-invoice', paymentLinksController.sendStripeInvoice);
@@ -272,6 +277,7 @@ router.patch(
 );
 
 router.post('/leads/intent', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateLeadIntent);
+router.post('/client-leads/intent', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateClientLeadIntent);
 router.put('/leads/:id/booking', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeGuestBooking);
 router.post('/deals/finalize', salesLeadsController.finalizeCreateDeal);
 
