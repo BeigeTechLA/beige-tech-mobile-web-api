@@ -1370,6 +1370,130 @@ exports.getLeads = async (req, res) => {
     });
   }
 };
+
+exports.getClientLeads = async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 20,
+      status,
+      lead_type,
+      assigned_to,
+      search,
+      start_date,
+      end_date,
+      intent,
+      booking_status
+    } = req.query;
+
+    const pageNumber = parseInt(page, 10);
+    const pageLimit = parseInt(limit, 10);
+    const offset = (pageNumber - 1) * pageLimit;
+
+    const whereClause = {};
+    if (req.userRole === 'sales_rep') {
+      whereClause.assigned_sales_rep_id = req.userId;
+    }
+
+    if (start_date && end_date) {
+      whereClause.created_at = {
+        [Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`]
+      };
+    }
+
+    if (lead_type) whereClause.lead_type = lead_type;
+
+    if (assigned_to) {
+      whereClause.assigned_sales_rep_id =
+        assigned_to === 'unassigned' ? null : parseInt(assigned_to, 10);
+    }
+
+    if (search) {
+      whereClause[Op.or] = [
+        { client_name: { [Op.like]: `%${search}%` } },
+        { guest_email: { [Op.like]: `%${search}%` } },
+        { phone: { [Op.like]: `%${search}%` } }
+      ];
+    }
+
+    const leads = await client_leads.findAll({
+      where: whereClause,
+      include: [
+        {
+          model: users,
+          as: 'assigned_sales_rep',
+          attributes: ['id', 'name', 'email']
+        },
+        {
+          model: stream_project_booking,
+          as: 'booking',
+          include: [
+            {
+              model: quotes,
+              as: 'primary_quote',
+              include: [{ model: quote_line_items, as: 'line_items' }]
+            }
+          ]
+        }
+      ],
+      order: [['created_at', 'DESC']]
+    });
+
+    let processedLeads = await Promise.all(
+      leads.map(async (lead) => {
+        const leadJson = lead.toJSON();
+        const pricingData = await calculateLeadPricing(lead.booking);
+        const computedIntent = lead.intent ?? leadAssignmentService.getClientIntent({ booking: lead.booking });
+        const computedBookingStatus = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
+
+        return {
+          ...leadJson,
+          potential_value: pricingData ? pricingData.total : 0,
+          booking_status: computedBookingStatus,
+          intent: computedIntent,
+          payment_status: lead.booking?.payment_id ? 'paid' : 'unpaid',
+        };
+      })
+    );
+
+    const activeStatusFilter = (status || booking_status);
+    if (activeStatusFilter && activeStatusFilter !== 'All') {
+      processedLeads = processedLeads.filter((lead) => {
+        const leadStat = lead.booking_status.replace('â€“', '-').trim();
+        const filterStat = activeStatusFilter.replace('â€“', '-').trim();
+        return leadStat === filterStat;
+      });
+    }
+
+    if (intent && intent !== 'All') {
+      processedLeads = processedLeads.filter(
+        (lead) => lead.intent.toLowerCase() === intent.toLowerCase().trim()
+      );
+    }
+
+    const total = processedLeads.length;
+    const paginatedLeads = processedLeads.slice(offset, offset + pageLimit);
+
+    res.json({
+      success: true,
+      data: {
+        leads: paginatedLeads,
+        pagination: {
+          total,
+          page: pageNumber,
+          totalPages: Math.ceil(total / pageLimit)
+        }
+      }
+    });
+  } catch (error) {
+    console.error('getClientLeads Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch client leads',
+      error: error.message
+    });
+  }
+};
 exports.getLeadById = async (req, res) => {
   try {
     const { id } = req.params;

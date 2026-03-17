@@ -323,8 +323,8 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "lead_id": 155,
-  "booking_id": 819,
+  "lead_id": 175,
+  "booking_id": 839,
   "discount_type": "percentage",
   "discount_value": 50,
   "usage_type": "one_time"
@@ -430,9 +430,9 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "lead_id": 155,
-  "booking_id": 819,
-  "discount_code_id": 25,
+  "lead_id": 175,
+  "booking_id": 839,
+  "discount_code_id": 32,
   "expiry_hours": 2
 }
 
@@ -803,7 +803,7 @@ Authorization: {{TOKEN}}
 GET {{URL}}client/get-booking-details/927 HTTP/1.1
 Content-Type: application/json
 
-### 
+### update client lead status
 PUT {{URL}}sales/client-leads/1/status HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
@@ -812,7 +812,7 @@ Authorization: {{TOKEN}}
     "status": "payment_link_sent"
 }
 
-### 
+### update client lead intent
 POST {{URL}}sales/client-leads/intent HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
@@ -823,7 +823,87 @@ Authorization: {{TOKEN}}
     "notes": "Client confirmed budget on call"
 }
 
-### 
+### get client lead detail 
 GET {{URL}}sales/client-leads/2 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### generate client lead discount
+POST {{URL}}sales/client-discount-codes HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "client_lead_id": 1,
+  "booking_id": 842,
+  "discount_type": "percentage",
+  "discount_value": 50,
+  "usage_type": "one_time"
+}
+
+### generate client lead payment link
+POST {{URL}}sales/client-payment-links HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "client_lead_id": 1,
+  "booking_id": 842,
+  "discount_code_id": 31,
+  "expiry_hours": 2
+}
+
+### get client leads
+GET {{URL}}sales/client-leads HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### assign crew from client lead
+POST {{URL}}admin/assign-crew-from-lead HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "client_lead_id": 1,
+  "crew_member_ids": [2064]
+}
+
+
+
+### 
+POST {{URL}}sales/payment-links/notify HTTP/1.1
+Content-Type: application/json
+
+{
+  "payment_link_id": 13
+}
+
+### 
+POST {{URL}}sales/send-invoice HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "booking_id": 842
+}
+
+### 
+POST {{URL}}sales/discount-codes/REV4D089/apply HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "quote_id": 170
+}
+
+### 
+POST {{URL}}sales/payment-links/11dc106341759dbd217e57ff7866492bebd3e5adab67b5fa304bdaa39759f755/mark-used HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{}
+
+### get discount code by id
+GET {{URL}}sales/discount-codes/31 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}

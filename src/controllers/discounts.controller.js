@@ -1,7 +1,71 @@
-const { discount_codes, discount_code_usage, sales_leads, sales_lead_activities, quotes, stream_project_booking } = require('../models');
+const { discount_codes, discount_code_usage, sales_leads, client_leads, sales_lead_activities, client_lead_activities, quotes, stream_project_booking } = require('../models');
 const db = require('../models');
 const discountService = require('../services/discount.service');
 const constants = require('../utils/constants');
+
+const findBookingForDiscount = async ({ booking_id, lead_id, client_lead_id }) => {
+  if (booking_id) {
+    return stream_project_booking.findOne({
+      where: { stream_project_booking_id: booking_id }
+    });
+  }
+
+  if (lead_id) {
+    const lead = await sales_leads.findByPk(lead_id);
+    if (!lead?.booking_id) return null;
+    return stream_project_booking.findByPk(lead.booking_id);
+  }
+
+  if (client_lead_id) {
+    const lead = await client_leads.findByPk(client_lead_id);
+    if (!lead?.booking_id) return null;
+    return stream_project_booking.findByPk(lead.booking_id);
+  }
+
+  return null;
+};
+
+const updateDiscountLeadState = async ({
+  leadId = null,
+  clientLeadId = null,
+  newStatus = null,
+  activityType,
+  activityData,
+  performedByUserId = null,
+  transaction = null
+}) => {
+  if (leadId) {
+    if (newStatus) {
+      await sales_leads.update(
+        { lead_status: newStatus },
+        { where: { lead_id: leadId }, transaction }
+      );
+    }
+
+    await sales_lead_activities.create({
+      lead_id: leadId,
+      activity_type: activityType,
+      activity_data: activityData,
+      performed_by_user_id: performedByUserId
+    }, { transaction });
+  }
+
+  if (clientLeadId) {
+    if (newStatus) {
+      await client_leads.update(
+        { lead_status: newStatus },
+        { where: { lead_id: clientLeadId }, transaction }
+      );
+    }
+
+    await client_lead_activities.create({
+      lead_id: clientLeadId,
+      activity_type: activityType,
+      activity_data: activityData,
+      performed_by_user_id: performedByUserId
+    }, { transaction });
+  }
+};
 
 /**
  * Generate discount code
@@ -11,6 +75,7 @@ exports.generateDiscountCode = async (req, res) => {
   try {
     const {
       lead_id,
+      client_lead_id,
       booking_id,
       discount_type,
       discount_value,
@@ -31,9 +96,7 @@ exports.generateDiscountCode = async (req, res) => {
 
     // --- NEW CONDITION: CHECK IF QUOTE EXISTS ---
     // We look for the booking to see if it has a quote_id
-    const booking = await stream_project_booking.findOne({
-      where: booking_id ? { stream_project_booking_id: booking_id } : { lead_id: lead_id }
-    });
+    const booking = await findBookingForDiscount({ booking_id, lead_id, client_lead_id });
 
     if (!booking) {
       return res.status(constants.NOT_FOUND.code).json({
@@ -103,7 +166,8 @@ exports.generateDiscountCode = async (req, res) => {
     // Create discount code
     const discountCode = await discount_codes.create({
       code,
-      lead_id: lead_id || booking.lead_id || null, // Ensure lead_id is captured from booking if not in body
+      lead_id: lead_id || null,
+      client_lead_id: client_lead_id || null,
       booking_id: booking.stream_project_booking_id,
       discount_type,
       discount_value,
@@ -115,20 +179,18 @@ exports.generateDiscountCode = async (req, res) => {
     });
 
     // Log activity if associated with lead
-    const finalLeadId = lead_id || booking.lead_id;
-    if (finalLeadId) {
-      await sales_lead_activities.create({
-        lead_id: finalLeadId,
-        activity_type: 'discount_code_generated',
-        activity_data: {
-          discount_code_id: discountCode.discount_code_id,
-          code: discountCode.code,
-          discount_type,
-          discount_value
-        },
-        performed_by_user_id: createdBy
-      });
-    }
+    await updateDiscountLeadState({
+      leadId: lead_id || null,
+      clientLeadId: client_lead_id || null,
+      activityType: 'discount_code_generated',
+      activityData: {
+        discount_code_id: discountCode.discount_code_id,
+        code: discountCode.code,
+        discount_type,
+        discount_value
+      },
+      performedByUserId: createdBy
+    });
 
     res.status(constants.CREATED.code).json({
       success: true,
@@ -152,6 +214,12 @@ exports.generateDiscountCode = async (req, res) => {
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
+};
+
+exports.generateClientDiscountCode = async (req, res) => {
+  req.body.client_lead_id = req.body.client_lead_id || req.body.lead_id || null;
+  delete req.body.lead_id;
+  return exports.generateDiscountCode(req, res);
 };
 
 /**
@@ -339,27 +407,19 @@ exports.applyDiscountCode = async (req, res) => {
     );
 
     // Update lead status if associated with lead
-    if (discountCode.lead_id) {
-      await sales_leads.update(
-        { lead_status: 'discount_applied' },
-        { 
-          where: { lead_id: discountCode.lead_id },
-          transaction
-        }
-      );
-
-      // Log activity
-      await sales_lead_activities.create({
-        lead_id: discountCode.lead_id,
-        activity_type: 'discount_applied',
-        activity_data: {
-          discount_code_id: discountCode.discount_code_id,
-          code: discountCode.code,
-          discount_amount: discountAmount,
-          quote_id
-        }
-      }, { transaction });
-    }
+    await updateDiscountLeadState({
+      leadId: discountCode.lead_id || null,
+      clientLeadId: discountCode.client_lead_id || null,
+      newStatus: 'discount_applied',
+      activityType: 'discount_applied',
+      activityData: {
+        discount_code_id: discountCode.discount_code_id,
+        code: discountCode.code,
+        discount_amount: discountAmount,
+        quote_id
+      },
+      transaction
+    });
 
     await transaction.commit();
 
@@ -538,6 +598,11 @@ exports.getDiscountCodeDetails = async (req, res) => {
         {
           model: sales_leads,
           as: 'lead',
+          attributes: ['lead_id', 'client_name', 'guest_email', 'lead_status']
+        },
+        {
+          model: client_leads,
+          as: 'client_lead',
           attributes: ['lead_id', 'client_name', 'guest_email', 'lead_status']
         }
       ]

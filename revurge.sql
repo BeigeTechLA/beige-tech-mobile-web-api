@@ -357,3 +357,17 @@ MODIFY COLUMN activity_type ENUM(
 ) NOT NULL;
 
 ALTER TABLE `client_leads` CHANGE `lead_status` `lead_status` VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL DEFAULT 'in_progress_self_serve';
+
+-- 17-03-26
+
+ALTER TABLE discount_codes
+ADD COLUMN client_lead_id INT NULL AFTER lead_id,
+ADD INDEX idx_client_lead (client_lead_id),
+ADD CONSTRAINT fk_discount_codes_client_lead
+  FOREIGN KEY (client_lead_id) REFERENCES client_leads(lead_id) ON DELETE SET NULL;
+
+ALTER TABLE payment_links
+ADD COLUMN client_lead_id INT NULL AFTER lead_id,
+ADD INDEX idx_client_lead (client_lead_id),
+ADD CONSTRAINT fk_payment_links_client_lead
+  FOREIGN KEY (client_lead_id) REFERENCES client_leads(lead_id) ON DELETE SET NULL;

@@ -28,7 +28,7 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   payment_transactions,
   assigned_post_production_member,
   post_production_members,
-  clients,sales_leads, sales_lead_activities, quotes, quote_line_items, discount_codes, payment_links, project_form_submissions,
+  clients, sales_leads, client_leads, sales_lead_activities, client_lead_activities, quotes, quote_line_items, discount_codes, payment_links, project_form_submissions,
   payments } = require('../models');
   const { deleteSheetRow, updateSheetRow } = require('../utils/googleSheets');
 const leadAssignmentService = require('../services/lead-assignment.service');
@@ -7108,7 +7108,11 @@ exports.searchCrewForLead = async (req, res) => {
 exports.assignCrewBulkSmart = async (req, res) => {
     try {
         const assigned_by_user_id = req.user?.userId;
-        const { lead_id, crew_member_ids } = req.body;
+        const { lead_id, client_lead_id, crew_member_ids } = req.body;
+
+        if (!lead_id && !client_lead_id) {
+            return res.status(400).json({ success: false, message: "lead_id or client_lead_id is required." });
+        }
 
         if (!Array.isArray(crew_member_ids) || crew_member_ids.length === 0) {
             return res.status(400).json({ success: false, message: "No crew members selected." });
@@ -7125,8 +7129,12 @@ exports.assignCrewBulkSmart = async (req, res) => {
             ids.forEach(id => { ID_TO_ROLE_MAP[String(id)] = roleName; });
         });
 
-        const lead = await sales_leads.findOne({
-          where: { lead_id },
+        const leadModel = client_lead_id ? client_leads : sales_leads;
+        const activityModel = client_lead_id ? client_lead_activities : sales_lead_activities;
+        const resolvedLeadId = client_lead_id || lead_id;
+
+        const lead = await leadModel.findOne({
+          where: { lead_id: resolvedLeadId },
           include: [{
             model: stream_project_booking,
             as: 'booking',
@@ -7225,10 +7233,13 @@ exports.assignCrewBulkSmart = async (req, res) => {
 
         if (assignmentsToCreate.length > 0) {
             await assigned_crew.bulkCreate(assignmentsToCreate);
-            await sales_lead_activities.create({
-                lead_id,
+            await activityModel.create({
+                lead_id: resolvedLeadId,
                 activity_type: 'bulk_crew_assigned',
-                notes: `Sales rep assigned ${assignmentsToCreate.length} crew members.`,
+                activity_data: {
+                  notes: `Sales rep assigned ${assignmentsToCreate.length} crew members.`,
+                  assigned_count: assignmentsToCreate.length
+                },
                 performed_by_user_id: assigned_by_user_id
             });
 
