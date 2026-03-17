@@ -468,13 +468,22 @@ function calculateRushFee(shootStartDate) {
   
   const now = new Date();
   const start = new Date(shootStartDate);
-  const diffInHours = (start - now) / (1000 * 60 * 60);
+  
+  const diffInMs = start - now;
+  const diffInHours = diffInMs / (1000 * 60 * 60);
+
+  console.log(`Current Time (Now): ${now.toISOString()}`);
+  console.log(`Shoot Start: ${start.toISOString()}`);
+  console.log(`Difference in Hours: ${diffInHours}`);
+
+  if (diffInHours < 0) return 0;
 
   if (diffInHours <= 24) return 250;
+  
   if (diffInHours <= 72) return 125;
+  
   return 0;
 }
-
 /**
  * Calculate quote from selected items and inject mandatory fees
  * @param {Object} params - Calculation parameters
