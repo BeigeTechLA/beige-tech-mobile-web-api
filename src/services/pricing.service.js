@@ -20,7 +20,7 @@ function determinePricingMode(eventType) {
   if (!eventType) return 'general';
   const normalizedType = eventType.toLowerCase().trim();
   
-  // Wedding-related keywords
+  // Wedding-related keywordspaymentLinksService
   const weddingKeywords = ['wedding', 'bridal', 'engagement', 'ceremony', 'reception'];
   
   for (const keyword of weddingKeywords) {
