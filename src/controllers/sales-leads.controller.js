@@ -1421,16 +1421,19 @@ exports.getClientLeads = async (req, res) => {
       include: [
         {
           model: users,
+          required: false,
           as: 'assigned_sales_rep',
           attributes: ['id', 'name', 'email']
         },
         {
           model: stream_project_booking,
           as: 'booking',
+          required: false,
           include: [
             {
               model: quotes,
               as: 'primary_quote',
+              required: false,
               include: [{ model: quote_line_items, as: 'line_items' }]
             }
           ]

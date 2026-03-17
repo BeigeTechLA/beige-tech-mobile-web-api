@@ -2,7 +2,7 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjE5MywidXNlclJvbGUiOiJzYWxlc19yZXAiLCJpYXQiOjE3NzM2NTEzMzIsImV4cCI6MTc3NDI1NjEzMn0.H7VeAog0Cft7jWYYEvOKZ3B5LKv-10Dg3o8P_sEIHPk
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzM3NDQ1MTIsImV4cCI6MTc3NDM0OTMxMn0.APmkptFyWus561mNJ-PqJBqhUNui97cZ1nbeMwaqqKw
 
 ###
 POST {{URL}}creator/dashboard-count HTTP/1.1
@@ -19,8 +19,8 @@ Content-Type: application/json
 
 {
   "name": "Harsh Panchal",
-  "email": "harsh.panchal.0308@gmail.com",
-  "phone_number": "1133567890",
+  "email": "harsh.panchal.30@gmail.com",
+  "phone_number": "1133568890",
   "password": "harsh@2026!",
   "userType": 3
 }
@@ -31,8 +31,8 @@ POST {{URL}}auth/login HTTP/1.1
 Content-Type: application/json
 
 {
-  "email": "sales@beigecorporation.io",
-  "password": "Sales@2026!"
+  "email": "harsh.panchal@gmail.com",
+  "password": "password123"
 }
 
 ###
