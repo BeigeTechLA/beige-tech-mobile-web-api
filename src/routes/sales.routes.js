@@ -281,6 +281,7 @@ router.patch(
 router.post('/leads/intent', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateLeadIntent);
 router.post('/client-leads/intent', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateClientLeadIntent);
 router.put('/leads/:id/booking', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeGuestBooking);
+router.put('/client-leads/:id/booking', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeClientLeadBooking);
 router.post('/deals/finalize', salesLeadsController.finalizeCreateDeal);
 
 module.exports = router;

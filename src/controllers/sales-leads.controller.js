@@ -4108,7 +4108,7 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
 }
 
 /**
- * POST /v1/guest-bookings/:id/finalize
+ * 
  * Body: booking fields + creators/roles + edit types + flags
  */
 exports.finalizeGuestBooking = async (req, res) => {
@@ -4200,6 +4200,123 @@ exports.finalizeGuestBooking = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Failed to finalize booking',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.finalizeClientLeadBooking = async (req, res) => {
+  const tx = await sequelize.transaction();
+  try {
+    const { id } = req.params;
+
+    const {
+      content_type,
+      shoot_type,
+      event_type,
+      start_date_time,
+      end_time,
+      duration_hours,
+      location,
+      crew_roles,
+      crew_size,
+      selected_crew_ids,
+      edits_needed,
+      video_edit_types,
+      photo_edit_types,
+      is_draft,
+      skip_discount = true,
+      skip_margin = true,
+      booking_type,
+      booking_days
+    } = req.body;
+
+    if (!id) {
+      await tx.rollback();
+      return res.status(400).json({ success: false, message: 'Client lead ID is required' });
+    }
+
+    const clientLead = await client_leads.findOne({
+      where: { lead_id: id },
+      transaction: tx
+    });
+
+    if (!clientLead) {
+      await tx.rollback();
+      return res.status(404).json({ success: false, message: 'Client lead not found' });
+    }
+
+    if (!clientLead.booking_id) {
+      await tx.rollback();
+      return res.status(400).json({ success: false, message: 'No booking found for this client lead' });
+    }
+
+    const booking = await stream_project_booking.findOne({
+      where: { stream_project_booking_id: clientLead.booking_id, is_active: 1 },
+      transaction: tx
+    });
+
+    if (!booking) {
+      await tx.rollback();
+      return res.status(404).json({ success: false, message: 'Booking not found' });
+    }
+
+    const finalizeResult = await finalizeBookingCore({
+      booking,
+      bookingId: booking.stream_project_booking_id,
+      finalizeBody: {
+        content_type,
+        shoot_type,
+        event_type,
+        start_date_time,
+        end_time,
+        duration_hours,
+        location,
+        crew_roles,
+        crew_size,
+        selected_crew_ids,
+        edits_needed,
+        video_edit_types,
+        photo_edit_types,
+        is_draft,
+        skip_discount,
+        skip_margin,
+        booking_type,
+        booking_days
+      },
+      tx
+    });
+
+    await client_lead_activities.create({
+      lead_id: clientLead.lead_id,
+      activity_type: 'booking_updated',
+      activity_data: {
+        booking_id: booking.stream_project_booking_id,
+        source: 'sales_portal_edit_client_booking'
+      },
+      performed_by_user_id: req.userId || null
+    }, { transaction: tx });
+
+    await tx.commit();
+
+    await notifyAssignedCreators(finalizeResult.assigned_creator_ids || []);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Client booking updated successfully',
+      data: {
+        client_lead_id: clientLead.lead_id,
+        booking_id: booking.stream_project_booking_id,
+        quote_id: finalizeResult.quote_id,
+        booking: finalizeResult.booking,
+        quote: finalizeResult.quote
+      }
+    });
+  } catch (error) {
+    try { await tx.rollback(); } catch (_) {}
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update client booking',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
