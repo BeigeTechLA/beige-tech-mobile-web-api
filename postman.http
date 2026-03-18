@@ -36,6 +36,16 @@ Content-Type: application/json
 }
 
 ###
+###
+POST {{URL}}auth/login HTTP/1.1
+Content-Type: application/json
+
+{
+  "email": "sales@beigecorporation.io",
+  "password": "Sales@2026!"
+}
+
+###
 ### 
 POST {{URL}}auth/register-crew-step1 HTTP/1.1
 Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW
@@ -516,6 +526,7 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
+  "client_lead_id": 3,
   "user_id": "182",
   "content_type": "videographer",
   "shoot_type": "corporate",

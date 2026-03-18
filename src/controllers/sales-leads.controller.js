@@ -4216,6 +4216,7 @@ exports.finalizeCreateDeal = async (req, res) => {
   try {
     const {
       // Client / lead fields
+      client_lead_id = null,
       user_id = null,
       client_name = null,
       guest_email = null,
@@ -4284,6 +4285,22 @@ exports.finalizeCreateDeal = async (req, res) => {
       });
     }
 
+    let existingClientLead = null;
+    if (client_lead_id) {
+      existingClientLead = await client_leads.findOne({
+        where: { lead_id: client_lead_id },
+        transaction: tx
+      });
+
+      if (!existingClientLead) {
+        await tx.rollback();
+        return res.status(404).json({
+          success: false,
+          message: 'client lead not found'
+        });
+      }
+    }
+
     // 1️⃣ Create booking shell
     const booking = await stream_project_booking.create(
       {
@@ -4300,23 +4317,44 @@ exports.finalizeCreateDeal = async (req, res) => {
       { transaction: tx }
     );
 
-    // 2️⃣ Create lead
+    // 2️⃣ Create or update lead
     const leadModel = user_id ? client_leads : sales_leads;
-    const lead = await leadModel.create(
-      {
-        booking_id: booking.stream_project_booking_id,
-        user_id: user_id || null,
-        guest_email: resolvedEmail,
-        phone: resolvedPhone,
-        client_name: resolvedName,
-        lead_type,
-        intent,
-        lead_source,
-        lead_status: 'manual_lead_created',
-        created_from: 1 // 1 = web
-      },
-      { transaction: tx }
-    );
+    let lead = null;
+
+    if (client_lead_id && user_id) {
+      await existingClientLead.update(
+        {
+          booking_id: booking.stream_project_booking_id,
+          user_id: user_id || existingClientLead.user_id || null,
+          guest_email: resolvedEmail,
+          phone: resolvedPhone,
+          client_name: resolvedName,
+          lead_type,
+          intent,
+          lead_source,
+          lead_status: 'manual_lead_created',
+          created_from: 1
+        },
+        { transaction: tx }
+      );
+      lead = existingClientLead;
+    } else {
+      lead = await leadModel.create(
+        {
+          booking_id: booking.stream_project_booking_id,
+          user_id: user_id || null,
+          guest_email: resolvedEmail,
+          phone: resolvedPhone,
+          client_name: resolvedName,
+          lead_type,
+          intent,
+          lead_source,
+          lead_status: 'manual_lead_created',
+          created_from: 1 // 1 = web
+        },
+        { transaction: tx }
+      );
+    }
 
     // 3️⃣ Create lead activity
     if (!user_id) {
@@ -4329,6 +4367,21 @@ exports.finalizeCreateDeal = async (req, res) => {
             guest_email: resolvedEmail,
             lead_source: lead_source || null
           }
+        },
+        { transaction: tx }
+      );
+    } else if (client_lead_id) {
+      await client_lead_activities.create(
+        {
+          lead_id: lead.lead_id,
+          activity_type: 'booking_updated',
+          activity_data: {
+            source: 'sales_portal_create_deal',
+            booking_id: booking.stream_project_booking_id,
+            guest_email: resolvedEmail,
+            lead_source: lead_source || null
+          },
+          performed_by_user_id: req.userId || null
         },
         { transaction: tx }
       );
@@ -4348,10 +4401,15 @@ exports.finalizeCreateDeal = async (req, res) => {
     }
 
     // 4️⃣ 🔥 AUTO ASSIGN (same as trackEarlyBookingInterest)
-    const assignedRep = await leadAssignmentService.autoAssignLead(
-      lead.lead_id,
-      { transaction: tx, leadModel }
-    );
+    let assignedRep = null;
+    if (lead.assigned_sales_rep_id) {
+      assignedRep = { id: lead.assigned_sales_rep_id };
+    } else {
+      assignedRep = await leadAssignmentService.autoAssignLead(
+        lead.lead_id,
+        { transaction: tx, leadModel }
+      );
+    }
     if (assignedRep?.id) {
       await lead.update(
         { assigned_sales_rep_id: assignedRep.id },
