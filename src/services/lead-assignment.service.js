@@ -419,48 +419,64 @@ const getLeadIntent = ({ lead, booking }) => {
   return 'Cold';
 };
 
-const getClientIntent = ({ booking }) => {
-  // Paid client
-  if (booking?.payment_id) {
+const getClientIntent = ({ lead, booking }) => {
+  if (lead?.intent) {
+    return lead.intent;
+  }
+
+  if (booking?.payment_id || lead?.lead_status === 'booked') {
     return 'Hot';
   }
 
-  // Booking in progress
-  if (booking && booking.is_draft === true) {
-    return 'Warm';
-  }
-
-  // Booking created but checkout reached
-  if (booking && booking.is_draft === false) {
+  if (lead?.lead_status === 'proposal_sent' || lead?.lead_status === 'payment_link_sent') {
     return 'Hot';
   }
 
-  // Signed up / lead created only
-  return 'Cold';
+  if (booking && (booking.is_draft === true || booking.is_draft === 1)) {
+    return lead?.lead_type === 'sales_assisted' ? 'Warm' : 'Hot';
+  }
+
+  if (booking && (booking.is_draft === false || booking.is_draft === 0)) {
+    return 'Hot';
+  }
+
+  return 'Hot';
 };
 
-const getClientBookingStatus = (booking) => {
-  if (!booking) {
-    return 'Signed Up';
+const getClientBookingStatus = (lead, booking) => {
+  if (lead?.lead_status === 'abandoned' || booking?.is_cancelled) {
+    return 'Closed - Lost';
   }
 
-  if (booking.is_cancelled) {
+  if (booking?.is_cancelled) {
     return 'Closed – Lost';
   }
 
-  if (booking.payment_id) {
+  if (booking?.payment_id || lead?.lead_status === 'booked') {
     return 'Booked';
   }
 
-  if (booking.is_draft === true || booking.is_draft === 1) {
+  if (lead?.lead_status === 'proposal_sent' || lead?.lead_status === 'payment_link_sent') {
+    return 'Payment/Invoice Sent';
+  }
+
+  if (lead?.lead_status === 'booking_in_progress' || (booking && (booking.is_draft === true || booking.is_draft === 1))) {
     return 'Booking In Progress';
   }
 
-  if (booking.is_draft === false || booking.is_draft === 0) {
+  if (booking && (booking.is_draft === false || booking.is_draft === 0)) {
     return 'Ready for Payment';
   }
 
-  return 'Signed Up';
+  if (lead?.lead_status === 'book_a_shoot_lead_created') {
+    return 'Book a shoot - Lead Created';
+  }
+
+  if (lead?.lead_status === 'manual_lead_created') {
+    return 'Manual - Lead Created';
+  }
+
+  return 'Signed Up - No Booking';
 };
 
 function getLeadBookingStep(lead, booking, activities = []) {

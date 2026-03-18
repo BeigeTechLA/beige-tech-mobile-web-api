@@ -1455,8 +1455,8 @@ exports.getClientLeads = async (req, res) => {
       leads.map(async (lead) => {
         const leadJson = lead.toJSON();
         const pricingData = await calculateLeadPricing(lead.booking);
-        const computedIntent = lead.intent ?? leadAssignmentService.getClientIntent({ booking: lead.booking });
-        const computedBookingStatus = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
+        const computedIntent = lead.intent ?? leadAssignmentService.getClientIntent({ lead, booking: lead.booking });
+        const computedBookingStatus = leadAssignmentService.getClientBookingStatus(lead, lead.booking);
 
         return {
           ...leadJson,
@@ -1711,8 +1711,8 @@ exports.getLeadById = async (req, res) => {
     pricing_breakdown.total = subtotal - pricing_breakdown.discount;
 
     const selectedCrewIds = lead.booking?.assigned_crews?.map(c => c.crew_member_id).filter(Boolean) || [];
-    const intent = lead.intent ?? leadAssignmentService.getLeadIntent({ lead, booking: lead.booking });
-    const booking_status = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
+    const intent = lead.intent ?? leadAssignmentService.getClientIntent({ lead, booking: lead.booking });
+    const booking_status = leadAssignmentService.getClientBookingStatus(lead, lead.booking);
     const booking_step = leadAssignmentService.getLeadBookingStep(lead, lead.booking, lead.activities);
     const can_edit_booking = canEditBooking(lead, lead.booking);
 
@@ -2416,8 +2416,8 @@ exports.getClientLeadById = async (req, res) => {
     pricing_breakdown.total = subtotal - pricing_breakdown.discount;
 
     const selectedCrewIds = lead.booking?.assigned_crews?.map(c => c.crew_member_id).filter(Boolean) || [];
-    const intent = lead.intent ?? leadAssignmentService.getLeadIntent({ lead, booking: lead.booking });
-    const booking_status = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
+    const intent = lead.intent ?? leadAssignmentService.getClientIntent({ lead, booking: lead.booking });
+    const booking_status = leadAssignmentService.getClientBookingStatus(lead, lead.booking);
     const booking_step = leadAssignmentService.getLeadBookingStep(lead, lead.booking, lead.activities);
     const can_edit_booking = canEditBooking(lead, lead.booking);
 
