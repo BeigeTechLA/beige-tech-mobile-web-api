@@ -371,3 +371,9 @@ ADD COLUMN client_lead_id INT NULL AFTER lead_id,
 ADD INDEX idx_client_lead (client_lead_id),
 ADD CONSTRAINT fk_payment_links_client_lead
   FOREIGN KEY (client_lead_id) REFERENCES client_leads(lead_id) ON DELETE SET NULL;
+
+-- 18-03-26
+UPDATE client_leads
+SET intent = 'Hot'
+WHERE booking_id IS NULL
+  AND lead_status = 'signed_up';

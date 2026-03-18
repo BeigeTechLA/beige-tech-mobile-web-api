@@ -192,6 +192,8 @@ router.get('/invoice-pdf/:booking_id', paymentLinksController.getStripeInvoicePd
 router.post('/send-invoice', paymentLinksController.sendStripeInvoice);
 router.post('/payment-links/notify', paymentLinksController.sendPaymentLinkEmail);
 router.get('/get-lead-stats/:id', authenticate, requireSalesRepOrAdmin, salesLeadsController.getLeadFulfillmentStatus);
+router.get('/get-client-lead-stats/:id', authenticate, requireSalesRepOrAdmin, salesLeadsController.getClientLeadFulfillmentStatus);
+
 /**
  * @route   GET /api/sales/payment-links/:token
  * @desc    Get payment link details
@@ -279,6 +281,7 @@ router.patch(
 router.post('/leads/intent', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateLeadIntent);
 router.post('/client-leads/intent', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateClientLeadIntent);
 router.put('/leads/:id/booking', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeGuestBooking);
+router.put('/client-leads/:id/booking', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeClientLeadBooking);
 router.post('/deals/finalize', salesLeadsController.finalizeCreateDeal);
 
 module.exports = router;

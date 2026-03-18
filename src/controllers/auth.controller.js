@@ -593,7 +593,7 @@ exports.register = async (req, res) => {
         phone: phone_number,
         lead_type: 'self_serve',
         lead_status: 'signed_up',
-        intent: 'Cold',
+        intent: 'Hot',
         lead_source: 'register',
         created_from: 1
       });

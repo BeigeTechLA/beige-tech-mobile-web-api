@@ -34,6 +34,9 @@ if (process.env.SENDGRID_API_KEY) {
 
 const {
   CLIENT_SIGNUP_WELCOME_TEMPLATE_ID,
+  PAYMENT_CONFIRMED_TEMPLATE_ID,
+  SHOOT_LEAD_NOTIFICATION_TEMPLATE_ID,
+  PRODUCTION_LEAD_NOTIFICATION_TEMPLATE_ID,
   BOOKING_CONFIRMED_WITH_CP_TEMPLATE_ID,
   BOOKING_CONFIRMED_WITHOUT_CP_TEMPLATE_ID,
   SHOOT_REMINDER_5D_TEMPLATE_ID,
@@ -115,6 +118,32 @@ const getFirstName = (name, fallbackFirstName) => {
   if (!name || !name.trim()) return 'there';
   return name.trim().split(/\s+/)[0];
 };
+
+const splitName = (fullName = '', fallbackEmail = '') => {
+  const normalizedName = String(fullName || '').trim();
+  if (normalizedName) {
+    const parts = normalizedName.split(/\s+/);
+    return {
+      firstName: parts[0] || '',
+      lastName: parts.slice(1).join(' ')
+    };
+  }
+
+  const emailLocalPart = String(fallbackEmail || '').split('@')[0].replace(/[._-]+/g, ' ').trim();
+  if (!emailLocalPart) {
+    return { firstName: '', lastName: '' };
+  }
+
+  const parts = emailLocalPart.split(/\s+/);
+  return {
+    firstName: parts[0] || '',
+    lastName: parts.slice(1).join(' ')
+  };
+};
+
+const formatEditingStatus = (value) => (value ? 'Yes' : 'No');
+
+const formatAmount = (value) => Number(value || 0).toFixed(2);
 
 const sendEmail = async ({ to, subject, templateId, dynamicTemplateData }) => {
   if (!process.env.SENDGRID_API_KEY) return { success: false, error: 'SENDGRID_API_KEY is not configured' };
@@ -1679,7 +1708,7 @@ const generateInvoiceTemplate = (userData, invoiceData) => {
 const sendSalesLeadNotification = async (leadData) => {
 try {
     const to = process.env.SALES_NOTIFICATION_EMAIL;
-    const templateId = SALES_LEAD_NOTIFICATION_TEMPLATE_ID;
+    const templateId = SHOOT_LEAD_NOTIFICATION_TEMPLATE_ID || SALES_LEAD_NOTIFICATION_TEMPLATE_ID;
 
     return await sendEmail({
       to,
@@ -1687,14 +1716,13 @@ try {
       templateId,
       dynamicTemplateData: {
         guestEmail: leadData?.guestEmail || '',
-        shootType: leadData?.shootType || '',
         contentType: Array.isArray(leadData?.contentType)
           ? leadData.contentType.join(', ')
           : (leadData?.contentType || ''),
-        eventDate: leadData?.eventDate || "TBD",
-        startTime: leadData?.startTime || "--",
-        endTime: leadData?.endTime || "--",
-        editsNeeded: !!leadData?.editsNeeded,
+        eventDate: formatDate(leadData?.eventDate) || leadData?.eventDate || 'TBD',
+        startTime: formatTime(leadData?.startTime) || leadData?.startTime || '--',
+        endTime: formatTime(leadData?.endTime) || leadData?.endTime || '--',
+        editsNeeded: formatEditingStatus(leadData?.editsNeeded),
         loginUrl: process.env.FRONTEND_URL || 'https://beige.app/',
         year: new Date().getFullYear()
       }
@@ -1711,22 +1739,70 @@ try {
 const sendPaymentSuccessSalesNotification = async (paymentData) => {
   try {
     const to = process.env.SALES_NOTIFICATION_EMAIL;
-    const templateId = SALES_PAYMENT_SUCCESS_TEMPLATE_ID;
+    const templateId = PAYMENT_CONFIRMED_TEMPLATE_ID || SALES_PAYMENT_SUCCESS_TEMPLATE_ID;
+    const { firstName, lastName } = splitName(
+      paymentData?.clientName || paymentData?.name,
+      paymentData?.guestEmail || paymentData?.email
+    );
 
     return await sendEmail({
       to,
       subject: 'Payment Received',
       templateId,
       dynamicTemplateData: {
-        guestEmail: paymentData?.guestEmail || '',
-        amount: Number(paymentData?.amount || 0).toFixed(2),
-        shootType: paymentData?.shootType || "N/A",
+        first_name: paymentData?.first_name || firstName,
+        last_name: paymentData?.last_name || lastName,
+        email: paymentData?.email || paymentData?.guestEmail || '',
+        phone_number: paymentData?.phone_number || 'N/A',
+        amount: formatAmount(paymentData?.amount),
+        shootType: paymentData?.shootType || 'N/A',
+        shoot_date: formatDate(paymentData?.shoot_date || paymentData?.eventDate) || 'TBD',
+        shoot_time:
+          paymentData?.shoot_time ||
+          [formatTime(paymentData?.startTime), formatTime(paymentData?.endTime)].filter(Boolean).join(' to ') ||
+          '--',
+        editing: formatEditingStatus(paymentData?.editing ?? paymentData?.editsNeeded),
         paymentIntentId: paymentData?.paymentIntentId || '',
         year: new Date().getFullYear()
       }
     });
   } catch (error) {
     console.error('Error sending payment success notification:', error?.response?.body || error.message);
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Send notification to production team about a new lead
+ * @param {Object} leadData - { guestEmail, contentType, eventDate, startTime, endTime, editsNeeded }
+ */
+const sendProductionLeadNotification = async (leadData) => {
+  try {
+    const to = process.env.PRODUCTION_NOTIFICATION_EMAIL || process.env.SALES_NOTIFICATION_EMAIL;
+    const templateId = PRODUCTION_LEAD_NOTIFICATION_TEMPLATE_ID;
+
+    if (!to) return { success: false, error: 'PRODUCTION_NOTIFICATION_EMAIL is not configured' };
+
+    return await sendEmail({
+      to,
+      subject: 'New Production Lead',
+      templateId,
+      dynamicTemplateData: {
+        guestEmail: leadData?.guestEmail || '',
+        contentType: Array.isArray(leadData?.contentType)
+          ? leadData.contentType.join(', ')
+          : (leadData?.contentType || ''),
+        shoot_date: formatDate(leadData?.eventDate) || leadData?.eventDate || 'TBD',
+        shoot_time:
+          [formatTime(leadData?.startTime), formatTime(leadData?.endTime)]
+            .filter(Boolean)
+            .join(' to ') || '--',
+        editing: formatEditingStatus(leadData?.editsNeeded),
+        year: new Date().getFullYear()
+      }
+    });
+  } catch (error) {
+    console.error('Error sending production lead notification:', error?.response?.body || error.message);
     return { success: false, error: error.message };
   }
 };
@@ -1744,11 +1820,11 @@ const sendNewClientSignupNotification = async (userData) => {
       subject: 'New Client Signup',
       templateId,
       dynamicTemplateData: {
-        name: userData?.name || '',
+        guestEmail: userData?.name || userData?.email || '',
         email: userData?.email || '',
         phone_number: userData?.phone_number || 'N/A',
-        instagram_handle: userData?.instagram_handle || 'N/A',
-        adminUrl: process.env.FRONTEND_URL || 'https://beige.app/',
+        instagram: userData?.instagram_handle || userData?.instagram || 'N/A',
+        loginUrl: process.env.FRONTEND_URL || 'https://beige.app/',
         year: new Date().getFullYear()
       }
     });
@@ -1977,6 +2053,7 @@ module.exports = {
   sendPaymentLinkEmail,
   sendInvoiceEmail,
   sendSalesLeadNotification,
+  sendProductionLeadNotification,
   sendPaymentSuccessSalesNotification,
   sendClientSignupWelcomeEmail,
   sendBookingConfirmationEmail,

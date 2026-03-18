@@ -1271,8 +1271,15 @@ exports.confirmPaymentMulti = async (req, res) => {
     // 9. Background notifications
     emailService.sendPaymentSuccessSalesNotification({
         guestEmail: booking.guest_email || 'Unknown Client',
+        email: booking.user?.email || booking.guest_email || '',
+        clientName: booking.user?.name || '',
+        phone_number: booking.user?.phone_number || booking.phone_number || '',
         amount: totalAmount,
         shootType: booking.shoot_type || 'Shoot',
+        shoot_date: booking.shoot_date || booking.event_date,
+        startTime: booking.start_time,
+        endTime: booking.end_time,
+        editsNeeded: booking.edits_needed,
         paymentIntentId: paymentIntentId
     }).catch(err => console.error('Sales Notification Error:', err));
 
@@ -1589,8 +1596,15 @@ exports.handleStripeWebhook = async (req, res) => {
       // Send Sales Notification Email
       emailService.sendPaymentSuccessSalesNotification({
         guestEmail: booking.guest_email || 'Unknown Client',
+        email: booking.user?.email || booking.guest_email || '',
+        clientName: booking.user?.name || '',
+        phone_number: booking.user?.phone_number || booking.phone_number || '',
         amount: amountPaid,
         shootType: booking.shoot_type || 'Shoot',
+        shoot_date: booking.shoot_date || booking.event_date,
+        startTime: booking.start_time,
+        endTime: booking.end_time,
+        editsNeeded: booking.edits_needed,
         paymentIntentId: paymentIntentId
       }).catch(err => console.error('Sales Notification Error:', err));
 
