@@ -2216,15 +2216,18 @@ exports.getClientLeadById = async (req, res) => {
       include: [
         {
           model: users,
+          required: false,
           as: "assigned_sales_rep",
           attributes: ["id", "name", "email"],
         },
         {
           model: stream_project_booking,
+          required: false,
           as: "booking",
           include: [
             {
               model: quotes,
+              required: false,
               as: "primary_quote",
               include: [{ model: quote_line_items, as: "line_items" }],
             },
@@ -2244,6 +2247,7 @@ exports.getClientLeadById = async (req, res) => {
               include: [
                 {
                   model: crew_members,
+                  required: false,
                   as: "crew_member",
                   attributes: [
                     "crew_member_id",
@@ -2271,6 +2275,7 @@ exports.getClientLeadById = async (req, res) => {
         },
         {
           model: client_lead_activities,
+          required: false,
           as: "activities",
           include: [
             { model: users, as: "performed_by", attributes: ["id", "name"] },

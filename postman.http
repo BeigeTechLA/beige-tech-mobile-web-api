@@ -907,6 +907,11 @@ GET {{URL}}sales/client-leads HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
+### get client leads
+GET {{URL}}sales/client-leads/10 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
 ### assign crew from client lead
 POST {{URL}}admin/assign-crew-from-lead HTTP/1.1
 Content-Type: application/json
