@@ -7286,20 +7286,40 @@ exports.assignCrewBulkSmart = async (req, res) => {
 
 exports.removeAssignedCrew = async (req, res) => {
     try {
-      const assigned_by_user_id = req.user?.userId; // Assuming you have user info in req.user
-        const { lead_id, crew_member_id } = req.body;
+        const assigned_by_user_id = req.user?.userId;
+        const { lead_id, client_lead_id, crew_member_id } = req.body;
 
-        if (!lead_id || !crew_member_id) {
-            return res.status(400).json({ success: false, message: "lead_id and crew_member_id are required." });
+        if ((!lead_id && !client_lead_id) || !crew_member_id) {
+            return res.status(400).json({
+                success: false,
+                message: "Either lead_id or client_lead_id and crew_member_id are required."
+            });
         }
 
-        const lead = await sales_leads.findOne({
-            where: { lead_id },
-            attributes: ['lead_id', 'booking_id']
+        let LeadModel;
+        let LeadActivityModel;
+        let where;
+
+        if (lead_id) {
+            LeadModel = sales_leads;
+            LeadActivityModel = sales_lead_activities;
+            where = { lead_id: lead_id };
+        } else {
+            LeadModel = client_leads;
+            LeadActivityModel = client_lead_activities;
+            where = { lead_id: client_lead_id };
+        }
+
+        const lead = await LeadModel.findOne({
+            where,
+            attributes: ['booking_id']
         });
 
         if (!lead || !lead.booking_id) {
-            return res.status(404).json({ success: false, message: "Lead or associated booking not found." });
+            return res.status(404).json({
+                success: false,
+                message: "Lead or associated booking not found."
+            });
         }
 
         const assignment = await assigned_crew.findOne({
@@ -7308,10 +7328,10 @@ exports.removeAssignedCrew = async (req, res) => {
                 crew_member_id: crew_member_id,
                 is_active: 1
             },
-            include: [{ 
-                model: crew_members, 
-                as: 'crew_member', 
-                attributes: ['first_name', 'last_name'] 
+            include: [{
+                model: crew_members,
+                as: 'crew_member',
+                attributes: ['first_name', 'last_name']
             }]
         });
 
@@ -7324,14 +7344,14 @@ exports.removeAssignedCrew = async (req, res) => {
 
         await assignment.update({ is_active: 0 });
 
-        const crewName = assignment.crew_member 
-            ? `${assignment.crew_member.first_name} ${assignment.crew_member.last_name}` 
+        const crewName = assignment.crew_member
+            ? `${assignment.crew_member.first_name} ${assignment.crew_member.last_name}`
             : `ID: ${crew_member_id}`;
 
-        await sales_lead_activities.create({
-            lead_id: lead_id,
+        await LeadActivityModel.create({
+            lead_id: lead_id || client_lead_id,
             activity_type: 'crew_removed',
-            notes: `Sales rep removed ${crewName} from the project.`,
+            activity_data: `Sales rep removed ${crewName} from the project.`,
             performed_by_user_id: assigned_by_user_id,
             created_at: new Date()
         });

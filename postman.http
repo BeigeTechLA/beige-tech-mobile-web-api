@@ -552,8 +552,8 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-    "lead_id": 136,
-    "crew_member_id": 2044
+    "client_lead_id": 1,
+    "crew_member_id": 2064
 }
 
 ### 
