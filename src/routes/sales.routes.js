@@ -192,6 +192,8 @@ router.get('/invoice-pdf/:booking_id', paymentLinksController.getStripeInvoicePd
 router.post('/send-invoice', paymentLinksController.sendStripeInvoice);
 router.post('/payment-links/notify', paymentLinksController.sendPaymentLinkEmail);
 router.get('/get-lead-stats/:id', authenticate, requireSalesRepOrAdmin, salesLeadsController.getLeadFulfillmentStatus);
+router.get('/get-client-lead-stats/:id', authenticate, requireSalesRepOrAdmin, salesLeadsController.getClientLeadFulfillmentStatus);
+
 /**
  * @route   GET /api/sales/payment-links/:token
  * @desc    Get payment link details

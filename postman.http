@@ -622,6 +622,11 @@ GET {{URL}}sales/get-lead-stats/136 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
+### 
+GET {{URL}}sales/get-client-lead-stats/1 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
 ###
 # Stripe Webhook Test (manual payload; signature verification requires a real Stripe signature)
 # 1) Start app on :5001
