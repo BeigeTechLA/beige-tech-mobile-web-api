@@ -1820,11 +1820,11 @@ const sendNewClientSignupNotification = async (userData) => {
       subject: 'New Client Signup',
       templateId,
       dynamicTemplateData: {
-        name: userData?.name || '',
+        guestEmail: userData?.name || userData?.email || '',
         email: userData?.email || '',
         phone_number: userData?.phone_number || 'N/A',
-        instagram_handle: userData?.instagram_handle || 'N/A',
-        adminUrl: process.env.FRONTEND_URL || 'https://beige.app/',
+        instagram: userData?.instagram_handle || userData?.instagram || 'N/A',
+        loginUrl: process.env.FRONTEND_URL || 'https://beige.app/',
         year: new Date().getFullYear()
       }
     });
