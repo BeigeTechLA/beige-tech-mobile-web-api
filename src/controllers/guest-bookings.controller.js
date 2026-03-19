@@ -782,6 +782,17 @@ exports.updateGuestBooking = async (req, res) => {
       // Update booking
       await booking.update(updateData, { transaction: tx });
 
+      const salesLeadUpdate = {};
+      if (full_name) salesLeadUpdate.client_name = full_name;
+      if (phone) salesLeadUpdate.phone = phone;
+
+      if (Object.keys(salesLeadUpdate).length > 0) {
+        await db.sales_leads.update(salesLeadUpdate, {
+          where: { booking_id: id },
+          transaction: tx
+        });
+      }
+
       if (booking_type === 'multi_day' && normalizedBookingDays.length > 0) {
         await stream_project_booking_days.destroy({
           where: { stream_project_booking_id: id },

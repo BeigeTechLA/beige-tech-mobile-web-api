@@ -19,9 +19,9 @@ Content-Type: application/json
 
 {
   "name": "Harsh Panchal",
-  "email": "harsh.panchal.31@gmail.com",
-  "phone_number": "7133867890",
-  "password": "harsh@2026!",
+  "email": "harsh.panchal.36@gmail.com",
+  "phone_number": "7133867897",
+  "password": "12345678",
   "userType": 3
 }
 
