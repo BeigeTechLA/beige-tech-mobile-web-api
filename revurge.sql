@@ -377,3 +377,7 @@ UPDATE client_leads
 SET intent = 'Hot'
 WHERE booking_id IS NULL
   AND lead_status = 'signed_up';
+
+-- 19-03-26
+
+ALTER TABLE `crew_members` ADD `user_id` INT NULL AFTER `crew_member_id`;
