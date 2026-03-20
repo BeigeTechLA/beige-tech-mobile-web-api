@@ -381,3 +381,142 @@ WHERE booking_id IS NULL
 -- 19-03-26
 
 ALTER TABLE `crew_members` ADD `user_id` INT NULL AFTER `crew_member_id`;
+
+-- 20-03-26
+
+CREATE TABLE `quote_catalog_items` (
+  `catalog_item_id` int(11) NOT NULL AUTO_INCREMENT,
+  `section_type` enum('service','addon','logistics') NOT NULL,
+  `pricing_mode` enum('general','wedding','both') NOT NULL DEFAULT 'both',
+  `name` varchar(255) NOT NULL,
+  `description` text DEFAULT NULL,
+  `default_rate` decimal(10,2) DEFAULT NULL,
+  `rate_type` enum('flat','per_hour','per_day','per_unit') NOT NULL DEFAULT 'flat',
+  `rate_unit` varchar(50) DEFAULT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT 1,
+  `display_order` int(11) NOT NULL DEFAULT 0,
+  `created_by_user_id` int(11) DEFAULT NULL,
+  `updated_by_user_id` int(11) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`catalog_item_id`),
+  KEY `idx_quote_catalog_section` (`section_type`,`pricing_mode`,`is_active`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+INSERT INTO `quote_catalog_items`
+(`section_type`, `pricing_mode`, `name`, `description`, `default_rate`, `rate_type`, `rate_unit`, `is_active`, `display_order`, `created_by_user_id`, `updated_by_user_id`)
+VALUES
+('service', 'both', 'Videography', NULL, 250.00, 'per_hour', 'per hour', 1, 1, NULL, NULL),
+('service', 'both', 'Photography', NULL, 250.00, 'per_hour', 'per hour', 1, 2, NULL, NULL),
+('service', 'both', 'AI Editing', NULL, 500.00, 'per_hour', 'per hour', 1, 3, NULL, NULL),
+('service', 'both', 'Livestream Production', NULL, 250.00, 'per_hour', 'per hour', 1, 4, NULL, NULL),
+('service', 'both', 'Location', NULL, 250.00, 'per_hour', 'per hour', 1, 5, NULL, NULL),
+
+('addon', 'both', '4K Camera Upgrade', NULL, 500.00, 'flat', NULL, 1, 1, NULL, NULL),
+('addon', 'both', 'Drone Footage', NULL, 800.00, 'flat', NULL, 1, 2, NULL, NULL),
+('addon', 'both', 'Additional Crew Member', NULL, 300.00, 'flat', NULL, 1, 3, NULL, NULL),
+('addon', 'both', 'Lighting Package', NULL, 600.00, 'flat', NULL, 1, 4, NULL, NULL),
+('addon', 'both', 'Audio Recording Kit', NULL, 400.00, 'flat', NULL, 1, 5, NULL, NULL),
+('addon', 'both', 'Green Screen Setup', NULL, 600.00, 'flat', NULL, 1, 6, NULL, NULL),
+('addon', 'both', 'Teleprompter', NULL, 200.00, 'flat', NULL, 1, 7, NULL, NULL),
+('addon', 'both', 'Hair and Makeup Artist', NULL, 450.00, 'flat', NULL, 1, 8, NULL, NULL),
+
+('logistics', 'both', 'Travel and Transportation', NULL, 500.00, 'flat', NULL, 1, 1, NULL, NULL),
+('logistics', 'both', 'Equipment Rental', NULL, 800.00, 'flat', NULL, 1, 2, NULL, NULL),
+('logistics', 'both', 'Studio Rental', NULL, 1200.00, 'flat', NULL, 1, 3, NULL, NULL),
+('logistics', 'both', 'Permits and Licenses', NULL, 300.00, 'flat', NULL, 1, 4, NULL, NULL);
+
+CREATE TABLE `sales_quotes` (
+  `sales_quote_id` int(11) NOT NULL AUTO_INCREMENT,
+  `quote_number` varchar(50) NOT NULL,
+  `lead_id` int(11) DEFAULT NULL,
+  `client_user_id` int(11) DEFAULT NULL,
+  `created_by_user_id` int(11) NOT NULL,
+  `assigned_sales_rep_id` int(11) DEFAULT NULL,
+  `pricing_mode` enum('general','wedding','both') NOT NULL DEFAULT 'general',
+  `status` enum('draft','sent','viewed','accepted','rejected','expired') NOT NULL DEFAULT 'draft',
+  `client_name` varchar(255) NOT NULL,
+  `client_email` varchar(255) DEFAULT NULL,
+  `client_phone` varchar(50) DEFAULT NULL,
+  `client_address` text DEFAULT NULL,
+  `project_description` text DEFAULT NULL,
+  `video_shoot_type` varchar(255) DEFAULT NULL,
+  `valid_until` date DEFAULT NULL,
+  `discount_type` enum('none','percentage','fixed_amount') NOT NULL DEFAULT 'none',
+  `discount_value` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `discount_amount` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `tax_type` varchar(100) DEFAULT NULL,
+  `tax_rate` decimal(5,2) NOT NULL DEFAULT 0.00,
+  `tax_amount` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `subtotal` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `total` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `notes` text DEFAULT NULL,
+  `terms_conditions` text DEFAULT NULL,
+  `sent_at` datetime DEFAULT NULL,
+  `viewed_at` datetime DEFAULT NULL,
+  `accepted_at` datetime DEFAULT NULL,
+  `rejected_at` datetime DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`sales_quote_id`),
+  UNIQUE KEY `quote_number` (`quote_number`),
+  KEY `idx_sales_quotes_owner` (`assigned_sales_rep_id`,`status`),
+  KEY `idx_sales_quotes_client` (`client_user_id`),
+  CONSTRAINT `sales_quotes_ibfk_1` FOREIGN KEY (`client_user_id`) REFERENCES `users` (`id`),
+  CONSTRAINT `sales_quotes_ibfk_2` FOREIGN KEY (`created_by_user_id`) REFERENCES `users` (`id`),
+  CONSTRAINT `sales_quotes_ibfk_3` FOREIGN KEY (`assigned_sales_rep_id`) REFERENCES `users` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+CREATE TABLE `sales_quote_line_items` (
+  `line_item_id` int(11) NOT NULL AUTO_INCREMENT,
+  `sales_quote_id` int(11) NOT NULL,
+  `catalog_item_id` int(11) DEFAULT NULL,
+  `pricing_item_id` int(11) DEFAULT NULL,
+  `source_type` enum('catalog','custom') NOT NULL DEFAULT 'catalog',
+  `section_type` enum('service','addon','logistics','custom') NOT NULL,
+  `item_name` varchar(255) NOT NULL,
+  `description` text DEFAULT NULL,
+  `rate_type` enum('flat','per_hour','per_day','per_unit') NOT NULL DEFAULT 'flat',
+  `rate_unit` varchar(50) DEFAULT NULL,
+  `quantity` int(11) NOT NULL DEFAULT 1,
+  `duration_hours` decimal(10,2) DEFAULT NULL,
+  `crew_size` int(11) DEFAULT NULL,
+  `unit_rate` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `line_total` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `configuration_json` text DEFAULT NULL,
+  `sort_order` int(11) NOT NULL DEFAULT 0,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`line_item_id`),
+  KEY `idx_sales_quote_line_items_quote` (`sales_quote_id`,`section_type`),
+  CONSTRAINT `sales_quote_line_items_ibfk_1` FOREIGN KEY (`sales_quote_id`) REFERENCES `sales_quotes` (`sales_quote_id`) ON DELETE CASCADE,
+  CONSTRAINT `sales_quote_line_items_ibfk_2` FOREIGN KEY (`catalog_item_id`) REFERENCES `quote_catalog_items` (`catalog_item_id`),
+  CONSTRAINT `sales_quote_line_items_ibfk_3` FOREIGN KEY (`pricing_item_id`) REFERENCES `pricing_items` (`item_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+CREATE TABLE `sales_quote_activities` (
+  `activity_id` int(11) NOT NULL AUTO_INCREMENT,
+  `sales_quote_id` int(11) NOT NULL,
+  `activity_type` enum('created','updated','status_changed','sent','viewed','accepted','rejected') NOT NULL,
+  `performed_by_user_id` int(11) DEFAULT NULL,
+  `message` varchar(255) DEFAULT NULL,
+  `metadata_json` text DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`activity_id`),
+  KEY `idx_sales_quote_activities_quote` (`sales_quote_id`,`created_at`),
+  CONSTRAINT `sales_quote_activities_ibfk_1` FOREIGN KEY (`sales_quote_id`) REFERENCES `sales_quotes` (`sales_quote_id`) ON DELETE CASCADE,
+  CONSTRAINT `sales_quote_activities_ibfk_2` FOREIGN KEY (`performed_by_user_id`) REFERENCES `users` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+ALTER TABLE `quote_catalog_items` DROP `description`;
+ALTER TABLE `sales_quote_line_items` DROP INDEX `sales_quote_line_items_ibfk_3`;
+ALTER TABLE sales_quote_line_items DROP FOREIGN KEY sales_quote_line_items_ibfk_3;
+ALTER TABLE `sales_quote_line_items` DROP `pricing_item_id`;
+
+ALTER TABLE `sales_quote_line_items`
+ADD COLUMN `estimated_pricing` decimal(10,2) DEFAULT NULL AFTER `crew_size`;
+
+ALTER TABLE `sales_quotes`
+ADD COLUMN `quote_validity_days` int(11) DEFAULT NULL AFTER `video_shoot_type`;
+
+ALTER TABLE users ADD location VARCHAR(255), ADD latitude DECIMAL(10,8), ADD longitude DECIMAL(11,8);

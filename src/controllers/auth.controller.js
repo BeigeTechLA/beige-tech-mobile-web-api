@@ -2217,7 +2217,9 @@ exports.registerCrewMemberStep1 = [
         password, 
         working_distance, 
         crew_member_id, 
-        user_id 
+        user_id,
+        lat,
+        lng
       } = req.body;
 
       if (!first_name || !last_name || !email || (!crew_member_id && !password)) {
@@ -2265,7 +2267,10 @@ exports.registerCrewMemberStep1 = [
         email_verified: 0,
         verification_code: otp,
         otp_expiry: otpExpiry,
-        created_from: 1 // 1 = web
+        created_from: 1, // 1 = web        
+        location,
+        latitude: lat, 
+        longitude: lng,
       });
 
       const newCrewMember = await crew_members.create({
