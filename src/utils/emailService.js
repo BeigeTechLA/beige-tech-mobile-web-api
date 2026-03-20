@@ -874,10 +874,9 @@ const sendFinalNudge7DaysEmail = async (data) => {
       subject: 'One last thing about your recent shoot',
       templateId: SHOOT_FINAL_NUDGE_7D_TEMPLATE_ID,
       dynamicTemplateData: {
-        first_name: data.first_name || 'there',
+        user_name: data.first_name || 'there',
         cp_name: data.cp_name || 'your Creative Partner',
-        review_link: reviewLink,
-        userData: { name: data.first_name || 'there' }
+        review_link: reviewLink
       }
     };
 
