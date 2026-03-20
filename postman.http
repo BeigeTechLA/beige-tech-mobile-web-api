@@ -961,3 +961,7 @@ Authorization: {{TOKEN}}
 GET {{URL}}sales/discount-codes/31 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
+
+### get discount code by id
+GET {{URL}}admin/942/get-booking-summary HTTP/1.1
+Content-Type: application/json

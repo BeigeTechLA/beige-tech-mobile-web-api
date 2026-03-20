@@ -3,6 +3,7 @@ const { Op } = require('sequelize');
 const constants = require('../utils/constants');
 const { Sequelize } = require('sequelize');
 const { parseLocation, formatLocationResponse } = require('../utils/locationHelpers');
+const { resolveEventDateAndStartTime, normalizeTime } = require('../utils/timezone');
 
 /**
  * Create a new booking
@@ -30,6 +31,8 @@ exports.createBooking = async (req, res) => {
       description,
       event_type,
       start_date_time,
+      start_date,
+      start_time,
       duration_hours,
       end_time,
       budget_min,
@@ -55,18 +58,13 @@ exports.createBooking = async (req, res) => {
     }
 
     // Parse date and time from start_date_time
-    let event_date = null;
-    let start_time = null;
-
-    if (start_date_time) {
-      try {
-        const dateObj = new Date(start_date_time);
-        event_date = dateObj.toISOString().split('T')[0];
-        start_time = dateObj.toTimeString().split(' ')[0];
-      } catch (error) {
-        console.error('Error parsing start_date_time:', error);
-      }
-    }
+    const resolvedSingleDay = resolveEventDateAndStartTime({
+      start_date,
+      start_time,
+      start_date_time
+    });
+    let event_date = resolvedSingleDay.event_date;
+    let start_time_final = resolvedSingleDay.start_time;
 
     // Calculate budget (use average of min/max or just max if only one provided)
     let budget = null;
@@ -100,8 +98,8 @@ exports.createBooking = async (req, res) => {
       event_type: event_type || content_type || project_type || null,
       event_date: event_date,
       duration_hours: duration_hours ? parseInt(duration_hours) : null,
-      start_time: start_time,
-      end_time: end_time || null,
+      start_time: start_time_final,
+      end_time: normalizeTime(end_time) || null,
       budget: budget,
       expected_viewers: expected_viewers ? parseInt(expected_viewers) : null,
       stream_quality: stream_quality || null,
@@ -476,6 +474,8 @@ exports.updateBooking = async (req, res) => {
       description,
       event_type,
       start_date_time,
+      start_date,
+      start_time,
       duration_hours,
       end_time,
       budget_min,
@@ -503,7 +503,6 @@ exports.updateBooking = async (req, res) => {
     if (content_type !== undefined && !event_type) updateData.event_type = content_type;
     if (project_type !== undefined && !event_type && !content_type) updateData.event_type = project_type;
     if (duration_hours !== undefined) updateData.duration_hours = parseInt(duration_hours);
-    if (end_time !== undefined) updateData.end_time = end_time;
     if (expected_viewers !== undefined) updateData.expected_viewers = parseInt(expected_viewers);
     if (stream_quality !== undefined) updateData.stream_quality = stream_quality;
     if (crew_size !== undefined) updateData.crew_size_needed = parseInt(crew_size);
@@ -520,14 +519,19 @@ exports.updateBooking = async (req, res) => {
     if (is_cancelled !== undefined) updateData.is_cancelled = is_cancelled ? 1 : 0;
 
     // Handle date/time updates
-    if (start_date_time) {
-      try {
-        const dateObj = new Date(start_date_time);
-        updateData.event_date = dateObj.toISOString().split('T')[0];
-        updateData.start_time = dateObj.toTimeString().split(' ')[0];
-      } catch (error) {
-        console.error('Error parsing start_date_time:', error);
-      }
+    if (start_date_time || start_date || start_time) {
+      const resolvedSingleDay = resolveEventDateAndStartTime({
+        start_date,
+        start_time,
+        start_date_time
+      });
+      if (resolvedSingleDay.event_date) updateData.event_date = resolvedSingleDay.event_date;
+      if (resolvedSingleDay.start_time) updateData.start_time = resolvedSingleDay.start_time;
+    }
+
+    if (end_time !== undefined) {
+      const normalizedEnd = normalizeTime(end_time);
+      if (normalizedEnd) updateData.end_time = normalizedEnd;
     }
 
     // Handle budget updates
