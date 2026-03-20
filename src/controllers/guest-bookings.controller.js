@@ -6,6 +6,7 @@ const { appendBookingToSheet } = require('../utils/googleSheetsService');
 const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 const { content } = require('googleapis/build/src/apis/content');
 const { sendCPNewBookingRequestEmail } = require('../utils/emailService');
+const { resolveEventDateAndStartTime, normalizeTime } = require('../utils/timezone');
 const REFERRAL_DISCOUNT_PERCENT = 10;
 
 async function resolveUserId(userId, guestEmail) {
@@ -287,8 +288,11 @@ exports.createGuestBooking = async (req, res) => {
       description,
       event_type,
       start_date_time,
+      start_date,
+      start_time,
       duration_hours,
       end_time,
+      time_zone,
       budget_min,
       budget_max,
       expected_viewers,
@@ -368,32 +372,28 @@ exports.createGuestBooking = async (req, res) => {
       .filter((d) => d && d.date)
       .map((d) => ({
         date: d.date,
-        start_time: d.start_time || d.startTime || null,
-        end_time: d.end_time || d.endTime || null,
+        start_time: normalizeTime(d.start_time || d.startTime) || null,
+        end_time: normalizeTime(d.end_time || d.endTime) || null,
         duration_hours: d.duration_hours != null ? Number(d.duration_hours) : null,
         time_zone: d.time_zone || d.timeZone || null
       }));
 
     // Parse date and time from start_date_time (single day)
-    let event_date = null;
-    let start_time = null;
-
-    if (start_date_time) {
-      try {
-        const dateObj = new Date(start_date_time);
-        event_date = dateObj.toISOString().split('T')[0];
-        start_time = dateObj.toTimeString().split(' ')[0];
-      } catch (error) {
-        console.error('Error parsing start_date_time:', error);
-      }
-    }
+    const resolvedSingleDay = resolveEventDateAndStartTime({
+      start_date,
+      start_time,
+      start_date_time
+    });
+    let event_date = resolvedSingleDay.event_date;
+    let start_time_final = resolvedSingleDay.start_time;
+    const end_time_final = normalizeTime(end_time);
 
     // If multi-day, derive event_date/start_time from first day
     let totalDurationHours = null;
     if (booking_type === 'multi_day' && normalizedBookingDays.length > 0) {
       normalizedBookingDays.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
       event_date = normalizedBookingDays[0].date;
-      start_time = normalizedBookingDays[0].start_time || null;
+      start_time_final = normalizeTime(normalizedBookingDays[0].start_time) || null;
       totalDurationHours = normalizedBookingDays.reduce((sum, d) => {
         const hours = d.duration_hours != null ? d.duration_hours : calculateDurationHours(d.start_time, d.end_time);
         return sum + (hours || 0);
@@ -448,8 +448,8 @@ exports.createGuestBooking = async (req, res) => {
       event_type: event_type || content_type || project_type || (shoot_type ? shoot_type : null),
       event_date: event_date,
       duration_hours: duration_hours ? parseInt(duration_hours) : totalDurationHours != null ? totalDurationHours : null,
-      start_time: start_time,
-      end_time: end_time || null,
+      start_time: start_time_final,
+      end_time: normalizeTime(end_time) || null,
       budget: budget,
       expected_viewers: expected_viewers ? parseInt(expected_viewers) : null,
       stream_quality: stream_quality || null,
@@ -482,8 +482,8 @@ exports.createGuestBooking = async (req, res) => {
         const dayRows = normalizedBookingDays.map((d) => ({
           stream_project_booking_id: booking.stream_project_booking_id,
           event_date: d.date,
-          start_time: d.start_time || null,
-          end_time: d.end_time || null,
+          start_time: normalizeTime(d.start_time) || null,
+          end_time: normalizeTime(d.end_time) || null,
           duration_hours: d.duration_hours != null ? d.duration_hours : calculateDurationHours(d.start_time, d.end_time),
           time_zone: d.time_zone || null
         }));
@@ -578,6 +578,8 @@ exports.updateGuestBooking = async (req, res) => {
       description,
       event_type,
       start_date_time,
+      start_date,
+      start_time,
       duration_hours,
       end_time,
       budget_min,
@@ -605,7 +607,8 @@ exports.updateGuestBooking = async (req, res) => {
       matching_method,
       selected_crew_ids,
       booking_type,
-      booking_days
+      booking_days,
+      time_zone
     } = req.body;
 
     if (!id) {
@@ -665,31 +668,25 @@ exports.updateGuestBooking = async (req, res) => {
       .filter((d) => d && d.date)
       .map((d) => ({
         date: d.date,
-        start_time: d.start_time || d.startTime || null,
-        end_time: d.end_time || d.endTime || null,
+        start_time: normalizeTime(d.start_time || d.startTime) || null,
+        end_time: normalizeTime(d.end_time || d.endTime) || null,
         duration_hours: d.duration_hours != null ? Number(d.duration_hours) : null,
         time_zone: d.time_zone || d.timeZone || null
       }));
 
-    // Parse date and time from start_date_time
-    let event_date = null;
-    let start_time = null;
-
-    if (start_date_time) {
-      try {
-        const dateObj = new Date(start_date_time);
-        event_date = dateObj.toISOString().split('T')[0];
-        start_time = dateObj.toTimeString().split(' ')[0];
-      } catch (error) {
-        console.error('Error parsing start_date_time:', error);
-      }
-    }
+    const resolvedSingleDay = resolveEventDateAndStartTime({
+      start_date,
+      start_time,
+      start_date_time
+    });
+    let event_date = resolvedSingleDay.event_date;
+    let start_time_final = resolvedSingleDay.start_time;
 
     let totalDurationHours = null;
     if (booking_type === 'multi_day' && normalizedBookingDays.length > 0) {
       normalizedBookingDays.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
       event_date = normalizedBookingDays[0].date;
-      start_time = normalizedBookingDays[0].start_time || null;
+      start_time_final = normalizeTime(normalizedBookingDays[0].start_time) || null;
       totalDurationHours = normalizedBookingDays.reduce((sum, d) => {
         const hours = d.duration_hours != null ? d.duration_hours : calculateDurationHours(d.start_time, d.end_time);
         return sum + (hours || 0);
@@ -747,8 +744,8 @@ exports.updateGuestBooking = async (req, res) => {
     if (event_date) updateData.event_date = event_date;
     if (duration_hours) updateData.duration_hours = parseInt(duration_hours);
     if (!duration_hours && totalDurationHours != null) updateData.duration_hours = totalDurationHours;
-    if (start_time) updateData.start_time = start_time;
-    if (end_time) updateData.end_time = end_time;
+    if (start_time_final) updateData.start_time = start_time_final;
+    // if (end_time_final) updateData.end_time = end_time_final;
     if (budget) updateData.budget = budget;
     if (expected_viewers) updateData.expected_viewers = parseInt(expected_viewers);
     if (stream_quality) updateData.stream_quality = stream_quality;
@@ -782,6 +779,17 @@ exports.updateGuestBooking = async (req, res) => {
       // Update booking
       await booking.update(updateData, { transaction: tx });
 
+      const salesLeadUpdate = {};
+      if (full_name) salesLeadUpdate.client_name = full_name;
+      if (phone) salesLeadUpdate.phone = phone;
+
+      if (Object.keys(salesLeadUpdate).length > 0) {
+        await db.sales_leads.update(salesLeadUpdate, {
+          where: { booking_id: id },
+          transaction: tx
+        });
+      }
+
       if (booking_type === 'multi_day' && normalizedBookingDays.length > 0) {
         await stream_project_booking_days.destroy({
           where: { stream_project_booking_id: id },
@@ -790,8 +798,8 @@ exports.updateGuestBooking = async (req, res) => {
         const dayRows = normalizedBookingDays.map((d) => ({
           stream_project_booking_id: id,
           event_date: d.date,
-          start_time: d.start_time || null,
-          end_time: d.end_time || null,
+          start_time: normalizeTime(d.start_time) || null,
+          end_time: normalizeTime(d.end_time) || null,
           duration_hours: d.duration_hours != null ? d.duration_hours : calculateDurationHours(d.start_time, d.end_time),
           time_zone: d.time_zone || null
         }));
@@ -850,8 +858,8 @@ exports.updateGuestBooking = async (req, res) => {
         booking_days: Array.isArray(booking.booking_days)
           ? booking.booking_days.map((d) => ({
             event_date: d.event_date,
-            start_time: d.start_time,
-            end_time: d.end_time,
+            start_time: normalizeTime(d.start_time),
+            end_time: normalizeTime(d.end_time),
             duration_hours: d.duration_hours,
             time_zone: d.time_zone
           }))
@@ -1497,8 +1505,8 @@ exports.getBookingPaymentDetails = async (req, res) => {
           booking_days: Array.isArray(booking.booking_days)
             ? booking.booking_days.map((d) => ({
               event_date: d.event_date,
-              start_time: d.start_time,
-              end_time: d.end_time,
+              start_time: normalizeTime(d.start_time),
+              end_time: normalizeTime(d.end_time),
               duration_hours: d.duration_hours,
               time_zone: d.time_zone
             }))

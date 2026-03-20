@@ -4,6 +4,7 @@ const salesLeadsController = require('../controllers/sales-leads.controller');
 const discountsController = require('../controllers/discounts.controller');
 const paymentLinksController = require('../controllers/payment-links.controller');
 const salesDashboardController = require('../controllers/sales-dashboard.controller');
+const salesQuotesController = require('../controllers/sales-quotes.controller');
 const { authenticate, requireSalesRepOrAdmin, requireSalesRep, requireAdmin } = require('../middleware/auth.middleware');
 
 /**
@@ -192,6 +193,8 @@ router.get('/invoice-pdf/:booking_id', paymentLinksController.getStripeInvoicePd
 router.post('/send-invoice', paymentLinksController.sendStripeInvoice);
 router.post('/payment-links/notify', paymentLinksController.sendPaymentLinkEmail);
 router.get('/get-lead-stats/:id', authenticate, requireSalesRepOrAdmin, salesLeadsController.getLeadFulfillmentStatus);
+router.get('/get-client-lead-stats/:id', authenticate, requireSalesRepOrAdmin, salesLeadsController.getClientLeadFulfillmentStatus);
+
 /**
  * @route   GET /api/sales/payment-links/:token
  * @desc    Get payment link details
@@ -264,6 +267,21 @@ router.get('/dashboard/recent-activities', authenticate, requireSalesRepOrAdmin,
  */
 router.get('/dashboard/funnel', authenticate, requireSalesRepOrAdmin, salesDashboardController.getLeadsFunnelData);
 
+// =====================================================
+// Quote Builder Routes
+// =====================================================
+
+router.get('/quotes/catalog', authenticate, requireSalesRepOrAdmin, salesQuotesController.getCatalog);
+router.post('/quotes/catalog', authenticate, requireAdmin, salesQuotesController.createCatalogItem);
+router.put('/quotes/catalog/:catalogItemId', authenticate, requireAdmin, salesQuotesController.updateCatalogItem);
+
+router.get('/quotes/dashboard', authenticate, requireSalesRepOrAdmin, salesQuotesController.getQuoteDashboard);
+router.get('/quotes', authenticate, requireSalesRepOrAdmin, salesQuotesController.listQuotes);
+router.get('/quotes/:quoteId', authenticate, requireSalesRepOrAdmin, salesQuotesController.getQuoteById);
+router.post('/quotes', authenticate, requireSalesRepOrAdmin, salesQuotesController.createQuote);
+router.put('/quotes/:quoteId', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateQuote);
+router.patch('/quotes/:quoteId/status', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateQuoteStatus);
+
 /**
  * @route   PATCH /api/bookings/:bookingId/crew
  * @desc    Update the crew assigned to a booking   
@@ -279,6 +297,7 @@ router.patch(
 router.post('/leads/intent', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateLeadIntent);
 router.post('/client-leads/intent', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateClientLeadIntent);
 router.put('/leads/:id/booking', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeGuestBooking);
+router.put('/client-leads/:id/booking', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeClientLeadBooking);
 router.post('/deals/finalize', salesLeadsController.finalizeCreateDeal);
 
 module.exports = router;

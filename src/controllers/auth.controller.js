@@ -572,20 +572,6 @@ exports.register = async (req, res) => {
         'Active'               
       ]).catch(err => console.error('Google Sheets Client Sync Error:', err.message));
 
-       emailService.sendNewClientSignupNotification({
-        name,
-        email,
-        phone_number,
-        instagram_handle
-      }).catch(err => console.error('Sales Signup Notification Error:', err));
-
-      if (email) {
-        emailService.sendClientSignupWelcomeEmail({
-          name,
-          email
-        }).catch(err => console.error('Client Signup Welcome Email Error:', err));
-      }
-
       const clientLead = await db.client_leads.create({
         user_id: newUser.id,
         guest_email: email,
@@ -593,7 +579,7 @@ exports.register = async (req, res) => {
         phone: phone_number,
         lead_type: 'self_serve',
         lead_status: 'signed_up',
-        intent: 'Cold',
+        intent: 'Hot',
         lead_source: 'register',
         created_from: 1
       });
@@ -873,8 +859,20 @@ exports.verifyEmail = async (req, res) => {
       { where: { email } }
     );
 
-    // Send welcome email
-    await emailService.sendWelcomeEmail({ name: user.name, email });
+    // Send email
+    emailService.sendNewClientSignupNotification({
+      name: user.name,
+      email,
+      phone_number: user.phone_number,
+      instagram_handle: user.instagram_handle
+    }).catch(err => console.error('Sales Signup Notification Error:', err));
+
+    if (email) {
+      emailService.sendClientSignupWelcomeEmail({
+        name: user.name,
+        email
+      }).catch(err => console.error('Client Signup Welcome Email Error:', err));
+    }
 
     // Generate tokens for auto-login
     const userTypeRecord = await user_type.findOne({
@@ -1255,7 +1253,7 @@ exports.forgotPassword = async (req, res) => {
 
     // Generate reset token
     const resetToken = otpService.generateResetToken();
-    const tokenExpiry = otpService.generateTokenExpiry(1); // 1 hour
+    const tokenExpiry = otpService.generateTokenExpiry(15); // 15 minutes
 
     await User.update(
       {
@@ -2219,7 +2217,9 @@ exports.registerCrewMemberStep1 = [
         password, 
         working_distance, 
         crew_member_id, 
-        user_id 
+        user_id,
+        lat,
+        lng
       } = req.body;
 
       if (!first_name || !last_name || !email || (!crew_member_id && !password)) {
@@ -2267,7 +2267,10 @@ exports.registerCrewMemberStep1 = [
         email_verified: 0,
         verification_code: otp,
         otp_expiry: otpExpiry,
-        created_from: 1 // 1 = web
+        created_from: 1, // 1 = web        
+        location,
+        latitude: lat, 
+        longitude: lng,
       });
 
       const newCrewMember = await crew_members.create({

@@ -7286,20 +7286,40 @@ exports.assignCrewBulkSmart = async (req, res) => {
 
 exports.removeAssignedCrew = async (req, res) => {
     try {
-      const assigned_by_user_id = req.user?.userId; // Assuming you have user info in req.user
-        const { lead_id, crew_member_id } = req.body;
+        const assigned_by_user_id = req.user?.userId;
+        const { lead_id, client_lead_id, crew_member_id } = req.body;
 
-        if (!lead_id || !crew_member_id) {
-            return res.status(400).json({ success: false, message: "lead_id and crew_member_id are required." });
+        if ((!lead_id && !client_lead_id) || !crew_member_id) {
+            return res.status(400).json({
+                success: false,
+                message: "Either lead_id or client_lead_id and crew_member_id are required."
+            });
         }
 
-        const lead = await sales_leads.findOne({
-            where: { lead_id },
-            attributes: ['lead_id', 'booking_id']
+        let LeadModel;
+        let LeadActivityModel;
+        let where;
+
+        if (lead_id) {
+            LeadModel = sales_leads;
+            LeadActivityModel = sales_lead_activities;
+            where = { lead_id: lead_id };
+        } else {
+            LeadModel = client_leads;
+            LeadActivityModel = client_lead_activities;
+            where = { lead_id: client_lead_id };
+        }
+
+        const lead = await LeadModel.findOne({
+            where,
+            attributes: ['booking_id']
         });
 
         if (!lead || !lead.booking_id) {
-            return res.status(404).json({ success: false, message: "Lead or associated booking not found." });
+            return res.status(404).json({
+                success: false,
+                message: "Lead or associated booking not found."
+            });
         }
 
         const assignment = await assigned_crew.findOne({
@@ -7308,10 +7328,10 @@ exports.removeAssignedCrew = async (req, res) => {
                 crew_member_id: crew_member_id,
                 is_active: 1
             },
-            include: [{ 
-                model: crew_members, 
-                as: 'crew_member', 
-                attributes: ['first_name', 'last_name'] 
+            include: [{
+                model: crew_members,
+                as: 'crew_member',
+                attributes: ['first_name', 'last_name']
             }]
         });
 
@@ -7324,14 +7344,14 @@ exports.removeAssignedCrew = async (req, res) => {
 
         await assignment.update({ is_active: 0 });
 
-        const crewName = assignment.crew_member 
-            ? `${assignment.crew_member.first_name} ${assignment.crew_member.last_name}` 
+        const crewName = assignment.crew_member
+            ? `${assignment.crew_member.first_name} ${assignment.crew_member.last_name}`
             : `ID: ${crew_member_id}`;
 
-        await sales_lead_activities.create({
-            lead_id: lead_id,
+        await LeadActivityModel.create({
+            lead_id: lead_id || client_lead_id,
             activity_type: 'crew_removed',
-            notes: `Sales rep removed ${crewName} from the project.`,
+            activity_data: `Sales rep removed ${crewName} from the project.`,
             performed_by_user_id: assigned_by_user_id,
             created_at: new Date()
         });
@@ -7550,13 +7570,13 @@ exports.getBookingSummaryById = async (req, res) => {
     try {
         const { bookingId } = req.params;
 
-        // 1. Fetch data with correct aliases
+        // 1. Fetch data with correct aliases from models
         const booking = await stream_project_booking.findOne({
             where: { stream_project_booking_id: bookingId },
             include: [
                 {
                     model: sales_leads,
-                    as: "sales_leads", // Matches your initModels alias
+                    as: "sales_leads", 
                     include: [{ model: users, as: "assigned_sales_rep", attributes: ["name"] }]
                 },
                 {
@@ -7572,6 +7592,7 @@ exports.getBookingSummaryById = async (req, res) => {
         }
 
         const bookingJson = booking.toJSON();
+        const primaryQuote = bookingJson.primary_quote || {};
 
         // 2. Helper to handle Double-Stringified JSON or Object data
         const safeParseJSON = (val) => {
@@ -7585,10 +7606,9 @@ exports.getBookingSummaryById = async (req, res) => {
             }
         };
 
-        // 3. Map Shoot Type Title
+        // 3. Map Shoot Type & Event Type Label
         const fullShootType = SHOOT_TYPE_TITLES[bookingJson.shoot_type] || bookingJson.shoot_type;
 
-        // 4. Map Event Type Label
         let formattedEventType = "Photography & Videography";
         const rawEvent = (bookingJson.event_type || "").toLowerCase();
         const hasVideo = rawEvent.includes('videographer');
@@ -7597,7 +7617,7 @@ exports.getBookingSummaryById = async (req, res) => {
         else if (hasVideo) formattedEventType = "Videography";
         else if (hasPhoto) formattedEventType = "Photography";
 
-        // 5. Handle Editing Details (Corrected logic)
+        // 4. Handle Editing Details
         const vKeys = safeParseJSON(bookingJson.video_edit_types);
         const pKeys = safeParseJSON(bookingJson.photo_edit_types);
 
@@ -7607,30 +7627,38 @@ exports.getBookingSummaryById = async (req, res) => {
             photo_edits: pKeys.map(key => PHOTO_EDIT_TITLES[key] || key)
         };
 
-        // 6. Parse Crew Counts
+        // 5. Parse Crew Counts
         let crewCounts = [];
         try {
             const roles = safeParseJSON(bookingJson.crew_roles);
-            crewCounts = Object.entries(roles).map(([role, count]) => ({
-                role: role.charAt(0).toUpperCase() + role.slice(1),
-                count: count
-            }));
+            if (roles && typeof roles === 'object') {
+                crewCounts = Object.entries(roles).map(([role, count]) => ({
+                    role: role.charAt(0).toUpperCase() + role.slice(1),
+                    count: count
+                }));
+            }
         } catch (e) { crewCounts = []; }
 
-        // 7. Calculate Pricing Breakdown
+        // 6. Pricing Breakdown & Discount Logic
+        
+        // Total discount recorded in the DB column (e.g., 5706.25)
+        const totalDiscountFromDb = parseFloat(primaryQuote.discount_amount || 0);
+        const subtotal = parseFloat(primaryQuote.subtotal || 0);
+        const quoteTotal = parseFloat(primaryQuote.total || 0);
+
         let pricing = {
             shoot_cost: 0,
             editing_cost: 0,
-            discount: parseFloat(bookingJson.primary_quote?.discount_amount || 0),
-            subtotal: parseFloat(bookingJson.primary_quote?.subtotal || 0),
-            total: parseFloat(bookingJson.primary_quote?.total || 0)
+            subtotal: subtotal,
+            total: quoteTotal,
+            discount: totalDiscountFromDb 
         };
 
-        const items = bookingJson.primary_quote?.line_items || [];
+        // Categorize Line Items into Shoot vs Editing
+        const items = primaryQuote.line_items || [];
         items.forEach(item => {
             const name = (item.item_name || "").toLowerCase();
             const total = parseFloat(item.line_total || 0);
-            // Categorize into breakdown
             if (name.includes('reel') || name.includes('edit') || name.includes('highlight') || name.includes('photo')) {
                 pricing.editing_cost += total;
             } else {
@@ -7638,34 +7666,40 @@ exports.getBookingSummaryById = async (req, res) => {
             }
         });
 
-        // 7b. Paid total + discount breakdown (if available)
-        let paidTotal = pricing.total;
+        // 7. EXTRACT REFERRAL DATA FROM NOTES (Regex Fix)
+        let referralDiscount = 0;
         let referralCode = null;
+        const notes = primaryQuote.notes || '';
+
+        // Matches: Referral applied (7321F9): -$518.75
+        const referralAmountMatch = String(notes).match(/Referral applied.*?-\$([\d,.]+)/i);
+        const referralCodeMatch = String(notes).match(/Referral applied \((.*?)\)/i);
+
+        if (referralAmountMatch && referralAmountMatch[1]) {
+            referralDiscount = parseFloat(referralAmountMatch[1].replace(/,/g, ''));
+        }
+        if (referralCodeMatch && referralCodeMatch[1]) {
+            referralCode = referralCodeMatch[1];
+        }
+
+        // Check if there is a payment record for more accurate referral info
         if (bookingJson.payment_id) {
             const payment = await db.payment_transactions.findByPk(bookingJson.payment_id);
-            if (payment && payment.total_amount !== null && payment.total_amount !== undefined) {
-                paidTotal = parseFloat(payment.total_amount);
-            }
             if (payment && payment.referral_code) {
                 referralCode = payment.referral_code;
             }
         }
 
-        let referralDiscount = 0;
-        const notes = bookingJson.primary_quote?.notes || '';
-        const referralMatch = String(notes).match(/Referral applied .*?: -\\$(\\d+(?:\\.\\d+)?)/i);
-        if (referralMatch && referralMatch[1]) {
-            referralDiscount = parseFloat(referralMatch[1]);
-        }
-        const discountCodeDiscount = Math.max(0, pricing.discount - referralDiscount);
+        // Logic: The "Promo Code" discount is whatever is left over after the Referral Discount
+        const discountCodeDiscount = Math.max(0, totalDiscountFromDb - referralDiscount);
 
-        pricing.total_paid = paidTotal;
-        pricing.discount_code_discount = discountCodeDiscount;
-        pricing.referral_discount = referralDiscount;
-        pricing.total_before_discounts = parseFloat((paidTotal + discountCodeDiscount + referralDiscount).toFixed(2));
+        pricing.total_paid = quoteTotal; // Default to quote total
+        pricing.discount_code_discount = parseFloat(discountCodeDiscount.toFixed(2));
+        pricing.referral_discount = parseFloat(referralDiscount.toFixed(2));
+        pricing.total_before_discounts = subtotal;
         pricing.referral_code = referralCode;
 
-        // 8. Return Response
+        // 8. Final Response
         res.json({
             success: true,
             data: {

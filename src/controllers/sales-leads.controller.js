@@ -9,6 +9,7 @@ const pricingController = require('../controllers/pricing.controller');
 const paymentService = require('../services/payment-links.service');
 const emailService = require('../utils/emailService');
 const { sendCPNewBookingRequestEmail } = require('../utils/emailService');
+const { resolveEventDateAndStartTime, normalizeTime } = require('../utils/timezone');
 
 const sequelize = require('../db');
 const db = require('../models');
@@ -82,16 +83,8 @@ function safeJsonStringify(val) {
   try { return JSON.stringify(val); } catch { return String(val); }
 }
 
-function parseStartDateTime(start_date_time) {
-  if (!start_date_time) return { event_date: null, start_time: null };
-  try {
-    const dateObj = new Date(start_date_time);
-    const event_date = dateObj.toISOString().split('T')[0]; // YYYY-MM-DD
-    const start_time = dateObj.toTimeString().split(' ')[0]; // HH:mm:ss
-    return { event_date, start_time };
-  } catch {
-    return { event_date: null, start_time: null };
-  }
+function parseStartDateTime({ start_date_time, start_date, start_time }) {
+  return resolveEventDateAndStartTime({ start_date_time, start_date, start_time });
 }
 
 function normalizeIsDraft(is_draft) {
@@ -546,6 +539,10 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             client_name,
             startDate, 
             endDate,
+            start_date,
+            start_time,
+            end_time,
+            time_zone,
             booking_type,
             booking_days,
             location,
@@ -587,22 +584,27 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             .filter((d) => d && d.date)
             .map((d) => ({
                 date: d.date,
-                start_time: d.start_time || d.startTime || null,
-                end_time: d.end_time || d.endTime || null,
+                start_time: normalizeTime(d.start_time || d.startTime) || null,
+                end_time: normalizeTime(d.end_time || d.endTime) || null,
                 duration_hours: d.duration_hours != null ? Number(d.duration_hours) : null,
-                time_zone: d.time_zone || d.timeZone || null
+                time_zone: d.time_zone || d.timeZone || time_zone || null
             }));
 
-        let event_date = startDate ? new Date(startDate).toISOString().split('T')[0] : null;
-        let start_time = startDate ? new Date(startDate).toTimeString().split(' ')[0] : null;
-        let end_time = endDate ? new Date(endDate).toTimeString().split(' ')[0] : null;
+        const resolvedSingleDay = resolveEventDateAndStartTime({
+            start_date,
+            start_time,
+            start_date_time: startDate
+        });
+        let event_date = resolvedSingleDay.event_date;
+        let start_time_final = resolvedSingleDay.start_time;
+        let end_time_final = normalizeTime(end_time || endDate);
         let totalDurationHours = null;
 
         if (booking_type === 'multi_day' && normalizedBookingDays.length > 0) {
             normalizedBookingDays.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
             event_date = normalizedBookingDays[0].date;
-            start_time = normalizedBookingDays[0].start_time || null;
-            end_time = normalizedBookingDays[0].end_time || null;
+            start_time_final = normalizeTime(normalizedBookingDays[0].start_time) || null;
+            end_time_final = normalizeTime(normalizedBookingDays[0].end_time) || null;
             totalDurationHours = normalizedBookingDays.reduce((sum, d) => {
                 const hours = d.duration_hours != null ? d.duration_hours : calculateDurationHours(d.start_time, d.end_time);
                 return sum + (hours || 0);
@@ -624,8 +626,8 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             streaming_platforms: JSON.stringify([]),
             crew_roles: JSON.stringify([]),
             event_date: event_date,
-            start_time: start_time,
-            end_time: end_time,
+            start_time: start_time_final,
+            end_time: end_time_final,
             duration_hours: totalDurationHours,
             event_location: location || null,
             description: specialInstructions || null,
@@ -661,8 +663,8 @@ exports.trackEarlyBookingInterest = async (req, res) => {
                 const dayRows = normalizedBookingDays.map((d) => ({
                     stream_project_booking_id: booking.stream_project_booking_id,
                     event_date: d.date,
-                    start_time: d.start_time || null,
-                    end_time: d.end_time || null,
+                    start_time: normalizeTime(d.start_time) || null,
+                    end_time: normalizeTime(d.end_time) || null,
                     duration_hours: d.duration_hours != null ? d.duration_hours : calculateDurationHours(d.start_time, d.end_time),
                     time_zone: d.time_zone || null
                 }));
@@ -708,15 +710,24 @@ exports.trackEarlyBookingInterest = async (req, res) => {
 
             assignedRep = await leadAssignmentService.autoAssignLead(lead.lead_id);
 
-          emailService.sendSalesLeadNotification({
+          // emailService.sendSalesLeadNotification({
+          //   guestEmail: normalizedGuestEmail,
+          //   shootType: shoot_type,
+          //   contentType: content_type,
+          //   eventDate: event_date,
+          //   startTime: start_time,
+          //   endTime: end_time,
+          //   editsNeeded: edits_needed
+          // }).catch(err => console.error('Sales Email Error:', err));
+
+          emailService.sendProductionLeadNotification({
             guestEmail: normalizedGuestEmail,
-            shootType: shoot_type,
             contentType: content_type,
             eventDate: event_date,
             startTime: start_time,
             endTime: end_time,
             editsNeeded: edits_needed
-          }).catch(err => console.error('Sales Email Error:', err));
+          }).catch(err => console.error('Production Email Error:', err));
         } else {
           await lead.update({ last_activity_at: new Date() });
         }
@@ -1260,7 +1271,6 @@ exports.getLeads = async (req, res) => {
       whereClause.assigned_sales_rep_id = req.userId;
     }
 
-    // 1. Database-level filters
     if (start_date && end_date) {
       whereClause.created_at = {
         [Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`]
@@ -1282,7 +1292,6 @@ exports.getLeads = async (req, res) => {
       ];
     }
 
-    // Fetch leads
     const leads = await sales_leads.findAll({
       where: whereClause,
       include: [
@@ -1291,6 +1300,8 @@ exports.getLeads = async (req, res) => {
           as: 'assigned_sales_rep',
           attributes: ['id', 'name', 'email']
         },
+        { model: discount_codes, as: "discount_codes" }, // Added for status consistency
+        { model: payment_links, as: "payment_links" },   // Added for status consistency
         {
           model: stream_project_booking,
           as: 'booking',
@@ -1306,47 +1317,53 @@ exports.getLeads = async (req, res) => {
       order: [['created_at', 'DESC']]
     });
 
-    // 2. Process leads to compute dynamic fields
     let processedLeads = await Promise.all(
       leads.map(async (lead) => {
         const leadJson = lead.toJSON();
         const pricingData = await calculateLeadPricing(lead.booking);
 
-        // Calculate dynamic status and intent strings
+        // 1. Standardize Booking Status & Intent (Using same methods as Detail API)
         const computedIntent = lead.intent ?? leadAssignmentService.getLeadIntent({ lead, booking: lead.booking });
         const computedBookingStatus = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
+
+        // 2. Standardize Payment Status Logic (Check for Payment Links)
+        let payment_status = lead.booking?.payment_id ? 'paid' : 'unpaid';
+        if (payment_status === 'unpaid') {
+          const pLinks = leadJson.payment_links || [];
+          if (pLinks.length > 0) {
+            const latestLink = [...pLinks].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+            const now = new Date();
+            const expiryDate = latestLink.expires_at ? new Date(latestLink.expires_at) : null;
+            const isExpired = expiryDate ? expiryDate < now : false;
+            payment_status = isExpired ? 'link_expired' : 'link_sent';
+          }
+        }
 
         return {
           ...leadJson,
           potential_value: pricingData ? pricingData.total : 0,
           booking_status: computedBookingStatus, 
           intent: computedIntent,
-          payment_status: lead.booking?.payment_id ? 'paid' : 'unpaid',
+          payment_status: payment_status,
         };
       })
     );
 
-    // 3. Apply Post-Process Filters (Matches UI strings)
-    
-    // Filter by Booking Status
     const activeStatusFilter = (status || booking_status);
     if (activeStatusFilter && activeStatusFilter !== 'All') {
       processedLeads = processedLeads.filter((lead) => {
-        // Normalize strings: replace en-dashes with hyphens and trim
         const leadStat = lead.booking_status.replace('–', '-').trim();
         const filterStat = activeStatusFilter.replace('–', '-').trim();
         return leadStat === filterStat;
       });
     }
 
-    // Filter by Intent
     if (intent && intent !== 'All') {
       processedLeads = processedLeads.filter(
         (lead) => lead.intent.toLowerCase() === intent.toLowerCase().trim()
       );
     }
 
-    // 4. Manual Pagination after filtering
     const total = processedLeads.length;
     const paginatedLeads = processedLeads.slice(offset, offset + pageLimit);
 
@@ -1446,8 +1463,8 @@ exports.getClientLeads = async (req, res) => {
       leads.map(async (lead) => {
         const leadJson = lead.toJSON();
         const pricingData = await calculateLeadPricing(lead.booking);
-        const computedIntent = lead.intent ?? leadAssignmentService.getClientIntent({ booking: lead.booking });
-        const computedBookingStatus = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
+        const computedIntent = lead.intent ?? leadAssignmentService.getClientIntent({ lead, booking: lead.booking });
+        const computedBookingStatus = leadAssignmentService.getClientBookingStatus(lead, lead.booking);
 
         return {
           ...leadJson,
@@ -1596,8 +1613,8 @@ exports.getLeadById = async (req, res) => {
       });
       leadJson.booking.booking_days = days.map((d) => ({
         event_date: d.event_date,
-        start_time: d.start_time,
-        end_time: d.end_time,
+        start_time: normalizeTime(d.start_time),
+        end_time: normalizeTime(d.end_time),
         duration_hours: d.duration_hours,
         time_zone: d.time_zone
       }));
@@ -1702,8 +1719,12 @@ exports.getLeadById = async (req, res) => {
     pricing_breakdown.total = subtotal - pricing_breakdown.discount;
 
     const selectedCrewIds = lead.booking?.assigned_crews?.map(c => c.crew_member_id).filter(Boolean) || [];
+    
+    // --- STANDARDIZED STATUS & INTENT CALLS ---
     const intent = lead.intent ?? leadAssignmentService.getLeadIntent({ lead, booking: lead.booking });
     const booking_status = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
+    // ------------------------------------------
+
     const booking_step = leadAssignmentService.getLeadBookingStep(lead, lead.booking, lead.activities);
     const can_edit_booking = canEditBooking(lead, lead.booking);
 
@@ -1816,6 +1837,110 @@ exports.getLeadFulfillmentStatus = async (req, res) => {
     const { id } = req.params;
 
     const lead = await sales_leads.findOne({
+      where: { lead_id: id },
+      include: [
+        {
+          model: stream_project_booking,
+          as: 'booking',
+          attributes: ['event_location', 'crew_roles'],
+          include: [
+            {
+              model: assigned_crew,
+              as: 'assigned_crews',
+              where: { is_active: 1 },
+              required: false,
+              attributes: ['crew_accept'],
+              include: [
+                {
+                  model: crew_members,
+                  as: 'crew_member',
+                  attributes: ['primary_role']
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    });
+
+    if (!lead || !lead.booking) {
+      return res.status(404).json({ success: false, message: 'Lead or Booking not found' });
+    }
+
+    const booking = lead.booking;
+    
+    let requestedRoles = {};
+    try {
+      requestedRoles = typeof booking.crew_roles === 'string' ? JSON.parse(booking.crew_roles) : (booking.crew_roles || {});
+    } catch (e) {
+      requestedRoles = {};
+    }
+
+    const ROLE_GROUPS = { 
+      videographer: ['9', '1'], 
+      photographer: ['10', '2'], 
+      cinematographer: ['11', '3'] 
+    };
+    const ID_TO_ROLE_MAP = {};
+    Object.entries(ROLE_GROUPS).forEach(([role, ids]) => {
+      ids.forEach(id => (ID_TO_ROLE_MAP[String(id)] = role));
+    });
+
+    // 3. Initialize Summary
+    let fulfillment = {};
+    Object.keys(requestedRoles).forEach(role => {
+      fulfillment[role] = {
+        accepted: 0,
+        required: parseInt(requestedRoles[role]) || 0,
+        status_display: `0/${requestedRoles[role]}`
+      };
+    });
+
+    if (booking.assigned_crews) {
+      booking.assigned_crews.forEach(ac => {
+        if (ac.crew_accept === 1) {
+          let crewRoleIds = [];
+          try {
+            crewRoleIds = typeof ac.crew_member?.primary_role === 'string' 
+              ? JSON.parse(ac.crew_member.primary_role) 
+              : (ac.crew_member?.primary_role || []);
+          } catch (e) { crewRoleIds = []; }
+
+          const categories = [...new Set(crewRoleIds.map(id => ID_TO_ROLE_MAP[String(id)]).filter(Boolean))];
+          
+          const targetCategory = categories.find(cat => fulfillment[cat] && fulfillment[cat].accepted < fulfillment[cat].required);
+          
+          if (targetCategory) {
+            fulfillment[targetCategory].accepted += 1;
+          }
+        }
+      });
+    }
+
+    const result = {};
+    Object.keys(fulfillment).forEach(key => {
+      result[key] = `${fulfillment[key].accepted}/${fulfillment[key].required}`;
+    });
+
+    res.json({
+      success: true,
+      data: {
+        lead_id: id,
+        location: booking.event_location,
+        fulfillment_stats: result
+      }
+    });
+
+  } catch (error) {
+    console.error('Fulfillment Status Error:', error);
+    res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+exports.getClientLeadFulfillmentStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const lead = await client_leads.findOne({
       where: { lead_id: id },
       include: [
         {
@@ -2103,15 +2228,18 @@ exports.getClientLeadById = async (req, res) => {
       include: [
         {
           model: users,
+          required: false,
           as: "assigned_sales_rep",
           attributes: ["id", "name", "email"],
         },
         {
           model: stream_project_booking,
+          required: false,
           as: "booking",
           include: [
             {
               model: quotes,
+              required: false,
               as: "primary_quote",
               include: [{ model: quote_line_items, as: "line_items" }],
             },
@@ -2131,6 +2259,7 @@ exports.getClientLeadById = async (req, res) => {
               include: [
                 {
                   model: crew_members,
+                  required: false,
                   as: "crew_member",
                   attributes: [
                     "crew_member_id",
@@ -2158,6 +2287,7 @@ exports.getClientLeadById = async (req, res) => {
         },
         {
           model: client_lead_activities,
+          required: false,
           as: "activities",
           include: [
             { model: users, as: "performed_by", attributes: ["id", "name"] },
@@ -2185,8 +2315,8 @@ exports.getClientLeadById = async (req, res) => {
       });
       leadJson.booking.booking_days = days.map((d) => ({
         event_date: d.event_date,
-        start_time: d.start_time,
-        end_time: d.end_time,
+        start_time: normalizeTime(d.start_time),
+        end_time: normalizeTime(d.end_time),
         duration_hours: d.duration_hours,
         time_zone: d.time_zone
       }));
@@ -2298,8 +2428,8 @@ exports.getClientLeadById = async (req, res) => {
     pricing_breakdown.total = subtotal - pricing_breakdown.discount;
 
     const selectedCrewIds = lead.booking?.assigned_crews?.map(c => c.crew_member_id).filter(Boolean) || [];
-    const intent = lead.intent ?? leadAssignmentService.getLeadIntent({ lead, booking: lead.booking });
-    const booking_status = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
+    const intent = lead.intent ?? leadAssignmentService.getClientIntent({ lead, booking: lead.booking });
+    const booking_status = leadAssignmentService.getClientBookingStatus(lead, lead.booking);
     const booking_step = leadAssignmentService.getLeadBookingStep(lead, lead.booking, lead.activities);
     const can_edit_booking = canEditBooking(lead, lead.booking);
 
@@ -3683,6 +3813,8 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
     content_type,
     shoot_type,
     start_date_time,
+    start_date,
+    start_time,
     end_time,
     duration_hours,
     location,
@@ -3697,7 +3829,8 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
     skip_discount = true,
     skip_margin = true,
     booking_type,
-    booking_days
+    booking_days,
+    time_zone
   } = finalizeBody;
 
   /* -----------------------------
@@ -3710,10 +3843,10 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
     .filter((d) => d && d.date)
     .map((d) => ({
       date: d.date,
-      start_time: d.start_time || d.startTime || null,
-      end_time: d.end_time || d.endTime || null,
+      start_time: normalizeTime(d.start_time || d.startTime) || null,
+      end_time: normalizeTime(d.end_time || d.endTime) || null,
       duration_hours: d.duration_hours != null ? Number(d.duration_hours) : null,
-      time_zone: d.time_zone || d.timeZone || null
+      time_zone: d.time_zone || d.timeZone || time_zone || null
     }));
 
   const calculateDurationHours = (startTime, endTime) => {
@@ -3731,27 +3864,14 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
   Parse start_date_time
   ------------------------------*/
 
-  let event_date = null;
-  let start_time = null;
-  let end_time_only = null;
-
-  if (start_date_time && start_date_time.includes(' ')) {
-    const parts = start_date_time.split(' ');
-    event_date = parts[0];
-    start_time = parts[1];
-  } else if (start_date_time && start_date_time.includes('T')) {
-    const parts = start_date_time.split('T');
-    event_date = parts[0];
-    start_time = parts[1].split('.')[0];
-  }
-
-  if (end_time && end_time.includes(' ')) {
-    end_time_only = end_time.split(' ')[1];
-  } else if (end_time && end_time.includes('T')) {
-    end_time_only = end_time.split('T')[1].split('.')[0];
-  } else {
-    end_time_only = end_time;
-  }
+  const resolvedSingleDay = resolveEventDateAndStartTime({
+    start_date,
+    start_time,
+    start_date_time
+  });
+  let event_date = resolvedSingleDay.event_date;
+  let start_time_final = resolvedSingleDay.start_time;
+  let end_time_only = normalizeTime(end_time);
 
   /* -----------------------------
   Multi-day override
@@ -3766,7 +3886,7 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
     );
 
     event_date = normalizedBookingDays[0].date;
-    start_time = normalizedBookingDays[0].start_time;
+    start_time_final = normalizeTime(normalizedBookingDays[0].start_time) || null;
 
     totalDurationHours = normalizedBookingDays.reduce((sum, d) => {
 
@@ -3795,7 +3915,7 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
   if (event_type) updateData.event_type = event_type;
 
   if (event_date) updateData.event_date = event_date;
-  if (start_time) updateData.start_time = start_time;
+  if (start_time_final) updateData.start_time = start_time_final;
   if (end_time_only) updateData.end_time = end_time_only;
 
   if (duration_hours != null)
@@ -3840,8 +3960,8 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
     const dayRows = normalizedBookingDays.map((d) => ({
       stream_project_booking_id: bookingId,
       event_date: d.date,
-      start_time: d.start_time,
-      end_time: d.end_time,
+      start_time: normalizeTime(d.start_time),
+      end_time: normalizeTime(d.end_time),
       duration_hours:
         d.duration_hours ??
         calculateDurationHours(d.start_time, d.end_time),
@@ -3920,7 +4040,10 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
 
     shoot_start_date:
       start_date_time ||
-      (booking.event_date ? `${booking.event_date}T${booking.start_time || '00:00:00.000Z'}` : null),
+      (start_date && (start_time || start_time_final)
+        ? `${start_date}T${normalizeTime(start_time || start_time_final)}`
+        : null) ||
+      (booking.event_date ? `${booking.event_date}T${booking.start_time || '00:00:00'}` : null),
 
     video_edit_types: Array.isArray(video_edit_types) ? video_edit_types : [],
     photo_edit_types: Array.isArray(photo_edit_types) ? photo_edit_types : [],
@@ -3995,7 +4118,7 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
 }
 
 /**
- * POST /v1/guest-bookings/:id/finalize
+ * 
  * Body: booking fields + creators/roles + edit types + flags
  */
 exports.finalizeGuestBooking = async (req, res) => {
@@ -4008,7 +4131,10 @@ exports.finalizeGuestBooking = async (req, res) => {
       shoot_type,
       event_type,
       start_date_time,
+      start_date,
+      start_time,
       end_time,
+      time_zone,
       duration_hours,
       location,
       crew_roles,
@@ -4049,7 +4175,10 @@ exports.finalizeGuestBooking = async (req, res) => {
         shoot_type,
         event_type,
         start_date_time,
+        start_date,
+        start_time,
         end_time,
+        time_zone,
         duration_hours,
         location,
         crew_roles,
@@ -4092,6 +4221,129 @@ exports.finalizeGuestBooking = async (req, res) => {
   }
 };
 
+exports.finalizeClientLeadBooking = async (req, res) => {
+  const tx = await sequelize.transaction();
+  try {
+    const { id } = req.params;
+
+    const {
+      content_type,
+      shoot_type,
+      event_type,
+      start_date_time,
+      start_date,
+      start_time,
+      end_time,
+      time_zone,
+      duration_hours,
+      location,
+      crew_roles,
+      crew_size,
+      selected_crew_ids,
+      edits_needed,
+      video_edit_types,
+      photo_edit_types,
+      is_draft,
+      skip_discount = true,
+      skip_margin = true,
+      booking_type,
+      booking_days
+    } = req.body;
+
+    if (!id) {
+      await tx.rollback();
+      return res.status(400).json({ success: false, message: 'Client lead ID is required' });
+    }
+
+    const clientLead = await client_leads.findOne({
+      where: { lead_id: id },
+      transaction: tx
+    });
+
+    if (!clientLead) {
+      await tx.rollback();
+      return res.status(404).json({ success: false, message: 'Client lead not found' });
+    }
+
+    if (!clientLead.booking_id) {
+      await tx.rollback();
+      return res.status(400).json({ success: false, message: 'No booking found for this client lead' });
+    }
+
+    const booking = await stream_project_booking.findOne({
+      where: { stream_project_booking_id: clientLead.booking_id, is_active: 1 },
+      transaction: tx
+    });
+
+    if (!booking) {
+      await tx.rollback();
+      return res.status(404).json({ success: false, message: 'Booking not found' });
+    }
+
+    const finalizeResult = await finalizeBookingCore({
+      booking,
+      bookingId: booking.stream_project_booking_id,
+      finalizeBody: {
+        content_type,
+        shoot_type,
+        event_type,
+        start_date_time,
+        start_date,
+        start_time,
+        end_time,
+        time_zone,
+        duration_hours,
+        location,
+        crew_roles,
+        crew_size,
+        selected_crew_ids,
+        edits_needed,
+        video_edit_types,
+        photo_edit_types,
+        is_draft,
+        skip_discount,
+        skip_margin,
+        booking_type,
+        booking_days
+      },
+      tx
+    });
+
+    await client_lead_activities.create({
+      lead_id: clientLead.lead_id,
+      activity_type: 'booking_updated',
+      activity_data: {
+        booking_id: booking.stream_project_booking_id,
+        source: 'sales_portal_edit_client_booking'
+      },
+      performed_by_user_id: req.userId || null
+    }, { transaction: tx });
+
+    await tx.commit();
+
+    await notifyAssignedCreators(finalizeResult.assigned_creator_ids || []);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Client booking updated successfully',
+      data: {
+        client_lead_id: clientLead.lead_id,
+        booking_id: booking.stream_project_booking_id,
+        quote_id: finalizeResult.quote_id,
+        booking: finalizeResult.booking,
+        quote: finalizeResult.quote
+      }
+    });
+  } catch (error) {
+    try { await tx.rollback(); } catch (_) {}
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update client booking',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
 /**
  * POST /v1/sales/deals/finalize
  * Single API for Create New Deal "Continue" button:
@@ -4103,6 +4355,7 @@ exports.finalizeCreateDeal = async (req, res) => {
   try {
     const {
       // Client / lead fields
+      client_lead_id = null,
       user_id = null,
       client_name = null,
       guest_email = null,
@@ -4116,7 +4369,10 @@ exports.finalizeCreateDeal = async (req, res) => {
       shoot_type,
       event_type,
       start_date_time,
+      start_date,
+      start_time,
       end_time,
+      time_zone,
       duration_hours,
       location,
       crew_roles,
@@ -4171,6 +4427,22 @@ exports.finalizeCreateDeal = async (req, res) => {
       });
     }
 
+    let existingClientLead = null;
+    if (client_lead_id) {
+      existingClientLead = await client_leads.findOne({
+        where: { lead_id: client_lead_id },
+        transaction: tx
+      });
+
+      if (!existingClientLead) {
+        await tx.rollback();
+        return res.status(404).json({
+          success: false,
+          message: 'client lead not found'
+        });
+      }
+    }
+
     // 1️⃣ Create booking shell
     const booking = await stream_project_booking.create(
       {
@@ -4187,23 +4459,44 @@ exports.finalizeCreateDeal = async (req, res) => {
       { transaction: tx }
     );
 
-    // 2️⃣ Create lead
+    // 2️⃣ Create or update lead
     const leadModel = user_id ? client_leads : sales_leads;
-    const lead = await leadModel.create(
-      {
-        booking_id: booking.stream_project_booking_id,
-        user_id: user_id || null,
-        guest_email: resolvedEmail,
-        phone: resolvedPhone,
-        client_name: resolvedName,
-        lead_type,
-        intent,
-        lead_source,
-        lead_status: 'manual_lead_created',
-        created_from: 1 // 1 = web
-      },
-      { transaction: tx }
-    );
+    let lead = null;
+
+    if (client_lead_id && user_id) {
+      await existingClientLead.update(
+        {
+          booking_id: booking.stream_project_booking_id,
+          user_id: user_id || existingClientLead.user_id || null,
+          guest_email: resolvedEmail,
+          phone: resolvedPhone,
+          client_name: resolvedName,
+          lead_type,
+          intent,
+          lead_source,
+          lead_status: 'manual_lead_created',
+          created_from: 1
+        },
+        { transaction: tx }
+      );
+      lead = existingClientLead;
+    } else {
+      lead = await leadModel.create(
+        {
+          booking_id: booking.stream_project_booking_id,
+          user_id: user_id || null,
+          guest_email: resolvedEmail,
+          phone: resolvedPhone,
+          client_name: resolvedName,
+          lead_type,
+          intent,
+          lead_source,
+          lead_status: 'manual_lead_created',
+          created_from: 1 // 1 = web
+        },
+        { transaction: tx }
+      );
+    }
 
     // 3️⃣ Create lead activity
     if (!user_id) {
@@ -4216,6 +4509,21 @@ exports.finalizeCreateDeal = async (req, res) => {
             guest_email: resolvedEmail,
             lead_source: lead_source || null
           }
+        },
+        { transaction: tx }
+      );
+    } else if (client_lead_id) {
+      await client_lead_activities.create(
+        {
+          lead_id: lead.lead_id,
+          activity_type: 'booking_updated',
+          activity_data: {
+            source: 'sales_portal_create_deal',
+            booking_id: booking.stream_project_booking_id,
+            guest_email: resolvedEmail,
+            lead_source: lead_source || null
+          },
+          performed_by_user_id: req.userId || null
         },
         { transaction: tx }
       );
@@ -4235,10 +4543,15 @@ exports.finalizeCreateDeal = async (req, res) => {
     }
 
     // 4️⃣ 🔥 AUTO ASSIGN (same as trackEarlyBookingInterest)
-    const assignedRep = await leadAssignmentService.autoAssignLead(
-      lead.lead_id,
-      { transaction: tx, leadModel }
-    );
+    let assignedRep = null;
+    if (lead.assigned_sales_rep_id) {
+      assignedRep = { id: lead.assigned_sales_rep_id };
+    } else {
+      assignedRep = await leadAssignmentService.autoAssignLead(
+        lead.lead_id,
+        { transaction: tx, leadModel }
+      );
+    }
     if (assignedRep?.id) {
       await lead.update(
         { assigned_sales_rep_id: assignedRep.id },
@@ -4255,7 +4568,10 @@ exports.finalizeCreateDeal = async (req, res) => {
         shoot_type,
         event_type,
         start_date_time,
+        start_date,
+        start_time,
         end_time,
+        time_zone,
         duration_hours,
         location,
         crew_roles,

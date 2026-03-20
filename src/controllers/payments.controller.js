@@ -297,6 +297,15 @@ const toAbsoluteBeigeAssetUrl = (pathValue) => {
   return `${configuredBase}${raw.replace(/^\/+/, '')}`;
 };
 
+const deriveClientNameFromEmail = (email) => {
+  const localPart = String(email || '').includes('@') ? String(email).split('@')[0] : String(email || '');
+  return localPart
+    .replace(/[._-]+/g, ' ')
+    .replace(/\b\d+\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
 const sendBookingConfirmationForBooking = async ({
   bookingId,
   amountPaid,
@@ -1268,12 +1277,33 @@ exports.confirmPaymentMulti = async (req, res) => {
 
     await transaction.commit();
 
-    // 9. Background notifications
+    const lead = await db.sales_leads.findOne({
+      where: { booking_id }
+    });
+
+    const user = booking.user_id
+      ? await db.users.findByPk(booking.user_id, {
+        attributes: ['name', 'email', 'phone_number']
+      })
+      : null;
+
+    const guestEmail = booking.guest_email || user?.email || lead?.guest_email || '';
+    const clientName = user?.name || lead?.client_name || '';
+    const phoneNumber = user?.phone_number || lead?.phone || '';
+
+    // Send Sales Notification Email
     emailService.sendPaymentSuccessSalesNotification({
-        guestEmail: booking.guest_email || 'Unknown Client',
-        amount: totalAmount,
-        shootType: booking.shoot_type || 'Shoot',
-        paymentIntentId: paymentIntentId
+      guestEmail: guestEmail || 'Unknown Client',
+      email: user?.email || guestEmail,
+      clientName,
+      phone_number: phoneNumber,
+      amount: totalAmount,
+      shootType: booking.shoot_type || 'Shoot',
+      shoot_date: booking.shoot_date || booking.event_date,
+      startTime: booking.start_time,
+      endTime: booking.end_time,
+      editsNeeded: booking.edits_needed ?? lead?.edits_needed,
+      paymentIntentId
     }).catch(err => console.error('Sales Notification Error:', err));
 
     let paymentMethod = 'free'; // default for free checkout
@@ -1585,13 +1615,34 @@ exports.handleStripeWebhook = async (req, res) => {
 
       await transaction.commit();
       console.log(`Webhook: booking ${booking_id} marked as paid`);
+      
+      const lead = await db.sales_leads.findOne({
+        where: { booking_id }
+      });
+
+      const user = booking.user_id
+        ? await db.users.findByPk(booking.user_id, {
+          attributes: ['name', 'email', 'phone_number']
+        })
+        : null;
+
+      const guestEmail = booking.guest_email || user?.email || lead?.guest_email || '';
+      const clientName = user?.name || lead?.client_name || '';
+      const phoneNumber = user?.phone_number || lead?.phone || '';
 
       // Send Sales Notification Email
       emailService.sendPaymentSuccessSalesNotification({
-        guestEmail: booking.guest_email || 'Unknown Client',
-        amount: amountPaid,
+        guestEmail: guestEmail || 'Unknown Client',
+        email: user?.email || guestEmail,
+        clientName,
+        phone_number: phoneNumber,
+        amount: amountPaid, // or totalAmount
         shootType: booking.shoot_type || 'Shoot',
-        paymentIntentId: paymentIntentId
+        shoot_date: booking.shoot_date || booking.event_date,
+        startTime: booking.start_time,
+        endTime: booking.end_time,
+        editsNeeded: booking.edits_needed ?? lead?.edits_needed,
+        paymentIntentId
       }).catch(err => console.error('Sales Notification Error:', err));
 
       const webhookPaymentMethod =
