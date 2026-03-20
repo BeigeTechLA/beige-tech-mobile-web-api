@@ -57,7 +57,8 @@ const {
   SALES_LEAD_NOTIFICATION_TEMPLATE_ID,
   CLIENT_SIGNUP_NOTIFICATION_TEMPLATE_ID,
   CREW_SIGNUP_NOTIFICATION_TEMPLATE_ID,
-  CP_SIGNUP_WELCOME_TEMPLATE_ID
+  CP_SIGNUP_WELCOME_TEMPLATE_ID,
+  PRODUCTION_PROPOSAL_TEMPLATE_ID
 } = require('../config/sendgridTemplates');
 
 const formatDate = (value) => {
@@ -451,10 +452,10 @@ const sendPasswordResetEmail = async (userData, resetToken) => {
       subject: 'Reset Your Password - BeigeAI',
       templateId: PASSWORD_RESET_TEMPLATE_ID,
       dynamicTemplateData: {
-        userData: { name: userData.name || 'there' },
+        user_name: userData.name || 'there',
         reset_link: resetLink,
         reset_token: resetToken,
-        expiry_hours: 1,
+        expiry_minutes: 15,
         year: new Date().getFullYear()
       }
     });
@@ -466,30 +467,6 @@ const sendPasswordResetEmail = async (userData, resetToken) => {
     };
   } catch (error) {
     console.error('Error sending password reset email via SendGrid:', error?.response?.body || error.message);
-    return { success: false, error: error.message };
-  }
-};
-
-/**
- * Send welcome email to new users
- * @param {Object} userData - User details
- */
-const sendWelcomeEmail = async (userData) => {
-  try {
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-
-    const mailOptions = {
-      from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_USER}>`,
-      to: userData.email,
-      subject: 'Welcome to BeigeAI!',
-      html: generateWelcomeTemplate(userData, frontendUrl)
-    };
-
-    const info = await transporter.sendMail(mailOptions);
-    console.log('Welcome email sent:', info.messageId);
-    return { success: true, messageId: info.messageId };
-  } catch (error) {
-    console.error('Error sending welcome email:', error);
     return { success: false, error: error.message };
   }
 };
@@ -523,11 +500,8 @@ const sendClientSignupWelcomeEmail = async (userData) => {
       },
       templateId: CLIENT_SIGNUP_WELCOME_TEMPLATE_ID,
       dynamicTemplateData: {
-        first_name: getFirstName(userData.name, userData.first_name),
-        book_a_shoot_url: process.env.BOOK_A_SHOOT_URL || 'https://beige.app/book-a-shoot',
-        userData: {
-          name: userData.name || getFirstName(userData.name, userData.first_name)
-        }
+        first_name: getFirstName(userData.name, userData.first_name) || 'there',
+        frontendUrl: process.env.FRONTEND_URL || 'https://beige.app'
       }
     };
 
@@ -572,8 +546,8 @@ const sendCPSignupWelcomeEmail = async (userData) => {
       },
       templateId: CP_SIGNUP_WELCOME_TEMPLATE_ID,
       dynamicTemplateData: {
-        first_name: userData.first_name,
-        frontendUrl: `${process.env.FRONTEND_URL}/creator/dashboard`
+        first_name: userData.first_name || 'there',
+        frontendUrl: `${process.env.FRONTEND_URL}` || 'https://beige.app'
       }
     };
 
@@ -710,15 +684,10 @@ const sendShootReminder5DaysEmail = async (data) => {
       templateId: SHOOT_REMINDER_5D_TEMPLATE_ID,
       dynamicTemplateData: {
         first_name: data.first_name || 'there',
-        shoot_date: data.shoot_date || '',
-        start_time: data.start_time || '',
-        end_time: data.end_time || '',
-        shoot_location_address: data.shoot_location_address || 'TBD',
-        onboarding_form_link: data.onboarding_form_link || process.env.CLIENT_ONBOARDING_FORM_URL || 'https://beige.app/',
-        userData: { name: data.first_name || 'there' },
         date: data.shoot_date || '',
-        location: data.shoot_location_address || 'TBD',
-        insert_link: data.onboarding_form_link || process.env.CLIENT_ONBOARDING_FORM_URL || 'https://beige.app/'
+        startTime: data.start_time || '',
+        endTime: data.end_time || '',
+        shoot_location_address: data.shoot_location_address || 'TBD'
       }
     };
 
@@ -1340,150 +1309,6 @@ const sendFinalDeliveryWithRevisionEmail = async (data) => {
 };
 
 /**
- * Generate HTML email template for welcome
- */
-const generateWelcomeTemplate = (userData, frontendUrl) => {
-  return `
-    <!DOCTYPE html>
-    <html lang="en">
-
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Welcome to Beige</title>
-    </head>
-
-    <body
-      style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #0A0F0D;">
-      <table width="100%" height="100%" cellpadding="0" cellspacing="0" border="0"
-        style="background-color: #0A0F0D; background: linear-gradient(0deg, #0A0F0D 77.1%, rgba(76, 57, 23, 0.10) 126.11%); padding: 60px 20px;">
-        <tr>
-          <td align="center" valign="top">
-            <table width="600" cellpadding="0" cellspacing="0" border="0"
-              style="background-color: #000000; border: 1px solid rgba(232, 209, 171, 0.15); border-radius: 24px; overflow: hidden; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);">
-              <tr>
-                <td align="center" style="padding: 40px 0;">
-                  <div
-                    style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 30px; border-radius: 100px; background-color: #000000;">
-                    <img
-                      src="https://beigexmemehouse.s3.eu-north-1.amazonaws.com/beige/beige_logo_vb.png"
-                      alt="Beige Logo" width="120" style="display: block; border: 0; outline: none;">
-                  </div>
-                </td>
-              </tr>
-              <tr>
-                <td style="padding: 10px 40px 30px; text-align: center;">
-                  <p style="margin: 0; color: #E8D1AB; font-size: 14px; letter-spacing: 0.5px;">Hi ${userData.name},</p>
-                  <h1
-                    style="margin: 50px 0 5px; color: #E1CAA1; font-size: 52px; font-weight: 500; letter-spacing: -1px; line-height: 1.1;">
-                    Welcome to Beige</h1>
-                  <p style="margin: 0; color: #E8D1AB; font-size: 32px; font-weight: 500; letter-spacing: -0.5px;">The
-                    modern content engine.</p>
-                  <p style="margin: 30px 0 0; font-size: 15px; color: #9ca3af; line-height: 1.8;">
-                    Beige is a unified platform for booking professional videography, photography, locations, and
-                    post-production, designed to remove friction from the content creation process.
-                  </p>
-                </td>
-              </tr>
-
-              <tr>
-                <td style="padding: 0 40px;">
-                  <div style="background-color: rgba(80, 55, 17, 0.20); border-radius: 16px; padding: 30px; ">
-                    <p style="margin: 0 0 20px; color: #ffffff; font-size: 18px; font-weight: 700;">What Sets Beige Apart:
-                    </p>
-                    <table width="100%" cellpadding="0" cellspacing="0" border="0">
-                      <tr>
-                        <td valign="top" style="padding-bottom: 15px;"><span style="color: #ffffff;">&#10003;</span></td>
-                        <td style="padding-bottom: 15px; color: #FFFFFF99; font-size: 14px; line-height: 1.4;">Curated,
-                          vetted
-                          creators across the US.</td>
-                      </tr>
-                      <tr>
-                        <td valign="top" style="padding-bottom: 15px;"><span style="color: #ffffff;">&#10003;</span></td>
-                        <td style="padding-bottom: 15px; color: #FFFFFF99; font-size: 14px; line-height: 1.4;">Transparent
-                          pricing and availability at the point of booking.</td>
-                      </tr>
-                      <tr>
-                        <td valign="top" style="padding-bottom: 15px;"><span style="color: #ffffff;">&#10003;</span></td>
-                        <td style="padding-bottom: 15px; color: #FFFFFF99; font-size: 14px; line-height: 1.4;">End-to-end
-                          production, from shoot to final delivery.</td>
-                      </tr>
-                      <tr>
-                        <td valign="top" style="padding-bottom: 15px;"><span style="color: #ffffff;">&#10003;</span></td>
-                        <td style="padding-bottom: 15px; color: #FFFFFF99; font-size: 14px; line-height: 1.4;">A streamlined
-                          experience built for speed, quality, and consistency.</td>
-                      </tr>
-                      <tr>
-                        <td valign="top"><span style="color: #ffffff;">&#10003;</span></td>
-                        <td style="color: #FFFFFF99; font-size: 14px; line-height: 1.4;">Smart automation integrated into
-                          the
-                          platform to enhance matching, workflows, and delivery.</td>
-                      </tr>
-                    </table>
-                  </div>
-                </td>
-              </tr>
-
-              <tr>
-                <td style="padding: 50px 40px; text-align: center;">
-                  <hr style="border: none; border-top: 1px solid #E1CAA1; width: 128px; margin: 0 auto 30px;">
-                  <h2
-                    style="margin: 0 0 24px; color: #E1CAA1; font-size: 52px; font-weight: 500; letter-spacing: -1.677px;">
-                    Your creative workspace is ready.</h2>
-                  <p style="margin: 0 0 24px; font-size: 15px; color: #F0F0F0; line-height: 1.8; font-weight: 300;">
-                    Whether you are producing content for a brand, event, or personal project, Beige simplifies execution so
-                    you can focus on the outcome.
-                  </p>
-
-                  <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: auto;">
-                    <tr>
-                      <td
-                        style="border-radius: 100px; background: linear-gradient(180deg, #3D342A -17.11%, #C79233 141.45%);">
-                        <a href="${frontendUrl}"
-                          style="padding: 18px 36px; font-size: 18px; font-weight: 600; line-height: 28px; letter-spacing: 2.261px; color: #ffffff; text-decoration: underline; display: inline-block; text-transform: uppercase; ">
-                          BOOK YOUR SHOOT IN MINUTES &rarr;
-                        </a>
-                      </td>
-                    </tr>
-                  </table>
-
-                  <p style="margin:24px 0 0; font-size: 15px; color: #F0F0F0; line-height: 1.8; font-weight: 300;">
-                    If you need assistance selecting the right setup, simply reply to this email and our team will support
-                    you.
-                  </p>
-                  <hr style="border: none; border-top: 1px solid #E1CAA1; width: 128px; margin: 24px auto 0;">
-                </td>
-              </tr>
-
-              <tr>
-                <td style="padding: 0 30px 30px; text-align: center; border-top: 2px solid #F5EBDA;">
-                  <p style="margin: 30px 0 0; font-size: 11px; color: #8C8C8C; text-transform: capitalize;">
-                    Help Center &nbsp;•&nbsp; Privacy Policy &nbsp;•&nbsp; Terms of Service
-                  </p>
-                  <p style="margin: 15px 0 0; font-size: 11px; color: #8C8C8C;text-transform: uppercase; ">
-                    Beige AI
-                    <!-- &nbsp;|&nbsp; 123 Creative Street, Design City, DC 10101 -->
-                  </p>
-                </td>
-              </tr>
-
-              <tr>
-                <td style="padding: 20px; text-align: center;">
-                  <img
-                    src="https://beigexmemehouse.s3.eu-north-1.amazonaws.com/beige/beige_logo_vb.png"
-                    alt="Beige Logo" width="180" style="display: inline-block; border: 0; outline: none; opacity: 1;">
-                </td>
-              </tr>
-            </table>
-          </td>
-        </tr>
-      </table>
-    </body>
-    </html>
-  `;
-};
-
-/**
  * Send payment link to client
  * @param {Object} userData - { name, email }
  * @param {Object} paymentData - { projectTitle, paymentUrl, expiresAt }
@@ -1858,7 +1683,9 @@ const sendNewCrewSignupNotification = async (crewData) => {
           typeof crewData?.location === 'string'
             ? crewData.location
             : (crewData?.location ? JSON.stringify(crewData.location) : 'Not provided'),
-        working_distance: Number(crewData?.working_distance || 0),
+        working_distance: crewData?.working_distance
+          ? String(crewData.working_distance).replace(/\s*miles?$/i, '').trim()
+          : 'Not provided',
         adminUrl: process.env.FRONTEND_URL || 'https://beige.app/',
         year: new Date().getFullYear()
       }
@@ -1869,6 +1696,141 @@ const sendNewCrewSignupNotification = async (crewData) => {
   }
 };
 
+function getStatusStyles(status) {
+  const normalized = String(status || '').toLowerCase();
+
+  if (normalized === 'accepted') {
+    return {
+      bg: '#21AC05',
+      label: 'Accepted',
+    };
+  }
+
+  if (normalized === 'rejected') {
+    return {
+      bg: '#AC1805',
+      label: 'Rejected',
+    };
+  }
+
+  return {
+    bg: '#8A8A8A',
+    label: status || 'Pending',
+  };
+}
+
+function buildCreativePartnerCards(cpList = []) {
+  if (!cpList.length) {
+    return `
+      <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%">
+        <tr>
+          <td align="center" style="padding: 20px; font-size: 16px; color: #666666;">
+            No creative partners found.
+          </td>
+        </tr>
+      </table>
+    `;
+  }
+
+  let html = '';
+
+  for (let i = 0; i < cpList.length; i += 2) {
+    const left = cpList[i];
+    const right = cpList[i + 1];
+
+    html += `
+      <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin-bottom: 20px;">
+        <tr>
+          <td width="50%" valign="top">
+            ${buildSingleCard(left)}
+          </td>
+          <td width="20" style="font-size:0; line-height:0;">&nbsp;</td>
+          <td width="50%" valign="top">
+            ${right ? buildSingleCard(right) : '&nbsp;'}
+          </td>
+        </tr>
+      </table>
+    `;
+  }
+
+  return html;
+}
+
+function buildSingleCard(cp) {
+  const { bg, label } = getStatusStyles(cp.status);
+  const image = cp.image || 'https://via.placeholder.com/300x220?text=Creative+Partner';
+  const name = cp.name || 'Creative Partner';
+
+  return `
+    <table border="0" cellpadding="0" cellspacing="0" width="100%">
+      <tr>
+        <td
+          valign="bottom"
+          background="${image}"
+          style="
+            background-image: url('${image}');
+            background-size: cover;
+            background-position: center;
+            border-radius: 24px;
+            padding: 0;
+            overflow: hidden;
+          "
+        >
+          <table border="0" cellpadding="0" cellspacing="0" width="100%">
+            <tr>
+              <td height="220" style="font-size: 0; line-height: 0;">&nbsp;</td>
+            </tr>
+            <tr>
+              <td style="padding: 0 15px 15px;">
+                <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                  <tr>
+                    <td
+                      align="left"
+                      style="font-size: 16px; font-weight: 600; color: #E9E9E9; font-family: sans-serif;"
+                    >
+                      ${name}
+                    </td>
+                    <td align="right">
+                      <table border="0" cellpadding="0" cellspacing="0">
+                        <tr>
+                          <td
+                            bgcolor="${bg}"
+                            style="
+                              border-radius: 41px;
+                              padding: 6px 16px;
+                              font-size: 12px;
+                              font-weight: 600;
+                              color: #ffffff;
+                              font-family: sans-serif;
+                            "
+                          >
+                            ${label}
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  `;
+}
+
+const toAbsoluteBeigeAssetUrl = (pathValue) => {
+  const fallbackBase = 'https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/';
+  const configuredBase = (process.env.BEIGE_ASSET_BASE_URL || fallbackBase).replace(/\/+$/, '/');
+
+  const raw = String(pathValue || '').trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw)) return raw;
+
+  return `${configuredBase}${raw.replace(/^\/+/, '')}`;
+};
+
 const sendCPAcceptRejectStatusEmail = async (data) => {
   try {
     if (!process.env.SENDGRID_API_KEY) return { success: false, error: 'SENDGRID_API_KEY is not configured' };
@@ -1876,6 +1838,8 @@ const sendCPAcceptRejectStatusEmail = async (data) => {
 
     const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
     if (!fromEmail) return { success: false, error: 'Sender email not configured' };
+    const normalizedAction = String(data.cp_action || data.cp_status || '').toLowerCase();
+    const isAccepted = normalizedAction === 'accepted' || normalizedAction === 'accept';
 
     const [response] = await sgMail.send({
       to: data.to_email,
@@ -1890,20 +1854,21 @@ const sendCPAcceptRejectStatusEmail = async (data) => {
         cp_name: data.cp_name || '',
         cp_action: data.cp_action || '',
         cp_status: data.cp_status || '',
-        cp_list: data.cp_list || [],
+        cp_list_html: buildCreativePartnerCards(data.cp_list || []),
+        cp_status_text: isAccepted
+          ? '<span style="color:#128308; font-weight:500;">Accepted</span>'
+          : '<span style="color:#AC1805; font-weight:500;">Rejected</span>',
         booking_id: data.booking_id || '',
         client_name: data.client_name || '',
         Service_type: data.service_type || '',
         date: data.date || '',
-        start_time: data.start_time || '',
-        end_time: data.end_time || '',
+        startTime: data.start_time || '',
+        endTime: data.end_time || '',
         duration: data.duration || '',
         shoot_location_address: data.shoot_location_address || 'TBD',
         dashboardLink: data.dashboardLink || process.env.CP_STATUS_DASHBOARD_LINK || process.env.FRONTEND_URL || 'https://beige.app/'
       }
     });
-
-    console.log("response", response)
 
     return {
       success: true,
@@ -1935,14 +1900,24 @@ const sendCPStatusUpdateByRequest = async ({ project_id, crew_member_id, cp_acti
               model: crew_members,
               as: 'crew_member',
               required: false,
-              attributes: ['crew_member_id', 'first_name', 'last_name']
+              attributes: ['crew_member_id', 'first_name', 'last_name'],
+              include: [
+                {
+                  model: db.crew_member_files,
+                  as: 'crew_member_files',
+                  required: false,
+                  attributes: ['file_type', 'file_path', 'created_at', 'is_active']
+                }
+              ]
             }
           ]
         }
       ]
     });
 
-    if (!booking) return { success: false, error: 'Booking not found' };
+    if (!booking) {
+      return { success: false, error: 'Booking not found' };
+    }
 
     const currentCrew = await crew_members.findOne({
       where: { crew_member_id },
@@ -1955,24 +1930,49 @@ const sendCPStatusUpdateByRequest = async ({ project_id, crew_member_id, cp_acti
     }
 
     const cpName =
-      [currentCrew?.first_name, currentCrew?.last_name].filter(Boolean).join(' ').trim() || 'Creative Partner';
+      [currentCrew?.first_name, currentCrew?.last_name].filter(Boolean).join(' ').trim() ||
+      'Creative Partner';
 
     const cpList = (booking.assigned_crews || [])
       .map((ac) => {
-        const name = [ac?.crew_member?.first_name, ac?.crew_member?.last_name].filter(Boolean).join(' ').trim();
+        const name = [ac?.crew_member?.first_name, ac?.crew_member?.last_name]
+          .filter(Boolean)
+          .join(' ')
+          .trim();
+
         if (!name) return null;
-        const status = ac?.crew_accept === 1 ? 'Accepted' : ac?.crew_accept === 2 ? 'Declined' : 'Pending';
+
+        const status =
+          Number(ac?.crew_accept) === 1
+            ? 'Accepted'
+            : Number(ac?.crew_accept) === 2
+              ? 'Rejected'
+              : 'Pending';
+
+        const files = Array.isArray(ac?.crew_member?.crew_member_files)
+          ? ac.crew_member.crew_member_files
+          : [];
+
+        const activeFiles = files.filter(
+          (f) => f?.is_active === 1 || f?.is_active === true || typeof f?.is_active === 'undefined'
+        );
+
+        const profileFile =
+          activeFiles.find((f) => String(f?.file_type || '').toLowerCase() === 'profile_photo') ||
+          activeFiles.find((f) => String(f?.file_type || '').toLowerCase() === 'profile_image') ||
+          activeFiles.find((f) => String(f?.file_type || '').toLowerCase().includes('image'));
+
         return {
           name,
-          action: status.toLowerCase(),
-          status
+          status,
+          image: toAbsoluteBeigeAssetUrl(profileFile?.file_path) || ''
         };
       })
       .filter(Boolean);
 
     return sendCPAcceptRejectStatusEmail({
       to_email: toEmail,
-      user_name: 'there',
+      user_name: 'Team',
       cp_name: cpName,
       cp_action: cp_action || '',
       cp_status: cp_status || '',
@@ -1984,10 +1984,12 @@ const sendCPStatusUpdateByRequest = async ({ project_id, crew_member_id, cp_acti
       end_time: formatTime(booking?.end_time),
       duration: booking?.duration_hours ? `${booking.duration_hours} hours` : '',
       shoot_location_address: formatLocation(booking?.event_location),
-      dashboardLink: process.env.CP_STATUS_DASHBOARD_LINK || process.env.FRONTEND_URL || 'https://beige.app/',
+      dashboardLink:
+        process.env.CP_STATUS_DASHBOARD_LINK ||
+        process.env.FRONTEND_URL ||
+        'https://beige.app/',
       cp_list: cpList
     });
-
   } catch (error) {
     return { success: false, error: error?.response?.body || error.message };
   }
@@ -2021,10 +2023,8 @@ const sendCPNewBookingRequestEmail = async (data) => {
       subject: 'New Booking Request',
       templateId: CP_NEW_BOOKING_REQUEST_TEMPLATE_ID,
       dynamicTemplateData: {
-        userData: {
-          name: data.user_name || 'there'
-        },
-        dashboardLink:
+        user_name: data.user_name || 'there',
+        dashboard_link:
           data.dashboardLink ||
           process.env.CP_DASHBOARD_LINK ||
           process.env.FRONTEND_URL ||
@@ -2045,11 +2045,46 @@ const sendCPNewBookingRequestEmail = async (data) => {
   }
 };
 
+const sendProductionProposalEmail = async (data) => {
+  try {
+    const to = data?.to_email || data?.email;
+    if (!to) {
+      return { success: false, error: 'Recipient email is required' };
+    }
+
+    const templateId = PRODUCTION_PROPOSAL_TEMPLATE_ID;
+    if (!templateId) {
+      return { success: false, error: 'PRODUCTION_PROPOSAL_TEMPLATE_ID is not configured' };
+    }
+
+    return await sendEmail({
+      to,
+      subject: 'Your Production Proposal from Beige',
+      templateId,
+      dynamicTemplateData: {
+        client_name: data?.client_name || 'there',
+        shoot_summary: data?.shoot_summary || '',
+        project_name: data?.project_name || '',
+        contentType: data?.contentType || '',
+        eventDate: data?.eventDate || '',
+        startTime: data?.startTime || '',
+        endTime: data?.endTime || '',
+        editsNeeded: data?.editsNeeded || 'Not Included',
+        location: data?.location || 'TBD',
+        proposed_amount: data?.proposed_amount || '0.00',
+        payment_link: data?.payment_link || ''
+      }
+    });
+  } catch (error) {
+    console.error('Error sending production proposal email:', error?.response?.body || error.message);
+    return { success: false, error: error.message };
+  }
+};
+
 module.exports = {
   sendTaskAssignmentEmail,
   sendVerificationOTP,
   sendPasswordResetEmail,
-  sendWelcomeEmail,
   sendPaymentLinkEmail,
   sendInvoiceEmail,
   sendSalesLeadNotification,
@@ -2071,5 +2106,6 @@ module.exports = {
   sendCPNewBookingRequestEmail,
   sendNewClientSignupNotification,
   sendNewCrewSignupNotification,
-  sendCPSignupWelcomeEmail
+  sendCPSignupWelcomeEmail,
+  sendProductionProposalEmail
 };
