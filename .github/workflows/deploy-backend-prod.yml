@@ -1,0 +1,92 @@
+name: Deploy Backend Production
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-backend-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH key
+        env:
+          BACKEND_PROD_SSH_KEY: ${{ secrets.BACKEND_PROD_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$BACKEND_PROD_SSH_KEY" > ~/.ssh/backend-prod.pem
+          chmod 600 ~/.ssh/backend-prod.pem
+
+      - name: Add server to known_hosts
+        env:
+          BACKEND_PROD_HOST: ${{ secrets.BACKEND_PROD_HOST }}
+          BACKEND_PROD_PORT: ${{ secrets.BACKEND_PROD_PORT }}
+        run: |
+          PORT="${BACKEND_PROD_PORT:-22}"
+          ssh-keyscan -p "$PORT" -H "$BACKEND_PROD_HOST" >> ~/.ssh/known_hosts
+
+      - name: Test SSH connectivity
+        env:
+          BACKEND_PROD_HOST: ${{ secrets.BACKEND_PROD_HOST }}
+          BACKEND_PROD_PORT: ${{ secrets.BACKEND_PROD_PORT }}
+          BACKEND_PROD_USER: ${{ secrets.BACKEND_PROD_USER }}
+        run: |
+          PORT="${BACKEND_PROD_PORT:-22}"
+          ssh -p "$PORT" -i ~/.ssh/backend-prod.pem -o BatchMode=yes \
+            "$BACKEND_PROD_USER@$BACKEND_PROD_HOST" "echo SSH_OK" >/dev/null
+
+      - name: Prepare remote directory
+        env:
+          BACKEND_PROD_HOST: ${{ secrets.BACKEND_PROD_HOST }}
+          BACKEND_PROD_PORT: ${{ secrets.BACKEND_PROD_PORT }}
+          BACKEND_PROD_USER: ${{ secrets.BACKEND_PROD_USER }}
+        run: |
+          PORT="${BACKEND_PROD_PORT:-22}"
+          ssh -p "$PORT" -i ~/.ssh/backend-prod.pem \
+            "$BACKEND_PROD_USER@$BACKEND_PROD_HOST" \
+            "sudo mkdir -p /var/www/revure-backend && sudo chown -R $BACKEND_PROD_USER:$BACKEND_PROD_USER /var/www/revure-backend"
+
+      - name: Upload backend code
+        env:
+          BACKEND_PROD_HOST: ${{ secrets.BACKEND_PROD_HOST }}
+          BACKEND_PROD_PORT: ${{ secrets.BACKEND_PROD_PORT }}
+          BACKEND_PROD_USER: ${{ secrets.BACKEND_PROD_USER }}
+        run: |
+          PORT="${BACKEND_PROD_PORT:-22}"
+          tar czf - \
+            --exclude=node_modules \
+            --exclude=.git \
+            --exclude=deploy \
+            --exclude=.env \
+            --exclude=*.log \
+            --exclude=logs \
+            . | ssh -p "$PORT" -i ~/.ssh/backend-prod.pem \
+              "$BACKEND_PROD_USER@$BACKEND_PROD_HOST" \
+              "cd /var/www/revure-backend && tar xzf -"
+
+      - name: Install dependencies and restart PM2
+        env:
+          BACKEND_PROD_HOST: ${{ secrets.BACKEND_PROD_HOST }}
+          BACKEND_PROD_PORT: ${{ secrets.BACKEND_PROD_PORT }}
+          BACKEND_PROD_USER: ${{ secrets.BACKEND_PROD_USER }}
+        run: |
+          PORT="${BACKEND_PROD_PORT:-22}"
+          ssh -p "$PORT" -i ~/.ssh/backend-prod.pem \
+            "$BACKEND_PROD_USER@$BACKEND_PROD_HOST" << 'EOF'
+          set -euo pipefail
+          cd /var/www/revure-backend
+          npm install --production
+          pm2 delete revure-backend >/dev/null 2>&1 || true
+          pm2 start npm --name revure-backend -- start
+          pm2 save
+          EOF
