@@ -83,15 +83,8 @@ const generateResetToken = () => {
   return crypto.randomBytes(32).toString('hex');
 };
 
-/**
- * Generate token expiry (default 1 hour)
- * @param {number} hours - Hours until expiry
- * @returns {Date} Expiry timestamp
- */
-const generateTokenExpiry = (hours = 1) => {
-  const expiry = new Date();
-  expiry.setHours(expiry.getHours() + hours);
-  return expiry;
+const generateTokenExpiry = (minutes = 15) => {
+  return new Date(Date.now() + minutes * 60 * 1000);
 };
 
 /**
