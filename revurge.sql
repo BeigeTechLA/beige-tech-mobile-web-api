@@ -509,7 +509,6 @@ CREATE TABLE `sales_quote_activities` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 ALTER TABLE `quote_catalog_items` DROP `description`;
-ALTER TABLE `sales_quote_line_items` DROP INDEX `sales_quote_line_items_ibfk_3`;
 ALTER TABLE sales_quote_line_items DROP FOREIGN KEY sales_quote_line_items_ibfk_3;
 ALTER TABLE `sales_quote_line_items` DROP `pricing_item_id`;
 
