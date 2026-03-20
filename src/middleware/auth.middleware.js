@@ -246,8 +246,9 @@ exports.requireAdmin = async (req, res, next) => {
     }
 
     const userRole = user.userType?.user_role;
+    console.log("userRole-----------", userRole)
 
-    if (userRole !== 'admin') {
+    if (userRole !== 'admin' && userRole !== 'Admin') {
       return res.status(403).json({
         success: false,
         message: 'Admin access required'

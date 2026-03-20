@@ -354,50 +354,78 @@ async function createStripeInvoice(booking, pricingData, options = {}) {
 }
 /**
  * Creates a formal invoice/receipt for a payment that HAS ALREADY been received.
+ * Improved to provide better context for manual/out-of-band payments.
  */
 async function createPaidStripeInvoice(booking, pricingData, options = {}) {
   const { transaction } = options;
   const email = booking.user?.email || booking.guest_email;
   const recipientName = booking.user?.name || (booking.project_name ? booking.project_name.split(' - ')[1] : 'Valued Guest');
 
-  const customer = await getOrCreateStripeCustomer({ email, name: recipientName, bookingId: booking.stream_project_booking_id });
+  // Ensure customer exists in Stripe
+  const customer = await getOrCreateStripeCustomer({ 
+    email, 
+    name: recipientName, 
+    bookingId: booking.stream_project_booking_id 
+  });
 
   const safeNumber = (value) => {
     const parsed = parseFloat(value);
     return Number.isFinite(parsed) ? parsed : 0;
   };
 
+  // Format the total for the footer text
+  const totalAmountFormatted = safeNumber(pricingData?.total).toLocaleString('en-US', { 
+    style: 'currency', 
+    currency: 'USD' 
+  });
+
+  // 1. CREATE THE INVOICE OBJECT
+  // We add Footer and Custom Fields to clarify the "Out of band" status professionally
   const invoice = await stripe.invoices.create({
     customer: customer.id,
     auto_advance: false, 
     collection_method: 'send_invoice',
     days_until_due: 1,
-    description: `PAID: Invoice for ${booking.project_name}`,
-    metadata: { booking_id: booking.stream_project_booking_id.toString(), status: 'paid_receipt' }
+    // Professional header for a finalized payment
+    description: `Payment Receipt: ${booking.project_name || 'Service Project'}`,
+    // This adds a professional note at the bottom of the PDF
+    footer: `Thank you for your business! This payment of ${totalAmountFormatted} was received and processed manually. Transaction Reference: ${booking.payment_id || 'N/A'}.`,
+    // Custom Fields appear as a table on the receipt, clarifying the status
+    custom_fields: [
+      { name: "Payment Status", value: "Paid in Full" },
+      { name: "Payment Method", value: "External / Bank Transfer" }
+    ],
+    metadata: { 
+      booking_id: booking.stream_project_booking_id.toString(), 
+      status: 'paid_receipt' 
+    }
   });
 
-  // --- ITEM CREATION WITH QUANTITY ---
+  // 2. ITEM CREATION WITH QUANTITY
   const lineItems = pricingData?.line_items || [];
   let lineItemsTotalCents = 0;
+
   for (const item of lineItems) {
     const lineTotalCents = Math.round(safeNumber(item.total) * 100);
     const qty = parseInt(item.quantity) || 1;
 
     if (lineTotalCents > 0) {
       lineItemsTotalCents += lineTotalCents;
+      // Calculate unit amount by dividing total by quantity so columns look correct
       const unitAmountCents = Math.round(lineTotalCents / qty);
 
       await stripe.invoiceItems.create({ 
         customer: customer.id, 
         invoice: invoice.id, 
-        unit_amount: unitAmountCents, // <--- Corrects Unit Price
-        quantity: qty,               // <--- Corrects Quantity
+        unit_amount: unitAmountCents, 
+        quantity: qty,               
         currency: 'usd', 
         description: `${item.name}` 
       });
     }
   }
 
+  // Fallback for subtotal if no specific line items are present
   const pricingSubtotal = safeNumber(pricingData?.subtotal || 0);
   if (lineItemsTotalCents <= 0 && pricingSubtotal > 0) {
     await stripe.invoiceItems.create({
@@ -409,11 +437,12 @@ async function createPaidStripeInvoice(booking, pricingData, options = {}) {
     });
   }
 
-  // Add Discounts (Negative amounts)
+  // 3. HANDLE DISCOUNTS (Negative amounts)
   const totalDiscount = safeNumber(pricingData?.discount_amount || 0);
   if (totalDiscount > 0) {
     const quote = booking.primary_quote;
     let promoCents = 0;
+    
     if (quote) {
       promoCents = quote.applied_discount_type === 'percentage' 
         ? Math.round((pricingSubtotal * (parseFloat(quote.applied_discount_value) / 100)) * 100)
@@ -421,24 +450,45 @@ async function createPaidStripeInvoice(booking, pricingData, options = {}) {
     }
     
     if (promoCents > 0) {
-      await stripe.invoiceItems.create({ customer: customer.id, invoice: invoice.id, amount: -promoCents, currency: 'usd', description: `Discount Code Applied` });
+      await stripe.invoiceItems.create({ 
+        customer: customer.id, 
+        invoice: invoice.id, 
+        amount: -promoCents, 
+        currency: 'usd', 
+        description: `Discount Code Applied` 
+      });
     }
     
     const referralCents = Math.round(totalDiscount * 100) - promoCents;
     if (referralCents > 0) {
-      await stripe.invoiceItems.create({ customer: customer.id, invoice: invoice.id, amount: -referralCents, currency: 'usd', description: `Referral Discount Applied` });
+      await stripe.invoiceItems.create({ 
+        customer: customer.id, 
+        invoice: invoice.id, 
+        amount: -referralCents, 
+        currency: 'usd', 
+        description: `Referral Discount Applied` 
+      });
     }
   }
 
+  // 4. FINALIZE AND MARK AS PAID
   let finalized = await stripe.invoices.finalizeInvoice(invoice.id);
+  
+  // This 'paid_out_of_band' flag tells Stripe the money was collected outside of Stripe (Wire, Cash, etc.)
   if (finalized.status !== 'paid' && finalized.total !== 0) {
-    finalized = await stripe.invoices.pay(finalized.id, { paid_out_of_band: true });
+    finalized = await stripe.invoices.pay(finalized.id, { 
+        paid_out_of_band: true 
+    });
   }
 
-  await booking.update({ stripe_invoice_id: finalized.id, stripe_customer_id: customer.id }, { transaction });
+  // Update Database with the new Receipt details
+  await booking.update(
+    { stripe_invoice_id: finalized.id, stripe_customer_id: customer.id }, 
+    { transaction }
+  );
+
   return finalized;
 }
-
 module.exports = {
   generateLinkToken,
   buildPaymentUrl,

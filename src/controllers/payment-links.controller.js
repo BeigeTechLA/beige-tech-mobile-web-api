@@ -423,7 +423,10 @@ exports.sendPaymentLinkEmail = async (req, res) => {
         {
           model: stream_project_booking,
           as: 'booking', 
-          include: [{ model: users, as: 'user', required: false }]
+          include: [
+            { model: users, as: 'user', required: false },
+            { model: quotes, as: 'primary_quote', required: false }
+          ]
         }
       ]
     });
@@ -448,23 +451,24 @@ exports.sendPaymentLinkEmail = async (req, res) => {
     }
 
     const paymentUrl = paymentLinksService.buildPaymentUrl(link.link_token);
-    
-    const paymentData = {
-      projectTitle: link.booking.project_name || 'Service Booking',
-      paymentUrl: paymentUrl,
-      expiresAt: new Date(link.expires_at).toLocaleString('en-US', {
-        dateStyle: 'long',
-        timeStyle: 'short'
-      })
-    };
-
-    const userData = {
-      name: recipientName,
-      email: recipientEmail
-    };
 
     // 4. Send Email
-    const result = await emailService.sendPaymentLinkEmail(userData, paymentData);
+    const result = await emailService.sendProductionProposalEmail({
+      to_email: recipientEmail,
+      client_name: recipientName,
+      shoot_summary: `${link.booking.shoot_type || link.booking.event_type || 'Shoot'} ${link.booking.content_type ? `- ${link.booking.content_type}` : ''}`.trim(),
+      project_name: link.booking.project_name || 'Service Booking',
+      contentType: link.booking.content_type || link.booking.event_type || 'N/A',
+      eventDate: link.booking.event_date
+        ? new Date(link.booking.event_date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+        : '',
+      startTime: link.booking.start_time || '',
+      endTime: link.booking.end_time || '',
+      editsNeeded: link.booking.edits_needed ? 'Included' : 'Not Included',
+      location: link.booking.event_location || 'TBD',
+      proposed_amount: link.booking.primary_quote?.total || '',
+      payment_link: paymentUrl
+    });
 
     if (result.success) {
       // Log Activity

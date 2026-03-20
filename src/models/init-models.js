@@ -66,6 +66,10 @@ var _discount_code_usage = require("./discount_code_usage");
 var _payment_links = require("./payment_links");
 var _sales_lead_activities = require("./sales_lead_activities");
 var _project_form_submissions = require("./project_form_submissions");
+var _quote_catalog_items = require("./quote_catalog_items");
+var _sales_quotes = require("./sales_quotes");
+var _sales_quote_line_items = require("./sales_quote_line_items");
+var _sales_quote_activities = require("./sales_quote_activities");
 
 function initModels(sequelize) {
   var assigned_crew = _assigned_crew(sequelize, DataTypes);
@@ -135,6 +139,12 @@ function initModels(sequelize) {
   var payment_links = _payment_links(sequelize, DataTypes);
   var sales_lead_activities = _sales_lead_activities(sequelize, DataTypes);
   var project_form_submissions = _project_form_submissions(sequelize, DataTypes);
+
+  // Quote module
+  var quote_catalog_items = _quote_catalog_items(sequelize, DataTypes);
+  var sales_quotes = _sales_quotes(sequelize, DataTypes);
+  var sales_quote_line_items = _sales_quote_line_items(sequelize, DataTypes);
+  var sales_quote_activities = _sales_quote_activities(sequelize, DataTypes);
 
   assignment_checklist.belongsTo(checklist_master, { as: "checklist", foreignKey: "checklist_id"});
   checklist_master.hasMany(assignment_checklist, { as: "assignment_checklists", foreignKey: "checklist_id"});
@@ -445,6 +455,37 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
 
  project_form_submissions.belongsTo(stream_project_booking, { as: "project", foreignKey: "project_id"});
  stream_project_booking.hasMany(project_form_submissions, { as: "form_submissions", foreignKey: "project_id"});
+  
+ // Quote catalog relationships
+  quote_catalog_items.belongsTo(users, { as: "created_by", foreignKey: "created_by_user_id" });
+  users.hasMany(quote_catalog_items, { as: "created_quote_catalog_items", foreignKey: "created_by_user_id" });
+
+  quote_catalog_items.belongsTo(users, { as: "updated_by", foreignKey: "updated_by_user_id" });
+  users.hasMany(quote_catalog_items, { as: "updated_quote_catalog_items", foreignKey: "updated_by_user_id" });
+
+  // Sales quote relationships
+  sales_quotes.belongsTo(users, { as: "client_user", foreignKey: "client_user_id" });
+  users.hasMany(sales_quotes, { as: "sales_quotes_as_client", foreignKey: "client_user_id" });
+
+  sales_quotes.belongsTo(users, { as: "created_by", foreignKey: "created_by_user_id" });
+  users.hasMany(sales_quotes, { as: "created_sales_quotes", foreignKey: "created_by_user_id" });
+
+  sales_quotes.belongsTo(users, { as: "assigned_sales_rep", foreignKey: "assigned_sales_rep_id" });
+  users.hasMany(sales_quotes, { as: "assigned_sales_quotes", foreignKey: "assigned_sales_rep_id" });
+
+  // Sales quote line item relationships
+  sales_quote_line_items.belongsTo(sales_quotes, { as: "quote", foreignKey: "sales_quote_id" });
+  sales_quotes.hasMany(sales_quote_line_items, { as: "line_items", foreignKey: "sales_quote_id" });
+
+  sales_quote_line_items.belongsTo(quote_catalog_items, { as: "catalog_item", foreignKey: "catalog_item_id" });
+  quote_catalog_items.hasMany(sales_quote_line_items, { as: "quote_line_items", foreignKey: "catalog_item_id" });
+
+  // Sales quote activity relationships
+  sales_quote_activities.belongsTo(sales_quotes, { as: "quote", foreignKey: "sales_quote_id" });
+  sales_quotes.hasMany(sales_quote_activities, { as: "activities", foreignKey: "sales_quote_id" });
+
+  sales_quote_activities.belongsTo(users, { as: "performed_by", foreignKey: "performed_by_user_id" });
+  users.hasMany(sales_quote_activities, { as: "performed_sales_quote_activities", foreignKey: "performed_by_user_id" });
 
   return {
     activity_logs,
@@ -513,7 +554,11 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
     post_production_members,
     assigned_post_production_member,
     clients,
-    project_form_submissions
+    project_form_submissions,
+    quote_catalog_items,
+    sales_quotes,
+    sales_quote_line_items,
+    sales_quote_activities
   };
 }
 module.exports = initModels;
