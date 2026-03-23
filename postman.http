@@ -757,6 +757,17 @@ Authorization: {{TOKEN}}
 }
 
 ### 
+POST {{URL}}sales/leads/163/final-assets-delivered-with-revision
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "drive_link": "https://drive.google.com/drive/folders/your-final-assets-folder-link",
+  "file_manager_link": "https://beige.app/dashboard/projects/your-project-id/files",
+  "view_final_assets_link": "https://beige.app/dashboard/projects/your-project-id/files"
+}
+
+### 
 POST {{URL}}creator/accept-project HTTP/1.1
 Content-Type: application/json
 # Authorization: {{TOKEN}}

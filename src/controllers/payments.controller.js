@@ -385,6 +385,24 @@ const sendBookingConfirmationForBooking = async ({
       assignments.find(a => ['selected', 'assigned', 'confirmed'].includes(String(a?.status || '').toLowerCase())) ||
       assignments[0] ||
       null;
+    
+    let cpStatusLabel = 'Pending';
+    let cpStatusColor = '#999999'; // grey
+
+    if (selectedAssignment) {
+      const status = String(selectedAssignment?.status || '').toLowerCase();
+
+      if (selectedAssignment?.crew_accept === 1) {
+        cpStatusLabel = 'Accepted';
+        cpStatusColor = '#21AC05'; // green
+      } else if (['assigned', 'confirmed'].includes(status)) {
+        cpStatusLabel = 'Assigned';
+        cpStatusColor = '#F59E0B'; // orange
+      } else if (status === 'selected') {
+        cpStatusLabel = 'Selected';
+        cpStatusColor = '#3B82F6'; // blue
+      }
+    }
     const cpFirstName = selectedAssignment?.crew_member?.first_name || '';
     const cpLastName = selectedAssignment?.crew_member?.last_name || '';
     const cpName = [cpFirstName, cpLastName].filter(Boolean).join(' ');
@@ -422,10 +440,17 @@ const sendBookingConfirmationForBooking = async ({
       end_time: formatTime(booking.end_time),
       duration: booking.duration_hours ? `${booking.duration_hours} hours` : '',
       shoot_location_address: formatLocation(booking.event_location),
-      amount_paid: typeof amountPaid === 'number' ? `$${amountPaid.toFixed(2)}` : (amountPaid || ''),
+      amount_paid: amountPaid || 0,
       payment_method: paymentMethod || 'Card',
       transaction_id: transactionId || '',
-      cp_assigned: !!selectedAssignment,
+      cp_status_label: cpStatusLabel,
+      cp_status_color: cpStatusColor,
+      cp_assigned: !!selectedAssignment && (
+        selectedAssignment?.crew_accept === 1 ||
+        ['selected', 'assigned', 'confirmed'].includes(
+          String(selectedAssignment?.status || '').toLowerCase()
+        )
+      ),
       cp_firstname: cpFirstName,
       cp_name: cpName,
       cp_role: cpRole,

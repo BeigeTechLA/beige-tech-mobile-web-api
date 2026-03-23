@@ -594,6 +594,12 @@ const sendBookingConfirmationEmail = async (data) => {
       return { success: false, error: 'Sender email not configured' };
     }
 
+    console.log('Booking email payload:', {
+      booking_id: data.booking_id,
+      to: data.to_email,
+      cp_assigned: data.cp_assigned
+    });
+
     const payload = {
       to: data.to_email,
       from: {
@@ -603,31 +609,29 @@ const sendBookingConfirmationEmail = async (data) => {
       subject: 'Your Beige booking is confirmed',
       templateId,
       dynamicTemplateData: {
-        first_name: data.first_name || 'there',
+        name: data.first_name || 'there',
         booking_id: data.booking_id || '',
-        shoot_type: data.shoot_type || '',
         service_type: data.service_type || data.content_type || '',
-        shoot_date: data.shoot_date || '',
+        date: data.shoot_date || '',
         start_time: data.start_time || '',
         end_time: data.end_time || '',
         duration: data.duration || '',
         shoot_location_address: data.shoot_location_address || 'TBD',
-        amount_paid: data.amount_paid || '',
+        amount_paid: data.amount_paid
+            ? `$${Number(data.amount_paid).toFixed(2)}`
+            : '$0.00',
         payment_method: data.payment_method || 'Card',
         transaction_id: data.transaction_id || '',
         cp_assigned: !!data.cp_assigned,
+        cp_status_label: data.cp_status_label || 'Pending',
+        cp_status_color: data.cp_status_color || '#999999',
         cp_firstname: data.cp_firstname || '',
         cp_name: data.cp_name || data.cp_firstname || '',
         cp_role: data.cp_role || data.service_type || '',
         cp_photo_url: data.cp_photo_url || 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=120&h=120',
         onboarding_form_link: data.onboarding_form_link || process.env.CLIENT_ONBOARDING_FORM_URL || 'https://beige.app/',
-        email_subject: 'Your Beige booking is confirmed',
-        userData: {
-          name: data.first_name || 'there'
-        },
-        date: data.shoot_date || '',
-        location: data.shoot_location_address || 'TBD',
-        insert_link: data.onboarding_form_link || process.env.CLIENT_ONBOARDING_FORM_URL || 'https://beige.app/'
+        insert_link: data.onboarding_form_link || process.env.CLIENT_ONBOARDING_FORM_URL || 'https://beige.app/',
+        frontend_url: data.frontend_url || process.env.FRONTEND_URL || 'https://beige.app/'
       }
     };
 
@@ -1074,11 +1078,9 @@ const sendFinalDeliveryCompleteEmail = async (data) => {
       subject: 'Final Delivery Complete - Access Your Assets',
       templateId: FINAL_DELIVERY_COMPLETE_TEMPLATE_ID,
       dynamicTemplateData: {
-        first_name: data.first_name || 'there',
+        name: data.first_name || 'there',
         booking_id: data.booking_id || '',
-        view_assets_link: data.view_assets_link,
-        access_files_link: data.view_assets_link,
-        userData: { name: data.first_name || 'there' }
+        frontend_url: data.view_assets_link
       }
     };
 
@@ -1279,11 +1281,9 @@ const sendFinalDeliveryWithRevisionEmail = async (data) => {
       subject: 'Final Delivery - Your Project Is Complete',
       templateId: FINAL_DELIVERY_WITH_REVISION_TEMPLATE_ID,
       dynamicTemplateData: {
-        first_name: data.first_name || 'there',
+        name: data.first_name || 'there',
         booking_id: data.booking_id || '',
-        view_final_assets_link: data.view_final_assets_link,
-        view_assets_link: data.view_final_assets_link,
-        userData: { name: data.first_name || 'there' }
+        frontend_url: data.view_final_assets_link
       }
     };
 
