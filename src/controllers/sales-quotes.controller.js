@@ -1,6 +1,7 @@
 const constants = require('../utils/constants');
 const quoteService = require('../services/sales-quote.service');
 const db = require('../models');
+const { Op } = require('sequelize');
 
 function getUserContext(req) {
   return {
@@ -176,6 +177,37 @@ exports.getShootTypes = async (req, res) => {
       code: constants.INTERNAL_SERVER_ERROR.code,
       message: constants.INTERNAL_SERVER_ERROR.message,
       data: null
+    });
+  }
+};
+
+exports.getClientDropdown = async (req, res) => {
+  try {
+    const { search } = req.query;
+    const whereConditions = { is_active: 1 };
+
+    if (search?.trim()) {
+      whereConditions.name = {
+        [Op.like]: `%${search.trim()}%`
+      };
+    }
+
+    const clientList = await db.clients.findAll({
+      where: whereConditions,
+      attributes: ['client_id', 'name', 'user_id'],
+      order: [['name', 'ASC']]
+    });
+
+    return res.status(constants.OK.code).json({
+      error: false,
+      message: 'Client dropdown fetched successfully',
+      data: clientList
+    });
+  } catch (error) {
+    console.error('Get Client Dropdown Error:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      error: true,
+      message: 'Internal server error'
     });
   }
 };

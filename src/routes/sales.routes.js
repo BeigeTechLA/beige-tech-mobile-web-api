@@ -283,6 +283,7 @@ router.get('/dashboard/funnel', authenticate, requireSalesRepOrAdmin, salesDashb
 // Quote Builder Routes
 // =====================================================
 
+router.get('/client-dropdown', authenticate, requireSalesRepOrAdmin, salesQuotesController.getClientDropdown);
 router.get('/quotes/catalog', authenticate, requireSalesRepOrAdmin, salesQuotesController.getCatalog);
 router.get('/quotes/shoot-types/:content_type', authenticate, requireSalesRepOrAdmin, salesQuotesController.getShootTypes);
 router.post('/quotes/catalog', authenticate, requireAdmin, salesQuotesController.createCatalogItem);

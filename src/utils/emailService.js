@@ -802,10 +802,14 @@ const sendShootReminder2HoursEmail = async (data) => {
         first_name: data.first_name || 'there',
         start_time: data.start_time || '',
         end_time: data.end_time || '',
+        shoot_time: data.shoot_time || [data.start_time, data.end_time].filter(Boolean).join(' - '),
         shoot_location_address: data.shoot_location_address || 'TBD',
         cp_name: data.cp_name || 'your Creative Partner',
         userData: { name: data.first_name || 'there' },
-        location: data.shoot_location_address || 'TBD'
+        location: data.location || data.shoot_location_address || 'TBD',
+        cp_image_url:
+          data.cp_image_url ||
+          'https://d2jhn32fsulyac.cloudfront.net/assets/Top_CP_images/Cornelius+M..png'
       }
     };
 
@@ -865,8 +869,7 @@ const sendShootCompletionEmail = async (data) => {
         first_name: data.first_name || 'there',
         cp_name: data.cp_name || 'your Creative Partner',
         has_editing: !!data.has_editing,
-        raw_only: !!data.raw_only,
-        userData: { name: data.first_name || 'there' }
+        raw_only: !!data.raw_only
       }
     };
 
