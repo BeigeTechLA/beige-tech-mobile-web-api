@@ -92,7 +92,7 @@
                     <td style="text-align: center;padding: 20px 40px 40px;">
                       <h3
                         style="margin: 0 0 26px; color: #000000 ; font-size: 30px; font-weight: 600;line-height: 40px;">
-                        Hi, {{userData.name}}
+                        Hi, {{name}}
                       </h3>
                       <!-- Accept Message -->
                       <p
@@ -214,7 +214,7 @@
                                         style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
                                         Service Type</div>
                                       <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
-                                        {{Service_type}}</div>
+                                        {{service_type}}</div>
                                     </td>
                                   </tr>
                                 </table>
@@ -272,7 +272,7 @@
                                         style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
                                         Shoot Time</div>
                                       <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
-                                        {{startTime}} - {{endTime}}</div>
+                                        {{start_time}} - {{end_time}}</div>
                                     </td>
                                   </tr>
                                 </table>
@@ -375,7 +375,7 @@
                                         style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
                                         Total Amount Paid</div>
                                       <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
-                                        $5000.00</div>
+                                        {{amount_paid}}</div>
                                     </td>
                                   </tr>
                                 </table>
@@ -405,7 +405,7 @@
                                         style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
                                         Payment Method</div>
                                       <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
-                                        Stripe</div>
+                                        {{payment_method}}</div>
                                     </td>
                                   </tr>
                                 </table>
@@ -434,7 +434,7 @@
                                         style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
                                         Transaction ID</div>
                                       <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
-                                        txn_1P2Q3R4S5T6U7V8W9X</div>
+                                        {{transaction_id}}</div>
                                     </td>
                                   </tr>
                                 </table>
@@ -552,7 +552,9 @@
                         Your shoot details will be confirmed. Please complete the onboarding form if you have not yet
                         done so.
                         <span style="font-weight: 600; color: #000;">
-                          [Insert Link]
+                          <a href="{{insert_link}}" style="font-weight:600; color:#000;">
+                            Complete onboarding
+                          </a>
                         </span>
                       </li>
                       <li
