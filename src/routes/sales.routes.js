@@ -118,6 +118,18 @@ router.post(
   requireSalesRepOrAdmin,
   salesLeadsController.sendFinalAssetsDeliveredWithRevision
 );
+router.post(
+  '/leads/:id/cp-confirmed',
+  authenticate,
+  requireSalesRepOrAdmin,
+  salesLeadsController.confirmLeadCreativePartner
+);
+router.post(
+  '/client-leads/:id/cp-confirmed',
+  authenticate,
+  requireSalesRepOrAdmin,
+  salesLeadsController.confirmClientLeadCreativePartner
+);
 
 // =====================================================
 // Discount Code Routes
@@ -272,6 +284,7 @@ router.get('/dashboard/funnel', authenticate, requireSalesRepOrAdmin, salesDashb
 // =====================================================
 
 router.get('/quotes/catalog', authenticate, requireSalesRepOrAdmin, salesQuotesController.getCatalog);
+router.get('/quotes/shoot-types/:content_type', authenticate, requireSalesRepOrAdmin, salesQuotesController.getShootTypes);
 router.post('/quotes/catalog', authenticate, requireAdmin, salesQuotesController.createCatalogItem);
 router.put('/quotes/catalog/:catalogItemId', authenticate, requireAdmin, salesQuotesController.updateCatalogItem);
 

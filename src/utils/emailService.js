@@ -58,7 +58,8 @@ const {
   CLIENT_SIGNUP_NOTIFICATION_TEMPLATE_ID,
   CREW_SIGNUP_NOTIFICATION_TEMPLATE_ID,
   CP_SIGNUP_WELCOME_TEMPLATE_ID,
-  PRODUCTION_PROPOSAL_TEMPLATE_ID
+  PRODUCTION_PROPOSAL_TEMPLATE_ID,
+  CP_CONFIRMED_TEMPLATE_ID
 } = require('../config/sendgridTemplates');
 
 const formatDate = (value) => {
@@ -145,6 +146,56 @@ const splitName = (fullName = '', fallbackEmail = '') => {
 const formatEditingStatus = (value) => (value ? 'Yes' : 'No');
 
 const formatAmount = (value) => Number(value || 0).toFixed(2);
+
+const parseLocationParts = (location) => {
+  if (!location) {
+    return {
+      name: '',
+      address: 'TBD'
+    };
+  }
+
+  const fallback = formatLocation(location);
+
+  const extractParts = (value) => {
+    if (!value || typeof value !== 'object') return null;
+    return {
+      name:
+        value.place_name ||
+        value.location_name ||
+        value.name ||
+        value.title ||
+        '',
+      address:
+        value.address ||
+        value.full_address ||
+        value.formatted_address ||
+        fallback
+    };
+  };
+
+  if (typeof location === 'object') {
+    return extractParts(location) || { name: '', address: fallback };
+  }
+
+  const trimmed = String(location).trim();
+  if (!trimmed) {
+    return { name: '', address: 'TBD' };
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    return extractParts(parsed) || { name: '', address: fallback };
+  } catch (_) {
+    return { name: '', address: fallback };
+  }
+};
+
+const formatExperienceSummary = (crew) => {
+  const years = Number(crew?.years_of_experience);
+  if (!Number.isFinite(years) || years <= 0) return '';
+  return years === 1 ? '1 year experience' : `${years} years experience`;
+};
 
 const sendEmail = async ({ to, subject, templateId, dynamicTemplateData }) => {
   if (!process.env.SENDGRID_API_KEY) return { success: false, error: 'SENDGRID_API_KEY is not configured' };
@@ -946,8 +997,7 @@ const sendPostProductionStatusUpdateEmail = async (data) => {
       dynamicTemplateData: {
         first_name: data.first_name || 'there',
         delivery_date: data.delivery_date,
-        estimated_delivery: data.delivery_date,
-        userData: { name: data.first_name || 'there' }
+        status_label: data.status_label || 'Processing & Editing'
       }
     };
 
@@ -1012,9 +1062,7 @@ const sendRawFootageReadyEmail = async (data) => {
       templateId: RAW_FOOTAGE_READY_TEMPLATE_ID,
       dynamicTemplateData: {
         first_name: data.first_name || 'there',
-        access_files_link: data.access_files_link,
-        files_link: data.access_files_link,
-        userData: { name: data.first_name || 'there' }
+        frontend_url: data.access_files_link
       }
     };
 
@@ -1214,10 +1262,7 @@ const sendRevisedContentDeliveredEmail = async (data) => {
       dynamicTemplateData: {
         first_name: data.first_name || 'there',
         booking_id: data.booking_id || '',
-        view_updated_assets_link: data.view_updated_assets_link,
-        view_assets_link: data.view_updated_assets_link,
-        revision_version: data.revision_version || '',
-        userData: { name: data.first_name || 'there' }
+        frontend_url: data.view_updated_assets_link
       }
     };
 
@@ -1994,6 +2039,122 @@ const sendCPStatusUpdateByRequest = async ({ project_id, crew_member_id, cp_acti
   }
 };
 
+const sendCPConfirmedEmailByRequest = async ({ project_id, crew_member_id }) => {
+  try {
+    const booking = await stream_project_booking.findOne({
+      where: { stream_project_booking_id: project_id },
+      include: [
+        {
+          model: db.users,
+          as: 'user',
+          required: false,
+          attributes: ['name', 'email']
+        }
+      ]
+    });
+
+    if (!booking) {
+      return { success: false, error: 'Booking not found' };
+    }
+
+    const crew = await crew_members.findOne({
+      where: { crew_member_id },
+      attributes: ['crew_member_id', 'first_name', 'last_name', 'years_of_experience'],
+      include: [
+        {
+          model: db.crew_member_files,
+          as: 'crew_member_files',
+          required: false,
+          attributes: ['file_type', 'file_path', 'created_at', 'is_active']
+        }
+      ]
+    });
+
+    if (!crew) {
+      return { success: false, error: 'Creative Partner not found' };
+    }
+
+    const toEmail = booking?.user?.email || booking?.guest_email || '';
+    if (!toEmail) {
+      return { success: false, error: 'Recipient email is required' };
+    }
+
+    let clientName = booking?.user?.name || '';
+
+    if (!clientName) {
+      const lead = await db.sales_leads.findOne({
+        where: { booking_id: project_id },
+        attributes: ['client_name', 'guest_email']
+      });
+
+      clientName = lead?.client_name || '';
+
+      if (!clientName) {
+        const emailForName = booking?.guest_email || lead?.guest_email || '';
+        const localPart = emailForName.includes('@') ? emailForName.split('@')[0] : '';
+        clientName = localPart.replace(/[._-]+/g, ' ').trim();
+      }
+    }
+
+    if (!clientName && booking?.description) {
+      const match = String(booking.description).match(/Contact Name:\s*([^\n\r]+)/i);
+      if (match?.[1]) {
+        clientName = match[1].trim();
+      }
+    }
+
+    const cpName = [crew.first_name, crew.last_name].filter(Boolean).join(' ').trim() || 'your Creative Partner';
+    const location = parseLocationParts(booking?.event_location);
+    const schedule = [formatTime(booking?.start_time), formatTime(booking?.end_time)]
+      .filter(Boolean)
+      .join(' - ');
+    const locationText = [location.name, location.address].filter(Boolean).join(', ') || 'TBD';
+    const activeFiles = Array.isArray(crew?.crew_member_files)
+      ? crew.crew_member_files.filter(
+          (file) => file?.is_active === 1 || file?.is_active === true || typeof file?.is_active === 'undefined'
+        )
+      : [];
+    const profileFile =
+      activeFiles.find((file) => String(file?.file_type || '').toLowerCase() === 'profile_photo') ||
+      activeFiles.find((file) => String(file?.file_type || '').toLowerCase() === 'profile_image') ||
+      activeFiles.find((file) => String(file?.file_type || '').toLowerCase().includes('image')) ||
+      null;
+    const cpImageUrl =
+      toAbsoluteBeigeAssetUrl(profileFile?.file_path) ||
+      'https://d2jhn32fsulyac.cloudfront.net/assets/Top_CP_images/Cornelius+M..png';
+    const experienceSummary = formatExperienceSummary(crew);
+    const serviceType = booking?.content_type || booking?.shoot_type || booking?.event_type || '';
+
+    return await sendEmail({
+      to: toEmail,
+      subject: 'Your Beige Creative Partner is confirmed',
+      templateId: CP_CONFIRMED_TEMPLATE_ID,
+      dynamicTemplateData: {
+        userData: { name: getFirstName(clientName) },
+        first_name: getFirstName(clientName),
+        cp_name: cpName,
+        cp_experience_summary: experienceSummary,
+        service_type: serviceType,
+        contentType: serviceType,
+        shoot_date: formatDate(booking?.event_date),
+        start_time: formatTime(booking?.start_time),
+        end_time: formatTime(booking?.end_time),
+        shoot_time: schedule,
+        shoot_location_name: location.name || '',
+        shoot_location_address: location.address || 'TBD',
+        location: locationText,
+        cp_image_url: cpImageUrl
+      }
+    });
+  } catch (error) {
+    console.error(
+      'Error sending CP confirmed email via SendGrid:',
+      error?.response?.body || error.message
+    );
+    return { success: false, error: error.message };
+  }
+};
+
 const sendCPNewBookingRequestEmail = async (data) => {
   try {
     if (!process.env.SENDGRID_API_KEY) {
@@ -2102,6 +2263,7 @@ module.exports = {
   sendRevisedContentDeliveredEmail,
   sendFinalDeliveryWithRevisionEmail,
   sendCPStatusUpdateByRequest,
+  sendCPConfirmedEmailByRequest,
   sendCPNewBookingRequestEmail,
   sendNewClientSignupNotification,
   sendNewCrewSignupNotification,

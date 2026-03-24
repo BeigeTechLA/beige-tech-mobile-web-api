@@ -634,6 +634,7 @@ exports.updateRequestStatus = async (req, res) => {
         cp_action: "accepted",
         cp_status: "Accepted",
       });
+      console.log('CP status email result:', emailRes);
 
       return res.status(200).json({ error: false, message: "Request accepted successfully." });
     }

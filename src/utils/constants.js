@@ -103,7 +103,8 @@ module.exports = {
         USER_TYPE: 'user_type',
         AFFILIATES: 'affiliates',
         CREW_EQUIPMENT: 'crew_equipment',
-        CLIENTS: 'clients'
+        CLIENTS: 'clients',
+        SHOOT_TYPES: 'shoot_types'
 
     },
     ASSOCIATION_TABLE_WISE: {
