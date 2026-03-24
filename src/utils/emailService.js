@@ -58,7 +58,8 @@ const {
   CLIENT_SIGNUP_NOTIFICATION_TEMPLATE_ID,
   CREW_SIGNUP_NOTIFICATION_TEMPLATE_ID,
   CP_SIGNUP_WELCOME_TEMPLATE_ID,
-  PRODUCTION_PROPOSAL_TEMPLATE_ID
+  PRODUCTION_PROPOSAL_TEMPLATE_ID,
+  CP_CONFIRMED_TEMPLATE_ID
 } = require('../config/sendgridTemplates');
 
 const formatDate = (value) => {
@@ -145,6 +146,56 @@ const splitName = (fullName = '', fallbackEmail = '') => {
 const formatEditingStatus = (value) => (value ? 'Yes' : 'No');
 
 const formatAmount = (value) => Number(value || 0).toFixed(2);
+
+const parseLocationParts = (location) => {
+  if (!location) {
+    return {
+      name: '',
+      address: 'TBD'
+    };
+  }
+
+  const fallback = formatLocation(location);
+
+  const extractParts = (value) => {
+    if (!value || typeof value !== 'object') return null;
+    return {
+      name:
+        value.place_name ||
+        value.location_name ||
+        value.name ||
+        value.title ||
+        '',
+      address:
+        value.address ||
+        value.full_address ||
+        value.formatted_address ||
+        fallback
+    };
+  };
+
+  if (typeof location === 'object') {
+    return extractParts(location) || { name: '', address: fallback };
+  }
+
+  const trimmed = String(location).trim();
+  if (!trimmed) {
+    return { name: '', address: 'TBD' };
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    return extractParts(parsed) || { name: '', address: fallback };
+  } catch (_) {
+    return { name: '', address: fallback };
+  }
+};
+
+const formatExperienceSummary = (crew) => {
+  const years = Number(crew?.years_of_experience);
+  if (!Number.isFinite(years) || years <= 0) return '';
+  return years === 1 ? '1 year experience' : `${years} years experience`;
+};
 
 const sendEmail = async ({ to, subject, templateId, dynamicTemplateData }) => {
   if (!process.env.SENDGRID_API_KEY) return { success: false, error: 'SENDGRID_API_KEY is not configured' };
@@ -594,6 +645,12 @@ const sendBookingConfirmationEmail = async (data) => {
       return { success: false, error: 'Sender email not configured' };
     }
 
+    console.log('Booking email payload:', {
+      booking_id: data.booking_id,
+      to: data.to_email,
+      cp_assigned: data.cp_assigned
+    });
+
     const payload = {
       to: data.to_email,
       from: {
@@ -603,31 +660,29 @@ const sendBookingConfirmationEmail = async (data) => {
       subject: 'Your Beige booking is confirmed',
       templateId,
       dynamicTemplateData: {
-        first_name: data.first_name || 'there',
+        name: data.first_name || 'there',
         booking_id: data.booking_id || '',
-        shoot_type: data.shoot_type || '',
         service_type: data.service_type || data.content_type || '',
-        shoot_date: data.shoot_date || '',
+        date: data.shoot_date || '',
         start_time: data.start_time || '',
         end_time: data.end_time || '',
         duration: data.duration || '',
         shoot_location_address: data.shoot_location_address || 'TBD',
-        amount_paid: data.amount_paid || '',
+        amount_paid: data.amount_paid
+            ? `$${Number(data.amount_paid).toFixed(2)}`
+            : '$0.00',
         payment_method: data.payment_method || 'Card',
         transaction_id: data.transaction_id || '',
         cp_assigned: !!data.cp_assigned,
+        cp_status_label: data.cp_status_label || 'Pending',
+        cp_status_color: data.cp_status_color || '#999999',
         cp_firstname: data.cp_firstname || '',
         cp_name: data.cp_name || data.cp_firstname || '',
         cp_role: data.cp_role || data.service_type || '',
         cp_photo_url: data.cp_photo_url || 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=120&h=120',
         onboarding_form_link: data.onboarding_form_link || process.env.CLIENT_ONBOARDING_FORM_URL || 'https://beige.app/',
-        email_subject: 'Your Beige booking is confirmed',
-        userData: {
-          name: data.first_name || 'there'
-        },
-        date: data.shoot_date || '',
-        location: data.shoot_location_address || 'TBD',
-        insert_link: data.onboarding_form_link || process.env.CLIENT_ONBOARDING_FORM_URL || 'https://beige.app/'
+        insert_link: data.onboarding_form_link || process.env.CLIENT_ONBOARDING_FORM_URL || 'https://beige.app/',
+        frontend_url: data.frontend_url || process.env.FRONTEND_URL || 'https://beige.app/'
       }
     };
 
@@ -747,10 +802,14 @@ const sendShootReminder2HoursEmail = async (data) => {
         first_name: data.first_name || 'there',
         start_time: data.start_time || '',
         end_time: data.end_time || '',
+        shoot_time: data.shoot_time || [data.start_time, data.end_time].filter(Boolean).join(' - '),
         shoot_location_address: data.shoot_location_address || 'TBD',
         cp_name: data.cp_name || 'your Creative Partner',
         userData: { name: data.first_name || 'there' },
-        location: data.shoot_location_address || 'TBD'
+        location: data.location || data.shoot_location_address || 'TBD',
+        cp_image_url:
+          data.cp_image_url ||
+          'https://d2jhn32fsulyac.cloudfront.net/assets/Top_CP_images/Cornelius+M..png'
       }
     };
 
@@ -810,8 +869,7 @@ const sendShootCompletionEmail = async (data) => {
         first_name: data.first_name || 'there',
         cp_name: data.cp_name || 'your Creative Partner',
         has_editing: !!data.has_editing,
-        raw_only: !!data.raw_only,
-        userData: { name: data.first_name || 'there' }
+        raw_only: !!data.raw_only
       }
     };
 
@@ -942,8 +1000,7 @@ const sendPostProductionStatusUpdateEmail = async (data) => {
       dynamicTemplateData: {
         first_name: data.first_name || 'there',
         delivery_date: data.delivery_date,
-        estimated_delivery: data.delivery_date,
-        userData: { name: data.first_name || 'there' }
+        status_label: data.status_label || 'Processing & Editing'
       }
     };
 
@@ -1008,9 +1065,7 @@ const sendRawFootageReadyEmail = async (data) => {
       templateId: RAW_FOOTAGE_READY_TEMPLATE_ID,
       dynamicTemplateData: {
         first_name: data.first_name || 'there',
-        access_files_link: data.access_files_link,
-        files_link: data.access_files_link,
-        userData: { name: data.first_name || 'there' }
+        frontend_url: data.access_files_link
       }
     };
 
@@ -1074,11 +1129,9 @@ const sendFinalDeliveryCompleteEmail = async (data) => {
       subject: 'Final Delivery Complete - Access Your Assets',
       templateId: FINAL_DELIVERY_COMPLETE_TEMPLATE_ID,
       dynamicTemplateData: {
-        first_name: data.first_name || 'there',
+        name: data.first_name || 'there',
         booking_id: data.booking_id || '',
-        view_assets_link: data.view_assets_link,
-        access_files_link: data.view_assets_link,
-        userData: { name: data.first_name || 'there' }
+        frontend_url: data.view_assets_link
       }
     };
 
@@ -1212,10 +1265,7 @@ const sendRevisedContentDeliveredEmail = async (data) => {
       dynamicTemplateData: {
         first_name: data.first_name || 'there',
         booking_id: data.booking_id || '',
-        view_updated_assets_link: data.view_updated_assets_link,
-        view_assets_link: data.view_updated_assets_link,
-        revision_version: data.revision_version || '',
-        userData: { name: data.first_name || 'there' }
+        frontend_url: data.view_updated_assets_link
       }
     };
 
@@ -1279,11 +1329,9 @@ const sendFinalDeliveryWithRevisionEmail = async (data) => {
       subject: 'Final Delivery - Your Project Is Complete',
       templateId: FINAL_DELIVERY_WITH_REVISION_TEMPLATE_ID,
       dynamicTemplateData: {
-        first_name: data.first_name || 'there',
+        name: data.first_name || 'there',
         booking_id: data.booking_id || '',
-        view_final_assets_link: data.view_final_assets_link,
-        view_assets_link: data.view_final_assets_link,
-        userData: { name: data.first_name || 'there' }
+        frontend_url: data.view_final_assets_link
       }
     };
 
@@ -1994,6 +2042,122 @@ const sendCPStatusUpdateByRequest = async ({ project_id, crew_member_id, cp_acti
   }
 };
 
+const sendCPConfirmedEmailByRequest = async ({ project_id, crew_member_id }) => {
+  try {
+    const booking = await stream_project_booking.findOne({
+      where: { stream_project_booking_id: project_id },
+      include: [
+        {
+          model: db.users,
+          as: 'user',
+          required: false,
+          attributes: ['name', 'email']
+        }
+      ]
+    });
+
+    if (!booking) {
+      return { success: false, error: 'Booking not found' };
+    }
+
+    const crew = await crew_members.findOne({
+      where: { crew_member_id },
+      attributes: ['crew_member_id', 'first_name', 'last_name', 'years_of_experience'],
+      include: [
+        {
+          model: db.crew_member_files,
+          as: 'crew_member_files',
+          required: false,
+          attributes: ['file_type', 'file_path', 'created_at', 'is_active']
+        }
+      ]
+    });
+
+    if (!crew) {
+      return { success: false, error: 'Creative Partner not found' };
+    }
+
+    const toEmail = booking?.user?.email || booking?.guest_email || '';
+    if (!toEmail) {
+      return { success: false, error: 'Recipient email is required' };
+    }
+
+    let clientName = booking?.user?.name || '';
+
+    if (!clientName) {
+      const lead = await db.sales_leads.findOne({
+        where: { booking_id: project_id },
+        attributes: ['client_name', 'guest_email']
+      });
+
+      clientName = lead?.client_name || '';
+
+      if (!clientName) {
+        const emailForName = booking?.guest_email || lead?.guest_email || '';
+        const localPart = emailForName.includes('@') ? emailForName.split('@')[0] : '';
+        clientName = localPart.replace(/[._-]+/g, ' ').trim();
+      }
+    }
+
+    if (!clientName && booking?.description) {
+      const match = String(booking.description).match(/Contact Name:\s*([^\n\r]+)/i);
+      if (match?.[1]) {
+        clientName = match[1].trim();
+      }
+    }
+
+    const cpName = [crew.first_name, crew.last_name].filter(Boolean).join(' ').trim() || 'your Creative Partner';
+    const location = parseLocationParts(booking?.event_location);
+    const schedule = [formatTime(booking?.start_time), formatTime(booking?.end_time)]
+      .filter(Boolean)
+      .join(' - ');
+    const locationText = [location.name, location.address].filter(Boolean).join(', ') || 'TBD';
+    const activeFiles = Array.isArray(crew?.crew_member_files)
+      ? crew.crew_member_files.filter(
+          (file) => file?.is_active === 1 || file?.is_active === true || typeof file?.is_active === 'undefined'
+        )
+      : [];
+    const profileFile =
+      activeFiles.find((file) => String(file?.file_type || '').toLowerCase() === 'profile_photo') ||
+      activeFiles.find((file) => String(file?.file_type || '').toLowerCase() === 'profile_image') ||
+      activeFiles.find((file) => String(file?.file_type || '').toLowerCase().includes('image')) ||
+      null;
+    const cpImageUrl =
+      toAbsoluteBeigeAssetUrl(profileFile?.file_path) ||
+      'https://d2jhn32fsulyac.cloudfront.net/assets/Top_CP_images/Cornelius+M..png';
+    const experienceSummary = formatExperienceSummary(crew);
+    const serviceType = booking?.content_type || booking?.shoot_type || booking?.event_type || '';
+
+    return await sendEmail({
+      to: toEmail,
+      subject: 'Your Beige Creative Partner is confirmed',
+      templateId: CP_CONFIRMED_TEMPLATE_ID,
+      dynamicTemplateData: {
+        userData: { name: getFirstName(clientName) },
+        first_name: getFirstName(clientName),
+        cp_name: cpName,
+        cp_experience_summary: experienceSummary,
+        service_type: serviceType,
+        contentType: serviceType,
+        shoot_date: formatDate(booking?.event_date),
+        start_time: formatTime(booking?.start_time),
+        end_time: formatTime(booking?.end_time),
+        shoot_time: schedule,
+        shoot_location_name: location.name || '',
+        shoot_location_address: location.address || 'TBD',
+        location: locationText,
+        cp_image_url: cpImageUrl
+      }
+    });
+  } catch (error) {
+    console.error(
+      'Error sending CP confirmed email via SendGrid:',
+      error?.response?.body || error.message
+    );
+    return { success: false, error: error.message };
+  }
+};
+
 const sendCPNewBookingRequestEmail = async (data) => {
   try {
     if (!process.env.SENDGRID_API_KEY) {
@@ -2102,6 +2266,7 @@ module.exports = {
   sendRevisedContentDeliveredEmail,
   sendFinalDeliveryWithRevisionEmail,
   sendCPStatusUpdateByRequest,
+  sendCPConfirmedEmailByRequest,
   sendCPNewBookingRequestEmail,
   sendNewClientSignupNotification,
   sendNewCrewSignupNotification,
