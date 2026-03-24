@@ -77,6 +77,131 @@ async function notifyAssignedCreators(creatorIds = []) {
   }
 }
 
+async function confirmCreativePartnerForLead({
+  leadId,
+  crewMemberId,
+  performedByUserId = null,
+  isClientLead = false
+}) {
+  const LeadModel = isClientLead ? client_leads : sales_leads;
+  const LeadActivityModel = isClientLead ? client_lead_activities : sales_lead_activities;
+
+  const lead = await LeadModel.findOne({
+    where: { lead_id: leadId },
+    attributes: ['lead_id', 'booking_id']
+  });
+
+  if (!lead) {
+    return {
+      status: 404,
+      body: { success: false, message: isClientLead ? 'Client lead not found' : 'Lead not found' }
+    };
+  }
+
+  if (!lead.booking_id) {
+    return {
+      status: 400,
+      body: { success: false, message: 'No booking is linked to this lead' }
+    };
+  }
+
+  const assignment = await assigned_crew.findOne({
+    where: {
+      project_id: lead.booking_id,
+      crew_member_id: crewMemberId,
+      is_active: 1
+    },
+    include: [
+      {
+        model: crew_members,
+        as: 'crew_member',
+        attributes: ['crew_member_id', 'first_name', 'last_name']
+      }
+    ]
+  });
+
+  if (!assignment) {
+    return {
+      status: 404,
+      body: { success: false, message: 'Creative Partner assignment not found for this booking' }
+    };
+  }
+
+  if (Number(assignment.crew_accept) !== 1) {
+    return {
+      status: 400,
+      body: {
+        success: false,
+        message: 'Creative Partner must accept the booking before it can be confirmed'
+      }
+    };
+  }
+
+  const currentStatus = String(assignment.status || '').toLowerCase();
+  if (currentStatus === 'confirmed') {
+    return {
+      status: 200,
+      body: {
+        success: true,
+        message: 'Creative Partner is already confirmed for this booking'
+      }
+    };
+  }
+
+  await assignment.update({
+    status: 'confirmed',
+    updated_at: new Date()
+  });
+
+  const cpName =
+    [assignment?.crew_member?.first_name, assignment?.crew_member?.last_name]
+      .filter(Boolean)
+      .join(' ')
+      .trim() || `Crew ID ${crewMemberId}`;
+
+  await LeadActivityModel.create({
+    lead_id: lead.lead_id,
+    activity_type: 'booking_updated',
+    activity_data: {
+      source: 'sales_portal_cp_confirmed',
+      booking_id: lead.booking_id,
+      crew_member_id: crewMemberId,
+      cp_name: cpName
+    },
+    performed_by_user_id: performedByUserId
+  });
+
+  const emailResult = await emailService.sendCPConfirmedEmailByRequest({
+    project_id: lead.booking_id,
+    crew_member_id: crewMemberId
+  });
+
+  if (!emailResult?.success) {
+    console.error('CP confirmed email send failed:', emailResult?.error || 'Unknown error');
+    return {
+      status: 500,
+      body: {
+        success: false,
+        message: emailResult?.error || 'Failed to send CP confirmed email'
+      }
+    };
+  }
+
+  return {
+    status: 200,
+    body: {
+      success: true,
+      message: 'Creative Partner confirmed and client email sent successfully',
+      data: {
+        lead_id: lead.lead_id,
+        booking_id: lead.booking_id,
+        crew_member_id: crewMemberId,
+        status: 'confirmed'
+      }
+    }
+  };
+}
+
 function safeJsonStringify(val) {
   if (val == null) return null;
   if (typeof val === 'string') return val;
@@ -2546,14 +2671,23 @@ exports.getClientLeadById = async (req, res) => {
 exports.sendPostProductionStatusUpdate = async (req, res) => {
   try {
     const { id } = req.params;
-    const { estimated_delivery_date, delivery_date } = req.body;
+    const { estimated_delivery_start_date, estimated_delivery_end_date } = req.body;
     const performedBy = req.userId || null;
 
-    const rawDeliveryDate = estimated_delivery_date || delivery_date;
-    if (!rawDeliveryDate) {
+    if (!estimated_delivery_start_date || !estimated_delivery_end_date) {
       return res.status(constants.BAD_REQUEST.code).json({
         success: false,
-        message: 'estimated_delivery_date is required'
+        message: 'delivery_start_date and delivery_end_date are required'
+      });
+    }
+
+    const startDate = new Date(estimated_delivery_start_date);
+    const endDate = new Date(estimated_delivery_end_date);
+
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Invalid delivery dates'
       });
     }
 
@@ -2616,20 +2750,26 @@ exports.sendPostProductionStatusUpdate = async (req, res) => {
         message: 'Post-production status update can be sent only for editing bookings'
       });
     }
-
-    const parsedDate = new Date(rawDeliveryDate);
-    if (Number.isNaN(parsedDate.getTime())) {
-      return res.status(constants.BAD_REQUEST.code).json({
-        success: false,
-        message: 'estimated_delivery_date is invalid'
-      });
-    }
-
-    const formattedDeliveryDate = parsedDate.toLocaleDateString('en-US', {
+    
+    const formattedStartDate = startDate.toLocaleDateString('en-US', {
       year: 'numeric',
-      month: 'long',
+      month: 'short',
       day: 'numeric'
     });
+
+    const formattedEndDate = endDate.toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    });
+
+    let deliveryDateDisplay;
+
+    if (formattedStartDate === formattedEndDate) {
+      deliveryDateDisplay = formattedStartDate;
+    } else {
+      deliveryDateDisplay = `${formattedStartDate} - ${formattedEndDate}`;
+    }
 
     const baseName = (booking.user?.name || lead.client_name || '').trim();
     let firstName = 'there';
@@ -2644,7 +2784,7 @@ exports.sendPostProductionStatusUpdate = async (req, res) => {
       to_email: toEmail,
       booking_id: booking.stream_project_booking_id,
       first_name: firstName,
-      delivery_date: formattedDeliveryDate
+      delivery_date: deliveryDateDisplay
     });
 
     if (!emailResult?.success) {
@@ -2660,7 +2800,8 @@ exports.sendPostProductionStatusUpdate = async (req, res) => {
       activity_data: {
         email_event: 'post_production_status_update',
         booking_id: booking.stream_project_booking_id,
-        estimated_delivery_date: parsedDate.toISOString().slice(0, 10)
+        delivery_start_date: startDate.toISOString().slice(0, 10),
+        delivery_end_date: endDate.toISOString().slice(0, 10)
       },
       performed_by_user_id: performedBy
     });
@@ -2672,7 +2813,8 @@ exports.sendPostProductionStatusUpdate = async (req, res) => {
         lead_id: parseInt(id, 10),
         booking_id: booking.stream_project_booking_id,
         to_email: toEmail,
-        estimated_delivery_date: parsedDate.toISOString().slice(0, 10)
+        delivery_start_date: startDate.toISOString().slice(0, 10),
+        delivery_end_date: endDate.toISOString().slice(0, 10)
       }
     });
   } catch (error) {
@@ -4339,6 +4481,66 @@ exports.finalizeClientLeadBooking = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Failed to update client booking',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.confirmLeadCreativePartner = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { crew_member_id } = req.body;
+
+    if (!crew_member_id) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'crew_member_id is required'
+      });
+    }
+
+    const result = await confirmCreativePartnerForLead({
+      leadId: parseInt(id, 10),
+      crewMemberId: parseInt(crew_member_id, 10),
+      performedByUserId: req.userId || null,
+      isClientLead: false
+    });
+
+    return res.status(result.status).json(result.body);
+  } catch (error) {
+    console.error('Error confirming Creative Partner for lead:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to confirm Creative Partner',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.confirmClientLeadCreativePartner = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { crew_member_id } = req.body;
+
+    if (!crew_member_id) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'crew_member_id is required'
+      });
+    }
+
+    const result = await confirmCreativePartnerForLead({
+      leadId: parseInt(id, 10),
+      crewMemberId: parseInt(crew_member_id, 10),
+      performedByUserId: req.userId || null,
+      isClientLead: true
+    });
+
+    return res.status(result.status).json(result.body);
+  } catch (error) {
+    console.error('Error confirming Creative Partner for client lead:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to confirm Creative Partner',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }

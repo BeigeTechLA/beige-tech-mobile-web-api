@@ -78,6 +78,24 @@ const deriveFirstName = (userName, leadClientName, guestEmail) => {
   return 'there';
 };
 
+const toAbsoluteBeigeAssetUrl = (pathValue) => {
+  if (!pathValue) return '';
+  const raw = String(pathValue).trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw)) return raw;
+
+  const base =
+    process.env.BEIGE_ASSET_BASE_URL ||
+    process.env.BEIGE_S3_BASE_URL ||
+    'https://beige-web-prod.s3.us-east-1.amazonaws.com';
+
+  if (raw.startsWith('/')) {
+    return `${base}${raw}`;
+  }
+
+  return `${base}/${raw.replace(/^\.?\//, '')}`;
+};
+
 const parseActivityData = (activityData) => {
   if (!activityData) return {};
   if (typeof activityData === 'object') return activityData;
@@ -354,7 +372,15 @@ const runShootReminder2HoursJob = async () => {
               model: db.crew_members,
               as: 'crew_member',
               required: false,
-              attributes: ['first_name', 'last_name']
+              attributes: ['first_name', 'last_name'],
+              include: [
+                {
+                  model: db.crew_member_files,
+                  as: 'crew_member_files',
+                  required: false,
+                  attributes: ['file_type', 'file_path', 'created_at', 'is_active']
+                }
+              ]
             }
           ]
         }
@@ -375,6 +401,9 @@ const runShootReminder2HoursJob = async () => {
       return;
     }
 
+    let windowMatchedCount = 0;
+    let sentCount = 0;
+
     for (const booking of bookings) {
       try {
         const bookingStart = buildBookingStartDateTime(booking.event_date, booking.start_time);
@@ -384,6 +413,7 @@ const runShootReminder2HoursJob = async () => {
         if (diffMinutes < REMINDER_2H_WINDOW_MIN || diffMinutes > REMINDER_2H_WINDOW_MAX) {
           continue;
         }
+        windowMatchedCount += 1;
 
         const lead = await db.sales_leads.findOne({
           where: { booking_id: booking.stream_project_booking_id },
@@ -416,6 +446,23 @@ const runShootReminder2HoursJob = async () => {
           .filter(Boolean)
           .join(' ')
           .trim() || 'your Creative Partner';
+        const cpFiles = Array.isArray(selectedAssignment?.crew_member?.crew_member_files)
+          ? [...selectedAssignment.crew_member.crew_member_files]
+              .filter(f => f?.is_active === 1 || f?.is_active === true || typeof f?.is_active === 'undefined')
+              .sort((a, b) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime())
+          : [];
+        const cpPhoto =
+          cpFiles.find(f => String(f?.file_type || '').toLowerCase() === 'profile_photo') ||
+          cpFiles.find(f => String(f?.file_type || '').toLowerCase() === 'profile_image') ||
+          cpFiles.find(f => String(f?.file_type || '').toLowerCase().includes('image')) ||
+          null;
+        const cpImageUrl =
+          toAbsoluteBeigeAssetUrl(cpPhoto?.file_path) ||
+          'https://d2jhn32fsulyac.cloudfront.net/assets/Top_CP_images/Cornelius+M..png';
+        const shootTime = [formatTime(booking.start_time), formatTime(booking.end_time)]
+          .filter(Boolean)
+          .join(' - ');
+        const location = formatLocation(booking.event_location);
 
         const firstName = deriveFirstName(booking.user?.name, lead?.client_name, toEmail);
         const emailResult = await emailService.sendShootReminder2HoursEmail({
@@ -424,8 +471,11 @@ const runShootReminder2HoursJob = async () => {
           first_name: firstName,
           start_time: formatTime(booking.start_time),
           end_time: formatTime(booking.end_time),
-          shoot_location_address: formatLocation(booking.event_location),
-          cp_name: cpName
+          shoot_time: shootTime,
+          shoot_location_address: location,
+          location,
+          cp_name: cpName,
+          cp_image_url: cpImageUrl
         });
 
         if (!emailResult?.success) {
@@ -437,9 +487,23 @@ const runShootReminder2HoursJob = async () => {
         }
 
         await markReminder2hSent(lead?.lead_id, booking.stream_project_booking_id, bookingStartIso);
+        sentCount += 1;
       } catch (bookingError) {
         console.error('[Email Job] 2-hour reminder booking processing error:', bookingError.message);
       }
+    }
+
+    if (windowMatchedCount === 0) {
+      console.log(
+        `[Email Job] 2-hour reminder: found ${bookings.length} booking(s) for ${todayStr}, but none within ${REMINDER_2H_WINDOW_MIN}-${REMINDER_2H_WINDOW_MAX} minutes of start time`
+      );
+      return;
+    }
+
+    if (sentCount === 0) {
+      console.log(
+        `[Email Job] 2-hour reminder: ${windowMatchedCount} booking(s) matched the time window for ${todayStr}, but no reminder was sent`
+      );
     }
   } catch (error) {
     console.error('[Email Job] 2-hour reminder run failed:', error);
