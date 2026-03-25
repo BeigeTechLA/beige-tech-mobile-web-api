@@ -94,6 +94,24 @@ exports.updateCatalogItem = async (req, res) => {
   }
 };
 
+exports.deleteCatalogItem = async (req, res) => {
+  try {
+    const data = await quoteService.deleteCatalogItem(Number(req.params.catalogItemId));
+    return res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    console.error('Error deleting quote catalog item:', error);
+    const statusCode = error.message === 'Catalog item not found'
+      ? constants.NOT_FOUND.code
+      : error.message === 'Default catalog items cannot be deleted'
+        ? constants.FORBIDDEN.code
+        : constants.BAD_REQUEST.code;
+    return sendError(res, error, error.message || 'Failed to delete quote catalog item', statusCode);
+  }
+};
+
 exports.createQuote = async (req, res) => {
   try {
     if (!req.body.client_name) {

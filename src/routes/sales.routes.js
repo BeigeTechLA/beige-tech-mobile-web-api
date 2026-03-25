@@ -290,6 +290,7 @@ router.post('/quotes/shoot-types', authenticate, requireAdmin, salesQuotesContro
 router.put('/quotes/shoot-types/:shootTypeId', authenticate, requireAdmin, salesQuotesController.updateShootType);
 router.post('/quotes/catalog', authenticate, requireAdmin, salesQuotesController.createCatalogItem);
 router.put('/quotes/catalog/:catalogItemId', authenticate, requireAdmin, salesQuotesController.updateCatalogItem);
+router.delete('/quotes/catalog/:catalogItemId', authenticate, requireAdmin, salesQuotesController.deleteCatalogItem);
 
 router.get('/quotes/dashboard', authenticate, requireSalesRepOrAdmin, salesQuotesController.getQuoteDashboard);
 router.get('/quotes', authenticate, requireSalesRepOrAdmin, salesQuotesController.listQuotes);

@@ -607,3 +607,6 @@ VALUES
 (21, 'Commercial & Advertising', 3, 7, 'shoot-types/commercial-advertising.png', NULL, '[\"Brand ads\", \"Promos\", \"Campaigns\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
 (22, 'Brand & Product', 3, 6, 'shoot-types/brand-product.png', NULL, '[\"Product photography\", \"campaigns\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
 (23, 'Behind-the-Scenes', 3, 8, 'shoot-types/behind-the-scenes.jpg', NULL, '[\"Candid shots\", \"process\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07');
+
+ALTER TABLE `quote_catalog_items` ADD COLUMN `is_system_default` tinyint(1) NOT NULL DEFAULT 0 AFTER `is_active`;
+UPDATE `quote_catalog_items` SET `is_system_default` = 1 WHERE `created_by_user_id` IS NULL;
