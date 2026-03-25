@@ -1672,7 +1672,7 @@ const sendProductionLeadNotification = async (leadData) => {
             .join(' to ') || '--',
         editing: formatEditingStatus(leadData?.editsNeeded),
         year: new Date().getFullYear(),
-        frontend_url: process.env.FRONTEND_URL || "https://beige.app/"
+        frontend_url: `${process.env.FRONTEND_URL}/admin/dashboard`,
       }
     });
   } catch (error) {
