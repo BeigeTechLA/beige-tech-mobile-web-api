@@ -1179,3 +1179,56 @@ Authorization: {{TOKEN}}
 {
   "crew_member_id": 2037
 }
+
+### Create sales shoot type - videography
+POST {{URL}}sales/quotes/shoot-types
+Authorization: {{TOKEN}}
+Content-Type: application/json
+
+{
+  "name": "Live Streaming",
+  "content_type": 1,
+  "display_order": 9,
+  "image_url": "shoot-types/live-streaming.jpg",
+  "description": "Multi-camera live production",
+  "tags": ["YouTube Live", "Webinars", "Events"],
+  "edited_photos_note": null,
+  "is_active": 1
+}
+
+### Create sales shoot type - photography
+POST {{URL}}sales/quotes/shoot-types
+Authorization: {{TOKEN}}
+Content-Type: application/json
+
+{
+  "name": "Food Photography",
+  "content_type": 2,
+  "display_order": 10,
+  "image_url": "shoot-types/food-photography.jpg",
+  "description": "Restaurant and product food shoots",
+  "tags": ["Menus", "Restaurants", "Brands"],
+  "edited_photos_note": "Generally photos include 25 edited photos per hour for non-weddings.",
+  "is_active": 1
+}
+
+### Update sales shoot type
+PUT {{URL}}sales/quotes/shoot-types/1
+Authorization: {{TOKEN}}
+Content-Type: application/json
+
+{
+  "name": "Wedding Films",
+  "display_order": 1,
+  "description": "Wedding videography and cinematic coverage",
+  "tags": ["Ceremony", "Reception", "Highlight Film"]
+}
+
+### Deactivate sales shoot type
+PUT {{URL}}sales/quotes/shoot-types/1
+Authorization: {{TOKEN}}
+Content-Type: application/json
+
+{
+  "is_active": 0
+}
