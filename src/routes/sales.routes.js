@@ -286,8 +286,11 @@ router.get('/dashboard/funnel', authenticate, requireSalesRepOrAdmin, salesDashb
 router.get('/client-dropdown', authenticate, requireSalesRepOrAdmin, salesQuotesController.getClientDropdown);
 router.get('/quotes/catalog', authenticate, requireSalesRepOrAdmin, salesQuotesController.getCatalog);
 router.get('/quotes/shoot-types/:content_type', authenticate, requireSalesRepOrAdmin, salesQuotesController.getShootTypes);
+router.post('/quotes/shoot-types', authenticate, requireAdmin, salesQuotesController.createShootType);
+router.put('/quotes/shoot-types/:shootTypeId', authenticate, requireAdmin, salesQuotesController.updateShootType);
 router.post('/quotes/catalog', authenticate, requireAdmin, salesQuotesController.createCatalogItem);
 router.put('/quotes/catalog/:catalogItemId', authenticate, requireAdmin, salesQuotesController.updateCatalogItem);
+router.delete('/quotes/catalog/:catalogItemId', authenticate, requireAdmin, salesQuotesController.deleteCatalogItem);
 
 router.get('/quotes/dashboard', authenticate, requireSalesRepOrAdmin, salesQuotesController.getQuoteDashboard);
 router.get('/quotes', authenticate, requireSalesRepOrAdmin, salesQuotesController.listQuotes);

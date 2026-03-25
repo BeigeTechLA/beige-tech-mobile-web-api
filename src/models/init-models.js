@@ -70,6 +70,7 @@ var _quote_catalog_items = require("./quote_catalog_items");
 var _sales_quotes = require("./sales_quotes");
 var _sales_quote_line_items = require("./sales_quote_line_items");
 var _sales_quote_activities = require("./sales_quote_activities");
+var _sales_shoot_types = require("./sales_shoot_types");
 var _shoot_types = require("./shoot_types");
 
 function initModels(sequelize) {
@@ -146,6 +147,7 @@ function initModels(sequelize) {
   var sales_quotes = _sales_quotes(sequelize, DataTypes);
   var sales_quote_line_items = _sales_quote_line_items(sequelize, DataTypes);
   var sales_quote_activities = _sales_quote_activities(sequelize, DataTypes);
+  var sales_shoot_types = _sales_shoot_types(sequelize, DataTypes);
   
   var shoot_types = _shoot_types(sequelize, DataTypes);
 
@@ -562,6 +564,7 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
     sales_quotes,
     sales_quote_line_items,
     sales_quote_activities,
+    sales_shoot_types,
     shoot_types
   };
 }

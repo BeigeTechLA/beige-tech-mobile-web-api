@@ -1635,7 +1635,8 @@ const sendPaymentSuccessSalesNotification = async (paymentData) => {
           '--',
         editing: formatEditingStatus(paymentData?.editing ?? paymentData?.editsNeeded),
         paymentIntentId: paymentData?.paymentIntentId || '',
-        year: new Date().getFullYear()
+        year: new Date().getFullYear(),
+        frontend_url: process.env.FRONTEND_URL || "https://beige.app/"
       }
     });
   } catch (error) {
@@ -1670,7 +1671,8 @@ const sendProductionLeadNotification = async (leadData) => {
             .filter(Boolean)
             .join(' to ') || '--',
         editing: formatEditingStatus(leadData?.editsNeeded),
-        year: new Date().getFullYear()
+        year: new Date().getFullYear(),
+        frontend_url: `${process.env.FRONTEND_URL}/admin/dashboard`,
       }
     });
   } catch (error) {

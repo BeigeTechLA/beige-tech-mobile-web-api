@@ -198,6 +198,7 @@ async function createCatalogItem(payload, userId) {
     rate_unit,
     display_order,
     is_active: is_active ? 1 : 0,
+    is_system_default: 0,
     created_by_user_id: userId,
     updated_by_user_id: userId
   });
@@ -230,6 +231,27 @@ async function updateCatalogItem(catalogItemId, payload, userId) {
   });
 
   return db.quote_catalog_items.findByPk(catalogItemId);
+}
+
+async function deleteCatalogItem(catalogItemId) {
+  const item = await db.quote_catalog_items.findByPk(catalogItemId);
+  if (!item) {
+    throw new Error('Catalog item not found');
+  }
+
+  if (Number(item.is_system_default) === 1) {
+    throw new Error('Default catalog items cannot be deleted');
+  }
+
+  await item.update({
+    is_active: 0,
+    updated_at: new Date()
+  });
+
+  return {
+    catalog_item_id: item.catalog_item_id,
+    deleted: true
+  };
 }
 
 async function buildLineItemsPayload(rawItems = []) {
@@ -670,6 +692,7 @@ module.exports = {
   getCatalog,
   createCatalogItem,
   updateCatalogItem,
+  deleteCatalogItem,
   createQuote,
   updateQuote,
   getQuoteById,
