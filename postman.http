@@ -1053,7 +1053,7 @@ GET {{URL}}sales/quotes/catalog HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
-### (optional) create quote catalog item (admin)
+### create quote catalog item (admin)
 POST {{URL}}sales/quotes/catalog HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
