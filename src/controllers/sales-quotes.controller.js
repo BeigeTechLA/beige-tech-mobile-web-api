@@ -114,13 +114,6 @@ exports.deleteCatalogItem = async (req, res) => {
 
 exports.createQuote = async (req, res) => {
   try {
-    if (!req.body.client_name) {
-      return res.status(constants.BAD_REQUEST.code).json({
-        success: false,
-        message: 'client_name is required'
-      });
-    }
-
     const quote = await quoteService.createQuote(req.body, getUserContext(req));
     return res.status(constants.CREATED.code).json({
       success: true,

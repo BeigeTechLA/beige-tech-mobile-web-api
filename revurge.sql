@@ -621,3 +621,6 @@ WHERE `sales_shoot_type_id` IN (
   9, 10, 11, 12, 13, 14, 15,
   16, 17, 18, 19, 20, 21, 22, 23
 );
+
+ALTER TABLE `sales_quote_line_items`
+ADD COLUMN `is_active` tinyint(1) NOT NULL DEFAULT 1 AFTER `sort_order`;
