@@ -846,7 +846,9 @@ exports.trackEarlyBookingInterest = async (req, res) => {
           // }).catch(err => console.error('Sales Email Error:', err));
 
           emailService.sendProductionLeadNotification({
+            client_name: client_name,
             guestEmail: normalizedGuestEmail,
+            shootType: shoot_type,
             contentType: content_type,
             eventDate: event_date,
             startTime: start_time,
