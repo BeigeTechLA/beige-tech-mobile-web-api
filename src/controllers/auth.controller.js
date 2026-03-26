@@ -2303,10 +2303,10 @@ exports.registerCrewMemberStep1 = [
         first_name, last_name, email, phone_number, location, working_distance
       }).catch(err => console.error('Admin Notification Error:', err));
 
-      await emailService.sendVerificationOTP(
-        { name: `${first_name} ${last_name}`, email },
-        otp
-      );
+      // await emailService.sendVerificationOTP(
+      //   { name: `${first_name} ${last_name}`, email },
+      //   otp
+      // );
 
       let affiliateData = null;
       try {
