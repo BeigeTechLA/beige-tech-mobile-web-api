@@ -491,7 +491,7 @@ const sendPasswordResetEmail = async (userData, resetToken) => {
       return { success: false, error: 'Sender email not configured' };
     }
 
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const frontendUrl = process.env.FRONTEND_URL;
     const resetLink = `${frontendUrl}/reset-password?token=${resetToken}`;
 
     const [response] = await sgMail.send({
@@ -552,7 +552,7 @@ const sendClientSignupWelcomeEmail = async (userData) => {
       templateId: CLIENT_SIGNUP_WELCOME_TEMPLATE_ID,
       dynamicTemplateData: {
         first_name: getFirstName(userData.name, userData.first_name) || 'there',
-        frontendUrl: process.env.FRONTEND_URL || 'https://beige.app'
+        frontendUrl: `${process.env.FRONTEND_URL}/book-a-shoot`
       }
     };
 
@@ -598,7 +598,7 @@ const sendCPSignupWelcomeEmail = async (userData) => {
       templateId: CP_SIGNUP_WELCOME_TEMPLATE_ID,
       dynamicTemplateData: {
         first_name: userData.first_name || 'there',
-        frontendUrl: `${process.env.FRONTEND_URL}` || 'https://beige.app'
+        frontendUrl: `${process.env.FRONTEND_URL}/creator/dashboard`
       }
     };
 
@@ -1611,7 +1611,7 @@ try {
 const sendPaymentSuccessSalesNotification = async (paymentData) => {
   try {
     const to = process.env.SALES_NOTIFICATION_EMAIL;
-    const templateId = PAYMENT_CONFIRMED_TEMPLATE_ID || SALES_PAYMENT_SUCCESS_TEMPLATE_ID;
+    const templateId = PAYMENT_CONFIRMED_TEMPLATE_ID;
     const { firstName, lastName } = splitName(
       paymentData?.clientName || paymentData?.name,
       paymentData?.guestEmail || paymentData?.email
@@ -1636,7 +1636,7 @@ const sendPaymentSuccessSalesNotification = async (paymentData) => {
         editing: formatEditingStatus(paymentData?.editing ?? paymentData?.editsNeeded),
         paymentIntentId: paymentData?.paymentIntentId || '',
         year: new Date().getFullYear(),
-        frontend_url: process.env.FRONTEND_URL || "https://beige.app/"
+        frontend_url: `${process.env.FRONTEND_URL}/admin/dashboard`,
       }
     });
   } catch (error) {
@@ -1698,7 +1698,7 @@ const sendNewClientSignupNotification = async (userData) => {
         email: userData?.email || '',
         phone_number: userData?.phone_number || 'N/A',
         instagram: userData?.instagram_handle || userData?.instagram || 'N/A',
-        loginUrl: process.env.FRONTEND_URL || 'https://beige.app/',
+        loginUrl: `${process.env.FRONTEND_URL}/admin/dashboard`,
         year: new Date().getFullYear()
       }
     });
@@ -1735,7 +1735,7 @@ const sendNewCrewSignupNotification = async (crewData) => {
         working_distance: crewData?.working_distance
           ? String(crewData.working_distance).replace(/\s*miles?$/i, '').trim()
           : 'Not provided',
-        adminUrl: process.env.FRONTEND_URL || 'https://beige.app/',
+        frontend_url: process.env.FRONTEND_URL,
         year: new Date().getFullYear()
       }
     });
@@ -1915,7 +1915,7 @@ const sendCPAcceptRejectStatusEmail = async (data) => {
         endTime: data.end_time || '',
         duration: data.duration || '',
         shoot_location_address: data.shoot_location_address || 'TBD',
-        dashboardLink: data.dashboardLink || process.env.CP_STATUS_DASHBOARD_LINK || process.env.FRONTEND_URL || 'https://beige.app/'
+        dashboardLink: data.dashboardLink
       }
     });
 
@@ -2033,10 +2033,7 @@ const sendCPStatusUpdateByRequest = async ({ project_id, crew_member_id, cp_acti
       end_time: formatTime(booking?.end_time),
       duration: booking?.duration_hours ? `${booking.duration_hours} hours` : '',
       shoot_location_address: formatLocation(booking?.event_location),
-      dashboardLink:
-        process.env.CP_STATUS_DASHBOARD_LINK ||
-        process.env.FRONTEND_URL ||
-        'https://beige.app/',
+      dashboardLink: `${process.env.FRONTEND_URL}/admin/dashboard`,
       cp_list: cpList
     });
   } catch (error) {
@@ -2189,11 +2186,7 @@ const sendCPNewBookingRequestEmail = async (data) => {
       templateId: CP_NEW_BOOKING_REQUEST_TEMPLATE_ID,
       dynamicTemplateData: {
         user_name: data.user_name || 'there',
-        dashboard_link:
-          data.dashboardLink ||
-          process.env.CP_DASHBOARD_LINK ||
-          process.env.FRONTEND_URL ||
-          'https://beige.app/'
+        dashboard_link: `${process.env.FRONTEND_URL}/creator/dashboard`,
       }
     });
 
