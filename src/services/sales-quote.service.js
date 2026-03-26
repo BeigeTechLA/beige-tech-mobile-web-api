@@ -1,7 +1,7 @@
 const { Op } = require('sequelize');
 const db = require('../models');
 
-const SECTION_TYPES = ['service', 'addon', 'logistics'];
+const SECTION_TYPES = ['service', 'addon', 'logistics', 'custom'];
 const QUOTE_STATUSES = ['draft', 'sent', 'viewed', 'accepted', 'rejected', 'expired'];
 const DISCOUNT_TYPES = ['none', 'percentage', 'fixed_amount'];
 const DEFAULT_FIGMA_CATALOG = {
@@ -254,6 +254,33 @@ async function deleteCatalogItem(catalogItemId) {
   };
 }
 
+async function resolveClientSnapshot(payload = {}, fallback = {}) {
+  const snapshot = {
+    client_user_id: payload.client_user_id !== undefined ? payload.client_user_id : fallback.client_user_id || null,
+    client_name: payload.client_name !== undefined ? payload.client_name : fallback.client_name || null,
+    client_email: payload.client_email !== undefined ? payload.client_email : fallback.client_email || null,
+    client_phone: payload.client_phone !== undefined ? payload.client_phone : fallback.client_phone || null,
+    client_address: payload.client_address !== undefined ? payload.client_address : fallback.client_address || null
+  };
+
+  if (snapshot.client_user_id) {
+    const [clientRecord, userRecord] = await Promise.all([
+      db.clients.findOne({ where: { user_id: snapshot.client_user_id, is_active: 1 } }),
+      db.users.findByPk(snapshot.client_user_id)
+    ]);
+
+    if (!snapshot.client_name) snapshot.client_name = clientRecord?.name || userRecord?.name || null;
+    if (!snapshot.client_email) snapshot.client_email = clientRecord?.email || userRecord?.email || null;
+    if (!snapshot.client_phone) snapshot.client_phone = clientRecord?.phone_number || userRecord?.phone_number || null;
+  }
+
+  if (!snapshot.client_name) {
+    snapshot.client_name = fallback.client_name || 'Untitled Draft';
+  }
+
+  return snapshot;
+}
+
 async function buildLineItemsPayload(rawItems = []) {
   if (!Array.isArray(rawItems) || rawItems.length === 0) {
     return [];
@@ -317,6 +344,37 @@ async function buildLineItemsPayload(rawItems = []) {
   });
 }
 
+function toPersistableLineItemPayload(item) {
+  const plain = typeof item.toJSON === 'function' ? item.toJSON() : { ...item };
+  delete plain.line_item_id;
+  delete plain.sales_quote_id;
+  delete plain.is_active;
+  delete plain.created_at;
+  delete plain.updated_at;
+  return plain;
+}
+
+function normalizeSectionTypes(sectionTypes = []) {
+  const validSections = new Set(SECTION_TYPES);
+  return [...new Set(
+    sectionTypes
+      .map((section) => (section == null ? null : String(section).trim()))
+      .filter((section) => section && validSections.has(section))
+  )];
+}
+
+function mergeLineItemsBySection(existingItems, incomingItems, sectionTypesToReplace) {
+  if (!sectionTypesToReplace.length) {
+    return existingItems;
+  }
+
+  const replaceSet = new Set(sectionTypesToReplace);
+  return [
+    ...existingItems.filter((item) => !replaceSet.has(item.section_type)),
+    ...incomingItems
+  ];
+}
+
 function calculateTotals(lineItems, quoteData) {
   const subtotal = roundCurrency(lineItems.reduce((sum, item) => sum + Number(item.line_total || 0), 0));
   const discountType = DISCOUNT_TYPES.includes(quoteData.discount_type) ? quoteData.discount_type : 'none';
@@ -358,6 +416,7 @@ async function recordActivity(transaction, salesQuoteId, activityType, userId, m
 async function createQuote(payload, user) {
   const transaction = await db.sequelize.transaction();
   try {
+    const clientSnapshot = await resolveClientSnapshot(payload);
     const lineItemsPayload = await buildLineItemsPayload(payload.line_items || []);
     const totals = calculateTotals(lineItemsPayload, payload);
     const validity = resolveValidity({
@@ -373,15 +432,15 @@ async function createQuote(payload, user) {
     const quote = await db.sales_quotes.create({
       quote_number: generateQuoteNumber(),
       lead_id: payload.lead_id || null,
-      client_user_id: payload.client_user_id || null,
+      client_user_id: clientSnapshot.client_user_id,
       created_by_user_id: user.userId,
       assigned_sales_rep_id: assignedSalesRepId,
       pricing_mode: payload.pricing_mode || 'general',
       status: QUOTE_STATUSES.includes(payload.status) ? payload.status : 'draft',
-      client_name: payload.client_name,
-      client_email: payload.client_email || null,
-      client_phone: payload.client_phone || null,
-      client_address: payload.client_address || null,
+      client_name: clientSnapshot.client_name,
+      client_email: clientSnapshot.client_email,
+      client_phone: clientSnapshot.client_phone,
+      client_address: clientSnapshot.client_address,
       project_description: payload.project_description || null,
       video_shoot_type: payload.video_shoot_type || null,
       quote_validity_days: validity.quote_validity_days,
@@ -402,6 +461,7 @@ async function createQuote(payload, user) {
       await db.sales_quote_line_items.bulkCreate(
         lineItemsPayload.map((item) => ({
           ...item,
+          is_active: 1,
           sales_quote_id: quote.sales_quote_id
         })),
         { transaction }
@@ -429,8 +489,33 @@ async function updateQuote(salesQuoteId, payload, user) {
       throw new Error('Quote not found');
     }
 
-    const lineItemsPayload = await buildLineItemsPayload(payload.line_items || []);
-    const totals = calculateTotals(lineItemsPayload, payload);
+    const clientSnapshot = await resolveClientSnapshot(payload, quote);
+    const existingLineItems = await db.sales_quote_line_items.findAll({
+      where: { sales_quote_id: salesQuoteId, is_active: 1 },
+      order: [['sort_order', 'ASC']],
+      transaction
+    });
+    const existingLineItemsPayload = existingLineItems.map(toPersistableLineItemPayload);
+
+    let incomingLineItemsPayload = [];
+    let sectionTypesToReplace = [];
+    if (Array.isArray(payload.line_items)) {
+      incomingLineItemsPayload = await buildLineItemsPayload(payload.line_items);
+      sectionTypesToReplace = normalizeSectionTypes([
+        ...(Array.isArray(payload.line_item_sections) ? payload.line_item_sections : []),
+        ...incomingLineItemsPayload.map((item) => item.section_type)
+      ]);
+    }
+
+    const mergedLineItemsPayload = Array.isArray(payload.line_items)
+      ? mergeLineItemsBySection(existingLineItemsPayload, incomingLineItemsPayload, sectionTypesToReplace)
+      : existingLineItemsPayload;
+
+    const totals = calculateTotals(mergedLineItemsPayload, {
+      discount_type: payload.discount_type !== undefined ? payload.discount_type : quote.discount_type,
+      discount_value: payload.discount_value !== undefined ? payload.discount_value : quote.discount_value,
+      tax_rate: payload.tax_rate !== undefined ? payload.tax_rate : quote.tax_rate
+    });
     const validity = resolveValidity({
       validUntil: payload.valid_until !== undefined ? payload.valid_until : quote.valid_until,
       quoteValidityDays: payload.quote_validity_days !== undefined ? payload.quote_validity_days : quote.quote_validity_days,
@@ -445,14 +530,14 @@ async function updateQuote(salesQuoteId, payload, user) {
 
     await quote.update({
       lead_id: payload.lead_id !== undefined ? payload.lead_id : quote.lead_id,
-      client_user_id: payload.client_user_id !== undefined ? payload.client_user_id : quote.client_user_id,
+      client_user_id: clientSnapshot.client_user_id,
       assigned_sales_rep_id: assignedSalesRepId,
       pricing_mode: payload.pricing_mode || quote.pricing_mode,
       status: nextStatus,
-      client_name: payload.client_name || quote.client_name,
-      client_email: payload.client_email !== undefined ? payload.client_email : quote.client_email,
-      client_phone: payload.client_phone !== undefined ? payload.client_phone : quote.client_phone,
-      client_address: payload.client_address !== undefined ? payload.client_address : quote.client_address,
+      client_name: clientSnapshot.client_name,
+      client_email: clientSnapshot.client_email,
+      client_phone: clientSnapshot.client_phone,
+      client_address: clientSnapshot.client_address,
       project_description: payload.project_description !== undefined ? payload.project_description : quote.project_description,
       video_shoot_type: payload.video_shoot_type !== undefined ? payload.video_shoot_type : quote.video_shoot_type,
       quote_validity_days: validity.quote_validity_days,
@@ -470,19 +555,31 @@ async function updateQuote(salesQuoteId, payload, user) {
       updated_at: new Date()
     }, { transaction });
 
-    await db.sales_quote_line_items.destroy({
-      where: { sales_quote_id: salesQuoteId },
-      transaction
-    });
+    if (Array.isArray(payload.line_items)) {
+      if (sectionTypesToReplace.length) {
+        await db.sales_quote_line_items.update({
+          is_active: 0,
+          updated_at: new Date()
+        }, {
+          where: {
+            sales_quote_id: salesQuoteId,
+            is_active: 1,
+            section_type: { [Op.in]: sectionTypesToReplace }
+          },
+          transaction
+        });
+      }
 
-    if (lineItemsPayload.length) {
-      await db.sales_quote_line_items.bulkCreate(
-        lineItemsPayload.map((item) => ({
-          ...item,
-          sales_quote_id: salesQuoteId
-        })),
-        { transaction }
-      );
+      if (incomingLineItemsPayload.length) {
+        await db.sales_quote_line_items.bulkCreate(
+          incomingLineItemsPayload.map((item) => ({
+            ...item,
+            is_active: 1,
+            sales_quote_id: salesQuoteId
+          })),
+          { transaction }
+        );
+      }
     }
 
     await recordActivity(transaction, salesQuoteId, 'updated', user.userId, 'Quote updated');
@@ -501,6 +598,8 @@ async function getQuoteById(salesQuoteId, user) {
       {
         model: db.sales_quote_line_items,
         as: 'line_items',
+        where: { is_active: 1 },
+        required: false,
         include: [
           { model: db.quote_catalog_items, as: 'catalog_item', required: false }
         ]
