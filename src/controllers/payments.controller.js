@@ -7,6 +7,7 @@ const googleSheetService = require('../utils/googleSheetsService');
 const BEIGE_MARGIN_PERCENT = parseFloat(process.env.BEIGE_MARGIN_PERCENT || '25.00');
 const REFERRAL_DISCOUNT_PERCENT = 10;
 const emailService = require('../utils/emailService');
+const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
 
 /**
  * Calculate pricing breakdown for CP + equipment booking
@@ -283,18 +284,6 @@ const resolveCrewRoleLabel = async (rawPrimaryRole, fallbackText) => {
     console.error('Failed to resolve crew role labels:', error.message);
     return normalizeServiceType(fallbackText);
   }
-};
-
-const toAbsoluteBeigeAssetUrl = (pathValue) => {
-  const fallbackBase = 'https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/';
-  const configuredBase = (process.env.BEIGE_ASSET_BASE_URL || fallbackBase).replace(/\/+$/, '/') ;
-
-  const raw = String(pathValue || '').trim();
-  if (!raw) return '';
-  if (/^https?:\/\//i.test(raw)) return raw;
-
-  // DB stores values after "beige/" so join directly.
-  return `${configuredBase}${raw.replace(/^\/+/, '')}`;
 };
 
 const deriveClientNameFromEmail = (email) => {

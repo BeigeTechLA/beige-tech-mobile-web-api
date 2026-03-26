@@ -114,13 +114,6 @@ exports.deleteCatalogItem = async (req, res) => {
 
 exports.createQuote = async (req, res) => {
   try {
-    if (!req.body.client_name) {
-      return res.status(constants.BAD_REQUEST.code).json({
-        success: false,
-        message: 'client_name is required'
-      });
-    }
-
     const quote = await quoteService.createQuote(req.body, getUserContext(req));
     return res.status(constants.CREATED.code).json({
       success: true,
@@ -248,7 +241,10 @@ exports.getShootTypes = async (req, res) => {
 exports.createShootType = async (req, res) => {
   try {
     const payload = normalizeShootTypePayload(req.body);
-    const data = await db.sales_shoot_types.create(payload);
+    const data = await db.sales_shoot_types.create({
+      ...payload,
+      is_system_default: 0
+    });
 
     return res.status(constants.CREATED.code).json({
       error: false,
@@ -313,6 +309,59 @@ exports.updateShootType = async (req, res) => {
       error: true,
       code: constants.BAD_REQUEST.code,
       message: err.message || constants.BAD_REQUEST.message,
+      data: null
+    });
+  }
+};
+
+exports.deleteShootType = async (req, res) => {
+  try {
+    const shootTypeId = Number(req.params.shootTypeId);
+    if (!Number.isInteger(shootTypeId) || shootTypeId <= 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        error: true,
+        code: constants.BAD_REQUEST.code,
+        message: 'Invalid shootTypeId',
+        data: null
+      });
+    }
+
+    const record = await db.sales_shoot_types.findByPk(shootTypeId);
+    if (!record) {
+      return res.status(constants.NOT_FOUND.code).json({
+        error: true,
+        code: constants.NOT_FOUND.code,
+        message: 'Shoot type not found',
+        data: null
+      });
+    }
+
+    if (Number(record.is_system_default) === 1) {
+      return res.status(constants.FORBIDDEN.code).json({
+        error: true,
+        code: constants.FORBIDDEN.code,
+        message: 'Default shoot types cannot be deleted',
+        data: null
+      });
+    }
+
+    await record.update({ is_active: 0 });
+
+    return res.status(constants.OK.code).json({
+      error: false,
+      code: constants.OK.code,
+      message: 'Shoot type deleted successfully',
+      data: {
+        sales_shoot_type_id: record.sales_shoot_type_id,
+        deleted: true
+      }
+    });
+  } catch (err) {
+    console.error('deleteShootType Error:', err);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      error: true,
+      code: constants.INTERNAL_SERVER_ERROR.code,
+      message: constants.INTERNAL_SERVER_ERROR.message,
       data: null
     });
   }
