@@ -3,6 +3,7 @@ const sgMail = require('@sendgrid/mail');
 require('dotenv').config();
 const db = require('../models');
 const { stream_project_booking, assigned_crew, crew_members } = db;
+const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
 
 /**
  * Email service using Gmail SMTP
@@ -144,6 +145,57 @@ const splitName = (fullName = '', fallbackEmail = '') => {
 };
 
 const formatEditingStatus = (value) => (value ? 'Yes' : 'No');
+
+const formatContentTypes = (value) => {
+  const labelMap = {
+    videographer: 'Videography',
+    photographer: 'Photography'
+  };
+
+  const items = Array.isArray(value)
+    ? value
+    : String(value || '')
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
+
+  return items
+    .map((item) => {
+      const normalized = String(item || '').trim();
+      return labelMap[normalized.toLowerCase()] || normalized;
+    })
+    .join(', ');
+};
+
+const formatShootTypes = (value) => {
+  const labelMap = {
+    corporate: 'Corporate Event',
+    wedding: 'Wedding',
+    private: 'Private Event',
+    commercial: 'Commercial & Advertising',
+    social_content: 'Social Content',
+    podcast: 'Podcasts & Shows',
+    music: 'Music Videos',
+    short_film: 'Short Films & Narrative',
+    brand_product: 'Brand & Product',
+    people_teams: 'People & Teams',
+    behind_scenes: 'Behind-the-Scenes'
+  };
+
+  const items = Array.isArray(value)
+    ? value
+    : String(value || '')
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
+
+  return items
+    .map((item) => {
+      const normalized = String(item || '').trim();
+      return labelMap[normalized.toLowerCase()] || normalized;
+    })
+    .join(', ');
+};
 
 const formatAmount = (value) => Number(value || 0).toFixed(2);
 
@@ -491,7 +543,7 @@ const sendPasswordResetEmail = async (userData, resetToken) => {
       return { success: false, error: 'Sender email not configured' };
     }
 
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const frontendUrl = process.env.FRONTEND_URL;
     const resetLink = `${frontendUrl}/reset-password?token=${resetToken}`;
 
     const [response] = await sgMail.send({
@@ -552,7 +604,7 @@ const sendClientSignupWelcomeEmail = async (userData) => {
       templateId: CLIENT_SIGNUP_WELCOME_TEMPLATE_ID,
       dynamicTemplateData: {
         first_name: getFirstName(userData.name, userData.first_name) || 'there',
-        frontendUrl: process.env.FRONTEND_URL || 'https://beige.app'
+        frontendUrl: `${process.env.FRONTEND_URL}/book-a-shoot`
       }
     };
 
@@ -598,7 +650,7 @@ const sendCPSignupWelcomeEmail = async (userData) => {
       templateId: CP_SIGNUP_WELCOME_TEMPLATE_ID,
       dynamicTemplateData: {
         first_name: userData.first_name || 'there',
-        frontendUrl: `${process.env.FRONTEND_URL}` || 'https://beige.app'
+        frontendUrl: `${process.env.FRONTEND_URL}/creator/dashboard`
       }
     };
 
@@ -682,7 +734,7 @@ const sendBookingConfirmationEmail = async (data) => {
         cp_photo_url: data.cp_photo_url || 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=120&h=120',
         onboarding_form_link: data.onboarding_form_link || process.env.CLIENT_ONBOARDING_FORM_URL || 'https://beige.app/',
         insert_link: data.onboarding_form_link || process.env.CLIENT_ONBOARDING_FORM_URL || 'https://beige.app/',
-        frontend_url: data.frontend_url || process.env.FRONTEND_URL || 'https://beige.app/'
+        frontend_url: `${process.env.FRONTEND_URL}/affiliate/dashboard`
       }
     };
 
@@ -917,12 +969,6 @@ const sendFinalNudge7DaysEmail = async (data) => {
       return { success: false, error: 'Sender email not configured' };
     }
 
-    const reviewLink =
-      data.review_link ||
-      process.env.CLIENT_REVIEW_LINK ||
-      process.env.FRONTEND_URL ||
-      'https://beige.app/';
-
     const payload = {
       to: data.to_email,
       from: {
@@ -934,7 +980,7 @@ const sendFinalNudge7DaysEmail = async (data) => {
       dynamicTemplateData: {
         user_name: data.first_name || 'there',
         cp_name: data.cp_name || 'your Creative Partner',
-        review_link: reviewLink
+        review_link: `${process.env.FRONTEND_URL}/affiliate/dashboard`
       }
     };
 
@@ -1588,9 +1634,7 @@ try {
       templateId,
       dynamicTemplateData: {
         guestEmail: leadData?.guestEmail || '',
-        contentType: Array.isArray(leadData?.contentType)
-          ? leadData.contentType.join(', ')
-          : (leadData?.contentType || ''),
+        contentType: formatContentTypes(leadData?.contentType),
         eventDate: formatDate(leadData?.eventDate) || leadData?.eventDate || 'TBD',
         startTime: formatTime(leadData?.startTime) || leadData?.startTime || '--',
         endTime: formatTime(leadData?.endTime) || leadData?.endTime || '--',
@@ -1611,7 +1655,7 @@ try {
 const sendPaymentSuccessSalesNotification = async (paymentData) => {
   try {
     const to = process.env.SALES_NOTIFICATION_EMAIL;
-    const templateId = PAYMENT_CONFIRMED_TEMPLATE_ID || SALES_PAYMENT_SUCCESS_TEMPLATE_ID;
+    const templateId = PAYMENT_CONFIRMED_TEMPLATE_ID;
     const { firstName, lastName } = splitName(
       paymentData?.clientName || paymentData?.name,
       paymentData?.guestEmail || paymentData?.email
@@ -1636,7 +1680,7 @@ const sendPaymentSuccessSalesNotification = async (paymentData) => {
         editing: formatEditingStatus(paymentData?.editing ?? paymentData?.editsNeeded),
         paymentIntentId: paymentData?.paymentIntentId || '',
         year: new Date().getFullYear(),
-        frontend_url: process.env.FRONTEND_URL || "https://beige.app/"
+        frontend_url: `${process.env.FRONTEND_URL}/admin/dashboard`,
       }
     });
   } catch (error) {
@@ -1647,7 +1691,7 @@ const sendPaymentSuccessSalesNotification = async (paymentData) => {
 
 /**
  * Send notification to production team about a new lead
- * @param {Object} leadData - { guestEmail, contentType, eventDate, startTime, endTime, editsNeeded }
+ * @param {Object} leadData - { guestEmail, shootType, contentType, eventDate, startTime, endTime, editsNeeded }
  */
 const sendProductionLeadNotification = async (leadData) => {
   try {
@@ -1661,10 +1705,10 @@ const sendProductionLeadNotification = async (leadData) => {
       subject: 'New Production Lead',
       templateId,
       dynamicTemplateData: {
+        client_name: leadData?.client_name || '',
         guestEmail: leadData?.guestEmail || '',
-        contentType: Array.isArray(leadData?.contentType)
-          ? leadData.contentType.join(', ')
-          : (leadData?.contentType || ''),
+        shoot_type: formatShootTypes(leadData?.shootType),
+        contentType: formatContentTypes(leadData?.contentType),
         shoot_date: formatDate(leadData?.eventDate) || leadData?.eventDate || 'TBD',
         shoot_time:
           [formatTime(leadData?.startTime), formatTime(leadData?.endTime)]
@@ -1698,7 +1742,7 @@ const sendNewClientSignupNotification = async (userData) => {
         email: userData?.email || '',
         phone_number: userData?.phone_number || 'N/A',
         instagram: userData?.instagram_handle || userData?.instagram || 'N/A',
-        loginUrl: process.env.FRONTEND_URL || 'https://beige.app/',
+        loginUrl: `${process.env.FRONTEND_URL}/admin/dashboard`,
         year: new Date().getFullYear()
       }
     });
@@ -1735,7 +1779,7 @@ const sendNewCrewSignupNotification = async (crewData) => {
         working_distance: crewData?.working_distance
           ? String(crewData.working_distance).replace(/\s*miles?$/i, '').trim()
           : 'Not provided',
-        adminUrl: process.env.FRONTEND_URL || 'https://beige.app/',
+        frontend_url: process.env.FRONTEND_URL,
         year: new Date().getFullYear()
       }
     });
@@ -1869,17 +1913,6 @@ function buildSingleCard(cp) {
   `;
 }
 
-const toAbsoluteBeigeAssetUrl = (pathValue) => {
-  const fallbackBase = 'https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/';
-  const configuredBase = (process.env.BEIGE_ASSET_BASE_URL || fallbackBase).replace(/\/+$/, '/');
-
-  const raw = String(pathValue || '').trim();
-  if (!raw) return '';
-  if (/^https?:\/\//i.test(raw)) return raw;
-
-  return `${configuredBase}${raw.replace(/^\/+/, '')}`;
-};
-
 const sendCPAcceptRejectStatusEmail = async (data) => {
   try {
     if (!process.env.SENDGRID_API_KEY) return { success: false, error: 'SENDGRID_API_KEY is not configured' };
@@ -1915,7 +1948,7 @@ const sendCPAcceptRejectStatusEmail = async (data) => {
         endTime: data.end_time || '',
         duration: data.duration || '',
         shoot_location_address: data.shoot_location_address || 'TBD',
-        dashboardLink: data.dashboardLink || process.env.CP_STATUS_DASHBOARD_LINK || process.env.FRONTEND_URL || 'https://beige.app/'
+        dashboardLink: data.dashboardLink
       }
     });
 
@@ -1954,6 +1987,7 @@ const sendCPStatusUpdateByRequest = async ({ project_id, crew_member_id, cp_acti
                 {
                   model: db.crew_member_files,
                   as: 'crew_member_files',
+                  where: { file_type: 'profile_photo' },
                   required: false,
                   attributes: ['file_type', 'file_path', 'created_at', 'is_active']
                 }
@@ -2027,16 +2061,13 @@ const sendCPStatusUpdateByRequest = async ({ project_id, crew_member_id, cp_acti
       cp_status: cp_status || '',
       booking_id: booking.stream_project_booking_id,
       client_name: booking?.user?.name || booking?.guest_email || 'Client',
-      service_type: booking?.content_type || booking?.shoot_type || booking?.event_type || '',
+      service_type: formatContentTypes(booking?.content_type),
       date: formatDate(booking?.event_date),
       start_time: formatTime(booking?.start_time),
       end_time: formatTime(booking?.end_time),
       duration: booking?.duration_hours ? `${booking.duration_hours} hours` : '',
       shoot_location_address: formatLocation(booking?.event_location),
-      dashboardLink:
-        process.env.CP_STATUS_DASHBOARD_LINK ||
-        process.env.FRONTEND_URL ||
-        'https://beige.app/',
+      dashboardLink: `${process.env.FRONTEND_URL}/admin/dashboard`,
       cp_list: cpList
     });
   } catch (error) {
@@ -2128,7 +2159,6 @@ const sendCPConfirmedEmailByRequest = async ({ project_id, crew_member_id }) => 
       toAbsoluteBeigeAssetUrl(profileFile?.file_path) ||
       'https://d2jhn32fsulyac.cloudfront.net/assets/Top_CP_images/Cornelius+M..png';
     const experienceSummary = formatExperienceSummary(crew);
-    const serviceType = booking?.content_type || booking?.shoot_type || booking?.event_type || '';
 
     return await sendEmail({
       to: toEmail,
@@ -2139,8 +2169,7 @@ const sendCPConfirmedEmailByRequest = async ({ project_id, crew_member_id }) => 
         first_name: getFirstName(clientName),
         cp_name: cpName,
         cp_experience_summary: experienceSummary,
-        service_type: serviceType,
-        contentType: serviceType,
+        contentType: formatContentTypes(booking?.content_type),
         shoot_date: formatDate(booking?.event_date),
         start_time: formatTime(booking?.start_time),
         end_time: formatTime(booking?.end_time),
@@ -2189,11 +2218,7 @@ const sendCPNewBookingRequestEmail = async (data) => {
       templateId: CP_NEW_BOOKING_REQUEST_TEMPLATE_ID,
       dynamicTemplateData: {
         user_name: data.user_name || 'there',
-        dashboard_link:
-          data.dashboardLink ||
-          process.env.CP_DASHBOARD_LINK ||
-          process.env.FRONTEND_URL ||
-          'https://beige.app/'
+        dashboard_link: `${process.env.FRONTEND_URL}/creator/dashboard`,
       }
     });
 
@@ -2230,7 +2255,7 @@ const sendProductionProposalEmail = async (data) => {
         client_name: data?.client_name || 'there',
         shoot_summary: data?.shoot_summary || '',
         project_name: data?.project_name || '',
-        contentType: data?.contentType || '',
+        contentType: formatContentTypes(data?.contentType) || '',
         eventDate: data?.eventDate || '',
         startTime: data?.startTime || '',
         endTime: data?.endTime || '',

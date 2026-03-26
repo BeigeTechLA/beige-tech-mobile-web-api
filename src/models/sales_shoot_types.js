@@ -43,6 +43,11 @@ module.exports = function(sequelize, DataTypes) {
       allowNull: true,
       defaultValue: 1
     },
+    is_system_default: {
+      type: DataTypes.TINYINT,
+      allowNull: false,
+      defaultValue: 0
+    },
     created_at: {
       type: DataTypes.DATE,
       allowNull: true,

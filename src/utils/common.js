@@ -130,9 +130,22 @@ const S3UploadFiles = async (files) => {
   return filePaths;
 };
 
+const toAbsoluteBeigeAssetUrl = (pathValue) => {
+  const base = (process.env.BEIGE_ASSET_BASE_URL || '').replace(/\/+$/, '/');
+
+  const raw = String(pathValue || '').trim();
+  if (!raw) return '';
+
+  // already full URL
+  if (/^https?:\/\//i.test(raw)) return raw;
+
+  return `${base}${raw.replace(/^\/+/, '')}`;
+};
+
 module.exports = {
   s3Upload,
   uploadS3File,
-  S3UploadFiles
+  S3UploadFiles,
+  toAbsoluteBeigeAssetUrl
 };
 

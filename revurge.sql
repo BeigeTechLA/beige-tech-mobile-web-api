@@ -610,3 +610,14 @@ VALUES
 
 ALTER TABLE `quote_catalog_items` ADD COLUMN `is_system_default` tinyint(1) NOT NULL DEFAULT 0 AFTER `is_active`;
 UPDATE `quote_catalog_items` SET `is_system_default` = 1 WHERE `created_by_user_id` IS NULL;
+
+-- 26-03-26
+
+ALTER TABLE `sales_shoot_types` ADD COLUMN `is_system_default` tinyint(1) NOT NULL DEFAULT 0 AFTER `is_active`;
+UPDATE `sales_shoot_types`
+SET `is_system_default` = 1
+WHERE `sales_shoot_type_id` IN (
+  1, 2, 3, 4, 5, 6, 7, 8,
+  9, 10, 11, 12, 13, 14, 15,
+  16, 17, 18, 19, 20, 21, 22, 23
+);

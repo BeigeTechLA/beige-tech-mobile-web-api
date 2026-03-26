@@ -1,5 +1,6 @@
 const db = require('../models');
 const emailService = require('../utils/emailService');
+const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
 
 const JOB_INTERVAL_MINUTES = parseInt(process.env.SHOOT_REMINDER_JOB_INTERVAL_MINUTES || '30', 10);
 const REMINDER_MARKER = 'shoot_reminder_5_days';
@@ -76,24 +77,6 @@ const deriveFirstName = (userName, leadClientName, guestEmail) => {
   }
 
   return 'there';
-};
-
-const toAbsoluteBeigeAssetUrl = (pathValue) => {
-  if (!pathValue) return '';
-  const raw = String(pathValue).trim();
-  if (!raw) return '';
-  if (/^https?:\/\//i.test(raw)) return raw;
-
-  const base =
-    process.env.BEIGE_ASSET_BASE_URL ||
-    process.env.BEIGE_S3_BASE_URL ||
-    'https://beige-web-prod.s3.us-east-1.amazonaws.com';
-
-  if (raw.startsWith('/')) {
-    return `${base}${raw}`;
-  }
-
-  return `${base}/${raw.replace(/^\.?\//, '')}`;
 };
 
 const parseActivityData = (activityData) => {
@@ -410,9 +393,9 @@ const runShootReminder2HoursJob = async () => {
         if (!bookingStart) continue;
 
         const diffMinutes = Math.round((bookingStart.getTime() - now.getTime()) / (60 * 1000));
-        if (diffMinutes < REMINDER_2H_WINDOW_MIN || diffMinutes > REMINDER_2H_WINDOW_MAX) {
-          continue;
-        }
+        // if (diffMinutes < REMINDER_2H_WINDOW_MIN || diffMinutes > REMINDER_2H_WINDOW_MAX) {
+        //   continue;
+        // }
         windowMatchedCount += 1;
 
         const lead = await db.sales_leads.findOne({
@@ -422,7 +405,7 @@ const runShootReminder2HoursJob = async () => {
 
         const bookingStartIso = bookingStart.toISOString();
         const hasAlreadySent = await alreadySentReminder2h(lead?.lead_id, bookingStartIso);
-        if (hasAlreadySent) continue;
+        // if (hasAlreadySent) continue;
 
         const toEmail = booking.user?.email || booking.guest_email || lead?.guest_email;
         if (!toEmail) {
@@ -465,6 +448,7 @@ const runShootReminder2HoursJob = async () => {
         const location = formatLocation(booking.event_location);
 
         const firstName = deriveFirstName(booking.user?.name, lead?.client_name, toEmail);
+        console.log(cpImageUrl);
         const emailResult = await emailService.sendShootReminder2HoursEmail({
           to_email: toEmail,
           booking_id: booking.stream_project_booking_id,
