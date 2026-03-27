@@ -105,7 +105,7 @@ exports.deleteCatalogItem = async (req, res) => {
     console.error('Error deleting quote catalog item:', error);
     const statusCode = error.message === 'Catalog item not found'
       ? constants.NOT_FOUND.code
-      : error.message === 'Default catalog items cannot be deleted'
+      : error.message === 'Default service catalog items cannot be deleted'
         ? constants.FORBIDDEN.code
         : constants.BAD_REQUEST.code;
     return sendError(res, error, error.message || 'Failed to delete quote catalog item', statusCode);

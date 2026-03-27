@@ -1320,7 +1320,7 @@ Content-Type: application/json
 }
 
 ### delete custom quote catalog item (admin)
-DELETE {{URL}}sales/quotes/catalog/19 HTTP/1.1
+DELETE {{URL}}sales/quotes/catalog/5 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN2}}
 
