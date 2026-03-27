@@ -254,10 +254,13 @@ exports.createShootType = async (req, res) => {
     });
   } catch (err) {
     console.error('createShootType Error:', err);
+    const message = err.name === 'SequelizeUniqueConstraintError'
+      ? 'Shoot type with the same name already exists for this content type'
+      : err.errors?.[0]?.message || err.message || constants.BAD_REQUEST.message;
     return res.status(constants.BAD_REQUEST.code).json({
       error: true,
       code: constants.BAD_REQUEST.code,
-      message: err.message || constants.BAD_REQUEST.message,
+      message,
       data: null
     });
   }
