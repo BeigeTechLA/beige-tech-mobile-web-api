@@ -1779,7 +1779,7 @@ const sendNewCrewSignupNotification = async (crewData) => {
         working_distance: crewData?.working_distance
           ? String(crewData.working_distance).replace(/\s*miles?$/i, '').trim()
           : 'Not provided',
-        frontend_url: process.env.FRONTEND_URL,
+        frontend_url: `${process.env.FRONTEND_URL}/admin/dashboard`,
         year: new Date().getFullYear()
       }
     });

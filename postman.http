@@ -2,7 +2,7 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzQ1MTc0MzQsImV4cCI6MTc3NTEyMjIzNH0.YvKQ5SNibQ0L1gIboojII1qdWA2nuMk7pSIWE-OFQ9U
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjE5MywidXNlclJvbGUiOiJzYWxlc19yZXAiLCJpYXQiOjE3NzQ2MDk0NTgsImV4cCI6MTc3NTIxNDI1OH0.XAH0czrqFJgvb3fLpa7lest588R9P1C9BFExLwvK6HY
 
 @TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzQ0MzE5NTEsImV4cCI6MTc3NTAzNjc1MX0.TZkQqnvlyd1zN_-DsgafsFhQGhMl3hcxDwnEubDBLSk
 
@@ -490,7 +490,7 @@ Authorization: {{TOKEN}}
 }
 
 ### Edit Client Lead Booking
-PUT {{URL}}sales/client-leads/3/booking HTTP/1.1
+PUT {{URL}}sales/client-leads/17/booking HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -516,51 +516,59 @@ Authorization: {{TOKEN}}
   "crew_roles": { "videographer": 2 },
   "crew_size": 2,
   "location": "442 Crocker Street, Los Angeles, California 90013, United States",
-  "selected_crew_ids": [2065],
+  "selected_crew_ids": [2047],
   "is_draft": false,
   "skip_discount": true,
   "skip_margin": true
 }
 
 ### Create New Deal
-POST {{DEV_URL}}sales/deals/finalize HTTP/1.1
+POST {{URL}}sales/deals/finalize HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "client_name": "Lisa Anderson",
-  "guest_email": "lisa@gmail.com",
-  "phone": "9173961117",
-  "intent": "Warm",
-  "lead_source": "instagram",
-  "content_type": "videographer",
-  "shoot_type": "corporate",
-  "booking_type": "multi_day",
-  "booking_days": [
-    {
-      "date": "2026-02-25",
-      "start_time": "03:30:00",
-      "end_time": "07:30:00"
+    "client_name": "Neha",
+    "guest_email": "nehatest@gmail.com",
+    "phone": "8562130120",
+    "intent": "Warm",
+    "lead_source": "referral",
+    "content_type": "videographer,photographer",
+    "shoot_type": "corporate",
+    "location": "Sarkhej Gandhinagar Hwy 314، 380060 Ahmedabad، India",
+    "crew_roles": {
+        "videographer": 1,
+        "photographer": 1
     },
-    {
-      "date": "2026-02-26",
-      "start_time": "05:30:00",
-      "end_time": "09:30:00"
-    }
-  ],
-  "start_date_time": "2026-02-25T03:30:00.000Z",
-  "end_time": "2026-02-25T11:30:00.000Z",
-  "duration_hours": 8,
-  "location": "442 Crocker Street, Los Angeles, California 90013, United States",
-  "crew_roles": { "videographer": 2 },
-  "crew_size": 2,
-  "selected_crew_ids": [291, 299],
-  "edits_needed": true,
-  "video_edit_types": ["highlight_4_7", "feature_30_40"],
-  "photo_edit_types": [],
-  "is_draft": false,
-  "skip_discount": true,
-  "skip_margin": true
+    "crew_size": 2,
+    "selected_crew_ids": [2100],
+    "edits_needed": true,
+    "video_edit_types": [
+        "social_reel_15_30",
+        "social_reel_30_90"
+    ],
+    "photo_edit_types": [
+        "edited_photos"
+    ],
+    "is_draft": false,
+    "skip_discount": true,
+    "skip_margin": true,
+    "booking_type": "multi_day",
+    "time_zone": "Asia/Calcutta",
+    "booking_days": [
+      {
+        "date": "2026-03-28",
+        "start_time": "03:30",
+        "end_time": "07:30",
+        "time_zone": "Asia/Calcutta"
+      },
+      {
+        "date": "2026-03-29",
+        "start_time": "05:30",
+        "end_time": "09:30",
+        "time_zone": "Asia/Calcutta"
+      }
+    ]
 }
 
 ### Create Client Booking
@@ -569,8 +577,8 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "client_lead_id": 15,
-  "user_id": "243",
+  "client_lead_id": 17,
+  "user_id": "246",
   "content_type": "videographer",
   "shoot_type": "corporate",
   "booking_type": "multi_day",
@@ -586,8 +594,6 @@ Authorization: {{TOKEN}}
       "end_time": "09:30:00"
     }
   ],
-  "start_date_time": "2026-02-25T03:30:00.000Z",
-  "end_time": "2026-02-25T11:30:00.000Z",
   "location": "442 Crocker Street, Los Angeles, California 90013, United States",
   "crew_roles": { "videographer": 2 },
   "crew_size": 2,
@@ -729,7 +735,7 @@ stripe-signature: t=1730000000,v1=replace_with_valid_stripe_signature
 # stripe trigger invoice.paid
 
 ### 
-POST {{URL}}sales/leads/202/post-production-status-update
+POST {{DEV_URL}}sales/leads/558/post-production-status-update
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -739,7 +745,7 @@ Authorization: {{TOKEN}}
 }
 
 ### 
-POST {{URL}}sales/leads/202/raw-footage-ready
+POST {{DEV_URL}}sales/leads/558/raw-footage-ready
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -749,7 +755,17 @@ Authorization: {{TOKEN}}
 }
 
 ### 
-POST {{URL}}sales/leads/202/revised-content-delivered
+POST {{DEV_URL}}sales/leads/558/revision-request-received
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "revision_delivery_date": "2026-03-28",
+  "estimated_delivery_date": "2026-03-28"
+}
+
+### 
+POST {{DEV_URL}}sales/leads/558/revised-content-delivered
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -760,17 +776,7 @@ Authorization: {{TOKEN}}
 }
 
 ### 
-POST {{URL}}sales/leads/202/revision-request-received
-Content-Type: application/json
-Authorization: {{TOKEN}}
-
-{
-  "revision_delivery_date": "2026-03-28",
-  "estimated_delivery_date": "2026-03-28"
-}
-
-### 
-POST {{URL}}sales/leads/163/final-assets-delivered-without-revision
+POST {{DEV_URL}}sales/leads/558/final-assets-delivered-without-revision
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -781,7 +787,7 @@ Authorization: {{TOKEN}}
 }
 
 ### 
-POST {{URL}}sales/leads/163/final-assets-delivered-with-revision
+POST {{DEV_URL}}sales/leads/558/final-assets-delivered-with-revision
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -1064,7 +1070,7 @@ GET {{URL}}sales/quotes/catalog HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN2}}
 
-### create quote catalog item (admin)
+### create quote catalog item
 POST {{URL}}sales/quotes/catalog HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN2}}
@@ -1079,14 +1085,19 @@ Authorization: {{TOKEN2}}
   "display_order": 1
 }
 
-### update quote catalog item (admin)
-PUT {{URL}}sales/quotes/catalog/1 HTTP/1.1
+### update quote catalog item
+PUT {{URL}}sales/quotes/catalog/20 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "default_rate": 250
+  "default_rate": 500
 }
+
+### delete custom quote catalog item
+DELETE {{URL}}sales/quotes/catalog/13 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
 
 ### create sales quote (can be called from any step)
 POST {{URL}}sales/quotes HTTP/1.1
@@ -1277,26 +1288,26 @@ Authorization: {{TOKEN}}
 
 ### Create sales shoot type - videography
 POST {{URL}}sales/quotes/shoot-types
-Authorization: {{TOKEN2}}
+Authorization: {{TOKEN}}
 Content-Type: application/json
 
 {
-  "name": "testing",
+  "name": "testi",
   "content_type": 1
 }
 
 ### Create sales shoot type - photography
 POST {{URL}}sales/quotes/shoot-types
-Authorization: {{TOKEN2}}
+Authorization: {{TOKEN}}
 Content-Type: application/json
 
 {
-  "name": "testing",
+  "name": "testin",
   "content_type": 2
 }
 
 ### Update sales shoot type
-PUT {{URL}}sales/quotes/shoot-types/1
+PUT {{URL}}sales/quotes/shoot-types/37
 Authorization: {{TOKEN}}
 Content-Type: application/json
 
@@ -1304,21 +1315,7 @@ Content-Type: application/json
   "name": "Wedding Films"
 }
 
-### Deactivate sales shoot type
-PUT {{URL}}sales/quotes/shoot-types/1
-Authorization: {{TOKEN}}
-Content-Type: application/json
-
-{
-  "is_active": 0
-}
-
-### delete custom quote catalog item (admin)
-DELETE {{URL}}sales/quotes/catalog/19 HTTP/1.1
-Content-Type: application/json
-Authorization: {{TOKEN2}}
-
-### delete custom video shoot type (admin)
-DELETE {{URL}}sales/quotes/shoot-types/30 HTTP/1.1
+### delete custom video shoot type
+DELETE {{URL}}sales/quotes/shoot-types/36 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}

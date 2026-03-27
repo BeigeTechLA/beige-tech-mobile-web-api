@@ -239,8 +239,8 @@ async function deleteCatalogItem(catalogItemId) {
     throw new Error('Catalog item not found');
   }
 
-  if (Number(item.is_system_default) === 1) {
-    throw new Error('Default catalog items cannot be deleted');
+  if (Number(item.is_system_default) === 1 && item.section_type === 'service') {
+    throw new Error('Default service catalog items cannot be deleted');
   }
 
   await item.update({
