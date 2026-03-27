@@ -4031,6 +4031,7 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
 
     event_date = normalizedBookingDays[0].date;
     start_time_final = normalizeTime(normalizedBookingDays[0].start_time) || null;
+    end_time_only = normalizeTime(normalizedBookingDays[0].end_time) || null;
 
     totalDurationHours = normalizedBookingDays.reduce((sum, d) => {
 
@@ -4453,6 +4454,13 @@ exports.finalizeClientLeadBooking = async (req, res) => {
       tx
     });
 
+    if (clientLead.lead_status !== 'booked' && clientLead.lead_status !== 'abandoned') {
+      await clientLead.update(
+        { lead_status: 'booking_in_progress' },
+        { transaction: tx }
+      );
+    }
+
     await client_lead_activities.create({
       lead_id: clientLead.lead_id,
       activity_type: 'booking_updated',
@@ -4678,7 +4686,7 @@ exports.finalizeCreateDeal = async (req, res) => {
           lead_type,
           intent,
           lead_source,
-          lead_status: 'manual_lead_created',
+          lead_status: 'booking_in_progress',
           created_from: 1
         },
         { transaction: tx }
