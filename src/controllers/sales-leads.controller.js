@@ -46,7 +46,12 @@ async function calculateFromCreatorsInternally(pricingPayload) {
   return pricingData;
 }
 
-async function notifyAssignedCreators(creatorIds = []) {
+async function notifyAssignedCreators(
+  creatorIds = [],
+  booking = null,
+  fallbackClientName = '',
+  fallbackShootAmount = null
+) {
   try {
     const uniqueIds = [...new Set((creatorIds || []).map(Number).filter(Boolean))];
     if (!uniqueIds.length) return;
@@ -68,6 +73,7 @@ async function notifyAssignedCreators(creatorIds = []) {
           sendCPNewBookingRequestEmail({
             to_email: c.email,
             user_name: [c.first_name, c.last_name].filter(Boolean).join(' ') || 'there',
+            ...getCPNewBookingEmailFields(booking, fallbackClientName, fallbackShootAmount),
             dashboardLink
           })
         )
@@ -75,6 +81,99 @@ async function notifyAssignedCreators(creatorIds = []) {
   } catch (e) {
     console.error('notifyAssignedCreators failed:', e?.message || e);
   }
+}
+
+function getCPNewBookingEmailFields(booking = {}, fallbackClientName = '', fallbackShootAmount = null) {
+  return {
+    client_name:
+      fallbackClientName ||
+      booking?.client_name ||
+      booking?.user?.name ||
+      null,
+    service_type:
+      booking?.content_type ||
+      booking?.event_type ||
+      booking?.shoot_type ||
+      null,
+    date: booking?.event_date || null,
+    start_time: booking?.start_time || null,
+    end_time: booking?.end_time || null,
+    shoot_amount: fallbackShootAmount ?? booking?.budget ?? null
+  };
+}
+
+function getEmailShootAmountFromFinalizeResult(finalizeResult = {}) {
+  return (
+    finalizeResult?.quote?.quote?.total ??
+    finalizeResult?.quote?.quote?.priceAfterDiscount ??
+    finalizeResult?.quote?.quote?.subtotal ??
+    finalizeResult?.quote?.total ??
+    finalizeResult?.quote?.price_after_discount ??
+    finalizeResult?.quote?.subtotal ??
+    null
+  );
+}
+
+async function resolveEmailClientNameForBooking(booking = null, fallbackClientName = null, options = {}) {
+  if (fallbackClientName) {
+    return fallbackClientName;
+  }
+
+  if (!booking) {
+    return null;
+  }
+
+  const transaction = options.transaction;
+
+  if (booking.client_name) {
+    return booking.client_name;
+  }
+
+  if (booking.user?.name) {
+    return booking.user.name;
+  }
+
+  if (booking.user_id) {
+    const bookingUser = await users.findOne({
+      where: { id: booking.user_id },
+      attributes: ['name'],
+      transaction
+    });
+
+    if (bookingUser?.name) {
+      return bookingUser.name;
+    }
+  }
+
+  const linkedLead = await sales_leads.findOne({
+    where: { booking_id: booking.stream_project_booking_id },
+    attributes: ['client_name'],
+    transaction
+  });
+
+  if (linkedLead?.client_name) {
+    return linkedLead.client_name;
+  }
+
+  const linkedClientLead = await client_leads.findOne({
+    where: { booking_id: booking.stream_project_booking_id },
+    attributes: ['client_name'],
+    transaction
+  });
+
+  if (linkedClientLead?.client_name) {
+    return linkedClientLead.client_name;
+  }
+
+  if (booking.guest_email) {
+    const localPart = String(booking.guest_email).split('@')[0] || '';
+    const derivedName = localPart.replace(/[._-]+/g, ' ').trim();
+    if (derivedName) {
+      return derivedName;
+    }
+  }
+
+  return null;
 }
 
 async function confirmCreativePartnerForLead({
@@ -4341,10 +4440,28 @@ exports.finalizeGuestBooking = async (req, res) => {
       tx
     });
 
+    const linkedLead = await sales_leads.findOne({
+      where: { booking_id: booking.stream_project_booking_id },
+      attributes: ['lead_id', 'client_name'],
+      transaction: tx
+    });
+
+    console.log(linkedLead);
+
     await tx.commit();
 
     // send CP new booking request emails
-    await notifyAssignedCreators(finalizeResult.assigned_creator_ids || []);
+    const emailClientName = await resolveEmailClientNameForBooking(
+      booking,
+      linkedLead?.client_name || null
+    );
+
+    await notifyAssignedCreators(
+      finalizeResult.assigned_creator_ids || [],
+      booking,
+      emailClientName,
+      getEmailShootAmountFromFinalizeResult(finalizeResult)
+    );
 
     return res.status(200).json({
       success: true,
@@ -4473,7 +4590,17 @@ exports.finalizeClientLeadBooking = async (req, res) => {
 
     await tx.commit();
 
-    await notifyAssignedCreators(finalizeResult.assigned_creator_ids || []);
+    const emailClientName = await resolveEmailClientNameForBooking(
+      booking,
+      clientLead.client_name
+    );
+
+    await notifyAssignedCreators(
+      finalizeResult.assigned_creator_ids || [],
+      booking,
+      emailClientName,
+      getEmailShootAmountFromFinalizeResult(finalizeResult)
+    );
 
     return res.status(200).json({
       success: true,
@@ -4804,7 +4931,17 @@ exports.finalizeCreateDeal = async (req, res) => {
     await tx.commit();
     
     // send CP new booking request emails
-    await notifyAssignedCreators(finalizeResult.assigned_creator_ids || []);
+    const emailClientName = await resolveEmailClientNameForBooking(
+      booking,
+      lead.client_name
+    );
+
+    await notifyAssignedCreators(
+      finalizeResult.assigned_creator_ids || [],
+      booking,
+      emailClientName,
+      getEmailShootAmountFromFinalizeResult(finalizeResult)
+    );
 
     return res.status(200).json({
       success: true,

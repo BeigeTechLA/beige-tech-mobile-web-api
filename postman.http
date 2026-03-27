@@ -435,8 +435,8 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-    "project_id": 715,
-    "crew_member_ids": [2065, 2049] 
+    "project_id": 922,
+    "crew_member_ids": [2103] 
 }
 
 ### 
@@ -483,7 +483,7 @@ Authorization: {{TOKEN}}
   "crew_roles": { "videographer": 2 },
   "crew_size": 2,
   "location": "442 Crocker Street, Los Angeles, California 90013, United States",
-  "selected_crew_ids": [2065],
+  "selected_crew_ids": [2103],
   "is_draft": false,
   "skip_discount": true,
   "skip_margin": true
@@ -516,7 +516,7 @@ Authorization: {{TOKEN}}
   "crew_roles": { "videographer": 2 },
   "crew_size": 2,
   "location": "442 Crocker Street, Los Angeles, California 90013, United States",
-  "selected_crew_ids": [2047],
+  "selected_crew_ids": [2103],
   "is_draft": false,
   "skip_discount": true,
   "skip_margin": true
@@ -528,8 +528,8 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-    "client_name": "Neha",
-    "guest_email": "nehatest@gmail.com",
+    "client_name": "Test User",
+    "guest_email": "nehatest3@gmail.com",
     "phone": "8562130120",
     "intent": "Warm",
     "lead_source": "referral",
@@ -541,7 +541,7 @@ Authorization: {{TOKEN}}
         "photographer": 1
     },
     "crew_size": 2,
-    "selected_crew_ids": [2100],
+    "selected_crew_ids": [2103],
     "edits_needed": true,
     "video_edit_types": [
         "social_reel_15_30",
@@ -597,7 +597,7 @@ Authorization: {{TOKEN}}
   "location": "442 Crocker Street, Los Angeles, California 90013, United States",
   "crew_roles": { "videographer": 2 },
   "crew_size": 2,
-  "selected_crew_ids": [2037],
+  "selected_crew_ids": [2103],
   "edits_needed": true,
   "video_edit_types": ["highlight_4_7", "feature_30_40"],
   "photo_edit_types": [],
@@ -818,13 +818,13 @@ Authorization: {{TOKEN}}
 }
 
 ### 
-POST {{DEV_URL}}admin/assignMatchCrew HTTP/1.1
+POST {{URL}}admin/assignMatchCrew HTTP/1.1
 Content-Type: application/json
 # Authorization: {{TOKEN}}
 
 {
-  "assigned_crew": [299],
-  "project_id": 2632
+  "assigned_crew": [2103],
+  "project_id": 922
 }
 
 ### 
@@ -971,13 +971,13 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### assign crew from client lead
-POST {{DEV_URL}}admin/assign-crew-from-lead HTTP/1.1
+POST {{URL}}admin/assign-crew-from-lead HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "lead_id": 528,
-  "crew_member_ids": [291, 299]
+  "lead_id": 245,
+  "crew_member_ids": [2103]
 }
 
 
@@ -1319,3 +1319,12 @@ Content-Type: application/json
 DELETE {{URL}}sales/quotes/shoot-types/36 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
+
+### 
+POST {{URL}}guest-bookings/797/assign-creators
+Authorization: {{TOKEN}}
+Content-Type: application/json
+
+{
+  "creator_ids": [2103]
+}

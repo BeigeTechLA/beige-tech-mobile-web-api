@@ -2208,6 +2208,18 @@ const sendCPNewBookingRequestEmail = async (data) => {
       return { success: false, error: 'Sender email not configured' };
     }
 
+    const userFirstName = getFirstName(data.user_name, data.first_name);
+    const clientName = data.client_name || 'TBD';
+    const serviceType = data.service_type || data.services
+      ? formatContentTypes(data.service_type || data.services)
+      : 'TBD';
+    const shootDate = data.date ? formatDate(data.date) : 'TBD';
+    const startTime = data.start_time ? formatTime(data.start_time) : 'TBD';
+    const endTime = data.end_time ? formatTime(data.end_time) : 'TBD';
+    const shootAmount = data.shoot_amount !== undefined && data.shoot_amount !== null
+      ? `$${formatAmount(data.shoot_amount)}`
+      : 'TBD';
+
     const [response] = await sgMail.send({
       to: data.to_email,
       from: {
@@ -2217,7 +2229,13 @@ const sendCPNewBookingRequestEmail = async (data) => {
       subject: 'New Booking Request',
       templateId: CP_NEW_BOOKING_REQUEST_TEMPLATE_ID,
       dynamicTemplateData: {
-        user_name: data.user_name || 'there',
+        user_name: userFirstName,
+        client_name: clientName,
+        service_type: serviceType,
+        date: shootDate,
+        start_time: startTime,
+        end_time: endTime,
+        shoot_amount: shootAmount,
         dashboard_link: `${process.env.FRONTEND_URL}/creator/dashboard`,
       }
     });
