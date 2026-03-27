@@ -624,3 +624,183 @@ WHERE `sales_shoot_type_id` IN (
 
 ALTER TABLE `sales_quote_line_items`
 ADD COLUMN `is_active` tinyint(1) NOT NULL DEFAULT 1 AFTER `sort_order`;
+
+-- 27-06-26
+
+CREATE TABLE IF NOT EXISTS `projects` (
+  `project_id` int(11) NOT NULL AUTO_INCREMENT,
+  `booking_id` int(11) NOT NULL COMMENT 'FK to stream_project_booking',
+  `project_code` varchar(50) NOT NULL COMMENT 'Unique identifier like PRJ-2026-001',
+  `project_name` varchar(255) NOT NULL,
+  `current_state` enum(
+    'RAW_UPLOADED',
+    'RAW_TECH_QC_PENDING',
+    'RAW_TECH_QC_REJECTED',
+    'RAW_TECH_QC_APPROVED',
+    'COVERAGE_REVIEW_PENDING',
+    'COVERAGE_REJECTED',
+    'EDIT_APPROVAL_PENDING',
+    'EDIT_IN_PROGRESS',
+    'INTERNAL_EDIT_REVIEW_PENDING',
+    'CLIENT_PREVIEW_READY',
+    'CLIENT_FEEDBACK_RECEIVED',
+    'FEEDBACK_INTERNAL_REVIEW',
+    'REVISION_IN_PROGRESS',
+    'REVISION_QC_PENDING',
+    'FINAL_EXPORT_PENDING',
+    'READY_FOR_DELIVERY',
+    'DELIVERED',
+    'PROJECT_CLOSED'
+  ) NOT NULL DEFAULT 'RAW_UPLOADED',
+  `state_changed_at` timestamp NULL DEFAULT NULL,
+  `client_user_id` int(11) NOT NULL COMMENT 'FK to users - client who owns this project',
+  `assigned_creator_id` int(11) DEFAULT NULL COMMENT 'FK to users - assigned creator/videographer',
+  `assigned_editor_id` int(11) DEFAULT NULL COMMENT 'FK to users - assigned editor',
+  `assigned_qc_id` int(11) DEFAULT NULL COMMENT 'FK to users - assigned QC reviewer',
+  `raw_upload_deadline` datetime DEFAULT NULL,
+  `edit_delivery_deadline` datetime DEFAULT NULL,
+  `final_delivery_deadline` datetime DEFAULT NULL,
+  `project_notes` text DEFAULT NULL COMMENT 'Internal admin notes',
+  `client_requirements` text DEFAULT NULL COMMENT 'Client-provided requirements from booking',
+  `total_raw_size_bytes` bigint(20) DEFAULT 0 COMMENT 'Total size of RAW footage uploaded',
+  `total_files_count` int(11) DEFAULT 0 COMMENT 'Total number of files in project',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (`project_id`),
+  UNIQUE KEY `project_code` (`project_code`),
+
+  KEY `idx_projects_booking` (`booking_id`),
+  KEY `idx_projects_client` (`client_user_id`),
+  KEY `idx_projects_current_state` (`current_state`),
+  KEY `idx_projects_creator` (`assigned_creator_id`),
+  KEY `idx_projects_editor` (`assigned_editor_id`),
+  KEY `idx_projects_qc` (`assigned_qc_id`),
+  KEY `idx_projects_state_changed` (`state_changed_at`),
+  KEY `idx_projects_created_at` (`created_at`),
+
+  CONSTRAINT `projects_ibfk_1`
+    FOREIGN KEY (`booking_id`)
+    REFERENCES `stream_project_booking` (`stream_project_booking_id`),
+
+  CONSTRAINT `projects_ibfk_2`
+    FOREIGN KEY (`client_user_id`)
+    REFERENCES `users` (`id`),
+
+  CONSTRAINT `projects_ibfk_3`
+    FOREIGN KEY (`assigned_creator_id`)
+    REFERENCES `users` (`id`)
+    ON DELETE SET NULL,
+
+  CONSTRAINT `projects_ibfk_4`
+    FOREIGN KEY (`assigned_editor_id`)
+    REFERENCES `users` (`id`)
+    ON DELETE SET NULL,
+
+  CONSTRAINT `projects_ibfk_5`
+    FOREIGN KEY (`assigned_qc_id`)
+    REFERENCES `users` (`id`)
+    ON DELETE SET NULL
+
+) ENGINE=InnoDB 
+DEFAULT CHARSET=utf8mb4 
+COLLATE=utf8mb4_general_ci;
+
+CREATE TABLE IF NOT EXISTS `project_files` (
+  `file_id` int(11) NOT NULL AUTO_INCREMENT,
+  `project_id` int(11) NOT NULL COMMENT 'FK to projects',
+
+  `file_category` enum(
+    'RAW_FOOTAGE',
+    'RAW_AUDIO',
+    'EDIT_DRAFT',
+    'EDIT_REVISION',
+    'EDIT_FINAL',
+    'CLIENT_DELIVERABLE',
+    'THUMBNAIL',
+    'REFERENCE_MATERIAL'
+  ) NOT NULL,
+
+  `file_name` varchar(500) NOT NULL,
+  `file_path` varchar(1000) NOT NULL COMMENT 'S3 path: raw-footage/{project_id}/{filename}',
+  `file_size_bytes` bigint(20) NOT NULL,
+  `file_extension` varchar(20) NOT NULL,
+  `mime_type` varchar(100) DEFAULT NULL,
+
+  `upload_status` enum('PENDING','IN_PROGRESS','COMPLETED','FAILED') NOT NULL DEFAULT 'PENDING',
+  `upload_progress` int(11) DEFAULT 0 COMMENT 'Percentage 0-100',
+  `upload_session_id` varchar(100) DEFAULT NULL COMMENT 'For chunked uploads',
+  `uploaded_by_user_id` int(11) DEFAULT NULL COMMENT 'FK to users - who uploaded this file',
+
+  `validation_status` enum('PENDING','PASSED','FAILED') DEFAULT 'PENDING',
+  `validation_errors` text DEFAULT NULL COMMENT 'JSON array of validation issues',
+
+  -- Video metadata
+  `video_duration_seconds` int(11) DEFAULT NULL,
+  `video_resolution` varchar(20) DEFAULT NULL,
+  `video_fps` decimal(5,2) DEFAULT NULL,
+  `video_codec` varchar(50) DEFAULT NULL,
+  `video_bitrate_kbps` int(11) DEFAULT NULL,
+
+  -- Audio metadata
+  `audio_codec` varchar(50) DEFAULT NULL,
+  `audio_sample_rate` int(11) DEFAULT NULL,
+  `audio_channels` int(11) DEFAULT NULL,
+
+  -- Versioning
+  `version_number` int(11) DEFAULT 1,
+  `replaces_file_id` int(11) DEFAULT NULL,
+
+  -- Hashing & storage
+  `md5_hash` varchar(32) DEFAULT NULL,
+  `sha256_hash` varchar(64) DEFAULT NULL,
+  `s3_bucket` varchar(100) DEFAULT NULL,
+  `s3_region` varchar(50) DEFAULT NULL,
+  `s3_etag` varchar(100) DEFAULT NULL,
+
+  -- Soft delete
+  `is_deleted` tinyint(1) DEFAULT 0,
+  `deleted_at` timestamp NULL DEFAULT NULL,
+  `deleted_by_user_id` int(11) DEFAULT NULL,
+
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (`file_id`),
+
+  -- Indexes
+  KEY `idx_project_files_project` (`project_id`),
+  KEY `idx_project_files_category` (`file_category`),
+  KEY `idx_project_files_upload_status` (`upload_status`),
+  KEY `idx_project_files_validation` (`validation_status`),
+  KEY `idx_project_files_session` (`upload_session_id`),
+  KEY `idx_project_files_uploaded_by` (`uploaded_by_user_id`),
+  KEY `idx_project_files_deleted` (`is_deleted`),
+  KEY `idx_project_files_created_at` (`created_at`),
+  KEY `idx_project_files_replaces` (`replaces_file_id`),
+  KEY `idx_project_files_deleted_by` (`deleted_by_user_id`),
+
+  -- Constraints
+  CONSTRAINT `project_files_ibfk_1`
+    FOREIGN KEY (`project_id`)
+    REFERENCES `projects` (`project_id`)
+    ON DELETE CASCADE,
+
+  CONSTRAINT `project_files_ibfk_2`
+    FOREIGN KEY (`uploaded_by_user_id`)
+    REFERENCES `users` (`id`)
+    ON DELETE SET NULL,
+
+  CONSTRAINT `project_files_ibfk_3`
+    FOREIGN KEY (`replaces_file_id`)
+    REFERENCES `project_files` (`file_id`)
+    ON DELETE SET NULL,
+
+  CONSTRAINT `project_files_ibfk_4`
+    FOREIGN KEY (`deleted_by_user_id`)
+    REFERENCES `users` (`id`)
+    ON DELETE SET NULL
+
+) ENGINE=InnoDB
+DEFAULT CHARSET=utf8mb4
+COLLATE=utf8mb4_general_ci;

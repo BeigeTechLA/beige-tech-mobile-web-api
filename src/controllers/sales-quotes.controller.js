@@ -105,7 +105,7 @@ exports.deleteCatalogItem = async (req, res) => {
     console.error('Error deleting quote catalog item:', error);
     const statusCode = error.message === 'Catalog item not found'
       ? constants.NOT_FOUND.code
-      : error.message === 'Default catalog items cannot be deleted'
+      : error.message === 'Default service catalog items cannot be deleted'
         ? constants.FORBIDDEN.code
         : constants.BAD_REQUEST.code;
     return sendError(res, error, error.message || 'Failed to delete quote catalog item', statusCode);
@@ -254,10 +254,13 @@ exports.createShootType = async (req, res) => {
     });
   } catch (err) {
     console.error('createShootType Error:', err);
+    const message = err.name === 'SequelizeUniqueConstraintError'
+      ? 'Shoot type with the same name already exists for this content type'
+      : err.errors?.[0]?.message || err.message || constants.BAD_REQUEST.message;
     return res.status(constants.BAD_REQUEST.code).json({
       error: true,
       code: constants.BAD_REQUEST.code,
-      message: err.message || constants.BAD_REQUEST.message,
+      message,
       data: null
     });
   }
