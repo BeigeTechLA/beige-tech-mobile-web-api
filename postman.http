@@ -1328,3 +1328,110 @@ Content-Type: application/json
 {
   "creator_ids": [2103]
 }
+
+### create sales quote from middle step 3
+POST {{URL}}sales/quotes HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{ 
+  "client_name": "Harsh Panchal",
+  "client_email": "harsh@example.com",
+  "client_phone": "+1 555 324 568",
+  "client_address": "567 Mission Street, San Francisco, CA 94105",
+  "project_description": "Corporate video production for annual conference",
+  "video_shoot_type": "Private Event",
+  "quote_validity_days": 7,
+  "video_shoot_type": "Private Event",
+  "line_items": [
+    {
+      "catalog_item_id": 1,
+      "section_type": "service",
+      "quantity": 1,
+      "duration_hours": 4,
+      "crew_size": 1,
+      "estimated_pricing": 300
+    },
+    {
+      "catalog_item_id": 6,
+      "section_type": "addon",
+      "quantity": 1
+    }
+  ]
+}
+
+### update sales quote on next step
+PUT {{URL}}sales/quotes/2 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "line_items": [
+    {
+      "source_type": "custom",
+      "section_type": "logistics",
+      "item_name": "Travel and Transportation",
+      "rate_type": "flat",
+      "unit_rate": 500,
+      "quantity": 1
+    },
+    {
+      "source_type": "custom",
+      "section_type": "custom",
+      "item_name": "Rush Delivery",
+      "rate_type": "flat",
+      "unit_rate": 1500,
+      "quantity": 1
+    }
+  ]
+}
+
+### update sales quote on next step (only tax/discount)
+PUT {{URL}}sales/quotes/2 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "discount_type": "fixed_amount",
+  "discount_value": 250,
+  "tax_type": "Sales Tax",
+  "tax_rate": 8.5,
+  "is_draft": false
+}
+
+### get sales quote detail
+GET {{URL}}sales/quotes/2 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### update sales quote when user again come back after saving draft
+PUT {{URL}}sales/quotes/2 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "project_description": "Updated conference production scope",
+  "quote_validity_days": 6,
+  "discount_type": "fixed_amount",
+  "discount_value": 250,
+  "tax_type": "Sales Tax",
+  "tax_rate": 8.5,
+  "line_items": [
+    {
+      "catalog_item_id": 1,
+      "section_type": "service",
+      "quantity": 1,
+      "duration_hours": 6,
+      "crew_size": 1,
+      "estimated_pricing": 350
+    },
+    {
+      "source_type": "custom",
+      "section_type": "custom",
+      "rate_type": "flat",
+      "unit_rate": 1500,
+      "quantity": 1
+    }
+  ],
+  "is_draft": false
+}

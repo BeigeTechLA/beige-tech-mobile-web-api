@@ -804,3 +804,5 @@ CREATE TABLE IF NOT EXISTS `project_files` (
 ) ENGINE=InnoDB
 DEFAULT CHARSET=utf8mb4
 COLLATE=utf8mb4_general_ci;
+
+ALTER TABLE `sales_quotes` MODIFY COLUMN `status` ENUM('draft','pending','sent','viewed','accepted','rejected','expired') NOT NULL DEFAULT 'draft';

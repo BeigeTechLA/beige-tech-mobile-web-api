@@ -2,7 +2,7 @@ const { Op } = require('sequelize');
 const db = require('../models');
 
 const SECTION_TYPES = ['service', 'addon', 'logistics', 'custom'];
-const QUOTE_STATUSES = ['draft', 'sent', 'viewed', 'accepted', 'rejected', 'expired'];
+const QUOTE_STATUSES = ['draft', 'pending', 'sent', 'viewed', 'accepted', 'rejected', 'expired'];
 const DISCOUNT_TYPES = ['none', 'percentage', 'fixed_amount'];
 const DEFAULT_FIGMA_CATALOG = {
   service: [
@@ -120,6 +120,22 @@ function resolveValidity({ validUntil, quoteValidityDays, validUntilProvided = f
 
 function isAdminRole(role) {
   return role === 'admin' || role === 'Admin';
+}
+
+function resolveQuoteStatus(payload = {}, currentStatus = 'draft') {
+  if (payload.is_draft === true) {
+    return 'draft';
+  }
+
+  if (payload.is_draft === false) {
+    return 'pending';
+  }
+
+  if (payload.status && QUOTE_STATUSES.includes(payload.status)) {
+    return payload.status;
+  }
+
+  return currentStatus;
 }
 
 function buildQuoteAccessWhere(user) {
@@ -436,7 +452,7 @@ async function createQuote(payload, user) {
       created_by_user_id: user.userId,
       assigned_sales_rep_id: assignedSalesRepId,
       pricing_mode: payload.pricing_mode || 'general',
-      status: QUOTE_STATUSES.includes(payload.status) ? payload.status : 'draft',
+      status: resolveQuoteStatus(payload, 'draft'),
       client_name: clientSnapshot.client_name,
       client_email: clientSnapshot.client_email,
       client_phone: clientSnapshot.client_phone,
@@ -523,7 +539,7 @@ async function updateQuote(salesQuoteId, payload, user) {
       quoteValidityDaysProvided: payload.quote_validity_days !== undefined
     });
 
-    const nextStatus = payload.status && QUOTE_STATUSES.includes(payload.status) ? payload.status : quote.status;
+    const nextStatus = resolveQuoteStatus(payload, quote.status);
     const assignedSalesRepId = isAdminRole(user.role)
       ? (payload.assigned_sales_rep_id !== undefined ? payload.assigned_sales_rep_id : quote.assigned_sales_rep_id)
       : quote.assigned_sales_rep_id;
@@ -727,7 +743,7 @@ async function getQuoteDashboard(query, user) {
   const overview = {
     total_quotes: quotes.length,
     accepted_quotes: quotes.filter((item) => item.status === 'accepted').length,
-    pending_quotes: quotes.filter((item) => ['sent', 'viewed'].includes(item.status)).length,
+    pending_quotes: quotes.filter((item) => ['pending', 'sent', 'viewed'].includes(item.status)).length,
     draft_quotes: quotes.filter((item) => item.status === 'draft').length,
     rejected_quotes: quotes.filter((item) => item.status === 'rejected').length,
     expired_quotes: quotes.filter((item) => item.status === 'expired').length,
