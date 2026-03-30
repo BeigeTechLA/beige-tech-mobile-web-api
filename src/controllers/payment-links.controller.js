@@ -5,8 +5,33 @@ const constants = require('../utils/constants');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const emailService = require('../utils/emailService');
 const discountService = require('../services/discount.service');
+const pricingService = require('../services/pricing.service');
 const { Op } = require('sequelize');
 const https = require('https');
+
+const formatDisplayLabel = (value) => {
+  const normalized = String(value || '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!normalized) return '';
+
+  return normalized
+    .split(' ')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(' ');
+};
+
+const formatProposalProjectName = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return 'Service Booking';
+
+  return raw
+    .split(' - ')
+    .map((part) => formatDisplayLabel(part) || part.trim())
+    .join(' - ');
+};
 
 const updatePaymentLeadState = async ({
   leadId = null,
@@ -451,14 +476,22 @@ exports.sendPaymentLinkEmail = async (req, res) => {
     }
 
     const paymentUrl = paymentLinksService.buildPaymentUrl(link.link_token);
+    const formattedShootType = emailService.formatShootTypes(
+      link.booking.shoot_type || link.booking.event_type || 'Shoot'
+    );
+    const formattedContentTypes = emailService.formatContentTypes(link.booking.content_type);
+    const shootSummary = [formattedShootType, formattedContentTypes]
+      .filter(Boolean)
+      .join(' - ');
+    const formattedProjectName = formatProposalProjectName(link.booking.project_name);
 
     // 4. Send Email
     const result = await emailService.sendProductionProposalEmail({
       to_email: recipientEmail,
       client_name: recipientName,
-      shoot_summary: `${link.booking.shoot_type || link.booking.event_type || 'Shoot'} ${link.booking.content_type ? `- ${link.booking.content_type}` : ''}`.trim(),
-      project_name: link.booking.project_name || 'Service Booking',
-      contentType: link.booking.content_type || link.booking.event_type || 'N/A',
+      shoot_summary: shootSummary || formattedShootType || 'Shoot',
+      project_name: formattedProjectName,
+      contentType: formattedContentTypes || formattedShootType || 'N/A',
       eventDate: link.booking.event_date
         ? new Date(link.booking.event_date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
         : '',
@@ -709,6 +742,10 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
     }
 
     const pricingData = await calculateLeadPricing(booking);
+    if (!pricingData) {
+      await booking.update({ invoice_generation_status: 'failed' });
+      throw new Error(`Could not calculate pricing for booking ${parsedBookingId}.`);
+    }
     let invoiceDetails = null;
 
     // --- CASE 1: ALREADY PAID ---

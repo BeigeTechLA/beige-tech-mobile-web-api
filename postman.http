@@ -450,8 +450,8 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "lead_id": 175,
-  "booking_id": 839,
+  "lead_id": 253,
+  "booking_id": 930,
   "discount_code_id": 32,
   "expiry_hours": 2
 }
@@ -665,16 +665,16 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "booking_id": 803
+  "booking_id": 930
 }
 
 
 ### 
-POST {{DEV_URL}}sales/payment-links/notify HTTP/1.1
+POST {{URL}}sales/payment-links/notify HTTP/1.1
 Content-Type: application/json
 
 {
-  "payment_link_id": 31
+  "payment_link_id": 15
 }
 
 ### 

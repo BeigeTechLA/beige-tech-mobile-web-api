@@ -33,6 +33,12 @@ if (process.env.SENDGRID_API_KEY) {
   sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 }
 
+const getSendgridFromName = () =>
+  (process.env.SENDGRID_FROM_NAME || '').trim() || 'Beige AI';
+
+const getSendgridFromAddress = () =>
+  (process.env.SENDGRID_FROM_EMAIL || '').trim();
+
 const {
   CLIENT_SIGNUP_WELCOME_TEMPLATE_ID,
   PAYMENT_CONFIRMED_TEMPLATE_ID,
@@ -254,14 +260,14 @@ const sendEmail = async ({ to, subject, templateId, dynamicTemplateData }) => {
   if (!templateId) return { success: false, error: 'Template ID is not configured' };
   if (!to) return { success: false, error: 'Recipient email is required' };
 
-  const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+  const fromEmail = getSendgridFromAddress();
   if (!fromEmail) return { success: false, error: 'Sender email not configured' };
 
   const [response] = await sgMail.send({
     to,
     from: {
       email: fromEmail,
-      name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+      name: getSendgridFromName()
     },
     subject,
     templateId,
@@ -481,7 +487,7 @@ const sendVerificationOTP = async (userData, otp) => {
       return { success: false, error: 'VERIFICATION_OTP_TEMPLATE_ID is not configured' };
     }
 
-    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    const fromEmail = getSendgridFromAddress();
     if (!fromEmail) {
       return { success: false, error: 'Sender email not configured' };
     }
@@ -490,7 +496,7 @@ const sendVerificationOTP = async (userData, otp) => {
       to: userData.email,
       from: {
         email: fromEmail,
-        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+        name: getSendgridFromName()
       },
       subject: 'Verify Your Email - BeigeAI',
       templateId: VERIFICATION_OTP_TEMPLATE_ID,
@@ -538,7 +544,7 @@ const sendPasswordResetEmail = async (userData, resetToken) => {
       return { success: false, error: 'Recipient email is required' };
     }
 
-    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    const fromEmail = getSendgridFromAddress();
     if (!fromEmail) {
       return { success: false, error: 'Sender email not configured' };
     }
@@ -550,7 +556,7 @@ const sendPasswordResetEmail = async (userData, resetToken) => {
       to: userData.email,
       from: {
         email: fromEmail,
-        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+        name: getSendgridFromName()
       },
       subject: 'Reset Your Password - BeigeAI',
       templateId: PASSWORD_RESET_TEMPLATE_ID,
@@ -590,7 +596,7 @@ const sendClientSignupWelcomeEmail = async (userData) => {
       return { success: false, error: 'Client email is required' };
     }
 
-    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    const fromEmail = getSendgridFromAddress();
     if (!fromEmail) {
       return { success: false, error: 'Sender email not configured' };
     }
@@ -599,7 +605,7 @@ const sendClientSignupWelcomeEmail = async (userData) => {
       to: userData.email,
       from: {
         email: fromEmail,
-        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+        name: getSendgridFromName()
       },
       templateId: CLIENT_SIGNUP_WELCOME_TEMPLATE_ID,
       dynamicTemplateData: {
@@ -636,7 +642,7 @@ const sendCPSignupWelcomeEmail = async (userData) => {
       return { success: false, error: 'CP email is required' };
     }
 
-    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    const fromEmail = getSendgridFromAddress();
     if (!fromEmail) {
       return { success: false, error: 'Sender email not configured' };
     }
@@ -645,7 +651,7 @@ const sendCPSignupWelcomeEmail = async (userData) => {
       to: userData.email,
       from: {
         email: fromEmail,
-        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+        name: getSendgridFromName()
       },
       templateId: CP_SIGNUP_WELCOME_TEMPLATE_ID,
       dynamicTemplateData: {
@@ -692,7 +698,7 @@ const sendBookingConfirmationEmail = async (data) => {
       return { success: false, error: 'Recipient email is required' };
     }
 
-    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    const fromEmail = getSendgridFromAddress();
     if (!fromEmail) {
       return { success: false, error: 'Sender email not configured' };
     }
@@ -707,7 +713,7 @@ const sendBookingConfirmationEmail = async (data) => {
       to: data.to_email,
       from: {
         email: fromEmail,
-        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+        name: getSendgridFromName()
       },
       subject: 'Your Beige booking is confirmed',
       templateId,
@@ -776,7 +782,7 @@ const sendShootReminder5DaysEmail = async (data) => {
       return { success: false, error: 'Recipient email is required' };
     }
 
-    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    const fromEmail = getSendgridFromAddress();
     if (!fromEmail) {
       return { success: false, error: 'Sender email not configured' };
     }
@@ -785,7 +791,7 @@ const sendShootReminder5DaysEmail = async (data) => {
       to: data.to_email,
       from: {
         email: fromEmail,
-        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+        name: getSendgridFromName()
       },
       subject: 'Upcoming: Your Beige shoot is in 5 days',
       templateId: SHOOT_REMINDER_5D_TEMPLATE_ID,
@@ -837,7 +843,7 @@ const sendShootReminder2HoursEmail = async (data) => {
       return { success: false, error: 'Recipient email is required' };
     }
 
-    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    const fromEmail = getSendgridFromAddress();
     if (!fromEmail) {
       return { success: false, error: 'Sender email not configured' };
     }
@@ -846,7 +852,7 @@ const sendShootReminder2HoursEmail = async (data) => {
       to: data.to_email,
       from: {
         email: fromEmail,
-        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+        name: getSendgridFromName()
       },
       subject: 'Happening Now: Your Beige shoot starts in 2 hours',
       templateId: SHOOT_REMINDER_2H_TEMPLATE_ID,
@@ -904,7 +910,7 @@ const sendShootCompletionEmail = async (data) => {
       return { success: false, error: 'Recipient email is required' };
     }
 
-    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    const fromEmail = getSendgridFromAddress();
     if (!fromEmail) {
       return { success: false, error: 'Sender email not configured' };
     }
@@ -913,7 +919,7 @@ const sendShootCompletionEmail = async (data) => {
       to: data.to_email,
       from: {
         email: fromEmail,
-        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+        name: getSendgridFromName()
       },
       subject: 'That\u2019s a wrap! Your shoot is complete',
       templateId: SHOOT_COMPLETION_TEMPLATE_ID,
@@ -964,7 +970,7 @@ const sendFinalNudge7DaysEmail = async (data) => {
       return { success: false, error: 'Recipient email is required' };
     }
 
-    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    const fromEmail = getSendgridFromAddress();
     if (!fromEmail) {
       return { success: false, error: 'Sender email not configured' };
     }
@@ -973,7 +979,7 @@ const sendFinalNudge7DaysEmail = async (data) => {
       to: data.to_email,
       from: {
         email: fromEmail,
-        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+        name: getSendgridFromName()
       },
       subject: 'One last thing about your recent shoot',
       templateId: SHOOT_FINAL_NUDGE_7D_TEMPLATE_ID,
@@ -1030,7 +1036,7 @@ const sendPostProductionStatusUpdateEmail = async (data) => {
       return { success: false, error: 'delivery_date is required' };
     }
 
-    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    const fromEmail = getSendgridFromAddress();
     if (!fromEmail) {
       return { success: false, error: 'Sender email not configured' };
     }
@@ -1039,7 +1045,7 @@ const sendPostProductionStatusUpdateEmail = async (data) => {
       to: data.to_email,
       from: {
         email: fromEmail,
-        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+        name: getSendgridFromName()
       },
       subject: 'Update: Your Content Is Being Edited',
       templateId: POST_PRODUCTION_STATUS_UPDATE_TEMPLATE_ID,
@@ -1096,7 +1102,7 @@ const sendRawFootageReadyEmail = async (data) => {
       return { success: false, error: 'access_files_link is required' };
     }
 
-    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    const fromEmail = getSendgridFromAddress();
     if (!fromEmail) {
       return { success: false, error: 'Sender email not configured' };
     }
@@ -1105,7 +1111,7 @@ const sendRawFootageReadyEmail = async (data) => {
       to: data.to_email,
       from: {
         email: fromEmail,
-        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+        name: getSendgridFromName()
       },
       subject: 'Your Raw Footage Is Ready',
       templateId: RAW_FOOTAGE_READY_TEMPLATE_ID,
@@ -1161,7 +1167,7 @@ const sendFinalDeliveryCompleteEmail = async (data) => {
       return { success: false, error: 'view_assets_link is required' };
     }
 
-    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    const fromEmail = getSendgridFromAddress();
     if (!fromEmail) {
       return { success: false, error: 'Sender email not configured' };
     }
@@ -1170,7 +1176,7 @@ const sendFinalDeliveryCompleteEmail = async (data) => {
       to: data.to_email,
       from: {
         email: fromEmail,
-        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+        name: getSendgridFromName()
       },
       subject: 'Final Delivery Complete - Access Your Assets',
       templateId: FINAL_DELIVERY_COMPLETE_TEMPLATE_ID,
@@ -1227,7 +1233,7 @@ const sendRevisionRequestReceivedEmail = async (data) => {
       return { success: false, error: 'revision_delivery_date is required' };
     }
 
-    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    const fromEmail = getSendgridFromAddress();
     if (!fromEmail) {
       return { success: false, error: 'Sender email not configured' };
     }
@@ -1236,7 +1242,7 @@ const sendRevisionRequestReceivedEmail = async (data) => {
       to: data.to_email,
       from: {
         email: fromEmail,
-        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+        name: getSendgridFromName()
       },
       subject: 'Revision Request Received - We\u2019re On It',
       templateId: REVISION_REQUEST_RECEIVED_TEMPLATE_ID,
@@ -1295,7 +1301,7 @@ const sendRevisedContentDeliveredEmail = async (data) => {
       return { success: false, error: 'view_updated_assets_link is required' };
     }
 
-    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    const fromEmail = getSendgridFromAddress();
     if (!fromEmail) {
       return { success: false, error: 'Sender email not configured' };
     }
@@ -1304,7 +1310,7 @@ const sendRevisedContentDeliveredEmail = async (data) => {
       to: data.to_email,
       from: {
         email: fromEmail,
-        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+        name: getSendgridFromName()
       },
       subject: 'Your Revised Content Is Ready',
       templateId: REVISED_CONTENT_DELIVERED_TEMPLATE_ID,
@@ -1361,7 +1367,7 @@ const sendFinalDeliveryWithRevisionEmail = async (data) => {
       return { success: false, error: 'view_final_assets_link is required' };
     }
 
-    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    const fromEmail = getSendgridFromAddress();
     if (!fromEmail) {
       return { success: false, error: 'Sender email not configured' };
     }
@@ -1370,7 +1376,7 @@ const sendFinalDeliveryWithRevisionEmail = async (data) => {
       to: data.to_email,
       from: {
         email: fromEmail,
-        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+        name: getSendgridFromName()
       },
       subject: 'Final Delivery - Your Project Is Complete',
       templateId: FINAL_DELIVERY_WITH_REVISION_TEMPLATE_ID,
@@ -1533,7 +1539,7 @@ const sendInvoiceEmail = async (userData, invoiceData) => {
       subject: `${statusText} #${invoiceData.invoiceNumber} for ${invoiceData.projectTitle}`,
       attachments: [{
         filename: 'logo.png',
-        path: 'https://beigexmemehouse.s3.eu-north-1.amazonaws.com/beige/beige_logo_vb.png',
+        path: process.env.BEIGE_ASSET_BASE_URL + 'beige_logo_vb.png',
         cid: 'beigelogo'
       }],
       html: generateInvoiceTemplate(userData, invoiceData)
@@ -1671,7 +1677,7 @@ const sendPaymentSuccessSalesNotification = async (paymentData) => {
         email: paymentData?.email || paymentData?.guestEmail || '',
         phone_number: paymentData?.phone_number || 'N/A',
         amount: formatAmount(paymentData?.amount),
-        shootType: paymentData?.shootType || 'N/A',
+        shootType: formatShootTypes(paymentData?.shootType) || 'N/A',
         shoot_date: formatDate(paymentData?.shoot_date || paymentData?.eventDate) || 'TBD',
         shoot_time:
           paymentData?.shoot_time ||
@@ -1918,7 +1924,7 @@ const sendCPAcceptRejectStatusEmail = async (data) => {
     if (!process.env.SENDGRID_API_KEY) return { success: false, error: 'SENDGRID_API_KEY is not configured' };
     if (!data?.to_email) return { success: false, error: 'Recipient email is required' };
 
-    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    const fromEmail = getSendgridFromAddress();
     if (!fromEmail) return { success: false, error: 'Sender email not configured' };
     const normalizedAction = String(data.cp_action || data.cp_status || '').toLowerCase();
     const isAccepted = normalizedAction === 'accepted' || normalizedAction === 'accept';
@@ -1927,7 +1933,7 @@ const sendCPAcceptRejectStatusEmail = async (data) => {
       to: data.to_email,
       from: {
         email: fromEmail,
-        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+        name: getSendgridFromName()
       },
       subject: 'CP Acceptance status update',
       templateId: CP_ACCEPT_REJECT_TEMPLATE_ID,
@@ -2203,7 +2209,7 @@ const sendCPNewBookingRequestEmail = async (data) => {
       return { success: false, error: 'Recipient email is required' };
     }
 
-    const fromEmail = process.env.SENDGRID_FROM_EMAIL || process.env.EMAIL_USER;
+    const fromEmail = getSendgridFromAddress();
     if (!fromEmail) {
       return { success: false, error: 'Sender email not configured' };
     }
@@ -2224,7 +2230,7 @@ const sendCPNewBookingRequestEmail = async (data) => {
       to: data.to_email,
       from: {
         email: fromEmail,
-        name: process.env.SENDGRID_FROM_NAME || process.env.EMAIL_FROM_NAME || 'Beige Team'
+        name: getSendgridFromName()
       },
       subject: 'New Booking Request',
       templateId: CP_NEW_BOOKING_REQUEST_TEMPLATE_ID,
@@ -2290,6 +2296,8 @@ const sendProductionProposalEmail = async (data) => {
 };
 
 module.exports = {
+  formatContentTypes,
+  formatShootTypes,
   sendTaskAssignmentEmail,
   sendVerificationOTP,
   sendPasswordResetEmail,
