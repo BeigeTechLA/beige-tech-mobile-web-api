@@ -10,6 +10,7 @@ const FINAL_NUDGE_7D_MARKER = 'shoot_final_nudge_7_days';
 const REMINDER_2H_WINDOW_MIN = parseInt(process.env.SHOOT_REMINDER_2H_WINDOW_MIN || '115', 10);
 const REMINDER_2H_WINDOW_MAX = parseInt(process.env.SHOOT_REMINDER_2H_WINDOW_MAX || '125', 10);
 const FINAL_NUDGE_DAYS_AFTER = parseInt(process.env.SHOOT_FINAL_NUDGE_DAYS_AFTER || '7', 10);
+const DEFAULT_SHOOT_TIME_ZONE = process.env.SHOOT_REMINDER_TIME_ZONE || process.env.APP_TIME_ZONE || 'Asia/Kolkata';
 
 let isRunning5d = false;
 let isRunning2h = false;
@@ -90,6 +91,99 @@ const parseActivityData = (activityData) => {
     }
   }
   return {};
+};
+
+const getDatePartsInTimeZone = (date, timeZone) => {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+
+  const parts = formatter.formatToParts(date);
+  return {
+    year: Number(parts.find((part) => part.type === 'year')?.value),
+    month: Number(parts.find((part) => part.type === 'month')?.value),
+    day: Number(parts.find((part) => part.type === 'day')?.value)
+  };
+};
+
+const toIsoDateInTimeZone = (date, timeZone = DEFAULT_SHOOT_TIME_ZONE) => {
+  const { year, month, day } = getDatePartsInTimeZone(date, timeZone);
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+};
+
+const addDaysToIsoDate = (isoDate, days) => {
+  const [year, month, day] = String(isoDate || '').split('-').map(Number);
+  if (!year || !month || !day) return isoDate;
+  const utcDate = new Date(Date.UTC(year, month - 1, day));
+  utcDate.setUTCDate(utcDate.getUTCDate() + days);
+  return utcDate.toISOString().slice(0, 10);
+};
+
+const getTimeZoneOffsetMs = (date, timeZone) => {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
+
+  const parts = formatter.formatToParts(date);
+  const lookup = (type) => Number(parts.find((part) => part.type === type)?.value);
+  const asUtc = Date.UTC(
+    lookup('year'),
+    lookup('month') - 1,
+    lookup('day'),
+    lookup('hour'),
+    lookup('minute'),
+    lookup('second')
+  );
+
+  return asUtc - date.getTime();
+};
+
+const buildZonedDateTime = (eventDate, startTime, timeZone = DEFAULT_SHOOT_TIME_ZONE) => {
+  if (!eventDate || !startTime) return null;
+
+  const [year, month, day] = String(eventDate).slice(0, 10).split('-').map(Number);
+  const [hour = 0, minute = 0, second = 0] = String(startTime)
+    .slice(0, 8)
+    .split(':')
+    .map((value) => Number(value));
+
+  if (!year || !month || !day || [hour, minute, second].some((value) => Number.isNaN(value))) {
+    return null;
+  }
+
+  const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+  const firstOffset = getTimeZoneOffsetMs(utcGuess, timeZone);
+  let resolved = new Date(utcGuess.getTime() - firstOffset);
+  const secondOffset = getTimeZoneOffsetMs(resolved, timeZone);
+
+  if (secondOffset !== firstOffset) {
+    resolved = new Date(utcGuess.getTime() - secondOffset);
+  }
+
+  return resolved;
+};
+
+const buildReminderCandidateDates = (now = new Date()) => {
+  const dates = new Set();
+
+  for (const timeZone of ['UTC', DEFAULT_SHOOT_TIME_ZONE]) {
+    const baseIsoDate = toIsoDateInTimeZone(now, timeZone);
+    dates.add(addDaysToIsoDate(baseIsoDate, -1));
+    dates.add(baseIsoDate);
+    dates.add(addDaysToIsoDate(baseIsoDate, 1));
+  }
+
+  return Array.from(dates).filter(Boolean);
 };
 
 const alreadySentReminder = async (leadId, targetDate) => {
@@ -311,31 +405,38 @@ const runShootReminder5DaysJob = async () => {
   }
 };
 
-const buildBookingStartDateTime = (eventDate, startTime) => {
-  if (!eventDate || !startTime) return null;
-  const datePart = String(eventDate).slice(0, 10);
-  const timePart = String(startTime).slice(0, 8);
-  const dt = new Date(`${datePart}T${timePart}`);
-  if (Number.isNaN(dt.getTime())) return null;
-  return dt;
-};
-
 const runShootReminder2HoursJob = async () => {
   if (isRunning2h) return;
   isRunning2h = true;
 
   try {
     const now = new Date();
-    const todayStr = toIsoDateLocal(now);
+    const candidateDates = buildReminderCandidateDates(now);
+    const bookingDaysForCandidates = await db.stream_project_booking_days.findAll({
+      where: {
+        event_date: { [db.Sequelize.Op.in]: candidateDates }
+      },
+      attributes: ['stream_project_booking_id']
+    });
+
+    const bookingIdsFromDays = Array.from(
+      new Set(
+        bookingDaysForCandidates
+          .map((row) => row.stream_project_booking_id)
+          .filter(Boolean)
+      )
+    );
 
     const bookings = await db.stream_project_booking.findAll({
       where: {
-        event_date: todayStr,
         is_active: 1,
         is_cancelled: 0,
         is_draft: 0,
         payment_id: { [db.Sequelize.Op.ne]: null },
-        start_time: { [db.Sequelize.Op.ne]: null }
+        [db.Sequelize.Op.or]: [
+          { event_date: { [db.Sequelize.Op.in]: candidateDates } },
+          { stream_project_booking_id: { [db.Sequelize.Op.in]: bookingIdsFromDays.length ? bookingIdsFromDays : [-1] } }
+        ]
       },
       include: [
         {
@@ -366,6 +467,21 @@ const runShootReminder2HoursJob = async () => {
               ]
             }
           ]
+        },
+        {
+          model: db.stream_project_booking_days,
+          as: 'booking_days',
+          required: false,
+          where: {
+            event_date: { [db.Sequelize.Op.in]: candidateDates }
+          },
+          attributes: [
+            'stream_project_booking_day_id',
+            'event_date',
+            'start_time',
+            'end_time',
+            'time_zone'
+          ]
         }
       ],
       attributes: [
@@ -380,7 +496,9 @@ const runShootReminder2HoursJob = async () => {
     });
 
     if (!bookings.length) {
-      console.log(`[Email Job] 2-hour reminder: no eligible bookings for ${todayStr}`);
+      console.log(
+        `[Email Job] 2-hour reminder: no eligible bookings for candidate dates ${candidateDates.join(', ')}`
+      );
       return;
     }
 
@@ -389,23 +507,10 @@ const runShootReminder2HoursJob = async () => {
 
     for (const booking of bookings) {
       try {
-        const bookingStart = buildBookingStartDateTime(booking.event_date, booking.start_time);
-        if (!bookingStart) continue;
-
-        const diffMinutes = Math.round((bookingStart.getTime() - now.getTime()) / (60 * 1000));
-        // if (diffMinutes < REMINDER_2H_WINDOW_MIN || diffMinutes > REMINDER_2H_WINDOW_MAX) {
-        //   continue;
-        // }
-        windowMatchedCount += 1;
-
         const lead = await db.sales_leads.findOne({
           where: { booking_id: booking.stream_project_booking_id },
           attributes: ['lead_id', 'client_name', 'guest_email']
         });
-
-        const bookingStartIso = bookingStart.toISOString();
-        const hasAlreadySent = await alreadySentReminder2h(lead?.lead_id, bookingStartIso);
-        // if (hasAlreadySent) continue;
 
         const toEmail = booking.user?.email || booking.guest_email || lead?.guest_email;
         if (!toEmail) {
@@ -446,32 +551,90 @@ const runShootReminder2HoursJob = async () => {
           .filter(Boolean)
           .join(' - ');
         const location = formatLocation(booking.event_location);
-
         const firstName = deriveFirstName(booking.user?.name, lead?.client_name, toEmail);
-        console.log(cpImageUrl);
-        const emailResult = await emailService.sendShootReminder2HoursEmail({
-          to_email: toEmail,
-          booking_id: booking.stream_project_booking_id,
-          first_name: firstName,
-          start_time: formatTime(booking.start_time),
-          end_time: formatTime(booking.end_time),
-          shoot_time: shootTime,
-          shoot_location_address: location,
-          location,
-          cp_name: cpName,
-          cp_image_url: cpImageUrl
-        });
+        const bookingDayEntries = Array.isArray(booking.booking_days) && booking.booking_days.length
+          ? booking.booking_days
+          : [{
+              stream_project_booking_day_id: null,
+              event_date: booking.event_date,
+              start_time: booking.start_time,
+              end_time: booking.end_time,
+              time_zone: DEFAULT_SHOOT_TIME_ZONE
+            }];
 
-        if (!emailResult?.success) {
-          console.error(
-            `[Email Job] 2-hour reminder failed for booking ${booking.stream_project_booking_id}:`,
-            emailResult?.error || 'unknown error'
-          );
-          continue;
+        for (const bookingDay of bookingDayEntries) {
+          const eventDate = bookingDay?.event_date || booking.event_date;
+          const startTime = bookingDay?.start_time || booking.start_time;
+          const endTime = bookingDay?.end_time || booking.end_time;
+          const timeZone = bookingDay?.time_zone || DEFAULT_SHOOT_TIME_ZONE;
+
+          if (!eventDate || !startTime) {
+            console.log(
+              `[Email Job] 2-hour reminder skipped booking ${booking.stream_project_booking_id} day ${bookingDay?.stream_project_booking_day_id || 'main'}: missing event date or start time`
+            );
+            continue;
+          }
+
+          const bookingLocalToday = toIsoDateInTimeZone(now, timeZone);
+          if (eventDate !== bookingLocalToday) {
+            continue;
+          }
+
+          const bookingStart = buildZonedDateTime(eventDate, startTime, timeZone);
+          if (!bookingStart) {
+            console.warn(
+              `[Email Job] 2-hour reminder skipped booking ${booking.stream_project_booking_id} day ${bookingDay?.stream_project_booking_day_id || 'main'}: invalid start datetime`
+            );
+            continue;
+          }
+
+          const diffMinutes = Math.round((bookingStart.getTime() - now.getTime()) / (60 * 1000));
+          if (diffMinutes < REMINDER_2H_WINDOW_MIN || diffMinutes > REMINDER_2H_WINDOW_MAX) {
+            console.log(
+              `[Email Job] 2-hour reminder skipped booking ${booking.stream_project_booking_id} day ${bookingDay?.stream_project_booking_day_id || 'main'}: diff=${diffMinutes}m, event_date=${eventDate}, start_time=${startTime}, tz=${timeZone}`
+            );
+            continue;
+          }
+
+          windowMatchedCount += 1;
+
+          const bookingStartIso = bookingStart.toISOString();
+          const hasAlreadySent = await alreadySentReminder2h(lead?.lead_id, bookingStartIso);
+          // if (hasAlreadySent) {
+          //   console.log(
+          //     `[Email Job] 2-hour reminder already sent for booking ${booking.stream_project_booking_id} day ${bookingDay?.stream_project_booking_day_id || 'main'} at ${bookingStartIso}`
+          //   );
+          //   continue;
+          // }
+
+          const dayShootTime = [formatTime(startTime), formatTime(endTime)]
+            .filter(Boolean)
+            .join(' - ');
+
+          const emailResult = await emailService.sendShootReminder2HoursEmail({
+            to_email: toEmail,
+            booking_id: booking.stream_project_booking_id,
+            first_name: firstName,
+            start_time: formatTime(startTime),
+            end_time: formatTime(endTime),
+            shoot_time: dayShootTime || shootTime,
+            shoot_location_address: location,
+            location,
+            cp_name: cpName,
+            cp_image_url: cpImageUrl
+          });
+
+          if (!emailResult?.success) {
+            console.error(
+              `[Email Job] 2-hour reminder failed for booking ${booking.stream_project_booking_id} day ${bookingDay?.stream_project_booking_day_id || 'main'}:`,
+              emailResult?.error || 'unknown error'
+            );
+            continue;
+          }
+
+          await markReminder2hSent(lead?.lead_id, booking.stream_project_booking_id, bookingStartIso);
+          sentCount += 1;
         }
-
-        await markReminder2hSent(lead?.lead_id, booking.stream_project_booking_id, bookingStartIso);
-        sentCount += 1;
       } catch (bookingError) {
         console.error('[Email Job] 2-hour reminder booking processing error:', bookingError.message);
       }
@@ -479,14 +642,14 @@ const runShootReminder2HoursJob = async () => {
 
     if (windowMatchedCount === 0) {
       console.log(
-        `[Email Job] 2-hour reminder: found ${bookings.length} booking(s) for ${todayStr}, but none within ${REMINDER_2H_WINDOW_MIN}-${REMINDER_2H_WINDOW_MAX} minutes of start time`
+        `[Email Job] 2-hour reminder: found ${bookings.length} booking(s) across ${candidateDates.join(', ')}, but none within ${REMINDER_2H_WINDOW_MIN}-${REMINDER_2H_WINDOW_MAX} minutes of start time in their configured timezone`
       );
       return;
     }
 
     if (sentCount === 0) {
       console.log(
-        `[Email Job] 2-hour reminder: ${windowMatchedCount} booking(s) matched the time window for ${todayStr}, but no reminder was sent`
+        `[Email Job] 2-hour reminder: ${windowMatchedCount} booking-day record(s) matched the time window, but no reminder was sent`
       );
     }
   } catch (error) {
