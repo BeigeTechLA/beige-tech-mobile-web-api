@@ -600,12 +600,12 @@ const runShootReminder2HoursJob = async () => {
 
           const bookingStartIso = bookingStart.toISOString();
           const hasAlreadySent = await alreadySentReminder2h(lead?.lead_id, bookingStartIso);
-          // if (hasAlreadySent) {
-          //   console.log(
-          //     `[Email Job] 2-hour reminder already sent for booking ${booking.stream_project_booking_id} day ${bookingDay?.stream_project_booking_day_id || 'main'} at ${bookingStartIso}`
-          //   );
-          //   continue;
-          // }
+          if (hasAlreadySent) {
+            console.log(
+              `[Email Job] 2-hour reminder already sent for booking ${booking.stream_project_booking_id} day ${bookingDay?.stream_project_booking_day_id || 'main'} at ${bookingStartIso}`
+            );
+            continue;
+          }
 
           const dayShootTime = [formatTime(startTime), formatTime(endTime)]
             .filter(Boolean)
