@@ -805,4 +805,6 @@ CREATE TABLE IF NOT EXISTS `project_files` (
 DEFAULT CHARSET=utf8mb4
 COLLATE=utf8mb4_general_ci;
 
+-- 30-03-26
+
 ALTER TABLE `sales_quotes` MODIFY COLUMN `status` ENUM('draft','pending','sent','viewed','accepted','rejected','expired') NOT NULL DEFAULT 'draft';
