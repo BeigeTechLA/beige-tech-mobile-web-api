@@ -317,5 +317,6 @@ router.post('/client-leads/intent', authenticate, requireSalesRepOrAdmin, salesL
 router.put('/leads/:id/booking', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeGuestBooking);
 router.put('/client-leads/:id/booking', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeClientLeadBooking);
 router.post('/deals/finalize', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeCreateDeal);
+router.get('/sales-reps', authenticate, requireSalesRepOrAdmin, salesDashboardController.getSalesRepsList);
 
 module.exports = router;

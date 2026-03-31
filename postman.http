@@ -456,6 +456,11 @@ Authorization: {{TOKEN}}
   "expiry_hours": 2
 }
 
+### 
+GET {{URL}}sales/sales-reps HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
 ### Edit Lead Booking
 PUT {{URL}}sales/leads/939/booking HTTP/1.1
 Content-Type: application/json
