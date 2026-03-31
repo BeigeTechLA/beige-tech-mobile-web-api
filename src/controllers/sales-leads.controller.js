@@ -334,6 +334,49 @@ async function resolveUserId(userId, guestEmail) {
   return existingUser ? existingUser.id : null;
 }
 
+async function resolveAssignedSalesRepId({
+  requestedSalesRepId,
+  req,
+  currentAssignedSalesRepId = null,
+  tx
+}) {
+  if (req.userRole === 'sales_rep') {
+    return req.userId || currentAssignedSalesRepId || null;
+  }
+
+  const normalizedRequestedSalesRepId =
+    requestedSalesRepId !== undefined && requestedSalesRepId !== null && requestedSalesRepId !== ''
+      ? parseInt(requestedSalesRepId, 10)
+      : null;
+
+  if (normalizedRequestedSalesRepId == null) {
+    return currentAssignedSalesRepId || null;
+  }
+
+  if (Number.isNaN(normalizedRequestedSalesRepId)) {
+    throw new Error('Invalid sales_rep_id');
+  }
+
+  const requestedSalesRep = await users.findByPk(normalizedRequestedSalesRepId, {
+    include: [
+      {
+        model: db.user_type,
+        as: 'userType',
+        attributes: ['user_role']
+      }
+    ],
+    transaction: tx
+  });
+
+  const requestedUserRole = requestedSalesRep?.userType?.user_role;
+
+  if (!requestedSalesRep || requestedUserRole !== 'sales_rep') {
+    throw new Error('Selected sales_rep_id is not a valid sales rep');
+  }
+
+  return normalizedRequestedSalesRepId;
+}
+
 /**
  * Create quote row + quote_line_items.
  */
@@ -4390,6 +4433,7 @@ exports.finalizeGuestBooking = async (req, res) => {
       is_draft,
       skip_discount = true,
       skip_margin = true,
+      sales_rep_id,
       booking_type,
       booking_days
     } = req.body;
@@ -4442,11 +4486,25 @@ exports.finalizeGuestBooking = async (req, res) => {
 
     const linkedLead = await sales_leads.findOne({
       where: { booking_id: booking.stream_project_booking_id },
-      attributes: ['lead_id', 'client_name'],
+      attributes: ['lead_id', 'client_name', 'assigned_sales_rep_id'],
       transaction: tx
     });
 
-    console.log(linkedLead);
+    if (linkedLead) {
+      const assignedSalesRepId = await resolveAssignedSalesRepId({
+        requestedSalesRepId: sales_rep_id,
+        req,
+        currentAssignedSalesRepId: linkedLead.assigned_sales_rep_id,
+        tx
+      });
+
+      if (assignedSalesRepId !== linkedLead.assigned_sales_rep_id) {
+        await linkedLead.update(
+          { assigned_sales_rep_id: assignedSalesRepId },
+          { transaction: tx }
+        );
+      }
+    }
 
     await tx.commit();
 
@@ -4508,6 +4566,7 @@ exports.finalizeClientLeadBooking = async (req, res) => {
       is_draft,
       skip_discount = true,
       skip_margin = true,
+      sales_rep_id,
       booking_type,
       booking_days
     } = req.body;
@@ -4542,6 +4601,13 @@ exports.finalizeClientLeadBooking = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
+    const assignedSalesRepId = await resolveAssignedSalesRepId({
+      requestedSalesRepId: sales_rep_id,
+      req,
+      currentAssignedSalesRepId: clientLead.assigned_sales_rep_id,
+      tx
+    });
+
     const finalizeResult = await finalizeBookingCore({
       booking,
       bookingId: booking.stream_project_booking_id,
@@ -4573,7 +4639,15 @@ exports.finalizeClientLeadBooking = async (req, res) => {
 
     if (clientLead.lead_status !== 'booked' && clientLead.lead_status !== 'abandoned') {
       await clientLead.update(
-        { lead_status: 'booking_in_progress' },
+        {
+          lead_status: 'booking_in_progress',
+          assigned_sales_rep_id: assignedSalesRepId
+        },
+        { transaction: tx }
+      );
+    } else if (assignedSalesRepId !== clientLead.assigned_sales_rep_id) {
+      await clientLead.update(
+        { assigned_sales_rep_id: assignedSalesRepId },
         { transaction: tx }
       );
     }
@@ -4721,6 +4795,7 @@ exports.finalizeCreateDeal = async (req, res) => {
       video_edit_types,
       photo_edit_types,
       is_draft,
+      sales_rep_id,
 
       // pricing flags
       skip_discount = true,
@@ -4881,10 +4956,20 @@ exports.finalizeCreateDeal = async (req, res) => {
       );
     }
 
-    // 4️⃣ 🔥 AUTO ASSIGN (same as trackEarlyBookingInterest)
+    // ASSIGN SALES REP
     let assignedRep = null;
-    if (lead.assigned_sales_rep_id) {
-      assignedRep = { id: lead.assigned_sales_rep_id };
+    const assignedSalesRepId = await resolveAssignedSalesRepId({
+      requestedSalesRepId: sales_rep_id,
+      req,
+      currentAssignedSalesRepId: lead.assigned_sales_rep_id,
+      tx
+    });
+
+    if (assignedSalesRepId) {
+      assignedRep = await users.findByPk(assignedSalesRepId, {
+        attributes: ['id', 'name'],
+        transaction: tx
+      });
     } else {
       assignedRep = await leadAssignmentService.autoAssignLead(
         lead.lead_id,

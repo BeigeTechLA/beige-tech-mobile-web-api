@@ -2,9 +2,9 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjE5MywidXNlclJvbGUiOiJzYWxlc19yZXAiLCJpYXQiOjE3NzQ2MDk0NTgsImV4cCI6MTc3NTIxNDI1OH0.XAH0czrqFJgvb3fLpa7lest588R9P1C9BFExLwvK6HY
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzQ5NTU4NjcsImV4cCI6MTc3NTU2MDY2N30.Nb7_0K7KZhteYRt4VlijirFwuPkzZXK64bsex3pcgYg
 
-@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzQ0MzE5NTEsImV4cCI6MTc3NTAzNjc1MX0.TZkQqnvlyd1zN_-DsgafsFhQGhMl3hcxDwnEubDBLSk
+@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjE5MywidXNlclJvbGUiOiJzYWxlc19yZXAiLCJpYXQiOjE3NzQ5NTU5MjgsImV4cCI6MTc3NTU2MDcyOH0.n8p4ORotIdvcB-nEHEM2GYeBdKrSMFDBDIqXlbqEP94
 
 ###
 POST {{URL}}creator/dashboard-count HTTP/1.1
@@ -457,9 +457,9 @@ Authorization: {{TOKEN}}
 }
 
 ### Edit Lead Booking
-PUT {{URL}}sales/leads/797/booking HTTP/1.1
+PUT {{URL}}sales/leads/939/booking HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN}}
+Authorization: {{TOKEN2}}
 
 {
   "content_type": "videographer",
@@ -486,7 +486,8 @@ Authorization: {{TOKEN}}
   "selected_crew_ids": [2103],
   "is_draft": false,
   "skip_discount": true,
-  "skip_margin": true
+  "skip_margin": true,
+  "sales_rep_id": 180
 }
 
 ### Edit Client Lead Booking
@@ -519,7 +520,8 @@ Authorization: {{TOKEN}}
   "selected_crew_ids": [2103],
   "is_draft": false,
   "skip_discount": true,
-  "skip_margin": true
+  "skip_margin": true,
+  "sales_rep_id": 180
 }
 
 ### Create New Deal
@@ -603,7 +605,8 @@ Authorization: {{TOKEN}}
   "photo_edit_types": [],
   "is_draft": false,
   "skip_discount": true,
-  "skip_margin": true
+  "skip_margin": true,
+  "sales_rep_id": 180
 }
 
 ### 
@@ -1434,3 +1437,8 @@ Authorization: {{TOKEN}}
     }
   ]
 }
+
+### 
+GET {{URL}}creators/2104
+Authorization: {{TOKEN}}
+Content-Type: application/json
