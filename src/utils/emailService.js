@@ -66,7 +66,8 @@ const {
   CREW_SIGNUP_NOTIFICATION_TEMPLATE_ID,
   CP_SIGNUP_WELCOME_TEMPLATE_ID,
   PRODUCTION_PROPOSAL_TEMPLATE_ID,
-  CP_CONFIRMED_TEMPLATE_ID
+  CP_CONFIRMED_TEMPLATE_ID,
+  CUSTOM_QUOTE_PROPOSAL_ID
 } = require('../config/sendgridTemplates');
 
 const formatDate = (value) => {
@@ -2295,6 +2296,71 @@ const sendProductionProposalEmail = async (data) => {
   }
 };
 
+const sendCustomQuoteProposalEmail = async (data) => {
+  try {
+    const to = data?.to_email || data?.email;
+    if (!to) {
+      return { success: false, error: 'Recipient email is required' };
+    }
+
+    if (!CUSTOM_QUOTE_PROPOSAL_ID) {
+      return { success: false, error: 'CUSTOM_QUOTE_PROPOSAL_ID is not configured' };
+    }
+
+    const fromEmail = process.env.SENDGRID_FROM_EMAIL;
+    if (!fromEmail) {
+      return { success: false, error: 'Sender email not configured' };
+    }
+
+    const proposalAmount = data?.proposal_amount !== undefined && data?.proposal_amount !== null
+      ? (String(data.proposal_amount).startsWith('$') ? String(data.proposal_amount) : `$${formatAmount(data.proposal_amount)}`)
+      : 'TBD';
+
+    const message = {
+      to,
+      from: {
+        email: fromEmail,
+        name: process.env.SENDGRID_FROM_NAME
+      },
+      subject: 'Your Shoot, Crafted — Proposal Inside',
+      templateId: CUSTOM_QUOTE_PROPOSAL_ID,
+      dynamicTemplateData: {
+        first_name: getFirstName(data?.first_name || data?.client_name || '', data?.first_name),
+        shoot_type: data?.shoot_type || 'TBD',
+        project_description: data?.project_description || 'TBD',
+        shoot_date: data?.shoot_date || 'TBD',
+        start_time: data?.start_time || 'TBD',
+        end_time: data?.end_time || 'TBD',
+        duration: data?.duration || 'TBD',
+        proposal_amount: proposalAmount
+      }
+    };
+
+    if (data?.attachment_content) {
+      message.attachments = [{
+        content: data.attachment_content,
+        filename: data.attachment_filename || 'custom-quote.pdf',
+        type: data.attachment_type || 'application/pdf',
+        disposition: 'attachment'
+      }];
+    }
+
+    const [response] = await sgMail.send(message);
+
+    return {
+      success: true,
+      statusCode: response?.statusCode,
+      messageId:
+        response?.headers?.['x-message-id'] ||
+        response?.headers?.['X-Message-Id'] ||
+        null
+    };
+  } catch (error) {
+    console.error('Error sending custom quote proposal email:', error?.response?.body || error.message);
+    return { success: false, error: error?.response?.body || error.message };
+  }
+};
+
 module.exports = {
   formatContentTypes,
   formatShootTypes,
@@ -2324,5 +2390,6 @@ module.exports = {
   sendNewClientSignupNotification,
   sendNewCrewSignupNotification,
   sendCPSignupWelcomeEmail,
-  sendProductionProposalEmail
+  sendProductionProposalEmail,
+  sendCustomQuoteProposalEmail
 };

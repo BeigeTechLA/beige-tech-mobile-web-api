@@ -200,6 +200,20 @@ exports.updateQuoteStatus = async (req, res) => {
   }
 };
 
+exports.sendQuoteProposal = async (req, res) => {
+  try {
+    const quote = await quoteService.sendQuoteProposal(Number(req.params.quoteId), req.body, getUserContext(req));
+    return res.json({
+      success: true,
+      data: quote
+    });
+  } catch (error) {
+    console.error('Error sending quote proposal email:', error);
+    const statusCode = error.message === 'Quote not found' ? constants.NOT_FOUND.code : constants.BAD_REQUEST.code;
+    return sendError(res, error, error.message || 'Failed to send quote proposal email', statusCode);
+  }
+};
+
 exports.getShootTypes = async (req, res) => {
   try {
     const content_type = Number(req.params.content_type);

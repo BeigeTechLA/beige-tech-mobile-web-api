@@ -1,5 +1,6 @@
 const { Op } = require('sequelize');
 const db = require('../models');
+const { sendCustomQuoteProposalEmail } = require('../utils/emailService');
 
 const SECTION_TYPES = ['service', 'addon', 'logistics', 'custom'];
 const QUOTE_STATUSES = ['draft', 'pending', 'sent', 'viewed', 'accepted', 'rejected', 'expired'];
@@ -419,6 +420,23 @@ function calculateTotals(lineItems, quoteData) {
   };
 }
 
+function deriveQuoteDuration(lineItems = [], explicitDuration = null) {
+  if (explicitDuration) {
+    return explicitDuration;
+  }
+
+  const totalHours = lineItems.reduce((sum, item) => {
+    if (item.section_type !== 'service') return sum;
+    const hours = Number(item.duration_hours || 0);
+    const quantity = Number(item.quantity || 1);
+    if (!hours) return sum;
+    return sum + (hours * quantity);
+  }, 0);
+
+  if (!totalHours) return 'TBD';
+  return `${roundCurrency(totalHours)} hours`;
+}
+
 async function recordActivity(transaction, salesQuoteId, activityType, userId, message, metadata = null) {
   return db.sales_quote_activities.create({
     sales_quote_id: salesQuoteId,
@@ -801,6 +819,75 @@ async function updateQuoteStatus(salesQuoteId, status, user) {
   }
 }
 
+async function sendQuoteProposal(salesQuoteId, payload, user) {
+  const transaction = await db.sequelize.transaction();
+  try {
+    const quote = await db.sales_quotes.findOne({
+      where: { sales_quote_id: salesQuoteId, ...buildQuoteAccessWhere(user) },
+      transaction
+    });
+
+    if (!quote) {
+      throw new Error('Quote not found');
+    }
+
+    const quoteDetails = await getQuoteById(salesQuoteId, user);
+    if (!quoteDetails) {
+      throw new Error('Quote not found');
+    }
+
+    const toEmail = payload?.to_email || quoteDetails.client_email;
+    if (!toEmail) {
+      throw new Error('Client email is required to send quote proposal');
+    }
+
+    const emailResult = await sendCustomQuoteProposalEmail({
+      to_email: toEmail,
+      first_name: payload?.first_name || quoteDetails.client_name || '',
+      client_name: quoteDetails.client_name,
+      shoot_type: payload?.shoot_type || quoteDetails.video_shoot_type || 'TBD',
+      project_description: payload?.project_description || quoteDetails.project_description || 'TBD',
+      shoot_date: payload?.shoot_date || payload?.event_date || 'TBD',
+      start_time: payload?.start_time || 'TBD',
+      end_time: payload?.end_time || 'TBD',
+      duration: deriveQuoteDuration(quoteDetails.line_items || [], payload?.duration || null),
+      proposal_amount: quoteDetails.total,
+      attachment_content: payload?.attachment_content || payload?.pdf_base64 || null,
+      attachment_filename: payload?.attachment_filename || `${quoteDetails.quote_number || 'custom-quote'}.pdf`,
+      attachment_type: payload?.attachment_type || 'application/pdf'
+    });
+
+    if (!emailResult?.success) {
+      throw new Error(
+        typeof emailResult?.error === 'string'
+          ? emailResult.error
+          : 'Failed to send quote proposal email'
+      );
+    }
+
+    await quote.update({
+      status: 'sent',
+      sent_at: new Date(),
+      updated_at: new Date()
+    }, { transaction });
+
+    await recordActivity(
+      transaction,
+      salesQuoteId,
+      'sent',
+      user.userId,
+      'Quote proposal email sent',
+      { to_email: toEmail }
+    );
+
+    await transaction.commit();
+    return getQuoteById(salesQuoteId, user);
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
+}
+
 module.exports = {
   SECTION_TYPES,
   QUOTE_STATUSES,
@@ -813,5 +900,6 @@ module.exports = {
   getQuoteById,
   listQuotes,
   getQuoteDashboard,
-  updateQuoteStatus
+  updateQuoteStatus,
+  sendQuoteProposal
 };
