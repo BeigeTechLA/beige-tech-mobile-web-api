@@ -165,7 +165,7 @@ POST {{URL}}creator/get-profile-detail HTTP/1.1
 Content-Type: application/json
 
 {
-  "crew_member_id": "2010"
+  "crew_member_id": "2100"
 }
 
 ###

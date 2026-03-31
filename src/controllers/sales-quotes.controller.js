@@ -383,7 +383,7 @@ exports.getClientDropdown = async (req, res) => {
 
     const clientList = await db.clients.findAll({
       where: whereConditions,
-      attributes: ['client_id', 'name', 'user_id'],
+      attributes: ['client_id', 'name', 'user_id', 'email', 'phone_number'],
       order: [['name', 'ASC']]
     });
 
