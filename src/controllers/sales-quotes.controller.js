@@ -185,6 +185,26 @@ exports.getQuoteById = async (req, res) => {
   }
 };
 
+exports.getPublicQuoteById = async (req, res) => {
+  try {
+    const quote = await quoteService.getPublicQuoteById(Number(req.params.quoteId));
+    if (!quote) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Quote not found'
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: quote
+    });
+  } catch (error) {
+    console.error('Error fetching public sales quote:', error);
+    return sendError(res, error, 'Failed to fetch quote', constants.INTERNAL_SERVER_ERROR.code);
+  }
+};
+
 exports.updateQuoteStatus = async (req, res) => {
   try {
     const { status } = req.body;

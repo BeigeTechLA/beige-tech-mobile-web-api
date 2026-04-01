@@ -641,9 +641,10 @@ async function updateQuote(salesQuoteId, payload, user) {
   }
 }
 
-async function getQuoteById(salesQuoteId, user) {
+async function fetchQuoteById(salesQuoteId, user = null) {
+  const accessWhere = user ? buildQuoteAccessWhere(user) : {};
   const quote = await db.sales_quotes.findOne({
-    where: { sales_quote_id: salesQuoteId, ...buildQuoteAccessWhere(user) },
+    where: { sales_quote_id: salesQuoteId, ...accessWhere },
     include: [
       {
         model: db.sales_quote_line_items,
@@ -689,6 +690,14 @@ async function getQuoteById(salesQuoteId, user) {
   }));
 
   return plain;
+}
+
+async function getQuoteById(salesQuoteId, user) {
+  return fetchQuoteById(salesQuoteId, user);
+}
+
+async function getPublicQuoteById(salesQuoteId) {
+  return fetchQuoteById(salesQuoteId);
 }
 
 async function listQuotes(query, user) {
@@ -912,6 +921,7 @@ module.exports = {
   createQuote,
   updateQuote,
   getQuoteById,
+  getPublicQuoteById,
   listQuotes,
   getQuoteDashboard,
   updateQuoteStatus,

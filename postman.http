@@ -1053,6 +1053,10 @@ GET {{URL}}sales/quotes/1 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
+### get sales quote detail (without token)
+GET {{URL}}sales/quotes/public/5 HTTP/1.1
+Content-Type: application/json
+
 ### update sales quote status
 PATCH {{URL}}sales/quotes/1/status HTTP/1.1
 Content-Type: application/json
