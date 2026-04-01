@@ -420,21 +420,37 @@ function calculateTotals(lineItems, quoteData) {
   };
 }
 
-function deriveQuoteDuration(lineItems = [], explicitDuration = null) {
-  if (explicitDuration) {
-    return explicitDuration;
+function deriveQuoteAddOns(lineItems = [], explicitAddOns = null) {
+  if (explicitAddOns) {
+    if (Array.isArray(explicitAddOns)) {
+      const values = explicitAddOns.filter(Boolean);
+      return values.length ? values.join(', ') : 'TBD';
+    }
+
+    return String(explicitAddOns);
   }
 
-  const totalHours = lineItems.reduce((sum, item) => {
-    if (item.section_type !== 'service') return sum;
-    const hours = Number(item.duration_hours || 0);
-    const quantity = Number(item.quantity || 1);
-    if (!hours) return sum;
-    return sum + (hours * quantity);
-  }, 0);
+  const addOnNames = (lineItems || [])
+    .filter((item) => item && item.section_type === 'addon' && item.item_name)
+    .map((item) => item.item_name.trim())
+    .filter(Boolean);
 
-  if (!totalHours) return 'TBD';
-  return `${roundCurrency(totalHours)} hours`;
+  return addOnNames.length ? addOnNames.join(', ') : 'TBD';
+}
+
+function deriveQuoteValidityText(quoteDetails = {}) {
+  if (quoteDetails.valid_until) {
+    return `Valid until ${quoteDetails.valid_until}`;
+  }
+
+  if (quoteDetails.quote_validity_days) {
+    const days = Number(quoteDetails.quote_validity_days);
+    if (days) {
+      return `${days} day${days === 1 ? '' : 's'}`;
+    }
+  }
+
+  return 'TBD';
 }
 
 async function recordActivity(transaction, salesQuoteId, activityType, userId, message, metadata = null) {
@@ -843,14 +859,12 @@ async function sendQuoteProposal(salesQuoteId, payload, user) {
 
     const emailResult = await sendCustomQuoteProposalEmail({
       to_email: toEmail,
-      first_name: payload?.first_name || quoteDetails.client_name || '',
-      client_name: quoteDetails.client_name,
-      shoot_type: payload?.shoot_type || quoteDetails.video_shoot_type || 'TBD',
-      project_description: payload?.project_description || quoteDetails.project_description || 'TBD',
-      shoot_date: payload?.shoot_date || payload?.event_date || 'TBD',
-      start_time: payload?.start_time || 'TBD',
-      end_time: payload?.end_time || 'TBD',
-      duration: deriveQuoteDuration(quoteDetails.line_items || [], payload?.duration || null),
+      first_name: quoteDetails.client_name || '',
+      shoot_type: quoteDetails.video_shoot_type || 'TBD',
+      project_description: quoteDetails.project_description || 'TBD',
+      location: quoteDetails.client_address || 'TBD',
+      quote_validity: deriveQuoteValidityText(quoteDetails),
+      add_ons: deriveQuoteAddOns(quoteDetails.line_items || []),
       proposal_amount: quoteDetails.total,
       attachment_content: payload?.attachment_content || payload?.pdf_base64 || null,
       attachment_filename: payload?.attachment_filename || `${quoteDetails.quote_number || 'custom-quote'}.pdf`,

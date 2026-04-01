@@ -2328,10 +2328,9 @@ const sendCustomQuoteProposalEmail = async (data) => {
         first_name: getFirstName(data?.first_name || data?.client_name || '', data?.first_name),
         shoot_type: data?.shoot_type || 'TBD',
         project_description: data?.project_description || 'TBD',
-        shoot_date: data?.shoot_date || 'TBD',
-        start_time: data?.start_time || 'TBD',
-        end_time: data?.end_time || 'TBD',
-        duration: data?.duration || 'TBD',
+        location: data?.location || 'TBD',
+        quote_validity: data?.quote_validity || 'TBD',
+        add_ons: data?.add_ons || 'TBD',
         proposal_amount: proposalAmount
       }
     };

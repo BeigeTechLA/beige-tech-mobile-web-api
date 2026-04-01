@@ -1357,13 +1357,13 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 { 
-  "client_name": "Harsh Panchal",
-  "client_email": "harsh@example.com",
+  "client_name": "Neha Panchal",
+  "client_email": "nehapanchal.np30@gmail.com",
   "client_phone": "+1 555 324 568",
   "client_address": "567 Mission Street, San Francisco, CA 94105",
   "project_description": "Corporate video production for annual conference",
   "video_shoot_type": "Private Event",
-  "quote_validity_days": 7,
+  "valid_until": "2026-04-28",
   "video_shoot_type": "Private Event",
   "line_items": [
     {
@@ -1378,12 +1378,17 @@ Authorization: {{TOKEN}}
       "catalog_item_id": 6,
       "section_type": "addon",
       "quantity": 1
+    },
+    {
+      "catalog_item_id": 7,
+      "section_type": "addon",
+      "quantity": 1
     }
   ]
 }
 
 ### update sales quote on next step
-PUT {{URL}}sales/quotes/2 HTTP/1.1
+PUT {{URL}}sales/quotes/5 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -1409,7 +1414,7 @@ Authorization: {{TOKEN}}
 }
 
 ### update sales quote on next step (only tax/discount)
-PUT {{URL}}sales/quotes/2 HTTP/1.1
+PUT {{URL}}sales/quotes/5 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -1422,7 +1427,7 @@ Authorization: {{TOKEN}}
 }
 
 ### get sales quote detail
-GET {{URL}}sales/quotes/2 HTTP/1.1
+GET {{URL}}sales/quotes/4 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -1463,22 +1468,11 @@ Authorization: {{TOKEN}}
 Content-Type: application/json
 
 ### send custom quote proposal email
-POST {{URL}}sales/quotes/1/send HTTP/1.1
+POST {{URL}}sales/quotes/5/send HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
-{
-  "to_email": "client@example.com",
-  "first_name": "Harsh",
-  "shoot_type": "Corporate Event",
-  "project_description": "Corporate video production for annual conference",
-  "shoot_date": "March 31, 2026",
-  "start_time": "9:00 AM",
-  "end_time": "5:00 PM",
-  "duration": "8 hours",
-  "attachment_filename": "custom-quote.pdf",
-  "attachment_content": "BASE64_PDF_CONTENT_HERE"
-}
+{}
 
 ### change sales rep for sales lead
 PUT {{URL}}sales/leads/264/change-sales-rep HTTP/1.1
