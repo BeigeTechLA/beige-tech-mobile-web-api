@@ -234,6 +234,19 @@ exports.sendQuoteProposal = async (req, res) => {
   }
 };
 
+exports.downloadQuotePdf = async (req, res) => {
+  try {
+    const { buffer, filename } = await quoteService.downloadQuotePdf(Number(req.params.quoteId), getUserContext(req));
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.send(buffer);
+  } catch (error) {
+    console.error('Error downloading sales quote PDF:', error);
+    const statusCode = error.message === 'Quote not found' ? constants.NOT_FOUND.code : constants.BAD_REQUEST.code;
+    return sendError(res, error, error.message || 'Failed to download quote PDF', statusCode);
+  }
+};
+
 exports.getShootTypes = async (req, res) => {
   try {
     const content_type = Number(req.params.content_type);

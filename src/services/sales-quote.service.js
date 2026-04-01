@@ -1,6 +1,7 @@
 const { Op } = require('sequelize');
 const db = require('../models');
 const { sendCustomQuoteProposalEmail } = require('../utils/emailService');
+const { generateQuotePdfBuffer } = require('../utils/quotePdf');
 
 const SECTION_TYPES = ['service', 'addon', 'logistics', 'custom'];
 const QUOTE_STATUSES = ['draft', 'pending', 'sent', 'viewed', 'accepted', 'rejected', 'expired'];
@@ -954,6 +955,10 @@ async function sendQuoteProposal(salesQuoteId, payload, user) {
       throw new Error('Client email is required to send quote proposal');
     }
 
+    const generatedPdfBuffer = payload?.attachment_content || payload?.pdf_base64
+      ? null
+      : await generateQuotePdfBuffer(quoteDetails);
+
     const emailResult = await sendCustomQuoteProposalEmail({
       to_email: toEmail,
       first_name: quoteDetails.client_name || '',
@@ -963,7 +968,7 @@ async function sendQuoteProposal(salesQuoteId, payload, user) {
       quote_validity: deriveQuoteValidityText(quoteDetails),
       add_ons: deriveQuoteAddOns(quoteDetails.line_items || []),
       proposal_amount: quoteDetails.total,
-      attachment_content: payload?.attachment_content || payload?.pdf_base64 || null,
+      attachment_content: payload?.attachment_content || payload?.pdf_base64 || (generatedPdfBuffer ? Buffer.from(generatedPdfBuffer).toString('base64') : null),
       attachment_filename: payload?.attachment_filename || `${quoteDetails.quote_number || 'custom-quote'}.pdf`,
       attachment_type: payload?.attachment_type || 'application/pdf'
     });
@@ -999,6 +1004,20 @@ async function sendQuoteProposal(salesQuoteId, payload, user) {
   }
 }
 
+async function downloadQuotePdf(salesQuoteId, user) {
+  const quoteDetails = await getQuoteById(salesQuoteId, user);
+  if (!quoteDetails) {
+    throw new Error('Quote not found');
+  }
+
+  const buffer = await generateQuotePdfBuffer(quoteDetails);
+
+  return {
+    buffer,
+    filename: `${quoteDetails.quote_number || 'custom-quote'}.pdf`
+  };
+}
+
 module.exports = {
   SECTION_TYPES,
   QUOTE_STATUSES,
@@ -1013,5 +1032,6 @@ module.exports = {
   listQuotes,
   getQuoteDashboard,
   updateQuoteStatus,
-  sendQuoteProposal
+  sendQuoteProposal,
+  downloadQuotePdf
 };
