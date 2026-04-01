@@ -1,4 +1,4 @@
-const { sales_leads, client_leads, sales_lead_activities, client_lead_activities, stream_project_booking, stream_project_booking_days, users, discount_codes, payment_links,  quotes, assigned_crew, crew_members,
+const { sales_leads, client_leads, sales_lead_activities, client_lead_activities, stream_project_booking, stream_project_booking_days, users, user_type, discount_codes, payment_links,  quotes, assigned_crew, crew_members,
   quote_line_items, crew_member_files } = require('../models');
 const { Op, Sequelize } = require('sequelize');
 const constants = require('../utils/constants');
@@ -112,6 +112,35 @@ function getEmailShootAmountFromFinalizeResult(finalizeResult = {}) {
     finalizeResult?.quote?.subtotal ??
     null
   );
+}
+
+async function resolveAssignableSalesRep(salesRepId) {
+  const salesRep = await users.findOne({
+    where: {
+      id: salesRepId,
+      is_active: 1
+    },
+    include: [
+      {
+        model: user_type,
+        as: 'userType',
+        attributes: ['user_role'],
+        required: false
+      }
+    ],
+    attributes: ['id', 'name', 'email']
+  });
+
+  if (!salesRep) {
+    throw new Error('Sales rep not found or inactive');
+  }
+
+  const userRole = salesRep.userType?.user_role;
+  if (userRole !== 'sales_rep' && userRole !== 'admin' && userRole !== 'Admin') {
+    throw new Error('Selected user is not a valid sales rep');
+  }
+
+  return salesRep;
 }
 
 async function resolveEmailClientNameForBooking(booking = null, fallbackClientName = null, options = {}) {
@@ -2343,6 +2372,168 @@ exports.assignLead = async (req, res) => {
     res.status(constants.INTERNAL_SERVER_ERROR.code).json({
       success: false,
       message: error.message || 'Failed to assign lead',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * Change sales rep for a sales lead
+ * PUT /api/sales/leads/:id/change-sales-rep
+ * Admin only
+ */
+exports.changeLeadSalesRep = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { sales_rep_id } = req.body;
+
+    if (!sales_rep_id) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Sales rep ID is required'
+      });
+    }
+
+    const lead = await sales_leads.findByPk(id, {
+      attributes: ['lead_id', 'assigned_sales_rep_id', 'client_name', 'guest_email']
+    });
+
+    if (!lead) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Lead not found'
+      });
+    }
+
+    const salesRep = await resolveAssignableSalesRep(parseInt(sales_rep_id, 10));
+
+    if (lead.assigned_sales_rep_id === salesRep.id) {
+      return res.json({
+        success: true,
+        message: 'Sales rep already assigned to this lead',
+        data: {
+          lead_id: lead.lead_id,
+          assigned_sales_rep_id: salesRep.id,
+          assigned_sales_rep: salesRep
+        }
+      });
+    }
+
+    const previousRepId = lead.assigned_sales_rep_id;
+
+    await lead.update({
+      assigned_sales_rep_id: salesRep.id
+    });
+
+    await sales_lead_activities.create({
+      lead_id: lead.lead_id,
+      activity_type: 'assigned',
+      activity_data: {
+        previous_rep_id: previousRepId,
+        new_rep_id: salesRep.id,
+        assignment_type: 'admin_change_sales_rep'
+      },
+      performed_by_user_id: req.userId
+    });
+
+    return res.json({
+      success: true,
+      message: 'Sales rep changed successfully',
+      data: {
+        lead_id: lead.lead_id,
+        client_name: lead.client_name,
+        guest_email: lead.guest_email,
+        previous_sales_rep_id: previousRepId,
+        assigned_sales_rep_id: salesRep.id,
+        assigned_sales_rep: salesRep
+      }
+    });
+  } catch (error) {
+    console.error('Error changing lead sales rep:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: error.message || 'Failed to change sales rep',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * Change sales rep for a client lead
+ * PUT /api/sales/client-leads/:id/change-sales-rep
+ * Admin only
+ */
+exports.changeClientLeadSalesRep = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { sales_rep_id } = req.body;
+
+    if (!sales_rep_id) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Sales rep ID is required'
+      });
+    }
+
+    const lead = await client_leads.findByPk(id, {
+      attributes: ['lead_id', 'assigned_sales_rep_id', 'client_name', 'user_id']
+    });
+
+    if (!lead) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Client lead not found'
+      });
+    }
+
+    const salesRep = await resolveAssignableSalesRep(parseInt(sales_rep_id, 10));
+
+    if (lead.assigned_sales_rep_id === salesRep.id) {
+      return res.json({
+        success: true,
+        message: 'Sales rep already assigned to this client lead',
+        data: {
+          lead_id: lead.lead_id,
+          assigned_sales_rep_id: salesRep.id,
+          assigned_sales_rep: salesRep
+        }
+      });
+    }
+
+    const previousRepId = lead.assigned_sales_rep_id;
+
+    await lead.update({
+      assigned_sales_rep_id: salesRep.id
+    });
+
+    await client_lead_activities.create({
+      lead_id: lead.lead_id,
+      activity_type: 'assigned',
+      activity_data: {
+        previous_rep_id: previousRepId,
+        new_rep_id: salesRep.id,
+        assignment_type: 'admin_change_sales_rep'
+      },
+      performed_by_user_id: req.userId
+    });
+
+    return res.json({
+      success: true,
+      message: 'Sales rep changed successfully',
+      data: {
+        lead_id: lead.lead_id,
+        client_name: lead.client_name,
+        user_id: lead.user_id,
+        previous_sales_rep_id: previousRepId,
+        assigned_sales_rep_id: salesRep.id,
+        assigned_sales_rep: salesRep
+      }
+    });
+  } catch (error) {
+    console.error('Error changing client lead sales rep:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: error.message || 'Failed to change sales rep',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }

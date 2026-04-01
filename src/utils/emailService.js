@@ -1745,7 +1745,7 @@ const sendNewClientSignupNotification = async (userData) => {
       subject: 'New Client Signup',
       templateId,
       dynamicTemplateData: {
-        guestEmail: userData?.name || userData?.email || '',
+        name: userData?.name || '',
         email: userData?.email || '',
         phone_number: userData?.phone_number || 'N/A',
         instagram: userData?.instagram_handle || userData?.instagram || 'N/A',
