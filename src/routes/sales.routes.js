@@ -73,6 +73,8 @@ router.get('/client-leads/:id', authenticate, requireSalesRepOrAdmin, salesLeads
  * @access  Sales Rep / Admin
  */
 router.put('/leads/:id/assign', authenticate, requireSalesRepOrAdmin, salesLeadsController.assignLead);
+router.put('/leads/:id/change-sales-rep', authenticate, requireAdmin, salesLeadsController.changeLeadSalesRep);
+router.put('/client-leads/:id/change-sales-rep', authenticate, requireAdmin, salesLeadsController.changeClientLeadSalesRep);
 
 /**
  * @route   PUT /api/sales/leads/:id/status
@@ -286,14 +288,21 @@ router.get('/dashboard/funnel', authenticate, requireSalesRepOrAdmin, salesDashb
 router.get('/client-dropdown', authenticate, requireSalesRepOrAdmin, salesQuotesController.getClientDropdown);
 router.get('/quotes/catalog', authenticate, requireSalesRepOrAdmin, salesQuotesController.getCatalog);
 router.get('/quotes/shoot-types/:content_type', authenticate, requireSalesRepOrAdmin, salesQuotesController.getShootTypes);
-router.post('/quotes/catalog', authenticate, requireAdmin, salesQuotesController.createCatalogItem);
-router.put('/quotes/catalog/:catalogItemId', authenticate, requireAdmin, salesQuotesController.updateCatalogItem);
+router.post('/quotes/shoot-types', authenticate, requireSalesRepOrAdmin, salesQuotesController.createShootType);
+router.put('/quotes/shoot-types/:shootTypeId', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateShootType);
+router.delete('/quotes/shoot-types/:shootTypeId', authenticate, requireSalesRepOrAdmin, salesQuotesController.deleteShootType);
+router.post('/quotes/catalog', authenticate, requireSalesRepOrAdmin, salesQuotesController.createCatalogItem);
+router.put('/quotes/catalog/:catalogItemId', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateCatalogItem);
+router.delete('/quotes/catalog/:catalogItemId', authenticate, requireSalesRepOrAdmin, salesQuotesController.deleteCatalogItem);
 
 router.get('/quotes/dashboard', authenticate, requireSalesRepOrAdmin, salesQuotesController.getQuoteDashboard);
 router.get('/quotes', authenticate, requireSalesRepOrAdmin, salesQuotesController.listQuotes);
+router.get('/quotes/public/:quoteId', salesQuotesController.getPublicQuoteById);
 router.get('/quotes/:quoteId', authenticate, requireSalesRepOrAdmin, salesQuotesController.getQuoteById);
+router.get('/quotes/:quoteId/pdf', authenticate, requireSalesRepOrAdmin, salesQuotesController.downloadQuotePdf);
 router.post('/quotes', authenticate, requireSalesRepOrAdmin, salesQuotesController.createQuote);
 router.put('/quotes/:quoteId', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateQuote);
+router.post('/quotes/:quoteId/send', authenticate, requireSalesRepOrAdmin, salesQuotesController.sendQuoteProposal);
 router.patch('/quotes/:quoteId/status', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateQuoteStatus);
 
 /**
@@ -312,6 +321,7 @@ router.post('/leads/intent', authenticate, requireSalesRepOrAdmin, salesLeadsCon
 router.post('/client-leads/intent', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateClientLeadIntent);
 router.put('/leads/:id/booking', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeGuestBooking);
 router.put('/client-leads/:id/booking', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeClientLeadBooking);
-router.post('/deals/finalize', salesLeadsController.finalizeCreateDeal);
+router.post('/deals/finalize', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeCreateDeal);
+router.get('/sales-reps', authenticate, requireSalesRepOrAdmin, salesDashboardController.getSalesRepsList);
 
 module.exports = router;

@@ -38,6 +38,11 @@ module.exports = function(sequelize, DataTypes) {
       allowNull: false,
       defaultValue: 1
     },
+    is_system_default: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: 0
+    },
     display_order: {
       type: DataTypes.INTEGER,
       allowNull: false,

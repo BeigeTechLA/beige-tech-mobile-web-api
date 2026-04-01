@@ -1,8 +1,10 @@
 const { Op } = require('sequelize');
 const db = require('../models');
+const { sendCustomQuoteProposalEmail } = require('../utils/emailService');
+const { generateQuotePdfBuffer } = require('../utils/quotePdf');
 
-const SECTION_TYPES = ['service', 'addon', 'logistics'];
-const QUOTE_STATUSES = ['draft', 'sent', 'viewed', 'accepted', 'rejected', 'expired'];
+const SECTION_TYPES = ['service', 'addon', 'logistics', 'custom'];
+const QUOTE_STATUSES = ['draft', 'pending', 'sent', 'viewed', 'accepted', 'rejected', 'expired'];
 const DISCOUNT_TYPES = ['none', 'percentage', 'fixed_amount'];
 const DEFAULT_FIGMA_CATALOG = {
   service: [
@@ -33,6 +35,54 @@ const DEFAULT_FIGMA_CATALOG = {
 function roundCurrency(value) {
   const numeric = Number(value || 0);
   return Number(numeric.toFixed(2));
+}
+
+function getDateRange(range = 'all') {
+  const now = new Date();
+
+  if (range === '7days' || range === '30days' || range === '90days') {
+    const days = Number(range.replace('days', ''));
+    const currentStart = new Date(now);
+    currentStart.setDate(currentStart.getDate() - days);
+
+    const previousStart = new Date(currentStart);
+    previousStart.setDate(previousStart.getDate() - days);
+
+    return {
+      currentStart,
+      currentEnd: now,
+      previousStart,
+      previousEnd: currentStart,
+      compareLabel: `vs previous ${days} days`
+    };
+  }
+
+  const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const previousMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+
+  return {
+    currentStart: currentMonthStart,
+    currentEnd: now,
+    previousStart: previousMonthStart,
+    previousEnd: currentMonthStart,
+    compareLabel: 'vs last month'
+  };
+}
+
+function isWithinRange(dateValue, start, end) {
+  const date = new Date(dateValue);
+  return date >= start && date < end;
+}
+
+function calculateGrowth(currentValue, previousValue) {
+  const current = Number(currentValue || 0);
+  const previous = Number(previousValue || 0);
+
+  if (previous === 0) {
+    return current > 0 ? 100 : 0;
+  }
+
+  return roundCurrency(((current - previous) / previous) * 100);
 }
 
 function parseConfig(config) {
@@ -122,6 +172,22 @@ function isAdminRole(role) {
   return role === 'admin' || role === 'Admin';
 }
 
+function resolveQuoteStatus(payload = {}, currentStatus = 'draft') {
+  if (payload.is_draft === true) {
+    return 'draft';
+  }
+
+  if (payload.is_draft === false) {
+    return 'pending';
+  }
+
+  if (payload.status && QUOTE_STATUSES.includes(payload.status)) {
+    return payload.status;
+  }
+
+  return currentStatus;
+}
+
 function buildQuoteAccessWhere(user) {
   if (isAdminRole(user?.role)) return {};
   return {
@@ -198,6 +264,7 @@ async function createCatalogItem(payload, userId) {
     rate_unit,
     display_order,
     is_active: is_active ? 1 : 0,
+    is_system_default: 0,
     created_by_user_id: userId,
     updated_by_user_id: userId
   });
@@ -230,6 +297,54 @@ async function updateCatalogItem(catalogItemId, payload, userId) {
   });
 
   return db.quote_catalog_items.findByPk(catalogItemId);
+}
+
+async function deleteCatalogItem(catalogItemId) {
+  const item = await db.quote_catalog_items.findByPk(catalogItemId);
+  if (!item) {
+    throw new Error('Catalog item not found');
+  }
+
+  if (Number(item.is_system_default) === 1 && item.section_type === 'service') {
+    throw new Error('Default service catalog items cannot be deleted');
+  }
+
+  await item.update({
+    is_active: 0,
+    updated_at: new Date()
+  });
+
+  return {
+    catalog_item_id: item.catalog_item_id,
+    deleted: true
+  };
+}
+
+async function resolveClientSnapshot(payload = {}, fallback = {}) {
+  const snapshot = {
+    client_user_id: payload.client_user_id !== undefined ? payload.client_user_id : fallback.client_user_id || null,
+    client_name: payload.client_name !== undefined ? payload.client_name : fallback.client_name || null,
+    client_email: payload.client_email !== undefined ? payload.client_email : fallback.client_email || null,
+    client_phone: payload.client_phone !== undefined ? payload.client_phone : fallback.client_phone || null,
+    client_address: payload.client_address !== undefined ? payload.client_address : fallback.client_address || null
+  };
+
+  if (snapshot.client_user_id) {
+    const [clientRecord, userRecord] = await Promise.all([
+      db.clients.findOne({ where: { user_id: snapshot.client_user_id, is_active: 1 } }),
+      db.users.findByPk(snapshot.client_user_id)
+    ]);
+
+    if (!snapshot.client_name) snapshot.client_name = clientRecord?.name || userRecord?.name || null;
+    if (!snapshot.client_email) snapshot.client_email = clientRecord?.email || userRecord?.email || null;
+    if (!snapshot.client_phone) snapshot.client_phone = clientRecord?.phone_number || userRecord?.phone_number || null;
+  }
+
+  if (!snapshot.client_name) {
+    snapshot.client_name = fallback.client_name || 'Untitled Draft';
+  }
+
+  return snapshot;
 }
 
 async function buildLineItemsPayload(rawItems = []) {
@@ -295,6 +410,37 @@ async function buildLineItemsPayload(rawItems = []) {
   });
 }
 
+function toPersistableLineItemPayload(item) {
+  const plain = typeof item.toJSON === 'function' ? item.toJSON() : { ...item };
+  delete plain.line_item_id;
+  delete plain.sales_quote_id;
+  delete plain.is_active;
+  delete plain.created_at;
+  delete plain.updated_at;
+  return plain;
+}
+
+function normalizeSectionTypes(sectionTypes = []) {
+  const validSections = new Set(SECTION_TYPES);
+  return [...new Set(
+    sectionTypes
+      .map((section) => (section == null ? null : String(section).trim()))
+      .filter((section) => section && validSections.has(section))
+  )];
+}
+
+function mergeLineItemsBySection(existingItems, incomingItems, sectionTypesToReplace) {
+  if (!sectionTypesToReplace.length) {
+    return existingItems;
+  }
+
+  const replaceSet = new Set(sectionTypesToReplace);
+  return [
+    ...existingItems.filter((item) => !replaceSet.has(item.section_type)),
+    ...incomingItems
+  ];
+}
+
 function calculateTotals(lineItems, quoteData) {
   const subtotal = roundCurrency(lineItems.reduce((sum, item) => sum + Number(item.line_total || 0), 0));
   const discountType = DISCOUNT_TYPES.includes(quoteData.discount_type) ? quoteData.discount_type : 'none';
@@ -323,6 +469,39 @@ function calculateTotals(lineItems, quoteData) {
   };
 }
 
+function deriveQuoteAddOns(lineItems = [], explicitAddOns = null) {
+  if (explicitAddOns) {
+    if (Array.isArray(explicitAddOns)) {
+      const values = explicitAddOns.filter(Boolean);
+      return values.length ? values.join(', ') : 'TBD';
+    }
+
+    return String(explicitAddOns);
+  }
+
+  const addOnNames = (lineItems || [])
+    .filter((item) => item && item.section_type === 'addon' && item.item_name)
+    .map((item) => item.item_name.trim())
+    .filter(Boolean);
+
+  return addOnNames.length ? addOnNames.join(', ') : 'TBD';
+}
+
+function deriveQuoteValidityText(quoteDetails = {}) {
+  if (quoteDetails.valid_until) {
+    return `Valid until ${quoteDetails.valid_until}`;
+  }
+
+  if (quoteDetails.quote_validity_days) {
+    const days = Number(quoteDetails.quote_validity_days);
+    if (days) {
+      return `${days} day${days === 1 ? '' : 's'}`;
+    }
+  }
+
+  return 'TBD';
+}
+
 async function recordActivity(transaction, salesQuoteId, activityType, userId, message, metadata = null) {
   return db.sales_quote_activities.create({
     sales_quote_id: salesQuoteId,
@@ -336,6 +515,7 @@ async function recordActivity(transaction, salesQuoteId, activityType, userId, m
 async function createQuote(payload, user) {
   const transaction = await db.sequelize.transaction();
   try {
+    const clientSnapshot = await resolveClientSnapshot(payload);
     const lineItemsPayload = await buildLineItemsPayload(payload.line_items || []);
     const totals = calculateTotals(lineItemsPayload, payload);
     const validity = resolveValidity({
@@ -351,15 +531,15 @@ async function createQuote(payload, user) {
     const quote = await db.sales_quotes.create({
       quote_number: generateQuoteNumber(),
       lead_id: payload.lead_id || null,
-      client_user_id: payload.client_user_id || null,
+      client_user_id: clientSnapshot.client_user_id,
       created_by_user_id: user.userId,
       assigned_sales_rep_id: assignedSalesRepId,
       pricing_mode: payload.pricing_mode || 'general',
-      status: QUOTE_STATUSES.includes(payload.status) ? payload.status : 'draft',
-      client_name: payload.client_name,
-      client_email: payload.client_email || null,
-      client_phone: payload.client_phone || null,
-      client_address: payload.client_address || null,
+      status: resolveQuoteStatus(payload, 'draft'),
+      client_name: clientSnapshot.client_name,
+      client_email: clientSnapshot.client_email,
+      client_phone: clientSnapshot.client_phone,
+      client_address: clientSnapshot.client_address,
       project_description: payload.project_description || null,
       video_shoot_type: payload.video_shoot_type || null,
       quote_validity_days: validity.quote_validity_days,
@@ -380,6 +560,7 @@ async function createQuote(payload, user) {
       await db.sales_quote_line_items.bulkCreate(
         lineItemsPayload.map((item) => ({
           ...item,
+          is_active: 1,
           sales_quote_id: quote.sales_quote_id
         })),
         { transaction }
@@ -407,8 +588,33 @@ async function updateQuote(salesQuoteId, payload, user) {
       throw new Error('Quote not found');
     }
 
-    const lineItemsPayload = await buildLineItemsPayload(payload.line_items || []);
-    const totals = calculateTotals(lineItemsPayload, payload);
+    const clientSnapshot = await resolveClientSnapshot(payload, quote);
+    const existingLineItems = await db.sales_quote_line_items.findAll({
+      where: { sales_quote_id: salesQuoteId, is_active: 1 },
+      order: [['sort_order', 'ASC']],
+      transaction
+    });
+    const existingLineItemsPayload = existingLineItems.map(toPersistableLineItemPayload);
+
+    let incomingLineItemsPayload = [];
+    let sectionTypesToReplace = [];
+    if (Array.isArray(payload.line_items)) {
+      incomingLineItemsPayload = await buildLineItemsPayload(payload.line_items);
+      sectionTypesToReplace = normalizeSectionTypes([
+        ...(Array.isArray(payload.line_item_sections) ? payload.line_item_sections : []),
+        ...incomingLineItemsPayload.map((item) => item.section_type)
+      ]);
+    }
+
+    const mergedLineItemsPayload = Array.isArray(payload.line_items)
+      ? mergeLineItemsBySection(existingLineItemsPayload, incomingLineItemsPayload, sectionTypesToReplace)
+      : existingLineItemsPayload;
+
+    const totals = calculateTotals(mergedLineItemsPayload, {
+      discount_type: payload.discount_type !== undefined ? payload.discount_type : quote.discount_type,
+      discount_value: payload.discount_value !== undefined ? payload.discount_value : quote.discount_value,
+      tax_rate: payload.tax_rate !== undefined ? payload.tax_rate : quote.tax_rate
+    });
     const validity = resolveValidity({
       validUntil: payload.valid_until !== undefined ? payload.valid_until : quote.valid_until,
       quoteValidityDays: payload.quote_validity_days !== undefined ? payload.quote_validity_days : quote.quote_validity_days,
@@ -416,21 +622,21 @@ async function updateQuote(salesQuoteId, payload, user) {
       quoteValidityDaysProvided: payload.quote_validity_days !== undefined
     });
 
-    const nextStatus = payload.status && QUOTE_STATUSES.includes(payload.status) ? payload.status : quote.status;
+    const nextStatus = resolveQuoteStatus(payload, quote.status);
     const assignedSalesRepId = isAdminRole(user.role)
       ? (payload.assigned_sales_rep_id !== undefined ? payload.assigned_sales_rep_id : quote.assigned_sales_rep_id)
       : quote.assigned_sales_rep_id;
 
     await quote.update({
       lead_id: payload.lead_id !== undefined ? payload.lead_id : quote.lead_id,
-      client_user_id: payload.client_user_id !== undefined ? payload.client_user_id : quote.client_user_id,
+      client_user_id: clientSnapshot.client_user_id,
       assigned_sales_rep_id: assignedSalesRepId,
       pricing_mode: payload.pricing_mode || quote.pricing_mode,
       status: nextStatus,
-      client_name: payload.client_name || quote.client_name,
-      client_email: payload.client_email !== undefined ? payload.client_email : quote.client_email,
-      client_phone: payload.client_phone !== undefined ? payload.client_phone : quote.client_phone,
-      client_address: payload.client_address !== undefined ? payload.client_address : quote.client_address,
+      client_name: clientSnapshot.client_name,
+      client_email: clientSnapshot.client_email,
+      client_phone: clientSnapshot.client_phone,
+      client_address: clientSnapshot.client_address,
       project_description: payload.project_description !== undefined ? payload.project_description : quote.project_description,
       video_shoot_type: payload.video_shoot_type !== undefined ? payload.video_shoot_type : quote.video_shoot_type,
       quote_validity_days: validity.quote_validity_days,
@@ -448,19 +654,31 @@ async function updateQuote(salesQuoteId, payload, user) {
       updated_at: new Date()
     }, { transaction });
 
-    await db.sales_quote_line_items.destroy({
-      where: { sales_quote_id: salesQuoteId },
-      transaction
-    });
+    if (Array.isArray(payload.line_items)) {
+      if (sectionTypesToReplace.length) {
+        await db.sales_quote_line_items.update({
+          is_active: 0,
+          updated_at: new Date()
+        }, {
+          where: {
+            sales_quote_id: salesQuoteId,
+            is_active: 1,
+            section_type: { [Op.in]: sectionTypesToReplace }
+          },
+          transaction
+        });
+      }
 
-    if (lineItemsPayload.length) {
-      await db.sales_quote_line_items.bulkCreate(
-        lineItemsPayload.map((item) => ({
-          ...item,
-          sales_quote_id: salesQuoteId
-        })),
-        { transaction }
-      );
+      if (incomingLineItemsPayload.length) {
+        await db.sales_quote_line_items.bulkCreate(
+          incomingLineItemsPayload.map((item) => ({
+            ...item,
+            is_active: 1,
+            sales_quote_id: salesQuoteId
+          })),
+          { transaction }
+        );
+      }
     }
 
     await recordActivity(transaction, salesQuoteId, 'updated', user.userId, 'Quote updated');
@@ -472,13 +690,16 @@ async function updateQuote(salesQuoteId, payload, user) {
   }
 }
 
-async function getQuoteById(salesQuoteId, user) {
+async function fetchQuoteById(salesQuoteId, user = null) {
+  const accessWhere = user ? buildQuoteAccessWhere(user) : {};
   const quote = await db.sales_quotes.findOne({
-    where: { sales_quote_id: salesQuoteId, ...buildQuoteAccessWhere(user) },
+    where: { sales_quote_id: salesQuoteId, ...accessWhere },
     include: [
       {
         model: db.sales_quote_line_items,
         as: 'line_items',
+        where: { is_active: 1 },
+        required: false,
         include: [
           { model: db.quote_catalog_items, as: 'catalog_item', required: false }
         ]
@@ -518,6 +739,14 @@ async function getQuoteById(salesQuoteId, user) {
   }));
 
   return plain;
+}
+
+async function getQuoteById(salesQuoteId, user) {
+  return fetchQuoteById(salesQuoteId, user);
+}
+
+async function getPublicQuoteById(salesQuoteId) {
+  return fetchQuoteById(salesQuoteId);
 }
 
 async function listQuotes(query, user) {
@@ -603,10 +832,38 @@ async function getQuoteDashboard(query, user) {
     raw: true
   });
 
+  const { currentStart, currentEnd, previousStart, previousEnd, compareLabel } = getDateRange(query.range || 'all');
+
+  const currentPeriodQuotes = quotes.filter((item) => isWithinRange(item.created_at, currentStart, currentEnd));
+  const previousPeriodQuotes = quotes.filter((item) => isWithinRange(item.created_at, previousStart, previousEnd));
+
+  const countByStatus = (items, statuses) => items.filter((item) => statuses.includes(item.status)).length;
+  const sumTotals = (items) => roundCurrency(items.reduce((sum, item) => sum + Number(item.total || 0), 0));
+
+  const currentMetrics = {
+    total_quotes: currentPeriodQuotes.length,
+    accepted_quotes: countByStatus(currentPeriodQuotes, ['accepted']),
+    pending_quotes: countByStatus(currentPeriodQuotes, ['pending', 'sent', 'viewed']),
+    draft_quotes: countByStatus(currentPeriodQuotes, ['draft']),
+    rejected_quotes: countByStatus(currentPeriodQuotes, ['rejected']),
+    expired_quotes: countByStatus(currentPeriodQuotes, ['expired']),
+    total_amount: sumTotals(currentPeriodQuotes)
+  };
+
+  const previousMetrics = {
+    total_quotes: previousPeriodQuotes.length,
+    accepted_quotes: countByStatus(previousPeriodQuotes, ['accepted']),
+    pending_quotes: countByStatus(previousPeriodQuotes, ['pending', 'sent', 'viewed']),
+    draft_quotes: countByStatus(previousPeriodQuotes, ['draft']),
+    rejected_quotes: countByStatus(previousPeriodQuotes, ['rejected']),
+    expired_quotes: countByStatus(previousPeriodQuotes, ['expired']),
+    total_amount: sumTotals(previousPeriodQuotes)
+  };
+
   const overview = {
     total_quotes: quotes.length,
     accepted_quotes: quotes.filter((item) => item.status === 'accepted').length,
-    pending_quotes: quotes.filter((item) => ['sent', 'viewed'].includes(item.status)).length,
+    pending_quotes: quotes.filter((item) => ['pending', 'sent', 'viewed'].includes(item.status)).length,
     draft_quotes: quotes.filter((item) => item.status === 'draft').length,
     rejected_quotes: quotes.filter((item) => item.status === 'rejected').length,
     expired_quotes: quotes.filter((item) => item.status === 'expired').length,
@@ -625,6 +882,18 @@ async function getQuoteDashboard(query, user) {
 
   return {
     overview,
+    growth: {
+      compare_label: compareLabel,
+      total_quotes: calculateGrowth(currentMetrics.total_quotes, previousMetrics.total_quotes),
+      accepted_quotes: calculateGrowth(currentMetrics.accepted_quotes, previousMetrics.accepted_quotes),
+      pending_quotes: calculateGrowth(currentMetrics.pending_quotes, previousMetrics.pending_quotes),
+      draft_quotes: calculateGrowth(currentMetrics.draft_quotes, previousMetrics.draft_quotes),
+      rejected_quotes: calculateGrowth(currentMetrics.rejected_quotes, previousMetrics.rejected_quotes),
+      expired_quotes: calculateGrowth(currentMetrics.expired_quotes, previousMetrics.expired_quotes),
+      total_amount: calculateGrowth(currentMetrics.total_amount, previousMetrics.total_amount),
+      current_period: currentMetrics,
+      previous_period: previousMetrics
+    },
     chart: Array.from(chartMap.values())
   };
 }
@@ -664,16 +933,105 @@ async function updateQuoteStatus(salesQuoteId, status, user) {
   }
 }
 
+async function sendQuoteProposal(salesQuoteId, payload, user) {
+  const transaction = await db.sequelize.transaction();
+  try {
+    const quote = await db.sales_quotes.findOne({
+      where: { sales_quote_id: salesQuoteId, ...buildQuoteAccessWhere(user) },
+      transaction
+    });
+
+    if (!quote) {
+      throw new Error('Quote not found');
+    }
+
+    const quoteDetails = await getQuoteById(salesQuoteId, user);
+    if (!quoteDetails) {
+      throw new Error('Quote not found');
+    }
+
+    const toEmail = payload?.to_email || quoteDetails.client_email;
+    if (!toEmail) {
+      throw new Error('Client email is required to send quote proposal');
+    }
+
+    const generatedPdfBuffer = payload?.attachment_content || payload?.pdf_base64
+      ? null
+      : await generateQuotePdfBuffer(quoteDetails);
+
+    const emailResult = await sendCustomQuoteProposalEmail({
+      to_email: toEmail,
+      first_name: quoteDetails.client_name || '',
+      shoot_type: quoteDetails.video_shoot_type || 'TBD',
+      project_description: quoteDetails.project_description || 'TBD',
+      location: quoteDetails.client_address || 'TBD',
+      quote_validity: deriveQuoteValidityText(quoteDetails),
+      add_ons: deriveQuoteAddOns(quoteDetails.line_items || []),
+      proposal_amount: quoteDetails.total,
+      attachment_content: payload?.attachment_content || payload?.pdf_base64 || (generatedPdfBuffer ? Buffer.from(generatedPdfBuffer).toString('base64') : null),
+      attachment_filename: payload?.attachment_filename || `${quoteDetails.quote_number || 'custom-quote'}.pdf`,
+      attachment_type: payload?.attachment_type || 'application/pdf'
+    });
+
+    if (!emailResult?.success) {
+      throw new Error(
+        typeof emailResult?.error === 'string'
+          ? emailResult.error
+          : 'Failed to send quote proposal email'
+      );
+    }
+
+    await quote.update({
+      status: 'sent',
+      sent_at: new Date(),
+      updated_at: new Date()
+    }, { transaction });
+
+    await recordActivity(
+      transaction,
+      salesQuoteId,
+      'sent',
+      user.userId,
+      'Quote proposal email sent',
+      { to_email: toEmail }
+    );
+
+    await transaction.commit();
+    return getQuoteById(salesQuoteId, user);
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
+}
+
+async function downloadQuotePdf(salesQuoteId, user) {
+  const quoteDetails = await getQuoteById(salesQuoteId, user);
+  if (!quoteDetails) {
+    throw new Error('Quote not found');
+  }
+
+  const buffer = await generateQuotePdfBuffer(quoteDetails);
+
+  return {
+    buffer,
+    filename: `${quoteDetails.quote_number || 'custom-quote'}.pdf`
+  };
+}
+
 module.exports = {
   SECTION_TYPES,
   QUOTE_STATUSES,
   getCatalog,
   createCatalogItem,
   updateCatalogItem,
+  deleteCatalogItem,
   createQuote,
   updateQuote,
   getQuoteById,
+  getPublicQuoteById,
   listQuotes,
   getQuoteDashboard,
-  updateQuoteStatus
+  updateQuoteStatus,
+  sendQuoteProposal,
+  downloadQuotePdf
 };

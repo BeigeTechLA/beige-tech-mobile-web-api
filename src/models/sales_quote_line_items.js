@@ -85,6 +85,11 @@ module.exports = function(sequelize, DataTypes) {
       allowNull: false,
       defaultValue: 0
     },
+    is_active: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: 1
+    },
     created_at: {
       type: DataTypes.DATE,
       allowNull: false,

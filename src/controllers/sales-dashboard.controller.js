@@ -282,6 +282,49 @@ exports.getSalesRepsWorkload = async (req, res) => {
 };
 
 /**
+ * Get active sales reps list
+ * GET /api/sales/sales-reps
+ */
+exports.getSalesRepsList = async (req, res) => {
+  try {
+    const { user_type } = require('../models');
+
+    const salesRepType = await user_type.findOne({
+      where: { user_role: 'sales_rep' },
+      attributes: ['user_type_id']
+    });
+
+    if (!salesRepType) {
+      return res.json({
+        success: true,
+        data: salesReps
+      });
+    }
+
+    const salesReps = await users.findAll({
+      where: {
+        user_type: salesRepType.user_type_id,
+        is_active: 1
+      },
+      attributes: ['id', 'name', 'email'],
+      order: [['name', 'ASC']]
+    });
+
+    res.json({
+      success: true,
+      data: salesReps
+    });
+  } catch (error) {
+    console.error('Error fetching sales reps list:', error);
+    res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to fetch sales reps list',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
  * Get recent activities across all leads
  * GET /api/sales/dashboard/recent-activities
  */
