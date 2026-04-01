@@ -36,6 +36,54 @@ function roundCurrency(value) {
   return Number(numeric.toFixed(2));
 }
 
+function getDateRange(range = 'all') {
+  const now = new Date();
+
+  if (range === '7days' || range === '30days' || range === '90days') {
+    const days = Number(range.replace('days', ''));
+    const currentStart = new Date(now);
+    currentStart.setDate(currentStart.getDate() - days);
+
+    const previousStart = new Date(currentStart);
+    previousStart.setDate(previousStart.getDate() - days);
+
+    return {
+      currentStart,
+      currentEnd: now,
+      previousStart,
+      previousEnd: currentStart,
+      compareLabel: `vs previous ${days} days`
+    };
+  }
+
+  const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const previousMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+
+  return {
+    currentStart: currentMonthStart,
+    currentEnd: now,
+    previousStart: previousMonthStart,
+    previousEnd: currentMonthStart,
+    compareLabel: 'vs last month'
+  };
+}
+
+function isWithinRange(dateValue, start, end) {
+  const date = new Date(dateValue);
+  return date >= start && date < end;
+}
+
+function calculateGrowth(currentValue, previousValue) {
+  const current = Number(currentValue || 0);
+  const previous = Number(previousValue || 0);
+
+  if (previous === 0) {
+    return current > 0 ? 100 : 0;
+  }
+
+  return roundCurrency(((current - previous) / previous) * 100);
+}
+
 function parseConfig(config) {
   if (!config) return null;
   if (typeof config === 'string') {
@@ -783,6 +831,34 @@ async function getQuoteDashboard(query, user) {
     raw: true
   });
 
+  const { currentStart, currentEnd, previousStart, previousEnd, compareLabel } = getDateRange(query.range || 'all');
+
+  const currentPeriodQuotes = quotes.filter((item) => isWithinRange(item.created_at, currentStart, currentEnd));
+  const previousPeriodQuotes = quotes.filter((item) => isWithinRange(item.created_at, previousStart, previousEnd));
+
+  const countByStatus = (items, statuses) => items.filter((item) => statuses.includes(item.status)).length;
+  const sumTotals = (items) => roundCurrency(items.reduce((sum, item) => sum + Number(item.total || 0), 0));
+
+  const currentMetrics = {
+    total_quotes: currentPeriodQuotes.length,
+    accepted_quotes: countByStatus(currentPeriodQuotes, ['accepted']),
+    pending_quotes: countByStatus(currentPeriodQuotes, ['pending', 'sent', 'viewed']),
+    draft_quotes: countByStatus(currentPeriodQuotes, ['draft']),
+    rejected_quotes: countByStatus(currentPeriodQuotes, ['rejected']),
+    expired_quotes: countByStatus(currentPeriodQuotes, ['expired']),
+    total_amount: sumTotals(currentPeriodQuotes)
+  };
+
+  const previousMetrics = {
+    total_quotes: previousPeriodQuotes.length,
+    accepted_quotes: countByStatus(previousPeriodQuotes, ['accepted']),
+    pending_quotes: countByStatus(previousPeriodQuotes, ['pending', 'sent', 'viewed']),
+    draft_quotes: countByStatus(previousPeriodQuotes, ['draft']),
+    rejected_quotes: countByStatus(previousPeriodQuotes, ['rejected']),
+    expired_quotes: countByStatus(previousPeriodQuotes, ['expired']),
+    total_amount: sumTotals(previousPeriodQuotes)
+  };
+
   const overview = {
     total_quotes: quotes.length,
     accepted_quotes: quotes.filter((item) => item.status === 'accepted').length,
@@ -805,6 +881,18 @@ async function getQuoteDashboard(query, user) {
 
   return {
     overview,
+    growth: {
+      compare_label: compareLabel,
+      total_quotes: calculateGrowth(currentMetrics.total_quotes, previousMetrics.total_quotes),
+      accepted_quotes: calculateGrowth(currentMetrics.accepted_quotes, previousMetrics.accepted_quotes),
+      pending_quotes: calculateGrowth(currentMetrics.pending_quotes, previousMetrics.pending_quotes),
+      draft_quotes: calculateGrowth(currentMetrics.draft_quotes, previousMetrics.draft_quotes),
+      rejected_quotes: calculateGrowth(currentMetrics.rejected_quotes, previousMetrics.rejected_quotes),
+      expired_quotes: calculateGrowth(currentMetrics.expired_quotes, previousMetrics.expired_quotes),
+      total_amount: calculateGrowth(currentMetrics.total_amount, previousMetrics.total_amount),
+      current_period: currentMetrics,
+      previous_period: previousMetrics
+    },
     chart: Array.from(chartMap.values())
   };
 }
