@@ -1,8 +1,10 @@
 const { Op } = require('sequelize');
 const db = require('../models');
+const { sendCustomQuoteProposalEmail } = require('../utils/emailService');
+const { generateQuotePdfBuffer } = require('../utils/quotePdf');
 
 const SECTION_TYPES = ['service', 'addon', 'logistics', 'custom'];
-const QUOTE_STATUSES = ['draft', 'sent', 'viewed', 'accepted', 'rejected', 'expired'];
+const QUOTE_STATUSES = ['draft', 'pending', 'sent', 'viewed', 'accepted', 'rejected', 'expired'];
 const DISCOUNT_TYPES = ['none', 'percentage', 'fixed_amount'];
 const DEFAULT_FIGMA_CATALOG = {
   service: [
@@ -33,6 +35,54 @@ const DEFAULT_FIGMA_CATALOG = {
 function roundCurrency(value) {
   const numeric = Number(value || 0);
   return Number(numeric.toFixed(2));
+}
+
+function getDateRange(range = 'all') {
+  const now = new Date();
+
+  if (range === '7days' || range === '30days' || range === '90days') {
+    const days = Number(range.replace('days', ''));
+    const currentStart = new Date(now);
+    currentStart.setDate(currentStart.getDate() - days);
+
+    const previousStart = new Date(currentStart);
+    previousStart.setDate(previousStart.getDate() - days);
+
+    return {
+      currentStart,
+      currentEnd: now,
+      previousStart,
+      previousEnd: currentStart,
+      compareLabel: `vs previous ${days} days`
+    };
+  }
+
+  const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const previousMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+
+  return {
+    currentStart: currentMonthStart,
+    currentEnd: now,
+    previousStart: previousMonthStart,
+    previousEnd: currentMonthStart,
+    compareLabel: 'vs last month'
+  };
+}
+
+function isWithinRange(dateValue, start, end) {
+  const date = new Date(dateValue);
+  return date >= start && date < end;
+}
+
+function calculateGrowth(currentValue, previousValue) {
+  const current = Number(currentValue || 0);
+  const previous = Number(previousValue || 0);
+
+  if (previous === 0) {
+    return current > 0 ? 100 : 0;
+  }
+
+  return roundCurrency(((current - previous) / previous) * 100);
 }
 
 function parseConfig(config) {
@@ -120,6 +170,22 @@ function resolveValidity({ validUntil, quoteValidityDays, validUntilProvided = f
 
 function isAdminRole(role) {
   return role === 'admin' || role === 'Admin';
+}
+
+function resolveQuoteStatus(payload = {}, currentStatus = 'draft') {
+  if (payload.is_draft === true) {
+    return 'draft';
+  }
+
+  if (payload.is_draft === false) {
+    return 'pending';
+  }
+
+  if (payload.status && QUOTE_STATUSES.includes(payload.status)) {
+    return payload.status;
+  }
+
+  return currentStatus;
 }
 
 function buildQuoteAccessWhere(user) {
@@ -403,6 +469,39 @@ function calculateTotals(lineItems, quoteData) {
   };
 }
 
+function deriveQuoteAddOns(lineItems = [], explicitAddOns = null) {
+  if (explicitAddOns) {
+    if (Array.isArray(explicitAddOns)) {
+      const values = explicitAddOns.filter(Boolean);
+      return values.length ? values.join(', ') : 'TBD';
+    }
+
+    return String(explicitAddOns);
+  }
+
+  const addOnNames = (lineItems || [])
+    .filter((item) => item && item.section_type === 'addon' && item.item_name)
+    .map((item) => item.item_name.trim())
+    .filter(Boolean);
+
+  return addOnNames.length ? addOnNames.join(', ') : 'TBD';
+}
+
+function deriveQuoteValidityText(quoteDetails = {}) {
+  if (quoteDetails.valid_until) {
+    return `Valid until ${quoteDetails.valid_until}`;
+  }
+
+  if (quoteDetails.quote_validity_days) {
+    const days = Number(quoteDetails.quote_validity_days);
+    if (days) {
+      return `${days} day${days === 1 ? '' : 's'}`;
+    }
+  }
+
+  return 'TBD';
+}
+
 async function recordActivity(transaction, salesQuoteId, activityType, userId, message, metadata = null) {
   return db.sales_quote_activities.create({
     sales_quote_id: salesQuoteId,
@@ -436,7 +535,7 @@ async function createQuote(payload, user) {
       created_by_user_id: user.userId,
       assigned_sales_rep_id: assignedSalesRepId,
       pricing_mode: payload.pricing_mode || 'general',
-      status: QUOTE_STATUSES.includes(payload.status) ? payload.status : 'draft',
+      status: resolveQuoteStatus(payload, 'draft'),
       client_name: clientSnapshot.client_name,
       client_email: clientSnapshot.client_email,
       client_phone: clientSnapshot.client_phone,
@@ -523,7 +622,7 @@ async function updateQuote(salesQuoteId, payload, user) {
       quoteValidityDaysProvided: payload.quote_validity_days !== undefined
     });
 
-    const nextStatus = payload.status && QUOTE_STATUSES.includes(payload.status) ? payload.status : quote.status;
+    const nextStatus = resolveQuoteStatus(payload, quote.status);
     const assignedSalesRepId = isAdminRole(user.role)
       ? (payload.assigned_sales_rep_id !== undefined ? payload.assigned_sales_rep_id : quote.assigned_sales_rep_id)
       : quote.assigned_sales_rep_id;
@@ -591,9 +690,10 @@ async function updateQuote(salesQuoteId, payload, user) {
   }
 }
 
-async function getQuoteById(salesQuoteId, user) {
+async function fetchQuoteById(salesQuoteId, user = null) {
+  const accessWhere = user ? buildQuoteAccessWhere(user) : {};
   const quote = await db.sales_quotes.findOne({
-    where: { sales_quote_id: salesQuoteId, ...buildQuoteAccessWhere(user) },
+    where: { sales_quote_id: salesQuoteId, ...accessWhere },
     include: [
       {
         model: db.sales_quote_line_items,
@@ -639,6 +739,14 @@ async function getQuoteById(salesQuoteId, user) {
   }));
 
   return plain;
+}
+
+async function getQuoteById(salesQuoteId, user) {
+  return fetchQuoteById(salesQuoteId, user);
+}
+
+async function getPublicQuoteById(salesQuoteId) {
+  return fetchQuoteById(salesQuoteId);
 }
 
 async function listQuotes(query, user) {
@@ -724,10 +832,38 @@ async function getQuoteDashboard(query, user) {
     raw: true
   });
 
+  const { currentStart, currentEnd, previousStart, previousEnd, compareLabel } = getDateRange(query.range || 'all');
+
+  const currentPeriodQuotes = quotes.filter((item) => isWithinRange(item.created_at, currentStart, currentEnd));
+  const previousPeriodQuotes = quotes.filter((item) => isWithinRange(item.created_at, previousStart, previousEnd));
+
+  const countByStatus = (items, statuses) => items.filter((item) => statuses.includes(item.status)).length;
+  const sumTotals = (items) => roundCurrency(items.reduce((sum, item) => sum + Number(item.total || 0), 0));
+
+  const currentMetrics = {
+    total_quotes: currentPeriodQuotes.length,
+    accepted_quotes: countByStatus(currentPeriodQuotes, ['accepted']),
+    pending_quotes: countByStatus(currentPeriodQuotes, ['pending', 'sent', 'viewed']),
+    draft_quotes: countByStatus(currentPeriodQuotes, ['draft']),
+    rejected_quotes: countByStatus(currentPeriodQuotes, ['rejected']),
+    expired_quotes: countByStatus(currentPeriodQuotes, ['expired']),
+    total_amount: sumTotals(currentPeriodQuotes)
+  };
+
+  const previousMetrics = {
+    total_quotes: previousPeriodQuotes.length,
+    accepted_quotes: countByStatus(previousPeriodQuotes, ['accepted']),
+    pending_quotes: countByStatus(previousPeriodQuotes, ['pending', 'sent', 'viewed']),
+    draft_quotes: countByStatus(previousPeriodQuotes, ['draft']),
+    rejected_quotes: countByStatus(previousPeriodQuotes, ['rejected']),
+    expired_quotes: countByStatus(previousPeriodQuotes, ['expired']),
+    total_amount: sumTotals(previousPeriodQuotes)
+  };
+
   const overview = {
     total_quotes: quotes.length,
     accepted_quotes: quotes.filter((item) => item.status === 'accepted').length,
-    pending_quotes: quotes.filter((item) => ['sent', 'viewed'].includes(item.status)).length,
+    pending_quotes: quotes.filter((item) => ['pending', 'sent', 'viewed'].includes(item.status)).length,
     draft_quotes: quotes.filter((item) => item.status === 'draft').length,
     rejected_quotes: quotes.filter((item) => item.status === 'rejected').length,
     expired_quotes: quotes.filter((item) => item.status === 'expired').length,
@@ -746,6 +882,18 @@ async function getQuoteDashboard(query, user) {
 
   return {
     overview,
+    growth: {
+      compare_label: compareLabel,
+      total_quotes: calculateGrowth(currentMetrics.total_quotes, previousMetrics.total_quotes),
+      accepted_quotes: calculateGrowth(currentMetrics.accepted_quotes, previousMetrics.accepted_quotes),
+      pending_quotes: calculateGrowth(currentMetrics.pending_quotes, previousMetrics.pending_quotes),
+      draft_quotes: calculateGrowth(currentMetrics.draft_quotes, previousMetrics.draft_quotes),
+      rejected_quotes: calculateGrowth(currentMetrics.rejected_quotes, previousMetrics.rejected_quotes),
+      expired_quotes: calculateGrowth(currentMetrics.expired_quotes, previousMetrics.expired_quotes),
+      total_amount: calculateGrowth(currentMetrics.total_amount, previousMetrics.total_amount),
+      current_period: currentMetrics,
+      previous_period: previousMetrics
+    },
     chart: Array.from(chartMap.values())
   };
 }
@@ -785,6 +933,91 @@ async function updateQuoteStatus(salesQuoteId, status, user) {
   }
 }
 
+async function sendQuoteProposal(salesQuoteId, payload, user) {
+  const transaction = await db.sequelize.transaction();
+  try {
+    const quote = await db.sales_quotes.findOne({
+      where: { sales_quote_id: salesQuoteId, ...buildQuoteAccessWhere(user) },
+      transaction
+    });
+
+    if (!quote) {
+      throw new Error('Quote not found');
+    }
+
+    const quoteDetails = await getQuoteById(salesQuoteId, user);
+    if (!quoteDetails) {
+      throw new Error('Quote not found');
+    }
+
+    const toEmail = payload?.to_email || quoteDetails.client_email;
+    if (!toEmail) {
+      throw new Error('Client email is required to send quote proposal');
+    }
+
+    const generatedPdfBuffer = payload?.attachment_content || payload?.pdf_base64
+      ? null
+      : await generateQuotePdfBuffer(quoteDetails);
+
+    const emailResult = await sendCustomQuoteProposalEmail({
+      to_email: toEmail,
+      first_name: quoteDetails.client_name || '',
+      shoot_type: quoteDetails.video_shoot_type || 'TBD',
+      project_description: quoteDetails.project_description || 'TBD',
+      location: quoteDetails.client_address || 'TBD',
+      quote_validity: deriveQuoteValidityText(quoteDetails),
+      add_ons: deriveQuoteAddOns(quoteDetails.line_items || []),
+      proposal_amount: quoteDetails.total,
+      attachment_content: payload?.attachment_content || payload?.pdf_base64 || (generatedPdfBuffer ? Buffer.from(generatedPdfBuffer).toString('base64') : null),
+      attachment_filename: payload?.attachment_filename || `${quoteDetails.quote_number || 'custom-quote'}.pdf`,
+      attachment_type: payload?.attachment_type || 'application/pdf'
+    });
+
+    if (!emailResult?.success) {
+      throw new Error(
+        typeof emailResult?.error === 'string'
+          ? emailResult.error
+          : 'Failed to send quote proposal email'
+      );
+    }
+
+    await quote.update({
+      status: 'sent',
+      sent_at: new Date(),
+      updated_at: new Date()
+    }, { transaction });
+
+    await recordActivity(
+      transaction,
+      salesQuoteId,
+      'sent',
+      user.userId,
+      'Quote proposal email sent',
+      { to_email: toEmail }
+    );
+
+    await transaction.commit();
+    return getQuoteById(salesQuoteId, user);
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
+}
+
+async function downloadQuotePdf(salesQuoteId, user) {
+  const quoteDetails = await getQuoteById(salesQuoteId, user);
+  if (!quoteDetails) {
+    throw new Error('Quote not found');
+  }
+
+  const buffer = await generateQuotePdfBuffer(quoteDetails);
+
+  return {
+    buffer,
+    filename: `${quoteDetails.quote_number || 'custom-quote'}.pdf`
+  };
+}
+
 module.exports = {
   SECTION_TYPES,
   QUOTE_STATUSES,
@@ -795,7 +1028,10 @@ module.exports = {
   createQuote,
   updateQuote,
   getQuoteById,
+  getPublicQuoteById,
   listQuotes,
   getQuoteDashboard,
-  updateQuoteStatus
+  updateQuoteStatus,
+  sendQuoteProposal,
+  downloadQuotePdf
 };

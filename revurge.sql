@@ -804,3 +804,12 @@ CREATE TABLE IF NOT EXISTS `project_files` (
 ) ENGINE=InnoDB
 DEFAULT CHARSET=utf8mb4
 COLLATE=utf8mb4_general_ci;
+
+-- 30-03-26
+
+ALTER TABLE `sales_quotes` MODIFY COLUMN `status` ENUM('draft','pending','sent','viewed','accepted','rejected','expired') NOT NULL DEFAULT 'draft';
+
+-- 01-04-26
+
+-- IGNORE ERR IF INDEX DOES NOT EXISTS
+ALTER TABLE users DROP INDEX email;

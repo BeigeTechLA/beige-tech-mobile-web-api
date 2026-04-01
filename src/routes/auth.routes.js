@@ -12,6 +12,7 @@ const { authenticate } = require('../middleware/auth');
 // ===== REGISTRATION =====
 router.post('/register', authController.register);
 router.post('/quick-register', authController.quickRegister);
+router.post('/register-sales', authController.registerSales);
 
 // ===== CREW MEMBER REGISTRATION (3 STEPS) =====
 router.post('/register-crew-step1', authController.registerCrewMemberStep1);

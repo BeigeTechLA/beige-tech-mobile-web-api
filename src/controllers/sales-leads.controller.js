@@ -1,4 +1,4 @@
-const { sales_leads, client_leads, sales_lead_activities, client_lead_activities, stream_project_booking, stream_project_booking_days, users, discount_codes, payment_links,  quotes, assigned_crew, crew_members,
+const { sales_leads, client_leads, sales_lead_activities, client_lead_activities, stream_project_booking, stream_project_booking_days, users, user_type, discount_codes, payment_links,  quotes, assigned_crew, crew_members,
   quote_line_items, crew_member_files } = require('../models');
 const { Op, Sequelize } = require('sequelize');
 const constants = require('../utils/constants');
@@ -46,7 +46,12 @@ async function calculateFromCreatorsInternally(pricingPayload) {
   return pricingData;
 }
 
-async function notifyAssignedCreators(creatorIds = []) {
+async function notifyAssignedCreators(
+  creatorIds = [],
+  booking = null,
+  fallbackClientName = '',
+  fallbackShootAmount = null
+) {
   try {
     const uniqueIds = [...new Set((creatorIds || []).map(Number).filter(Boolean))];
     if (!uniqueIds.length) return;
@@ -68,6 +73,7 @@ async function notifyAssignedCreators(creatorIds = []) {
           sendCPNewBookingRequestEmail({
             to_email: c.email,
             user_name: [c.first_name, c.last_name].filter(Boolean).join(' ') || 'there',
+            ...getCPNewBookingEmailFields(booking, fallbackClientName, fallbackShootAmount),
             dashboardLink
           })
         )
@@ -75,6 +81,128 @@ async function notifyAssignedCreators(creatorIds = []) {
   } catch (e) {
     console.error('notifyAssignedCreators failed:', e?.message || e);
   }
+}
+
+function getCPNewBookingEmailFields(booking = {}, fallbackClientName = '', fallbackShootAmount = null) {
+  return {
+    client_name:
+      fallbackClientName ||
+      booking?.client_name ||
+      booking?.user?.name ||
+      null,
+    service_type:
+      booking?.content_type ||
+      booking?.event_type ||
+      booking?.shoot_type ||
+      null,
+    date: booking?.event_date || null,
+    start_time: booking?.start_time || null,
+    end_time: booking?.end_time || null,
+    shoot_amount: fallbackShootAmount ?? booking?.budget ?? null
+  };
+}
+
+function getEmailShootAmountFromFinalizeResult(finalizeResult = {}) {
+  return (
+    finalizeResult?.quote?.quote?.total ??
+    finalizeResult?.quote?.quote?.priceAfterDiscount ??
+    finalizeResult?.quote?.quote?.subtotal ??
+    finalizeResult?.quote?.total ??
+    finalizeResult?.quote?.price_after_discount ??
+    finalizeResult?.quote?.subtotal ??
+    null
+  );
+}
+
+async function resolveAssignableSalesRep(salesRepId) {
+  const salesRep = await users.findOne({
+    where: {
+      id: salesRepId,
+      is_active: 1
+    },
+    include: [
+      {
+        model: user_type,
+        as: 'userType',
+        attributes: ['user_role'],
+        required: false
+      }
+    ],
+    attributes: ['id', 'name', 'email']
+  });
+
+  if (!salesRep) {
+    throw new Error('Sales rep not found or inactive');
+  }
+
+  const userRole = salesRep.userType?.user_role;
+  if (userRole !== 'sales_rep' && userRole !== 'admin' && userRole !== 'Admin') {
+    throw new Error('Selected user is not a valid sales rep');
+  }
+
+  return salesRep;
+}
+
+async function resolveEmailClientNameForBooking(booking = null, fallbackClientName = null, options = {}) {
+  if (fallbackClientName) {
+    return fallbackClientName;
+  }
+
+  if (!booking) {
+    return null;
+  }
+
+  const transaction = options.transaction;
+
+  if (booking.client_name) {
+    return booking.client_name;
+  }
+
+  if (booking.user?.name) {
+    return booking.user.name;
+  }
+
+  if (booking.user_id) {
+    const bookingUser = await users.findOne({
+      where: { id: booking.user_id },
+      attributes: ['name'],
+      transaction
+    });
+
+    if (bookingUser?.name) {
+      return bookingUser.name;
+    }
+  }
+
+  const linkedLead = await sales_leads.findOne({
+    where: { booking_id: booking.stream_project_booking_id },
+    attributes: ['client_name'],
+    transaction
+  });
+
+  if (linkedLead?.client_name) {
+    return linkedLead.client_name;
+  }
+
+  const linkedClientLead = await client_leads.findOne({
+    where: { booking_id: booking.stream_project_booking_id },
+    attributes: ['client_name'],
+    transaction
+  });
+
+  if (linkedClientLead?.client_name) {
+    return linkedClientLead.client_name;
+  }
+
+  if (booking.guest_email) {
+    const localPart = String(booking.guest_email).split('@')[0] || '';
+    const derivedName = localPart.replace(/[._-]+/g, ' ').trim();
+    if (derivedName) {
+      return derivedName;
+    }
+  }
+
+  return null;
 }
 
 async function confirmCreativePartnerForLead({
@@ -233,6 +361,49 @@ async function resolveUserId(userId, guestEmail) {
   });
 
   return existingUser ? existingUser.id : null;
+}
+
+async function resolveAssignedSalesRepId({
+  requestedSalesRepId,
+  req,
+  currentAssignedSalesRepId = null,
+  tx
+}) {
+  if (req.userRole === 'sales_rep') {
+    return req.userId || currentAssignedSalesRepId || null;
+  }
+
+  const normalizedRequestedSalesRepId =
+    requestedSalesRepId !== undefined && requestedSalesRepId !== null && requestedSalesRepId !== ''
+      ? parseInt(requestedSalesRepId, 10)
+      : null;
+
+  if (normalizedRequestedSalesRepId == null) {
+    return currentAssignedSalesRepId || null;
+  }
+
+  if (Number.isNaN(normalizedRequestedSalesRepId)) {
+    throw new Error('Invalid sales_rep_id');
+  }
+
+  const requestedSalesRep = await users.findByPk(normalizedRequestedSalesRepId, {
+    include: [
+      {
+        model: db.user_type,
+        as: 'userType',
+        attributes: ['user_role']
+      }
+    ],
+    transaction: tx
+  });
+
+  const requestedUserRole = requestedSalesRep?.userType?.user_role;
+
+  if (!requestedSalesRep || requestedUserRole !== 'sales_rep') {
+    throw new Error('Selected sales_rep_id is not a valid sales rep');
+  }
+
+  return normalizedRequestedSalesRepId;
 }
 
 /**
@@ -2201,6 +2372,168 @@ exports.assignLead = async (req, res) => {
     res.status(constants.INTERNAL_SERVER_ERROR.code).json({
       success: false,
       message: error.message || 'Failed to assign lead',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * Change sales rep for a sales lead
+ * PUT /api/sales/leads/:id/change-sales-rep
+ * Admin only
+ */
+exports.changeLeadSalesRep = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { sales_rep_id } = req.body;
+
+    if (!sales_rep_id) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Sales rep ID is required'
+      });
+    }
+
+    const lead = await sales_leads.findByPk(id, {
+      attributes: ['lead_id', 'assigned_sales_rep_id', 'client_name', 'guest_email']
+    });
+
+    if (!lead) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Lead not found'
+      });
+    }
+
+    const salesRep = await resolveAssignableSalesRep(parseInt(sales_rep_id, 10));
+
+    if (lead.assigned_sales_rep_id === salesRep.id) {
+      return res.json({
+        success: true,
+        message: 'Sales rep already assigned to this lead',
+        data: {
+          lead_id: lead.lead_id,
+          assigned_sales_rep_id: salesRep.id,
+          assigned_sales_rep: salesRep
+        }
+      });
+    }
+
+    const previousRepId = lead.assigned_sales_rep_id;
+
+    await lead.update({
+      assigned_sales_rep_id: salesRep.id
+    });
+
+    await sales_lead_activities.create({
+      lead_id: lead.lead_id,
+      activity_type: 'assigned',
+      activity_data: {
+        previous_rep_id: previousRepId,
+        new_rep_id: salesRep.id,
+        assignment_type: 'admin_change_sales_rep'
+      },
+      performed_by_user_id: req.userId
+    });
+
+    return res.json({
+      success: true,
+      message: 'Sales rep changed successfully',
+      data: {
+        lead_id: lead.lead_id,
+        client_name: lead.client_name,
+        guest_email: lead.guest_email,
+        previous_sales_rep_id: previousRepId,
+        assigned_sales_rep_id: salesRep.id,
+        assigned_sales_rep: salesRep
+      }
+    });
+  } catch (error) {
+    console.error('Error changing lead sales rep:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: error.message || 'Failed to change sales rep',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * Change sales rep for a client lead
+ * PUT /api/sales/client-leads/:id/change-sales-rep
+ * Admin only
+ */
+exports.changeClientLeadSalesRep = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { sales_rep_id } = req.body;
+
+    if (!sales_rep_id) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Sales rep ID is required'
+      });
+    }
+
+    const lead = await client_leads.findByPk(id, {
+      attributes: ['lead_id', 'assigned_sales_rep_id', 'client_name', 'user_id']
+    });
+
+    if (!lead) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Client lead not found'
+      });
+    }
+
+    const salesRep = await resolveAssignableSalesRep(parseInt(sales_rep_id, 10));
+
+    if (lead.assigned_sales_rep_id === salesRep.id) {
+      return res.json({
+        success: true,
+        message: 'Sales rep already assigned to this client lead',
+        data: {
+          lead_id: lead.lead_id,
+          assigned_sales_rep_id: salesRep.id,
+          assigned_sales_rep: salesRep
+        }
+      });
+    }
+
+    const previousRepId = lead.assigned_sales_rep_id;
+
+    await lead.update({
+      assigned_sales_rep_id: salesRep.id
+    });
+
+    await client_lead_activities.create({
+      lead_id: lead.lead_id,
+      activity_type: 'assigned',
+      activity_data: {
+        previous_rep_id: previousRepId,
+        new_rep_id: salesRep.id,
+        assignment_type: 'admin_change_sales_rep'
+      },
+      performed_by_user_id: req.userId
+    });
+
+    return res.json({
+      success: true,
+      message: 'Sales rep changed successfully',
+      data: {
+        lead_id: lead.lead_id,
+        client_name: lead.client_name,
+        user_id: lead.user_id,
+        previous_sales_rep_id: previousRepId,
+        assigned_sales_rep_id: salesRep.id,
+        assigned_sales_rep: salesRep
+      }
+    });
+  } catch (error) {
+    console.error('Error changing client lead sales rep:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: error.message || 'Failed to change sales rep',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
@@ -4291,6 +4624,7 @@ exports.finalizeGuestBooking = async (req, res) => {
       is_draft,
       skip_discount = true,
       skip_margin = true,
+      sales_rep_id,
       booking_type,
       booking_days
     } = req.body;
@@ -4341,10 +4675,42 @@ exports.finalizeGuestBooking = async (req, res) => {
       tx
     });
 
+    const linkedLead = await sales_leads.findOne({
+      where: { booking_id: booking.stream_project_booking_id },
+      attributes: ['lead_id', 'client_name', 'assigned_sales_rep_id'],
+      transaction: tx
+    });
+
+    if (linkedLead) {
+      const assignedSalesRepId = await resolveAssignedSalesRepId({
+        requestedSalesRepId: sales_rep_id,
+        req,
+        currentAssignedSalesRepId: linkedLead.assigned_sales_rep_id,
+        tx
+      });
+
+      if (assignedSalesRepId !== linkedLead.assigned_sales_rep_id) {
+        await linkedLead.update(
+          { assigned_sales_rep_id: assignedSalesRepId },
+          { transaction: tx }
+        );
+      }
+    }
+
     await tx.commit();
 
     // send CP new booking request emails
-    await notifyAssignedCreators(finalizeResult.assigned_creator_ids || []);
+    const emailClientName = await resolveEmailClientNameForBooking(
+      booking,
+      linkedLead?.client_name || null
+    );
+
+    await notifyAssignedCreators(
+      finalizeResult.assigned_creator_ids || [],
+      booking,
+      emailClientName,
+      getEmailShootAmountFromFinalizeResult(finalizeResult)
+    );
 
     return res.status(200).json({
       success: true,
@@ -4391,6 +4757,7 @@ exports.finalizeClientLeadBooking = async (req, res) => {
       is_draft,
       skip_discount = true,
       skip_margin = true,
+      sales_rep_id,
       booking_type,
       booking_days
     } = req.body;
@@ -4425,6 +4792,13 @@ exports.finalizeClientLeadBooking = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
+    const assignedSalesRepId = await resolveAssignedSalesRepId({
+      requestedSalesRepId: sales_rep_id,
+      req,
+      currentAssignedSalesRepId: clientLead.assigned_sales_rep_id,
+      tx
+    });
+
     const finalizeResult = await finalizeBookingCore({
       booking,
       bookingId: booking.stream_project_booking_id,
@@ -4456,7 +4830,15 @@ exports.finalizeClientLeadBooking = async (req, res) => {
 
     if (clientLead.lead_status !== 'booked' && clientLead.lead_status !== 'abandoned') {
       await clientLead.update(
-        { lead_status: 'booking_in_progress' },
+        {
+          lead_status: 'booking_in_progress',
+          assigned_sales_rep_id: assignedSalesRepId
+        },
+        { transaction: tx }
+      );
+    } else if (assignedSalesRepId !== clientLead.assigned_sales_rep_id) {
+      await clientLead.update(
+        { assigned_sales_rep_id: assignedSalesRepId },
         { transaction: tx }
       );
     }
@@ -4473,7 +4855,17 @@ exports.finalizeClientLeadBooking = async (req, res) => {
 
     await tx.commit();
 
-    await notifyAssignedCreators(finalizeResult.assigned_creator_ids || []);
+    const emailClientName = await resolveEmailClientNameForBooking(
+      booking,
+      clientLead.client_name
+    );
+
+    await notifyAssignedCreators(
+      finalizeResult.assigned_creator_ids || [],
+      booking,
+      emailClientName,
+      getEmailShootAmountFromFinalizeResult(finalizeResult)
+    );
 
     return res.status(200).json({
       success: true,
@@ -4594,6 +4986,7 @@ exports.finalizeCreateDeal = async (req, res) => {
       video_edit_types,
       photo_edit_types,
       is_draft,
+      sales_rep_id,
 
       // pricing flags
       skip_discount = true,
@@ -4754,10 +5147,20 @@ exports.finalizeCreateDeal = async (req, res) => {
       );
     }
 
-    // 4️⃣ 🔥 AUTO ASSIGN (same as trackEarlyBookingInterest)
+    // ASSIGN SALES REP
     let assignedRep = null;
-    if (lead.assigned_sales_rep_id) {
-      assignedRep = { id: lead.assigned_sales_rep_id };
+    const assignedSalesRepId = await resolveAssignedSalesRepId({
+      requestedSalesRepId: sales_rep_id,
+      req,
+      currentAssignedSalesRepId: lead.assigned_sales_rep_id,
+      tx
+    });
+
+    if (assignedSalesRepId) {
+      assignedRep = await users.findByPk(assignedSalesRepId, {
+        attributes: ['id', 'name'],
+        transaction: tx
+      });
     } else {
       assignedRep = await leadAssignmentService.autoAssignLead(
         lead.lead_id,
@@ -4804,7 +5207,17 @@ exports.finalizeCreateDeal = async (req, res) => {
     await tx.commit();
     
     // send CP new booking request emails
-    await notifyAssignedCreators(finalizeResult.assigned_creator_ids || []);
+    const emailClientName = await resolveEmailClientNameForBooking(
+      booking,
+      lead.client_name
+    );
+
+    await notifyAssignedCreators(
+      finalizeResult.assigned_creator_ids || [],
+      booking,
+      emailClientName,
+      getEmailShootAmountFromFinalizeResult(finalizeResult)
+    );
 
     return res.status(200).json({
       success: true,

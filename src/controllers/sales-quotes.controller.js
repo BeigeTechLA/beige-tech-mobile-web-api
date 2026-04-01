@@ -185,6 +185,26 @@ exports.getQuoteById = async (req, res) => {
   }
 };
 
+exports.getPublicQuoteById = async (req, res) => {
+  try {
+    const quote = await quoteService.getPublicQuoteById(Number(req.params.quoteId));
+    if (!quote) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Quote not found'
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: quote
+    });
+  } catch (error) {
+    console.error('Error fetching public sales quote:', error);
+    return sendError(res, error, 'Failed to fetch quote', constants.INTERNAL_SERVER_ERROR.code);
+  }
+};
+
 exports.updateQuoteStatus = async (req, res) => {
   try {
     const { status } = req.body;
@@ -197,6 +217,33 @@ exports.updateQuoteStatus = async (req, res) => {
     console.error('Error updating sales quote status:', error);
     const statusCode = error.message === 'Quote not found' ? constants.NOT_FOUND.code : constants.BAD_REQUEST.code;
     return sendError(res, error, error.message || 'Failed to update quote status', statusCode);
+  }
+};
+
+exports.sendQuoteProposal = async (req, res) => {
+  try {
+    const quote = await quoteService.sendQuoteProposal(Number(req.params.quoteId), req.body, getUserContext(req));
+    return res.json({
+      success: true,
+      data: quote
+    });
+  } catch (error) {
+    console.error('Error sending quote proposal email:', error);
+    const statusCode = error.message === 'Quote not found' ? constants.NOT_FOUND.code : constants.BAD_REQUEST.code;
+    return sendError(res, error, error.message || 'Failed to send quote proposal email', statusCode);
+  }
+};
+
+exports.downloadQuotePdf = async (req, res) => {
+  try {
+    const { buffer, filename } = await quoteService.downloadQuotePdf(Number(req.params.quoteId), getUserContext(req));
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return res.send(buffer);
+  } catch (error) {
+    console.error('Error downloading sales quote PDF:', error);
+    const statusCode = error.message === 'Quote not found' ? constants.NOT_FOUND.code : constants.BAD_REQUEST.code;
+    return sendError(res, error, error.message || 'Failed to download quote PDF', statusCode);
   }
 };
 
@@ -383,7 +430,7 @@ exports.getClientDropdown = async (req, res) => {
 
     const clientList = await db.clients.findAll({
       where: whereConditions,
-      attributes: ['client_id', 'name', 'user_id'],
+      attributes: ['client_id', 'name', 'user_id', 'email', 'phone_number'],
       order: [['name', 'ASC']]
     });
 
