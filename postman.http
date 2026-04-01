@@ -1179,3 +1179,16 @@ Authorization: {{TOKEN}}
 {
   "crew_member_id": 2037
 }
+
+
+###
+# Sales Rep Register
+POST {{URL}}auth/register-sales HTTP/1.1
+Content-Type: application/json
+
+{
+  "name": "Parth Panchal",
+  "email": "parth.panchal.36@gmail.com",
+  "phone_number": "7133867897",
+  "password": "12345678"
+}

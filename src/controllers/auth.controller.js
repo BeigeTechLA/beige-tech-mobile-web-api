@@ -2799,3 +2799,76 @@ exports.changePasswordCrewMember = async (req, res) => {
     });
   }
 };
+
+exports.registerSales = async (req, res) => {
+  try {
+    const { name, email, phone_number, instagram_handle, password } = req.body;
+
+    // 🔹 Validation
+    if (!name || !password || !email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name, email, and password are required'
+      });
+    }
+
+    // 🔹 Check if user exists
+    const conditions = [];
+    if (email) conditions.push({ email });
+    if (phone_number) conditions.push({ phone_number });
+    if (instagram_handle) conditions.push({ instagram_handle });
+
+    const userExists = await User.findOne({
+      where: { [Op.or]: conditions }
+    });
+
+    if (userExists) {
+      return res.status(409).json({
+        success: false,
+        message: 'User already exists'
+      });
+    }
+
+    // 🔐 Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // 🔢 OTP
+    const otp = otpService.generateOTP();
+    const otpExpiry = otpService.generateOTPExpiry(10);
+
+    // ✅ Create User (ONLY THIS)
+    const newUser = await User.create({
+      name,
+      email,
+      phone_number,
+      instagram_handle,
+      password_hash: hashedPassword,
+      user_type: 5, // 👈 fixed
+      is_active: 1,
+      email_verified: 0,
+      verification_code: otp,
+      otp_expiry: otpExpiry,
+      created_from: 1
+    });
+
+    // 📧 Send OTP (optional but good)
+    if (email) {
+      await emailService.sendVerificationOTP({ name, email }, otp);
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: 'User registered successfully (Type 5)',
+      userId: newUser.id,
+      email: newUser.email
+    });
+
+  } catch (error) {
+    console.error('Register Client Simple Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
