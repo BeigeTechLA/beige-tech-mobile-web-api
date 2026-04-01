@@ -2315,6 +2315,9 @@ const sendCustomQuoteProposalEmail = async (data) => {
     const proposalAmount = data?.proposal_amount !== undefined && data?.proposal_amount !== null
       ? (String(data.proposal_amount).startsWith('$') ? String(data.proposal_amount) : `$${formatAmount(data.proposal_amount)}`)
       : 'TBD';
+    const attachmentContent = typeof data?.attachment_content === 'string'
+      ? data.attachment_content.replace(/^data:.*;base64,/, '').trim()
+      : null;
 
     const message = {
       to,
@@ -2325,7 +2328,7 @@ const sendCustomQuoteProposalEmail = async (data) => {
       subject: 'Your Shoot, Crafted — Proposal Inside',
       templateId: CUSTOM_QUOTE_PROPOSAL_ID,
       dynamicTemplateData: {
-        first_name: getFirstName(data?.first_name || data?.client_name || '', data?.first_name),
+        first_name: getFirstName(data?.first_name || data?.client_name || '') || 'there',
         shoot_type: data?.shoot_type || 'TBD',
         project_description: data?.project_description || 'TBD',
         location: data?.location || 'TBD',
@@ -2335,9 +2338,9 @@ const sendCustomQuoteProposalEmail = async (data) => {
       }
     };
 
-    if (data?.attachment_content) {
+    if (attachmentContent) {
       message.attachments = [{
-        content: data.attachment_content,
+        content: attachmentContent,
         filename: data.attachment_filename || 'custom-quote.pdf',
         type: data.attachment_type || 'application/pdf',
         disposition: 'attachment'

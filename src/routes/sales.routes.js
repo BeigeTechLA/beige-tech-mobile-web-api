@@ -299,6 +299,7 @@ router.get('/quotes/dashboard', authenticate, requireSalesRepOrAdmin, salesQuote
 router.get('/quotes', authenticate, requireSalesRepOrAdmin, salesQuotesController.listQuotes);
 router.get('/quotes/public/:quoteId', salesQuotesController.getPublicQuoteById);
 router.get('/quotes/:quoteId', authenticate, requireSalesRepOrAdmin, salesQuotesController.getQuoteById);
+router.get('/quotes/:quoteId/pdf', authenticate, requireSalesRepOrAdmin, salesQuotesController.downloadQuotePdf);
 router.post('/quotes', authenticate, requireSalesRepOrAdmin, salesQuotesController.createQuote);
 router.put('/quotes/:quoteId', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateQuote);
 router.post('/quotes/:quoteId/send', authenticate, requireSalesRepOrAdmin, salesQuotesController.sendQuoteProposal);
