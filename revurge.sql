@@ -519,7 +519,7 @@ ALTER TABLE users ADD location VARCHAR(255), ADD latitude DECIMAL(10,8), ADD lon
 CREATE TABLE IF NOT EXISTS `shoot_types` (
   `shoot_type_id` int(11) NOT NULL AUTO_INCREMENT,
   `name` varchar(100) NOT NULL,
-  `content_type` tinyint(4) NOT NULL COMMENT '1=videography,2=photography,3=both',
+  `content_type` tinyint(4) NOT NULL COMMENT 'Legacy field before catalog-item mapping',
   `display_order` int(11) NOT NULL DEFAULT 0,
   `image_url` varchar(255) DEFAULT NULL,
   `description` varchar(255) DEFAULT NULL,
@@ -813,3 +813,21 @@ ALTER TABLE `sales_quotes` MODIFY COLUMN `status` ENUM('draft','pending','sent',
 
 -- IGNORE ERR IF INDEX DOES NOT EXISTS
 ALTER TABLE users DROP INDEX email;
+
+-- 02-04-26
+
+INSERT INTO `user_type` (`user_type_id`, `user_role`, `is_active`) VALUES (NULL, 'sales_admin', '1');
+
+-- 02-04-26
+-- Align sales_shoot_types.content_type with quote_catalog_items.catalog_item_id
+ALTER TABLE `sales_shoot_types`
+  MODIFY `content_type` int(11) NOT NULL COMMENT 'References quote_catalog_items.catalog_item_id for service items';
+
+-- Legacy content_type=3 meant "both". Deactivate those rows before enforcing catalog-item mapping.
+UPDATE `sales_shoot_types`
+SET `is_active` = 0
+WHERE `content_type` = 3;
+
+ALTER TABLE `sales_shoot_types`
+  ADD CONSTRAINT `fk_sales_shoot_types_catalog_item`
+  FOREIGN KEY (`content_type`) REFERENCES `quote_catalog_items` (`catalog_item_id`);
