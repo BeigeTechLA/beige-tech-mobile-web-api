@@ -865,7 +865,7 @@ exports.confirmPayment = async (req, res) => {
       try {
         await db.stream_project_booking.update(
           {
-            is_completed: 1,
+            // is_completed: 1,
             payment_completed_at: new Date(),
             payment_id: payment.payment_id,
           },
@@ -1279,7 +1279,7 @@ exports.confirmPaymentMulti = async (req, res) => {
         payment_completed_at: new Date(), 
         payment_id: payment.payment_id,
         is_draft: 0,
-        is_completed: 1
+        // is_completed: 1
       },
       { where: { stream_project_booking_id: booking_id }, transaction }
     );
