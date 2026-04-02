@@ -32,8 +32,8 @@ function normalizeShootTypePayload(payload = {}, { partial = false } = {}) {
 
   if (payload.content_type !== undefined) {
     const contentType = Number(payload.content_type);
-    if (![1, 2, 3].includes(contentType)) {
-      throw new Error('content_type must be 1, 2, or 3');
+    if (!Number.isInteger(contentType) || contentType <= 0) {
+      throw new Error('content_type is invalid');
     }
     data.content_type = contentType;
   } else if (!partial) {
@@ -55,6 +55,21 @@ function normalizeShootTypePayload(payload = {}, { partial = false } = {}) {
   if (payload.is_active !== undefined) data.is_active = Number(payload.is_active) ? 1 : 0;
 
   return data;
+}
+
+async function resolveShootTypeContentType(rawValue) {
+  const contentType = Number(rawValue);
+
+  if (!Number.isInteger(contentType) || contentType <= 0) {
+    throw new Error('content_type must be an active service catalog_item_id');
+  }
+
+  const catalogItem = await db.quote_catalog_items.findByPk(contentType);
+  if (!catalogItem || Number(catalogItem.is_active) !== 1 || catalogItem.section_type !== 'service') {
+    throw new Error('content_type must be an active service catalog_item_id');
+  }
+
+  return contentType;
 }
 
 exports.getCatalog = async (req, res) => {
@@ -249,15 +264,7 @@ exports.downloadQuotePdf = async (req, res) => {
 
 exports.getShootTypes = async (req, res) => {
   try {
-    const content_type = Number(req.params.content_type);
-    if (![1, 2, 3].includes(content_type)) {
-      return res.status(constants.BAD_REQUEST.code).json({
-        error: true,
-        code: constants.BAD_REQUEST.code,
-        message: 'content_type must be 1, 2, or 3',
-        data: null
-      });
-    }
+    const content_type = await resolveShootTypeContentType(req.params.content_type);
 
     const where = { is_active: 1 };
 
@@ -276,10 +283,13 @@ exports.getShootTypes = async (req, res) => {
     });
   } catch (err) {
     console.error('getShootTypes Error:', err);
-    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+    const statusCode = err.message === 'content_type must be an active service catalog_item_id'
+      ? constants.BAD_REQUEST.code
+      : constants.INTERNAL_SERVER_ERROR.code;
+    return res.status(statusCode).json({
       error: true,
-      code: constants.INTERNAL_SERVER_ERROR.code,
-      message: constants.INTERNAL_SERVER_ERROR.message,
+      code: statusCode,
+      message: statusCode === constants.BAD_REQUEST.code ? err.message : constants.INTERNAL_SERVER_ERROR.message,
       data: null
     });
   }
@@ -288,6 +298,7 @@ exports.getShootTypes = async (req, res) => {
 exports.createShootType = async (req, res) => {
   try {
     const payload = normalizeShootTypePayload(req.body);
+    payload.content_type = await resolveShootTypeContentType(payload.content_type);
     const data = await db.sales_shoot_types.create({
       ...payload,
       is_system_default: 0
@@ -333,6 +344,10 @@ exports.updateShootType = async (req, res) => {
         message: 'At least one field is required to update',
         data: null
       });
+    }
+
+    if (payload.content_type !== undefined) {
+      payload.content_type = await resolveShootTypeContentType(payload.content_type);
     }
 
     const record = await db.sales_shoot_types.findByPk(shootTypeId);

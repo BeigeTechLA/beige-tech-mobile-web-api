@@ -1340,6 +1340,16 @@ Content-Type: application/json
   "content_type": 2
 }
 
+### Create sales shoot type
+POST {{URL}}sales/quotes/shoot-types
+Authorization: {{TOKEN}}
+Content-Type: application/json
+
+{
+  "name": "Studio Interview",
+  "content_type": 5
+}
+
 ### Update sales shoot type
 PUT {{URL}}sales/quotes/shoot-types/37
 Authorization: {{TOKEN}}

@@ -13,9 +13,9 @@ module.exports = function(sequelize, DataTypes) {
       allowNull: false
     },
     content_type: {
-      type: DataTypes.TINYINT,
+      type: DataTypes.INTEGER,
       allowNull: false,
-      comment: '1=videography,2=photography,3=both'
+      comment: 'References quote_catalog_items.catalog_item_id for service items'
     },
     display_order: {
       type: DataTypes.INTEGER,
