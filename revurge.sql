@@ -813,3 +813,7 @@ ALTER TABLE `sales_quotes` MODIFY COLUMN `status` ENUM('draft','pending','sent',
 
 -- IGNORE ERR IF INDEX DOES NOT EXISTS
 ALTER TABLE users DROP INDEX email;
+
+-- 02-04-26
+
+INSERT INTO `user_type` (`user_type_id`, `user_role`, `is_active`) VALUES (NULL, 'sales_admin', '1');
