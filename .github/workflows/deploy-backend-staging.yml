@@ -1,0 +1,92 @@
+name: Deploy Backend Staging
+
+on:
+  push:
+    branches:
+      - staging
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-backend-staging
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH key
+        env:
+          BACKEND_STAGING_SSH_KEY: ${{ secrets.BACKEND_STAGING_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$BACKEND_STAGING_SSH_KEY" > ~/.ssh/backend-staging.pem
+          chmod 600 ~/.ssh/backend-staging.pem
+
+      - name: Add server to known_hosts
+        env:
+          BACKEND_STAGING_HOST: ${{ secrets.BACKEND_STAGING_HOST }}
+          BACKEND_STAGING_PORT: ${{ secrets.BACKEND_STAGING_PORT }}
+        run: |
+          PORT="${BACKEND_STAGING_PORT:-22}"
+          ssh-keyscan -p "$PORT" -H "$BACKEND_STAGING_HOST" >> ~/.ssh/known_hosts
+
+      - name: Test SSH connectivity
+        env:
+          BACKEND_STAGING_HOST: ${{ secrets.BACKEND_STAGING_HOST }}
+          BACKEND_STAGING_PORT: ${{ secrets.BACKEND_STAGING_PORT }}
+          BACKEND_STAGING_USER: ${{ secrets.BACKEND_STAGING_USER }}
+        run: |
+          PORT="${BACKEND_STAGING_PORT:-22}"
+          ssh -p "$PORT" -i ~/.ssh/backend-staging.pem -o BatchMode=yes \
+            "$BACKEND_STAGING_USER@$BACKEND_STAGING_HOST" "echo SSH_OK" >/dev/null
+
+      - name: Prepare remote directory
+        env:
+          BACKEND_STAGING_HOST: ${{ secrets.BACKEND_STAGING_HOST }}
+          BACKEND_STAGING_PORT: ${{ secrets.BACKEND_STAGING_PORT }}
+          BACKEND_STAGING_USER: ${{ secrets.BACKEND_STAGING_USER }}
+        run: |
+          PORT="${BACKEND_STAGING_PORT:-22}"
+          ssh -p "$PORT" -i ~/.ssh/backend-staging.pem \
+            "$BACKEND_STAGING_USER@$BACKEND_STAGING_HOST" \
+            "sudo mkdir -p /var/www/beige-web-staging && sudo chown -R $BACKEND_STAGING_USER:$BACKEND_STAGING_USER /var/www/beige-web-staging"
+
+      - name: Upload backend code
+        env:
+          BACKEND_STAGING_HOST: ${{ secrets.BACKEND_STAGING_HOST }}
+          BACKEND_STAGING_PORT: ${{ secrets.BACKEND_STAGING_PORT }}
+          BACKEND_STAGING_USER: ${{ secrets.BACKEND_STAGING_USER }}
+        run: |
+          PORT="${BACKEND_STAGING_PORT:-22}"
+          tar czf - \
+            --exclude=node_modules \
+            --exclude=.git \
+            --exclude=deploy \
+            --exclude=.env \
+            --exclude=*.log \
+            --exclude=logs \
+            . | ssh -p "$PORT" -i ~/.ssh/backend-staging.pem \
+              "$BACKEND_STAGING_USER@$BACKEND_STAGING_HOST" \
+              "cd /var/www/beige-web-staging && tar xzf -"
+
+      - name: Install dependencies and restart PM2
+        env:
+          BACKEND_STAGING_HOST: ${{ secrets.BACKEND_STAGING_HOST }}
+          BACKEND_STAGING_PORT: ${{ secrets.BACKEND_STAGING_PORT }}
+          BACKEND_STAGING_USER: ${{ secrets.BACKEND_STAGING_USER }}
+        run: |
+          PORT="${BACKEND_STAGING_PORT:-22}"
+          ssh -p "$PORT" -i ~/.ssh/backend-staging.pem \
+            "$BACKEND_STAGING_USER@$BACKEND_STAGING_HOST" << 'EOF'
+          set -euo pipefail
+          cd /var/www/beige-web-staging
+          npm install --production
+          pm2 delete beige-web-staging >/dev/null 2>&1 || true
+          pm2 start npm --name beige-web-staging -- start
+          pm2 save
+          EOF
