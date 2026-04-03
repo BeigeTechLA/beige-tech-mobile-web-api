@@ -6,6 +6,7 @@ const { generateQuotePdfBuffer } = require('../utils/quotePdf');
 const SECTION_TYPES = ['service', 'addon', 'logistics', 'custom'];
 const QUOTE_STATUSES = ['draft', 'pending', 'sent', 'viewed', 'accepted', 'rejected', 'expired'];
 const DISCOUNT_TYPES = ['none', 'percentage', 'fixed_amount'];
+const AI_EDITING_SERVICE_NAME = 'ai editing';
 const DEFAULT_FIGMA_CATALOG = {
   service: [
     { catalog_item_id: null, section_type: 'service', pricing_mode: 'both', name: 'Videography', description: null, default_rate: 250, rate_type: 'per_hour', rate_unit: 'per hour', is_active: 1, display_order: 1, source: 'figma_default' },
@@ -29,6 +30,89 @@ const DEFAULT_FIGMA_CATALOG = {
     { catalog_item_id: null, section_type: 'logistics', pricing_mode: 'both', name: 'Equipment Rental', description: null, default_rate: 800, rate_type: 'flat', rate_unit: null, is_active: 1, display_order: 2, source: 'figma_default' },
     { catalog_item_id: null, section_type: 'logistics', pricing_mode: 'both', name: 'Studio Rental', description: null, default_rate: 1200, rate_type: 'flat', rate_unit: null, is_active: 1, display_order: 3, source: 'figma_default' },
     { catalog_item_id: null, section_type: 'logistics', pricing_mode: 'both', name: 'Permits and Licenses', description: null, default_rate: 300, rate_type: 'flat', rate_unit: null, is_active: 1, display_order: 4, source: 'figma_default' }
+  ]
+};
+
+const AI_EDITING_VIDEO_TYPE_MAP = {
+  corporateevent: [
+    { key: 'social_reel_15_30', value: 'Social Media Reel (15 sec-30 sec)' },
+    { key: 'social_reel_30_90', value: 'Social Media Reel (30 sec-90 sec)' },
+    { key: 'mini_highlight_1_2', value: 'Mini Highlight Video (1-2 mins)' },
+    { key: 'highlight_4_7', value: 'Highlight Video (4-7 min)' },
+    { key: 'feature_30_40', value: 'Feature Video (30-40 min)' }
+  ],
+  wedding: [
+    { key: 'social_reel_15_30', value: 'Social Media Reel (15 sec-30 sec)' },
+    { key: 'social_reel_30_90', value: 'Social Media Reel (30 sec-90 sec)' },
+    { key: 'mini_highlight_1_2', value: 'Mini Highlight Video (1-2 mins)' },
+    { key: 'highlight_4_7', value: 'Highlight Video (4-7 min)' },
+    { key: 'feature_30_40', value: 'Feature Video (30-40 min)' }
+  ],
+  privateevent: [
+    { key: 'social_reel_15_30', value: 'Social Media Reel (15 sec-30 sec)' },
+    { key: 'social_reel_30_90', value: 'Social Media Reel (30 sec-90 sec)' },
+    { key: 'mini_highlight_1_2', value: 'Mini Highlight Video (1-2 mins)' },
+    { key: 'highlight_4_7', value: 'Highlight Video (4-7 min)' },
+    { key: 'feature_30_40', value: 'Feature Video (30-40 min)' }
+  ],
+  commercialadvertising: [
+    { key: 'social_reel_15_30', value: 'Social Media Reel (15 sec-30 sec)' },
+    { key: 'social_reel_30_90', value: 'Social Media Reel (30 sec-90 sec)' },
+    { key: 'commercial_2_4', value: 'Commercial (2 min-4 min)' },
+    { key: 'commercial_4_10', value: 'Commercial (4 min-10 min)' }
+  ],
+  socialcontent: [
+    { key: 'social_reel_15_30', value: 'Social Media Reel (15 sec-30 sec)' },
+    { key: 'social_reel_30_90', value: 'Social Media Reel (30 sec-90 sec)' },
+    { key: 'social_reel_2_4', value: 'Social Media Reel (2 min-4 min)' }
+  ],
+  podcastshows: [
+    { key: 'social_reel_15_30', value: 'Social Media Reel (15 sec-30 sec)' },
+    { key: 'social_reel_30_90', value: 'Social Media Reel (30 sec-90 sec)' },
+    { key: 'full_podcast_15_30', value: 'Full Length Podcast (15 min-30 min)' },
+    { key: 'full_podcast_30_60', value: 'Longer Full Length Podcast (30 min-60 min)' }
+  ],
+  musicvideos: [
+    { key: 'social_reel_15_30', value: 'Social Media Reel (15 sec-30 sec)' },
+    { key: 'social_reel_30_90', value: 'Social Media Reel (30 sec-90 sec)' },
+    { key: 'music_video_2_3', value: 'Edited Music Video (2-3 min)' },
+    { key: 'music_video_vfx_2_3', value: 'Edited Music Video with VFX (2-3 min)' }
+  ],
+  shortfilmsnarrative: [
+    { key: 'social_reel_15_30', value: 'Social Media Reel (15 sec-30 sec)' },
+    { key: 'social_reel_30_90', value: 'Social Media Reel (30 sec-90 sec)' },
+    { key: 'short_film_2_5', value: 'Edited Short Film (2 Min-5 Min)' },
+    { key: 'short_film_5_10', value: 'Edited Short Film (5 Min-10 Min)' }
+  ]
+};
+
+const AI_EDITING_PHOTO_TYPE_MAP = {
+  corporateevent: [
+    { key: 'edited_photos', value: 'Edited Photos', note: '25 edited photos per hour' }
+  ],
+  wedding: [
+    { key: 'edited_photos', value: 'Edited Photos', note: '50 edited photos per hour for weddings' }
+  ],
+  privateevent: [
+    { key: 'edited_photos', value: 'Edited Photos', note: '25 edited photos per hour' }
+  ],
+  brandproduct: [
+    { key: 'edited_photos', value: 'Edited Photos', note: '25 edited photos per hour' }
+  ],
+  socialcontent: [
+    { key: 'edited_photos', value: 'Edited Photos', note: '25 edited photos per hour' }
+  ],
+  peopleteams: [
+    { key: 'edited_photos', value: 'Edited Photos', note: '25 edited photos per hour' }
+  ],
+  behindthescenes: [
+    { key: 'edited_photos', value: 'Edited Photos', note: '25 edited photos per hour' }
+  ],
+  musicvideos: [
+    { key: 'edited_photos', value: 'Edited Photos', note: '25 edited photos per hour' }
+  ],
+  commercialadvertising: [
+    { key: 'edited_photos', value: 'Edited Photos', note: '25 edited photos per hour' }
   ]
 };
 
@@ -105,6 +189,112 @@ function stringifyConfig(config) {
 function normalizeMode(pricingMode) {
   if (!pricingMode || pricingMode === 'all') return null;
   return pricingMode;
+}
+
+function normalizeLookupKey(value) {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function getUniqueEditingTypes(map) {
+  const seen = new Set();
+  const result = [];
+
+  Object.values(map).forEach((items) => {
+    (items || []).forEach((item) => {
+      if (!item?.key || seen.has(item.key)) return;
+      seen.add(item.key);
+      result.push(item);
+    });
+  });
+
+  return result;
+}
+
+function buildAiEditingTypesResponse() {
+  return {
+    video_edit_types: getUniqueEditingTypes(AI_EDITING_VIDEO_TYPE_MAP),
+    photo_edit_types: getUniqueEditingTypes(AI_EDITING_PHOTO_TYPE_MAP)
+  };
+}
+
+function normalizeCustomEditingTypes(items = []) {
+  return (Array.isArray(items) ? items : [])
+    .map((item) => {
+      if (!item) return null;
+
+      if (typeof item === 'string') {
+        const value = item.trim();
+        return value ? { key: normalizeLookupKey(value), value, is_custom: true } : null;
+      }
+
+      const value = String(item.value || item.label || item.name || '').trim();
+      if (!value) return null;
+
+      return {
+        key: String(item.key || normalizeLookupKey(value)),
+        value,
+        is_custom: true
+      };
+    })
+    .filter(Boolean);
+}
+
+function extractAiEditingConfig(rawItem) {
+  const baseConfig = parseConfig(rawItem.configuration || rawItem.configuration_json) || {};
+  const configuration = {};
+
+  const directKey = rawItem.editing_type_key ?? baseConfig.editing_type_key ?? null;
+  const directLabel = rawItem.editing_type_label
+    ?? rawItem.editing_type
+    ?? baseConfig.editing_type_label
+    ?? baseConfig.editing_type
+    ?? null;
+  const directCustom = rawItem.is_custom_editing_type ?? baseConfig.is_custom_editing_type;
+
+  if (directLabel) {
+    configuration.editing_type_key = String(directKey || normalizeLookupKey(directLabel));
+    configuration.editing_type_label = String(directLabel);
+    configuration.is_custom_editing_type = Boolean(directCustom);
+    return configuration;
+  }
+
+  const firstVideoType = Array.isArray(rawItem.video_edit_types) ? rawItem.video_edit_types[0] : null;
+  if (firstVideoType) {
+    configuration.editing_type_key = normalizeLookupKey(firstVideoType);
+    configuration.editing_type_label = String(firstVideoType);
+    configuration.is_custom_editing_type = false;
+    return configuration;
+  }
+
+  const firstPhotoType = Array.isArray(rawItem.photo_edit_types) ? rawItem.photo_edit_types[0] : null;
+  if (firstPhotoType) {
+    configuration.editing_type_key = normalizeLookupKey(firstPhotoType);
+    configuration.editing_type_label = String(firstPhotoType);
+    configuration.is_custom_editing_type = false;
+    return configuration;
+  }
+
+  const firstCustomType = normalizeCustomEditingTypes(rawItem.custom_ai_editing_types)[0];
+  if (firstCustomType) {
+    configuration.editing_type_key = firstCustomType.key;
+    configuration.editing_type_label = firstCustomType.value;
+    configuration.is_custom_editing_type = true;
+    return configuration;
+  }
+
+  return Object.keys(baseConfig).length ? baseConfig : null;
+}
+
+function deriveAiEditingItemName(rawItem, catalogItem, config) {
+  if (rawItem.item_name || rawItem.name) {
+    return rawItem.item_name || rawItem.name;
+  }
+
+  if (config?.editing_type_label) {
+    return `AI Editing Type - ${config.editing_type_label}`;
+  }
+
+  return catalogItem?.name || 'AI Editing';
 }
 
 function resolveRateTypeValue(preferred, pricingItem, catalogItem) {
@@ -231,6 +421,10 @@ async function getCatalog(pricingMode = null) {
   }
 
   return grouped;
+}
+
+async function getAiEditingTypes() {
+  return buildAiEditingTypesResponse();
 }
 
 async function createCatalogItem(payload, userId) {
@@ -379,6 +573,13 @@ async function buildLineItemsPayload(rawItems = []) {
     const estimatedPricing = rawItem.estimated_pricing !== undefined && rawItem.estimated_pricing !== null
       ? roundCurrency(rawItem.estimated_pricing)
       : null;
+    const normalizedItemName = normalizeLookupKey(rawItem.item_name || rawItem.name || catalogItem?.name || '');
+    const aiEditingConfig = normalizedItemName === normalizeLookupKey(AI_EDITING_SERVICE_NAME)
+      ? extractAiEditingConfig(rawItem)
+      : null;
+    const configuration = normalizedItemName === normalizeLookupKey(AI_EDITING_SERVICE_NAME)
+      ? aiEditingConfig
+      : (rawItem.configuration || rawItem.configuration_json || null);
 
     let multiplier = quantity;
     if (rateType === 'per_hour') {
@@ -394,7 +595,9 @@ async function buildLineItemsPayload(rawItems = []) {
       catalog_item_id: catalogItem?.catalog_item_id || null,
       source_type: sourceType,
       section_type: sectionType,
-      item_name: rawItem.item_name || rawItem.name || catalogItem?.name,
+      item_name: normalizedItemName === normalizeLookupKey(AI_EDITING_SERVICE_NAME)
+        ? deriveAiEditingItemName(rawItem, catalogItem, aiEditingConfig)
+        : (rawItem.item_name || rawItem.name || catalogItem?.name),
       description: rawItem.description ?? catalogItem?.description ?? null,
       rate_type: rateType,
       rate_unit: rateUnit,
@@ -404,7 +607,7 @@ async function buildLineItemsPayload(rawItems = []) {
       estimated_pricing: estimatedPricing,
       unit_rate: unitRate,
       line_total: lineTotal,
-      configuration_json: stringifyConfig(rawItem.configuration || rawItem.configuration_json || null),
+      configuration_json: stringifyConfig(configuration),
       sort_order: rawItem.sort_order !== undefined ? Number(rawItem.sort_order) : index
     };
   });
@@ -1022,6 +1225,7 @@ module.exports = {
   SECTION_TYPES,
   QUOTE_STATUSES,
   getCatalog,
+  getAiEditingTypes,
   createCatalogItem,
   updateCatalogItem,
   deleteCatalogItem,

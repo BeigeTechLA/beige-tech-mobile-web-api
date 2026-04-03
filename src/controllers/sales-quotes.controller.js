@@ -82,6 +82,16 @@ exports.getCatalog = async (req, res) => {
   }
 };
 
+exports.getAiEditingTypes = async (req, res) => {
+  try {
+    const data = await quoteService.getAiEditingTypes();
+    return res.json({ success: true, data });
+  } catch (error) {
+    console.error('Error fetching AI editing types:', error);
+    return sendError(res, error, error.message || 'Failed to fetch AI editing types', constants.BAD_REQUEST.code);
+  }
+};
+
 exports.createCatalogItem = async (req, res) => {
   try {
     const item = await quoteService.createCatalogItem(req.body, req.userId);
