@@ -8567,3 +8567,126 @@ exports.getProjectFormByProjectId = async (req, res) => {
         });
     }
 };
+
+exports.getAllAssignedRequests = async (req, res) => {
+  try {
+    const { crew_member_id } = req.body || req.query;
+
+    if (!crew_member_id) {
+      return res.status(400).json({
+        error: true,
+        message: "crew_member_id is required",
+      });
+    }
+
+    const STATUS_MAP = {
+      0: "pending",
+      1: "accepted",
+      2: "rejected",
+    };
+
+    const assignedRequests = await assigned_crew.findAll({
+      where: { crew_member_id },
+      attributes: ['id', 'project_id', 'crew_member_id', 'crew_accept', 'status', 'created_at'],
+      include: [
+        {
+          model: stream_project_booking,
+          as: "project",
+          required: true,
+          where: {
+            is_active: 1,
+            payment_id: {
+              [Op.ne]: null,
+            },
+          },
+          attributes: [
+            'stream_project_booking_id',
+            'project_name',
+            'content_type',
+            'shoot_type',
+            'event_type',
+            'budget',
+            'quote_id',
+            'payment_id',
+          ],
+          include: [
+            {
+              model: quotes,
+              as: 'primary_quote',
+              required: false,
+              attributes: ['quote_id', 'total', 'price_after_discount', 'subtotal'],
+            },
+            {
+              model: quotes,
+              as: 'quotes',
+              required: false,
+              attributes: ['quote_id', 'total', 'price_after_discount', 'subtotal'],
+              separate: true,
+              limit: 1,
+              order: [['quote_id', 'DESC']],
+            },
+          ],
+        },
+      ],
+      order: [['created_at', 'DESC']],
+    });
+
+    const paymentIds = [
+      ...new Set(
+        assignedRequests
+          .map((assignment) => assignment.project?.payment_id)
+          .filter((paymentId) => paymentId !== null && paymentId !== undefined)
+      ),
+    ];
+
+    const paymentRecords = paymentIds.length
+      ? await payment_transactions.findAll({
+          where: {
+            payment_id: {
+              [Op.in]: paymentIds,
+            },
+          },
+          attributes: ['payment_id', 'total_amount'],
+          raw: true,
+        })
+      : [];
+
+    const paymentAmountById = paymentRecords.reduce((acc, payment) => {
+      acc[payment.payment_id] = payment.total_amount;
+      return acc;
+    }, {});
+
+    const data = assignedRequests.map((assignment) => {
+      const project = assignment.project || {};
+      const fallbackQuote = Array.isArray(project.quotes) ? project.quotes[0] : null;
+      const quoteSource = project.primary_quote || fallbackQuote;
+      const price =
+        paymentAmountById[project.payment_id] ??
+        quoteSource?.total ??
+        quoteSource?.price_after_discount ??
+        quoteSource?.subtotal ??
+        project.budget ??
+        null;
+
+      return {
+        project_name: project.project_name || null,
+        category: project.content_type || project.shoot_type || null,
+        event_type: project.event_type || null,
+        price,
+        status: STATUS_MAP[assignment.crew_accept] || assignment.status || "unknown",
+      };
+    });
+
+    return res.status(200).json({
+      error: false,
+      message: "Assigned project details fetched successfully",
+      data,
+    });
+  } catch (error) {
+    console.error('Error fetching assigned project details:', error);
+    return res.status(500).json({
+      error: true,
+      message: 'Internal server error',
+    });
+  }
+};

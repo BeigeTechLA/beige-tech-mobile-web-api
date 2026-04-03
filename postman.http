@@ -188,6 +188,24 @@ Authorization: {{TOKEN}}
 }
 
 ###
+POST {{URL}}admin/crew-member-assigned-projects HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "crew_member_id": "2010"
+}
+
+###
+POST {{URL}}admin/get-assigned-project-crew HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "crew_member_id": "2010"
+}
+
+###
 # Dashboard summary: total shoots, active, completed, CPs
 GET {{URL}}admin/dashboard-chart-data HTTP/1.1
 Content-Type: application/json
@@ -1323,12 +1341,12 @@ Authorization: {{TOKEN}}
 
 ###
 # Sales Rep Register
-POST {{URL}}auth/register-sales HTTP/1.1
+POST https://staging.beige.app/v1/auth/register-sales-admin HTTP/1.1
 Content-Type: application/json
 
 {
-  "name": "Parth Panchal",
-  "email": "parth.panchal.36@gmail.com",
-  "phone_number": "7133867897",
-  "password": "12345678"
+  "name": "Sales Admin",
+  "email": "sales.admin.stage@gmail.com",
+  "phone_number": "5551826801",
+  "password": "SalesA@2026!"
 }
