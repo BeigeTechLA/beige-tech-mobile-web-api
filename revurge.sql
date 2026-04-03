@@ -831,3 +831,13 @@ WHERE `content_type` = 3;
 ALTER TABLE `sales_shoot_types`
   ADD CONSTRAINT `fk_sales_shoot_types_catalog_item`
   FOREIGN KEY (`content_type`) REFERENCES `quote_catalog_items` (`catalog_item_id`);
+
+-- 03-04-26
+
+ALTER TABLE `sales_leads`
+  ADD COLUMN `is_active` TINYINT(1) NOT NULL DEFAULT 1 AFTER `updated_at`,
+  ADD INDEX `idx_sales_leads_is_active` (`is_active`);
+
+ALTER TABLE `client_leads`
+  ADD COLUMN `is_active` TINYINT(1) NOT NULL DEFAULT 1 AFTER `updated_at`,
+  ADD INDEX `idx_client_leads_is_active` (`is_active`);

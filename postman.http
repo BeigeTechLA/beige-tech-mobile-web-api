@@ -337,6 +337,11 @@ GET {{URL}}sales/leads/173 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
+### soft delete sales lead
+DELETE {{URL}}sales/leads/173 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
 ### generate discount: one-time
 POST {{URL}}sales/discount-codes HTTP/1.1
 Content-Type: application/json
@@ -943,6 +948,11 @@ GET {{URL}}sales/client-leads/2 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
+### soft delete client lead
+DELETE {{URL}}sales/client-leads/2 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
 ### generate client lead discount
 POST {{URL}}sales/client-discount-codes HTTP/1.1
 Content-Type: application/json
@@ -1030,6 +1040,11 @@ Authorization: {{TOKEN}}
 
 ### quote dashboard
 GET {{URL}}sales/quotes/dashboard HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### sales dashboard overview cards
+GET {{URL}}sales/dashboard/overview?period=all_time HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
