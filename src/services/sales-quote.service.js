@@ -210,11 +210,84 @@ function getUniqueEditingTypes(map) {
   return result;
 }
 
-function buildAiEditingTypesResponse() {
+function buildFallbackAiEditingTypesResponse() {
+  const withSystemDefault = (items = []) => items.map((item) => ({
+    ...item,
+    is_system_default: true
+  }));
+
   return {
-    video_edit_types: getUniqueEditingTypes(AI_EDITING_VIDEO_TYPE_MAP),
-    photo_edit_types: getUniqueEditingTypes(AI_EDITING_PHOTO_TYPE_MAP)
+    video_edit_types: withSystemDefault(getUniqueEditingTypes(AI_EDITING_VIDEO_TYPE_MAP)),
+    photo_edit_types: withSystemDefault(getUniqueEditingTypes(AI_EDITING_PHOTO_TYPE_MAP))
   };
+}
+
+function toAiEditingTypeResponseItem(item) {
+  return {
+    ai_editing_type_id: item.sales_ai_editing_type_id,
+    key: item.type_key,
+    value: item.label,
+    note: item.note || null,
+    is_system_default: Boolean(Number(item.is_system_default))
+  };
+}
+
+function buildAiEditingTypesResponseFromRows(rows = []) {
+  return rows.reduce((acc, item) => {
+    const key = item.category === 'photo' ? 'photo_edit_types' : 'video_edit_types';
+    acc[key].push(toAiEditingTypeResponseItem(item));
+    return acc;
+  }, {
+    video_edit_types: [],
+    photo_edit_types: []
+  });
+}
+
+async function loadAiEditingTypesResponse() {
+  try {
+    if (!db.sales_ai_editing_types) {
+      return buildFallbackAiEditingTypesResponse();
+    }
+
+    const records = await db.sales_ai_editing_types.findAll({
+      where: { is_active: 1 },
+      order: [
+        ['category', 'ASC'],
+        ['display_order', 'ASC'],
+        ['sales_ai_editing_type_id', 'ASC']
+      ]
+    });
+
+    if (!records.length) {
+      return buildFallbackAiEditingTypesResponse();
+    }
+
+    return buildAiEditingTypesResponseFromRows(records.map((record) => record.toJSON()));
+  } catch (error) {
+    return buildFallbackAiEditingTypesResponse();
+  }
+}
+
+function buildAiEditingTypesLookup(response) {
+  const byKey = new Map();
+  const byLabel = new Map();
+
+  ['video_edit_types', 'photo_edit_types'].forEach((groupKey) => {
+    (response[groupKey] || []).forEach((item) => {
+      const normalizedKey = normalizeLookupKey(item.key);
+      const normalizedLabel = normalizeLookupKey(item.value);
+
+      if (normalizedKey && !byKey.has(normalizedKey)) {
+        byKey.set(normalizedKey, item);
+      }
+
+      if (normalizedLabel && !byLabel.has(normalizedLabel)) {
+        byLabel.set(normalizedLabel, item);
+      }
+    });
+  });
+
+  return { byKey, byLabel };
 }
 
 function normalizeCustomEditingTypes(items = []) {
@@ -239,62 +312,83 @@ function normalizeCustomEditingTypes(items = []) {
     .filter(Boolean);
 }
 
-function extractAiEditingConfig(rawItem) {
+function extractAiEditingConfig(rawItem, aiEditingTypesLookup = null) {
   const baseConfig = parseConfig(rawItem.configuration || rawItem.configuration_json) || {};
-  const configuration = {};
-
   const directKey = rawItem.editing_type_key ?? baseConfig.editing_type_key ?? null;
   const directLabel = rawItem.editing_type_label
     ?? rawItem.editing_type
     ?? baseConfig.editing_type_label
     ?? baseConfig.editing_type
     ?? null;
-  const directCustom = rawItem.is_custom_editing_type ?? baseConfig.is_custom_editing_type;
+  const directCustom = Boolean(rawItem.is_custom_editing_type ?? baseConfig.is_custom_editing_type);
+
+  if (!directCustom && directKey && aiEditingTypesLookup?.byKey?.has(normalizeLookupKey(directKey))) {
+    const matched = aiEditingTypesLookup.byKey.get(normalizeLookupKey(directKey));
+    return {
+      editing_type_key: matched.key,
+      editing_type_label: matched.value,
+      is_custom_editing_type: Boolean(!matched.is_system_default)
+    };
+  }
+
+  if (!directCustom && directLabel && aiEditingTypesLookup?.byLabel?.has(normalizeLookupKey(directLabel))) {
+    const matched = aiEditingTypesLookup.byLabel.get(normalizeLookupKey(directLabel));
+    return {
+      editing_type_key: matched.key,
+      editing_type_label: matched.value,
+      is_custom_editing_type: Boolean(!matched.is_system_default)
+    };
+  }
 
   if (directLabel) {
-    configuration.editing_type_key = String(directKey || normalizeLookupKey(directLabel));
-    configuration.editing_type_label = String(directLabel);
-    configuration.is_custom_editing_type = Boolean(directCustom);
-    return configuration;
+    const normalizedLabel = String(directLabel).trim();
+    return {
+      editing_type_key: String(directKey || normalizeLookupKey(normalizedLabel)),
+      editing_type_label: normalizedLabel,
+      is_custom_editing_type: directCustom
+    };
   }
 
   const firstVideoType = Array.isArray(rawItem.video_edit_types) ? rawItem.video_edit_types[0] : null;
   if (firstVideoType) {
-    configuration.editing_type_key = normalizeLookupKey(firstVideoType);
-    configuration.editing_type_label = String(firstVideoType);
-    configuration.is_custom_editing_type = false;
-    return configuration;
+    const normalizedType = normalizeLookupKey(firstVideoType);
+    const matched = aiEditingTypesLookup?.byLabel?.get(normalizedType) || aiEditingTypesLookup?.byKey?.get(normalizedType);
+    return {
+      editing_type_key: matched?.key || normalizeLookupKey(firstVideoType),
+      editing_type_label: matched?.value || String(firstVideoType),
+      is_custom_editing_type: matched ? Boolean(!matched.is_system_default) : false
+    };
   }
 
   const firstPhotoType = Array.isArray(rawItem.photo_edit_types) ? rawItem.photo_edit_types[0] : null;
   if (firstPhotoType) {
-    configuration.editing_type_key = normalizeLookupKey(firstPhotoType);
-    configuration.editing_type_label = String(firstPhotoType);
-    configuration.is_custom_editing_type = false;
-    return configuration;
+    const normalizedType = normalizeLookupKey(firstPhotoType);
+    const matched = aiEditingTypesLookup?.byLabel?.get(normalizedType) || aiEditingTypesLookup?.byKey?.get(normalizedType);
+    return {
+      editing_type_key: matched?.key || normalizeLookupKey(firstPhotoType),
+      editing_type_label: matched?.value || String(firstPhotoType),
+      is_custom_editing_type: matched ? Boolean(!matched.is_system_default) : false
+    };
   }
 
   const firstCustomType = normalizeCustomEditingTypes(rawItem.custom_ai_editing_types)[0];
   if (firstCustomType) {
-    configuration.editing_type_key = firstCustomType.key;
-    configuration.editing_type_label = firstCustomType.value;
-    configuration.is_custom_editing_type = true;
-    return configuration;
+    return {
+      editing_type_key: firstCustomType.key,
+      editing_type_label: firstCustomType.value,
+      is_custom_editing_type: true
+    };
   }
 
   return Object.keys(baseConfig).length ? baseConfig : null;
 }
 
 function deriveAiEditingItemName(rawItem, catalogItem, config) {
-  if (rawItem.item_name || rawItem.name) {
-    return rawItem.item_name || rawItem.name;
-  }
-
   if (config?.editing_type_label) {
     return `AI Editing Type - ${config.editing_type_label}`;
   }
 
-  return catalogItem?.name || 'AI Editing';
+  return rawItem.item_name || rawItem.name || catalogItem?.name || 'AI Editing';
 }
 
 function resolveRateTypeValue(preferred, pricingItem, catalogItem) {
@@ -424,7 +518,72 @@ async function getCatalog(pricingMode = null) {
 }
 
 async function getAiEditingTypes() {
-  return buildAiEditingTypesResponse();
+  return loadAiEditingTypesResponse();
+}
+
+async function createAiEditingType(payload, userId) {
+  const label = String(payload.label).trim();
+  const typeKey = String(payload.type_key || normalizeLookupKey(label));
+
+  const created = await db.sales_ai_editing_types.create({
+    category: payload.category,
+    type_key: typeKey,
+    label,
+    note: payload.note ?? null,
+    display_order: payload.display_order ?? 0,
+    is_active: payload.is_active !== undefined ? (payload.is_active ? 1 : 0) : 1,
+    is_system_default: 0,
+    created_by_user_id: userId,
+    updated_by_user_id: userId
+  });
+
+  return db.sales_ai_editing_types.findByPk(created.sales_ai_editing_type_id);
+}
+
+async function updateAiEditingType(aiEditingTypeId, payload, userId) {
+  const item = await db.sales_ai_editing_types.findByPk(aiEditingTypeId);
+  if (!item) {
+    throw new Error('AI editing type not found');
+  }
+
+  const label = payload.label !== undefined ? String(payload.label).trim() : item.label;
+  const typeKey = payload.type_key !== undefined
+    ? String(payload.type_key).trim()
+    : (payload.label !== undefined ? normalizeLookupKey(label) : item.type_key);
+
+  await item.update({
+    category: payload.category ?? item.category,
+    type_key: typeKey || item.type_key,
+    label: label || item.label,
+    note: payload.note !== undefined ? payload.note : item.note,
+    display_order: payload.display_order !== undefined ? payload.display_order : item.display_order,
+    is_active: payload.is_active !== undefined ? (payload.is_active ? 1 : 0) : item.is_active,
+    updated_by_user_id: userId,
+    updated_at: new Date()
+  });
+
+  return db.sales_ai_editing_types.findByPk(aiEditingTypeId);
+}
+
+async function deleteAiEditingType(aiEditingTypeId) {
+  const item = await db.sales_ai_editing_types.findByPk(aiEditingTypeId);
+  if (!item) {
+    throw new Error('AI editing type not found');
+  }
+
+  if (Number(item.is_system_default) === 1) {
+    throw new Error('Default AI editing types cannot be deleted');
+  }
+
+  await item.update({
+    is_active: 0,
+    updated_at: new Date()
+  });
+
+  return {
+    ai_editing_type_id: item.sales_ai_editing_type_id,
+    deleted: true
+  };
 }
 
 async function createCatalogItem(payload, userId) {
@@ -548,12 +707,14 @@ async function buildLineItemsPayload(rawItems = []) {
 
   const catalogItemIds = rawItems.map((item) => item.catalog_item_id).filter(Boolean);
   const catalogItems = catalogItemIds.length
-    ? await db.quote_catalog_items.findAll({
-        where: { catalog_item_id: { [Op.in]: catalogItemIds } }
-      })
-    : [];
+      ? await db.quote_catalog_items.findAll({
+          where: { catalog_item_id: { [Op.in]: catalogItemIds } }
+        })
+      : [];
 
   const catalogMap = new Map(catalogItems.map((item) => [item.catalog_item_id, item.toJSON()]));
+  const aiEditingTypesResponse = await loadAiEditingTypesResponse();
+  const aiEditingTypesLookup = buildAiEditingTypesLookup(aiEditingTypesResponse);
 
   return rawItems.map((rawItem, index) => {
     const catalogItem = rawItem.catalog_item_id ? catalogMap.get(rawItem.catalog_item_id) : null;
@@ -570,13 +731,13 @@ async function buildLineItemsPayload(rawItems = []) {
     const crewSize = rawItem.crew_size !== undefined && rawItem.crew_size !== null
       ? Math.max(0, Number(rawItem.crew_size))
       : null;
-    const estimatedPricing = rawItem.estimated_pricing !== undefined && rawItem.estimated_pricing !== null
-      ? roundCurrency(rawItem.estimated_pricing)
-      : null;
-    const normalizedItemName = normalizeLookupKey(rawItem.item_name || rawItem.name || catalogItem?.name || '');
-    const aiEditingConfig = normalizedItemName === normalizeLookupKey(AI_EDITING_SERVICE_NAME)
-      ? extractAiEditingConfig(rawItem)
-      : null;
+      const estimatedPricing = rawItem.estimated_pricing !== undefined && rawItem.estimated_pricing !== null
+        ? roundCurrency(rawItem.estimated_pricing)
+        : null;
+      const normalizedItemName = normalizeLookupKey(rawItem.item_name || rawItem.name || catalogItem?.name || '');
+      const aiEditingConfig = normalizedItemName === normalizeLookupKey(AI_EDITING_SERVICE_NAME)
+        ? extractAiEditingConfig(rawItem, aiEditingTypesLookup)
+        : null;
     const configuration = normalizedItemName === normalizeLookupKey(AI_EDITING_SERVICE_NAME)
       ? aiEditingConfig
       : (rawItem.configuration || rawItem.configuration_json || null);
@@ -1226,6 +1387,9 @@ module.exports = {
   QUOTE_STATUSES,
   getCatalog,
   getAiEditingTypes,
+  createAiEditingType,
+  updateAiEditingType,
+  deleteAiEditingType,
   createCatalogItem,
   updateCatalogItem,
   deleteCatalogItem,

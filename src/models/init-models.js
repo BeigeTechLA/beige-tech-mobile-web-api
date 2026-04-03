@@ -67,6 +67,7 @@ var _payment_links = require("./payment_links");
 var _sales_lead_activities = require("./sales_lead_activities");
 var _project_form_submissions = require("./project_form_submissions");
 var _quote_catalog_items = require("./quote_catalog_items");
+var _sales_ai_editing_types = require("./sales_ai_editing_types");
 var _sales_quotes = require("./sales_quotes");
 var _sales_quote_line_items = require("./sales_quote_line_items");
 var _sales_quote_activities = require("./sales_quote_activities");
@@ -144,6 +145,7 @@ function initModels(sequelize) {
 
   // Quote module
   var quote_catalog_items = _quote_catalog_items(sequelize, DataTypes);
+  var sales_ai_editing_types = _sales_ai_editing_types(sequelize, DataTypes);
   var sales_quotes = _sales_quotes(sequelize, DataTypes);
   var sales_quote_line_items = _sales_quote_line_items(sequelize, DataTypes);
   var sales_quote_activities = _sales_quote_activities(sequelize, DataTypes);
@@ -561,6 +563,7 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
     clients,
     project_form_submissions,
     quote_catalog_items,
+    sales_ai_editing_types,
     sales_quotes,
     sales_quote_line_items,
     sales_quote_activities,
