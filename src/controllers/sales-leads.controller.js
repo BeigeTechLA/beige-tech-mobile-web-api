@@ -424,7 +424,7 @@ async function resolveAssignedSalesRepId({
   currentAssignedSalesRepId = null,
   tx
 }) {
-  if (req.userRole === 'sales_rep') {
+  if (req.userRole === 'sales_rep' || req.userRole === 'sales_admin' || req.userRole === 'Admin') {
     return req.userId || currentAssignedSalesRepId || null;
   }
 
