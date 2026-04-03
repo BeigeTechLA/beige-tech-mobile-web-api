@@ -57,6 +57,51 @@ function normalizeShootTypePayload(payload = {}, { partial = false } = {}) {
   return data;
 }
 
+function normalizeAiEditingTypePayload(payload = {}, { partial = false } = {}) {
+  const data = {};
+  const category = payload.category;
+
+  if (category !== undefined) {
+    const normalizedCategory = String(category).trim().toLowerCase();
+    if (!['video', 'photo'].includes(normalizedCategory)) {
+      throw new Error('category must be either video or photo');
+    }
+    data.category = normalizedCategory;
+  } else if (!partial) {
+    throw new Error('category is required');
+  }
+
+  if (payload.label !== undefined || payload.value !== undefined || payload.name !== undefined) {
+    data.label = String(payload.label ?? payload.value ?? payload.name).trim();
+    if (!data.label) {
+      throw new Error('label is required');
+    }
+  } else if (!partial) {
+    throw new Error('label is required');
+  }
+
+  if (payload.type_key !== undefined) {
+    data.type_key = String(payload.type_key).trim();
+    if (!data.type_key) {
+      throw new Error('type_key is invalid');
+    }
+  }
+
+  if (payload.note !== undefined) data.note = payload.note ? String(payload.note).trim() : null;
+
+  if (payload.display_order !== undefined) {
+    const displayOrder = Number(payload.display_order);
+    if (!Number.isInteger(displayOrder) || displayOrder < 0) {
+      throw new Error('display_order must be a non-negative integer');
+    }
+    data.display_order = displayOrder;
+  }
+
+  if (payload.is_active !== undefined) data.is_active = Number(payload.is_active) ? 1 : 0;
+
+  return data;
+}
+
 async function resolveShootTypeContentType(rawValue) {
   const contentType = Number(rawValue);
 
@@ -79,6 +124,79 @@ exports.getCatalog = async (req, res) => {
   } catch (error) {
     console.error('Error fetching quote catalog:', error);
     return sendError(res, error, 'Failed to fetch quote catalog', constants.INTERNAL_SERVER_ERROR.code);
+  }
+};
+
+exports.getAiEditingTypes = async (req, res) => {
+  try {
+    const data = await quoteService.getAiEditingTypes();
+    return res.json({ success: true, data });
+  } catch (error) {
+    console.error('Error fetching AI editing types:', error);
+    return sendError(res, error, error.message || 'Failed to fetch AI editing types', constants.BAD_REQUEST.code);
+  }
+};
+
+exports.createAiEditingType = async (req, res) => {
+  try {
+    const payload = normalizeAiEditingTypePayload(req.body);
+    const data = await quoteService.createAiEditingType(payload, req.userId);
+    return res.status(constants.CREATED.code).json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    console.error('Error creating AI editing type:', error);
+    return sendError(res, error, error.message || 'Failed to create AI editing type');
+  }
+};
+
+exports.updateAiEditingType = async (req, res) => {
+  try {
+    const aiEditingTypeId = Number(req.params.aiEditingTypeId);
+    if (!Number.isInteger(aiEditingTypeId) || aiEditingTypeId <= 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Invalid aiEditingTypeId'
+      });
+    }
+
+    const payload = normalizeAiEditingTypePayload(req.body, { partial: true });
+    const data = await quoteService.updateAiEditingType(aiEditingTypeId, payload, req.userId);
+    return res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    console.error('Error updating AI editing type:', error);
+    const statusCode = error.message === 'AI editing type not found' ? constants.NOT_FOUND.code : constants.BAD_REQUEST.code;
+    return sendError(res, error, error.message || 'Failed to update AI editing type', statusCode);
+  }
+};
+
+exports.deleteAiEditingType = async (req, res) => {
+  try {
+    const aiEditingTypeId = Number(req.params.aiEditingTypeId);
+    if (!Number.isInteger(aiEditingTypeId) || aiEditingTypeId <= 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Invalid aiEditingTypeId'
+      });
+    }
+
+    const data = await quoteService.deleteAiEditingType(aiEditingTypeId);
+    return res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    console.error('Error deleting AI editing type:', error);
+    const statusCode = error.message === 'AI editing type not found'
+      ? constants.NOT_FOUND.code
+      : error.message === 'Default AI editing types cannot be deleted'
+        ? constants.FORBIDDEN.code
+        : constants.BAD_REQUEST.code;
+    return sendError(res, error, error.message || 'Failed to delete AI editing type', statusCode);
   }
 };
 
