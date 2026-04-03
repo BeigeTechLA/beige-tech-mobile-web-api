@@ -8669,6 +8669,7 @@ exports.getAllAssignedRequests = async (req, res) => {
         null;
 
       return {
+        booking_id: project.stream_project_booking_id || null,
         project_name: project.project_name || null,
         category: project.content_type || project.shoot_type || null,
         event_type: project.event_type || null,
