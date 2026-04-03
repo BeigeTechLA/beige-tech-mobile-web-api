@@ -831,3 +831,51 @@ WHERE `content_type` = 3;
 ALTER TABLE `sales_shoot_types`
   ADD CONSTRAINT `fk_sales_shoot_types_catalog_item`
   FOREIGN KEY (`content_type`) REFERENCES `quote_catalog_items` (`catalog_item_id`);
+
+-- 03-04-26
+
+ALTER TABLE `sales_leads`
+  ADD COLUMN `is_active` TINYINT(1) NOT NULL DEFAULT 1 AFTER `updated_at`,
+  ADD INDEX `idx_sales_leads_is_active` (`is_active`);
+
+ALTER TABLE `client_leads`
+  ADD COLUMN `is_active` TINYINT(1) NOT NULL DEFAULT 1 AFTER `updated_at`,
+  ADD INDEX `idx_client_leads_is_active` (`is_active`);
+
+CREATE TABLE IF NOT EXISTS `sales_ai_editing_types` (
+  `sales_ai_editing_type_id` int NOT NULL AUTO_INCREMENT,
+  `category` enum('video','photo') NOT NULL,
+  `type_key` varchar(100) NOT NULL,
+  `label` varchar(255) NOT NULL,
+  `note` varchar(255) DEFAULT NULL,
+  `display_order` int NOT NULL DEFAULT 0,
+  `is_active` tinyint(1) NOT NULL DEFAULT 1,
+  `is_system_default` tinyint(1) NOT NULL DEFAULT 0,
+  `created_by_user_id` int DEFAULT NULL,
+  `updated_by_user_id` int DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`sales_ai_editing_type_id`),
+  UNIQUE KEY `uniq_sales_ai_editing_type_key` (`type_key`),
+  UNIQUE KEY `uniq_sales_ai_editing_type_label` (`category`,`label`),
+  KEY `idx_sales_ai_editing_types_active` (`category`,`is_active`,`display_order`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+INSERT IGNORE INTO `sales_ai_editing_types`
+(`sales_ai_editing_type_id`, `category`, `type_key`, `label`, `note`, `display_order`, `is_active`, `is_system_default`, `created_at`, `updated_at`)
+VALUES
+(1, 'video', 'social_reel_15_30', 'Social Media Reel (15 sec-30 sec)', NULL, 1, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(2, 'video', 'social_reel_30_90', 'Social Media Reel (30 sec-90 sec)', NULL, 2, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(3, 'video', 'mini_highlight_1_2', 'Mini Highlight Video (1-2 mins)', NULL, 3, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(4, 'video', 'highlight_4_7', 'Highlight Video (4-7 min)', NULL, 4, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(5, 'video', 'feature_30_40', 'Feature Video (30-40 min)', NULL, 5, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(6, 'video', 'commercial_2_4', 'Commercial (2 min-4 min)', NULL, 6, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(7, 'video', 'commercial_4_10', 'Commercial (4 min-10 min)', NULL, 7, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(8, 'video', 'social_reel_2_4', 'Social Media Reel (2 min-4 min)', NULL, 8, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(9, 'video', 'full_podcast_15_30', 'Full Length Podcast (15 min-30 min)', NULL, 9, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(10, 'video', 'full_podcast_30_60', 'Longer Full Length Podcast (30 min-60 min)', NULL, 10, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(11, 'video', 'music_video_2_3', 'Edited Music Video (2-3 min)', NULL, 11, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(12, 'video', 'music_video_vfx_2_3', 'Edited Music Video with VFX (2-3 min)', NULL, 12, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(13, 'video', 'short_film_2_5', 'Edited Short Film (2 Min-5 Min)', NULL, 13, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(14, 'video', 'short_film_5_10', 'Edited Short Film (5 Min-10 Min)', NULL, 14, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(15, 'photo', 'edited_photos', 'Edited Photos', 'Edited Photos', 1, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);

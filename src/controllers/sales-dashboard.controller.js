@@ -1,8 +1,101 @@
-const { sales_leads, discount_codes, payment_links, users, stream_project_booking } = require('../models');
+const { sales_leads, client_leads, discount_codes, payment_links, users, stream_project_booking } = require('../models');
 const { Op } = require('sequelize');
 const sequelize = require('../db');
 const constants = require('../utils/constants');
 const leadAssignmentService = require('../services/lead-assignment.service');
+
+function getDashboardStartDate(period) {
+  if (!period || period === 'all_time' || period === 'all') {
+    return null;
+  }
+
+  const startDate = new Date();
+
+  if (period === '7days') {
+    startDate.setDate(startDate.getDate() - 7);
+    return startDate;
+  }
+
+  if (period === '30days') {
+    startDate.setDate(startDate.getDate() - 30);
+    return startDate;
+  }
+
+  if (period === '90days') {
+    startDate.setDate(startDate.getDate() - 90);
+    return startDate;
+  }
+
+  return null;
+}
+
+function buildLeadDashboardWhere({ startDate, salesRepId, req }) {
+  const whereClause = {
+    is_active: 1
+  };
+
+  if (startDate) {
+    whereClause.created_at = { [Op.gte]: startDate };
+  }
+
+  if (req.userRole === 'sales_rep') {
+    whereClause.assigned_sales_rep_id = req.userId;
+  } else if (salesRepId) {
+    whereClause.assigned_sales_rep_id = parseInt(salesRepId, 10);
+  }
+
+  return whereClause;
+}
+
+async function getOverviewStatsForModel(LeadModel, whereClause) {
+  const totalLeads = await LeadModel.count({
+    where: whereClause
+  });
+
+  const totalActiveLeads = await LeadModel.count({
+    where: whereClause
+  });
+
+  const salesAssistedLeads = await LeadModel.count({
+    where: {
+      ...whereClause,
+      lead_type: 'sales_assisted'
+    }
+  });
+
+  const totalBookings = await LeadModel.count({
+    where: {
+      ...whereClause,
+      lead_status: 'booked'
+    }
+  });
+
+  const totalConversionRate = totalLeads > 0
+    ? Number(((totalBookings / totalLeads) * 100).toFixed(1))
+    : 0;
+
+  return {
+    total_leads: totalLeads,
+    total_active_leads: totalActiveLeads,
+    sales_assisted_leads: salesAssistedLeads,
+    total_conversion_rate: totalConversionRate,
+    total_bookings: totalBookings
+  };
+}
+
+function combineOverviewStats(salesStats, clientStats) {
+  const totalLeads = salesStats.total_leads + clientStats.total_leads;
+  const totalBookings = salesStats.total_bookings + clientStats.total_bookings;
+
+  return {
+    total_active_leads: salesStats.total_active_leads + clientStats.total_active_leads,
+    sales_assisted_leads: salesStats.sales_assisted_leads + clientStats.sales_assisted_leads,
+    total_conversion_rate: totalLeads > 0
+      ? Number(((totalBookings / totalLeads) * 100).toFixed(1))
+      : 0,
+    total_bookings: totalBookings
+  };
+}
 
 /**
  * Get dashboard overview statistics
@@ -159,6 +252,61 @@ exports.getDashboardStats = async (req, res) => {
     res.status(constants.INTERNAL_SERVER_ERROR.code).json({
       success: false,
       message: 'Failed to fetch dashboard stats',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * Get combined overview statistics for dashboard cards
+ * GET /api/sales/dashboard/overview
+ */
+exports.getCombinedOverviewStats = async (req, res) => {
+  try {
+    const { period = 'all_time', sales_rep_id } = req.query;
+    const startDate = getDashboardStartDate(period);
+
+    const salesWhere = buildLeadDashboardWhere({
+      startDate,
+      salesRepId: sales_rep_id,
+      req
+    });
+
+    const clientWhere = buildLeadDashboardWhere({
+      startDate,
+      salesRepId: sales_rep_id,
+      req
+    });
+
+    const salesOverview = await getOverviewStatsForModel(sales_leads, salesWhere);
+    const clientOverview = await getOverviewStatsForModel(client_leads, clientWhere);
+
+    const combinedOverview = combineOverviewStats(salesOverview, clientOverview);
+
+    return res.json({
+      success: true,
+      data: {
+        period,
+        combined: combinedOverview,
+        sales_leads: {
+          total_active_leads: salesOverview.total_active_leads,
+          sales_assisted_leads: salesOverview.sales_assisted_leads,
+          total_conversion_rate: salesOverview.total_conversion_rate,
+          total_bookings: salesOverview.total_bookings
+        },
+        client_leads: {
+          total_active_leads: clientOverview.total_active_leads,
+          sales_assisted_leads: clientOverview.sales_assisted_leads,
+          total_conversion_rate: clientOverview.total_conversion_rate,
+          total_bookings: clientOverview.total_bookings
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching combined overview stats:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to fetch dashboard overview stats',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
