@@ -1965,8 +1965,36 @@ exports.getLeadById = async (req, res) => {
         payment_status = active_payment_link.is_expired ? 'link_expired' : 'link_sent';
     }
 
+    const convertedSalesQuote = await db.sales_quotes.findOne({
+      where: { lead_id: leadJson.lead_id },
+      include: [
+        {
+          model: db.sales_quote_line_items,
+          as: 'line_items',
+          where: { is_active: 1 },
+          required: false
+        }
+      ],
+      order: [[{ model: db.sales_quote_line_items, as: 'line_items' }, 'sort_order', 'ASC']]
+    });
+
+    const normalizedConvertedSalesQuote = convertedSalesQuote
+      ? {
+          ...convertedSalesQuote.toJSON(),
+          line_items: (convertedSalesQuote.toJSON().line_items || []).map((item) => ({
+            ...item,
+            item_name: item.item_name,
+            quantity: Number(item.quantity || 1),
+            line_total: parseFloat(item.line_total || 0)
+          }))
+        }
+      : null;
+
     const projectedQuote = await calculateLeadPricing(lead.booking);
-    const activeQuoteSource = leadJson.booking?.primary_quote || projectedQuote;
+    const activeQuoteSource =
+      leadJson.booking?.primary_quote?.line_items?.length
+        ? leadJson.booking.primary_quote
+        : normalizedConvertedSalesQuote || leadJson.booking?.primary_quote || projectedQuote;
 
     let pricing_breakdown = {
         shoot_cost: 0,
@@ -2122,7 +2150,8 @@ exports.getLeadById = async (req, res) => {
         can_edit_booking,
         fulfillmentSummary,
         pricing_breakdown,
-        projected_quote: projectedQuote
+        projected_quote: projectedQuote,
+        converted_sales_quote: normalizedConvertedSalesQuote
       }
     });
   } catch (error) {

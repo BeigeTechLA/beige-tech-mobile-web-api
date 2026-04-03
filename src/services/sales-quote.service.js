@@ -37,6 +37,12 @@ function roundCurrency(value) {
   return Number(numeric.toFixed(2));
 }
 
+function normalizeString(value) {
+  if (value === undefined || value === null) return null;
+  const trimmed = String(value).trim();
+  return trimmed || null;
+}
+
 function getDateRange(range = 'all') {
   const now = new Date();
 
@@ -118,6 +124,19 @@ function resolveRateUnitValue(preferred, pricingItem, catalogItem) {
 function resolveUnitRateValue(preferred, pricingItem, catalogItem) {
   const candidate = preferred ?? catalogItem?.default_rate ?? 0;
   return roundCurrency(candidate);
+}
+
+function getFallbackLineItemName(sectionType) {
+  switch (sectionType) {
+    case 'service':
+      return 'Custom Service';
+    case 'addon':
+      return 'Custom Add-on';
+    case 'logistics':
+      return 'Custom Logistics';
+    default:
+      return 'Custom Item';
+  }
 }
 
 function generateQuoteNumber() {
@@ -368,6 +387,9 @@ async function buildLineItemsPayload(rawItems = []) {
     const sectionType = rawItem.section_type || catalogItem?.section_type || 'custom';
     const rateType = resolveRateTypeValue(rawItem.rate_type, null, catalogItem);
     const rateUnit = resolveRateUnitValue(rawItem.rate_unit, null, catalogItem);
+    const resolvedEstimatedPricing = rawItem.estimated_pricing !== undefined && rawItem.estimated_pricing !== null
+      ? roundCurrency(rawItem.estimated_pricing)
+      : null;
     const unitRate = resolveUnitRateValue(rawItem.unit_rate, null, catalogItem);
     const quantity = Math.max(1, Number(rawItem.quantity || 1));
     const durationHours = rawItem.duration_hours !== undefined && rawItem.duration_hours !== null
@@ -376,9 +398,7 @@ async function buildLineItemsPayload(rawItems = []) {
     const crewSize = rawItem.crew_size !== undefined && rawItem.crew_size !== null
       ? Math.max(0, Number(rawItem.crew_size))
       : null;
-    const estimatedPricing = rawItem.estimated_pricing !== undefined && rawItem.estimated_pricing !== null
-      ? roundCurrency(rawItem.estimated_pricing)
-      : null;
+    const estimatedPricing = resolvedEstimatedPricing;
 
     let multiplier = quantity;
     if (rateType === 'per_hour') {
@@ -388,13 +408,16 @@ async function buildLineItemsPayload(rawItems = []) {
       multiplier *= crewSize || 1;
     }
 
-    const lineTotal = roundCurrency(unitRate * multiplier);
+    const lineTotal = estimatedPricing !== null
+      ? estimatedPricing
+      : roundCurrency(unitRate * multiplier);
+    const resolvedItemName = normalizeString(rawItem.item_name || rawItem.name || catalogItem?.name) || getFallbackLineItemName(sectionType);
 
     return {
       catalog_item_id: catalogItem?.catalog_item_id || null,
       source_type: sourceType,
       section_type: sectionType,
-      item_name: rawItem.item_name || rawItem.name || catalogItem?.name,
+      item_name: resolvedItemName,
       description: rawItem.description ?? catalogItem?.description ?? null,
       rate_type: rateType,
       rate_unit: rateUnit,
@@ -738,6 +761,50 @@ async function fetchQuoteById(salesQuoteId, user = null) {
     metadata: parseConfig(item.metadata_json)
   }));
 
+  plain.linked_lead = null;
+  plain.linked_booking = null;
+  plain.payment_status = 'pending';
+
+  if (plain.lead_id) {
+    const linkedLead = await db.sales_leads.findByPk(plain.lead_id, {
+      include: [
+        {
+          model: db.stream_project_booking,
+          as: 'booking',
+          required: false,
+          attributes: [
+            'stream_project_booking_id',
+            'project_name',
+            'event_date',
+            'start_time',
+            'duration_hours',
+            'event_location',
+            'payment_id',
+            'is_completed',
+            'payment_completed_at'
+          ]
+        }
+      ]
+    });
+
+    if (linkedLead) {
+      const leadJson = linkedLead.toJSON();
+      plain.linked_lead = {
+        lead_id: leadJson.lead_id,
+        booking_id: leadJson.booking_id,
+        lead_status: leadJson.lead_status
+      };
+
+      if (leadJson.booking) {
+        plain.linked_booking = leadJson.booking;
+        plain.payment_status =
+          leadJson.booking.payment_id || Number(leadJson.booking.is_completed) === 1
+            ? 'paid'
+            : 'pending';
+      }
+    }
+  }
+
   return plain;
 }
 
@@ -747,6 +814,259 @@ async function getQuoteById(salesQuoteId, user) {
 
 async function getPublicQuoteById(salesQuoteId) {
   return fetchQuoteById(salesQuoteId);
+}
+
+function deriveDurationHours(startTime, durationHours, endTime) {
+  const normalizedDuration = Number(durationHours || 0);
+  if (Number.isFinite(normalizedDuration) && normalizedDuration > 0) {
+    return roundCurrency(normalizedDuration);
+  }
+
+  if (!startTime || !endTime) {
+    return null;
+  }
+
+  const [startHour, startMinute] = String(startTime).split(':').map(Number);
+  const [endHour, endMinute] = String(endTime).split(':').map(Number);
+
+  if (
+    !Number.isFinite(startHour) ||
+    !Number.isFinite(startMinute) ||
+    !Number.isFinite(endHour) ||
+    !Number.isFinite(endMinute)
+  ) {
+    return null;
+  }
+
+  const startTotalMinutes = startHour * 60 + startMinute;
+  let endTotalMinutes = endHour * 60 + endMinute;
+
+  if (endTotalMinutes <= startTotalMinutes) {
+    endTotalMinutes += 24 * 60;
+  }
+
+  return roundCurrency((endTotalMinutes - startTotalMinutes) / 60);
+}
+
+function buildBookingDescriptionFromQuote(quote) {
+  const segments = [];
+
+  if (quote.project_description) {
+    segments.push(`Project Description: ${quote.project_description}`);
+  }
+
+  if (quote.notes) {
+    segments.push(`Quote Notes: ${quote.notes}`);
+  }
+
+  const lineItems = Array.isArray(quote.line_items) ? quote.line_items : [];
+  if (lineItems.length) {
+    const breakdown = lineItems
+      .map((item) => {
+        const quantity = Number(item.quantity || 1);
+        const lineTotal = roundCurrency(item.line_total || 0);
+        return `${item.item_name} x${quantity} ($${lineTotal})`;
+      })
+      .join(', ');
+
+    if (breakdown) {
+      segments.push(`Quote Pricing: ${breakdown}`);
+    }
+  }
+
+  if (quote.tax_amount || quote.tax_rate) {
+    segments.push(
+      `Tax: ${normalizeString(quote.tax_type) || 'Sales Tax'} ${roundCurrency(quote.tax_rate || 0)}% ($${roundCurrency(quote.tax_amount || 0)})`
+    );
+  }
+
+  return segments.join('\n\n') || null;
+}
+
+async function createLegacyBookingQuote({ bookingId, quote, transaction }) {
+  return db.quotes.create({
+    booking_id: bookingId,
+    user_id: quote.client_user_id || null,
+    guest_email: normalizeString(quote.client_email) || normalizeString(quote.client_user?.email),
+    pricing_mode: quote.pricing_mode === 'wedding' ? 'wedding' : 'general',
+    shoot_hours: 0,
+    subtotal: roundCurrency(quote.subtotal || 0),
+    discount_percent: quote.discount_type === 'percentage' ? roundCurrency(quote.discount_value || 0) : 0,
+    discount_amount: roundCurrency(quote.discount_amount || 0),
+    applied_discount_type: quote.discount_type === 'none' ? null : quote.discount_type,
+    applied_discount_value: quote.discount_type === 'none' ? null : roundCurrency(quote.discount_value || 0),
+    price_after_discount: roundCurrency((quote.subtotal || 0) - (quote.discount_amount || 0)),
+    margin_percent: 0,
+    margin_amount: 0,
+    total: roundCurrency(quote.total || 0),
+    status: 'pending',
+    expires_at: quote.valid_until ? new Date(`${quote.valid_until}T23:59:59.999Z`) : null,
+    notes: buildBookingDescriptionFromQuote(quote)
+  }, { transaction });
+}
+
+async function convertQuoteToBooking(salesQuoteId, payload, user) {
+  const quote = await fetchQuoteById(salesQuoteId, user);
+
+  if (!quote) {
+    throw new Error('Quote not found');
+  }
+
+  if (quote.linked_booking?.stream_project_booking_id) {
+    throw new Error('Quote has already been converted to a booking');
+  }
+
+  const shootDate = normalizeString(payload.shoot_date || payload.event_date || payload.start_date);
+  const startTime = normalizeString(payload.start_time);
+  const endTime = normalizeString(payload.end_time);
+  const location = normalizeString(payload.location);
+  const durationHours = deriveDurationHours(startTime, payload.duration_hours, endTime);
+
+  if (!shootDate) throw new Error('shoot_date is required');
+  if (!startTime) throw new Error('start_time is required');
+  if (!durationHours) throw new Error('duration_hours or end_time is required');
+  if (!location) throw new Error('location is required');
+
+  const clientEmail = normalizeString(quote.client_email) || normalizeString(quote.client_user?.email);
+  if (!clientEmail) {
+    throw new Error('Quote must include a client email before conversion');
+  }
+
+  const clientName = normalizeString(quote.client_name) || normalizeString(quote.client_user?.name) || 'Quote Client';
+  const clientPhone = normalizeString(quote.client_phone);
+  const projectName = normalizeString(payload.project_name) || `${clientName} - ${normalizeString(quote.video_shoot_type) || 'Quote Booking'}`;
+  const shootType = normalizeString(payload.shoot_type) || normalizeString(quote.video_shoot_type) || 'Quote Conversion';
+  const contentType = normalizeString(payload.content_type) || shootType;
+  const description = buildBookingDescriptionFromQuote(quote);
+
+  const transaction = await db.sequelize.transaction();
+
+  try {
+    const booking = await db.stream_project_booking.create({
+      user_id: quote.client_user_id || null,
+      guest_email: clientEmail,
+      project_name: projectName,
+      description,
+      special_instructions: description,
+      event_type: shootType,
+      shoot_type: shootType,
+      content_type: contentType,
+      event_date: shootDate,
+      start_time: startTime,
+      end_time: endTime,
+      duration_hours: durationHours,
+      budget: roundCurrency(quote.total || 0),
+      event_location: location,
+      streaming_platforms: '[]',
+      crew_roles: '[]',
+      is_draft: 1,
+      is_completed: 0,
+      is_cancelled: 0,
+      is_active: 1
+    }, { transaction });
+
+    let lead = null;
+    if (quote.lead_id) {
+      lead = await db.sales_leads.findByPk(quote.lead_id, { transaction });
+    }
+
+    if (lead) {
+      await lead.update({
+        booking_id: booking.stream_project_booking_id,
+        user_id: quote.client_user_id || lead.user_id || null,
+        guest_email: clientEmail,
+        client_name: clientName,
+        phone: clientPhone || lead.phone || null,
+        assigned_sales_rep_id: quote.assigned_sales_rep_id || lead.assigned_sales_rep_id || user.userId,
+        lead_status: 'booking_in_progress',
+        lead_type: lead.lead_type || 'sales_assisted',
+        lead_source: lead.lead_source || 'quote_conversion',
+        intent: lead.intent || 'Warm',
+        last_activity_at: new Date()
+      }, { transaction });
+    } else {
+      lead = await db.sales_leads.create({
+        booking_id: booking.stream_project_booking_id,
+        user_id: quote.client_user_id || null,
+        guest_email: clientEmail,
+        client_name: clientName,
+        phone: clientPhone,
+        lead_type: 'sales_assisted',
+        lead_status: 'booking_in_progress',
+        intent: 'Warm',
+        lead_source: 'quote_conversion',
+        assigned_sales_rep_id: quote.assigned_sales_rep_id || user.userId,
+        created_from: 1
+      }, { transaction });
+
+      await db.sales_quotes.update({
+        lead_id: lead.lead_id,
+        updated_at: new Date()
+      }, {
+        where: { sales_quote_id: salesQuoteId },
+        transaction
+      });
+    }
+
+    const legacyQuote = await createLegacyBookingQuote({
+      bookingId: booking.stream_project_booking_id,
+      quote,
+      transaction
+    });
+
+    await booking.update({ quote_id: legacyQuote.quote_id }, { transaction });
+
+    await recordActivity(
+      transaction,
+      salesQuoteId,
+      'status_changed',
+      user.userId,
+      `Quote converted to booking #${booking.stream_project_booking_id}`,
+      {
+        booking_id: booking.stream_project_booking_id,
+        lead_id: lead.lead_id,
+        legacy_quote_id: legacyQuote.quote_id,
+        status: 'accepted',
+        event: 'converted_to_booking'
+      }
+    );
+
+    const normalizedStatus = String(quote.status || '').toLowerCase();
+    if (normalizedStatus !== 'accepted') {
+      await db.sales_quotes.update({
+        status: 'accepted',
+        accepted_at: new Date(),
+        updated_at: new Date()
+      }, {
+        where: { sales_quote_id: salesQuoteId },
+        transaction
+      });
+    }
+
+    await db.sales_lead_activities.create({
+      lead_id: lead.lead_id,
+      activity_type: 'booking_updated',
+      activity_data: {
+        source: 'sales_quote_conversion',
+        booking_id: booking.stream_project_booking_id,
+        sales_quote_id: salesQuoteId,
+        legacy_quote_id: legacyQuote.quote_id
+      },
+      performed_by_user_id: user.userId || null
+    }, { transaction });
+
+    await transaction.commit();
+
+    return {
+      quote: await getQuoteById(salesQuoteId, user),
+      lead_id: lead.lead_id,
+      booking_id: booking.stream_project_booking_id,
+      legacy_quote_id: legacyQuote.quote_id
+    };
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
 }
 
 async function listQuotes(query, user) {
@@ -805,6 +1125,40 @@ async function listQuotes(query, user) {
     return acc;
   }, {});
 
+  const rawRows = rows.map((item) => item.toJSON());
+  const leadIds = [...new Set(rawRows.map((item) => Number(item.lead_id)).filter((id) => Number.isInteger(id) && id > 0))];
+  const leadMap = new Map();
+
+  if (leadIds.length) {
+    const linkedLeads = await db.sales_leads.findAll({
+      where: { lead_id: { [Op.in]: leadIds } },
+      include: [
+        {
+          model: db.stream_project_booking,
+          as: 'booking',
+          required: false,
+          attributes: ['stream_project_booking_id', 'payment_id', 'is_completed']
+        }
+      ]
+    });
+
+    linkedLeads.forEach((lead) => {
+      leadMap.set(Number(lead.lead_id), lead.toJSON());
+    });
+  }
+
+  const enrichedRows = rawRows.map((item) => {
+    const linkedLead = leadMap.get(Number(item.lead_id));
+    const linkedBooking = linkedLead?.booking || null;
+    const isPaid = Boolean(linkedBooking?.payment_id || Number(linkedBooking?.is_completed) === 1);
+
+    return {
+      ...item,
+      linked_booking: linkedBooking,
+      payment_status: isPaid ? 'paid' : 'pending'
+    };
+  });
+
   return {
     pagination: {
       page,
@@ -813,7 +1167,7 @@ async function listQuotes(query, user) {
       total_pages: Math.ceil(count / limit)
     },
     summary,
-    rows: rows.map((item) => item.toJSON())
+    rows: enrichedRows
   };
 }
 
@@ -1029,6 +1383,7 @@ module.exports = {
   updateQuote,
   getQuoteById,
   getPublicQuoteById,
+  convertQuoteToBooking,
   listQuotes,
   getQuoteDashboard,
   updateQuoteStatus,

@@ -303,6 +303,7 @@ router.get('/quotes/:quoteId/pdf', authenticate, requireSalesRepOrAdmin, salesQu
 router.post('/quotes', authenticate, requireSalesRepOrAdmin, salesQuotesController.createQuote);
 router.put('/quotes/:quoteId', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateQuote);
 router.post('/quotes/:quoteId/send', authenticate, requireSalesRepOrAdmin, salesQuotesController.sendQuoteProposal);
+router.post('/quotes/:quoteId/convert-to-booking', authenticate, requireSalesRepOrAdmin, salesQuotesController.convertQuoteToBooking);
 router.patch('/quotes/:quoteId/status', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateQuoteStatus);
 
 /**
