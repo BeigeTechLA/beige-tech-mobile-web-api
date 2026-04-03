@@ -433,28 +433,79 @@ exports.getSalesRepsWorkload = async (req, res) => {
  * Get active sales reps list
  * GET /api/sales/sales-reps
  */
+// exports.getSalesRepsList = async (req, res) => {
+//   try {
+//     const { user_type } = require('../models');
+
+//     const salesRepType = await user_type.findOne({
+//       where: { user_role: 'sales_rep' },
+//       attributes: ['user_type_id']
+//     });
+
+//     if (!salesRepType) {
+//       return res.json({
+//         success: true,
+//         data: salesReps
+//       });
+//     }
+
+//     const salesReps = await users.findAll({
+//       where: {
+//         user_type: salesRepType.user_type_id,
+//         is_active: 1
+//       },
+//       attributes: ['id', 'name', 'email'],
+//       order: [['name', 'ASC']]
+//     });
+
+//     res.json({
+//       success: true,
+//       data: salesReps
+//     });
+//   } catch (error) {
+//     console.error('Error fetching sales reps list:', error);
+//     res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+//       success: false,
+//       message: 'Failed to fetch sales reps list',
+//       error: process.env.NODE_ENV === 'development' ? error.message : undefined
+//     });
+//   }
+// };
+
 exports.getSalesRepsList = async (req, res) => {
   try {
-    const { user_type } = require('../models');
+    const { user_type, users, Sequelize } = require('../models');
+    const { Op } = Sequelize;
 
-    const salesRepType = await user_type.findOne({
-      where: { user_role: 'sales_rep' },
+    // Get both roles
+    const userTypes = await user_type.findAll({
+      where: {
+        user_role: {
+          [Op.in]: ['sales_rep', 'sales_admin']
+        }
+      },
       attributes: ['user_type_id']
     });
 
-    if (!salesRepType) {
+    const userTypeIds = userTypes.map(u => u.user_type_id);
+
+    // If no roles found
+    if (userTypeIds.length === 0) {
       return res.json({
         success: true,
-        data: salesReps
+        data: []
       });
     }
 
+    // Fetch users
     const salesReps = await users.findAll({
       where: {
-        user_type: salesRepType.user_type_id,
+        user_type: {
+          [Op.in]: userTypeIds
+        },
         is_active: 1
       },
-      attributes: ['id', 'name', 'email'],
+      attributes: ['id', 'name', 'email', 'user_type'],
       order: [['name', 'ASC']]
     });
 
@@ -464,14 +515,13 @@ exports.getSalesRepsList = async (req, res) => {
     });
   } catch (error) {
     console.error('Error fetching sales reps list:', error);
-    res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+    res.status(500).json({
       success: false,
       message: 'Failed to fetch sales reps list',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
-
 /**
  * Get recent activities across all leads
  * GET /api/sales/dashboard/recent-activities
