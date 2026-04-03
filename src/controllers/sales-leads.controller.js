@@ -136,7 +136,7 @@ async function resolveAssignableSalesRep(salesRepId) {
   }
 
   const userRole = salesRep.userType?.user_role;
-  if (userRole !== 'sales_rep' && userRole !== 'admin' && userRole !== 'Admin') {
+  if (userRole !== 'sales_rep' && userRole !== 'sales_admin' && userRole !== 'admin' && userRole !== 'Admin') {
     throw new Error('Selected user is not a valid sales rep');
   }
 
