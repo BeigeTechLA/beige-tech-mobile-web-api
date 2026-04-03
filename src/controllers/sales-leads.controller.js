@@ -330,6 +330,61 @@ async function confirmCreativePartnerForLead({
   };
 }
 
+async function softDeleteLeadById({
+  leadId,
+  performedByUserId = null,
+  isClientLead = false
+}) {
+  const LeadModel = isClientLead ? client_leads : sales_leads;
+  const LeadActivityModel = isClientLead ? client_lead_activities : sales_lead_activities;
+
+  const lead = await LeadModel.findOne({
+    where: { lead_id: leadId },
+    attributes: ['lead_id', 'booking_id', 'client_name', 'guest_email', 'user_id', 'lead_status', 'is_active']
+  });
+
+  if (!lead || Number(lead.is_active) === 0) {
+    return {
+      status: constants.NOT_FOUND.code,
+      body: {
+        success: false,
+        message: isClientLead ? 'Client lead not found' : 'Lead not found'
+      }
+    };
+  }
+
+  await lead.update({
+    is_active: 0,
+    last_activity_at: new Date()
+  });
+
+  await LeadActivityModel.create({
+    lead_id: lead.lead_id,
+    activity_type: 'status_changed',
+    activity_data: {
+      old_status: lead.lead_status,
+      new_status: lead.lead_status,
+      action: 'soft_deleted',
+      source: 'admin_soft_delete',
+      booking_id: lead.booking_id || null
+    },
+    performed_by_user_id: performedByUserId
+  });
+
+  return {
+    status: constants.OK.code,
+    body: {
+      success: true,
+      message: isClientLead ? 'Client lead deleted successfully' : 'Lead deleted successfully',
+      data: {
+        lead_id: lead.lead_id,
+        booking_id: lead.booking_id,
+        is_active: 0
+      }
+    }
+  };
+}
+
 function safeJsonStringify(val) {
   if (val == null) return null;
   if (typeof val === 'string') return val;
@@ -1564,7 +1619,7 @@ exports.getLeads = async (req, res) => {
     const pageLimit = parseInt(limit);
     const offset = (pageNumber - 1) * pageLimit;
 
-    const whereClause = {};
+    const whereClause = { is_active: 1 };
     if (req.userRole === 'sales_rep') {
       whereClause.assigned_sales_rep_id = req.userId;
     }
@@ -1705,7 +1760,7 @@ exports.getClientLeads = async (req, res) => {
     const pageLimit = parseInt(limit, 10);
     const offset = (pageNumber - 1) * pageLimit;
 
-    const whereClause = {};
+    const whereClause = { is_active: 1 };
     if (req.userRole === 'sales_rep') {
       whereClause.assigned_sales_rep_id = req.userId;
     }
@@ -1816,7 +1871,7 @@ exports.getLeadById = async (req, res) => {
   try {
     const { id } = req.params;
 
-    let whereClause = { lead_id: id };
+    let whereClause = { lead_id: id, is_active: 1 };
 
     if (req.userRole === 'sales_rep') {
       whereClause.assigned_sales_rep_id = req.userId;
@@ -2135,7 +2190,7 @@ exports.getLeadFulfillmentStatus = async (req, res) => {
     const { id } = req.params;
 
     const lead = await sales_leads.findOne({
-      where: { lead_id: id },
+      where: { lead_id: id, is_active: 1 },
       include: [
         {
           model: stream_project_booking,
@@ -2239,7 +2294,7 @@ exports.getClientLeadFulfillmentStatus = async (req, res) => {
     const { id } = req.params;
 
     const lead = await client_leads.findOne({
-      where: { lead_id: id },
+      where: { lead_id: id, is_active: 1 },
       include: [
         {
           model: stream_project_booking,
@@ -2394,7 +2449,8 @@ exports.changeLeadSalesRep = async (req, res) => {
       });
     }
 
-    const lead = await sales_leads.findByPk(id, {
+    const lead = await sales_leads.findOne({
+      where: { lead_id: id, is_active: 1 },
       attributes: ['lead_id', 'assigned_sales_rep_id', 'client_name', 'guest_email']
     });
 
@@ -2475,7 +2531,8 @@ exports.changeClientLeadSalesRep = async (req, res) => {
       });
     }
 
-    const lead = await client_leads.findByPk(id, {
+    const lead = await client_leads.findOne({
+      where: { lead_id: id, is_active: 1 },
       attributes: ['lead_id', 'assigned_sales_rep_id', 'client_name', 'user_id']
     });
 
@@ -2565,7 +2622,7 @@ exports.updateLeadStatus = async (req, res) => {
       });
     }
 
-    const lead = await sales_leads.findByPk(id);
+    const lead = await sales_leads.findOne({ where: { lead_id: id, is_active: 1 } });
 
     if (!lead) {
       return res.status(constants.NOT_FOUND.code).json({
@@ -2633,7 +2690,7 @@ exports.updateClientLeadStatus = async (req, res) => {
       });
     }
 
-    const lead = await client_leads.findByPk(id);
+    const lead = await client_leads.findOne({ where: { lead_id: id, is_active: 1 } });
 
     if (!lead) {
       return res.status(constants.NOT_FOUND.code).json({
@@ -2677,7 +2734,7 @@ exports.getClientLeadById = async (req, res) => {
   try {
     const { id } = req.params;
 
-    let whereClause = { lead_id: id };
+    let whereClause = { lead_id: id, is_active: 1 };
 
     if (req.userRole === 'sales_rep') {
       whereClause.assigned_sales_rep_id = req.userId;
@@ -4943,6 +5000,46 @@ exports.confirmClientLeadCreativePartner = async (req, res) => {
     return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
       success: false,
       message: 'Failed to confirm Creative Partner',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.softDeleteLead = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await softDeleteLeadById({
+      leadId: parseInt(id, 10),
+      performedByUserId: req.userId || null,
+      isClientLead: false
+    });
+
+    return res.status(result.status).json(result.body);
+  } catch (error) {
+    console.error('Error soft deleting lead:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to delete lead',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.softDeleteClientLead = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await softDeleteLeadById({
+      leadId: parseInt(id, 10),
+      performedByUserId: req.userId || null,
+      isClientLead: true
+    });
+
+    return res.status(result.status).json(result.body);
+  } catch (error) {
+    console.error('Error soft deleting client lead:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to delete client lead',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }

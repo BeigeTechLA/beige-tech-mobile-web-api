@@ -75,6 +75,8 @@ router.get('/client-leads/:id', authenticate, requireSalesRepOrAdmin, salesLeads
 router.put('/leads/:id/assign', authenticate, requireSalesRepOrAdmin, salesLeadsController.assignLead);
 router.put('/leads/:id/change-sales-rep', authenticate, requireAdmin, salesLeadsController.changeLeadSalesRep);
 router.put('/client-leads/:id/change-sales-rep', authenticate, requireAdmin, salesLeadsController.changeClientLeadSalesRep);
+router.delete('/leads/:id', authenticate, requireAdmin, salesLeadsController.softDeleteLead);
+router.delete('/client-leads/:id', authenticate, requireAdmin, salesLeadsController.softDeleteClientLead);
 
 /**
  * @route   PUT /api/sales/leads/:id/status
@@ -249,6 +251,7 @@ router.get('/payment-links/rep/:repId', authenticate, requireSalesRepOrAdmin, pa
  * @access  Sales Rep / Admin
  */
 router.get('/dashboard/stats', authenticate, requireSalesRepOrAdmin, salesDashboardController.getDashboardStats);
+router.get('/dashboard/overview', authenticate, requireSalesRepOrAdmin, salesDashboardController.getCombinedOverviewStats);
 
 /**
  * @route   GET /api/sales/dashboard/rep-stats/:repId
@@ -287,6 +290,10 @@ router.get('/dashboard/funnel', authenticate, requireSalesRepOrAdmin, salesDashb
 
 router.get('/client-dropdown', authenticate, requireSalesRepOrAdmin, salesQuotesController.getClientDropdown);
 router.get('/quotes/catalog', authenticate, requireSalesRepOrAdmin, salesQuotesController.getCatalog);
+router.get('/quotes/ai-editing-types', authenticate, requireSalesRepOrAdmin, salesQuotesController.getAiEditingTypes);
+router.post('/quotes/ai-editing-types', authenticate, requireSalesRepOrAdmin, salesQuotesController.createAiEditingType);
+router.put('/quotes/ai-editing-types/:aiEditingTypeId', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateAiEditingType);
+router.delete('/quotes/ai-editing-types/:aiEditingTypeId', authenticate, requireSalesRepOrAdmin, salesQuotesController.deleteAiEditingType);
 router.get('/quotes/shoot-types/:content_type', authenticate, requireSalesRepOrAdmin, salesQuotesController.getShootTypes);
 router.post('/quotes/shoot-types', authenticate, requireSalesRepOrAdmin, salesQuotesController.createShootType);
 router.put('/quotes/shoot-types/:shootTypeId', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateShootType);
