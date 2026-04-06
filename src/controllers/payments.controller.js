@@ -63,6 +63,62 @@ function getReferralCommissionBaseAmount(paidAmount, quoteTotal = null) {
   return Math.max(paid, fromQuote, grossedUp);
 }
 
+async function markConvertedSalesQuoteAsPaid({
+  bookingId,
+  paymentId = null,
+  paymentIntentId = null,
+  paidAmount = null,
+  transaction
+}) {
+  if (!bookingId) return null;
+
+  const lead = await db.sales_leads.findOne({
+    where: { booking_id: bookingId },
+    attributes: ['lead_id'],
+    transaction
+  });
+
+  if (!lead?.lead_id) return null;
+
+  const salesQuote = await db.sales_quotes.findOne({
+    where: {
+      lead_id: lead.lead_id
+    },
+    order: [
+      [db.sequelize.literal("CASE WHEN status = 'paid' THEN 0 WHEN status = 'accepted' THEN 1 WHEN status = 'sent' THEN 2 WHEN status = 'viewed' THEN 3 WHEN status = 'pending' THEN 4 ELSE 5 END"), 'ASC'],
+      ['accepted_at', 'DESC'],
+      ['updated_at', 'DESC'],
+      ['sales_quote_id', 'DESC']
+    ],
+    transaction
+  });
+
+  if (!salesQuote) return null;
+
+  const now = new Date();
+  await salesQuote.update({
+    status: 'paid',
+    accepted_at: salesQuote.accepted_at || now,
+    updated_at: now
+  }, { transaction });
+
+  await db.sales_quote_activities.create({
+    sales_quote_id: salesQuote.sales_quote_id,
+    activity_type: 'status_changed',
+    performed_by_user_id: null,
+    message: 'Quote marked as paid after booking payment',
+    metadata_json: JSON.stringify({
+      status: 'paid',
+      booking_id: bookingId,
+      payment_id: paymentId,
+      payment_intent_id: paymentIntentId,
+      amount_paid: paidAmount
+    })
+  }, { transaction });
+
+  return salesQuote.sales_quote_id;
+}
+
 async function persistQuoteReferralDiscount({
   quote,
   referralCode,
@@ -1289,6 +1345,14 @@ exports.confirmPaymentMulti = async (req, res) => {
       { where: { booking_id: booking_id }, transaction }
     );
 
+    await markConvertedSalesQuoteAsPaid({
+      bookingId: booking_id,
+      paymentId: payment.payment_id,
+      paymentIntentId,
+      paidAmount: totalAmount,
+      transaction
+    });
+
     await transaction.commit();
 
     const lead = await db.sales_leads.findOne({
@@ -1624,6 +1688,14 @@ exports.handleStripeWebhook = async (req, res) => {
         lead_status: 'booked'
       }, {
         where: { booking_id: booking_id },
+        transaction
+      });
+
+      await markConvertedSalesQuoteAsPaid({
+        bookingId: booking_id,
+        paymentId: payment.payment_id,
+        paymentIntentId,
+        paidAmount: amountPaid,
         transaction
       });
 

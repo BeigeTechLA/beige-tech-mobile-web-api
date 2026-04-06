@@ -4,7 +4,7 @@ const { sendCustomQuoteProposalEmail } = require('../utils/emailService');
 const { generateQuotePdfBuffer } = require('../utils/quotePdf');
 
 const SECTION_TYPES = ['service', 'addon', 'logistics', 'custom'];
-const QUOTE_STATUSES = ['draft', 'pending', 'sent', 'viewed', 'accepted', 'rejected', 'expired'];
+const QUOTE_STATUSES = ['draft', 'pending', 'sent', 'viewed', 'accepted', 'paid', 'rejected', 'expired'];
 const DISCOUNT_TYPES = ['none', 'percentage', 'fixed_amount'];
 const AI_EDITING_SERVICE_NAME = 'ai editing';
 const CONVERTED_BOOKINGS_LEAD_SOURCE = 'converted bookings';
@@ -1064,6 +1064,9 @@ async function persistLegacyBookingQuoteFromSalesQuote({ booking, quoteDetails, 
     subtotal: Number(quoteDetails.subtotal || 0),
     discount_percent: quoteDetails.discount_type === 'percentage' ? Number(quoteDetails.discount_value || 0) : 0,
     discount_amount: Number(quoteDetails.discount_amount || 0),
+    tax_type: quoteDetails.tax_type || null,
+    tax_rate: Number(quoteDetails.tax_rate || 0),
+    tax_amount: Number(quoteDetails.tax_amount || 0),
     applied_discount_type: ['percentage', 'fixed_amount'].includes(quoteDetails.discount_type) ? quoteDetails.discount_type : null,
     applied_discount_value: ['percentage', 'fixed_amount'].includes(quoteDetails.discount_type) ? Number(quoteDetails.discount_value || 0) : null,
     price_after_discount: priceAfterDiscount,
@@ -1484,12 +1487,12 @@ async function convertQuoteToBooking(salesQuoteId, user) {
       }, { transaction });
     }
 
-    if (quote.lead_id !== lead.lead_id) {
-      await quote.update({
-        lead_id: lead.lead_id,
-        updated_at: new Date()
-      }, { transaction });
-    }
+    await quote.update({
+      lead_id: lead.lead_id,
+      status: 'accepted',
+      accepted_at: quote.accepted_at || new Date(),
+      updated_at: new Date()
+    }, { transaction });
 
     await db.sales_lead_activities.create({
       lead_id: lead.lead_id,
@@ -1506,9 +1509,9 @@ async function convertQuoteToBooking(salesQuoteId, user) {
     await recordActivity(
       transaction,
       quote.sales_quote_id,
-      'updated',
+      'accepted',
       user.userId,
-      wasAlreadyConverted ? 'Quote booking conversion reopened' : 'Quote converted to booking',
+      wasAlreadyConverted ? 'Quote conversion reopened and marked as accepted' : 'Quote converted to booking and marked as accepted',
       {
         lead_id: lead.lead_id,
         booking_id: booking.stream_project_booking_id
@@ -1692,7 +1695,7 @@ async function getQuoteDashboard(query, user) {
 
   const currentMetrics = {
     total_quotes: currentPeriodQuotes.length,
-    accepted_quotes: countByStatus(currentPeriodQuotes, ['accepted']),
+    accepted_quotes: countByStatus(currentPeriodQuotes, ['accepted', 'paid']),
     pending_quotes: countByStatus(currentPeriodQuotes, ['pending', 'sent', 'viewed']),
     draft_quotes: countByStatus(currentPeriodQuotes, ['draft']),
     rejected_quotes: countByStatus(currentPeriodQuotes, ['rejected']),
@@ -1702,7 +1705,7 @@ async function getQuoteDashboard(query, user) {
 
   const previousMetrics = {
     total_quotes: previousPeriodQuotes.length,
-    accepted_quotes: countByStatus(previousPeriodQuotes, ['accepted']),
+    accepted_quotes: countByStatus(previousPeriodQuotes, ['accepted', 'paid']),
     pending_quotes: countByStatus(previousPeriodQuotes, ['pending', 'sent', 'viewed']),
     draft_quotes: countByStatus(previousPeriodQuotes, ['draft']),
     rejected_quotes: countByStatus(previousPeriodQuotes, ['rejected']),
@@ -1712,7 +1715,7 @@ async function getQuoteDashboard(query, user) {
 
   const overview = {
     total_quotes: quotes.length,
-    accepted_quotes: quotes.filter((item) => item.status === 'accepted').length,
+    accepted_quotes: quotes.filter((item) => ['accepted', 'paid'].includes(item.status)).length,
     pending_quotes: quotes.filter((item) => ['pending', 'sent', 'viewed'].includes(item.status)).length,
     draft_quotes: quotes.filter((item) => item.status === 'draft').length,
     rejected_quotes: quotes.filter((item) => item.status === 'rejected').length,
@@ -1770,7 +1773,7 @@ async function updateQuoteStatus(salesQuoteId, status, user) {
     };
     if (status === 'sent') patch.sent_at = new Date();
     if (status === 'viewed') patch.viewed_at = new Date();
-    if (status === 'accepted') patch.accepted_at = new Date();
+    if (status === 'accepted' || status === 'paid') patch.accepted_at = new Date();
     if (status === 'rejected') patch.rejected_at = new Date();
 
     await quote.update(patch, { transaction });

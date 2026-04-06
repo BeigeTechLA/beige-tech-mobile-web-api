@@ -46,7 +46,7 @@ module.exports = function(sequelize, DataTypes) {
       defaultValue: "general"
     },
     status: {
-      type: DataTypes.ENUM('draft','pending','sent','viewed','accepted','rejected','expired'),
+      type: DataTypes.ENUM('draft','pending','sent','viewed','accepted','paid','rejected','expired'),
       allowNull: false,
       defaultValue: "draft"
     },
