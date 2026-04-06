@@ -2382,13 +2382,13 @@ exports.registerCrewMemberStep2 = async (req, res) => {
     member.equipment_ownership = JSON.stringify(equipment_ownership);
     await member.save();
 
-     await updateSheetRow('Crew_data', crew_member_id, {
-      'I': primaryRoleNames.join(', '),
-      'J': years_of_experience,
-      'K': hourly_rate,
-      'L': bio,
-      'M': skillNameList.join(', ')
-    });
+    //  await updateSheetRow('Crew_data', crew_member_id, {
+    //   'I': primaryRoleNames.join(', '),
+    //   'J': years_of_experience,
+    //   'K': hourly_rate,
+    //   'L': bio,
+    //   'M': skillNameList.join(', ')
+    // });
 
     return res.status(200).json({ success: true, message: 'Step 2 completed' });
   } catch (error) {
@@ -2410,8 +2410,16 @@ exports.registerCrewMemberStep3 = [
 
   async (req, res) => {
     try {
-      // 1. Added 'portfolio_links' to destructuring
-      const { crew_member_id, availability, certifications, social_media_links, portfolio_links } = req.body;
+      // 1. Added support for featured-work title/tag using existing payload fields
+      const {
+        crew_member_id,
+        availability,
+        certifications,
+        social_media_links,
+        portfolio_links,
+        title,
+        tag
+      } = req.body;
 
       if (!crew_member_id) return res.status(400).json({ success: false, message: 'ID required' });
 
@@ -2430,21 +2438,54 @@ exports.registerCrewMemberStep3 = [
       // --- NEW: Handle both Files and Links together ---
       let itemsToCreate = [];
 
-      // Handle S3 uploads (YOUR OLD LOGIC - UNCHANGED)
+      const parseJsonInput = (value, fallback = []) => {
+        if (!value) return fallback;
+        if (Array.isArray(value) || typeof value === 'object') return value;
+        try {
+          return JSON.parse(value);
+        } catch (error) {
+          return fallback;
+        }
+      };
+
+      const recentWorkTitles = Array.isArray(title) ? title : title ? [title] : [];
+      const recentWorkTags = Array.isArray(tag) ? tag : tag ? [tag] : [];
+
+      // Handle S3 uploads
       const filePaths = await S3UploadFiles(req.files);
       if (filePaths.length > 0) {
-        const filesToCreate = filePaths.map(f => ({
-          crew_member_id,
-          file_type: f.file_type,
-          file_path: f.file_path,
-          file_category: f.fieldname
-        }));
+        let recentWorkIndex = 0;
+
+        const filesToCreate = filePaths.map(f => {
+          let title = null;
+          let tag = null;
+
+          if (f.file_type === 'recent_work') {
+            // If frontend sends one shared title/tag for a featured-work group,
+            // apply it to all uploaded recent_work files. If arrays are sent,
+            // keep the index-based mapping for per-file metadata.
+            title = recentWorkTitles[recentWorkIndex]
+              || (recentWorkTitles.length === 1 ? recentWorkTitles[0] : null);
+            tag = recentWorkTags[recentWorkIndex]
+              || (recentWorkTags.length === 1 ? recentWorkTags[0] : null);
+            recentWorkIndex += 1;
+          }
+
+          return {
+            crew_member_id,
+            file_type: f.file_type,
+            file_path: f.file_path,
+            file_category: f.file_type,
+            title,
+            tag
+          };
+        });
         itemsToCreate.push(...filesToCreate);
       }
 
       // Handle Portfolio Links (NEW LOGIC)
       if (portfolio_links) {
-        const parsedLinks = typeof portfolio_links === 'string' ? JSON.parse(portfolio_links) : portfolio_links;
+        const parsedLinks = parseJsonInput(portfolio_links, []);
         const linksToCreate = parsedLinks.map(link => ({
           crew_member_id,
           file_type: 'link', 
@@ -2462,9 +2503,9 @@ exports.registerCrewMemberStep3 = [
       }
       // ------------------------------------------------
 
-      await updateSheetRow('Crew_data', crew_member_id, {
-        'N': JSON.stringify(social_media_links),
-      });
+      // await updateSheetRow('Crew_data', crew_member_id, {
+      //   'N': JSON.stringify(social_media_links),
+      // });
 
       // SEND WELCOME EMAIL
       const user = await User.findOne({
