@@ -1104,13 +1104,11 @@ Authorization: {{TOKEN}}
 }
 
 ### send custom quote proposal email
-POST {{URL}}sales/quotes/1/send HTTP/1.1
+POST {{URL}}sales/quotes/10/send HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
-{
-  "to_email": "client@example.com"
-}
+{}
 
 ### download sales quote pdf
 GET {{URL}}sales/quotes/1/pdf HTTP/1.1
