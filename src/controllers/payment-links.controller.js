@@ -231,6 +231,10 @@ const calculateLeadPricing = async (booking) => {
                 total: resolvedTotal,
                 subtotal: parseFloat(q.subtotal || 0),
                 discount_amount: parseFloat(q.discount_amount || 0),
+                price_after_discount: parseFloat(q.price_after_discount || 0),
+                tax_type: q.tax_type || null,
+                tax_rate: parseFloat(q.tax_rate || 0),
+                tax_amount: parseFloat(q.tax_amount || 0),
                 line_items: (q.line_items || []).map(item => ({
                     name: item.item_name,
                     quantity: item.quantity,
@@ -246,6 +250,10 @@ const calculateLeadPricing = async (booking) => {
                 stripe_payment_intent_id: paymentTransaction.stripe_payment_intent_id,
                 total: parseFloat(paymentTransaction.total_amount || 0),
                 subtotal: parseFloat(paymentTransaction.subtotal || 0),
+                price_after_discount: parseFloat(paymentTransaction.subtotal || 0),
+                tax_type: null,
+                tax_rate: 0,
+                tax_amount: 0,
                 line_items: [{
                     name: `Service Payment - ${booking.project_name || 'Project'}`,
                     quantity: 1,
@@ -288,6 +296,10 @@ const calculateLeadPricing = async (booking) => {
             total: calculated?.total || 0,
             subtotal: calculated?.subtotal || 0,
             discount_amount: calculated?.discountAmount || 0,
+            price_after_discount: calculated?.priceAfterDiscount || calculated?.subtotal || 0,
+            tax_type: null,
+            tax_rate: 0,
+            tax_amount: 0,
             line_items: (calculated?.lineItems || []).map(li => ({
                 name: li.item_name,
                 quantity: li.quantity,
@@ -566,7 +578,17 @@ exports.getPaymentLinkDetails = async (req, res) => {
         'duration_hours',
         'budget',
         'description',
-        'guest_email'
+        'guest_email',
+        'payment_id',
+        'is_completed'
+      ],
+      include: [
+        {
+          model: quotes,
+          as: 'primary_quote',
+          required: false,
+          include: [{ model: quote_line_items, as: 'line_items', required: false }]
+        }
       ]
     });
 
@@ -584,12 +606,15 @@ exports.getPaymentLinkDetails = async (req, res) => {
       });
     }
 
+    const pricing = booking ? await calculateLeadPricing(booking) : null;
+
     res.json({
       success: true,
       valid: true,
       data: {
         payment_link_id: paymentLink.payment_link_id,
         booking,
+        pricing,
         discount_code: discountCode,
         expires_at: paymentLink.expires_at
       }

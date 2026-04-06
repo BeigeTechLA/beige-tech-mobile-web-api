@@ -879,3 +879,12 @@ VALUES
 (13, 'video', 'short_film_2_5', 'Edited Short Film (2 Min-5 Min)', NULL, 13, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
 (14, 'video', 'short_film_5_10', 'Edited Short Film (5 Min-10 Min)', NULL, 14, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
 (15, 'photo', 'edited_photos', 'Edited Photos', 'Edited Photos', 1, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+
+-- 06-04-26
+
+ALTER TABLE `sales_quotes` MODIFY COLUMN `status` ENUM('draft','pending','sent','viewed','accepted','paid','rejected','expired') NOT NULL DEFAULT 'draft';
+
+ALTER TABLE `quotes`
+  ADD COLUMN `tax_type` VARCHAR(100) NULL AFTER `discount_amount`,
+  ADD COLUMN `tax_rate` DECIMAL(5,2) NOT NULL DEFAULT 0.00 AFTER `tax_type`,
+  ADD COLUMN `tax_amount` DECIMAL(10,2) NOT NULL DEFAULT 0.00 AFTER `tax_rate`;
