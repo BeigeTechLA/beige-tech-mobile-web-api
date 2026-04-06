@@ -309,6 +309,7 @@ router.get('/quotes/:quoteId', authenticate, requireSalesRepOrAdmin, salesQuotes
 router.get('/quotes/:quoteId/pdf', authenticate, requireSalesRepOrAdmin, salesQuotesController.downloadQuotePdf);
 router.post('/quotes', authenticate, requireSalesRepOrAdmin, salesQuotesController.createQuote);
 router.put('/quotes/:quoteId', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateQuote);
+router.post('/quotes/:quoteId/convert-to-booking', authenticate, requireSalesRepOrAdmin, salesQuotesController.convertQuoteToBooking);
 router.post('/quotes/:quoteId/send', authenticate, requireSalesRepOrAdmin, salesQuotesController.sendQuoteProposal);
 router.patch('/quotes/:quoteId/status', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateQuoteStatus);
 
