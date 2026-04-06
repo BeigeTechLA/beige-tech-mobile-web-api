@@ -2410,13 +2410,14 @@ exports.registerCrewMemberStep3 = [
 
   async (req, res) => {
     try {
-      // 1. Added support for featured-work title/tag using existing payload fields
+      // 1. Added grouped featured-work support while keeping legacy title/tag fallback
       const {
         crew_member_id,
         availability,
         certifications,
         social_media_links,
         portfolio_links,
+        featured_work,
         title,
         tag
       } = req.body;
@@ -2448,38 +2449,78 @@ exports.registerCrewMemberStep3 = [
         }
       };
 
+      const featuredWorkGroups = parseJsonInput(featured_work, []);
       const recentWorkTitles = Array.isArray(title) ? title : title ? [title] : [];
       const recentWorkTags = Array.isArray(tag) ? tag : tag ? [tag] : [];
 
       // Handle S3 uploads
       const filePaths = await S3UploadFiles(req.files);
       if (filePaths.length > 0) {
-        let recentWorkIndex = 0;
+        const recentWorkFiles = filePaths.filter(f => f.file_type === 'recent_work');
+        const otherFiles = filePaths.filter(f => f.file_type !== 'recent_work');
 
-        const filesToCreate = filePaths.map(f => {
-          let title = null;
-          let tag = null;
+        const filesToCreate = otherFiles.map(f => ({
+          crew_member_id,
+          file_type: f.file_type,
+          file_path: f.file_path,
+          file_category: f.file_type
+        }));
 
-          if (f.file_type === 'recent_work') {
-            // If frontend sends one shared title/tag for a featured-work group,
-            // apply it to all uploaded recent_work files. If arrays are sent,
-            // keep the index-based mapping for per-file metadata.
-            title = recentWorkTitles[recentWorkIndex]
-              || (recentWorkTitles.length === 1 ? recentWorkTitles[0] : null);
-            tag = recentWorkTags[recentWorkIndex]
-              || (recentWorkTags.length === 1 ? recentWorkTags[0] : null);
-            recentWorkIndex += 1;
+        if (featuredWorkGroups.length > 0) {
+          const mappedIndexes = new Set();
+
+          for (const group of featuredWorkGroups) {
+            const fileIndexes = Array.isArray(group?.fileIndexes) ? group.fileIndexes : [];
+            const groupTitle = group?.title || null;
+            const groupTag = Array.isArray(group?.tags)
+              ? JSON.stringify(group.tags)
+              : group?.tags || group?.tag || null;
+
+            for (const index of fileIndexes) {
+              const file = recentWorkFiles[index];
+              if (!file) continue;
+
+              mappedIndexes.add(index);
+              filesToCreate.push({
+                crew_member_id,
+                file_type: file.file_type,
+                file_path: file.file_path,
+                file_category: file.file_type,
+                title: groupTitle,
+                tag: groupTag
+              });
+            }
           }
 
-          return {
-            crew_member_id,
-            file_type: f.file_type,
-            file_path: f.file_path,
-            file_category: f.file_type,
-            title,
-            tag
-          };
-        });
+          for (const [index, file] of recentWorkFiles.entries()) {
+            if (mappedIndexes.has(index)) continue;
+
+            filesToCreate.push({
+              crew_member_id,
+              file_type: file.file_type,
+              file_path: file.file_path,
+              file_category: file.file_type,
+              title: recentWorkTitles[index]
+                || (recentWorkTitles.length === 1 ? recentWorkTitles[0] : null),
+              tag: recentWorkTags[index]
+                || (recentWorkTags.length === 1 ? recentWorkTags[0] : null)
+            });
+          }
+        } else {
+          for (const [index, file] of recentWorkFiles.entries()) {
+            filesToCreate.push({
+              crew_member_id,
+              file_type: file.file_type,
+              file_path: file.file_path,
+              file_category: file.file_type,
+              title: recentWorkTitles[index]
+                || (recentWorkTitles.length === 1 ? recentWorkTitles[0] : null),
+              tag: recentWorkTags[index]
+                || (recentWorkTags.length === 1 ? recentWorkTags[0] : null)
+            });
+          }
+        }
+
         itemsToCreate.push(...filesToCreate);
       }
 

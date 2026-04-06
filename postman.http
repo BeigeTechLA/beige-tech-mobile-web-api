@@ -1398,93 +1398,41 @@ Content-Type: application/json
   "password": "SalesA@2026!"
 }
 
-### CP Step 3 
-POST {{URL}}auth/register-crew-step3
+### Register Crew Member Step 3
+POST {{URL}}auth/register-crew-step3 HTTP/1.1
 Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW
 
 ------WebKitFormBoundary7MA4YWxkTrZu0gW
 Content-Disposition: form-data; name="crew_member_id"
 
-2103
+2104
 ------WebKitFormBoundary7MA4YWxkTrZu0gW
-Content-Disposition: form-data; name="availability"
+Content-Disposition: form-data; name="featured_work"
 
-["full-time","freelance"]
+[{"title":"Nature Shoot","tags":["nature","travel"],"fileIndexes":[0,1,2]},{"title":"City Portraits","tags":["portrait"],"fileIndexes":[3,4]}]
 ------WebKitFormBoundary7MA4YWxkTrZu0gW
-Content-Disposition: form-data; name="certifications"
-
-["Adobe Premiere Pro","DaVinci Resolve"]
-------WebKitFormBoundary7MA4YWxkTrZu0gW
-Content-Disposition: form-data; name="social_media_links"
-
-{"instagram":"https://instagram.com/testuser"}
-------WebKitFormBoundary7MA4YWxkTrZu0gW
-Content-Disposition: form-data; name="title"
-
-Nature Shoot
-------WebKitFormBoundary7MA4YWxkTrZu0gW
-Content-Disposition: form-data; name="tag"
-
-nature
-------WebKitFormBoundary7MA4YWxkTrZu0gW
-Content-Disposition: form-data; name="recent_work"; filename="nature1.jpg"
+Content-Disposition: form-data; name="recent_work"; filename="/C:/goa.jpeg"
 Content-Type: image/jpeg
 
-< ./test-files/nature1.jpg
+(data)
 ------WebKitFormBoundary7MA4YWxkTrZu0gW
-Content-Disposition: form-data; name="title"
-
-Nature Shoot
-------WebKitFormBoundary7MA4YWxkTrZu0gW
-Content-Disposition: form-data; name="tag"
-
-nature
-------WebKitFormBoundary7MA4YWxkTrZu0gW
-Content-Disposition: form-data; name="recent_work"; filename="nature2.jpg"
+Content-Disposition: form-data; name="recent_work"; filename="/C:/kerala.jpg"
 Content-Type: image/jpeg
 
-< ./test-files/nature2.jpg
-
+(data)
 ------WebKitFormBoundary7MA4YWxkTrZu0gW
-Content-Disposition: form-data; name="title"
-
-City Portraits
-------WebKitFormBoundary7MA4YWxkTrZu0gW
-Content-Disposition: form-data; name="tag"
-
-portrait
-------WebKitFormBoundary7MA4YWxkTrZu0gW
-Content-Disposition: form-data; name="recent_work"; filename="city1.jpg"
+Content-Disposition: form-data; name="recent_work"; filename="/C:/pune.jpeg"
 Content-Type: image/jpeg
 
-< ./test-files/city1.jpg
-
+(data)
 ------WebKitFormBoundary7MA4YWxkTrZu0gW
-Content-Disposition: form-data; name="title"
-
-City Portraits
-------WebKitFormBoundary7MA4YWxkTrZu0gW
-Content-Disposition: form-data; name="tag"
-
-portrait
-------WebKitFormBoundary7MA4YWxkTrZu0gW
-Content-Disposition: form-data; name="recent_work"; filename="city2.jpg"
+Content-Disposition: form-data; name="recent_work"; filename="/C:/sample1.jpeg"
 Content-Type: image/jpeg
 
-< ./test-files/city2.jpg
+(data)
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="recent_work"; filename="/C:/rishikesh.jpg"
+Content-Type: image/jpeg
 
+(data)
 ------WebKitFormBoundary7MA4YWxkTrZu0gW--
-
-
-# NOTE:
-# For multiple featured works in one API call, repeat `title` and `tag`
-# before each `recent_work` file in the same order.
-# Example mapping in the request above:
-# nature1.jpg -> Nature Shoot / nature
-# nature2.jpg -> Nature Shoot / nature
-# nature3.jpg -> Nature Shoot / nature
-# nature4.jpg -> Nature Shoot / nature
-# nature5.jpg -> Nature Shoot / nature
-# city1.jpg   -> City Portraits / portrait
-# city2.jpg   -> City Portraits / portrait
-# city3.jpg   -> City Portraits / portrait
