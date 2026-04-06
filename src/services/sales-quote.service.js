@@ -1032,6 +1032,80 @@ function canGeneratePaymentLinkFromConvertedBooking(quoteDetails, prefillData) {
   );
 }
 
+async function persistLegacyBookingQuoteFromSalesQuote({ booking, quoteDetails, transaction }) {
+  const legacyPricingMode = quoteDetails.pricing_mode === 'wedding' ? 'wedding' : 'general';
+  const legacyStatus = quoteDetails.status === 'draft' ? 'draft' : 'pending';
+  const priceAfterDiscount = roundCurrency(
+    Number(quoteDetails.subtotal || 0) - Number(quoteDetails.discount_amount || 0)
+  );
+  const expiresAt = quoteDetails.valid_until
+    ? new Date(`${quoteDetails.valid_until}T23:59:59.000Z`)
+    : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+  let legacyQuote = null;
+  if (booking.quote_id) {
+    legacyQuote = await db.quotes.findByPk(booking.quote_id, { transaction });
+  }
+
+  if (!legacyQuote) {
+    legacyQuote = await db.quotes.findOne({
+      where: { booking_id: booking.stream_project_booking_id },
+      order: [['quote_id', 'DESC']],
+      transaction
+    });
+  }
+
+  const legacyPayload = {
+    booking_id: booking.stream_project_booking_id,
+    user_id: quoteDetails.client_user_id || null,
+    guest_email: quoteDetails.client_email || null,
+    pricing_mode: legacyPricingMode,
+    shoot_hours: Number(quoteDetails.line_items?.find((item) => item.section_type === 'service' && item.duration_hours)?.duration_hours || quoteDetails.line_items?.[0]?.duration_hours || 0),
+    subtotal: Number(quoteDetails.subtotal || 0),
+    discount_percent: quoteDetails.discount_type === 'percentage' ? Number(quoteDetails.discount_value || 0) : 0,
+    discount_amount: Number(quoteDetails.discount_amount || 0),
+    applied_discount_type: ['percentage', 'fixed_amount'].includes(quoteDetails.discount_type) ? quoteDetails.discount_type : null,
+    applied_discount_value: ['percentage', 'fixed_amount'].includes(quoteDetails.discount_type) ? Number(quoteDetails.discount_value || 0) : null,
+    price_after_discount: priceAfterDiscount,
+    margin_percent: 0,
+    margin_amount: 0,
+    total: Number(quoteDetails.total || 0),
+    status: legacyStatus,
+    expires_at: expiresAt,
+    notes: quoteDetails.notes || null,
+    updated_at: new Date()
+  };
+
+  if (legacyQuote) {
+    await legacyQuote.update(legacyPayload, { transaction });
+  } else {
+    legacyQuote = await db.quotes.create(legacyPayload, { transaction });
+  }
+
+  await db.quote_line_items.destroy({
+    where: { quote_id: legacyQuote.quote_id },
+    transaction
+  });
+
+  const lineItems = Array.isArray(quoteDetails.line_items) ? quoteDetails.line_items : [];
+  if (lineItems.length) {
+    await db.quote_line_items.bulkCreate(
+      lineItems.map((item) => ({
+        quote_id: legacyQuote.quote_id,
+        item_id: null,
+        item_name: item.item_name,
+        quantity: Number(item.quantity || 1),
+        unit_price: Number(item.unit_rate || item.estimated_pricing || 0),
+        line_total: Number(item.line_total || 0),
+        notes: item.section_type || null
+      })),
+      { transaction }
+    );
+  }
+
+  return legacyQuote;
+}
+
 function deriveQuoteAddOns(lineItems = [], explicitAddOns = null) {
   if (explicitAddOns) {
     if (Array.isArray(explicitAddOns)) {
@@ -1398,6 +1472,18 @@ async function convertQuoteToBooking(salesQuoteId, user) {
       }, { transaction });
     }
 
+    const legacyQuote = await persistLegacyBookingQuoteFromSalesQuote({
+      booking,
+      quoteDetails,
+      transaction
+    });
+
+    if (booking.quote_id !== legacyQuote.quote_id) {
+      await booking.update({
+        quote_id: legacyQuote.quote_id
+      }, { transaction });
+    }
+
     if (quote.lead_id !== lead.lead_id) {
       await quote.update({
         lead_id: lead.lead_id,
@@ -1439,6 +1525,7 @@ async function convertQuoteToBooking(salesQuoteId, user) {
       lead_source: CONVERTED_BOOKINGS_LEAD_SOURCE,
       booking_mode_hint: deriveQuoteConversionModeHint(prefillData),
       payment_link_ready_hint: canGeneratePaymentLinkFromConvertedBooking(quoteDetails, prefillData),
+      legacy_quote_id: legacyQuote.quote_id,
       prefill_data: prefillData,
       booking_summary: {
         project_name: deriveConvertedProjectName(quoteDetails),

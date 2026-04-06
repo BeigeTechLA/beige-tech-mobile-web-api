@@ -1280,14 +1280,14 @@ Authorization: {{TOKEN}}
 }
 
 ### convert quote to booking
-POST {{URL}}sales/quotes/16/convert-to-booking HTTP/1.1
+POST {{URL}}sales/quotes/17/convert-to-booking HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {}
 
 ### update sales quote (partial safe)
-PUT {{URL}}sales/quotes/16 HTTP/1.1
+PUT {{URL}}sales/quotes/17 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -1313,7 +1313,7 @@ Authorization: {{TOKEN}}
 }
 
 ### update sales quote (only tax/discount)
-PUT {{URL}}sales/quotes/16 HTTP/1.1
+PUT {{URL}}sales/quotes/17 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -1325,30 +1325,83 @@ Authorization: {{TOKEN}}
 }
 
 ### get sales quote detail
-GET {{URL}}sales/quotes/15 HTTP/1.1
+GET {{URL}}sales/quotes/17 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### update sales quote (partial safe)
-PUT {{URL}}sales/quotes/1 HTTP/1.1
+PUT {{URL}}sales/quotes/17 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "project_description": "Updated conference production scope",
-  "quote_validity_days": 6,
+  "is_draft": false,
+  "pricing_mode": "general",
+  "client_name": "Harsh Panchal",
+  "client_email": "harsh.panchal@revurge.com",
+  "client_phone": "+91 98856 99444",
+  "client_address": "Los Angeles, California, United States",
+  "project_description": "Corporate video production for annual conference - updated",
+  "video_shoot_type": "Private Event",
+  "quote_validity_days": 7,
   "discount_type": "fixed_amount",
   "discount_value": 250,
   "tax_type": "Sales Tax",
   "tax_rate": 8.5,
+  "terms_conditions": "50% deposit required before production starts.",
   "line_items": [
     {
       "catalog_item_id": 1,
       "section_type": "service",
       "quantity": 1,
-      "duration_hours": 6,
+      "duration_hours": 5,
       "crew_size": 1,
       "estimated_pricing": 350
+    },
+    {
+      "catalog_item_id": 3,
+      "section_type": "service",
+      "quantity": 1,
+      "duration_hours": 4,
+      "crew_size": 1,
+      "estimated_pricing": 800,
+      "configuration": {
+        "editing_type_key": "social_reel_30_90",
+        "is_custom_editing_type": false
+      }
+    },
+    {
+      "catalog_item_id": 3,
+      "section_type": "service",
+      "quantity": 1,
+      "duration_hours": 3,
+      "crew_size": 1,
+      "estimated_pricing": 700,
+      "configuration": {
+        "editing_type_label": "Custom Reel Editing",
+        "is_custom_editing_type": true
+      }
+    },
+    {
+      "catalog_item_id": 6,
+      "section_type": "addon",
+      "quantity": 2,
+      "estimated_pricing": 1000
+    },
+    {
+      "catalog_item_id": 13,
+      "section_type": "addon",
+      "quantity": 1,
+      "estimated_pricing": 450
+    },
+    {
+      "source_type": "custom",
+      "section_type": "logistics",
+      "item_name": "Travel and Transportation",
+      "rate_type": "flat",
+      "unit_rate": 500,
+      "quantity": 1,
+      "estimated_pricing": 500
     },
     {
       "source_type": "custom",
@@ -1356,7 +1409,8 @@ Authorization: {{TOKEN}}
       "item_name": "Rush Delivery",
       "rate_type": "flat",
       "unit_rate": 1500,
-      "quantity": 1
+      "quantity": 1,
+      "estimated_pricing": 1500
     }
   ]
 }
