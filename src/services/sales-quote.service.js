@@ -741,7 +741,7 @@ async function buildLineItemsPayload(rawItems = []) {
     const sectionType = rawItem.section_type || catalogItem?.section_type || 'custom';
     const rateType = resolveRateTypeValue(rawItem.rate_type, null, catalogItem);
     const rateUnit = resolveRateUnitValue(rawItem.rate_unit, null, catalogItem);
-    const unitRate = resolveUnitRateValue(rawItem.unit_rate, null, catalogItem);
+    const baseUnitRate = resolveUnitRateValue(rawItem.unit_rate, null, catalogItem);
     const quantity = Math.max(1, Number(rawItem.quantity || 1));
     const durationHours = rawItem.duration_hours !== undefined && rawItem.duration_hours !== null
       ? Math.max(0, Number(rawItem.duration_hours))
@@ -752,6 +752,7 @@ async function buildLineItemsPayload(rawItems = []) {
       const estimatedPricing = rawItem.estimated_pricing !== undefined && rawItem.estimated_pricing !== null
         ? roundCurrency(rawItem.estimated_pricing)
         : null;
+      const effectiveUnitRate = estimatedPricing !== null ? estimatedPricing : baseUnitRate;
       const normalizedItemName = normalizeLookupKey(rawItem.item_name || rawItem.name || catalogItem?.name || '');
       const aiEditingConfig = normalizedItemName === normalizeLookupKey(AI_EDITING_SERVICE_NAME)
         ? extractAiEditingConfig(rawItem, aiEditingTypesLookup)
@@ -768,7 +769,7 @@ async function buildLineItemsPayload(rawItems = []) {
       multiplier *= crewSize || 1;
     }
 
-    const lineTotal = roundCurrency(unitRate * multiplier);
+    const lineTotal = roundCurrency(effectiveUnitRate * multiplier);
 
     return {
       catalog_item_id: catalogItem?.catalog_item_id || null,
@@ -784,7 +785,7 @@ async function buildLineItemsPayload(rawItems = []) {
       duration_hours: durationHours,
       crew_size: crewSize,
       estimated_pricing: estimatedPricing,
-      unit_rate: unitRate,
+      unit_rate: effectiveUnitRate,
       line_total: lineTotal,
       configuration_json: stringifyConfig(configuration),
       sort_order: rawItem.sort_order !== undefined ? Number(rawItem.sort_order) : index
