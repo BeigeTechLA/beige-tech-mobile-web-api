@@ -7,6 +7,24 @@ const SECTION_TYPES = ['service', 'addon', 'logistics', 'custom'];
 const QUOTE_STATUSES = ['draft', 'pending', 'sent', 'viewed', 'accepted', 'rejected', 'expired'];
 const DISCOUNT_TYPES = ['none', 'percentage', 'fixed_amount'];
 const AI_EDITING_SERVICE_NAME = 'ai editing';
+const CONVERTED_BOOKINGS_LEAD_SOURCE = 'converted bookings';
+const BOOKING_SHOOT_TYPE_MAP = {
+  corporateevent: 'corporate',
+  wedding: 'wedding',
+  privateevent: 'private',
+  commercialadvertising: 'commercial',
+  socialcontent: 'social_content',
+  podcastshows: 'podcast',
+  musicvideos: 'music',
+  shortfilmsnarrative: 'short_film',
+  peopleteams: 'people_teams',
+  brandproduct: 'brand_product',
+  behindthescenes: 'behind_scenes'
+};
+const BOOKING_ROLE_SERVICE_MAP = {
+  videography: 'videographer',
+  photography: 'photographer'
+};
 const DEFAULT_FIGMA_CATALOG = {
   service: [
     { catalog_item_id: null, section_type: 'service', pricing_mode: 'both', name: 'Videography', description: null, default_rate: 250, rate_type: 'per_hour', rate_unit: 'per hour', is_active: 1, display_order: 1, source: 'figma_default' },
@@ -833,6 +851,187 @@ function calculateTotals(lineItems, quoteData) {
   };
 }
 
+function mapQuoteShootTypeToBookingShootType(shootType) {
+  const normalized = normalizeLookupKey(shootType);
+  return BOOKING_SHOOT_TYPE_MAP[normalized] || null;
+}
+
+function getLineItemCatalogName(item) {
+  return item?.catalog_item?.name || item?.item_name || '';
+}
+
+function deriveBookingRoleDataFromQuote(lineItems = []) {
+  const crew_roles = {};
+  let duration_hours = null;
+
+  (lineItems || []).forEach((item) => {
+    if (item.section_type !== 'service') return;
+
+    const normalizedName = normalizeLookupKey(getLineItemCatalogName(item));
+    const roleKey = BOOKING_ROLE_SERVICE_MAP[normalizedName];
+    if (!roleKey) return;
+
+    const roleCount = Math.max(1, Number(item.crew_size || item.quantity || 1));
+    crew_roles[roleKey] = (crew_roles[roleKey] || 0) + roleCount;
+
+    const itemDuration = item.duration_hours !== null && item.duration_hours !== undefined
+      ? Number(item.duration_hours)
+      : null;
+    if (Number.isFinite(itemDuration) && itemDuration > 0) {
+      duration_hours = duration_hours == null ? itemDuration : Math.max(duration_hours, itemDuration);
+    }
+  });
+
+  const crew_size = Object.values(crew_roles).reduce((sum, value) => sum + Number(value || 0), 0) || null;
+  const contentTypes = Object.keys(crew_roles)
+    .filter((key) => Number(crew_roles[key]) > 0)
+    .join(',');
+
+  return {
+    crew_roles,
+    crew_size,
+    content_type: contentTypes || null,
+    duration_hours
+  };
+}
+
+function hasConvertibleServiceInQuote(lineItems = []) {
+  return (lineItems || []).some((item) => {
+    if (item.section_type !== 'service') return false;
+    const normalizedName = normalizeLookupKey(getLineItemCatalogName(item));
+    return Boolean(normalizedName);
+  });
+}
+
+async function deriveBookingEditSelectionsFromQuote(lineItems = []) {
+  const aiEditingTypesResponse = await loadAiEditingTypesResponse();
+  const aiEditingTypesLookup = buildAiEditingTypesLookup(aiEditingTypesResponse);
+  const video_edit_types = [];
+  const photo_edit_types = [];
+  const unmatched_edit_types = [];
+
+  (lineItems || []).forEach((item) => {
+    if (item.section_type !== 'service') return;
+
+    const normalizedCatalogName = normalizeLookupKey(getLineItemCatalogName(item));
+    if (normalizedCatalogName !== normalizeLookupKey(AI_EDITING_SERVICE_NAME)) return;
+
+    const config = extractAiEditingConfig(item, aiEditingTypesLookup);
+    if (!config?.editing_type_key && !config?.editing_type_label) return;
+
+    const keyLookup = config.editing_type_key
+      ? aiEditingTypesLookup.byKey.get(normalizeLookupKey(config.editing_type_key))
+      : null;
+    const labelLookup = config.editing_type_label
+      ? aiEditingTypesLookup.byLabel.get(normalizeLookupKey(config.editing_type_label))
+      : null;
+    const matched = keyLookup || labelLookup;
+
+    if (!matched) {
+      unmatched_edit_types.push(config.editing_type_label || config.editing_type_key);
+      return;
+    }
+
+    if (matched.note) {
+      if (!photo_edit_types.includes(matched.key)) photo_edit_types.push(matched.key);
+      return;
+    }
+
+    if (!video_edit_types.includes(matched.key)) video_edit_types.push(matched.key);
+  });
+
+  return {
+    video_edit_types,
+    photo_edit_types,
+    unmatched_edit_types,
+    edits_needed: video_edit_types.length > 0 || photo_edit_types.length > 0 || unmatched_edit_types.length > 0
+  };
+}
+
+function deriveConvertedProjectName(quote) {
+  const shootType = quote.video_shoot_type || 'Custom';
+  const clientName = quote.client_name || quote.client_email || 'Client';
+  return `${shootType.toUpperCase()} Shoot - ${clientName}`;
+}
+
+function buildConvertedBookingDescription(quoteDetails, prefillData) {
+  const lines = [];
+
+  if (quoteDetails.project_description) {
+    lines.push(quoteDetails.project_description);
+  }
+
+  if (quoteDetails.client_name) {
+    lines.push(`Contact Name: ${quoteDetails.client_name}`);
+  }
+
+  if (quoteDetails.client_phone) {
+    lines.push(`Phone: ${quoteDetails.client_phone}`);
+  }
+
+  if (prefillData.quote_shoot_type_label) {
+    lines.push(`Shoot Type: ${prefillData.quote_shoot_type_label}`);
+  }
+
+  if (prefillData.video_edit_types?.length) {
+    lines.push(`Video Edit Types: ${prefillData.video_edit_types.join(', ')}`);
+  }
+
+  if (prefillData.photo_edit_types?.length) {
+    lines.push(`Photo Edit Types: ${prefillData.photo_edit_types.join(', ')}`);
+  }
+
+  if (prefillData.unmatched_edit_types?.length) {
+    lines.push(`Custom Edit Types: ${prefillData.unmatched_edit_types.join(', ')}`);
+  }
+
+  return lines.filter(Boolean).join('\n');
+}
+
+function buildQuoteConversionMissingFields(prefillData) {
+  const otherFields = [];
+
+  if (!prefillData.content_type) otherFields.push('content_type');
+  if (!prefillData.shoot_type) otherFields.push('shoot_type');
+  if (!prefillData.crew_roles || !Object.keys(prefillData.crew_roles).length) otherFields.push('crew_roles');
+  if (!prefillData.crew_size) otherFields.push('crew_size');
+
+  return {
+    missing_required_fields: {
+      time_fields: {
+        always: ['booking_type', 'time_zone'],
+        single_day: ['start_date', 'start_time', 'end_time'],
+        multi_day: ['booking_days']
+      },
+      other_fields: [...new Set(['selected_crew_ids', ...otherFields])]
+    }
+  };
+}
+
+function deriveQuoteConversionModeHint(prefillData) {
+  if (!prefillData.content_type && prefillData.edits_needed) {
+    return 'editing_only';
+  }
+
+  if (prefillData.content_type && prefillData.edits_needed) {
+    return 'shoot_and_editing';
+  }
+
+  if (prefillData.content_type) {
+    return 'shoot_only';
+  }
+
+  return 'incomplete';
+}
+
+function canGeneratePaymentLinkFromConvertedBooking(quoteDetails, prefillData) {
+  return Boolean(
+    quoteDetails?.total &&
+    Number(quoteDetails.total) > 0 &&
+    (prefillData?.guest_email || quoteDetails?.client_email)
+  );
+}
+
 function deriveQuoteAddOns(lineItems = [], explicitAddOns = null) {
   if (explicitAddOns) {
     if (Array.isArray(explicitAddOns)) {
@@ -1048,6 +1247,206 @@ async function updateQuote(salesQuoteId, payload, user) {
     await recordActivity(transaction, salesQuoteId, 'updated', user.userId, 'Quote updated');
     await transaction.commit();
     return getQuoteById(salesQuoteId, user);
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
+}
+
+async function convertQuoteToBooking(salesQuoteId, user) {
+  const quoteDetails = await getQuoteById(salesQuoteId, user);
+  if (!quoteDetails) {
+    throw new Error('Quote not found');
+  }
+
+  if (!hasConvertibleServiceInQuote(quoteDetails.line_items || [])) {
+    throw new Error('Quote must include at least one service to convert into a booking');
+  }
+
+  const roleData = deriveBookingRoleDataFromQuote(quoteDetails.line_items || []);
+  const editSelections = await deriveBookingEditSelectionsFromQuote(quoteDetails.line_items || []);
+  const prefillData = {
+    guest_email: quoteDetails.client_email || null,
+    user_id: quoteDetails.client_user_id || null,
+    full_name: quoteDetails.client_name || null,
+    phone: quoteDetails.client_phone || null,
+    location: quoteDetails.client_address || null,
+    content_type: roleData.content_type,
+    shoot_type: mapQuoteShootTypeToBookingShootType(quoteDetails.video_shoot_type),
+    quote_shoot_type_label: quoteDetails.video_shoot_type || null,
+    duration_hours: roleData.duration_hours,
+    crew_roles: roleData.crew_roles,
+    crew_size: roleData.crew_size,
+    video_edit_types: editSelections.video_edit_types,
+    photo_edit_types: editSelections.photo_edit_types,
+    edits_needed: editSelections.edits_needed,
+    unmatched_edit_types: editSelections.unmatched_edit_types,
+    project_description: quoteDetails.project_description || null,
+    reference_links: null,
+    special_instructions: quoteDetails.notes || null
+  };
+  const bookingDescription = buildConvertedBookingDescription(quoteDetails, prefillData);
+
+  const requirementData = buildQuoteConversionMissingFields(prefillData);
+  const transaction = await db.sequelize.transaction();
+
+  try {
+    const quote = await db.sales_quotes.findOne({
+      where: { sales_quote_id: salesQuoteId, ...buildQuoteAccessWhere(user) },
+      transaction
+    });
+
+    if (!quote) {
+      throw new Error('Quote not found');
+    }
+
+    let lead = quote.lead_id
+      ? await db.sales_leads.findOne({
+          where: { lead_id: quote.lead_id, is_active: 1 },
+          transaction
+        })
+      : null;
+
+    let booking = lead?.booking_id
+      ? await db.stream_project_booking.findOne({
+          where: { stream_project_booking_id: lead.booking_id, is_active: 1 },
+          transaction
+        })
+      : null;
+
+    const wasAlreadyConverted = Boolean(lead && booking);
+
+    if (!booking) {
+      booking = await db.stream_project_booking.create({
+        user_id: quote.client_user_id || null,
+        guest_email: quote.client_email || null,
+        project_name: deriveConvertedProjectName(quoteDetails),
+        description: bookingDescription || null,
+        event_type: prefillData.shoot_type || prefillData.content_type,
+        shoot_type: prefillData.shoot_type || null,
+        content_type: prefillData.content_type,
+        duration_hours: prefillData.duration_hours,
+        budget: Number(quoteDetails.total || 0) || null,
+        crew_size_needed: prefillData.crew_size,
+        event_location: prefillData.location,
+        crew_roles: JSON.stringify(prefillData.crew_roles || {}),
+        streaming_platforms: JSON.stringify([]),
+        reference_links: prefillData.reference_links,
+        edits_needed: prefillData.edits_needed ? 1 : 0,
+        video_edit_types: prefillData.video_edit_types,
+        photo_edit_types: prefillData.photo_edit_types,
+        special_instructions: prefillData.special_instructions,
+        is_draft: 1,
+        is_completed: 0,
+        is_cancelled: 0,
+        is_active: 1
+      }, { transaction });
+    } else {
+      await booking.update({
+        user_id: quote.client_user_id || booking.user_id || null,
+        guest_email: quote.client_email || booking.guest_email || null,
+        project_name: deriveConvertedProjectName(quoteDetails),
+        description: bookingDescription || booking.description || null,
+        event_type: prefillData.shoot_type || prefillData.content_type || booking.event_type,
+        shoot_type: prefillData.shoot_type || booking.shoot_type || null,
+        content_type: prefillData.content_type || booking.content_type || null,
+        duration_hours: prefillData.duration_hours ?? booking.duration_hours,
+        budget: Number(quoteDetails.total || 0) || booking.budget || null,
+        crew_size_needed: prefillData.crew_size ?? booking.crew_size_needed,
+        event_location: prefillData.location || booking.event_location || null,
+        crew_roles: JSON.stringify(
+          Object.keys(prefillData.crew_roles || {}).length
+            ? prefillData.crew_roles
+            : (parseConfig(booking.crew_roles) || {})
+        ),
+        reference_links: prefillData.reference_links ?? booking.reference_links ?? null,
+        edits_needed: prefillData.edits_needed ? 1 : booking.edits_needed,
+        video_edit_types: prefillData.video_edit_types?.length ? prefillData.video_edit_types : booking.video_edit_types,
+        photo_edit_types: prefillData.photo_edit_types?.length ? prefillData.photo_edit_types : booking.photo_edit_types,
+        special_instructions: prefillData.special_instructions || booking.special_instructions || null,
+        is_active: 1
+      }, { transaction });
+    }
+
+    if (!lead) {
+      lead = await db.sales_leads.create({
+        booking_id: booking.stream_project_booking_id,
+        user_id: quote.client_user_id || null,
+        guest_email: quote.client_email || null,
+        client_name: quote.client_name,
+        phone: quote.client_phone || null,
+        lead_type: 'sales_assisted',
+        lead_status: 'booking_in_progress',
+        intent: null,
+        lead_source: CONVERTED_BOOKINGS_LEAD_SOURCE,
+        assigned_sales_rep_id: quote.assigned_sales_rep_id || user.userId,
+        last_activity_at: new Date(),
+        created_from: 1
+      }, { transaction });
+    } else {
+      await lead.update({
+        booking_id: booking.stream_project_booking_id,
+        user_id: quote.client_user_id || lead.user_id || null,
+        guest_email: quote.client_email || lead.guest_email || null,
+        client_name: quote.client_name || lead.client_name || null,
+        phone: quote.client_phone || lead.phone || null,
+        lead_type: lead.lead_type || 'sales_assisted',
+        lead_status: 'booking_in_progress',
+        lead_source: CONVERTED_BOOKINGS_LEAD_SOURCE,
+        assigned_sales_rep_id: quote.assigned_sales_rep_id || lead.assigned_sales_rep_id || user.userId,
+        last_activity_at: new Date()
+      }, { transaction });
+    }
+
+    if (quote.lead_id !== lead.lead_id) {
+      await quote.update({
+        lead_id: lead.lead_id,
+        updated_at: new Date()
+      }, { transaction });
+    }
+
+    await db.sales_lead_activities.create({
+      lead_id: lead.lead_id,
+      activity_type: wasAlreadyConverted ? 'booking_updated' : 'created',
+      activity_data: {
+        source: 'sales_quote_conversion',
+        sales_quote_id: quote.sales_quote_id,
+        booking_id: booking.stream_project_booking_id,
+        lead_source: CONVERTED_BOOKINGS_LEAD_SOURCE
+      },
+      performed_by_user_id: user.userId || null
+    }, { transaction });
+
+    await recordActivity(
+      transaction,
+      quote.sales_quote_id,
+      'updated',
+      user.userId,
+      wasAlreadyConverted ? 'Quote booking conversion reopened' : 'Quote converted to booking',
+      {
+        lead_id: lead.lead_id,
+        booking_id: booking.stream_project_booking_id
+      }
+    );
+
+    await transaction.commit();
+
+    return {
+      quote_id: quote.sales_quote_id,
+      lead_id: lead.lead_id,
+      booking_id: booking.stream_project_booking_id,
+      already_converted: wasAlreadyConverted,
+      lead_source: CONVERTED_BOOKINGS_LEAD_SOURCE,
+      booking_mode_hint: deriveQuoteConversionModeHint(prefillData),
+      payment_link_ready_hint: canGeneratePaymentLinkFromConvertedBooking(quoteDetails, prefillData),
+      prefill_data: prefillData,
+      booking_summary: {
+        project_name: deriveConvertedProjectName(quoteDetails),
+        budget: Number(quoteDetails.total || 0) || null,
+        description: bookingDescription || null
+      },
+      missing_required_fields: requirementData.missing_required_fields
+    };
   } catch (error) {
     await transaction.rollback();
     throw error;
@@ -1395,6 +1794,7 @@ module.exports = {
   deleteCatalogItem,
   createQuote,
   updateQuote,
+  convertQuoteToBooking,
   getQuoteById,
   getPublicQuoteById,
   listQuotes,

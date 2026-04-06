@@ -1253,10 +1253,7 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 { 
-  "client_name": "Harsh Panchal",
-  "client_email": "harsh.panchal@revurge.com",
-  "client_phone": "+91 98856 99444",
-  "client_address": "Los Angeles, California, United States",
+  "client_user_id": 260,
   "project_description": "Corporate video production for annual conference",
   "video_shoot_type": "Private Event",
   "quote_validity_days": 7,
@@ -1282,13 +1279,20 @@ Authorization: {{TOKEN}}
   ]
 }
 
+### convert quote to booking
+POST {{URL}}sales/quotes/16/convert-to-booking HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{}
+
 ### update sales quote (partial safe)
-PUT {{URL}}sales/quotes/10 HTTP/1.1
+PUT {{URL}}sales/quotes/16 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "line_items": [
+    "line_items": [
     {
       "source_type": "custom",
       "section_type": "logistics",
@@ -1309,7 +1313,7 @@ Authorization: {{TOKEN}}
 }
 
 ### update sales quote (only tax/discount)
-PUT {{URL}}sales/quotes/10 HTTP/1.1
+PUT {{URL}}sales/quotes/16 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -1321,7 +1325,7 @@ Authorization: {{TOKEN}}
 }
 
 ### get sales quote detail
-GET {{URL}}sales/quotes/1 HTTP/1.1
+GET {{URL}}sales/quotes/15 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
