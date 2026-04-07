@@ -236,7 +236,7 @@ exports.getPendingRequests = async (req, res) => {
           model: stream_project_booking,
           as: "project",
           required: true,
-          where: { is_completed: 0 },
+          // where: { is_completed: 0 },
           include: [
             { 
               model: assigned_crew, as: 'assigned_crews', 
@@ -304,6 +304,7 @@ exports.getPendingRequests = async (req, res) => {
     return res.status(500).json({ error: true, message: 'Internal server error' });
   }
 };
+
 exports.getConfirmedRequests = async (req, res) => {
   try {
     const { crew_member_id } = req.body || req.query;

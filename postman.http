@@ -238,6 +238,35 @@ Authorization: {{TOKEN}}
 
 ###
 # Top creative partners (month/all filter)
+###
+# Meetings: list by booking/project id
+GET {{URL}}external-meetings/order/898?sortBy=meeting_date_time:desc&limit=100&page=1 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+# Meetings: create for booking/project id
+POST {{URL}}external-meetings HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "order_id": 898,
+  "meeting_date_time": "2026-04-02T15:00:00.000Z",
+  "meeting_end_time": "2026-04-02T16:00:00.000Z",
+  "meeting_status": "pending",
+  "meeting_type": "post_production",
+  "meeting_title": "Project sync",
+  "description": "Native SQL meetings test",
+  "created_by_id": 1,
+  "send_notification": true
+}
+
+###
+# Meetings: list for current user relation
+GET {{URL}}external-meetings/user/1?sortBy=meeting_date_time:desc&limit=100&page=1 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
 GET {{URL}}admin/dashboard/top-creative-partners?range=month HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
@@ -965,3 +994,12 @@ Authorization: {{TOKEN}}
 ### get discount code by id
 GET {{URL}}admin/942/get-booking-summary HTTP/1.1
 Content-Type: application/json
+
+###
+# Sales Rep Register
+POST {{URL}}creator/pending-projects HTTP/1.1
+Content-Type: application/json
+
+{
+"crew_member_id": 2010
+}
