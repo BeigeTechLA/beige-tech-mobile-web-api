@@ -1242,20 +1242,6 @@ async function syncConvertedQuoteArtifacts({
         })),
         { transaction }
       );
-    } else if (
-      prefillData.booking_type === 'single_day' &&
-      (prefillData.start_date || prefillData.start_time || prefillData.end_time || prefillData.time_zone)
-    ) {
-      await db.stream_project_booking_days.bulkCreate([
-        {
-          stream_project_booking_id: booking.stream_project_booking_id,
-          event_date: prefillData.start_date || booking.event_date,
-          start_time: prefillData.start_time || null,
-          end_time: prefillData.end_time || null,
-          duration_hours: prefillData.duration_hours || null,
-          time_zone: prefillData.time_zone || null
-        }
-      ], { transaction });
     }
   }
 

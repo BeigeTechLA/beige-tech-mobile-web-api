@@ -351,9 +351,46 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### get lead by id (3 is lead_id)
-GET {{URL}}sales/leads/279 HTTP/1.1
+GET {{URL}}sales/leads/285 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
+
+### update lead booking schedule/location - single day
+PUT {{URL}}sales/leads/285/booking-schedule HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "location": "552 Crocker Street, Los Angeles, California 90013, United States",
+  "booking_type": "single_day",
+  "time_zone": "Asia/Calcutta",
+  "start_date": "2026-04-15",
+  "start_time": "09:00:00",
+  "end_time": "12:00:00"
+}
+
+### update lead booking schedule/location - multi day
+PUT {{URL}}sales/leads/285/booking-schedule HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "location": "552 Crocker Street, Los Angeles, California 90013, United States",
+  "booking_type": "multi_day",
+  "time_zone": "Asia/Calcutta",
+  "booking_days": [
+    {
+      "date": "2026-04-20",
+      "start_time": "10:00:00",
+      "end_time": "12:00:00"
+    },
+    {
+      "date": "2026-04-21",
+      "start_time": "10:00:00",
+      "end_time": "12:00:00"
+    }
+  ]
+}
 
 ### soft delete sales lead
 DELETE {{URL}}sales/leads/173 HTTP/1.1
@@ -1314,7 +1351,7 @@ Authorization: {{TOKEN}}
 }
 
 ### get sales quote detail
-GET {{URL}}sales/quotes/25 HTTP/1.1
+GET {{URL}}sales/quotes/24 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
