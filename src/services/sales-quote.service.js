@@ -2,6 +2,7 @@ const { Op } = require('sequelize');
 const db = require('../models');
 const { sendCustomQuoteProposalEmail } = require('../utils/emailService');
 const { generateQuotePdfBuffer } = require('../utils/quotePdf');
+const { normalizeTime, resolveEventDateAndStartTime } = require('../utils/timezone');
 
 const SECTION_TYPES = ['service', 'addon', 'logistics', 'custom'];
 const QUOTE_STATUSES = ['draft', 'pending', 'sent', 'viewed', 'accepted', 'paid', 'rejected', 'expired'];
@@ -424,16 +425,9 @@ function resolveUnitRateValue(preferred, pricingItem, catalogItem) {
 
 function generateQuoteNumber() {
   const now = new Date();
-  const stamp = [
-    now.getFullYear(),
-    String(now.getMonth() + 1).padStart(2, '0'),
-    String(now.getDate()).padStart(2, '0'),
-    String(now.getHours()).padStart(2, '0'),
-    String(now.getMinutes()).padStart(2, '0'),
-    String(now.getSeconds()).padStart(2, '0'),
-    String(now.getMilliseconds()).padStart(3, '0')
-  ].join('');
-  return `SQ-${stamp}`;
+  const randomSuffix = Math.floor(100 + Math.random() * 900);
+  const shortDate = `${now.getMonth() + 1}${String(now.getDate()).padStart(2, '0')}`;
+  return `BEIGE-${shortDate}-${randomSuffix}`;
 }
 
 function formatDateOnly(date) {
@@ -996,15 +990,27 @@ function buildQuoteConversionMissingFields(prefillData) {
   if (!prefillData.shoot_type) otherFields.push('shoot_type');
   if (!prefillData.crew_roles || !Object.keys(prefillData.crew_roles).length) otherFields.push('crew_roles');
   if (!prefillData.crew_size) otherFields.push('crew_size');
+  if (!prefillData.location) otherFields.push('location');
 
   return {
     missing_required_fields: {
       time_fields: {
-        always: ['booking_type', 'time_zone'],
-        single_day: ['start_date', 'start_time', 'end_time'],
-        multi_day: ['booking_days']
+        always: [
+          ...(!prefillData.booking_type ? ['booking_type'] : []),
+          ...(!prefillData.time_zone ? ['time_zone'] : [])
+        ],
+        single_day: prefillData.booking_type === 'single_day'
+          ? [
+              ...(!prefillData.start_date ? ['start_date'] : []),
+              ...(!prefillData.start_time ? ['start_time'] : []),
+              ...(!prefillData.end_time ? ['end_time'] : [])
+            ]
+          : ['start_date', 'start_time', 'end_time'],
+        multi_day: prefillData.booking_type === 'multi_day'
+          ? [!(Array.isArray(prefillData.booking_days) && prefillData.booking_days.length) ? 'booking_days' : null].filter(Boolean)
+          : ['booking_days']
       },
-      other_fields: [...new Set(['selected_crew_ids', ...otherFields])]
+      other_fields: [...new Set([...(prefillData.selected_crew_ids?.length ? [] : ['selected_crew_ids']), ...otherFields])]
     }
   };
 }
@@ -1031,6 +1037,98 @@ function canGeneratePaymentLinkFromConvertedBooking(quoteDetails, prefillData) {
     Number(quoteDetails.total) > 0 &&
     (prefillData?.guest_email || quoteDetails?.client_email)
   );
+}
+
+function calculateDurationFromTimes(startTime, endTime) {
+  const normalizedStart = normalizeTime(startTime);
+  const normalizedEnd = normalizeTime(endTime);
+  if (!normalizedStart || !normalizedEnd) return null;
+
+  const [sh, sm, ss = '00'] = normalizedStart.split(':').map(Number);
+  const [eh, em, es = '00'] = normalizedEnd.split(':').map(Number);
+  if ([sh, sm, ss, eh, em, es].some((part) => Number.isNaN(part))) return null;
+
+  const startMinutes = (sh * 60) + sm + (ss / 60);
+  const endMinutes = (eh * 60) + em + (es / 60);
+  const diffMinutes = endMinutes - startMinutes;
+  if (diffMinutes <= 0) return null;
+  return roundCurrency(diffMinutes / 60);
+}
+
+function normalizeBookingDaysPayload(bookingDays = [], defaultTimeZone = null) {
+  return (Array.isArray(bookingDays) ? bookingDays : [])
+    .filter((day) => day && day.date)
+    .map((day) => {
+      const start = normalizeTime(day.start_time || day.startTime || null);
+      const end = normalizeTime(day.end_time || day.endTime || null);
+      const explicitDuration = day.duration_hours !== undefined && day.duration_hours !== null
+        ? Number(day.duration_hours)
+        : null;
+
+      return {
+        date: day.date,
+        start_time: start,
+        end_time: end,
+        duration_hours: Number.isFinite(explicitDuration) && explicitDuration > 0
+          ? explicitDuration
+          : calculateDurationFromTimes(start, end),
+        time_zone: day.time_zone || day.timeZone || defaultTimeZone || null
+      };
+    });
+}
+
+function applyConvertBookingOverrides(prefillData, payload = {}) {
+  const next = { ...prefillData };
+  const timeZone = payload.time_zone || payload.timeZone || null;
+  const location = payload.location !== undefined ? payload.location : payload.event_location;
+  const referenceLinks = payload.reference_links !== undefined ? payload.reference_links : payload.referenceLinks;
+  const specialInstructions = payload.special_instructions !== undefined ? payload.special_instructions : payload.specialInstructions;
+  const selectedCrewIds = Array.isArray(payload.selected_crew_ids) ? payload.selected_crew_ids.filter(Boolean).map(Number) : [];
+  const normalizedBookingDays = normalizeBookingDaysPayload(payload.booking_days, timeZone);
+  const inferredBookingType = payload.booking_type
+    || (normalizedBookingDays.length ? 'multi_day' : null)
+    || ((payload.start_date || payload.start_time || payload.start_date_time || payload.end_time) ? 'single_day' : null);
+  const bookingType = inferredBookingType;
+  const singleDaySchedule = resolveEventDateAndStartTime({
+    start_date: payload.start_date,
+    start_time: payload.start_time,
+    start_date_time: payload.start_date_time
+  });
+  const singleDayEndTime = normalizeTime(payload.end_time || null);
+
+  if (location !== undefined) next.location = location || null;
+  if (referenceLinks !== undefined) next.reference_links = referenceLinks || null;
+  if (specialInstructions !== undefined) next.special_instructions = specialInstructions || null;
+  if (bookingType) next.booking_type = bookingType;
+  if (timeZone) next.time_zone = timeZone;
+  if (selectedCrewIds.length) next.selected_crew_ids = selectedCrewIds;
+
+  if (bookingType === 'multi_day') {
+    next.booking_days = normalizedBookingDays;
+    if (normalizedBookingDays.length) {
+      const firstDay = [...normalizedBookingDays].sort((a, b) => new Date(a.date) - new Date(b.date))[0];
+      next.start_date = firstDay.date;
+      next.start_time = firstDay.start_time || null;
+      next.end_time = firstDay.end_time || null;
+      const totalDuration = normalizedBookingDays.reduce((sum, day) => sum + Number(day.duration_hours || 0), 0);
+      if (totalDuration > 0) next.duration_hours = totalDuration;
+    }
+  } else if (bookingType === 'single_day') {
+    next.booking_days = [];
+    if (singleDaySchedule.event_date) next.start_date = singleDaySchedule.event_date;
+    if (singleDaySchedule.start_time) next.start_time = singleDaySchedule.start_time;
+    if (singleDayEndTime) next.end_time = singleDayEndTime;
+
+    const explicitDuration = payload.duration_hours !== undefined && payload.duration_hours !== null
+      ? Number(payload.duration_hours)
+      : null;
+    const computedDuration = Number.isFinite(explicitDuration) && explicitDuration > 0
+      ? explicitDuration
+      : calculateDurationFromTimes(next.start_time, next.end_time);
+    if (computedDuration) next.duration_hours = computedDuration;
+  }
+
+  return next;
 }
 
 async function persistLegacyBookingQuoteFromSalesQuote({ booking, quoteDetails, transaction }) {
@@ -1331,7 +1429,7 @@ async function updateQuote(salesQuoteId, payload, user) {
   }
 }
 
-async function convertQuoteToBooking(salesQuoteId, user) {
+async function convertQuoteToBooking(salesQuoteId, payload = {}, user) {
   const quoteDetails = await getQuoteById(salesQuoteId, user);
   if (!quoteDetails) {
     throw new Error('Quote not found');
@@ -1343,7 +1441,7 @@ async function convertQuoteToBooking(salesQuoteId, user) {
 
   const roleData = deriveBookingRoleDataFromQuote(quoteDetails.line_items || []);
   const editSelections = await deriveBookingEditSelectionsFromQuote(quoteDetails.line_items || []);
-  const prefillData = {
+  let prefillData = {
     guest_email: quoteDetails.client_email || null,
     user_id: quoteDetails.client_user_id || null,
     full_name: quoteDetails.client_name || null,
@@ -1363,6 +1461,7 @@ async function convertQuoteToBooking(salesQuoteId, user) {
     reference_links: null,
     special_instructions: quoteDetails.notes || null
   };
+  prefillData = applyConvertBookingOverrides(prefillData, payload);
   const bookingDescription = buildConvertedBookingDescription(quoteDetails, prefillData);
 
   const requirementData = buildQuoteConversionMissingFields(prefillData);
@@ -1403,7 +1502,10 @@ async function convertQuoteToBooking(salesQuoteId, user) {
         event_type: prefillData.shoot_type || prefillData.content_type,
         shoot_type: prefillData.shoot_type || null,
         content_type: prefillData.content_type,
+        event_date: prefillData.start_date || null,
         duration_hours: prefillData.duration_hours,
+        start_time: prefillData.start_time || null,
+        end_time: prefillData.end_time || null,
         budget: Number(quoteDetails.total || 0) || null,
         crew_size_needed: prefillData.crew_size,
         event_location: prefillData.location,
@@ -1428,7 +1530,10 @@ async function convertQuoteToBooking(salesQuoteId, user) {
         event_type: prefillData.shoot_type || prefillData.content_type || booking.event_type,
         shoot_type: prefillData.shoot_type || booking.shoot_type || null,
         content_type: prefillData.content_type || booking.content_type || null,
+        event_date: prefillData.start_date || booking.event_date || null,
         duration_hours: prefillData.duration_hours ?? booking.duration_hours,
+        start_time: prefillData.start_time || booking.start_time || null,
+        end_time: prefillData.end_time || booking.end_time || null,
         budget: Number(quoteDetails.total || 0) || booking.budget || null,
         crew_size_needed: prefillData.crew_size ?? booking.crew_size_needed,
         event_location: prefillData.location || booking.event_location || null,
@@ -1444,6 +1549,39 @@ async function convertQuoteToBooking(salesQuoteId, user) {
         special_instructions: prefillData.special_instructions || booking.special_instructions || null,
         is_active: 1
       }, { transaction });
+    }
+
+    await db.stream_project_booking_days.destroy({
+      where: { stream_project_booking_id: booking.stream_project_booking_id },
+      transaction
+    });
+
+    if (prefillData.booking_type === 'multi_day' && Array.isArray(prefillData.booking_days) && prefillData.booking_days.length) {
+      await db.stream_project_booking_days.bulkCreate(
+        prefillData.booking_days.map((day) => ({
+          stream_project_booking_id: booking.stream_project_booking_id,
+          event_date: day.date,
+          start_time: day.start_time || null,
+          end_time: day.end_time || null,
+          duration_hours: day.duration_hours || null,
+          time_zone: day.time_zone || prefillData.time_zone || null
+        })),
+        { transaction }
+      );
+    } else if (
+      prefillData.booking_type === 'single_day' &&
+      (prefillData.start_date || prefillData.start_time || prefillData.end_time || prefillData.time_zone)
+    ) {
+      await db.stream_project_booking_days.bulkCreate([
+        {
+          stream_project_booking_id: booking.stream_project_booking_id,
+          event_date: prefillData.start_date || booking.event_date,
+          start_time: prefillData.start_time || null,
+          end_time: prefillData.end_time || null,
+          duration_hours: prefillData.duration_hours || null,
+          time_zone: prefillData.time_zone || null
+        }
+      ], { transaction });
     }
 
     if (!lead) {

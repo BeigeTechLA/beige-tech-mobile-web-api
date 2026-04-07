@@ -1252,7 +1252,6 @@ Authorization: {{TOKEN}}
   "project_description": "Corporate video production for annual conference",
   "video_shoot_type": "Private Event",
   "quote_validity_days": 7,
-  "video_shoot_type": "Private Event",
   "line_items": [
     {
       "catalog_item_id": 1,
@@ -1274,51 +1273,87 @@ Authorization: {{TOKEN}}
   ]
 }
 
-### convert quote to booking
-POST {{URL}}sales/quotes/19/convert-to-booking HTTP/1.1
-Content-Type: application/json
-Authorization: {{TOKEN}}
-
-{}
-
 ### update sales quote (partial safe)
-PUT {{URL}}sales/quotes/19 HTTP/1.1
+PUT {{URL}}sales/quotes/23 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
     "line_items": [
     {
-      "catalog_item_id": 6,
-      "section_type": "addon",
-      "quantity": 2,
-      "estimated_pricing": 800
+      "source_type": "custom",
+      "section_type": "logistics",
+      "item_name": "Travel and Transportation",
+      "rate_type": "flat",
+      "unit_rate": 500,
+      "quantity": 1,
+      "estimated_pricing": 500
     },
     {
-      "catalog_item_id": 13,
-      "section_type": "addon",
-      "quantity": 2,
-      "estimated_pricing": 800
+      "source_type": "custom",
+      "section_type": "custom",
+      "item_name": "Rush Delivery",
+      "rate_type": "flat",
+      "unit_rate": 1500,
+      "quantity": 1,
+      "estimated_pricing": 1500
     }
   ]
 }
 
 ### update sales quote (only tax/discount)
-PUT {{URL}}sales/quotes/17 HTTP/1.1
+PUT {{URL}}sales/quotes/23 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
   "discount_type": "fixed_amount",
-  "discount_value": 250,
+  "discount_value": 500,
   "tax_type": "Sales Tax",
   "tax_rate": 8.5
 }
 
 ### get sales quote detail
-GET {{URL}}sales/quotes/17 HTTP/1.1
+GET {{URL}}sales/quotes/23 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
+
+### convert quote to booking | Single day:
+POST {{URL}}sales/quotes/23/convert-to-booking HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "booking_type": "single_day",
+  "time_zone": "Asia/Calcutta",
+  "start_date": "2026-04-15",
+  "start_time": "09:00:00",
+  "end_time": "15:00:00",
+  "location": "442 Crocker Street, Los Angeles, California 90013, United States"
+}
+
+### convert quote to booking | Multi day:
+POST {{URL}}sales/quotes/23/convert-to-booking HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "booking_type": "multi_day",
+  "time_zone": "Asia/Calcutta",
+  "location": "442 Crocker Street, Los Angeles, California 90013, United States",
+  "booking_days": [
+    {
+      "date": "2026-04-15",
+      "start_time": "09:00:00",
+      "end_time": "13:00:00"
+    },
+    {
+      "date": "2026-04-16",
+      "start_time": "10:00:00",
+      "end_time": "14:00:00"
+    }
+  ]
+}
 
 ### update sales quote (partial safe)
 PUT {{URL}}sales/quotes/17 HTTP/1.1

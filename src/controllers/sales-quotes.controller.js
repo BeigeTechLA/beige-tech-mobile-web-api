@@ -274,7 +274,7 @@ exports.updateQuote = async (req, res) => {
 
 exports.convertQuoteToBooking = async (req, res) => {
   try {
-    const data = await quoteService.convertQuoteToBooking(Number(req.params.quoteId), getUserContext(req));
+    const data = await quoteService.convertQuoteToBooking(Number(req.params.quoteId), req.body || {}, getUserContext(req));
     return res.json({
       success: true,
       data
