@@ -74,6 +74,18 @@ module.exports = function(sequelize, DataTypes) {
     created_from: {
       type: DataTypes.INTEGER,
       allowNull: true
+    },    
+    location: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
+    latitude: {
+      type: DataTypes.DECIMAL(10,8),
+      allowNull: true
+    },
+    longitude: {
+      type: DataTypes.DECIMAL(11,8),
+      allowNull: true
     }
   }, {
     sequelize,

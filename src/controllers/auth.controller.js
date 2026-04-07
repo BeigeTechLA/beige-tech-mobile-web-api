@@ -572,20 +572,6 @@ exports.register = async (req, res) => {
         'Active'               
       ]).catch(err => console.error('Google Sheets Client Sync Error:', err.message));
 
-       emailService.sendNewClientSignupNotification({
-        name,
-        email,
-        phone_number,
-        instagram_handle
-      }).catch(err => console.error('Sales Signup Notification Error:', err));
-
-      if (email) {
-        emailService.sendClientSignupWelcomeEmail({
-          name,
-          email
-        }).catch(err => console.error('Client Signup Welcome Email Error:', err));
-      }
-
       const clientLead = await db.client_leads.create({
         user_id: newUser.id,
         guest_email: email,
@@ -873,8 +859,20 @@ exports.verifyEmail = async (req, res) => {
       { where: { email } }
     );
 
-    // Send welcome email
-    await emailService.sendWelcomeEmail({ name: user.name, email });
+    // Send email
+    emailService.sendNewClientSignupNotification({
+      name: user.name,
+      email,
+      phone_number: user.phone_number,
+      instagram_handle: user.instagram_handle
+    }).catch(err => console.error('Sales Signup Notification Error:', err));
+
+    if (email) {
+      emailService.sendClientSignupWelcomeEmail({
+        name: user.name,
+        email
+      }).catch(err => console.error('Client Signup Welcome Email Error:', err));
+    }
 
     // Generate tokens for auto-login
     const userTypeRecord = await user_type.findOne({
@@ -1255,7 +1253,7 @@ exports.forgotPassword = async (req, res) => {
 
     // Generate reset token
     const resetToken = otpService.generateResetToken();
-    const tokenExpiry = otpService.generateTokenExpiry(1); // 1 hour
+    const tokenExpiry = otpService.generateTokenExpiry(15); // 15 minutes
 
     await User.update(
       {
@@ -2219,7 +2217,9 @@ exports.registerCrewMemberStep1 = [
         password, 
         working_distance, 
         crew_member_id, 
-        user_id 
+        user_id,
+        lat,
+        lng
       } = req.body;
 
       if (!first_name || !last_name || !email || (!crew_member_id && !password)) {
@@ -2267,7 +2267,10 @@ exports.registerCrewMemberStep1 = [
         email_verified: 0,
         verification_code: otp,
         otp_expiry: otpExpiry,
-        created_from: 1 // 1 = web
+        created_from: 1, // 1 = web        
+        location,
+        latitude: lat, 
+        longitude: lng,
       });
 
       const newCrewMember = await crew_members.create({
@@ -2300,10 +2303,10 @@ exports.registerCrewMemberStep1 = [
         first_name, last_name, email, phone_number, location, working_distance
       }).catch(err => console.error('Admin Notification Error:', err));
 
-      await emailService.sendVerificationOTP(
-        { name: `${first_name} ${last_name}`, email },
-        otp
-      );
+      // await emailService.sendVerificationOTP(
+      //   { name: `${first_name} ${last_name}`, email },
+      //   otp
+      // );
 
       let affiliateData = null;
       try {
@@ -2379,13 +2382,13 @@ exports.registerCrewMemberStep2 = async (req, res) => {
     member.equipment_ownership = JSON.stringify(equipment_ownership);
     await member.save();
 
-     await updateSheetRow('Crew_data', crew_member_id, {
-      'I': primaryRoleNames.join(', '),
-      'J': years_of_experience,
-      'K': hourly_rate,
-      'L': bio,
-      'M': skillNameList.join(', ')
-    });
+    //  await updateSheetRow('Crew_data', crew_member_id, {
+    //   'I': primaryRoleNames.join(', '),
+    //   'J': years_of_experience,
+    //   'K': hourly_rate,
+    //   'L': bio,
+    //   'M': skillNameList.join(', ')
+    // });
 
     return res.status(200).json({ success: true, message: 'Step 2 completed' });
   } catch (error) {
@@ -2407,8 +2410,17 @@ exports.registerCrewMemberStep3 = [
 
   async (req, res) => {
     try {
-      // 1. Added 'portfolio_links' to destructuring
-      const { crew_member_id, availability, certifications, social_media_links, portfolio_links } = req.body;
+      // 1. Added grouped featured-work support while keeping legacy title/tag fallback
+      const {
+        crew_member_id,
+        availability,
+        certifications,
+        social_media_links,
+        portfolio_links,
+        featured_work,
+        title,
+        tag
+      } = req.body;
 
       if (!crew_member_id) return res.status(400).json({ success: false, message: 'ID required' });
 
@@ -2427,21 +2439,94 @@ exports.registerCrewMemberStep3 = [
       // --- NEW: Handle both Files and Links together ---
       let itemsToCreate = [];
 
-      // Handle S3 uploads (YOUR OLD LOGIC - UNCHANGED)
+      const parseJsonInput = (value, fallback = []) => {
+        if (!value) return fallback;
+        if (Array.isArray(value) || typeof value === 'object') return value;
+        try {
+          return JSON.parse(value);
+        } catch (error) {
+          return fallback;
+        }
+      };
+
+      const featuredWorkGroups = parseJsonInput(featured_work, []);
+      const recentWorkTitles = Array.isArray(title) ? title : title ? [title] : [];
+      const recentWorkTags = Array.isArray(tag) ? tag : tag ? [tag] : [];
+
+      // Handle S3 uploads
       const filePaths = await S3UploadFiles(req.files);
       if (filePaths.length > 0) {
-        const filesToCreate = filePaths.map(f => ({
+        const recentWorkFiles = filePaths.filter(f => f.file_type === 'recent_work');
+        const otherFiles = filePaths.filter(f => f.file_type !== 'recent_work');
+
+        const filesToCreate = otherFiles.map(f => ({
           crew_member_id,
           file_type: f.file_type,
           file_path: f.file_path,
-          file_category: f.fieldname
+          file_category: f.file_type
         }));
+
+        if (featuredWorkGroups.length > 0) {
+          const mappedIndexes = new Set();
+
+          for (const group of featuredWorkGroups) {
+            const fileIndexes = Array.isArray(group?.fileIndexes) ? group.fileIndexes : [];
+            const groupTitle = group?.title || null;
+            const groupTag = Array.isArray(group?.tags)
+              ? JSON.stringify(group.tags)
+              : group?.tags || group?.tag || null;
+
+            for (const index of fileIndexes) {
+              const file = recentWorkFiles[index];
+              if (!file) continue;
+
+              mappedIndexes.add(index);
+              filesToCreate.push({
+                crew_member_id,
+                file_type: file.file_type,
+                file_path: file.file_path,
+                file_category: file.file_type,
+                title: groupTitle,
+                tag: groupTag
+              });
+            }
+          }
+
+          for (const [index, file] of recentWorkFiles.entries()) {
+            if (mappedIndexes.has(index)) continue;
+
+            filesToCreate.push({
+              crew_member_id,
+              file_type: file.file_type,
+              file_path: file.file_path,
+              file_category: file.file_type,
+              title: recentWorkTitles[index]
+                || (recentWorkTitles.length === 1 ? recentWorkTitles[0] : null),
+              tag: recentWorkTags[index]
+                || (recentWorkTags.length === 1 ? recentWorkTags[0] : null)
+            });
+          }
+        } else {
+          for (const [index, file] of recentWorkFiles.entries()) {
+            filesToCreate.push({
+              crew_member_id,
+              file_type: file.file_type,
+              file_path: file.file_path,
+              file_category: file.file_type,
+              title: recentWorkTitles[index]
+                || (recentWorkTitles.length === 1 ? recentWorkTitles[0] : null),
+              tag: recentWorkTags[index]
+                || (recentWorkTags.length === 1 ? recentWorkTags[0] : null)
+            });
+          }
+        }
+
         itemsToCreate.push(...filesToCreate);
       }
 
       // Handle Portfolio Links (NEW LOGIC)
       if (portfolio_links) {
-        const parsedLinks = typeof portfolio_links === 'string' ? JSON.parse(portfolio_links) : portfolio_links;
+        const parsedLinks = parseJsonInput(portfolio_links, []);
         const linksToCreate = parsedLinks.map(link => ({
           crew_member_id,
           file_type: 'link', 
@@ -2459,9 +2544,9 @@ exports.registerCrewMemberStep3 = [
       }
       // ------------------------------------------------
 
-      await updateSheetRow('Crew_data', crew_member_id, {
-        'N': JSON.stringify(social_media_links),
-      });
+      // await updateSheetRow('Crew_data', crew_member_id, {
+      //   'N': JSON.stringify(social_media_links),
+      // });
 
       // SEND WELCOME EMAIL
       const user = await User.findOne({
@@ -2792,6 +2877,146 @@ exports.changePasswordCrewMember = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Server error during password change',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.registerSales = async (req, res) => {
+  try {
+    const { name, email, phone_number, instagram_handle, password } = req.body;
+
+    // 🔹 Validation
+    if (!name || !password || !email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name, email, and password are required'
+      });
+    }
+
+    // 🔹 Check if user exists
+    const conditions = [];
+    if (email) conditions.push({ email });
+    if (phone_number) conditions.push({ phone_number });
+    if (instagram_handle) conditions.push({ instagram_handle });
+
+    const userExists = await User.findOne({
+      where: { [Op.or]: conditions }
+    });
+
+    if (userExists) {
+      return res.status(409).json({
+        success: false,
+        message: 'User already exists'
+      });
+    }
+
+    // 🔐 Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // 🔢 OTP
+    const otp = otpService.generateOTP();
+    const otpExpiry = otpService.generateOTPExpiry(10);
+
+    // ✅ Create User (ONLY THIS)
+    const newUser = await User.create({
+      name,
+      email,
+      phone_number,
+      instagram_handle,
+      password_hash: hashedPassword,
+      user_type: 5, // 👈 fixed
+      is_active: 1,
+      email_verified: 0,
+      verification_code: otp,
+      otp_expiry: otpExpiry,
+      created_from: 1
+    });
+
+    // 📧 Send OTP (optional but good)
+    if (email) {
+      await emailService.sendVerificationOTP({ name, email }, otp);
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: 'User registered successfully (Type 5)',
+      userId: newUser.id,
+      email: newUser.email
+    });
+
+  } catch (error) {
+    console.error('Register Client Simple Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.registerSalesAdmin = async (req, res) => {
+  try {
+    const { name, email, phone_number, instagram_handle, password } = req.body;
+
+    if (!name || !password || !email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name, email, and password are required'
+      });
+    }
+
+    const conditions = [];
+    if (email) conditions.push({ email });
+    if (phone_number) conditions.push({ phone_number });
+    if (instagram_handle) conditions.push({ instagram_handle });
+
+    const userExists = await User.findOne({
+      where: { [Op.or]: conditions }
+    });
+
+    if (userExists) {
+      return res.status(409).json({
+        success: false,
+        message: 'User already exists'
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const otp = otpService.generateOTP();
+    const otpExpiry = otpService.generateOTPExpiry(10);
+
+    const newUser = await User.create({
+      name,
+      email,
+      phone_number,
+      instagram_handle,
+      password_hash: hashedPassword,
+      user_type: 7,
+      is_active: 1,
+      email_verified: 0,
+      verification_code: otp,
+      otp_expiry: otpExpiry,
+      created_from: 1
+    });
+
+    if (email) {
+      await emailService.sendVerificationOTP({ name, email }, otp);
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: 'User registered successfully (Type 7)',
+      userId: newUser.id,
+      email: newUser.email
+    });
+
+  } catch (error) {
+    console.error('Register Client Simple Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }

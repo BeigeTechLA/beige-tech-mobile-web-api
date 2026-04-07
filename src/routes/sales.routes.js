@@ -4,6 +4,7 @@ const salesLeadsController = require('../controllers/sales-leads.controller');
 const discountsController = require('../controllers/discounts.controller');
 const paymentLinksController = require('../controllers/payment-links.controller');
 const salesDashboardController = require('../controllers/sales-dashboard.controller');
+const salesQuotesController = require('../controllers/sales-quotes.controller');
 const { authenticate, requireSalesRepOrAdmin, requireSalesRep, requireAdmin } = require('../middleware/auth.middleware');
 
 /**
@@ -72,6 +73,10 @@ router.get('/client-leads/:id', authenticate, requireSalesRepOrAdmin, salesLeads
  * @access  Sales Rep / Admin
  */
 router.put('/leads/:id/assign', authenticate, requireSalesRepOrAdmin, salesLeadsController.assignLead);
+router.put('/leads/:id/change-sales-rep', authenticate, requireAdmin, salesLeadsController.changeLeadSalesRep);
+router.put('/client-leads/:id/change-sales-rep', authenticate, requireAdmin, salesLeadsController.changeClientLeadSalesRep);
+router.delete('/leads/:id', authenticate, requireAdmin, salesLeadsController.softDeleteLead);
+router.delete('/client-leads/:id', authenticate, requireAdmin, salesLeadsController.softDeleteClientLead);
 
 /**
  * @route   PUT /api/sales/leads/:id/status
@@ -116,6 +121,18 @@ router.post(
   authenticate,
   requireSalesRepOrAdmin,
   salesLeadsController.sendFinalAssetsDeliveredWithRevision
+);
+router.post(
+  '/leads/:id/cp-confirmed',
+  authenticate,
+  requireSalesRepOrAdmin,
+  salesLeadsController.confirmLeadCreativePartner
+);
+router.post(
+  '/client-leads/:id/cp-confirmed',
+  authenticate,
+  requireSalesRepOrAdmin,
+  salesLeadsController.confirmClientLeadCreativePartner
 );
 
 // =====================================================
@@ -234,6 +251,7 @@ router.get('/payment-links/rep/:repId', authenticate, requireSalesRepOrAdmin, pa
  * @access  Sales Rep / Admin
  */
 router.get('/dashboard/stats', authenticate, requireSalesRepOrAdmin, salesDashboardController.getDashboardStats);
+router.get('/dashboard/overview', authenticate, requireSalesRepOrAdmin, salesDashboardController.getCombinedOverviewStats);
 
 /**
  * @route   GET /api/sales/dashboard/rep-stats/:repId
@@ -266,6 +284,35 @@ router.get('/dashboard/recent-activities', authenticate, requireSalesRepOrAdmin,
  */
 router.get('/dashboard/funnel', authenticate, requireSalesRepOrAdmin, salesDashboardController.getLeadsFunnelData);
 
+// =====================================================
+// Quote Builder Routes
+// =====================================================
+
+router.get('/client-dropdown', authenticate, requireSalesRepOrAdmin, salesQuotesController.getClientDropdown);
+router.get('/quotes/catalog', authenticate, requireSalesRepOrAdmin, salesQuotesController.getCatalog);
+router.get('/quotes/ai-editing-types', authenticate, requireSalesRepOrAdmin, salesQuotesController.getAiEditingTypes);
+router.post('/quotes/ai-editing-types', authenticate, requireSalesRepOrAdmin, salesQuotesController.createAiEditingType);
+router.put('/quotes/ai-editing-types/:aiEditingTypeId', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateAiEditingType);
+router.delete('/quotes/ai-editing-types/:aiEditingTypeId', authenticate, requireSalesRepOrAdmin, salesQuotesController.deleteAiEditingType);
+router.get('/quotes/shoot-types/:content_type', authenticate, requireSalesRepOrAdmin, salesQuotesController.getShootTypes);
+router.post('/quotes/shoot-types', authenticate, requireSalesRepOrAdmin, salesQuotesController.createShootType);
+router.put('/quotes/shoot-types/:shootTypeId', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateShootType);
+router.delete('/quotes/shoot-types/:shootTypeId', authenticate, requireSalesRepOrAdmin, salesQuotesController.deleteShootType);
+router.post('/quotes/catalog', authenticate, requireSalesRepOrAdmin, salesQuotesController.createCatalogItem);
+router.put('/quotes/catalog/:catalogItemId', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateCatalogItem);
+router.delete('/quotes/catalog/:catalogItemId', authenticate, requireSalesRepOrAdmin, salesQuotesController.deleteCatalogItem);
+
+router.get('/quotes/dashboard', authenticate, requireSalesRepOrAdmin, salesQuotesController.getQuoteDashboard);
+router.get('/quotes', authenticate, requireSalesRepOrAdmin, salesQuotesController.listQuotes);
+router.get('/quotes/public/:quoteId', salesQuotesController.getPublicQuoteById);
+router.get('/quotes/:quoteId', authenticate, requireSalesRepOrAdmin, salesQuotesController.getQuoteById);
+router.get('/quotes/:quoteId/pdf', authenticate, requireSalesRepOrAdmin, salesQuotesController.downloadQuotePdf);
+router.post('/quotes', authenticate, requireSalesRepOrAdmin, salesQuotesController.createQuote);
+router.put('/quotes/:quoteId', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateQuote);
+router.post('/quotes/:quoteId/convert-to-booking', authenticate, requireSalesRepOrAdmin, salesQuotesController.convertQuoteToBooking);
+router.post('/quotes/:quoteId/send', authenticate, requireSalesRepOrAdmin, salesQuotesController.sendQuoteProposal);
+router.patch('/quotes/:quoteId/status', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateQuoteStatus);
+
 /**
  * @route   PATCH /api/bookings/:bookingId/crew
  * @desc    Update the crew assigned to a booking   
@@ -282,6 +329,7 @@ router.post('/leads/intent', authenticate, requireSalesRepOrAdmin, salesLeadsCon
 router.post('/client-leads/intent', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateClientLeadIntent);
 router.put('/leads/:id/booking', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeGuestBooking);
 router.put('/client-leads/:id/booking', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeClientLeadBooking);
-router.post('/deals/finalize', salesLeadsController.finalizeCreateDeal);
+router.post('/deals/finalize', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeCreateDeal);
+router.get('/sales-reps', authenticate, requireSalesRepOrAdmin, salesDashboardController.getSalesRepsList);
 
 module.exports = router;

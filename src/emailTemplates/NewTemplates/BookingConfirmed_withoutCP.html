@@ -92,7 +92,7 @@
                     <td style="text-align: center;padding: 20px 40px 40px;">
                       <h3
                         style="margin: 0 0 26px; color: #000000 ; font-size: 30px; font-weight: 600;line-height: 40px;">
-                        Hi, {{userData.name}}
+                        Hi, {{name}}
                       </h3>
                       <!-- Accept Message -->
                       <p
@@ -193,7 +193,7 @@
                         <td align="center" style="padding: 40px 0 0;">
                           <h2
                             style="margin:0 0 20px; text-align: center; font-size: 30px; line-height: 1; font-weight: 600; color: #000;">
-                            Booking ID: #12345</h2>
+                            Booking ID: #{{booking_id}}</h2>
                           <table border="0" cellpadding="0" cellspacing="0" width="100%"
                             style="background-color: #ffffff; padding: 30px; border-radius: 36px;">
 
@@ -214,7 +214,7 @@
                                         style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
                                         Service Type</div>
                                       <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
-                                        {{Service_type}}</div>
+                                        {{service_type}}</div>
                                     </td>
                                   </tr>
                                 </table>
@@ -268,11 +268,19 @@
                                       </div>
                                     </td>
                                     <td style="padding-bottom: 15px;">
-                                      <div
-                                        style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
-                                        Shoot Time</div>
+                                      <div style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
+                                        Start Time
+                                      </div>
                                       <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
-                                        {{startTime}} - {{endTime}}</div>
+                                        {{start_time}}
+                                      </div>
+
+                                      <div style="margin-top: 10px; font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
+                                        End Time
+                                      </div>
+                                      <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
+                                        {{end_time}}
+                                      </div>
                                     </td>
                                   </tr>
                                 </table>
@@ -373,9 +381,9 @@
                                     <td style="padding-bottom: 15px;">
                                       <div
                                         style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
-                                        Total Amount Paid</div>
+                                        Amount Paid</div>
                                       <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
-                                        $5000.00</div>
+                                        {{amount_paid}}</div>
                                     </td>
                                   </tr>
                                 </table>
@@ -405,7 +413,7 @@
                                         style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
                                         Payment Method</div>
                                       <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
-                                        Stripe</div>
+                                        {{payment_method}}</div>
                                     </td>
                                   </tr>
                                 </table>
@@ -434,10 +442,17 @@
                                         style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
                                         Transaction ID</div>
                                       <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
-                                        txn_1P2Q3R4S5T6U7V8W9X</div>
+                                        {{transaction_id}}</div>
                                     </td>
                                   </tr>
                                 </table>
+                              </td>
+                            </tr>
+                            <tr>
+                              <td style="padding: 20px 0 0; text-align: center;">
+                                <p style="margin: 0; font-size: 18px; line-height: 28px; color: rgba(0, 0, 0, 0.70);">
+                                  Your payment has been securely processed and received.
+                                </p>
                               </td>
                             </tr>
                           </table>
@@ -523,6 +538,13 @@
                             </p>
                           </td>
                         </tr>
+                        <tr>
+                          <td align="center" style="padding: 0 40px 40px;">
+                            <p style="color: rgba(0, 0, 0, 0.70); font-size: 20px; font-weight: 400; line-height: 30px; margin: 0;">
+                              No action is needed on your end.
+                            </p>
+                          </td>
+                        </tr>
                       </table>
                     </div>
                   </td>
@@ -552,7 +574,9 @@
                         Your shoot details will be confirmed. Please complete the onboarding form if you have not yet
                         done so.
                         <span style="font-weight: 600; color: #000;">
-                          [Insert Link]
+                          <a href="{{insert_link}}" style="font-weight:600; color:#000;">
+                            Complete onboarding
+                          </a>
                         </span>
                       </li>
                       <li

@@ -549,7 +549,7 @@ exports.updateRequestStatus = async (req, res) => {
         project_id,
         crew_member_id,
         cp_action: "declined",
-        cp_status: "Declined",
+        cp_status: "Rejected",
       });
       console.log('CP email result:', emailRes);
       return res.status(200).json({ error: false, message: "Request declined successfully." });
@@ -635,6 +635,7 @@ exports.updateRequestStatus = async (req, res) => {
         cp_action: "accepted",
         cp_status: "Accepted",
       });
+      console.log('CP status email result:', emailRes);
 
       return res.status(200).json({ error: false, message: "Request accepted successfully." });
     }

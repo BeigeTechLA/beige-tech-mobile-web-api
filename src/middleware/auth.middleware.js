@@ -164,50 +164,48 @@ exports.requireSalesRepOrAdmin = async (req, res, next) => {
     const { users, user_type } = require('../models');
     
     if (!req.userId) {
-      return res.status(401).json({
+      return res.status(401).json({ 
         success: false,
         message: 'Authentication required'
-      });
+       });
     }
 
-    // Get user with user type
     const user = await users.findByPk(req.userId, {
       include: [
         {
-          model: user_type,
-          as: 'userType',
-          attributes: ['user_role']
-        }
-      ]
+        model: user_type,
+        as: 'userType',
+        attributes: ['user_role']
+      }
+    ]
     });
 
     if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: 'User not found'
+      return res.status(401).json({ 
+        success: false, 
+        message: 'User not found' 
       });
     }
 
     const userRole = user.userType?.user_role;
-    console.log('User role for authorization:', userRole);
-    console.log('userr', user);
+    
+    const allowedRoles = ['admin', 'Admin', 'sales_rep', 'sales_admin'];
 
-    if (userRole !== 'sales_rep' && userRole !== 'admin' && userRole !== 'Admin') {
+    if (!allowedRoles.includes(userRole)) {
       return res.status(403).json({
         success: false,
-        message: 'Sales rep or admin access required'
+        message: 'Access denied: Sales Admin, Sales Rep, or Admin access required'
       });
     }
 
-    req.userRole = userRole; // Attach role to request
+    req.userRole = userRole;
     next();
 
   } catch (error) {
-    console.error('Sales rep/admin authorization error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Authorization error',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    console.error('Authorization error:', error);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Authorization error' 
     });
   }
 };
@@ -246,8 +244,11 @@ exports.requireAdmin = async (req, res, next) => {
     }
 
     const userRole = user.userType?.user_role;
+    console.log("userRole-----------", userRole)
 
-    if (userRole !== 'admin') {
+    const allowedRoles = ['admin', 'Admin', 'sales_admin'];
+
+    if (!allowedRoles.includes(userRole)) {
       return res.status(403).json({
         success: false,
         message: 'Admin access required'

@@ -4,7 +4,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Your Production Proposal</title>
+  <meta name="color-scheme" content="light">
+  <meta name="supported-color-schemes" content="light">
+  <title>Your Shoot, Crafted - Proposal Inside</title>
 </head>
 
 <body
@@ -15,7 +17,6 @@
         <table width="600"
           style="background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%); border: 1px solid rgba(232, 209, 171, 0.3); border-radius: 24px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.04);">
 
-          <!-- Beige Logo -->
           <tr>
             <td align="center" style="padding: 40px 0 36px;">
               <div
@@ -31,31 +32,28 @@
             </td>
           </tr>
 
-          <!-- Header -->
           <tr>
             <td style="padding: 0 40px;">
-              <h1 style="margin: 0; color: #000000; font-size: 54px; font-weight: 500; line-height: 1;">
-                Your Production Proposal</h1>
-              <p style="margin: 16px 0 0; font-size: 26px; color: #403E3E; line-height: 1.3;">
-                Hi {{client_name}}
+              <h1 style="margin: 0; color: #000000; font-size: 52px; font-weight: 600; line-height: 1.05;">
+                We've crafted your custom proposal
+              </h1>
+              <p style="margin: 18px 0 0; font-size: 24px; color: #403E3E; line-height: 1.45;">
+                Hello {{first_name}},
               </p>
-              <p style="margin: 16px 0 0; font-size: 26px; color: #403E3E; line-height: 1.3; font-weight: 400;">
-                Thank you for choosing Beige for your upcoming <span style="color: #000000; font-weight: 500;">{{shoot_summary}}</span>
-              </p>
-              <p style="margin: 16px 0 0; font-size: 26px; color: #403E3E; line-height: 1.3;">
-                Your proposal is ready for confirmation.<br />
-                Once confirmed, we can begin <span style="color: #000000; font-weight: 500;">production</span>
+              <p style="margin: 16px 0 0; font-size: 24px; color: #403E3E; line-height: 1.45;">
+                For your <span style="color: #000000; font-weight: 600;">{{shoot_type}}</span> shoot -
+                <span style="color: #000000; font-weight: 600;">{{project_description}}</span> - here's a quick
+                snapshot:
               </p>
             </td>
           </tr>
 
-          <!-- Production Details -->
           <tr>
             <td>
               <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%"
                 style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;">
                 <tr>
-                  <td align="center" style="padding: 0 40px;">
+                  <td align="center" style="padding: 36px 40px 0;">
                     <table border="0" cellpadding="0" cellspacing="0" width="100%"
                       style="line-height: 0; font-size: 0;">
                       <tr>
@@ -107,7 +105,6 @@
                               </div>
                             </div>
                           </div>
-                          </div>
                         </td>
                       </tr>
                     </table>
@@ -115,162 +112,152 @@
                     <table border="0" cellpadding="0" cellspacing="0" width="100%"
                       style="background-color: #FEF0D8; border-radius: 0 0 40px 40px;">
                       <tr>
-                        <td align="center" style="padding: 40px 30px 60px 30px;">
-                          <h2 style="margin: 0 0 25px 0; font-size: 30px; font-weight: 600; color: #000000;">Production
-                            Details</h2>
+                        <td align="center" style="padding: 34px 30px 28px;">
+                          <h2 style="margin: 0 0 22px 0; font-size: 30px; font-weight: 600; color: #000000;">
+                            Proposal Details
+                          </h2>
+
                           <table border="0" cellpadding="0" cellspacing="0" width="100%"
                             style="background-color: #ffffff; border-radius: 40px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); padding: 30px;">
+
                             <tr>
                               <td style="padding: 0;">
                                 <table width="100%" cellpadding="0" cellspacing="0">
                                   <tr>
-                                    <td width="100" style="padding-bottom: 20px;">
-                                      <div
-                                        style="width: 76px; height: 76px; border-radius: 50%; text-align: center; display: table-cell; vertical-align: middle; background-color: #FFFFFF; box-shadow: 1px 1px 1px 0 #FFF inset, -1px -1px 0 0 rgba(0, 0, 0, 0.10) inset, 10px 10px 21.2px rgba(0, 0, 0, 0.05), 5.9px 5.9px 8.3px rgba(0, 0, 0, 0.19), 2.6px 2.6px 3.7px rgba(0, 0, 0, 0.23), 1.2px 1.2px 1.7px rgba(0, 0, 0, 0.25), 0.4px 0.4px 0.6px rgba(0, 0, 0, 0.26);">
-                                        <img
-                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/User.svg"
-                                          width="40" height="40" style="display: inline-block; vertical-align: middle;">
-                                      </div>
-                                    </td>
-                                    <td style="padding-bottom: 20px;">
-                                      <div
-                                        style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
-                                        Project</div>
-                                      <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
-                                        {{project_name}}</div>
-                                    </td>
-                                  </tr>
-                                </table>
-                                <div>
-                                  <img
-                                    src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
-                                    alt="Line Separator" width="100%" style="display: block; border: 0;">
-                                </div>
-                              </td>
-                            </tr>
-
-                            <tr>
-                              <td style="padding: 20px 0 0;">
-                                <table width="100%" cellpadding="0" cellspacing="0">
-                                  <tr>
-                                    <td width="100" style="padding-bottom: 20px;">
-                                      <div
-                                        style="width: 76px; height: 76px; border-radius: 50%; text-align: center; display: table-cell; vertical-align: middle; background-color: #FFFFFF; box-shadow: 1px 1px 1px 0 #FFF inset, -1px -1px 0 0 rgba(0, 0, 0, 0.10) inset, 10px 10px 21.2px rgba(0, 0, 0, 0.05), 5.9px 5.9px 8.3px rgba(0, 0, 0, 0.19), 2.6px 2.6px 3.7px rgba(0, 0, 0, 0.23), 1.2px 1.2px 1.7px rgba(0, 0, 0, 0.25), 0.4px 0.4px 0.6px rgba(0, 0, 0, 0.26);">
-                                        <img
-                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/Camera.png"
-                                          width="40" height="40" style="display: inline-block; vertical-align: middle;">
-                                      </div>
-                                    </td>
-                                    <td style="padding-bottom: 20px;">
-                                      <div
-                                        style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
-                                        Services</div>
-                                      <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
-                                        {{contentType}}</div>
-                                    </td>
-                                  </tr>
-                                </table>
-                                <div>
-                                  <img
-                                    src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
-                                    alt="Line Separator" width="100%" style="display: block; border: 0;">
-                                </div>
-                              </td>
-                            </tr>
-
-                            <tr>
-                              <td style="padding: 20px 0 0;">
-                                <table width="100%" cellpadding="0" cellspacing="0">
-                                  <tr>
-                                    <td width="100" style="padding-bottom: 20px;">
-                                      <div
-                                        style="width: 76px; height: 76px; border-radius: 50%; text-align: center; display: table-cell; vertical-align: middle; background-color: #FFFFFF; box-shadow: 1px 1px 1px 0 #FFF inset, -1px -1px 0 0 rgba(0, 0, 0, 0.10) inset, 10px 10px 21.2px rgba(0, 0, 0, 0.05), 5.9px 5.9px 8.3px rgba(0, 0, 0, 0.19), 2.6px 2.6px 3.7px rgba(0, 0, 0, 0.23), 1.2px 1.2px 1.7px rgba(0, 0, 0, 0.25), 0.4px 0.4px 0.6px rgba(0, 0, 0, 0.26);">
-                                        <img
-                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/ClockCircle.png"
-                                          width="40" height="40" style="display: inline-block; vertical-align: middle;">
-                                      </div>
-                                    </td>
-                                    <td style="padding-bottom: 20px;">
-                                      <div
-                                        style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
-                                        Schedule</div>
-                                      <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
-                                        {{eventDate}} | {{startTime}} to
-                                        {{endTime}}</div>
-                                    </td>
-                                  </tr>
-                                </table>
-                                <div>
-                                  <img
-                                    src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
-                                    alt="Line Separator" width="100%" style="display: block; border: 0;">
-                                </div>
-                              </td>
-                            </tr>
-
-                            <tr>
-                              <td style="padding: 20px 0 0;">
-                                <table width="100%" cellpadding="0" cellspacing="0">
-                                  <tr>
-                                    <td width="100" style="padding-bottom: 20px;">
-                                      <div
-                                        style="width: 76px; height: 76px; border-radius: 50%; text-align: center; display: table-cell; vertical-align: middle; background-color: #FFFFFF; box-shadow: 1px 1px 1px 0 #FFF inset, -1px -1px 0 0 rgba(0, 0, 0, 0.10) inset, 10px 10px 21.2px rgba(0, 0, 0, 0.05), 5.9px 5.9px 8.3px rgba(0, 0, 0, 0.19), 2.6px 2.6px 3.7px rgba(0, 0, 0, 0.23), 1.2px 1.2px 1.7px rgba(0, 0, 0, 0.25), 0.4px 0.4px 0.6px rgba(0, 0, 0, 0.26);">
-                                        <img
-                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/EditPencil.png"
-                                          width="40" height="40" style="display: inline-block; vertical-align: middle;">
-                                      </div>
-                                    </td>
-                                    <td style="padding-bottom: 20px;">
-                                      <div
-                                        style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
-                                        Editing</div>
-                                      <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
-                                        {{editsNeeded}}</div>
-                                    </td>
-                                  </tr>
-                                </table>
-                                <div>
-                                  <img
-                                    src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
-                                    alt="Line Separator" width="100%" style="display: block; border: 0;">
-                                </div>
-                              </td>
-                            </tr>
-
-                            <tr>
-                              <td style="padding: 20px 0;">
-                                <table width="100%" cellpadding="0" cellspacing="0">
-                                  <tr>
-                                    <td width="100">
+                                    <td width="96" style="padding-bottom: 20px;">
                                       <div
                                         style="width: 76px; height: 76px; border-radius: 50%; text-align: center; display: table-cell; vertical-align: middle; background-color: #FFFFFF; box-shadow: 1px 1px 1px 0 #FFF inset, -1px -1px 0 0 rgba(0, 0, 0, 0.10) inset, 10px 10px 21.2px rgba(0, 0, 0, 0.05), 5.9px 5.9px 8.3px rgba(0, 0, 0, 0.19), 2.6px 2.6px 3.7px rgba(0, 0, 0, 0.23), 1.2px 1.2px 1.7px rgba(0, 0, 0, 0.25), 0.4px 0.4px 0.6px rgba(0, 0, 0, 0.26);">
                                         <img
                                           src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/location.svg"
-                                          width="40" height="40" style="display: inline-block; vertical-align: middle;">
+                                          width="40" height="40" alt="Date" style="display: inline-block; vertical-align: middle;">
                                       </div>
                                     </td>
-                                    <td>
+                                    <td style="padding-bottom: 20px;">
                                       <div
                                         style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
-                                        Location</div>
+                                        Location
+                                      </div>
                                       <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
-                                        {{location}}</div>
+                                        {{location}}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                </table>
+                                <div>
+                                  <img
+                                    src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                    alt="Line Separator" width="100%" style="display: block; border: 0;">
+                                </div>
+                              </td>
+                            </tr>
+
+                            <tr>
+                              <td style="padding: 20px 0 0;">
+                                <table width="100%" cellpadding="0" cellspacing="0">
+                                  <tr>
+                                    <td width="96" style="padding-bottom: 20px;">
+                                      <div
+                                        style="width: 76px; height: 76px; border-radius: 50%; text-align: center; display: table-cell; vertical-align: middle; background-color: #FFFFFF; box-shadow: 1px 1px 1px 0 #FFF inset, -1px -1px 0 0 rgba(0, 0, 0, 0.10) inset, 10px 10px 21.2px rgba(0, 0, 0, 0.05), 5.9px 5.9px 8.3px rgba(0, 0, 0, 0.19), 2.6px 2.6px 3.7px rgba(0, 0, 0, 0.23), 1.2px 1.2px 1.7px rgba(0, 0, 0, 0.25), 0.4px 0.4px 0.6px rgba(0, 0, 0, 0.26);">
+                                        <img
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/ClockCircle.png"
+                                          width="40" height="40" alt="Time" style="display: inline-block; vertical-align: middle;">
+                                      </div>
+                                    </td>
+                                    <td style="padding-bottom: 20px;">
+                                      <div
+                                        style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
+                                        Quote Validity
+                                      </div>
+                                      <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
+                                        {{quote_validity}}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                </table>
+                                <div>
+                                  <img
+                                    src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                    alt="Line Separator" width="100%" style="display: block; border: 0;">
+                                </div>
+                              </td>
+                            </tr>
+
+                            <tr>
+                              <td style="padding: 20px 0 0;">
+                                <table width="100%" cellpadding="0" cellspacing="0">
+                                  <tr>
+                                    <td width="96" style="padding-bottom: 0;">
+                                      <div
+                                        style="width: 76px; height: 76px; border-radius: 50%; text-align: center; display: table-cell; vertical-align: middle; background-color: #FFFFFF; box-shadow: 1px 1px 1px 0 #FFF inset, -1px -1px 0 0 rgba(0, 0, 0, 0.10) inset, 10px 10px 21.2px rgba(0, 0, 0, 0.05), 5.9px 5.9px 8.3px rgba(0, 0, 0, 0.19), 2.6px 2.6px 3.7px rgba(0, 0, 0, 0.23), 1.2px 1.2px 1.7px rgba(0, 0, 0, 0.25), 0.4px 0.4px 0.6px rgba(0, 0, 0, 0.26);">
+                                        <img
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/EditPencil.png"
+                                          width="40" height="40" alt="Add-ons" style="display: inline-block; vertical-align: middle;">
+                                      </div>
+                                    </td>
+                                    <td style="padding-bottom: 0;">
+                                      <div
+                                        style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
+                                        Add-ons
+                                      </div>
+                                      <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 26px;">
+                                        {{add_ons}}
+                                      </div>
+                                    </td>
+                                  </tr>
+                                </table>
+                                <div style="padding-top: 20px;">
+                                  <img
+                                    src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                    alt="Line Separator" width="100%" style="display: block; border: 0;">
+                                </div>
+                              </td>
+                            </tr>
+
+                            <tr>
+                              <td style="padding: 20px 0 0;">
+                                <table width="100%" cellpadding="0" cellspacing="0">
+                                  <tr>
+                                    <td width="96" style="padding-bottom: 0;">
+                                      <div
+                                        style="width: 76px; height: 76px; border-radius: 50%; text-align: center; display: table-cell; vertical-align: middle; background-color: #FFFFFF; box-shadow: 1px 1px 1px 0 #FFF inset, -1px -1px 0 0 rgba(0, 0, 0, 0.10) inset, 10px 10px 21.2px rgba(0, 0, 0, 0.05), 5.9px 5.9px 8.3px rgba(0, 0, 0, 0.19), 2.6px 2.6px 3.7px rgba(0, 0, 0, 0.23), 1.2px 1.2px 1.7px rgba(0, 0, 0, 0.25), 0.4px 0.4px 0.6px rgba(0, 0, 0, 0.26);">
+                                        <img
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/Checklist.svg"
+                                          width="40" height="40" alt="Includes" style="display: inline-block; vertical-align: middle;">
+                                      </div>
+                                    </td>
+                                    <td style="padding-bottom: 0;">
+                                      <div
+                                        style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
+                                        Includes
+                                      </div>
+                                      <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 26px;">
+                                        Production, selected add-ons, and logistics planning
+                                      </div>
                                     </td>
                                   </tr>
                                 </table>
                               </td>
                             </tr>
+
                           </table>
 
-                          <div style="padding: 40px 0 0;">
-                            <h2 style="margin: 0 0 31px 0; font-size: 27px; font-weight: 600; color: #000000;">Proposed
-                              Amount</h2>
-                            <p
-                              style="font-size: 35px; font-weight: 600; color: #E8D1AB; letter-spacing: 1px; line-height: 1.7; background-color: #000; padding: 18px 40px; border-radius: 100px; margin:0;">
-                              $ {{proposed_amount}}
-                              <!-- $5000.00 -->
-                            </p>
-                          </div>
+                          <table width="100%" cellpadding="0" cellspacing="0" style="padding-top: 26px;">
+                            <tr>
+                              <td
+                                style="padding: 0 0 12px; font-size: 24px; line-height: 1.3; font-weight: 600; color: #000000; text-align: center;">
+                                Estimate Proposal Amount
+                              </td>
+                            </tr>
+                            <tr>
+                              <td>
+                                <div
+                                  style="background: #000000; border-radius: 999px; text-align: center; padding: 18px 26px; font-size: 34px; line-height: 1; color: #E8D1AB; font-weight: 700; letter-spacing: 0.5px;">
+                                  {{proposal_amount}}
+                                </div>
+                              </td>
+                            </tr>
+                          </table>
+
                         </td>
                       </tr>
                     </table>
@@ -280,83 +267,82 @@
             </td>
           </tr>
 
-          <!-- Confirm Button -->
           <tr>
-            <td align="center" style="padding: 52px;">
-              <a href="{{payment_link}}" target="_blank"
-                style="border-radius: 100px; padding: 18px 40px; font-size: 18px; font-weight: 600; color: #E8D1AB; text-decoration: none; text-transform: capitalize; letter-spacing: 1px; line-height: 1.7; background-color: #000;">
-                Confirm Your Booking &rarr;
-              </a>
+            <td style="padding: 0 18px 0; background-color: #FEF0D8;">
+              <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td>
+                    <img
+                      src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/ProdProposalImg.png"
+                      alt="Proposal Preview" width="100%"
+                      style="display: block; border: 0; max-width: 564px;">
+                  </td>
+                </tr>
+              </table>
             </td>
           </tr>
 
           <tr>
-            <td style="padding: 0;" bgcolor="#FFF3DE">
-              <!-- Message -->
-              <div style="padding: 40px 40px 20px;">
-                <p
-                  style="font-size: 28px;font-style: normal;font-weight: 500;line-height: normal;color: #000; margin: 0 0 27px;">
-                  After confirming your booking:
-                </p>
-
-                <div
-                  style="border-radius: 18px; background: linear-gradient(90deg, #FFF 0%, rgba(255, 255, 255, 0.00) 100%); padding: 20px; color: #000000B2; font-size: 20px; font-weight: 500;">
-                  <ul style="margin: 0;">
-                    <li style="margin-bottom: 15px;">Your production team will be assigned</li>
-                    <li style="margin-bottom: 15px;">Your shoot timeline will be finalized</li>
-                    <li>Your creative brief will be reviewed</li>
-                  </ul>
-                </div>
-              </div>
-
-              <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/ProdProposalImg.png"
-                alt="Laptop Image" width="100%"
-                style="display: block; border: 0; object-fit: cover; object-position: top; border-radius: 18px;"
-                height="450px" />
-
-              <div style="padding: 40px 40px;">
-                <p style="background-color: #E8D1AB; font-size: 20px;font-style: normal;font-weight: 500;line-height: normal;letter-spacing: 0.415px; color: #000000B2; 
-                padding: 20px 24px; border-radius: 32px; width: fit-content;">
-                  ✔ Vetted Creative Partners
-                </p>
-                <p style="background-color: #E8D1AB; font-size: 20px;font-style: normal;font-weight: 500;line-height: normal;letter-spacing: 0.415px; color: #000000B2; 
-                padding: 20px 24px; border-radius: 32px;width: fit-content;">
-                  ✔ Professional Production Standards
-                </p>
-                <p style="background-color: #E8D1AB; font-size: 20px;font-style: normal;font-weight: 500;line-height: normal;letter-spacing: 0.415px; color: #000000B2; 
-                padding: 20px 24px; border-radius: 32px;width: fit-content;">
-                  ✔ Beige Quality Guarantee
-                </p>
-                <p style="font-size: 28px;font-style: normal;font-weight: 600; color: #000; margin: 30px 0 0;">Beige AI
-                  Platform -<br />
-                  Production Marketplace</p>
-              </div>
+            <td style="padding: 26px 40px 0; background-color: #FFFFFF;">
+              <table border="0" cellpadding="0" cellspacing="0" style="margin: 0 0 18px;">
+                <tr>
+                  <td
+                    style="background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%); border-radius: 999px; padding: 10px 18px; color: #000000; font-size: 20px; font-style: italic; font-weight: 600; line-height: 1.2;">
+                    What Happens Next
+                  </td>
+                </tr>
+              </table>
+              <ul style="margin: 0; padding-left: 18px; color: #5A5A5A; font-size: 16px; line-height: 1.8;">
+                <li>Everything from shoot execution to add-ons and final delivery has been tailored to your requirements.</li>
+                <li>You'll find the complete details in the attached proposal.</li>
+                <li>Review it and let us know once approved, we'll take it forward.</li>
+              </ul>
             </td>
           </tr>
 
-          <!-- Footer -->
           <tr>
-            <td align="center" style="padding: 52px 40px 60px;">
-              <div style="padding-bottom: 48px;">
-                <img
-                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
-                  alt="Line Separator" width="100%" style="display: block; border: 0;">
-              </div>
-              <p
-                style="margin: 0 0 20px; font-size: 16px;font-style: normal;font-weight: 400;line-height: normal; color: #3C3B3B;">
-                Need help with your booking?
+            <td style="padding: 28px 40px 0; background-color: #FFFFFF;">
+              <p style="margin: 0; font-size: 24px; font-style: italic; font-weight: 600; color: #000000;">
+                The Beige Team
               </p>
-              <a href="mailto:sales@beigecorporation.io" target="_blank"
-                style="display:block; margin: 0 0 60px; color: #000000; font-size: 26px;font-weight: 600;">
-                sales@beigecorporation.io
-              </a>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding: 18px 40px 0; background-color: #FFFFFF;">
+              <img
+                src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                alt="Line Separator" width="100%" style="display: block; border: 0;">
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding: 24px 40px 12px; text-align: center; background-color: #FFFFFF;">
+              <p style="margin: 0; font-size: 13px; color: rgba(0,0,0,0.55); line-height: 1.7;">
+                This is an automated email from BeigeAI. Please do not reply to this email.
+              </p>
+              <p style="margin: 18px 0 0; font-size: 14px; color: #000000; font-weight: 600; line-height: 1.6;">
+                Need Help?<br>
+                <a href="mailto:sales@beigeoperation.io"
+                  style="color: #000000; text-decoration: none;">sales@beigeoperation.io</a>
+              </p>
+              <p style="margin: 16px 0 0; font-size: 12px; color: rgba(0,0,0,0.65); line-height: 1.6;">
+                Help Center &nbsp;•&nbsp; Terms of Service &nbsp;•&nbsp; Privacy Policy
+              </p>
+              <p style="margin: 14px 0 0; font-size: 14px; color: #000000; font-weight: 600;">Beige AI</p>
+            </td>
+          </tr>
+
+          <tr>
+            <td align="center" style="padding: 24px 0 34px; background: linear-gradient(180deg, #FFFFFF 0%, #FBF3E4 100%);">
               <div
-                style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF;">
+                style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 28px; border-radius: 100px; background-color: #FFFFFF; box-shadow: 0 8px 24px 0 rgba(149, 157, 165, 0.20);">
                 <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
-                  alt="Beige" width="110" style="display: block; border: 0;">
+                  alt="Beige" width="95" style="display: block; border: 0;">
               </div>
             </td>
           </tr>
+
         </table>
       </td>
     </tr>

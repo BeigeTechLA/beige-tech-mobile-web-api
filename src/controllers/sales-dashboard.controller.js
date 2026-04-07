@@ -1,8 +1,190 @@
-const { sales_leads, discount_codes, payment_links, users, stream_project_booking } = require('../models');
+const { sales_leads, client_leads, discount_codes, payment_links, users, stream_project_booking } = require('../models');
 const { Op } = require('sequelize');
 const sequelize = require('../db');
 const constants = require('../utils/constants');
 const leadAssignmentService = require('../services/lead-assignment.service');
+
+function getDashboardStartDate(period) {
+  if (!period || period === 'all_time' || period === 'all') {
+    return null;
+  }
+
+  const startDate = new Date();
+
+  if (period === '7days') {
+    startDate.setDate(startDate.getDate() - 7);
+    return startDate;
+  }
+
+  if (period === '30days') {
+    startDate.setDate(startDate.getDate() - 30);
+    return startDate;
+  }
+
+  if (period === '90days') {
+    startDate.setDate(startDate.getDate() - 90);
+    return startDate;
+  }
+
+  return null;
+}
+
+function getDashboardDateRanges(period) {
+  if (!period || period === 'all_time' || period === 'all') {
+    return {
+      currentStartDate: null,
+      previousStartDate: null,
+      previousEndDate: null
+    };
+  }
+
+  const currentStartDate = getDashboardStartDate(period);
+  if (!currentStartDate) {
+    return {
+      currentStartDate: null,
+      previousStartDate: null,
+      previousEndDate: null
+    };
+  }
+
+  const now = new Date();
+  const rangeMs = now.getTime() - currentStartDate.getTime();
+  const previousEndDate = new Date(currentStartDate.getTime());
+  const previousStartDate = new Date(currentStartDate.getTime() - rangeMs);
+
+  return {
+    currentStartDate,
+    previousStartDate,
+    previousEndDate
+  };
+}
+
+function buildLeadDashboardWhere({ startDate, salesRepId, req }) {
+  const whereClause = {
+    is_active: 1
+  };
+
+  if (startDate) {
+    whereClause.created_at = { [Op.gte]: startDate };
+  }
+
+  if (req.userRole === 'sales_rep') {
+    whereClause.assigned_sales_rep_id = req.userId;
+  } else if (salesRepId) {
+    whereClause.assigned_sales_rep_id = parseInt(salesRepId, 10);
+  }
+
+  return whereClause;
+}
+
+function buildPreviousLeadDashboardWhere({ previousStartDate, previousEndDate, salesRepId, req }) {
+  const whereClause = {
+    is_active: 1
+  };
+
+  if (previousStartDate && previousEndDate) {
+    whereClause.created_at = {
+      [Op.gte]: previousStartDate,
+      [Op.lt]: previousEndDate
+    };
+  }
+
+  if (req.userRole === 'sales_rep') {
+    whereClause.assigned_sales_rep_id = req.userId;
+  } else if (salesRepId) {
+    whereClause.assigned_sales_rep_id = parseInt(salesRepId, 10);
+  }
+
+  return whereClause;
+}
+
+async function getOverviewStatsForModel(LeadModel, whereClause) {
+  const totalLeads = await LeadModel.count({
+    where: whereClause
+  });
+
+  const totalActiveLeads = await LeadModel.count({
+    where: whereClause
+  });
+
+  const salesAssistedLeads = await LeadModel.count({
+    where: {
+      ...whereClause,
+      lead_type: 'sales_assisted'
+    }
+  });
+
+  const totalBookings = await LeadModel.count({
+    where: {
+      ...whereClause,
+      lead_status: 'booked'
+    }
+  });
+
+  const totalConversionRate = totalLeads > 0
+    ? Number(((totalBookings / totalLeads) * 100).toFixed(1))
+    : 0;
+
+  return {
+    total_leads: totalLeads,
+    total_active_leads: totalActiveLeads,
+    sales_assisted_leads: salesAssistedLeads,
+    total_conversion_rate: totalConversionRate,
+    total_bookings: totalBookings
+  };
+}
+
+function getPercentageChange(currentValue, previousValue, options = {}) {
+  const { isRate = false } = options;
+
+  if (previousValue === 0) {
+    if (currentValue === 0) return 0;
+    return 100;
+  }
+
+  const change = ((currentValue - previousValue) / previousValue) * 100;
+  return Number((isRate ? change : change).toFixed(1));
+}
+
+function withTrend(currentStats, previousStats, period) {
+  const trendValue = (current, previous, options = {}) =>
+    period === 'all_time' || period === 'all'
+      ? 0
+      : getPercentageChange(current, previous, options);
+
+  return {
+    total_active_leads: {
+      value: currentStats.total_active_leads,
+      change_percent: trendValue(currentStats.total_active_leads, previousStats.total_active_leads)
+    },
+    sales_assisted_leads: {
+      value: currentStats.sales_assisted_leads,
+      change_percent: trendValue(currentStats.sales_assisted_leads, previousStats.sales_assisted_leads)
+    },
+    total_conversion_rate: {
+      value: currentStats.total_conversion_rate,
+      change_percent: trendValue(currentStats.total_conversion_rate, previousStats.total_conversion_rate, { isRate: true })
+    },
+    total_bookings: {
+      value: currentStats.total_bookings,
+      change_percent: trendValue(currentStats.total_bookings, previousStats.total_bookings)
+    }
+  };
+}
+
+function combineOverviewStats(salesStats, clientStats) {
+  const totalLeads = salesStats.total_leads + clientStats.total_leads;
+  const totalBookings = salesStats.total_bookings + clientStats.total_bookings;
+
+  return {
+    total_active_leads: salesStats.total_active_leads + clientStats.total_active_leads,
+    sales_assisted_leads: salesStats.sales_assisted_leads + clientStats.sales_assisted_leads,
+    total_conversion_rate: totalLeads > 0
+      ? Number(((totalBookings / totalLeads) * 100).toFixed(1))
+      : 0,
+    total_bookings: totalBookings
+  };
+}
 
 /**
  * Get dashboard overview statistics
@@ -165,6 +347,72 @@ exports.getDashboardStats = async (req, res) => {
 };
 
 /**
+ * Get combined overview statistics for dashboard cards
+ * GET /api/sales/dashboard/overview
+ */
+exports.getCombinedOverviewStats = async (req, res) => {
+  try {
+    const { period = 'all_time', sales_rep_id } = req.query;
+    const {
+      currentStartDate,
+      previousStartDate,
+      previousEndDate
+    } = getDashboardDateRanges(period);
+
+    const salesWhere = buildLeadDashboardWhere({
+      startDate: currentStartDate,
+      salesRepId: sales_rep_id,
+      req
+    });
+
+    const clientWhere = buildLeadDashboardWhere({
+      startDate: currentStartDate,
+      salesRepId: sales_rep_id,
+      req
+    });
+
+    const previousSalesWhere = buildPreviousLeadDashboardWhere({
+      previousStartDate,
+      previousEndDate,
+      salesRepId: sales_rep_id,
+      req
+    });
+
+    const previousClientWhere = buildPreviousLeadDashboardWhere({
+      previousStartDate,
+      previousEndDate,
+      salesRepId: sales_rep_id,
+      req
+    });
+
+    const salesOverview = await getOverviewStatsForModel(sales_leads, salesWhere);
+    const clientOverview = await getOverviewStatsForModel(client_leads, clientWhere);
+    const previousSalesOverview = await getOverviewStatsForModel(sales_leads, previousSalesWhere);
+    const previousClientOverview = await getOverviewStatsForModel(client_leads, previousClientWhere);
+
+    const combinedOverview = combineOverviewStats(salesOverview, clientOverview);
+    const previousCombinedOverview = combineOverviewStats(previousSalesOverview, previousClientOverview);
+
+    return res.json({
+      success: true,
+      data: {
+        period,
+        combined: withTrend(combinedOverview, previousCombinedOverview, period),
+        sales_leads: withTrend(salesOverview, previousSalesOverview, period),
+        client_leads: withTrend(clientOverview, previousClientOverview, period)
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching combined overview stats:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to fetch dashboard overview stats',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
  * Get sales rep performance statistics
  * GET /api/sales/dashboard/rep-stats/:repId
  */
@@ -281,6 +529,99 @@ exports.getSalesRepsWorkload = async (req, res) => {
   }
 };
 
+/**
+ * Get active sales reps list
+ * GET /api/sales/sales-reps
+ */
+// exports.getSalesRepsList = async (req, res) => {
+//   try {
+//     const { user_type } = require('../models');
+
+//     const salesRepType = await user_type.findOne({
+//       where: { user_role: 'sales_rep' },
+//       attributes: ['user_type_id']
+//     });
+
+//     if (!salesRepType) {
+//       return res.json({
+//         success: true,
+//         data: salesReps
+//       });
+//     }
+
+//     const salesReps = await users.findAll({
+//       where: {
+//         user_type: salesRepType.user_type_id,
+//         is_active: 1
+//       },
+//       attributes: ['id', 'name', 'email'],
+//       order: [['name', 'ASC']]
+//     });
+
+//     res.json({
+//       success: true,
+//       data: salesReps
+//     });
+//   } catch (error) {
+//     console.error('Error fetching sales reps list:', error);
+//     res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+//       success: false,
+//       message: 'Failed to fetch sales reps list',
+//       error: process.env.NODE_ENV === 'development' ? error.message : undefined
+//     });
+//   }
+// };
+
+exports.getSalesRepsList = async (req, res) => {
+  try {
+    const { user_type, users, Sequelize } = require('../models');
+    const { Op } = Sequelize;
+
+    // Get both roles
+    const userTypes = await user_type.findAll({
+      where: {
+        user_role: {
+          [Op.in]: ['sales_rep', 'sales_admin']
+        }
+      },
+      attributes: ['user_type_id']
+    });
+
+    const userTypeIds = userTypes.map(u => u.user_type_id);
+
+    // If no roles found
+    if (userTypeIds.length === 0) {
+      return res.json({
+        success: true,
+        data: []
+      });
+    }
+
+    // Fetch users
+    const salesReps = await users.findAll({
+      where: {
+        user_type: {
+          [Op.in]: userTypeIds
+        },
+        is_active: 1
+      },
+      attributes: ['id', 'name', 'email', 'user_type'],
+      order: [['name', 'ASC']]
+    });
+
+    res.json({
+      success: true,
+      data: salesReps
+    });
+  } catch (error) {
+    console.error('Error fetching sales reps list:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch sales reps list',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
 /**
  * Get recent activities across all leads
  * GET /api/sales/dashboard/recent-activities

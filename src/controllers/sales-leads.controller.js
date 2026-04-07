@@ -1,4 +1,4 @@
-const { sales_leads, client_leads, sales_lead_activities, client_lead_activities, stream_project_booking, stream_project_booking_days, users, discount_codes, payment_links,  quotes, assigned_crew, crew_members,
+const { sales_leads, client_leads, sales_lead_activities, client_lead_activities, stream_project_booking, stream_project_booking_days, users, user_type, discount_codes, payment_links,  quotes, assigned_crew, crew_members,
   quote_line_items, crew_member_files } = require('../models');
 const { Op, Sequelize } = require('sequelize');
 const constants = require('../utils/constants');
@@ -46,7 +46,12 @@ async function calculateFromCreatorsInternally(pricingPayload) {
   return pricingData;
 }
 
-async function notifyAssignedCreators(creatorIds = []) {
+async function notifyAssignedCreators(
+  creatorIds = [],
+  booking = null,
+  fallbackClientName = '',
+  fallbackShootAmount = null
+) {
   try {
     const uniqueIds = [...new Set((creatorIds || []).map(Number).filter(Boolean))];
     if (!uniqueIds.length) return;
@@ -68,6 +73,7 @@ async function notifyAssignedCreators(creatorIds = []) {
           sendCPNewBookingRequestEmail({
             to_email: c.email,
             user_name: [c.first_name, c.last_name].filter(Boolean).join(' ') || 'there',
+            ...getCPNewBookingEmailFields(booking, fallbackClientName, fallbackShootAmount),
             dashboardLink
           })
         )
@@ -75,6 +81,308 @@ async function notifyAssignedCreators(creatorIds = []) {
   } catch (e) {
     console.error('notifyAssignedCreators failed:', e?.message || e);
   }
+}
+
+function getCPNewBookingEmailFields(booking = {}, fallbackClientName = '', fallbackShootAmount = null) {
+  return {
+    client_name:
+      fallbackClientName ||
+      booking?.client_name ||
+      booking?.user?.name ||
+      null,
+    service_type:
+      booking?.content_type ||
+      booking?.event_type ||
+      booking?.shoot_type ||
+      null,
+    date: booking?.event_date || null,
+    start_time: booking?.start_time || null,
+    end_time: booking?.end_time || null,
+    shoot_amount: fallbackShootAmount ?? booking?.budget ?? null
+  };
+}
+
+function getEmailShootAmountFromFinalizeResult(finalizeResult = {}) {
+  return (
+    finalizeResult?.quote?.quote?.total ??
+    finalizeResult?.quote?.quote?.priceAfterDiscount ??
+    finalizeResult?.quote?.quote?.subtotal ??
+    finalizeResult?.quote?.total ??
+    finalizeResult?.quote?.price_after_discount ??
+    finalizeResult?.quote?.subtotal ??
+    null
+  );
+}
+
+async function resolveAssignableSalesRep(salesRepId) {
+  const salesRep = await users.findOne({
+    where: {
+      id: salesRepId,
+      is_active: 1
+    },
+    include: [
+      {
+        model: user_type,
+        as: 'userType',
+        attributes: ['user_role'],
+        required: false
+      }
+    ],
+    attributes: ['id', 'name', 'email']
+  });
+
+  if (!salesRep) {
+    throw new Error('Sales rep not found or inactive');
+  }
+
+  const userRole = salesRep.userType?.user_role;
+  if (userRole !== 'sales_rep' && userRole !== 'sales_admin' && userRole !== 'admin' && userRole !== 'Admin') {
+    throw new Error('Selected user is not a valid sales rep');
+  }
+
+  return salesRep;
+}
+
+async function resolveEmailClientNameForBooking(booking = null, fallbackClientName = null, options = {}) {
+  if (fallbackClientName) {
+    return fallbackClientName;
+  }
+
+  if (!booking) {
+    return null;
+  }
+
+  const transaction = options.transaction;
+
+  if (booking.client_name) {
+    return booking.client_name;
+  }
+
+  if (booking.user?.name) {
+    return booking.user.name;
+  }
+
+  if (booking.user_id) {
+    const bookingUser = await users.findOne({
+      where: { id: booking.user_id },
+      attributes: ['name'],
+      transaction
+    });
+
+    if (bookingUser?.name) {
+      return bookingUser.name;
+    }
+  }
+
+  const linkedLead = await sales_leads.findOne({
+    where: { booking_id: booking.stream_project_booking_id },
+    attributes: ['client_name'],
+    transaction
+  });
+
+  if (linkedLead?.client_name) {
+    return linkedLead.client_name;
+  }
+
+  const linkedClientLead = await client_leads.findOne({
+    where: { booking_id: booking.stream_project_booking_id },
+    attributes: ['client_name'],
+    transaction
+  });
+
+  if (linkedClientLead?.client_name) {
+    return linkedClientLead.client_name;
+  }
+
+  if (booking.guest_email) {
+    const localPart = String(booking.guest_email).split('@')[0] || '';
+    const derivedName = localPart.replace(/[._-]+/g, ' ').trim();
+    if (derivedName) {
+      return derivedName;
+    }
+  }
+
+  return null;
+}
+
+async function confirmCreativePartnerForLead({
+  leadId,
+  crewMemberId,
+  performedByUserId = null,
+  isClientLead = false
+}) {
+  const LeadModel = isClientLead ? client_leads : sales_leads;
+  const LeadActivityModel = isClientLead ? client_lead_activities : sales_lead_activities;
+
+  const lead = await LeadModel.findOne({
+    where: { lead_id: leadId },
+    attributes: ['lead_id', 'booking_id']
+  });
+
+  if (!lead) {
+    return {
+      status: 404,
+      body: { success: false, message: isClientLead ? 'Client lead not found' : 'Lead not found' }
+    };
+  }
+
+  if (!lead.booking_id) {
+    return {
+      status: 400,
+      body: { success: false, message: 'No booking is linked to this lead' }
+    };
+  }
+
+  const assignment = await assigned_crew.findOne({
+    where: {
+      project_id: lead.booking_id,
+      crew_member_id: crewMemberId,
+      is_active: 1
+    },
+    include: [
+      {
+        model: crew_members,
+        as: 'crew_member',
+        attributes: ['crew_member_id', 'first_name', 'last_name']
+      }
+    ]
+  });
+
+  if (!assignment) {
+    return {
+      status: 404,
+      body: { success: false, message: 'Creative Partner assignment not found for this booking' }
+    };
+  }
+
+  if (Number(assignment.crew_accept) !== 1) {
+    return {
+      status: 400,
+      body: {
+        success: false,
+        message: 'Creative Partner must accept the booking before it can be confirmed'
+      }
+    };
+  }
+
+  const currentStatus = String(assignment.status || '').toLowerCase();
+  if (currentStatus === 'confirmed') {
+    return {
+      status: 200,
+      body: {
+        success: true,
+        message: 'Creative Partner is already confirmed for this booking'
+      }
+    };
+  }
+
+  await assignment.update({
+    status: 'confirmed',
+    updated_at: new Date()
+  });
+
+  const cpName =
+    [assignment?.crew_member?.first_name, assignment?.crew_member?.last_name]
+      .filter(Boolean)
+      .join(' ')
+      .trim() || `Crew ID ${crewMemberId}`;
+
+  await LeadActivityModel.create({
+    lead_id: lead.lead_id,
+    activity_type: 'booking_updated',
+    activity_data: {
+      source: 'sales_portal_cp_confirmed',
+      booking_id: lead.booking_id,
+      crew_member_id: crewMemberId,
+      cp_name: cpName
+    },
+    performed_by_user_id: performedByUserId
+  });
+
+  const emailResult = await emailService.sendCPConfirmedEmailByRequest({
+    project_id: lead.booking_id,
+    crew_member_id: crewMemberId
+  });
+
+  if (!emailResult?.success) {
+    console.error('CP confirmed email send failed:', emailResult?.error || 'Unknown error');
+    return {
+      status: 500,
+      body: {
+        success: false,
+        message: emailResult?.error || 'Failed to send CP confirmed email'
+      }
+    };
+  }
+
+  return {
+    status: 200,
+    body: {
+      success: true,
+      message: 'Creative Partner confirmed and client email sent successfully',
+      data: {
+        lead_id: lead.lead_id,
+        booking_id: lead.booking_id,
+        crew_member_id: crewMemberId,
+        status: 'confirmed'
+      }
+    }
+  };
+}
+
+async function softDeleteLeadById({
+  leadId,
+  performedByUserId = null,
+  isClientLead = false
+}) {
+  const LeadModel = isClientLead ? client_leads : sales_leads;
+  const LeadActivityModel = isClientLead ? client_lead_activities : sales_lead_activities;
+
+  const lead = await LeadModel.findOne({
+    where: { lead_id: leadId },
+    attributes: ['lead_id', 'booking_id', 'client_name', 'guest_email', 'user_id', 'lead_status', 'is_active']
+  });
+
+  if (!lead || Number(lead.is_active) === 0) {
+    return {
+      status: constants.NOT_FOUND.code,
+      body: {
+        success: false,
+        message: isClientLead ? 'Client lead not found' : 'Lead not found'
+      }
+    };
+  }
+
+  await lead.update({
+    is_active: 0,
+    last_activity_at: new Date()
+  });
+
+  await LeadActivityModel.create({
+    lead_id: lead.lead_id,
+    activity_type: 'status_changed',
+    activity_data: {
+      old_status: lead.lead_status,
+      new_status: lead.lead_status,
+      action: 'soft_deleted',
+      source: 'admin_soft_delete',
+      booking_id: lead.booking_id || null
+    },
+    performed_by_user_id: performedByUserId
+  });
+
+  return {
+    status: constants.OK.code,
+    body: {
+      success: true,
+      message: isClientLead ? 'Client lead deleted successfully' : 'Lead deleted successfully',
+      data: {
+        lead_id: lead.lead_id,
+        booking_id: lead.booking_id,
+        is_active: 0
+      }
+    }
+  };
 }
 
 function safeJsonStringify(val) {
@@ -108,6 +416,49 @@ async function resolveUserId(userId, guestEmail) {
   });
 
   return existingUser ? existingUser.id : null;
+}
+
+async function resolveAssignedSalesRepId({
+  requestedSalesRepId,
+  req,
+  currentAssignedSalesRepId = null,
+  tx
+}) {
+  if (req.userRole === 'sales_rep' || req.userRole === 'sales_admin' || req.userRole === 'Admin') {
+    return req.userId || currentAssignedSalesRepId || null;
+  }
+
+  const normalizedRequestedSalesRepId =
+    requestedSalesRepId !== undefined && requestedSalesRepId !== null && requestedSalesRepId !== ''
+      ? parseInt(requestedSalesRepId, 10)
+      : null;
+
+  if (normalizedRequestedSalesRepId == null) {
+    return currentAssignedSalesRepId || null;
+  }
+
+  if (Number.isNaN(normalizedRequestedSalesRepId)) {
+    throw new Error('Invalid sales_rep_id');
+  }
+
+  const requestedSalesRep = await users.findByPk(normalizedRequestedSalesRepId, {
+    include: [
+      {
+        model: db.user_type,
+        as: 'userType',
+        attributes: ['user_role']
+      }
+    ],
+    transaction: tx
+  });
+
+  const requestedUserRole = requestedSalesRep?.userType?.user_role;
+
+  if (!requestedSalesRep || requestedUserRole !== 'sales_rep') {
+    throw new Error('Selected sales_rep_id is not a valid sales rep');
+  }
+
+  return normalizedRequestedSalesRepId;
 }
 
 /**
@@ -710,7 +1061,18 @@ exports.trackEarlyBookingInterest = async (req, res) => {
 
             assignedRep = await leadAssignmentService.autoAssignLead(lead.lead_id);
 
-          emailService.sendSalesLeadNotification({
+          // emailService.sendSalesLeadNotification({
+          //   guestEmail: normalizedGuestEmail,
+          //   shootType: shoot_type,
+          //   contentType: content_type,
+          //   eventDate: event_date,
+          //   startTime: start_time,
+          //   endTime: end_time,
+          //   editsNeeded: edits_needed
+          // }).catch(err => console.error('Sales Email Error:', err));
+
+          emailService.sendProductionLeadNotification({
+            client_name: client_name,
             guestEmail: normalizedGuestEmail,
             shootType: shoot_type,
             contentType: content_type,
@@ -718,16 +1080,7 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             startTime: start_time,
             endTime: end_time,
             editsNeeded: edits_needed
-          }).catch(err => console.error('Sales Email Error:', err));
-
-          // emailService.sendProductionLeadNotification({
-          //   guestEmail: normalizedGuestEmail,
-          //   contentType: content_type,
-          //   eventDate: event_date,
-          //   startTime: start_time,
-          //   endTime: end_time,
-          //   editsNeeded: edits_needed
-          // }).catch(err => console.error('Production Email Error:', err));
+          }).catch(err => console.error('Production Email Error:', err));
         } else {
           await lead.update({ last_activity_at: new Date() });
         }
@@ -1266,7 +1619,7 @@ exports.getLeads = async (req, res) => {
     const pageLimit = parseInt(limit);
     const offset = (pageNumber - 1) * pageLimit;
 
-    const whereClause = {};
+    const whereClause = { is_active: 1 };
     if (req.userRole === 'sales_rep') {
       whereClause.assigned_sales_rep_id = req.userId;
     }
@@ -1407,7 +1760,7 @@ exports.getClientLeads = async (req, res) => {
     const pageLimit = parseInt(limit, 10);
     const offset = (pageNumber - 1) * pageLimit;
 
-    const whereClause = {};
+    const whereClause = { is_active: 1 };
     if (req.userRole === 'sales_rep') {
       whereClause.assigned_sales_rep_id = req.userId;
     }
@@ -1518,7 +1871,7 @@ exports.getLeadById = async (req, res) => {
   try {
     const { id } = req.params;
 
-    let whereClause = { lead_id: id };
+    let whereClause = { lead_id: id, is_active: 1 };
 
     if (req.userRole === 'sales_rep') {
       whereClause.assigned_sales_rep_id = req.userId;
@@ -1837,7 +2190,7 @@ exports.getLeadFulfillmentStatus = async (req, res) => {
     const { id } = req.params;
 
     const lead = await sales_leads.findOne({
-      where: { lead_id: id },
+      where: { lead_id: id, is_active: 1 },
       include: [
         {
           model: stream_project_booking,
@@ -1941,7 +2294,7 @@ exports.getClientLeadFulfillmentStatus = async (req, res) => {
     const { id } = req.params;
 
     const lead = await client_leads.findOne({
-      where: { lead_id: id },
+      where: { lead_id: id, is_active: 1 },
       include: [
         {
           model: stream_project_booking,
@@ -2080,6 +2433,170 @@ exports.assignLead = async (req, res) => {
 };
 
 /**
+ * Change sales rep for a sales lead
+ * PUT /api/sales/leads/:id/change-sales-rep
+ * Admin only
+ */
+exports.changeLeadSalesRep = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { sales_rep_id } = req.body;
+
+    if (!sales_rep_id) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Sales rep ID is required'
+      });
+    }
+
+    const lead = await sales_leads.findOne({
+      where: { lead_id: id, is_active: 1 },
+      attributes: ['lead_id', 'assigned_sales_rep_id', 'client_name', 'guest_email']
+    });
+
+    if (!lead) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Lead not found'
+      });
+    }
+
+    const salesRep = await resolveAssignableSalesRep(parseInt(sales_rep_id, 10));
+
+    if (lead.assigned_sales_rep_id === salesRep.id) {
+      return res.json({
+        success: true,
+        message: 'Sales rep already assigned to this lead',
+        data: {
+          lead_id: lead.lead_id,
+          assigned_sales_rep_id: salesRep.id,
+          assigned_sales_rep: salesRep
+        }
+      });
+    }
+
+    const previousRepId = lead.assigned_sales_rep_id;
+
+    await lead.update({
+      assigned_sales_rep_id: salesRep.id
+    });
+
+    await sales_lead_activities.create({
+      lead_id: lead.lead_id,
+      activity_type: 'assigned',
+      activity_data: {
+        previous_rep_id: previousRepId,
+        new_rep_id: salesRep.id,
+        assignment_type: 'admin_change_sales_rep'
+      },
+      performed_by_user_id: req.userId
+    });
+
+    return res.json({
+      success: true,
+      message: 'Sales rep changed successfully',
+      data: {
+        lead_id: lead.lead_id,
+        client_name: lead.client_name,
+        guest_email: lead.guest_email,
+        previous_sales_rep_id: previousRepId,
+        assigned_sales_rep_id: salesRep.id,
+        assigned_sales_rep: salesRep
+      }
+    });
+  } catch (error) {
+    console.error('Error changing lead sales rep:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: error.message || 'Failed to change sales rep',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * Change sales rep for a client lead
+ * PUT /api/sales/client-leads/:id/change-sales-rep
+ * Admin only
+ */
+exports.changeClientLeadSalesRep = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { sales_rep_id } = req.body;
+
+    if (!sales_rep_id) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Sales rep ID is required'
+      });
+    }
+
+    const lead = await client_leads.findOne({
+      where: { lead_id: id, is_active: 1 },
+      attributes: ['lead_id', 'assigned_sales_rep_id', 'client_name', 'user_id']
+    });
+
+    if (!lead) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Client lead not found'
+      });
+    }
+
+    const salesRep = await resolveAssignableSalesRep(parseInt(sales_rep_id, 10));
+
+    if (lead.assigned_sales_rep_id === salesRep.id) {
+      return res.json({
+        success: true,
+        message: 'Sales rep already assigned to this client lead',
+        data: {
+          lead_id: lead.lead_id,
+          assigned_sales_rep_id: salesRep.id,
+          assigned_sales_rep: salesRep
+        }
+      });
+    }
+
+    const previousRepId = lead.assigned_sales_rep_id;
+
+    await lead.update({
+      assigned_sales_rep_id: salesRep.id
+    });
+
+    await client_lead_activities.create({
+      lead_id: lead.lead_id,
+      activity_type: 'assigned',
+      activity_data: {
+        previous_rep_id: previousRepId,
+        new_rep_id: salesRep.id,
+        assignment_type: 'admin_change_sales_rep'
+      },
+      performed_by_user_id: req.userId
+    });
+
+    return res.json({
+      success: true,
+      message: 'Sales rep changed successfully',
+      data: {
+        lead_id: lead.lead_id,
+        client_name: lead.client_name,
+        user_id: lead.user_id,
+        previous_sales_rep_id: previousRepId,
+        assigned_sales_rep_id: salesRep.id,
+        assigned_sales_rep: salesRep
+      }
+    });
+  } catch (error) {
+    console.error('Error changing client lead sales rep:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: error.message || 'Failed to change sales rep',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
  * Update lead status
  * PUT /api/sales/leads/:id/status
  */
@@ -2105,7 +2622,7 @@ exports.updateLeadStatus = async (req, res) => {
       });
     }
 
-    const lead = await sales_leads.findByPk(id);
+    const lead = await sales_leads.findOne({ where: { lead_id: id, is_active: 1 } });
 
     if (!lead) {
       return res.status(constants.NOT_FOUND.code).json({
@@ -2173,7 +2690,7 @@ exports.updateClientLeadStatus = async (req, res) => {
       });
     }
 
-    const lead = await client_leads.findByPk(id);
+    const lead = await client_leads.findOne({ where: { lead_id: id, is_active: 1 } });
 
     if (!lead) {
       return res.status(constants.NOT_FOUND.code).json({
@@ -2217,7 +2734,7 @@ exports.getClientLeadById = async (req, res) => {
   try {
     const { id } = req.params;
 
-    let whereClause = { lead_id: id };
+    let whereClause = { lead_id: id, is_active: 1 };
 
     if (req.userRole === 'sales_rep') {
       whereClause.assigned_sales_rep_id = req.userId;
@@ -2546,14 +3063,23 @@ exports.getClientLeadById = async (req, res) => {
 exports.sendPostProductionStatusUpdate = async (req, res) => {
   try {
     const { id } = req.params;
-    const { estimated_delivery_date, delivery_date } = req.body;
+    const { estimated_delivery_start_date, estimated_delivery_end_date } = req.body;
     const performedBy = req.userId || null;
 
-    const rawDeliveryDate = estimated_delivery_date || delivery_date;
-    if (!rawDeliveryDate) {
+    if (!estimated_delivery_start_date || !estimated_delivery_end_date) {
       return res.status(constants.BAD_REQUEST.code).json({
         success: false,
-        message: 'estimated_delivery_date is required'
+        message: 'delivery_start_date and delivery_end_date are required'
+      });
+    }
+
+    const startDate = new Date(estimated_delivery_start_date);
+    const endDate = new Date(estimated_delivery_end_date);
+
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Invalid delivery dates'
       });
     }
 
@@ -2616,20 +3142,26 @@ exports.sendPostProductionStatusUpdate = async (req, res) => {
         message: 'Post-production status update can be sent only for editing bookings'
       });
     }
-
-    const parsedDate = new Date(rawDeliveryDate);
-    if (Number.isNaN(parsedDate.getTime())) {
-      return res.status(constants.BAD_REQUEST.code).json({
-        success: false,
-        message: 'estimated_delivery_date is invalid'
-      });
-    }
-
-    const formattedDeliveryDate = parsedDate.toLocaleDateString('en-US', {
+    
+    const formattedStartDate = startDate.toLocaleDateString('en-US', {
       year: 'numeric',
-      month: 'long',
+      month: 'short',
       day: 'numeric'
     });
+
+    const formattedEndDate = endDate.toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    });
+
+    let deliveryDateDisplay;
+
+    if (formattedStartDate === formattedEndDate) {
+      deliveryDateDisplay = formattedStartDate;
+    } else {
+      deliveryDateDisplay = `${formattedStartDate} - ${formattedEndDate}`;
+    }
 
     const baseName = (booking.user?.name || lead.client_name || '').trim();
     let firstName = 'there';
@@ -2644,7 +3176,7 @@ exports.sendPostProductionStatusUpdate = async (req, res) => {
       to_email: toEmail,
       booking_id: booking.stream_project_booking_id,
       first_name: firstName,
-      delivery_date: formattedDeliveryDate
+      delivery_date: deliveryDateDisplay
     });
 
     if (!emailResult?.success) {
@@ -2660,7 +3192,8 @@ exports.sendPostProductionStatusUpdate = async (req, res) => {
       activity_data: {
         email_event: 'post_production_status_update',
         booking_id: booking.stream_project_booking_id,
-        estimated_delivery_date: parsedDate.toISOString().slice(0, 10)
+        delivery_start_date: startDate.toISOString().slice(0, 10),
+        delivery_end_date: endDate.toISOString().slice(0, 10)
       },
       performed_by_user_id: performedBy
     });
@@ -2672,7 +3205,8 @@ exports.sendPostProductionStatusUpdate = async (req, res) => {
         lead_id: parseInt(id, 10),
         booking_id: booking.stream_project_booking_id,
         to_email: toEmail,
-        estimated_delivery_date: parsedDate.toISOString().slice(0, 10)
+        delivery_start_date: startDate.toISOString().slice(0, 10),
+        delivery_end_date: endDate.toISOString().slice(0, 10)
       }
     });
   } catch (error) {
@@ -3887,6 +4421,7 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
 
     event_date = normalizedBookingDays[0].date;
     start_time_final = normalizeTime(normalizedBookingDays[0].start_time) || null;
+    end_time_only = normalizeTime(normalizedBookingDays[0].end_time) || null;
 
     totalDurationHours = normalizedBookingDays.reduce((sum, d) => {
 
@@ -4146,6 +4681,7 @@ exports.finalizeGuestBooking = async (req, res) => {
       is_draft,
       skip_discount = true,
       skip_margin = true,
+      sales_rep_id,
       booking_type,
       booking_days
     } = req.body;
@@ -4196,10 +4732,42 @@ exports.finalizeGuestBooking = async (req, res) => {
       tx
     });
 
+    const linkedLead = await sales_leads.findOne({
+      where: { booking_id: booking.stream_project_booking_id },
+      attributes: ['lead_id', 'client_name', 'assigned_sales_rep_id'],
+      transaction: tx
+    });
+
+    if (linkedLead) {
+      const assignedSalesRepId = await resolveAssignedSalesRepId({
+        requestedSalesRepId: sales_rep_id,
+        req,
+        currentAssignedSalesRepId: linkedLead.assigned_sales_rep_id,
+        tx
+      });
+
+      if (assignedSalesRepId !== linkedLead.assigned_sales_rep_id) {
+        await linkedLead.update(
+          { assigned_sales_rep_id: assignedSalesRepId },
+          { transaction: tx }
+        );
+      }
+    }
+
     await tx.commit();
 
     // send CP new booking request emails
-    await notifyAssignedCreators(finalizeResult.assigned_creator_ids || []);
+    const emailClientName = await resolveEmailClientNameForBooking(
+      booking,
+      linkedLead?.client_name || null
+    );
+
+    await notifyAssignedCreators(
+      finalizeResult.assigned_creator_ids || [],
+      booking,
+      emailClientName,
+      getEmailShootAmountFromFinalizeResult(finalizeResult)
+    );
 
     return res.status(200).json({
       success: true,
@@ -4246,6 +4814,7 @@ exports.finalizeClientLeadBooking = async (req, res) => {
       is_draft,
       skip_discount = true,
       skip_margin = true,
+      sales_rep_id,
       booking_type,
       booking_days
     } = req.body;
@@ -4280,6 +4849,13 @@ exports.finalizeClientLeadBooking = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
+    const assignedSalesRepId = await resolveAssignedSalesRepId({
+      requestedSalesRepId: sales_rep_id,
+      req,
+      currentAssignedSalesRepId: clientLead.assigned_sales_rep_id,
+      tx
+    });
+
     const finalizeResult = await finalizeBookingCore({
       booking,
       bookingId: booking.stream_project_booking_id,
@@ -4309,6 +4885,21 @@ exports.finalizeClientLeadBooking = async (req, res) => {
       tx
     });
 
+    if (clientLead.lead_status !== 'booked' && clientLead.lead_status !== 'abandoned') {
+      await clientLead.update(
+        {
+          lead_status: 'booking_in_progress',
+          assigned_sales_rep_id: assignedSalesRepId
+        },
+        { transaction: tx }
+      );
+    } else if (assignedSalesRepId !== clientLead.assigned_sales_rep_id) {
+      await clientLead.update(
+        { assigned_sales_rep_id: assignedSalesRepId },
+        { transaction: tx }
+      );
+    }
+
     await client_lead_activities.create({
       lead_id: clientLead.lead_id,
       activity_type: 'booking_updated',
@@ -4321,7 +4912,17 @@ exports.finalizeClientLeadBooking = async (req, res) => {
 
     await tx.commit();
 
-    await notifyAssignedCreators(finalizeResult.assigned_creator_ids || []);
+    const emailClientName = await resolveEmailClientNameForBooking(
+      booking,
+      clientLead.client_name
+    );
+
+    await notifyAssignedCreators(
+      finalizeResult.assigned_creator_ids || [],
+      booking,
+      emailClientName,
+      getEmailShootAmountFromFinalizeResult(finalizeResult)
+    );
 
     return res.status(200).json({
       success: true,
@@ -4339,6 +4940,106 @@ exports.finalizeClientLeadBooking = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Failed to update client booking',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.confirmLeadCreativePartner = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { crew_member_id } = req.body;
+
+    if (!crew_member_id) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'crew_member_id is required'
+      });
+    }
+
+    const result = await confirmCreativePartnerForLead({
+      leadId: parseInt(id, 10),
+      crewMemberId: parseInt(crew_member_id, 10),
+      performedByUserId: req.userId || null,
+      isClientLead: false
+    });
+
+    return res.status(result.status).json(result.body);
+  } catch (error) {
+    console.error('Error confirming Creative Partner for lead:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to confirm Creative Partner',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.confirmClientLeadCreativePartner = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { crew_member_id } = req.body;
+
+    if (!crew_member_id) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'crew_member_id is required'
+      });
+    }
+
+    const result = await confirmCreativePartnerForLead({
+      leadId: parseInt(id, 10),
+      crewMemberId: parseInt(crew_member_id, 10),
+      performedByUserId: req.userId || null,
+      isClientLead: true
+    });
+
+    return res.status(result.status).json(result.body);
+  } catch (error) {
+    console.error('Error confirming Creative Partner for client lead:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to confirm Creative Partner',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.softDeleteLead = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await softDeleteLeadById({
+      leadId: parseInt(id, 10),
+      performedByUserId: req.userId || null,
+      isClientLead: false
+    });
+
+    return res.status(result.status).json(result.body);
+  } catch (error) {
+    console.error('Error soft deleting lead:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to delete lead',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.softDeleteClientLead = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await softDeleteLeadById({
+      leadId: parseInt(id, 10),
+      performedByUserId: req.userId || null,
+      isClientLead: true
+    });
+
+    return res.status(result.status).json(result.body);
+  } catch (error) {
+    console.error('Error soft deleting client lead:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to delete client lead',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
@@ -4382,6 +5083,7 @@ exports.finalizeCreateDeal = async (req, res) => {
       video_edit_types,
       photo_edit_types,
       is_draft,
+      sales_rep_id,
 
       // pricing flags
       skip_discount = true,
@@ -4474,7 +5176,7 @@ exports.finalizeCreateDeal = async (req, res) => {
           lead_type,
           intent,
           lead_source,
-          lead_status: 'manual_lead_created',
+          lead_status: 'booking_in_progress',
           created_from: 1
         },
         { transaction: tx }
@@ -4542,10 +5244,20 @@ exports.finalizeCreateDeal = async (req, res) => {
       );
     }
 
-    // 4️⃣ 🔥 AUTO ASSIGN (same as trackEarlyBookingInterest)
+    // ASSIGN SALES REP
     let assignedRep = null;
-    if (lead.assigned_sales_rep_id) {
-      assignedRep = { id: lead.assigned_sales_rep_id };
+    const assignedSalesRepId = await resolveAssignedSalesRepId({
+      requestedSalesRepId: sales_rep_id,
+      req,
+      currentAssignedSalesRepId: lead.assigned_sales_rep_id,
+      tx
+    });
+
+    if (assignedSalesRepId) {
+      assignedRep = await users.findByPk(assignedSalesRepId, {
+        attributes: ['id', 'name'],
+        transaction: tx
+      });
     } else {
       assignedRep = await leadAssignmentService.autoAssignLead(
         lead.lead_id,
@@ -4592,7 +5304,17 @@ exports.finalizeCreateDeal = async (req, res) => {
     await tx.commit();
     
     // send CP new booking request emails
-    await notifyAssignedCreators(finalizeResult.assigned_creator_ids || []);
+    const emailClientName = await resolveEmailClientNameForBooking(
+      booking,
+      lead.client_name
+    );
+
+    await notifyAssignedCreators(
+      finalizeResult.assigned_creator_ids || [],
+      booking,
+      emailClientName,
+      getEmailShootAmountFromFinalizeResult(finalizeResult)
+    );
 
     return res.status(200).json({
       success: true,

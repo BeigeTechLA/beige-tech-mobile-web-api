@@ -46,7 +46,8 @@ async function getLeadCountsPerRep(salesRepIds, hours = 24, options = {}) {
     ],
     where: {
       assigned_sales_rep_id: { [Op.in]: salesRepIds },
-      created_at: { [Op.gte]: cutoffDate }
+      created_at: { [Op.gte]: cutoffDate },
+      is_active: 1
     },
     group: ['assigned_sales_rep_id'],
     raw: true,
@@ -163,13 +164,27 @@ async function manuallyAssignLead(leadId, salesRepId, performedByUserId) {
   }
   
   // Get current assignment for history
-  const lead = await sales_leads.findByPk(leadId);
+  const lead = await sales_leads.findOne({
+    where: {
+      lead_id: leadId,
+      is_active: 1
+    }
+  });
+
+  if (!lead) {
+    throw new Error('Lead not found');
+  }
   const previousRepId = lead.assigned_sales_rep_id;
   
   // Update lead assignment
   await sales_leads.update(
     { assigned_sales_rep_id: salesRepId },
-    { where: { lead_id: leadId } }
+    {
+      where: {
+        lead_id: leadId,
+        is_active: 1
+      }
+    }
   );
   
   // Log activity

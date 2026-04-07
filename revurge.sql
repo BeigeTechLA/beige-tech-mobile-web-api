@@ -377,3 +377,514 @@ UPDATE client_leads
 SET intent = 'Hot'
 WHERE booking_id IS NULL
   AND lead_status = 'signed_up';
+
+-- 19-03-26
+
+ALTER TABLE `crew_members` ADD `user_id` INT NULL AFTER `crew_member_id`;
+
+-- 20-03-26
+-- 1. QUOTE CATALOG ITEMS
+CREATE TABLE `quote_catalog_items` (
+  `catalog_item_id` int(11) NOT NULL AUTO_INCREMENT,
+  `section_type` enum('service','addon','logistics') NOT NULL,
+  `pricing_mode` enum('general','wedding','both') NOT NULL DEFAULT 'both',
+  `name` varchar(255) NOT NULL,
+  `default_rate` decimal(10,2) DEFAULT NULL,
+  `rate_type` enum('flat','per_hour','per_day','per_unit') NOT NULL DEFAULT 'flat',
+  `rate_unit` varchar(50) DEFAULT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT 1,
+  `display_order` int(11) NOT NULL DEFAULT 0,
+  `created_by_user_id` int(11) DEFAULT NULL,
+  `updated_by_user_id` int(11) DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`catalog_item_id`),
+  KEY `idx_quote_catalog_section` (`section_type`,`pricing_mode`,`is_active`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- 2. INSERT CATALOG DATA
+INSERT INTO `quote_catalog_items`
+(`section_type`, `pricing_mode`, `name`, `default_rate`, `rate_type`, `rate_unit`, `is_active`, `display_order`)
+VALUES
+('service', 'both', 'Videography', 250.00, 'per_hour', 'per hour', 1, 1),
+('service', 'both', 'Photography', 250.00, 'per_hour', 'per hour', 1, 2),
+('service', 'both', 'AI Editing', 500.00, 'per_hour', 'per hour', 1, 3),
+('service', 'both', 'Livestream Production', 250.00, 'per_hour', 'per hour', 1, 4),
+('service', 'both', 'Location', 250.00, 'per_hour', 'per hour', 1, 5),
+
+('addon', 'both', '4K Camera Upgrade', 500.00, 'flat', NULL, 1, 1),
+('addon', 'both', 'Drone Footage', 800.00, 'flat', NULL, 1, 2),
+('addon', 'both', 'Additional Crew Member', 300.00, 'flat', NULL, 1, 3),
+('addon', 'both', 'Lighting Package', 600.00, 'flat', NULL, 1, 4),
+('addon', 'both', 'Audio Recording Kit', 400.00, 'flat', NULL, 1, 5),
+('addon', 'both', 'Green Screen Setup', 600.00, 'flat', NULL, 1, 6),
+('addon', 'both', 'Teleprompter', 200.00, 'flat', NULL, 1, 7),
+('addon', 'both', 'Hair and Makeup Artist', 450.00, 'flat', NULL, 1, 8),
+
+('logistics', 'both', 'Travel and Transportation', 500.00, 'flat', NULL, 1, 1),
+('logistics', 'both', 'Equipment Rental', 800.00, 'flat', NULL, 1, 2),
+('logistics', 'both', 'Studio Rental', 1200.00, 'flat', NULL, 1, 3),
+('logistics', 'both', 'Permits and Licenses', 300.00, 'flat', NULL, 1, 4);
+
+-- 3. SALES QUOTES
+CREATE TABLE `sales_quotes` (
+  `sales_quote_id` int(11) NOT NULL AUTO_INCREMENT,
+  `quote_number` varchar(50) NOT NULL,
+  `lead_id` int(11) DEFAULT NULL,
+  `client_user_id` int(11) DEFAULT NULL,
+  `created_by_user_id` int(11) NOT NULL,
+  `assigned_sales_rep_id` int(11) DEFAULT NULL,
+  `pricing_mode` enum('general','wedding','both') NOT NULL DEFAULT 'general',
+  `status` enum('draft','sent','viewed','accepted','rejected','expired') NOT NULL DEFAULT 'draft',
+  `client_name` varchar(255) NOT NULL,
+  `client_email` varchar(255) DEFAULT NULL,
+  `client_phone` varchar(50) DEFAULT NULL,
+  `client_address` text DEFAULT NULL,
+  `project_description` text DEFAULT NULL,
+  `video_shoot_type` varchar(255) DEFAULT NULL,
+  `valid_until` date DEFAULT NULL,
+  `quote_validity_days` int(11) DEFAULT NULL,
+  `discount_type` enum('none','percentage','fixed_amount') NOT NULL DEFAULT 'none',
+  `discount_value` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `discount_amount` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `tax_type` varchar(100) DEFAULT NULL,
+  `tax_rate` decimal(5,2) NOT NULL DEFAULT 0.00,
+  `tax_amount` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `subtotal` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `total` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `notes` text DEFAULT NULL,
+  `terms_conditions` text DEFAULT NULL,
+  `sent_at` datetime DEFAULT NULL,
+  `viewed_at` datetime DEFAULT NULL,
+  `accepted_at` datetime DEFAULT NULL,
+  `rejected_at` datetime DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`sales_quote_id`),
+  UNIQUE KEY `quote_number` (`quote_number`),
+  KEY `idx_sales_quotes_owner` (`assigned_sales_rep_id`,`status`),
+  KEY `idx_sales_quotes_client` (`client_user_id`),
+  CONSTRAINT `sales_quotes_ibfk_1` FOREIGN KEY (`client_user_id`) REFERENCES `users` (`id`),
+  CONSTRAINT `sales_quotes_ibfk_2` FOREIGN KEY (`created_by_user_id`) REFERENCES `users` (`id`),
+  CONSTRAINT `sales_quotes_ibfk_3` FOREIGN KEY (`assigned_sales_rep_id`) REFERENCES `users` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- 4. LINE ITEMS (CLEANED)
+CREATE TABLE `sales_quote_line_items` (
+  `line_item_id` int(11) NOT NULL AUTO_INCREMENT,
+  `sales_quote_id` int(11) NOT NULL,
+  `catalog_item_id` int(11) DEFAULT NULL,
+  `source_type` enum('catalog','custom') NOT NULL DEFAULT 'catalog',
+  `section_type` enum('service','addon','logistics','custom') NOT NULL,
+  `item_name` varchar(255) NOT NULL,
+  `description` text DEFAULT NULL,
+  `rate_type` enum('flat','per_hour','per_day','per_unit') NOT NULL DEFAULT 'flat',
+  `rate_unit` varchar(50) DEFAULT NULL,
+  `quantity` int(11) NOT NULL DEFAULT 1,
+  `duration_hours` decimal(10,2) DEFAULT NULL,
+  `crew_size` int(11) DEFAULT NULL,
+  `estimated_pricing` decimal(10,2) DEFAULT NULL,
+  `unit_rate` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `line_total` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `configuration_json` text DEFAULT NULL,
+  `sort_order` int(11) NOT NULL DEFAULT 0,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`line_item_id`),
+  KEY `idx_sales_quote_line_items_quote` (`sales_quote_id`,`section_type`),
+  CONSTRAINT `sales_quote_line_items_ibfk_1` FOREIGN KEY (`sales_quote_id`) REFERENCES `sales_quotes` (`sales_quote_id`) ON DELETE CASCADE,
+  CONSTRAINT `sales_quote_line_items_ibfk_2` FOREIGN KEY (`catalog_item_id`) REFERENCES `quote_catalog_items` (`catalog_item_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- 5. ACTIVITIES
+CREATE TABLE `sales_quote_activities` (
+  `activity_id` int(11) NOT NULL AUTO_INCREMENT,
+  `sales_quote_id` int(11) NOT NULL,
+  `activity_type` enum('created','updated','status_changed','sent','viewed','accepted','rejected') NOT NULL,
+  `performed_by_user_id` int(11) DEFAULT NULL,
+  `message` varchar(255) DEFAULT NULL,
+  `metadata_json` text DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`activity_id`),
+  KEY `idx_sales_quote_activities_quote` (`sales_quote_id`,`created_at`),
+  CONSTRAINT `sales_quote_activities_ibfk_1` FOREIGN KEY (`sales_quote_id`) REFERENCES `sales_quotes` (`sales_quote_id`) ON DELETE CASCADE,
+  CONSTRAINT `sales_quote_activities_ibfk_2` FOREIGN KEY (`performed_by_user_id`) REFERENCES `users` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+ALTER TABLE users ADD location VARCHAR(255), ADD latitude DECIMAL(10,8), ADD longitude DECIMAL(11,8);
+
+-- 24-03-26
+
+-- 1. Create table if not exists
+CREATE TABLE IF NOT EXISTS `shoot_types` (
+  `shoot_type_id` int(11) NOT NULL AUTO_INCREMENT,
+  `name` varchar(100) NOT NULL,
+  `content_type` tinyint(4) NOT NULL COMMENT 'Legacy field before catalog-item mapping',
+  `display_order` int(11) NOT NULL DEFAULT 0,
+  `image_url` varchar(255) DEFAULT NULL,
+  `description` varchar(255) DEFAULT NULL,
+  `tags` text DEFAULT NULL,
+  `edited_photos_note` varchar(255) DEFAULT NULL,
+  `is_active` tinyint(4) DEFAULT 1,
+  `created_at` datetime DEFAULT current_timestamp(),
+  PRIMARY KEY (`shoot_type_id`),
+  
+  -- 👇 important: prevent duplicate logical data
+  UNIQUE KEY unique_shoot (`name`, `content_type`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT IGNORE INTO `shoot_types`
+(`shoot_type_id`, `name`, `content_type`, `display_order`, `image_url`, `description`, `tags`, `edited_photos_note`, `is_active`, `created_at`)
+VALUES
+(1, 'Wedding', 1, 2, 'shoot-types/wedding.jpg', NULL, '[\"Ceremony and reception\"]', NULL, 1, '2026-01-13 19:18:07'),
+(2, 'Social Content', 1, 5, 'shoot-types/social-content.jpg', NULL, '[\"Reels\", \"TikToks\", \"Youtube\"]', NULL, 1, '2026-01-13 19:18:07'),
+(3, 'Short Films & Narrative', 1, 8, 'shoot-types/short-films-narrative.png', NULL, '[\"Scripted\", \"Cinematic stories\"]', NULL, 1, '2026-01-13 19:18:07'),
+(4, 'Private Event', 1, 3, 'shoot-types/private-event.jpg', NULL, '[\"Parties\", \"celebrations\"]', NULL, 1, '2026-01-13 19:18:07'),
+(5, 'Podcasts & Shows', 1, 6, 'shoot-types/podcasts-shows.jpg', NULL, '[\"Video podcasts\", \"livestreams\"]', NULL, 1, '2026-01-13 19:18:07'),
+(6, 'Music Videos', 1, 7, 'shoot-types/music-videos.jpg', NULL, '[\"Artists-led productions\"]', NULL, 1, '2026-01-13 19:18:07'),
+(7, 'Corporate Event', 1, 1, 'shoot-types/corporate-event.jpg', NULL, '[\"Conferences\", \"summits\", \"company offsites\"]', NULL, 1, '2026-01-13 19:18:07'),
+(8, 'Commercial & Advertising', 1, 4, 'shoot-types/commercial-advertising.png', NULL, '[\"Brand ads\", \"Promos\", \"Campaigns\"]', NULL, 1, '2026-01-13 19:18:07'),
+
+(9, 'Wedding', 2, 2, 'shoot-types/wedding.jpg', NULL, '[\"Ceremony and reception\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
+(10, 'Social Content', 2, 5, 'shoot-types/social-content.jpg', NULL, '[\"Instagram, Linkedin etc\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
+(11, 'Private Event', 2, 3, 'shoot-types/private-event.jpg', NULL, '[\"Parties\", \"celebrations\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
+(12, 'People & Teams', 2, 6, 'shoot-types/people-teams.jpg', NULL, '[\"Headshots\", \"team photos\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
+(13, 'Corporate Event', 2, 1, 'shoot-types/corporate-event.jpg', NULL, '[\"Conferences\", \"summits\", \"company offsites\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
+(14, 'Brand & Product', 2, 4, 'shoot-types/brand-product.png', NULL, '[\"Product photography\", \"campaigns\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
+(15, 'Behind-the-Scenes', 2, 7, 'shoot-types/behind-the-scenes.jpg', NULL, '[\"Candid shots, process\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
+
+(16, 'Wedding', 3, 2, 'shoot-types/wedding.jpg', NULL, '[\"Ceremony and reception\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
+(17, 'Social Content', 3, 4, 'shoot-types/social-content.jpg', NULL, '[\"Reels\", \"TikToks\", \"Youtube\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
+(18, 'Private Event', 3, 3, 'shoot-types/private-event.jpg', NULL, '[\"Parties\", \"celebrations\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
+(19, 'Music Videos', 3, 5, 'shoot-types/music-videos.jpg', NULL, '[\"Artists-led productions\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
+(20, 'Corporate Event', 3, 1, 'shoot-types/corporate-event.jpg', NULL, '[\"Conferences\", \"summits\", \"company offsites\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
+(21, 'Commercial & Advertising', 3, 7, 'shoot-types/commercial-advertising.png', NULL, '[\"Brand ads\", \"Promos\", \"Campaigns\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
+(22, 'Brand & Product', 3, 6, 'shoot-types/brand-product.png', NULL, '[\"Product photography\", \"campaigns\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
+(23, 'Behind-the-Scenes', 3, 8, 'shoot-types/behind-the-scenes.jpg', NULL, '[\"Candid shots\", \"process\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07');
+
+--- 25-03-26 ---
+
+CREATE TABLE IF NOT EXISTS `sales_shoot_types` (
+  `sales_shoot_type_id` int(11) NOT NULL AUTO_INCREMENT,
+  `name` varchar(100) NOT NULL,
+  `content_type` tinyint(4) NOT NULL COMMENT '1=videography,2=photography,3=both',
+  `display_order` int(11) NOT NULL DEFAULT 0,
+  `image_url` varchar(255) DEFAULT NULL,
+  `description` varchar(255) DEFAULT NULL,
+  `tags` text DEFAULT NULL,
+  `edited_photos_note` varchar(255) DEFAULT NULL,
+  `is_active` tinyint(4) DEFAULT 1,
+  `created_at` datetime DEFAULT current_timestamp(),
+  PRIMARY KEY (`sales_shoot_type_id`),
+  UNIQUE KEY unique_shoot (`name`, `content_type`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+INSERT IGNORE INTO `sales_shoot_types`
+(`sales_shoot_type_id`, `name`, `content_type`, `display_order`, `image_url`, `description`, `tags`, `edited_photos_note`, `is_active`, `created_at`)
+VALUES
+(1, 'Wedding', 1, 2, 'shoot-types/wedding.jpg', NULL, '[\"Ceremony and reception\"]', NULL, 1, '2026-01-13 19:18:07'),
+(2, 'Social Content', 1, 5, 'shoot-types/social-content.jpg', NULL, '[\"Reels\", \"TikToks\", \"Youtube\"]', NULL, 1, '2026-01-13 19:18:07'),
+(3, 'Short Films & Narrative', 1, 8, 'shoot-types/short-films-narrative.png', NULL, '[\"Scripted\", \"Cinematic stories\"]', NULL, 1, '2026-01-13 19:18:07'),
+(4, 'Private Event', 1, 3, 'shoot-types/private-event.jpg', NULL, '[\"Parties\", \"celebrations\"]', NULL, 1, '2026-01-13 19:18:07'),
+(5, 'Podcasts & Shows', 1, 6, 'shoot-types/podcasts-shows.jpg', NULL, '[\"Video podcasts\", \"livestreams\"]', NULL, 1, '2026-01-13 19:18:07'),
+(6, 'Music Videos', 1, 7, 'shoot-types/music-videos.jpg', NULL, '[\"Artists-led productions\"]', NULL, 1, '2026-01-13 19:18:07'),
+(7, 'Corporate Event', 1, 1, 'shoot-types/corporate-event.jpg', NULL, '[\"Conferences\", \"summits\", \"company offsites\"]', NULL, 1, '2026-01-13 19:18:07'),
+(8, 'Commercial & Advertising', 1, 4, 'shoot-types/commercial-advertising.png', NULL, '[\"Brand ads\", \"Promos\", \"Campaigns\"]', NULL, 1, '2026-01-13 19:18:07'),
+
+(9, 'Wedding', 2, 2, 'shoot-types/wedding.jpg', NULL, '[\"Ceremony and reception\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
+(10, 'Social Content', 2, 5, 'shoot-types/social-content.jpg', NULL, '[\"Instagram, Linkedin etc\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
+(11, 'Private Event', 2, 3, 'shoot-types/private-event.jpg', NULL, '[\"Parties\", \"celebrations\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
+(12, 'People & Teams', 2, 6, 'shoot-types/people-teams.jpg', NULL, '[\"Headshots\", \"team photos\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
+(13, 'Corporate Event', 2, 1, 'shoot-types/corporate-event.jpg', NULL, '[\"Conferences\", \"summits\", \"company offsites\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
+(14, 'Brand & Product', 2, 4, 'shoot-types/brand-product.png', NULL, '[\"Product photography\", \"campaigns\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
+(15, 'Behind-the-Scenes', 2, 7, 'shoot-types/behind-the-scenes.jpg', NULL, '[\"Candid shots, process\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
+
+(16, 'Wedding', 3, 2, 'shoot-types/wedding.jpg', NULL, '[\"Ceremony and reception\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
+(17, 'Social Content', 3, 4, 'shoot-types/social-content.jpg', NULL, '[\"Reels\", \"TikToks\", \"Youtube\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
+(18, 'Private Event', 3, 3, 'shoot-types/private-event.jpg', NULL, '[\"Parties\", \"celebrations\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
+(19, 'Music Videos', 3, 5, 'shoot-types/music-videos.jpg', NULL, '[\"Artists-led productions\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
+(20, 'Corporate Event', 3, 1, 'shoot-types/corporate-event.jpg', NULL, '[\"Conferences\", \"summits\", \"company offsites\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
+(21, 'Commercial & Advertising', 3, 7, 'shoot-types/commercial-advertising.png', NULL, '[\"Brand ads\", \"Promos\", \"Campaigns\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
+(22, 'Brand & Product', 3, 6, 'shoot-types/brand-product.png', NULL, '[\"Product photography\", \"campaigns\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07'),
+(23, 'Behind-the-Scenes', 3, 8, 'shoot-types/behind-the-scenes.jpg', NULL, '[\"Candid shots\", \"process\"]', 'Generally photos include 25 edited photos per hour for non-weddings.', 1, '2026-01-13 19:18:07');
+
+ALTER TABLE `quote_catalog_items` ADD COLUMN `is_system_default` tinyint(1) NOT NULL DEFAULT 0 AFTER `is_active`;
+UPDATE `quote_catalog_items` SET `is_system_default` = 1 WHERE `created_by_user_id` IS NULL;
+
+-- 26-03-26
+
+ALTER TABLE `sales_shoot_types` ADD COLUMN `is_system_default` tinyint(1) NOT NULL DEFAULT 0 AFTER `is_active`;
+UPDATE `sales_shoot_types`
+SET `is_system_default` = 1
+WHERE `sales_shoot_type_id` IN (
+  1, 2, 3, 4, 5, 6, 7, 8,
+  9, 10, 11, 12, 13, 14, 15,
+  16, 17, 18, 19, 20, 21, 22, 23
+);
+
+ALTER TABLE `sales_quote_line_items`
+ADD COLUMN `is_active` tinyint(1) NOT NULL DEFAULT 1 AFTER `sort_order`;
+
+-- 27-06-26
+
+CREATE TABLE IF NOT EXISTS `projects` (
+  `project_id` int(11) NOT NULL AUTO_INCREMENT,
+  `booking_id` int(11) NOT NULL COMMENT 'FK to stream_project_booking',
+  `project_code` varchar(50) NOT NULL COMMENT 'Unique identifier like PRJ-2026-001',
+  `project_name` varchar(255) NOT NULL,
+  `current_state` enum(
+    'RAW_UPLOADED',
+    'RAW_TECH_QC_PENDING',
+    'RAW_TECH_QC_REJECTED',
+    'RAW_TECH_QC_APPROVED',
+    'COVERAGE_REVIEW_PENDING',
+    'COVERAGE_REJECTED',
+    'EDIT_APPROVAL_PENDING',
+    'EDIT_IN_PROGRESS',
+    'INTERNAL_EDIT_REVIEW_PENDING',
+    'CLIENT_PREVIEW_READY',
+    'CLIENT_FEEDBACK_RECEIVED',
+    'FEEDBACK_INTERNAL_REVIEW',
+    'REVISION_IN_PROGRESS',
+    'REVISION_QC_PENDING',
+    'FINAL_EXPORT_PENDING',
+    'READY_FOR_DELIVERY',
+    'DELIVERED',
+    'PROJECT_CLOSED'
+  ) NOT NULL DEFAULT 'RAW_UPLOADED',
+  `state_changed_at` timestamp NULL DEFAULT NULL,
+  `client_user_id` int(11) NOT NULL COMMENT 'FK to users - client who owns this project',
+  `assigned_creator_id` int(11) DEFAULT NULL COMMENT 'FK to users - assigned creator/videographer',
+  `assigned_editor_id` int(11) DEFAULT NULL COMMENT 'FK to users - assigned editor',
+  `assigned_qc_id` int(11) DEFAULT NULL COMMENT 'FK to users - assigned QC reviewer',
+  `raw_upload_deadline` datetime DEFAULT NULL,
+  `edit_delivery_deadline` datetime DEFAULT NULL,
+  `final_delivery_deadline` datetime DEFAULT NULL,
+  `project_notes` text DEFAULT NULL COMMENT 'Internal admin notes',
+  `client_requirements` text DEFAULT NULL COMMENT 'Client-provided requirements from booking',
+  `total_raw_size_bytes` bigint(20) DEFAULT 0 COMMENT 'Total size of RAW footage uploaded',
+  `total_files_count` int(11) DEFAULT 0 COMMENT 'Total number of files in project',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (`project_id`),
+  UNIQUE KEY `project_code` (`project_code`),
+
+  KEY `idx_projects_booking` (`booking_id`),
+  KEY `idx_projects_client` (`client_user_id`),
+  KEY `idx_projects_current_state` (`current_state`),
+  KEY `idx_projects_creator` (`assigned_creator_id`),
+  KEY `idx_projects_editor` (`assigned_editor_id`),
+  KEY `idx_projects_qc` (`assigned_qc_id`),
+  KEY `idx_projects_state_changed` (`state_changed_at`),
+  KEY `idx_projects_created_at` (`created_at`),
+
+  CONSTRAINT `projects_ibfk_1`
+    FOREIGN KEY (`booking_id`)
+    REFERENCES `stream_project_booking` (`stream_project_booking_id`),
+
+  CONSTRAINT `projects_ibfk_2`
+    FOREIGN KEY (`client_user_id`)
+    REFERENCES `users` (`id`),
+
+  CONSTRAINT `projects_ibfk_3`
+    FOREIGN KEY (`assigned_creator_id`)
+    REFERENCES `users` (`id`)
+    ON DELETE SET NULL,
+
+  CONSTRAINT `projects_ibfk_4`
+    FOREIGN KEY (`assigned_editor_id`)
+    REFERENCES `users` (`id`)
+    ON DELETE SET NULL,
+
+  CONSTRAINT `projects_ibfk_5`
+    FOREIGN KEY (`assigned_qc_id`)
+    REFERENCES `users` (`id`)
+    ON DELETE SET NULL
+
+) ENGINE=InnoDB 
+DEFAULT CHARSET=utf8mb4 
+COLLATE=utf8mb4_general_ci;
+
+CREATE TABLE IF NOT EXISTS `project_files` (
+  `file_id` int(11) NOT NULL AUTO_INCREMENT,
+  `project_id` int(11) NOT NULL COMMENT 'FK to projects',
+
+  `file_category` enum(
+    'RAW_FOOTAGE',
+    'RAW_AUDIO',
+    'EDIT_DRAFT',
+    'EDIT_REVISION',
+    'EDIT_FINAL',
+    'CLIENT_DELIVERABLE',
+    'THUMBNAIL',
+    'REFERENCE_MATERIAL'
+  ) NOT NULL,
+
+  `file_name` varchar(500) NOT NULL,
+  `file_path` varchar(1000) NOT NULL COMMENT 'S3 path: raw-footage/{project_id}/{filename}',
+  `file_size_bytes` bigint(20) NOT NULL,
+  `file_extension` varchar(20) NOT NULL,
+  `mime_type` varchar(100) DEFAULT NULL,
+
+  `upload_status` enum('PENDING','IN_PROGRESS','COMPLETED','FAILED') NOT NULL DEFAULT 'PENDING',
+  `upload_progress` int(11) DEFAULT 0 COMMENT 'Percentage 0-100',
+  `upload_session_id` varchar(100) DEFAULT NULL COMMENT 'For chunked uploads',
+  `uploaded_by_user_id` int(11) DEFAULT NULL COMMENT 'FK to users - who uploaded this file',
+
+  `validation_status` enum('PENDING','PASSED','FAILED') DEFAULT 'PENDING',
+  `validation_errors` text DEFAULT NULL COMMENT 'JSON array of validation issues',
+
+  -- Video metadata
+  `video_duration_seconds` int(11) DEFAULT NULL,
+  `video_resolution` varchar(20) DEFAULT NULL,
+  `video_fps` decimal(5,2) DEFAULT NULL,
+  `video_codec` varchar(50) DEFAULT NULL,
+  `video_bitrate_kbps` int(11) DEFAULT NULL,
+
+  -- Audio metadata
+  `audio_codec` varchar(50) DEFAULT NULL,
+  `audio_sample_rate` int(11) DEFAULT NULL,
+  `audio_channels` int(11) DEFAULT NULL,
+
+  -- Versioning
+  `version_number` int(11) DEFAULT 1,
+  `replaces_file_id` int(11) DEFAULT NULL,
+
+  -- Hashing & storage
+  `md5_hash` varchar(32) DEFAULT NULL,
+  `sha256_hash` varchar(64) DEFAULT NULL,
+  `s3_bucket` varchar(100) DEFAULT NULL,
+  `s3_region` varchar(50) DEFAULT NULL,
+  `s3_etag` varchar(100) DEFAULT NULL,
+
+  -- Soft delete
+  `is_deleted` tinyint(1) DEFAULT 0,
+  `deleted_at` timestamp NULL DEFAULT NULL,
+  `deleted_by_user_id` int(11) DEFAULT NULL,
+
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  PRIMARY KEY (`file_id`),
+
+  -- Indexes
+  KEY `idx_project_files_project` (`project_id`),
+  KEY `idx_project_files_category` (`file_category`),
+  KEY `idx_project_files_upload_status` (`upload_status`),
+  KEY `idx_project_files_validation` (`validation_status`),
+  KEY `idx_project_files_session` (`upload_session_id`),
+  KEY `idx_project_files_uploaded_by` (`uploaded_by_user_id`),
+  KEY `idx_project_files_deleted` (`is_deleted`),
+  KEY `idx_project_files_created_at` (`created_at`),
+  KEY `idx_project_files_replaces` (`replaces_file_id`),
+  KEY `idx_project_files_deleted_by` (`deleted_by_user_id`),
+
+  -- Constraints
+  CONSTRAINT `project_files_ibfk_1`
+    FOREIGN KEY (`project_id`)
+    REFERENCES `projects` (`project_id`)
+    ON DELETE CASCADE,
+
+  CONSTRAINT `project_files_ibfk_2`
+    FOREIGN KEY (`uploaded_by_user_id`)
+    REFERENCES `users` (`id`)
+    ON DELETE SET NULL,
+
+  CONSTRAINT `project_files_ibfk_3`
+    FOREIGN KEY (`replaces_file_id`)
+    REFERENCES `project_files` (`file_id`)
+    ON DELETE SET NULL,
+
+  CONSTRAINT `project_files_ibfk_4`
+    FOREIGN KEY (`deleted_by_user_id`)
+    REFERENCES `users` (`id`)
+    ON DELETE SET NULL
+
+) ENGINE=InnoDB
+DEFAULT CHARSET=utf8mb4
+COLLATE=utf8mb4_general_ci;
+
+-- 30-03-26
+
+ALTER TABLE `sales_quotes` MODIFY COLUMN `status` ENUM('draft','pending','sent','viewed','accepted','rejected','expired') NOT NULL DEFAULT 'draft';
+
+-- 01-04-26
+
+-- IGNORE ERR IF INDEX DOES NOT EXISTS
+ALTER TABLE users DROP INDEX email;
+
+-- 02-04-26
+
+INSERT INTO `user_type` (`user_type_id`, `user_role`, `is_active`) VALUES (NULL, 'sales_admin', '1');
+
+-- 02-04-26
+-- Align sales_shoot_types.content_type with quote_catalog_items.catalog_item_id
+ALTER TABLE `sales_shoot_types`
+  MODIFY `content_type` int(11) NOT NULL COMMENT 'References quote_catalog_items.catalog_item_id for service items';
+
+-- Legacy content_type=3 meant "both". Deactivate those rows before enforcing catalog-item mapping.
+UPDATE `sales_shoot_types`
+SET `is_active` = 0
+WHERE `content_type` = 3;
+
+ALTER TABLE `sales_shoot_types`
+  ADD CONSTRAINT `fk_sales_shoot_types_catalog_item`
+  FOREIGN KEY (`content_type`) REFERENCES `quote_catalog_items` (`catalog_item_id`);
+
+-- 03-04-26
+
+ALTER TABLE `sales_leads`
+  ADD COLUMN `is_active` TINYINT(1) NOT NULL DEFAULT 1 AFTER `updated_at`,
+  ADD INDEX `idx_sales_leads_is_active` (`is_active`);
+
+ALTER TABLE `client_leads`
+  ADD COLUMN `is_active` TINYINT(1) NOT NULL DEFAULT 1 AFTER `updated_at`,
+  ADD INDEX `idx_client_leads_is_active` (`is_active`);
+
+CREATE TABLE IF NOT EXISTS `sales_ai_editing_types` (
+  `sales_ai_editing_type_id` int NOT NULL AUTO_INCREMENT,
+  `category` enum('video','photo') NOT NULL,
+  `type_key` varchar(100) NOT NULL,
+  `label` varchar(255) NOT NULL,
+  `note` varchar(255) DEFAULT NULL,
+  `display_order` int NOT NULL DEFAULT 0,
+  `is_active` tinyint(1) NOT NULL DEFAULT 1,
+  `is_system_default` tinyint(1) NOT NULL DEFAULT 0,
+  `created_by_user_id` int DEFAULT NULL,
+  `updated_by_user_id` int DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`sales_ai_editing_type_id`),
+  UNIQUE KEY `uniq_sales_ai_editing_type_key` (`type_key`),
+  UNIQUE KEY `uniq_sales_ai_editing_type_label` (`category`,`label`),
+  KEY `idx_sales_ai_editing_types_active` (`category`,`is_active`,`display_order`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+INSERT IGNORE INTO `sales_ai_editing_types`
+(`sales_ai_editing_type_id`, `category`, `type_key`, `label`, `note`, `display_order`, `is_active`, `is_system_default`, `created_at`, `updated_at`)
+VALUES
+(1, 'video', 'social_reel_15_30', 'Social Media Reel (15 sec-30 sec)', NULL, 1, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(2, 'video', 'social_reel_30_90', 'Social Media Reel (30 sec-90 sec)', NULL, 2, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(3, 'video', 'mini_highlight_1_2', 'Mini Highlight Video (1-2 mins)', NULL, 3, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(4, 'video', 'highlight_4_7', 'Highlight Video (4-7 min)', NULL, 4, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(5, 'video', 'feature_30_40', 'Feature Video (30-40 min)', NULL, 5, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(6, 'video', 'commercial_2_4', 'Commercial (2 min-4 min)', NULL, 6, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(7, 'video', 'commercial_4_10', 'Commercial (4 min-10 min)', NULL, 7, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(8, 'video', 'social_reel_2_4', 'Social Media Reel (2 min-4 min)', NULL, 8, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(9, 'video', 'full_podcast_15_30', 'Full Length Podcast (15 min-30 min)', NULL, 9, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(10, 'video', 'full_podcast_30_60', 'Longer Full Length Podcast (30 min-60 min)', NULL, 10, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(11, 'video', 'music_video_2_3', 'Edited Music Video (2-3 min)', NULL, 11, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(12, 'video', 'music_video_vfx_2_3', 'Edited Music Video with VFX (2-3 min)', NULL, 12, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(13, 'video', 'short_film_2_5', 'Edited Short Film (2 Min-5 Min)', NULL, 13, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(14, 'video', 'short_film_5_10', 'Edited Short Film (5 Min-10 Min)', NULL, 14, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+(15, 'photo', 'edited_photos', 'Edited Photos', 'Edited Photos', 1, 1, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+
+-- 06-04-26
+
+ALTER TABLE `sales_quotes` MODIFY COLUMN `status` ENUM('draft','pending','sent','viewed','accepted','paid','rejected','expired') NOT NULL DEFAULT 'draft';
+
+ALTER TABLE `quotes`
+  ADD COLUMN `tax_type` VARCHAR(100) NULL AFTER `discount_amount`,
+  ADD COLUMN `tax_rate` DECIMAL(5,2) NOT NULL DEFAULT 0.00 AFTER `tax_type`,
+  ADD COLUMN `tax_amount` DECIMAL(10,2) NOT NULL DEFAULT 0.00 AFTER `tax_rate`;

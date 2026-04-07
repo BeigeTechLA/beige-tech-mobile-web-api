@@ -80,6 +80,11 @@ module.exports = function(sequelize, DataTypes) {
       allowNull: false,
       defaultValue: Sequelize.Sequelize.fn('current_timestamp')
     },
+    is_active: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 1
+    },
     intent_updated_by: {
       type: DataTypes.INTEGER,
       allowNull: true
@@ -138,6 +143,13 @@ module.exports = function(sequelize, DataTypes) {
         using: 'BTREE',
         fields: [
           { name: 'lead_type' },
+        ]
+      },
+      {
+        name: 'idx_client_leads_is_active',
+        using: 'BTREE',
+        fields: [
+          { name: 'is_active' },
         ]
       },
       {

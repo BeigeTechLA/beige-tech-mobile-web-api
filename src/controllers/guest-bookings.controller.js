@@ -24,7 +24,12 @@ async function resolveUserId(userId, guestEmail) {
   return existingUser ? existingUser.id : null;
 }
 
-const notifyAssignedCreators = async (creatorIds = []) => {
+const notifyAssignedCreators = async (
+  creatorIds = [],
+  booking = null,
+  fallbackClientName = '',
+  fallbackShootAmount = null
+) => {
   try {
     const uniqueIds = [...new Set((creatorIds || []).map(Number).filter(Boolean))];
     if (!uniqueIds.length) return;
@@ -46,6 +51,7 @@ const notifyAssignedCreators = async (creatorIds = []) => {
           sendCPNewBookingRequestEmail({
             to_email: c.email,
             user_name: [c.first_name, c.last_name].filter(Boolean).join(' ') || 'there',
+            ...getCPNewBookingEmailFields(booking, fallbackClientName, fallbackShootAmount),
             dashboardLink
           })
         )
@@ -53,6 +59,100 @@ const notifyAssignedCreators = async (creatorIds = []) => {
   } catch (e) {
     console.error('notifyAssignedCreators error:', e?.message || e);
   }
+};
+
+const getCPNewBookingEmailFields = (booking = {}, fallbackClientName = '', fallbackShootAmount = null) => ({
+  client_name:
+    fallbackClientName ||
+    booking?.client_name ||
+    booking?.user?.name ||
+    null,
+  service_type:
+    booking?.content_type ||
+    booking?.event_type ||
+    booking?.shoot_type ||
+    null,
+  date: booking?.event_date || null,
+  start_time: booking?.start_time || null,
+  end_time: booking?.end_time || null,
+  shoot_amount: fallbackShootAmount ?? booking?.budget ?? null
+});
+
+const resolveBookingClientName = async (booking = null, options = {}) => {
+  if (!booking) return null;
+
+  const bookingId = booking.stream_project_booking_id;
+  const transaction = options.transaction;
+  const fallbackClientName = options.fallbackClientName;
+
+  if (fallbackClientName) {
+    return fallbackClientName;
+  }
+
+  if (booking.client_name) {
+    return booking.client_name;
+  }
+
+  const salesLead = await db.sales_leads.findOne({
+    where: { booking_id: bookingId },
+    attributes: ['client_name'],
+    transaction
+  });
+
+  if (salesLead?.client_name) {
+    return salesLead.client_name;
+  }
+
+  const clientLead = await db.client_leads.findOne({
+    where: { booking_id: bookingId },
+    attributes: ['client_name'],
+    transaction
+  });
+
+  if (clientLead?.client_name) {
+    return clientLead.client_name;
+  }
+
+  if (booking.user_id) {
+    const user = await db.users.findByPk(booking.user_id, {
+      attributes: ['name'],
+      transaction
+    });
+
+    if (user?.name) {
+      return user.name;
+    }
+  }
+
+  return null;
+};
+
+const resolveBookingShootAmount = async (booking = null, options = {}) => {
+  if (!booking) return null;
+
+  const transaction = options.transaction;
+  const fallbackShootAmount = options.fallbackShootAmount;
+
+  if (fallbackShootAmount !== undefined && fallbackShootAmount !== null) {
+    return fallbackShootAmount;
+  }
+
+  if (booking.budget !== undefined && booking.budget !== null) {
+    return booking.budget;
+  }
+
+  if (booking.quote_id) {
+    const quote = await db.quotes.findByPk(booking.quote_id, {
+      attributes: ['total', 'price_after_discount', 'subtotal'],
+      transaction
+    });
+
+    if (quote) {
+      return quote.total ?? quote.price_after_discount ?? quote.subtotal ?? null;
+    }
+  }
+
+  return null;
 };
 
 /**
@@ -779,6 +879,17 @@ exports.updateGuestBooking = async (req, res) => {
       // Update booking
       await booking.update(updateData, { transaction: tx });
 
+      const salesLeadUpdate = {};
+      if (full_name) salesLeadUpdate.client_name = full_name;
+      if (phone) salesLeadUpdate.phone = phone;
+
+      if (Object.keys(salesLeadUpdate).length > 0) {
+        await db.sales_leads.update(salesLeadUpdate, {
+          where: { booking_id: id },
+          transaction: tx
+        });
+      }
+
       if (booking_type === 'multi_day' && normalizedBookingDays.length > 0) {
         await stream_project_booking_days.destroy({
           where: { stream_project_booking_id: id },
@@ -821,7 +932,20 @@ exports.updateGuestBooking = async (req, res) => {
         await assigned_crew.bulkCreate(assignments, { transaction: tx });
         
         // send email to newly selected creators
-        await notifyAssignedCreators(selected_crew_ids);
+        const fallbackClientName = await resolveBookingClientName(booking, {
+          transaction: tx,
+          fallbackClientName: full_name || null
+        });
+        const fallbackShootAmount = await resolveBookingShootAmount(booking, {
+          transaction: tx,
+          fallbackShootAmount: budget ?? null
+        });
+        await notifyAssignedCreators(
+          selected_crew_ids,
+          booking,
+          fallbackClientName,
+          fallbackShootAmount
+        );
       }
 
       await tx.commit();
@@ -1009,7 +1133,9 @@ exports.assignCreatorsToBooking = async (req, res) => {
     const createdAssignments = await assigned_crew.bulkCreate(assignments);
 
     // send email to assigned creators
-    await notifyAssignedCreators(creator_ids);
+    const fallbackClientName = await resolveBookingClientName(booking);
+    const fallbackShootAmount = await resolveBookingShootAmount(booking);
+    await notifyAssignedCreators(creator_ids, booking, fallbackClientName, fallbackShootAmount);
 
     res.status(constants.OK.code).json({
       success: true,
@@ -1389,6 +1515,8 @@ exports.getBookingPaymentDetails = async (req, res) => {
       const baseSubtotal = parseFloat(booking.primary_quote.subtotal || 0);
       const baseDiscountAmount = parseFloat(booking.primary_quote.discount_amount || 0);
       const basePriceAfterDiscount = parseFloat(booking.primary_quote.price_after_discount || booking.primary_quote.subtotal || 0);
+      const baseTaxRate = parseFloat(booking.primary_quote.tax_rate || 0);
+      const baseTaxAmount = parseFloat(booking.primary_quote.tax_amount || 0);
       const baseTotal = parseFloat(booking.primary_quote.total || booking.primary_quote.subtotal || 0);
 
       let normalizedReferralCode = null;
@@ -1455,6 +1583,9 @@ exports.getBookingPaymentDetails = async (req, res) => {
         discountAmount: baseDiscountAmount,
         total_discount_with_referral: parseFloat((baseDiscountAmount + referralDiscountAmount).toFixed(2)),
         price_after_discount: finalPriceAfterDiscount,
+        tax_type: booking.primary_quote.tax_type || null,
+        tax_rate: baseTaxRate,
+        tax_amount: baseTaxAmount,
         marginPercent: parseFloat(booking.primary_quote.margin_percent || 0),
         marginAmount: parseFloat(booking.primary_quote.margin_amount || 0),
         total_before_referral_discount: baseTotal,

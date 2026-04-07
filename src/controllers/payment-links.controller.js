@@ -5,8 +5,33 @@ const constants = require('../utils/constants');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const emailService = require('../utils/emailService');
 const discountService = require('../services/discount.service');
+const pricingService = require('../services/pricing.service');
 const { Op } = require('sequelize');
 const https = require('https');
+
+const formatDisplayLabel = (value) => {
+  const normalized = String(value || '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!normalized) return '';
+
+  return normalized
+    .split(' ')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(' ');
+};
+
+const formatProposalProjectName = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return 'Service Booking';
+
+  return raw
+    .split(' - ')
+    .map((part) => formatDisplayLabel(part) || part.trim())
+    .join(' - ');
+};
 
 const updatePaymentLeadState = async ({
   leadId = null,
@@ -206,6 +231,10 @@ const calculateLeadPricing = async (booking) => {
                 total: resolvedTotal,
                 subtotal: parseFloat(q.subtotal || 0),
                 discount_amount: parseFloat(q.discount_amount || 0),
+                price_after_discount: parseFloat(q.price_after_discount || 0),
+                tax_type: q.tax_type || null,
+                tax_rate: parseFloat(q.tax_rate || 0),
+                tax_amount: parseFloat(q.tax_amount || 0),
                 line_items: (q.line_items || []).map(item => ({
                     name: item.item_name,
                     quantity: item.quantity,
@@ -221,6 +250,10 @@ const calculateLeadPricing = async (booking) => {
                 stripe_payment_intent_id: paymentTransaction.stripe_payment_intent_id,
                 total: parseFloat(paymentTransaction.total_amount || 0),
                 subtotal: parseFloat(paymentTransaction.subtotal || 0),
+                price_after_discount: parseFloat(paymentTransaction.subtotal || 0),
+                tax_type: null,
+                tax_rate: 0,
+                tax_amount: 0,
                 line_items: [{
                     name: `Service Payment - ${booking.project_name || 'Project'}`,
                     quantity: 1,
@@ -263,6 +296,10 @@ const calculateLeadPricing = async (booking) => {
             total: calculated?.total || 0,
             subtotal: calculated?.subtotal || 0,
             discount_amount: calculated?.discountAmount || 0,
+            price_after_discount: calculated?.priceAfterDiscount || calculated?.subtotal || 0,
+            tax_type: null,
+            tax_rate: 0,
+            tax_amount: 0,
             line_items: (calculated?.lineItems || []).map(li => ({
                 name: li.item_name,
                 quantity: li.quantity,
@@ -423,7 +460,10 @@ exports.sendPaymentLinkEmail = async (req, res) => {
         {
           model: stream_project_booking,
           as: 'booking', 
-          include: [{ model: users, as: 'user', required: false }]
+          include: [
+            { model: users, as: 'user', required: false },
+            { model: quotes, as: 'primary_quote', required: false }
+          ]
         }
       ]
     });
@@ -448,23 +488,32 @@ exports.sendPaymentLinkEmail = async (req, res) => {
     }
 
     const paymentUrl = paymentLinksService.buildPaymentUrl(link.link_token);
-    
-    const paymentData = {
-      projectTitle: link.booking.project_name || 'Service Booking',
-      paymentUrl: paymentUrl,
-      expiresAt: new Date(link.expires_at).toLocaleString('en-US', {
-        dateStyle: 'long',
-        timeStyle: 'short'
-      })
-    };
-
-    const userData = {
-      name: recipientName,
-      email: recipientEmail
-    };
+    const formattedShootType = emailService.formatShootTypes(
+      link.booking.shoot_type || link.booking.event_type || 'Shoot'
+    );
+    const formattedContentTypes = emailService.formatContentTypes(link.booking.content_type);
+    const shootSummary = [formattedShootType, formattedContentTypes]
+      .filter(Boolean)
+      .join(' - ');
+    const formattedProjectName = formatProposalProjectName(link.booking.project_name);
 
     // 4. Send Email
-    const result = await emailService.sendPaymentLinkEmail(userData, paymentData);
+    const result = await emailService.sendProductionProposalEmail({
+      to_email: recipientEmail,
+      client_name: recipientName,
+      shoot_summary: shootSummary || formattedShootType || 'Shoot',
+      project_name: formattedProjectName,
+      contentType: formattedContentTypes || formattedShootType || 'N/A',
+      eventDate: link.booking.event_date
+        ? new Date(link.booking.event_date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+        : '',
+      startTime: link.booking.start_time || '',
+      endTime: link.booking.end_time || '',
+      editsNeeded: link.booking.edits_needed ? 'Included' : 'Not Included',
+      location: link.booking.event_location || 'TBD',
+      proposed_amount: link.booking.primary_quote?.total || '',
+      payment_link: paymentUrl
+    });
 
     if (result.success) {
       // Log Activity
@@ -529,7 +578,17 @@ exports.getPaymentLinkDetails = async (req, res) => {
         'duration_hours',
         'budget',
         'description',
-        'guest_email'
+        'guest_email',
+        'payment_id',
+        'is_completed'
+      ],
+      include: [
+        {
+          model: quotes,
+          as: 'primary_quote',
+          required: false,
+          include: [{ model: quote_line_items, as: 'line_items', required: false }]
+        }
       ]
     });
 
@@ -547,12 +606,15 @@ exports.getPaymentLinkDetails = async (req, res) => {
       });
     }
 
+    const pricing = booking ? await calculateLeadPricing(booking) : null;
+
     res.json({
       success: true,
       valid: true,
       data: {
         payment_link_id: paymentLink.payment_link_id,
         booking,
+        pricing,
         discount_code: discountCode,
         expires_at: paymentLink.expires_at
       }
@@ -705,6 +767,10 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
     }
 
     const pricingData = await calculateLeadPricing(booking);
+    if (!pricingData) {
+      await booking.update({ invoice_generation_status: 'failed' });
+      throw new Error(`Could not calculate pricing for booking ${parsedBookingId}.`);
+    }
     let invoiceDetails = null;
 
     // --- CASE 1: ALREADY PAID ---

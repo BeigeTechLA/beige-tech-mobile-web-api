@@ -9,6 +9,7 @@ const googleSheetService = require('../utils/googleSheetsService');
 const BEIGE_MARGIN_PERCENT = parseFloat(process.env.BEIGE_MARGIN_PERCENT || '25.00');
 const REFERRAL_DISCOUNT_PERCENT = 10;
 const emailService = require('../utils/emailService');
+const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
 
 /**
  * Calculate pricing breakdown for CP + equipment booking
@@ -63,6 +64,63 @@ function getReferralCommissionBaseAmount(paidAmount, quoteTotal = null) {
 
   return Math.max(paid, fromQuote, grossedUp);
 }
+
+async function markConvertedSalesQuoteAsPaid({
+  bookingId,
+  paymentId = null,
+  paymentIntentId = null,
+  paidAmount = null,
+  transaction
+}) {
+  if (!bookingId) return null;
+
+  const lead = await db.sales_leads.findOne({
+    where: { booking_id: bookingId },
+    attributes: ['lead_id'],
+    transaction
+  });
+
+  if (!lead?.lead_id) return null;
+
+  const salesQuote = await db.sales_quotes.findOne({
+    where: {
+      lead_id: lead.lead_id
+    },
+    order: [
+      [db.sequelize.literal("CASE WHEN status = 'paid' THEN 0 WHEN status = 'accepted' THEN 1 WHEN status = 'sent' THEN 2 WHEN status = 'viewed' THEN 3 WHEN status = 'pending' THEN 4 ELSE 5 END"), 'ASC'],
+      ['accepted_at', 'DESC'],
+      ['updated_at', 'DESC'],
+      ['sales_quote_id', 'DESC']
+    ],
+    transaction
+  });
+
+  if (!salesQuote) return null;
+
+  const now = new Date();
+  await salesQuote.update({
+    status: 'paid',
+    accepted_at: salesQuote.accepted_at || now,
+    updated_at: now
+  }, { transaction });
+
+  await db.sales_quote_activities.create({
+    sales_quote_id: salesQuote.sales_quote_id,
+    activity_type: 'status_changed',
+    performed_by_user_id: null,
+    message: 'Quote marked as paid after booking payment',
+    metadata_json: JSON.stringify({
+      status: 'paid',
+      booking_id: bookingId,
+      payment_id: paymentId,
+      payment_intent_id: paymentIntentId,
+      amount_paid: paidAmount
+    })
+  }, { transaction });
+
+  return salesQuote.sales_quote_id;
+}
+
 
 async function ensureProjectAfterPayment({
   bookingId,
@@ -318,16 +376,13 @@ const resolveCrewRoleLabel = async (rawPrimaryRole, fallbackText) => {
   }
 };
 
-const toAbsoluteBeigeAssetUrl = (pathValue) => {
-  const fallbackBase = 'https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/';
-  const configuredBase = (process.env.BEIGE_ASSET_BASE_URL || fallbackBase).replace(/\/+$/, '/') ;
-
-  const raw = String(pathValue || '').trim();
-  if (!raw) return '';
-  if (/^https?:\/\//i.test(raw)) return raw;
-
-  // DB stores values after "beige/" so join directly.
-  return `${configuredBase}${raw.replace(/^\/+/, '')}`;
+const deriveClientNameFromEmail = (email) => {
+  const localPart = String(email || '').includes('@') ? String(email).split('@')[0] : String(email || '');
+  return localPart
+    .replace(/[._-]+/g, ' ')
+    .replace(/\b\d+\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 };
 
 const sendBookingConfirmationForBooking = async ({
@@ -409,6 +464,24 @@ const sendBookingConfirmationForBooking = async ({
       assignments.find(a => ['selected', 'assigned', 'confirmed'].includes(String(a?.status || '').toLowerCase())) ||
       assignments[0] ||
       null;
+    
+    let cpStatusLabel = 'Pending';
+    let cpStatusColor = '#999999'; // grey
+
+    if (selectedAssignment) {
+      const status = String(selectedAssignment?.status || '').toLowerCase();
+
+      if (selectedAssignment?.crew_accept === 1) {
+        cpStatusLabel = 'Accepted';
+        cpStatusColor = '#21AC05'; // green
+      } else if (['assigned', 'confirmed'].includes(status)) {
+        cpStatusLabel = 'Assigned';
+        cpStatusColor = '#F59E0B'; // orange
+      } else if (status === 'selected') {
+        cpStatusLabel = 'Selected';
+        cpStatusColor = '#3B82F6'; // blue
+      }
+    }
     const cpFirstName = selectedAssignment?.crew_member?.first_name || '';
     const cpLastName = selectedAssignment?.crew_member?.last_name || '';
     const cpName = [cpFirstName, cpLastName].filter(Boolean).join(' ');
@@ -446,10 +519,17 @@ const sendBookingConfirmationForBooking = async ({
       end_time: formatTime(booking.end_time),
       duration: booking.duration_hours ? `${booking.duration_hours} hours` : '',
       shoot_location_address: formatLocation(booking.event_location),
-      amount_paid: typeof amountPaid === 'number' ? `$${amountPaid.toFixed(2)}` : (amountPaid || ''),
+      amount_paid: amountPaid || 0,
       payment_method: paymentMethod || 'Card',
       transaction_id: transactionId || '',
-      cp_assigned: !!selectedAssignment,
+      cp_status_label: cpStatusLabel,
+      cp_status_color: cpStatusColor,
+      cp_assigned: !!selectedAssignment && (
+        selectedAssignment?.crew_accept === 1 ||
+        ['selected', 'assigned', 'confirmed'].includes(
+          String(selectedAssignment?.status || '').toLowerCase()
+        )
+      ),
       cp_firstname: cpFirstName,
       cp_name: cpName,
       cp_role: cpRole,
@@ -877,7 +957,7 @@ exports.confirmPayment = async (req, res) => {
       try {
         await db.stream_project_booking.update(
           {
-            is_completed: 1,
+            // is_completed: 1,
             is_draft: 0,
             payment_completed_at: new Date(),
             payment_id: payment.payment_id,
@@ -1309,7 +1389,7 @@ exports.confirmPaymentMulti = async (req, res) => {
         payment_completed_at: new Date(), 
         payment_id: payment.payment_id,
         is_draft: 0,
-        is_completed: 1
+        // is_completed: 1
       },
       { where: { stream_project_booking_id: booking_id }, transaction }
     );
@@ -1318,6 +1398,14 @@ exports.confirmPaymentMulti = async (req, res) => {
       { lead_status: 'booked' },
       { where: { booking_id: booking_id }, transaction }
     );
+
+    await markConvertedSalesQuoteAsPaid({
+      bookingId: booking_id,
+      paymentId: payment.payment_id,
+      paymentIntentId,
+      paidAmount: totalAmount,
+      transaction
+    });
 
     const projectSync = await ensureProjectAfterPayment({
       bookingId: booking_id,
@@ -1328,21 +1416,36 @@ exports.confirmPaymentMulti = async (req, res) => {
     });
     const externalWorkspaceSync = await syncExternalWorkspaceAfterPayment(booking);
 
+
     await transaction.commit();
 
-    // 9. Background notifications
+    const lead = await db.sales_leads.findOne({
+      where: { booking_id }
+    });
+
+    const user = booking.user_id
+      ? await db.users.findByPk(booking.user_id, {
+        attributes: ['name', 'email', 'phone_number']
+      })
+      : null;
+
+    const guestEmail = booking.guest_email || user?.email || lead?.guest_email || '';
+    const clientName = user?.name || lead?.client_name || '';
+    const phoneNumber = user?.phone_number || lead?.phone || '';
+
+    // Send Sales Notification Email
     emailService.sendPaymentSuccessSalesNotification({
-        guestEmail: booking.guest_email || 'Unknown Client',
-        email: booking.user?.email || booking.guest_email || '',
-        clientName: booking.user?.name || '',
-        phone_number: booking.user?.phone_number || booking.phone_number || '',
-        amount: totalAmount,
-        shootType: booking.shoot_type || 'Shoot',
-        shoot_date: booking.shoot_date || booking.event_date,
-        startTime: booking.start_time,
-        endTime: booking.end_time,
-        editsNeeded: booking.edits_needed,
-        paymentIntentId: paymentIntentId
+      guestEmail: guestEmail || 'Unknown Client',
+      email: user?.email || guestEmail,
+      clientName,
+      phone_number: phoneNumber,
+      amount: totalAmount,
+      shootType: booking.shoot_type || 'Shoot',
+      shoot_date: booking.shoot_date || booking.event_date,
+      startTime: booking.start_time,
+      endTime: booking.end_time,
+      editsNeeded: booking.edits_needed ?? lead?.edits_needed,
+      paymentIntentId
     }).catch(err => console.error('Sales Notification Error:', err));
 
     let paymentMethod = 'free'; // default for free checkout
@@ -1660,7 +1763,15 @@ exports.handleStripeWebhook = async (req, res) => {
         transaction
       });
 
-      await ensureProjectAfterPayment({
+      await markConvertedSalesQuoteAsPaid({
+        bookingId: booking_id,
+        paymentId: payment.payment_id,
+        paymentIntentId,
+        paidAmount: amountPaid,
+        transaction
+      });
+      
+       await ensureProjectAfterPayment({
         bookingId: booking_id,
         transaction,
         initiatedByUserId: booking.user_id || null,
@@ -1671,20 +1782,34 @@ exports.handleStripeWebhook = async (req, res) => {
 
       await transaction.commit();
       console.log(`Webhook: booking ${booking_id} marked as paid`);
+      
+      const lead = await db.sales_leads.findOne({
+        where: { booking_id }
+      });
+
+      const user = booking.user_id
+        ? await db.users.findByPk(booking.user_id, {
+          attributes: ['name', 'email', 'phone_number']
+        })
+        : null;
+
+      const guestEmail = booking.guest_email || user?.email || lead?.guest_email || '';
+      const clientName = user?.name || lead?.client_name || '';
+      const phoneNumber = user?.phone_number || lead?.phone || '';
 
       // Send Sales Notification Email
       emailService.sendPaymentSuccessSalesNotification({
-        guestEmail: booking.guest_email || 'Unknown Client',
-        email: booking.user?.email || booking.guest_email || '',
-        clientName: booking.user?.name || '',
-        phone_number: booking.user?.phone_number || booking.phone_number || '',
-        amount: amountPaid,
+        guestEmail: guestEmail || 'Unknown Client',
+        email: user?.email || guestEmail,
+        clientName,
+        phone_number: phoneNumber,
+        amount: amountPaid, // or totalAmount
         shootType: booking.shoot_type || 'Shoot',
         shoot_date: booking.shoot_date || booking.event_date,
         startTime: booking.start_time,
         endTime: booking.end_time,
-        editsNeeded: booking.edits_needed,
-        paymentIntentId: paymentIntentId
+        editsNeeded: booking.edits_needed ?? lead?.edits_needed,
+        paymentIntentId
       }).catch(err => console.error('Sales Notification Error:', err));
 
       const webhookPaymentMethod =

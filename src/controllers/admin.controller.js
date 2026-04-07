@@ -35,6 +35,115 @@ const leadAssignmentService = require('../services/lead-assignment.service');
 const db = require('../models');
 // const NodeGeocoder = require('node-geocoder');
 
+const getCPNewBookingEmailFields = (booking = {}, fallbackClientName = '', fallbackShootAmount = null) => ({
+  client_name:
+    fallbackClientName ||
+    booking?.client_name ||
+    booking?.user?.name ||
+    null,
+  service_type:
+    booking?.content_type ||
+    booking?.event_type ||
+    booking?.shoot_type ||
+    null,
+  date: booking?.event_date || null,
+  start_time: booking?.start_time || null,
+  end_time: booking?.end_time || null,
+  shoot_amount: fallbackShootAmount ?? booking?.budget ?? null
+});
+
+const resolveAdminBookingClientName = async (booking = null, fallbackClientName = null) => {
+  if (fallbackClientName) {
+    return fallbackClientName;
+  }
+
+  if (!booking) {
+    return null;
+  }
+
+  if (booking.client_name) {
+    return booking.client_name;
+  }
+
+  if (booking.user?.name) {
+    return booking.user.name;
+  }
+
+  if (booking.user_id) {
+    const bookingUser = await users.findOne({
+      where: { id: booking.user_id },
+      attributes: ['name']
+    });
+
+    if (bookingUser?.name) {
+      return bookingUser.name;
+    }
+  }
+
+  const linkedLead = await sales_leads.findOne({
+    where: { booking_id: booking.stream_project_booking_id },
+    attributes: ['client_name']
+  });
+
+  if (linkedLead?.client_name) {
+    return linkedLead.client_name;
+  }
+
+  const linkedClientLead = await client_leads.findOne({
+    where: { booking_id: booking.stream_project_booking_id },
+    attributes: ['client_name']
+  });
+
+  if (linkedClientLead?.client_name) {
+    return linkedClientLead.client_name;
+  }
+
+  if (booking.guest_email) {
+    const localPart = String(booking.guest_email).split('@')[0] || '';
+    const derivedName = localPart.replace(/[._-]+/g, ' ').trim();
+    if (derivedName) {
+      return derivedName;
+    }
+  }
+
+  return null;
+};
+
+const resolveAdminBookingShootAmount = async (booking = null, fallbackShootAmount = null) => {
+  if (fallbackShootAmount !== undefined && fallbackShootAmount !== null) {
+    return fallbackShootAmount;
+  }
+
+  if (!booking) {
+    return null;
+  }
+
+  if (booking.budget !== undefined && booking.budget !== null) {
+    return booking.budget;
+  }
+
+  if (booking.primary_quote) {
+    return (
+      booking.primary_quote.total ??
+      booking.primary_quote.price_after_discount ??
+      booking.primary_quote.subtotal ??
+      null
+    );
+  }
+
+  if (booking.quote_id) {
+    const quote = await quotes.findByPk(booking.quote_id, {
+      attributes: ['total', 'price_after_discount', 'subtotal']
+    });
+
+    if (quote) {
+      return quote.total ?? quote.price_after_discount ?? quote.subtotal ?? null;
+    }
+  }
+
+  return null;
+};
+
 // Initialize geocoder
 // const geocoder = NodeGeocoder({ provider: 'openstreetmap' });
 
@@ -704,11 +813,33 @@ exports.assignCrew = async (req, res) => {
         where: { crew_member_id: uniqueCrewIds },
         attributes: ['crew_member_id', 'first_name', 'last_name', 'email']
       });
+      const booking = await stream_project_booking.findByPk(project_id, {
+        attributes: [
+          'stream_project_booking_id',
+          'user_id',
+          'guest_email',
+          'quote_id',
+          'budget',
+          'content_type',
+          'event_type',
+          'shoot_type',
+          'event_date',
+          'start_time',
+          'end_time'
+        ]
+      });
+      const lead = await sales_leads.findOne({
+        where: { booking_id: project_id },
+        attributes: ['client_name']
+      });
 
       const dashboardLink =
         process.env.CP_DASHBOARD_LINK ||
         process.env.FRONTEND_URL ||
         'https://beige.app/';
+
+      const emailClientName = await resolveAdminBookingClientName(booking, lead?.client_name || null);
+      const emailShootAmount = await resolveAdminBookingShootAmount(booking);
 
       await Promise.allSettled(
         crews
@@ -717,6 +848,7 @@ exports.assignCrew = async (req, res) => {
             sendCPNewBookingRequestEmail({
               to_email: c.email,
               user_name: [c.first_name, c.last_name].filter(Boolean).join(' ') || 'there',
+              ...getCPNewBookingEmailFields(booking, emailClientName, emailShootAmount),
               dashboardLink
             })
           )
@@ -7256,6 +7388,9 @@ exports.assignCrewBulkSmart = async (req, res) => {
               process.env.FRONTEND_URL ||
               'https://beige.app/';
 
+            const emailClientName = await resolveAdminBookingClientName(lead?.booking, lead?.client_name || null);
+            const emailShootAmount = await resolveAdminBookingShootAmount(lead?.booking);
+
             await Promise.allSettled(
               crews
                 .filter(c => c.email)
@@ -7263,6 +7398,7 @@ exports.assignCrewBulkSmart = async (req, res) => {
                   sendCPNewBookingRequestEmail({
                     to_email: c.email,
                     user_name: [c.first_name, c.last_name].filter(Boolean).join(' ') || 'there',
+                    ...getCPNewBookingEmailFields(lead?.booking, emailClientName, emailShootAmount),
                     dashboardLink
                   })
                 )
@@ -8270,11 +8406,18 @@ exports.assignProjectCrewBulk = async (req, res) => {
 
                 const dashboardLink = process.env.CP_DASHBOARD_LINK || 'https://beige.app/';
 
+                const emailClientName = await resolveAdminBookingClientName(
+                    booking,
+                    booking?.sales_leads?.[0]?.client_name || null
+                );
+                const emailShootAmount = await resolveAdminBookingShootAmount(booking);
+
                 await Promise.allSettled(
                     crews.filter(c => c.email).map(c =>
                         sendCPNewBookingRequestEmail({
                             to_email: c.email,
                             user_name: c.first_name,
+                            ...getCPNewBookingEmailFields(booking, emailClientName, emailShootAmount),
                             dashboardLink
                         })
                     )
@@ -8423,4 +8566,128 @@ exports.getProjectFormByProjectId = async (req, res) => {
             details: error.message 
         });
     }
+};
+
+exports.getAllAssignedRequests = async (req, res) => {
+  try {
+    const { crew_member_id } = req.body || req.query;
+
+    if (!crew_member_id) {
+      return res.status(400).json({
+        error: true,
+        message: "crew_member_id is required",
+      });
+    }
+
+    const STATUS_MAP = {
+      0: "pending",
+      1: "accepted",
+      2: "rejected",
+    };
+
+    const assignedRequests = await assigned_crew.findAll({
+      where: { crew_member_id },
+      attributes: ['id', 'project_id', 'crew_member_id', 'crew_accept', 'status', 'created_at'],
+      include: [
+        {
+          model: stream_project_booking,
+          as: "project",
+          required: true,
+          where: {
+            is_active: 1,
+            payment_id: {
+              [Op.ne]: null,
+            },
+          },
+          attributes: [
+            'stream_project_booking_id',
+            'project_name',
+            'content_type',
+            'shoot_type',
+            'event_type',
+            'budget',
+            'quote_id',
+            'payment_id',
+          ],
+          include: [
+            {
+              model: quotes,
+              as: 'primary_quote',
+              required: false,
+              attributes: ['quote_id', 'total', 'price_after_discount', 'subtotal'],
+            },
+            {
+              model: quotes,
+              as: 'quotes',
+              required: false,
+              attributes: ['quote_id', 'total', 'price_after_discount', 'subtotal'],
+              separate: true,
+              limit: 1,
+              order: [['quote_id', 'DESC']],
+            },
+          ],
+        },
+      ],
+      order: [['created_at', 'DESC']],
+    });
+
+    const paymentIds = [
+      ...new Set(
+        assignedRequests
+          .map((assignment) => assignment.project?.payment_id)
+          .filter((paymentId) => paymentId !== null && paymentId !== undefined)
+      ),
+    ];
+
+    const paymentRecords = paymentIds.length
+      ? await payment_transactions.findAll({
+          where: {
+            payment_id: {
+              [Op.in]: paymentIds,
+            },
+          },
+          attributes: ['payment_id', 'total_amount'],
+          raw: true,
+        })
+      : [];
+
+    const paymentAmountById = paymentRecords.reduce((acc, payment) => {
+      acc[payment.payment_id] = payment.total_amount;
+      return acc;
+    }, {});
+
+    const data = assignedRequests.map((assignment) => {
+      const project = assignment.project || {};
+      const fallbackQuote = Array.isArray(project.quotes) ? project.quotes[0] : null;
+      const quoteSource = project.primary_quote || fallbackQuote;
+      const price =
+        paymentAmountById[project.payment_id] ??
+        quoteSource?.total ??
+        quoteSource?.price_after_discount ??
+        quoteSource?.subtotal ??
+        project.budget ??
+        null;
+
+      return {
+        booking_id: project.stream_project_booking_id || null,
+        project_name: project.project_name || null,
+        category: project.content_type || project.shoot_type || null,
+        event_type: project.event_type || null,
+        price,
+        status: STATUS_MAP[assignment.crew_accept] || assignment.status || "unknown",
+      };
+    });
+
+    return res.status(200).json({
+      error: false,
+      message: "Assigned project details fetched successfully",
+      data,
+    });
+  } catch (error) {
+    console.error('Error fetching assigned project details:', error);
+    return res.status(500).json({
+      error: true,
+      message: 'Internal server error',
+    });
+  }
 };
