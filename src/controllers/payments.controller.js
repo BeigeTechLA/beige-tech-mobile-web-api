@@ -40,6 +40,40 @@ function round2(value) {
   return parseFloat(Number(value || 0).toFixed(2));
 }
 
+function normalizeDateOnly(value, fallback = new Date()) {
+  const source = value || fallback;
+  const date = source instanceof Date ? source : new Date(source);
+  if (Number.isNaN(date.getTime())) {
+    const fallbackDate = fallback instanceof Date ? fallback : new Date(fallback);
+    return Number.isNaN(fallbackDate.getTime()) ? new Date() : fallbackDate;
+  }
+  return date;
+}
+
+function normalizeString(value, maxLen, fallback = null) {
+  let normalized = value;
+
+  if (normalized === undefined || normalized === null || normalized === '') {
+    return fallback;
+  }
+
+  if (typeof normalized !== 'string') {
+    try {
+      normalized = JSON.stringify(normalized);
+    } catch (error) {
+      normalized = String(normalized);
+    }
+  }
+
+  normalized = String(normalized).trim();
+  if (!normalized) return fallback;
+
+  if (Number.isFinite(maxLen) && maxLen > 0 && normalized.length > maxLen) {
+    return normalized.slice(0, maxLen);
+  }
+  return normalized;
+}
+
 function applyReferralDiscount(totalAmount) {
   const total = parseFloat(totalAmount || 0);
   if (!Number.isFinite(total) || total <= 0) {
@@ -1317,9 +1351,12 @@ exports.confirmPaymentMulti = async (req, res) => {
     }
 
     // 6. Create Payment Transaction Record
-    const finalShootDate = booking.shoot_date || booking.event_date || new Date();
+    const finalShootDate = normalizeDateOnly(booking.shoot_date || booking.event_date || new Date());
     const rawHours = booking.shoot_hours || booking.duration_hours || 1;
     const finalHours = parseFloat(rawHours) > 0 ? parseFloat(rawHours) : 1;
+    const safeLocation = normalizeString(booking.event_location, 255, 'See Booking Details');
+    const safeShootType = normalizeString(booking.shoot_type, 100, null);
+    const safeNotes = normalizeString(booking.special_requests || booking.special_instructions, null, null);
 
     const payment = await db.payment_transactions.create({
       stripe_payment_intent_id: paymentIntentId,
@@ -1336,9 +1373,9 @@ exports.confirmPaymentMulti = async (req, res) => {
       beige_margin_amount: 0,
       total_amount: totalAmount,
       shoot_date: finalShootDate,
-      location: booking.event_location ? (typeof booking.event_location === 'string' ? booking.event_location : JSON.stringify(booking.event_location)) : 'See Booking Details',
-      shoot_type: booking.shoot_type || null,
-      notes: booking.special_requests || null,
+      location: safeLocation,
+      shoot_type: safeShootType,
+      notes: safeNotes,
       referral_code: normalizedReferralCode || null,
       status: 'succeeded'
     }, { transaction });
@@ -1493,6 +1530,16 @@ exports.confirmPaymentMulti = async (req, res) => {
   } catch (error) {
     if (transaction && !transaction.finished) {
         await transaction.rollback();
+    }
+    if (error?.name === 'SequelizeValidationError' || error?.name === 'SequelizeUniqueConstraintError') {
+      console.error(
+        'Multi-Creator Payment Validation Details:',
+        (error.errors || []).map(err => ({
+          message: err.message,
+          field: err.path,
+          value: err.value
+        }))
+      );
     }
     console.error('Multi-Creator Payment Error:', error);
     return res.status(500).json({ success: false, message: error.message });
