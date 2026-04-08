@@ -4652,6 +4652,129 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
   };
 }
 
+async function updateBookingScheduleAndLocationCore({ booking, bookingId, payload, tx }) {
+  const {
+    location,
+    booking_type,
+    booking_days,
+    time_zone,
+    start_date_time,
+    start_date,
+    start_time,
+    end_time,
+    duration_hours
+  } = payload;
+
+  let normalizedBookingDays = Array.isArray(booking_days) ? booking_days : [];
+  normalizedBookingDays = normalizedBookingDays
+    .filter((d) => d && d.date)
+    .map((d) => ({
+      date: d.date,
+      start_time: normalizeTime(d.start_time || d.startTime) || null,
+      end_time: normalizeTime(d.end_time || d.endTime) || null,
+      duration_hours: d.duration_hours != null ? Number(d.duration_hours) : null,
+      time_zone: d.time_zone || d.timeZone || time_zone || null
+    }));
+
+  const calculateDurationHours = (startTimeValue, endTimeValue) => {
+    if (!startTimeValue || !endTimeValue) return null;
+    const start = new Date(`1970-01-01T${startTimeValue}`);
+    const end = new Date(`1970-01-01T${endTimeValue}`);
+    const diff = (end - start) / 3600000;
+    return diff > 0 ? Math.round(diff * 100) / 100 : null;
+  };
+
+  let resolvedBookingType = booking_type || null;
+  if (!resolvedBookingType) {
+    if (normalizedBookingDays.length > 0) {
+      resolvedBookingType = 'multi_day';
+    } else if (start_date || start_time || start_date_time || end_time) {
+      resolvedBookingType = 'single_day';
+    }
+  }
+
+  const resolvedSingleDay = resolveEventDateAndStartTime({
+    start_date,
+    start_time,
+    start_date_time
+  });
+
+  let eventDate = resolvedSingleDay.event_date || booking.event_date || null;
+  let startTimeFinal = resolvedSingleDay.start_time || booking.start_time || null;
+  let endTimeFinal = normalizeTime(end_time) || booking.end_time || null;
+  let totalDurationHours = duration_hours != null ? Number(duration_hours) : null;
+
+  if (resolvedBookingType === 'multi_day' && normalizedBookingDays.length > 0) {
+    normalizedBookingDays.sort((a, b) => new Date(a.date) - new Date(b.date));
+    eventDate = normalizedBookingDays[0].date;
+    startTimeFinal = normalizedBookingDays[0].start_time || null;
+    endTimeFinal = normalizedBookingDays[0].end_time || null;
+    totalDurationHours = normalizedBookingDays.reduce((sum, day) => {
+      const hours = day.duration_hours ?? calculateDurationHours(day.start_time, day.end_time);
+      return sum + (hours || 0);
+    }, 0);
+    totalDurationHours = totalDurationHours > 0 ? Math.round(totalDurationHours * 100) / 100 : null;
+  } else if (totalDurationHours == null) {
+    totalDurationHours = calculateDurationHours(startTimeFinal, endTimeFinal) ?? booking.duration_hours ?? null;
+  }
+
+  const updateData = {};
+  if (location !== undefined) updateData.event_location = safeJsonStringify(location);
+  if (eventDate) updateData.event_date = eventDate;
+  if (startTimeFinal) updateData.start_time = startTimeFinal;
+  if (endTimeFinal) updateData.end_time = endTimeFinal;
+  if (totalDurationHours != null) updateData.duration_hours = totalDurationHours;
+
+  if (Object.keys(updateData).length > 0) {
+    await booking.update(updateData, { transaction: tx });
+  }
+
+  const shouldRewriteDays =
+    resolvedBookingType === 'multi_day' ||
+    resolvedBookingType === 'single_day' ||
+    Array.isArray(booking_days);
+
+  if (shouldRewriteDays) {
+    await stream_project_booking_days.destroy({
+      where: { stream_project_booking_id: bookingId },
+      transaction: tx
+    });
+
+    if (resolvedBookingType === 'multi_day' && normalizedBookingDays.length > 0) {
+      await stream_project_booking_days.bulkCreate(
+        normalizedBookingDays.map((day) => ({
+          stream_project_booking_id: bookingId,
+          event_date: day.date,
+          start_time: day.start_time,
+          end_time: day.end_time,
+          duration_hours: day.duration_hours ?? calculateDurationHours(day.start_time, day.end_time),
+          time_zone: day.time_zone
+        })),
+        { transaction: tx }
+      );
+    }
+  }
+
+  const bookingReloaded = await stream_project_booking.findByPk(bookingId, { transaction: tx });
+  const bookingDays = await stream_project_booking_days.findAll({
+    where: { stream_project_booking_id: bookingId },
+    order: [['event_date', 'ASC']],
+    transaction: tx
+  });
+
+  return {
+    booking: bookingReloaded,
+    booking_type: resolvedBookingType,
+    booking_days: bookingDays.map((day) => ({
+      event_date: day.event_date,
+      start_time: day.start_time,
+      end_time: day.end_time,
+      duration_hours: day.duration_hours,
+      time_zone: day.time_zone
+    }))
+  };
+}
+
 /**
  * 
  * Body: booking fields + creators/roles + edit types + flags
@@ -4784,6 +4907,83 @@ exports.finalizeGuestBooking = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Failed to finalize booking',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.updateLeadBookingSchedule = async (req, res) => {
+  const tx = await sequelize.transaction();
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      await tx.rollback();
+      return res.status(400).json({ success: false, message: 'Lead ID is required' });
+    }
+
+    const lead = await sales_leads.findOne({
+      where: { lead_id: id, is_active: 1 },
+      transaction: tx
+    });
+
+    if (!lead) {
+      await tx.rollback();
+      return res.status(404).json({ success: false, message: 'Lead not found' });
+    }
+
+    if (!lead.booking_id) {
+      await tx.rollback();
+      return res.status(400).json({ success: false, message: 'No booking found for this lead' });
+    }
+
+    const booking = await stream_project_booking.findOne({
+      where: { stream_project_booking_id: lead.booking_id, is_active: 1 },
+      transaction: tx
+    });
+
+    if (!booking) {
+      await tx.rollback();
+      return res.status(404).json({ success: false, message: 'Booking not found' });
+    }
+
+    const result = await updateBookingScheduleAndLocationCore({
+      booking,
+      bookingId: booking.stream_project_booking_id,
+      payload: req.body || {},
+      tx
+    });
+
+    await lead.update({ last_activity_at: new Date() }, { transaction: tx });
+
+    await sales_lead_activities.create({
+      lead_id: lead.lead_id,
+      activity_type: 'booking_updated',
+      activity_data: {
+        booking_id: booking.stream_project_booking_id,
+        source: 'sales_portal_schedule_location_edit'
+      },
+      performed_by_user_id: req.userId || null
+    }, { transaction: tx });
+
+    await tx.commit();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Lead booking schedule and location updated successfully',
+      data: {
+        lead_id: lead.lead_id,
+        booking_id: booking.stream_project_booking_id,
+        booking_type: result.booking_type,
+        booking: result.booking,
+        booking_days: result.booking_days
+      }
+    });
+  } catch (error) {
+    try { await tx.rollback(); } catch (_) {}
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update lead booking schedule and location',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
@@ -4940,6 +5140,83 @@ exports.finalizeClientLeadBooking = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Failed to update client booking',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.updateClientLeadBookingSchedule = async (req, res) => {
+  const tx = await sequelize.transaction();
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      await tx.rollback();
+      return res.status(400).json({ success: false, message: 'Client lead ID is required' });
+    }
+
+    const clientLead = await client_leads.findOne({
+      where: { lead_id: id, is_active: 1 },
+      transaction: tx
+    });
+
+    if (!clientLead) {
+      await tx.rollback();
+      return res.status(404).json({ success: false, message: 'Client lead not found' });
+    }
+
+    if (!clientLead.booking_id) {
+      await tx.rollback();
+      return res.status(400).json({ success: false, message: 'No booking found for this client lead' });
+    }
+
+    const booking = await stream_project_booking.findOne({
+      where: { stream_project_booking_id: clientLead.booking_id, is_active: 1 },
+      transaction: tx
+    });
+
+    if (!booking) {
+      await tx.rollback();
+      return res.status(404).json({ success: false, message: 'Booking not found' });
+    }
+
+    const result = await updateBookingScheduleAndLocationCore({
+      booking,
+      bookingId: booking.stream_project_booking_id,
+      payload: req.body || {},
+      tx
+    });
+
+    await clientLead.update({ last_activity_at: new Date() }, { transaction: tx });
+
+    await client_lead_activities.create({
+      lead_id: clientLead.lead_id,
+      activity_type: 'booking_updated',
+      activity_data: {
+        booking_id: booking.stream_project_booking_id,
+        source: 'sales_portal_schedule_location_edit'
+      },
+      performed_by_user_id: req.userId || null
+    }, { transaction: tx });
+
+    await tx.commit();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Client lead booking schedule and location updated successfully',
+      data: {
+        client_lead_id: clientLead.lead_id,
+        booking_id: booking.stream_project_booking_id,
+        booking_type: result.booking_type,
+        booking: result.booking,
+        booking_days: result.booking_days
+      }
+    });
+  } catch (error) {
+    try { await tx.rollback(); } catch (_) {}
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update client lead booking schedule and location',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }

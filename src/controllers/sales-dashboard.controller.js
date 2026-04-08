@@ -29,6 +29,36 @@ function getDashboardStartDate(period) {
   return null;
 }
 
+function getDashboardDateRanges(period) {
+  if (!period || period === 'all_time' || period === 'all') {
+    return {
+      currentStartDate: null,
+      previousStartDate: null,
+      previousEndDate: null
+    };
+  }
+
+  const currentStartDate = getDashboardStartDate(period);
+  if (!currentStartDate) {
+    return {
+      currentStartDate: null,
+      previousStartDate: null,
+      previousEndDate: null
+    };
+  }
+
+  const now = new Date();
+  const rangeMs = now.getTime() - currentStartDate.getTime();
+  const previousEndDate = new Date(currentStartDate.getTime());
+  const previousStartDate = new Date(currentStartDate.getTime() - rangeMs);
+
+  return {
+    currentStartDate,
+    previousStartDate,
+    previousEndDate
+  };
+}
+
 function buildLeadDashboardWhere({ startDate, salesRepId, req }) {
   const whereClause = {
     is_active: 1
@@ -36,6 +66,27 @@ function buildLeadDashboardWhere({ startDate, salesRepId, req }) {
 
   if (startDate) {
     whereClause.created_at = { [Op.gte]: startDate };
+  }
+
+  if (req.userRole === 'sales_rep') {
+    whereClause.assigned_sales_rep_id = req.userId;
+  } else if (salesRepId) {
+    whereClause.assigned_sales_rep_id = parseInt(salesRepId, 10);
+  }
+
+  return whereClause;
+}
+
+function buildPreviousLeadDashboardWhere({ previousStartDate, previousEndDate, salesRepId, req }) {
+  const whereClause = {
+    is_active: 1
+  };
+
+  if (previousStartDate && previousEndDate) {
+    whereClause.created_at = {
+      [Op.gte]: previousStartDate,
+      [Op.lt]: previousEndDate
+    };
   }
 
   if (req.userRole === 'sales_rep') {
@@ -80,6 +131,44 @@ async function getOverviewStatsForModel(LeadModel, whereClause) {
     sales_assisted_leads: salesAssistedLeads,
     total_conversion_rate: totalConversionRate,
     total_bookings: totalBookings
+  };
+}
+
+function getPercentageChange(currentValue, previousValue, options = {}) {
+  const { isRate = false } = options;
+
+  if (previousValue === 0) {
+    if (currentValue === 0) return 0;
+    return 100;
+  }
+
+  const change = ((currentValue - previousValue) / previousValue) * 100;
+  return Number((isRate ? change : change).toFixed(1));
+}
+
+function withTrend(currentStats, previousStats, period) {
+  const trendValue = (current, previous, options = {}) =>
+    period === 'all_time' || period === 'all'
+      ? 0
+      : getPercentageChange(current, previous, options);
+
+  return {
+    total_active_leads: {
+      value: currentStats.total_active_leads,
+      change_percent: trendValue(currentStats.total_active_leads, previousStats.total_active_leads)
+    },
+    sales_assisted_leads: {
+      value: currentStats.sales_assisted_leads,
+      change_percent: trendValue(currentStats.sales_assisted_leads, previousStats.sales_assisted_leads)
+    },
+    total_conversion_rate: {
+      value: currentStats.total_conversion_rate,
+      change_percent: trendValue(currentStats.total_conversion_rate, previousStats.total_conversion_rate, { isRate: true })
+    },
+    total_bookings: {
+      value: currentStats.total_bookings,
+      change_percent: trendValue(currentStats.total_bookings, previousStats.total_bookings)
+    }
   };
 }
 
@@ -264,42 +353,53 @@ exports.getDashboardStats = async (req, res) => {
 exports.getCombinedOverviewStats = async (req, res) => {
   try {
     const { period = 'all_time', sales_rep_id } = req.query;
-    const startDate = getDashboardStartDate(period);
+    const {
+      currentStartDate,
+      previousStartDate,
+      previousEndDate
+    } = getDashboardDateRanges(period);
 
     const salesWhere = buildLeadDashboardWhere({
-      startDate,
+      startDate: currentStartDate,
       salesRepId: sales_rep_id,
       req
     });
 
     const clientWhere = buildLeadDashboardWhere({
-      startDate,
+      startDate: currentStartDate,
+      salesRepId: sales_rep_id,
+      req
+    });
+
+    const previousSalesWhere = buildPreviousLeadDashboardWhere({
+      previousStartDate,
+      previousEndDate,
+      salesRepId: sales_rep_id,
+      req
+    });
+
+    const previousClientWhere = buildPreviousLeadDashboardWhere({
+      previousStartDate,
+      previousEndDate,
       salesRepId: sales_rep_id,
       req
     });
 
     const salesOverview = await getOverviewStatsForModel(sales_leads, salesWhere);
     const clientOverview = await getOverviewStatsForModel(client_leads, clientWhere);
+    const previousSalesOverview = await getOverviewStatsForModel(sales_leads, previousSalesWhere);
+    const previousClientOverview = await getOverviewStatsForModel(client_leads, previousClientWhere);
 
     const combinedOverview = combineOverviewStats(salesOverview, clientOverview);
+    const previousCombinedOverview = combineOverviewStats(previousSalesOverview, previousClientOverview);
 
     return res.json({
       success: true,
       data: {
         period,
-        combined: combinedOverview,
-        sales_leads: {
-          total_active_leads: salesOverview.total_active_leads,
-          sales_assisted_leads: salesOverview.sales_assisted_leads,
-          total_conversion_rate: salesOverview.total_conversion_rate,
-          total_bookings: salesOverview.total_bookings
-        },
-        client_leads: {
-          total_active_leads: clientOverview.total_active_leads,
-          sales_assisted_leads: clientOverview.sales_assisted_leads,
-          total_conversion_rate: clientOverview.total_conversion_rate,
-          total_bookings: clientOverview.total_bookings
-        }
+        combined: withTrend(combinedOverview, previousCombinedOverview, period),
+        sales_leads: withTrend(salesOverview, previousSalesOverview, period),
+        client_leads: withTrend(clientOverview, previousClientOverview, period)
       }
     });
   } catch (error) {

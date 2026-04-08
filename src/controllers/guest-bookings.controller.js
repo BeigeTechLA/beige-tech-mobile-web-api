@@ -1515,6 +1515,8 @@ exports.getBookingPaymentDetails = async (req, res) => {
       const baseSubtotal = parseFloat(booking.primary_quote.subtotal || 0);
       const baseDiscountAmount = parseFloat(booking.primary_quote.discount_amount || 0);
       const basePriceAfterDiscount = parseFloat(booking.primary_quote.price_after_discount || booking.primary_quote.subtotal || 0);
+      const baseTaxRate = parseFloat(booking.primary_quote.tax_rate || 0);
+      const baseTaxAmount = parseFloat(booking.primary_quote.tax_amount || 0);
       const baseTotal = parseFloat(booking.primary_quote.total || booking.primary_quote.subtotal || 0);
 
       let normalizedReferralCode = null;
@@ -1581,6 +1583,9 @@ exports.getBookingPaymentDetails = async (req, res) => {
         discountAmount: baseDiscountAmount,
         total_discount_with_referral: parseFloat((baseDiscountAmount + referralDiscountAmount).toFixed(2)),
         price_after_discount: finalPriceAfterDiscount,
+        tax_type: booking.primary_quote.tax_type || null,
+        tax_rate: baseTaxRate,
+        tax_amount: baseTaxAmount,
         marginPercent: parseFloat(booking.primary_quote.margin_percent || 0),
         marginAmount: parseFloat(booking.primary_quote.margin_amount || 0),
         total_before_referral_discount: baseTotal,

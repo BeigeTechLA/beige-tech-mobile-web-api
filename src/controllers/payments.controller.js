@@ -1,6 +1,8 @@
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const db = require('../models');
 const affiliateController = require('./affiliate.controller');
+const { ensureProjectForBooking } = require('./projects.controller');
+const externalFileManagerController = require('./external-file-manager.controller');
 const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 const googleSheetService = require('../utils/googleSheetsService');
 // Get Beige margin percentage from environment, default to 25%
@@ -61,6 +63,94 @@ function getReferralCommissionBaseAmount(paidAmount, quoteTotal = null) {
     : paid;
 
   return Math.max(paid, fromQuote, grossedUp);
+}
+
+async function markConvertedSalesQuoteAsPaid({
+  bookingId,
+  paymentId = null,
+  paymentIntentId = null,
+  paidAmount = null,
+  transaction
+}) {
+  if (!bookingId) return null;
+
+  const lead = await db.sales_leads.findOne({
+    where: { booking_id: bookingId },
+    attributes: ['lead_id'],
+    transaction
+  });
+
+  if (!lead?.lead_id) return null;
+
+  const salesQuote = await db.sales_quotes.findOne({
+    where: {
+      lead_id: lead.lead_id
+    },
+    order: [
+      [db.sequelize.literal("CASE WHEN status = 'paid' THEN 0 WHEN status = 'accepted' THEN 1 WHEN status = 'sent' THEN 2 WHEN status = 'viewed' THEN 3 WHEN status = 'pending' THEN 4 ELSE 5 END"), 'ASC'],
+      ['accepted_at', 'DESC'],
+      ['updated_at', 'DESC'],
+      ['sales_quote_id', 'DESC']
+    ],
+    transaction
+  });
+
+  if (!salesQuote) return null;
+
+  const now = new Date();
+  await salesQuote.update({
+    status: 'paid',
+    accepted_at: salesQuote.accepted_at || now,
+    updated_at: now
+  }, { transaction });
+
+  await db.sales_quote_activities.create({
+    sales_quote_id: salesQuote.sales_quote_id,
+    activity_type: 'status_changed',
+    performed_by_user_id: null,
+    message: 'Quote marked as paid after booking payment',
+    metadata_json: JSON.stringify({
+      status: 'paid',
+      booking_id: bookingId,
+      payment_id: paymentId,
+      payment_intent_id: paymentIntentId,
+      amount_paid: paidAmount
+    })
+  }, { transaction });
+
+  return salesQuote.sales_quote_id;
+}
+
+
+async function ensureProjectAfterPayment({
+  bookingId,
+  transaction,
+  initiatedByUserId = null,
+  ipAddress = null,
+  userAgent = null,
+}) {
+  try {
+    return await ensureProjectForBooking({
+      bookingId,
+      transaction,
+      initiatedByUserId,
+      initiatedByRole: 'SYSTEM',
+      ipAddress,
+      userAgent,
+    });
+  } catch (error) {
+    console.error(`Project auto-create failed for booking ${bookingId}:`, error.message);
+    return { project: null, created: false, error: error.message };
+  }
+}
+
+async function syncExternalWorkspaceAfterPayment(booking) {
+  try {
+    return await externalFileManagerController.syncWorkspaceForBookingFromRecord(booking);
+  } catch (error) {
+    console.error(`External workspace sync failed for booking ${booking?.stream_project_booking_id}:`, error.message);
+    return { success: false, message: error.message };
+  }
 }
 
 async function persistQuoteReferralDiscount({
@@ -860,12 +950,15 @@ exports.confirmPayment = async (req, res) => {
       await payment.save({ transaction });
     }
 
+    let projectSync = { project: null, created: false, error: null };
+    let externalWorkspaceSync = { success: false, message: null };
     // Update booking status to payment completed if booking_id provided
     if (booking_id) {
       try {
         await db.stream_project_booking.update(
           {
             // is_completed: 1,
+            is_draft: 0,
             payment_completed_at: new Date(),
             payment_id: payment.payment_id,
           },
@@ -875,6 +968,18 @@ exports.confirmPayment = async (req, res) => {
           }
         );
         console.log(`Booking ${booking_id} marked as payment completed`);
+
+        projectSync = await ensureProjectAfterPayment({
+          bookingId: booking_id,
+          transaction,
+          initiatedByUserId: resolvedUserId || null,
+          ipAddress: req.ip || req.connection?.remoteAddress,
+          userAgent: req.headers['user-agent'],
+        });
+        externalWorkspaceSync = await syncExternalWorkspaceAfterPayment({
+          stream_project_booking_id: booking_id,
+          project_name: notes || shoot_type || `Booking_${booking_id}`,
+        });
       } catch (bookingUpdateError) {
         console.error('Failed to update booking status:', bookingUpdateError);
         // Don't fail the payment if booking update fails
@@ -919,7 +1024,12 @@ exports.confirmPayment = async (req, res) => {
           },
           status: 'succeeded',
           booking_id: booking_id || null,
-        booking_payment_updated: !!booking_id
+        booking_payment_updated: !!booking_id,
+        project_id: projectSync.project?.project_id || null,
+        project_created: projectSync.created,
+        project_sync_error: projectSync.error || null,
+        external_workspace_synced: !!externalWorkspaceSync.success,
+        external_workspace_message: externalWorkspaceSync.message || null,
       }
     });
 
@@ -1179,11 +1289,25 @@ exports.confirmPaymentMulti = async (req, res) => {
         }
       }
 
+      const projectSync = await ensureProjectAfterPayment({
+        bookingId: booking_id,
+        transaction,
+        initiatedByUserId: req.user?.userId || booking.user_id || null,
+        ipAddress: req.ip || req.connection?.remoteAddress,
+        userAgent: req.headers['user-agent'],
+      });
+      const externalWorkspaceSync = await syncExternalWorkspaceAfterPayment(booking);
+
       await transaction.commit();
       return res.status(200).json({
         success: true,
         message: "Payment already processed",
-        data: { payment_id: existingPayment.payment_id, booking_id },
+        data: {
+          payment_id: existingPayment.payment_id,
+          booking_id,
+          external_workspace_synced: !!externalWorkspaceSync.success,
+          external_workspace_message: externalWorkspaceSync.message || null,
+        },
       });
     }
 
@@ -1289,6 +1413,24 @@ exports.confirmPaymentMulti = async (req, res) => {
       { where: { booking_id: booking_id }, transaction }
     );
 
+    await markConvertedSalesQuoteAsPaid({
+      bookingId: booking_id,
+      paymentId: payment.payment_id,
+      paymentIntentId,
+      paidAmount: totalAmount,
+      transaction
+    });
+
+    const projectSync = await ensureProjectAfterPayment({
+      bookingId: booking_id,
+      transaction,
+      initiatedByUserId: req.user?.userId || booking.user_id || null,
+      ipAddress: req.ip || req.connection?.remoteAddress,
+      userAgent: req.headers['user-agent'],
+    });
+    const externalWorkspaceSync = await syncExternalWorkspaceAfterPayment(booking);
+
+
     await transaction.commit();
 
     const lead = await db.sales_leads.findOne({
@@ -1351,7 +1493,15 @@ exports.confirmPaymentMulti = async (req, res) => {
     return res.status(201).json({
       success: true,
       message: totalAmount === 0 ? 'Booking confirmed (Free)' : 'Payment confirmed successfully',
-      data: { payment_id: payment.payment_id, booking_id }
+      data: {
+        payment_id: payment.payment_id,
+        booking_id,
+        project_id: projectSync.project?.project_id || null,
+        project_created: projectSync.created,
+        project_sync_error: projectSync.error || null,
+        external_workspace_synced: !!externalWorkspaceSync.success,
+        external_workspace_message: externalWorkspaceSync.message || null,
+      }
     });
 
   } catch (error) {
@@ -1626,6 +1776,23 @@ exports.handleStripeWebhook = async (req, res) => {
         where: { booking_id: booking_id },
         transaction
       });
+
+      await markConvertedSalesQuoteAsPaid({
+        bookingId: booking_id,
+        paymentId: payment.payment_id,
+        paymentIntentId,
+        paidAmount: amountPaid,
+        transaction
+      });
+      
+       await ensureProjectAfterPayment({
+        bookingId: booking_id,
+        transaction,
+        initiatedByUserId: booking.user_id || null,
+        ipAddress: req.ip || req.connection?.remoteAddress,
+        userAgent: req.headers['user-agent'],
+      });
+      await syncExternalWorkspaceAfterPayment(booking);
 
       await transaction.commit();
       console.log(`Webhook: booking ${booking_id} marked as paid`);

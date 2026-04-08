@@ -78,9 +78,6 @@ function buildTerms(quote) {
     .filter(Boolean);
 
   const defaultTerms = [
-    'Payment is due within 30 days of quote acceptance.',
-    'A 50% deposit is required before project commencement.',
-    quote.valid_until ? `This quote is valid until ${formatDate(quote.valid_until)}.` : null,
     'All prices are in USD.',
     'Changes to the scope of work may result in additional charges.'
   ].filter(Boolean);
@@ -272,6 +269,10 @@ function buildQuotePdfHtml(quote) {
             <div style="display:flex; justify-content:space-between; font-size: 13px; margin-bottom: 8px;">
               <span>Subtotal</span>
               <span>${formatCurrency(quote.subtotal)}</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size: 13px; margin-bottom: 8px;">
+              <span>Discount</span>
+              <span>${formatCurrency(quote.discount_amount)}</span>
             </div>
             <div style="display:flex; justify-content:space-between; font-size: 13px;">
               <span>${escapeHtml(quote.tax_type || 'Tax')} (${Number(quote.tax_rate || 0)}%)</span>

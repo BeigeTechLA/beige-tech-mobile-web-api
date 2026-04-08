@@ -46,6 +46,20 @@ module.exports = function(sequelize, DataTypes) {
       allowNull: false,
       defaultValue: 0
     },
+    tax_type: {
+      type: DataTypes.STRING(100),
+      allowNull: true
+    },
+    tax_rate: {
+      type: DataTypes.DECIMAL(5, 2),
+      allowNull: false,
+      defaultValue: 0
+    },
+    tax_amount: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: false,
+      defaultValue: 0
+    },
     discount_code_id: {
       type: DataTypes.INTEGER,
       allowNull: true

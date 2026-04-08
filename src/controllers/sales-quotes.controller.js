@@ -272,6 +272,22 @@ exports.updateQuote = async (req, res) => {
   }
 };
 
+exports.convertQuoteToBooking = async (req, res) => {
+  try {
+    const data = await quoteService.convertQuoteToBooking(Number(req.params.quoteId), req.body || {}, getUserContext(req));
+    return res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    console.error('Error converting quote to booking:', error);
+    const statusCode = error.message === 'Quote not found'
+      ? constants.NOT_FOUND.code
+      : constants.BAD_REQUEST.code;
+    return sendError(res, error, error.message || 'Failed to convert quote to booking', statusCode);
+  }
+};
+
 exports.listQuotes = async (req, res) => {
   try {
     const data = await quoteService.listQuotes(req.query, getUserContext(req));

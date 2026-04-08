@@ -309,6 +309,7 @@ router.get('/quotes/:quoteId', authenticate, requireSalesRepOrAdmin, salesQuotes
 router.get('/quotes/:quoteId/pdf', authenticate, requireSalesRepOrAdmin, salesQuotesController.downloadQuotePdf);
 router.post('/quotes', authenticate, requireSalesRepOrAdmin, salesQuotesController.createQuote);
 router.put('/quotes/:quoteId', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateQuote);
+router.post('/quotes/:quoteId/convert-to-booking', authenticate, requireSalesRepOrAdmin, salesQuotesController.convertQuoteToBooking);
 router.post('/quotes/:quoteId/send', authenticate, requireSalesRepOrAdmin, salesQuotesController.sendQuoteProposal);
 router.patch('/quotes/:quoteId/status', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateQuoteStatus);
 
@@ -327,7 +328,9 @@ router.patch(
 router.post('/leads/intent', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateLeadIntent);
 router.post('/client-leads/intent', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateClientLeadIntent);
 router.put('/leads/:id/booking', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeGuestBooking);
+router.put('/leads/:id/booking-schedule', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateLeadBookingSchedule);
 router.put('/client-leads/:id/booking', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeClientLeadBooking);
+router.put('/client-leads/:id/booking-schedule', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateClientLeadBookingSchedule);
 router.post('/deals/finalize', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeCreateDeal);
 router.get('/sales-reps', authenticate, requireSalesRepOrAdmin, salesDashboardController.getSalesRepsList);
 
