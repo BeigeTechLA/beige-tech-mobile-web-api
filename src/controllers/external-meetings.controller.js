@@ -6,6 +6,7 @@ const DEFAULT_BASE_URL =
   process.env.EXTERNAL_MEETINGS_API_BASE_URL ||
   process.env.MEETINGS_API_BASE_URL ||
   (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:5002/v1');
+const MEET_EVENT_MODE = String(process.env.MEET_EVENT_MODE || 'auto').trim().toLowerCase();
 const INTERNAL_KEY = process.env.EXTERNAL_MEETINGS_KEY || process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
 
 const VALID_SORT_FIELDS = new Set(['meeting_date_time', 'meeting_end_time', 'created_at', 'updated_at', 'meeting_title', 'meeting_status']);
@@ -140,6 +141,12 @@ const createMeetEventDirectly = async ({ summary, location, description, startDa
     meetLink,
     eventId: response?.data?.id || null,
   };
+};
+
+const shouldUseProxyForMeetEvent = () => {
+  if (MEET_EVENT_MODE === 'direct') return false;
+  if (MEET_EVENT_MODE === 'proxy') return true;
+  return Boolean(DEFAULT_BASE_URL);
 };
 
 const safeJsonParse = (value, fallback) => {
@@ -1281,7 +1288,13 @@ exports.createMeetEvent = async (req, res) => {
     const payload = { ...(req.body || {}) };
     let result;
 
-    if (DEFAULT_BASE_URL) {
+    if (shouldUseProxyForMeetEvent()) {
+      if (!DEFAULT_BASE_URL) {
+        return res.status(503).json({
+          message: 'MEET_EVENT_MODE=proxy but EXTERNAL_MEETINGS_API_BASE_URL is not configured',
+        });
+      }
+
       const userId = payload?.userId || req.query?.userId || '';
       const query = userId ? `?userId=${encodeURIComponent(String(userId))}` : '';
       delete payload.userId;
