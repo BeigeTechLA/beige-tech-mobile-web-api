@@ -1,12 +1,7 @@
 const { Op } = require('sequelize');
-const { google } = require('googleapis');
 const db = require('../models');
 
-const DEFAULT_BASE_URL =
-  process.env.EXTERNAL_MEETINGS_API_BASE_URL ||
-  process.env.MEETINGS_API_BASE_URL ||
-  (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:5002/v1');
-const MEET_EVENT_MODE = String(process.env.MEET_EVENT_MODE || 'auto').trim().toLowerCase();
+const DEFAULT_BASE_URL = process.env.EXTERNAL_MEETINGS_API_BASE_URL || process.env.MEETINGS_API_BASE_URL || 'http://localhost:5002/v1';
 const INTERNAL_KEY = process.env.EXTERNAL_MEETINGS_KEY || process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
 
 const VALID_SORT_FIELDS = new Set(['meeting_date_time', 'meeting_end_time', 'created_at', 'updated_at', 'meeting_title', 'meeting_status']);
@@ -40,12 +35,6 @@ const buildHeaders = (req) => {
 };
 
 const proxyRequest = async (req, path, options = {}) => {
-  if (!DEFAULT_BASE_URL) {
-    const error = new Error('External meetings service is not configured');
-    error.status = 503;
-    throw error;
-  }
-
   const response = await fetch(`${DEFAULT_BASE_URL}${path}`, {
     ...options,
     headers: {
@@ -67,86 +56,6 @@ const proxyRequest = async (req, path, options = {}) => {
   }
 
   return payload;
-};
-
-const createMeetEventDirectly = async ({ summary, location, description, startDateTime, endDateTime, attendeeEmails = [] }) => {
-  const clientId = process.env.GOOGLE_CALENDAR_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CALENDAR_CLIENT_SECRETE || process.env.GOOGLE_CALENDAR_CLIENT_SECRET;
-  const redirectUri = process.env.GOOGLE_REDIRECT_URI;
-  const refreshToken = process.env.GOOGLE_CALENDAR_REFRESH_TOKEN;
-
-  if (!clientId || !clientSecret || !redirectUri || !refreshToken) {
-    const error = new Error(
-      'Direct meet creation is not configured. Required env: GOOGLE_CALENDAR_CLIENT_ID, GOOGLE_CALENDAR_CLIENT_SECRETE (or GOOGLE_CALENDAR_CLIENT_SECRET), GOOGLE_REDIRECT_URI, GOOGLE_CALENDAR_REFRESH_TOKEN'
-    );
-    error.status = 503;
-    throw error;
-  }
-
-  if (!summary || !startDateTime || !endDateTime) {
-    const error = new Error('summary, startDateTime and endDateTime are required');
-    error.status = 400;
-    throw error;
-  }
-
-  const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
-  oauth2Client.setCredentials({ refresh_token: refreshToken });
-
-  const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
-
-  const eventPayload = {
-    summary,
-    location: location || '',
-    description: description || '',
-    start: {
-      dateTime: startDateTime,
-      timeZone: process.env.GOOGLE_CALENDAR_TIMEZONE || 'UTC',
-    },
-    end: {
-      dateTime: endDateTime,
-      timeZone: process.env.GOOGLE_CALENDAR_TIMEZONE || 'UTC',
-    },
-    conferenceData: {
-      createRequest: {
-        requestId: `meet-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
-        conferenceSolutionKey: { type: 'hangoutsMeet' },
-      },
-    },
-    attendees: (attendeeEmails || [])
-      .map((email) => String(email || '').trim())
-      .filter(Boolean)
-      .map((email) => ({ email })),
-    guestsCanModify: false,
-    guestsCanInviteOthers: true,
-    guestsCanSeeOtherGuests: true,
-  };
-
-  const response = await calendar.events.insert({
-    calendarId: process.env.GOOGLE_CALENDAR_ID || 'primary',
-    resource: eventPayload,
-    conferenceDataVersion: 1,
-    sendUpdates: 'all',
-  });
-
-  const entryPoints = response?.data?.conferenceData?.entryPoints || [];
-  const meetLink = entryPoints.find((entry) => entry?.entryPointType === 'video')?.uri || response?.data?.hangoutLink;
-
-  if (!meetLink) {
-    const error = new Error('Google Calendar event created but Meet link was not returned');
-    error.status = 502;
-    throw error;
-  }
-
-  return {
-    meetLink,
-    eventId: response?.data?.id || null,
-  };
-};
-
-const shouldUseProxyForMeetEvent = () => {
-  if (MEET_EVENT_MODE === 'direct') return false;
-  if (MEET_EVENT_MODE === 'proxy') return true;
-  return Boolean(DEFAULT_BASE_URL);
 };
 
 const safeJsonParse = (value, fallback) => {
@@ -1285,28 +1194,15 @@ exports.respondToMeetingInvitation = async (req, res) => {
 
 exports.createMeetEvent = async (req, res) => {
   try {
+    const userId = req.body?.userId || req.query?.userId || '';
+    const query = userId ? `?userId=${encodeURIComponent(String(userId))}` : '';
     const payload = { ...(req.body || {}) };
-    let result;
+    delete payload.userId;
 
-    if (shouldUseProxyForMeetEvent()) {
-      if (!DEFAULT_BASE_URL) {
-        return res.status(503).json({
-          message: 'MEET_EVENT_MODE=proxy but EXTERNAL_MEETINGS_API_BASE_URL is not configured',
-        });
-      }
-
-      const userId = payload?.userId || req.query?.userId || '';
-      const query = userId ? `?userId=${encodeURIComponent(String(userId))}` : '';
-      delete payload.userId;
-
-      result = await proxyRequest(req, `/create-event${query}`, {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
-    } else {
-      result = await createMeetEventDirectly(payload);
-    }
-
+    const result = await proxyRequest(req, `/create-event${query}`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
     return res.status(200).json(result);
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {
