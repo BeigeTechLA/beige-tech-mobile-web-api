@@ -74,6 +74,20 @@ function normalizeString(value, maxLen, fallback = null) {
   return normalized;
 }
 
+function isPaymentIntentUniqueConstraintError(error) {
+  if (!error) return false;
+
+  const isUniqueName = error.name === 'SequelizeUniqueConstraintError';
+  const hasStripeField =
+    error?.fields?.stripe_payment_intent_id ||
+    (error.errors || []).some(err => err?.path === 'stripe_payment_intent_id');
+  const duplicateMessage = String(
+    error?.parent?.sqlMessage || error?.message || ''
+  ).includes('stripe_payment_intent_id');
+
+  return isUniqueName && (hasStripeField || duplicateMessage);
+}
+
 function applyReferralDiscount(totalAmount) {
   const total = parseFloat(totalAmount || 0);
   if (!Number.isFinite(total) || total <= 0) {
@@ -1531,6 +1545,31 @@ exports.confirmPaymentMulti = async (req, res) => {
     if (transaction && !transaction.finished) {
         await transaction.rollback();
     }
+
+    if (isPaymentIntentUniqueConstraintError(error)) {
+      try {
+        const paymentIntentIdFromBody = req.body?.paymentIntentId;
+        const existingPayment = paymentIntentIdFromBody
+          ? await db.payment_transactions.findOne({
+            where: { stripe_payment_intent_id: paymentIntentIdFromBody }
+          })
+          : null;
+
+        if (existingPayment) {
+          return res.status(200).json({
+            success: true,
+            message: 'Payment already processed',
+            data: {
+              payment_id: existingPayment.payment_id,
+              booking_id: req.body?.booking_id || null
+            }
+          });
+        }
+      } catch (lookupError) {
+        console.error('Failed lookup after payment intent unique conflict:', lookupError);
+      }
+    }
+
     if (error?.name === 'SequelizeValidationError' || error?.name === 'SequelizeUniqueConstraintError') {
       console.error(
         'Multi-Creator Payment Validation Details:',
