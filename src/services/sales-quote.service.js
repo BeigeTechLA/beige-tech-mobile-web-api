@@ -2,6 +2,7 @@ const { Op } = require('sequelize');
 const db = require('../models');
 const { sendCustomQuoteProposalEmail } = require('../utils/emailService');
 const { generateQuotePdfBuffer } = require('../utils/quotePdf');
+const { normalizeTime, resolveEventDateAndStartTime } = require('../utils/timezone');
 
 const SECTION_TYPES = ['service', 'addon', 'logistics', 'custom'];
 const QUOTE_STATUSES = ['draft', 'pending', 'sent', 'viewed', 'accepted', 'paid', 'rejected', 'expired'];
@@ -422,18 +423,13 @@ function resolveUnitRateValue(preferred, pricingItem, catalogItem) {
   return roundCurrency(candidate);
 }
 
-function generateQuoteNumber() {
-  const now = new Date();
-  const stamp = [
-    now.getFullYear(),
-    String(now.getMonth() + 1).padStart(2, '0'),
-    String(now.getDate()).padStart(2, '0'),
-    String(now.getHours()).padStart(2, '0'),
-    String(now.getMinutes()).padStart(2, '0'),
-    String(now.getSeconds()).padStart(2, '0'),
-    String(now.getMilliseconds()).padStart(3, '0')
-  ].join('');
-  return `SQ-${stamp}`;
+function generateQuoteNumber(salesQuoteId = null) {
+  const normalizedId = Number(salesQuoteId);
+  if (Number.isInteger(normalizedId) && normalizedId > 0) {
+    return `BEIGE-${normalizedId}`;
+  }
+
+  return `BEIGE-${Date.now()}`;
 }
 
 function formatDateOnly(date) {
@@ -996,15 +992,27 @@ function buildQuoteConversionMissingFields(prefillData) {
   if (!prefillData.shoot_type) otherFields.push('shoot_type');
   if (!prefillData.crew_roles || !Object.keys(prefillData.crew_roles).length) otherFields.push('crew_roles');
   if (!prefillData.crew_size) otherFields.push('crew_size');
+  if (!prefillData.location) otherFields.push('location');
 
   return {
     missing_required_fields: {
       time_fields: {
-        always: ['booking_type', 'time_zone'],
-        single_day: ['start_date', 'start_time', 'end_time'],
-        multi_day: ['booking_days']
+        always: [
+          ...(!prefillData.booking_type ? ['booking_type'] : []),
+          ...(!prefillData.time_zone ? ['time_zone'] : [])
+        ],
+        single_day: prefillData.booking_type === 'single_day'
+          ? [
+              ...(!prefillData.start_date ? ['start_date'] : []),
+              ...(!prefillData.start_time ? ['start_time'] : []),
+              ...(!prefillData.end_time ? ['end_time'] : [])
+            ]
+          : ['start_date', 'start_time', 'end_time'],
+        multi_day: prefillData.booking_type === 'multi_day'
+          ? [!(Array.isArray(prefillData.booking_days) && prefillData.booking_days.length) ? 'booking_days' : null].filter(Boolean)
+          : ['booking_days']
       },
-      other_fields: [...new Set(['selected_crew_ids', ...otherFields])]
+      other_fields: [...new Set([...(prefillData.selected_crew_ids?.length ? [] : ['selected_crew_ids']), ...otherFields])]
     }
   };
 }
@@ -1031,6 +1039,294 @@ function canGeneratePaymentLinkFromConvertedBooking(quoteDetails, prefillData) {
     Number(quoteDetails.total) > 0 &&
     (prefillData?.guest_email || quoteDetails?.client_email)
   );
+}
+
+function calculateDurationFromTimes(startTime, endTime) {
+  const normalizedStart = normalizeTime(startTime);
+  const normalizedEnd = normalizeTime(endTime);
+  if (!normalizedStart || !normalizedEnd) return null;
+
+  const [sh, sm, ss = '00'] = normalizedStart.split(':').map(Number);
+  const [eh, em, es = '00'] = normalizedEnd.split(':').map(Number);
+  if ([sh, sm, ss, eh, em, es].some((part) => Number.isNaN(part))) return null;
+
+  const startMinutes = (sh * 60) + sm + (ss / 60);
+  const endMinutes = (eh * 60) + em + (es / 60);
+  const diffMinutes = endMinutes - startMinutes;
+  if (diffMinutes <= 0) return null;
+  return roundCurrency(diffMinutes / 60);
+}
+
+function normalizeBookingDaysPayload(bookingDays = [], defaultTimeZone = null) {
+  return (Array.isArray(bookingDays) ? bookingDays : [])
+    .filter((day) => day && day.date)
+    .map((day) => {
+      const start = normalizeTime(day.start_time || day.startTime || null);
+      const end = normalizeTime(day.end_time || day.endTime || null);
+      const explicitDuration = day.duration_hours !== undefined && day.duration_hours !== null
+        ? Number(day.duration_hours)
+        : null;
+
+      return {
+        date: day.date,
+        start_time: start,
+        end_time: end,
+        duration_hours: Number.isFinite(explicitDuration) && explicitDuration > 0
+          ? explicitDuration
+          : calculateDurationFromTimes(start, end),
+        time_zone: day.time_zone || day.timeZone || defaultTimeZone || null
+      };
+    });
+}
+
+function applyConvertBookingOverrides(prefillData, payload = {}) {
+  const next = { ...prefillData };
+  const timeZone = payload.time_zone || payload.timeZone || null;
+  const location = payload.location !== undefined ? payload.location : payload.event_location;
+  const referenceLinks = payload.reference_links !== undefined ? payload.reference_links : payload.referenceLinks;
+  const specialInstructions = payload.special_instructions !== undefined ? payload.special_instructions : payload.specialInstructions;
+  const selectedCrewIds = Array.isArray(payload.selected_crew_ids) ? payload.selected_crew_ids.filter(Boolean).map(Number) : [];
+  const normalizedBookingDays = normalizeBookingDaysPayload(payload.booking_days, timeZone);
+  const inferredBookingType = payload.booking_type
+    || (normalizedBookingDays.length ? 'multi_day' : null)
+    || ((payload.start_date || payload.start_time || payload.start_date_time || payload.end_time) ? 'single_day' : null);
+  const bookingType = inferredBookingType;
+  const singleDaySchedule = resolveEventDateAndStartTime({
+    start_date: payload.start_date,
+    start_time: payload.start_time,
+    start_date_time: payload.start_date_time
+  });
+  const singleDayEndTime = normalizeTime(payload.end_time || null);
+  next.has_schedule_override = Boolean(
+    bookingType ||
+    timeZone ||
+    normalizedBookingDays.length ||
+    payload.start_date ||
+    payload.start_time ||
+    payload.start_date_time ||
+    payload.end_time
+  );
+
+  if (location !== undefined) next.location = location || null;
+  if (referenceLinks !== undefined) next.reference_links = referenceLinks || null;
+  if (specialInstructions !== undefined) next.special_instructions = specialInstructions || null;
+  if (bookingType) next.booking_type = bookingType;
+  if (timeZone) next.time_zone = timeZone;
+  if (selectedCrewIds.length) next.selected_crew_ids = selectedCrewIds;
+
+  if (bookingType === 'multi_day') {
+    next.booking_days = normalizedBookingDays;
+    if (normalizedBookingDays.length) {
+      const firstDay = [...normalizedBookingDays].sort((a, b) => new Date(a.date) - new Date(b.date))[0];
+      next.start_date = firstDay.date;
+      next.start_time = firstDay.start_time || null;
+      next.end_time = firstDay.end_time || null;
+      const totalDuration = normalizedBookingDays.reduce((sum, day) => sum + Number(day.duration_hours || 0), 0);
+      if (totalDuration > 0) next.duration_hours = totalDuration;
+    }
+  } else if (bookingType === 'single_day') {
+    next.booking_days = [];
+    if (singleDaySchedule.event_date) next.start_date = singleDaySchedule.event_date;
+    if (singleDaySchedule.start_time) next.start_time = singleDaySchedule.start_time;
+    if (singleDayEndTime) next.end_time = singleDayEndTime;
+
+    const explicitDuration = payload.duration_hours !== undefined && payload.duration_hours !== null
+      ? Number(payload.duration_hours)
+      : null;
+    const computedDuration = Number.isFinite(explicitDuration) && explicitDuration > 0
+      ? explicitDuration
+      : calculateDurationFromTimes(next.start_time, next.end_time);
+    if (computedDuration) next.duration_hours = computedDuration;
+  }
+
+  return next;
+}
+
+async function syncConvertedQuoteArtifacts({
+  quote,
+  quoteDetails,
+  prefillData,
+  user,
+  transaction,
+  markQuoteAccepted = false,
+  recordConversionActivity = false
+}) {
+  let lead = quote.lead_id
+    ? await db.sales_leads.findOne({
+        where: { lead_id: quote.lead_id, is_active: 1 },
+        transaction
+      })
+    : null;
+
+  let booking = lead?.booking_id
+    ? await db.stream_project_booking.findOne({
+        where: { stream_project_booking_id: lead.booking_id, is_active: 1 },
+        transaction
+      })
+    : null;
+
+  const wasAlreadyConverted = Boolean(lead && booking);
+  const bookingDescription = buildConvertedBookingDescription(quoteDetails, prefillData);
+
+  if (!booking) {
+    booking = await db.stream_project_booking.create({
+      user_id: quote.client_user_id || null,
+      guest_email: quote.client_email || null,
+      project_name: deriveConvertedProjectName(quoteDetails),
+      description: bookingDescription || null,
+      event_type: prefillData.shoot_type || prefillData.content_type,
+      shoot_type: prefillData.shoot_type || null,
+      content_type: prefillData.content_type,
+      event_date: prefillData.start_date || null,
+      duration_hours: prefillData.duration_hours,
+      start_time: prefillData.start_time || null,
+      end_time: prefillData.end_time || null,
+      budget: Number(quoteDetails.total || 0) || null,
+      crew_size_needed: prefillData.crew_size,
+      event_location: prefillData.location,
+      crew_roles: JSON.stringify(prefillData.crew_roles || {}),
+      streaming_platforms: JSON.stringify([]),
+      reference_links: prefillData.reference_links,
+      edits_needed: prefillData.edits_needed ? 1 : 0,
+      video_edit_types: prefillData.video_edit_types,
+      photo_edit_types: prefillData.photo_edit_types,
+      special_instructions: prefillData.special_instructions,
+      is_draft: 1,
+      is_completed: 0,
+      is_cancelled: 0,
+      is_active: 1
+    }, { transaction });
+  } else {
+    await booking.update({
+      user_id: quote.client_user_id || booking.user_id || null,
+      guest_email: quote.client_email || booking.guest_email || null,
+      project_name: deriveConvertedProjectName(quoteDetails),
+      description: bookingDescription || booking.description || null,
+      event_type: prefillData.shoot_type || prefillData.content_type || booking.event_type,
+      shoot_type: prefillData.shoot_type || booking.shoot_type || null,
+      content_type: prefillData.content_type || booking.content_type || null,
+      event_date: prefillData.start_date || booking.event_date || null,
+      duration_hours: prefillData.duration_hours ?? booking.duration_hours,
+      start_time: prefillData.start_time || booking.start_time || null,
+      end_time: prefillData.end_time || booking.end_time || null,
+      budget: Number(quoteDetails.total || 0) || booking.budget || null,
+      crew_size_needed: prefillData.crew_size ?? booking.crew_size_needed,
+      event_location: prefillData.location || booking.event_location || null,
+      crew_roles: JSON.stringify(
+        Object.keys(prefillData.crew_roles || {}).length
+          ? prefillData.crew_roles
+          : (parseConfig(booking.crew_roles) || {})
+      ),
+      reference_links: prefillData.reference_links ?? booking.reference_links ?? null,
+      edits_needed: prefillData.edits_needed ? 1 : booking.edits_needed,
+      video_edit_types: prefillData.video_edit_types?.length ? prefillData.video_edit_types : booking.video_edit_types,
+      photo_edit_types: prefillData.photo_edit_types?.length ? prefillData.photo_edit_types : booking.photo_edit_types,
+      special_instructions: prefillData.special_instructions || booking.special_instructions || null,
+      is_active: 1
+    }, { transaction });
+  }
+
+  if (prefillData.has_schedule_override) {
+    await db.stream_project_booking_days.destroy({
+      where: { stream_project_booking_id: booking.stream_project_booking_id },
+      transaction
+    });
+
+    if (prefillData.booking_type === 'multi_day' && Array.isArray(prefillData.booking_days) && prefillData.booking_days.length) {
+      await db.stream_project_booking_days.bulkCreate(
+        prefillData.booking_days.map((day) => ({
+          stream_project_booking_id: booking.stream_project_booking_id,
+          event_date: day.date,
+          start_time: day.start_time || null,
+          end_time: day.end_time || null,
+          duration_hours: day.duration_hours || null,
+          time_zone: day.time_zone || prefillData.time_zone || null
+        })),
+        { transaction }
+      );
+    }
+  }
+
+  const nextLeadStatus = booking.payment_id || booking.is_completed === 1
+    ? (lead?.lead_status || 'booked')
+    : 'booking_in_progress';
+
+  if (!lead) {
+    lead = await db.sales_leads.create({
+      booking_id: booking.stream_project_booking_id,
+      user_id: quote.client_user_id || null,
+      guest_email: quote.client_email || null,
+      client_name: quote.client_name,
+      phone: quote.client_phone || null,
+      lead_type: 'sales_assisted',
+      lead_status: nextLeadStatus,
+      intent: null,
+      lead_source: CONVERTED_BOOKINGS_LEAD_SOURCE,
+      assigned_sales_rep_id: quote.assigned_sales_rep_id || user.userId,
+      last_activity_at: new Date(),
+      created_from: 1
+    }, { transaction });
+  } else {
+    await lead.update({
+      booking_id: booking.stream_project_booking_id,
+      user_id: quote.client_user_id || lead.user_id || null,
+      guest_email: quote.client_email || lead.guest_email || null,
+      client_name: quote.client_name || lead.client_name || null,
+      phone: quote.client_phone || lead.phone || null,
+      lead_type: lead.lead_type || 'sales_assisted',
+      lead_status: nextLeadStatus,
+      lead_source: CONVERTED_BOOKINGS_LEAD_SOURCE,
+      assigned_sales_rep_id: quote.assigned_sales_rep_id || lead.assigned_sales_rep_id || user.userId,
+      last_activity_at: new Date()
+    }, { transaction });
+  }
+
+  const legacyQuote = await persistLegacyBookingQuoteFromSalesQuote({
+    booking,
+    quoteDetails,
+    transaction
+  });
+
+  if (booking.quote_id !== legacyQuote.quote_id) {
+    await booking.update({ quote_id: legacyQuote.quote_id }, { transaction });
+  }
+
+  await quote.update({
+    lead_id: lead.lead_id,
+    ...(markQuoteAccepted ? {
+      status: 'accepted',
+      accepted_at: quote.accepted_at || new Date()
+    } : {}),
+    updated_at: new Date()
+  }, { transaction });
+
+  if (recordConversionActivity) {
+    await db.sales_lead_activities.create({
+      lead_id: lead.lead_id,
+      activity_type: wasAlreadyConverted ? 'booking_updated' : 'created',
+      activity_data: {
+        source: 'sales_quote_conversion',
+        sales_quote_id: quote.sales_quote_id,
+        booking_id: booking.stream_project_booking_id,
+        lead_source: CONVERTED_BOOKINGS_LEAD_SOURCE
+      },
+      performed_by_user_id: user.userId || null
+    }, { transaction });
+
+    await recordActivity(
+      transaction,
+      quote.sales_quote_id,
+      'accepted',
+      user.userId,
+      wasAlreadyConverted ? 'Quote conversion reopened and marked as accepted' : 'Quote converted to booking and marked as accepted',
+      {
+        lead_id: lead.lead_id,
+        booking_id: booking.stream_project_booking_id
+      }
+    );
+  }
+
+  return { lead, booking, legacyQuote, wasAlreadyConverted };
 }
 
 async function persistLegacyBookingQuoteFromSalesQuote({ booking, quoteDetails, transaction }) {
@@ -1197,6 +1493,11 @@ async function createQuote(payload, user) {
       terms_conditions: payload.terms_conditions || null
     }, { transaction });
 
+    const stableQuoteNumber = generateQuoteNumber(quote.sales_quote_id);
+    if (quote.quote_number !== stableQuoteNumber) {
+      await quote.update({ quote_number: stableQuoteNumber }, { transaction });
+    }
+
     if (lineItemsPayload.length) {
       await db.sales_quote_line_items.bulkCreate(
         lineItemsPayload.map((item) => ({
@@ -1322,6 +1623,75 @@ async function updateQuote(salesQuoteId, payload, user) {
       }
     }
 
+    if (quote.lead_id) {
+      const updatedQuoteDetails = {
+        sales_quote_id: quote.sales_quote_id,
+        quote_number: quote.quote_number,
+        lead_id: quote.lead_id,
+        client_user_id: quote.client_user_id,
+        created_by_user_id: quote.created_by_user_id,
+        assigned_sales_rep_id: quote.assigned_sales_rep_id,
+        pricing_mode: quote.pricing_mode,
+        status: quote.status,
+        client_name: quote.client_name,
+        client_email: quote.client_email,
+        client_phone: quote.client_phone,
+        client_address: quote.client_address,
+        project_description: quote.project_description,
+        video_shoot_type: quote.video_shoot_type,
+        quote_validity_days: quote.quote_validity_days,
+        valid_until: quote.valid_until,
+        discount_type: quote.discount_type,
+        discount_value: quote.discount_value,
+        discount_amount: quote.discount_amount,
+        tax_type: quote.tax_type,
+        tax_rate: quote.tax_rate,
+        tax_amount: quote.tax_amount,
+        subtotal: quote.subtotal,
+        total: quote.total,
+        notes: quote.notes,
+        terms_conditions: quote.terms_conditions,
+        line_items: mergedLineItemsPayload.map((item) => ({
+          ...item,
+          configuration: parseConfig(item.configuration_json)
+        }))
+      };
+
+      const roleData = deriveBookingRoleDataFromQuote(updatedQuoteDetails.line_items || []);
+      const editSelections = await deriveBookingEditSelectionsFromQuote(updatedQuoteDetails.line_items || []);
+      let prefillData = {
+        guest_email: updatedQuoteDetails.client_email || null,
+        user_id: updatedQuoteDetails.client_user_id || null,
+        full_name: updatedQuoteDetails.client_name || null,
+        phone: updatedQuoteDetails.client_phone || null,
+        location: updatedQuoteDetails.client_address || null,
+        content_type: roleData.content_type,
+        shoot_type: mapQuoteShootTypeToBookingShootType(updatedQuoteDetails.video_shoot_type),
+        quote_shoot_type_label: updatedQuoteDetails.video_shoot_type || null,
+        duration_hours: roleData.duration_hours,
+        crew_roles: roleData.crew_roles,
+        crew_size: roleData.crew_size,
+        video_edit_types: editSelections.video_edit_types,
+        photo_edit_types: editSelections.photo_edit_types,
+        edits_needed: editSelections.edits_needed,
+        unmatched_edit_types: editSelections.unmatched_edit_types,
+        project_description: updatedQuoteDetails.project_description || null,
+        reference_links: null,
+        special_instructions: updatedQuoteDetails.notes || null
+      };
+      prefillData = applyConvertBookingOverrides(prefillData, payload);
+
+      await syncConvertedQuoteArtifacts({
+        quote,
+        quoteDetails: updatedQuoteDetails,
+        prefillData,
+        user,
+        transaction,
+        markQuoteAccepted: false,
+        recordConversionActivity: false
+      });
+    }
+
     await recordActivity(transaction, salesQuoteId, 'updated', user.userId, 'Quote updated');
     await transaction.commit();
     return getQuoteById(salesQuoteId, user);
@@ -1331,7 +1701,7 @@ async function updateQuote(salesQuoteId, payload, user) {
   }
 }
 
-async function convertQuoteToBooking(salesQuoteId, user) {
+async function convertQuoteToBooking(salesQuoteId, payload = {}, user) {
   const quoteDetails = await getQuoteById(salesQuoteId, user);
   if (!quoteDetails) {
     throw new Error('Quote not found');
@@ -1343,7 +1713,7 @@ async function convertQuoteToBooking(salesQuoteId, user) {
 
   const roleData = deriveBookingRoleDataFromQuote(quoteDetails.line_items || []);
   const editSelections = await deriveBookingEditSelectionsFromQuote(quoteDetails.line_items || []);
-  const prefillData = {
+  let prefillData = {
     guest_email: quoteDetails.client_email || null,
     user_id: quoteDetails.client_user_id || null,
     full_name: quoteDetails.client_name || null,
@@ -1363,6 +1733,7 @@ async function convertQuoteToBooking(salesQuoteId, user) {
     reference_links: null,
     special_instructions: quoteDetails.notes || null
   };
+  prefillData = applyConvertBookingOverrides(prefillData, payload);
   const bookingDescription = buildConvertedBookingDescription(quoteDetails, prefillData);
 
   const requirementData = buildQuoteConversionMissingFields(prefillData);
@@ -1378,146 +1749,15 @@ async function convertQuoteToBooking(salesQuoteId, user) {
       throw new Error('Quote not found');
     }
 
-    let lead = quote.lead_id
-      ? await db.sales_leads.findOne({
-          where: { lead_id: quote.lead_id, is_active: 1 },
-          transaction
-        })
-      : null;
-
-    let booking = lead?.booking_id
-      ? await db.stream_project_booking.findOne({
-          where: { stream_project_booking_id: lead.booking_id, is_active: 1 },
-          transaction
-        })
-      : null;
-
-    const wasAlreadyConverted = Boolean(lead && booking);
-
-    if (!booking) {
-      booking = await db.stream_project_booking.create({
-        user_id: quote.client_user_id || null,
-        guest_email: quote.client_email || null,
-        project_name: deriveConvertedProjectName(quoteDetails),
-        description: bookingDescription || null,
-        event_type: prefillData.shoot_type || prefillData.content_type,
-        shoot_type: prefillData.shoot_type || null,
-        content_type: prefillData.content_type,
-        duration_hours: prefillData.duration_hours,
-        budget: Number(quoteDetails.total || 0) || null,
-        crew_size_needed: prefillData.crew_size,
-        event_location: prefillData.location,
-        crew_roles: JSON.stringify(prefillData.crew_roles || {}),
-        streaming_platforms: JSON.stringify([]),
-        reference_links: prefillData.reference_links,
-        edits_needed: prefillData.edits_needed ? 1 : 0,
-        video_edit_types: prefillData.video_edit_types,
-        photo_edit_types: prefillData.photo_edit_types,
-        special_instructions: prefillData.special_instructions,
-        is_draft: 1,
-        is_completed: 0,
-        is_cancelled: 0,
-        is_active: 1
-      }, { transaction });
-    } else {
-      await booking.update({
-        user_id: quote.client_user_id || booking.user_id || null,
-        guest_email: quote.client_email || booking.guest_email || null,
-        project_name: deriveConvertedProjectName(quoteDetails),
-        description: bookingDescription || booking.description || null,
-        event_type: prefillData.shoot_type || prefillData.content_type || booking.event_type,
-        shoot_type: prefillData.shoot_type || booking.shoot_type || null,
-        content_type: prefillData.content_type || booking.content_type || null,
-        duration_hours: prefillData.duration_hours ?? booking.duration_hours,
-        budget: Number(quoteDetails.total || 0) || booking.budget || null,
-        crew_size_needed: prefillData.crew_size ?? booking.crew_size_needed,
-        event_location: prefillData.location || booking.event_location || null,
-        crew_roles: JSON.stringify(
-          Object.keys(prefillData.crew_roles || {}).length
-            ? prefillData.crew_roles
-            : (parseConfig(booking.crew_roles) || {})
-        ),
-        reference_links: prefillData.reference_links ?? booking.reference_links ?? null,
-        edits_needed: prefillData.edits_needed ? 1 : booking.edits_needed,
-        video_edit_types: prefillData.video_edit_types?.length ? prefillData.video_edit_types : booking.video_edit_types,
-        photo_edit_types: prefillData.photo_edit_types?.length ? prefillData.photo_edit_types : booking.photo_edit_types,
-        special_instructions: prefillData.special_instructions || booking.special_instructions || null,
-        is_active: 1
-      }, { transaction });
-    }
-
-    if (!lead) {
-      lead = await db.sales_leads.create({
-        booking_id: booking.stream_project_booking_id,
-        user_id: quote.client_user_id || null,
-        guest_email: quote.client_email || null,
-        client_name: quote.client_name,
-        phone: quote.client_phone || null,
-        lead_type: 'sales_assisted',
-        lead_status: 'booking_in_progress',
-        intent: null,
-        lead_source: CONVERTED_BOOKINGS_LEAD_SOURCE,
-        assigned_sales_rep_id: quote.assigned_sales_rep_id || user.userId,
-        last_activity_at: new Date(),
-        created_from: 1
-      }, { transaction });
-    } else {
-      await lead.update({
-        booking_id: booking.stream_project_booking_id,
-        user_id: quote.client_user_id || lead.user_id || null,
-        guest_email: quote.client_email || lead.guest_email || null,
-        client_name: quote.client_name || lead.client_name || null,
-        phone: quote.client_phone || lead.phone || null,
-        lead_type: lead.lead_type || 'sales_assisted',
-        lead_status: 'booking_in_progress',
-        lead_source: CONVERTED_BOOKINGS_LEAD_SOURCE,
-        assigned_sales_rep_id: quote.assigned_sales_rep_id || lead.assigned_sales_rep_id || user.userId,
-        last_activity_at: new Date()
-      }, { transaction });
-    }
-
-    const legacyQuote = await persistLegacyBookingQuoteFromSalesQuote({
-      booking,
+    const { lead, booking, legacyQuote, wasAlreadyConverted } = await syncConvertedQuoteArtifacts({
+      quote,
       quoteDetails,
-      transaction
-    });
-
-    if (booking.quote_id !== legacyQuote.quote_id) {
-      await booking.update({
-        quote_id: legacyQuote.quote_id
-      }, { transaction });
-    }
-
-    await quote.update({
-      lead_id: lead.lead_id,
-      status: 'accepted',
-      accepted_at: quote.accepted_at || new Date(),
-      updated_at: new Date()
-    }, { transaction });
-
-    await db.sales_lead_activities.create({
-      lead_id: lead.lead_id,
-      activity_type: wasAlreadyConverted ? 'booking_updated' : 'created',
-      activity_data: {
-        source: 'sales_quote_conversion',
-        sales_quote_id: quote.sales_quote_id,
-        booking_id: booking.stream_project_booking_id,
-        lead_source: CONVERTED_BOOKINGS_LEAD_SOURCE
-      },
-      performed_by_user_id: user.userId || null
-    }, { transaction });
-
-    await recordActivity(
+      prefillData,
+      user,
       transaction,
-      quote.sales_quote_id,
-      'accepted',
-      user.userId,
-      wasAlreadyConverted ? 'Quote conversion reopened and marked as accepted' : 'Quote converted to booking and marked as accepted',
-      {
-        lead_id: lead.lead_id,
-        booking_id: booking.stream_project_booking_id
-      }
-    );
+      markQuoteAccepted: true,
+      recordConversionActivity: true
+    });
 
     await transaction.commit();
 

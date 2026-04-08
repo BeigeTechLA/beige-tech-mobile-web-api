@@ -274,7 +274,7 @@ exports.updateQuote = async (req, res) => {
 
 exports.convertQuoteToBooking = async (req, res) => {
   try {
-    const data = await quoteService.convertQuoteToBooking(Number(req.params.quoteId), getUserContext(req));
+    const data = await quoteService.convertQuoteToBooking(Number(req.params.quoteId), req.body || {}, getUserContext(req));
     return res.json({
       success: true,
       data
@@ -569,7 +569,28 @@ exports.deleteShootType = async (req, res) => {
 exports.getClientDropdown = async (req, res) => {
   try {
     const { search } = req.query;
-    const whereConditions = { is_active: 1 };
+    const allowedUsers = await db.users.findAll({
+      where: { user_type: 3 },
+      attributes: ['id'],
+      raw: true
+    });
+
+    const allowedUserIds = allowedUsers.map((user) => user.id);
+
+    if (!allowedUserIds.length) {
+      return res.status(constants.OK.code).json({
+        error: false,
+        message: 'Client dropdown fetched successfully',
+        data: []
+      });
+    }
+
+    const whereConditions = {
+      is_active: 1,
+      user_id: {
+        [Op.in]: allowedUserIds
+      }
+    };
 
     if (search?.trim()) {
       whereConditions.name = {

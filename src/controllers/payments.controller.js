@@ -1,6 +1,8 @@
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const db = require('../models');
 const affiliateController = require('./affiliate.controller');
+const { ensureProjectForBooking } = require('./projects.controller');
+const externalFileManagerController = require('./external-file-manager.controller');
 const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 const googleSheetService = require('../utils/googleSheetsService');
 // Get Beige margin percentage from environment, default to 25%
@@ -36,6 +38,54 @@ function calculatePricing(hours, hourlyRate, equipmentItems = [], marginPercent 
 
 function round2(value) {
   return parseFloat(Number(value || 0).toFixed(2));
+}
+
+function normalizeDateOnly(value, fallback = new Date()) {
+  const source = value || fallback;
+  const date = source instanceof Date ? source : new Date(source);
+  if (Number.isNaN(date.getTime())) {
+    const fallbackDate = fallback instanceof Date ? fallback : new Date(fallback);
+    return Number.isNaN(fallbackDate.getTime()) ? new Date() : fallbackDate;
+  }
+  return date;
+}
+
+function normalizeString(value, maxLen, fallback = null) {
+  let normalized = value;
+
+  if (normalized === undefined || normalized === null || normalized === '') {
+    return fallback;
+  }
+
+  if (typeof normalized !== 'string') {
+    try {
+      normalized = JSON.stringify(normalized);
+    } catch (error) {
+      normalized = String(normalized);
+    }
+  }
+
+  normalized = String(normalized).trim();
+  if (!normalized) return fallback;
+
+  if (Number.isFinite(maxLen) && maxLen > 0 && normalized.length > maxLen) {
+    return normalized.slice(0, maxLen);
+  }
+  return normalized;
+}
+
+function isPaymentIntentUniqueConstraintError(error) {
+  if (!error) return false;
+
+  const isUniqueName = error.name === 'SequelizeUniqueConstraintError';
+  const hasStripeField =
+    error?.fields?.stripe_payment_intent_id ||
+    (error.errors || []).some(err => err?.path === 'stripe_payment_intent_id');
+  const duplicateMessage = String(
+    error?.parent?.sqlMessage || error?.message || ''
+  ).includes('stripe_payment_intent_id');
+
+  return isUniqueName && (hasStripeField || duplicateMessage);
 }
 
 function applyReferralDiscount(totalAmount) {
@@ -117,6 +167,38 @@ async function markConvertedSalesQuoteAsPaid({
   }, { transaction });
 
   return salesQuote.sales_quote_id;
+}
+
+
+async function ensureProjectAfterPayment({
+  bookingId,
+  transaction,
+  initiatedByUserId = null,
+  ipAddress = null,
+  userAgent = null,
+}) {
+  try {
+    return await ensureProjectForBooking({
+      bookingId,
+      transaction,
+      initiatedByUserId,
+      initiatedByRole: 'SYSTEM',
+      ipAddress,
+      userAgent,
+    });
+  } catch (error) {
+    console.error(`Project auto-create failed for booking ${bookingId}:`, error.message);
+    return { project: null, created: false, error: error.message };
+  }
+}
+
+async function syncExternalWorkspaceAfterPayment(booking) {
+  try {
+    return await externalFileManagerController.syncWorkspaceForBookingFromRecord(booking);
+  } catch (error) {
+    console.error(`External workspace sync failed for booking ${booking?.stream_project_booking_id}:`, error.message);
+    return { success: false, message: error.message };
+  }
 }
 
 async function persistQuoteReferralDiscount({
@@ -916,12 +998,15 @@ exports.confirmPayment = async (req, res) => {
       await payment.save({ transaction });
     }
 
+    let projectSync = { project: null, created: false, error: null };
+    let externalWorkspaceSync = { success: false, message: null };
     // Update booking status to payment completed if booking_id provided
     if (booking_id) {
       try {
         await db.stream_project_booking.update(
           {
             // is_completed: 1,
+            is_draft: 0,
             payment_completed_at: new Date(),
             payment_id: payment.payment_id,
           },
@@ -931,6 +1016,18 @@ exports.confirmPayment = async (req, res) => {
           }
         );
         console.log(`Booking ${booking_id} marked as payment completed`);
+
+        projectSync = await ensureProjectAfterPayment({
+          bookingId: booking_id,
+          transaction,
+          initiatedByUserId: resolvedUserId || null,
+          ipAddress: req.ip || req.connection?.remoteAddress,
+          userAgent: req.headers['user-agent'],
+        });
+        externalWorkspaceSync = await syncExternalWorkspaceAfterPayment({
+          stream_project_booking_id: booking_id,
+          project_name: notes || shoot_type || `Booking_${booking_id}`,
+        });
       } catch (bookingUpdateError) {
         console.error('Failed to update booking status:', bookingUpdateError);
         // Don't fail the payment if booking update fails
@@ -975,7 +1072,12 @@ exports.confirmPayment = async (req, res) => {
           },
           status: 'succeeded',
           booking_id: booking_id || null,
-        booking_payment_updated: !!booking_id
+        booking_payment_updated: !!booking_id,
+        project_id: projectSync.project?.project_id || null,
+        project_created: projectSync.created,
+        project_sync_error: projectSync.error || null,
+        external_workspace_synced: !!externalWorkspaceSync.success,
+        external_workspace_message: externalWorkspaceSync.message || null,
       }
     });
 
@@ -1263,9 +1365,12 @@ exports.confirmPaymentMulti = async (req, res) => {
     }
 
     // 6. Create Payment Transaction Record
-    const finalShootDate = booking.shoot_date || booking.event_date || new Date();
+    const finalShootDate = normalizeDateOnly(booking.shoot_date || booking.event_date || new Date());
     const rawHours = booking.shoot_hours || booking.duration_hours || 1;
     const finalHours = parseFloat(rawHours) > 0 ? parseFloat(rawHours) : 1;
+    const safeLocation = normalizeString(booking.event_location, 255, 'See Booking Details');
+    const safeShootType = normalizeString(booking.shoot_type, 100, null);
+    const safeNotes = normalizeString(booking.special_requests || booking.special_instructions, null, null);
 
     const payment = await db.payment_transactions.create({
       stripe_payment_intent_id: paymentIntentId,
@@ -1282,9 +1387,9 @@ exports.confirmPaymentMulti = async (req, res) => {
       beige_margin_amount: 0,
       total_amount: totalAmount,
       shoot_date: finalShootDate,
-      location: booking.event_location ? (typeof booking.event_location === 'string' ? booking.event_location : JSON.stringify(booking.event_location)) : 'See Booking Details',
-      shoot_type: booking.shoot_type || null,
-      notes: booking.special_requests || null,
+      location: safeLocation,
+      shoot_type: safeShootType,
+      notes: safeNotes,
       referral_code: normalizedReferralCode || null,
       status: 'succeeded'
     }, { transaction });
@@ -1353,6 +1458,16 @@ exports.confirmPaymentMulti = async (req, res) => {
       transaction
     });
 
+    const projectSync = await ensureProjectAfterPayment({
+      bookingId: booking_id,
+      transaction,
+      initiatedByUserId: req.user?.userId || booking.user_id || null,
+      ipAddress: req.ip || req.connection?.remoteAddress,
+      userAgent: req.headers['user-agent'],
+    });
+    const externalWorkspaceSync = await syncExternalWorkspaceAfterPayment(booking);
+
+
     await transaction.commit();
 
     const lead = await db.sales_leads.findOne({
@@ -1415,12 +1530,55 @@ exports.confirmPaymentMulti = async (req, res) => {
     return res.status(201).json({
       success: true,
       message: totalAmount === 0 ? 'Booking confirmed (Free)' : 'Payment confirmed successfully',
-      data: { payment_id: payment.payment_id, booking_id }
+      data: {
+        payment_id: payment.payment_id,
+        booking_id,
+        project_id: projectSync.project?.project_id || null,
+        project_created: projectSync.created,
+        project_sync_error: projectSync.error || null,
+        external_workspace_synced: !!externalWorkspaceSync.success,
+        external_workspace_message: externalWorkspaceSync.message || null,
+      }
     });
 
   } catch (error) {
     if (transaction && !transaction.finished) {
         await transaction.rollback();
+    }
+
+    if (isPaymentIntentUniqueConstraintError(error)) {
+      try {
+        const paymentIntentIdFromBody = req.body?.paymentIntentId;
+        const existingPayment = paymentIntentIdFromBody
+          ? await db.payment_transactions.findOne({
+            where: { stripe_payment_intent_id: paymentIntentIdFromBody }
+          })
+          : null;
+
+        if (existingPayment) {
+          return res.status(200).json({
+            success: true,
+            message: 'Payment already processed',
+            data: {
+              payment_id: existingPayment.payment_id,
+              booking_id: req.body?.booking_id || null
+            }
+          });
+        }
+      } catch (lookupError) {
+        console.error('Failed lookup after payment intent unique conflict:', lookupError);
+      }
+    }
+
+    if (error?.name === 'SequelizeValidationError' || error?.name === 'SequelizeUniqueConstraintError') {
+      console.error(
+        'Multi-Creator Payment Validation Details:',
+        (error.errors || []).map(err => ({
+          message: err.message,
+          field: err.path,
+          value: err.value
+        }))
+      );
     }
     console.error('Multi-Creator Payment Error:', error);
     return res.status(500).json({ success: false, message: error.message });
@@ -1698,6 +1856,15 @@ exports.handleStripeWebhook = async (req, res) => {
         paidAmount: amountPaid,
         transaction
       });
+      
+       await ensureProjectAfterPayment({
+        bookingId: booking_id,
+        transaction,
+        initiatedByUserId: booking.user_id || null,
+        ipAddress: req.ip || req.connection?.remoteAddress,
+        userAgent: req.headers['user-agent'],
+      });
+      await syncExternalWorkspaceAfterPayment(booking);
 
       await transaction.commit();
       console.log(`Webhook: booking ${booking_id} marked as paid`);

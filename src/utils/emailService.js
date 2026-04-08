@@ -2281,12 +2281,12 @@ const sendProductionProposalEmail = async (data) => {
         shoot_summary: data?.shoot_summary || '',
         project_name: data?.project_name || '',
         contentType: formatContentTypes(data?.contentType) || '',
-        eventDate: data?.eventDate || '',
-        startTime: data?.startTime || '',
-        endTime: data?.endTime || '',
+        eventDate: formatDate(data?.eventDate) || data?.eventDate || '',
+        startTime: formatTime(data?.startTime) || data?.startTime || '',
+        endTime: formatTime(data?.endTime) || data?.endTime || '',
         editsNeeded: data?.editsNeeded || 'Not Included',
-        location: data?.location || 'TBD',
-        proposed_amount: data?.proposed_amount || '0.00',
+        location: formatLocation(data?.location) || 'TBD',
+        proposed_amount: Number(data?.proposed_amount || 0).toFixed(2),
         payment_link: data?.payment_link || ''
       }
     });
