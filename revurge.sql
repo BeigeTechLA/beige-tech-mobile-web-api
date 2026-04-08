@@ -888,3 +888,7 @@ ALTER TABLE `quotes`
   ADD COLUMN `tax_type` VARCHAR(100) NULL AFTER `discount_amount`,
   ADD COLUMN `tax_rate` DECIMAL(5,2) NOT NULL DEFAULT 0.00 AFTER `tax_type`,
   ADD COLUMN `tax_amount` DECIMAL(10,2) NOT NULL DEFAULT 0.00 AFTER `tax_rate`;
+
+-- 08-04-26
+
+DELETE FROM sales_ai_editing_types WHERE sales_ai_editing_type_id BETWEEN 6 AND 14;
