@@ -1609,6 +1609,7 @@ exports.getLeads = async (req, res) => {
       lead_type,     // "self_serve" or "sales_assisted"
       assigned_to,
       search,
+      booking_id,
       start_date,
       end_date,
       intent,
@@ -1637,7 +1638,24 @@ exports.getLeads = async (req, res) => {
         assigned_to === 'unassigned' ? null : parseInt(assigned_to);
     }
 
-    if (search) {
+    if (search?.trim()) {
+      const normalizedSearch = search.trim();
+      whereClause[Op.or] = [
+        { client_name: { [Op.like]: `%${normalizedSearch}%` } },
+        { guest_email: { [Op.like]: `%${normalizedSearch}%` } },
+        { phone: { [Op.like]: `%${normalizedSearch}%` } },
+        Sequelize.where(
+          Sequelize.cast(Sequelize.col('sales_leads.booking_id'), 'CHAR'),
+          { [Op.like]: `%${normalizedSearch}%` }
+        )
+      ];
+    }
+    
+    if (booking_id) {
+      whereClause.booking_id = parseInt(booking_id, 10);
+    }
+
+    if (booking_id) {
       whereClause[Op.or] = [
         { client_name: { [Op.like]: `%${search}%` } },
         { guest_email: { [Op.like]: `%${search}%` } },

@@ -379,6 +379,11 @@ GET {{URL}}sales/leads HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
+###
+GET {{URL}}sales/leads?page=1&limit=10&booking_id=960 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
 ### get lead by id (3 is lead_id)
 GET {{URL}}sales/leads/285 HTTP/1.1
 Content-Type: application/json
