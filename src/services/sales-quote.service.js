@@ -423,11 +423,13 @@ function resolveUnitRateValue(preferred, pricingItem, catalogItem) {
   return roundCurrency(candidate);
 }
 
-function generateQuoteNumber() {
-  const now = new Date();
-  const randomSuffix = Math.floor(100 + Math.random() * 900);
-  const shortDate = `${now.getMonth() + 1}${String(now.getDate()).padStart(2, '0')}`;
-  return `BEIGE-${shortDate}-${randomSuffix}`;
+function generateQuoteNumber(salesQuoteId = null) {
+  const normalizedId = Number(salesQuoteId);
+  if (Number.isInteger(normalizedId) && normalizedId > 0) {
+    return `BEIGE-${normalizedId}`;
+  }
+
+  return `BEIGE-${Date.now()}`;
 }
 
 function formatDateOnly(date) {
@@ -1490,6 +1492,11 @@ async function createQuote(payload, user) {
       notes: payload.notes || null,
       terms_conditions: payload.terms_conditions || null
     }, { transaction });
+
+    const stableQuoteNumber = generateQuoteNumber(quote.sales_quote_id);
+    if (quote.quote_number !== stableQuoteNumber) {
+      await quote.update({ quote_number: stableQuoteNumber }, { transaction });
+    }
 
     if (lineItemsPayload.length) {
       await db.sales_quote_line_items.bulkCreate(

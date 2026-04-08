@@ -1,4 +1,4 @@
-const { sales_leads, client_leads, sales_lead_activities, client_lead_activities, stream_project_booking, stream_project_booking_days, users, user_type, discount_codes, payment_links,  quotes, assigned_crew, crew_members,
+const { sales_leads, client_leads, sales_lead_activities, client_lead_activities, stream_project_booking, stream_project_booking_days, users, user_type, discount_codes, payment_links,  quotes, sales_quotes, assigned_crew, crew_members,
   quote_line_items, crew_member_files } = require('../models');
 const { Op, Sequelize } = require('sequelize');
 const constants = require('../utils/constants');
@@ -1609,6 +1609,7 @@ exports.getLeads = async (req, res) => {
       lead_type,     // "self_serve" or "sales_assisted"
       assigned_to,
       search,
+      booking_id,
       start_date,
       end_date,
       intent,
@@ -1637,7 +1638,24 @@ exports.getLeads = async (req, res) => {
         assigned_to === 'unassigned' ? null : parseInt(assigned_to);
     }
 
-    if (search) {
+    if (search?.trim()) {
+      const normalizedSearch = search.trim();
+      whereClause[Op.or] = [
+        { client_name: { [Op.like]: `%${normalizedSearch}%` } },
+        { guest_email: { [Op.like]: `%${normalizedSearch}%` } },
+        { phone: { [Op.like]: `%${normalizedSearch}%` } },
+        Sequelize.where(
+          Sequelize.cast(Sequelize.col('sales_leads.booking_id'), 'CHAR'),
+          { [Op.like]: `%${normalizedSearch}%` }
+        )
+      ];
+    }
+    
+    if (booking_id) {
+      whereClause.booking_id = parseInt(booking_id, 10);
+    }
+
+    if (booking_id) {
       whereClause[Op.or] = [
         { client_name: { [Op.like]: `%${search}%` } },
         { guest_email: { [Op.like]: `%${search}%` } },
@@ -1959,6 +1977,11 @@ exports.getLeadById = async (req, res) => {
     }
 
     const leadJson = lead.toJSON();
+    const linkedSalesQuote = await sales_quotes.findOne({
+      where: { lead_id: lead.lead_id },
+      attributes: ['sales_quote_id', 'quote_number', 'status'],
+      order: [['updated_at', 'DESC']]
+    });
 
     if (leadJson.booking && !Array.isArray(leadJson.booking.booking_days)) {
       const days = await stream_project_booking_days.findAll({
@@ -2177,7 +2200,10 @@ exports.getLeadById = async (req, res) => {
         can_edit_booking,
         fulfillmentSummary,
         pricing_breakdown,
-        projected_quote: projectedQuote
+        projected_quote: projectedQuote,
+        custom_quote_id: linkedSalesQuote?.sales_quote_id || null,
+        custom_quote_number: linkedSalesQuote?.quote_number || null,
+        custom_quote_status: linkedSalesQuote?.status || null
       }
     });
   } catch (error) {
