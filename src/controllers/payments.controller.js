@@ -1289,11 +1289,25 @@ exports.confirmPaymentMulti = async (req, res) => {
         }
       }
 
+      const projectSync = await ensureProjectAfterPayment({
+        bookingId: booking_id,
+        transaction,
+        initiatedByUserId: req.user?.userId || booking.user_id || null,
+        ipAddress: req.ip || req.connection?.remoteAddress,
+        userAgent: req.headers['user-agent'],
+      });
+      const externalWorkspaceSync = await syncExternalWorkspaceAfterPayment(booking);
+
       await transaction.commit();
       return res.status(200).json({
         success: true,
         message: "Payment already processed",
-        data: { payment_id: existingPayment.payment_id, booking_id },
+        data: {
+          payment_id: existingPayment.payment_id,
+          booking_id,
+          external_workspace_synced: !!externalWorkspaceSync.success,
+          external_workspace_message: externalWorkspaceSync.message || null,
+        },
       });
     }
 
