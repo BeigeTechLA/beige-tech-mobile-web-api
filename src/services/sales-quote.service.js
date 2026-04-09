@@ -511,11 +511,15 @@ async function getCatalog(pricingMode = null) {
   const grouped = {
     service: [],
     addon: [],
-    logistics: []
+    logistics: [],
+    custom: []
   };
 
   items.forEach((entry) => {
     const item = entry.toJSON();
+    if (!grouped[item.section_type]) {
+      grouped[item.section_type] = [];
+    }
     grouped[item.section_type].push({
       ...item,
       effective_rate: roundCurrency(item.default_rate ?? 0),
@@ -524,7 +528,7 @@ async function getCatalog(pricingMode = null) {
     });
   });
 
-  if (!grouped.service.length && !grouped.addon.length && !grouped.logistics.length) {
+  if (!grouped.service.length && !grouped.addon.length && !grouped.logistics.length && !grouped.custom.length) {
     return DEFAULT_FIGMA_CATALOG;
   }
 
