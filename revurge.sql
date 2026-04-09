@@ -892,3 +892,56 @@ ALTER TABLE `quotes`
 -- 08-04-26
 
 DELETE FROM sales_ai_editing_types WHERE sales_ai_editing_type_id BETWEEN 6 AND 14;
+
+-- 09-04-26
+
+CREATE TABLE IF NOT EXISTS `invoice_send_history` (
+  `invoice_send_history_id` INT NOT NULL AUTO_INCREMENT,
+  `booking_id` INT NOT NULL,
+  `quote_id` INT NULL,
+  `lead_id` INT NULL,
+  `client_lead_id` INT NULL,
+  `assigned_sales_rep_id` INT NULL,
+  `client_name` VARCHAR(255) NULL,
+  `client_email` VARCHAR(255) NULL,
+  `invoice_number` VARCHAR(100) NULL,
+  `invoice_url` TEXT NULL,
+  `invoice_pdf` TEXT NULL,
+  `payment_status` ENUM('paid', 'pending') NOT NULL DEFAULT 'pending',
+  `sent_by_user_id` INT NULL,
+  `sent_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`invoice_send_history_id`),
+  KEY `idx_invoice_send_history_booking` (`booking_id`),
+  KEY `idx_invoice_send_history_quote` (`quote_id`),
+  KEY `idx_invoice_send_history_lead` (`lead_id`),
+  KEY `idx_invoice_send_history_client_lead` (`client_lead_id`),
+  KEY `idx_invoice_send_history_assigned_rep` (`assigned_sales_rep_id`),
+  KEY `idx_invoice_send_history_payment_status` (`payment_status`),
+  KEY `idx_invoice_send_history_sent_at` (`sent_at`),
+  CONSTRAINT `fk_invoice_send_history_booking`
+    FOREIGN KEY (`booking_id`) REFERENCES `stream_project_booking` (`stream_project_booking_id`)
+    ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `fk_invoice_send_history_quote`
+    FOREIGN KEY (`quote_id`) REFERENCES `sales_quotes` (`sales_quote_id`)
+    ON DELETE SET NULL ON UPDATE CASCADE,
+  CONSTRAINT `fk_invoice_send_history_lead`
+    FOREIGN KEY (`lead_id`) REFERENCES `sales_leads` (`lead_id`)
+    ON DELETE SET NULL ON UPDATE CASCADE,
+  CONSTRAINT `fk_invoice_send_history_client_lead`
+    FOREIGN KEY (`client_lead_id`) REFERENCES `client_leads` (`lead_id`)
+    ON DELETE SET NULL ON UPDATE CASCADE,
+  CONSTRAINT `fk_invoice_send_history_assigned_rep`
+    FOREIGN KEY (`assigned_sales_rep_id`) REFERENCES `users` (`id`)
+    ON DELETE SET NULL ON UPDATE CASCADE,
+  CONSTRAINT `fk_invoice_send_history_sent_by`
+    FOREIGN KEY (`sent_by_user_id`) REFERENCES `users` (`id`)
+    ON DELETE SET NULL ON UPDATE CASCADE
+);
+
+ALTER TABLE `invoice_send_history`
+  ADD COLUMN `quote_id` INT NULL AFTER `booking_id`,
+  ADD KEY `idx_invoice_send_history_quote` (`quote_id`),
+  ADD CONSTRAINT `fk_invoice_send_history_quote`
+    FOREIGN KEY (`quote_id`) REFERENCES `sales_quotes` (`sales_quote_id`)
+    ON DELETE SET NULL ON UPDATE CASCADE;

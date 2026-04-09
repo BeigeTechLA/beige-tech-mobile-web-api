@@ -275,6 +275,7 @@ router.get('/dashboard/sales-reps', authenticate, requireAdmin, salesDashboardCo
  * @access  Sales Rep / Admin
  */
 router.get('/dashboard/recent-activities', authenticate, requireSalesRepOrAdmin, salesDashboardController.getRecentActivities);
+router.get('/dashboard/invoice-history', authenticate, requireSalesRepOrAdmin, salesDashboardController.getInvoiceHistory);
 
 /**
  * @route   GET /api/sales/dashboard/funnel
@@ -311,6 +312,7 @@ router.post('/quotes', authenticate, requireSalesRepOrAdmin, salesQuotesControll
 router.put('/quotes/:quoteId', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateQuote);
 router.post('/quotes/:quoteId/convert-to-booking', authenticate, requireSalesRepOrAdmin, salesQuotesController.convertQuoteToBooking);
 router.post('/quotes/:quoteId/send', authenticate, requireSalesRepOrAdmin, salesQuotesController.sendQuoteProposal);
+router.post('/quotes/:quoteId/send-invoice', authenticate, requireSalesRepOrAdmin, paymentLinksController.sendQuoteInvoice);
 router.patch('/quotes/:quoteId/status', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateQuoteStatus);
 
 /**
