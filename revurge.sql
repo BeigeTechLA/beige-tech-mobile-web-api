@@ -918,30 +918,5 @@ CREATE TABLE IF NOT EXISTS `invoice_send_history` (
   KEY `idx_invoice_send_history_client_lead` (`client_lead_id`),
   KEY `idx_invoice_send_history_assigned_rep` (`assigned_sales_rep_id`),
   KEY `idx_invoice_send_history_payment_status` (`payment_status`),
-  KEY `idx_invoice_send_history_sent_at` (`sent_at`),
-  CONSTRAINT `fk_invoice_send_history_booking`
-    FOREIGN KEY (`booking_id`) REFERENCES `stream_project_booking` (`stream_project_booking_id`)
-    ON DELETE CASCADE ON UPDATE CASCADE,
-  CONSTRAINT `fk_invoice_send_history_quote`
-    FOREIGN KEY (`quote_id`) REFERENCES `sales_quotes` (`sales_quote_id`)
-    ON DELETE SET NULL ON UPDATE CASCADE,
-  CONSTRAINT `fk_invoice_send_history_lead`
-    FOREIGN KEY (`lead_id`) REFERENCES `sales_leads` (`lead_id`)
-    ON DELETE SET NULL ON UPDATE CASCADE,
-  CONSTRAINT `fk_invoice_send_history_client_lead`
-    FOREIGN KEY (`client_lead_id`) REFERENCES `client_leads` (`lead_id`)
-    ON DELETE SET NULL ON UPDATE CASCADE,
-  CONSTRAINT `fk_invoice_send_history_assigned_rep`
-    FOREIGN KEY (`assigned_sales_rep_id`) REFERENCES `users` (`id`)
-    ON DELETE SET NULL ON UPDATE CASCADE,
-  CONSTRAINT `fk_invoice_send_history_sent_by`
-    FOREIGN KEY (`sent_by_user_id`) REFERENCES `users` (`id`)
-    ON DELETE SET NULL ON UPDATE CASCADE
+  KEY `idx_invoice_send_history_sent_at` (`sent_at`)
 );
-
-ALTER TABLE `invoice_send_history`
-  ADD COLUMN `quote_id` INT NULL AFTER `booking_id`,
-  ADD KEY `idx_invoice_send_history_quote` (`quote_id`),
-  ADD CONSTRAINT `fk_invoice_send_history_quote`
-    FOREIGN KEY (`quote_id`) REFERENCES `sales_quotes` (`sales_quote_id`)
-    ON DELETE SET NULL ON UPDATE CASCADE;
