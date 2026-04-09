@@ -589,16 +589,32 @@ exports.updateRequestStatus = async (req, res) => {
           ? JSON.parse(project.crew_roles) 
           : (project.crew_roles || {});
 
-      const crewRoleIds = typeof currentCrew.primary_role === 'string'
-          ? JSON.parse(currentCrew.primary_role)
-          : (currentCrew.primary_role || []);
+      const normalizeRoleIds = (rawRole) => {
+        let parsedRoleIds = [];
+
+        if (typeof rawRole === 'string') {
+          try {
+            parsedRoleIds = JSON.parse(rawRole);
+          } catch (e) {
+            parsedRoleIds = [rawRole];
+          }
+        } else if (rawRole != null) {
+          parsedRoleIds = rawRole;
+        }
+
+        return Array.isArray(parsedRoleIds)
+          ? parsedRoleIds
+          : (parsedRoleIds ? [parsedRoleIds] : []);
+      };
+
+      const crewRoleIds = normalizeRoleIds(currentCrew.primary_role);
 
       const crewCategories = [...new Set(crewRoleIds.map(id => ID_TO_ROLE_MAP[String(id)]).filter(Boolean))];
 
       let currentAcceptedCounts = { videographer: 0, photographer: 0, cinematographer: 0 };
       if (project.assigned_crews) {
         project.assigned_crews.forEach(ac => {
-          const acRoles = JSON.parse(ac.crew_member?.primary_role || "[]");
+          const acRoles = normalizeRoleIds(ac.crew_member?.primary_role);
           let assignedTo = acRoles.map(id => ID_TO_ROLE_MAP[String(id)]).find(cat => 
             cat && currentAcceptedCounts[cat] < (requestedLimits[cat] || 0)
           );
