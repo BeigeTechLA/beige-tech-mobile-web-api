@@ -2,7 +2,7 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzU2MjYyNDksImV4cCI6MTc3NjIzMTA0OX0.C236teKjaOJMJvQo0WLKLUeCFEARmo-ViAw0PIX1yOA
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzU3MjczNzIsImV4cCI6MTc3NjMzMjE3Mn0.gYa5WJOElPjg4rMApnBJ8Lj9ggcLlMVXIADlYuDnIQ4
 
 @TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjE5MywidXNlclJvbGUiOiJzYWxlc19yZXAiLCJpYXQiOjE3NzQ5NTU5MjgsImV4cCI6MTc3NTU2MDcyOH0.n8p4ORotIdvcB-nEHEM2GYeBdKrSMFDBDIqXlbqEP94
 
@@ -902,7 +902,7 @@ Content-Type: application/json
 # Authorization: {{TOKEN}}
 
 {
-  "crew_member_id": 2042,
+  "crew_member_id": 2043,
   "project_id": 892,
   "crew_accept": 1
 }
@@ -1124,6 +1124,11 @@ GET {{URL}}sales/discount-codes/31 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
+###
+GET {{URL}}sales/dashboard/invoice-history?page=1&limit=20 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
 ### quote dashboard
 GET {{URL}}sales/quotes/dashboard HTTP/1.1
 Content-Type: application/json
@@ -1198,7 +1203,7 @@ Authorization: {{TOKEN}}
 ### sales quote catalog
 GET {{URL}}sales/quotes/catalog HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN2}}
+Authorization: {{TOKEN}}
 
 ### sales quote ai editing types
 GET {{URL}}sales/quotes/ai-editing-types HTTP/1.1
@@ -1345,7 +1350,7 @@ Authorization: {{TOKEN}}
 }
 
 ### update sales quote (partial safe)
-PUT {{URL}}sales/quotes/25 HTTP/1.1
+PUT {{URL}}sales/quotes/116 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -1373,7 +1378,7 @@ Authorization: {{TOKEN}}
 }
 
 ### update sales quote (only tax/discount)
-PUT {{URL}}sales/quotes/25 HTTP/1.1
+PUT {{URL}}sales/quotes/116 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -1385,12 +1390,12 @@ Authorization: {{TOKEN}}
 }
 
 ### get sales quote detail
-GET {{URL}}sales/quotes/24 HTTP/1.1
+GET {{URL}}sales/quotes/116 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### convert quote to booking | Single day:
-POST {{URL}}sales/quotes/24/convert-to-booking HTTP/1.1
+POST {{URL}}sales/quotes/116/convert-to-booking HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -1404,7 +1409,7 @@ Authorization: {{TOKEN}}
 }
 
 ### convert quote to booking | Multi day:
-POST {{URL}}sales/quotes/24/convert-to-booking HTTP/1.1
+POST {{URL}}sales/quotes/115/convert-to-booking HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -1606,3 +1611,17 @@ Content-Type: image/jpeg
 
 (data)
 ------WebKitFormBoundary7MA4YWxkTrZu0gW--
+
+###
+POST {{URL}}sales/quotes/116/preview-invoice HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### send invoice for quote
+POST {{URL}}sales/quotes/116/send-invoice HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Get Sent Invoice History
+GET {{URL}}sales/dashboard/invoice-history?page=1&limit=20
+Authorization: {{TOKEN}}

@@ -256,6 +256,7 @@ async function createStripeInvoice(booking, pricingData, options = {}) {
   const email = booking.guest_email || (booking.user ? booking.user.email : null);
   const expectedTotalCents = getExpectedInvoiceTotalCents(pricingData);
   const pricingKey = `${booking.stream_project_booking_id}-${expectedTotalCents}`;
+  const createAttemptKey = `${pricingKey}-${Date.now()}`;
   
   if (!email) throw new Error("Booking must have an email address.");
 
@@ -268,13 +269,53 @@ async function createStripeInvoice(booking, pricingData, options = {}) {
     await booking.update({ stripe_customer_id: customer.id }, { transaction });
   }
 
+  let existingInvoice = null;
+
+  if (booking.stripe_invoice_id) {
+    try {
+      existingInvoice = await stripe.invoices.retrieve(booking.stripe_invoice_id);
+    } catch (_) {
+      existingInvoice = null;
+    }
+  }
+
+  if (!existingInvoice) {
+    const relatedCustomerIds = [customer.id];
+    if (booking.stripe_customer_id) {
+      relatedCustomerIds.push(booking.stripe_customer_id);
+    }
+
+    existingInvoice = await findExistingInvoiceAcrossCustomers({
+      bookingId: booking.stream_project_booking_id,
+      customerIds: relatedCustomerIds
+    });
+  }
+
+  if (existingInvoice) {
+    if (isInvoiceTotalMismatch(existingInvoice, expectedTotalCents)) {
+      await replaceMismatchedInvoice(existingInvoice, booking.stream_project_booking_id);
+      existingInvoice = null;
+    } else {
+      if (existingInvoice.status === 'draft') {
+        const finalizedExistingInvoice = await stripe.invoices.finalizeInvoice(existingInvoice.id);
+        await booking.update({ stripe_invoice_id: finalizedExistingInvoice.id }, { transaction });
+        return finalizedExistingInvoice;
+      }
+
+      if (['open', 'paid', 'uncollectible', 'void'].includes(existingInvoice.status)) {
+        await booking.update({ stripe_invoice_id: existingInvoice.id }, { transaction });
+        return existingInvoice;
+      }
+    }
+  }
+
   const invoice = await stripe.invoices.create({
     customer: customer.id,
     collection_method: 'send_invoice',
     days_until_due: 7,
     description: `Service Invoice for ${booking.project_name || 'Project'}`,
     metadata: { booking_id: booking.stream_project_booking_id.toString() }
-  }, { idempotencyKey: `inv-create-${pricingKey}` });
+  }, { idempotencyKey: `inv-create-${createAttemptKey}` });
 
   // --- ITEM CREATION WITH QUANTITY ---
   let addedItemsTotalCents = 0;
@@ -346,6 +387,27 @@ async function createStripeInvoice(booking, pricingData, options = {}) {
         description: `Referral Discount Applied`,
       });
     }
+  }
+
+  const totalTaxAmount = parseFloat(pricingData.tax_amount || 0);
+  if (totalTaxAmount > 0) {
+    const taxDescriptionParts = [];
+    if (pricingData.tax_type) {
+      taxDescriptionParts.push(String(pricingData.tax_type).trim());
+    } else {
+      taxDescriptionParts.push('Tax');
+    }
+    if (pricingData.tax_rate != null && pricingData.tax_rate !== '') {
+      taxDescriptionParts.push(`(${parseFloat(pricingData.tax_rate)}%)`);
+    }
+
+    await stripe.invoiceItems.create({
+      customer: customer.id,
+      invoice: invoice.id,
+      amount: Math.round(totalTaxAmount * 100),
+      currency: 'usd',
+      description: taxDescriptionParts.join(' ')
+    });
   }
 
   const finalizedInvoice = await stripe.invoices.finalizeInvoice(invoice.id);
@@ -469,6 +531,27 @@ async function createPaidStripeInvoice(booking, pricingData, options = {}) {
         description: `Referral Discount Applied` 
       });
     }
+  }
+
+  const totalTax = safeNumber(pricingData?.tax_amount || 0);
+  if (totalTax > 0) {
+    const taxDescriptionParts = [];
+    if (pricingData?.tax_type) {
+      taxDescriptionParts.push(String(pricingData.tax_type).trim());
+    } else {
+      taxDescriptionParts.push('Tax');
+    }
+    if (pricingData?.tax_rate != null && pricingData.tax_rate !== '') {
+      taxDescriptionParts.push(`(${parseFloat(pricingData.tax_rate)}%)`);
+    }
+
+    await stripe.invoiceItems.create({
+      customer: customer.id,
+      invoice: invoice.id,
+      amount: Math.round(totalTax * 100),
+      currency: 'usd',
+      description: taxDescriptionParts.join(' ')
+    });
   }
 
   // 4. FINALIZE AND MARK AS PAID

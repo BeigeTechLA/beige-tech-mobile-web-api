@@ -2242,7 +2242,7 @@ const sendCPNewBookingRequestEmail = async (data) => {
         date: shootDate,
         start_time: startTime,
         end_time: endTime,
-        shoot_amount: shootAmount,
+        // shoot_amount: shootAmount,
         dashboard_link: `${process.env.FRONTEND_URL}/creator/dashboard`,
       }
     });

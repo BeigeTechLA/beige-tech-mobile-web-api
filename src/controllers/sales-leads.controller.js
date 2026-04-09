@@ -4532,6 +4532,11 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
     await stream_project_booking_days.bulkCreate(dayRows, {
       transaction: tx
     });
+  } else if (booking_type === 'single_day') {
+    await stream_project_booking_days.destroy({
+      where: { stream_project_booking_id: bookingId },
+      transaction: tx
+    });
   }
 
   /* -----------------------------
