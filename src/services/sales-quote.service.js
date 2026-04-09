@@ -2057,6 +2057,22 @@ async function fetchQuoteById(salesQuoteId, user = null) {
   if (!quote) return null;
 
   const plain = quote.toJSON();
+  if (plain.lead_id) {
+    const linkedLead = await db.sales_leads.findOne({
+      where: { lead_id: plain.lead_id },
+      attributes: ['booking_id', 'lead_source'],
+      raw: true
+    });
+
+    if (linkedLead?.booking_id) {
+      plain.booking_id = linkedLead.booking_id;
+    }
+
+    if (linkedLead?.lead_source) {
+      plain.lead_source = linkedLead.lead_source;
+    }
+  }
+
   plain.line_items = (plain.line_items || []).map((item) => ({
     ...item,
     quantity: Number(item.quantity || 0),
