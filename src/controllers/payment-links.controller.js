@@ -1115,6 +1115,66 @@ exports.sendQuoteInvoice = async (req, res) => {
   }
 };
 
+exports.previewQuoteInvoice = async (req, res) => {
+  try {
+    const quoteId = Number(req.params.quoteId || req.body?.quote_id);
+    if (!Number.isInteger(quoteId) || quoteId <= 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Invalid quoteId'
+      });
+    }
+
+    const quoteWhere = { sales_quote_id: quoteId };
+    if (req.userRole === 'sales_rep') {
+      quoteWhere.assigned_sales_rep_id = req.userId;
+    }
+
+    const salesQuote = await db.sales_quotes.findOne({
+      where: quoteWhere,
+      attributes: ['sales_quote_id', 'lead_id']
+    });
+
+    if (!salesQuote) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Quote not found'
+      });
+    }
+
+    const linkedLead = salesQuote.lead_id
+      ? await db.sales_leads.findOne({
+          where: { lead_id: salesQuote.lead_id },
+          attributes: ['lead_id', 'booking_id']
+        })
+      : null;
+
+    const bookingId = linkedLead?.booking_id || null;
+    if (!bookingId) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Quote must be converted to booking before invoice preview can be generated'
+      });
+    }
+
+    const { invoiceDetails } = await prepareInvoiceDetailsForBooking(bookingId, req.userId || null);
+
+    return res.status(200).json({
+      success: true,
+      message: invoiceDetails.isPaid ? 'Quote receipt preview ready' : 'Quote invoice preview ready',
+      data: {
+        quote_id: salesQuote.sales_quote_id,
+        booking_id: bookingId,
+        ...invoiceDetails
+      }
+    });
+  } catch (error) {
+    console.error('Quote Invoice Preview Error:', error);
+    const status = error.statusCode || 500;
+    return res.status(status).json({ success: false, message: error.message });
+  }
+};
+
 /**
  * Mark payment link as used (called after successful payment)
  * POST /api/sales/payment-links/:token/mark-used

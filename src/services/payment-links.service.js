@@ -389,6 +389,27 @@ async function createStripeInvoice(booking, pricingData, options = {}) {
     }
   }
 
+  const totalTaxAmount = parseFloat(pricingData.tax_amount || 0);
+  if (totalTaxAmount > 0) {
+    const taxDescriptionParts = [];
+    if (pricingData.tax_type) {
+      taxDescriptionParts.push(String(pricingData.tax_type).trim());
+    } else {
+      taxDescriptionParts.push('Tax');
+    }
+    if (pricingData.tax_rate != null && pricingData.tax_rate !== '') {
+      taxDescriptionParts.push(`(${parseFloat(pricingData.tax_rate)}%)`);
+    }
+
+    await stripe.invoiceItems.create({
+      customer: customer.id,
+      invoice: invoice.id,
+      amount: Math.round(totalTaxAmount * 100),
+      currency: 'usd',
+      description: taxDescriptionParts.join(' ')
+    });
+  }
+
   const finalizedInvoice = await stripe.invoices.finalizeInvoice(invoice.id);
   await booking.update({ stripe_invoice_id: finalizedInvoice.id }, { transaction });
   return finalizedInvoice;
@@ -510,6 +531,27 @@ async function createPaidStripeInvoice(booking, pricingData, options = {}) {
         description: `Referral Discount Applied` 
       });
     }
+  }
+
+  const totalTax = safeNumber(pricingData?.tax_amount || 0);
+  if (totalTax > 0) {
+    const taxDescriptionParts = [];
+    if (pricingData?.tax_type) {
+      taxDescriptionParts.push(String(pricingData.tax_type).trim());
+    } else {
+      taxDescriptionParts.push('Tax');
+    }
+    if (pricingData?.tax_rate != null && pricingData.tax_rate !== '') {
+      taxDescriptionParts.push(`(${parseFloat(pricingData.tax_rate)}%)`);
+    }
+
+    await stripe.invoiceItems.create({
+      customer: customer.id,
+      invoice: invoice.id,
+      amount: Math.round(totalTax * 100),
+      currency: 'usd',
+      description: taxDescriptionParts.join(' ')
+    });
   }
 
   // 4. FINALIZE AND MARK AS PAID
