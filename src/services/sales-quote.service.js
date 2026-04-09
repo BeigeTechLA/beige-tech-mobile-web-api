@@ -140,41 +140,277 @@ function roundCurrency(value) {
   return Number(numeric.toFixed(2));
 }
 
-function getDateRange(range = 'all') {
+function startOfDay(date) {
+  const nextDate = new Date(date);
+  nextDate.setHours(0, 0, 0, 0);
+  return nextDate;
+}
+
+function addDays(date, days) {
+  const nextDate = new Date(date);
+  nextDate.setDate(nextDate.getDate() + days);
+  return nextDate;
+}
+
+function addMonths(date, months) {
+  const nextDate = new Date(date);
+  nextDate.setMonth(nextDate.getMonth() + months);
+  return nextDate;
+}
+
+function startOfMonth(date) {
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function parseDateInput(dateInput) {
+  if (!dateInput) return null;
+
+  const parsedDate = new Date(`${String(dateInput).trim()}T00:00:00`);
+  return Number.isNaN(parsedDate.getTime()) ? null : parsedDate;
+}
+
+function normalizeQuoteFilterStatus(status) {
+  const normalizedStatus = String(status || '').trim().toLowerCase();
+  if (!normalizedStatus || normalizedStatus === 'all') {
+    return null;
+  }
+
+  const statusGroups = {
+    accepted: ['accepted', 'paid'],
+    draft: ['draft'],
+    pending: ['pending'],
+    rejected: ['rejected'],
+    sent: ['sent', 'viewed'],
+    viewed: ['viewed'],
+    paid: ['paid'],
+    expired: ['expired']
+  };
+
+  if (statusGroups[normalizedStatus]) {
+    return statusGroups[normalizedStatus];
+  }
+
+  return QUOTE_STATUSES.includes(normalizedStatus) ? [normalizedStatus] : null;
+}
+
+function appendAndCondition(where, condition) {
+  if (!condition) {
+    return where;
+  }
+
+  if (!where[Op.and]) {
+    where[Op.and] = [];
+  }
+
+  where[Op.and].push(condition);
+  return where;
+}
+
+function applyQuoteSalesRepFilter(where, assignedSalesRepId, user) {
+  if (!assignedSalesRepId || !isAdminRole(user.role)) {
+    return where;
+  }
+
+  const salesRepId = Number(assignedSalesRepId);
+  if (!Number.isInteger(salesRepId) || salesRepId <= 0) {
+    return where;
+  }
+
+  return appendAndCondition(where, {
+    [Op.or]: [
+      { assigned_sales_rep_id: salesRepId },
+      { created_by_user_id: salesRepId }
+    ]
+  });
+}
+
+function buildQuoteCreatedAtCondition(range = 'all', dateOn = null) {
+  const normalizedRange = String(range || 'all').trim().toLowerCase();
   const now = new Date();
+  const todayStart = startOfDay(now);
 
-  if (range === '7days' || range === '30days' || range === '90days') {
-    const days = Number(range.replace('days', ''));
-    const currentStart = new Date(now);
-    currentStart.setDate(currentStart.getDate() - days);
-
-    const previousStart = new Date(currentStart);
-    previousStart.setDate(previousStart.getDate() - days);
+  if (normalizedRange === 'custom') {
+    const selectedDate = parseDateInput(dateOn) || now;
+    const selectedStart = startOfDay(selectedDate);
 
     return {
-      currentStart,
-      currentEnd: now,
-      previousStart,
-      previousEnd: currentStart,
-      compareLabel: `vs previous ${days} days`
+      [Op.gte]: selectedStart,
+      [Op.lt]: addDays(selectedStart, 1)
     };
   }
 
-  const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const previousMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  if (normalizedRange === 'week' || normalizedRange === '7days') {
+    return {
+      [Op.gte]: addDays(todayStart, -6),
+      [Op.lt]: addDays(todayStart, 1)
+    };
+  }
+
+  if (normalizedRange === 'month' || normalizedRange === '30days') {
+    return {
+      [Op.gte]: addDays(todayStart, -29),
+      [Op.lt]: addDays(todayStart, 1)
+    };
+  }
+
+  if (normalizedRange === '90days') {
+    return {
+      [Op.gte]: addDays(todayStart, -89),
+      [Op.lt]: addDays(todayStart, 1)
+    };
+  }
+
+  if (normalizedRange === 'all') {
+    return {
+      [Op.gte]: startOfMonth(addMonths(now, -5)),
+      [Op.lt]: addDays(todayStart, 1)
+    };
+  }
+
+  return null;
+}
+
+function getDateRange(range = 'all', dateOn = null) {
+  const normalizedRange = String(range || 'all').trim().toLowerCase();
+  const now = new Date();
+  const todayStart = startOfDay(now);
+
+  if (normalizedRange === 'custom') {
+    const selectedDate = parseDateInput(dateOn) || now;
+    const currentStart = startOfDay(selectedDate);
+
+    return {
+      normalizedRange,
+      currentStart,
+      currentEnd: addDays(currentStart, 1),
+      previousStart: addDays(currentStart, -1),
+      previousEnd: currentStart,
+      compareLabel: 'vs previous day'
+    };
+  }
+
+  if (normalizedRange === 'week' || normalizedRange === '7days') {
+    const currentStart = addDays(todayStart, -6);
+    return {
+      normalizedRange: 'week',
+      currentStart,
+      currentEnd: addDays(todayStart, 1),
+      previousStart: addDays(currentStart, -7),
+      previousEnd: currentStart,
+      compareLabel: 'vs previous 7 days'
+    };
+  }
+
+  if (normalizedRange === 'month' || normalizedRange === '30days') {
+    const currentStart = addDays(todayStart, -29);
+    return {
+      normalizedRange: 'month',
+      currentStart,
+      currentEnd: addDays(todayStart, 1),
+      previousStart: addDays(currentStart, -30),
+      previousEnd: currentStart,
+      compareLabel: 'vs previous 30 days'
+    };
+  }
+
+  if (normalizedRange === '90days') {
+    const currentStart = addDays(todayStart, -89);
+    return {
+      normalizedRange,
+      currentStart,
+      currentEnd: addDays(todayStart, 1),
+      previousStart: addDays(currentStart, -90),
+      previousEnd: currentStart,
+      compareLabel: 'vs previous 90 days'
+    };
+  }
+
+  const currentStart = startOfMonth(addMonths(now, -5));
+  const previousEnd = currentStart;
+  const previousStart = startOfMonth(addMonths(currentStart, -6));
 
   return {
-    currentStart: currentMonthStart,
-    currentEnd: now,
-    previousStart: previousMonthStart,
-    previousEnd: currentMonthStart,
-    compareLabel: 'vs last month'
+    normalizedRange: 'all',
+    currentStart,
+    currentEnd: addDays(todayStart, 1),
+    previousStart,
+    previousEnd,
+    compareLabel: 'vs previous 6 months'
   };
 }
 
 function isWithinRange(dateValue, start, end) {
   const date = new Date(dateValue);
   return date >= start && date < end;
+}
+
+function buildDashboardChartBuckets(range = 'all', dateOn = null) {
+  const { normalizedRange, currentStart } = getDateRange(range, dateOn);
+  const buckets = [];
+  const now = new Date();
+
+  if (normalizedRange === 'custom') {
+    for (let hour = 0; hour < 24; hour += 1) {
+      const date = new Date(currentStart);
+      date.setHours(hour, 0, 0, 0);
+      buckets.push({
+        key: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}-${String(hour).padStart(2, '0')}`,
+        label: date.toLocaleString('en-US', { hour: 'numeric', hour12: true })
+      });
+    }
+    return buckets;
+  }
+
+  if (normalizedRange === 'week' || normalizedRange === 'month' || normalizedRange === '90days') {
+    const dayCount = normalizedRange === 'week' ? 7 : normalizedRange === 'month' ? 30 : 90;
+    for (let index = 0; index < dayCount; index += 1) {
+      const date = addDays(currentStart, index);
+      buckets.push({
+        key: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`,
+        label: normalizedRange === 'week'
+          ? date.toLocaleDateString('en-US', { weekday: 'short' })
+          : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      });
+    }
+    return buckets;
+  }
+
+  for (let index = 0; index < 6; index += 1) {
+    const date = startOfMonth(addMonths(currentStart, index));
+    buckets.push({
+      key: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`,
+      label: date.toLocaleDateString('en-US', { month: 'short', year: '2-digit' })
+    });
+  }
+
+  return buckets;
+}
+
+function getDashboardChartBucketKey(dateValue, range = 'all', dateOn = null) {
+  const { normalizedRange, currentStart, currentEnd } = getDateRange(range, dateOn);
+  const date = new Date(dateValue);
+
+  if (!isWithinRange(date, currentStart, currentEnd)) {
+    return null;
+  }
+
+  if (normalizedRange === 'custom') {
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}-${String(date.getHours()).padStart(2, '0')}`;
+  }
+
+  if (normalizedRange === 'week' || normalizedRange === 'month' || normalizedRange === '90days') {
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  }
+
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function normalizeStatusForDashboardMetrics(status) {
+  const normalizedStatus = String(status || '').toLowerCase();
+
+  if (normalizedStatus === 'paid') return 'accepted';
+  if (normalizedStatus === 'viewed' || normalizedStatus === 'sent') return 'sent';
+  return normalizedStatus;
 }
 
 function calculateGrowth(currentValue, previousValue) {
@@ -511,11 +747,15 @@ async function getCatalog(pricingMode = null) {
   const grouped = {
     service: [],
     addon: [],
-    logistics: []
+    logistics: [],
+    custom: []
   };
 
   items.forEach((entry) => {
     const item = entry.toJSON();
+    if (!grouped[item.section_type]) {
+      grouped[item.section_type] = [];
+    }
     grouped[item.section_type].push({
       ...item,
       effective_rate: roundCurrency(item.default_rate ?? 0),
@@ -524,7 +764,7 @@ async function getCatalog(pricingMode = null) {
     });
   });
 
-  if (!grouped.service.length && !grouped.addon.length && !grouped.logistics.length) {
+  if (!grouped.service.length && !grouped.addon.length && !grouped.logistics.length && !grouped.custom.length) {
     return DEFAULT_FIGMA_CATALOG;
   }
 
@@ -1817,6 +2057,22 @@ async function fetchQuoteById(salesQuoteId, user = null) {
   if (!quote) return null;
 
   const plain = quote.toJSON();
+  if (plain.lead_id) {
+    const linkedLead = await db.sales_leads.findOne({
+      where: { lead_id: plain.lead_id },
+      attributes: ['booking_id', 'lead_source'],
+      raw: true
+    });
+
+    if (linkedLead?.booking_id) {
+      plain.booking_id = linkedLead.booking_id;
+    }
+
+    if (linkedLead?.lead_source) {
+      plain.lead_source = linkedLead.lead_source;
+    }
+  }
+
   plain.line_items = (plain.line_items || []).map((item) => ({
     ...item,
     quantity: Number(item.quantity || 0),
@@ -1851,17 +2107,22 @@ async function listQuotes(query, user) {
     ...buildQuoteAccessWhere(user)
   };
 
-  if (query.status && QUOTE_STATUSES.includes(query.status)) {
-    where.status = query.status;
+  const statusFilter = normalizeQuoteFilterStatus(query.status);
+  if (statusFilter?.length) {
+    appendAndCondition(where, {
+      status: statusFilter.length === 1 ? statusFilter[0] : { [Op.in]: statusFilter }
+    });
   }
 
-  if (query.assigned_sales_rep_id && isAdminRole(user.role)) {
-    where.assigned_sales_rep_id = Number(query.assigned_sales_rep_id);
+  applyQuoteSalesRepFilter(where, query.assigned_sales_rep_id, user);
+
+  const createdAtCondition = buildQuoteCreatedAtCondition(query.range, query.date_on);
+  if (createdAtCondition) {
+    appendAndCondition(where, { created_at: createdAtCondition });
   }
 
   if (query.search) {
-    where[Op.and] = where[Op.and] || [];
-    where[Op.and].push({
+    appendAndCondition(where, {
       [Op.or]: [
         { quote_number: { [Op.like]: `%${query.search}%` } },
         { client_name: { [Op.like]: `%${query.search}%` } },
@@ -1916,9 +2177,14 @@ async function getQuoteDashboard(query, user) {
     ...buildQuoteAccessWhere(user)
   };
 
-  if (query.assigned_sales_rep_id && isAdminRole(user.role)) {
-    where.assigned_sales_rep_id = Number(query.assigned_sales_rep_id);
+  const statusFilter = normalizeQuoteFilterStatus(query.status);
+  if (statusFilter?.length) {
+    appendAndCondition(where, {
+      status: statusFilter.length === 1 ? statusFilter[0] : { [Op.in]: statusFilter }
+    });
   }
+
+  applyQuoteSalesRepFilter(where, query.assigned_sales_rep_id, user);
 
   const quotes = await db.sales_quotes.findAll({
     where,
@@ -1926,7 +2192,14 @@ async function getQuoteDashboard(query, user) {
     raw: true
   });
 
-  const { currentStart, currentEnd, previousStart, previousEnd, compareLabel } = getDateRange(query.range || 'all');
+  const {
+    currentStart,
+    currentEnd,
+    previousStart,
+    previousEnd,
+    compareLabel,
+    normalizedRange
+  } = getDateRange(query.range || 'all', query.date_on || null);
 
   const currentPeriodQuotes = quotes.filter((item) => isWithinRange(item.created_at, currentStart, currentEnd));
   const previousPeriodQuotes = quotes.filter((item) => isWithinRange(item.created_at, previousStart, previousEnd));
@@ -1937,7 +2210,7 @@ async function getQuoteDashboard(query, user) {
   const currentMetrics = {
     total_quotes: currentPeriodQuotes.length,
     accepted_quotes: countByStatus(currentPeriodQuotes, ['accepted', 'paid']),
-    pending_quotes: countByStatus(currentPeriodQuotes, ['pending', 'sent', 'viewed']),
+    pending_quotes: countByStatus(currentPeriodQuotes, ['pending']),
     draft_quotes: countByStatus(currentPeriodQuotes, ['draft']),
     rejected_quotes: countByStatus(currentPeriodQuotes, ['rejected']),
     expired_quotes: countByStatus(currentPeriodQuotes, ['expired']),
@@ -1947,31 +2220,51 @@ async function getQuoteDashboard(query, user) {
   const previousMetrics = {
     total_quotes: previousPeriodQuotes.length,
     accepted_quotes: countByStatus(previousPeriodQuotes, ['accepted', 'paid']),
-    pending_quotes: countByStatus(previousPeriodQuotes, ['pending', 'sent', 'viewed']),
+    pending_quotes: countByStatus(previousPeriodQuotes, ['pending']),
     draft_quotes: countByStatus(previousPeriodQuotes, ['draft']),
     rejected_quotes: countByStatus(previousPeriodQuotes, ['rejected']),
     expired_quotes: countByStatus(previousPeriodQuotes, ['expired']),
     total_amount: sumTotals(previousPeriodQuotes)
   };
 
-  const overview = {
-    total_quotes: quotes.length,
-    accepted_quotes: quotes.filter((item) => ['accepted', 'paid'].includes(item.status)).length,
-    pending_quotes: quotes.filter((item) => ['pending', 'sent', 'viewed'].includes(item.status)).length,
-    draft_quotes: quotes.filter((item) => item.status === 'draft').length,
-    rejected_quotes: quotes.filter((item) => item.status === 'rejected').length,
-    expired_quotes: quotes.filter((item) => item.status === 'expired').length,
-    total_amount: roundCurrency(quotes.reduce((sum, item) => sum + Number(item.total || 0), 0))
-  };
+  const overview = currentMetrics;
 
-  const chartMap = new Map();
-  quotes.forEach((item) => {
-    const date = new Date(item.created_at);
-    const label = date.toLocaleString('en-US', { month: 'short' });
-    const current = chartMap.get(label) || { label, quote_count: 0, total_amount: 0 };
-    current.quote_count += 1;
-    current.total_amount = roundCurrency(current.total_amount + Number(item.total || 0));
-    chartMap.set(label, current);
+  const chartBuckets = buildDashboardChartBuckets(normalizedRange, query.date_on || null);
+  const chartMap = new Map(
+    chartBuckets.map((bucket) => [
+      bucket.key,
+      {
+        label: bucket.label,
+        quote_count: 0,
+        total_amount: 0,
+        accepted_count: 0,
+        pending_count: 0,
+        draft_count: 0,
+        rejected_count: 0,
+        expired_count: 0,
+        sent_count: 0
+      }
+    ])
+  );
+
+  currentPeriodQuotes.forEach((item) => {
+    const bucketKey = getDashboardChartBucketKey(item.created_at, normalizedRange, query.date_on || null);
+    if (!bucketKey || !chartMap.has(bucketKey)) {
+      return;
+    }
+
+    const bucket = chartMap.get(bucketKey);
+    const normalizedStatus = normalizeStatusForDashboardMetrics(item.status);
+
+    bucket.quote_count += 1;
+    bucket.total_amount = roundCurrency(bucket.total_amount + Number(item.total || 0));
+
+    if (normalizedStatus === 'accepted') bucket.accepted_count += 1;
+    if (normalizedStatus === 'pending') bucket.pending_count += 1;
+    if (normalizedStatus === 'draft') bucket.draft_count += 1;
+    if (normalizedStatus === 'rejected') bucket.rejected_count += 1;
+    if (normalizedStatus === 'expired') bucket.expired_count += 1;
+    if (normalizedStatus === 'sent') bucket.sent_count += 1;
   });
 
   return {
@@ -1988,7 +2281,7 @@ async function getQuoteDashboard(query, user) {
       current_period: currentMetrics,
       previous_period: previousMetrics
     },
-    chart: Array.from(chartMap.values())
+    chart: chartBuckets.map((bucket) => chartMap.get(bucket.key))
   };
 }
 

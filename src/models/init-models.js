@@ -65,6 +65,7 @@ var _sales_leads = require("./sales_leads");
 var _discount_codes = require("./discount_codes");
 var _discount_code_usage = require("./discount_code_usage");
 var _payment_links = require("./payment_links");
+var _invoice_send_history = require("./invoice_send_history");
 var _sales_lead_activities = require("./sales_lead_activities");
 var _project_form_submissions = require("./project_form_submissions");
 var _quote_catalog_items = require("./quote_catalog_items");
@@ -142,6 +143,7 @@ function initModels(sequelize) {
   var discount_codes = _discount_codes(sequelize, DataTypes);
   var discount_code_usage = _discount_code_usage(sequelize, DataTypes);
   var payment_links = _payment_links(sequelize, DataTypes);
+  var invoice_send_history = _invoice_send_history(sequelize, DataTypes);
   var sales_lead_activities = _sales_lead_activities(sequelize, DataTypes);
   var project_form_submissions = _project_form_submissions(sequelize, DataTypes);
 
@@ -399,6 +401,14 @@ crew_members.belongsTo(crew_roles, { as: 'role', foreignKey: 'primary_role' });
   stream_project_booking.hasMany(sales_leads, { as: "sales_leads", foreignKey: "booking_id" });
   client_leads.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id" });
   stream_project_booking.hasMany(client_leads, { as: "client_leads", foreignKey: "booking_id" });
+  invoice_send_history.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id" });
+  stream_project_booking.hasMany(invoice_send_history, { as: "invoice_send_history", foreignKey: "booking_id" });
+  invoice_send_history.belongsTo(sales_quotes, { as: "quote", foreignKey: "quote_id" });
+  sales_quotes.hasMany(invoice_send_history, { as: "invoice_send_history", foreignKey: "quote_id" });
+  invoice_send_history.belongsTo(sales_leads, { as: "sales_lead", foreignKey: "lead_id" });
+  sales_leads.hasMany(invoice_send_history, { as: "invoice_send_history", foreignKey: "lead_id" });
+  invoice_send_history.belongsTo(client_leads, { as: "client_lead", foreignKey: "client_lead_id" });
+  client_leads.hasMany(invoice_send_history, { as: "invoice_send_history", foreignKey: "client_lead_id" });
 
   sales_leads.belongsTo(users, { as: "user", foreignKey: "user_id" });
   users.hasMany(sales_leads, { as: "sales_leads", foreignKey: "user_id" });
@@ -409,6 +419,10 @@ crew_members.belongsTo(crew_roles, { as: 'role', foreignKey: 'primary_role' });
   users.hasMany(sales_leads, { as: "assigned_leads", foreignKey: "assigned_sales_rep_id" });
   client_leads.belongsTo(users, { as: "assigned_sales_rep", foreignKey: "assigned_sales_rep_id" });
   users.hasMany(client_leads, { as: "assigned_client_leads", foreignKey: "assigned_sales_rep_id" });
+  invoice_send_history.belongsTo(users, { as: "sent_by", foreignKey: "sent_by_user_id" });
+  users.hasMany(invoice_send_history, { as: "sent_invoice_history", foreignKey: "sent_by_user_id" });
+  invoice_send_history.belongsTo(users, { as: "assigned_sales_rep", foreignKey: "assigned_sales_rep_id" });
+  users.hasMany(invoice_send_history, { as: "assigned_invoice_history", foreignKey: "assigned_sales_rep_id" });
 
   // Discount Codes relationships
   discount_codes.belongsTo(sales_leads, { as: "lead", foreignKey: "lead_id" });
@@ -565,6 +579,7 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
     discount_codes,
     discount_code_usage,
     payment_links,
+    invoice_send_history,
     client_lead_activities,
     sales_lead_activities,
     // Crew & Equipment Models
