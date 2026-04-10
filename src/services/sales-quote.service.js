@@ -2,6 +2,7 @@ const { Op } = require('sequelize');
 const db = require('../models');
 const { sendCustomQuoteProposalEmail } = require('../utils/emailService');
 const { generateQuotePdfBuffer } = require('../utils/quotePdf');
+const { normalizeTime, resolveEventDateAndStartTime } = require('../utils/timezone');
 
 const SECTION_TYPES = ['service', 'addon', 'logistics', 'custom'];
 const QUOTE_STATUSES = ['draft', 'pending', 'sent', 'viewed', 'accepted', 'paid', 'rejected', 'expired'];
@@ -139,41 +140,277 @@ function roundCurrency(value) {
   return Number(numeric.toFixed(2));
 }
 
-function getDateRange(range = 'all') {
+function startOfDay(date) {
+  const nextDate = new Date(date);
+  nextDate.setHours(0, 0, 0, 0);
+  return nextDate;
+}
+
+function addDays(date, days) {
+  const nextDate = new Date(date);
+  nextDate.setDate(nextDate.getDate() + days);
+  return nextDate;
+}
+
+function addMonths(date, months) {
+  const nextDate = new Date(date);
+  nextDate.setMonth(nextDate.getMonth() + months);
+  return nextDate;
+}
+
+function startOfMonth(date) {
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function parseDateInput(dateInput) {
+  if (!dateInput) return null;
+
+  const parsedDate = new Date(`${String(dateInput).trim()}T00:00:00`);
+  return Number.isNaN(parsedDate.getTime()) ? null : parsedDate;
+}
+
+function normalizeQuoteFilterStatus(status) {
+  const normalizedStatus = String(status || '').trim().toLowerCase();
+  if (!normalizedStatus || normalizedStatus === 'all') {
+    return null;
+  }
+
+  const statusGroups = {
+    accepted: ['accepted', 'paid'],
+    draft: ['draft'],
+    pending: ['pending'],
+    rejected: ['rejected'],
+    sent: ['sent', 'viewed'],
+    viewed: ['viewed'],
+    paid: ['paid'],
+    expired: ['expired']
+  };
+
+  if (statusGroups[normalizedStatus]) {
+    return statusGroups[normalizedStatus];
+  }
+
+  return QUOTE_STATUSES.includes(normalizedStatus) ? [normalizedStatus] : null;
+}
+
+function appendAndCondition(where, condition) {
+  if (!condition) {
+    return where;
+  }
+
+  if (!where[Op.and]) {
+    where[Op.and] = [];
+  }
+
+  where[Op.and].push(condition);
+  return where;
+}
+
+function applyQuoteSalesRepFilter(where, assignedSalesRepId, user) {
+  if (!assignedSalesRepId || !isAdminRole(user.role)) {
+    return where;
+  }
+
+  const salesRepId = Number(assignedSalesRepId);
+  if (!Number.isInteger(salesRepId) || salesRepId <= 0) {
+    return where;
+  }
+
+  return appendAndCondition(where, {
+    [Op.or]: [
+      { assigned_sales_rep_id: salesRepId },
+      { created_by_user_id: salesRepId }
+    ]
+  });
+}
+
+function buildQuoteCreatedAtCondition(range = 'all', dateOn = null) {
+  const normalizedRange = String(range || 'all').trim().toLowerCase();
   const now = new Date();
+  const todayStart = startOfDay(now);
 
-  if (range === '7days' || range === '30days' || range === '90days') {
-    const days = Number(range.replace('days', ''));
-    const currentStart = new Date(now);
-    currentStart.setDate(currentStart.getDate() - days);
-
-    const previousStart = new Date(currentStart);
-    previousStart.setDate(previousStart.getDate() - days);
+  if (normalizedRange === 'custom') {
+    const selectedDate = parseDateInput(dateOn) || now;
+    const selectedStart = startOfDay(selectedDate);
 
     return {
-      currentStart,
-      currentEnd: now,
-      previousStart,
-      previousEnd: currentStart,
-      compareLabel: `vs previous ${days} days`
+      [Op.gte]: selectedStart,
+      [Op.lt]: addDays(selectedStart, 1)
     };
   }
 
-  const currentMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-  const previousMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  if (normalizedRange === 'week' || normalizedRange === '7days') {
+    return {
+      [Op.gte]: addDays(todayStart, -6),
+      [Op.lt]: addDays(todayStart, 1)
+    };
+  }
+
+  if (normalizedRange === 'month' || normalizedRange === '30days') {
+    return {
+      [Op.gte]: addDays(todayStart, -29),
+      [Op.lt]: addDays(todayStart, 1)
+    };
+  }
+
+  if (normalizedRange === '90days') {
+    return {
+      [Op.gte]: addDays(todayStart, -89),
+      [Op.lt]: addDays(todayStart, 1)
+    };
+  }
+
+  if (normalizedRange === 'all') {
+    return {
+      [Op.gte]: startOfMonth(addMonths(now, -5)),
+      [Op.lt]: addDays(todayStart, 1)
+    };
+  }
+
+  return null;
+}
+
+function getDateRange(range = 'all', dateOn = null) {
+  const normalizedRange = String(range || 'all').trim().toLowerCase();
+  const now = new Date();
+  const todayStart = startOfDay(now);
+
+  if (normalizedRange === 'custom') {
+    const selectedDate = parseDateInput(dateOn) || now;
+    const currentStart = startOfDay(selectedDate);
+
+    return {
+      normalizedRange,
+      currentStart,
+      currentEnd: addDays(currentStart, 1),
+      previousStart: addDays(currentStart, -1),
+      previousEnd: currentStart,
+      compareLabel: 'vs previous day'
+    };
+  }
+
+  if (normalizedRange === 'week' || normalizedRange === '7days') {
+    const currentStart = addDays(todayStart, -6);
+    return {
+      normalizedRange: 'week',
+      currentStart,
+      currentEnd: addDays(todayStart, 1),
+      previousStart: addDays(currentStart, -7),
+      previousEnd: currentStart,
+      compareLabel: 'vs previous 7 days'
+    };
+  }
+
+  if (normalizedRange === 'month' || normalizedRange === '30days') {
+    const currentStart = addDays(todayStart, -29);
+    return {
+      normalizedRange: 'month',
+      currentStart,
+      currentEnd: addDays(todayStart, 1),
+      previousStart: addDays(currentStart, -30),
+      previousEnd: currentStart,
+      compareLabel: 'vs previous 30 days'
+    };
+  }
+
+  if (normalizedRange === '90days') {
+    const currentStart = addDays(todayStart, -89);
+    return {
+      normalizedRange,
+      currentStart,
+      currentEnd: addDays(todayStart, 1),
+      previousStart: addDays(currentStart, -90),
+      previousEnd: currentStart,
+      compareLabel: 'vs previous 90 days'
+    };
+  }
+
+  const currentStart = startOfMonth(addMonths(now, -5));
+  const previousEnd = currentStart;
+  const previousStart = startOfMonth(addMonths(currentStart, -6));
 
   return {
-    currentStart: currentMonthStart,
-    currentEnd: now,
-    previousStart: previousMonthStart,
-    previousEnd: currentMonthStart,
-    compareLabel: 'vs last month'
+    normalizedRange: 'all',
+    currentStart,
+    currentEnd: addDays(todayStart, 1),
+    previousStart,
+    previousEnd,
+    compareLabel: 'vs previous 6 months'
   };
 }
 
 function isWithinRange(dateValue, start, end) {
   const date = new Date(dateValue);
   return date >= start && date < end;
+}
+
+function buildDashboardChartBuckets(range = 'all', dateOn = null) {
+  const { normalizedRange, currentStart } = getDateRange(range, dateOn);
+  const buckets = [];
+  const now = new Date();
+
+  if (normalizedRange === 'custom') {
+    for (let hour = 0; hour < 24; hour += 1) {
+      const date = new Date(currentStart);
+      date.setHours(hour, 0, 0, 0);
+      buckets.push({
+        key: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}-${String(hour).padStart(2, '0')}`,
+        label: date.toLocaleString('en-US', { hour: 'numeric', hour12: true })
+      });
+    }
+    return buckets;
+  }
+
+  if (normalizedRange === 'week' || normalizedRange === 'month' || normalizedRange === '90days') {
+    const dayCount = normalizedRange === 'week' ? 7 : normalizedRange === 'month' ? 30 : 90;
+    for (let index = 0; index < dayCount; index += 1) {
+      const date = addDays(currentStart, index);
+      buckets.push({
+        key: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`,
+        label: normalizedRange === 'week'
+          ? date.toLocaleDateString('en-US', { weekday: 'short' })
+          : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      });
+    }
+    return buckets;
+  }
+
+  for (let index = 0; index < 6; index += 1) {
+    const date = startOfMonth(addMonths(currentStart, index));
+    buckets.push({
+      key: `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`,
+      label: date.toLocaleDateString('en-US', { month: 'short', year: '2-digit' })
+    });
+  }
+
+  return buckets;
+}
+
+function getDashboardChartBucketKey(dateValue, range = 'all', dateOn = null) {
+  const { normalizedRange, currentStart, currentEnd } = getDateRange(range, dateOn);
+  const date = new Date(dateValue);
+
+  if (!isWithinRange(date, currentStart, currentEnd)) {
+    return null;
+  }
+
+  if (normalizedRange === 'custom') {
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}-${String(date.getHours()).padStart(2, '0')}`;
+  }
+
+  if (normalizedRange === 'week' || normalizedRange === 'month' || normalizedRange === '90days') {
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  }
+
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function normalizeStatusForDashboardMetrics(status) {
+  const normalizedStatus = String(status || '').toLowerCase();
+
+  if (normalizedStatus === 'paid') return 'accepted';
+  if (normalizedStatus === 'viewed' || normalizedStatus === 'sent') return 'sent';
+  return normalizedStatus;
 }
 
 function calculateGrowth(currentValue, previousValue) {
@@ -422,18 +659,13 @@ function resolveUnitRateValue(preferred, pricingItem, catalogItem) {
   return roundCurrency(candidate);
 }
 
-function generateQuoteNumber() {
-  const now = new Date();
-  const stamp = [
-    now.getFullYear(),
-    String(now.getMonth() + 1).padStart(2, '0'),
-    String(now.getDate()).padStart(2, '0'),
-    String(now.getHours()).padStart(2, '0'),
-    String(now.getMinutes()).padStart(2, '0'),
-    String(now.getSeconds()).padStart(2, '0'),
-    String(now.getMilliseconds()).padStart(3, '0')
-  ].join('');
-  return `SQ-${stamp}`;
+function generateQuoteNumber(salesQuoteId = null) {
+  const normalizedId = Number(salesQuoteId);
+  if (Number.isInteger(normalizedId) && normalizedId > 0) {
+    return `BEIGE-${normalizedId}`;
+  }
+
+  return `BEIGE-${Date.now()}`;
 }
 
 function formatDateOnly(date) {
@@ -471,7 +703,34 @@ function resolveValidity({ validUntil, quoteValidityDays, validUntilProvided = f
 }
 
 function isAdminRole(role) {
-  return role === 'admin' || role === 'Admin';
+  return role === 'admin' || role === 'Admin' || role === 'sales_admin' || role === 'Sales_Admin';
+}
+
+async function getRandomActiveSalesRepId(transaction) {
+  const salesRepType = await db.user_type.findOne({
+    where: { user_role: 'sales_rep' },
+    transaction
+  });
+
+  if (!salesRepType?.user_type_id) {
+    return null;
+  }
+
+  const salesReps = await db.users.findAll({
+    where: {
+      user_type: salesRepType.user_type_id,
+      is_active: 1
+    },
+    attributes: ['id'],
+    transaction
+  });
+
+  if (!salesReps.length) {
+    return null;
+  }
+
+  const randomIndex = Math.floor(Math.random() * salesReps.length);
+  return salesReps[randomIndex].id;
 }
 
 function resolveQuoteStatus(payload = {}, currentStatus = 'draft') {
@@ -515,11 +774,15 @@ async function getCatalog(pricingMode = null) {
   const grouped = {
     service: [],
     addon: [],
-    logistics: []
+    logistics: [],
+    custom: []
   };
 
   items.forEach((entry) => {
     const item = entry.toJSON();
+    if (!grouped[item.section_type]) {
+      grouped[item.section_type] = [];
+    }
     grouped[item.section_type].push({
       ...item,
       effective_rate: roundCurrency(item.default_rate ?? 0),
@@ -528,7 +791,7 @@ async function getCatalog(pricingMode = null) {
     });
   });
 
-  if (!grouped.service.length && !grouped.addon.length && !grouped.logistics.length) {
+  if (!grouped.service.length && !grouped.addon.length && !grouped.logistics.length && !grouped.custom.length) {
     return DEFAULT_FIGMA_CATALOG;
   }
 
@@ -949,25 +1212,27 @@ async function deriveBookingEditSelectionsFromQuote(lineItems = []) {
   };
 }
 
-function deriveConvertedProjectName(quote) {
+function deriveConvertedProjectName(quote, prefillData = {}) {
   const shootType = quote.video_shoot_type || 'Custom';
-  const clientName = quote.client_name || quote.client_email || 'Client';
+  const clientName = prefillData.full_name || quote.client_name || quote.client_email || 'Client';
   return `${shootType.toUpperCase()} Shoot - ${clientName}`;
 }
 
 function buildConvertedBookingDescription(quoteDetails, prefillData) {
   const lines = [];
+  const contactName = prefillData.full_name || quoteDetails.client_name;
+  const contactPhone = prefillData.phone || quoteDetails.client_phone;
 
   if (quoteDetails.project_description) {
     lines.push(quoteDetails.project_description);
   }
 
-  if (quoteDetails.client_name) {
-    lines.push(`Contact Name: ${quoteDetails.client_name}`);
+  if (contactName) {
+    lines.push(`Contact Name: ${contactName}`);
   }
 
-  if (quoteDetails.client_phone) {
-    lines.push(`Phone: ${quoteDetails.client_phone}`);
+  if (contactPhone) {
+    lines.push(`Phone: ${contactPhone}`);
   }
 
   if (prefillData.quote_shoot_type_label) {
@@ -996,15 +1261,27 @@ function buildQuoteConversionMissingFields(prefillData) {
   if (!prefillData.shoot_type) otherFields.push('shoot_type');
   if (!prefillData.crew_roles || !Object.keys(prefillData.crew_roles).length) otherFields.push('crew_roles');
   if (!prefillData.crew_size) otherFields.push('crew_size');
+  if (!prefillData.location) otherFields.push('location');
 
   return {
     missing_required_fields: {
       time_fields: {
-        always: ['booking_type', 'time_zone'],
-        single_day: ['start_date', 'start_time', 'end_time'],
-        multi_day: ['booking_days']
+        always: [
+          ...(!prefillData.booking_type ? ['booking_type'] : []),
+          ...(!prefillData.time_zone ? ['time_zone'] : [])
+        ],
+        single_day: prefillData.booking_type === 'single_day'
+          ? [
+              ...(!prefillData.start_date ? ['start_date'] : []),
+              ...(!prefillData.start_time ? ['start_time'] : []),
+              ...(!prefillData.end_time ? ['end_time'] : [])
+            ]
+          : ['start_date', 'start_time', 'end_time'],
+        multi_day: prefillData.booking_type === 'multi_day'
+          ? [!(Array.isArray(prefillData.booking_days) && prefillData.booking_days.length) ? 'booking_days' : null].filter(Boolean)
+          : ['booking_days']
       },
-      other_fields: [...new Set(['selected_crew_ids', ...otherFields])]
+      other_fields: [...new Set([...(prefillData.selected_crew_ids?.length ? [] : ['selected_crew_ids']), ...otherFields])]
     }
   };
 }
@@ -1031,6 +1308,294 @@ function canGeneratePaymentLinkFromConvertedBooking(quoteDetails, prefillData) {
     Number(quoteDetails.total) > 0 &&
     (prefillData?.guest_email || quoteDetails?.client_email)
   );
+}
+
+function calculateDurationFromTimes(startTime, endTime) {
+  const normalizedStart = normalizeTime(startTime);
+  const normalizedEnd = normalizeTime(endTime);
+  if (!normalizedStart || !normalizedEnd) return null;
+
+  const [sh, sm, ss = '00'] = normalizedStart.split(':').map(Number);
+  const [eh, em, es = '00'] = normalizedEnd.split(':').map(Number);
+  if ([sh, sm, ss, eh, em, es].some((part) => Number.isNaN(part))) return null;
+
+  const startMinutes = (sh * 60) + sm + (ss / 60);
+  const endMinutes = (eh * 60) + em + (es / 60);
+  const diffMinutes = endMinutes - startMinutes;
+  if (diffMinutes <= 0) return null;
+  return roundCurrency(diffMinutes / 60);
+}
+
+function normalizeBookingDaysPayload(bookingDays = [], defaultTimeZone = null) {
+  return (Array.isArray(bookingDays) ? bookingDays : [])
+    .filter((day) => day && day.date)
+    .map((day) => {
+      const start = normalizeTime(day.start_time || day.startTime || null);
+      const end = normalizeTime(day.end_time || day.endTime || null);
+      const explicitDuration = day.duration_hours !== undefined && day.duration_hours !== null
+        ? Number(day.duration_hours)
+        : null;
+
+      return {
+        date: day.date,
+        start_time: start,
+        end_time: end,
+        duration_hours: Number.isFinite(explicitDuration) && explicitDuration > 0
+          ? explicitDuration
+          : calculateDurationFromTimes(start, end),
+        time_zone: day.time_zone || day.timeZone || defaultTimeZone || null
+      };
+    });
+}
+
+function applyConvertBookingOverrides(prefillData, payload = {}) {
+  const next = { ...prefillData };
+  const timeZone = payload.time_zone || payload.timeZone || null;
+  const location = payload.location !== undefined ? payload.location : payload.event_location;
+  const referenceLinks = payload.reference_links !== undefined ? payload.reference_links : payload.referenceLinks;
+  const specialInstructions = payload.special_instructions !== undefined ? payload.special_instructions : payload.specialInstructions;
+  const selectedCrewIds = Array.isArray(payload.selected_crew_ids) ? payload.selected_crew_ids.filter(Boolean).map(Number) : [];
+  const normalizedBookingDays = normalizeBookingDaysPayload(payload.booking_days, timeZone);
+  const inferredBookingType = payload.booking_type
+    || (normalizedBookingDays.length ? 'multi_day' : null)
+    || ((payload.start_date || payload.start_time || payload.start_date_time || payload.end_time) ? 'single_day' : null);
+  const bookingType = inferredBookingType;
+  const singleDaySchedule = resolveEventDateAndStartTime({
+    start_date: payload.start_date,
+    start_time: payload.start_time,
+    start_date_time: payload.start_date_time
+  });
+  const singleDayEndTime = normalizeTime(payload.end_time || null);
+  next.has_schedule_override = Boolean(
+    bookingType ||
+    timeZone ||
+    normalizedBookingDays.length ||
+    payload.start_date ||
+    payload.start_time ||
+    payload.start_date_time ||
+    payload.end_time
+  );
+
+  if (location !== undefined) next.location = location || null;
+  if (referenceLinks !== undefined) next.reference_links = referenceLinks || null;
+  if (specialInstructions !== undefined) next.special_instructions = specialInstructions || null;
+  if (bookingType) next.booking_type = bookingType;
+  if (timeZone) next.time_zone = timeZone;
+  if (selectedCrewIds.length) next.selected_crew_ids = selectedCrewIds;
+
+  if (bookingType === 'multi_day') {
+    next.booking_days = normalizedBookingDays;
+    if (normalizedBookingDays.length) {
+      const firstDay = [...normalizedBookingDays].sort((a, b) => new Date(a.date) - new Date(b.date))[0];
+      next.start_date = firstDay.date;
+      next.start_time = firstDay.start_time || null;
+      next.end_time = firstDay.end_time || null;
+      const totalDuration = normalizedBookingDays.reduce((sum, day) => sum + Number(day.duration_hours || 0), 0);
+      if (totalDuration > 0) next.duration_hours = totalDuration;
+    }
+  } else if (bookingType === 'single_day') {
+    next.booking_days = [];
+    if (singleDaySchedule.event_date) next.start_date = singleDaySchedule.event_date;
+    if (singleDaySchedule.start_time) next.start_time = singleDaySchedule.start_time;
+    if (singleDayEndTime) next.end_time = singleDayEndTime;
+
+    const explicitDuration = payload.duration_hours !== undefined && payload.duration_hours !== null
+      ? Number(payload.duration_hours)
+      : null;
+    const computedDuration = Number.isFinite(explicitDuration) && explicitDuration > 0
+      ? explicitDuration
+      : calculateDurationFromTimes(next.start_time, next.end_time);
+    if (computedDuration) next.duration_hours = computedDuration;
+  }
+
+  return next;
+}
+
+async function syncConvertedQuoteArtifacts({
+  quote,
+  quoteDetails,
+  prefillData,
+  user,
+  transaction,
+  markQuoteAccepted = false,
+  recordConversionActivity = false
+}) {
+  let lead = quote.lead_id
+    ? await db.sales_leads.findOne({
+        where: { lead_id: quote.lead_id, is_active: 1 },
+        transaction
+      })
+    : null;
+
+  let booking = lead?.booking_id
+    ? await db.stream_project_booking.findOne({
+        where: { stream_project_booking_id: lead.booking_id, is_active: 1 },
+        transaction
+      })
+    : null;
+
+  const wasAlreadyConverted = Boolean(lead && booking);
+  const bookingDescription = buildConvertedBookingDescription(quoteDetails, prefillData);
+
+  if (!booking) {
+    booking = await db.stream_project_booking.create({
+      user_id: quote.client_user_id || null,
+      guest_email: quote.client_email || null,
+      project_name: deriveConvertedProjectName(quoteDetails, prefillData),
+      description: bookingDescription || null,
+      event_type: prefillData.shoot_type || prefillData.content_type,
+      shoot_type: prefillData.shoot_type || null,
+      content_type: prefillData.content_type,
+      event_date: prefillData.start_date || null,
+      duration_hours: prefillData.duration_hours,
+      start_time: prefillData.start_time || null,
+      end_time: prefillData.end_time || null,
+      budget: Number(quoteDetails.total || 0) || null,
+      crew_size_needed: prefillData.crew_size,
+      event_location: prefillData.location,
+      crew_roles: JSON.stringify(prefillData.crew_roles || {}),
+      streaming_platforms: JSON.stringify([]),
+      reference_links: prefillData.reference_links,
+      edits_needed: prefillData.edits_needed ? 1 : 0,
+      video_edit_types: prefillData.video_edit_types,
+      photo_edit_types: prefillData.photo_edit_types,
+      special_instructions: prefillData.special_instructions,
+      is_draft: 1,
+      is_completed: 0,
+      is_cancelled: 0,
+      is_active: 1
+    }, { transaction });
+  } else {
+    await booking.update({
+      user_id: quote.client_user_id || booking.user_id || null,
+      guest_email: quote.client_email || booking.guest_email || null,
+      project_name: deriveConvertedProjectName(quoteDetails, prefillData),
+      description: bookingDescription || booking.description || null,
+      event_type: prefillData.shoot_type || prefillData.content_type || booking.event_type,
+      shoot_type: prefillData.shoot_type || booking.shoot_type || null,
+      content_type: prefillData.content_type || booking.content_type || null,
+      event_date: prefillData.start_date || booking.event_date || null,
+      duration_hours: prefillData.duration_hours ?? booking.duration_hours,
+      start_time: prefillData.start_time || booking.start_time || null,
+      end_time: prefillData.end_time || booking.end_time || null,
+      budget: Number(quoteDetails.total || 0) || booking.budget || null,
+      crew_size_needed: prefillData.crew_size ?? booking.crew_size_needed,
+      event_location: prefillData.location || booking.event_location || null,
+      crew_roles: JSON.stringify(
+        Object.keys(prefillData.crew_roles || {}).length
+          ? prefillData.crew_roles
+          : (parseConfig(booking.crew_roles) || {})
+      ),
+      reference_links: prefillData.reference_links ?? booking.reference_links ?? null,
+      edits_needed: prefillData.edits_needed ? 1 : booking.edits_needed,
+      video_edit_types: prefillData.video_edit_types?.length ? prefillData.video_edit_types : booking.video_edit_types,
+      photo_edit_types: prefillData.photo_edit_types?.length ? prefillData.photo_edit_types : booking.photo_edit_types,
+      special_instructions: prefillData.special_instructions || booking.special_instructions || null,
+      is_active: 1
+    }, { transaction });
+  }
+
+  if (prefillData.has_schedule_override) {
+    await db.stream_project_booking_days.destroy({
+      where: { stream_project_booking_id: booking.stream_project_booking_id },
+      transaction
+    });
+
+    if (prefillData.booking_type === 'multi_day' && Array.isArray(prefillData.booking_days) && prefillData.booking_days.length) {
+      await db.stream_project_booking_days.bulkCreate(
+        prefillData.booking_days.map((day) => ({
+          stream_project_booking_id: booking.stream_project_booking_id,
+          event_date: day.date,
+          start_time: day.start_time || null,
+          end_time: day.end_time || null,
+          duration_hours: day.duration_hours || null,
+          time_zone: day.time_zone || prefillData.time_zone || null
+        })),
+        { transaction }
+      );
+    }
+  }
+
+  const nextLeadStatus = booking.payment_id || booking.is_completed === 1
+    ? (lead?.lead_status || 'booked')
+    : 'booking_in_progress';
+
+  if (!lead) {
+    lead = await db.sales_leads.create({
+      booking_id: booking.stream_project_booking_id,
+      user_id: quote.client_user_id || null,
+      guest_email: quote.client_email || null,
+      client_name: quote.client_name,
+      phone: quote.client_phone || null,
+      lead_type: 'sales_assisted',
+      lead_status: nextLeadStatus,
+      intent: null,
+      lead_source: CONVERTED_BOOKINGS_LEAD_SOURCE,
+      assigned_sales_rep_id: quote.assigned_sales_rep_id || user.userId,
+      last_activity_at: new Date(),
+      created_from: 1
+    }, { transaction });
+  } else {
+    await lead.update({
+      booking_id: booking.stream_project_booking_id,
+      user_id: quote.client_user_id || lead.user_id || null,
+      guest_email: quote.client_email || lead.guest_email || null,
+      client_name: quote.client_name || lead.client_name || null,
+      phone: quote.client_phone || lead.phone || null,
+      lead_type: lead.lead_type || 'sales_assisted',
+      lead_status: nextLeadStatus,
+      lead_source: CONVERTED_BOOKINGS_LEAD_SOURCE,
+      assigned_sales_rep_id: quote.assigned_sales_rep_id || lead.assigned_sales_rep_id || user.userId,
+      last_activity_at: new Date()
+    }, { transaction });
+  }
+
+  const legacyQuote = await persistLegacyBookingQuoteFromSalesQuote({
+    booking,
+    quoteDetails,
+    transaction
+  });
+
+  if (booking.quote_id !== legacyQuote.quote_id) {
+    await booking.update({ quote_id: legacyQuote.quote_id }, { transaction });
+  }
+
+  await quote.update({
+    lead_id: lead.lead_id,
+    ...(markQuoteAccepted ? {
+      status: 'accepted',
+      accepted_at: quote.accepted_at || new Date()
+    } : {}),
+    updated_at: new Date()
+  }, { transaction });
+
+  if (recordConversionActivity) {
+    await db.sales_lead_activities.create({
+      lead_id: lead.lead_id,
+      activity_type: wasAlreadyConverted ? 'booking_updated' : 'created',
+      activity_data: {
+        source: 'sales_quote_conversion',
+        sales_quote_id: quote.sales_quote_id,
+        booking_id: booking.stream_project_booking_id,
+        lead_source: CONVERTED_BOOKINGS_LEAD_SOURCE
+      },
+      performed_by_user_id: user.userId || null
+    }, { transaction });
+
+    await recordActivity(
+      transaction,
+      quote.sales_quote_id,
+      'accepted',
+      user.userId,
+      wasAlreadyConverted ? 'Quote conversion reopened and marked as accepted' : 'Quote converted to booking and marked as accepted',
+      {
+        lead_id: lead.lead_id,
+        booking_id: booking.stream_project_booking_id
+      }
+    );
+  }
+
+  return { lead, booking, legacyQuote, wasAlreadyConverted };
 }
 
 async function persistLegacyBookingQuoteFromSalesQuote({ booking, quoteDetails, transaction }) {
@@ -1128,6 +1693,31 @@ function deriveQuoteAddOns(lineItems = [], explicitAddOns = null) {
   return addOnNames.length ? addOnNames.join(', ') : 'TBD';
 }
 
+function deriveQuoteIncludes(lineItems = [], explicitIncludes = null) {
+  if (explicitIncludes) {
+    if (Array.isArray(explicitIncludes)) {
+      const values = explicitIncludes.filter(Boolean);
+      return values.length ? values.join(', ') : 'TBD';
+    }
+
+    return String(explicitIncludes);
+  }
+
+  const includeNames = (lineItems || [])
+    .filter((item) => item && item.item_name)
+    .map((item) => item.item_name.trim())
+    .filter(Boolean);
+
+  if (!includeNames.length) return 'TBD';
+
+  const maxItems = 2;
+  const visible = includeNames.slice(0, maxItems);
+  const remaining = includeNames.length - visible.length;
+  if (remaining <= 0) return visible.join(', ');
+
+  return `${visible.join(', ')} + ${remaining} more`;
+}
+
 function deriveQuoteValidityText(quoteDetails = {}) {
   if (quoteDetails.valid_until) {
     return `Valid until ${quoteDetails.valid_until}`;
@@ -1165,9 +1755,33 @@ async function createQuote(payload, user) {
       validUntilProvided: payload.valid_until !== undefined,
       quoteValidityDaysProvided: payload.quote_validity_days !== undefined
     });
-    const assignedSalesRepId = isAdminRole(user.role)
-      ? (payload.assigned_sales_rep_id || user.userId)
-      : user.userId;
+    let assignedSalesRepId = user.userId;
+
+    if (isAdminRole(user.role)) {
+      const requestedSalesRepId = payload.assigned_sales_rep_id !== undefined && payload.assigned_sales_rep_id !== null && payload.assigned_sales_rep_id !== ''
+        ? Number(payload.assigned_sales_rep_id)
+        : null;
+
+      if (Number.isInteger(requestedSalesRepId) && requestedSalesRepId > 0) {
+        const requestedUser = await db.users.findByPk(requestedSalesRepId, {
+          include: [
+            {
+              model: db.user_type,
+              as: 'userType',
+              attributes: ['user_role']
+            }
+          ],
+          transaction
+        });
+
+        const requestedUserRole = String(requestedUser?.userType?.user_role || '').toLowerCase();
+        assignedSalesRepId = requestedUser && requestedUserRole === 'sales_rep'
+          ? requestedSalesRepId
+          : await getRandomActiveSalesRepId(transaction);
+      } else {
+        assignedSalesRepId = await getRandomActiveSalesRepId(transaction);
+      }
+    }
 
     const quote = await db.sales_quotes.create({
       quote_number: generateQuoteNumber(),
@@ -1196,6 +1810,11 @@ async function createQuote(payload, user) {
       notes: payload.notes || null,
       terms_conditions: payload.terms_conditions || null
     }, { transaction });
+
+    const stableQuoteNumber = generateQuoteNumber(quote.sales_quote_id);
+    if (quote.quote_number !== stableQuoteNumber) {
+      await quote.update({ quote_number: stableQuoteNumber }, { transaction });
+    }
 
     if (lineItemsPayload.length) {
       await db.sales_quote_line_items.bulkCreate(
@@ -1322,6 +1941,75 @@ async function updateQuote(salesQuoteId, payload, user) {
       }
     }
 
+    if (quote.lead_id) {
+      const updatedQuoteDetails = {
+        sales_quote_id: quote.sales_quote_id,
+        quote_number: quote.quote_number,
+        lead_id: quote.lead_id,
+        client_user_id: quote.client_user_id,
+        created_by_user_id: quote.created_by_user_id,
+        assigned_sales_rep_id: quote.assigned_sales_rep_id,
+        pricing_mode: quote.pricing_mode,
+        status: quote.status,
+        client_name: quote.client_name,
+        client_email: quote.client_email,
+        client_phone: quote.client_phone,
+        client_address: quote.client_address,
+        project_description: quote.project_description,
+        video_shoot_type: quote.video_shoot_type,
+        quote_validity_days: quote.quote_validity_days,
+        valid_until: quote.valid_until,
+        discount_type: quote.discount_type,
+        discount_value: quote.discount_value,
+        discount_amount: quote.discount_amount,
+        tax_type: quote.tax_type,
+        tax_rate: quote.tax_rate,
+        tax_amount: quote.tax_amount,
+        subtotal: quote.subtotal,
+        total: quote.total,
+        notes: quote.notes,
+        terms_conditions: quote.terms_conditions,
+        line_items: mergedLineItemsPayload.map((item) => ({
+          ...item,
+          configuration: parseConfig(item.configuration_json)
+        }))
+      };
+
+      const roleData = deriveBookingRoleDataFromQuote(updatedQuoteDetails.line_items || []);
+      const editSelections = await deriveBookingEditSelectionsFromQuote(updatedQuoteDetails.line_items || []);
+      let prefillData = {
+        guest_email: updatedQuoteDetails.client_email || null,
+        user_id: updatedQuoteDetails.client_user_id || null,
+        full_name: updatedQuoteDetails.client_name || null,
+        phone: updatedQuoteDetails.client_phone || null,
+        location: updatedQuoteDetails.client_address || null,
+        content_type: roleData.content_type,
+        shoot_type: mapQuoteShootTypeToBookingShootType(updatedQuoteDetails.video_shoot_type),
+        quote_shoot_type_label: updatedQuoteDetails.video_shoot_type || null,
+        duration_hours: roleData.duration_hours,
+        crew_roles: roleData.crew_roles,
+        crew_size: roleData.crew_size,
+        video_edit_types: editSelections.video_edit_types,
+        photo_edit_types: editSelections.photo_edit_types,
+        edits_needed: editSelections.edits_needed,
+        unmatched_edit_types: editSelections.unmatched_edit_types,
+        project_description: updatedQuoteDetails.project_description || null,
+        reference_links: null,
+        special_instructions: updatedQuoteDetails.notes || null
+      };
+      prefillData = applyConvertBookingOverrides(prefillData, payload);
+
+      await syncConvertedQuoteArtifacts({
+        quote,
+        quoteDetails: updatedQuoteDetails,
+        prefillData,
+        user,
+        transaction,
+        markQuoteAccepted: false,
+        recordConversionActivity: false
+      });
+    }
+
     await recordActivity(transaction, salesQuoteId, 'updated', user.userId, 'Quote updated');
     await transaction.commit();
     return getQuoteById(salesQuoteId, user);
@@ -1331,7 +2019,7 @@ async function updateQuote(salesQuoteId, payload, user) {
   }
 }
 
-async function convertQuoteToBooking(salesQuoteId, user) {
+async function convertQuoteToBooking(salesQuoteId, payload = {}, user) {
   const quoteDetails = await getQuoteById(salesQuoteId, user);
   if (!quoteDetails) {
     throw new Error('Quote not found');
@@ -1343,7 +2031,7 @@ async function convertQuoteToBooking(salesQuoteId, user) {
 
   const roleData = deriveBookingRoleDataFromQuote(quoteDetails.line_items || []);
   const editSelections = await deriveBookingEditSelectionsFromQuote(quoteDetails.line_items || []);
-  const prefillData = {
+  let prefillData = {
     guest_email: quoteDetails.client_email || null,
     user_id: quoteDetails.client_user_id || null,
     full_name: quoteDetails.client_name || null,
@@ -1363,6 +2051,7 @@ async function convertQuoteToBooking(salesQuoteId, user) {
     reference_links: null,
     special_instructions: quoteDetails.notes || null
   };
+  prefillData = applyConvertBookingOverrides(prefillData, payload);
   const bookingDescription = buildConvertedBookingDescription(quoteDetails, prefillData);
 
   const requirementData = buildQuoteConversionMissingFields(prefillData);
@@ -1378,146 +2067,15 @@ async function convertQuoteToBooking(salesQuoteId, user) {
       throw new Error('Quote not found');
     }
 
-    let lead = quote.lead_id
-      ? await db.sales_leads.findOne({
-          where: { lead_id: quote.lead_id, is_active: 1 },
-          transaction
-        })
-      : null;
-
-    let booking = lead?.booking_id
-      ? await db.stream_project_booking.findOne({
-          where: { stream_project_booking_id: lead.booking_id, is_active: 1 },
-          transaction
-        })
-      : null;
-
-    const wasAlreadyConverted = Boolean(lead && booking);
-
-    if (!booking) {
-      booking = await db.stream_project_booking.create({
-        user_id: quote.client_user_id || null,
-        guest_email: quote.client_email || null,
-        project_name: deriveConvertedProjectName(quoteDetails),
-        description: bookingDescription || null,
-        event_type: prefillData.shoot_type || prefillData.content_type,
-        shoot_type: prefillData.shoot_type || null,
-        content_type: prefillData.content_type,
-        duration_hours: prefillData.duration_hours,
-        budget: Number(quoteDetails.total || 0) || null,
-        crew_size_needed: prefillData.crew_size,
-        event_location: prefillData.location,
-        crew_roles: JSON.stringify(prefillData.crew_roles || {}),
-        streaming_platforms: JSON.stringify([]),
-        reference_links: prefillData.reference_links,
-        edits_needed: prefillData.edits_needed ? 1 : 0,
-        video_edit_types: prefillData.video_edit_types,
-        photo_edit_types: prefillData.photo_edit_types,
-        special_instructions: prefillData.special_instructions,
-        is_draft: 1,
-        is_completed: 0,
-        is_cancelled: 0,
-        is_active: 1
-      }, { transaction });
-    } else {
-      await booking.update({
-        user_id: quote.client_user_id || booking.user_id || null,
-        guest_email: quote.client_email || booking.guest_email || null,
-        project_name: deriveConvertedProjectName(quoteDetails),
-        description: bookingDescription || booking.description || null,
-        event_type: prefillData.shoot_type || prefillData.content_type || booking.event_type,
-        shoot_type: prefillData.shoot_type || booking.shoot_type || null,
-        content_type: prefillData.content_type || booking.content_type || null,
-        duration_hours: prefillData.duration_hours ?? booking.duration_hours,
-        budget: Number(quoteDetails.total || 0) || booking.budget || null,
-        crew_size_needed: prefillData.crew_size ?? booking.crew_size_needed,
-        event_location: prefillData.location || booking.event_location || null,
-        crew_roles: JSON.stringify(
-          Object.keys(prefillData.crew_roles || {}).length
-            ? prefillData.crew_roles
-            : (parseConfig(booking.crew_roles) || {})
-        ),
-        reference_links: prefillData.reference_links ?? booking.reference_links ?? null,
-        edits_needed: prefillData.edits_needed ? 1 : booking.edits_needed,
-        video_edit_types: prefillData.video_edit_types?.length ? prefillData.video_edit_types : booking.video_edit_types,
-        photo_edit_types: prefillData.photo_edit_types?.length ? prefillData.photo_edit_types : booking.photo_edit_types,
-        special_instructions: prefillData.special_instructions || booking.special_instructions || null,
-        is_active: 1
-      }, { transaction });
-    }
-
-    if (!lead) {
-      lead = await db.sales_leads.create({
-        booking_id: booking.stream_project_booking_id,
-        user_id: quote.client_user_id || null,
-        guest_email: quote.client_email || null,
-        client_name: quote.client_name,
-        phone: quote.client_phone || null,
-        lead_type: 'sales_assisted',
-        lead_status: 'booking_in_progress',
-        intent: null,
-        lead_source: CONVERTED_BOOKINGS_LEAD_SOURCE,
-        assigned_sales_rep_id: quote.assigned_sales_rep_id || user.userId,
-        last_activity_at: new Date(),
-        created_from: 1
-      }, { transaction });
-    } else {
-      await lead.update({
-        booking_id: booking.stream_project_booking_id,
-        user_id: quote.client_user_id || lead.user_id || null,
-        guest_email: quote.client_email || lead.guest_email || null,
-        client_name: quote.client_name || lead.client_name || null,
-        phone: quote.client_phone || lead.phone || null,
-        lead_type: lead.lead_type || 'sales_assisted',
-        lead_status: 'booking_in_progress',
-        lead_source: CONVERTED_BOOKINGS_LEAD_SOURCE,
-        assigned_sales_rep_id: quote.assigned_sales_rep_id || lead.assigned_sales_rep_id || user.userId,
-        last_activity_at: new Date()
-      }, { transaction });
-    }
-
-    const legacyQuote = await persistLegacyBookingQuoteFromSalesQuote({
-      booking,
+    const { lead, booking, legacyQuote, wasAlreadyConverted } = await syncConvertedQuoteArtifacts({
+      quote,
       quoteDetails,
-      transaction
-    });
-
-    if (booking.quote_id !== legacyQuote.quote_id) {
-      await booking.update({
-        quote_id: legacyQuote.quote_id
-      }, { transaction });
-    }
-
-    await quote.update({
-      lead_id: lead.lead_id,
-      status: 'accepted',
-      accepted_at: quote.accepted_at || new Date(),
-      updated_at: new Date()
-    }, { transaction });
-
-    await db.sales_lead_activities.create({
-      lead_id: lead.lead_id,
-      activity_type: wasAlreadyConverted ? 'booking_updated' : 'created',
-      activity_data: {
-        source: 'sales_quote_conversion',
-        sales_quote_id: quote.sales_quote_id,
-        booking_id: booking.stream_project_booking_id,
-        lead_source: CONVERTED_BOOKINGS_LEAD_SOURCE
-      },
-      performed_by_user_id: user.userId || null
-    }, { transaction });
-
-    await recordActivity(
+      prefillData,
+      user,
       transaction,
-      quote.sales_quote_id,
-      'accepted',
-      user.userId,
-      wasAlreadyConverted ? 'Quote conversion reopened and marked as accepted' : 'Quote converted to booking and marked as accepted',
-      {
-        lead_id: lead.lead_id,
-        booking_id: booking.stream_project_booking_id
-      }
-    );
+      markQuoteAccepted: true,
+      recordConversionActivity: true
+    });
 
     await transaction.commit();
 
@@ -1577,6 +2135,22 @@ async function fetchQuoteById(salesQuoteId, user = null) {
   if (!quote) return null;
 
   const plain = quote.toJSON();
+  if (plain.lead_id) {
+    const linkedLead = await db.sales_leads.findOne({
+      where: { lead_id: plain.lead_id },
+      attributes: ['booking_id', 'lead_source'],
+      raw: true
+    });
+
+    if (linkedLead?.booking_id) {
+      plain.booking_id = linkedLead.booking_id;
+    }
+
+    if (linkedLead?.lead_source) {
+      plain.lead_source = linkedLead.lead_source;
+    }
+  }
+
   plain.line_items = (plain.line_items || []).map((item) => ({
     ...item,
     quantity: Number(item.quantity || 0),
@@ -1611,17 +2185,22 @@ async function listQuotes(query, user) {
     ...buildQuoteAccessWhere(user)
   };
 
-  if (query.status && QUOTE_STATUSES.includes(query.status)) {
-    where.status = query.status;
+  const statusFilter = normalizeQuoteFilterStatus(query.status);
+  if (statusFilter?.length) {
+    appendAndCondition(where, {
+      status: statusFilter.length === 1 ? statusFilter[0] : { [Op.in]: statusFilter }
+    });
   }
 
-  if (query.assigned_sales_rep_id && isAdminRole(user.role)) {
-    where.assigned_sales_rep_id = Number(query.assigned_sales_rep_id);
+  applyQuoteSalesRepFilter(where, query.assigned_sales_rep_id, user);
+
+  const createdAtCondition = buildQuoteCreatedAtCondition(query.range, query.date_on);
+  if (createdAtCondition) {
+    appendAndCondition(where, { created_at: createdAtCondition });
   }
 
   if (query.search) {
-    where[Op.and] = where[Op.and] || [];
-    where[Op.and].push({
+    appendAndCondition(where, {
       [Op.or]: [
         { quote_number: { [Op.like]: `%${query.search}%` } },
         { client_name: { [Op.like]: `%${query.search}%` } },
@@ -1676,9 +2255,14 @@ async function getQuoteDashboard(query, user) {
     ...buildQuoteAccessWhere(user)
   };
 
-  if (query.assigned_sales_rep_id && isAdminRole(user.role)) {
-    where.assigned_sales_rep_id = Number(query.assigned_sales_rep_id);
+  const statusFilter = normalizeQuoteFilterStatus(query.status);
+  if (statusFilter?.length) {
+    appendAndCondition(where, {
+      status: statusFilter.length === 1 ? statusFilter[0] : { [Op.in]: statusFilter }
+    });
   }
+
+  applyQuoteSalesRepFilter(where, query.assigned_sales_rep_id, user);
 
   const quotes = await db.sales_quotes.findAll({
     where,
@@ -1686,7 +2270,14 @@ async function getQuoteDashboard(query, user) {
     raw: true
   });
 
-  const { currentStart, currentEnd, previousStart, previousEnd, compareLabel } = getDateRange(query.range || 'all');
+  const {
+    currentStart,
+    currentEnd,
+    previousStart,
+    previousEnd,
+    compareLabel,
+    normalizedRange
+  } = getDateRange(query.range || 'all', query.date_on || null);
 
   const currentPeriodQuotes = quotes.filter((item) => isWithinRange(item.created_at, currentStart, currentEnd));
   const previousPeriodQuotes = quotes.filter((item) => isWithinRange(item.created_at, previousStart, previousEnd));
@@ -1697,7 +2288,7 @@ async function getQuoteDashboard(query, user) {
   const currentMetrics = {
     total_quotes: currentPeriodQuotes.length,
     accepted_quotes: countByStatus(currentPeriodQuotes, ['accepted', 'paid']),
-    pending_quotes: countByStatus(currentPeriodQuotes, ['pending', 'sent', 'viewed']),
+    pending_quotes: countByStatus(currentPeriodQuotes, ['pending']),
     draft_quotes: countByStatus(currentPeriodQuotes, ['draft']),
     rejected_quotes: countByStatus(currentPeriodQuotes, ['rejected']),
     expired_quotes: countByStatus(currentPeriodQuotes, ['expired']),
@@ -1707,31 +2298,51 @@ async function getQuoteDashboard(query, user) {
   const previousMetrics = {
     total_quotes: previousPeriodQuotes.length,
     accepted_quotes: countByStatus(previousPeriodQuotes, ['accepted', 'paid']),
-    pending_quotes: countByStatus(previousPeriodQuotes, ['pending', 'sent', 'viewed']),
+    pending_quotes: countByStatus(previousPeriodQuotes, ['pending']),
     draft_quotes: countByStatus(previousPeriodQuotes, ['draft']),
     rejected_quotes: countByStatus(previousPeriodQuotes, ['rejected']),
     expired_quotes: countByStatus(previousPeriodQuotes, ['expired']),
     total_amount: sumTotals(previousPeriodQuotes)
   };
 
-  const overview = {
-    total_quotes: quotes.length,
-    accepted_quotes: quotes.filter((item) => ['accepted', 'paid'].includes(item.status)).length,
-    pending_quotes: quotes.filter((item) => ['pending', 'sent', 'viewed'].includes(item.status)).length,
-    draft_quotes: quotes.filter((item) => item.status === 'draft').length,
-    rejected_quotes: quotes.filter((item) => item.status === 'rejected').length,
-    expired_quotes: quotes.filter((item) => item.status === 'expired').length,
-    total_amount: roundCurrency(quotes.reduce((sum, item) => sum + Number(item.total || 0), 0))
-  };
+  const overview = currentMetrics;
 
-  const chartMap = new Map();
-  quotes.forEach((item) => {
-    const date = new Date(item.created_at);
-    const label = date.toLocaleString('en-US', { month: 'short' });
-    const current = chartMap.get(label) || { label, quote_count: 0, total_amount: 0 };
-    current.quote_count += 1;
-    current.total_amount = roundCurrency(current.total_amount + Number(item.total || 0));
-    chartMap.set(label, current);
+  const chartBuckets = buildDashboardChartBuckets(normalizedRange, query.date_on || null);
+  const chartMap = new Map(
+    chartBuckets.map((bucket) => [
+      bucket.key,
+      {
+        label: bucket.label,
+        quote_count: 0,
+        total_amount: 0,
+        accepted_count: 0,
+        pending_count: 0,
+        draft_count: 0,
+        rejected_count: 0,
+        expired_count: 0,
+        sent_count: 0
+      }
+    ])
+  );
+
+  currentPeriodQuotes.forEach((item) => {
+    const bucketKey = getDashboardChartBucketKey(item.created_at, normalizedRange, query.date_on || null);
+    if (!bucketKey || !chartMap.has(bucketKey)) {
+      return;
+    }
+
+    const bucket = chartMap.get(bucketKey);
+    const normalizedStatus = normalizeStatusForDashboardMetrics(item.status);
+
+    bucket.quote_count += 1;
+    bucket.total_amount = roundCurrency(bucket.total_amount + Number(item.total || 0));
+
+    if (normalizedStatus === 'accepted') bucket.accepted_count += 1;
+    if (normalizedStatus === 'pending') bucket.pending_count += 1;
+    if (normalizedStatus === 'draft') bucket.draft_count += 1;
+    if (normalizedStatus === 'rejected') bucket.rejected_count += 1;
+    if (normalizedStatus === 'expired') bucket.expired_count += 1;
+    if (normalizedStatus === 'sent') bucket.sent_count += 1;
   });
 
   return {
@@ -1748,7 +2359,7 @@ async function getQuoteDashboard(query, user) {
       current_period: currentMetrics,
       previous_period: previousMetrics
     },
-    chart: Array.from(chartMap.values())
+    chart: chartBuckets.map((bucket) => chartMap.get(bucket.key))
   };
 }
 
@@ -1821,6 +2432,7 @@ async function sendQuoteProposal(salesQuoteId, payload, user) {
       location: quoteDetails.client_address || 'TBD',
       quote_validity: deriveQuoteValidityText(quoteDetails),
       add_ons: deriveQuoteAddOns(quoteDetails.line_items || []),
+      includes: deriveQuoteIncludes(quoteDetails.line_items || []),
       proposal_amount: quoteDetails.total,
       attachment_content: payload?.attachment_content || payload?.pdf_base64 || (generatedPdfBuffer ? Buffer.from(generatedPdfBuffer).toString('base64') : null),
       attachment_filename: payload?.attachment_filename || `${quoteDetails.quote_number || 'custom-quote'}.pdf`,

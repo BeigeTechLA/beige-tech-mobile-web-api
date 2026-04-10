@@ -79,6 +79,88 @@ const updatePaymentLeadState = async ({
   }
 };
 
+const persistInvoiceSendHistory = async ({
+  bookingId,
+  quoteId = null,
+  associatedLead = null,
+  associatedClientLead = null,
+  recipientName = null,
+  recipientEmail = null,
+  invoiceDetails,
+  sentByUserId = null,
+  sentAt = new Date()
+}) => {
+  await db.invoice_send_history.create({
+    booking_id: bookingId,
+    quote_id: quoteId,
+    lead_id: associatedLead?.lead_id || null,
+    client_lead_id: associatedClientLead?.lead_id || null,
+    assigned_sales_rep_id: associatedLead?.assigned_sales_rep_id || associatedClientLead?.assigned_sales_rep_id || null,
+    client_name: recipientName || associatedLead?.client_name || associatedClientLead?.client_name || null,
+    client_email: recipientEmail || associatedLead?.guest_email || associatedClientLead?.guest_email || null,
+    invoice_number: invoiceDetails.invoiceNumber || null,
+    invoice_url: invoiceDetails.invoiceUrl || null,
+    invoice_pdf: invoiceDetails.invoicePdf || null,
+    payment_status: invoiceDetails.isPaid ? 'paid' : 'pending',
+    sent_by_user_id: sentByUserId || null,
+    sent_at: sentAt
+  });
+};
+
+const sendInvoiceForBooking = async ({ bookingId, quoteId = null, performedByUserId = null, recipientOverride = null }) => {
+  const {
+    parsedBookingId,
+    recipientName,
+    recipientEmail,
+    invoiceDetails
+  } = await prepareInvoiceDetailsForBooking(bookingId, performedByUserId, recipientOverride);
+
+  const userData = { name: recipientName, email: recipientEmail };
+  const emailResult = await emailService.sendInvoiceEmail(userData, invoiceDetails);
+
+  if (!emailResult.success) {
+    console.error("Email failed to send but invoice was generated:", emailResult.error);
+  }
+
+  const associatedLead = await db.sales_leads.findOne({ where: { booking_id: parsedBookingId } });
+  const associatedClientLead = await db.client_leads.findOne({ where: { booking_id: parsedBookingId } });
+  const sentAt = new Date();
+
+  await persistInvoiceSendHistory({
+    bookingId: parsedBookingId,
+    quoteId,
+    associatedLead,
+    associatedClientLead,
+    recipientName,
+    recipientEmail,
+    invoiceDetails,
+    sentByUserId: performedByUserId,
+    sentAt
+  });
+
+  await updatePaymentLeadState({
+    leadId: associatedLead?.lead_id || null,
+    clientLeadId: associatedClientLead?.lead_id || null,
+    newStatus: 'proposal_sent',
+    activityType: 'payment_link_generated',
+    activityData: {
+      booking_id: parsedBookingId,
+      quote_id: quoteId,
+      invoice_number: invoiceDetails.invoiceNumber,
+      invoice_sent: true,
+      invoice_url: invoiceDetails.invoiceUrl || null,
+      invoice_pdf: invoiceDetails.invoicePdf || null,
+      recipient_name: recipientName || null,
+      recipient_email: recipientEmail || null,
+      sent_at: sentAt.toISOString(),
+      payment_status: invoiceDetails.isPaid ? 'paid' : 'pending'
+    },
+    performedByUserId
+  });
+
+  return { invoiceDetails };
+};
+
 const applyQuoteDiscountFromLatestPaymentLink = async (booking, performedByUserId = null) => {
     if (!booking || !booking.primary_quote) return false;
     if (booking.payment_id || booking.is_completed === 1) return false;
@@ -716,7 +798,7 @@ const bookingInvoiceIncludes = [
   { model: db.users, as: 'user', required: false }
 ];
 
-const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = null) => {
+const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = null, recipientOverride = null) => {
   let lockTransaction = null;
   try {
     const parsedBookingId = parseInt(bookingId, 10);
@@ -755,6 +837,13 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
     let recipientEmail = booking.user?.email || booking.guest_email;
     let recipientName = booking.user?.name || (booking.project_name ? booking.project_name.split(' - ')[1] : 'Valued Guest');
 
+    if (recipientOverride?.email) {
+      recipientEmail = recipientOverride.email;
+    }
+    if (recipientOverride?.name) {
+      recipientName = recipientOverride.name;
+    }
+
     if (!recipientEmail) {
       await booking.update({ invoice_generation_status: 'failed' });
       throw new Error('No email address associated with this booking.');
@@ -777,7 +866,7 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
     if (pricingData && (pricingData.is_paid || bookingMarkedPaid)) {
       let invoiceUrl, invoicePdf, invoiceNumber;
       let stripeTotalAmount = 0;
-      let needsNewInvoice = false;
+      let needsNewInvoice = Boolean(recipientOverride?.email || recipientOverride?.name);
 
       // Check existing invoice for amount mismatch
       if (booking.stripe_invoice_id) {
@@ -798,7 +887,7 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
       }
 
       if (!invoicePdf || needsNewInvoice) {
-        const retrospectiveInvoice = await paymentLinksService.createPaidStripeInvoice(booking, pricingData, {});
+        const retrospectiveInvoice = await paymentLinksService.createPaidStripeInvoice(booking, pricingData, { recipientOverride });
         invoiceUrl = retrospectiveInvoice.hosted_invoice_url;
         invoicePdf = retrospectiveInvoice.invoice_pdf;
         invoiceNumber = retrospectiveInvoice.number;
@@ -809,7 +898,10 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
 
     } else {
       // --- CASE 2: NOT PAID YET ---
-      const stripeInvoice = await paymentLinksService.createStripeInvoice(booking, pricingData, {});
+      const stripeInvoice = await paymentLinksService.createStripeInvoice(booking, pricingData, {
+        recipientOverride,
+        forceNewInvoice: Boolean(recipientOverride?.email || recipientOverride?.name)
+      });
       invoiceDetails = { projectTitle: booking.project_name, invoiceUrl: stripeInvoice.hosted_invoice_url, invoicePdf: stripeInvoice.invoice_pdf, invoiceNumber: stripeInvoice.number, totalAmount: pricingData.total, isPaid: false };
     }
 
@@ -915,18 +1007,44 @@ exports.sendStripeInvoice = async (req, res) => {
     const emailResult = await emailService.sendInvoiceEmail(userData, invoiceDetails);
 
     if (!emailResult.success) {
-        console.error("Email failed to send but invoice was generated:", emailResult.error);
+      console.error("Email failed to send but invoice was generated:", emailResult.error);
     }
 
     const associatedLead = await db.sales_leads.findOne({ where: { booking_id: parsedBookingId } });
     const associatedClientLead = await db.client_leads.findOne({ where: { booking_id: parsedBookingId } });
+    const sentAt = new Date();
+
+    await db.invoice_send_history.create({
+      booking_id: parsedBookingId,
+      lead_id: associatedLead?.lead_id || null,
+      client_lead_id: associatedClientLead?.lead_id || null,
+      assigned_sales_rep_id: associatedLead?.assigned_sales_rep_id || associatedClientLead?.assigned_sales_rep_id || null,
+      client_name: recipientName || associatedLead?.client_name || associatedClientLead?.client_name || null,
+      client_email: recipientEmail || associatedLead?.guest_email || associatedClientLead?.guest_email || null,
+      invoice_number: invoiceDetails.invoiceNumber || null,
+      invoice_url: invoiceDetails.invoiceUrl || null,
+      invoice_pdf: invoiceDetails.invoicePdf || null,
+      payment_status: invoiceDetails.isPaid ? 'paid' : 'pending',
+      sent_by_user_id: req.userId || null,
+      sent_at: sentAt
+    });
 
     await updatePaymentLeadState({
       leadId: associatedLead?.lead_id || null,
       clientLeadId: associatedClientLead?.lead_id || null,
       newStatus: 'proposal_sent',
       activityType: 'payment_link_generated',
-      activityData: { invoice_number: invoiceDetails.invoiceNumber, invoice_sent: true },
+      activityData: {
+        booking_id: parsedBookingId,
+        invoice_number: invoiceDetails.invoiceNumber,
+        invoice_sent: true,
+        invoice_url: invoiceDetails.invoiceUrl || null,
+        invoice_pdf: invoiceDetails.invoicePdf || null,
+        recipient_name: recipientName || null,
+        recipient_email: recipientEmail || null,
+        sent_at: sentAt.toISOString(),
+        payment_status: invoiceDetails.isPaid ? 'paid' : 'pending'
+      },
       performedByUserId: req.userId
     });
 
@@ -940,6 +1058,137 @@ exports.sendStripeInvoice = async (req, res) => {
     console.error('Stripe Invoice Error:', error);
     const status = error.statusCode || 500;
     res.status(status).json({ success: false, message: error.message });
+  }
+};
+
+exports.sendQuoteInvoice = async (req, res) => {
+  try {
+    const quoteId = Number(req.params.quoteId || req.body?.quote_id);
+    if (!Number.isInteger(quoteId) || quoteId <= 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Invalid quoteId'
+      });
+    }
+
+    const quoteWhere = { sales_quote_id: quoteId };
+    if (req.userRole === 'sales_rep') {
+      quoteWhere.assigned_sales_rep_id = req.userId;
+    }
+
+    const salesQuote = await db.sales_quotes.findOne({
+      where: quoteWhere,
+      attributes: ['sales_quote_id', 'lead_id', 'client_name', 'client_email']
+    });
+
+    if (!salesQuote) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Quote not found'
+      });
+    }
+
+    const linkedLead = salesQuote.lead_id
+      ? await db.sales_leads.findOne({
+          where: { lead_id: salesQuote.lead_id },
+          attributes: ['lead_id', 'booking_id']
+        })
+      : null;
+
+    const bookingId = linkedLead?.booking_id || null;
+    if (!bookingId) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Quote must be converted to booking before invoice can be sent'
+      });
+    }
+
+    const { invoiceDetails } = await sendInvoiceForBooking({
+      bookingId,
+      quoteId: salesQuote.sales_quote_id,
+      performedByUserId: req.userId || null,
+      recipientOverride: {
+        email: salesQuote.client_email || null,
+        name: salesQuote.client_name || null
+      }
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: invoiceDetails.isPaid ? 'Quote receipt sent successfully' : 'Quote invoice sent successfully',
+      data: {
+        quote_id: salesQuote.sales_quote_id,
+        booking_id: bookingId,
+        ...invoiceDetails
+      }
+    });
+  } catch (error) {
+    console.error('Quote Invoice Error:', error);
+    const status = error.statusCode || 500;
+    return res.status(status).json({ success: false, message: error.message });
+  }
+};
+
+exports.previewQuoteInvoice = async (req, res) => {
+  try {
+    const quoteId = Number(req.params.quoteId || req.body?.quote_id);
+    if (!Number.isInteger(quoteId) || quoteId <= 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Invalid quoteId'
+      });
+    }
+
+    const quoteWhere = { sales_quote_id: quoteId };
+    if (req.userRole === 'sales_rep') {
+      quoteWhere.assigned_sales_rep_id = req.userId;
+    }
+
+    const salesQuote = await db.sales_quotes.findOne({
+      where: quoteWhere,
+      attributes: ['sales_quote_id', 'lead_id']
+    });
+
+    if (!salesQuote) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Quote not found'
+      });
+    }
+
+    const linkedLead = salesQuote.lead_id
+      ? await db.sales_leads.findOne({
+          where: { lead_id: salesQuote.lead_id },
+          attributes: ['lead_id', 'booking_id']
+        })
+      : null;
+
+    const bookingId = linkedLead?.booking_id || null;
+    if (!bookingId) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Quote must be converted to booking before invoice preview can be generated'
+      });
+    }
+
+    const { invoiceDetails } = await prepareInvoiceDetailsForBooking(bookingId, req.userId || null, {
+      email: salesQuote.client_email || null,
+      name: salesQuote.client_name || null
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: invoiceDetails.isPaid ? 'Quote receipt preview ready' : 'Quote invoice preview ready',
+      data: {
+        quote_id: salesQuote.sales_quote_id,
+        booking_id: bookingId,
+        ...invoiceDetails
+      }
+    });
+  } catch (error) {
+    console.error('Quote Invoice Preview Error:', error);
+    const status = error.statusCode || 500;
+    return res.status(status).json({ success: false, message: error.message });
   }
 };
 

@@ -5,6 +5,70 @@ const { parseLocation, filterByProximity, formatLocationResponse } = require('..
 // Radius expansion steps in miles (progressive expansion)
 const RADIUS_STEPS = [25, 50, 100, 200, 500, 1000, 2000, 5000];
 
+const STREET_WORDS_REGEX = /\b(street|road|avenue|lane|highway|freeway|expressway|turnpike|parkway|circle|court|place|terrace|trail|drive|boulevard)\b/i;
+const COUNTRY_REGEX = /\b(united states|usa|us|india|canada|uk|united kingdom|australia)\b/i;
+const US_STATE_ABBR_REGEX = /\b(AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|IA|ID|IL|IN|KS|KY|LA|MA|MD|ME|MI|MN|MO|MS|MT|NC|ND|NE|NH|NJ|NM|NV|NY|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VA|VT|WA|WI|WV|WY)\b/i;
+const STATE_NAMES = [
+  'alabama', 'alaska', 'arizona', 'arkansas', 'california', 'colorado',
+  'connecticut', 'delaware', 'florida', 'georgia', 'hawaii', 'idaho',
+  'illinois', 'indiana', 'iowa', 'kansas', 'kentucky', 'louisiana',
+  'maine', 'maryland', 'massachusetts', 'michigan', 'minnesota', 'mississippi',
+  'missouri', 'montana', 'nebraska', 'nevada', 'new hampshire', 'new jersey',
+  'new mexico', 'new york', 'north carolina', 'north dakota', 'ohio', 'oklahoma',
+  'oregon', 'pennsylvania', 'rhode island', 'south carolina', 'south dakota',
+  'tennessee', 'texas', 'utah', 'vermont', 'virginia', 'washington',
+  'west virginia', 'wisconsin', 'wyoming'
+];
+
+const normalizeToken = (value = '') => String(value).replace(/\s+/g, ' ').trim();
+
+const isStreetLikeToken = (value = '') => {
+  const token = normalizeToken(value);
+  if (!token) return false;
+  return /^\d+/.test(token) || STREET_WORDS_REGEX.test(token);
+};
+
+const isCountryToken = (value = '') => {
+  const token = normalizeToken(value);
+  if (!token) return false;
+  return COUNTRY_REGEX.test(token.toLowerCase());
+};
+
+const isStateToken = (value = '') => {
+  const token = normalizeToken(value);
+  if (!token) return false;
+  const lower = token.toLowerCase();
+
+  if (STATE_NAMES.some(name => lower.includes(name))) return true;
+  if (US_STATE_ABBR_REGEX.test(token) && /\d{5}(?:-\d{4})?/.test(token)) return true;
+
+  return false;
+};
+
+const extractCityFromLocation = (locationValue = '') => {
+  const address = normalizeToken(locationValue);
+  if (!address) return null;
+
+  const parts = address
+    .split(',')
+    .map(normalizeToken)
+    .filter(Boolean);
+
+  if (parts.length === 0) return null;
+
+  const cityToken = parts.find(part => {
+    const hasLetters = /[a-z]/i.test(part);
+    const isZipOnly = /^\d{5}(?:-\d{4})?$/.test(part);
+    if (!hasLetters || isZipOnly) return false;
+    if (isStreetLikeToken(part)) return false;
+    if (isCountryToken(part)) return false;
+    if (isStateToken(part)) return false;
+    return true;
+  });
+
+  return cityToken || null;
+};
+
 /**
  * Helper function to parse skills from various formats
  * Handles: JSON arrays, comma-separated strings, plain strings
@@ -177,87 +241,12 @@ exports.searchCreators = async (req, res) => {
 
     // Location filter - use text search if no coordinates for proximity search
     if (location && !useProximitySearch) {
-      const parts = location
-        .split(',')
-        .map(p => p.trim())
-        .filter(p => p.length > 0);
-
-      let city = null;
-
-      const zipPattern = /^\d{5,6}$/;
-      const streetPattern = /\d+\s+(street|st|road|rd|avenue|ave|lane|ln|highway|hwy|nagar|marg|colony|sector|freeway|fwy|expressway|expy|turnpike|tpke|pike|parkway|pkwy|circle|cir|court|ct|place|pl|way|terrace|ter|trail|trl|drive|dr|boulevard|blvd)/i;
-
-      const cleanParts = parts.filter(p =>
-        !zipPattern.test(p) &&
-        !streetPattern.test(p.trim()) &&
-        p.length >= 3
-      );
-
-      // Step 2: Major US cities + a few Indian cities for testing
-      const majorCities = [
-        // Major US Cities (Top 100+)
-        'new york', 'los angeles', 'chicago', 'houston', 'phoenix', 'philadelphia',
-        'san antonio', 'san diego', 'dallas', 'san jose', 'austin', 'jacksonville',
-        'fort worth', 'columbus', 'charlotte', 'san francisco', 'indianapolis', 'seattle',
-        'denver', 'washington', 'boston', 'el paso', 'nashville', 'detroit', 'oklahoma city',
-        'portland', 'las vegas', 'memphis', 'louisville', 'baltimore', 'milwaukee',
-        'albuquerque', 'tucson', 'fresno', 'mesa', 'sacramento', 'atlanta', 'kansas city',
-        'colorado springs', 'omaha', 'raleigh', 'miami', 'long beach', 'virginia beach',
-        'oakland', 'minneapolis', 'tulsa', 'tampa', 'arlington', 'new orleans', 'wichita',
-        'cleveland', 'bakersfield', 'aurora', 'anaheim', 'honolulu', 'santa ana',
-        'riverside', 'corpus christi', 'lexington', 'stockton', 'henderson', 'saint paul',
-        'cincinnati', 'st. louis', 'pittsburgh', 'greensboro', 'lincoln', 'anchorage',
-        'plano', 'orlando', 'irvine', 'newark', 'toledo', 'durham', 'chula vista',
-        'fort wayne', 'jersey city', 'st. petersburg', 'laredo', 'madison', 'chandler',
-        'buffalo', 'lubbock', 'scottsdale', 'reno', 'glendale', 'gilbert', 'winston-salem',
-        'north las vegas', 'norfolk', 'chesapeake', 'garland', 'irving', 'hialeah',
-        'fremont', 'richmond', 'boise', 'spokane', 'des moines', 'tacoma', 'san bernardino',
-
-        // Indian cities (for testing)
-        'mumbai', 'delhi', 'bangalore', 'bengaluru', 'hyderabad', 'ahmedabad',
-        'chennai', 'kolkata', 'pune', 'jaipur', 'surat'
-      ];
-
-      // Step 3: Find major city (exact match first)
-      city = cleanParts.find(part =>
-        majorCities.includes(part.toLowerCase())
-      );
-
-      // Step 4: If no exact match, find partial match
-      // This handles cases like "Los Angeles" in "Avenue East, Los Angeles, California"
-      if (!city) {
-        city = cleanParts.find(part =>
-          majorCities.some(majorCity => {
-            const partLower = part.toLowerCase();
-            // Check if part contains major city OR major city contains part
-            return partLower.includes(majorCity) || majorCity.includes(partLower);
-          })
-        );
-      }
-
-      // Step 5: Fallback - skip neighborhood/directional indicators and states
-      if (!city) {
-        const skipPattern = /\b(east|west|north|south|central|suburban|suburb|california|texas|florida|new york|illinois|pennsylvania|ohio|georgia|michigan|north carolina|new jersey|virginia|washington|arizona|massachusetts|tennessee|indiana|missouri|maryland|wisconsin|colorado|minnesota|south carolina|alabama|louisiana|kentucky|oregon|oklahoma|connecticut|utah|iowa|nevada|arkansas|mississippi|kansas|new mexico|nebraska|idaho|hawaii|maine|new hampshire|rhode island|montana|delaware|south dakota|north dakota|alaska|vermont|wyoming|maharashtra|gujarat|karnataka|tamil nadu|rajasthan|uttar Pradesh)\b/i;
-
-        city = cleanParts.find(p => !skipPattern.test(p.toLowerCase()));
-      }
-
-      // Step 6: Last resort - use first clean part
-      if (!city && cleanParts.length > 0) {
-        city = cleanParts[0];
-      }
-
-      // Step 7: Clean up city name
-      if (city) {
-        city = city
-          .replace(/\b(suburban|suburb|east|west|north|south|central|greater)\b/gi, '')
-          .trim();
-      }
+      const rawLocation = parsedLocation?.address || location;
+      const city = extractCityFromLocation(rawLocation);
 
       console.log('🔍 DEBUG: Location parsing:', {
-        original: location,
-        parts: parts,
-        cleanParts: cleanParts,
+        original: rawLocation,
+        parts: String(rawLocation).split(',').map(p => normalizeToken(p)).filter(Boolean),
         extractedCity: city
       });
 

@@ -275,6 +275,7 @@ router.get('/dashboard/sales-reps', authenticate, requireAdmin, salesDashboardCo
  * @access  Sales Rep / Admin
  */
 router.get('/dashboard/recent-activities', authenticate, requireSalesRepOrAdmin, salesDashboardController.getRecentActivities);
+router.get('/dashboard/invoice-history', authenticate, requireSalesRepOrAdmin, salesDashboardController.getInvoiceHistory);
 
 /**
  * @route   GET /api/sales/dashboard/funnel
@@ -311,6 +312,8 @@ router.post('/quotes', authenticate, requireSalesRepOrAdmin, salesQuotesControll
 router.put('/quotes/:quoteId', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateQuote);
 router.post('/quotes/:quoteId/convert-to-booking', authenticate, requireSalesRepOrAdmin, salesQuotesController.convertQuoteToBooking);
 router.post('/quotes/:quoteId/send', authenticate, requireSalesRepOrAdmin, salesQuotesController.sendQuoteProposal);
+router.post('/quotes/:quoteId/preview-invoice', authenticate, requireSalesRepOrAdmin, paymentLinksController.previewQuoteInvoice);
+router.post('/quotes/:quoteId/send-invoice', authenticate, requireSalesRepOrAdmin, paymentLinksController.sendQuoteInvoice);
 router.patch('/quotes/:quoteId/status', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateQuoteStatus);
 
 /**
@@ -328,7 +331,10 @@ router.patch(
 router.post('/leads/intent', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateLeadIntent);
 router.post('/client-leads/intent', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateClientLeadIntent);
 router.put('/leads/:id/booking', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeGuestBooking);
+router.put('/client/:id/booking', authenticate, salesLeadsController.finalizeGuestBooking);
+router.put('/leads/:id/booking-schedule', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateLeadBookingSchedule);
 router.put('/client-leads/:id/booking', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeClientLeadBooking);
+router.put('/client-leads/:id/booking-schedule', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateClientLeadBookingSchedule);
 router.post('/deals/finalize', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeCreateDeal);
 router.get('/sales-reps', authenticate, requireSalesRepOrAdmin, salesDashboardController.getSalesRepsList);
 

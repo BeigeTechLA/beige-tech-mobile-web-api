@@ -1,4 +1,13 @@
-const { sales_leads, client_leads, discount_codes, payment_links, users, stream_project_booking } = require('../models');
+const {
+  sales_leads,
+  client_leads,
+  discount_codes,
+  payment_links,
+  invoice_send_history,
+  users,
+  stream_project_booking,
+  sales_quotes
+} = require('../models');
 const { Op } = require('sequelize');
 const sequelize = require('../db');
 const constants = require('../utils/constants');
@@ -581,7 +590,7 @@ exports.getSalesRepsList = async (req, res) => {
     const userTypes = await user_type.findAll({
       where: {
         user_role: {
-          [Op.in]: ['sales_rep', 'sales_admin']
+          [Op.in]: ['sales_rep']
         }
       },
       attributes: ['user_type_id']
@@ -749,6 +758,130 @@ exports.getLeadsFunnelData = async (req, res) => {
     res.status(constants.INTERNAL_SERVER_ERROR.code).json({
       success: false,
       message: 'Failed to fetch funnel data',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * Get invoice send history for admin/sales screens
+ * GET /api/sales/dashboard/invoice-history
+ */
+exports.getInvoiceHistory = async (req, res) => {
+  try {
+    const limit = Math.max(parseInt(req.query.limit, 10) || 20, 1);
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const status = String(req.query.status || '').trim().toLowerCase();
+    const search = String(req.query.search || '').trim().toLowerCase();
+    const salesRepId = req.userRole === 'sales_rep'
+      ? req.userId
+      : (req.query.sales_rep_id ? parseInt(req.query.sales_rep_id, 10) : null);
+
+    const whereClause = {};
+    if (salesRepId) {
+      whereClause.assigned_sales_rep_id = salesRepId;
+    }
+    if (status === 'paid' || status === 'pending') {
+      whereClause.payment_status = status;
+    }
+
+    const historyRows = await invoice_send_history.findAll({
+      where: whereClause,
+      include: [
+        {
+          model: users,
+          as: 'sent_by',
+          required: false,
+          attributes: ['id', 'name']
+        },
+        {
+          model: users,
+          as: 'assigned_sales_rep',
+          required: false,
+          attributes: ['id', 'name']
+        },
+        {
+          model: stream_project_booking,
+          as: 'booking',
+          required: false,
+          attributes: ['stream_project_booking_id']
+        },
+        {
+          model: sales_quotes,
+          as: 'quote',
+          required: false,
+          attributes: ['sales_quote_id', 'quote_number']
+        }
+      ],
+      order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']]
+    });
+
+    let items = historyRows.map((row) => ({
+      invoice_send_history_id: row.invoice_send_history_id,
+      lead_id: row.lead_id,
+      client_lead_id: row.client_lead_id,
+      booking_id: row.booking_id,
+      quote_id: row.quote_id || row.quote?.sales_quote_id || null,
+      quote_number: row.quote?.quote_number || null,
+      client_name: row.client_name,
+      client_email: row.client_email,
+      send_date_time: row.sent_at,
+      payment_status: row.payment_status,
+      invoice_number: row.invoice_number,
+      invoice_url: row.invoice_url,
+      invoice_pdf: row.invoice_pdf,
+      sent_by: row.sent_by ? {
+        id: row.sent_by.id,
+        name: row.sent_by.name
+      } : null,
+      sales_rep: row.assigned_sales_rep ? {
+        id: row.assigned_sales_rep.id,
+        name: row.assigned_sales_rep.name
+      } : null,
+      created_at: row.created_at
+    }));
+
+    if (search) {
+      items = items.filter((item) => {
+        const haystack = [
+          item.client_lead_id,
+          item.lead_id,
+          item.booking_id,
+          item.client_name,
+          item.client_email,
+          item.invoice_number
+        ]
+          .filter((value) => value !== null && value !== undefined)
+          .join(' ')
+          .toLowerCase();
+
+        return haystack.includes(search);
+      });
+    }
+
+    items.sort((a, b) => new Date(b.send_date_time) - new Date(a.send_date_time));
+
+    const total = items.length;
+    const offset = (page - 1) * limit;
+    const paginatedItems = items.slice(offset, offset + limit);
+
+    return res.json({
+      success: true,
+      data: {
+        items: paginatedItems,
+        pagination: {
+          page,
+          limit,
+          total,
+          total_pages: Math.ceil(total / limit)
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching invoice history:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to fetch invoice history',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }

@@ -45,6 +45,78 @@ async function generateProjectCode() {
   return `${prefix}${String(nextNumber).padStart(4, '0')}`;
 }
 
+async function ensureProjectForBooking({
+  bookingId,
+  transaction,
+  initiatedByUserId = null,
+  initiatedByRole = ROLES.SYSTEM,
+  ipAddress = null,
+  userAgent = null,
+  projectOverrides = {},
+}) {
+  const booking = await db.stream_project_booking.findOne({
+    where: { stream_project_booking_id: bookingId },
+    transaction,
+  });
+
+  if (!booking) {
+    throw new Error('Booking not found');
+  }
+
+  const existingProject = await db.projects.findOne({
+    where: { booking_id: bookingId },
+    transaction,
+  });
+
+  if (existingProject) {
+    return { project: existingProject, created: false };
+  }
+
+  const clientUserId = projectOverrides.client_user_id || booking.user_id || initiatedByUserId;
+  if (!clientUserId) {
+    throw new Error('Project could not be created because booking has no linked user');
+  }
+
+  const projectCode = await generateProjectCode();
+
+  const project = await db.projects.create(
+    {
+      booking_id: bookingId,
+      project_code: projectCode,
+      project_name: projectOverrides.project_name || booking.project_name || `Project ${projectCode}`,
+      current_state: PROJECT_STATES.RAW_UPLOADED,
+      state_changed_at: new Date(),
+      client_user_id: clientUserId,
+      assigned_creator_id: projectOverrides.assigned_creator_id || null,
+      raw_upload_deadline: projectOverrides.raw_upload_deadline || null,
+      edit_delivery_deadline: projectOverrides.edit_delivery_deadline || null,
+      final_delivery_deadline: projectOverrides.final_delivery_deadline || null,
+      project_notes: projectOverrides.project_notes || null,
+      client_requirements: projectOverrides.client_requirements || booking.description || null,
+      total_raw_size_bytes: 0,
+      total_files_count: 0,
+    },
+    { transaction }
+  );
+
+  await db.project_state_history.create(
+    {
+      project_id: project.project_id,
+      from_state: PROJECT_STATES.RAW_UPLOADED,
+      to_state: PROJECT_STATES.RAW_UPLOADED,
+      transitioned_by_user_id: initiatedByUserId,
+      transitioned_by_role: initiatedByRole,
+      transition_reason: 'Project created',
+      transition_type: 'AUTOMATIC',
+      ip_address: ipAddress,
+      user_agent: userAgent,
+    },
+    { transaction }
+  );
+
+  return { project, created: true };
+}
+
 /**
  * Map user_type to role string for state machine
  * @param {number} userType - User type ID
@@ -195,23 +267,7 @@ exports.createProject = async (req, res) => {
       });
     }
 
-    // Verify booking exists
-    const booking = await db.stream_project_booking.findOne({
-      where: { stream_project_booking_id: booking_id },
-    });
-
-    if (!booking) {
-      await transaction.rollback();
-      return res.status(constants.NOT_FOUND.code).json({
-        success: false,
-        message: 'Booking not found',
-      });
-    }
-
-    // Check if project already exists for this booking
-    const existingProject = await db.projects.findOne({
-      where: { booking_id },
-    });
+    const existingProject = await db.projects.findOne({ where: { booking_id } });
 
     if (existingProject) {
       await transaction.rollback();
@@ -222,45 +278,24 @@ exports.createProject = async (req, res) => {
       });
     }
 
-    // Generate project code
-    const projectCode = await generateProjectCode();
-
-    // Create project
-    const project = await db.projects.create(
-      {
-        booking_id,
-        project_code: projectCode,
-        project_name: project_name || booking.project_name || `Project ${projectCode}`,
-        current_state: PROJECT_STATES.RAW_UPLOADED,
-        state_changed_at: new Date(),
-        client_user_id: client_user_id || booking.user_id || userId,
-        assigned_creator_id: assigned_creator_id || null,
-        raw_upload_deadline: raw_upload_deadline || null,
-        edit_delivery_deadline: edit_delivery_deadline || null,
-        final_delivery_deadline: final_delivery_deadline || null,
-        project_notes: project_notes || null,
-        client_requirements: client_requirements || booking.description || null,
-        total_raw_size_bytes: 0,
-        total_files_count: 0,
+    const { project } = await ensureProjectForBooking({
+      bookingId: booking_id,
+      transaction,
+      initiatedByUserId: userId,
+      initiatedByRole: userRole,
+      ipAddress: req.ip || req.connection?.remoteAddress,
+      userAgent: req.headers['user-agent'],
+      projectOverrides: {
+        project_name,
+        client_user_id,
+        assigned_creator_id,
+        raw_upload_deadline,
+        edit_delivery_deadline,
+        final_delivery_deadline,
+        project_notes,
+        client_requirements,
       },
-      { transaction }
-    );
-
-    // Create initial audit log entry
-    await db.project_state_history.create(
-      {
-        project_id: project.project_id,
-        from_state: PROJECT_STATES.RAW_UPLOADED,
-        to_state: PROJECT_STATES.RAW_UPLOADED,
-        transitioned_by_user_id: userId,
-        transitioned_by_role: userRole,
-        transition_reason: 'Project created',
-        transition_type: 'MANUAL',
-        ip_address: req.ip || req.connection?.remoteAddress,
-        user_agent: req.headers['user-agent'],
-      },
-      { transaction }
-    );
+    });
 
     await transaction.commit();
 
@@ -296,6 +331,8 @@ exports.createProject = async (req, res) => {
     });
   }
 };
+
+exports.ensureProjectForBooking = ensureProjectForBooking;
 
 /**
  * Get project by ID

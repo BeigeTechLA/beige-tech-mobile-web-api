@@ -2,7 +2,7 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzQ5NTU4NjcsImV4cCI6MTc3NTU2MDY2N30.Nb7_0K7KZhteYRt4VlijirFwuPkzZXK64bsex3pcgYg
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzU3MjczNzIsImV4cCI6MTc3NjMzMjE3Mn0.gYa5WJOElPjg4rMApnBJ8Lj9ggcLlMVXIADlYuDnIQ4
 
 @TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjE5MywidXNlclJvbGUiOiJzYWxlc19yZXAiLCJpYXQiOjE3NzQ5NTU5MjgsImV4cCI6MTc3NTU2MDcyOH0.n8p4ORotIdvcB-nEHEM2GYeBdKrSMFDBDIqXlbqEP94
 
@@ -266,6 +266,35 @@ Authorization: {{TOKEN}}
 
 ###
 # Top creative partners (month/all filter)
+###
+# Meetings: list by booking/project id
+GET {{URL}}external-meetings/order/898?sortBy=meeting_date_time:desc&limit=100&page=1 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+# Meetings: create for booking/project id
+POST {{URL}}external-meetings HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "order_id": 898,
+  "meeting_date_time": "2026-04-02T15:00:00.000Z",
+  "meeting_end_time": "2026-04-02T16:00:00.000Z",
+  "meeting_status": "pending",
+  "meeting_type": "post_production",
+  "meeting_title": "Project sync",
+  "description": "Native SQL meetings test",
+  "created_by_id": 1,
+  "send_notification": true
+}
+
+###
+# Meetings: list for current user relation
+GET {{URL}}external-meetings/user/1?sortBy=meeting_date_time:desc&limit=100&page=1 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
 GET {{URL}}admin/dashboard/top-creative-partners?range=month HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
@@ -350,10 +379,52 @@ GET {{URL}}sales/leads HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
-### get lead by id (3 is lead_id)
-GET {{URL}}sales/leads/279 HTTP/1.1
+###
+GET {{URL}}sales/leads?page=1&limit=10&booking_id=960 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
+
+### get lead by id (3 is lead_id)
+GET {{URL}}sales/leads/285 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### update lead booking schedule/location - single day
+PUT {{URL}}sales/leads/285/booking-schedule HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "location": "552 Crocker Street, Los Angeles, California 90013, United States",
+  "booking_type": "single_day",
+  "time_zone": "Asia/Calcutta",
+  "start_date": "2026-04-15",
+  "start_time": "09:00:00",
+  "end_time": "12:00:00"
+}
+
+### update lead booking schedule/location - multi day
+PUT {{URL}}sales/leads/285/booking-schedule HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "location": "552 Crocker Street, Los Angeles, California 90013, United States",
+  "booking_type": "multi_day",
+  "time_zone": "Asia/Calcutta",
+  "booking_days": [
+    {
+      "date": "2026-04-20",
+      "start_time": "10:00:00",
+      "end_time": "12:00:00"
+    },
+    {
+      "date": "2026-04-21",
+      "start_time": "10:00:00",
+      "end_time": "12:00:00"
+    }
+  ]
+}
 
 ### soft delete sales lead
 DELETE {{URL}}sales/leads/173 HTTP/1.1
@@ -831,7 +902,7 @@ Content-Type: application/json
 # Authorization: {{TOKEN}}
 
 {
-  "crew_member_id": 2042,
+  "crew_member_id": 2043,
   "project_id": 892,
   "crew_accept": 1
 }
@@ -1053,6 +1124,11 @@ GET {{URL}}sales/discount-codes/31 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
+###
+GET {{URL}}sales/dashboard/invoice-history?page=1&limit=20 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
 ### quote dashboard
 GET {{URL}}sales/quotes/dashboard HTTP/1.1
 Content-Type: application/json
@@ -1102,7 +1178,7 @@ Authorization: {{TOKEN}}
 }
 
 ### send custom quote proposal email
-POST {{URL}}sales/quotes/10/send HTTP/1.1
+POST {{URL}}sales/quotes/121/send HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -1127,12 +1203,12 @@ Authorization: {{TOKEN}}
 ### sales quote catalog
 GET {{URL}}sales/quotes/catalog HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN2}}
+Authorization: {{TOKEN}}
 
 ### sales quote ai editing types
 GET {{URL}}sales/quotes/ai-editing-types HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN2}}
+Authorization: {{TOKEN}}
 
 ### create custom ai editing type
 POST {{URL}}sales/quotes/ai-editing-types HTTP/1.1
@@ -1248,11 +1324,10 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 { 
-  "client_user_id": 260,
+  "client_user_id": 8,
   "project_description": "Corporate video production for annual conference",
   "video_shoot_type": "Private Event",
   "quote_validity_days": 7,
-  "video_shoot_type": "Private Event",
   "line_items": [
     {
       "catalog_item_id": 1,
@@ -1274,54 +1349,86 @@ Authorization: {{TOKEN}}
   ]
 }
 
-### convert quote to booking
-POST {{URL}}sales/quotes/19/convert-to-booking HTTP/1.1
-Content-Type: application/json
-Authorization: {{TOKEN}}
-
-{}
-
 ### update sales quote (partial safe)
-PUT {{URL}}sales/quotes/19 HTTP/1.1
+PUT {{URL}}sales/quotes/121 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
     "line_items": [
     {
-      "catalog_item_id": 6,
-      "section_type": "addon",
-      "quantity": 2,
-      "estimated_pricing": 800
+      "catalog_item_id": 1,
+      "section_type": "service",
+      "quantity": 1,
+      "duration_hours": 4,
+      "crew_size": 1
     },
     {
-      "catalog_item_id": 13,
-      "section_type": "addon",
-      "quantity": 2,
-      "estimated_pricing": 800
+      "catalog_item_id": 2,
+      "section_type": "service",
+      "quantity": 1,
+      "duration_hours": 4,
+      "crew_size": 1
     }
   ]
 }
 
 ### update sales quote (only tax/discount)
-PUT {{URL}}sales/quotes/17 HTTP/1.1
+PUT {{URL}}sales/quotes/121 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
   "discount_type": "fixed_amount",
-  "discount_value": 250,
+  "discount_value": 500,
   "tax_type": "Sales Tax",
   "tax_rate": 8.5
 }
 
 ### get sales quote detail
-GET {{URL}}sales/quotes/17 HTTP/1.1
+GET {{URL}}sales/quotes/116 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
+### convert quote to booking | Single day:
+POST {{URL}}sales/quotes/121/convert-to-booking HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "booking_type": "single_day",
+  "time_zone": "Asia/Calcutta",
+  "start_date": "2026-04-15",
+  "start_time": "09:00:00",
+  "end_time": "15:00:00",
+  "location": "442 Crocker Street, Los Angeles, California 90013, United States"
+}
+
+### convert quote to booking | Multi day:
+POST {{URL}}sales/quotes/115/convert-to-booking HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "booking_type": "multi_day",
+  "time_zone": "Asia/Calcutta",
+  "location": "442 Crocker Street, Los Angeles, California 90013, United States",
+  "booking_days": [
+    {
+      "date": "2026-04-15",
+      "start_time": "09:00:00",
+      "end_time": "13:00:00"
+    },
+    {
+      "date": "2026-04-16",
+      "start_time": "10:00:00",
+      "end_time": "14:00:00"
+    }
+  ]
+}
+
 ### update sales quote (partial safe)
-PUT {{URL}}sales/quotes/17 HTTP/1.1
+PUT {{URL}}sales/quotes/25 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -1333,10 +1440,10 @@ Authorization: {{TOKEN}}
   "client_phone": "+91 98856 99444",
   "client_address": "Los Angeles, California, United States",
   "project_description": "Corporate video production for annual conference - updated",
-  "video_shoot_type": "Private Event",
-  "quote_validity_days": 7,
+  "video_shoot_type": "Corporate Event",
+  "quote_validity_days": 9,
   "discount_type": "fixed_amount",
-  "discount_value": 250,
+  "discount_value": 1000,
   "tax_type": "Sales Tax",
   "tax_rate": 8.5,
   "terms_conditions": "50% deposit required before production starts.",
@@ -1402,6 +1509,21 @@ Authorization: {{TOKEN}}
       "unit_rate": 1500,
       "quantity": 1,
       "estimated_pricing": 1500
+    }
+  ],
+  "booking_type": "multi_day",
+  "time_zone": "Asia/Calcutta",
+  "location": "442 Crocker Street, Los Angeles, California 90013, United States",
+  "booking_days": [
+    {
+      "date": "2026-04-15",
+      "start_time": "09:00:00",
+      "end_time": "13:00:00"
+    },
+    {
+      "date": "2026-04-16",
+      "start_time": "10:00:00",
+      "end_time": "14:00:00"
     }
   ]
 }
@@ -1485,3 +1607,17 @@ Content-Type: image/jpeg
 
 (data)
 ------WebKitFormBoundary7MA4YWxkTrZu0gW--
+
+###
+POST {{URL}}sales/quotes/116/preview-invoice HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### send invoice for quote
+POST {{URL}}sales/quotes/121/send-invoice HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Get Sent Invoice History
+GET {{URL}}sales/dashboard/invoice-history?page=1&limit=20
+Authorization: {{TOKEN}}
