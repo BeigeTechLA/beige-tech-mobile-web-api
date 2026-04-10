@@ -252,61 +252,73 @@ async function replaceMismatchedInvoice(invoice, bookingId) {
  * Create a Stripe Invoice for an unpaid booking
  */
 async function createStripeInvoice(booking, pricingData, options = {}) {
-  const { transaction } = options;
-  const email = booking.guest_email || (booking.user ? booking.user.email : null);
+  const { transaction, recipientOverride = null, forceNewInvoice = false } = options;
+  const email = recipientOverride?.email || booking.guest_email || (booking.user ? booking.user.email : null);
   const expectedTotalCents = getExpectedInvoiceTotalCents(pricingData);
   const pricingKey = `${booking.stream_project_booking_id}-${expectedTotalCents}`;
   const createAttemptKey = `${pricingKey}-${Date.now()}`;
   
   if (!email) throw new Error("Booking must have an email address.");
 
-  let recipientName = booking.user?.name || (booking.project_name ? booking.project_name.split(' - ')[1] : 'Valued Guest');
+  let recipientName = recipientOverride?.name || booking.user?.name || (booking.project_name ? booking.project_name.split(' - ')[1] : 'Valued Guest');
 
   let customer = null;
   if (booking.stripe_customer_id) customer = await getStripeCustomerById(booking.stripe_customer_id);
   if (!customer) {
     customer = await getOrCreateStripeCustomer({ email, name: recipientName, bookingId: booking.stream_project_booking_id });
     await booking.update({ stripe_customer_id: customer.id }, { transaction });
+  } else if ((recipientOverride?.email && customer.email !== email) || (recipientOverride?.name && customer.name !== recipientName)) {
+    customer = await stripe.customers.update(customer.id, {
+      ...(recipientOverride?.email ? { email } : {}),
+      ...(recipientOverride?.name ? { name: recipientName } : {})
+    });
   }
 
   let existingInvoice = null;
 
-  if (booking.stripe_invoice_id) {
+  if (!forceNewInvoice) {
+    if (booking.stripe_invoice_id) {
+      try {
+        existingInvoice = await stripe.invoices.retrieve(booking.stripe_invoice_id);
+      } catch (_) {
+        existingInvoice = null;
+      }
+    }
+
+    if (!existingInvoice) {
+      const relatedCustomerIds = [customer.id];
+      if (booking.stripe_customer_id) {
+        relatedCustomerIds.push(booking.stripe_customer_id);
+      }
+
+      existingInvoice = await findExistingInvoiceAcrossCustomers({
+        bookingId: booking.stream_project_booking_id,
+        customerIds: relatedCustomerIds
+      });
+    }
+
+    if (existingInvoice) {
+      if (isInvoiceTotalMismatch(existingInvoice, expectedTotalCents)) {
+        await replaceMismatchedInvoice(existingInvoice, booking.stream_project_booking_id);
+        existingInvoice = null;
+      } else {
+        if (existingInvoice.status === 'draft') {
+          const finalizedExistingInvoice = await stripe.invoices.finalizeInvoice(existingInvoice.id);
+          await booking.update({ stripe_invoice_id: finalizedExistingInvoice.id }, { transaction });
+          return finalizedExistingInvoice;
+        }
+
+        if (['open', 'paid', 'uncollectible', 'void'].includes(existingInvoice.status)) {
+          await booking.update({ stripe_invoice_id: existingInvoice.id }, { transaction });
+          return existingInvoice;
+        }
+      }
+    }
+  } else if (booking.stripe_invoice_id) {
     try {
-      existingInvoice = await stripe.invoices.retrieve(booking.stripe_invoice_id);
-    } catch (_) {
-      existingInvoice = null;
-    }
-  }
-
-  if (!existingInvoice) {
-    const relatedCustomerIds = [customer.id];
-    if (booking.stripe_customer_id) {
-      relatedCustomerIds.push(booking.stripe_customer_id);
-    }
-
-    existingInvoice = await findExistingInvoiceAcrossCustomers({
-      bookingId: booking.stream_project_booking_id,
-      customerIds: relatedCustomerIds
-    });
-  }
-
-  if (existingInvoice) {
-    if (isInvoiceTotalMismatch(existingInvoice, expectedTotalCents)) {
-      await replaceMismatchedInvoice(existingInvoice, booking.stream_project_booking_id);
-      existingInvoice = null;
-    } else {
-      if (existingInvoice.status === 'draft') {
-        const finalizedExistingInvoice = await stripe.invoices.finalizeInvoice(existingInvoice.id);
-        await booking.update({ stripe_invoice_id: finalizedExistingInvoice.id }, { transaction });
-        return finalizedExistingInvoice;
-      }
-
-      if (['open', 'paid', 'uncollectible', 'void'].includes(existingInvoice.status)) {
-        await booking.update({ stripe_invoice_id: existingInvoice.id }, { transaction });
-        return existingInvoice;
-      }
-    }
+      const existing = await stripe.invoices.retrieve(booking.stripe_invoice_id);
+      await replaceMismatchedInvoice(existing, booking.stream_project_booking_id);
+    } catch (_) {}
   }
 
   const invoice = await stripe.invoices.create({
@@ -419,16 +431,22 @@ async function createStripeInvoice(booking, pricingData, options = {}) {
  * Improved to provide better context for manual/out-of-band payments.
  */
 async function createPaidStripeInvoice(booking, pricingData, options = {}) {
-  const { transaction } = options;
-  const email = booking.user?.email || booking.guest_email;
-  const recipientName = booking.user?.name || (booking.project_name ? booking.project_name.split(' - ')[1] : 'Valued Guest');
+  const { transaction, recipientOverride = null } = options;
+  const email = recipientOverride?.email || booking.user?.email || booking.guest_email;
+  const recipientName = recipientOverride?.name || booking.user?.name || (booking.project_name ? booking.project_name.split(' - ')[1] : 'Valued Guest');
 
   // Ensure customer exists in Stripe
-  const customer = await getOrCreateStripeCustomer({ 
+  let customer = await getOrCreateStripeCustomer({ 
     email, 
     name: recipientName, 
     bookingId: booking.stream_project_booking_id 
   });
+  if (recipientOverride?.email || recipientOverride?.name) {
+    customer = await stripe.customers.update(customer.id, {
+      ...(recipientOverride?.email ? { email } : {}),
+      ...(recipientOverride?.name ? { name: recipientName } : {})
+    });
+  }
 
   const safeNumber = (value) => {
     const parsed = parseFloat(value);

@@ -703,7 +703,34 @@ function resolveValidity({ validUntil, quoteValidityDays, validUntilProvided = f
 }
 
 function isAdminRole(role) {
-  return role === 'admin' || role === 'Admin';
+  return role === 'admin' || role === 'Admin' || role === 'sales_admin' || role === 'Sales_Admin';
+}
+
+async function getRandomActiveSalesRepId(transaction) {
+  const salesRepType = await db.user_type.findOne({
+    where: { user_role: 'sales_rep' },
+    transaction
+  });
+
+  if (!salesRepType?.user_type_id) {
+    return null;
+  }
+
+  const salesReps = await db.users.findAll({
+    where: {
+      user_type: salesRepType.user_type_id,
+      is_active: 1
+    },
+    attributes: ['id'],
+    transaction
+  });
+
+  if (!salesReps.length) {
+    return null;
+  }
+
+  const randomIndex = Math.floor(Math.random() * salesReps.length);
+  return salesReps[randomIndex].id;
 }
 
 function resolveQuoteStatus(payload = {}, currentStatus = 'draft') {
@@ -1185,25 +1212,27 @@ async function deriveBookingEditSelectionsFromQuote(lineItems = []) {
   };
 }
 
-function deriveConvertedProjectName(quote) {
+function deriveConvertedProjectName(quote, prefillData = {}) {
   const shootType = quote.video_shoot_type || 'Custom';
-  const clientName = quote.client_name || quote.client_email || 'Client';
+  const clientName = prefillData.full_name || quote.client_name || quote.client_email || 'Client';
   return `${shootType.toUpperCase()} Shoot - ${clientName}`;
 }
 
 function buildConvertedBookingDescription(quoteDetails, prefillData) {
   const lines = [];
+  const contactName = prefillData.full_name || quoteDetails.client_name;
+  const contactPhone = prefillData.phone || quoteDetails.client_phone;
 
   if (quoteDetails.project_description) {
     lines.push(quoteDetails.project_description);
   }
 
-  if (quoteDetails.client_name) {
-    lines.push(`Contact Name: ${quoteDetails.client_name}`);
+  if (contactName) {
+    lines.push(`Contact Name: ${contactName}`);
   }
 
-  if (quoteDetails.client_phone) {
-    lines.push(`Phone: ${quoteDetails.client_phone}`);
+  if (contactPhone) {
+    lines.push(`Phone: ${contactPhone}`);
   }
 
   if (prefillData.quote_shoot_type_label) {
@@ -1412,7 +1441,7 @@ async function syncConvertedQuoteArtifacts({
     booking = await db.stream_project_booking.create({
       user_id: quote.client_user_id || null,
       guest_email: quote.client_email || null,
-      project_name: deriveConvertedProjectName(quoteDetails),
+      project_name: deriveConvertedProjectName(quoteDetails, prefillData),
       description: bookingDescription || null,
       event_type: prefillData.shoot_type || prefillData.content_type,
       shoot_type: prefillData.shoot_type || null,
@@ -1440,7 +1469,7 @@ async function syncConvertedQuoteArtifacts({
     await booking.update({
       user_id: quote.client_user_id || booking.user_id || null,
       guest_email: quote.client_email || booking.guest_email || null,
-      project_name: deriveConvertedProjectName(quoteDetails),
+      project_name: deriveConvertedProjectName(quoteDetails, prefillData),
       description: bookingDescription || booking.description || null,
       event_type: prefillData.shoot_type || prefillData.content_type || booking.event_type,
       shoot_type: prefillData.shoot_type || booking.shoot_type || null,
@@ -1664,6 +1693,31 @@ function deriveQuoteAddOns(lineItems = [], explicitAddOns = null) {
   return addOnNames.length ? addOnNames.join(', ') : 'TBD';
 }
 
+function deriveQuoteIncludes(lineItems = [], explicitIncludes = null) {
+  if (explicitIncludes) {
+    if (Array.isArray(explicitIncludes)) {
+      const values = explicitIncludes.filter(Boolean);
+      return values.length ? values.join(', ') : 'TBD';
+    }
+
+    return String(explicitIncludes);
+  }
+
+  const includeNames = (lineItems || [])
+    .filter((item) => item && item.item_name)
+    .map((item) => item.item_name.trim())
+    .filter(Boolean);
+
+  if (!includeNames.length) return 'TBD';
+
+  const maxItems = 2;
+  const visible = includeNames.slice(0, maxItems);
+  const remaining = includeNames.length - visible.length;
+  if (remaining <= 0) return visible.join(', ');
+
+  return `${visible.join(', ')} + ${remaining} more`;
+}
+
 function deriveQuoteValidityText(quoteDetails = {}) {
   if (quoteDetails.valid_until) {
     return `Valid until ${quoteDetails.valid_until}`;
@@ -1701,9 +1755,33 @@ async function createQuote(payload, user) {
       validUntilProvided: payload.valid_until !== undefined,
       quoteValidityDaysProvided: payload.quote_validity_days !== undefined
     });
-    const assignedSalesRepId = isAdminRole(user.role)
-      ? (payload.assigned_sales_rep_id || user.userId)
-      : user.userId;
+    let assignedSalesRepId = user.userId;
+
+    if (isAdminRole(user.role)) {
+      const requestedSalesRepId = payload.assigned_sales_rep_id !== undefined && payload.assigned_sales_rep_id !== null && payload.assigned_sales_rep_id !== ''
+        ? Number(payload.assigned_sales_rep_id)
+        : null;
+
+      if (Number.isInteger(requestedSalesRepId) && requestedSalesRepId > 0) {
+        const requestedUser = await db.users.findByPk(requestedSalesRepId, {
+          include: [
+            {
+              model: db.user_type,
+              as: 'userType',
+              attributes: ['user_role']
+            }
+          ],
+          transaction
+        });
+
+        const requestedUserRole = String(requestedUser?.userType?.user_role || '').toLowerCase();
+        assignedSalesRepId = requestedUser && requestedUserRole === 'sales_rep'
+          ? requestedSalesRepId
+          : await getRandomActiveSalesRepId(transaction);
+      } else {
+        assignedSalesRepId = await getRandomActiveSalesRepId(transaction);
+      }
+    }
 
     const quote = await db.sales_quotes.create({
       quote_number: generateQuoteNumber(),
@@ -2354,6 +2432,7 @@ async function sendQuoteProposal(salesQuoteId, payload, user) {
       location: quoteDetails.client_address || 'TBD',
       quote_validity: deriveQuoteValidityText(quoteDetails),
       add_ons: deriveQuoteAddOns(quoteDetails.line_items || []),
+      includes: deriveQuoteIncludes(quoteDetails.line_items || []),
       proposal_amount: quoteDetails.total,
       attachment_content: payload?.attachment_content || payload?.pdf_base64 || (generatedPdfBuffer ? Buffer.from(generatedPdfBuffer).toString('base64') : null),
       attachment_filename: payload?.attachment_filename || `${quoteDetails.quote_number || 'custom-quote'}.pdf`,
