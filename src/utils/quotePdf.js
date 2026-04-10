@@ -72,27 +72,10 @@ function buildSimpleSectionRows(items) {
 }
 
 function buildTerms(quote) {
-  const customTerms = String(quote.terms_conditions || '')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  const defaultTerms = [
-    'All prices are in USD.',
-    'Changes to the scope of work may result in additional charges.'
-  ].filter(Boolean);
-
-  const seen = new Set();
-  const terms = [...customTerms, ...defaultTerms].filter((line) => {
-    const normalized = String(line).toLowerCase();
-    if (seen.has(normalized)) return false;
-    seen.add(normalized);
-    return true;
-  });
-
-  if (!terms.length) {
-    return '<div style="color: #8A8A8A; font-size: 12px; line-height: 1.8;">No terms provided.</div>';
-  }
+  const terms = [
+    `This quote is valid until ${formatDate(quote.valid_until)}.`,
+    'Changes to the scope of work may result in additional investment.'
+  ];
 
   return terms.map((line) => `
     <div style="color: #8A8A8A; font-size: 12px; line-height: 1.8;">- ${escapeHtml(line)}</div>
@@ -294,7 +277,7 @@ function buildQuotePdfHtml(quote) {
           <div class="divider"></div>
 
           <div class="small muted" style="text-align:center;">
-            Thank you for your business! For questions, contact ${escapeHtml(contactName)} at ${escapeHtml(companyEmail)}
+            Thank you for your business! For questions, contact Beige AI at sales@beigecorporation.io or 323-826-7230
           </div>
         </div>
       </div>

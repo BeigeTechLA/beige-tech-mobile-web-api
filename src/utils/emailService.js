@@ -2313,7 +2313,9 @@ const sendCustomQuoteProposalEmail = async (data) => {
     }
 
     const proposalAmount = data?.proposal_amount !== undefined && data?.proposal_amount !== null
-      ? (String(data.proposal_amount).startsWith('$') ? String(data.proposal_amount) : `$${formatAmount(data.proposal_amount)}`)
+      ? (String(data.proposal_amount).startsWith('$')
+        ? String(data.proposal_amount).replace(/^\$/, '')
+        : formatAmount(data.proposal_amount))
       : 'TBD';
     const attachmentContent = typeof data?.attachment_content === 'string'
       ? data.attachment_content.replace(/^data:.*;base64,/, '').trim()
@@ -2334,6 +2336,7 @@ const sendCustomQuoteProposalEmail = async (data) => {
         location: data?.location || 'TBD',
         quote_validity: data?.quote_validity || 'TBD',
         add_ons: data?.add_ons || 'TBD',
+        includes: data?.includes || 'TBD',
         proposal_amount: proposalAmount
       }
     };

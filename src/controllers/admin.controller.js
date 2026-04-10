@@ -33,6 +33,7 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   const { deleteSheetRow, updateSheetRow } = require('../utils/googleSheets');
 const leadAssignmentService = require('../services/lead-assignment.service');
 const db = require('../models');
+const bookingTimelineService = require('../services/bookingTimeline.service');
 // const NodeGeocoder = require('node-geocoder');
 
 const getCPNewBookingEmailFields = (booking = {}, fallbackClientName = '', fallbackShootAmount = null) => ({
@@ -1275,6 +1276,9 @@ exports.getProjectDetails = async (req, res) => {
         };
     }
 
+    const timelineStatus = bookingTimelineService.getTimelineStage(projectJson);
+    const timelineLabel = bookingTimelineService.getTimelineLabel(timelineStatus);
+
     // 8. Construct Response
     return res.status(200).json({
       error: false,
@@ -1284,8 +1288,12 @@ exports.getProjectDetails = async (req, res) => {
           ...projectJson,
           total_paid_amount: paymentData ? paymentData.total_amount : 0,
           event_type_labels: eventTypeLabels.join(', '),
+          timeline_status: timelineStatus,
+          timeline_label: timelineLabel,
           sales_leads: undefined // Remove from main object to avoid redundancy
         },
+        timeline_status: timelineStatus,
+        timeline_label: timelineLabel,
         lead_details: lead, // Sales rep, activities, etc.
         pricing_breakdown,
         payment_status: projectJson.payment_id ? 'paid' : (active_payment_link ? 'link_sent' : 'unpaid'),
@@ -2009,23 +2017,70 @@ exports.getAllProjectDetails = async (req, res) => {
     }
 
     if (status) {
-      const statusLower = status.toLowerCase().replace(/\s+/g, '');
-      const statusMap = { 'initiated': 0, 'preproduction': 1, 'postproduction': 2, 'revision': 3, 'completed': 4, 'cancelled': 5 };
+      const statusLower = String(status).toLowerCase().replace(/\s+/g, '');
+      const dynamicStatusConditions = {
+        initiated: {
+          [Sequelize.Op.and]: [
+            { status: 0 },
+            {
+              [Sequelize.Op.or]: [
+                { event_date: null },
+                Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), { [Sequelize.Op.gt]: Sequelize.fn('CURDATE') })
+              ]
+            }
+          ]
+        },
+        preproduction: {
+          [Sequelize.Op.and]: [
+            { status: 1 },
+            Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), { [Sequelize.Op.gt]: Sequelize.fn('CURDATE') })
+          ]
+        },
+        shootday: {
+          [Sequelize.Op.and]: [
+            { status: { [Sequelize.Op.notIn]: [3, 4, 5] } },
+            Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), Sequelize.fn('CURDATE'))
+          ]
+        },
+        postproduction: {
+          [Sequelize.Op.or]: [
+            { status: 2 },
+            {
+              [Sequelize.Op.and]: [
+                { status: { [Sequelize.Op.in]: [0, 1] } },
+                Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), { [Sequelize.Op.lt]: Sequelize.fn('CURDATE') })
+              ]
+            }
+          ]
+        },
+        revision: { status: 3 },
+        completed: { status: 4 },
+        assetsdelivered: { status: 4 },
+        cancelled: {
+          [Sequelize.Op.or]: [
+            { status: 5 },
+            { is_cancelled: 1 }
+          ]
+        }
+      };
 
-      if (statusMap.hasOwnProperty(statusLower)) {
-        whereConditions.status = statusMap[statusLower];
-      } else if (statusLower === 'shootday') {
-        whereConditions.status = { [Sequelize.Op.notIn]: [4, 5] };
+      if (dynamicStatusConditions[statusLower]) {
         whereConditions = {
           ...whereConditions,
           [Sequelize.Op.and]: [
             ...(whereConditions[Sequelize.Op.and] || []),
-            Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), Sequelize.fn('CURDATE'))
+            dynamicStatusConditions[statusLower]
           ]
         };
       } else if (statusLower === 'upcoming') {
-        whereConditions.status = { [Sequelize.Op.notIn]: [4, 5] };
-        whereConditions.event_date = { ...(whereConditions.event_date || {}), [Sequelize.Op.gt]: today };
+        whereConditions = {
+          ...whereConditions,
+          [Sequelize.Op.and]: [
+            ...(whereConditions[Sequelize.Op.and] || []),
+            { status: { [Sequelize.Op.notIn]: [3, 4, 5] } },
+            Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), { [Sequelize.Op.gt]: Sequelize.fn('CURDATE') })
+          ]
+        };
       } else if (statusLower === 'draft') {
         whereConditions.is_draft = 1;
       }
@@ -2090,11 +2145,16 @@ exports.getAllProjectDetails = async (req, res) => {
         return stringMap[val.toLowerCase()] || val.charAt(0).toUpperCase() + val.slice(1);
       });
 
+      const timelineStatus = bookingTimelineService.getTimelineStage(project);
+      const timelineLabel = bookingTimelineService.getTimelineLabel(timelineStatus);
+
       return {
         project: {
           ...project.toJSON(),
           total_paid_amount: paymentData ? paymentData.total_amount : 0,
           event_type_labels: formattedTypes.join(', '),
+          timeline_status: timelineStatus,
+          timeline_label: timelineLabel,
           event_location: (() => {
             const loc = project.event_location;
             if (!loc) return null;
@@ -5597,8 +5657,9 @@ exports.getShootStatus = async (req, res) => {
 exports.getTopCreativePartners = async (req, res) => {
   try {
     const { range, start_date, end_date } = req.query;
-    
-    const limit = Number(req.query.limit || 10);
+
+    const parsedLimit = Number(req.query.limit || 10);
+    const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 10;
 
     let dateFilter = {};
 
@@ -5642,6 +5703,11 @@ exports.getTopCreativePartners = async (req, res) => {
           model: crew_members,
           as: 'creator',
           attributes: ['crew_member_id', 'first_name', 'last_name', 'email'],
+          where: {
+            is_active: 1,
+            is_crew_verified: 1, // only approved crew (exclude pending/rejected)
+          },
+          required: true,
           include: [
             {
               model: crew_member_files,
@@ -5660,6 +5726,10 @@ exports.getTopCreativePartners = async (req, res) => {
         }
       ],
       group: ['creator_id'],
+      having: Sequelize.where(
+        Sequelize.fn('SUM', Sequelize.col('total_amount')),
+        { [Op.gt]: 0 } // exclude CPs with $0 earnings
+      ),
       order: [[Sequelize.literal('total_earnings'), 'DESC']],
       limit: limit
     });

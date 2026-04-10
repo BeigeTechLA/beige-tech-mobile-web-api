@@ -1178,7 +1178,7 @@ Authorization: {{TOKEN}}
 }
 
 ### send custom quote proposal email
-POST {{URL}}sales/quotes/10/send HTTP/1.1
+POST {{URL}}sales/quotes/121/send HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -1324,7 +1324,7 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 { 
-  "client_user_id": 260,
+  "client_user_id": 8,
   "project_description": "Corporate video production for annual conference",
   "video_shoot_type": "Private Event",
   "quote_validity_days": 7,
@@ -1350,35 +1350,31 @@ Authorization: {{TOKEN}}
 }
 
 ### update sales quote (partial safe)
-PUT {{URL}}sales/quotes/116 HTTP/1.1
+PUT {{URL}}sales/quotes/121 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
     "line_items": [
     {
-      "source_type": "custom",
-      "section_type": "logistics",
-      "item_name": "Travel and Transportation",
-      "rate_type": "flat",
-      "unit_rate": 500,
+      "catalog_item_id": 1,
+      "section_type": "service",
       "quantity": 1,
-      "estimated_pricing": 500
+      "duration_hours": 4,
+      "crew_size": 1
     },
     {
-      "source_type": "custom",
-      "section_type": "custom",
-      "item_name": "Rush Delivery",
-      "rate_type": "flat",
-      "unit_rate": 1500,
+      "catalog_item_id": 2,
+      "section_type": "service",
       "quantity": 1,
-      "estimated_pricing": 1500
+      "duration_hours": 4,
+      "crew_size": 1
     }
   ]
 }
 
 ### update sales quote (only tax/discount)
-PUT {{URL}}sales/quotes/116 HTTP/1.1
+PUT {{URL}}sales/quotes/121 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -1395,7 +1391,7 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### convert quote to booking | Single day:
-POST {{URL}}sales/quotes/116/convert-to-booking HTTP/1.1
+POST {{URL}}sales/quotes/121/convert-to-booking HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -1618,7 +1614,7 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### send invoice for quote
-POST {{URL}}sales/quotes/116/send-invoice HTTP/1.1
+POST {{URL}}sales/quotes/121/send-invoice HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
