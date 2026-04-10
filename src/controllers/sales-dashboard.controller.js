@@ -590,7 +590,7 @@ exports.getSalesRepsList = async (req, res) => {
     const userTypes = await user_type.findAll({
       where: {
         user_role: {
-          [Op.in]: ['sales_rep', 'sales_admin']
+          [Op.in]: ['sales_rep']
         }
       },
       attributes: ['user_type_id']
