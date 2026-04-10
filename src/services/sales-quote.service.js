@@ -706,6 +706,33 @@ function isAdminRole(role) {
   return role === 'admin' || role === 'Admin' || role === 'sales_admin' || role === 'Sales_Admin';
 }
 
+async function getRandomActiveSalesRepId(transaction) {
+  const salesRepType = await db.user_type.findOne({
+    where: { user_role: 'sales_rep' },
+    transaction
+  });
+
+  if (!salesRepType?.user_type_id) {
+    return null;
+  }
+
+  const salesReps = await db.users.findAll({
+    where: {
+      user_type: salesRepType.user_type_id,
+      is_active: 1
+    },
+    attributes: ['id'],
+    transaction
+  });
+
+  if (!salesReps.length) {
+    return null;
+  }
+
+  const randomIndex = Math.floor(Math.random() * salesReps.length);
+  return salesReps[randomIndex].id;
+}
+
 function resolveQuoteStatus(payload = {}, currentStatus = 'draft') {
   if (payload.is_draft === true) {
     return 'draft';
@@ -1701,9 +1728,33 @@ async function createQuote(payload, user) {
       validUntilProvided: payload.valid_until !== undefined,
       quoteValidityDaysProvided: payload.quote_validity_days !== undefined
     });
-    const assignedSalesRepId = isAdminRole(user.role)
-      ? (payload.assigned_sales_rep_id || user.userId)
-      : user.userId;
+    let assignedSalesRepId = user.userId;
+
+    if (isAdminRole(user.role)) {
+      const requestedSalesRepId = payload.assigned_sales_rep_id !== undefined && payload.assigned_sales_rep_id !== null && payload.assigned_sales_rep_id !== ''
+        ? Number(payload.assigned_sales_rep_id)
+        : null;
+
+      if (Number.isInteger(requestedSalesRepId) && requestedSalesRepId > 0) {
+        const requestedUser = await db.users.findByPk(requestedSalesRepId, {
+          include: [
+            {
+              model: db.user_type,
+              as: 'userType',
+              attributes: ['user_role']
+            }
+          ],
+          transaction
+        });
+
+        const requestedUserRole = String(requestedUser?.userType?.user_role || '').toLowerCase();
+        assignedSalesRepId = requestedUser && requestedUserRole === 'sales_rep'
+          ? requestedSalesRepId
+          : await getRandomActiveSalesRepId(transaction);
+      } else {
+        assignedSalesRepId = await getRandomActiveSalesRepId(transaction);
+      }
+    }
 
     const quote = await db.sales_quotes.create({
       quote_number: generateQuoteNumber(),
