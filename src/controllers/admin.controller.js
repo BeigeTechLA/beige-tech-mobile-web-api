@@ -33,6 +33,7 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   const { deleteSheetRow, updateSheetRow } = require('../utils/googleSheets');
 const leadAssignmentService = require('../services/lead-assignment.service');
 const db = require('../models');
+const bookingTimelineService = require('../services/bookingTimeline.service');
 // const NodeGeocoder = require('node-geocoder');
 
 const getCPNewBookingEmailFields = (booking = {}, fallbackClientName = '', fallbackShootAmount = null) => ({
@@ -1275,6 +1276,9 @@ exports.getProjectDetails = async (req, res) => {
         };
     }
 
+    const timelineStatus = bookingTimelineService.getTimelineStage(projectJson);
+    const timelineLabel = bookingTimelineService.getTimelineLabel(timelineStatus);
+
     // 8. Construct Response
     return res.status(200).json({
       error: false,
@@ -1284,8 +1288,12 @@ exports.getProjectDetails = async (req, res) => {
           ...projectJson,
           total_paid_amount: paymentData ? paymentData.total_amount : 0,
           event_type_labels: eventTypeLabels.join(', '),
+          timeline_status: timelineStatus,
+          timeline_label: timelineLabel,
           sales_leads: undefined // Remove from main object to avoid redundancy
         },
+        timeline_status: timelineStatus,
+        timeline_label: timelineLabel,
         lead_details: lead, // Sales rep, activities, etc.
         pricing_breakdown,
         payment_status: projectJson.payment_id ? 'paid' : (active_payment_link ? 'link_sent' : 'unpaid'),
@@ -2090,11 +2098,16 @@ exports.getAllProjectDetails = async (req, res) => {
         return stringMap[val.toLowerCase()] || val.charAt(0).toUpperCase() + val.slice(1);
       });
 
+      const timelineStatus = bookingTimelineService.getTimelineStage(project);
+      const timelineLabel = bookingTimelineService.getTimelineLabel(timelineStatus);
+
       return {
         project: {
           ...project.toJSON(),
           total_paid_amount: paymentData ? paymentData.total_amount : 0,
           event_type_labels: formattedTypes.join(', '),
+          timeline_status: timelineStatus,
+          timeline_label: timelineLabel,
           event_location: (() => {
             const loc = project.event_location;
             if (!loc) return null;
@@ -5597,8 +5610,9 @@ exports.getShootStatus = async (req, res) => {
 exports.getTopCreativePartners = async (req, res) => {
   try {
     const { range, start_date, end_date } = req.query;
-    
-    const limit = Number(req.query.limit || 10);
+
+    const parsedLimit = Number(req.query.limit || 10);
+    const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 10;
 
     let dateFilter = {};
 
@@ -5642,6 +5656,11 @@ exports.getTopCreativePartners = async (req, res) => {
           model: crew_members,
           as: 'creator',
           attributes: ['crew_member_id', 'first_name', 'last_name', 'email'],
+          where: {
+            is_active: 1,
+            is_crew_verified: 1, // only approved crew (exclude pending/rejected)
+          },
+          required: true,
           include: [
             {
               model: crew_member_files,
@@ -5660,6 +5679,10 @@ exports.getTopCreativePartners = async (req, res) => {
         }
       ],
       group: ['creator_id'],
+      having: Sequelize.where(
+        Sequelize.fn('SUM', Sequelize.col('total_amount')),
+        { [Op.gt]: 0 } // exclude CPs with $0 earnings
+      ),
       order: [[Sequelize.literal('total_earnings'), 'DESC']],
       limit: limit
     });

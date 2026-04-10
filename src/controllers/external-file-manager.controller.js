@@ -1,6 +1,7 @@
 const DEFAULT_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
 const INTERNAL_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
 const { users, crew_members, assigned_crew } = require('../models');
+const bookingTimelineService = require('../services/bookingTimeline.service');
 
 const buildHeaders = () => ({
   'Content-Type': 'application/json',
@@ -368,6 +369,15 @@ exports.notifyFileUploaded = async (req, res) => {
         userId: getRequestUserId(req),
       }),
     });
+
+    try {
+      await bookingTimelineService.applyUploadDrivenStatusTransition({
+        filepath: req.body.filepath,
+      });
+    } catch (timelineError) {
+      console.error('Timeline update skipped after file upload:', timelineError.message);
+    }
+
     return res.status(200).json(result);
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {
