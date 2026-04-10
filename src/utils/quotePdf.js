@@ -89,7 +89,8 @@ function buildQuotePdfHtml(quote) {
   const logistics = lineItems.filter((item) => item.section_type === 'logistics');
   const custom = lineItems.filter((item) => item.section_type === 'custom');
   const companyName = process.env.SENDGRID_FROM_NAME || 'Beige AI';
-  const companyEmail = process.env.SENDGRID_FROM_EMAIL || 'contact@beigeai.com';
+  const companyEmail = process.env.SENDGRID_FROM_EMAIL || 'sales@beigecorporation.io';
+  const companyPhone = process.env.COMPANY_PHONE || '323-826-7230';
   const contactName = quote.assigned_sales_rep?.name || companyName;
   const companyAddress = process.env.COMPANY_ADDRESS || '9200 Sunset Blvd. #215\nWest Hollywood, CA 90069';
   const companyAddressLines = companyAddress.split('\n').filter(Boolean);
@@ -190,7 +191,7 @@ function buildQuotePdfHtml(quote) {
               </div>
               <div style="margin-top: 16px;" class="small muted">
                 ${companyAddressLines.map((line) => `${escapeHtml(line)}<br>`).join('')}
-                ${escapeHtml(companyEmail)}
+                ${escapeHtml(companyEmail)} ${escapeHtml(companyPhone)}
               </div>
             </div>
             <div style="width: 240px; text-align:right;">
@@ -277,7 +278,7 @@ function buildQuotePdfHtml(quote) {
           <div class="divider"></div>
 
           <div class="small muted" style="text-align:center;">
-            Thank you for your business! For questions, contact Beige AI at sales@beigecorporation.io or 323-826-7230
+            Thank you for your business! For questions, contact ${escapeHtml(contactName)} at ${escapeHtml(companyEmail)} or ${escapeHtml(companyPhone)}
           </div>
         </div>
       </div>
