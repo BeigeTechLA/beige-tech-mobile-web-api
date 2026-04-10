@@ -108,7 +108,7 @@ function buildQuotePdfHtml(quote) {
   const companyName = process.env.SENDGRID_FROM_NAME || 'Beige AI';
   const companyEmail = process.env.SENDGRID_FROM_EMAIL || 'contact@beigeai.com';
   const contactName = quote.assigned_sales_rep?.name || companyName;
-  const companyAddress = process.env.COMPANY_ADDRESS || '123 Business Street\nSan Francisco, CA 94102';
+  const companyAddress = process.env.COMPANY_ADDRESS || '9200 Sunset Blvd. #215\nWest Hollywood, CA 90069';
   const companyAddressLines = companyAddress.split('\n').filter(Boolean);
 
   return `
