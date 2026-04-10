@@ -191,7 +191,8 @@ function buildQuotePdfHtml(quote) {
               </div>
               <div style="margin-top: 16px;" class="small muted">
                 ${companyAddressLines.map((line) => `${escapeHtml(line)}<br>`).join('')}
-                ${escapeHtml(companyEmail)} ${escapeHtml(companyPhone)}
+                ${escapeHtml(companyEmail)}<br>
+                ${escapeHtml(companyPhone)}
               </div>
             </div>
             <div style="width: 240px; text-align:right;">
@@ -278,7 +279,7 @@ function buildQuotePdfHtml(quote) {
           <div class="divider"></div>
 
           <div class="small muted" style="text-align:center;">
-            Thank you for your business! For questions, contact ${escapeHtml(contactName)} at ${escapeHtml(companyEmail)} or ${escapeHtml(companyPhone)}
+            Thank you for your business! For questions, contact ${escapeHtml(contactName)} at ${escapeHtml(companyEmail)}
           </div>
         </div>
       </div>
