@@ -107,13 +107,13 @@ const persistInvoiceSendHistory = async ({
   });
 };
 
-const sendInvoiceForBooking = async ({ bookingId, quoteId = null, performedByUserId = null }) => {
+const sendInvoiceForBooking = async ({ bookingId, quoteId = null, performedByUserId = null, recipientOverride = null }) => {
   const {
     parsedBookingId,
     recipientName,
     recipientEmail,
     invoiceDetails
-  } = await prepareInvoiceDetailsForBooking(bookingId, performedByUserId);
+  } = await prepareInvoiceDetailsForBooking(bookingId, performedByUserId, recipientOverride);
 
   const userData = { name: recipientName, email: recipientEmail };
   const emailResult = await emailService.sendInvoiceEmail(userData, invoiceDetails);
@@ -798,7 +798,7 @@ const bookingInvoiceIncludes = [
   { model: db.users, as: 'user', required: false }
 ];
 
-const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = null) => {
+const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = null, recipientOverride = null) => {
   let lockTransaction = null;
   try {
     const parsedBookingId = parseInt(bookingId, 10);
@@ -837,6 +837,13 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
     let recipientEmail = booking.user?.email || booking.guest_email;
     let recipientName = booking.user?.name || (booking.project_name ? booking.project_name.split(' - ')[1] : 'Valued Guest');
 
+    if (recipientOverride?.email) {
+      recipientEmail = recipientOverride.email;
+    }
+    if (recipientOverride?.name) {
+      recipientName = recipientOverride.name;
+    }
+
     if (!recipientEmail) {
       await booking.update({ invoice_generation_status: 'failed' });
       throw new Error('No email address associated with this booking.');
@@ -859,7 +866,7 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
     if (pricingData && (pricingData.is_paid || bookingMarkedPaid)) {
       let invoiceUrl, invoicePdf, invoiceNumber;
       let stripeTotalAmount = 0;
-      let needsNewInvoice = false;
+      let needsNewInvoice = Boolean(recipientOverride?.email || recipientOverride?.name);
 
       // Check existing invoice for amount mismatch
       if (booking.stripe_invoice_id) {
@@ -880,7 +887,7 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
       }
 
       if (!invoicePdf || needsNewInvoice) {
-        const retrospectiveInvoice = await paymentLinksService.createPaidStripeInvoice(booking, pricingData, {});
+        const retrospectiveInvoice = await paymentLinksService.createPaidStripeInvoice(booking, pricingData, { recipientOverride });
         invoiceUrl = retrospectiveInvoice.hosted_invoice_url;
         invoicePdf = retrospectiveInvoice.invoice_pdf;
         invoiceNumber = retrospectiveInvoice.number;
@@ -891,7 +898,10 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
 
     } else {
       // --- CASE 2: NOT PAID YET ---
-      const stripeInvoice = await paymentLinksService.createStripeInvoice(booking, pricingData, {});
+      const stripeInvoice = await paymentLinksService.createStripeInvoice(booking, pricingData, {
+        recipientOverride,
+        forceNewInvoice: Boolean(recipientOverride?.email || recipientOverride?.name)
+      });
       invoiceDetails = { projectTitle: booking.project_name, invoiceUrl: stripeInvoice.hosted_invoice_url, invoicePdf: stripeInvoice.invoice_pdf, invoiceNumber: stripeInvoice.number, totalAmount: pricingData.total, isPaid: false };
     }
 
@@ -1096,7 +1106,11 @@ exports.sendQuoteInvoice = async (req, res) => {
     const { invoiceDetails } = await sendInvoiceForBooking({
       bookingId,
       quoteId: salesQuote.sales_quote_id,
-      performedByUserId: req.userId || null
+      performedByUserId: req.userId || null,
+      recipientOverride: {
+        email: salesQuote.client_email || null,
+        name: salesQuote.client_name || null
+      }
     });
 
     return res.status(200).json({
@@ -1157,7 +1171,10 @@ exports.previewQuoteInvoice = async (req, res) => {
       });
     }
 
-    const { invoiceDetails } = await prepareInvoiceDetailsForBooking(bookingId, req.userId || null);
+    const { invoiceDetails } = await prepareInvoiceDetailsForBooking(bookingId, req.userId || null, {
+      email: salesQuote.client_email || null,
+      name: salesQuote.client_name || null
+    });
 
     return res.status(200).json({
       success: true,
