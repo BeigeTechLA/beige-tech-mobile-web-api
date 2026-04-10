@@ -89,6 +89,8 @@ function buildQuotePdfHtml(quote) {
   const logistics = lineItems.filter((item) => item.section_type === 'logistics');
   const custom = lineItems.filter((item) => item.section_type === 'custom');
   const companyName = process.env.SENDGRID_FROM_NAME || 'Beige AI';
+  // const companyEmail = process.env.SENDGRID_FROM_EMAIL || 'sales@beigecorporation.io';
+  // const companyPhone = process.env.COMPANY_PHONE || '323-826-7230';
   const companyEmail = process.env.SENDGRID_FROM_EMAIL || 'sales@beigecorporation.io';
   const companyPhone = process.env.COMPANY_PHONE || '323-826-7230';
   const contactName = quote.assigned_sales_rep?.name || companyName;
