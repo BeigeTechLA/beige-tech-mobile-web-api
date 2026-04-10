@@ -89,9 +89,12 @@ function buildQuotePdfHtml(quote) {
   const logistics = lineItems.filter((item) => item.section_type === 'logistics');
   const custom = lineItems.filter((item) => item.section_type === 'custom');
   const companyName = process.env.SENDGRID_FROM_NAME || 'Beige AI';
-  const companyEmail = process.env.SENDGRID_FROM_EMAIL || 'contact@beigeai.com';
+  // const companyEmail = process.env.SENDGRID_FROM_EMAIL || 'sales@beigecorporation.io';
+  // const companyPhone = process.env.COMPANY_PHONE || '323-826-7230';
+  const companyEmail =  'sales@beigecorporation.io';
+  const companyPhone =  '323-826-7230';
   const contactName = quote.assigned_sales_rep?.name || companyName;
-  const companyAddress = process.env.COMPANY_ADDRESS || '123 Business Street\nSan Francisco, CA 94102';
+  const companyAddress = process.env.COMPANY_ADDRESS || '9200 Sunset Blvd. #215\nWest Hollywood, CA 90069';
   const companyAddressLines = companyAddress.split('\n').filter(Boolean);
 
   return `
@@ -190,7 +193,8 @@ function buildQuotePdfHtml(quote) {
               </div>
               <div style="margin-top: 16px;" class="small muted">
                 ${companyAddressLines.map((line) => `${escapeHtml(line)}<br>`).join('')}
-                ${escapeHtml(companyEmail)}
+                ${escapeHtml(companyEmail)}<br>
+                ${escapeHtml(companyPhone)}
               </div>
             </div>
             <div style="width: 240px; text-align:right;">
