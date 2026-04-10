@@ -279,7 +279,7 @@ function buildQuotePdfHtml(quote) {
           <div class="divider"></div>
 
           <div class="small muted" style="text-align:center;">
-            Thank you for your business! For questions, contact ${escapeHtml(contactName)} at ${escapeHtml(companyEmail)}
+            Thank you for your business! For questions, contact Beige AI at sales@beigecorporation.io or 323-826-7230
           </div>
         </div>
       </div>
