@@ -17,6 +17,7 @@ router.post('/completed-projects', creator.getCompletedProjectsByCrew);
 router.post('/project-details', creator.getProjectDetails);
 router.post('/accept-project', creator.updateRequestStatus);
 router.post('/upcoming-accepted-project', creator.getAcceptedAndUpcomingProjects);
+router.post('/accepted-shoots', creator.getAcceptedShootsByCrew);
 router.post('/availability', creator.getCrewAvailability);
 router.post('/add-availability', creator.setCrewAvailability);
 router.post('/status-count', creator.getDashboardRequestCounts);
