@@ -178,6 +178,7 @@ exports.getDashboardCounts = async (req, res) => {
           required: true,
           where: {
             is_completed: 0,
+            payment_completed_at: { [Op.ne]: null },
           },
         },
       ],
@@ -236,7 +237,9 @@ exports.getPendingRequests = async (req, res) => {
           model: stream_project_booking,
           as: "project",
           required: true,
-          // where: { is_completed: 0 },
+          where: {
+            payment_completed_at: { [Op.ne]: null },
+          },
           include: [
             { 
               model: assigned_crew, as: 'assigned_crews', 
@@ -818,6 +821,83 @@ exports.getAcceptedAndUpcomingProjects = async (req, res) => {
   }
 };
 
+exports.getAcceptedShootsByCrew = async (req, res) => {
+  try {
+    const { crew_member_id } = req.body || req.query;
+
+    if (!crew_member_id) {
+      return res.status(400).json({
+        error: true,
+        message: "crew_member_id is required",
+      });
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const projects = await assigned_crew.findAll({
+      where: {
+        crew_member_id,
+        crew_accept: 1,
+      },
+      include: [
+        {
+          model: stream_project_booking,
+          as: "project",
+          required: true,
+          where: {
+            event_date: { [Sequelize.Op.lt]: today },
+          },
+          attributes: [
+            "stream_project_booking_id",
+            "project_name",
+            "event_date",
+            "start_time",
+            "end_time",
+            "event_location",
+            "budget",
+            "is_completed",
+          ],
+        },
+      ],
+      order: [
+        [{ model: stream_project_booking, as: "project" }, "event_date", "DESC"],
+      ],
+    });
+
+    if (!projects.length) {
+      return res.status(200).json({
+        error: false,
+        message: "No accepted shoots found for the given crew member.",
+        data: [],
+      });
+    }
+
+    const projectDetails = projects.map((request) => ({
+      project_id: request.project.stream_project_booking_id,
+      project_name: request.project.project_name,
+      event_date: request.project.event_date,
+      start_time: request.project.start_time,
+      end_time: request.project.end_time,
+      event_location: request.project.event_location,
+      budget: request.project.budget,
+      is_completed: request.project.is_completed,
+    }));
+
+    return res.status(200).json({
+      error: false,
+      message: "Accepted shoots fetched successfully",
+      data: projectDetails,
+    });
+  } catch (error) {
+    console.error("Error fetching accepted shoots:", error);
+    return res.status(500).json({
+      error: true,
+      message: "Something went wrong while fetching accepted shoots",
+    });
+  }
+};
+
 
 
 exports.getCrewAvailability = async (req, res) => {
@@ -1189,7 +1269,10 @@ exports.getDashboardRequestCounts = async (req, res) => {
       where: { crew_member_id: creator_id, crew_accept: 0 },
       include: [{
         model: stream_project_booking, as: "project",
-        where: { is_completed: 0 },
+        where: { 
+          is_completed: 0,
+          payment_completed_at: { [Op.ne]: null },
+        },
         include: [{ 
           model: assigned_crew, as: 'assigned_crews', 
           where: { crew_accept: 1 }, required: false,
@@ -2890,7 +2973,8 @@ exports.getDashboardDetails = async (req, res) => {
           as: "project",
           where: {
             ...projectWhere,
-            is_completed: 0
+            is_completed: 0,
+            payment_completed_at: { [Op.ne]: null },
           },
           required: true,
         },
