@@ -84,7 +84,9 @@ async function loadBookings() {
     order: [['stream_project_booking_id', 'ASC']],
   };
 
-  if (limit && Number.isFinite(limit)) {
+  // Do not apply SQL limit when we want "limit = missing workspaces created"
+  // We'll enforce that in the loop so skips don't count against the limit.
+  if (limit && Number.isFinite(limit) && bookingIds.length > 0) {
     options.limit = limit;
   }
 
@@ -111,6 +113,7 @@ async function run() {
 
     let successCount = 0;
     let failCount = 0;
+    let processedMissingCount = 0;
 
     for (const booking of bookings) {
       const bookingId = booking.stream_project_booking_id;
@@ -131,6 +134,8 @@ async function run() {
 
       if (dryRun) {
         console.log(`[DRY RUN] Would sync workspace for ${label}`);
+        processedMissingCount += 1;
+        if (limit && processedMissingCount >= limit) break;
         continue;
       }
 
@@ -138,15 +143,20 @@ async function run() {
         const result = await externalFileManagerController.syncWorkspaceForBookingFromRecord(booking);
         if (result?.success) {
           successCount += 1;
+          processedMissingCount += 1;
           console.log(`[OK] Workspace synced for ${label}`);
         } else {
           failCount += 1;
+          processedMissingCount += 1;
           console.log(`[WARN] Workspace not synced for ${label}: ${result?.message || 'unknown response'}`);
         }
       } catch (error) {
         failCount += 1;
+        processedMissingCount += 1;
         console.log(`[ERROR] Workspace sync failed for ${label}: ${error.message}`);
       }
+
+      if (limit && processedMissingCount >= limit) break;
     }
 
     console.log(`Done. Success: ${successCount}, Failed: ${failCount}`);
