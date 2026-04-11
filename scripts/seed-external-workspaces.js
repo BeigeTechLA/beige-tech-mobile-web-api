@@ -54,6 +54,7 @@ const includeUnpaid = hasFlag('--include-unpaid');
 const includeCancelled = hasFlag('--include-cancelled');
 const onlyInactive = hasFlag('--only-inactive');
 const limit = Number(getFlagValue('--limit')) || null;
+const force = hasFlag('--force');
 
 const idsFromArgs = parseIdList(getFlagValue('--ids') || getFlagValue('--booking-ids'));
 const idsFromJson = loadIdsFromJson(getFlagValue('--json'));
@@ -114,6 +115,19 @@ async function run() {
     for (const booking of bookings) {
       const bookingId = booking.stream_project_booking_id;
       const label = `${bookingId} - ${booking.project_name || 'Untitled'}`;
+
+      if (!force) {
+        try {
+          const existing = await externalFileManagerController.getWorkspaceByBookingId(bookingId);
+          if (existing?.data) {
+            console.log(`[SKIP] Workspace already exists for ${label}`);
+            continue;
+          }
+        } catch (error) {
+          console.log(`[WARN] Workspace lookup failed for ${label}: ${error.message}`);
+          // Fall through to try creating anyway
+        }
+      }
 
       if (dryRun) {
         console.log(`[DRY RUN] Would sync workspace for ${label}`);

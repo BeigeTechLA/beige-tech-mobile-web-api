@@ -264,6 +264,28 @@ exports.getWorkspace = async (req, res) => {
   }
 };
 
+// Used by scripts to check existence without req/res
+exports.getWorkspaceByBookingId = async (bookingId) => {
+  const normalizedBookingId = String(bookingId || '').trim();
+  if (!normalizedBookingId) {
+    return { success: false, message: 'booking_id is required for workspace lookup', data: null };
+  }
+
+  try {
+    return await proxyRequest(`/workspace/${normalizedBookingId}`);
+  } catch (error) {
+    if (error.status === 404) {
+      return {
+        success: true,
+        message: 'Workspace not found',
+        data: null,
+      };
+    }
+
+    throw error;
+  }
+};
+
 exports.getWorkspaceFiles = async (req, res) => {
   try {
     await ensureCreatorWorkspaceAccess(req, req.params.bookingId);
