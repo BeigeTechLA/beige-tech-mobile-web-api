@@ -1,6 +1,6 @@
 const DEFAULT_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
 const INTERNAL_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
-const { users, crew_members, assigned_crew } = require('../models');
+const { users, crew_members, assigned_crew, stream_project_booking } = require('../models');
 const bookingTimelineService = require('../services/bookingTimeline.service');
 
 const buildHeaders = () => ({
@@ -30,11 +30,53 @@ const isCreatorPostProductionPath = (filepath) =>
 const isPreProductionPath = (filepath) =>
   /(^|\/)pre-production(\/|$)/i.test(String(filepath || ''));
 
+const isCreatorAllowedUploadPath = (filepath) =>
+  isCreatorPostProductionPath(filepath) || isPreProductionPath(filepath);
+
 const isAdminRestrictedPostProductionUpload = (req, filepath) =>
   getNormalizedRequestUserRole(req) === 'admin' && isCreatorPostProductionPath(filepath);
 
 const isPreProductionOnlyRole = (req) =>
   ['admin', 'sales_rep', 'sales_representative', 'sales', 'client'].includes(getNormalizedRequestUserRole(req));
+
+const getTodayDateOnly = () => {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const ensureCreatorPostProductionUploadWindow = async (req, filepath) => {
+  if (getNormalizedRequestUserRole(req) !== 'creator') return;
+  if (!isCreatorPostProductionPath(filepath)) return;
+
+  const bookingId = parseBookingIdFromFilepath(filepath);
+  if (!bookingId) {
+    const error = new Error('Invalid project file path');
+    error.status = 400;
+    throw error;
+  }
+
+  const booking = await stream_project_booking.findOne({
+    where: { stream_project_booking_id: Number(bookingId) },
+    attributes: ['stream_project_booking_id', 'event_date'],
+  });
+
+  const eventDate = booking?.event_date ? String(booking.event_date).slice(0, 10) : null;
+  if (!eventDate) {
+    const error = new Error('Shoot date is not set for this project');
+    error.status = 403;
+    throw error;
+  }
+
+  const today = getTodayDateOnly();
+  if (today < eventDate) {
+    const error = new Error(`Post-Production uploads are allowed on or after shoot day (${eventDate})`);
+    error.status = 403;
+    throw error;
+  }
+};
 
 const resolveCreatorCrewMemberId = async (userId) => {
   if (!userId) return null;
@@ -317,12 +359,14 @@ exports.getUploadPolicy = async (req, res) => {
   try {
     await ensureCreatorFileAccess(req, req.body.filepath);
 
-    if (getNormalizedRequestUserRole(req) === 'creator' && !isCreatorPostProductionPath(req.body.filepath)) {
+    if (getNormalizedRequestUserRole(req) === 'creator' && !isCreatorAllowedUploadPath(req.body.filepath)) {
       return res.status(403).json({
         success: false,
-        message: 'Creators can upload files only in Post-Production',
+        message: 'Creators can upload files only in Pre-Production or Post-Production',
       });
     }
+
+    await ensureCreatorPostProductionUploadWindow(req, req.body.filepath);
 
     if (isAdminRestrictedPostProductionUpload(req, req.body.filepath)) {
       return res.status(403).json({
@@ -360,12 +404,14 @@ exports.notifyFileUploaded = async (req, res) => {
   try {
     await ensureCreatorFileAccess(req, req.body.filepath);
 
-    if (getNormalizedRequestUserRole(req) === 'creator' && !isCreatorPostProductionPath(req.body.filepath)) {
+    if (getNormalizedRequestUserRole(req) === 'creator' && !isCreatorAllowedUploadPath(req.body.filepath)) {
       return res.status(403).json({
         success: false,
-        message: 'Creators can upload files only in Post-Production',
+        message: 'Creators can upload files only in Pre-Production or Post-Production',
       });
     }
+
+    await ensureCreatorPostProductionUploadWindow(req, req.body.filepath);
 
     if (isAdminRestrictedPostProductionUpload(req, req.body.filepath)) {
       return res.status(403).json({
