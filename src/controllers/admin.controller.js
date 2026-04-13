@@ -2017,23 +2017,70 @@ exports.getAllProjectDetails = async (req, res) => {
     }
 
     if (status) {
-      const statusLower = status.toLowerCase().replace(/\s+/g, '');
-      const statusMap = { 'initiated': 0, 'preproduction': 1, 'postproduction': 2, 'revision': 3, 'completed': 4, 'cancelled': 5 };
+      const statusLower = String(status).toLowerCase().replace(/\s+/g, '');
+      const dynamicStatusConditions = {
+        initiated: {
+          [Sequelize.Op.and]: [
+            { status: 0 },
+            {
+              [Sequelize.Op.or]: [
+                { event_date: null },
+                Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), { [Sequelize.Op.gt]: Sequelize.fn('CURDATE') })
+              ]
+            }
+          ]
+        },
+        preproduction: {
+          [Sequelize.Op.and]: [
+            { status: 1 },
+            Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), { [Sequelize.Op.gt]: Sequelize.fn('CURDATE') })
+          ]
+        },
+        shootday: {
+          [Sequelize.Op.and]: [
+            { status: { [Sequelize.Op.notIn]: [3, 4, 5] } },
+            Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), Sequelize.fn('CURDATE'))
+          ]
+        },
+        postproduction: {
+          [Sequelize.Op.or]: [
+            { status: 2 },
+            {
+              [Sequelize.Op.and]: [
+                { status: { [Sequelize.Op.in]: [0, 1] } },
+                Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), { [Sequelize.Op.lt]: Sequelize.fn('CURDATE') })
+              ]
+            }
+          ]
+        },
+        revision: { status: 3 },
+        completed: { status: 4 },
+        assetsdelivered: { status: 4 },
+        cancelled: {
+          [Sequelize.Op.or]: [
+            { status: 5 },
+            { is_cancelled: 1 }
+          ]
+        }
+      };
 
-      if (statusMap.hasOwnProperty(statusLower)) {
-        whereConditions.status = statusMap[statusLower];
-      } else if (statusLower === 'shootday') {
-        whereConditions.status = { [Sequelize.Op.notIn]: [4, 5] };
+      if (dynamicStatusConditions[statusLower]) {
         whereConditions = {
           ...whereConditions,
           [Sequelize.Op.and]: [
             ...(whereConditions[Sequelize.Op.and] || []),
-            Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), Sequelize.fn('CURDATE'))
+            dynamicStatusConditions[statusLower]
           ]
         };
       } else if (statusLower === 'upcoming') {
-        whereConditions.status = { [Sequelize.Op.notIn]: [4, 5] };
-        whereConditions.event_date = { ...(whereConditions.event_date || {}), [Sequelize.Op.gt]: today };
+        whereConditions = {
+          ...whereConditions,
+          [Sequelize.Op.and]: [
+            ...(whereConditions[Sequelize.Op.and] || []),
+            { status: { [Sequelize.Op.notIn]: [3, 4, 5] } },
+            Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), { [Sequelize.Op.gt]: Sequelize.fn('CURDATE') })
+          ]
+        };
       } else if (statusLower === 'draft') {
         whereConditions.is_draft = 1;
       }
