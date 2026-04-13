@@ -4,7 +4,7 @@
 
 @TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzU3MjczNzIsImV4cCI6MTc3NjMzMjE3Mn0.gYa5WJOElPjg4rMApnBJ8Lj9ggcLlMVXIADlYuDnIQ4
 
-@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjE5MywidXNlclJvbGUiOiJzYWxlc19yZXAiLCJpYXQiOjE3NzQ5NTU5MjgsImV4cCI6MTc3NTU2MDcyOH0.n8p4ORotIdvcB-nEHEM2GYeBdKrSMFDBDIqXlbqEP94
+@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjIzNiwidXNlclJvbGUiOiJzYWxlc19yZXAiLCJpYXQiOjE3NzYwNzMyMzcsImV4cCI6MTc3NjY3ODAzN30.IwmHkqPxFgVrK46vW9sP9OTRAg4P7FFGfZs8XEOkoBQ
 
 ###
 POST {{URL}}creator/dashboard-count HTTP/1.1
@@ -20,11 +20,11 @@ POST {{URL}}auth/register HTTP/1.1
 Content-Type: application/json
 
 {
-  "name": "Harsh Panchal",
-  "email": "harsh.panchal.36@gmail.com",
+  "name": "Sales Representative",
+  "email": "sales@beigecorporation.io",
   "phone_number": "7133867897",
-  "password": "12345678",
-  "userType": 3
+  "password": "Sales@2026!",
+  "userType": 5
 }
 
 ###
@@ -1556,6 +1556,51 @@ Authorization: {{TOKEN}}
   "crew_member_id": 2037
 }
 
+### Availability
+POST {{URL}}sales/add-availability HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+{
+  "date": "2026-04-13",
+  "availability_status": 2,
+  "is_full_day": 1,
+  "notes": "Unavailable for 13th April"
+}
+
+### Get Availability
+POST {{URL}}sales/availability HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+{
+  "year": "2026",
+  "month": "04"
+}
+
+### Unavailable
+POST {{URL}}sales/toggle-status HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+{
+  "is_available": 0,
+  "reason": "On break"
+}
+
+### Available
+POST {{URL}}sales/toggle-status HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+{
+  "is_available": 1
+}
+
+### Get Current Live Status
+GET {{URL}}sales/current-status HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
 
 ###
 # Sales Rep Register
