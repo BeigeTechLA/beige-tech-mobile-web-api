@@ -640,7 +640,7 @@ Authorization: {{TOKEN}}
         "photographer": 1
     },
     "crew_size": 2,
-    "selected_crew_ids": [2103],
+    "selected_crew_ids": [2043],
     "edits_needed": true,
     "video_edit_types": [
         "social_reel_15_30",
@@ -676,8 +676,8 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "client_lead_id": 17,
-  "user_id": "246",
+  "client_lead_id": 7,
+  "user_id": "228",
   "content_type": "videographer",
   "shoot_type": "corporate",
   "booking_type": "multi_day",
@@ -696,7 +696,7 @@ Authorization: {{TOKEN}}
   "location": "442 Crocker Street, Los Angeles, California 90013, United States",
   "crew_roles": { "videographer": 2 },
   "crew_size": 2,
-  "selected_crew_ids": [2103],
+  "selected_crew_ids": [2043],
   "edits_needed": true,
   "video_edit_types": ["highlight_4_7", "feature_30_40"],
   "photo_edit_types": [],
