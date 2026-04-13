@@ -405,7 +405,6 @@ const getActiveStaffDirectory = async (search = '') => {
   const users = await db.users.findAll({
     where,
     attributes: ['id', 'name', 'email', 'user_type'],
-    limit: 50,
     order: [['name', 'ASC']],
   });
 
@@ -440,7 +439,6 @@ const getClientDirectory = async (search = '') => {
   const clients = await db.clients.findAll({
     where,
     attributes: ['client_id', 'user_id', 'name', 'email', 'phone_number'],
-    limit: 50,
     order: [['name', 'ASC']],
   });
 
@@ -486,7 +484,7 @@ const getCreativePartnerDirectory = async (search = '') => {
         required: false,
       },
     ],
-    limit: 50,
+    // limit: 50,
     order: [['first_name', 'ASC'], ['last_name', 'ASC']],
   });
 

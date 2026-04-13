@@ -920,3 +920,43 @@ CREATE TABLE IF NOT EXISTS `invoice_send_history` (
   KEY `idx_invoice_send_history_payment_status` (`payment_status`),
   KEY `idx_invoice_send_history_sent_at` (`sent_at`)
 );
+
+-- 13-04-26
+
+CREATE TABLE IF NOT EXISTS `sales_rep_availability` (
+  `id` INT NOT NULL AUTO_INCREMENT,
+  `sales_rep_id` INT NOT NULL,
+  `date` DATE NOT NULL,
+  `availability_status` TINYINT NOT NULL COMMENT '1 = available, 2 = unavailable',
+  `start_time` TIME NULL,
+  `end_time` TIME NULL,
+  `location` VARCHAR(255) NULL,
+  `recurrence` TINYINT NULL DEFAULT 1 COMMENT '1=none,2=daily,3=weekly,4=monthly',
+  `notes` TEXT NULL,
+  `is_full_day` INT NOT NULL DEFAULT 0,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `recurrence_until` DATE NULL,
+  `recurrence_days` TEXT NULL,
+  `recurrence_day_of_month` INT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_sales_rep_availability_rep_id` (`sales_rep_id`),
+  KEY `idx_sales_rep_availability_rep_date` (`sales_rep_id`, `date`),
+  CONSTRAINT `fk_sales_rep_availability_user`
+    FOREIGN KEY (`sales_rep_id`) REFERENCES `users` (`id`)
+    ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS `sales_rep_live_status` (
+  `id` INT NOT NULL AUTO_INCREMENT,
+  `sales_rep_id` INT NOT NULL,
+  `is_available` TINYINT NOT NULL DEFAULT 1 COMMENT '1 = available/on, 0 = unavailable/off',
+  `reason` VARCHAR(255) NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_sales_rep_live_status_rep` (`sales_rep_id`),
+  CONSTRAINT `fk_sales_rep_live_status_user`
+    FOREIGN KEY (`sales_rep_id`) REFERENCES `users` (`id`)
+    ON DELETE CASCADE
+);

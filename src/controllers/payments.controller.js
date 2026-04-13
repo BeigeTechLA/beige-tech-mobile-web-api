@@ -433,6 +433,109 @@ const deriveClientNameFromEmail = (email) => {
     .trim();
 };
 
+const getCPNewBookingEmailFields = (booking = {}, fallbackClientName = '') => ({
+  client_name:
+    fallbackClientName ||
+    booking?.client_name ||
+    booking?.user?.name ||
+    null,
+  service_type:
+    booking?.content_type ||
+    booking?.event_type ||
+    booking?.shoot_type ||
+  null,
+  date: booking?.event_date || null,
+  start_time: booking?.start_time || null,
+  end_time: booking?.end_time || null
+});
+
+async function notifyAssignedCreatorsAfterPayment(bookingId) {
+  try {
+    if (!bookingId) return;
+
+    const booking = await db.stream_project_booking.findByPk(bookingId, {
+      include: [
+        {
+          model: db.users,
+          as: 'user',
+          attributes: ['name'],
+          required: false
+        },
+        {
+          model: db.quotes,
+          as: 'primary_quote',
+          attributes: ['total', 'price_after_discount', 'subtotal'],
+          required: false
+        },
+        {
+          model: db.assigned_crew,
+          as: 'assigned_crews',
+          where: { is_active: 1 },
+          required: false,
+          attributes: ['crew_member_id'],
+          include: [
+            {
+              model: db.crew_members,
+              as: 'crew_member',
+              attributes: ['crew_member_id', 'first_name', 'last_name', 'email'],
+              required: false
+            }
+          ]
+        }
+      ]
+    });
+
+    if (!booking || !booking.payment_id) return;
+
+    let clientName = booking.user?.name || '';
+    if (!clientName) {
+      const salesLead = await db.sales_leads.findOne({
+        where: { booking_id: bookingId },
+        attributes: ['client_name']
+      });
+      clientName = salesLead?.client_name || '';
+    }
+
+    if (!clientName) {
+      const clientLead = await db.client_leads.findOne({
+        where: { booking_id: bookingId },
+        attributes: ['client_name']
+      });
+      clientName = clientLead?.client_name || '';
+    }
+
+    if (!clientName && booking.guest_email) {
+      clientName = deriveClientNameFromEmail(booking.guest_email);
+    }
+
+    const dashboardLink =
+      process.env.CP_DASHBOARD_LINK ||
+      process.env.FRONTEND_URL ||
+      'https://beige.app/';
+
+    const creators = Array.isArray(booking.assigned_crews)
+      ? booking.assigned_crews
+          .map((assignment) => assignment?.crew_member)
+          .filter((creator) => creator?.email)
+      : [];
+
+    if (!creators.length) return;
+
+    await Promise.allSettled(
+      creators.map((creator) =>
+        emailService.sendCPNewBookingRequestEmail({
+          to_email: creator.email,
+          user_name: [creator.first_name, creator.last_name].filter(Boolean).join(' ') || 'there',
+          ...getCPNewBookingEmailFields(booking, clientName),
+          dashboardLink
+        })
+      )
+    );
+  } catch (error) {
+    console.error(`Assigned creator payment notification failed for booking ${bookingId}:`, error.message);
+  }
+}
+
 const sendBookingConfirmationForBooking = async ({
   bookingId,
   amountPaid,
@@ -1513,6 +1616,8 @@ exports.confirmPaymentMulti = async (req, res) => {
       paymentMethod,
       transactionId: paymentIntentId
     }).catch(err => console.error('Booking Confirmation Email Error:', err));
+    notifyAssignedCreatorsAfterPayment(booking_id)
+      .catch(err => console.error('Assigned Creator Notification Error:', err));
 
     try {
       const lead = await db.sales_leads.findOne({ where: { booking_id: booking_id } });
@@ -1908,6 +2013,8 @@ exports.handleStripeWebhook = async (req, res) => {
         paymentMethod: webhookPaymentMethod,
         transactionId: paymentIntentId
       }).catch(err => console.error('Booking Confirmation Email Error:', err));
+      notifyAssignedCreatorsAfterPayment(booking_id)
+        .catch(err => console.error('Assigned Creator Notification Error:', err));
     } catch (dbError) {
       await transaction.rollback();
       throw dbError;
