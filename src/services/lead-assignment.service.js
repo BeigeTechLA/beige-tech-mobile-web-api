@@ -1,15 +1,157 @@
-const { users, sales_leads, client_leads, user_type } = require('../models');
+const {
+  users,
+  sales_leads,
+  client_leads,
+  user_type,
+  sales_rep_availability,
+  sales_rep_live_status
+} = require('../models');
 const { Op } = require('sequelize');
 const sequelize = require('../db');
+
+function normalizeDate(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 10);
+}
+
+function parseRecurrenceDays(value) {
+  if (!value) return [];
+
+  if (Array.isArray(value)) {
+    return value.map((day) => String(day).toLowerCase().slice(0, 3));
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.map((day) => String(day).toLowerCase().slice(0, 3))
+      : [];
+  } catch (error) {
+    return [];
+  }
+}
+
+function appliesAvailabilityRuleOnDate(rule, targetDate) {
+  const target = new Date(targetDate);
+  const start = new Date(rule.date);
+  const end = rule.recurrence_until ? new Date(rule.recurrence_until) : start;
+
+  target.setHours(0, 0, 0, 0);
+  start.setHours(0, 0, 0, 0);
+  end.setHours(0, 0, 0, 0);
+
+  if (target < start || target > end) {
+    return false;
+  }
+
+  switch (Number(rule.recurrence || 1)) {
+    case 1:
+      return target.getTime() === start.getTime();
+    case 2:
+      return true;
+    case 3: {
+      const recurrenceDays = parseRecurrenceDays(rule.recurrence_days);
+      const dayCode = target.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }).toLowerCase();
+      return recurrenceDays.includes(dayCode);
+    }
+    case 4:
+      return target.getUTCDate() === Number(rule.recurrence_day_of_month);
+    default:
+      return false;
+  }
+}
+
+async function getLeadAssignmentDate(leadId, options = {}) {
+  const leadModel = options.leadModel || sales_leads;
+  const transaction = options.transaction || null;
+
+  const lead = await leadModel.findOne({
+    where: { lead_id: leadId },
+    attributes: ['lead_id', 'booking_id', 'created_at'],
+    transaction
+  });
+
+  if (!lead) {
+    return null;
+  }
+
+  // Availability should be matched against when the lead/book-a-shoot
+  // entry was created, not the event/shoot date.
+  return normalizeDate(lead.created_at);
+}
+
+async function getUnavailableSalesRepIdsForDate(assignmentDate, salesRepIds, options = {}) {
+  if (!assignmentDate || !salesRepIds?.length) {
+    return new Set();
+  }
+
+  const transaction = options.transaction || null;
+  const entries = await sales_rep_availability.findAll({
+    where: {
+      sales_rep_id: { [Op.in]: salesRepIds },
+      date: { [Op.lte]: assignmentDate },
+      [Op.or]: [
+        { recurrence_until: null },
+        { recurrence_until: { [Op.gte]: assignmentDate } }
+      ]
+    },
+    order: [['created_at', 'DESC']],
+    transaction
+  });
+
+  const unavailableIds = new Set();
+  const resolvedIds = new Set();
+
+  for (const entry of entries) {
+    if (resolvedIds.has(entry.sales_rep_id)) {
+      continue;
+    }
+
+    if (!appliesAvailabilityRuleOnDate(entry, assignmentDate)) {
+      continue;
+    }
+
+    resolvedIds.add(entry.sales_rep_id);
+
+    if (String(entry.availability_status) !== '1') {
+      unavailableIds.add(entry.sales_rep_id);
+    }
+  }
+
+  return unavailableIds;
+}
+
+async function getUnavailableSalesRepIdsByLiveStatus(salesRepIds, options = {}) {
+  if (!salesRepIds?.length) {
+    return new Set();
+  }
+
+  const transaction = options.transaction || null;
+  const liveStatuses = await sales_rep_live_status.findAll({
+    where: {
+      sales_rep_id: { [Op.in]: salesRepIds },
+      is_available: 0
+    },
+    attributes: ['sales_rep_id'],
+    transaction
+  });
+
+  return new Set(liveStatuses.map((entry) => entry.sales_rep_id));
+}
 
 /**
  * Get all active sales reps
  * @returns {Promise<Array>} Array of sales rep users
  */
-async function getActiveSalesReps() {
+async function getActiveSalesReps(options = {}) {
+  const transaction = options.transaction || null;
+
   // Find user_type_id for 'sales_rep'
   const salesRepType = await user_type.findOne({
-    where: { user_role: 'sales_rep' }
+    where: { user_role: 'sales_rep' },
+    transaction
   });
   
   if (!salesRepType) {
@@ -21,7 +163,8 @@ async function getActiveSalesReps() {
       user_type: salesRepType.user_type_id,
       is_active: 1
     },
-    attributes: ['id', 'name', 'email']
+    attributes: ['id', 'name', 'email'],
+    transaction
   });
 }
 
@@ -523,10 +666,68 @@ function getLeadBookingStep(lead, booking, activities = []) {
   return 1;
 }
 
+async function autoAssignLead(leadId, options = {}) {
+  const transaction = options.transaction || null;
+  const leadModel = options.leadModel || sales_leads;
+
+  if (process.env.SALES_AUTO_ASSIGNMENT === 'false') {
+    return null;
+  }
+
+  const salesReps = await getActiveSalesReps({ transaction });
+
+  if (!salesReps.length) {
+    console.warn('No active sales reps available for auto-assignment');
+    return null;
+  }
+
+  const assignmentDate = options.assignmentDate || await getLeadAssignmentDate(leadId, { leadModel, transaction });
+  const unavailableRepIds = await getUnavailableSalesRepIdsForDate(
+    assignmentDate,
+    salesReps.map((rep) => rep.id),
+    { transaction }
+  );
+  const unavailableByLiveStatusIds = await getUnavailableSalesRepIdsByLiveStatus(
+    salesReps.map((rep) => rep.id),
+    { transaction }
+  );
+  const availableSalesReps = salesReps.filter(
+    (rep) => !unavailableRepIds.has(rep.id) && !unavailableByLiveStatusIds.has(rep.id)
+  );
+
+  if (!availableSalesReps.length) {
+    console.warn(`No available sales reps found for auto-assignment on ${assignmentDate || 'requested date'}`);
+    return null;
+  }
+
+  const salesRepIds = availableSalesReps.map((rep) => rep.id);
+  const leadCounts = await getLeadCountsPerRep(salesRepIds, 24, { leadModel, transaction });
+  const selectedRep = findRepWithFewestLeads(availableSalesReps, leadCounts);
+
+  await leadModel.update(
+    { assigned_sales_rep_id: selectedRep.id },
+    {
+      where: { lead_id: leadId },
+      transaction
+    }
+  );
+
+  console.log(`Lead ${leadId} auto-assigned to ${selectedRep.name} (ID: ${selectedRep.id})`);
+
+  return {
+    id: selectedRep.id,
+    name: selectedRep.name,
+    email: selectedRep.email
+  };
+}
+
 module.exports = {
   getActiveSalesReps,
   getLeadCountsPerRep,
   findRepWithFewestLeads,
+  getLeadAssignmentDate,
+  getUnavailableSalesRepIdsForDate,
+  getUnavailableSalesRepIdsByLiveStatus,
   autoAssignLead,
   manuallyAssignLead,
   getSalesRepWorkload,

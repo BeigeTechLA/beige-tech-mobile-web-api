@@ -4912,19 +4912,6 @@ exports.finalizeGuestBooking = async (req, res) => {
 
     await tx.commit();
 
-    // send CP new booking request emails
-    const emailClientName = await resolveEmailClientNameForBooking(
-      booking,
-      linkedLead?.client_name || null
-    );
-
-    await notifyAssignedCreators(
-      finalizeResult.assigned_creator_ids || [],
-      booking,
-      emailClientName,
-      getEmailShootAmountFromFinalizeResult(finalizeResult)
-    );
-
     return res.status(200).json({
       success: true,
       message: 'Booking finalized',
@@ -5144,18 +5131,6 @@ exports.finalizeClientLeadBooking = async (req, res) => {
     }, { transaction: tx });
 
     await tx.commit();
-
-    const emailClientName = await resolveEmailClientNameForBooking(
-      booking,
-      clientLead.client_name
-    );
-
-    await notifyAssignedCreators(
-      finalizeResult.assigned_creator_ids || [],
-      booking,
-      emailClientName,
-      getEmailShootAmountFromFinalizeResult(finalizeResult)
-    );
 
     return res.status(200).json({
       success: true,
@@ -5613,19 +5588,6 @@ exports.finalizeCreateDeal = async (req, res) => {
 
     await tx.commit();
     
-    // send CP new booking request emails
-    const emailClientName = await resolveEmailClientNameForBooking(
-      booking,
-      lead.client_name
-    );
-
-    await notifyAssignedCreators(
-      finalizeResult.assigned_creator_ids || [],
-      booking,
-      emailClientName,
-      getEmailShootAmountFromFinalizeResult(finalizeResult)
-    );
-
     return res.status(200).json({
       success: true,
       message: 'Deal created & booking finalized',
