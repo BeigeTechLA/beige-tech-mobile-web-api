@@ -669,10 +669,17 @@ function getLeadBookingStep(lead, booking, activities = []) {
 async function autoAssignLead(leadId, options = {}) {
   const transaction = options.transaction || null;
   const leadModel = options.leadModel || sales_leads;
+  const { sales_lead_activities, client_lead_activities } = require('../models');
 
   if (process.env.SALES_AUTO_ASSIGNMENT === 'false') {
     return null;
   }
+
+  const lead = await leadModel.findOne({
+    where: { lead_id: leadId },
+    attributes: ['lead_id', 'assigned_sales_rep_id'],
+    transaction
+  });
 
   const salesReps = await getActiveSalesReps({ transaction });
 
@@ -711,6 +718,24 @@ async function autoAssignLead(leadId, options = {}) {
       transaction
     }
   );
+
+  const previousRepId = lead?.assigned_sales_rep_id ?? null;
+  const activityPayload = {
+    lead_id: leadId,
+    activity_type: 'assigned',
+    activity_data: {
+      previous_rep_id: previousRepId,
+      new_rep_id: selectedRep.id,
+      assignment_type: 'auto'
+    },
+    performed_by_user_id: null
+  };
+
+  if (leadModel === sales_leads) {
+    await sales_lead_activities.create(activityPayload, { transaction });
+  } else if (leadModel === client_leads) {
+    await client_lead_activities.create(activityPayload, { transaction });
+  }
 
   console.log(`Lead ${leadId} auto-assigned to ${selectedRep.name} (ID: ${selectedRep.id})`);
 

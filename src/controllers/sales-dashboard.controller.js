@@ -844,9 +844,12 @@ exports.getInvoiceHistory = async (req, res) => {
     if (search) {
       items = items.filter((item) => {
         const haystack = [
+          item.invoice_send_history_id,
           item.client_lead_id,
           item.lead_id,
           item.booking_id,
+          item.quote_id,
+          item.quote_number,
           item.client_name,
           item.client_email,
           item.invoice_number
