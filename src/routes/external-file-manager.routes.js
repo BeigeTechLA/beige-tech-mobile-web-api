@@ -3,6 +3,10 @@ const externalFileManagerController = require('../controllers/external-file-mana
 const { authenticate } = require('../middleware/auth');
 
 router.get('/workspaces', authenticate, externalFileManagerController.listWorkspaces);
+router.get('/common-events', authenticate, externalFileManagerController.listCommonEvents);
+router.post('/common-events', authenticate, externalFileManagerController.createCommonEvent);
+router.post('/common-events/:eventExternalId/creator-folder', authenticate, externalFileManagerController.createCreatorEventFolder);
+router.post('/face-scan/search', authenticate, externalFileManagerController.searchFaceMatches);
 router.post('/workspace', authenticate, externalFileManagerController.createWorkspace);
 router.get('/workspace/:bookingId', authenticate, externalFileManagerController.getWorkspace);
 router.get('/workspace/:bookingId/files', authenticate, externalFileManagerController.getWorkspaceFiles);
