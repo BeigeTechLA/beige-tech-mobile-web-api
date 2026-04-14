@@ -200,6 +200,35 @@ const collectWorkspaceImageCandidates = async (externalId) => {
   return [...collected.values()];
 };
 
+const enrichCandidatesWithViewUrls = async (candidates = []) => {
+  const enriched = await Promise.all(
+    (candidates || []).map(async (candidate) => {
+      if (!candidate?.path) return candidate;
+
+      try {
+        const view = await proxyRequest('/file-view-url', {
+          method: 'POST',
+          body: JSON.stringify({
+            filepath: candidate.path,
+          }),
+        });
+
+        return {
+          ...candidate,
+          url: view?.data?.url || null,
+        };
+      } catch (error) {
+        return {
+          ...candidate,
+          url: null,
+        };
+      }
+    })
+  );
+
+  return enriched.filter((candidate) => candidate?.url);
+};
+
 const isCreatorPostProductionPath = (filepath) =>
   /(^|\/)post-production(\/|$)/i.test(String(filepath || ''));
 
@@ -640,6 +669,7 @@ exports.searchFaceMatches = async (req, res) => {
     await ensureCreatorWorkspaceAccess(req, externalId);
 
     const imageCandidates = await collectWorkspaceImageCandidates(externalId);
+    const imageCandidatesWithUrls = await enrichCandidatesWithViewUrls(imageCandidates);
     if (!FACE_SCAN_SERVICE_URL) {
       return res.status(200).json({
         success: true,
@@ -648,7 +678,7 @@ exports.searchFaceMatches = async (req, res) => {
           externalId,
           scanMode: 'full_face_scan',
           integrated: false,
-          candidatesCount: imageCandidates.length,
+          candidatesCount: imageCandidatesWithUrls.length,
           matches: [],
         },
       });
@@ -664,7 +694,7 @@ exports.searchFaceMatches = async (req, res) => {
         scanMode: 'full_face_scan',
         scanImageBase64: scanImageBase64 || undefined,
         scanImageUrl: scanImageUrl || undefined,
-        candidates: imageCandidates,
+        candidates: imageCandidatesWithUrls,
         threshold: Number(req.body.threshold || 0.7),
         maxResults: Number(req.body.maxResults || 200),
       }),
@@ -685,7 +715,7 @@ exports.searchFaceMatches = async (req, res) => {
         externalId,
         scanMode: 'full_face_scan',
         integrated: true,
-        candidatesCount: imageCandidates.length,
+        candidatesCount: imageCandidatesWithUrls.length,
         matches: providerPayload?.data?.matches || providerPayload?.matches || [],
         provider: providerPayload?.data?.provider || providerPayload?.provider || null,
       },
