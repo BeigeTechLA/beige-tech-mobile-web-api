@@ -36,6 +36,10 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.TEXT,
       allowNull: true
     },
+    old_location: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
     working_distance: {
       type: DataTypes.STRING(50),
       allowNull: true

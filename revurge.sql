@@ -976,3 +976,5 @@ CREATE TABLE IF NOT EXISTS `sales_rep_status_activity` (
     FOREIGN KEY (`sales_rep_id`) REFERENCES `users` (`id`)
     ON DELETE CASCADE
 );
+
+ALTER TABLE crew_members ADD COLUMN old_location TEXT NULL AFTER location;

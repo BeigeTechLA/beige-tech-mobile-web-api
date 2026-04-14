@@ -2,7 +2,7 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjIzNiwidXNlclJvbGUiOiJzYWxlc19yZXAiLCJpYXQiOjE3NzYxNDIyMDYsImV4cCI6MTc3Njc0NzAwNn0.bgbuRf-KhuDJ06C9Jz5hebdPSed52ks2ilWciFhX8x8
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjIzNSwidXNlclJvbGUiOiJDcmVhdG9yIiwiaWF0IjoxNzc2MTY1MDkwLCJleHAiOjE3NzY3Njk4OTB9.GpypHeCIkN_KHTFjEKeCVvbwnSztQ6vdtyEmVkHoV7s
 
 @TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzYxNDIwNDIsImV4cCI6MTc3Njc0Njg0Mn0.zj4IndvhOmTI6ytrZLoJj43VHr8su9gGFxWvec3ki8s
 
@@ -33,9 +33,15 @@ POST {{URL}}auth/login HTTP/1.1
 Content-Type: application/json
 
 {
-  "email": "harsh.panchal@gmail.com",
-  "password": "password123"
+  "email": "himanipanchal.hp13@gmail.com",
+  "password": "12345678"
 }
+
+###
+###
+POST {{URL}}auth/cp-event-location/confirm HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
 
 ###
 ###

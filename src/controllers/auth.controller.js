@@ -15,6 +15,7 @@ const Skills_master = common_model.getTableNameDirect(constants.TABLES.SKILLS_MA
 const affiliateController = require('./affiliate.controller');
 const config = require('../config/config');
 const { S3UploadFiles } = require('../utils/common.js');
+const { parseLocation } = require('../utils/locationHelpers');
 const multer = require('multer');
 const path = require('path');
 const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
@@ -147,6 +148,117 @@ const generateTokens = (userId, userRole) => {
 const getPermissionsForRole = (role) => {
   return PERMISSIONS_MAP[role] || [];
 };
+
+// Temporary CP event popup config.
+const TEMP_CP_EVENT_CONFIG = {
+  enabled: true,
+  location_text: 'Indio, California, United States',
+  location_payload: {
+    address: 'Indio, California, United States',
+    city: 'Indio',
+    state: 'California',
+    country: 'United States',
+    lat: 33.7206,
+    lng: -116.2156
+  },
+  starts_at: '2026-04-14T00:00:00+05:30',
+  ends_at: '2026-04-20T00:00:00+05:30'
+};
+
+function isTempCpEventActive() {
+  if (!TEMP_CP_EVENT_CONFIG.enabled) return false;
+
+  const now = new Date();
+  const startsAt = new Date(TEMP_CP_EVENT_CONFIG.starts_at);
+  const endsAt = new Date(TEMP_CP_EVENT_CONFIG.ends_at);
+
+  return now >= startsAt && now < endsAt;
+}
+
+function getLocationAddress(location) {
+  if (!location) return '';
+
+  const parsedLocation = parseLocation(location);
+
+  if (parsedLocation?.address) {
+    return String(parsedLocation.address).trim();
+  }
+
+  if (typeof location === 'string') {
+    return location.trim();
+  }
+
+  return '';
+}
+
+function toSimpleLocationResponse(location) {
+  const address = getLocationAddress(location);
+
+  return {
+    address: address || null
+  };
+}
+
+function normalizeLocationForComparison(location) {
+  return getLocationAddress(location)
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isIndioEventLocation(location) {
+  const normalizedLocation = normalizeLocationForComparison(location);
+
+  if (!normalizedLocation) return false;
+
+  return normalizedLocation.includes('indio') &&
+    normalizedLocation.includes('california') &&
+    (
+      normalizedLocation.includes('united states') ||
+      normalizedLocation.includes('usa') ||
+      normalizedLocation.includes('us')
+    );
+}
+
+function getTempCpEventPopup(crewMember) {
+  if (!isTempCpEventActive()) {
+    return {
+      show: false
+    };
+  }
+
+  if (!crewMember || isIndioEventLocation(crewMember.location)) {
+    return {
+      show: false
+    };
+  }
+
+  return {
+    show: true,
+    current_location: toSimpleLocationResponse(crewMember.location),
+    event_location: toSimpleLocationResponse(TEMP_CP_EVENT_CONFIG.location_payload)
+  };
+}
+
+async function getCreatorCrewMemberForUser(user) {
+  if (!user || user.userType?.user_type_id !== 2) {
+    return null;
+  }
+
+  let crewMember = await CrewMember.findOne({
+    where: { user_id: user.id },
+    attributes: ['crew_member_id', 'is_crew_verified', 'location', 'old_location']
+  });
+
+  if (!crewMember && user.email) {
+    crewMember = await CrewMember.findOne({
+      where: { email: user.email },
+      attributes: ['crew_member_id', 'is_crew_verified', 'location', 'old_location', 'user_id']
+    });
+  }
+
+  return crewMember;
+}
 
 // ==================== REGISTRATION ====================
 
@@ -980,13 +1092,13 @@ exports.login = async (req, res) => {
       let crew_member_id = null;
       let is_crew_verified = null;
 
+      let temp_event_popup = null;
+
       if (user.userType && user.userType.user_type_id === 2) {
-        const crew = await CrewMember.findOne({
-          where: { email: user.email },
-          attributes: ["crew_member_id", 'is_crew_verified'],
-        });
+        const crew = await getCreatorCrewMemberForUser(user);
         crew_member_id = crew ? crew.crew_member_id : null;
         is_crew_verified = crew ? crew.is_crew_verified : null;
+        temp_event_popup = getTempCpEventPopup(crew);
       }
 
       let affiliate_id = null;
@@ -1014,7 +1126,8 @@ exports.login = async (req, res) => {
           email_verified: user.email_verified,
           crew_member_id,
            affiliate_id,
-          is_crew_verified
+          is_crew_verified,
+          temp_event_popup
         },
         token,
         refreshToken,
@@ -1105,14 +1218,15 @@ exports.login = async (req, res) => {
 
       // Get crew_member_id if creator
       let crew_member_id = null;
+      let is_crew_verified = null;
+      let temp_event_popup = null;
+
       if (user.userType && user.userType.user_type_id === 2) {
-        const crew = await CrewMember.findOne({
-          where: { email: user.email },
-          attributes: ['crew_member_id', 'is_crew_verified']
-        });
+        const crew = await getCreatorCrewMemberForUser(user);
 
         crew_member_id = crew ? crew.crew_member_id : null;
         is_crew_verified = crew ? crew.is_crew_verified : null;
+        temp_event_popup = getTempCpEventPopup(crew);
       }
 
       let affiliate_id = null;
@@ -1139,7 +1253,8 @@ affiliate_id = affiliate ? affiliate.affiliate_id : null;
           email_verified: user.email_verified,
           crew_member_id,
           affiliate_id,
-          is_crew_verified
+          is_crew_verified,
+          temp_event_popup
         },
 
         token,
@@ -1397,6 +1512,7 @@ exports.getCurrentUser = async (req, res) => {
 
     const role = user.userType?.user_role || 'client';
     const permissions = getPermissionsForRole(role);
+    const crewMember = await getCreatorCrewMemberForUser(user);
 
     return res.status(200).json({
       success: true,
@@ -1408,7 +1524,10 @@ exports.getCurrentUser = async (req, res) => {
         instagram_handle: user.instagram_handle,
         role: role,
         email_verified: user.email_verified,
-        created_at: user.created_at
+        created_at: user.created_at,
+        crew_member_id: crewMember?.crew_member_id || null,
+        is_crew_verified: crewMember?.is_crew_verified || null,
+        temp_event_popup: getTempCpEventPopup(crewMember)
       },
       permissions
     });
@@ -1452,6 +1571,109 @@ exports.getPermissions = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Server error fetching permissions',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+/**
+ * Confirm temporary Indio event attendance for CP and switch location
+ * POST /auth/cp-event-location/confirm
+ */
+exports.confirmCpEventLocation = async (req, res) => {
+  try {
+    const userId = req.user?.userId;
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Not authenticated'
+      });
+    }
+
+    if (!isTempCpEventActive()) {
+      return res.status(400).json({
+        success: false,
+        message: 'This temporary event location flow is not active right now'
+      });
+    }
+
+    const user = await User.findOne({
+      where: { id: userId },
+      include: [{
+        model: UserType,
+        as: 'userType',
+        attributes: ['user_type_id', 'user_role']
+      }]
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    if (user.userType?.user_type_id !== 2) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only CP users can use this event location flow'
+      });
+    }
+
+    const crewMember = await getCreatorCrewMemberForUser(user);
+
+    if (!crewMember) {
+      return res.status(404).json({
+        success: false,
+        message: 'Crew member profile not found'
+      });
+    }
+
+    if (isIndioEventLocation(crewMember.location)) {
+      return res.status(200).json({
+        success: true,
+        message: 'CP location is already set to Indio, California, United States',
+        data: {
+          crew_member_id: crewMember.crew_member_id,
+          old_location: toSimpleLocationResponse(crewMember.old_location),
+          current_location: toSimpleLocationResponse(crewMember.location),
+          temp_event_popup: getTempCpEventPopup(crewMember)
+        }
+      });
+    }
+
+    const previousLocation = crewMember.location || user.location || null;
+    const eventLocationPayload = TEMP_CP_EVENT_CONFIG.location_text;
+
+    await CrewMember.update(
+      {
+        old_location: previousLocation,
+        location: eventLocationPayload,
+        updated_at: new Date()
+      },
+      {
+        where: { crew_member_id: crewMember.crew_member_id }
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'CP location updated to Indio, California, United States',
+      data: {
+        crew_member_id: crewMember.crew_member_id,
+        old_location: toSimpleLocationResponse(previousLocation),
+        current_location: toSimpleLocationResponse(eventLocationPayload),
+        temp_event_popup: {
+          show: false
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Confirm CP Event Location Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while updating CP event location',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
