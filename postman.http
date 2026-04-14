@@ -2,9 +2,9 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzU3MjczNzIsImV4cCI6MTc3NjMzMjE3Mn0.gYa5WJOElPjg4rMApnBJ8Lj9ggcLlMVXIADlYuDnIQ4
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjIzNiwidXNlclJvbGUiOiJzYWxlc19yZXAiLCJpYXQiOjE3NzYxNzA2NjIsImV4cCI6MTc3Njc3NTQ2Mn0.j_uN9X0Ypuqx6zd0pjHVxOjetoOArYEEjDaH34mukwk
 
-@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjE5MywidXNlclJvbGUiOiJzYWxlc19yZXAiLCJpYXQiOjE3NzQ5NTU5MjgsImV4cCI6MTc3NTU2MDcyOH0.n8p4ORotIdvcB-nEHEM2GYeBdKrSMFDBDIqXlbqEP94
+@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzYxNzA2NzEsImV4cCI6MTc3Njc3NTQ3MX0.lJg4FvoagMh4272Y4-O69kV5dX8qgWRJurLdJXn3ps4
 
 ###
 POST {{URL}}creator/dashboard-count HTTP/1.1
@@ -20,11 +20,11 @@ POST {{URL}}auth/register HTTP/1.1
 Content-Type: application/json
 
 {
-  "name": "Harsh Panchal",
-  "email": "harsh.panchal.36@gmail.com",
+  "name": "Sales Representative",
+  "email": "sales@beigecorporation.io",
   "phone_number": "7133867897",
-  "password": "12345678",
-  "userType": 3
+  "password": "Sales@2026!",
+  "userType": 5
 }
 
 ###
@@ -36,6 +36,12 @@ Content-Type: application/json
   "email": "harsh.panchal@gmail.com",
   "password": "password123"
 }
+
+###
+###
+POST {{URL}}auth/cp-event-location/confirm HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
 
 ###
 ###
@@ -125,7 +131,7 @@ GET {{URL}}admin/get-projects HTTP/1.1
 Content-Type: application/json
 
 ###
-GET {{URL}}admin/get-project/713 HTTP/1.1
+GET {{URL}}admin/get-project/932 HTTP/1.1
 Content-Type: application/json
 
 ###
@@ -548,7 +554,7 @@ Authorization: {{TOKEN}}
   "booking_id": 958
 }
 
-### 
+### Get sales representatives
 GET {{URL}}sales/sales-reps HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
@@ -640,7 +646,7 @@ Authorization: {{TOKEN}}
         "photographer": 1
     },
     "crew_size": 2,
-    "selected_crew_ids": [2103],
+    "selected_crew_ids": [2043],
     "edits_needed": true,
     "video_edit_types": [
         "social_reel_15_30",
@@ -676,8 +682,8 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "client_lead_id": 17,
-  "user_id": "246",
+  "client_lead_id": 7,
+  "user_id": "228",
   "content_type": "videographer",
   "shoot_type": "corporate",
   "booking_type": "multi_day",
@@ -696,7 +702,7 @@ Authorization: {{TOKEN}}
   "location": "442 Crocker Street, Los Angeles, California 90013, United States",
   "crew_roles": { "videographer": 2 },
   "crew_size": 2,
-  "selected_crew_ids": [2103],
+  "selected_crew_ids": [2043],
   "edits_needed": true,
   "video_edit_types": ["highlight_4_7", "feature_30_40"],
   "photo_edit_types": [],
@@ -1556,6 +1562,70 @@ Authorization: {{TOKEN}}
   "crew_member_id": 2037
 }
 
+### Availability
+POST {{URL}}sales/add-availability HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "date": "2026-04-18",
+  "availability_status": 2,
+  "is_full_day": 1,
+  "notes": "Unavailable for 14th April"
+}
+
+### Get Availability
+POST {{URL}}sales/availability HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "sales_rep_id": 236,
+  "year": "2026",
+  "month": "04"
+}
+
+### Unavailable
+POST {{URL}}sales/toggle-status HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "is_available": 0,
+  "reason": "On break"
+}
+
+### Available
+POST {{URL}}sales/toggle-status HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "is_available": 1
+}
+
+### Get Current Live Status
+GET {{URL}}sales/current-status HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Get All Sales Representative Status (last 7 Days)
+GET {{URL}}sales/all-statuses HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+### last 7 days
+GET {{URL}}sales/status-details?sales_rep_id=236
+Authorization: {{TOKEN2}}
+
+### date wise
+GET {{URL}}sales/status-details?sales_rep_id=236&date=2026-04-18
+Authorization: {{TOKEN2}}
+
+### Get All Sales Representative Status (by date)
+GET {{URL}}sales/all-statuses?date=2026-04-14 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
 
 ###
 # Sales Rep Register
@@ -1621,3 +1691,27 @@ Authorization: {{TOKEN}}
 ### Get Sent Invoice History
 GET {{URL}}sales/dashboard/invoice-history?page=1&limit=20
 Authorization: {{TOKEN}}
+
+###
+GET {{URL}}sales/all-statuses HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+GET {{URL}}sales/all-statuses?date=2026-04-14 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+GET {{URL}}sales/all-statuses?start_date=2026-04-13&end_date=2026-04-14 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+GET {{URL}}sales/status-details?sales_rep_id=193&date=2026-04-14 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+GET {{URL}}admin/934/get-booking-summary  HTTP/1.1
+Content-Type: application/json

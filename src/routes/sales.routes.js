@@ -5,6 +5,7 @@ const discountsController = require('../controllers/discounts.controller');
 const paymentLinksController = require('../controllers/payment-links.controller');
 const salesDashboardController = require('../controllers/sales-dashboard.controller');
 const salesQuotesController = require('../controllers/sales-quotes.controller');
+const salesAvailabilityController = require('../controllers/sales-availability.controller');
 const { authenticate, requireSalesRepOrAdmin, requireSalesRep, requireAdmin } = require('../middleware/auth.middleware');
 
 /**
@@ -86,6 +87,12 @@ router.delete('/client-leads/:id', authenticate, requireAdmin, salesLeadsControl
  */
 router.put('/leads/:id/status', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateLeadStatus);
 router.put('/client-leads/:id/status', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateClientLeadStatus);
+router.post('/availability', authenticate, requireSalesRepOrAdmin, salesAvailabilityController.getSalesRepAvailability);
+router.post('/add-availability', authenticate, requireSalesRepOrAdmin, salesAvailabilityController.setSalesRepAvailability);
+router.get('/current-status', authenticate, requireSalesRepOrAdmin, salesAvailabilityController.getSalesRepCurrentStatus);
+router.post('/toggle-status', authenticate, requireSalesRepOrAdmin, salesAvailabilityController.toggleSalesRepCurrentStatus);
+router.get('/all-statuses', authenticate, requireSalesRepOrAdmin, salesAvailabilityController.getAllSalesRepStatuses);
+router.get('/status-details', authenticate, requireSalesRepOrAdmin, salesAvailabilityController.getSalesRepStatusDetails);
 router.post(
   '/leads/:id/post-production-status-update',
   authenticate,

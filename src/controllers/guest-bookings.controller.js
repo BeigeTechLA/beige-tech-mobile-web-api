@@ -931,21 +931,6 @@ exports.updateGuestBooking = async (req, res) => {
         }));
         await assigned_crew.bulkCreate(assignments, { transaction: tx });
         
-        // send email to newly selected creators
-        const fallbackClientName = await resolveBookingClientName(booking, {
-          transaction: tx,
-          fallbackClientName: full_name || null
-        });
-        const fallbackShootAmount = await resolveBookingShootAmount(booking, {
-          transaction: tx,
-          fallbackShootAmount: budget ?? null
-        });
-        await notifyAssignedCreators(
-          selected_crew_ids,
-          booking,
-          fallbackClientName,
-          fallbackShootAmount
-        );
       }
 
       await tx.commit();
@@ -1131,11 +1116,6 @@ exports.assignCreatorsToBooking = async (req, res) => {
     }));
 
     const createdAssignments = await assigned_crew.bulkCreate(assignments);
-
-    // send email to assigned creators
-    const fallbackClientName = await resolveBookingClientName(booking);
-    const fallbackShootAmount = await resolveBookingShootAmount(booking);
-    await notifyAssignedCreators(creator_ids, booking, fallbackClientName, fallbackShootAmount);
 
     res.status(constants.OK.code).json({
       success: true,
