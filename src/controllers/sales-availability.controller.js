@@ -157,6 +157,23 @@ function getDateRangeFromQuery(query = {}, defaultRangeDays = null) {
   };
 }
 
+function getDateKeysInRange(startDateString, endDateString) {
+  if (!startDateString || !endDateString) {
+    return [];
+  }
+
+  const dates = [];
+  const current = new Date(`${startDateString}T00:00:00.000Z`);
+  const end = new Date(`${endDateString}T00:00:00.000Z`);
+
+  while (current <= end) {
+    dates.push(normalizeDate(current));
+    current.setUTCDate(current.getUTCDate() + 1);
+  }
+
+  return dates;
+}
+
 exports.getSalesRepAvailability = async (req, res) => {
   try {
     const { year, month } = req.body || {};
@@ -539,6 +556,46 @@ exports.getSalesRepStatusDetails = async (req, res) => {
       raw: true
     });
 
+    const availabilityRows = start_date && end_date
+      ? await sales_rep_availability.findAll({
+          where: {
+            sales_rep_id: salesRep.id,
+            availability_status: 2,
+            [Op.or]: [
+              {
+                recurrence: 1,
+                date: { [Op.between]: [start_date, end_date] }
+              },
+              {
+                recurrence: { [Op.ne]: 1 },
+                date: { [Op.lte]: end_date },
+                [Op.or]: [
+                  { recurrence_until: null },
+                  { recurrence_until: { [Op.gte]: start_date } }
+                ]
+              }
+            ]
+          },
+          attributes: [
+            'id',
+            'date',
+            'start_time',
+            'end_time',
+            'location',
+            'notes',
+            'is_full_day',
+            'recurrence',
+            'recurrence_until',
+            'recurrence_days',
+            'recurrence_day_of_month',
+            'created_at',
+            'updated_at'
+          ],
+          order: [['created_at', 'DESC']],
+          raw: true
+        })
+      : [];
+
     const activity_by_date = {};
     let total_status_changes_in_range = 0;
 
@@ -562,6 +619,28 @@ exports.getSalesRepStatusDetails = async (req, res) => {
       total_status_changes_in_range += 1;
     });
 
+    const unavailability = [];
+
+    const dateKeysInRange = getDateKeysInRange(start_date, end_date);
+
+    dateKeysInRange.forEach((dateKey) => {
+      const matchingRows = availabilityRows.filter((row) => appliesOnDate(row, dateKey));
+
+      if (!matchingRows.length) {
+        return;
+      }
+
+      matchingRows.forEach((row) => {
+        unavailability.push({
+          date: dateKey,
+          start_time: Number(row.is_full_day) === 0 ? row.start_time : null,
+          end_time: Number(row.is_full_day) === 0 ? row.end_time : null,
+          is_full_day: Number(row.is_full_day) === 1,
+          notes: row.notes || null
+        });
+      });
+    });
+
     return res.status(200).json({
       error: false,
       message: 'Sales rep status details fetched successfully',
@@ -574,6 +653,7 @@ exports.getSalesRepStatusDetails = async (req, res) => {
         sales_rep_name: salesRep.name,
         sales_rep_email: salesRep.email,
         current_status: liveStatus,
+        unavailability,
         activity: {
           activity_by_date,
           total_status_changes_in_range
