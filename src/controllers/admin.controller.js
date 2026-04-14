@@ -3332,6 +3332,26 @@ exports.getCrewMembers = async (req, res) => {
             crew_roles.findAll({ attributes: ['role_id', 'role_name'], raw: true })
         ]);
 
+        const crewUserIds = Array.from(
+            new Set(
+                members
+                    .map((member) => Number(member.user_id))
+                    .filter(Boolean)
+            )
+        );
+
+        const affiliateRows = crewUserIds.length
+            ? await affiliates.findAll({
+                where: { user_id: { [Sequelize.Op.in]: crewUserIds } },
+                attributes: ['user_id', 'referral_code'],
+                raw: true
+            })
+            : [];
+
+        const affiliateMap = new Map(
+            affiliateRows.map((row) => [Number(row.user_id), row.referral_code || null])
+        );
+
         const processedMembers = members.map((member) => {
             const memberData = member.get({ clone: true });
 
@@ -3364,6 +3384,7 @@ exports.getCrewMembers = async (req, res) => {
 
             return {
                 ...memberData,
+                referral_code: affiliateMap.get(Number(memberData.user_id)) || null,
                 location: finalLocation,
                 status: statusLabel,
                 role: roleNames.length > 0 ? { role_name: roleNames.join(", ") } : null
@@ -6171,12 +6192,33 @@ exports.getClients = async (req, res) => {
       ]
     });
 
+    const clientUserIds = Array.from(
+      new Set(
+        rows
+          .map((client) => Number(client.user_id))
+          .filter(Boolean)
+      )
+    );
+
+    const affiliateRows = clientUserIds.length
+      ? await affiliates.findAll({
+          where: { user_id: { [Op.in]: clientUserIds } },
+          attributes: ['user_id', 'referral_code'],
+          raw: true
+        })
+      : [];
+
+    const affiliateMap = new Map(
+      affiliateRows.map((row) => [Number(row.user_id), row.referral_code || null])
+    );
+
     const data = rows.map(client => {
       const lead = client.user?.sales_leads?.[0] || null;
       const booking = lead?.booking || null;
 
       return {
         ...client.toJSON(),
+        referral_code: affiliateMap.get(Number(client.user_id)) || null,
         intent: leadAssignmentService.getClientIntent({ lead, booking }),
         booking_status: leadAssignmentService.getClientBookingStatus(booking)
       };

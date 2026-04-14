@@ -174,6 +174,28 @@ function getDateKeysInRange(startDateString, endDateString) {
   return dates;
 }
 
+function dedupeUnavailabilityItems(items = []) {
+  const dedupedByDate = new Map();
+
+  items.forEach((item) => {
+    const existing = dedupedByDate.get(item.date);
+
+    if (!existing) {
+      dedupedByDate.set(item.date, item);
+      return;
+    }
+
+    const existingHasNotes = Boolean(existing.notes);
+    const currentHasNotes = Boolean(item.notes);
+
+    if (!existingHasNotes && currentHasNotes) {
+      dedupedByDate.set(item.date, item);
+    }
+  });
+
+  return Array.from(dedupedByDate.values());
+}
+
 exports.getSalesRepAvailability = async (req, res) => {
   try {
     const { year, month } = req.body || {};
@@ -539,6 +561,10 @@ exports.getSalesRepStatusDetails = async (req, res) => {
     const salesRep = await resolveTargetSalesRep(req);
     const liveStatus = await getLiveStatusSnapshot(salesRep.id);
     const { start, end, start_date, end_date } = getDateRangeFromQuery(req.query, 7);
+    const hasExplicitDateFilter = Boolean(
+      normalizeDate(req.query?.date)
+      || (normalizeDate(req.query?.start_date) && normalizeDate(req.query?.end_date))
+    );
 
     const activityWhere = {
       sales_rep_id: salesRep.id
@@ -556,7 +582,7 @@ exports.getSalesRepStatusDetails = async (req, res) => {
       raw: true
     });
 
-    const availabilityRows = start_date && end_date
+    const availabilityRows = hasExplicitDateFilter
       ? await sales_rep_availability.findAll({
           where: {
             sales_rep_id: salesRep.id,
@@ -594,7 +620,27 @@ exports.getSalesRepStatusDetails = async (req, res) => {
           order: [['created_at', 'DESC']],
           raw: true
         })
-      : [];
+      : await sales_rep_availability.findAll({
+          where: {
+            sales_rep_id: salesRep.id,
+            availability_status: 2
+          },
+          attributes: [
+            'id',
+            'date',
+            'start_time',
+            'end_time',
+            'notes',
+            'is_full_day',
+            'recurrence',
+            'recurrence_until',
+            'recurrence_days',
+            'recurrence_day_of_month',
+            'created_at'
+          ],
+          order: [['date', 'ASC'], ['created_at', 'DESC']],
+          raw: true
+        });
 
     const activity_by_date = {};
     let total_status_changes_in_range = 0;
@@ -619,27 +665,39 @@ exports.getSalesRepStatusDetails = async (req, res) => {
       total_status_changes_in_range += 1;
     });
 
-    const unavailability = [];
+    let unavailability = [];
 
-    const dateKeysInRange = getDateKeysInRange(start_date, end_date);
+    if (hasExplicitDateFilter) {
+      const dateKeysInRange = getDateKeysInRange(start_date, end_date);
 
-    dateKeysInRange.forEach((dateKey) => {
-      const matchingRows = availabilityRows.filter((row) => appliesOnDate(row, dateKey));
+      dateKeysInRange.forEach((dateKey) => {
+        const matchingRows = availabilityRows.filter((row) => appliesOnDate(row, dateKey));
 
-      if (!matchingRows.length) {
-        return;
-      }
+        if (!matchingRows.length) {
+          return;
+        }
 
-      matchingRows.forEach((row) => {
-        unavailability.push({
-          date: dateKey,
-          start_time: Number(row.is_full_day) === 0 ? row.start_time : null,
-          end_time: Number(row.is_full_day) === 0 ? row.end_time : null,
-          is_full_day: Number(row.is_full_day) === 1,
-          notes: row.notes || null
+        matchingRows.forEach((row) => {
+          unavailability.push({
+            date: dateKey,
+            start_time: Number(row.is_full_day) === 0 ? row.start_time : null,
+            end_time: Number(row.is_full_day) === 0 ? row.end_time : null,
+            is_full_day: Number(row.is_full_day) === 1,
+            notes: row.notes || null
+          });
         });
       });
-    });
+    } else {
+      unavailability = availabilityRows.map((row) => ({
+        date: normalizeDate(row.date),
+        start_time: Number(row.is_full_day) === 0 ? row.start_time : null,
+        end_time: Number(row.is_full_day) === 0 ? row.end_time : null,
+        is_full_day: Number(row.is_full_day) === 1,
+        notes: row.notes || null
+      }));
+    }
+
+    unavailability = dedupeUnavailabilityItems(unavailability);
 
     return res.status(200).json({
       error: false,

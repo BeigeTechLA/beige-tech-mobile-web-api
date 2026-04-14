@@ -2,9 +2,9 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzYxNjc0MDUsImV4cCI6MTc3Njc3MjIwNX0.E8HBBmJXWLwZsdG0xtAa5AwYhPOGVj7qMIQRaWkwMRQ
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjIzNiwidXNlclJvbGUiOiJzYWxlc19yZXAiLCJpYXQiOjE3NzYxNzA2NjIsImV4cCI6MTc3Njc3NTQ2Mn0.j_uN9X0Ypuqx6zd0pjHVxOjetoOArYEEjDaH34mukwk
 
-@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzYxNDIwNDIsImV4cCI6MTc3Njc0Njg0Mn0.zj4IndvhOmTI6ytrZLoJj43VHr8su9gGFxWvec3ki8s
+@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzYxNzA2NzEsImV4cCI6MTc3Njc3NTQ3MX0.lJg4FvoagMh4272Y4-O69kV5dX8qgWRJurLdJXn3ps4
 
 ###
 POST {{URL}}creator/dashboard-count HTTP/1.1
@@ -1565,11 +1565,10 @@ Authorization: {{TOKEN}}
 ### Availability
 POST {{URL}}sales/add-availability HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN2}}
+Authorization: {{TOKEN}}
 
 {
-  "sales_rep_id": 236,
-  "date": "2026-04-14",
+  "date": "2026-04-18",
   "availability_status": 2,
   "is_full_day": 1,
   "notes": "Unavailable for 14th April"
@@ -1620,7 +1619,7 @@ GET {{URL}}sales/status-details?sales_rep_id=236
 Authorization: {{TOKEN2}}
 
 ### date wise
-GET {{URL}}sales/status-details?sales_rep_id=180&date=2026-04-14
+GET {{URL}}sales/status-details?sales_rep_id=236&date=2026-04-18
 Authorization: {{TOKEN2}}
 
 ### Get All Sales Representative Status (by date)
