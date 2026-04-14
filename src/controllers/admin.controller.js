@@ -7781,6 +7781,11 @@ exports.getBookingSummaryById = async (req, res) => {
             where: { stream_project_booking_id: bookingId },
             include: [
                 {
+                    model: db.stream_project_booking_days,
+                    as: "booking_days",
+                    required: false
+                },
+                {
                     model: sales_leads,
                     as: "sales_leads", 
                     include: [{ model: users, as: "assigned_sales_rep", attributes: ["name"] }]
@@ -7799,6 +7804,20 @@ exports.getBookingSummaryById = async (req, res) => {
 
         const bookingJson = booking.toJSON();
         const primaryQuote = bookingJson.primary_quote || {};
+        const bookingDayEntries = Array.isArray(bookingJson.booking_days) && bookingJson.booking_days.length
+            ? [...bookingJson.booking_days].sort((a, b) => {
+                const dateCompare = String(a?.event_date || "").localeCompare(String(b?.event_date || ""));
+                if (dateCompare !== 0) return dateCompare;
+                return String(a?.start_time || "").localeCompare(String(b?.start_time || ""));
+            })
+            : [{
+                event_date: bookingJson.event_date,
+                start_time: bookingJson.start_time,
+                end_time: bookingJson.end_time,
+                duration_hours: bookingJson.duration_hours,
+                time_zone: null
+            }];
+        const primarySchedule = bookingDayEntries[0] || {};
 
         // 2. Helper to handle Double-Stringified JSON or Object data
         const safeParseJSON = (val) => {
@@ -7915,9 +7934,16 @@ exports.getBookingSummaryById = async (req, res) => {
                 shoot_type: fullShootType,
                 event_type: formattedEventType,
                 location: bookingJson.event_location,
-                date: bookingJson.event_date,
-                start_time: bookingJson.start_time,
-                end_time: bookingJson.end_time,
+                date: primarySchedule.event_date || bookingJson.event_date,
+                start_time: primarySchedule.start_time || bookingJson.start_time,
+                end_time: primarySchedule.end_time || bookingJson.end_time,
+                booking_days: bookingDayEntries.map((day) => ({
+                    event_date: day.event_date,
+                    start_time: day.start_time,
+                    end_time: day.end_time,
+                    duration_hours: day.duration_hours,
+                    time_zone: day.time_zone || null
+                })),
                 special_instructions: bookingJson.special_instructions || "",
                 editing: editing,
                 crew_counts: crewCounts,

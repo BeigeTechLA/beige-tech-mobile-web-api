@@ -1691,3 +1691,7 @@ Authorization: {{TOKEN}}
 GET {{URL}}sales/all-statuses?start_date=2026-04-13&end_date=2026-04-14 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
+
+###
+GET {{URL}}admin/932/get-booking-summary  HTTP/1.1
+Content-Type: application/json
