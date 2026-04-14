@@ -1179,6 +1179,11 @@ exports.getProjectDetails = async (req, res) => {
               include: [{ model: users, as: "performed_by", attributes: ["id", "name"] }]
             }
           ]
+        },
+        {
+          model: db.stream_project_booking_days,
+          as: "booking_days",
+          required: false
         }
       ]
     });
@@ -1187,7 +1192,31 @@ exports.getProjectDetails = async (req, res) => {
       return res.status(404).json({ error: true, message: 'Project not found' });
     }
 
-    const projectJson = project.toJSON();
+    let projectJson = project.toJSON();
+    
+    const bookingDayEntries =
+      Array.isArray(projectJson.booking_days) && projectJson.booking_days.length
+        ? [...projectJson.booking_days].sort((a, b) => {
+            const dateDiff = new Date(a.event_date) - new Date(b.event_date);
+            if (dateDiff !== 0) return dateDiff;
+            return (a.start_time || "").localeCompare(b.start_time || "");
+          })
+        : [{
+            event_date: projectJson.event_date,
+            start_time: projectJson.start_time,
+            end_time: projectJson.end_time,
+            duration_hours: projectJson.duration_hours,
+            time_zone: null
+          }];
+
+    projectJson.booking_days = bookingDayEntries.map(day => ({
+      event_date: day.event_date,
+      start_time: day.start_time,
+      end_time: day.end_time,
+      duration_hours: day.duration_hours,
+      time_zone: day.time_zone || null
+    }));
+
     // Get the first lead associated (usually there's only one)
     const lead = projectJson.sales_leads?.[0] || null;
 

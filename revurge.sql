@@ -961,6 +961,8 @@ CREATE TABLE IF NOT EXISTS `sales_rep_live_status` (
     ON DELETE CASCADE
 );
 
+-- 14-04-26
+
 CREATE TABLE IF NOT EXISTS `sales_rep_status_activity` (
   `id` INT NOT NULL AUTO_INCREMENT,
   `sales_rep_id` INT NOT NULL,
