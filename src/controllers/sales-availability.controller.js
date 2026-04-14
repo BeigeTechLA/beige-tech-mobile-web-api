@@ -196,6 +196,28 @@ function dedupeUnavailabilityItems(items = []) {
   return Array.from(dedupedByDate.values());
 }
 
+function pickLatestAvailabilityByDate(items = []) {
+  const latestByDate = new Map();
+
+  items.forEach((item) => {
+    const existing = latestByDate.get(item.date);
+
+    if (!existing) {
+      latestByDate.set(item.date, item);
+      return;
+    }
+
+    const existingTime = existing.created_at ? new Date(existing.created_at).getTime() : 0;
+    const currentTime = item.created_at ? new Date(item.created_at).getTime() : 0;
+
+    if (currentTime >= existingTime) {
+      latestByDate.set(item.date, item);
+    }
+  });
+
+  return Array.from(latestByDate.values());
+}
+
 exports.getSalesRepAvailability = async (req, res) => {
   try {
     const { year, month } = req.body || {};
@@ -586,7 +608,6 @@ exports.getSalesRepStatusDetails = async (req, res) => {
       ? await sales_rep_availability.findAll({
           where: {
             sales_rep_id: salesRep.id,
-            availability_status: 2,
             [Op.or]: [
               {
                 recurrence: 1,
@@ -605,6 +626,7 @@ exports.getSalesRepStatusDetails = async (req, res) => {
           attributes: [
             'id',
             'date',
+            'availability_status',
             'start_time',
             'end_time',
             'location',
@@ -622,12 +644,12 @@ exports.getSalesRepStatusDetails = async (req, res) => {
         })
       : await sales_rep_availability.findAll({
           where: {
-            sales_rep_id: salesRep.id,
-            availability_status: 2
+            sales_rep_id: salesRep.id
           },
           attributes: [
             'id',
             'date',
+            'availability_status',
             'start_time',
             'end_time',
             'notes',
@@ -665,7 +687,7 @@ exports.getSalesRepStatusDetails = async (req, res) => {
       total_status_changes_in_range += 1;
     });
 
-    let unavailability = [];
+    let effectiveAvailability = [];
 
     if (hasExplicitDateFilter) {
       const dateKeysInRange = getDateKeysInRange(start_date, end_date);
@@ -678,26 +700,34 @@ exports.getSalesRepStatusDetails = async (req, res) => {
         }
 
         matchingRows.forEach((row) => {
-          unavailability.push({
+          effectiveAvailability.push({
             date: dateKey,
+            availability_status: Number(row.availability_status),
             start_time: Number(row.is_full_day) === 0 ? row.start_time : null,
             end_time: Number(row.is_full_day) === 0 ? row.end_time : null,
             is_full_day: Number(row.is_full_day) === 1,
-            notes: row.notes || null
+            notes: row.notes || null,
+            created_at: row.created_at || null
           });
         });
       });
     } else {
-      unavailability = availabilityRows.map((row) => ({
+      effectiveAvailability = availabilityRows.map((row) => ({
         date: normalizeDate(row.date),
+        availability_status: Number(row.availability_status),
         start_time: Number(row.is_full_day) === 0 ? row.start_time : null,
         end_time: Number(row.is_full_day) === 0 ? row.end_time : null,
         is_full_day: Number(row.is_full_day) === 1,
-        notes: row.notes || null
+        notes: row.notes || null,
+        created_at: row.created_at || null
       }));
     }
 
-    unavailability = dedupeUnavailabilityItems(unavailability);
+    const unavailability = dedupeUnavailabilityItems(
+      pickLatestAvailabilityByDate(effectiveAvailability)
+        .filter((item) => item.availability_status === 2)
+        .map(({ availability_status, created_at, ...item }) => item)
+    );
 
     return res.status(200).json({
       error: false,
