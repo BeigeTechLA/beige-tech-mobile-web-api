@@ -960,3 +960,17 @@ CREATE TABLE IF NOT EXISTS `sales_rep_live_status` (
     FOREIGN KEY (`sales_rep_id`) REFERENCES `users` (`id`)
     ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS `sales_rep_status_activity` (
+  `id` INT NOT NULL AUTO_INCREMENT,
+  `sales_rep_id` INT NOT NULL,
+  `is_available` TINYINT NOT NULL COMMENT '1 = available/on, 0 = unavailable/off',
+  `reason` VARCHAR(255) NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_sales_rep_status_activity_rep_id` (`sales_rep_id`),
+  KEY `idx_sales_rep_status_activity_created_at` (`created_at`),
+  CONSTRAINT `fk_sales_rep_status_activity_user`
+    FOREIGN KEY (`sales_rep_id`) REFERENCES `users` (`id`)
+    ON DELETE CASCADE
+);

@@ -1,4 +1,4 @@
-const { sales_rep_availability, sales_rep_live_status, users } = require('../models');
+const { sales_rep_availability, sales_rep_live_status, sales_rep_status_activity, users } = require('../models');
 const { Op } = require('sequelize');
 
 function normalizeDate(value) {
@@ -89,6 +89,52 @@ async function getLiveStatusSnapshot(salesRepId) {
     is_available: currentStatus ? Number(currentStatus.is_available) === 1 : true,
     reason: currentStatus?.reason || null,
     updated_at: currentStatus?.updated_at || null
+  };
+}
+
+function ensureAdminOrSalesAdmin(req) {
+  const allowedRoles = ['admin', 'Admin', 'sales_admin'];
+
+  if (!allowedRoles.includes(req.userRole)) {
+    throw new Error('Only admin or sales admin can access this API');
+  }
+}
+
+function getDateRangeFromQuery(query = {}) {
+  const singleDate = normalizeDate(query.date);
+  const startDate = normalizeDate(query.start_date);
+  const endDate = normalizeDate(query.end_date);
+
+  if (singleDate) {
+    return {
+      start: new Date(`${singleDate}T00:00:00.000Z`),
+      end: new Date(`${singleDate}T23:59:59.999Z`),
+      start_date: singleDate,
+      end_date: singleDate
+    };
+  }
+
+  if (startDate && endDate) {
+    return {
+      start: new Date(`${startDate}T00:00:00.000Z`),
+      end: new Date(`${endDate}T23:59:59.999Z`),
+      start_date: startDate,
+      end_date: endDate
+    };
+  }
+
+  const end = new Date();
+  end.setHours(23, 59, 59, 999);
+
+  const start = new Date(end);
+  start.setDate(start.getDate() - 6);
+  start.setHours(0, 0, 0, 0);
+
+  return {
+    start,
+    end,
+    start_date: normalizeDate(start),
+    end_date: normalizeDate(end)
   };
 }
 
@@ -228,6 +274,133 @@ exports.getSalesRepCurrentStatus = async (req, res) => {
   }
 };
 
+exports.getAllSalesRepStatuses = async (req, res) => {
+  try {
+    ensureAdminOrSalesAdmin(req);
+
+    const salesReps = await users.findAll({
+      where: {
+        user_type: 5,
+        is_active: 1
+      },
+      attributes: ['id', 'name', 'email'],
+      order: [['name', 'ASC']]
+    });
+
+    const salesRepIds = salesReps.map((rep) => rep.id);
+    const liveStatuses = salesRepIds.length
+      ? await sales_rep_live_status.findAll({
+          where: { sales_rep_id: { [Op.in]: salesRepIds } },
+          attributes: ['sales_rep_id', 'is_available', 'reason', 'updated_at']
+        })
+      : [];
+
+    const { start, end, start_date, end_date } = getDateRangeFromQuery(req.query);
+    const activityRows = salesRepIds.length
+      ? await sales_rep_status_activity.findAll({
+          where: {
+            sales_rep_id: { [Op.in]: salesRepIds },
+            created_at: {
+              [Op.between]: [start, end]
+            }
+          },
+          attributes: [
+            'sales_rep_id',
+            'is_available',
+            'created_at'
+          ],
+          raw: true
+        })
+      : [];
+
+    const liveStatusMap = new Map(
+      liveStatuses.map((row) => [
+        row.sales_rep_id,
+        {
+          is_available: Number(row.is_available) === 1,
+          reason: row.reason || null,
+          updated_at: row.updated_at || null
+        }
+      ])
+    );
+
+    const activityMap = new Map();
+    activityRows.forEach((row) => {
+      const key = row.sales_rep_id;
+      const activityDate = normalizeDate(row.created_at);
+
+      if (!activityMap.has(key)) {
+        activityMap.set(key, {
+          activity_by_date: {},
+          total_status_changes_in_range: 0
+        });
+      }
+
+      const current = activityMap.get(key);
+      if (!current.activity_by_date[activityDate]) {
+        current.activity_by_date[activityDate] = {
+          available_count: 0,
+          unavailable_count: 0,
+          total_status_changes: 0
+        };
+      }
+
+      if (Number(row.is_available) === 1) {
+        current.activity_by_date[activityDate].available_count += 1;
+      } else {
+        current.activity_by_date[activityDate].unavailable_count += 1;
+      }
+
+      current.activity_by_date[activityDate].total_status_changes += 1;
+      current.total_status_changes_in_range += 1;
+    });
+
+    const data = salesReps.map((rep) => {
+      const liveStatus = liveStatusMap.get(rep.id) || {
+        is_available: true,
+        reason: null,
+        updated_at: null
+      };
+      const activity = activityMap.get(rep.id) || {
+        activity_by_date: {},
+        total_status_changes_in_range: 0
+      };
+
+      return {
+        sales_rep_id: rep.id,
+        sales_rep_name: rep.name,
+        sales_rep_email: rep.email,
+        current_status: liveStatus,
+        activity
+      };
+    });
+
+    return res.status(200).json({
+      error: false,
+      message: 'Sales rep statuses fetched successfully',
+      filters: {
+        start_date,
+        end_date
+      },
+      data
+    });
+  } catch (error) {
+    console.error('Error fetching all sales rep statuses:', error);
+
+    if (error.message === 'Only admin or sales admin can access this API') {
+      return res.status(403).json({
+        error: true,
+        message: error.message
+      });
+    }
+
+    return res.status(500).json({
+      error: true,
+      message: 'Something went wrong while fetching sales rep statuses'
+    });
+  }
+};
+
 exports.toggleSalesRepCurrentStatus = async (req, res) => {
   try {
     const salesRep = await resolveTargetSalesRep(req);
@@ -266,6 +439,12 @@ exports.toggleSalesRepCurrentStatus = async (req, res) => {
         reason: normalizedReason
       });
     }
+
+    await sales_rep_status_activity.create({
+      sales_rep_id: salesRep.id,
+      is_available: normalizedAvailability,
+      reason: normalizedReason
+    });
 
     return res.status(200).json({
       error: false,
