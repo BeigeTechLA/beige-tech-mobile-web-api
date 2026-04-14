@@ -548,7 +548,7 @@ Authorization: {{TOKEN}}
   "booking_id": 958
 }
 
-### 
+### Get sales representatives
 GET {{URL}}sales/sales-reps HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
@@ -1600,11 +1600,19 @@ Authorization: {{TOKEN}}
 ### Get Current Live Status
 GET {{URL}}sales/current-status HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN2}}
+Authorization: {{TOKEN}}
 
 ### Get All Sales Representative Status (last 7 Days)
 GET {{URL}}sales/all-statuses HTTP/1.1
 Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+### last 7 days
+GET {{URL}}sales/status-details?sales_rep_id=236
+Authorization: {{TOKEN2}}
+
+### date wise
+GET {{URL}}sales/status-details?sales_rep_id=180&date=2026-04-14
 Authorization: {{TOKEN2}}
 
 ### Get All Sales Representative Status (by date)
@@ -1693,5 +1701,10 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ###
-GET {{URL}}admin/932/get-booking-summary  HTTP/1.1
+GET {{URL}}sales/status-details?sales_rep_id=193&date=2026-04-14 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+GET {{URL}}admin/934/get-booking-summary  HTTP/1.1
 Content-Type: application/json

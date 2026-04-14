@@ -100,7 +100,7 @@ function ensureAdminOrSalesAdmin(req) {
   }
 }
 
-function getDateRangeFromQuery(query = {}) {
+function getDateRangeFromQuery(query = {}, defaultRangeDays = null) {
   const singleDate = normalizeDate(query.date);
   const startDate = normalizeDate(query.start_date);
   const endDate = normalizeDate(query.end_date);
@@ -123,18 +123,27 @@ function getDateRangeFromQuery(query = {}) {
     };
   }
 
-  const end = new Date();
-  end.setHours(23, 59, 59, 999);
+  if (defaultRangeDays) {
+    const end = new Date();
+    end.setHours(23, 59, 59, 999);
 
-  const start = new Date(end);
-  start.setDate(start.getDate() - 6);
-  start.setHours(0, 0, 0, 0);
+    const start = new Date(end);
+    start.setDate(start.getDate() - (defaultRangeDays - 1));
+    start.setHours(0, 0, 0, 0);
+
+    return {
+      start,
+      end,
+      start_date: normalizeDate(start),
+      end_date: normalizeDate(end)
+    };
+  }
 
   return {
-    start,
-    end,
-    start_date: normalizeDate(start),
-    end_date: normalizeDate(end)
+    start: null,
+    end: null,
+    start_date: null,
+    end_date: null
   };
 }
 
@@ -295,15 +304,20 @@ exports.getAllSalesRepStatuses = async (req, res) => {
         })
       : [];
 
-    const { start, end, start_date, end_date } = getDateRangeFromQuery(req.query);
+    const { start, end, start_date, end_date } = getDateRangeFromQuery(req.query, 7);
+    const activityWhere = {
+      sales_rep_id: { [Op.in]: salesRepIds }
+    };
+
+    if (start && end) {
+      activityWhere.created_at = {
+        [Op.between]: [start, end]
+      };
+    }
+
     const activityRows = salesRepIds.length
       ? await sales_rep_status_activity.findAll({
-          where: {
-            sales_rep_id: { [Op.in]: salesRepIds },
-            created_at: {
-              [Op.between]: [start, end]
-            }
-          },
+          where: activityWhere,
           attributes: [
             'sales_rep_id',
             'is_available',
@@ -397,6 +411,93 @@ exports.getAllSalesRepStatuses = async (req, res) => {
     return res.status(500).json({
       error: true,
       message: 'Something went wrong while fetching sales rep statuses'
+    });
+  }
+};
+
+exports.getSalesRepStatusDetails = async (req, res) => {
+  try {
+    const salesRep = await resolveTargetSalesRep(req);
+    const liveStatus = await getLiveStatusSnapshot(salesRep.id);
+    const { start, end, start_date, end_date } = getDateRangeFromQuery(req.query, 7);
+
+    const activityWhere = {
+      sales_rep_id: salesRep.id
+    };
+
+    if (start && end) {
+      activityWhere.created_at = {
+        [Op.between]: [start, end]
+      };
+    }
+
+    const activityRows = await sales_rep_status_activity.findAll({
+      where: activityWhere,
+      attributes: ['is_available', 'created_at'],
+      raw: true
+    });
+
+    const activity_by_date = {};
+    let total_status_changes_in_range = 0;
+
+    activityRows.forEach((row) => {
+      const activityDate = normalizeDate(row.created_at);
+      if (!activity_by_date[activityDate]) {
+        activity_by_date[activityDate] = {
+          available_count: 0,
+          unavailable_count: 0,
+          total_status_changes: 0
+        };
+      }
+
+      if (Number(row.is_available) === 1) {
+        activity_by_date[activityDate].available_count += 1;
+      } else {
+        activity_by_date[activityDate].unavailable_count += 1;
+      }
+
+      activity_by_date[activityDate].total_status_changes += 1;
+      total_status_changes_in_range += 1;
+    });
+
+    return res.status(200).json({
+      error: false,
+      message: 'Sales rep status details fetched successfully',
+      filters: {
+        start_date,
+        end_date
+      },
+      data: {
+        sales_rep_id: salesRep.id,
+        sales_rep_name: salesRep.name,
+        sales_rep_email: salesRep.email,
+        current_status: liveStatus,
+        activity: {
+          activity_by_date,
+          total_status_changes_in_range
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching sales rep status details:', error);
+
+    if (error.message === 'sales_rep_id is required') {
+      return res.status(400).json({
+        error: true,
+        message: error.message
+      });
+    }
+
+    if (error.message === 'Sales rep not found or inactive') {
+      return res.status(404).json({
+        error: true,
+        message: error.message
+      });
+    }
+
+    return res.status(500).json({
+      error: true,
+      message: 'Something went wrong while fetching sales rep status details'
     });
   }
 };

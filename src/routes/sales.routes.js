@@ -92,6 +92,7 @@ router.post('/add-availability', authenticate, requireSalesRepOrAdmin, salesAvai
 router.get('/current-status', authenticate, requireSalesRepOrAdmin, salesAvailabilityController.getSalesRepCurrentStatus);
 router.post('/toggle-status', authenticate, requireSalesRepOrAdmin, salesAvailabilityController.toggleSalesRepCurrentStatus);
 router.get('/all-statuses', authenticate, requireSalesRepOrAdmin, salesAvailabilityController.getAllSalesRepStatuses);
+router.get('/status-details', authenticate, requireSalesRepOrAdmin, salesAvailabilityController.getSalesRepStatusDetails);
 router.post(
   '/leads/:id/post-production-status-update',
   authenticate,
