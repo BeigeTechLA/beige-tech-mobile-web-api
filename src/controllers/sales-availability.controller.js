@@ -1,5 +1,15 @@
-const { sales_rep_availability, sales_rep_live_status, sales_rep_status_activity, users } = require('../models');
+const {
+  sales_rep_availability,
+  sales_rep_live_status,
+  sales_rep_status_activity,
+  sales_lead_activities,
+  client_lead_activities,
+  sales_leads,
+  client_leads,
+  users
+} = require('../models');
 const { Op } = require('sequelize');
+const sequelize = require('../db');
 
 function normalizeDate(value) {
   if (!value) return null;
@@ -173,6 +183,8 @@ exports.getSalesRepAvailability = async (req, res) => {
     const daysInMonth = endOfMonth.getUTCDate();
     const monthStart = normalizeDate(startOfMonth);
     const monthEnd = normalizeDate(endOfMonth);
+    const monthStartDateTime = new Date(`${monthStart}T00:00:00.000Z`);
+    const monthEndDateTime = new Date(`${monthEnd}T23:59:59.999Z`);
 
     const customAvailability = await sales_rep_availability.findAll({
       where: {
@@ -195,6 +207,84 @@ exports.getSalesRepAvailability = async (req, res) => {
       order: [['created_at', 'DESC']]
     });
 
+    const assignmentActivityRows = await sales_lead_activities.findAll({
+      where: {
+        activity_type: 'assigned',
+        created_at: {
+          [Op.between]: [monthStartDateTime, monthEndDateTime]
+        }
+      },
+      attributes: ['lead_id', 'created_at'],
+      raw: true
+    });
+
+    const clientAssignmentActivityRows = await client_lead_activities.findAll({
+      where: {
+        activity_type: 'assigned',
+        created_at: {
+          [Op.between]: [monthStartDateTime, monthEndDateTime]
+        }
+      },
+      attributes: ['lead_id', 'created_at'],
+      raw: true
+    });
+
+    const salesLeadIdsFromActivity = Array.from(new Set(
+      assignmentActivityRows.map((row) => Number(row.lead_id)).filter(Boolean)
+    ));
+    const clientLeadIdsFromActivity = Array.from(new Set(
+      clientAssignmentActivityRows.map((row) => Number(row.lead_id)).filter(Boolean)
+    ));
+
+    const assignedSalesLeadRows = salesLeadIdsFromActivity.length
+      ? await sales_leads.findAll({
+          where: {
+            lead_id: { [Op.in]: salesLeadIdsFromActivity },
+            assigned_sales_rep_id: salesRep.id
+          },
+          attributes: ['lead_id'],
+          raw: true
+        })
+      : [];
+
+    const assignedClientLeadRows = clientLeadIdsFromActivity.length
+      ? await client_leads.findAll({
+          where: {
+            lead_id: { [Op.in]: clientLeadIdsFromActivity },
+            assigned_sales_rep_id: salesRep.id
+          },
+          attributes: ['lead_id'],
+          raw: true
+        })
+      : [];
+
+    const assignedSalesLeadIdSet = new Set(assignedSalesLeadRows.map((row) => Number(row.lead_id)));
+    const assignedClientLeadIdSet = new Set(assignedClientLeadRows.map((row) => Number(row.lead_id)));
+
+    const salesAssignmentIdsMap = new Map();
+    assignmentActivityRows.forEach((row) => {
+      const dateKey = normalizeDate(row.created_at);
+      if (!dateKey) return;
+      if (!salesAssignmentIdsMap.has(dateKey)) {
+        salesAssignmentIdsMap.set(dateKey, new Set());
+      }
+      if (row.lead_id && assignedSalesLeadIdSet.has(Number(row.lead_id))) {
+        salesAssignmentIdsMap.get(dateKey).add(Number(row.lead_id));
+      }
+    });
+
+    const clientAssignmentIdsMap = new Map();
+    clientAssignmentActivityRows.forEach((row) => {
+      const dateKey = normalizeDate(row.created_at);
+      if (!dateKey) return;
+      if (!clientAssignmentIdsMap.has(dateKey)) {
+        clientAssignmentIdsMap.set(dateKey, new Set());
+      }
+      if (row.lead_id && assignedClientLeadIdSet.has(Number(row.lead_id))) {
+        clientAssignmentIdsMap.get(dateKey).add(Number(row.lead_id));
+      }
+    });
+
     const calendar = {};
 
     for (let day = 1; day <= daysInMonth; day += 1) {
@@ -202,13 +292,25 @@ exports.getSalesRepAvailability = async (req, res) => {
       const dateKey = normalizeDate(date);
       const rule = customAvailability.find((entry) => appliesOnDate(entry, dateKey));
 
+      const salesLeadIds = Array.from(salesAssignmentIdsMap.get(dateKey) || []);
+      const clientLeadIds = Array.from(clientAssignmentIdsMap.get(dateKey) || []);
+      const salesLeadCount = salesLeadIds.length;
+      const clientLeadCount = clientLeadIds.length;
+      const assignedLeadIds = [...salesLeadIds, ...clientLeadIds];
+
       calendar[dateKey] = {
         available: rule ? String(rule.availability_status) === '1' : true,
         customAvailabilityStatus: rule ? Number(rule.availability_status) : null,
         start_time: rule && Number(rule.is_full_day) === 0 ? rule.start_time : null,
         end_time: rule && Number(rule.is_full_day) === 0 ? rule.end_time : null,
         is_full_day: rule ? Number(rule.is_full_day) : 1,
-        notes: rule?.notes || null
+        notes: rule?.notes || null,
+        assigned_leads_count: salesLeadCount + clientLeadCount,
+        assigned_sales_leads_count: salesLeadCount,
+        assigned_client_leads_count: clientLeadCount,
+        assigned_lead_ids: assignedLeadIds,
+        assigned_sales_lead_ids: salesLeadIds,
+        assigned_client_lead_ids: clientLeadIds
       };
     }
 

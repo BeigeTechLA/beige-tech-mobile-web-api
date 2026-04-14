@@ -1571,7 +1571,7 @@ Authorization: {{TOKEN2}}
 ### Get Availability
 POST {{URL}}sales/availability HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN2}}
+Authorization: {{TOKEN}}
 
 {
   "year": "2026",
