@@ -141,6 +141,25 @@ const sanitizeFolderName = (value, fallback = 'Folder') => {
   return (safe || fallback).slice(0, 120);
 };
 
+const sanitizeRelativeFolderPath = (value) =>
+  String(value || '')
+    .replace(/\\/g, '/')
+    .split('/')
+    .map((segment) => sanitizeFolderName(segment, ''))
+    .filter(Boolean)
+    .join('/');
+
+const normalizeWorkspacePhase = (value, fallback = null) => {
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, '-');
+
+  if (['pre', 'pre-production', 'preproduction'].includes(normalized)) return 'pre';
+  if (['post', 'post-production', 'postproduction'].includes(normalized)) return 'post';
+  return fallback;
+};
+
 const isImageLikeFile = (file = {}) => {
   const contentType = String(file.contentType || '').toLowerCase();
   if (contentType.startsWith('image/')) return true;
@@ -619,13 +638,15 @@ exports.createCreatorEventFolder = async (req, res) => {
     const profileName = await getUserDisplayName(userId);
     const requestedName = sanitizeFolderName(req.body.folderName, '');
     const folderName = requestedName || sanitizeFolderName(profileName ? `${profileName}` : `CP ${userId || ''}`, 'Creative Partner');
+    const phase = normalizeWorkspacePhase(req.body.phase || req.body.state || req.body.stage, 'pre');
+    const folderPath = sanitizeRelativeFolderPath(req.body.path);
 
     const result = await proxyRequest('/folder', {
       method: 'POST',
       body: JSON.stringify({
         externalId: eventExternalId,
-        phase: 'pre',
-        path: req.body.path,
+        phase,
+        path: folderPath || undefined,
         folderName,
       }),
     });
@@ -635,6 +656,8 @@ exports.createCreatorEventFolder = async (req, res) => {
       message: 'Creative partner folder created',
       data: {
         externalId: eventExternalId,
+        phase,
+        path: folderPath || null,
         folderName,
         folder: result?.data?.folder || null,
       },
@@ -970,13 +993,29 @@ exports.getFileViewUrl = async (req, res) => {
 
 exports.createFolder = async (req, res) => {
   try {
-    await ensureCreatorWorkspaceAccess(req, req.body.externalId || req.body.bookingId);
+    const externalId = String(req.body.externalId || req.body.bookingId || '').trim();
+    await ensureCreatorWorkspaceAccess(req, externalId);
+
+    const isCommonEvent = isCommonEventExternalId(externalId);
+    const phase = normalizeWorkspacePhase(
+      req.body.phase || req.body.state || req.body.stage,
+      isCommonEvent ? 'pre' : null
+    );
+    const path = sanitizeRelativeFolderPath(req.body.path);
+
+    if (isCommonEvent && !phase) {
+      return res.status(400).json({
+        success: false,
+        message: 'phase is required. Allowed values: pre, post, pre-production, post-production',
+      });
+    }
+
     const result = await proxyRequest('/folder', {
       method: 'POST',
       body: JSON.stringify({
-        externalId: req.body.externalId || req.body.bookingId,
-        phase: req.body.phase,
-        path: req.body.path,
+        externalId,
+        phase: phase || req.body.phase,
+        path: path || undefined,
         folderName: req.body.folderName || req.body.name,
       }),
     });
