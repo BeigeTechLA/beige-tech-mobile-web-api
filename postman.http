@@ -4,7 +4,7 @@
 
 @TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjQsInVzZXJSb2xlIjoic2FsZXNfcmVwIiwiaWF0IjoxNzc2MjM1ODI0LCJleHAiOjE3NzY4NDA2MjR9.7apxMrftY5r84Mv2FGKjby1F_fqScun5l6wdHbAtFrs
 
-@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzYxNzA2NzEsImV4cCI6MTc3Njc3NTQ3MX0.lJg4FvoagMh4272Y4-O69kV5dX8qgWRJurLdJXn3ps4
+@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzYyNTc0NDIsImV4cCI6MTc3Njg2MjI0Mn0.D-6nEkuqfog0IC-FsF5oxS27doGTDtNhN5_0HmmREkw
 
 ###
 POST {{URL}}creator/dashboard-count HTTP/1.1
@@ -1855,3 +1855,8 @@ Content-Type: application/json
   "booking_id":"945",
   "referral_code":null
 }
+
+### 
+PUT {{URL}}sales/leads/271/assign-self HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
