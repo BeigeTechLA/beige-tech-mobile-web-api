@@ -978,3 +978,7 @@ CREATE TABLE IF NOT EXISTS `sales_rep_status_activity` (
 );
 
 ALTER TABLE crew_members ADD COLUMN old_location TEXT NULL AFTER location;
+
+-- 15-04-26
+
+ALTER TABLE stream_project_booking ADD COLUMN estimated_delivery_date DATE NULL AFTER event_date;
