@@ -1179,6 +1179,11 @@ exports.getProjectDetails = async (req, res) => {
               include: [{ model: users, as: "performed_by", attributes: ["id", "name"] }]
             }
           ]
+        },
+        {
+          model: db.stream_project_booking_days,
+          as: "booking_days",
+          required: false
         }
       ]
     });
@@ -1187,7 +1192,31 @@ exports.getProjectDetails = async (req, res) => {
       return res.status(404).json({ error: true, message: 'Project not found' });
     }
 
-    const projectJson = project.toJSON();
+    let projectJson = project.toJSON();
+    
+    const bookingDayEntries =
+      Array.isArray(projectJson.booking_days) && projectJson.booking_days.length
+        ? [...projectJson.booking_days].sort((a, b) => {
+            const dateDiff = new Date(a.event_date) - new Date(b.event_date);
+            if (dateDiff !== 0) return dateDiff;
+            return (a.start_time || "").localeCompare(b.start_time || "");
+          })
+        : [{
+            event_date: projectJson.event_date,
+            start_time: projectJson.start_time,
+            end_time: projectJson.end_time,
+            duration_hours: projectJson.duration_hours,
+            time_zone: null
+          }];
+
+    projectJson.booking_days = bookingDayEntries.map(day => ({
+      event_date: day.event_date,
+      start_time: day.start_time,
+      end_time: day.end_time,
+      duration_hours: day.duration_hours,
+      time_zone: day.time_zone || null
+    }));
+
     // Get the first lead associated (usually there's only one)
     const lead = projectJson.sales_leads?.[0] || null;
 
@@ -3303,6 +3332,26 @@ exports.getCrewMembers = async (req, res) => {
             crew_roles.findAll({ attributes: ['role_id', 'role_name'], raw: true })
         ]);
 
+        const crewUserIds = Array.from(
+            new Set(
+                members
+                    .map((member) => Number(member.user_id))
+                    .filter(Boolean)
+            )
+        );
+
+        const affiliateRows = crewUserIds.length
+            ? await affiliates.findAll({
+                where: { user_id: { [Sequelize.Op.in]: crewUserIds } },
+                attributes: ['user_id', 'referral_code'],
+                raw: true
+            })
+            : [];
+
+        const affiliateMap = new Map(
+            affiliateRows.map((row) => [Number(row.user_id), row.referral_code || null])
+        );
+
         const processedMembers = members.map((member) => {
             const memberData = member.get({ clone: true });
 
@@ -3335,6 +3384,7 @@ exports.getCrewMembers = async (req, res) => {
 
             return {
                 ...memberData,
+                referral_code: affiliateMap.get(Number(memberData.user_id)) || null,
                 location: finalLocation,
                 status: statusLabel,
                 role: roleNames.length > 0 ? { role_name: roleNames.join(", ") } : null
@@ -6142,12 +6192,33 @@ exports.getClients = async (req, res) => {
       ]
     });
 
+    const clientUserIds = Array.from(
+      new Set(
+        rows
+          .map((client) => Number(client.user_id))
+          .filter(Boolean)
+      )
+    );
+
+    const affiliateRows = clientUserIds.length
+      ? await affiliates.findAll({
+          where: { user_id: { [Op.in]: clientUserIds } },
+          attributes: ['user_id', 'referral_code'],
+          raw: true
+        })
+      : [];
+
+    const affiliateMap = new Map(
+      affiliateRows.map((row) => [Number(row.user_id), row.referral_code || null])
+    );
+
     const data = rows.map(client => {
       const lead = client.user?.sales_leads?.[0] || null;
       const booking = lead?.booking || null;
 
       return {
         ...client.toJSON(),
+        referral_code: affiliateMap.get(Number(client.user_id)) || null,
         intent: leadAssignmentService.getClientIntent({ lead, booking }),
         booking_status: leadAssignmentService.getClientBookingStatus(booking)
       };
@@ -7781,6 +7852,11 @@ exports.getBookingSummaryById = async (req, res) => {
             where: { stream_project_booking_id: bookingId },
             include: [
                 {
+                    model: db.stream_project_booking_days,
+                    as: "booking_days",
+                    required: false
+                },
+                {
                     model: sales_leads,
                     as: "sales_leads", 
                     include: [{ model: users, as: "assigned_sales_rep", attributes: ["name"] }]
@@ -7799,6 +7875,20 @@ exports.getBookingSummaryById = async (req, res) => {
 
         const bookingJson = booking.toJSON();
         const primaryQuote = bookingJson.primary_quote || {};
+        const bookingDayEntries = Array.isArray(bookingJson.booking_days) && bookingJson.booking_days.length
+            ? [...bookingJson.booking_days].sort((a, b) => {
+                const dateCompare = String(a?.event_date || "").localeCompare(String(b?.event_date || ""));
+                if (dateCompare !== 0) return dateCompare;
+                return String(a?.start_time || "").localeCompare(String(b?.start_time || ""));
+            })
+            : [{
+                event_date: bookingJson.event_date,
+                start_time: bookingJson.start_time,
+                end_time: bookingJson.end_time,
+                duration_hours: bookingJson.duration_hours,
+                time_zone: null
+            }];
+        const primarySchedule = bookingDayEntries[0] || {};
 
         // 2. Helper to handle Double-Stringified JSON or Object data
         const safeParseJSON = (val) => {
@@ -7915,9 +8005,16 @@ exports.getBookingSummaryById = async (req, res) => {
                 shoot_type: fullShootType,
                 event_type: formattedEventType,
                 location: bookingJson.event_location,
-                date: bookingJson.event_date,
-                start_time: bookingJson.start_time,
-                end_time: bookingJson.end_time,
+                date: primarySchedule.event_date || bookingJson.event_date,
+                start_time: primarySchedule.start_time || bookingJson.start_time,
+                end_time: primarySchedule.end_time || bookingJson.end_time,
+                booking_days: bookingDayEntries.map((day) => ({
+                    event_date: day.event_date,
+                    start_time: day.start_time,
+                    end_time: day.end_time,
+                    duration_hours: day.duration_hours,
+                    time_zone: day.time_zone || null
+                })),
                 special_instructions: bookingJson.special_instructions || "",
                 editing: editing,
                 crew_counts: crewCounts,
