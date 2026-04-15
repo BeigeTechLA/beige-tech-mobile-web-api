@@ -5,6 +5,7 @@ const {
   payment_links,
   invoice_send_history,
   users,
+  sales_rep_live_status,
   stream_project_booking,
   sales_quotes
 } = require('../models');
@@ -622,9 +623,46 @@ exports.getSalesRepsList = async (req, res) => {
       order: [['name', 'ASC']]
     });
 
+    const salesRepIds = salesReps.map((rep) => rep.id);
+    const liveStatuses = salesRepIds.length
+      ? await sales_rep_live_status.findAll({
+          where: {
+            sales_rep_id: {
+              [Op.in]: salesRepIds
+            }
+          },
+          attributes: ['sales_rep_id', 'is_available', 'reason', 'updated_at'],
+          raw: true
+        })
+      : [];
+
+    const liveStatusMap = new Map(
+      liveStatuses.map((statusRow) => [
+        statusRow.sales_rep_id,
+        {
+          is_available: Number(statusRow.is_available) === 1,
+          reason: statusRow.reason || null,
+          updated_at: statusRow.updated_at || null
+        }
+      ])
+    );
+
+    const salesRepsWithStatus = salesReps.map((rep) => {
+      const currentStatus = liveStatusMap.get(rep.id) || {
+        is_available: true,
+        reason: null,
+        updated_at: null
+      };
+
+      return {
+        ...rep.toJSON(),
+        status: currentStatus.is_available ? 'active' : 'inactive'
+      };
+    });
+
     res.json({
       success: true,
-      data: salesReps
+      data: salesRepsWithStatus
     });
   } catch (error) {
     console.error('Error fetching sales reps list:', error);
