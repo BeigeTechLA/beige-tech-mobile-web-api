@@ -74,6 +74,10 @@ function mergeEditTypeCounts(target, source) {
   });
 }
 
+function isEditingOnlyLineItem(lineItem = {}) {
+  return String(lineItem.category_slug || '').toLowerCase() === 'editing';
+}
+
 /**
  * Get the full pricing catalog with categories and items
  * @param {string} mode - 'general', 'wedding', or null for all
@@ -599,14 +603,18 @@ async function calculateQuote({
       });
     }
 
+    const hasEditSelections = editCounts.size > 0;
+    const hasNonEditingLineItems = lineItems.some((lineItem) => !isEditingOnlyLineItem(lineItem));
+    const isEditingOnlyQuote = hasEditSelections && !hasNonEditingLineItems;
+
     // 4. Pre-Production Fees
     const preProdMap = {
       photo: { wedding: 250, corporate: 250, private: 250, brand_product: 250, social_content: 250, people_teams: 250, behind_scenes: 250 },
       video: { wedding: 250, corporate: 250, private: 250, advertising: 250, social_content: 250, podcast: 250, short_film: 250, music: 250, podcast_shows: 250 }
     };
 
-    const hasPhoto = lineItems.some(li => li.category_slug === 'photography' || li.item_name.toLowerCase().includes('photo'));
-    const hasVideo = lineItems.some(li => li.category_slug === 'videography' || li.item_name.toLowerCase().includes('video'));
+    const hasPhoto = !isEditingOnlyQuote && lineItems.some(li => li.category_slug === 'photography' || li.item_name.toLowerCase().includes('photo'));
+    const hasVideo = !isEditingOnlyQuote && lineItems.some(li => li.category_slug === 'videography' || li.item_name.toLowerCase().includes('video'));
 
     const photoPreProd = hasPhoto ? (preProdMap.photo[normalizedType] || 0) : 0;
     const videoPreProd = hasVideo ? (preProdMap.video[normalizedType] || 0) : 0;
@@ -633,7 +641,7 @@ async function calculateQuote({
     }
 
     // 6. Rush Fee
-    const rushFee = calculateRushFee(shootStartDate);
+    const rushFee = isEditingOnlyQuote ? 0 : calculateRushFee(shootStartDate);
     if (rushFee > 0) {
       subtotal += rushFee;
       lineItems.push({

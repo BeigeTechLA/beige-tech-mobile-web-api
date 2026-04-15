@@ -9,10 +9,15 @@ const pricingController = require('../controllers/pricing.controller');
 const paymentService = require('../services/payment-links.service');
 const emailService = require('../utils/emailService');
 const { sendCPNewBookingRequestEmail } = require('../utils/emailService');
-const { resolveEventDateAndStartTime, normalizeTime } = require('../utils/timezone');
+const { resolveEventDateAndStartTime, normalizeTime, splitDateTime } = require('../utils/timezone');
 
 const sequelize = require('../db');
 const db = require('../models');
+
+const normalizeDateOnlyInput = (value) => {
+  const { date } = splitDateTime(value);
+  return date || null;
+};
 
 /**
  * Internal helper to reuse calculateFromCreators safely.
@@ -895,6 +900,7 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             start_date,
             start_time,
             end_time,
+            estimated_delivery_date,
             time_zone,
             booking_type,
             booking_days,
@@ -912,6 +918,11 @@ exports.trackEarlyBookingInterest = async (req, res) => {
 
         const normalizedGuestEmail = String(guest_email).trim().toLowerCase();
         const resolvedUserId = await resolveUserId(user_id, normalizedGuestEmail);
+        const normalizedEstimatedDeliveryDate = normalizeDateOnlyInput(estimated_delivery_date);
+
+        if (estimated_delivery_date && !normalizedEstimatedDeliveryDate) {
+            return res.status(400).json({ success: false, message: 'estimated_delivery_date must be a valid date' });
+        }
 
         const toTimeParts = (timeStr) => {
             if (!timeStr) return null;
@@ -979,6 +990,7 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             streaming_platforms: JSON.stringify([]),
             crew_roles: JSON.stringify([]),
             event_date: event_date,
+            estimated_delivery_date: normalizedEstimatedDeliveryDate,
             start_time: start_time_final,
             end_time: end_time_final,
             duration_hours: totalDurationHours,
@@ -1623,9 +1635,9 @@ exports.getLeads = async (req, res) => {
     const offset = (pageNumber - 1) * pageLimit;
 
     const whereClause = { is_active: 1 };
-    if (req.userRole === 'sales_rep') {
-      whereClause.assigned_sales_rep_id = req.userId;
-    }
+    // if (req.userRole === 'sales_rep') {
+    //   whereClause.assigned_sales_rep_id = req.userId;
+    // }
 
     if (start_date && end_date) {
       whereClause.created_at = {
@@ -2436,6 +2448,42 @@ exports.assignLead = async (req, res) => {
       return res.status(constants.BAD_REQUEST.code).json({
         success: false,
         message: 'Sales rep ID is required'
+      });
+    }
+
+    await leadAssignmentService.manuallyAssignLead(
+      parseInt(id),
+      parseInt(sales_rep_id),
+      performedBy
+    );
+
+    res.json({
+      success: true,
+      message: 'Lead assigned successfully'
+    });
+
+  } catch (error) {
+    console.error('Error assigning lead:', error);
+    res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: error.message || 'Failed to assign lead',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.assignLeadToSelf = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const sales_rep_id = req.userId;
+    const performedBy = req.userId;
+
+    const role = req.userRole?.toLowerCase();
+
+    if (!['admin', 'sales_admin'].includes(role)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only admin or sales admin can assign leads to themselves'
       });
     }
 

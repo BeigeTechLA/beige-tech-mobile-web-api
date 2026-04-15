@@ -74,6 +74,7 @@ router.get('/client-leads/:id', authenticate, requireSalesRepOrAdmin, salesLeads
  * @access  Sales Rep / Admin
  */
 router.put('/leads/:id/assign', authenticate, requireSalesRepOrAdmin, salesLeadsController.assignLead);
+router.put('/leads/:id/assign-self', authenticate, requireSalesRepOrAdmin, salesLeadsController.assignLeadToSelf);
 router.put('/leads/:id/change-sales-rep', authenticate, requireAdmin, salesLeadsController.changeLeadSalesRep);
 router.put('/client-leads/:id/change-sales-rep', authenticate, requireAdmin, salesLeadsController.changeClientLeadSalesRep);
 router.delete('/leads/:id', authenticate, requireAdmin, salesLeadsController.softDeleteLead);
