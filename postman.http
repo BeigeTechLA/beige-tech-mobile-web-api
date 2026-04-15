@@ -2,7 +2,7 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjIzNiwidXNlclJvbGUiOiJzYWxlc19yZXAiLCJpYXQiOjE3NzYxNzA2NjIsImV4cCI6MTc3Njc3NTQ2Mn0.j_uN9X0Ypuqx6zd0pjHVxOjetoOArYEEjDaH34mukwk
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjQsInVzZXJSb2xlIjoic2FsZXNfcmVwIiwiaWF0IjoxNzc2MjM1ODI0LCJleHAiOjE3NzY4NDA2MjR9.7apxMrftY5r84Mv2FGKjby1F_fqScun5l6wdHbAtFrs
 
 @TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzYxNzA2NzEsImV4cCI6MTc3Njc3NTQ3MX0.lJg4FvoagMh4272Y4-O69kV5dX8qgWRJurLdJXn3ps4
 
@@ -29,6 +29,11 @@ Content-Type: application/json
 
 ###
 ###
+GET {{URL}}auth/me HTTP/1.1
+Authorization: {{TOKEN}}
+
+###
+###
 POST {{URL}}auth/login HTTP/1.1
 Content-Type: application/json
 
@@ -49,8 +54,8 @@ POST {{URL}}auth/login HTTP/1.1
 Content-Type: application/json
 
 {
-  "email": "sales@beigecorporation.io",
-  "password": "Sales@2026!"
+  "email": "ronak.gandhi@gmail.com",
+  "password": "password123"
 }
 
 ###
@@ -382,6 +387,11 @@ Content-Type: application/json
 
 ###
 GET {{URL}}sales/leads HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### filter by sales_rep
+GET {{URL}}sales/leads?assigned_to=180 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -1160,6 +1170,11 @@ GET {{URL}}sales/quotes HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
+### list sales quotes by sales rep
+GET {{URL}}sales/quotes?assigned_sales_rep_id=180 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
 ### list sales quotes sorted by valid until
 GET {{URL}}sales/quotes?sort_by=valid_until&sort_order=ASC HTTP/1.1
 Content-Type: application/json
@@ -1614,8 +1629,8 @@ GET {{URL}}sales/all-statuses HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN2}}
 
-### last 7 days
-GET {{URL}}sales/status-details?sales_rep_id=236
+### 
+GET {{URL}}sales/status-details?sales_rep_id=180
 Authorization: {{TOKEN2}}
 
 ### date wise

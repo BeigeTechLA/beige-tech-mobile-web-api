@@ -207,7 +207,7 @@ function appendAndCondition(where, condition) {
 }
 
 function applyQuoteSalesRepFilter(where, assignedSalesRepId, user) {
-  if (!assignedSalesRepId || !isAdminRole(user.role)) {
+  if (!assignedSalesRepId) {
     return where;
   }
 
@@ -749,8 +749,10 @@ function resolveQuoteStatus(payload = {}, currentStatus = 'draft') {
   return currentStatus;
 }
 
-function buildQuoteAccessWhere(user) {
-  if (isAdminRole(user?.role)) return {};
+function buildQuoteAccessWhere(user, options = {}) {
+  const { restrictToLoggedInRep = true } = options;
+
+  if (isAdminRole(user?.role) || !restrictToLoggedInRep) return {};
   return {
     [Op.or]: [
       { created_by_user_id: user.userId },
@@ -2182,7 +2184,7 @@ async function listQuotes(query, user) {
   const limit = Math.min(100, Math.max(1, Number(query.limit || 20)));
   const offset = (page - 1) * limit;
   const where = {
-    ...buildQuoteAccessWhere(user)
+    ...buildQuoteAccessWhere(user, { restrictToLoggedInRep: false })
   };
 
   const statusFilter = normalizeQuoteFilterStatus(query.status);
@@ -2252,7 +2254,7 @@ async function listQuotes(query, user) {
 
 async function getQuoteDashboard(query, user) {
   const where = {
-    ...buildQuoteAccessWhere(user)
+    ...buildQuoteAccessWhere(user, { restrictToLoggedInRep: false })
   };
 
   const statusFilter = normalizeQuoteFilterStatus(query.status);
