@@ -102,6 +102,52 @@ async function getLiveStatusSnapshot(salesRepId) {
   };
 }
 
+async function getAssignedLeadsSnapshot(salesRepId) {
+  const leadAttributes = [
+    'lead_id',
+    'booking_id',
+    'client_name',
+    'guest_email',
+    'phone',
+    'lead_type',
+    'lead_status',
+    'intent',
+    'lead_source',
+    'last_activity_at',
+    'created_at',
+    'updated_at'
+  ];
+
+  const [assignedSalesLeads, assignedClientLeads] = await Promise.all([
+    sales_leads.findAll({
+      where: {
+        assigned_sales_rep_id: salesRepId,
+        is_active: 1
+      },
+      attributes: leadAttributes,
+      order: [['updated_at', 'DESC'], ['lead_id', 'DESC']],
+      raw: true
+    }),
+    client_leads.findAll({
+      where: {
+        assigned_sales_rep_id: salesRepId,
+        is_active: 1
+      },
+      attributes: leadAttributes,
+      order: [['updated_at', 'DESC'], ['lead_id', 'DESC']],
+      raw: true
+    })
+  ]);
+
+  return {
+    total_count: assignedSalesLeads.length + assignedClientLeads.length,
+    sales_leads_count: assignedSalesLeads.length,
+    client_leads_count: assignedClientLeads.length,
+    sales_leads: assignedSalesLeads,
+    client_leads: assignedClientLeads
+  };
+}
+
 function ensureAdminOrSalesAdmin(req) {
   const allowedRoles = ['admin', 'Admin', 'sales_admin'];
 
@@ -582,6 +628,7 @@ exports.getSalesRepStatusDetails = async (req, res) => {
   try {
     const salesRep = await resolveTargetSalesRep(req);
     const liveStatus = await getLiveStatusSnapshot(salesRep.id);
+    const assignedLeads = await getAssignedLeadsSnapshot(salesRep.id);
     const { start, end, start_date, end_date } = getDateRangeFromQuery(req.query, 7);
     const hasExplicitDateFilter = Boolean(
       normalizeDate(req.query?.date)
@@ -741,6 +788,7 @@ exports.getSalesRepStatusDetails = async (req, res) => {
         sales_rep_name: salesRep.name,
         sales_rep_email: salesRep.email,
         current_status: liveStatus,
+        assigned_leads: assignedLeads,
         unavailability,
         activity: {
           activity_by_date,

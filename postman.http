@@ -2,9 +2,9 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjIzNiwidXNlclJvbGUiOiJzYWxlc19yZXAiLCJpYXQiOjE3NzYxNzA2NjIsImV4cCI6MTc3Njc3NTQ2Mn0.j_uN9X0Ypuqx6zd0pjHVxOjetoOArYEEjDaH34mukwk
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjQsInVzZXJSb2xlIjoic2FsZXNfcmVwIiwiaWF0IjoxNzc2MjM1ODI0LCJleHAiOjE3NzY4NDA2MjR9.7apxMrftY5r84Mv2FGKjby1F_fqScun5l6wdHbAtFrs
 
-@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzYxNzA2NzEsImV4cCI6MTc3Njc3NTQ3MX0.lJg4FvoagMh4272Y4-O69kV5dX8qgWRJurLdJXn3ps4
+@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzYyNTc0NDIsImV4cCI6MTc3Njg2MjI0Mn0.D-6nEkuqfog0IC-FsF5oxS27doGTDtNhN5_0HmmREkw
 
 ###
 POST {{URL}}creator/dashboard-count HTTP/1.1
@@ -29,6 +29,11 @@ Content-Type: application/json
 
 ###
 ###
+GET {{URL}}auth/me HTTP/1.1
+Authorization: {{TOKEN}}
+
+###
+###
 POST {{URL}}auth/login HTTP/1.1
 Content-Type: application/json
 
@@ -49,8 +54,8 @@ POST {{URL}}auth/login HTTP/1.1
 Content-Type: application/json
 
 {
-  "email": "sales@beigecorporation.io",
-  "password": "Sales@2026!"
+  "email": "ronak.gandhi@gmail.com",
+  "password": "password123"
 }
 
 ###
@@ -382,6 +387,11 @@ Content-Type: application/json
 
 ###
 GET {{URL}}sales/leads HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### filter by sales_rep
+GET {{URL}}sales/leads?assigned_to=180 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -1160,6 +1170,11 @@ GET {{URL}}sales/quotes HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
+### list sales quotes by sales rep
+GET {{URL}}sales/quotes?assigned_sales_rep_id=180 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
 ### list sales quotes sorted by valid until
 GET {{URL}}sales/quotes?sort_by=valid_until&sort_order=ASC HTTP/1.1
 Content-Type: application/json
@@ -1614,8 +1629,8 @@ GET {{URL}}sales/all-statuses HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN2}}
 
-### last 7 days
-GET {{URL}}sales/status-details?sales_rep_id=236
+### 
+GET {{URL}}sales/status-details?sales_rep_id=180
 Authorization: {{TOKEN2}}
 
 ### date wise
@@ -1715,3 +1730,133 @@ Authorization: {{TOKEN}}
 ###
 GET {{URL}}admin/934/get-booking-summary  HTTP/1.1
 Content-Type: application/json
+
+###
+POST {{URL}}sales/leads/track-early-interest  HTTP/1.1
+Content-Type: application/json
+
+{
+  "guest_email": "test@gmail.com",
+  "content_type": "ai editing",
+  "shoot_type": "wedding",
+  "estimated_delivery_date": "2026-06-08",
+  "edits_needed": true,
+  "video_edit_types": ["social_reel_15_30"],
+  "photo_edit_types": ["edited_photos"]
+}
+
+###
+PATCH {{URL}}sales/bookings/945/crew  HTTP/1.1
+Content-Type: application/json
+
+{
+  "crew_roles": { "editor":1 },
+  "description":"",
+  "reference_links":""
+}
+
+###
+GET {{URL}}creators/search?content_types=editor&limit=12&page=1
+
+###
+POST {{URL}}pricing/calculate-from-creators
+Content-Type: application/json
+
+{
+  "content_type": "ai editing",
+  "creator_ids": [2098],
+  "role_counts": {
+    "editor": 1
+  },
+  "event_type": "wedding",
+  "video_edit_types": [
+    { "slug": "social_reel_15_30", "quantity": 1 }
+  ],
+  "photo_edit_types": [
+    { "slug": "edited_photos", "quantity": 1 }
+  ],
+  "skip_discount": true,
+  "skip_margin": true
+}
+
+###
+POST {{URL}}pricing/quotes
+Content-Type: application/json
+
+{
+  "items": [],
+  "shootHours": 0,
+  "eventType": "wedding",
+  "guestEmail": "test@gmail.com",
+  "video_edit_types": [
+    { "slug": "social_reel_15_30", "quantity": 1 }
+  ],
+  "photo_edit_types": [
+    { "slug": "edited_photos", "quantity": 1 }
+  ]
+}
+
+###
+PUT {{URL}}guest-bookings/945
+Content-Type: application/json
+
+{
+  "order_name": "WEDDING Shoot - test",
+  "guestEmail": "test@gmail.com",
+  "content_type": "ai editing",
+  "shoot_type": "wedding",
+  "estimated_delivery_date": "2026-04-22",
+  "quote_id": 239,
+  "full_name": "test user",
+  "phone": "22722222222",
+  "edits_needed": true,
+  "video_edit_types": [
+    "social_reel_15_30"
+  ],
+  "photo_edit_types": [
+    "edited_photos"
+  ],
+  "crew_size": "",
+  "location": "",
+  "matching_method": "ai_matchmaker",
+  "selected_crew_ids": [2098],
+  "reference_links": "",
+  "is_draft": false
+}
+
+###
+GET {{URL}}admin/945/get-booking-summary
+Content-Type: application/json
+
+###
+GET {{URL}}guest-bookings/945/payment-details
+Content-Type: application/json
+
+###
+POST {{URL}}payments/create-intent-multi
+Content-Type: application/json
+
+{
+  "booking_id":"945",
+  "amount":500,
+  "guest_email":"test@gmail.com"
+}
+
+# ###
+# POST https://api.stripe.com/v1/payment_intents/pi_3TMSU554hnPNgHXU1Hq21snZ/confirm
+# Content-Type: application/json
+
+###
+POST {{URL}}payments/confirm-multi
+Content-Type: application/json
+
+{
+  "paymentIntentId":"pi_3TMSU554hnPNgHXU1Hq21snZ",
+  "booking_id":"945",
+  "referral_code":null
+}
+
+### 
+PUT {{URL}}sales/leads/271/assign-self HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}

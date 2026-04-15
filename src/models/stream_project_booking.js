@@ -51,6 +51,10 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.DATEONLY,
       allowNull: true
     },
+    estimated_delivery_date: {
+      type: DataTypes.DATEONLY,
+      allowNull: true
+    },
     duration_hours: {
       type: DataTypes.INTEGER,
       allowNull: true

@@ -5,6 +5,7 @@ const {
   payment_links,
   invoice_send_history,
   users,
+  sales_rep_live_status,
   stream_project_booking,
   sales_quotes
 } = require('../models');
@@ -68,7 +69,7 @@ function getDashboardDateRanges(period) {
   };
 }
 
-function buildLeadDashboardWhere({ startDate, salesRepId, req }) {
+function buildLeadDashboardWhere({ startDate, salesRepId, req, restrictToLoggedInRep = true }) {
   const whereClause = {
     is_active: 1
   };
@@ -77,7 +78,7 @@ function buildLeadDashboardWhere({ startDate, salesRepId, req }) {
     whereClause.created_at = { [Op.gte]: startDate };
   }
 
-  if (req.userRole === 'sales_rep') {
+  if (restrictToLoggedInRep && req.userRole === 'sales_rep') {
     whereClause.assigned_sales_rep_id = req.userId;
   } else if (salesRepId) {
     whereClause.assigned_sales_rep_id = parseInt(salesRepId, 10);
@@ -86,7 +87,7 @@ function buildLeadDashboardWhere({ startDate, salesRepId, req }) {
   return whereClause;
 }
 
-function buildPreviousLeadDashboardWhere({ previousStartDate, previousEndDate, salesRepId, req }) {
+function buildPreviousLeadDashboardWhere({ previousStartDate, previousEndDate, salesRepId, req, restrictToLoggedInRep = true }) {
   const whereClause = {
     is_active: 1
   };
@@ -98,7 +99,7 @@ function buildPreviousLeadDashboardWhere({ previousStartDate, previousEndDate, s
     };
   }
 
-  if (req.userRole === 'sales_rep') {
+  if (restrictToLoggedInRep && req.userRole === 'sales_rep') {
     whereClause.assigned_sales_rep_id = req.userId;
   } else if (salesRepId) {
     whereClause.assigned_sales_rep_id = parseInt(salesRepId, 10);
@@ -371,27 +372,31 @@ exports.getCombinedOverviewStats = async (req, res) => {
     const salesWhere = buildLeadDashboardWhere({
       startDate: currentStartDate,
       salesRepId: sales_rep_id,
-      req
+      req,
+      restrictToLoggedInRep: false
     });
 
     const clientWhere = buildLeadDashboardWhere({
       startDate: currentStartDate,
       salesRepId: sales_rep_id,
-      req
+      req,
+      restrictToLoggedInRep: false
     });
 
     const previousSalesWhere = buildPreviousLeadDashboardWhere({
       previousStartDate,
       previousEndDate,
       salesRepId: sales_rep_id,
-      req
+      req,
+      restrictToLoggedInRep: false
     });
 
     const previousClientWhere = buildPreviousLeadDashboardWhere({
       previousStartDate,
       previousEndDate,
       salesRepId: sales_rep_id,
-      req
+      req,
+      restrictToLoggedInRep: false
     });
 
     const salesOverview = await getOverviewStatsForModel(sales_leads, salesWhere);
@@ -618,9 +623,46 @@ exports.getSalesRepsList = async (req, res) => {
       order: [['name', 'ASC']]
     });
 
+    const salesRepIds = salesReps.map((rep) => rep.id);
+    const liveStatuses = salesRepIds.length
+      ? await sales_rep_live_status.findAll({
+          where: {
+            sales_rep_id: {
+              [Op.in]: salesRepIds
+            }
+          },
+          attributes: ['sales_rep_id', 'is_available', 'reason', 'updated_at'],
+          raw: true
+        })
+      : [];
+
+    const liveStatusMap = new Map(
+      liveStatuses.map((statusRow) => [
+        statusRow.sales_rep_id,
+        {
+          is_available: Number(statusRow.is_available) === 1,
+          reason: statusRow.reason || null,
+          updated_at: statusRow.updated_at || null
+        }
+      ])
+    );
+
+    const salesRepsWithStatus = salesReps.map((rep) => {
+      const currentStatus = liveStatusMap.get(rep.id) || {
+        is_available: true,
+        reason: null,
+        updated_at: null
+      };
+
+      return {
+        ...rep.toJSON(),
+        status: currentStatus.is_available ? 'active' : 'inactive'
+      };
+    });
+
     res.json({
       success: true,
-      data: salesReps
+      data: salesRepsWithStatus
     });
   } catch (error) {
     console.error('Error fetching sales reps list:', error);
