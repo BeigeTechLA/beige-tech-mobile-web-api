@@ -2472,6 +2472,42 @@ exports.assignLead = async (req, res) => {
   }
 };
 
+exports.assignLeadToSelf = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const sales_rep_id = req.userId;
+    const performedBy = req.userId;
+
+    const role = req.userRole?.toLowerCase();
+
+    if (!['admin', 'sales_admin'].includes(role)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only admin or sales admin can assign leads to themselves'
+      });
+    }
+
+    await leadAssignmentService.manuallyAssignLead(
+      parseInt(id),
+      parseInt(sales_rep_id),
+      performedBy
+    );
+
+    res.json({
+      success: true,
+      message: 'Lead assigned successfully'
+    });
+
+  } catch (error) {
+    console.error('Error assigning lead:', error);
+    res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: error.message || 'Failed to assign lead',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
 /**
  * Change sales rep for a sales lead
  * PUT /api/sales/leads/:id/change-sales-rep
