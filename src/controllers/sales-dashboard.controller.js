@@ -68,7 +68,7 @@ function getDashboardDateRanges(period) {
   };
 }
 
-function buildLeadDashboardWhere({ startDate, salesRepId, req }) {
+function buildLeadDashboardWhere({ startDate, salesRepId, req, restrictToLoggedInRep = true }) {
   const whereClause = {
     is_active: 1
   };
@@ -77,7 +77,7 @@ function buildLeadDashboardWhere({ startDate, salesRepId, req }) {
     whereClause.created_at = { [Op.gte]: startDate };
   }
 
-  if (req.userRole === 'sales_rep') {
+  if (restrictToLoggedInRep && req.userRole === 'sales_rep') {
     whereClause.assigned_sales_rep_id = req.userId;
   } else if (salesRepId) {
     whereClause.assigned_sales_rep_id = parseInt(salesRepId, 10);
@@ -86,7 +86,7 @@ function buildLeadDashboardWhere({ startDate, salesRepId, req }) {
   return whereClause;
 }
 
-function buildPreviousLeadDashboardWhere({ previousStartDate, previousEndDate, salesRepId, req }) {
+function buildPreviousLeadDashboardWhere({ previousStartDate, previousEndDate, salesRepId, req, restrictToLoggedInRep = true }) {
   const whereClause = {
     is_active: 1
   };
@@ -98,7 +98,7 @@ function buildPreviousLeadDashboardWhere({ previousStartDate, previousEndDate, s
     };
   }
 
-  if (req.userRole === 'sales_rep') {
+  if (restrictToLoggedInRep && req.userRole === 'sales_rep') {
     whereClause.assigned_sales_rep_id = req.userId;
   } else if (salesRepId) {
     whereClause.assigned_sales_rep_id = parseInt(salesRepId, 10);
@@ -371,27 +371,31 @@ exports.getCombinedOverviewStats = async (req, res) => {
     const salesWhere = buildLeadDashboardWhere({
       startDate: currentStartDate,
       salesRepId: sales_rep_id,
-      req
+      req,
+      restrictToLoggedInRep: false
     });
 
     const clientWhere = buildLeadDashboardWhere({
       startDate: currentStartDate,
       salesRepId: sales_rep_id,
-      req
+      req,
+      restrictToLoggedInRep: false
     });
 
     const previousSalesWhere = buildPreviousLeadDashboardWhere({
       previousStartDate,
       previousEndDate,
       salesRepId: sales_rep_id,
-      req
+      req,
+      restrictToLoggedInRep: false
     });
 
     const previousClientWhere = buildPreviousLeadDashboardWhere({
       previousStartDate,
       previousEndDate,
       salesRepId: sales_rep_id,
-      req
+      req,
+      restrictToLoggedInRep: false
     });
 
     const salesOverview = await getOverviewStatsForModel(sales_leads, salesWhere);

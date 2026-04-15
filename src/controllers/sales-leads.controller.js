@@ -1623,9 +1623,9 @@ exports.getLeads = async (req, res) => {
     const offset = (pageNumber - 1) * pageLimit;
 
     const whereClause = { is_active: 1 };
-    if (req.userRole === 'sales_rep') {
-      whereClause.assigned_sales_rep_id = req.userId;
-    }
+    // if (req.userRole === 'sales_rep') {
+    //   whereClause.assigned_sales_rep_id = req.userId;
+    // }
 
     if (start_date && end_date) {
       whereClause.created_at = {
