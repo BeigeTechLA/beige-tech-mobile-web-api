@@ -2478,6 +2478,15 @@ exports.assignLeadToSelf = async (req, res) => {
     const sales_rep_id = req.userId;
     const performedBy = req.userId;
 
+    const role = req.userRole?.toLowerCase();
+
+    if (!['admin', 'sales_admin'].includes(role)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only admin or sales admin can assign leads to themselves'
+      });
+    }
+
     await leadAssignmentService.manuallyAssignLead(
       parseInt(id),
       parseInt(sales_rep_id),
