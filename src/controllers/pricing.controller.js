@@ -546,6 +546,7 @@ exports.calculateFromCreators = async (req, res) => {
     const {
       creator_ids = [],
       role_counts = {},        
+      content_type,
       shoot_hours,
       event_type,
       shoot_start_date,
@@ -557,7 +558,34 @@ exports.calculateFromCreators = async (req, res) => {
       is_return
     } = req.body;
 
-    if (!shoot_hours || shoot_hours <= 0) {
+    const normalizeServiceKey = (value) =>
+      String(value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[_-]+/g, ' ')
+        .replace(/\s+/g, ' ');
+
+    const requestedContentTypes = String(content_type || '')
+      .split(',')
+      .map((entry) => normalizeServiceKey(entry))
+      .filter(Boolean);
+
+    const isAiEditingFlow =
+      requestedContentTypes.includes('ai editing') ||
+      normalizeServiceKey(event_type) === 'ai editing';
+
+    const hasEditSelections =
+      (Array.isArray(video_edit_types) && video_edit_types.length > 0) ||
+      (!!video_edit_types && !Array.isArray(video_edit_types) && Object.keys(video_edit_types).length > 0) ||
+      (Array.isArray(photo_edit_types) && photo_edit_types.length > 0) ||
+      (!!photo_edit_types && !Array.isArray(photo_edit_types) && Object.keys(photo_edit_types).length > 0);
+
+    const numericShootHours = Number(shoot_hours);
+    const resolvedShootHours = Number.isFinite(numericShootHours) && numericShootHours > 0
+      ? numericShootHours
+      : 0;
+
+    if (!isAiEditingFlow && resolvedShootHours <= 0) {
       return res.status(400).json({
         success: false,
         message: 'shoot_hours is required and must be > 0',
@@ -597,46 +625,48 @@ exports.calculateFromCreators = async (req, res) => {
         });
       }
 
-      const roleCounts = {};
+      if (!isAiEditingFlow) {
+        const roleCounts = {};
 
-      creators.forEach((c) => {
-        let roles = c.primary_role;
+        creators.forEach((c) => {
+          let roles = c.primary_role;
 
-        if (typeof roles === 'string') {
-          try {
-            roles = JSON.parse(roles);
-          } catch {
-            roles = [roles];
+          if (typeof roles === 'string') {
+            try {
+              roles = JSON.parse(roles);
+            } catch {
+              roles = [roles];
+            }
           }
-        }
 
-        const rolesArr = Array.isArray(roles) ? roles : [roles];
+          const rolesArr = Array.isArray(roles) ? roles : [roles];
 
-        rolesArr.forEach((r) => {
-          const roleKey =
-            r === 11 ? 'videographer' :
-            r === 10 ? 'photographer' :
-            r === 12 ? 'cinematographer' :
-            null;
+          rolesArr.forEach((r) => {
+            const roleKey =
+              r === 11 ? 'videographer' :
+              r === 10 ? 'photographer' :
+              r === 12 ? 'cinematographer' :
+              null;
 
-          if (roleKey) {
-            roleCounts[roleKey] = (roleCounts[roleKey] || 0) + 1;
+            if (roleKey) {
+              roleCounts[roleKey] = (roleCounts[roleKey] || 0) + 1;
+            }
+          });
+        });
+
+        Object.entries(roleCounts).forEach(([role, count]) => {
+          const itemId = ROLE_TO_ITEM_MAP[role];
+          if (itemId && count > 0) {
+            pricingItems.push({ item_id: itemId, quantity: count });
           }
         });
-      });
-
-      Object.entries(roleCounts).forEach(([role, count]) => {
-        const itemId = ROLE_TO_ITEM_MAP[role];
-        if (itemId && count > 0) {
-          pricingItems.push({ item_id: itemId, quantity: count });
-        }
-      });
+      }
     }
 
     /* --------------------------------------------
      * CASE 2: No creators → fallback to role_counts
      * ------------------------------------------ */
-    if (pricingItems.length === 0 && role_counts) {
+    if (!isAiEditingFlow && pricingItems.length === 0 && role_counts) {
       Object.entries(role_counts).forEach(([role, count]) => {
         const itemId = ROLE_TO_ITEM_MAP[role];
         if (itemId && count > 0) {
@@ -645,10 +675,10 @@ exports.calculateFromCreators = async (req, res) => {
       });
     }
 
-    if (pricingItems.length === 0 && add_on_items.length === 0) {
+    if (pricingItems.length === 0 && add_on_items.length === 0 && !hasEditSelections) {
       return res.status(400).json({
         success: false,
-        message: 'No pricing items resolved',
+        message: 'No pricing items or edit types resolved',
       });
     }
 
@@ -656,7 +686,7 @@ exports.calculateFromCreators = async (req, res) => {
 
     const quote = await pricingService.calculateQuote({
       items: allItems,
-      shootHours: Number(shoot_hours),
+      shootHours: resolvedShootHours,
       eventType: event_type,
       shootStartDate: shoot_start_date,
       skipDiscount: skip_discount,

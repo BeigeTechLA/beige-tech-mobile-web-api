@@ -6,8 +6,13 @@ const { appendBookingToSheet } = require('../utils/googleSheetsService');
 const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 const { content } = require('googleapis/build/src/apis/content');
 const { sendCPNewBookingRequestEmail } = require('../utils/emailService');
-const { resolveEventDateAndStartTime, normalizeTime } = require('../utils/timezone');
+const { resolveEventDateAndStartTime, normalizeTime, splitDateTime } = require('../utils/timezone');
 const REFERRAL_DISCOUNT_PERCENT = 10;
+
+const normalizeDateOnlyInput = (value) => {
+  const { date } = splitDateTime(value);
+  return date || null;
+};
 
 async function resolveUserId(userId, guestEmail) {
   if (userId) return parseInt(userId);
@@ -390,6 +395,7 @@ exports.createGuestBooking = async (req, res) => {
       start_date_time,
       start_date,
       start_time,
+      estimated_delivery_date,
       duration_hours,
       end_time,
       time_zone,
@@ -447,6 +453,14 @@ exports.createGuestBooking = async (req, res) => {
 
     const normalizedGuestEmail = String(guest_email).trim().toLowerCase();
     const resolvedUserId = await resolveUserId(user_id, normalizedGuestEmail);
+    const normalizedEstimatedDeliveryDate = normalizeDateOnlyInput(estimated_delivery_date);
+
+    if (estimated_delivery_date && !normalizedEstimatedDeliveryDate) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'estimated_delivery_date must be a valid date'
+      });
+    }
 
     const toTimeParts = (timeStr) => {
       if (!timeStr) return null;
@@ -547,6 +561,7 @@ exports.createGuestBooking = async (req, res) => {
       content_type: content_type || null,
       event_type: event_type || content_type || project_type || (shoot_type ? shoot_type : null),
       event_date: event_date,
+      estimated_delivery_date: normalizedEstimatedDeliveryDate,
       duration_hours: duration_hours ? parseInt(duration_hours) : totalDurationHours != null ? totalDurationHours : null,
       start_time: start_time_final,
       end_time: normalizeTime(end_time) || null,
@@ -640,6 +655,7 @@ exports.createGuestBooking = async (req, res) => {
         guest_email: normalizedGuestEmail,
         user_id: booking.user_id,
         event_date: booking.event_date,
+        estimated_delivery_date: booking.estimated_delivery_date,
         event_location: formatLocationResponse(booking.event_location),
         budget: booking.budget,
         quote_id: booking.quote_id,
@@ -680,6 +696,7 @@ exports.updateGuestBooking = async (req, res) => {
       start_date_time,
       start_date,
       start_time,
+      estimated_delivery_date,
       duration_hours,
       end_time,
       budget_min,
@@ -743,6 +760,14 @@ exports.updateGuestBooking = async (req, res) => {
     const normalizedGuestEmail = guest_email ? String(guest_email).trim().toLowerCase() : null;
     const lookupEmail = normalizedGuestEmail || booking.guest_email || null;
     const resolvedUserId = await resolveUserId(null, lookupEmail);
+    const normalizedEstimatedDeliveryDate = normalizeDateOnlyInput(estimated_delivery_date);
+
+    if (estimated_delivery_date && !normalizedEstimatedDeliveryDate) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'estimated_delivery_date must be a valid date'
+      });
+    }
 
     const toTimeParts = (timeStr) => {
       if (!timeStr) return null;
@@ -842,6 +867,7 @@ exports.updateGuestBooking = async (req, res) => {
       updateData.event_type = event_type || content_type || project_type || shoot_type;
     }
     if (event_date) updateData.event_date = event_date;
+    if (estimated_delivery_date !== undefined) updateData.estimated_delivery_date = normalizedEstimatedDeliveryDate;
     if (duration_hours) updateData.duration_hours = parseInt(duration_hours);
     if (!duration_hours && totalDurationHours != null) updateData.duration_hours = totalDurationHours;
     if (start_time_final) updateData.start_time = start_time_final;
@@ -849,8 +875,12 @@ exports.updateGuestBooking = async (req, res) => {
     if (budget) updateData.budget = budget;
     if (expected_viewers) updateData.expected_viewers = parseInt(expected_viewers);
     if (stream_quality) updateData.stream_quality = stream_quality;
-    if (crew_size) updateData.crew_size_needed = parseInt(crew_size);
-    if (normalizedLocation) updateData.event_location = normalizedLocation;
+    if (crew_size !== undefined) {
+      updateData.crew_size_needed = crew_size === null || crew_size === ''
+        ? null
+        : parseInt(crew_size);
+    }
+    if (location !== undefined) updateData.event_location = normalizedLocation || null;
     if (streaming_platforms) {
       updateData.streaming_platforms = typeof streaming_platforms === 'string' 
         ? streaming_platforms 
@@ -948,6 +978,7 @@ exports.updateGuestBooking = async (req, res) => {
         guest_email: booking.guest_email,
         user_id: booking.user_id,
         event_date: booking.event_date,
+        estimated_delivery_date: booking.estimated_delivery_date,
         event_location: formatLocationResponse(booking.event_location),
         budget: booking.budget,
         quote_id: booking.quote_id,
@@ -1015,6 +1046,7 @@ exports.getGuestBookingById = async (req, res) => {
         description: booking.description,
         event_type: booking.event_type,
         event_date: booking.event_date,
+        estimated_delivery_date: booking.estimated_delivery_date,
         duration_hours: booking.duration_hours,
         start_time: booking.start_time,
         end_time: booking.end_time,
@@ -1593,6 +1625,7 @@ exports.getBookingPaymentDetails = async (req, res) => {
           description: booking.description,
           event_type: booking.event_type,
           event_date: booking.event_date,
+          estimated_delivery_date: booking.estimated_delivery_date,
           duration_hours: booking.duration_hours,
           start_time: booking.start_time,
           end_time: booking.end_time,

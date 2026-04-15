@@ -1730,3 +1730,128 @@ Authorization: {{TOKEN}}
 ###
 GET {{URL}}admin/934/get-booking-summary  HTTP/1.1
 Content-Type: application/json
+
+###
+POST {{URL}}sales/leads/track-early-interest  HTTP/1.1
+Content-Type: application/json
+
+{
+  "guest_email": "test@gmail.com",
+  "content_type": "ai editing",
+  "shoot_type": "wedding",
+  "estimated_delivery_date": "2026-06-08",
+  "edits_needed": true,
+  "video_edit_types": ["social_reel_15_30"],
+  "photo_edit_types": ["edited_photos"]
+}
+
+###
+PATCH {{URL}}sales/bookings/945/crew  HTTP/1.1
+Content-Type: application/json
+
+{
+  "crew_roles": { "editor":1 },
+  "description":"",
+  "reference_links":""
+}
+
+###
+GET {{URL}}creators/search?content_types=editor&limit=12&page=1
+
+###
+POST {{URL}}pricing/calculate-from-creators
+Content-Type: application/json
+
+{
+  "content_type": "ai editing",
+  "creator_ids": [2098],
+  "role_counts": {
+    "editor": 1
+  },
+  "event_type": "wedding",
+  "video_edit_types": [
+    { "slug": "social_reel_15_30", "quantity": 1 }
+  ],
+  "photo_edit_types": [
+    { "slug": "edited_photos", "quantity": 1 }
+  ],
+  "skip_discount": true,
+  "skip_margin": true
+}
+
+###
+POST {{URL}}pricing/quotes
+Content-Type: application/json
+
+{
+  "items": [],
+  "shootHours": 0,
+  "eventType": "wedding",
+  "guestEmail": "test@gmail.com",
+  "video_edit_types": [
+    { "slug": "social_reel_15_30", "quantity": 1 }
+  ],
+  "photo_edit_types": [
+    { "slug": "edited_photos", "quantity": 1 }
+  ]
+}
+
+###
+PUT {{URL}}guest-bookings/945
+Content-Type: application/json
+
+{
+  "order_name": "WEDDING Shoot - test",
+  "guestEmail": "test@gmail.com",
+  "content_type": "ai editing",
+  "shoot_type": "wedding",
+  "estimated_delivery_date": "2026-04-22",
+  "quote_id": 239,
+  "full_name": "test user",
+  "phone": "22722222222",
+  "edits_needed": true,
+  "video_edit_types": [
+    "social_reel_15_30"
+  ],
+  "photo_edit_types": [
+    "edited_photos"
+  ],
+  "crew_size": "",
+  "location": "",
+  "matching_method": "ai_matchmaker",
+  "selected_crew_ids": [2098],
+  "reference_links": "",
+  "is_draft": false
+}
+
+###
+GET {{URL}}admin/945/get-booking-summary
+Content-Type: application/json
+
+###
+GET {{URL}}guest-bookings/945/payment-details
+Content-Type: application/json
+
+###
+POST {{URL}}payments/create-intent-multi
+Content-Type: application/json
+
+{
+  "booking_id":"945",
+  "amount":500,
+  "guest_email":"test@gmail.com"
+}
+
+# ###
+# POST https://api.stripe.com/v1/payment_intents/pi_3TMSU554hnPNgHXU1Hq21snZ/confirm
+# Content-Type: application/json
+
+###
+POST {{URL}}payments/confirm-multi
+Content-Type: application/json
+
+{
+  "paymentIntentId":"pi_3TMSU554hnPNgHXU1Hq21snZ",
+  "booking_id":"945",
+  "referral_code":null
+}

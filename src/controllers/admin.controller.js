@@ -8006,6 +8006,7 @@ exports.getBookingSummaryById = async (req, res) => {
                 event_type: formattedEventType,
                 location: bookingJson.event_location,
                 date: primarySchedule.event_date || bookingJson.event_date,
+                estimated_delivery_date: bookingJson.estimated_delivery_date || null,
                 start_time: primarySchedule.start_time || bookingJson.start_time,
                 end_time: primarySchedule.end_time || bookingJson.end_time,
                 booking_days: bookingDayEntries.map((day) => ({
