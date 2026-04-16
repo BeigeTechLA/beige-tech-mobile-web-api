@@ -1630,7 +1630,7 @@ Content-Type: application/json
 Authorization: {{TOKEN2}}
 
 ### 
-GET {{URL}}sales/status-details?sales_rep_id=180
+GET {{URL}}sales/status-details?sales_rep_id=180&search=22722222222
 Authorization: {{TOKEN2}}
 
 ### date wise

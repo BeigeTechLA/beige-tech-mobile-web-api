@@ -102,7 +102,15 @@ async function getLiveStatusSnapshot(salesRepId) {
   };
 }
 
-async function getAssignedLeadsSnapshot(salesRepId) {
+async function getAssignedLeadsSnapshot(salesRepId, filters = {}) {
+  const {
+    start_date,
+    end_date,
+    lead_status,
+    lead_type,
+    search
+  } = filters;
+
   const leadAttributes = [
     'lead_id',
     'booking_id',
@@ -118,21 +126,51 @@ async function getAssignedLeadsSnapshot(salesRepId) {
     'updated_at'
   ];
 
+  // 🔹 Common where condition builder
+  const buildWhere = () => {
+    const where = {
+      assigned_sales_rep_id: salesRepId,
+      is_active: 1
+    };
+
+    // 📅 Date filter
+    if (start_date && end_date) {
+      where.created_at = {
+        [Op.between]: [new Date(start_date), new Date(end_date)]
+      };
+    }
+
+    // 📌 Status filter
+    if (lead_status) {
+      where.lead_status = lead_status;
+    }
+
+    // 📌 Type filter
+    if (lead_type) {
+      where.lead_type = lead_type;
+    }
+
+    // 🔍 Search filter
+    if (search) {
+      where[Op.or] = [
+        { client_name: { [Op.like]: `%${search}%` } },
+        { guest_email: { [Op.like]: `%${search}%` } },
+        { phone: { [Op.like]: `%${search}%` } }
+      ];
+    }
+
+    return where;
+  };
+
   const [assignedSalesLeads, assignedClientLeads] = await Promise.all([
     sales_leads.findAll({
-      where: {
-        assigned_sales_rep_id: salesRepId,
-        is_active: 1
-      },
+      where: buildWhere(),
       attributes: leadAttributes,
       order: [['updated_at', 'DESC'], ['lead_id', 'DESC']],
       raw: true
     }),
     client_leads.findAll({
-      where: {
-        assigned_sales_rep_id: salesRepId,
-        is_active: 1
-      },
+      where: buildWhere(),
       attributes: leadAttributes,
       order: [['updated_at', 'DESC'], ['lead_id', 'DESC']],
       raw: true
@@ -628,7 +666,7 @@ exports.getSalesRepStatusDetails = async (req, res) => {
   try {
     const salesRep = await resolveTargetSalesRep(req);
     const liveStatus = await getLiveStatusSnapshot(salesRep.id);
-    const assignedLeads = await getAssignedLeadsSnapshot(salesRep.id);
+    const assignedLeads = await getAssignedLeadsSnapshot(salesRep.id, req.query);
     const { start, end, start_date, end_date } = getDateRangeFromQuery(req.query, 7);
     const hasExplicitDateFilter = Boolean(
       normalizeDate(req.query?.date)
