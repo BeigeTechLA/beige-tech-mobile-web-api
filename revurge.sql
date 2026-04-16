@@ -982,3 +982,7 @@ ALTER TABLE crew_members ADD COLUMN old_location TEXT NULL AFTER location;
 -- 15-04-26
 
 ALTER TABLE stream_project_booking ADD COLUMN estimated_delivery_date DATE NULL AFTER event_date;
+
+--16-04-26
+
+ALTER TABLE `clients` CHANGE `user_id` `user_id` INT(11) NULL;
