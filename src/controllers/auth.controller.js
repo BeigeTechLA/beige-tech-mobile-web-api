@@ -679,6 +679,8 @@ exports.register = async (req, res) => {
             client_id: exisitingClient.client_id
           }
         });
+
+        newClient = exisitingClient;
       } else {
         newClient = await Clients.create({
           user_id: newUser.id,
