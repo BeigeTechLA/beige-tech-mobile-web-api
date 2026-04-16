@@ -667,13 +667,29 @@ exports.register = async (req, res) => {
     let newClient = null;
     
     if (userType == 3) {
-      newClient = await Clients.create({
-        user_id: newUser.id,
-        name,
-        email,
-        phone_number,
-        is_active: 1
+      let exisitingClient = await Clients.findOne({ 
+        where: { [Op.or]: conditions }
       });
+
+      if (exisitingClient) {
+        await Clients.update({
+          user_id: newUser.id,
+        }, {
+          where: {
+            client_id: exisitingClient.client_id
+          }
+        });
+
+        newClient = exisitingClient;
+      } else {
+        newClient = await Clients.create({
+          user_id: newUser.id,
+          name,
+          email,
+          phone_number,
+          is_active: 1
+        });
+      }
 
       appendToSheet('Client_data', [
         newClient.client_id,

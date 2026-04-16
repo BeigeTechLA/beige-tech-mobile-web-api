@@ -587,9 +587,16 @@ exports.getClientDropdown = async (req, res) => {
 
     const whereConditions = {
       is_active: 1,
-      user_id: {
-        [Op.in]: allowedUserIds
-      }
+      [Op.or]: [
+        {
+          user_id: {
+            [Op.in]: allowedUserIds
+          }
+        },
+        {
+          user_id: null
+        }
+      ]
     };
 
     if (search?.trim()) {
@@ -611,6 +618,25 @@ exports.getClientDropdown = async (req, res) => {
     });
   } catch (error) {
     console.error('Get Client Dropdown Error:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      error: true,
+      message: 'Internal server error'
+    });
+  }
+};
+
+exports.createClient = async (req, res) => {
+  try {
+    const { name, email, phone_number } = req.body;
+    await db.clients.create({ name, email, phone_number });
+
+    return res.status(constants.OK.code).json({
+      error: false,
+      message: 'Client created successfully',
+      data: {}
+    });
+  } catch (error) {
+    console.error('Client Create Error:', error);
     return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
       error: true,
       message: 'Internal server error'
