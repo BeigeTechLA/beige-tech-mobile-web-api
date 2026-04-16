@@ -91,6 +91,26 @@ router.get('/example', pricingController.getPricingExample);
  * @body    add_on_items - Optional array of additional pricing items {item_id, quantity}
  * @access  Public
  */
+/**
+ * @route   POST /api/pricing/items
+ * @desc    Create a new pricing item
+ * @access  Admin
+ */
+router.post('/items', authenticate, pricingController.createPricingItem);
+
+/**
+ * @route   PUT /api/pricing/items/:itemId
+ * @desc    Update a pricing item
+ * @access  Admin
+ */
+router.put('/items/:itemId', authenticate, pricingController.updatePricingItem);
+
+/**
+ * @route   DELETE /api/pricing/items/:itemId
+ * @desc    Delete a pricing item
+ * @access  Admin
+ */
+router.delete('/items/:itemId', authenticate, pricingController.deletePricingItem);
 router.post('/calculate-from-creators', pricingController.calculateFromCreators);
 
 module.exports = router;

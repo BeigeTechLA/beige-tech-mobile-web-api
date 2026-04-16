@@ -463,39 +463,28 @@ async function getAllPricingItems(filters = {}) {
  * @param {Date|string} shootStartDate 
  * @returns {number} Fee amount
  */
-function calculateRushFee(shootStartDate) {
+async function calculateRushFee(shootStartDate) {
   if (!shootStartDate) return 0;
-  
-  const normalizeShootStartDate = (value) => {
-    if (!value) return value;
-    if (value instanceof Date) return value.toISOString();
-    if (typeof value !== 'string') return value;
-    const trimmed = value.trim();
-    if (!trimmed) return trimmed;
-
-    // If no timezone info is present, assume UTC to ensure consistent behavior across servers.
-    const hasTimezone = /[zZ]|[+-]\d{2}:?\d{2}$/.test(trimmed);
-    return hasTimezone ? trimmed : `${trimmed}Z`;
-  };
 
   const now = new Date();
-  const normalizedStart = normalizeShootStartDate(shootStartDate);
-  const start = new Date(normalizedStart);
+  const trimmed = shootStartDate.trim();
+  const hasTimezone = /[zZ]|[+-]\d{2}:?\d{2}$/.test(trimmed);
+  const start = new Date(hasTimezone ? trimmed : `${trimmed}Z`);
   if (isNaN(start.getTime())) return 0;
-  
-  const diffInMs = start - now;
-  const diffInHours = diffInMs / (1000 * 60 * 60);
 
-  console.log(`Current Time (Now): ${now.toISOString()}`);
-  console.log(`Shoot Start: ${start.toISOString()}`);
-  console.log(`Difference in Hours: ${diffInHours}`);
-
+  const diffInHours = (start - now) / (1000 * 60 * 60);
   if (diffInHours < 0) return 0;
+  const rushCategory = await db.pricing_categories.findOne({ where: { slug: 'rush_order', is_active: 1 } });
+  const rushItems = rushCategory ? await db.pricing_items.findAll({
+    where: { category_id: rushCategory.category_id, is_active: 1 },
+    order: [['rate', 'DESC']]
+  }) : [];
 
-  if (diffInHours <= 24) return 250;
-  
-  if (diffInHours <= 72) return 125;
-  
+  const highRate = rushItems.length > 0 ? parseFloat(rushItems[0].rate) : 250;
+  const lowRate = rushItems.length > 1 ? parseFloat(rushItems[rushItems.length - 1].rate) : 125;
+
+  if (diffInHours <= 24) return highRate;
+  if (diffInHours <= 72) return lowRate;
   return 0;
 }
 /**
@@ -600,17 +589,26 @@ async function calculateQuote({
     }
 
     // 4. Pre-Production Fees
-    const preProdMap = {
-      photo: { wedding: 250, corporate: 250, private: 250, brand_product: 250, social_content: 250, people_teams: 250, behind_scenes: 250 },
-      video: { wedding: 250, corporate: 250, private: 250, advertising: 250, social_content: 250, podcast: 250, short_film: 250, music: 250, podcast_shows: 250 }
-    };
+    const preProdCategory = await db.pricing_categories.findOne({ where: { slug: 'pre-production', is_active: 1 } });
+    const preProdItem = preProdCategory ? await db.pricing_items.findOne({
+      where: { category_id: preProdCategory.category_id, is_active: 1 },
+      order: [['display_order', 'ASC']]
+    }) : null;
+    const preProdRate = preProdItem ? parseFloat(preProdItem.rate) : 250;
 
-    const hasPhoto = lineItems.some(li => li.category_slug === 'photography' || li.item_name.toLowerCase().includes('photo'));
-    const hasVideo = lineItems.some(li => li.category_slug === 'videography' || li.item_name.toLowerCase().includes('video'));
-
-    const photoPreProd = hasPhoto ? (preProdMap.photo[normalizedType] || 0) : 0;
-    const videoPreProd = hasVideo ? (preProdMap.video[normalizedType] || 0) : 0;
-    const preProdTotal = Math.max(photoPreProd, videoPreProd);
+   const hasPhoto = lineItems.some(li => 
+  li.category_slug === 'photography' || 
+  li.category_slug === 'services' ||           
+  li.item_name.toLowerCase().includes('photo') ||
+  li.item_name.toLowerCase().includes('photographer')  
+);
+const hasVideo = lineItems.some(li => 
+  li.category_slug === 'videography' || 
+  li.category_slug === 'services' ||           
+  li.item_name.toLowerCase().includes('video') ||
+  li.item_name.toLowerCase().includes('videographer') 
+);
+    const preProdTotal = (hasPhoto || hasVideo) ? preProdRate : 0;
 
     if (preProdTotal > 0) {
       subtotal += preProdTotal;
@@ -620,7 +618,7 @@ async function calculateQuote({
         unit_price: preProdTotal,
         line_total: preProdTotal,
         is_mandatory: true,
-        hidden: true // Keep hidden as it's rolled into "Shoot Cost" on frontend
+        hidden: true 
       });
     }
 
@@ -632,12 +630,34 @@ async function calculateQuote({
       });
     }
 
-    // 6. Rush Fee
-    const rushFee = calculateRushFee(shootStartDate);
+    // 6. Rush Fees
+    let rushFee = await calculateRushFee(shootStartDate);
+
+    if (rushFee === 0) {
+      const rushCat = await db.pricing_categories.findOne({
+        where: { slug: 'rush_order', is_active: 1 }
+      });
+      if (rushCat) {
+        const rushItems = await db.pricing_items.findAll({
+          where: { category_id: rushCat.category_id, is_active: 1 }
+        });
+        const rushItemIds = rushItems.map(r => r.item_id);
+        const selectedRush = items.filter(i => rushItemIds.includes(i.item_id));
+        selectedRush.forEach(sel => {
+          const dbRush = rushItems.find(r => r.item_id === sel.item_id);
+          if (dbRush) rushFee += parseFloat(dbRush.rate) * (sel.quantity || 1);
+        });
+      }
+    }
+
     if (rushFee > 0) {
       subtotal += rushFee;
       lineItems.push({
-        item_name: "Rush Order Fee", quantity: 1, unit_price: rushFee, line_total: rushFee, is_mandatory: true
+        item_name: "Rush Order Fee",
+        quantity: 1,
+        unit_price: rushFee,
+        line_total: rushFee,
+        is_mandatory: true
       });
     }
 

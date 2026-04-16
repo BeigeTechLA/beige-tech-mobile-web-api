@@ -201,19 +201,36 @@ exports.saveQuote = async (req, res) => {
       bookingId, 
       notes, 
       shoot_start_date,
-      // 1. Extract these from the request body
       video_edit_types = [], 
-      photo_edit_types = [] 
+      photo_edit_types = [],
+      role_counts = {}
     } = req.body;
     
     // 2. Pass them to the service calculation
+    const ROLE_TO_ITEM_MAP = {
+      videographer: 11,
+      photographer: 10,
+      cinematographer: 12,
+    };
+
+    let resolvedItems = [...(items || [])];
+
+    if (role_counts && resolvedItems.length === 0) {
+      Object.entries(role_counts).forEach(([role, count]) => {
+        const itemId = ROLE_TO_ITEM_MAP[role];
+        if (itemId && Number(count) > 0) {
+          resolvedItems.push({ item_id: itemId, quantity: Number(count) });
+        }
+      });
+    }
+
     const quoteData = await pricingService.calculateQuote({
-      items,
+      items: resolvedItems,  // ← resolved items use karo
       shootHours: parseFloat(shootHours) || 0,
       eventType,
       shootStartDate: shoot_start_date,
-      videoEditTypes: video_edit_types, // Pass video edits
-      photoEditTypes: photo_edit_types, // Pass photo edits
+      videoEditTypes: video_edit_types,
+      photoEditTypes: photo_edit_types,
       skipDiscount: true,
       skipMargin: true
     });
@@ -614,10 +631,10 @@ exports.calculateFromCreators = async (req, res) => {
 
         rolesArr.forEach((r) => {
           const roleKey =
-            r === 11 ? 'videographer' :
-            r === 10 ? 'photographer' :
-            r === 12 ? 'cinematographer' :
-            null;
+            r === 11 || String(r).toLowerCase() === 'videographer' ? 'videographer' :
+              r === 10 || String(r).toLowerCase() === 'photographer' ? 'photographer' :
+                r === 12 || String(r).toLowerCase() === 'cinematographer' ? 'cinematographer' :
+                  null;
 
           if (roleKey) {
             roleCounts[roleKey] = (roleCounts[roleKey] || 0) + 1;
@@ -688,6 +705,176 @@ exports.calculateFromCreators = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to calculate pricing',
+    });
+  }
+};
+
+/**
+ * Create a new pricing item
+ * POST /api/pricing/items
+ */
+exports.createPricingItem = async (req, res) => {
+  try {
+    const { name, unit_price, category_slug, section_key } = req.body;
+    if (!name || !unit_price || !category_slug) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'name, unit_price, and category_slug are required',
+      });
+    }
+
+    if (isNaN(parseFloat(unit_price)) || parseFloat(unit_price) < 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'unit_price must be a valid non-negative number',
+      });
+    }
+
+    const db = require('../models');
+
+    const category = await db.pricing_categories.findOne({
+      where: { slug: category_slug, is_active: 1 },
+    });
+
+    if (!category) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: `Category not found: ${category_slug}`,
+      });
+    }
+
+    const newItem = await db.pricing_items.create({
+      name,
+      rate: parseFloat(unit_price),
+      category_id: category.category_id,
+      slug: section_key || name.toLowerCase().replace(/\s+/g, '_'),
+      rate_type: 'flat',
+      pricing_mode: 'both',
+      is_active: 1,
+      display_order: 999,
+    });
+
+    const created = await db.pricing_items.findOne({
+      where: { item_id: newItem.item_id },
+      include: [{ model: db.pricing_categories, as: 'category', attributes: ['category_id', 'name', 'slug'] }],
+    });
+
+    return res.status(201).json({
+      success: true,
+      data: created.toJSON(),
+    });
+  } catch (error) {
+    console.error('Error creating pricing item:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to create pricing item',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+/**
+ * Update a pricing item
+ * PUT /api/pricing/items/:itemId
+ */
+exports.updatePricingItem = async (req, res) => {
+  try {
+    const { itemId } = req.params;
+    const { name, unit_price, rate } = req.body;
+
+    if (!itemId || isNaN(parseInt(itemId))) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Valid item ID is required',
+      });
+    }
+
+    if (!name && unit_price === undefined && rate === undefined) { 
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'At least name or unit_price is required to update',
+      });
+    }
+
+    const db = require('../models');
+
+    const item = await db.pricing_items.findOne({
+      where: { item_id: parseInt(itemId), is_active: 1 },
+    });
+
+    if (!item) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Pricing item not found',
+      });
+    }
+    const updateData = {};
+    if (name) updateData.name = name;
+    const priceValue = unit_price ?? rate;
+    if (priceValue !== undefined) updateData.rate = parseFloat(priceValue);
+
+    await item.update(updateData);
+
+    const updated = await db.pricing_items.findOne({
+      where: { item_id: parseInt(itemId) },
+      include: [{ model: db.pricing_categories, as: 'category', attributes: ['category_id', 'name', 'slug'] }],
+    });
+
+    return res.json({
+      success: true,
+      data: updated.toJSON(),
+    });
+  } catch (error) {
+    console.error('Error updating pricing item:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to update pricing item',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+/**
+ * Delete (soft) a pricing item
+ * DELETE /api/pricing/items/:itemId
+ */
+exports.deletePricingItem = async (req, res) => {
+  try {
+    const { itemId } = req.params;
+
+    if (!itemId || isNaN(parseInt(itemId))) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Valid item ID is required',
+      });
+    }
+
+    const db = require('../models');
+
+    const item = await db.pricing_items.findOne({
+      where: { item_id: parseInt(itemId), is_active: 1 },
+    });
+
+    if (!item) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Pricing item not found',
+      });
+    }
+
+    await item.update({ is_active: 0 });
+
+    return res.json({
+      success: true,
+      message: 'Pricing item deleted successfully',
+      data: { item_id: parseInt(itemId) },
+    });
+  } catch (error) {
+    console.error('Error deleting pricing item:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to delete pricing item',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }
 };
