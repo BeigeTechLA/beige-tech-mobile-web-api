@@ -48,3 +48,8 @@ build/
 # Google Cloud Service Account credentials
 revurve.json
 *.json
+
+.venv/
+__pycache__/
+*.pyc
+*.py
