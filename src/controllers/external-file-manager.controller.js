@@ -17,8 +17,10 @@ const getRequestUserId = (req) => req.userId || req.user?.userId || null;
 const getRequestUserRole = (req) => req.userRole || req.user?.userRole || null;
 const getNormalizedRequestUserRole = (req) => String(getRequestUserRole(req) || '').trim().toLowerCase();
 const isAdminRole = (req) => ['admin', 'super_admin', 'superadmin'].includes(getNormalizedRequestUserRole(req));
-const isCreatorRole = (req) => getNormalizedRequestUserRole(req) === 'creator';
-
+const isCreatorRole = (req) => {
+  const role = getNormalizedRequestUserRole(req);
+  return ['creator', 'creative', 'Creative'].includes(role);
+};
 const isCommonEventExternalId = (value) =>
   String(value || '').trim().toLowerCase().startsWith(COMMON_EVENT_ID_PREFIX);
 
