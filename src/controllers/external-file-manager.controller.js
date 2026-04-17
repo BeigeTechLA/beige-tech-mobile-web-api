@@ -903,80 +903,176 @@ exports.createCreatorEventFolder = async (req, res) => {
   }
 };
 
+// exports.searchFaceMatches = async (req, res) => {
+//   try {
+//     const externalId = String(req.body.externalId || req.body.eventExternalId || '').trim().toLowerCase();
+//     if (!externalId) {
+//       return res.status(400).json({
+//         success: false,
+//         message: 'externalId is required',
+//       });
+//     }
+
+//     const scanImageBase64 = String(req.body.scanImageBase64 || '').trim();
+//     const scanImageUrl = String(req.body.scanImageUrl || '').trim();
+//     if (!scanImageBase64 && !scanImageUrl) {
+//       return res.status(400).json({
+//         success: false,
+//         message: 'scanImageBase64 or scanImageUrl is required',
+//       });
+//     }
+
+//     await ensureCreatorWorkspaceAccess(req, externalId);
+
+//     const imageCandidates = await collectWorkspaceImageCandidates(externalId);
+//     const imageCandidatesWithUrls = await enrichCandidatesWithViewUrls(imageCandidates);
+//     if (!FACE_SCAN_SERVICE_URL) {
+//       return res.status(200).json({
+//         success: true,
+//         message: 'Face scan provider is not configured yet',
+//         data: {
+//           externalId,
+//           scanMode: 'full_face_scan',
+//           integrated: false,
+//           candidatesCount: imageCandidatesWithUrls.length,
+//           matches: [],
+//         },
+//       });
+//     }
+
+//     const response = await fetch(`${FACE_SCAN_SERVICE_URL.replace(/\/+$/, '')}/search`, {
+//       method: 'POST',
+//       headers: {
+//         'Content-Type': 'application/json',
+//       },
+//       body: JSON.stringify({
+//         externalId,
+//         scanMode: 'full_face_scan',
+//         scanImageBase64: scanImageBase64 || undefined,
+//         scanImageUrl: scanImageUrl || undefined,
+//         candidates: imageCandidatesWithUrls,
+//         threshold: Number(req.body.threshold || 0.7),
+//         maxResults: Number(req.body.maxResults || 200),
+//       }),
+//     });
+
+//     const providerPayload = await response.json().catch(() => null);
+//     if (!response.ok) {
+//       return res.status(502).json({
+//         success: false,
+//         message: providerPayload?.message || 'Face scan provider failed',
+//       });
+//     }
+
+//     return res.status(200).json({
+//       success: true,
+//       message: 'Face scan completed',
+//       data: {
+//         externalId,
+//         scanMode: 'full_face_scan',
+//         integrated: true,
+//         candidatesCount: imageCandidatesWithUrls.length,
+//         matches: providerPayload?.data?.matches || providerPayload?.matches || [],
+//         provider: providerPayload?.data?.provider || providerPayload?.provider || null,
+//       },
+//     });
+//   } catch (error) {
+//     return res.status(error.status || 500).json(error.payload || {
+//       success: false,
+//       message: error.message || 'Face scan search failed',
+//     });
+//   }
+// };
+
 exports.searchFaceMatches = async (req, res) => {
+  req.setTimeout(120000); 
+  res.setTimeout(120000);
+
   try {
     const externalId = String(req.body.externalId || req.body.eventExternalId || '').trim().toLowerCase();
     if (!externalId) {
-      return res.status(400).json({
-        success: false,
-        message: 'externalId is required',
-      });
+      return res.status(400).json({ success: false, message: 'externalId is required' });
     }
 
     const scanImageBase64 = String(req.body.scanImageBase64 || '').trim();
     const scanImageUrl = String(req.body.scanImageUrl || '').trim();
     if (!scanImageBase64 && !scanImageUrl) {
-      return res.status(400).json({
-        success: false,
-        message: 'scanImageBase64 or scanImageUrl is required',
-      });
+      return res.status(400).json({ success: false, message: 'scanImageBase64 or scanImageUrl is required' });
     }
 
     await ensureCreatorWorkspaceAccess(req, externalId);
 
     const imageCandidates = await collectWorkspaceImageCandidates(externalId);
     const imageCandidatesWithUrls = await enrichCandidatesWithViewUrls(imageCandidates);
+
     if (!FACE_SCAN_SERVICE_URL) {
       return res.status(200).json({
         success: true,
         message: 'Face scan provider is not configured yet',
+        data: { externalId, scanMode: 'full_face_scan', integrated: false, candidatesCount: imageCandidatesWithUrls.length, matches: [] },
+      });
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 120000);
+
+    try {
+      const response = await fetch(`${FACE_SCAN_SERVICE_URL.replace(/\/+$/, '')}/search`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          externalId,
+          scanMode: 'full_face_scan',
+          scanImageBase64: scanImageUrl ? undefined : (scanImageBase64 || undefined),
+          scanImageUrl: scanImageUrl || undefined,
+          candidates: imageCandidatesWithUrls.map(c => ({
+            id: c.id || c._id,
+            url: c.url || c.viewUrl
+          })),
+          threshold: Number(req.body.threshold || 0.7),
+          maxResults: Number(req.body.maxResults || 200),
+        }),
+      });
+
+      clearTimeout(timeout);
+
+      const providerPayload = await response.json().catch(() => null);
+      
+      if (!response.ok) {
+        return res.status(502).json({
+          success: false,
+          message: providerPayload?.message || 'Face scan provider failed',
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'Face scan completed',
         data: {
           externalId,
           scanMode: 'full_face_scan',
-          integrated: false,
+          integrated: true,
           candidatesCount: imageCandidatesWithUrls.length,
-          matches: [],
+          matches: providerPayload?.data?.matches || providerPayload?.matches || [],
+          provider: providerPayload?.data?.provider || providerPayload?.provider || null,
         },
       });
+
+    } catch (fetchError) {
+      if (fetchError.name === 'AbortError') {
+        return res.status(504).json({
+          success: false,
+          message: 'The face scan service took too long to respond (Timeout)',
+        });
+      }
+      throw fetchError;
     }
 
-    const response = await fetch(`${FACE_SCAN_SERVICE_URL.replace(/\/+$/, '')}/search`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        externalId,
-        scanMode: 'full_face_scan',
-        scanImageBase64: scanImageBase64 || undefined,
-        scanImageUrl: scanImageUrl || undefined,
-        candidates: imageCandidatesWithUrls,
-        threshold: Number(req.body.threshold || 0.7),
-        maxResults: Number(req.body.maxResults || 200),
-      }),
-    });
-
-    const providerPayload = await response.json().catch(() => null);
-    if (!response.ok) {
-      return res.status(502).json({
-        success: false,
-        message: providerPayload?.message || 'Face scan provider failed',
-      });
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: 'Face scan completed',
-      data: {
-        externalId,
-        scanMode: 'full_face_scan',
-        integrated: true,
-        candidatesCount: imageCandidatesWithUrls.length,
-        matches: providerPayload?.data?.matches || providerPayload?.matches || [],
-        provider: providerPayload?.data?.provider || providerPayload?.provider || null,
-      },
-    });
   } catch (error) {
+    console.error('Face Scan Error:', error);
     return res.status(error.status || 500).json(error.payload || {
       success: false,
       message: error.message || 'Face scan search failed',
