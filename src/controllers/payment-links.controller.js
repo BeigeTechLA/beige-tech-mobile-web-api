@@ -33,6 +33,185 @@ const formatProposalProjectName = (value) => {
     .join(' - ');
 };
 
+const formatInvoiceDate = (value) => {
+  if (!value) return '';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return String(value);
+  return parsed.toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  });
+};
+
+const formatInvoiceTime = (value) => {
+  if (!value) return '';
+  const text = String(value);
+  const [hh, mm] = text.split(':');
+  if (hh === undefined || mm === undefined) return text;
+  const hour = Number(hh);
+  if (Number.isNaN(hour)) return text;
+  const suffix = hour >= 12 ? 'PM' : 'AM';
+  const hour12 = hour % 12 || 12;
+  return `${hour12}:${mm} ${suffix}`;
+};
+
+const parseJsonArray = (value) => {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+    try {
+      const parsed = JSON.parse(trimmed);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (_) {
+      return trimmed
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+  }
+  return [];
+};
+
+const formatInvoiceLocation = (location) => {
+  if (!location) return 'TBD';
+
+  if (typeof location === 'object') {
+    return (
+      location.address ||
+      location.full_address ||
+      location.formatted_address ||
+      location.place_name ||
+      location.name ||
+      'TBD'
+    );
+  }
+
+  const trimmed = String(location).trim();
+  if (!trimmed) return 'TBD';
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (typeof parsed === 'string') return parsed;
+    if (parsed && typeof parsed === 'object') {
+      return (
+        parsed.address ||
+        parsed.full_address ||
+        parsed.formatted_address ||
+        parsed.place_name ||
+        parsed.name ||
+        trimmed
+      );
+    }
+  } catch (_) {}
+
+  return trimmed;
+};
+
+const formatEditTypeLabel = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+
+  return raw
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .split(' ')
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(' ');
+};
+
+const resolveInvoiceServices = (booking, pricingData) => {
+  const editingKeywords = /\b(edit|editing|edited|reel|retouch|retouching|color|thumbnail|post[- ]?production|revision)\b/i;
+  const lineItemNames = Array.isArray(pricingData?.line_items)
+    ? pricingData.line_items
+        .map((item) => String(item?.name || '').trim())
+        .filter((name) => name && !editingKeywords.test(name))
+    : [];
+
+  const uniqueLineItems = [...new Set(lineItemNames)];
+  if (uniqueLineItems.length) {
+    return uniqueLineItems.join(', ');
+  }
+
+  const contentType = emailService.formatContentTypes(booking?.content_type);
+  if (contentType) return contentType;
+
+  const shootType = emailService.formatShootTypes(booking?.shoot_type);
+  if (shootType) return shootType;
+
+  return 'N/A';
+};
+
+const resolveInvoiceEditing = (booking) => {
+  const videoEditTypes = parseJsonArray(booking?.video_edit_types);
+  const photoEditTypes = parseJsonArray(booking?.photo_edit_types);
+  const formattedTypes = [...new Set(
+    [...videoEditTypes, ...photoEditTypes]
+      .map((item) => {
+        if (!item) return '';
+        if (typeof item === 'string') return formatEditTypeLabel(item);
+        if (typeof item === 'object') {
+          return formatEditTypeLabel(item.label || item.name || item.slug || item.key || item.value);
+        }
+        return '';
+      })
+      .filter(Boolean)
+  )];
+
+  if (formattedTypes.length) {
+    return formattedTypes.join(', ');
+  }
+
+  if (booking?.edits_needed === 1 || booking?.edits_needed === true) {
+    return 'Included';
+  }
+
+  return 'Not included';
+};
+
+const resolveInvoiceSchedule = (booking) => {
+  const bookingDayEntries = Array.isArray(booking?.booking_days) && booking.booking_days.length
+    ? [...booking.booking_days]
+    : [{
+        event_date: booking?.event_date,
+        start_time: booking?.start_time,
+        end_time: booking?.end_time
+      }];
+
+  const sortedEntries = bookingDayEntries.sort((a, b) => {
+    const dateCompare = String(a?.event_date || '').localeCompare(String(b?.event_date || ''));
+    if (dateCompare !== 0) return dateCompare;
+    return String(a?.start_time || '').localeCompare(String(b?.start_time || ''));
+  });
+
+  const parts = sortedEntries
+    .map((day) => {
+      const dateLabel = formatInvoiceDate(day?.event_date);
+      const startLabel = formatInvoiceTime(day?.start_time);
+      const endLabel = formatInvoiceTime(day?.end_time);
+      const timeLabel = [startLabel, endLabel].filter(Boolean).join(' - ');
+
+      if (dateLabel && timeLabel) return `${dateLabel} | ${timeLabel}`;
+      return dateLabel || timeLabel || '';
+    })
+    .filter(Boolean);
+
+  return parts.join('; ') || 'TBD';
+};
+
+const buildInvoiceTemplateDetails = (booking, pricingData, invoiceDetails) => ({
+  ...invoiceDetails,
+  projectTitle: formatProposalProjectName(booking?.project_name),
+  shootType: booking?.shoot_type || '',
+  contentType: booking?.content_type || '',
+  services: resolveInvoiceServices(booking, pricingData),
+  schedule: resolveInvoiceSchedule(booking),
+  editing: resolveInvoiceEditing(booking),
+  location: formatInvoiceLocation(booking?.event_location)
+});
+
 const updatePaymentLeadState = async ({
   leadId = null,
   clientLeadId = null,
@@ -795,7 +974,8 @@ const bookingInvoiceIncludes = [
     required: false,
     include: [{ model: db.quote_line_items, as: 'line_items', required: false }]
   },
-  { model: db.users, as: 'user', required: false }
+  { model: db.users, as: 'user', required: false },
+  { model: db.stream_project_booking_days, as: 'booking_days', required: false }
 ];
 
 const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = null, recipientOverride = null) => {
@@ -894,7 +1074,13 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
         stripeTotalAmount = (retrospectiveInvoice.total || 0) / 100;
       }
 
-      invoiceDetails = { projectTitle: booking.project_name, invoiceUrl, invoicePdf, invoiceNumber, totalAmount: stripeTotalAmount, isPaid: true };
+      invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
+        invoiceUrl,
+        invoicePdf,
+        invoiceNumber,
+        totalAmount: stripeTotalAmount,
+        isPaid: true
+      });
 
     } else {
       // --- CASE 2: NOT PAID YET ---
@@ -902,7 +1088,13 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
         recipientOverride,
         forceNewInvoice: Boolean(recipientOverride?.email || recipientOverride?.name)
       });
-      invoiceDetails = { projectTitle: booking.project_name, invoiceUrl: stripeInvoice.hosted_invoice_url, invoicePdf: stripeInvoice.invoice_pdf, invoiceNumber: stripeInvoice.number, totalAmount: pricingData.total, isPaid: false };
+      invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
+        invoiceUrl: stripeInvoice.hosted_invoice_url,
+        invoicePdf: stripeInvoice.invoice_pdf,
+        invoiceNumber: stripeInvoice.number,
+        totalAmount: pricingData.total,
+        isPaid: false
+      });
     }
 
     await booking.update({ invoice_generation_status: 'completed' });
@@ -1007,7 +1199,11 @@ exports.sendStripeInvoice = async (req, res) => {
     const emailResult = await emailService.sendInvoiceEmail(userData, invoiceDetails);
 
     if (!emailResult.success) {
-      console.error("Email failed to send but invoice was generated:", emailResult.error);
+      console.error("Email failed", {
+        booking_id: parsedBookingId,
+        invoice: invoiceDetails.invoiceNumber,
+        error: emailResult.error
+      });
     }
 
     const associatedLead = await db.sales_leads.findOne({ where: { booking_id: parsedBookingId } });
@@ -1037,7 +1233,7 @@ exports.sendStripeInvoice = async (req, res) => {
       activityData: {
         booking_id: parsedBookingId,
         invoice_number: invoiceDetails.invoiceNumber,
-        invoice_sent: true,
+        invoice_sent: emailResult.success,
         invoice_url: invoiceDetails.invoiceUrl || null,
         invoice_pdf: invoiceDetails.invoicePdf || null,
         recipient_name: recipientName || null,

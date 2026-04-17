@@ -2,7 +2,7 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjQsInVzZXJSb2xlIjoic2FsZXNfcmVwIiwiaWF0IjoxNzc2MjM1ODI0LCJleHAiOjE3NzY4NDA2MjR9.7apxMrftY5r84Mv2FGKjby1F_fqScun5l6wdHbAtFrs
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzY0MDI4OTUsImV4cCI6MTc3NzAwNzY5NX0.q7KzjCqMTxWLILgWzwO8VoaHOzdyfEADgRVummG2mHQ
 
 @TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzYyNTc0NDIsImV4cCI6MTc3Njg2MjI0Mn0.D-6nEkuqfog0IC-FsF5oxS27doGTDtNhN5_0HmmREkw
 
@@ -738,7 +738,7 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "booking_id": 800
+  "booking_id": 948
 }
 
 ### 
@@ -1228,8 +1228,8 @@ Authorization: {{TOKEN}}
 
 {
   "name": "neha",
-  "email": "neha@gmail.com",
-  "phone_number": "2178996655"
+  "email": "nehaj@gmail.com",
+  "phone_number": "2178996658"
 }
 
 ### sales quote catalog
