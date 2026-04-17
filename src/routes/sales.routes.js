@@ -298,6 +298,7 @@ router.get('/dashboard/funnel', authenticate, requireSalesRepOrAdmin, salesDashb
 // =====================================================
 
 router.get('/client-dropdown', authenticate, requireSalesRepOrAdmin, salesQuotesController.getClientDropdown);
+router.post('/create-client', authenticate, requireSalesRepOrAdmin, salesQuotesController.createClient);
 router.get('/quotes/catalog', authenticate, requireSalesRepOrAdmin, salesQuotesController.getCatalog);
 router.get('/quotes/ai-editing-types', authenticate, requireSalesRepOrAdmin, salesQuotesController.getAiEditingTypes);
 router.post('/quotes/ai-editing-types', authenticate, requireSalesRepOrAdmin, salesQuotesController.createAiEditingType);
