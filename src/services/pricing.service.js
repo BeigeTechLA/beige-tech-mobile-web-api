@@ -518,6 +518,7 @@ async function calculateQuote({
   shootHours = 0, 
   eventType = null, 
   shootStartDate = null, 
+  studioTotal = 0,
   videoEditTypes = [], 
   photoEditTypes = [],
   marginPercent = null, 
@@ -647,6 +648,11 @@ async function calculateQuote({
       lineItems.push({
         item_name: "Rush Order Fee", quantity: 1, unit_price: rushFee, line_total: rushFee, is_mandatory: true
       });
+    }
+
+    const parsedStudioTotal = Number(studioTotal) || 0;
+    if (parsedStudioTotal > 0) {
+      subtotal += parsedStudioTotal;
     }
 
     // Final Math

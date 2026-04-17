@@ -201,6 +201,7 @@ exports.saveQuote = async (req, res) => {
       bookingId, 
       notes, 
       shoot_start_date,
+      studio_total = 0,
       // 1. Extract these from the request body
       video_edit_types = [], 
       photo_edit_types = [] 
@@ -212,6 +213,7 @@ exports.saveQuote = async (req, res) => {
       shootHours: parseFloat(shootHours) || 0,
       eventType,
       shootStartDate: shoot_start_date,
+      studioTotal: parseFloat(studio_total) || 0,
       videoEditTypes: video_edit_types, // Pass video edits
       photoEditTypes: photo_edit_types, // Pass photo edits
       skipDiscount: true,
@@ -550,6 +552,7 @@ exports.calculateFromCreators = async (req, res) => {
       shoot_hours,
       event_type,
       shoot_start_date,
+      studio_total = 0,
       add_on_items = [],
       video_edit_types = [], // Added
       photo_edit_types = [], 
@@ -689,6 +692,7 @@ exports.calculateFromCreators = async (req, res) => {
       shootHours: resolvedShootHours,
       eventType: event_type,
       shootStartDate: shoot_start_date,
+      studioTotal: parseFloat(studio_total) || 0,
       skipDiscount: skip_discount,
       skipMargin: skip_margin,
       videoEditTypes: video_edit_types, // Sent to service
