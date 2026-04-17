@@ -703,7 +703,7 @@ function resolveValidity({ validUntil, quoteValidityDays, validUntilProvided = f
 }
 
 function isAdminRole(role) {
-  return role === 'admin' || role === 'Admin' || role === 'sales_admin' || role === 'Sales_Admin';
+  return role === 'admin' || role === 'Admin' || role === 'sales_admin' || role === 'Sales_Admin' || role === 'sales_rep' || role === 'Sales_Rep';
 }
 
 async function getRandomActiveSalesRepId(transaction) {
