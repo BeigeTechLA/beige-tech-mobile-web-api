@@ -34,7 +34,7 @@ class SearchRequest(BaseModel):
     scanImageBase64: Optional[str] = None
     scanImageUrl: Optional[str] = None
     candidates: List[Candidate] = Field(default_factory=list)
-    threshold: float = 0.9
+    threshold: float = 0.7
     maxResults: int = 200
 
 
@@ -66,7 +66,7 @@ def _get_embedding_from_path(img_path: str) -> List[float]:
         img_path=img_path,
         model_name=FACE_MODEL,
         detector_backend=FACE_DETECTOR,
-        enforce_detection=True
+        enforce_detection=False,
     )
     if not reps:
         raise ValueError("No face embedding generated")
