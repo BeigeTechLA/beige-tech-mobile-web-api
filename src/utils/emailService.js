@@ -1580,18 +1580,27 @@ const sendInvoiceEmail = async (userData, invoiceData) => {
       },
       templateId: INVOICE_TEMPLATE_ID,
       dynamicTemplateData: {
-        title: isPaid ? 'Payment Received' : 'New Invoice',
-        statusColor: isPaid ? '#22c55e' : '#C79233',
-        invoiceNumber: invoiceData.invoiceNumber,
-        name: userData.name || 'there',
-        projectTitle: invoiceData.projectTitle,
-        totalAmount: invoiceData.totalAmount 
-          ? parseFloat(invoiceData.totalAmount).toFixed(2) 
+        first_name: getFirstName(userData?.name, '') || 'there',
+        // Header section
+        shoot_type: formatShootTypes(invoiceData?.shootType) || 'Shoot',
+        shoot_category: formatContentTypes(invoiceData?.contentType) || 'General',
+        // Shoot details
+        project: invoiceData.projectTitle || 'N/A',
+        services: invoiceData.services || 'N/A',
+        schedule: invoiceData.schedule || 'N/A',
+        editing:
+          typeof invoiceData?.editing === 'string'
+            ? invoiceData.editing
+            : (formatEditingStatus(invoiceData?.editing) || 'N/A'),
+        location: invoiceData.location || 'N/A',
+        // Amount + links
+        invoice_amount: invoiceData.totalAmount
+          ? parseFloat(invoiceData.totalAmount).toFixed(2)
           : '0.00',
-        isPaid: isPaid,
-        invoiceUrl: invoiceData.invoiceUrl,
-        invoicePdf: invoiceData.invoicePdf,
-        year: new Date().getFullYear()
+        payment_link: invoiceData.invoiceUrl,
+        invoice_pdf: invoiceData.invoicePdf || invoiceData.invoiceUrl,
+        // Important
+        isPaid: invoiceData.isPaid
       }
     };
 
