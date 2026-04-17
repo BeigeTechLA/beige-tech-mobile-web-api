@@ -189,7 +189,7 @@ exports.requireSalesRepOrAdmin = async (req, res, next) => {
 
     const userRole = user.userType?.user_role;
     
-    const allowedRoles = ['admin', 'Admin', 'sales_rep', 'sales_admin'];
+    const allowedRoles = ['admin', 'Admin', 'sales_rep', 'sales_admin', 'Sales_Admin', 'Sales_admin'];
 
     if (!allowedRoles.includes(userRole)) {
       return res.status(403).json({
