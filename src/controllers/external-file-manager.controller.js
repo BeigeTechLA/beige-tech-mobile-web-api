@@ -81,13 +81,15 @@ const ensureCommonEventCreatorFoldersTable = async () => {
         workspace_external_id VARCHAR(128) NOT NULL,
         phase VARCHAR(16) NOT NULL DEFAULT 'pre',
         folder_path VARCHAR(1024) NOT NULL,
+        folder_path_hash CHAR(64) AS (SHA2(folder_path, 256)) STORED,
         created_by_user_id BIGINT UNSIGNED NOT NULL,
         created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         PRIMARY KEY (id),
-        UNIQUE KEY uq_common_event_creator_folder (workspace_external_id, phase, folder_path),
+        UNIQUE KEY uq_common_event_creator_folder (workspace_external_id, phase, folder_path_hash),
         KEY idx_common_event_creator_user (created_by_user_id),
-        KEY idx_common_event_creator_workspace (workspace_external_id)
+        KEY idx_common_event_creator_workspace (workspace_external_id),
+        KEY idx_common_event_creator_folder_path (folder_path(191))
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
   }
