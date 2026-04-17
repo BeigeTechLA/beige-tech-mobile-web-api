@@ -67,7 +67,8 @@ const {
   CP_SIGNUP_WELCOME_TEMPLATE_ID,
   PRODUCTION_PROPOSAL_TEMPLATE_ID,
   CP_CONFIRMED_TEMPLATE_ID,
-  CUSTOM_QUOTE_PROPOSAL_ID
+  CUSTOM_QUOTE_PROPOSAL_ID,
+  INVOICE_TEMPLATE_ID
 } = require('../config/sendgridTemplates');
 
 const formatDate = (value) => {
@@ -976,6 +977,12 @@ const sendFinalNudge7DaysEmail = async (data) => {
       return { success: false, error: 'Sender email not configured' };
     }
 
+    const cpFirstName =
+      String(data.cp_name || '')
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean)[0] || 'your Creative Partner';
+
     const payload = {
       to: data.to_email,
       from: {
@@ -986,7 +993,7 @@ const sendFinalNudge7DaysEmail = async (data) => {
       templateId: SHOOT_FINAL_NUDGE_7D_TEMPLATE_ID,
       dynamicTemplateData: {
         user_name: data.first_name || 'there',
-        cp_name: data.cp_name || 'your Creative Partner',
+        cp_name: cpFirstName,
         review_link: `${process.env.FRONTEND_URL}/affiliate/dashboard`
       }
     };
@@ -1530,26 +1537,92 @@ const generatePaymentLinkTemplate = (userData, paymentData) => {
  * @param {Object} userData - { name, email }
  * @param {Object} invoiceData - { projectTitle, invoiceUrl, invoicePdf, totalAmount, invoiceNumber, isPaid }
  */
+// const sendInvoiceEmail = async (userData, invoiceData) => {
+//   try {
+//     const statusText = invoiceData.isPaid ? 'Receipt' : 'Invoice';
+    
+//     const mailOptions = {
+//       from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_USER}>`,
+//       to: userData.email,
+//       subject: `${statusText} #${invoiceData.invoiceNumber} for ${invoiceData.projectTitle}`,
+//       attachments: [{
+//         filename: 'logo.png',
+//         path: process.env.BEIGE_ASSET_BASE_URL + 'beige_logo_vb.png',
+//         cid: 'beigelogo'
+//       }],
+//       html: generateInvoiceTemplate(userData, invoiceData)
+//     };
+
+//     const info = await transporter.sendMail(mailOptions);
+//     return { success: true, messageId: info.messageId };
+//   } catch (error) {
+//     console.error('Error sending invoice email:', error);
+//     return { success: false, error: error.message };
+//   }
+// };
+
 const sendInvoiceEmail = async (userData, invoiceData) => {
   try {
-    const statusText = invoiceData.isPaid ? 'Receipt' : 'Invoice';
-    
-    const mailOptions = {
-      from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_USER}>`,
+    if (!process.env.SENDGRID_API_KEY) {
+      return { success: false, error: 'SENDGRID_API_KEY not configured' };
+    }
+
+    if (!userData?.email) {
+      return { success: false, error: 'Recipient email required' };
+    }
+
+    const fromEmail = getSendgridFromAddress();
+    if (!fromEmail) {
+      return { success: false, error: 'Sender email not configured' };
+    }
+
+    const isPaid = invoiceData.isPaid;
+
+    const payload = {
       to: userData.email,
-      subject: `${statusText} #${invoiceData.invoiceNumber} for ${invoiceData.projectTitle}`,
-      attachments: [{
-        filename: 'logo.png',
-        path: process.env.BEIGE_ASSET_BASE_URL + 'beige_logo_vb.png',
-        cid: 'beigelogo'
-      }],
-      html: generateInvoiceTemplate(userData, invoiceData)
+      from: {
+        email: fromEmail,
+        name: getSendgridFromName()
+      },
+      templateId: INVOICE_TEMPLATE_ID,
+      dynamicTemplateData: {
+        first_name: getFirstName(userData?.name, '') || 'there',
+        // Header section
+        shoot_type: formatShootTypes(invoiceData?.shootType) || 'Shoot',
+        shoot_category: formatContentTypes(invoiceData?.contentType) || 'General',
+        // Shoot details
+        project: invoiceData.projectTitle || 'N/A',
+        services: invoiceData.services || 'N/A',
+        schedule: invoiceData.schedule || 'N/A',
+        editing:
+          typeof invoiceData?.editing === 'string'
+            ? invoiceData.editing
+            : (formatEditingStatus(invoiceData?.editing) || 'N/A'),
+        location: invoiceData.location || 'N/A',
+        // Amount + links
+        invoice_amount: invoiceData.totalAmount
+          ? parseFloat(invoiceData.totalAmount).toFixed(2)
+          : '0.00',
+        payment_link: invoiceData.invoiceUrl,
+        invoice_pdf: invoiceData.invoicePdf || invoiceData.invoiceUrl,
+        // Important
+        isPaid: invoiceData.isPaid
+      }
     };
 
-    const info = await transporter.sendMail(mailOptions);
-    return { success: true, messageId: info.messageId };
+    const [response] = await sgMail.send(payload);
+
+    return {
+      success: true,
+      statusCode: response?.statusCode,
+      messageId:
+        response?.headers?.['x-message-id'] ||
+        response?.headers?.['X-Message-Id'] ||
+        null
+    };
+
   } catch (error) {
-    console.error('Error sending invoice email:', error);
+    console.error('SendGrid Invoice Error:', error?.response?.body || error.message);
     return { success: false, error: error.message };
   }
 };

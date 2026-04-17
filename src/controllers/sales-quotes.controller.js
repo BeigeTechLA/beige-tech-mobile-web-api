@@ -608,13 +608,19 @@ exports.getClientDropdown = async (req, res) => {
     const clientList = await db.clients.findAll({
       where: whereConditions,
       attributes: ['client_id', 'name', 'user_id', 'email', 'phone_number'],
-      order: [['name', 'ASC']]
+      order: [['name', 'ASC']],
+      raw: true
     });
+
+    const formattedList = clientList.map(client => ({
+      ...client,
+      client_type: client.user_id ? 'registered' : 'guest'
+    }));
 
     return res.status(constants.OK.code).json({
       error: false,
       message: 'Client dropdown fetched successfully',
-      data: clientList
+      data: formattedList
     });
   } catch (error) {
     console.error('Get Client Dropdown Error:', error);
@@ -628,6 +634,23 @@ exports.getClientDropdown = async (req, res) => {
 exports.createClient = async (req, res) => {
   try {
     const { name, email, phone_number } = req.body;
+
+    const existingUser = await db.users.findOne({
+      where: {
+        [db.Sequelize.Op.or]: [
+          email ? { email } : null,
+          phone_number ? { phone_number } : null
+        ].filter(Boolean)
+      }
+    });
+
+    if (existingUser) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        error: true,
+        message: 'Client already exists with same email or phone number'
+      });
+    }
+
     await db.clients.create({ name, email, phone_number });
 
     return res.status(constants.OK.code).json({
