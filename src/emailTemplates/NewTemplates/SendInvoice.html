@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+</head>
+
+<body style="margin: 0; padding: 0; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #0A0F0D; color: #ffffff;">
+    
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #0A0F0D; padding: 40px 10px;">
+        <tr>
+            <td align="center">
+                
+                <table width="600" cellpadding="0" cellspacing="0" border="0"
+                    style="background-color: #000000; border: 1px solid rgba(232, 209, 171, 0.2); border-radius: 20px; overflow: hidden;">
+                    
+                    <!-- LOGO -->
+                    <tr>
+                        <td align="center" style="padding: 40px 0 20px 0;">
+                            <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
+                                alt="Beige" width="110" style="display: block; border: 0;">
+                        </td>
+                    </tr>
+
+                    <!-- CONTENT -->
+                    <tr>
+                        <td style="padding: 0 50px 40px 50px; text-align: center;">
+                            
+                            <h1 style="color: #E1CAA1; font-size: 28px; font-weight: 500; margin-bottom: 10px;">
+                                {{title}}
+                            </h1>
+
+                            <p style="color: {{statusColor}}; font-size: 14px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 25px;">
+                                {{invoiceNumber}}
+                            </p>
+
+                            <p style="color: #E8D1AB; font-size: 16px; margin-bottom: 15px;">
+                                Hi {{name}},
+                            </p>
+
+                            <p style="color: #9ca3af; font-size: 15px; line-height: 1.6; margin-bottom: 30px;">
+                                {{#if isPaid}}
+                                    Thank you for your payment. Please find your official receipt for 
+                                    <strong>{{projectTitle}}</strong> below.
+                                {{else}}
+                                    An invoice has been generated for your project 
+                                    <strong>{{projectTitle}}</strong>. Please review the details and complete the payment.
+                                {{/if}}
+                            </p>
+
+                            <!-- DETAILS -->
+                            <div style="background-color: rgba(232, 209, 171, 0.05); border: 1px solid rgba(232, 209, 171, 0.1); border-radius: 12px; padding: 20px; margin-bottom: 30px; text-align: left;">
+                                <table width="100%">
+                                    <tr>
+                                        <td style="color: #9ca3af; font-size: 13px; padding-bottom: 8px;">Amount</td>
+                                        <td align="right" style="color: #ffffff; font-size: 18px; font-weight: 600;">
+                                            ${{totalAmount}}
+                                        </td>
+                                    </tr>
+                                    <tr>
+                                        <td style="color: #9ca3af; font-size: 13px;">Status</td>
+                                        <td align="right" style="color: {{statusColor}}; font-size: 13px; font-weight: 600;">
+                                            {{#if isPaid}}PAID{{else}}DUE{{/if}}
+                                        </td>
+                                    </tr>
+                                </table>
+                            </div>
+
+                            <!-- BUTTONS -->
+                            <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                                <tr>
+                                    <td align="center">
+                                        <a href="{{invoiceUrl}}"
+                                            style="background: linear-gradient(180deg, #3D342A 0%, #C79233 100%); color: #ffffff; padding: 18px 40px; text-decoration: none; border-radius: 50px; font-weight: 600; display: inline-block; margin-bottom: 15px;">
+                                            
+                                            {{#if isPaid}}VIEW RECEIPT{{else}}PAY INVOICE NOW{{/if}}
+                                        </a>
+                                        <br>
+                                        <a href="{{invoicePdf}}"
+                                            style="color: #9ca3af; font-size: 13px; text-decoration: underline;">
+                                            Download PDF Version
+                                        </a>
+                                    </td>
+                                </tr>
+                            </table>
+
+                        </td>
+                    </tr>
+
+                    <!-- FOOTER -->
+                    <tr>
+                        <td style="background-color: #050505; padding: 30px; text-align: center; border-top: 1px solid rgba(232, 209, 171, 0.1);">
+                            <p style="color: #6b7280; font-size: 11px; margin: 0;">
+                                &copy; {{year}} Beige AI Platform. All rights reserved.
+                            </p>
+                        </td>
+                    </tr>
+
+                </table>
+
+            </td>
+        </tr>
+    </table>
+
+</body>
+</html>

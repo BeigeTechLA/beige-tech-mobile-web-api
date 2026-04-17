@@ -1007,7 +1007,11 @@ exports.sendStripeInvoice = async (req, res) => {
     const emailResult = await emailService.sendInvoiceEmail(userData, invoiceDetails);
 
     if (!emailResult.success) {
-      console.error("Email failed to send but invoice was generated:", emailResult.error);
+      console.error("Email failed", {
+        booking_id: parsedBookingId,
+        invoice: invoiceDetails.invoiceNumber,
+        error: emailResult.error
+      });
     }
 
     const associatedLead = await db.sales_leads.findOne({ where: { booking_id: parsedBookingId } });
@@ -1037,7 +1041,7 @@ exports.sendStripeInvoice = async (req, res) => {
       activityData: {
         booking_id: parsedBookingId,
         invoice_number: invoiceDetails.invoiceNumber,
-        invoice_sent: true,
+        invoice_sent: emailResult.success,
         invoice_url: invoiceDetails.invoiceUrl || null,
         invoice_pdf: invoiceDetails.invoicePdf || null,
         recipient_name: recipientName || null,
