@@ -5,6 +5,8 @@ const { users, crew_members, assigned_crew, stream_project_booking } = db;
 const bookingTimelineService = require('../services/bookingTimeline.service');
 
 const FACE_SCAN_SERVICE_URL = process.env.FACE_SCAN_SERVICE_URL || '';
+const FACE_SCAN_PROVIDER_TIMEOUT_MS = Math.max(15000, Number(process.env.FACE_SCAN_PROVIDER_TIMEOUT_MS || 55000));
+const FACE_SCAN_MAX_CANDIDATES = Math.max(25, Number(process.env.FACE_SCAN_MAX_CANDIDATES || 120));
 const COMMON_EVENT_ID_PREFIX = 'event_';
 let commonEventsTableReadyPromise = null;
 let commonEventCreatorFoldersTableReadyPromise = null;
@@ -374,6 +376,15 @@ const isImageLikeFile = (file = {}) => {
   const fileName = String(file.name || file.path || '').toLowerCase();
   return /\.(jpg|jpeg|png|webp|heic|heif|bmp)$/i.test(fileName);
 };
+
+const toPositiveInteger = (value, fallback) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(1, Math.floor(parsed));
+};
+
+const limitFaceScanCandidates = (candidates = [], limit = FACE_SCAN_MAX_CANDIDATES) =>
+  (Array.isArray(candidates) ? candidates : []).slice(0, toPositiveInteger(limit, FACE_SCAN_MAX_CANDIDATES));
 
 const fetchWorkspaceFiles = async (externalId, phase, path) => {
   const query = new URLSearchParams();
@@ -904,6 +915,9 @@ exports.createCreatorEventFolder = async (req, res) => {
 };
 
 exports.searchFaceMatches = async (req, res) => {
+  req.setTimeout(FACE_SCAN_PROVIDER_TIMEOUT_MS + 5000);
+  res.setTimeout(FACE_SCAN_PROVIDER_TIMEOUT_MS + 5000);
+
   try {
     const externalId = String(req.body.externalId || req.body.eventExternalId || '').trim().toLowerCase();
     if (!externalId) {
@@ -926,6 +940,9 @@ exports.searchFaceMatches = async (req, res) => {
 
     const imageCandidates = await collectWorkspaceImageCandidates(externalId);
     const imageCandidatesWithUrls = await enrichCandidatesWithViewUrls(imageCandidates);
+    const candidateLimit = toPositiveInteger(req.body.candidateLimit, FACE_SCAN_MAX_CANDIDATES);
+    const candidatesForScan = limitFaceScanCandidates(imageCandidatesWithUrls, candidateLimit);
+
     if (!FACE_SCAN_SERVICE_URL) {
       return res.status(200).json({
         success: true,
@@ -935,28 +952,54 @@ exports.searchFaceMatches = async (req, res) => {
           scanMode: 'full_face_scan',
           integrated: false,
           candidatesCount: imageCandidatesWithUrls.length,
+          scannedCandidatesCount: candidatesForScan.length,
           matches: [],
         },
       });
     }
 
-    const response = await fetch(`${FACE_SCAN_SERVICE_URL.replace(/\/+$/, '')}/search`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        externalId,
-        scanMode: 'full_face_scan',
-        scanImageBase64: scanImageBase64 || undefined,
-        scanImageUrl: scanImageUrl || undefined,
-        candidates: imageCandidatesWithUrls,
-        threshold: Number(req.body.threshold || 0.7),
-        maxResults: Number(req.body.maxResults || 200),
-      }),
-    });
+    const controller = new AbortController();
+    const providerTimeout = toPositiveInteger(req.body.providerTimeoutMs, FACE_SCAN_PROVIDER_TIMEOUT_MS);
+    const timeout = setTimeout(() => controller.abort(), providerTimeout);
 
-    const providerPayload = await response.json().catch(() => null);
+    let response;
+    let providerPayload;
+    try {
+      response = await fetch(`${FACE_SCAN_SERVICE_URL.replace(/\/+$/, '')}/search`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          externalId,
+          scanMode: 'full_face_scan',
+          scanImageBase64: scanImageBase64 || undefined,
+          scanImageUrl: scanImageUrl || undefined,
+          candidates: candidatesForScan.map((candidate) => ({
+            path: candidate.path,
+            url: candidate.url,
+            name: candidate.name,
+            phase: candidate.phase,
+            folder: candidate.folder,
+          })),
+          threshold: Number(req.body.threshold || 0.7),
+          maxResults: Number(req.body.maxResults || 200),
+        }),
+      });
+      providerPayload = await response.json().catch(() => null);
+    } catch (fetchError) {
+      if (fetchError?.name === 'AbortError') {
+        return res.status(504).json({
+          success: false,
+          message: `Face scan timed out after ${providerTimeout}ms. Try lower candidateLimit or threshold.`,
+        });
+      }
+      throw fetchError;
+    } finally {
+      clearTimeout(timeout);
+    }
+
     if (!response.ok) {
       return res.status(502).json({
         success: false,
@@ -972,6 +1015,7 @@ exports.searchFaceMatches = async (req, res) => {
         scanMode: 'full_face_scan',
         integrated: true,
         candidatesCount: imageCandidatesWithUrls.length,
+        scannedCandidatesCount: candidatesForScan.length,
         matches: providerPayload?.data?.matches || providerPayload?.matches || [],
         provider: providerPayload?.data?.provider || providerPayload?.provider || null,
       },

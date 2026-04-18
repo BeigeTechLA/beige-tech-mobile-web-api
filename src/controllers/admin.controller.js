@@ -5502,7 +5502,7 @@ exports.getPendingPayout = async (req, res) => {
 exports.getTotalCPCount = async (req, res) => {
   try {
     const totalCPs = await crew_members.count({
-      where: { is_active: 1 }
+      where: { is_active: 1, is_crew_verified: 1 }
     });
 
     return res.status(200).json({
