@@ -5,3 +5,4 @@ numpy==1.26.4
 pillow==10.4.0
 pandas==2.3.3
 deepface==0.0.93
+tf-keras==2.21.0
