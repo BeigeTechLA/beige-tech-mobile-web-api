@@ -1825,7 +1825,16 @@ const sendPaymentSuccessSalesNotification = async (paymentData) => {
  */
 const sendProductionLeadNotification = async (leadData) => {
   try {
-    const to = process.env.PRODUCTION_NOTIFICATION_EMAIL || process.env.SALES_NOTIFICATION_EMAIL;
+    // const to = process.env.SALES_NOTIFICATION_EMAIL;
+    const to = [
+      process.env.SALES_NOTIFICATION_EMAIL,
+      leadData.sales_rep_email
+    ].filter(Boolean);
+
+    if (!to.length) {
+      return { success: false, error: 'No recipient emails configured' };
+    }
+
     const templateId = PRODUCTION_LEAD_NOTIFICATION_TEMPLATE_ID;
 
     if (!to) return { success: false, error: 'PRODUCTION_NOTIFICATION_EMAIL is not configured' };
