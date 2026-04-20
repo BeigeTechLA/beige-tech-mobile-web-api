@@ -1165,20 +1165,22 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
       }
       const additionalInvoicePaid = stripeInvoice?.status === 'paid';
 
-      invoiceDetails = buildInvoiceTemplateDetails(booking, additionalPricingData, {
-        invoiceUrl: stripeInvoice?.hosted_invoice_url || additionalInvoiceContext.existingInvoice?.invoice_url,
-        invoicePdf: stripeInvoice?.invoice_pdf || additionalInvoiceContext.existingInvoice?.invoice_pdf,
-        invoiceNumber: stripeInvoice?.number || additionalInvoiceContext.existingInvoice?.invoice_number,
-        totalAmount: additionalInvoiceContext.additionalAmount,
-        isPaid: additionalInvoicePaid,
-        isAdditionalPayment: true,
-        previouslyPaidAmount: additionalInvoiceContext.previouslyPaidAmount,
-        revisedTotal: additionalInvoiceContext.revisedTotal,
-        additionalAmount: additionalInvoiceContext.additionalAmount
-      });
+      if (!additionalInvoicePaid) {
+        invoiceDetails = buildInvoiceTemplateDetails(booking, additionalPricingData, {
+          invoiceUrl: stripeInvoice?.hosted_invoice_url || additionalInvoiceContext.existingInvoice?.invoice_url,
+          invoicePdf: stripeInvoice?.invoice_pdf || additionalInvoiceContext.existingInvoice?.invoice_pdf,
+          invoiceNumber: stripeInvoice?.number || additionalInvoiceContext.existingInvoice?.invoice_number,
+          totalAmount: additionalInvoiceContext.additionalAmount,
+          isPaid: false,
+          isAdditionalPayment: true,
+          previouslyPaidAmount: additionalInvoiceContext.previouslyPaidAmount,
+          revisedTotal: additionalInvoiceContext.revisedTotal,
+          additionalAmount: additionalInvoiceContext.additionalAmount
+        });
 
-      await booking.update({ invoice_generation_status: 'completed' });
-      return { parsedBookingId, recipientName, recipientEmail, invoiceDetails };
+        await booking.update({ invoice_generation_status: 'completed' });
+        return { parsedBookingId, recipientName, recipientEmail, invoiceDetails };
+      }
     }
 
     // --- CASE 1: ALREADY PAID ---
