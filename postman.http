@@ -2,7 +2,7 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzY0MDI4OTUsImV4cCI6MTc3NzAwNzY5NX0.q7KzjCqMTxWLILgWzwO8VoaHOzdyfEADgRVummG2mHQ
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI1OCwidXNlclJvbGUiOiJzYWxlc19yZXAiLCJpYXQiOjE3NzY0Mzc5NzMsImV4cCI6MTc3NzA0Mjc3M30.xJ8Aq21n68g47mGIKEkutWqdrgnUGeeQ1uwfudrCPb4
 
 @TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzYyNTc0NDIsImV4cCI6MTc3Njg2MjI0Mn0.D-6nEkuqfog0IC-FsF5oxS27doGTDtNhN5_0HmmREkw
 
@@ -54,8 +54,8 @@ POST {{URL}}auth/login HTTP/1.1
 Content-Type: application/json
 
 {
-  "email": "ronak.gandhi@gmail.com",
-  "password": "password123"
+  "email": "sales@beigecorporation.io",
+  "password": "Beige2moon@2026!"
 }
 
 ###
@@ -773,16 +773,6 @@ Authorization: {{TOKEN}}
     "lead_id": 136,
     "crew_member_id": 2044
 }
-
-### 
-POST {{URL}}sales/send-invoice HTTP/1.1
-Content-Type: application/json
-Authorization: {{TOKEN}}
-
-{
-  "booking_id": 930
-}
-
 
 ### 
 POST {{URL}}sales/payment-links/notify HTTP/1.1
