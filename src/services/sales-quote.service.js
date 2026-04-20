@@ -1838,6 +1838,89 @@ async function createQuote(payload, user) {
   }
 }
 
+async function duplicateQuote(salesQuoteId, user) {
+  const transaction = await db.sequelize.transaction();
+
+  try {
+    const quote = await db.sales_quotes.findOne({
+      where: { sales_quote_id: salesQuoteId, ...buildQuoteAccessWhere(user) },
+      include: [
+        {
+          model: db.sales_quote_line_items,
+          as: 'line_items',
+          where: { is_active: 1 },
+          required: false
+        }
+      ],
+      order: [[{ model: db.sales_quote_line_items, as: 'line_items' }, 'sort_order', 'ASC']],
+      transaction
+    });
+
+    if (!quote) {
+      throw new Error('Quote not found');
+    }
+
+    const sourceQuote = quote.toJSON();
+    const duplicatedQuote = await db.sales_quotes.create({
+      quote_number: generateQuoteNumber(),
+      lead_id: sourceQuote.lead_id || null,
+      client_user_id: sourceQuote.client_user_id || null,
+      created_by_user_id: user.userId,
+      assigned_sales_rep_id: sourceQuote.assigned_sales_rep_id || null,
+      pricing_mode: sourceQuote.pricing_mode || 'general',
+      status: 'pending',
+      client_name: sourceQuote.client_name,
+      client_email: sourceQuote.client_email || null,
+      client_phone: sourceQuote.client_phone || null,
+      client_address: sourceQuote.client_address || null,
+      project_description: sourceQuote.project_description || null,
+      video_shoot_type: sourceQuote.video_shoot_type || null,
+      quote_validity_days: sourceQuote.quote_validity_days || null,
+      valid_until: sourceQuote.valid_until || null,
+      discount_type: sourceQuote.discount_type || 'none',
+      discount_value: sourceQuote.discount_value || 0,
+      discount_amount: sourceQuote.discount_amount || 0,
+      tax_type: sourceQuote.tax_type || null,
+      tax_rate: sourceQuote.tax_rate || 0,
+      tax_amount: sourceQuote.tax_amount || 0,
+      subtotal: sourceQuote.subtotal || 0,
+      total: sourceQuote.total || 0,
+      notes: sourceQuote.notes || null,
+      terms_conditions: sourceQuote.terms_conditions || null
+    }, { transaction });
+
+    const stableQuoteNumber = generateQuoteNumber(duplicatedQuote.sales_quote_id);
+    if (duplicatedQuote.quote_number !== stableQuoteNumber) {
+      await duplicatedQuote.update({ quote_number: stableQuoteNumber }, { transaction });
+    }
+
+    const duplicatedLineItems = (sourceQuote.line_items || []).map((item) => ({
+      ...toPersistableLineItemPayload(item),
+      sales_quote_id: duplicatedQuote.sales_quote_id,
+      is_active: 1
+    }));
+
+    if (duplicatedLineItems.length) {
+      await db.sales_quote_line_items.bulkCreate(duplicatedLineItems, { transaction });
+    }
+
+    await recordActivity(
+      transaction,
+      duplicatedQuote.sales_quote_id,
+      'created',
+      user.userId,
+      'Quote duplicated',
+      { source_quote_id: salesQuoteId }
+    );
+
+    await transaction.commit();
+    return getQuoteById(duplicatedQuote.sales_quote_id, user);
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
+}
+
 async function updateQuote(salesQuoteId, payload, user) {
   const transaction = await db.sequelize.transaction();
   try {
@@ -2494,6 +2577,7 @@ module.exports = {
   updateCatalogItem,
   deleteCatalogItem,
   createQuote,
+  duplicateQuote,
   updateQuote,
   convertQuoteToBooking,
   getQuoteById,
