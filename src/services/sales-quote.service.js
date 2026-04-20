@@ -1822,7 +1822,8 @@ async function markQuoteInvoiceRefreshRequired({
       previous_total: roundCurrency(previousTotal),
       new_total: roundCurrency(newTotal),
       extra_amount: roundCurrency(extraAmount),
-      payment_status: paymentStatus
+      payment_status: paymentStatus,
+      invoice_refresh_required: true
     }
   );
 }
