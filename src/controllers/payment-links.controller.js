@@ -1139,20 +1139,38 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
       };
 
       let stripeInvoice = null;
+      if (booking.stripe_invoice_id) {
+        try {
+          const existingStripeInvoice = await stripe.invoices.retrieve(booking.stripe_invoice_id);
+          const stripeInvoiceTotal = parseFloat(((existingStripeInvoice.total || existingStripeInvoice.amount_due || 0) / 100).toFixed(2));
+          const expectedAdditionalTotal = parseFloat(Number(additionalInvoiceContext.additionalAmount || 0).toFixed(2));
+
+          if (
+            Math.abs(stripeInvoiceTotal - expectedAdditionalTotal) <= 0.01 &&
+            ['open', 'paid', 'uncollectible', 'void'].includes(existingStripeInvoice.status)
+          ) {
+            stripeInvoice = existingStripeInvoice;
+          }
+        } catch (_) {
+          stripeInvoice = null;
+        }
+      }
+
       if (!additionalInvoiceContext.existingInvoice?.invoice_url) {
-        stripeInvoice = await paymentLinksService.createStripeInvoice(booking, additionalPricingData, {
+        stripeInvoice = stripeInvoice || await paymentLinksService.createStripeInvoice(booking, additionalPricingData, {
           recipientOverride,
           forceNewInvoice: true,
           descriptionOverride: `${additionalInvoiceContext.label} - ${booking.project_name || 'Project'}`
         });
       }
+      const additionalInvoicePaid = stripeInvoice?.status === 'paid';
 
       invoiceDetails = buildInvoiceTemplateDetails(booking, additionalPricingData, {
-        invoiceUrl: additionalInvoiceContext.existingInvoice?.invoice_url || stripeInvoice.hosted_invoice_url,
-        invoicePdf: additionalInvoiceContext.existingInvoice?.invoice_pdf || stripeInvoice.invoice_pdf,
-        invoiceNumber: additionalInvoiceContext.existingInvoice?.invoice_number || stripeInvoice.number,
+        invoiceUrl: stripeInvoice?.hosted_invoice_url || additionalInvoiceContext.existingInvoice?.invoice_url,
+        invoicePdf: stripeInvoice?.invoice_pdf || additionalInvoiceContext.existingInvoice?.invoice_pdf,
+        invoiceNumber: stripeInvoice?.number || additionalInvoiceContext.existingInvoice?.invoice_number,
         totalAmount: additionalInvoiceContext.additionalAmount,
-        isPaid: false,
+        isPaid: additionalInvoicePaid,
         isAdditionalPayment: true,
         previouslyPaidAmount: additionalInvoiceContext.previouslyPaidAmount,
         revisedTotal: additionalInvoiceContext.revisedTotal,
