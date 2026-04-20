@@ -1599,6 +1599,7 @@ const sendInvoiceEmail = async (userData, invoiceData) => {
     }
 
     const isPaid = invoiceData.isPaid;
+    const isAdditionalPayment = Boolean(invoiceData?.isAdditionalPayment);
 
     const payload = {
       to: userData.email,
@@ -1627,10 +1628,20 @@ const sendInvoiceEmail = async (userData, invoiceData) => {
         invoice_amount: invoiceData.totalAmount
           ? parseFloat(invoiceData.totalAmount).toFixed(2)
           : '0.00',
+        additional_amount: invoiceData.additionalAmount != null
+          ? parseFloat(invoiceData.additionalAmount).toFixed(2)
+          : null,
+        previously_paid_amount: invoiceData.previouslyPaidAmount != null
+          ? parseFloat(invoiceData.previouslyPaidAmount).toFixed(2)
+          : null,
+        revised_total: invoiceData.revisedTotal != null
+          ? parseFloat(invoiceData.revisedTotal).toFixed(2)
+          : null,
         payment_link: invoiceData.invoiceUrl,
         invoice_pdf: invoiceData.invoicePdf || invoiceData.invoiceUrl,
         // Important
-        isPaid: invoiceData.isPaid
+        isPaid: invoiceData.isPaid,
+        isAdditionalPayment
       }
     };
 
@@ -1653,7 +1664,10 @@ const sendInvoiceEmail = async (userData, invoiceData) => {
 
 const generateInvoiceTemplate = (userData, invoiceData) => {
   const statusColor = invoiceData.isPaid ? '#22c55e' : '#C79233'; // Green for paid, Gold for unpaid
-  const title = invoiceData.isPaid ? 'Payment Received' : 'New Invoice';
+  const isAdditionalPayment = Boolean(invoiceData?.isAdditionalPayment);
+  const title = invoiceData.isPaid
+    ? 'Payment Received'
+    : (isAdditionalPayment ? 'Additional Payment Required' : 'New Invoice');
 
   return `
     <!DOCTYPE html>
@@ -1679,7 +1693,9 @@ const generateInvoiceTemplate = (userData, invoiceData) => {
                   <p style="color: #9ca3af; font-size: 15px; line-height: 1.6; margin-bottom: 30px;">
                     ${invoiceData.isPaid 
                       ? `Thank you for your payment. Please find your official receipt for <strong>${invoiceData.projectTitle}</strong> below.`
-                      : `An invoice has been generated for your project <strong>${invoiceData.projectTitle}</strong>. Please review the details and complete the payment.`
+                      : isAdditionalPayment
+                        ? `Your quote for <strong>${invoiceData.projectTitle}</strong> was updated. An additional payment is required to cover the revised total.`
+                        : `An invoice has been generated for your project <strong>${invoiceData.projectTitle}</strong>. Please review the details and complete the payment.`
                     }
                   </p>
                   
@@ -1693,6 +1709,16 @@ const generateInvoiceTemplate = (userData, invoiceData) => {
                         <td style="color: #9ca3af; font-size: 13px;">Status</td>
                         <td align="right" style="color: ${statusColor}; font-size: 13px; font-weight: 600;">${invoiceData.isPaid ? 'PAID' : 'DUE'}</td>
                       </tr>
+                      ${isAdditionalPayment ? `
+                      <tr>
+                        <td style="color: #9ca3af; font-size: 13px; padding-top: 8px;">Previously Paid</td>
+                        <td align="right" style="color: #ffffff; font-size: 13px;">$${parseFloat(invoiceData.previouslyPaidAmount || 0).toFixed(2)}</td>
+                      </tr>
+                      <tr>
+                        <td style="color: #9ca3af; font-size: 13px; padding-top: 8px;">Revised Total</td>
+                        <td align="right" style="color: #ffffff; font-size: 13px;">$${parseFloat(invoiceData.revisedTotal || invoiceData.totalAmount || 0).toFixed(2)}</td>
+                      </tr>
+                      ` : ''}
                     </table>
                   </div>
 

@@ -1745,6 +1745,88 @@ async function recordActivity(transaction, salesQuoteId, activityType, userId, m
   }, { transaction });
 }
 
+async function resolveQuoteBillingState(quote, transaction) {
+  const defaultState = {
+    booking: null,
+    latest_invoice_history: null,
+    collected_amount: 0,
+    payment_status: 'pending',
+    is_collected: false
+  };
+
+  const latestInvoiceHistory = db.invoice_send_history
+    ? await db.invoice_send_history.findOne({
+        where: { quote_id: quote.sales_quote_id },
+        order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+        transaction
+      })
+    : null;
+
+  if (!quote?.lead_id) {
+    if (latestInvoiceHistory?.payment_status) {
+      defaultState.payment_status = latestInvoiceHistory.payment_status;
+      defaultState.is_collected = latestInvoiceHistory.payment_status === 'paid';
+      defaultState.collected_amount = defaultState.is_collected ? roundCurrency(quote.total) : 0;
+      defaultState.latest_invoice_history = latestInvoiceHistory;
+    }
+    return defaultState;
+  }
+
+  const linkedLead = await db.sales_leads.findOne({
+    where: { lead_id: quote.lead_id },
+    attributes: ['booking_id'],
+    transaction
+  });
+
+  const booking = linkedLead?.booking_id
+    ? await db.stream_project_booking.findByPk(linkedLead.booking_id, {
+        attributes: ['stream_project_booking_id', 'payment_id', 'is_completed', 'stripe_invoice_id'],
+        transaction
+      })
+    : null;
+
+  const bookingMarkedCollected = Boolean(
+    booking && (booking.payment_id || Number(booking.is_completed) === 1)
+  );
+  const historyMarkedCollected = latestInvoiceHistory?.payment_status === 'paid';
+  const isCollected = bookingMarkedCollected || historyMarkedCollected;
+  const paymentStatus = latestInvoiceHistory?.payment_status || (isCollected ? 'paid' : 'pending');
+
+  return {
+    booking,
+    latest_invoice_history: latestInvoiceHistory,
+    collected_amount: isCollected ? roundCurrency(quote.total) : 0,
+    payment_status: paymentStatus,
+    is_collected: isCollected
+  };
+}
+
+async function markQuoteInvoiceRefreshRequired({
+  transaction,
+  salesQuoteId,
+  bookingId = null,
+  userId = null,
+  previousTotal = 0,
+  newTotal = 0,
+  extraAmount = 0,
+  paymentStatus = 'pending'
+}) {
+  await recordActivity(
+    transaction,
+    salesQuoteId,
+    'updated',
+    userId,
+    'Quote total increased after invoice/payment state; send updated invoice',
+    {
+      booking_id: bookingId,
+      previous_total: roundCurrency(previousTotal),
+      new_total: roundCurrency(newTotal),
+      extra_amount: roundCurrency(extraAmount),
+      payment_status: paymentStatus
+    }
+  );
+}
+
 async function createQuote(payload, user) {
   const transaction = await db.sequelize.transaction();
   try {
@@ -1933,6 +2015,7 @@ async function updateQuote(salesQuoteId, payload, user) {
       throw new Error('Quote not found');
     }
 
+    const billingState = await resolveQuoteBillingState(quote, transaction);
     const clientSnapshot = await resolveClientSnapshot(payload, quote);
     const existingLineItems = await db.sales_quote_line_items.findAll({
       where: { sales_quote_id: salesQuoteId, is_active: 1 },
@@ -1971,8 +2054,15 @@ async function updateQuote(salesQuoteId, payload, user) {
     const assignedSalesRepId = isAdminRole(user.role)
       ? (payload.assigned_sales_rep_id !== undefined ? payload.assigned_sales_rep_id : quote.assigned_sales_rep_id)
       : quote.assigned_sales_rep_id;
+    const previousTotal = roundCurrency(quote.total);
+    const newTotal = roundCurrency(totals.total);
+    const collectedAmount = roundCurrency(billingState.collected_amount);
+    const extraAmount = roundCurrency(Math.max(newTotal - collectedAmount, 0));
+    const paymentStatus = extraAmount > 0
+      ? (billingState.is_collected ? 'pending' : billingState.payment_status)
+      : (billingState.is_collected ? 'paid' : billingState.payment_status);
 
-    await quote.update({
+    const quoteUpdatePayload = {
       lead_id: payload.lead_id !== undefined ? payload.lead_id : quote.lead_id,
       client_user_id: clientSnapshot.client_user_id,
       assigned_sales_rep_id: assignedSalesRepId,
@@ -1993,11 +2083,13 @@ async function updateQuote(salesQuoteId, payload, user) {
       tax_rate: totals.tax_rate,
       tax_amount: totals.tax_amount,
       subtotal: totals.subtotal,
-      total: totals.total,
+      total: newTotal,
       notes: payload.notes !== undefined ? payload.notes : quote.notes,
       terms_conditions: payload.terms_conditions !== undefined ? payload.terms_conditions : quote.terms_conditions,
       updated_at: new Date()
-    }, { transaction });
+    };
+
+    await quote.update(quoteUpdatePayload, { transaction });
 
     if (Array.isArray(payload.line_items)) {
       if (sectionTypesToReplace.length) {
@@ -2095,7 +2187,33 @@ async function updateQuote(salesQuoteId, payload, user) {
       });
     }
 
-    await recordActivity(transaction, salesQuoteId, 'updated', user.userId, 'Quote updated');
+    await recordActivity(transaction, salesQuoteId, 'updated', user.userId, 'Quote updated', {
+      previous_total: previousTotal,
+      new_total: newTotal,
+      collected_amount: collectedAmount,
+      extra_amount: extraAmount,
+      payment_status: paymentStatus,
+      booking_id: billingState.booking?.stream_project_booking_id || null,
+      invoice_refresh_required: Boolean(
+        billingState.booking?.stream_project_booking_id &&
+        extraAmount > 0 &&
+        billingState.is_collected
+      )
+    });
+
+    if (billingState.booking?.stream_project_booking_id && extraAmount > 0 && billingState.is_collected) {
+      await markQuoteInvoiceRefreshRequired({
+        transaction,
+        salesQuoteId,
+        bookingId: billingState.booking.stream_project_booking_id,
+        userId: user.userId,
+        previousTotal,
+        newTotal,
+        extraAmount,
+        paymentStatus
+      });
+    }
+
     await transaction.commit();
     return getQuoteById(salesQuoteId, user);
   } catch (error) {

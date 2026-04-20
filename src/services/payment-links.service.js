@@ -252,7 +252,7 @@ async function replaceMismatchedInvoice(invoice, bookingId) {
  * Create a Stripe Invoice for an unpaid booking
  */
 async function createStripeInvoice(booking, pricingData, options = {}) {
-  const { transaction, recipientOverride = null, forceNewInvoice = false } = options;
+  const { transaction, recipientOverride = null, forceNewInvoice = false, descriptionOverride = null, metadata = null } = options;
   const email = recipientOverride?.email || booking.guest_email || (booking.user ? booking.user.email : null);
   const expectedTotalCents = getExpectedInvoiceTotalCents(pricingData);
   const pricingKey = `${booking.stream_project_booking_id}-${expectedTotalCents}`;
@@ -325,8 +325,11 @@ async function createStripeInvoice(booking, pricingData, options = {}) {
     customer: customer.id,
     collection_method: 'send_invoice',
     days_until_due: 7,
-    description: `Service Invoice for ${booking.project_name || 'Project'}`,
-    metadata: { booking_id: booking.stream_project_booking_id.toString() }
+    description: descriptionOverride || `Service Invoice for ${booking.project_name || 'Project'}`,
+    metadata: {
+      booking_id: booking.stream_project_booking_id.toString(),
+      ...(metadata || {})
+    }
   }, { idempotencyKey: `inv-create-${createAttemptKey}` });
 
   // --- ITEM CREATION WITH QUANTITY ---
