@@ -1861,3 +1861,31 @@ Content-Type: application/json
 PUT {{URL}}sales/leads/271/assign-self HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN2}}
+
+### 
+POST {{URL}}admin/assign_task HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+{
+  "title": "Client Shoot Preparation",
+  "description": "Prepare equipment and confirm shoot details with client",
+  "priority_id": 2,
+  "category_id": 1,
+  "due_date": "2026-04-25",
+  "due_time": "14:00:00",
+  "estimated_duration": 120,
+  "dependencies": [
+    { "task_id": 10 },
+    { "task_id": 12 }
+  ],
+  "additional_notes": "Carry backup batteries and lenses",
+  "assigned_to": 2117,
+  "send_sms": 0,
+  "send_email": 1,
+  "checklist": [
+    { "item": "Camera ready", "is_completed": false },
+    { "item": "Lighting setup", "is_completed": false }
+  ],
+  "status": "assigned"
+}

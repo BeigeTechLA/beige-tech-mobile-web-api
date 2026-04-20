@@ -68,7 +68,8 @@ const {
   PRODUCTION_PROPOSAL_TEMPLATE_ID,
   CP_CONFIRMED_TEMPLATE_ID,
   CUSTOM_QUOTE_PROPOSAL_ID,
-  INVOICE_TEMPLATE_ID
+  INVOICE_TEMPLATE_ID,
+  TASK_ASSIGNMENT_TEMPLATE_ID
 } = require('../config/sendgridTemplates');
 
 const formatDate = (value) => {
@@ -292,22 +293,72 @@ const sendEmail = async ({ to, subject, templateId, dynamicTemplateData }) => {
  */
 const sendTaskAssignmentEmail = async (taskData, assigneeData) => {
   try {
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    if (!process.env.SENDGRID_API_KEY) {
+      return { success: false, error: 'SENDGRID_API_KEY not configured' };
+    }
+
+    if (!assigneeData?.email) {
+      return { success: false, error: 'Recipient email required' };
+    }
+
+    const frontendUrl = process.env.FRONTEND_URL;
     const taskId = taskData.assign_task_id || taskData.task_id;
     const taskLink = `${frontendUrl}/tasks/${taskId}`;
 
-    const mailOptions = {
-      from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_USER}>`,
+    const priority =
+      taskData.priority_id === 1 ? 'Low' :
+      taskData.priority_id === 2 ? 'Medium' : 'High';
+
+    const priorityColor =
+      taskData.priority_id === 1 ? '#10b981' :
+      taskData.priority_id === 2 ? '#f59e0b' : '#ef4444';
+
+    const dueDate = taskData.due_date
+      ? new Date(taskData.due_date).toLocaleDateString('en-US', {
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric'
+        })
+      : 'Not specified';
+
+    const payload = {
       to: assigneeData.email,
-      subject: `New Task Assigned: ${taskData.title}`,
-      html: generateTaskAssignmentTemplate(taskData, assigneeData, taskLink)
+      from: {
+        email: process.env.SENDGRID_FROM_EMAIL,
+        name: process.env.SENDGRID_FROM_NAME
+      },
+      templateId: TASK_ASSIGNMENT_TEMPLATE_ID,
+      dynamicTemplateData: {
+        first_name: assigneeData.first_name || 'there',
+        last_name: assigneeData.last_name || '',
+        task_title: taskData.title || 'Untitled Task',
+        description: taskData.description || null,
+        priority,
+        priority_color: priorityColor,
+        due_date: dueDate,
+        estimated_duration: taskData.estimated_duration
+          ? String(taskData.estimated_duration)
+          : null,
+        status: taskData.status || 'Assigned',
+        task_link: taskLink,
+        additional_notes: taskData.additional_notes || null,
+        year: new Date().getFullYear()
+      }
     };
 
-    const info = await transporter.sendMail(mailOptions);
-    console.log('Task assignment email sent:', info.messageId);
-    return { success: true, messageId: info.messageId };
+    const [response] = await sgMail.send(payload);
+
+    return {
+      success: true,
+      statusCode: response?.statusCode,
+      messageId:
+        response?.headers?.['x-message-id'] ||
+        response?.headers?.['X-Message-Id'] ||
+        null
+    };
+
   } catch (error) {
-    console.error('Error sending task assignment email:', error);
+    console.error('SendGrid Task Assignment Error:', error?.response?.body || error.message);
     return { success: false, error: error.message };
   }
 };
