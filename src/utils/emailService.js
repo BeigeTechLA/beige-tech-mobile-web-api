@@ -1702,7 +1702,7 @@ const generateInvoiceTemplate = (userData, invoiceData) => {
                   <div style="background-color: rgba(232, 209, 171, 0.05); border: 1px solid rgba(232, 209, 171, 0.1); border-radius: 12px; padding: 20px; margin-bottom: 30px; text-align: left;">
                     <table width="100%">
                       <tr>
-                        <td style="color: #9ca3af; font-size: 13px; padding-bottom: 8px;">Amount</td>
+                        <td style="color: #9ca3af; font-size: 13px; padding-bottom: 8px;">${isAdditionalPayment ? (invoiceData.isPaid ? 'Additional Amount Paid' : 'Additional Amount Due') : 'Amount'}</td>
                         <td align="right" style="color: #ffffff; font-size: 18px; font-weight: 600;">$${parseFloat(invoiceData.totalAmount).toFixed(2)}</td>
                       </tr>
                       <tr>

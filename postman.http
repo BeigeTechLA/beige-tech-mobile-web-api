@@ -1711,7 +1711,7 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### send invoice for quote
-POST {{DEV_URL}}sales/quotes/117/send-invoice HTTP/1.1
+POST {{DEV_URL}}sales/quotes/120/send-invoice HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN2}}
 
