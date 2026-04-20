@@ -703,7 +703,7 @@ function resolveValidity({ validUntil, quoteValidityDays, validUntilProvided = f
 }
 
 function isAdminRole(role) {
-  return role === 'admin' || role === 'Admin' || role === 'sales_admin' || role === 'Sales_Admin';
+  return role === 'admin' || role === 'Admin' || role === 'sales_admin' || role === 'Sales_Admin' || role === 'sales_rep' || role === 'Sales_Rep';
 }
 
 async function getRandomActiveSalesRepId(transaction) {
@@ -2183,9 +2183,7 @@ async function listQuotes(query, user) {
   const page = Math.max(1, Number(query.page || 1));
   const limit = Math.min(100, Math.max(1, Number(query.limit || 20)));
   const offset = (page - 1) * limit;
-  const where = {
-    ...buildQuoteAccessWhere(user, { restrictToLoggedInRep: false })
-  };
+  const where = { ...buildQuoteAccessWhere(user) };
 
   const statusFilter = normalizeQuoteFilterStatus(query.status);
   if (statusFilter?.length) {
@@ -2253,9 +2251,7 @@ async function listQuotes(query, user) {
 }
 
 async function getQuoteDashboard(query, user) {
-  const where = {
-    ...buildQuoteAccessWhere(user, { restrictToLoggedInRep: false })
-  };
+  const where = { ...buildQuoteAccessWhere(user) };
 
   const statusFilter = normalizeQuoteFilterStatus(query.status);
   if (statusFilter?.length) {

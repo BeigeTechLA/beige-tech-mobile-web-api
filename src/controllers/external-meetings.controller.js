@@ -75,7 +75,8 @@ const toPositiveInt = (value) => {
 
 const normalizeRole = (value) => String(value || '').trim().toLowerCase();
 
-const isAdminLikeRole = (role) => ['admin', 'administrator', 'production_manager', 'pm'].includes(normalizeRole(role));
+const isAdminLikeRole = (role) =>
+  ['admin', 'administrator', 'production_manager', 'pm', 'sales_admin'].includes(normalizeRole(role));
 
 const getRequestUserId = (req) => req.user?.userId || null;
 const getRequestUserRole = (req) => normalizeRole(req.user?.userRole || '');

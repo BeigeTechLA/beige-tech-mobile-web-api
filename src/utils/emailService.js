@@ -977,6 +977,12 @@ const sendFinalNudge7DaysEmail = async (data) => {
       return { success: false, error: 'Sender email not configured' };
     }
 
+    const cpFirstName =
+      String(data.cp_name || '')
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean)[0] || 'your Creative Partner';
+
     const payload = {
       to: data.to_email,
       from: {
@@ -987,7 +993,7 @@ const sendFinalNudge7DaysEmail = async (data) => {
       templateId: SHOOT_FINAL_NUDGE_7D_TEMPLATE_ID,
       dynamicTemplateData: {
         user_name: data.first_name || 'there',
-        cp_name: data.cp_name || 'your Creative Partner',
+        cp_name: cpFirstName,
         review_link: `${process.env.FRONTEND_URL}/affiliate/dashboard`
       }
     };

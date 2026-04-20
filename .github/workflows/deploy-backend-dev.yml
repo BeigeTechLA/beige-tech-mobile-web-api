@@ -3,7 +3,7 @@ name: Deploy Backend Dev
 on:
   push:
     branches:
-      - parth-fid-gcp
+      - development
     paths-ignore:
       - ".github/workflows/deploy-dev.yml"
       - ".github/workflows/deploy-staging.yml"

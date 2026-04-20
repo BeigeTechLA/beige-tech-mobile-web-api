@@ -5,8 +5,11 @@ const { users, crew_members, assigned_crew, stream_project_booking } = db;
 const bookingTimelineService = require('../services/bookingTimeline.service');
 
 const FACE_SCAN_SERVICE_URL = process.env.FACE_SCAN_SERVICE_URL || '';
+const FACE_SCAN_PROVIDER_TIMEOUT_MS = Math.max(15000, Number(process.env.FACE_SCAN_PROVIDER_TIMEOUT_MS || 55000));
+const FACE_SCAN_MAX_CANDIDATES = Math.max(25, Number(process.env.FACE_SCAN_MAX_CANDIDATES || 120));
 const COMMON_EVENT_ID_PREFIX = 'event_';
 let commonEventsTableReadyPromise = null;
+let commonEventCreatorFoldersTableReadyPromise = null;
 
 const buildHeaders = () => ({
   'Content-Type': 'application/json',
@@ -16,7 +19,7 @@ const buildHeaders = () => ({
 const getRequestUserId = (req) => req.userId || req.user?.userId || null;
 const getRequestUserRole = (req) => req.userRole || req.user?.userRole || null;
 const getNormalizedRequestUserRole = (req) => String(getRequestUserRole(req) || '').trim().toLowerCase();
-const isAdminRole = (req) => ['admin', 'super_admin', 'superadmin'].includes(getNormalizedRequestUserRole(req));
+const isAdminRole = (req) => ['admin', 'super_admin', 'superadmin', 'sales_admin'].includes(getNormalizedRequestUserRole(req));
 const isCreatorRole = (req) => {
   const role = getNormalizedRequestUserRole(req);
   return ['creator', 'creative', 'Creative'].includes(role);
@@ -72,6 +75,30 @@ const ensureCommonEventsTable = async () => {
   await commonEventsTableReadyPromise;
 };
 
+const ensureCommonEventCreatorFoldersTable = async () => {
+  if (!commonEventCreatorFoldersTableReadyPromise) {
+    commonEventCreatorFoldersTableReadyPromise = db.sequelize.query(`
+      CREATE TABLE IF NOT EXISTS file_manager_common_event_creator_folders (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        workspace_external_id VARCHAR(128) NOT NULL,
+        phase VARCHAR(16) NOT NULL DEFAULT 'pre',
+        folder_path VARCHAR(1024) NOT NULL,
+        folder_path_hash CHAR(64) AS (SHA2(folder_path, 256)) STORED,
+        created_by_user_id BIGINT UNSIGNED NOT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        UNIQUE KEY uq_common_event_creator_folder (workspace_external_id, phase, folder_path_hash),
+        KEY idx_common_event_creator_user (created_by_user_id),
+        KEY idx_common_event_creator_workspace (workspace_external_id),
+        KEY idx_common_event_creator_folder_path (folder_path(191))
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+  }
+
+  await commonEventCreatorFoldersTableReadyPromise;
+};
+
 const toEventSlug = (value) =>
   String(value || '')
     .trim()
@@ -103,6 +130,23 @@ const listCommonEventRows = async () => {
   `);
 
   return Array.isArray(rows) ? rows : [];
+};
+
+const deleteCommonEventRowsByExternalId = async (externalId) => {
+  const normalizedExternalId = String(externalId || '').trim().toLowerCase();
+  if (!normalizedExternalId) return;
+
+  await ensureCommonEventsTable();
+  await ensureCommonEventCreatorFoldersTable();
+
+  await db.sequelize.query(
+    'DELETE FROM file_manager_common_event_creator_folders WHERE workspace_external_id = ?',
+    { replacements: [normalizedExternalId] }
+  );
+  await db.sequelize.query(
+    'DELETE FROM file_manager_common_events WHERE workspace_external_id = ?',
+    { replacements: [normalizedExternalId] }
+  );
 };
 
 const findCommonEventByFilepath = async (filepath) => {
@@ -151,6 +195,13 @@ const sanitizeRelativeFolderPath = (value) =>
     .filter(Boolean)
     .join('/');
 
+const normalizePathForAccess = (value) =>
+  String(value || '')
+    .replace(/\\/g, '/')
+    .replace(/^\/+|\/+$/g, '')
+    .replace(/\/+/g, '/')
+    .trim();
+
 const normalizeWorkspacePhase = (value, fallback = null) => {
   const normalized = String(value || '')
     .trim()
@@ -162,6 +213,162 @@ const normalizeWorkspacePhase = (value, fallback = null) => {
   return fallback;
 };
 
+const extractPhaseAndRelativePath = (value, fallbackPhase = null) => {
+  const normalizedPath = normalizePathForAccess(value);
+  if (!normalizedPath) {
+    return {
+      phase: fallbackPhase,
+      relativePath: '',
+    };
+  }
+
+  const segments = normalizedPath.split('/').filter(Boolean);
+  const phaseIndex = segments.findIndex((segment) => {
+    const normalizedSegment = String(segment || '').trim().toLowerCase();
+    return normalizedSegment === 'pre-production' || normalizedSegment === 'post-production';
+  });
+
+  if (phaseIndex === -1) {
+    return {
+      phase: fallbackPhase,
+      relativePath: normalizedPath,
+    };
+  }
+
+  const phaseSegment = String(segments[phaseIndex] || '').toLowerCase();
+  const phase = phaseSegment === 'post-production' ? 'post' : 'pre';
+  const relativePath = segments.slice(phaseIndex + 1).join('/');
+
+  return {
+    phase,
+    relativePath: normalizePathForAccess(relativePath),
+  };
+};
+
+const isPathWithin = (basePath, candidatePath) => {
+  const base = normalizePathForAccess(basePath);
+  const candidate = normalizePathForAccess(candidatePath);
+  if (!base || !candidate) return false;
+  return candidate === base || candidate.startsWith(`${base}/`);
+};
+
+const listCreatorCommonEventFolders = async ({ eventExternalId, userId, phase = null }) => {
+  if (!eventExternalId || !userId) return [];
+
+  await ensureCommonEventCreatorFoldersTable();
+  const replacements = [String(eventExternalId).trim().toLowerCase(), Number(userId)];
+  let sql = `
+    SELECT workspace_external_id, phase, folder_path, created_by_user_id
+    FROM file_manager_common_event_creator_folders
+    WHERE workspace_external_id = ?
+      AND created_by_user_id = ?
+  `;
+
+  if (phase) {
+    sql += ' AND phase = ?';
+    replacements.push(String(phase).trim().toLowerCase());
+  }
+
+  const [rows] = await db.sequelize.query(sql, { replacements });
+  return Array.isArray(rows) ? rows : [];
+};
+
+const ensureCreatorCommonEventRelativePathAccess = async ({
+  req,
+  eventExternalId,
+  phase,
+  relativePath,
+  allowRoot = false,
+  allowAncestorNavigation = false,
+}) => {
+  if (!isCreatorRole(req)) return;
+
+  const normalizedEventExternalId = String(eventExternalId || '').trim().toLowerCase();
+  if (!isCommonEventExternalId(normalizedEventExternalId)) return;
+
+  const userId = getRequestUserId(req);
+  if (!userId) {
+    const error = new Error('Creator profile not found');
+    error.status = 403;
+    throw error;
+  }
+
+  const normalizedPhase = normalizeWorkspacePhase(phase, null);
+  const normalizedRelativePath = normalizePathForAccess(relativePath);
+  const creatorFolders = await listCreatorCommonEventFolders({
+    eventExternalId: normalizedEventExternalId,
+    userId,
+    phase: normalizedPhase || null,
+  });
+  const allowedRoots = creatorFolders.map((row) => normalizePathForAccess(row.folder_path)).filter(Boolean);
+
+  if (!allowedRoots.length) {
+    const phaseLabel = normalizedPhase === 'post' ? 'Post-Production' : 'Pre-Production';
+    const error = new Error(
+      `Please create your own folder first, then access ${phaseLabel} in this common event`
+    );
+    error.status = 403;
+    throw error;
+  }
+
+  if (!normalizedRelativePath) {
+    if (allowRoot) return;
+    const error = new Error('Folder path is required');
+    error.status = 400;
+    throw error;
+  }
+
+  const hasPathAccess = allowedRoots.some((rootPath) => {
+    if (isPathWithin(rootPath, normalizedRelativePath)) return true;
+    if (allowAncestorNavigation && isPathWithin(normalizedRelativePath, rootPath)) return true;
+    return false;
+  });
+  if (!hasPathAccess) {
+    const error = new Error('You can access only your own common event folder/files');
+    error.status = 403;
+    throw error;
+  }
+};
+
+const ensureCreatorCommonEventFileAccess = async (req, filepath) => {
+  if (!isCreatorRole(req)) return false;
+
+  const normalizedFilepath = String(filepath || '').trim();
+  if (!normalizedFilepath) return false;
+
+  let eventExternalId = extractCommonEventExternalIdFromPath(normalizedFilepath);
+  if (!eventExternalId) {
+    const row = await findCommonEventByFilepath(normalizedFilepath);
+    eventExternalId = row?.workspace_external_id || null;
+  }
+
+  if (!isCommonEventExternalId(eventExternalId)) return false;
+
+  const { phase, relativePath } = extractPhaseAndRelativePath(normalizedFilepath);
+  await ensureCreatorCommonEventRelativePathAccess({
+    req,
+    eventExternalId,
+    phase,
+    relativePath,
+    allowRoot: false,
+  });
+
+  return true;
+};
+
+const getRelativePathForEntry = (entry, parentPath = '') => {
+  const directPath = normalizePathForAccess(entry?.path || '');
+  if (directPath) {
+    const fromDirectPath = extractPhaseAndRelativePath(directPath).relativePath || directPath;
+    return normalizePathForAccess(fromDirectPath);
+  }
+
+  const name = normalizePathForAccess(entry?.name || '');
+  if (!name) return '';
+  const parent = normalizePathForAccess(parentPath);
+  return normalizePathForAccess(parent ? `${parent}/${name}` : name);
+};
+
 const isImageLikeFile = (file = {}) => {
   const contentType = String(file.contentType || '').toLowerCase();
   if (contentType.startsWith('image/')) return true;
@@ -169,6 +376,15 @@ const isImageLikeFile = (file = {}) => {
   const fileName = String(file.name || file.path || '').toLowerCase();
   return /\.(jpg|jpeg|png|webp|heic|heif|bmp)$/i.test(fileName);
 };
+
+const toPositiveInteger = (value, fallback) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(1, Math.floor(parsed));
+};
+
+const limitFaceScanCandidates = (candidates = [], limit = FACE_SCAN_MAX_CANDIDATES) =>
+  (Array.isArray(candidates) ? candidates : []).slice(0, toPositiveInteger(limit, FACE_SCAN_MAX_CANDIDATES));
 
 const fetchWorkspaceFiles = async (externalId, phase, path) => {
   const query = new URLSearchParams();
@@ -367,13 +583,14 @@ const ensureCreatorWorkspaceAccess = async (req, bookingId) => {
 const ensureCreatorFileAccess = async (req, filepath) => {
   if (!isCreatorRole(req)) return;
 
-  const commonEventExternalId = extractCommonEventExternalIdFromPath(filepath);
-  if (commonEventExternalId) {
+  const hasCommonEventAccess = await ensureCreatorCommonEventFileAccess(req, filepath);
+  if (hasCommonEventAccess) {
     return;
   }
 
   const commonEventByPath = await findCommonEventByFilepath(filepath);
   if (commonEventByPath) {
+    await ensureCreatorCommonEventFileAccess(req, filepath);
     return;
   }
 
@@ -653,6 +870,31 @@ exports.createCreatorEventFolder = async (req, res) => {
       }),
     });
 
+    if (isCreatorRole(req)) {
+      const createdFolderPathFromProvider = result?.data?.folder?.path || result?.data?.folderPath || '';
+      const normalizedPhase = normalizeWorkspacePhase(phase, 'pre');
+      const createdFolderPath = sanitizeRelativeFolderPath(
+        extractPhaseAndRelativePath(createdFolderPathFromProvider, normalizedPhase).relativePath
+          || [folderPath, folderName].filter(Boolean).join('/')
+      );
+
+      if (createdFolderPath) {
+        await ensureCommonEventCreatorFoldersTable();
+        await db.sequelize.query(
+          `
+          INSERT INTO file_manager_common_event_creator_folders
+          (workspace_external_id, phase, folder_path, created_by_user_id)
+          VALUES (?, ?, ?, ?)
+          ON DUPLICATE KEY UPDATE
+            updated_at = CURRENT_TIMESTAMP
+          `,
+          {
+            replacements: [eventExternalId, normalizedPhase, createdFolderPath, userId],
+          }
+        );
+      }
+    }
+
     return res.status(200).json({
       success: true,
       message: 'Creative partner folder created',
@@ -673,6 +915,9 @@ exports.createCreatorEventFolder = async (req, res) => {
 };
 
 exports.searchFaceMatches = async (req, res) => {
+  req.setTimeout(FACE_SCAN_PROVIDER_TIMEOUT_MS + 5000);
+  res.setTimeout(FACE_SCAN_PROVIDER_TIMEOUT_MS + 5000);
+
   try {
     const externalId = String(req.body.externalId || req.body.eventExternalId || '').trim().toLowerCase();
     if (!externalId) {
@@ -695,6 +940,9 @@ exports.searchFaceMatches = async (req, res) => {
 
     const imageCandidates = await collectWorkspaceImageCandidates(externalId);
     const imageCandidatesWithUrls = await enrichCandidatesWithViewUrls(imageCandidates);
+    const candidateLimit = toPositiveInteger(req.body.candidateLimit, FACE_SCAN_MAX_CANDIDATES);
+    const candidatesForScan = limitFaceScanCandidates(imageCandidatesWithUrls, candidateLimit);
+
     if (!FACE_SCAN_SERVICE_URL) {
       return res.status(200).json({
         success: true,
@@ -704,28 +952,54 @@ exports.searchFaceMatches = async (req, res) => {
           scanMode: 'full_face_scan',
           integrated: false,
           candidatesCount: imageCandidatesWithUrls.length,
+          scannedCandidatesCount: candidatesForScan.length,
           matches: [],
         },
       });
     }
 
-    const response = await fetch(`${FACE_SCAN_SERVICE_URL.replace(/\/+$/, '')}/search`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        externalId,
-        scanMode: 'full_face_scan',
-        scanImageBase64: scanImageBase64 || undefined,
-        scanImageUrl: scanImageUrl || undefined,
-        candidates: imageCandidatesWithUrls,
-        threshold: Number(req.body.threshold || 0.7),
-        maxResults: Number(req.body.maxResults || 200),
-      }),
-    });
+    const controller = new AbortController();
+    const providerTimeout = toPositiveInteger(req.body.providerTimeoutMs, FACE_SCAN_PROVIDER_TIMEOUT_MS);
+    const timeout = setTimeout(() => controller.abort(), providerTimeout);
 
-    const providerPayload = await response.json().catch(() => null);
+    let response;
+    let providerPayload;
+    try {
+      response = await fetch(`${FACE_SCAN_SERVICE_URL.replace(/\/+$/, '')}/search`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          externalId,
+          scanMode: 'full_face_scan',
+          scanImageBase64: scanImageBase64 || undefined,
+          scanImageUrl: scanImageUrl || undefined,
+          candidates: candidatesForScan.map((candidate) => ({
+            path: candidate.path,
+            url: candidate.url,
+            name: candidate.name,
+            phase: candidate.phase,
+            folder: candidate.folder,
+          })),
+          threshold: Number(req.body.threshold || 0.7),
+          maxResults: Number(req.body.maxResults || 200),
+        }),
+      });
+      providerPayload = await response.json().catch(() => null);
+    } catch (fetchError) {
+      if (fetchError?.name === 'AbortError') {
+        return res.status(504).json({
+          success: false,
+          message: `Face scan timed out after ${providerTimeout}ms. Try lower candidateLimit or threshold.`,
+        });
+      }
+      throw fetchError;
+    } finally {
+      clearTimeout(timeout);
+    }
+
     if (!response.ok) {
       return res.status(502).json({
         success: false,
@@ -741,6 +1015,7 @@ exports.searchFaceMatches = async (req, res) => {
         scanMode: 'full_face_scan',
         integrated: true,
         candidatesCount: imageCandidatesWithUrls.length,
+        scannedCandidatesCount: candidatesForScan.length,
         matches: providerPayload?.data?.matches || providerPayload?.matches || [],
         provider: providerPayload?.data?.provider || providerPayload?.provider || null,
       },
@@ -752,6 +1027,102 @@ exports.searchFaceMatches = async (req, res) => {
     });
   }
 };
+
+// exports.searchFaceMatches = async (req, res) => {
+//   req.setTimeout(120000); 
+//   res.setTimeout(120000);
+
+//   try {
+//     const externalId = String(req.body.externalId || req.body.eventExternalId || '').trim().toLowerCase();
+//     if (!externalId) {
+//       return res.status(400).json({ success: false, message: 'externalId is required' });
+//     }
+
+//     const scanImageBase64 = String(req.body.scanImageBase64 || '').trim();
+//     const scanImageUrl = String(req.body.scanImageUrl || '').trim();
+//     if (!scanImageBase64 && !scanImageUrl) {
+//       return res.status(400).json({ success: false, message: 'scanImageBase64 or scanImageUrl is required' });
+//     }
+
+//     await ensureCreatorWorkspaceAccess(req, externalId);
+
+//     const imageCandidates = await collectWorkspaceImageCandidates(externalId);
+//     const imageCandidatesWithUrls = await enrichCandidatesWithViewUrls(imageCandidates);
+
+//     if (!FACE_SCAN_SERVICE_URL) {
+//       return res.status(200).json({
+//         success: true,
+//         message: 'Face scan provider is not configured yet',
+//         data: { externalId, scanMode: 'full_face_scan', integrated: false, candidatesCount: imageCandidatesWithUrls.length, matches: [] },
+//       });
+//     }
+
+//     const controller = new AbortController();
+//     const timeout = setTimeout(() => controller.abort(), 120000);
+
+//     try {
+//       const response = await fetch(`${FACE_SCAN_SERVICE_URL.replace(/\/+$/, '')}/search`, {
+//         method: 'POST',
+//         headers: {
+//           'Content-Type': 'application/json',
+//         },
+//         signal: controller.signal,
+//         body: JSON.stringify({
+//           externalId,
+//           scanMode: 'full_face_scan',
+//           scanImageBase64: scanImageUrl ? undefined : (scanImageBase64 || undefined),
+//           scanImageUrl: scanImageUrl || undefined,
+//           candidates: imageCandidatesWithUrls.map(c => ({
+//             id: c.id || c._id,
+//             url: c.url || c.viewUrl
+//           })),
+//           threshold: Number(req.body.threshold || 0.7),
+//           maxResults: Number(req.body.maxResults || 200),
+//         }),
+//       });
+
+//       clearTimeout(timeout);
+
+//       const providerPayload = await response.json().catch(() => null);
+      
+//       if (!response.ok) {
+//         return res.status(502).json({
+//           success: false,
+//           message: providerPayload?.message || 'Face scan provider failed',
+//         });
+//       }
+
+//       return res.status(200).json({
+//         success: true,
+//         message: 'Face scan completed',
+//         data: {
+//           externalId,
+//           scanMode: 'full_face_scan',
+//           integrated: true,
+//           candidatesCount: imageCandidatesWithUrls.length,
+//           matches: providerPayload?.data?.matches || providerPayload?.matches || [],
+//           provider: providerPayload?.data?.provider || providerPayload?.provider || null,
+//         },
+//       });
+
+//     } catch (fetchError) {
+//       if (fetchError.name === 'AbortError') {
+//         return res.status(504).json({
+//           success: false,
+//           message: 'The face scan service took too long to respond (Timeout)',
+//         });
+//       }
+//       throw fetchError;
+//     }
+
+//   } catch (error) {
+//     console.error('Face Scan Error:', error);
+//     return res.status(error.status || 500).json(error.payload || {
+//       success: false,
+//       message: error.message || 'Face scan search failed',
+//     });
+//   }
+// };
 
 exports.listWorkspaces = async (req, res) => {
   try {
@@ -769,10 +1140,30 @@ exports.listWorkspaces = async (req, res) => {
       eventName: row.event_name,
     }));
 
-    const existingByExternalId = new Set((result.data?.workspaces || []).map((workspace) => String(workspace.externalId)));
+    const existingByExternalId = new Set(
+      (result.data?.workspaces || []).map((workspace) => String(workspace.externalId || '').trim().toLowerCase())
+    );
+    const missingEventWorkspaces = eventWorkspaces.filter(
+      (workspace) => !existingByExternalId.has(String(workspace.externalId || '').trim().toLowerCase())
+    );
+
+    const verifiedMissingEventWorkspaces = (
+      await Promise.all(
+        missingEventWorkspaces.map(async (workspace) => {
+          try {
+            const lookup = await proxyRequest(`/workspace/${encodeURIComponent(String(workspace.externalId))}`);
+            if (!lookup?.data?.workspace) return null;
+            return workspace;
+          } catch (error) {
+            return null;
+          }
+        })
+      )
+    ).filter(Boolean);
+
     const mergedWorkspaces = [
       ...(result.data?.workspaces || []),
-      ...eventWorkspaces.filter((workspace) => !existingByExternalId.has(String(workspace.externalId))),
+      ...verifiedMissingEventWorkspaces,
     ];
 
     if (isCreatorRole(req)) {
@@ -858,6 +1249,47 @@ exports.getWorkspaceFiles = async (req, res) => {
     const result = await proxyRequest(
       `/workspace/${req.params.bookingId}/files${query.toString() ? `?${query.toString()}` : ''}`
     );
+
+    if (isCreatorRole(req) && isCommonEventExternalId(req.params.bookingId)) {
+      const phase = normalizeWorkspacePhase(req.query.phase, null);
+      const requestedPath = sanitizeRelativeFolderPath(req.query.path || '');
+      await ensureCreatorCommonEventRelativePathAccess({
+        req,
+        eventExternalId: req.params.bookingId,
+        phase,
+        relativePath: requestedPath,
+        allowRoot: true,
+        allowAncestorNavigation: true,
+      });
+
+      const creatorFolders = await listCreatorCommonEventFolders({
+        eventExternalId: req.params.bookingId,
+        userId: getRequestUserId(req),
+        phase: phase || null,
+      });
+      const allowedRoots = creatorFolders.map((row) => normalizePathForAccess(row.folder_path)).filter(Boolean);
+      const isAllowed = (entryPath) =>
+        allowedRoots.some((rootPath) => isPathWithin(rootPath, entryPath) || isPathWithin(entryPath, rootPath));
+
+      const filteredFolders = (result?.data?.folders || []).filter((folder) => {
+        const entryPath = getRelativePathForEntry(folder, requestedPath);
+        return entryPath && isAllowed(entryPath);
+      });
+      const filteredFiles = (result?.data?.files || []).filter((file) => {
+        const entryPath = getRelativePathForEntry(file, requestedPath);
+        return entryPath && isAllowed(entryPath);
+      });
+
+      return res.status(200).json({
+        ...result,
+        data: {
+          ...(result.data || {}),
+          folders: filteredFolders,
+          files: filteredFiles,
+        },
+      });
+    }
+
     return res.status(200).json(result);
   } catch (error) {
     if (error.status === 404) {
@@ -1012,6 +1444,23 @@ exports.createFolder = async (req, res) => {
       });
     }
 
+    if (isCommonEvent && isCreatorRole(req)) {
+      if (!path) {
+        return res.status(403).json({
+          success: false,
+          message: 'Creators can create folders only inside their own common event folder',
+        });
+      }
+
+      await ensureCreatorCommonEventRelativePathAccess({
+        req,
+        eventExternalId: externalId,
+        phase,
+        relativePath: path,
+        allowRoot: false,
+      });
+    }
+
     const result = await proxyRequest('/folder', {
       method: 'POST',
       body: JSON.stringify({
@@ -1050,11 +1499,23 @@ exports.getFileDownloadUrl = async (req, res) => {
 
 exports.getFolderDownloadUrl = async (req, res) => {
   try {
-    await ensureCreatorWorkspaceAccess(req, req.body.externalId || req.body.bookingId);
+    const externalId = String(req.body.externalId || req.body.bookingId || '').trim();
+    await ensureCreatorWorkspaceAccess(req, externalId);
+
+    if (isCreatorRole(req) && isCommonEventExternalId(externalId)) {
+      await ensureCreatorCommonEventRelativePathAccess({
+        req,
+        eventExternalId: externalId,
+        phase: req.body.phase,
+        relativePath: req.body.path,
+        allowRoot: false,
+      });
+    }
+
     const result = await proxyRequest('/folder-download-url', {
       method: 'POST',
       body: JSON.stringify({
-        externalId: req.body.externalId || req.body.bookingId,
+        externalId,
         phase: req.body.phase,
         path: req.body.path,
       }),
@@ -1070,13 +1531,28 @@ exports.getFolderDownloadUrl = async (req, res) => {
 
 exports.deleteEntry = async (req, res) => {
   try {
-    await ensureCreatorFileAccess(req, req.body.filepath || req.body.path);
+    const targetPath = req.body.filepath || req.body.path;
+    await ensureCreatorFileAccess(req, targetPath);
     const result = await proxyRequest('/delete', {
       method: 'POST',
       body: JSON.stringify({
-        filepath: req.body.filepath || req.body.path,
+        filepath: targetPath,
       }),
     });
+
+    const deletedPath = normalizePathForAccess(targetPath);
+    if (deletedPath) {
+      const rows = await listCommonEventRows().catch(() => []);
+      const deletedRootRow = rows.find((row) => {
+        const rootPath = normalizePathForAccess(row?.root_path || '');
+        return rootPath && rootPath === deletedPath;
+      });
+
+      if (deletedRootRow?.workspace_external_id) {
+        await deleteCommonEventRowsByExternalId(deletedRootRow.workspace_external_id);
+      }
+    }
+
     return res.status(200).json(result);
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {
