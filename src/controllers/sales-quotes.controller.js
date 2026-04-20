@@ -272,6 +272,20 @@ exports.updateQuote = async (req, res) => {
   }
 };
 
+exports.duplicateQuote = async (req, res) => {
+  try {
+    const quote = await quoteService.duplicateQuote(Number(req.params.quoteId), getUserContext(req));
+    return res.status(constants.CREATED.code).json({
+      success: true,
+      data: quote
+    });
+  } catch (error) {
+    console.error('Error duplicating sales quote:', error);
+    const statusCode = error.message === 'Quote not found' ? constants.NOT_FOUND.code : constants.BAD_REQUEST.code;
+    return sendError(res, error, error.message || 'Failed to duplicate quote', statusCode);
+  }
+};
+
 exports.convertQuoteToBooking = async (req, res) => {
   try {
     const data = await quoteService.convertQuoteToBooking(Number(req.params.quoteId), req.body || {}, getUserContext(req));

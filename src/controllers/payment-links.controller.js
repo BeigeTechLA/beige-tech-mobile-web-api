@@ -212,6 +212,77 @@ const buildInvoiceTemplateDetails = (booking, pricingData, invoiceDetails) => ({
   location: formatInvoiceLocation(booking?.event_location)
 });
 
+const parseActivityMetadata = (value) => {
+  if (!value) return null;
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch (_) {
+    return null;
+  }
+};
+
+const resolveAdditionalQuoteInvoiceContext = async ({ quoteId, bookingId, transaction }) => {
+  if (!quoteId || !db.sales_quote_activities) {
+    return null;
+  }
+
+  const recentUpdateActivities = await db.sales_quote_activities.findAll({
+    where: {
+      sales_quote_id: quoteId,
+      activity_type: 'updated'
+    },
+    order: [['created_at', 'DESC'], ['activity_id', 'DESC']],
+    limit: 10,
+    transaction
+  });
+
+  const refreshActivity = (recentUpdateActivities || [])
+    .map((activity) => ({
+      activity,
+      metadata: parseActivityMetadata(activity?.metadata_json)
+    }))
+    .find(({ metadata }) => {
+      if (!metadata?.invoice_refresh_required) return false;
+      if (bookingId && metadata.booking_id && Number(metadata.booking_id) !== Number(bookingId)) return false;
+      return parseFloat(metadata.extra_amount || 0) > 0;
+    });
+
+  if (!refreshActivity?.metadata) {
+    return null;
+  }
+
+  const { metadata } = refreshActivity;
+  const additionalAmount = parseFloat(metadata.extra_amount || 0);
+  const revisedTotal = parseFloat(metadata.new_total || 0);
+  const previouslyPaidAmount = parseFloat(metadata.previous_total || 0);
+
+  if (!(additionalAmount > 0)) {
+    return null;
+  }
+
+  const existingAdditionalInvoice = db.invoice_send_history
+    ? await db.invoice_send_history.findOne({
+        where: {
+          quote_id: quoteId,
+          booking_id: bookingId,
+          payment_status: 'pending',
+          sent_at: { [Op.gte]: refreshActivity.activity.created_at }
+        },
+        order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+        transaction
+      })
+    : null;
+
+  return {
+    additionalAmount,
+    revisedTotal,
+    previouslyPaidAmount,
+    label: 'Additional payment for revised quote',
+    existingInvoice: existingAdditionalInvoice
+  };
+};
+
 const updatePaymentLeadState = async ({
   leadId = null,
   clientLeadId = null,
@@ -292,7 +363,7 @@ const sendInvoiceForBooking = async ({ bookingId, quoteId = null, performedByUse
     recipientName,
     recipientEmail,
     invoiceDetails
-  } = await prepareInvoiceDetailsForBooking(bookingId, performedByUserId, recipientOverride);
+  } = await prepareInvoiceDetailsForBooking(bookingId, performedByUserId, recipientOverride, quoteId);
 
   const userData = { name: recipientName, email: recipientEmail };
   const emailResult = await emailService.sendInvoiceEmail(userData, invoiceDetails);
@@ -978,7 +1049,7 @@ const bookingInvoiceIncludes = [
   { model: db.stream_project_booking_days, as: 'booking_days', required: false }
 ];
 
-const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = null, recipientOverride = null) => {
+const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = null, recipientOverride = null, quoteId = null) => {
   let lockTransaction = null;
   try {
     const parsedBookingId = parseInt(bookingId, 10);
@@ -1040,7 +1111,75 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
       await booking.update({ invoice_generation_status: 'failed' });
       throw new Error(`Could not calculate pricing for booking ${parsedBookingId}.`);
     }
+    const additionalInvoiceContext = await resolveAdditionalQuoteInvoiceContext({
+      quoteId,
+      bookingId: parsedBookingId,
+      transaction: null
+    });
     let invoiceDetails = null;
+
+    if (additionalInvoiceContext) {
+      const additionalPricingData = {
+        source: 'quote_additional_amount',
+        is_paid: false,
+        total: additionalInvoiceContext.additionalAmount,
+        subtotal: additionalInvoiceContext.additionalAmount,
+        discount_amount: 0,
+        price_after_discount: additionalInvoiceContext.additionalAmount,
+        tax_type: null,
+        tax_rate: 0,
+        tax_amount: 0,
+        line_items: [
+          {
+            name: additionalInvoiceContext.label,
+            quantity: 1,
+            total: additionalInvoiceContext.additionalAmount
+          }
+        ]
+      };
+
+      let stripeInvoice = null;
+      if (booking.stripe_invoice_id) {
+        try {
+          const existingStripeInvoice = await stripe.invoices.retrieve(booking.stripe_invoice_id);
+          const stripeInvoiceTotal = parseFloat(((existingStripeInvoice.total || existingStripeInvoice.amount_due || 0) / 100).toFixed(2));
+          const expectedAdditionalTotal = parseFloat(Number(additionalInvoiceContext.additionalAmount || 0).toFixed(2));
+
+          if (
+            Math.abs(stripeInvoiceTotal - expectedAdditionalTotal) <= 0.01 &&
+            ['open', 'paid', 'uncollectible', 'void'].includes(existingStripeInvoice.status)
+          ) {
+            stripeInvoice = existingStripeInvoice;
+          }
+        } catch (_) {
+          stripeInvoice = null;
+        }
+      }
+
+      if (!additionalInvoiceContext.existingInvoice?.invoice_url) {
+        stripeInvoice = stripeInvoice || await paymentLinksService.createStripeInvoice(booking, additionalPricingData, {
+          recipientOverride,
+          forceNewInvoice: true,
+          descriptionOverride: `${additionalInvoiceContext.label} - ${booking.project_name || 'Project'}`
+        });
+      }
+      const additionalInvoicePaid = stripeInvoice?.status === 'paid';
+
+      invoiceDetails = buildInvoiceTemplateDetails(booking, additionalPricingData, {
+        invoiceUrl: stripeInvoice?.hosted_invoice_url || additionalInvoiceContext.existingInvoice?.invoice_url,
+        invoicePdf: stripeInvoice?.invoice_pdf || additionalInvoiceContext.existingInvoice?.invoice_pdf,
+        invoiceNumber: stripeInvoice?.number || additionalInvoiceContext.existingInvoice?.invoice_number,
+        totalAmount: additionalInvoiceContext.additionalAmount,
+        isPaid: additionalInvoicePaid,
+        isAdditionalPayment: true,
+        previouslyPaidAmount: additionalInvoiceContext.previouslyPaidAmount,
+        revisedTotal: additionalInvoiceContext.revisedTotal,
+        additionalAmount: additionalInvoiceContext.additionalAmount
+      });
+
+      await booking.update({ invoice_generation_status: 'completed' });
+      return { parsedBookingId, recipientName, recipientEmail, invoiceDetails };
+    }
 
     // --- CASE 1: ALREADY PAID ---
     if (pricingData && (pricingData.is_paid || bookingMarkedPaid)) {
@@ -1079,7 +1218,8 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
         invoicePdf,
         invoiceNumber,
         totalAmount: stripeTotalAmount,
-        isPaid: true
+        isPaid: true,
+        isAdditionalPayment: false
       });
 
     } else {
@@ -1093,7 +1233,8 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
         invoicePdf: stripeInvoice.invoice_pdf,
         invoiceNumber: stripeInvoice.number,
         totalAmount: pricingData.total,
-        isPaid: false
+        isPaid: false,
+        isAdditionalPayment: false
       });
     }
 
@@ -1370,7 +1511,7 @@ exports.previewQuoteInvoice = async (req, res) => {
     const { invoiceDetails } = await prepareInvoiceDetailsForBooking(bookingId, req.userId || null, {
       email: salesQuote.client_email || null,
       name: salesQuote.client_name || null
-    });
+    }, salesQuote.sales_quote_id);
 
     return res.status(200).json({
       success: true,
