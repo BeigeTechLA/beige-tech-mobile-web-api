@@ -1,4 +1,5 @@
 const DEFAULT_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
+const PUBLIC_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_PUBLIC_BASE_URL || '';
 const INTERNAL_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
 const db = require('../models');
 const { users, crew_members, assigned_crew, stream_project_booking } = db;
@@ -17,6 +18,66 @@ const buildHeaders = () => ({
   'Content-Type': 'application/json',
   'x-internal-key': INTERNAL_KEY,
 });
+
+const INTERNAL_FILE_MANAGER_ORIGIN = (() => {
+  try {
+    return new URL(DEFAULT_BASE_URL).origin.toLowerCase();
+  } catch (error) {
+    return '';
+  }
+})();
+
+const PUBLIC_FILE_MANAGER_ORIGIN = (() => {
+  try {
+    if (!PUBLIC_BASE_URL) return '';
+    return new URL(PUBLIC_BASE_URL).origin;
+  } catch (error) {
+    return '';
+  }
+})();
+
+const shouldRewriteToPublicOrigin = (origin, hostname) => {
+  const normalizedHostname = String(hostname || '').toLowerCase();
+  const isLocalHost =
+    normalizedHostname === 'localhost' ||
+    normalizedHostname === '127.0.0.1' ||
+    normalizedHostname === '::1';
+
+  if (isLocalHost) return true;
+  if (INTERNAL_FILE_MANAGER_ORIGIN && String(origin || '').toLowerCase() === INTERNAL_FILE_MANAGER_ORIGIN) {
+    return true;
+  }
+  return false;
+};
+
+const rewriteExternalServiceUrl = (rawUrl) => {
+  const value = String(rawUrl || '').trim();
+  if (!value) return value;
+  if (!PUBLIC_FILE_MANAGER_ORIGIN) return value;
+
+  try {
+    const parsed = new URL(value);
+    if (!shouldRewriteToPublicOrigin(parsed.origin, parsed.hostname)) {
+      return value;
+    }
+    return `${PUBLIC_FILE_MANAGER_ORIGIN}${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch (error) {
+    return value;
+  }
+};
+
+const withPublicUrl = (result) => {
+  const currentUrl = result?.data?.url;
+  if (typeof currentUrl !== 'string') return result;
+
+  return {
+    ...result,
+    data: {
+      ...(result.data || {}),
+      url: rewriteExternalServiceUrl(currentUrl),
+    },
+  };
+};
 
 const getRequestUserId = (req) => req.userId || req.user?.userId || null;
 const getRequestUserRole = (req) => req.userRole || req.user?.userRole || null;
@@ -1756,7 +1817,7 @@ exports.getFileViewUrl = async (req, res) => {
         filepath: req.body.filepath,
       }),
     });
-    return res.status(200).json(result);
+    return res.status(200).json(withPublicUrl(result));
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
@@ -1828,7 +1889,7 @@ exports.getFileDownloadUrl = async (req, res) => {
         filepath: req.body.filepath,
       }),
     });
-    return res.status(200).json(result);
+    return res.status(200).json(withPublicUrl(result));
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
@@ -1860,7 +1921,7 @@ exports.getFolderDownloadUrl = async (req, res) => {
         path: req.body.path,
       }),
     });
-    return res.status(200).json(result);
+    return res.status(200).json(withPublicUrl(result));
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
