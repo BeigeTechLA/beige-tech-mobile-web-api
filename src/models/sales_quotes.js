@@ -24,6 +24,14 @@ module.exports = function(sequelize, DataTypes) {
         key: 'id'
       }
     },
+    client_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'clients',
+        key: 'client_id'
+      }
+    },
     created_by_user_id: {
       type: DataTypes.INTEGER,
       allowNull: false,
@@ -188,6 +196,7 @@ module.exports = function(sequelize, DataTypes) {
         name: "idx_sales_quotes_client",
         using: "BTREE",
         fields: [
+          { name: "client_id" },
           { name: "client_user_id" },
         ]
       },

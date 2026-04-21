@@ -19,6 +19,86 @@ const normalizeDateOnlyInput = (value) => {
   return date || null;
 };
 
+const parseQuoteActivityMetadata = (value) => {
+  if (!value) return null;
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch (_) {
+    return null;
+  }
+};
+
+async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
+  if (!quoteId) return null;
+
+  const [latestInvoiceHistory, recentQuoteUpdates] = await Promise.all([
+    db.invoice_send_history?.findOne({
+      where: {
+        quote_id: quoteId,
+        ...(bookingId ? { booking_id: bookingId } : {})
+      },
+      order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']]
+    }) || null,
+    db.sales_quote_activities?.findAll({
+      where: {
+        sales_quote_id: quoteId,
+        activity_type: 'updated'
+      },
+      order: [['created_at', 'DESC'], ['activity_id', 'DESC']],
+      limit: 10
+    }) || []
+  ]);
+
+  const refreshActivity = (recentQuoteUpdates || [])
+    .map((activity) => ({
+      activity,
+      metadata: parseQuoteActivityMetadata(activity?.metadata_json)
+    }))
+    .find(({ metadata }) => {
+      if (!metadata?.invoice_refresh_required) return false;
+      if (bookingId && metadata.booking_id && Number(metadata.booking_id) !== Number(bookingId)) return false;
+      return parseFloat(metadata.extra_amount || 0) > 0;
+    });
+
+  const refreshInvoiceHistory = refreshActivity?.activity
+    ? await db.invoice_send_history?.findOne({
+        where: {
+          quote_id: quoteId,
+          ...(bookingId ? { booking_id: bookingId } : {}),
+          sent_at: { [Op.gte]: refreshActivity.activity.created_at }
+        },
+        order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']]
+      })
+    : null;
+
+  const additionalAmount = parseFloat(refreshActivity?.metadata?.extra_amount || 0);
+  const previouslyPaidAmount = parseFloat(refreshActivity?.metadata?.previous_total || 0);
+  const revisedTotal = parseFloat(refreshActivity?.metadata?.new_total || 0);
+  const additionalPaymentStatus = refreshInvoiceHistory?.payment_status || (additionalAmount > 0 ? 'pending' : null);
+
+  return {
+    latest_invoice: latestInvoiceHistory ? {
+      invoice_send_history_id: latestInvoiceHistory.invoice_send_history_id,
+      invoice_number: latestInvoiceHistory.invoice_number || null,
+      invoice_url: latestInvoiceHistory.invoice_url || null,
+      invoice_pdf: latestInvoiceHistory.invoice_pdf || null,
+      payment_status: latestInvoiceHistory.payment_status || null,
+      sent_at: latestInvoiceHistory.sent_at || null
+    } : null,
+    additional_payment: refreshActivity ? {
+      additional_amount: additionalAmount,
+      previously_paid_amount: previouslyPaidAmount,
+      revised_total: revisedTotal,
+      outstanding_amount: additionalPaymentStatus === 'paid' ? 0 : additionalAmount,
+      payment_status: additionalPaymentStatus,
+      last_sent_at: refreshInvoiceHistory?.sent_at || null,
+      invoice_number: refreshInvoiceHistory?.invoice_number || null,
+      invoice_url: refreshInvoiceHistory?.invoice_url || null
+    } : null
+  };
+}
+
 /**
  * Internal helper to reuse calculateFromCreators safely.
  * DO NOT pass real res here.
@@ -1995,8 +2075,12 @@ exports.getLeadById = async (req, res) => {
     const leadJson = lead.toJSON();
     const linkedSalesQuote = await sales_quotes.findOne({
       where: { lead_id: lead.lead_id },
-      attributes: ['sales_quote_id', 'quote_number', 'status'],
+      attributes: ['sales_quote_id', 'quote_number', 'status', 'subtotal', 'discount_amount', 'total'],
       order: [['updated_at', 'DESC']]
+    });
+    const customQuoteFinancials = await getCustomQuoteFinancialDetails({
+      quoteId: linkedSalesQuote?.sales_quote_id || null,
+      bookingId: leadJson.booking?.stream_project_booking_id || null
     });
 
     if (leadJson.booking && !Array.isArray(leadJson.booking.booking_days)) {
@@ -2217,6 +2301,15 @@ exports.getLeadById = async (req, res) => {
         fulfillmentSummary,
         pricing_breakdown,
         projected_quote: projectedQuote,
+        custom_quote: linkedSalesQuote ? {
+          sales_quote_id: linkedSalesQuote.sales_quote_id,
+          quote_number: linkedSalesQuote.quote_number,
+          status: linkedSalesQuote.status,
+          subtotal: parseFloat(linkedSalesQuote.subtotal || 0),
+          discount_amount: parseFloat(linkedSalesQuote.discount_amount || 0),
+          total: parseFloat(linkedSalesQuote.total || 0),
+          ...customQuoteFinancials
+        } : null,
         custom_quote_id: linkedSalesQuote?.sales_quote_id || null,
         custom_quote_number: linkedSalesQuote?.quote_number || null,
         custom_quote_status: linkedSalesQuote?.status || null

@@ -1001,3 +1001,9 @@ MODIFY COLUMN status ENUM(
   'rejected',
   'expired'
 ) NOT NULL DEFAULT 'draft';
+
+ALTER TABLE sales_quotes
+ADD COLUMN client_id INT NULL AFTER client_user_id,
+ADD CONSTRAINT sales_quotes_ibfk_client
+  FOREIGN KEY (client_id) REFERENCES clients(client_id),
+ADD INDEX idx_sales_quotes_client_ref (client_id, client_user_id);
