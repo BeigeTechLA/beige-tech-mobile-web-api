@@ -1409,6 +1409,11 @@ exports.searchFaceMatches = async (req, res) => {
 
 exports.listWorkspaces = async (req, res) => {
   try {
+    const hasPaginationParams =
+      typeof req.query.page !== 'undefined' || typeof req.query.limit !== 'undefined';
+    const page = Math.max(1, Number.parseInt(String(req.query.page || '1'), 10) || 1);
+    const limit = Math.min(200, Math.max(1, Number.parseInt(String(req.query.limit || '24'), 10) || 24));
+    const search = String(req.query.search || '').trim().toLowerCase();
     const result = await proxyRequest('/workspaces');
     const eventRows = await listCommonEventRows().catch(() => []);
     const eventWorkspaces = eventRows.map((row) => ({
@@ -1449,26 +1454,47 @@ exports.listWorkspaces = async (req, res) => {
       ...verifiedMissingEventWorkspaces,
     ];
 
+    let filteredWorkspaces = mergedWorkspaces;
     if (isCreatorRole(req)) {
       const allowedProjectIds = await getCreatorAcceptedProjectIds(req);
       const allowedIdSet = new Set((allowedProjectIds || []).map((id) => String(id)));
+      filteredWorkspaces = mergedWorkspaces.filter((workspace) =>
+        isCommonEventExternalId(workspace.externalId) || allowedIdSet.has(String(workspace.externalId))
+      );
+    }
 
-      return res.status(200).json({
-        ...result,
-        data: {
-          ...(result.data || {}),
-          workspaces: mergedWorkspaces.filter((workspace) =>
-            isCommonEventExternalId(workspace.externalId) || allowedIdSet.has(String(workspace.externalId))
-          ),
-        },
+    if (search) {
+      filteredWorkspaces = filteredWorkspaces.filter((workspace) => {
+        const folderName = String(workspace.folderName || '').toLowerCase();
+        const externalId = String(workspace.externalId || '').toLowerCase();
+        const eventName = String(workspace.eventName || '').toLowerCase();
+        return (
+          folderName.includes(search) ||
+          externalId.includes(search) ||
+          eventName.includes(search)
+        );
       });
     }
+    const total = filteredWorkspaces.length;
+    const effectiveLimit = hasPaginationParams ? limit : Math.max(total, 1);
+    const totalPages = Math.max(1, Math.ceil(total / effectiveLimit));
+    const safePage = hasPaginationParams ? Math.min(page, totalPages) : 1;
+    const offset = (safePage - 1) * effectiveLimit;
+    const paginatedWorkspaces = filteredWorkspaces.slice(offset, offset + effectiveLimit);
 
     return res.status(200).json({
       ...result,
       data: {
         ...(result.data || {}),
-        workspaces: mergedWorkspaces,
+        workspaces: paginatedWorkspaces,
+        pagination: {
+          page: safePage,
+          limit: effectiveLimit,
+          total,
+          totalPages,
+          hasNextPage: safePage < totalPages,
+          hasPreviousPage: safePage > 1,
+        },
       },
     });
   } catch (error) {
