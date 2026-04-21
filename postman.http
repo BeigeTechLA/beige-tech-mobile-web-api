@@ -2,7 +2,7 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzY2Nzk5ODksImV4cCI6MTc3NzI4NDc4OX0.0Dyb6XSR04o7U7PMrEH7qvZ97H_N8AaIGULV4iwDU_M
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzY3NjE5NjYsImV4cCI6MTc3NzM2Njc2Nn0.5bgn8XTW8D7WkadQJ2yP04Y9sZfqJRzyZAHO1W-f_Dk
 
 @TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI4OCwidXNlclJvbGUiOiJBZG1pbiIsImlhdCI6MTc3NjY3MjYyMiwiZXhwIjoxNzc3Mjc3NDIyfQ.TvvFxV-jZRKi-lMlOHQwMyztvL-_ZIOvIEqhd-gk_J8
 
@@ -50,12 +50,12 @@ Authorization: {{TOKEN}}
 
 ###
 ###
-POST {{DEV_URL}}auth/login HTTP/1.1
+POST {{URL}}auth/login HTTP/1.1
 Content-Type: application/json
 
 {
-  "email": "sales@beigecorporation.io",
-  "password": "Sales@2026!"
+  "email": "ronak.gandhi@gmail.com",
+  "password": "password123"
 }
 
 ###
@@ -1404,9 +1404,9 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### convert quote to booking | Single day:
-POST {{URL}}sales/quotes/123/convert-to-booking HTTP/1.1
+POST {{DEV_URL}}sales/quotes/138/convert-to-booking HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN}}
+Authorization: {{TOKEN2}}
 
 {
   "booking_type": "single_day",
@@ -1711,9 +1711,9 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### send invoice for quote
-POST {{DEV_URL}}sales/quotes/131/send-invoice HTTP/1.1
+POST {{URL}}sales/quotes/126/send-invoice HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN2}}
+Authorization: {{TOKEN}}
 
 ### Get Sent Invoice History
 GET {{URL}}sales/dashboard/invoice-history?page=1&limit=20
