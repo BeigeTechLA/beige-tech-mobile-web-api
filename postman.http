@@ -1283,6 +1283,7 @@ Authorization: {{TOKEN}}
 
 {
   "pricing_mode": "general",
+  "client_id": 15,
   "client_name": "Harsh Panchal",
   "client_email": "harsh.panchal@revurge.com",
   "client_phone": "+1 555 324 568",
@@ -1404,9 +1405,9 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### convert quote to booking | Single day:
-POST {{DEV_URL}}sales/quotes/138/convert-to-booking HTTP/1.1
+POST {{URL}}sales/quotes/132/convert-to-booking HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN2}}
+Authorization: {{TOKEN}}
 
 {
   "booking_type": "single_day",
