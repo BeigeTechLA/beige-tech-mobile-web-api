@@ -2428,6 +2428,23 @@ async function fetchQuoteById(salesQuoteId, user = null) {
   if (!quote) return null;
 
   const plain = quote.toJSON();
+  try {
+    const signature = await db.sequelize.query(
+      'SELECT signature_base64, signer_name, signer_email, signed_at FROM signatures WHERE quote_id = ? ORDER BY id DESC LIMIT 1',
+      {
+        replacements: [salesQuoteId],
+        type: db.sequelize.QueryTypes.SELECT
+      }
+    );
+
+    if (signature && signature.length > 0) {
+      plain.signature_base64 = signature[0].signature_base64;
+      plain.signer_name = signature[0].signer_name;
+      plain.signed_at = signature[0].signed_at;
+    }
+  } catch (err) {
+    console.error('Signature fetch error:', err);
+  }
   if (plain.lead_id) {
     const linkedLead = await db.sales_leads.findOne({
       where: { lead_id: plain.lead_id },
