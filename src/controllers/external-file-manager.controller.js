@@ -1357,8 +1357,13 @@ exports.searchFaceMatches = async (req, res) => {
         scanImageBase64: scanImageBase64 || undefined,
         scanImageUrl: scanImageUrl || undefined,
         threshold: req.body.threshold,
+        minScore: req.body.minScore,
         maxResults: req.body.maxResults,
         candidateLimit: req.body.candidateLimit,
+        fallbackCandidateLimit: req.body.fallbackCandidateLimit,
+        backgroundReindex: req.body.backgroundReindex,
+        backgroundBatchLimit: req.body.backgroundBatchLimit,
+        backgroundConcurrency: req.body.backgroundConcurrency,
         providerTimeoutMs: req.body.providerTimeoutMs,
       }),
     });
@@ -1368,6 +1373,28 @@ exports.searchFaceMatches = async (req, res) => {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
       message: error.message || 'Face scan search failed',
+    });
+  }
+};
+
+exports.getFaceScanIndexStatus = async (req, res) => {
+  try {
+    const externalId = String(req.params.externalId || req.query.externalId || '').trim().toLowerCase();
+    if (!externalId) {
+      return res.status(400).json({
+        success: false,
+        message: 'externalId is required',
+      });
+    }
+
+    await ensureCreatorWorkspaceAccess(req, externalId);
+    const proxyResult = await proxyRequest(`/face-scan/index-status/${encodeURIComponent(externalId)}`);
+
+    return res.status(200).json(proxyResult);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to fetch face index status',
     });
   }
 };
