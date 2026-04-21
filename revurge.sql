@@ -987,6 +987,22 @@ ALTER TABLE stream_project_booking ADD COLUMN estimated_delivery_date DATE NULL 
 
 ALTER TABLE `clients` CHANGE `user_id` `user_id` INT(11) NULL;
 
+-- 20-4-26
+
+CREATE TABLE `signatures` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `quote_id` int(11) NOT NULL,
+  `signer_name` varchar(255) NOT NULL,
+  `signer_email` varchar(255) DEFAULT NULL,
+  `signature_base64` longtext NOT NULL,
+  `pdf_path` varchar(500) DEFAULT NULL,
+  `status` varchar(50) DEFAULT 'signed',
+  `signed_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- 21-04-26
 
 ALTER TABLE sales_quotes
