@@ -986,3 +986,18 @@ ALTER TABLE stream_project_booking ADD COLUMN estimated_delivery_date DATE NULL 
 --16-04-26
 
 ALTER TABLE `clients` CHANGE `user_id` `user_id` INT(11) NULL;
+
+-- 21-04-26
+
+ALTER TABLE sales_quotes
+MODIFY COLUMN status ENUM(
+  'draft',
+  'pending',
+  'partially_paid',
+  'sent',
+  'viewed',
+  'accepted',
+  'paid',
+  'rejected',
+  'expired'
+) NOT NULL DEFAULT 'draft';

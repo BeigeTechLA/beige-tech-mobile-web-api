@@ -5,7 +5,7 @@ const { generateQuotePdfBuffer } = require('../utils/quotePdf');
 const { normalizeTime, resolveEventDateAndStartTime } = require('../utils/timezone');
 
 const SECTION_TYPES = ['service', 'addon', 'logistics', 'custom'];
-const QUOTE_STATUSES = ['draft', 'pending', 'sent', 'viewed', 'accepted', 'paid', 'rejected', 'expired'];
+const QUOTE_STATUSES = ['draft', 'pending', 'partially_paid', 'sent', 'viewed', 'accepted', 'paid', 'rejected', 'expired'];
 const DISCOUNT_TYPES = ['none', 'percentage', 'fixed_amount'];
 const AI_EDITING_SERVICE_NAME = 'ai editing';
 const CONVERTED_BOOKINGS_LEAD_SOURCE = 'converted bookings';
@@ -178,7 +178,8 @@ function normalizeQuoteFilterStatus(status) {
   const statusGroups = {
     accepted: ['accepted', 'paid'],
     draft: ['draft'],
-    pending: ['pending'],
+    pending: ['pending', 'partially_paid'],
+    partially_paid: ['partially_paid'],
     rejected: ['rejected'],
     sent: ['sent', 'viewed'],
     viewed: ['viewed'],
@@ -409,6 +410,7 @@ function normalizeStatusForDashboardMetrics(status) {
   const normalizedStatus = String(status || '').toLowerCase();
 
   if (normalizedStatus === 'paid') return 'accepted';
+  if (normalizedStatus === 'partially_paid') return 'pending';
   if (normalizedStatus === 'viewed' || normalizedStatus === 'sent') return 'sent';
   return normalizedStatus;
 }
@@ -1750,6 +1752,7 @@ async function resolveQuoteBillingState(quote, transaction) {
     booking: null,
     latest_invoice_history: null,
     collected_amount: 0,
+    outstanding_amount: 0,
     payment_status: 'pending',
     is_collected: false
   };
@@ -1789,13 +1792,52 @@ async function resolveQuoteBillingState(quote, transaction) {
     booking && (booking.payment_id || Number(booking.is_completed) === 1)
   );
   const historyMarkedCollected = latestInvoiceHistory?.payment_status === 'paid';
-  const isCollected = bookingMarkedCollected || historyMarkedCollected;
-  const paymentStatus = latestInvoiceHistory?.payment_status || (isCollected ? 'paid' : 'pending');
+  const refreshActivity = db.sales_quote_activities
+    ? await db.sales_quote_activities.findOne({
+        where: {
+          sales_quote_id: quote.sales_quote_id,
+          activity_type: 'updated'
+        },
+        order: [['created_at', 'DESC'], ['activity_id', 'DESC']],
+        transaction
+      })
+    : null;
+  const refreshMetadata = parseConfig(refreshActivity?.metadata_json);
+  const refreshExtraAmount = roundCurrency(refreshMetadata?.extra_amount || 0);
+  const refreshPreviousTotal = roundCurrency(refreshMetadata?.previous_total || 0);
+  const refreshInvoiceHistory = refreshActivity && db.invoice_send_history
+    ? await db.invoice_send_history.findOne({
+        where: {
+          quote_id: quote.sales_quote_id,
+          ...(booking?.stream_project_booking_id ? { booking_id: booking.stream_project_booking_id } : {}),
+          sent_at: { [Op.gte]: refreshActivity.created_at }
+        },
+        order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+        transaction
+      })
+    : null;
+  const refreshOutstanding = Boolean(
+    refreshMetadata?.invoice_refresh_required &&
+    booking?.stream_project_booking_id &&
+    Number(refreshMetadata?.booking_id || 0) === Number(booking.stream_project_booking_id) &&
+    refreshExtraAmount > 0 &&
+    refreshInvoiceHistory?.payment_status !== 'paid'
+  );
+
+  const isCollected = !refreshOutstanding && (bookingMarkedCollected || historyMarkedCollected);
+  const paymentStatus = refreshOutstanding
+    ? 'partially_paid'
+    : (refreshInvoiceHistory?.payment_status || latestInvoiceHistory?.payment_status || (isCollected ? 'paid' : 'pending'));
+  const collectedAmount = refreshOutstanding
+    ? refreshPreviousTotal
+    : (isCollected ? roundCurrency(quote.total) : 0);
+  const outstandingAmount = roundCurrency(Math.max(roundCurrency(quote.total) - collectedAmount, 0));
 
   return {
     booking,
     latest_invoice_history: latestInvoiceHistory,
-    collected_amount: isCollected ? roundCurrency(quote.total) : 0,
+    collected_amount: collectedAmount,
+    outstanding_amount: outstandingAmount,
     payment_status: paymentStatus,
     is_collected: isCollected
   };
@@ -2060,15 +2102,18 @@ async function updateQuote(salesQuoteId, payload, user) {
     const collectedAmount = roundCurrency(billingState.collected_amount);
     const extraAmount = roundCurrency(Math.max(newTotal - collectedAmount, 0));
     const paymentStatus = extraAmount > 0
-      ? (billingState.is_collected ? 'pending' : billingState.payment_status)
+      ? (billingState.is_collected ? 'partially_paid' : billingState.payment_status)
       : (billingState.is_collected ? 'paid' : billingState.payment_status);
+    const resolvedStatus = extraAmount > 0 && billingState.is_collected
+      ? 'partially_paid'
+      : nextStatus;
 
     const quoteUpdatePayload = {
       lead_id: payload.lead_id !== undefined ? payload.lead_id : quote.lead_id,
       client_user_id: clientSnapshot.client_user_id,
       assigned_sales_rep_id: assignedSalesRepId,
       pricing_mode: payload.pricing_mode || quote.pricing_mode,
-      status: nextStatus,
+      status: resolvedStatus,
       client_name: clientSnapshot.client_name,
       client_email: clientSnapshot.client_email,
       client_phone: clientSnapshot.client_phone,
