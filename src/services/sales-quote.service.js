@@ -1988,8 +1988,8 @@ async function duplicateQuote(salesQuoteId, user) {
     const sourceQuote = quote.toJSON();
     const duplicatedQuote = await db.sales_quotes.create({
       quote_number: generateQuoteNumber(),
-      lead_id: sourceQuote.lead_id || null,
-      client_user_id: sourceQuote.client_user_id || null,
+      lead_id: null,
+      client_user_id: null,
       created_by_user_id: user.userId,
       assigned_sales_rep_id: sourceQuote.assigned_sales_rep_id || null,
       pricing_mode: sourceQuote.pricing_mode || 'general',
@@ -2035,7 +2035,11 @@ async function duplicateQuote(salesQuoteId, user) {
       'created',
       user.userId,
       'Quote duplicated',
-      { source_quote_id: salesQuoteId }
+      {
+        source_quote_id: salesQuoteId,
+        reset_lead_linkage: true,
+        reset_client_user_linkage: true
+      }
     );
 
     await transaction.commit();
