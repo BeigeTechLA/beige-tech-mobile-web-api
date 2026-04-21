@@ -135,7 +135,7 @@ async function markConvertedSalesQuoteAsPaid({
       lead_id: lead.lead_id
     },
     order: [
-      [db.sequelize.literal("CASE WHEN status = 'paid' THEN 0 WHEN status = 'accepted' THEN 1 WHEN status = 'sent' THEN 2 WHEN status = 'viewed' THEN 3 WHEN status = 'pending' THEN 4 ELSE 5 END"), 'ASC'],
+      [db.sequelize.literal("CASE WHEN status = 'paid' THEN 0 WHEN status = 'accepted' THEN 1 WHEN status = 'partially_paid' THEN 2 WHEN status = 'sent' THEN 3 WHEN status = 'viewed' THEN 4 WHEN status = 'pending' THEN 5 ELSE 6 END"), 'ASC'],
       ['accepted_at', 'DESC'],
       ['updated_at', 'DESC'],
       ['sales_quote_id', 'DESC']
@@ -167,6 +167,85 @@ async function markConvertedSalesQuoteAsPaid({
   }, { transaction });
 
   return salesQuote.sales_quote_id;
+}
+
+async function markAdditionalQuoteInvoiceAsPaid({
+  bookingId,
+  stripeInvoice = null,
+  paymentIntentId = null,
+  transaction
+}) {
+  if (!bookingId || !db.invoice_send_history) return false;
+
+  const invoiceNumber = normalizeString(stripeInvoice?.number, 255, null);
+  const invoiceUrl = normalizeString(stripeInvoice?.hosted_invoice_url, 1000, null);
+  const invoicePdf = normalizeString(stripeInvoice?.invoice_pdf, 1000, null);
+  const invoiceAmount = round2((stripeInvoice?.amount_paid || stripeInvoice?.total || 0) / 100);
+
+  let pendingInvoiceHistory = null;
+  if (invoiceNumber) {
+    pendingInvoiceHistory = await db.invoice_send_history.findOne({
+      where: {
+        booking_id: bookingId,
+        invoice_number: invoiceNumber,
+        payment_status: 'pending'
+      },
+      order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+      transaction
+    });
+  }
+
+  if (!pendingInvoiceHistory) {
+    pendingInvoiceHistory = await db.invoice_send_history.findOne({
+      where: {
+        booking_id: bookingId,
+        payment_status: 'pending'
+      },
+      order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+      transaction
+    });
+  }
+
+  if (!pendingInvoiceHistory) return false;
+
+  await pendingInvoiceHistory.update({
+    payment_status: 'paid',
+    invoice_number: invoiceNumber || pendingInvoiceHistory.invoice_number,
+    invoice_url: invoiceUrl || pendingInvoiceHistory.invoice_url,
+    invoice_pdf: invoicePdf || pendingInvoiceHistory.invoice_pdf
+  }, { transaction });
+
+  if (!pendingInvoiceHistory.quote_id) {
+    return true;
+  }
+
+  const salesQuote = await db.sales_quotes.findByPk(pendingInvoiceHistory.quote_id, { transaction });
+  if (!salesQuote) {
+    return true;
+  }
+
+  const now = new Date();
+  await salesQuote.update({
+    status: 'paid',
+    accepted_at: salesQuote.accepted_at || now,
+    updated_at: now
+  }, { transaction });
+
+  await db.sales_quote_activities.create({
+    sales_quote_id: salesQuote.sales_quote_id,
+    activity_type: 'status_changed',
+    performed_by_user_id: null,
+    message: 'Quote marked as paid after additional invoice payment',
+    metadata_json: JSON.stringify({
+      status: 'paid',
+      booking_id: bookingId,
+      payment_intent_id: paymentIntentId,
+      invoice_number: invoiceNumber,
+      amount_paid: invoiceAmount
+    })
+  }, { transaction });
+
+  return true;
 }
 
 
@@ -1807,6 +1886,7 @@ exports.handleStripeWebhook = async (req, res) => {
     const dataObject = event.data.object;
     let booking_id = null;
     let paymentIntentId = null;
+    let stripeInvoice = null;
 
     if (event.type === 'payment_intent.succeeded') {
       const bookingIdRaw = dataObject.metadata?.booking_id;
@@ -1829,6 +1909,7 @@ exports.handleStripeWebhook = async (req, res) => {
         }
       }
     } else if (event.type === 'invoice.paid') {
+      stripeInvoice = dataObject;
       const bookingIdRaw = dataObject.metadata?.booking_id;
       booking_id = bookingIdRaw ? parseInt(bookingIdRaw, 10) : null;
       paymentIntentId = typeof dataObject.payment_intent === 'string'
@@ -1871,6 +1952,21 @@ exports.handleStripeWebhook = async (req, res) => {
 
       // Booking-level idempotency: do not create a second payment for an already paid booking.
       if (booking.payment_id || booking.is_completed === 1) {
+        if (event.type === 'invoice.paid') {
+          const additionalInvoiceMarkedPaid = await markAdditionalQuoteInvoiceAsPaid({
+            bookingId: booking_id,
+            stripeInvoice,
+            paymentIntentId,
+            transaction
+          });
+
+          if (additionalInvoiceMarkedPaid) {
+            await transaction.commit();
+            console.log(`Webhook: additional invoice marked paid for booking ${booking_id}`);
+            return res.status(200).json({ received: true, additional_invoice_paid: true });
+          }
+        }
+
         await transaction.rollback();
         console.log(`Webhook: booking ${booking_id} already marked paid`);
         return res.status(200).json({ received: true, booking_already_paid: true });

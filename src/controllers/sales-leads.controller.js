@@ -1084,6 +1084,7 @@ exports.trackEarlyBookingInterest = async (req, res) => {
           //   endTime: end_time,
           //   editsNeeded: edits_needed
           // }).catch(err => console.error('Sales Email Error:', err));
+          console.log(assignedRep);
 
           emailService.sendProductionLeadNotification({
             client_name: client_name,
@@ -1093,7 +1094,8 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             eventDate: event_date,
             startTime: start_time,
             endTime: end_time,
-            editsNeeded: edits_needed
+            editsNeeded: edits_needed,
+            sales_rep_email: assignedRep.email
           }).catch(err => console.error('Production Email Error:', err));
         } else {
           await lead.update({ last_activity_at: new Date() });
