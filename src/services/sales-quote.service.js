@@ -960,6 +960,7 @@ async function deleteCatalogItem(catalogItemId) {
 
 async function resolveClientSnapshot(payload = {}, fallback = {}) {
   const snapshot = {
+    client_id: payload.client_id !== undefined ? payload.client_id : fallback.client_id || null,
     client_user_id: payload.client_user_id !== undefined ? payload.client_user_id : fallback.client_user_id || null,
     client_name: payload.client_name !== undefined ? payload.client_name : fallback.client_name || null,
     client_email: payload.client_email !== undefined ? payload.client_email : fallback.client_email || null,
@@ -967,15 +968,51 @@ async function resolveClientSnapshot(payload = {}, fallback = {}) {
     client_address: payload.client_address !== undefined ? payload.client_address : fallback.client_address || null
   };
 
+  let clientRecordById = null;
+  if (snapshot.client_id) {
+    clientRecordById = await db.clients.findOne({
+      where: { client_id: snapshot.client_id, is_active: 1 }
+    });
+
+    if (clientRecordById) {
+      if (!snapshot.client_user_id && clientRecordById.user_id) {
+        snapshot.client_user_id = clientRecordById.user_id;
+      }
+      if (!snapshot.client_name) snapshot.client_name = clientRecordById.name || null;
+      if (!snapshot.client_email) snapshot.client_email = clientRecordById.email || null;
+      if (!snapshot.client_phone) snapshot.client_phone = clientRecordById.phone_number || null;
+    }
+  }
+
   if (snapshot.client_user_id) {
-    const [clientRecord, userRecord] = await Promise.all([
+    let [clientRecordByUser, userRecord] = await Promise.all([
       db.clients.findOne({ where: { user_id: snapshot.client_user_id, is_active: 1 } }),
       db.users.findByPk(snapshot.client_user_id)
     ]);
 
-    if (!snapshot.client_name) snapshot.client_name = clientRecord?.name || userRecord?.name || null;
-    if (!snapshot.client_email) snapshot.client_email = clientRecord?.email || userRecord?.email || null;
-    if (!snapshot.client_phone) snapshot.client_phone = clientRecord?.phone_number || userRecord?.phone_number || null;
+    // Backward compatibility: old clients dropdown could send guest client_id in client_user_id.
+    if (!clientRecordByUser && !userRecord) {
+      const guestClientRecord = await db.clients.findOne({
+        where: { client_id: snapshot.client_user_id, is_active: 1 }
+      });
+
+      if (guestClientRecord) {
+        snapshot.client_id = guestClientRecord.client_id;
+        snapshot.client_user_id = guestClientRecord.user_id || null;
+        clientRecordById = guestClientRecord;
+        clientRecordByUser = guestClientRecord.user_id
+          ? await db.clients.findOne({ where: { user_id: guestClientRecord.user_id, is_active: 1 } })
+          : null;
+        userRecord = guestClientRecord.user_id ? await db.users.findByPk(guestClientRecord.user_id) : null;
+      }
+    }
+
+    if (!snapshot.client_id) {
+      snapshot.client_id = clientRecordByUser?.client_id || clientRecordById?.client_id || null;
+    }
+    if (!snapshot.client_name) snapshot.client_name = clientRecordByUser?.name || clientRecordById?.name || userRecord?.name || null;
+    if (!snapshot.client_email) snapshot.client_email = clientRecordByUser?.email || clientRecordById?.email || userRecord?.email || null;
+    if (!snapshot.client_phone) snapshot.client_phone = clientRecordByUser?.phone_number || clientRecordById?.phone_number || userRecord?.phone_number || null;
   }
 
   if (!snapshot.client_name) {
@@ -1914,6 +1951,7 @@ async function createQuote(payload, user) {
       quote_number: generateQuoteNumber(),
       lead_id: payload.lead_id || null,
       client_user_id: clientSnapshot.client_user_id,
+      client_id: clientSnapshot.client_id,
       created_by_user_id: user.userId,
       assigned_sales_rep_id: assignedSalesRepId,
       pricing_mode: payload.pricing_mode || 'general',
@@ -1990,6 +2028,7 @@ async function duplicateQuote(salesQuoteId, user) {
       quote_number: generateQuoteNumber(),
       lead_id: null,
       client_user_id: null,
+      client_id: null,
       created_by_user_id: user.userId,
       assigned_sales_rep_id: sourceQuote.assigned_sales_rep_id || null,
       pricing_mode: sourceQuote.pricing_mode || 'general',
@@ -2115,6 +2154,7 @@ async function updateQuote(salesQuoteId, payload, user) {
     const quoteUpdatePayload = {
       lead_id: payload.lead_id !== undefined ? payload.lead_id : quote.lead_id,
       client_user_id: clientSnapshot.client_user_id,
+      client_id: clientSnapshot.client_id,
       assigned_sales_rep_id: assignedSalesRepId,
       pricing_mode: payload.pricing_mode || quote.pricing_mode,
       status: resolvedStatus,

@@ -665,12 +665,19 @@ exports.createClient = async (req, res) => {
       });
     }
 
-    await db.clients.create({ name, email, phone_number });
+    const createdClient = await db.clients.create({ name, email, phone_number });
 
     return res.status(constants.OK.code).json({
       error: false,
       message: 'Client created successfully',
-      data: {}
+      data: {
+        client_id: createdClient.client_id,
+        user_id: createdClient.user_id || null,
+        name: createdClient.name,
+        email: createdClient.email,
+        phone_number: createdClient.phone_number,
+        client_type: createdClient.user_id ? 'registered' : 'guest'
+      }
     });
   } catch (error) {
     console.error('Client Create Error:', error);
