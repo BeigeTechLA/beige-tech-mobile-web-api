@@ -39,6 +39,11 @@ class SearchRequest(BaseModel):
     maxResults: int = 200
 
 
+class EmbedRequest(BaseModel):
+    scanImageBase64: Optional[str] = None
+    scanImageUrl: Optional[str] = None
+
+
 def _write_temp_image_bytes(img_bytes: bytes) -> str:
     tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
     tmp.write(img_bytes)
@@ -119,6 +124,31 @@ def _best_face_pair_score(
 @app.get("/health")
 def health() -> Dict[str, Any]:
     return {"ok": True, "model": FACE_MODEL, "detector": FACE_DETECTOR}
+
+
+@app.post("/embed")
+def embed_face(payload: EmbedRequest) -> Dict[str, Any]:
+    scan_bytes = _load_scan_bytes(payload.scanImageBase64, payload.scanImageUrl)
+    scan_path = _write_temp_image_bytes(scan_bytes)
+
+    try:
+        scan_embeddings = _get_embeddings_from_path(scan_path)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to process image: {exc}") from exc
+    finally:
+        try:
+            os.remove(scan_path)
+        except OSError:
+            pass
+
+    return {
+        "success": True,
+        "data": {
+            "provider": "deepface",
+            "embeddings": scan_embeddings,
+            "facesDetected": len(scan_embeddings),
+        },
+    }
 
 
 @app.post("/search")

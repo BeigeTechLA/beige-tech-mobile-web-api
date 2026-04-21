@@ -318,6 +318,7 @@ router.get('/quotes/public/:quoteId', salesQuotesController.getPublicQuoteById);
 router.get('/quotes/:quoteId', authenticate, requireSalesRepOrAdmin, salesQuotesController.getQuoteById);
 router.get('/quotes/:quoteId/pdf', authenticate, requireSalesRepOrAdmin, salesQuotesController.downloadQuotePdf);
 router.post('/quotes', authenticate, requireSalesRepOrAdmin, salesQuotesController.createQuote);
+router.post('/quotes/:quoteId/duplicate', authenticate, requireSalesRepOrAdmin, salesQuotesController.duplicateQuote);
 router.put('/quotes/:quoteId', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateQuote);
 router.post('/quotes/:quoteId/convert-to-booking', authenticate, requireSalesRepOrAdmin, salesQuotesController.convertQuoteToBooking);
 router.post('/quotes/:quoteId/send', authenticate, requireSalesRepOrAdmin, salesQuotesController.sendQuoteProposal);
