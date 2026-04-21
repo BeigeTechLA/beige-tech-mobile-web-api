@@ -451,6 +451,8 @@ crew_members.belongsTo(crew_roles, { as: 'role', foreignKey: 'primary_role' });
   sales_leads.hasMany(payment_links, { as: "payment_links", foreignKey: "lead_id" });
   payment_links.belongsTo(client_leads, { as: "client_lead", foreignKey: "client_lead_id" });
   client_leads.hasMany(payment_links, { as: "payment_links", foreignKey: "client_lead_id" });
+  payment_links.belongsTo(sales_quotes, { as: "quote", foreignKey: "quote_id" });
+  sales_quotes.hasMany(payment_links, { as: "payment_links", foreignKey: "quote_id" });
 
   payment_links.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id" });
   stream_project_booking.hasMany(payment_links, { as: "payment_links", foreignKey: "booking_id" });

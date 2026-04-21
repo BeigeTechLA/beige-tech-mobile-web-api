@@ -37,6 +37,14 @@ module.exports = function(sequelize, DataTypes) {
         key: 'stream_project_booking_id'
       }
     },
+    quote_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'sales_quotes',
+        key: 'sales_quote_id'
+      }
+    },
     discount_code_id: {
       type: DataTypes.INTEGER,
       allowNull: true,
@@ -52,6 +60,11 @@ module.exports = function(sequelize, DataTypes) {
         model: 'users',
         key: 'id'
       }
+    },
+    payment_context: {
+      type: DataTypes.ENUM('booking_payment', 'additional_quote_payment'),
+      allowNull: false,
+      defaultValue: 'booking_payment'
     },
     expires_at: {
       type: DataTypes.DATE,
@@ -118,6 +131,20 @@ module.exports = function(sequelize, DataTypes) {
         using: "BTREE",
         fields: [
           { name: "booking_id" },
+        ]
+      },
+      {
+        name: "idx_quote",
+        using: "BTREE",
+        fields: [
+          { name: "quote_id" },
+        ]
+      },
+      {
+        name: "idx_payment_context",
+        using: "BTREE",
+        fields: [
+          { name: "payment_context" },
         ]
       },
       {

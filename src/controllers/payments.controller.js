@@ -5,11 +5,18 @@ const { ensureProjectForBooking } = require('./projects.controller');
 const externalFileManagerController = require('./external-file-manager.controller');
 const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 const googleSheetService = require('../utils/googleSheetsService');
+const quotePaymentContextService = require('../services/quote-payment-context.service');
 // Get Beige margin percentage from environment, default to 25%
 const BEIGE_MARGIN_PERCENT = parseFloat(process.env.BEIGE_MARGIN_PERCENT || '25.00');
 const REFERRAL_DISCOUNT_PERCENT = 10;
 const emailService = require('../utils/emailService');
 const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
+const {
+  PAYMENT_LINK_CONTEXT,
+  INVOICE_HISTORY_TYPES,
+  resolveAdditionalQuoteInvoiceContext,
+  hasPendingAdditionalQuotePayment
+} = quotePaymentContextService;
 
 /**
  * Calculate pricing breakdown for CP + equipment booking
@@ -172,23 +179,50 @@ async function markConvertedSalesQuoteAsPaid({
 async function markAdditionalQuoteInvoiceAsPaid({
   bookingId,
   stripeInvoice = null,
+  quoteId = null,
   paymentIntentId = null,
   transaction
 }) {
   if (!bookingId || !db.invoice_send_history) return false;
 
+  const stripeInvoiceId = normalizeString(stripeInvoice?.id, 255, null);
   const invoiceNumber = normalizeString(stripeInvoice?.number, 255, null);
   const invoiceUrl = normalizeString(stripeInvoice?.hosted_invoice_url, 1000, null);
   const invoicePdf = normalizeString(stripeInvoice?.invoice_pdf, 1000, null);
   const invoiceAmount = round2((stripeInvoice?.amount_paid || stripeInvoice?.total || 0) / 100);
+  const normalizedQuoteId = Number(
+    quoteId ||
+    stripeInvoice?.metadata?.quote_id ||
+    0
+  );
+
+  const baseWhere = {
+    booking_id: bookingId,
+    payment_status: 'pending',
+    ...(normalizedQuoteId > 0 ? { quote_id: normalizedQuoteId } : {})
+  };
+
+  if (db.invoice_send_history.rawAttributes?.invoice_type) {
+    baseWhere.invoice_type = INVOICE_HISTORY_TYPES.ADDITIONAL_INVOICE;
+  }
 
   let pendingInvoiceHistory = null;
-  if (invoiceNumber) {
+  if (stripeInvoiceId && db.invoice_send_history.rawAttributes?.stripe_invoice_id) {
     pendingInvoiceHistory = await db.invoice_send_history.findOne({
       where: {
-        booking_id: bookingId,
+        ...baseWhere,
+        stripe_invoice_id: stripeInvoiceId
+      },
+      order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+      transaction
+    });
+  }
+
+  if (!pendingInvoiceHistory && invoiceNumber) {
+    pendingInvoiceHistory = await db.invoice_send_history.findOne({
+      where: {
+        ...baseWhere,
         invoice_number: invoiceNumber,
-        payment_status: 'pending'
       },
       order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
       transaction
@@ -197,10 +231,7 @@ async function markAdditionalQuoteInvoiceAsPaid({
 
   if (!pendingInvoiceHistory) {
     pendingInvoiceHistory = await db.invoice_send_history.findOne({
-      where: {
-        booking_id: bookingId,
-        payment_status: 'pending'
-      },
+      where: baseWhere,
       order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
       transaction
     });
@@ -210,6 +241,9 @@ async function markAdditionalQuoteInvoiceAsPaid({
 
   await pendingInvoiceHistory.update({
     payment_status: 'paid',
+    ...(db.invoice_send_history.rawAttributes?.stripe_invoice_id
+      ? { stripe_invoice_id: stripeInvoiceId || pendingInvoiceHistory.stripe_invoice_id || null }
+      : {}),
     invoice_number: invoiceNumber || pendingInvoiceHistory.invoice_number,
     invoice_url: invoiceUrl || pendingInvoiceHistory.invoice_url,
     invoice_pdf: invoicePdf || pendingInvoiceHistory.invoice_pdf
@@ -1306,9 +1340,25 @@ exports.createPaymentIntentMulti = async (req, res) => {
       });
     }
 
+    const bookingMarkedPaid = Boolean(booking.payment_id || Number(booking.is_completed) === 1);
+    const additionalInvoiceContext = bookingMarkedPaid
+      ? await resolveAdditionalQuoteInvoiceContext({ bookingId: booking_id, transaction: null })
+      : null;
+    const isAdditionalQuotePayment = bookingMarkedPaid && hasPendingAdditionalQuotePayment(additionalInvoiceContext);
+    const resolvedAmount = isAdditionalQuotePayment
+      ? Number(additionalInvoiceContext.additionalAmount || 0)
+      : Number(amount || 0);
+
+    if (bookingMarkedPaid && !isAdditionalQuotePayment) {
+      return res.status(400).json({
+        success: false,
+        message: 'This booking is already paid and has no additional balance due.'
+      });
+    }
+
     // 3. Handle 100% Discount ($0.00) Case
     // Stripe does not allow creating intents for $0.00
-    if (parseFloat(amount) === 0) {
+    if (resolvedAmount === 0) {
       return res.status(200).json({
         success: true,
         data: {
@@ -1321,7 +1371,7 @@ exports.createPaymentIntentMulti = async (req, res) => {
     }
 
     // 4. Standard Stripe logic for paid bookings
-    if (!amount || amount < 0) {
+    if (!Number.isFinite(resolvedAmount) || resolvedAmount < 0) {
       return res.status(400).json({
         success: false,
         message: 'Valid amount is required'
@@ -1329,13 +1379,18 @@ exports.createPaymentIntentMulti = async (req, res) => {
     }
 
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: Math.round(amount * 100), // Convert to cents
+      amount: Math.round(resolvedAmount * 100), // Convert to cents
       currency: 'usd',
       metadata: {
         booking_id: booking_id.toString(),
         guest_email: guest_email || booking.guest_email || '',
         type: 'multi-creator',
         shoot_name: booking.shoot_name || '',
+        payment_context: isAdditionalQuotePayment
+          ? PAYMENT_LINK_CONTEXT.ADDITIONAL_QUOTE_PAYMENT
+          : PAYMENT_LINK_CONTEXT.BOOKING_PAYMENT,
+        quote_id: isAdditionalQuotePayment ? String(additionalInvoiceContext.quoteId || '') : '',
+        additional_amount: isAdditionalQuotePayment ? String(additionalInvoiceContext.additionalAmount || 0) : ''
       }
     });
 
@@ -1344,7 +1399,7 @@ exports.createPaymentIntentMulti = async (req, res) => {
       data: {
         clientSecret: paymentIntent.client_secret,
         paymentIntentId: paymentIntent.id,
-        amount: amount,
+        amount: resolvedAmount,
         isFree: false
       }
     });
@@ -1438,6 +1493,57 @@ exports.confirmPaymentMulti = async (req, res) => {
         if (transaction) await transaction.rollback();
         return res.status(400).json({ success: false, message: stripeError.message });
       }
+    }
+
+    const paymentContext = paymentIntent?.metadata?.payment_context || PAYMENT_LINK_CONTEXT.BOOKING_PAYMENT;
+    const isAdditionalQuotePayment = paymentContext === PAYMENT_LINK_CONTEXT.ADDITIONAL_QUOTE_PAYMENT;
+    const additionalQuoteId = Number(paymentIntent?.metadata?.quote_id || 0) || null;
+
+    if (isAdditionalQuotePayment) {
+      const additionalInvoiceMarkedPaid = await markAdditionalQuoteInvoiceAsPaid({
+        bookingId: booking_id,
+        quoteId: additionalQuoteId,
+        paymentIntentId,
+        transaction
+      });
+
+      if (!additionalInvoiceMarkedPaid) {
+        const additionalInvoiceContext = await resolveAdditionalQuoteInvoiceContext({
+          bookingId: booking_id,
+          quoteId: additionalQuoteId,
+          transaction
+        });
+
+        if (!hasPendingAdditionalQuotePayment(additionalInvoiceContext)) {
+          await transaction.commit();
+          return res.status(200).json({
+            success: true,
+            message: 'Additional payment already processed',
+            data: {
+              booking_id,
+              quote_id: additionalQuoteId,
+              amount: totalAmount
+            }
+          });
+        }
+
+        await transaction.rollback();
+        return res.status(409).json({
+          success: false,
+          message: 'Additional payment could not be matched to a pending invoice.'
+        });
+      }
+
+      await transaction.commit();
+      return res.status(200).json({
+        success: true,
+        message: 'Additional payment processed successfully',
+        data: {
+          booking_id,
+          quote_id: additionalQuoteId,
+          amount: totalAmount
+        }
+      });
     }
 
     // 4. Prevent duplicate processing
@@ -1887,11 +1993,15 @@ exports.handleStripeWebhook = async (req, res) => {
     let booking_id = null;
     let paymentIntentId = null;
     let stripeInvoice = null;
+    let paymentContext = PAYMENT_LINK_CONTEXT.BOOKING_PAYMENT;
+    let additionalQuoteId = null;
 
     if (event.type === 'payment_intent.succeeded') {
       const bookingIdRaw = dataObject.metadata?.booking_id;
       booking_id = bookingIdRaw ? parseInt(bookingIdRaw, 10) : null;
       paymentIntentId = dataObject.id;
+      paymentContext = dataObject.metadata?.payment_context || PAYMENT_LINK_CONTEXT.BOOKING_PAYMENT;
+      additionalQuoteId = Number(dataObject.metadata?.quote_id || 0) || null;
 
       // Fallback: when booking_id is only present on the related invoice metadata.
       if ((!booking_id || Number.isNaN(booking_id)) && dataObject.invoice) {
@@ -1915,6 +2025,8 @@ exports.handleStripeWebhook = async (req, res) => {
       paymentIntentId = typeof dataObject.payment_intent === 'string'
         ? dataObject.payment_intent
         : dataObject.payment_intent?.id;
+      paymentContext = dataObject.metadata?.payment_context || PAYMENT_LINK_CONTEXT.BOOKING_PAYMENT;
+      additionalQuoteId = Number(dataObject.metadata?.quote_id || 0) || null;
     }
 
     if (!booking_id || Number.isNaN(booking_id)) {
@@ -1952,10 +2064,11 @@ exports.handleStripeWebhook = async (req, res) => {
 
       // Booking-level idempotency: do not create a second payment for an already paid booking.
       if (booking.payment_id || booking.is_completed === 1) {
-        if (event.type === 'invoice.paid') {
+        if (event.type === 'invoice.paid' || paymentContext === PAYMENT_LINK_CONTEXT.ADDITIONAL_QUOTE_PAYMENT) {
           const additionalInvoiceMarkedPaid = await markAdditionalQuoteInvoiceAsPaid({
             bookingId: booking_id,
             stripeInvoice,
+            quoteId: additionalQuoteId,
             paymentIntentId,
             transaction
           });

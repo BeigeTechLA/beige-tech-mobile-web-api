@@ -68,10 +68,19 @@ module.exports = function (sequelize, DataTypes) {
       type: DataTypes.TEXT,
       allowNull: true
     },
+    stripe_invoice_id: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
     payment_status: {
       type: DataTypes.ENUM('paid', 'pending'),
       allowNull: false,
       defaultValue: 'pending'
+    },
+    invoice_type: {
+      type: DataTypes.ENUM('invoice', 'additional_invoice', 'receipt'),
+      allowNull: false,
+      defaultValue: 'invoice'
     },
     sent_by_user_id: {
       type: DataTypes.INTEGER,
@@ -144,6 +153,20 @@ module.exports = function (sequelize, DataTypes) {
         using: 'BTREE',
         fields: [
           { name: 'payment_status' }
+        ]
+      },
+      {
+        name: 'idx_invoice_send_history_invoice_type',
+        using: 'BTREE',
+        fields: [
+          { name: 'invoice_type' }
+        ]
+      },
+      {
+        name: 'idx_invoice_send_history_stripe_invoice_id',
+        using: 'BTREE',
+        fields: [
+          { name: 'stripe_invoice_id' }
         ]
       },
       {

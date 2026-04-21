@@ -1007,3 +1007,18 @@ ADD COLUMN client_id INT NULL AFTER client_user_id,
 ADD CONSTRAINT sales_quotes_ibfk_client
   FOREIGN KEY (client_id) REFERENCES clients(client_id),
 ADD INDEX idx_sales_quotes_client_ref (client_id, client_user_id);
+
+ALTER TABLE `payment_links`
+  ADD COLUMN `quote_id` INT NULL AFTER `booking_id`,
+  ADD COLUMN `payment_context` ENUM('booking_payment', 'additional_quote_payment') NOT NULL DEFAULT 'booking_payment' AFTER `created_by_user_id`,
+  ADD KEY `idx_quote` (`quote_id`),
+  ADD KEY `idx_payment_context` (`payment_context`),
+  ADD CONSTRAINT `fk_payment_links_quote`
+    FOREIGN KEY (`quote_id`) REFERENCES `sales_quotes` (`sales_quote_id`)
+    ON DELETE SET NULL ON UPDATE CASCADE;
+
+ALTER TABLE `invoice_send_history`
+  ADD COLUMN `stripe_invoice_id` VARCHAR(255) NULL AFTER `invoice_pdf`,
+  ADD COLUMN `invoice_type` ENUM('invoice', 'additional_invoice', 'receipt') NOT NULL DEFAULT 'invoice' AFTER `payment_status`,
+  ADD KEY `idx_invoice_send_history_invoice_type` (`invoice_type`),
+  ADD KEY `idx_invoice_send_history_stripe_invoice_id` (`stripe_invoice_id`);
