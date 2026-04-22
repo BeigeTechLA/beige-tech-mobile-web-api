@@ -9,6 +9,10 @@ const FACE_SCAN_SERVICE_URL = process.env.FACE_SCAN_SERVICE_URL || '';
 const FACE_SCAN_PROVIDER_TIMEOUT_MS = Math.max(15000, Number(process.env.FACE_SCAN_PROVIDER_TIMEOUT_MS || 300000));
 const FACE_SCAN_MAX_CANDIDATES = Math.max(25, Number(process.env.FACE_SCAN_MAX_CANDIDATES || 80));
 const FACE_SCAN_INDEX_CONCURRENCY = Math.max(1, Number(process.env.FACE_SCAN_INDEX_CONCURRENCY || 3));
+const EXTERNAL_FILE_MANAGER_PROXY_TIMEOUT_MS = Math.max(
+  15000,
+  Number(process.env.EXTERNAL_FILE_MANAGER_PROXY_TIMEOUT_MS || 300000)
+);
 const COMMON_EVENT_ID_PREFIX = 'event_';
 let commonEventsTableReadyPromise = null;
 let commonEventCreatorFoldersTableReadyPromise = null;
@@ -1040,13 +1044,38 @@ const getCreatorAcceptedProjectIds = async (req) => {
 };
 
 const proxyRequest = async (path, options = {}) => {
-  const response = await fetch(`${DEFAULT_BASE_URL}${path}`, {
-    ...options,
-    headers: {
-      ...buildHeaders(),
-      ...(options.headers || {}),
-    },
-  });
+  const { timeoutMs: requestedTimeoutMs, ...requestOptions } = options || {};
+  const controller = new AbortController();
+  const timeoutMs = Math.max(
+    15000,
+    Number(requestedTimeoutMs || EXTERNAL_FILE_MANAGER_PROXY_TIMEOUT_MS)
+  );
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  let response;
+  try {
+    response = await fetch(`${DEFAULT_BASE_URL}${path}`, {
+      ...requestOptions,
+      signal: controller.signal,
+      headers: {
+        ...buildHeaders(),
+        ...(requestOptions.headers || {}),
+      },
+    });
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      const timeoutError = new Error(`External file manager timed out after ${timeoutMs}ms`);
+      timeoutError.status = 504;
+      timeoutError.payload = {
+        success: false,
+        message: 'Request timed out while waiting for external file manager',
+      };
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   const payload = await response.json().catch(() => ({
     success: false,
@@ -1357,8 +1386,13 @@ exports.searchFaceMatches = async (req, res) => {
         scanImageBase64: scanImageBase64 || undefined,
         scanImageUrl: scanImageUrl || undefined,
         threshold: req.body.threshold,
+        minScore: req.body.minScore,
         maxResults: req.body.maxResults,
         candidateLimit: req.body.candidateLimit,
+        fallbackCandidateLimit: req.body.fallbackCandidateLimit,
+        backgroundReindex: req.body.backgroundReindex,
+        backgroundBatchLimit: req.body.backgroundBatchLimit,
+        backgroundConcurrency: req.body.backgroundConcurrency,
         providerTimeoutMs: req.body.providerTimeoutMs,
       }),
     });
@@ -1368,6 +1402,28 @@ exports.searchFaceMatches = async (req, res) => {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
       message: error.message || 'Face scan search failed',
+    });
+  }
+};
+
+exports.getFaceScanIndexStatus = async (req, res) => {
+  try {
+    const externalId = String(req.params.externalId || req.query.externalId || '').trim().toLowerCase();
+    if (!externalId) {
+      return res.status(400).json({
+        success: false,
+        message: 'externalId is required',
+      });
+    }
+
+    await ensureCreatorWorkspaceAccess(req, externalId);
+    const proxyResult = await proxyRequest(`/face-scan/index-status/${encodeURIComponent(externalId)}`);
+
+    return res.status(200).json(proxyResult);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to fetch face index status',
     });
   }
 };

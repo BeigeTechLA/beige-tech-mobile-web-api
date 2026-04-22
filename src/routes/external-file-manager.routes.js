@@ -7,6 +7,7 @@ router.get('/common-events', authenticate, externalFileManagerController.listCom
 router.post('/common-events', authenticate, externalFileManagerController.createCommonEvent);
 router.post('/common-events/:eventExternalId/creator-folder', authenticate, externalFileManagerController.createCreatorEventFolder);
 router.post('/face-scan/search', authenticate, externalFileManagerController.searchFaceMatches);
+router.get('/face-scan/index-status/:externalId', authenticate, externalFileManagerController.getFaceScanIndexStatus);
 router.post('/face-scan/reindex', authenticate, externalFileManagerController.reindexFaceEmbeddings);
 router.post('/workspace', authenticate, externalFileManagerController.createWorkspace);
 router.get('/workspace/:bookingId', authenticate, externalFileManagerController.getWorkspace);

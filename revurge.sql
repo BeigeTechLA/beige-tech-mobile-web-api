@@ -1007,3 +1007,20 @@ ADD COLUMN client_id INT NULL AFTER client_user_id,
 ADD CONSTRAINT sales_quotes_ibfk_client
   FOREIGN KEY (client_id) REFERENCES clients(client_id),
 ADD INDEX idx_sales_quotes_client_ref (client_id, client_user_id);
+
+
+-- 20-4-26
+
+CREATE TABLE `signatures` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `quote_id` int(11) NOT NULL,
+  `signer_name` varchar(255) NOT NULL,
+  `signer_email` varchar(255) DEFAULT NULL,
+  `signature_base64` longtext NOT NULL,
+  `pdf_path` varchar(500) DEFAULT NULL,
+  `status` varchar(50) DEFAULT 'signed',
+  `signed_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
