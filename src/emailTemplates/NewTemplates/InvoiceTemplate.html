@@ -64,6 +64,22 @@
                   style="color: #000000 !important; font-weight: 600;">production</span> with the revised scope.
               </p>
               {{else}}
+              {{#if isReducedAmount}}
+              <h1 style="margin: 0; color: #000000 !important; font-size: 52px; font-weight: 600; line-height: 1.05;">
+                Quote Updated
+              </h1>
+              <p style="margin: 18px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+                Hello {{first_name}},
+              </p>
+              <p style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+                Your quote for [<span style="color: #000000 !important; font-weight: 600;">{{shoot_type}} +
+                  {{shoot_category}}</span>] was updated after payment and the total has been reduced.
+              </p>
+              <p style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+                Please review the revised amount below. Any refund handling will be communicated separately once that
+                process is defined.
+              </p>
+              {{else}}
               <h1 style="margin: 0; color: #000000 !important; font-size: 52px; font-weight: 600; line-height: 1.05;">
                 Your Invoice is Ready
               </h1>
@@ -79,6 +95,7 @@
                 Once payment is done, we can begin <span
                   style="color: #000000 !important; font-weight: 600;">production</span>.
               </p>
+              {{/if}}
               {{/if}}
               {{/if}}
             </td>
@@ -270,7 +287,11 @@
                                 Additional Amount Due
                                 {{/if}}
                                 {{else}}
+                                {{#if isReducedAmount}}
+                                Reduced Amount
+                                {{else}}
                                 Invoice Amount
+                                {{/if}}
                                 {{/if}}
                               </td>
                             </tr>
@@ -308,6 +329,36 @@
                                     </td>
                                   </tr>
                                 </table>
+                                {{else}}
+                                {{#if isReducedAmount}}
+                                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+                                  style="border-collapse: collapse; margin: 18px 0 0; background-color: #ffffff !important; border-radius: 22px; padding: 18px;">
+                                  <tr>
+                                    <td style="padding: 8px 18px; color: #525252 !important; font-size: 16px; line-height: 22px;">
+                                      Previously Paid
+                                    </td>
+                                    <td align="right" style="padding: 8px 18px; color: #000000 !important; font-size: 16px; line-height: 22px; font-weight: 600;">
+                                      $ {{previously_paid_amount}}
+                                    </td>
+                                  </tr>
+                                  <tr>
+                                    <td style="padding: 8px 18px; color: #525252 !important; font-size: 16px; line-height: 22px;">
+                                      Revised Total
+                                    </td>
+                                    <td align="right" style="padding: 8px 18px; color: #000000 !important; font-size: 16px; line-height: 22px; font-weight: 600;">
+                                      $ {{revised_total}}
+                                    </td>
+                                  </tr>
+                                  <tr>
+                                    <td style="padding: 8px 18px; color: #525252 !important; font-size: 16px; line-height: 22px;">
+                                      Refund Pending
+                                    </td>
+                                    <td align="right" style="padding: 8px 18px; color: #000000 !important; font-size: 16px; line-height: 22px; font-weight: 600;">
+                                      $ {{reduced_amount}}
+                                    </td>
+                                  </tr>
+                                </table>
+                                {{/if}}
                                 {{/if}}
                               </td>
                             </tr>
@@ -336,7 +387,11 @@
                 {{#if isAdditionalPayment}}
                 Pay Additional Amount &rarr;
                 {{else}}
+                {{#if isReducedAmount}}
+                View Updated Invoice &rarr;
+                {{else}}
                 Pay Invoice Now &rarr;
+                {{/if}}
                 {{/if}}
               </a>
               {{/if}}
@@ -362,7 +417,11 @@
                   After confirming the additional payment:
                   {{/if}}
                   {{else}}
+                  {{#if isReducedAmount}}
+                  After reviewing your updated quote:
+                  {{else}}
                   After confirming your booking:
+                  {{/if}}
                   {{/if}}
                 </p>
 

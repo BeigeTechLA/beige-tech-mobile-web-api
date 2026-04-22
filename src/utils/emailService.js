@@ -68,6 +68,8 @@ const {
   PRODUCTION_PROPOSAL_TEMPLATE_ID,
   CP_CONFIRMED_TEMPLATE_ID,
   CUSTOM_QUOTE_PROPOSAL_ID,
+  QUOTE_ACCEPTED_CLIENT_TEMPLATE_ID,
+  QUOTE_ACCEPTED_SALES_NOTIFICATION_TEMPLATE_ID,
   INVOICE_TEMPLATE_ID,
   TASK_ASSIGNMENT_TEMPLATE_ID
 } = require('../config/sendgridTemplates');
@@ -1598,8 +1600,8 @@ const sendInvoiceEmail = async (userData, invoiceData) => {
       return { success: false, error: 'Sender email not configured' };
     }
 
-    const isPaid = invoiceData.isPaid;
     const isAdditionalPayment = Boolean(invoiceData?.isAdditionalPayment);
+    const isReducedAmount = Boolean(invoiceData?.isReducedAmount);
 
     const payload = {
       to: userData.email,
@@ -1637,11 +1639,16 @@ const sendInvoiceEmail = async (userData, invoiceData) => {
         revised_total: invoiceData.revisedTotal != null
           ? parseFloat(invoiceData.revisedTotal).toFixed(2)
           : null,
+        reduced_amount: invoiceData.reducedAmount != null
+          ? parseFloat(invoiceData.reducedAmount).toFixed(2)
+          : null,
         payment_link: invoiceData.invoiceUrl,
         invoice_pdf: invoiceData.invoicePdf || invoiceData.invoiceUrl,
         // Important
         isPaid: invoiceData.isPaid,
-        isAdditionalPayment
+        isAdditionalPayment,
+        isReducedAmount,
+        refund_status: isReducedAmount ? 'refund_pending' : null
       }
     };
 
@@ -1660,93 +1667,6 @@ const sendInvoiceEmail = async (userData, invoiceData) => {
     console.error('SendGrid Invoice Error:', error?.response?.body || error.message);
     return { success: false, error: error.message };
   }
-};
-
-const generateInvoiceTemplate = (userData, invoiceData) => {
-  const statusColor = invoiceData.isPaid ? '#22c55e' : '#C79233'; // Green for paid, Gold for unpaid
-  const isAdditionalPayment = Boolean(invoiceData?.isAdditionalPayment);
-  const title = invoiceData.isPaid
-    ? 'Payment Received'
-    : (isAdditionalPayment ? 'Additional Payment Required' : 'New Invoice');
-
-  return `
-    <!DOCTYPE html>
-    <html lang="en">
-    <head><meta charset="UTF-8"></head>
-    <body style="margin: 0; padding: 0; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #0A0F0D; color: #ffffff;">
-      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #0A0F0D; padding: 40px 10px;">
-        <tr>
-          <td align="center">
-            <table width="600" cellpadding="0" cellspacing="0" border="0" style="background-color: #000000; border: 1px solid rgba(232, 209, 171, 0.2); border-radius: 20px; overflow: hidden;">
-              <tr>
-                <td align="center" style="padding: 40px 0 20px 0;">
-                  <img src="cid:beigelogo" alt="Beige" width="100" style="display: block; border:0;">
-                </td>
-              </tr>
-              <tr>
-                <td style="padding: 0 50px 40px 50px; text-align: center;">
-                  <h1 style="color: #E1CAA1; font-size: 28px; font-weight: 500; margin-bottom: 10px;">${title}</h1>
-                  <p style="color: ${statusColor}; font-size: 14px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 25px;">${invoiceData.invoiceNumber}</p>
-                  
-                  <p style="color: #E8D1AB; font-size: 16px; margin-bottom: 15px;">Hi ${userData.name},</p>
-                  
-                  <p style="color: #9ca3af; font-size: 15px; line-height: 1.6; margin-bottom: 30px;">
-                    ${invoiceData.isPaid 
-                      ? `Thank you for your payment. Please find your official receipt for <strong>${invoiceData.projectTitle}</strong> below.`
-                      : isAdditionalPayment
-                        ? `Your quote for <strong>${invoiceData.projectTitle}</strong> was updated. An additional payment is required to cover the revised total.`
-                        : `An invoice has been generated for your project <strong>${invoiceData.projectTitle}</strong>. Please review the details and complete the payment.`
-                    }
-                  </p>
-                  
-                  <div style="background-color: rgba(232, 209, 171, 0.05); border: 1px solid rgba(232, 209, 171, 0.1); border-radius: 12px; padding: 20px; margin-bottom: 30px; text-align: left;">
-                    <table width="100%">
-                      <tr>
-                        <td style="color: #9ca3af; font-size: 13px; padding-bottom: 8px;">${isAdditionalPayment ? (invoiceData.isPaid ? 'Additional Amount Paid' : 'Additional Amount Due') : 'Amount'}</td>
-                        <td align="right" style="color: #ffffff; font-size: 18px; font-weight: 600;">$${parseFloat(invoiceData.totalAmount).toFixed(2)}</td>
-                      </tr>
-                      <tr>
-                        <td style="color: #9ca3af; font-size: 13px;">Status</td>
-                        <td align="right" style="color: ${statusColor}; font-size: 13px; font-weight: 600;">${invoiceData.isPaid ? 'PAID' : 'DUE'}</td>
-                      </tr>
-                      ${isAdditionalPayment ? `
-                      <tr>
-                        <td style="color: #9ca3af; font-size: 13px; padding-top: 8px;">Previously Paid</td>
-                        <td align="right" style="color: #ffffff; font-size: 13px;">$${parseFloat(invoiceData.previouslyPaidAmount || 0).toFixed(2)}</td>
-                      </tr>
-                      <tr>
-                        <td style="color: #9ca3af; font-size: 13px; padding-top: 8px;">Revised Total</td>
-                        <td align="right" style="color: #ffffff; font-size: 13px;">$${parseFloat(invoiceData.revisedTotal || invoiceData.totalAmount || 0).toFixed(2)}</td>
-                      </tr>
-                      ` : ''}
-                    </table>
-                  </div>
-
-                  <table width="100%" border="0" cellspacing="0" cellpadding="0">
-                    <tr>
-                      <td align="center">
-                        <a href="${invoiceData.invoiceUrl}" style="background: linear-gradient(180deg, #3D342A 0%, #C79233 100%); color: #ffffff; padding: 18px 40px; text-decoration: none; border-radius: 50px; font-weight: 600; display: inline-block; margin-bottom: 15px;">
-                          ${invoiceData.isPaid ? 'VIEW RECEIPT' : 'PAY INVOICE NOW'}
-                        </a>
-                        <br>
-                        <a href="${invoiceData.invoicePdf}" style="color: #9ca3af; font-size: 13px; text-decoration: underline;">Download PDF Version</a>
-                      </td>
-                    </tr>
-                  </table>
-                </td>
-              </tr>
-              <tr>
-                <td style="background-color: #050505; padding: 30px; text-align: center; border-top: 1px solid rgba(232, 209, 171, 0.1);">
-                  <p style="color: #6b7280; font-size: 11px; margin: 0;">&copy; ${new Date().getFullYear()} Beige AI Platform. All rights reserved.</p>
-                </td>
-              </tr>
-            </table>
-          </td>
-        </tr>
-      </table>
-    </body>
-    </html>
-  `;
 };
 
 /**
@@ -2469,7 +2389,8 @@ const sendCustomQuoteProposalEmail = async (data) => {
         quote_validity: data?.quote_validity || 'TBD',
         add_ons: data?.add_ons || 'TBD',
         includes: data?.includes || 'TBD',
-        proposal_amount: proposalAmount
+        proposal_amount: proposalAmount,
+        accept_quote_url: data?.accept_quote_url || ''
       }
     };
 
@@ -2496,6 +2417,53 @@ const sendCustomQuoteProposalEmail = async (data) => {
     console.error('Error sending custom quote proposal email:', error?.response?.body || error.message);
     return { success: false, error: error?.response?.body || error.message };
   }
+};
+
+const sendQuoteAcceptedClientEmail = async (data) => {
+  const to = data?.to_email || data?.email;
+  if (!QUOTE_ACCEPTED_CLIENT_TEMPLATE_ID) {
+    return { success: false, error: 'QUOTE_ACCEPTED_CLIENT_TEMPLATE_ID is not configured' };
+  }
+
+  return sendEmail({
+    to,
+    subject: 'Your quote has been accepted',
+    templateId: QUOTE_ACCEPTED_CLIENT_TEMPLATE_ID,
+    dynamicTemplateData: {
+      client_name: getFirstName(data?.client_name || data?.first_name || '', data?.first_name || 'there') || 'there',
+      quote_number: data?.quote_number || 'TBD',
+      project_description: data?.project_description || 'TBD',
+      proposal_amount: formatAmount(data?.proposal_amount || 0)
+    }
+  });
+};
+
+const sendQuoteAcceptedSalesNotificationEmail = async (data) => {
+  const to = process.env.SALES_NOTIFICATION_EMAIL;
+  if (!to) {
+    return { success: false, error: 'SALES_NOTIFICATION_EMAIL is not configured' };
+  }
+
+  if (!QUOTE_ACCEPTED_SALES_NOTIFICATION_TEMPLATE_ID) {
+    return { success: false, error: 'QUOTE_ACCEPTED_SALES_NOTIFICATION_TEMPLATE_ID is not configured' };
+  }
+
+  return sendEmail({
+    to,
+    subject: `Quote accepted: ${data?.quote_number || 'Quote'}`,
+    templateId: QUOTE_ACCEPTED_SALES_NOTIFICATION_TEMPLATE_ID,
+    dynamicTemplateData: {
+      client_name: data?.client_name || 'TBD',
+      quote_number: data?.quote_number || 'TBD',
+      client_email: data?.client_email || 'TBD',
+      client_phone: data?.client_phone || 'TBD',
+      shoot_type: data?.shoot_type || 'TBD',
+      project_description: data?.project_description || 'TBD',
+      location: data?.location || 'TBD',
+      proposal_amount: formatAmount(data?.proposal_amount || 0),
+      accepted_at: data?.accepted_at || formatDate(new Date())
+    }
+  });
 };
 
 module.exports = {
@@ -2528,5 +2496,7 @@ module.exports = {
   sendNewCrewSignupNotification,
   sendCPSignupWelcomeEmail,
   sendProductionProposalEmail,
-  sendCustomQuoteProposalEmail
+  sendCustomQuoteProposalEmail,
+  sendQuoteAcceptedClientEmail,
+  sendQuoteAcceptedSalesNotificationEmail
 };

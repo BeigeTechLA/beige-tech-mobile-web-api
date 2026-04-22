@@ -1,6 +1,11 @@
 const { Op } = require('sequelize');
+const jwt = require('jsonwebtoken');
 const db = require('../models');
-const { sendCustomQuoteProposalEmail } = require('../utils/emailService');
+const {
+  sendCustomQuoteProposalEmail,
+  sendQuoteAcceptedClientEmail,
+  sendQuoteAcceptedSalesNotificationEmail
+} = require('../utils/emailService');
 const { generateQuotePdfBuffer } = require('../utils/quotePdf');
 const { normalizeTime, resolveEventDateAndStartTime } = require('../utils/timezone');
 
@@ -441,6 +446,76 @@ function parseConfig(config) {
 function stringifyConfig(config) {
   if (!config) return null;
   return JSON.stringify(config);
+}
+
+function getQuoteAcceptTokenSecret() {
+  return process.env.JWT_SECRET || 'quote-accept-secret';
+}
+
+function buildQuoteAcceptUrl(token) {
+  const apiBaseUrl = (process.env.API_BASE_URL || '').trim();
+  if (apiBaseUrl) {
+    return `${apiBaseUrl.replace(/\/$/, '')}/sales/quotes/accept?token=${encodeURIComponent(token)}`;
+  }
+
+  return `http://localhost:${process.env.PORT || 5001}/v1/sales/quotes/accept?token=${encodeURIComponent(token)}`;
+}
+
+function createQuoteAcceptToken(quoteDetails) {
+  return jwt.sign({
+    action: 'accept_quote',
+    sales_quote_id: quoteDetails.sales_quote_id,
+    quote_number: quoteDetails.quote_number,
+    client_email: quoteDetails.client_email || null
+  }, getQuoteAcceptTokenSecret(), {
+    expiresIn: '30d'
+  });
+}
+
+function verifyQuoteAcceptToken(token) {
+  if (!token) {
+    throw new Error('Accept token is required');
+  }
+
+  try {
+    const decoded = jwt.verify(token, getQuoteAcceptTokenSecret());
+    if (decoded?.action !== 'accept_quote' || !decoded?.sales_quote_id) {
+      throw new Error('Invalid accept token');
+    }
+
+    return decoded;
+  } catch (error) {
+    throw new Error('Invalid accept token');
+  }
+}
+
+function deriveQuoteAcceptanceEmailPayload(quoteDetails) {
+  return {
+    to_email: quoteDetails.client_email || null,
+    client_name: quoteDetails.client_name || 'there',
+    client_email: quoteDetails.client_email || null,
+    client_phone: quoteDetails.client_phone || null,
+    quote_number: quoteDetails.quote_number || `Q-${quoteDetails.sales_quote_id}`,
+    shoot_type: quoteDetails.video_shoot_type || 'TBD',
+    project_description: quoteDetails.project_description || 'TBD',
+    location: quoteDetails.client_address || 'TBD',
+    proposal_amount: quoteDetails.total,
+    accepted_at: quoteDetails.accepted_at
+      ? new Date(quoteDetails.accepted_at).toLocaleString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit'
+      })
+      : new Date().toLocaleString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit'
+      })
+  };
 }
 
 function normalizeMode(pricingMode) {
@@ -1888,19 +1963,28 @@ async function markQuoteInvoiceRefreshRequired({
   previousTotal = 0,
   newTotal = 0,
   extraAmount = 0,
+  reducedAmount = 0,
+  changeType = null,
   paymentStatus = 'pending'
 }) {
+  const resolvedChangeType = changeType || (extraAmount > 0 ? 'increase' : reducedAmount > 0 ? 'decrease' : 'unchanged');
+  const activityMessage = resolvedChangeType === 'decrease'
+    ? 'Quote total decreased after invoice/payment state; send updated invoice notice'
+    : 'Quote total increased after invoice/payment state; send updated invoice';
+
   await recordActivity(
     transaction,
     salesQuoteId,
     'updated',
     userId,
-    'Quote total increased after invoice/payment state; send updated invoice',
+    activityMessage,
     {
       booking_id: bookingId,
       previous_total: roundCurrency(previousTotal),
       new_total: roundCurrency(newTotal),
       extra_amount: roundCurrency(extraAmount),
+      reduced_amount: roundCurrency(reducedAmount),
+      quote_change_type: resolvedChangeType,
       payment_status: paymentStatus,
       invoice_refresh_required: true
     }
@@ -2144,6 +2228,12 @@ async function updateQuote(salesQuoteId, payload, user) {
     const newTotal = roundCurrency(totals.total);
     const collectedAmount = roundCurrency(billingState.collected_amount);
     const extraAmount = roundCurrency(Math.max(newTotal - collectedAmount, 0));
+    const reducedAmount = roundCurrency(Math.max(collectedAmount - newTotal, 0));
+    const quoteChangeType = newTotal > previousTotal
+      ? 'increase'
+      : newTotal < previousTotal
+        ? 'decrease'
+        : 'unchanged';
     const paymentStatus = extraAmount > 0
       ? (billingState.is_collected ? 'partially_paid' : billingState.payment_status)
       : (billingState.is_collected ? 'paid' : billingState.payment_status);
@@ -2282,16 +2372,18 @@ async function updateQuote(salesQuoteId, payload, user) {
       new_total: newTotal,
       collected_amount: collectedAmount,
       extra_amount: extraAmount,
+      reduced_amount: reducedAmount,
+      quote_change_type: quoteChangeType,
       payment_status: paymentStatus,
       booking_id: billingState.booking?.stream_project_booking_id || null,
       invoice_refresh_required: Boolean(
         billingState.booking?.stream_project_booking_id &&
-        extraAmount > 0 &&
+        (extraAmount > 0 || reducedAmount > 0) &&
         billingState.is_collected
       )
     });
 
-    if (billingState.booking?.stream_project_booking_id && extraAmount > 0 && billingState.is_collected) {
+    if (billingState.booking?.stream_project_booking_id && (extraAmount > 0 || reducedAmount > 0) && billingState.is_collected) {
       await markQuoteInvoiceRefreshRequired({
         transaction,
         salesQuoteId,
@@ -2300,6 +2392,8 @@ async function updateQuote(salesQuoteId, payload, user) {
         previousTotal,
         newTotal,
         extraAmount,
+        reducedAmount,
+        changeType: quoteChangeType,
         paymentStatus
       });
     }
@@ -2726,6 +2820,12 @@ async function sendQuoteProposal(salesQuoteId, payload, user) {
       throw new Error('Client email is required to send quote proposal');
     }
 
+    const acceptQuoteToken = createQuoteAcceptToken({
+      sales_quote_id: quoteDetails.sales_quote_id,
+      quote_number: quoteDetails.quote_number,
+      client_email: toEmail
+    });
+
     const generatedPdfBuffer = payload?.attachment_content || payload?.pdf_base64
       ? null
       : await generateQuotePdfBuffer(quoteDetails);
@@ -2740,6 +2840,7 @@ async function sendQuoteProposal(salesQuoteId, payload, user) {
       add_ons: deriveQuoteAddOns(quoteDetails.line_items || []),
       includes: deriveQuoteIncludes(quoteDetails.line_items || []),
       proposal_amount: quoteDetails.total,
+      accept_quote_url: buildQuoteAcceptUrl(acceptQuoteToken),
       attachment_content: payload?.attachment_content || payload?.pdf_base64 || (generatedPdfBuffer ? Buffer.from(generatedPdfBuffer).toString('base64') : null),
       attachment_filename: payload?.attachment_filename || `${quoteDetails.quote_number || 'custom-quote'}.pdf`,
       attachment_type: payload?.attachment_type || 'application/pdf'
@@ -2772,6 +2873,98 @@ async function sendQuoteProposal(salesQuoteId, payload, user) {
     return getQuoteById(salesQuoteId, user);
   } catch (error) {
     await transaction.rollback();
+    throw error;
+  }
+}
+
+async function acceptQuoteProposal(token) {
+  const decoded = verifyQuoteAcceptToken(token);
+  const salesQuoteId = Number(decoded.sales_quote_id);
+
+  if (!Number.isInteger(salesQuoteId) || salesQuoteId <= 0) {
+    throw new Error('Invalid accept token');
+  }
+
+  const transaction = await db.sequelize.transaction();
+  let transactionCompleted = false;
+
+  try {
+    const quote = await db.sales_quotes.findOne({
+      where: { sales_quote_id: salesQuoteId },
+      transaction
+    });
+
+    if (!quote) {
+      throw new Error('Quote not found');
+    }
+
+    if (decoded.quote_number && quote.quote_number !== decoded.quote_number) {
+      throw new Error('Invalid accept token');
+    }
+
+    if (decoded.client_email && quote.client_email && String(decoded.client_email).toLowerCase() !== String(quote.client_email).toLowerCase()) {
+      throw new Error('Invalid accept token');
+    }
+
+    if (['rejected', 'expired'].includes(quote.status)) {
+      throw new Error(`Quote cannot be accepted because it is ${quote.status}`);
+    }
+
+    const alreadyAccepted = ['accepted', 'paid'].includes(quote.status);
+
+    if (!alreadyAccepted) {
+      const acceptedAt = new Date();
+      await quote.update({
+        status: 'accepted',
+        accepted_at: acceptedAt,
+        updated_at: acceptedAt
+      }, { transaction });
+
+      await recordActivity(
+        transaction,
+        salesQuoteId,
+        'accepted',
+        null,
+        'Quote accepted by client via email',
+        { source: 'email_accept_link' }
+      );
+    }
+
+    await transaction.commit();
+    transactionCompleted = true;
+
+    const quoteDetails = await getPublicQuoteById(salesQuoteId);
+    if (!quoteDetails) {
+      throw new Error('Quote not found');
+    }
+
+    let notificationResults = {
+      client_email: { success: false, skipped: true },
+      sales_email: { success: false, skipped: true }
+    };
+
+    if (!alreadyAccepted) {
+      const emailPayload = deriveQuoteAcceptanceEmailPayload(quoteDetails);
+      notificationResults = {
+        client_email: quoteDetails.client_email
+          ? await sendQuoteAcceptedClientEmail(emailPayload)
+          : { success: false, skipped: true, error: 'Client email not available' },
+        sales_email: await sendQuoteAcceptedSalesNotificationEmail(emailPayload)
+      };
+    }
+
+    return {
+      already_accepted: alreadyAccepted,
+      quote: quoteDetails,
+      notifications: notificationResults
+    };
+  } catch (error) {
+    if (!transactionCompleted) {
+      await transaction.rollback();
+    }
+    if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
+      throw new Error('Invalid accept token');
+    }
     throw error;
   }
 }
@@ -2811,5 +3004,6 @@ module.exports = {
   getQuoteDashboard,
   updateQuoteStatus,
   sendQuoteProposal,
+  acceptQuoteProposal,
   downloadQuotePdf
 };
