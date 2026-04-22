@@ -7,6 +7,7 @@ const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 const pricingService = require('../services/pricing.service');
 const pricingController = require('../controllers/pricing.controller');
 const paymentService = require('../services/payment-links.service');
+const accountCreditService = require('../services/account-credit.service');
 const emailService = require('../utils/emailService');
 const { sendCPNewBookingRequestEmail } = require('../utils/emailService');
 const { resolveEventDateAndStartTime, normalizeTime, splitDateTime } = require('../utils/timezone');
@@ -79,6 +80,11 @@ async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null
   const additionalPaymentStatus = refreshInvoiceHistory?.payment_status || (additionalAmount > 0 ? 'pending' : null);
   const reducedPaymentStatus = refreshInvoiceHistory?.payment_status || (reducedAmount > 0 ? 'refund_pending' : null);
 
+  const creditSummary = await accountCreditService.getQuoteCreditSummary({
+    salesQuoteId: quoteId,
+    bookingId
+  });
+
   return {
     latest_invoice: latestInvoiceHistory ? {
       invoice_send_history_id: latestInvoiceHistory.invoice_send_history_id,
@@ -107,7 +113,8 @@ async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null
       last_sent_at: refreshInvoiceHistory?.sent_at || null,
       invoice_number: refreshInvoiceHistory?.invoice_number || null,
       invoice_url: refreshInvoiceHistory?.invoice_url || null
-    } : null
+    } : null,
+    credit_summary: creditSummary
   };
 }
 

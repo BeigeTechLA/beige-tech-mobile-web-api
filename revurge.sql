@@ -1024,3 +1024,49 @@ CREATE TABLE `signatures` (
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 22-04-26
+
+CREATE TABLE `account_credit_ledger` (
+  `account_credit_ledger_id` INT NOT NULL AUTO_INCREMENT,
+  `user_id` INT NULL,
+  `guest_email` VARCHAR(255) NULL,
+  `booking_id` INT NULL,
+  `sales_quote_id` INT NULL,
+  `sales_quote_activity_id` INT NULL,
+  `amount` DECIMAL(10,2) NOT NULL,
+  `entry_type` ENUM('credit_created', 'credit_used', 'credit_reversed') NOT NULL DEFAULT 'credit_created',
+  `status` ENUM('pending', 'available', 'used', 'reversed', 'expired') NOT NULL DEFAULT 'pending',
+  `source` ENUM('quote_reduction', 'manual_admin', 'payment_adjustment') NOT NULL DEFAULT 'quote_reduction',
+  `notes` TEXT NULL,
+  `created_by_user_id` INT NULL,
+  `approved_by_user_id` INT NULL,
+  `approved_at` DATETIME NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`account_credit_ledger_id`),
+  KEY `idx_account_credit_user` (`user_id`),
+  KEY `idx_account_credit_guest_email` (`guest_email`),
+  KEY `idx_account_credit_booking` (`booking_id`),
+  KEY `idx_account_credit_quote` (`sales_quote_id`),
+  KEY `idx_account_credit_status` (`status`),
+  UNIQUE KEY `uniq_account_credit_source_activity` (`sales_quote_activity_id`, `entry_type`),
+  CONSTRAINT `fk_account_credit_user`
+    FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)
+    ON DELETE SET NULL ON UPDATE CASCADE,
+  CONSTRAINT `fk_account_credit_booking`
+    FOREIGN KEY (`booking_id`) REFERENCES `stream_project_booking` (`stream_project_booking_id`)
+    ON DELETE SET NULL ON UPDATE CASCADE,
+  CONSTRAINT `fk_account_credit_sales_quote`
+    FOREIGN KEY (`sales_quote_id`) REFERENCES `sales_quotes` (`sales_quote_id`)
+    ON DELETE SET NULL ON UPDATE CASCADE,
+  CONSTRAINT `fk_account_credit_sales_quote_activity`
+    FOREIGN KEY (`sales_quote_activity_id`) REFERENCES `sales_quote_activities` (`activity_id`)
+    ON DELETE SET NULL ON UPDATE CASCADE,
+  CONSTRAINT `fk_account_credit_created_by`
+    FOREIGN KEY (`created_by_user_id`) REFERENCES `users` (`id`)
+    ON DELETE SET NULL ON UPDATE CASCADE,
+  CONSTRAINT `fk_account_credit_approved_by`
+    FOREIGN KEY (`approved_by_user_id`) REFERENCES `users` (`id`)
+    ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
