@@ -58,7 +58,7 @@ async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null
     .find(({ metadata }) => {
       if (!metadata?.invoice_refresh_required) return false;
       if (bookingId && metadata.booking_id && Number(metadata.booking_id) !== Number(bookingId)) return false;
-      return parseFloat(metadata.extra_amount || 0) > 0;
+      return parseFloat(metadata.extra_amount || 0) > 0 || parseFloat(metadata.reduced_amount || 0) > 0;
     });
 
   const refreshInvoiceHistory = refreshActivity?.activity
@@ -73,9 +73,11 @@ async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null
     : null;
 
   const additionalAmount = parseFloat(refreshActivity?.metadata?.extra_amount || 0);
+  const reducedAmount = parseFloat(refreshActivity?.metadata?.reduced_amount || 0);
   const previouslyPaidAmount = parseFloat(refreshActivity?.metadata?.previous_total || 0);
   const revisedTotal = parseFloat(refreshActivity?.metadata?.new_total || 0);
   const additionalPaymentStatus = refreshInvoiceHistory?.payment_status || (additionalAmount > 0 ? 'pending' : null);
+  const reducedPaymentStatus = refreshInvoiceHistory?.payment_status || (reducedAmount > 0 ? 'refund_pending' : null);
 
   return {
     latest_invoice: latestInvoiceHistory ? {
@@ -92,6 +94,16 @@ async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null
       revised_total: revisedTotal,
       outstanding_amount: additionalPaymentStatus === 'paid' ? 0 : additionalAmount,
       payment_status: additionalPaymentStatus,
+      last_sent_at: refreshInvoiceHistory?.sent_at || null,
+      invoice_number: refreshInvoiceHistory?.invoice_number || null,
+      invoice_url: refreshInvoiceHistory?.invoice_url || null
+    } : null,
+    reduced_payment: refreshActivity && reducedAmount > 0 ? {
+      reduced_amount: reducedAmount,
+      previously_paid_amount: previouslyPaidAmount,
+      revised_total: revisedTotal,
+      refund_pending_amount: reducedAmount,
+      payment_status: reducedPaymentStatus,
       last_sent_at: refreshInvoiceHistory?.sent_at || null,
       invoice_number: refreshInvoiceHistory?.invoice_number || null,
       invoice_url: refreshInvoiceHistory?.invoice_url || null

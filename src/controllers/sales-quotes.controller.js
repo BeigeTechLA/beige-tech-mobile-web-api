@@ -18,6 +18,113 @@ function sendError(res, error, fallbackMessage, statusCode = constants.BAD_REQUE
   });
 }
 
+function renderQuoteAcceptPage({
+  title,
+  badge,
+  description,
+  quoteNumber = '',
+  tone = 'success',
+  statusCode = constants.OK.code
+}) {
+  const palette = tone === 'error'
+    ? {
+      accent: '#8F2D2D',
+      accentSoft: '#F8E3DF',
+      border: 'rgba(173, 97, 80, 0.28)',
+      badgeBg: '#FFF1EE',
+      badgeText: '#8F2D2D'
+    }
+    : tone === 'warning'
+      ? {
+        accent: '#73510D',
+        accentSoft: '#FBF0D8',
+        border: 'rgba(214, 182, 112, 0.35)',
+        badgeBg: '#FFF7E7',
+        badgeText: '#73510D'
+      }
+      : {
+        accent: '#1E4D3A',
+        accentSoft: '#EAF5EF',
+        border: 'rgba(93, 149, 120, 0.30)',
+        badgeBg: '#F3FBF6',
+        badgeText: '#1E4D3A'
+      };
+
+  return {
+    statusCode,
+    html: `
+      <!DOCTYPE html>
+      <html lang="en">
+        <head>
+          <meta charset="UTF-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          <meta name="x-apple-disable-message-reformatting" />
+          <title>${title}</title>
+        </head>
+        <body style="margin:0;padding:0;background:#f6f5f2;font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f1f1f;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f6f5f2;padding:40px 20px;">
+            <tr>
+              <td align="center">
+                <table width="640" cellpadding="0" cellspacing="0" style="width:100%;max-width:640px;background:linear-gradient(145deg,#fffdf8 18%,#f5e4c3 190%);border:1px solid rgba(232,209,171,0.35);border-radius:28px;overflow:hidden;box-shadow:0 14px 40px rgba(0,0,0,0.05);">
+                  <tr>
+                    <td align="center" style="padding:42px 40px 26px;">
+                      <div style="display:inline-block;border:1px solid rgba(232,209,171,0.4);padding:12px 32px;border-radius:100px;background:#ffffff;box-shadow:0 8px 24px rgba(149,157,165,0.18);">
+                        <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png" alt="Beige" width="110" style="display:block;border:0;">
+                      </div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:0 40px 22px;">
+                      <div style="background:${palette.accentSoft};border:1px solid ${palette.border};border-radius:24px;padding:28px 28px 30px;text-align:center;">
+                        <span style="display:inline-block;background:${palette.badgeBg};color:${palette.badgeText};border-radius:999px;padding:8px 16px;font-size:13px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;">
+                          ${badge}
+                        </span>
+                        <h1 style="margin:20px 0 12px;font-size:48px;line-height:1.05;font-weight:700;color:#111111;">
+                          ${title}
+                        </h1>
+                        <p style="margin:0 auto;max-width:480px;font-size:22px;line-height:1.55;color:#4c4a46;">
+                          ${description}
+                        </p>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:0 40px 24px;">
+                      <table width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:24px;box-shadow:0 10px 24px rgba(0,0,0,0.04);">
+                        <tr>
+                          <td style="padding:28px;">
+                            <div style="font-size:15px;line-height:1.7;color:#6a665f;text-transform:uppercase;letter-spacing:1px;padding-bottom:6px;">
+                              Quote Reference
+                            </div>
+                            <div style="font-size:26px;line-height:1.3;font-weight:700;color:#111111;padding-bottom:18px;">
+                              ${quoteNumber || 'Unavailable'}
+                            </div>
+                            <div style="font-size:17px;line-height:1.8;color:#5a5751;">
+                              Our team will continue from here. If you need help, contact
+                              <a href="mailto:sales@beigecorporation.io" style="color:#111111;font-weight:600;text-decoration:underline;">sales@beigecorporation.io</a>.
+                            </div>
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td align="center" style="padding:0 40px 40px;">
+                      <div style="border-top:1px solid rgba(0,0,0,0.12);padding-top:26px;font-size:14px;line-height:1.7;color:#6f6b64;">
+                        This is an automated Beige confirmation page.
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+      </html>
+    `
+  };
+}
+
 function normalizeShootTypePayload(payload = {}, { partial = false } = {}) {
   const data = {};
 
@@ -394,6 +501,73 @@ exports.sendQuoteProposal = async (req, res) => {
     console.error('Error sending quote proposal email:', error);
     const statusCode = error.message === 'Quote not found' ? constants.NOT_FOUND.code : constants.BAD_REQUEST.code;
     return sendError(res, error, error.message || 'Failed to send quote proposal email', statusCode);
+  }
+};
+
+exports.acceptQuoteProposal = async (req, res) => {
+  try {
+    const token = String(req.query.token || req.body?.token || '').trim();
+    if (!token) {
+      if (req.method === 'GET' && req.accepts('html')) {
+        const page = renderQuoteAcceptPage({
+          title: 'Link Invalid',
+          badge: 'Unable To Process',
+          description: 'This quote confirmation link is missing required information. Please contact the Beige team for help.',
+          quoteNumber: '',
+          tone: 'error',
+          statusCode: constants.BAD_REQUEST.code
+        });
+        return res.status(page.statusCode).send(page.html);
+      }
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Accept token is required'
+      });
+    }
+
+    const result = await quoteService.acceptQuoteProposal(token);
+
+    if (req.method === 'GET' && req.accepts('html')) {
+      const quoteNumber = result?.quote?.quote_number || 'your quote';
+      const title = result.already_accepted ? 'Quote Already Confirmed' : 'Quote Accepted';
+      const description = result.already_accepted
+        ? `${quoteNumber} was already confirmed earlier. No further action is needed from you right now.`
+        : `${quoteNumber} has been accepted successfully. Our sales team will send the invoice shortly.`;
+      const page = renderQuoteAcceptPage({
+        title,
+        badge: result.already_accepted ? 'Already Confirmed' : 'Approval Received',
+        description,
+        quoteNumber,
+        tone: result.already_accepted ? 'warning' : 'success',
+        statusCode: constants.OK.code
+      });
+      return res.status(page.statusCode).send(page.html);
+    }
+
+    return res.json({
+      success: true,
+      data: result
+    });
+  } catch (error) {
+    console.error('Error accepting quote proposal:', error);
+    const statusCode = error.message === 'Quote not found'
+      ? constants.NOT_FOUND.code
+      : constants.BAD_REQUEST.code;
+    if (req.method === 'GET' && req.accepts('html')) {
+      const isMissing = error.message === 'Quote not found';
+      const page = renderQuoteAcceptPage({
+        title: isMissing ? 'Quote Not Found' : 'Unable To Confirm Quote',
+        badge: isMissing ? 'Not Found' : 'Action Needed',
+        description: isMissing
+          ? 'We could not find this quote anymore. Please contact the Beige team for assistance.'
+          : 'This confirmation link is invalid or has expired. Please contact the Beige team and we will help you right away.',
+        quoteNumber: '',
+        tone: 'error',
+        statusCode
+      });
+      return res.status(page.statusCode).send(page.html);
+    }
+    return sendError(res, error, error.message || 'Failed to accept quote proposal', statusCode);
   }
 };
 
