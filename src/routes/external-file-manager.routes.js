@@ -14,7 +14,9 @@ router.get('/workspace/:bookingId', authenticate, externalFileManagerController.
 router.get('/workspace/:bookingId/files', authenticate, externalFileManagerController.getWorkspaceFiles);
 router.post('/folder', authenticate, externalFileManagerController.createFolder);
 router.post('/upload-policy', authenticate, externalFileManagerController.getUploadPolicy);
+router.post('/upload-policies/batch', authenticate, externalFileManagerController.getUploadPoliciesBatch);
 router.post('/file-uploaded', authenticate, externalFileManagerController.notifyFileUploaded);
+router.post('/files-uploaded/batch', authenticate, externalFileManagerController.notifyFilesUploadedBatch);
 router.post('/file-view-url', authenticate, externalFileManagerController.getFileViewUrl);
 router.post('/file-download-url', authenticate, externalFileManagerController.getFileDownloadUrl);
 router.post('/folder-download-url', authenticate, externalFileManagerController.getFolderDownloadUrl);
