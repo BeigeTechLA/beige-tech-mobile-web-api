@@ -1,6 +1,7 @@
 const { payment_links, sales_leads, client_leads, sales_lead_activities, client_lead_activities, discount_codes, stream_project_booking, quotes, quote_line_items, users } = require('../models');
 const db = require('../models');
 const paymentLinksService = require('../services/payment-links.service');
+const quoteService = require('../services/sales-quote.service');
 const constants = require('../utils/constants');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const emailService = require('../utils/emailService');
@@ -1530,12 +1531,13 @@ exports.sendQuoteInvoice = async (req, res) => {
         })
       : null;
 
-    const bookingId = linkedLead?.booking_id || null;
+    let bookingId = linkedLead?.booking_id || null;
     if (!bookingId) {
-      return res.status(constants.BAD_REQUEST.code).json({
-        success: false,
-        message: 'Quote must be converted to booking before invoice can be sent'
-      });
+      const ensuredBooking = await quoteService.ensureQuoteBookingForPayment(
+        salesQuote.sales_quote_id,
+        { userId: req.userId, role: req.userRole }
+      );
+      bookingId = ensuredBooking.booking_id;
     }
 
     const { invoiceDetails } = await sendInvoiceForBooking({
@@ -1581,7 +1583,7 @@ exports.previewQuoteInvoice = async (req, res) => {
 
     const salesQuote = await db.sales_quotes.findOne({
       where: quoteWhere,
-      attributes: ['sales_quote_id', 'lead_id']
+      attributes: ['sales_quote_id', 'lead_id', 'client_name', 'client_email']
     });
 
     if (!salesQuote) {
@@ -1598,12 +1600,13 @@ exports.previewQuoteInvoice = async (req, res) => {
         })
       : null;
 
-    const bookingId = linkedLead?.booking_id || null;
+    let bookingId = linkedLead?.booking_id || null;
     if (!bookingId) {
-      return res.status(constants.BAD_REQUEST.code).json({
-        success: false,
-        message: 'Quote must be converted to booking before invoice preview can be generated'
-      });
+      const ensuredBooking = await quoteService.ensureQuoteBookingForPayment(
+        salesQuote.sales_quote_id,
+        { userId: req.userId, role: req.userRole }
+      );
+      bookingId = ensuredBooking.booking_id;
     }
 
     const { invoiceDetails } = await prepareInvoiceDetailsForBooking(bookingId, req.userId || null, {

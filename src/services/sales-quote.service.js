@@ -2489,6 +2489,105 @@ async function convertQuoteToBooking(salesQuoteId, payload = {}, user) {
   }
 }
 
+async function buildPaymentBookingPrefillDataFromQuote(quoteDetails, payload = {}) {
+  const roleData = deriveBookingRoleDataFromQuote(quoteDetails.line_items || []);
+  const editSelections = await deriveBookingEditSelectionsFromQuote(quoteDetails.line_items || []);
+
+  let prefillData = {
+    guest_email: quoteDetails.client_email || null,
+    user_id: quoteDetails.client_user_id || null,
+    full_name: quoteDetails.client_name || null,
+    phone: quoteDetails.client_phone || null,
+    location: quoteDetails.client_address || null,
+    content_type: roleData.content_type,
+    shoot_type: mapQuoteShootTypeToBookingShootType(quoteDetails.video_shoot_type),
+    quote_shoot_type_label: quoteDetails.video_shoot_type || null,
+    duration_hours: roleData.duration_hours,
+    crew_roles: roleData.crew_roles,
+    crew_size: roleData.crew_size,
+    video_edit_types: editSelections.video_edit_types,
+    photo_edit_types: editSelections.photo_edit_types,
+    edits_needed: editSelections.edits_needed,
+    unmatched_edit_types: editSelections.unmatched_edit_types,
+    project_description: quoteDetails.project_description || null,
+    reference_links: null,
+    special_instructions: quoteDetails.notes || null
+  };
+
+  prefillData = applyConvertBookingOverrides(prefillData, payload);
+  return prefillData;
+}
+
+async function ensureQuoteBookingForPayment(salesQuoteId, user, payload = {}) {
+  const quoteDetails = await getQuoteById(salesQuoteId, user);
+  if (!quoteDetails) {
+    throw new Error('Quote not found');
+  }
+
+  if (!hasConvertibleServiceInQuote(quoteDetails.line_items || [])) {
+    throw new Error('Quote must include at least one service before invoice/payment can be generated');
+  }
+
+  if (!(Number(quoteDetails.total || 0) > 0)) {
+    throw new Error('Quote total must be greater than zero before invoice/payment can be generated');
+  }
+
+  const prefillData = await buildPaymentBookingPrefillDataFromQuote(quoteDetails, payload);
+  const requirementData = buildQuoteConversionMissingFields(prefillData);
+  const transaction = await db.sequelize.transaction();
+
+  try {
+    const quote = await db.sales_quotes.findOne({
+      where: { sales_quote_id: salesQuoteId, ...buildQuoteAccessWhere(user) },
+      transaction
+    });
+
+    if (!quote) {
+      throw new Error('Quote not found');
+    }
+
+    const { lead, booking, legacyQuote, wasAlreadyConverted } = await syncConvertedQuoteArtifacts({
+      quote,
+      quoteDetails,
+      prefillData,
+      user,
+      transaction,
+      markQuoteAccepted: false,
+      recordConversionActivity: false
+    });
+
+    if (!wasAlreadyConverted) {
+      await recordActivity(
+        transaction,
+        quote.sales_quote_id,
+        'updated',
+        user?.userId || null,
+        'Draft booking auto-created for invoice/payment flow',
+        {
+          lead_id: lead.lead_id,
+          booking_id: booking.stream_project_booking_id,
+          source: 'quote_payment_flow'
+        }
+      );
+    }
+
+    await transaction.commit();
+
+    return {
+      quote_id: quote.sales_quote_id,
+      lead_id: lead.lead_id,
+      booking_id: booking.stream_project_booking_id,
+      legacy_quote_id: legacyQuote.quote_id,
+      already_converted: wasAlreadyConverted,
+      prefill_data: prefillData,
+      missing_required_fields: requirementData.missing_required_fields
+    };
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
+}
+
 async function fetchQuoteById(salesQuoteId, user = null) {
   const accessWhere = user ? buildQuoteAccessWhere(user) : {};
   const quote = await db.sales_quotes.findOne({
@@ -3005,5 +3104,6 @@ module.exports = {
   updateQuoteStatus,
   sendQuoteProposal,
   acceptQuoteProposal,
+  ensureQuoteBookingForPayment,
   downloadQuotePdf
 };
