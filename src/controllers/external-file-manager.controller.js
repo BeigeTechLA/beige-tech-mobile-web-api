@@ -9,6 +9,10 @@ const FACE_SCAN_SERVICE_URL = process.env.FACE_SCAN_SERVICE_URL || '';
 const FACE_SCAN_PROVIDER_TIMEOUT_MS = Math.max(15000, Number(process.env.FACE_SCAN_PROVIDER_TIMEOUT_MS || 300000));
 const FACE_SCAN_MAX_CANDIDATES = Math.max(25, Number(process.env.FACE_SCAN_MAX_CANDIDATES || 80));
 const FACE_SCAN_INDEX_CONCURRENCY = Math.max(1, Number(process.env.FACE_SCAN_INDEX_CONCURRENCY || 3));
+const EXTERNAL_FILE_MANAGER_PROXY_TIMEOUT_MS = Math.max(
+  15000,
+  Number(process.env.EXTERNAL_FILE_MANAGER_PROXY_TIMEOUT_MS || 300000)
+);
 const COMMON_EVENT_ID_PREFIX = 'event_';
 let commonEventsTableReadyPromise = null;
 let commonEventCreatorFoldersTableReadyPromise = null;
@@ -1040,13 +1044,38 @@ const getCreatorAcceptedProjectIds = async (req) => {
 };
 
 const proxyRequest = async (path, options = {}) => {
-  const response = await fetch(`${DEFAULT_BASE_URL}${path}`, {
-    ...options,
-    headers: {
-      ...buildHeaders(),
-      ...(options.headers || {}),
-    },
-  });
+  const { timeoutMs: requestedTimeoutMs, ...requestOptions } = options || {};
+  const controller = new AbortController();
+  const timeoutMs = Math.max(
+    15000,
+    Number(requestedTimeoutMs || EXTERNAL_FILE_MANAGER_PROXY_TIMEOUT_MS)
+  );
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  let response;
+  try {
+    response = await fetch(`${DEFAULT_BASE_URL}${path}`, {
+      ...requestOptions,
+      signal: controller.signal,
+      headers: {
+        ...buildHeaders(),
+        ...(requestOptions.headers || {}),
+      },
+    });
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      const timeoutError = new Error(`External file manager timed out after ${timeoutMs}ms`);
+      timeoutError.status = 504;
+      timeoutError.payload = {
+        success: false,
+        message: 'Request timed out while waiting for external file manager',
+      };
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   const payload = await response.json().catch(() => ({
     success: false,
