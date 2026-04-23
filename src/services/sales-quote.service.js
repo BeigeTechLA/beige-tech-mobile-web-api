@@ -1816,6 +1816,59 @@ async function getQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
   };
 }
 
+async function getConvertedBookingDetails(bookingId = null) {
+  if (!bookingId) return null;
+
+  const booking = await db.stream_project_booking.findOne({
+    where: {
+      stream_project_booking_id: bookingId,
+      is_active: 1
+    },
+    attributes: [
+      'stream_project_booking_id',
+      'event_date',
+      'start_time',
+      'end_time',
+      'duration_hours',
+      'event_location',
+      'reference_links',
+      'special_instructions'
+    ]
+  });
+
+  if (!booking) return null;
+
+  const bookingDays = await db.stream_project_booking_days.findAll({
+    where: { stream_project_booking_id: bookingId },
+    order: [['event_date', 'ASC'], ['stream_project_booking_day_id', 'ASC']]
+  });
+
+  const normalizedBookingDays = (bookingDays || []).map((day) => ({
+    date: day.event_date,
+    start_time: normalizeTime(day.start_time),
+    end_time: normalizeTime(day.end_time),
+    duration_hours: day.duration_hours !== null && day.duration_hours !== undefined ? Number(day.duration_hours) : null,
+    time_zone: day.time_zone || null
+  }));
+
+  const firstBookingDay = normalizedBookingDays[0] || null;
+  const inferredBookingType = normalizedBookingDays.length ? 'multi_day' : 'single_day';
+
+  return {
+    booking_id: booking.stream_project_booking_id,
+    booking_type: inferredBookingType,
+    time_zone: firstBookingDay?.time_zone || null,
+    start_date: booking.event_date || firstBookingDay?.date || null,
+    start_time: normalizeTime(booking.start_time) || firstBookingDay?.start_time || null,
+    end_time: normalizeTime(booking.end_time) || firstBookingDay?.end_time || null,
+    duration_hours: booking.duration_hours !== null && booking.duration_hours !== undefined ? Number(booking.duration_hours) : null,
+    location: booking.event_location || null,
+    reference_links: booking.reference_links || null,
+    special_instructions: booking.special_instructions || null,
+    booking_days: inferredBookingType === 'multi_day' ? normalizedBookingDays : []
+  };
+}
+
 function deriveBookingRoleDataFromQuote(lineItems = []) {
   const crew_roles = {};
   let duration_hours = null;
@@ -3302,6 +3355,7 @@ async function fetchQuoteById(salesQuoteId, user = null) {
   if (quoteFinancialDetails) {
     Object.assign(plain, quoteFinancialDetails);
   }
+  plain.converted_booking_details = await getConvertedBookingDetails(plain.booking_id || null);
 
   return plain;
 }
