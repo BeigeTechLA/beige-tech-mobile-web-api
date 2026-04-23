@@ -1508,9 +1508,6 @@ exports.sendQuoteInvoice = async (req, res) => {
     }
 
     const quoteWhere = { sales_quote_id: quoteId };
-    if (req.userRole === 'sales_rep') {
-      quoteWhere.assigned_sales_rep_id = req.userId;
-    }
 
     const salesQuote = await db.sales_quotes.findOne({
       where: quoteWhere,
@@ -1577,9 +1574,6 @@ exports.previewQuoteInvoice = async (req, res) => {
     }
 
     const quoteWhere = { sales_quote_id: quoteId };
-    if (req.userRole === 'sales_rep') {
-      quoteWhere.assigned_sales_rep_id = req.userId;
-    }
 
     const salesQuote = await db.sales_quotes.findOne({
       where: quoteWhere,
