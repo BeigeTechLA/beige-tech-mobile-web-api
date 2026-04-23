@@ -946,6 +946,30 @@ const ensureCreatorPostProductionUploadWindow = async (req, filepath) => {
   }
 };
 
+const validateUploadAccessForPath = async (req, filepath) => {
+  await ensureCreatorFileAccess(req, filepath);
+
+  if (getNormalizedRequestUserRole(req) === 'creator' && !isCreatorAllowedUploadPath(filepath)) {
+    const error = new Error('Creators can upload files only in Pre-Production or Post-Production');
+    error.status = 403;
+    throw error;
+  }
+
+  await ensureCreatorPostProductionUploadWindow(req, filepath);
+
+  if (isAdminRestrictedPostProductionUpload(req, filepath)) {
+    const error = new Error('Admin uploads are allowed only in Pre-Production');
+    error.status = 403;
+    throw error;
+  }
+
+  if (isPreProductionOnlyRole(req) && !isPreProductionPath(filepath)) {
+    const error = new Error('Uploads are allowed only in Pre-Production');
+    error.status = 403;
+    throw error;
+  }
+};
+
 const resolveCreatorCrewMemberId = async (userId) => {
   if (!userId) return null;
 
@@ -1735,30 +1759,7 @@ exports.getWorkspaceFiles = async (req, res) => {
 
 exports.getUploadPolicy = async (req, res) => {
   try {
-    await ensureCreatorFileAccess(req, req.body.filepath);
-
-    if (getNormalizedRequestUserRole(req) === 'creator' && !isCreatorAllowedUploadPath(req.body.filepath)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Creators can upload files only in Pre-Production or Post-Production',
-      });
-    }
-
-    await ensureCreatorPostProductionUploadWindow(req, req.body.filepath);
-
-    if (isAdminRestrictedPostProductionUpload(req, req.body.filepath)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Admin uploads are allowed only in Pre-Production',
-      });
-    }
-
-    if (isPreProductionOnlyRole(req) && !isPreProductionPath(req.body.filepath)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Uploads are allowed only in Pre-Production',
-      });
-    }
+    await validateUploadAccessForPath(req, req.body.filepath);
 
     const result = await proxyRequest('/upload-policy', {
       method: 'POST',
@@ -1778,32 +1779,44 @@ exports.getUploadPolicy = async (req, res) => {
   }
 };
 
+exports.getUploadPoliciesBatch = async (req, res) => {
+  try {
+    const items = Array.isArray(req.body.items) ? req.body.items : [];
+    if (!items.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'items array is required',
+      });
+    }
+
+    for (const item of items) {
+      await validateUploadAccessForPath(req, item?.filepath);
+    }
+
+    const result = await proxyRequest('/upload-policies/batch', {
+      method: 'POST',
+      body: JSON.stringify({
+        userId: getRequestUserId(req),
+        items: items.map((item = {}) => ({
+          filepath: item.filepath,
+          fileContentType: item.fileContentType,
+          fileSize: item.fileSize,
+          userId: getRequestUserId(req),
+        })),
+      }),
+    });
+    return res.status(200).json(result);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
 exports.notifyFileUploaded = async (req, res) => {
   try {
-    await ensureCreatorFileAccess(req, req.body.filepath);
-
-    if (getNormalizedRequestUserRole(req) === 'creator' && !isCreatorAllowedUploadPath(req.body.filepath)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Creators can upload files only in Pre-Production or Post-Production',
-      });
-    }
-
-    await ensureCreatorPostProductionUploadWindow(req, req.body.filepath);
-
-    if (isAdminRestrictedPostProductionUpload(req, req.body.filepath)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Admin uploads are allowed only in Pre-Production',
-      });
-    }
-
-    if (isPreProductionOnlyRole(req) && !isPreProductionPath(req.body.filepath)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Uploads are allowed only in Pre-Production',
-      });
-    }
+    await validateUploadAccessForPath(req, req.body.filepath);
 
     const result = await proxyRequest('/file-uploaded', {
       method: 'POST',
@@ -1822,6 +1835,56 @@ exports.notifyFileUploaded = async (req, res) => {
       });
     } catch (timelineError) {
       console.error('Timeline update skipped after file upload:', timelineError.message);
+    }
+
+    return res.status(200).json(result);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.notifyFilesUploadedBatch = async (req, res) => {
+  try {
+    const items = Array.isArray(req.body.items) ? req.body.items : [];
+    if (!items.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'items array is required',
+      });
+    }
+
+    for (const item of items) {
+      await validateUploadAccessForPath(req, item?.filepath);
+    }
+
+    const result = await proxyRequest('/files-uploaded/batch', {
+      method: 'POST',
+      body: JSON.stringify({
+        userId: getRequestUserId(req),
+        items: items.map((item = {}) => ({
+          filepath: item.filepath,
+          fileContentType: item.fileContentType,
+          fileSize: item.fileSize,
+          fileName: item.fileName,
+          userId: getRequestUserId(req),
+        })),
+      }),
+    });
+
+    const succeededItems = Array.isArray(result?.data?.items)
+      ? result.data.items.filter((item) => item?.success && item?.filepath)
+      : [];
+    for (const item of succeededItems) {
+      try {
+        await bookingTimelineService.applyUploadDrivenStatusTransition({
+          filepath: item.filepath,
+        });
+      } catch (timelineError) {
+        console.error('Timeline update skipped after file upload batch item:', timelineError.message);
+      }
     }
 
     return res.status(200).json(result);
