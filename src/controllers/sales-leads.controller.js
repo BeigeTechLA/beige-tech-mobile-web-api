@@ -2211,7 +2211,26 @@ exports.getLeadById = async (req, res) => {
         pricing_breakdown.discount = parseFloat(leadJson.booking?.primary_quote?.discount_amount || 0);
     }
 
-    pricing_breakdown.total = subtotal - pricing_breakdown.discount;
+    const totalBeforeCredit = parseFloat((subtotal - pricing_breakdown.discount).toFixed(2));
+    let creditApplied = 0;
+    let totalPaid = null;
+
+    if (leadJson.booking?.payment_id) {
+      const paymentData = await db.payment_transactions.findByPk(leadJson.booking.payment_id);
+      if (paymentData) {
+        totalPaid = parseFloat(paymentData.total_amount || 0);
+        if (Number.isFinite(totalPaid)) {
+          creditApplied = Math.max(0, totalBeforeCredit - totalPaid);
+        }
+      }
+    }
+
+    const totalAfterCredit = Math.max(0, totalBeforeCredit - creditApplied);
+    pricing_breakdown.total_before_credit = totalBeforeCredit;
+    pricing_breakdown.credit_applied = parseFloat(creditApplied.toFixed(2));
+    pricing_breakdown.total_after_credit = parseFloat(totalAfterCredit.toFixed(2));
+    pricing_breakdown.total_paid = Number.isFinite(totalPaid) ? parseFloat(totalPaid.toFixed(2)) : null;
+    pricing_breakdown.total = pricing_breakdown.total_after_credit;
 
     const selectedCrewIds = lead.booking?.assigned_crews?.map(c => c.crew_member_id).filter(Boolean) || [];
     
@@ -3132,7 +3151,26 @@ exports.getClientLeadById = async (req, res) => {
       pricing_breakdown.discount = parseFloat(leadJson.booking?.primary_quote?.discount_amount || 0);
     }
 
-    pricing_breakdown.total = subtotal - pricing_breakdown.discount;
+    const totalBeforeCredit = parseFloat((subtotal - pricing_breakdown.discount).toFixed(2));
+    let creditApplied = 0;
+    let totalPaid = null;
+
+    if (leadJson.booking?.payment_id) {
+      const paymentData = await db.payment_transactions.findByPk(leadJson.booking.payment_id);
+      if (paymentData) {
+        totalPaid = parseFloat(paymentData.total_amount || 0);
+        if (Number.isFinite(totalPaid)) {
+          creditApplied = Math.max(0, totalBeforeCredit - totalPaid);
+        }
+      }
+    }
+
+    const totalAfterCredit = Math.max(0, totalBeforeCredit - creditApplied);
+    pricing_breakdown.total_before_credit = totalBeforeCredit;
+    pricing_breakdown.credit_applied = parseFloat(creditApplied.toFixed(2));
+    pricing_breakdown.total_after_credit = parseFloat(totalAfterCredit.toFixed(2));
+    pricing_breakdown.total_paid = Number.isFinite(totalPaid) ? parseFloat(totalPaid.toFixed(2)) : null;
+    pricing_breakdown.total = pricing_breakdown.total_after_credit;
 
     const selectedCrewIds = lead.booking?.assigned_crews?.map(c => c.crew_member_id).filter(Boolean) || [];
     const intent = lead.intent ?? leadAssignmentService.getClientIntent({ lead, booking: lead.booking });

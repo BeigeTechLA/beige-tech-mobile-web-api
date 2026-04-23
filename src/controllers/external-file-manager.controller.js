@@ -187,8 +187,10 @@ const sendUploadTemplateEmailForFile = async ({ filepath, fileName, uploadedByNa
     ).trim();
     const payload = {
       recipient_name: recipientName,
+      booking_id: String(plainBooking?.stream_project_booking_id || bookingId),
       order_id: String(plainBooking?.stream_project_booking_id || bookingId),
-      order_name: String(plainBooking?.project_name || `Project #${bookingId}`),
+      order_name: String(plainBooking?.project_name || plainBooking?.client_name || `Project #${bookingId}`),
+      project_name: String(plainBooking?.project_name || plainBooking?.client_name || `Project #${bookingId}`),
       file_name: String(fileName || String(filepath).split('/').pop() || ''),
       file_path: String(filepath || ''),
       uploaded_by_name: String(uploadedByName || 'Beige User'),
