@@ -314,6 +314,7 @@ router.delete('/quotes/catalog/:catalogItemId', authenticate, requireSalesRepOrA
 
 router.get('/quotes/dashboard', authenticate, requireSalesRepOrAdmin, salesQuotesController.getQuoteDashboard);
 router.get('/quotes', authenticate, requireSalesRepOrAdmin, salesQuotesController.listQuotes);
+router.get('/quotes/accept', salesQuotesController.acceptQuoteProposal);
 router.get('/quotes/public/:quoteId', salesQuotesController.getPublicQuoteById);
 router.get('/quotes/:quoteId', authenticate, requireSalesRepOrAdmin, salesQuotesController.getQuoteById);
 router.get('/quotes/:quoteId/pdf', authenticate, requireSalesRepOrAdmin, salesQuotesController.downloadQuotePdf);

@@ -283,6 +283,66 @@ const resolveAdditionalQuoteInvoiceContext = async ({ quoteId, bookingId, transa
   };
 };
 
+const resolveReducedQuoteInvoiceContext = async ({ quoteId, bookingId, transaction }) => {
+  if (!quoteId || !db.sales_quote_activities) {
+    return null;
+  }
+
+  const recentUpdateActivities = await db.sales_quote_activities.findAll({
+    where: {
+      sales_quote_id: quoteId,
+      activity_type: 'updated'
+    },
+    order: [['created_at', 'DESC'], ['activity_id', 'DESC']],
+    limit: 10,
+    transaction
+  });
+
+  const refreshActivity = (recentUpdateActivities || [])
+    .map((activity) => ({
+      activity,
+      metadata: parseActivityMetadata(activity?.metadata_json)
+    }))
+    .find(({ metadata }) => {
+      if (!metadata?.invoice_refresh_required) return false;
+      if (bookingId && metadata.booking_id && Number(metadata.booking_id) !== Number(bookingId)) return false;
+      return parseFloat(metadata.reduced_amount || 0) > 0;
+    });
+
+  if (!refreshActivity?.metadata) {
+    return null;
+  }
+
+  const { metadata } = refreshActivity;
+  const reducedAmount = parseFloat(metadata.reduced_amount || 0);
+  const revisedTotal = parseFloat(metadata.new_total || 0);
+  const previouslyPaidAmount = parseFloat(metadata.previous_total || 0);
+
+  if (!(reducedAmount > 0)) {
+    return null;
+  }
+
+  const existingReducedInvoice = db.invoice_send_history
+    ? await db.invoice_send_history.findOne({
+        where: {
+          quote_id: quoteId,
+          booking_id: bookingId,
+          sent_at: { [Op.gte]: refreshActivity.activity.created_at }
+        },
+        order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+        transaction
+      })
+    : null;
+
+  return {
+    reducedAmount,
+    revisedTotal,
+    previouslyPaidAmount,
+    label: 'Quote total reduced after payment',
+    existingInvoice: existingReducedInvoice
+  };
+};
+
 const updatePaymentLeadState = async ({
   leadId = null,
   clientLeadId = null,
@@ -351,7 +411,7 @@ const persistInvoiceSendHistory = async ({
     invoice_number: invoiceDetails.invoiceNumber || null,
     invoice_url: invoiceDetails.invoiceUrl || null,
     invoice_pdf: invoiceDetails.invoicePdf || null,
-    payment_status: invoiceDetails.isPaid ? 'paid' : 'pending',
+    payment_status: invoiceDetails.paymentStatusOverride || (invoiceDetails.isPaid ? 'paid' : 'pending'),
     sent_by_user_id: sentByUserId || null,
     sent_at: sentAt
   });
@@ -375,6 +435,7 @@ const sendInvoiceForBooking = async ({ bookingId, quoteId = null, performedByUse
   const associatedLead = await db.sales_leads.findOne({ where: { booking_id: parsedBookingId } });
   const associatedClientLead = await db.client_leads.findOne({ where: { booking_id: parsedBookingId } });
   const sentAt = new Date();
+  const invoicePaymentStatus = invoiceDetails.paymentStatusOverride || (invoiceDetails.isPaid ? 'paid' : 'pending');
 
   await persistInvoiceSendHistory({
     bookingId: parsedBookingId,
@@ -403,7 +464,7 @@ const sendInvoiceForBooking = async ({ bookingId, quoteId = null, performedByUse
       recipient_name: recipientName || null,
       recipient_email: recipientEmail || null,
       sent_at: sentAt.toISOString(),
-      payment_status: invoiceDetails.isPaid ? 'paid' : 'pending'
+      payment_status: invoicePaymentStatus
     },
     performedByUserId
   });
@@ -1116,6 +1177,11 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
       bookingId: parsedBookingId,
       transaction: null
     });
+    const reducedInvoiceContext = await resolveReducedQuoteInvoiceContext({
+      quoteId,
+      bookingId: parsedBookingId,
+      transaction: null
+    });
     let invoiceDetails = null;
 
     if (additionalInvoiceContext) {
@@ -1181,6 +1247,36 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
         await booking.update({ invoice_generation_status: 'completed' });
         return { parsedBookingId, recipientName, recipientEmail, invoiceDetails };
       }
+    }
+
+    if (reducedInvoiceContext) {
+      let invoiceUrl = reducedInvoiceContext.existingInvoice?.invoice_url || null;
+      let invoicePdf = reducedInvoiceContext.existingInvoice?.invoice_pdf || null;
+      let invoiceNumber = reducedInvoiceContext.existingInvoice?.invoice_number || null;
+
+      if (!invoicePdf || !invoiceUrl || !invoiceNumber) {
+        const revisedInvoice = await paymentLinksService.createPaidStripeInvoice(booking, pricingData, { recipientOverride });
+        invoiceUrl = revisedInvoice?.hosted_invoice_url || invoiceUrl;
+        invoicePdf = revisedInvoice?.invoice_pdf || invoicePdf;
+        invoiceNumber = revisedInvoice?.number || invoiceNumber;
+      }
+
+      invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
+        invoiceUrl,
+        invoicePdf,
+        invoiceNumber,
+        totalAmount: reducedInvoiceContext.reducedAmount,
+        isPaid: false,
+        isAdditionalPayment: false,
+        isReducedAmount: true,
+        paymentStatusOverride: 'refund_pending',
+        previouslyPaidAmount: reducedInvoiceContext.previouslyPaidAmount,
+        revisedTotal: reducedInvoiceContext.revisedTotal,
+        reducedAmount: reducedInvoiceContext.reducedAmount
+      });
+
+      await booking.update({ invoice_generation_status: 'completed' });
+      return { parsedBookingId, recipientName, recipientEmail, invoiceDetails };
     }
 
     // --- CASE 1: ALREADY PAID ---
@@ -1363,7 +1459,7 @@ exports.sendStripeInvoice = async (req, res) => {
       invoice_number: invoiceDetails.invoiceNumber || null,
       invoice_url: invoiceDetails.invoiceUrl || null,
       invoice_pdf: invoiceDetails.invoicePdf || null,
-      payment_status: invoiceDetails.isPaid ? 'paid' : 'pending',
+      payment_status: invoiceDetails.paymentStatusOverride || (invoiceDetails.isPaid ? 'paid' : 'pending'),
       sent_by_user_id: req.userId || null,
       sent_at: sentAt
     });
@@ -1382,14 +1478,14 @@ exports.sendStripeInvoice = async (req, res) => {
         recipient_name: recipientName || null,
         recipient_email: recipientEmail || null,
         sent_at: sentAt.toISOString(),
-        payment_status: invoiceDetails.isPaid ? 'paid' : 'pending'
+        payment_status: invoiceDetails.paymentStatusOverride || (invoiceDetails.isPaid ? 'paid' : 'pending')
       },
       performedByUserId: req.userId
     });
 
     return res.status(200).json({
       success: true,
-      message: invoiceDetails.isPaid ? 'Receipt sent successfully' : 'Invoice sent successfully',
+      message: invoiceDetails.isReducedAmount ? 'Quote update sent successfully' : (invoiceDetails.isPaid ? 'Receipt sent successfully' : 'Invoice sent successfully'),
       data: invoiceDetails
     });
 
@@ -1454,7 +1550,7 @@ exports.sendQuoteInvoice = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: invoiceDetails.isPaid ? 'Quote receipt sent successfully' : 'Quote invoice sent successfully',
+      message: invoiceDetails.isReducedAmount ? 'Quote update sent successfully' : (invoiceDetails.isPaid ? 'Quote receipt sent successfully' : 'Quote invoice sent successfully'),
       data: {
         quote_id: salesQuote.sales_quote_id,
         booking_id: bookingId,
@@ -1517,7 +1613,7 @@ exports.previewQuoteInvoice = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: invoiceDetails.isPaid ? 'Quote receipt preview ready' : 'Quote invoice preview ready',
+      message: invoiceDetails.isReducedAmount ? 'Quote update preview ready' : (invoiceDetails.isPaid ? 'Quote receipt preview ready' : 'Quote invoice preview ready'),
       data: {
         quote_id: salesQuote.sales_quote_id,
         booking_id: bookingId,

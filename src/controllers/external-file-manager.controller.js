@@ -1,4 +1,5 @@
 const DEFAULT_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
+const PUBLIC_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_PUBLIC_BASE_URL || '';
 const INTERNAL_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
 const db = require('../models');
 const { users, crew_members, assigned_crew, stream_project_booking } = db;
@@ -8,6 +9,10 @@ const FACE_SCAN_SERVICE_URL = process.env.FACE_SCAN_SERVICE_URL || '';
 const FACE_SCAN_PROVIDER_TIMEOUT_MS = Math.max(15000, Number(process.env.FACE_SCAN_PROVIDER_TIMEOUT_MS || 300000));
 const FACE_SCAN_MAX_CANDIDATES = Math.max(25, Number(process.env.FACE_SCAN_MAX_CANDIDATES || 80));
 const FACE_SCAN_INDEX_CONCURRENCY = Math.max(1, Number(process.env.FACE_SCAN_INDEX_CONCURRENCY || 3));
+const EXTERNAL_FILE_MANAGER_PROXY_TIMEOUT_MS = Math.max(
+  15000,
+  Number(process.env.EXTERNAL_FILE_MANAGER_PROXY_TIMEOUT_MS || 300000)
+);
 const COMMON_EVENT_ID_PREFIX = 'event_';
 let commonEventsTableReadyPromise = null;
 let commonEventCreatorFoldersTableReadyPromise = null;
@@ -17,6 +22,66 @@ const buildHeaders = () => ({
   'Content-Type': 'application/json',
   'x-internal-key': INTERNAL_KEY,
 });
+
+const INTERNAL_FILE_MANAGER_ORIGIN = (() => {
+  try {
+    return new URL(DEFAULT_BASE_URL).origin.toLowerCase();
+  } catch (error) {
+    return '';
+  }
+})();
+
+const PUBLIC_FILE_MANAGER_ORIGIN = (() => {
+  try {
+    if (!PUBLIC_BASE_URL) return '';
+    return new URL(PUBLIC_BASE_URL).origin;
+  } catch (error) {
+    return '';
+  }
+})();
+
+const shouldRewriteToPublicOrigin = (origin, hostname) => {
+  const normalizedHostname = String(hostname || '').toLowerCase();
+  const isLocalHost =
+    normalizedHostname === 'localhost' ||
+    normalizedHostname === '127.0.0.1' ||
+    normalizedHostname === '::1';
+
+  if (isLocalHost) return true;
+  if (INTERNAL_FILE_MANAGER_ORIGIN && String(origin || '').toLowerCase() === INTERNAL_FILE_MANAGER_ORIGIN) {
+    return true;
+  }
+  return false;
+};
+
+const rewriteExternalServiceUrl = (rawUrl) => {
+  const value = String(rawUrl || '').trim();
+  if (!value) return value;
+  if (!PUBLIC_FILE_MANAGER_ORIGIN) return value;
+
+  try {
+    const parsed = new URL(value);
+    if (!shouldRewriteToPublicOrigin(parsed.origin, parsed.hostname)) {
+      return value;
+    }
+    return `${PUBLIC_FILE_MANAGER_ORIGIN}${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch (error) {
+    return value;
+  }
+};
+
+const withPublicUrl = (result) => {
+  const currentUrl = result?.data?.url;
+  if (typeof currentUrl !== 'string') return result;
+
+  return {
+    ...result,
+    data: {
+      ...(result.data || {}),
+      url: rewriteExternalServiceUrl(currentUrl),
+    },
+  };
+};
 
 const getRequestUserId = (req) => req.userId || req.user?.userId || null;
 const getRequestUserRole = (req) => req.userRole || req.user?.userRole || null;
@@ -881,6 +946,30 @@ const ensureCreatorPostProductionUploadWindow = async (req, filepath) => {
   }
 };
 
+const validateUploadAccessForPath = async (req, filepath) => {
+  await ensureCreatorFileAccess(req, filepath);
+
+  if (getNormalizedRequestUserRole(req) === 'creator' && !isCreatorAllowedUploadPath(filepath)) {
+    const error = new Error('Creators can upload files only in Pre-Production or Post-Production');
+    error.status = 403;
+    throw error;
+  }
+
+  await ensureCreatorPostProductionUploadWindow(req, filepath);
+
+  if (isAdminRestrictedPostProductionUpload(req, filepath)) {
+    const error = new Error('Admin uploads are allowed only in Pre-Production');
+    error.status = 403;
+    throw error;
+  }
+
+  if (isPreProductionOnlyRole(req) && !isPreProductionPath(filepath)) {
+    const error = new Error('Uploads are allowed only in Pre-Production');
+    error.status = 403;
+    throw error;
+  }
+};
+
 const resolveCreatorCrewMemberId = async (userId) => {
   if (!userId) return null;
 
@@ -979,13 +1068,38 @@ const getCreatorAcceptedProjectIds = async (req) => {
 };
 
 const proxyRequest = async (path, options = {}) => {
-  const response = await fetch(`${DEFAULT_BASE_URL}${path}`, {
-    ...options,
-    headers: {
-      ...buildHeaders(),
-      ...(options.headers || {}),
-    },
-  });
+  const { timeoutMs: requestedTimeoutMs, ...requestOptions } = options || {};
+  const controller = new AbortController();
+  const timeoutMs = Math.max(
+    15000,
+    Number(requestedTimeoutMs || EXTERNAL_FILE_MANAGER_PROXY_TIMEOUT_MS)
+  );
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  let response;
+  try {
+    response = await fetch(`${DEFAULT_BASE_URL}${path}`, {
+      ...requestOptions,
+      signal: controller.signal,
+      headers: {
+        ...buildHeaders(),
+        ...(requestOptions.headers || {}),
+      },
+    });
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      const timeoutError = new Error(`External file manager timed out after ${timeoutMs}ms`);
+      timeoutError.status = 504;
+      timeoutError.payload = {
+        success: false,
+        message: 'Request timed out while waiting for external file manager',
+      };
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   const payload = await response.json().catch(() => ({
     success: false,
@@ -1296,8 +1410,13 @@ exports.searchFaceMatches = async (req, res) => {
         scanImageBase64: scanImageBase64 || undefined,
         scanImageUrl: scanImageUrl || undefined,
         threshold: req.body.threshold,
+        minScore: req.body.minScore,
         maxResults: req.body.maxResults,
         candidateLimit: req.body.candidateLimit,
+        fallbackCandidateLimit: req.body.fallbackCandidateLimit,
+        backgroundReindex: req.body.backgroundReindex,
+        backgroundBatchLimit: req.body.backgroundBatchLimit,
+        backgroundConcurrency: req.body.backgroundConcurrency,
         providerTimeoutMs: req.body.providerTimeoutMs,
       }),
     });
@@ -1307,6 +1426,28 @@ exports.searchFaceMatches = async (req, res) => {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
       message: error.message || 'Face scan search failed',
+    });
+  }
+};
+
+exports.getFaceScanIndexStatus = async (req, res) => {
+  try {
+    const externalId = String(req.params.externalId || req.query.externalId || '').trim().toLowerCase();
+    if (!externalId) {
+      return res.status(400).json({
+        success: false,
+        message: 'externalId is required',
+      });
+    }
+
+    await ensureCreatorWorkspaceAccess(req, externalId);
+    const proxyResult = await proxyRequest(`/face-scan/index-status/${encodeURIComponent(externalId)}`);
+
+    return res.status(200).json(proxyResult);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to fetch face index status',
     });
   }
 };
@@ -1409,6 +1550,11 @@ exports.searchFaceMatches = async (req, res) => {
 
 exports.listWorkspaces = async (req, res) => {
   try {
+    const hasPaginationParams =
+      typeof req.query.page !== 'undefined' || typeof req.query.limit !== 'undefined';
+    const page = Math.max(1, Number.parseInt(String(req.query.page || '1'), 10) || 1);
+    const limit = Math.min(200, Math.max(1, Number.parseInt(String(req.query.limit || '24'), 10) || 24));
+    const search = String(req.query.search || '').trim().toLowerCase();
     const result = await proxyRequest('/workspaces');
     const eventRows = await listCommonEventRows().catch(() => []);
     const eventWorkspaces = eventRows.map((row) => ({
@@ -1449,26 +1595,47 @@ exports.listWorkspaces = async (req, res) => {
       ...verifiedMissingEventWorkspaces,
     ];
 
+    let filteredWorkspaces = mergedWorkspaces;
     if (isCreatorRole(req)) {
       const allowedProjectIds = await getCreatorAcceptedProjectIds(req);
       const allowedIdSet = new Set((allowedProjectIds || []).map((id) => String(id)));
+      filteredWorkspaces = mergedWorkspaces.filter((workspace) =>
+        isCommonEventExternalId(workspace.externalId) || allowedIdSet.has(String(workspace.externalId))
+      );
+    }
 
-      return res.status(200).json({
-        ...result,
-        data: {
-          ...(result.data || {}),
-          workspaces: mergedWorkspaces.filter((workspace) =>
-            isCommonEventExternalId(workspace.externalId) || allowedIdSet.has(String(workspace.externalId))
-          ),
-        },
+    if (search) {
+      filteredWorkspaces = filteredWorkspaces.filter((workspace) => {
+        const folderName = String(workspace.folderName || '').toLowerCase();
+        const externalId = String(workspace.externalId || '').toLowerCase();
+        const eventName = String(workspace.eventName || '').toLowerCase();
+        return (
+          folderName.includes(search) ||
+          externalId.includes(search) ||
+          eventName.includes(search)
+        );
       });
     }
+    const total = filteredWorkspaces.length;
+    const effectiveLimit = hasPaginationParams ? limit : Math.max(total, 1);
+    const totalPages = Math.max(1, Math.ceil(total / effectiveLimit));
+    const safePage = hasPaginationParams ? Math.min(page, totalPages) : 1;
+    const offset = (safePage - 1) * effectiveLimit;
+    const paginatedWorkspaces = filteredWorkspaces.slice(offset, offset + effectiveLimit);
 
     return res.status(200).json({
       ...result,
       data: {
         ...(result.data || {}),
-        workspaces: mergedWorkspaces,
+        workspaces: paginatedWorkspaces,
+        pagination: {
+          page: safePage,
+          limit: effectiveLimit,
+          total,
+          totalPages,
+          hasNextPage: safePage < totalPages,
+          hasPreviousPage: safePage > 1,
+        },
       },
     });
   } catch (error) {
@@ -1592,30 +1759,7 @@ exports.getWorkspaceFiles = async (req, res) => {
 
 exports.getUploadPolicy = async (req, res) => {
   try {
-    await ensureCreatorFileAccess(req, req.body.filepath);
-
-    if (getNormalizedRequestUserRole(req) === 'creator' && !isCreatorAllowedUploadPath(req.body.filepath)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Creators can upload files only in Pre-Production or Post-Production',
-      });
-    }
-
-    await ensureCreatorPostProductionUploadWindow(req, req.body.filepath);
-
-    if (isAdminRestrictedPostProductionUpload(req, req.body.filepath)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Admin uploads are allowed only in Pre-Production',
-      });
-    }
-
-    if (isPreProductionOnlyRole(req) && !isPreProductionPath(req.body.filepath)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Uploads are allowed only in Pre-Production',
-      });
-    }
+    await validateUploadAccessForPath(req, req.body.filepath);
 
     const result = await proxyRequest('/upload-policy', {
       method: 'POST',
@@ -1635,32 +1779,44 @@ exports.getUploadPolicy = async (req, res) => {
   }
 };
 
+exports.getUploadPoliciesBatch = async (req, res) => {
+  try {
+    const items = Array.isArray(req.body.items) ? req.body.items : [];
+    if (!items.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'items array is required',
+      });
+    }
+
+    for (const item of items) {
+      await validateUploadAccessForPath(req, item?.filepath);
+    }
+
+    const result = await proxyRequest('/upload-policies/batch', {
+      method: 'POST',
+      body: JSON.stringify({
+        userId: getRequestUserId(req),
+        items: items.map((item = {}) => ({
+          filepath: item.filepath,
+          fileContentType: item.fileContentType,
+          fileSize: item.fileSize,
+          userId: getRequestUserId(req),
+        })),
+      }),
+    });
+    return res.status(200).json(result);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
 exports.notifyFileUploaded = async (req, res) => {
   try {
-    await ensureCreatorFileAccess(req, req.body.filepath);
-
-    if (getNormalizedRequestUserRole(req) === 'creator' && !isCreatorAllowedUploadPath(req.body.filepath)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Creators can upload files only in Pre-Production or Post-Production',
-      });
-    }
-
-    await ensureCreatorPostProductionUploadWindow(req, req.body.filepath);
-
-    if (isAdminRestrictedPostProductionUpload(req, req.body.filepath)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Admin uploads are allowed only in Pre-Production',
-      });
-    }
-
-    if (isPreProductionOnlyRole(req) && !isPreProductionPath(req.body.filepath)) {
-      return res.status(403).json({
-        success: false,
-        message: 'Uploads are allowed only in Pre-Production',
-      });
-    }
+    await validateUploadAccessForPath(req, req.body.filepath);
 
     const result = await proxyRequest('/file-uploaded', {
       method: 'POST',
@@ -1679,6 +1835,56 @@ exports.notifyFileUploaded = async (req, res) => {
       });
     } catch (timelineError) {
       console.error('Timeline update skipped after file upload:', timelineError.message);
+    }
+
+    return res.status(200).json(result);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.notifyFilesUploadedBatch = async (req, res) => {
+  try {
+    const items = Array.isArray(req.body.items) ? req.body.items : [];
+    if (!items.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'items array is required',
+      });
+    }
+
+    for (const item of items) {
+      await validateUploadAccessForPath(req, item?.filepath);
+    }
+
+    const result = await proxyRequest('/files-uploaded/batch', {
+      method: 'POST',
+      body: JSON.stringify({
+        userId: getRequestUserId(req),
+        items: items.map((item = {}) => ({
+          filepath: item.filepath,
+          fileContentType: item.fileContentType,
+          fileSize: item.fileSize,
+          fileName: item.fileName,
+          userId: getRequestUserId(req),
+        })),
+      }),
+    });
+
+    const succeededItems = Array.isArray(result?.data?.items)
+      ? result.data.items.filter((item) => item?.success && item?.filepath)
+      : [];
+    for (const item of succeededItems) {
+      try {
+        await bookingTimelineService.applyUploadDrivenStatusTransition({
+          filepath: item.filepath,
+        });
+      } catch (timelineError) {
+        console.error('Timeline update skipped after file upload batch item:', timelineError.message);
+      }
     }
 
     return res.status(200).json(result);
@@ -1730,7 +1936,7 @@ exports.getFileViewUrl = async (req, res) => {
         filepath: req.body.filepath,
       }),
     });
-    return res.status(200).json(result);
+    return res.status(200).json(withPublicUrl(result));
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
@@ -1802,7 +2008,7 @@ exports.getFileDownloadUrl = async (req, res) => {
         filepath: req.body.filepath,
       }),
     });
-    return res.status(200).json(result);
+    return res.status(200).json(withPublicUrl(result));
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
@@ -1834,7 +2040,7 @@ exports.getFolderDownloadUrl = async (req, res) => {
         path: req.body.path,
       }),
     });
-    return res.status(200).json(result);
+    return res.status(200).json(withPublicUrl(result));
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
