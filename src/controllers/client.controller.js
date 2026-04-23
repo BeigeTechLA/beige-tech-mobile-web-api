@@ -1,6 +1,5 @@
 const constants = require('../utils/constants');
 const { Sequelize } = require('../models')
-const accountCreditService = require('../services/account-credit.service');
 const multer = require('multer');
 const path = require('path');
 const common_model = require('../utils/common_model');
@@ -221,7 +220,6 @@ exports.getClientDashboardSummary = async (req, res) => {
       total_shoots,
       active_shoots,
       completed_shoots,
-      accountCredit,
     ] = await Promise.all([
       stream_project_booking.count({
         where: { user_id, is_active: 1, ...bookingDateFilter }
@@ -234,10 +232,6 @@ exports.getClientDashboardSummary = async (req, res) => {
       stream_project_booking.count({
         where: { user_id, is_active: 1, is_completed: 1, ...bookingDateFilter }
       }),
-
-      accountCreditService.getAccountCreditBalance({
-        userId: user_id
-      })
     ]);
 
     return res.status(200).json({
@@ -246,11 +240,7 @@ exports.getClientDashboardSummary = async (req, res) => {
       data: {
         total_shoots: { count: total_shoots, growth: 3 },
         active_shoots: { count: active_shoots, growth: 3 },
-        completed_shoots: { count: completed_shoots, growth: 3 },
-        account_credit: {
-          available_credit_amount: accountCredit?.available_credit_amount || 0,
-          can_use_credit: (accountCredit?.available_credit_amount || 0) > 0
-        }
+        completed_shoots: { count: completed_shoots, growth: 3 }
       }
     });
   } catch (error) {
