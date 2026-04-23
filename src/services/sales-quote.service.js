@@ -146,6 +146,38 @@ function roundCurrency(value) {
   return Number(numeric.toFixed(2));
 }
 
+function formatCurrency(value) {
+  return `$${roundCurrency(value).toFixed(2)}`;
+}
+
+function formatSignedCurrency(value) {
+  const amount = roundCurrency(value || 0);
+  if (amount === 0) return formatCurrency(0);
+  return `${amount > 0 ? '+' : '-'}${formatCurrency(Math.abs(amount))}`;
+}
+
+function parseQuoteActivityMetadata(value) {
+  if (!value) return null;
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch (_) {
+    return null;
+  }
+}
+
+function stableStringify(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableStringify(entry)).join(',')}]`;
+  }
+
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
+  }
+
+  return JSON.stringify(value);
+}
+
 function startOfDay(date) {
   const nextDate = new Date(date);
   nextDate.setHours(0, 0, 0, 0);
@@ -1241,6 +1273,549 @@ function getLineItemCatalogName(item) {
   return item?.catalog_item?.name || item?.item_name || '';
 }
 
+function buildLineItemSummaryKey(item = {}) {
+  const config = parseConfig(item.configuration_json || item.configuration) || null;
+  return [
+    item.section_type || '',
+    item.catalog_item_id || '',
+    String(item.item_name || '').trim().toLowerCase(),
+    String(item.description || '').trim().toLowerCase(),
+    item.rate_type || '',
+    item.rate_unit || '',
+    stableStringify(config)
+  ].join('::');
+}
+
+function buildLineItemSummaryLabel(item = {}) {
+  const sectionType = item.section_type ? String(item.section_type).trim() : 'item';
+  const itemName = getLineItemCatalogName(item) || 'Custom item';
+  return `${itemName} (${sectionType})`;
+}
+
+function buildLineItemSummarySnapshot(item = {}) {
+  return {
+    label: buildLineItemSummaryLabel(item),
+    section_type: item.section_type || null,
+    item_name: getLineItemCatalogName(item) || null,
+    quantity: Number(item.quantity || 0),
+    duration_hours: item.duration_hours !== null && item.duration_hours !== undefined ? Number(item.duration_hours) : null,
+    crew_size: item.crew_size !== null && item.crew_size !== undefined ? Number(item.crew_size) : null,
+    unit_rate: roundCurrency(item.unit_rate || 0),
+    line_total: roundCurrency(item.line_total || 0)
+  };
+}
+
+function summarizeLineItemsForDiff(items = []) {
+  const groupedItems = new Map();
+
+  (Array.isArray(items) ? items : []).forEach((item) => {
+    const key = buildLineItemSummaryKey(item);
+    const current = groupedItems.get(key) || {
+      key,
+      label: buildLineItemSummaryLabel(item),
+      section_type: item.section_type || null,
+      item_name: getLineItemCatalogName(item) || null,
+      quantity: 0,
+      duration_hours: 0,
+      crew_size: 0,
+      unit_rate_total: 0,
+      line_total: 0,
+      occurrences: 0
+    };
+
+    current.quantity += Number(item.quantity || 0);
+    current.duration_hours += Number(item.duration_hours || 0);
+    current.crew_size += Number(item.crew_size || 0);
+    current.unit_rate_total += Number(item.unit_rate || 0);
+    current.line_total += Number(item.line_total || 0);
+    current.occurrences += 1;
+    groupedItems.set(key, current);
+  });
+
+  return groupedItems;
+}
+
+function buildFieldChange(label, before, after, type = 'text') {
+  const normalizedBefore = before == null ? null : before;
+  const normalizedAfter = after == null ? null : after;
+
+  if (type === 'currency') {
+    const beforeAmount = roundCurrency(normalizedBefore || 0);
+    const afterAmount = roundCurrency(normalizedAfter || 0);
+    if (beforeAmount === afterAmount) return null;
+    return {
+      field: label,
+      previous_value: beforeAmount,
+      new_value: afterAmount,
+      display_previous: formatCurrency(beforeAmount),
+      display_new: formatCurrency(afterAmount)
+    };
+  }
+
+  if (type === 'number') {
+    const beforeNumber = normalizedBefore == null || normalizedBefore === '' ? null : Number(normalizedBefore);
+    const afterNumber = normalizedAfter == null || normalizedAfter === '' ? null : Number(normalizedAfter);
+    if (beforeNumber === afterNumber) return null;
+    return {
+      field: label,
+      previous_value: beforeNumber,
+      new_value: afterNumber,
+      display_previous: beforeNumber == null ? 'Empty' : String(beforeNumber),
+      display_new: afterNumber == null ? 'Empty' : String(afterNumber)
+    };
+  }
+
+  const beforeText = normalizedBefore == null || normalizedBefore === '' ? '' : String(normalizedBefore).trim();
+  const afterText = normalizedAfter == null || normalizedAfter === '' ? '' : String(normalizedAfter).trim();
+  if (beforeText === afterText) return null;
+
+  return {
+    field: label,
+    previous_value: beforeText || null,
+    new_value: afterText || null,
+    display_previous: beforeText || 'Empty',
+    display_new: afterText || 'Empty'
+  };
+}
+
+function buildQuoteChangeSummary({ previousQuote = {}, nextQuote = {}, previousLineItems = [], nextLineItems = [] }) {
+  const previousItems = summarizeLineItemsForDiff(previousLineItems);
+  const nextItems = summarizeLineItemsForDiff(nextLineItems);
+
+  const added_items = [];
+  const removed_items = [];
+  const updated_items = [];
+
+  nextItems.forEach((nextItem, key) => {
+    const previousItem = previousItems.get(key);
+    if (!previousItem) {
+      added_items.push({
+        ...buildLineItemSummarySnapshot(nextItem),
+        line_total_delta: nextItem.line_total
+      });
+      return;
+    }
+
+    const changes = [];
+    if (previousItem.quantity !== nextItem.quantity) {
+      changes.push({ field: 'quantity', previous_value: previousItem.quantity, new_value: nextItem.quantity });
+    }
+    if (roundCurrency(previousItem.duration_hours) !== roundCurrency(nextItem.duration_hours)) {
+      changes.push({ field: 'duration_hours', previous_value: roundCurrency(previousItem.duration_hours), new_value: roundCurrency(nextItem.duration_hours) });
+    }
+    if (roundCurrency(previousItem.crew_size) !== roundCurrency(nextItem.crew_size)) {
+      changes.push({ field: 'crew_size', previous_value: roundCurrency(previousItem.crew_size), new_value: roundCurrency(nextItem.crew_size) });
+    }
+    if (roundCurrency(previousItem.unit_rate_total) !== roundCurrency(nextItem.unit_rate_total)) {
+      changes.push({
+        field: 'unit_rate',
+        previous_value: roundCurrency(previousItem.unit_rate_total),
+        new_value: roundCurrency(nextItem.unit_rate_total),
+        display_previous: formatCurrency(previousItem.unit_rate_total),
+        display_new: formatCurrency(nextItem.unit_rate_total)
+      });
+    }
+    if (roundCurrency(previousItem.line_total) !== roundCurrency(nextItem.line_total)) {
+      changes.push({
+        field: 'line_total',
+        previous_value: roundCurrency(previousItem.line_total),
+        new_value: roundCurrency(nextItem.line_total),
+        display_previous: formatCurrency(previousItem.line_total),
+        display_new: formatCurrency(nextItem.line_total)
+      });
+    }
+
+    if (changes.length) {
+      updated_items.push({
+        label: nextItem.label,
+        section_type: nextItem.section_type,
+        item_name: nextItem.item_name,
+        previous_line_total: roundCurrency(previousItem.line_total),
+        new_line_total: roundCurrency(nextItem.line_total),
+        line_total_delta: roundCurrency(nextItem.line_total - previousItem.line_total),
+        changes
+      });
+    }
+  });
+
+  previousItems.forEach((previousItem, key) => {
+    if (nextItems.has(key)) return;
+    removed_items.push({
+      ...buildLineItemSummarySnapshot(previousItem),
+      line_total_delta: roundCurrency(previousItem.line_total * -1)
+    });
+  });
+
+  const field_changes = [
+    buildFieldChange('Project description', previousQuote.project_description, nextQuote.project_description),
+    buildFieldChange('Shoot type', previousQuote.video_shoot_type, nextQuote.video_shoot_type),
+    buildFieldChange('Client name', previousQuote.client_name, nextQuote.client_name),
+    buildFieldChange('Client email', previousQuote.client_email, nextQuote.client_email),
+    buildFieldChange('Client phone', previousQuote.client_phone, nextQuote.client_phone),
+    buildFieldChange('Client address', previousQuote.client_address, nextQuote.client_address),
+    buildFieldChange('Status', previousQuote.status, nextQuote.status),
+    buildFieldChange('Discount type', previousQuote.discount_type, nextQuote.discount_type),
+    buildFieldChange('Discount value', previousQuote.discount_value, nextQuote.discount_value, 'currency'),
+    buildFieldChange('Discount amount', previousQuote.discount_amount, nextQuote.discount_amount, 'currency'),
+    buildFieldChange('Tax type', previousQuote.tax_type, nextQuote.tax_type),
+    buildFieldChange('Tax rate', previousQuote.tax_rate, nextQuote.tax_rate, 'number'),
+    buildFieldChange('Tax amount', previousQuote.tax_amount, nextQuote.tax_amount, 'currency'),
+    buildFieldChange('Subtotal', previousQuote.subtotal, nextQuote.subtotal, 'currency'),
+    buildFieldChange('Total', previousQuote.total, nextQuote.total, 'currency'),
+    buildFieldChange('Quote validity days', previousQuote.quote_validity_days, nextQuote.quote_validity_days, 'number'),
+    buildFieldChange('Valid until', previousQuote.valid_until, nextQuote.valid_until),
+    buildFieldChange('Notes', previousQuote.notes, nextQuote.notes),
+    buildFieldChange('Terms & conditions', previousQuote.terms_conditions, nextQuote.terms_conditions)
+  ].filter(Boolean);
+
+  const amount_summary = {
+    previous_subtotal: roundCurrency(previousQuote.subtotal || 0),
+    new_subtotal: roundCurrency(nextQuote.subtotal || 0),
+    subtotal_delta: roundCurrency((nextQuote.subtotal || 0) - (previousQuote.subtotal || 0)),
+    previous_total: roundCurrency(previousQuote.total || 0),
+    new_total: roundCurrency(nextQuote.total || 0),
+    total_delta: roundCurrency((nextQuote.total || 0) - (previousQuote.total || 0)),
+    previous_discount_amount: roundCurrency(previousQuote.discount_amount || 0),
+    new_discount_amount: roundCurrency(nextQuote.discount_amount || 0),
+    discount_delta: roundCurrency((nextQuote.discount_amount || 0) - (previousQuote.discount_amount || 0)),
+    previous_tax_amount: roundCurrency(previousQuote.tax_amount || 0),
+    new_tax_amount: roundCurrency(nextQuote.tax_amount || 0),
+    tax_delta: roundCurrency((nextQuote.tax_amount || 0) - (previousQuote.tax_amount || 0))
+  };
+
+  const summary_lines = [];
+  if (amount_summary.total_delta !== 0) {
+    summary_lines.push(`Total changed from ${formatCurrency(amount_summary.previous_total)} to ${formatCurrency(amount_summary.new_total)} (${amount_summary.total_delta > 0 ? '+' : ''}${formatCurrency(amount_summary.total_delta)})`);
+  }
+  if (added_items.length) {
+    summary_lines.push(`Added ${added_items.length} item${added_items.length === 1 ? '' : 's'}: ${added_items.map((item) => item.label).join(', ')}`);
+  }
+  if (updated_items.length) {
+    summary_lines.push(`Updated ${updated_items.length} item${updated_items.length === 1 ? '' : 's'}: ${updated_items.map((item) => item.label).join(', ')}`);
+  }
+  if (removed_items.length) {
+    summary_lines.push(`Removed ${removed_items.length} item${removed_items.length === 1 ? '' : 's'}: ${removed_items.map((item) => item.label).join(', ')}`);
+  }
+  if (field_changes.length) {
+    summary_lines.push(`Other changes: ${field_changes.map((item) => item.field).join(', ')}`);
+  }
+  if (!summary_lines.length) {
+    summary_lines.push('Quote updated with no material changes detected.');
+  }
+
+  return {
+    added_items,
+    updated_items,
+    removed_items,
+    field_changes,
+    amount_summary,
+    summary_lines,
+    has_changes: Boolean(added_items.length || updated_items.length || removed_items.length || field_changes.length || amount_summary.total_delta !== 0)
+  };
+}
+
+function formatItemChangeDetail(change = {}) {
+  if (change.field === 'duration_hours') {
+    return `duration changed from ${change.previous_value}h to ${change.new_value}h`;
+  }
+
+  if (change.field === 'crew_size') {
+    return `crew size changed from ${change.previous_value} to ${change.new_value}`;
+  }
+
+  if (change.field === 'quantity') {
+    return `quantity changed from ${change.previous_value} to ${change.new_value}`;
+  }
+
+  if (change.field === 'unit_rate') {
+    const previousValue = change.display_previous !== undefined ? change.display_previous : formatCurrency(change.previous_value || 0);
+    const newValue = change.display_new !== undefined ? change.display_new : formatCurrency(change.new_value || 0);
+    return `unit rate changed from ${previousValue} to ${newValue}`;
+  }
+
+  if (change.field === 'line_total') {
+    const previousValue = change.display_previous !== undefined ? change.display_previous : formatCurrency(change.previous_value || 0);
+    const newValue = change.display_new !== undefined ? change.display_new : formatCurrency(change.new_value || 0);
+    return `line total changed from ${previousValue} to ${newValue}`;
+  }
+
+  const previousValue = change.display_previous !== undefined
+    ? change.display_previous
+    : (change.previous_value == null ? 'empty' : String(change.previous_value));
+  const newValue = change.display_new !== undefined
+    ? change.display_new
+    : (change.new_value == null ? 'empty' : String(change.new_value));
+
+  return `${change.field || 'value'} changed from ${previousValue} to ${newValue}`;
+}
+
+function formatOverallFieldChange(change = {}) {
+  const field = String(change.field || '').toLowerCase();
+  const previousValue = change.display_previous !== undefined
+    ? change.display_previous
+    : (change.previous_value == null ? 'empty' : String(change.previous_value));
+  const newValue = change.display_new !== undefined
+    ? change.display_new
+    : (change.new_value == null ? 'empty' : String(change.new_value));
+
+  if (field === 'discount type') {
+    return `Changed discount type from ${previousValue} to ${newValue}.`;
+  }
+
+  if (field === 'discount value') {
+    return `Changed discount value from ${previousValue} to ${newValue}.`;
+  }
+
+  if (field === 'discount amount') {
+    return `Changed discount amount from ${previousValue} to ${newValue}.`;
+  }
+
+  if (field === 'tax type') {
+    return `Changed tax type from ${previousValue} to ${newValue}.`;
+  }
+
+  if (field === 'tax rate') {
+    return `Changed tax rate from ${previousValue} to ${newValue}.`;
+  }
+
+  if (field === 'project description') {
+    return `Updated project description from ${previousValue} to ${newValue}.`;
+  }
+
+  if (field === 'shoot type') {
+    return `Changed shoot type from ${previousValue} to ${newValue}.`;
+  }
+
+  return null;
+}
+
+function buildOverallChangeSummary(activities = []) {
+  const detailedActivities = (Array.isArray(activities) ? activities : [])
+    .filter((activity) => activity.activity_type === 'updated' && activity?.metadata?.change_summary?.has_changes)
+    .slice()
+    .sort((a, b) => {
+      const createdAtDiff = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      if (createdAtDiff !== 0) return createdAtDiff;
+      return Number(a.activity_id || 0) - Number(b.activity_id || 0);
+    });
+
+  if (!detailedActivities.length) return null;
+
+  const narrativeEntries = [];
+  let addedCount = 0;
+  let updatedCount = 0;
+  let removedCount = 0;
+
+  detailedActivities.forEach((activity) => {
+    const changeSummary = activity.metadata.change_summary;
+
+    (changeSummary.added_items || []).forEach((item) => {
+      addedCount += 1;
+      const itemName = item.item_name || item.label || 'item';
+      narrativeEntries.push({
+        type: 'item_added',
+        item_name: itemName,
+        amount: roundCurrency(item.line_total || 0),
+        text: `Added ${itemName} for ${formatCurrency(item.line_total || 0)}.`
+      });
+    });
+
+    (changeSummary.updated_items || []).forEach((item) => {
+      const itemName = item.item_name || item.label || 'item';
+      const newLineTotal = roundCurrency(item.new_line_total || 0);
+      const details = (item.changes || []).map(formatItemChangeDetail).filter(Boolean);
+      const lineTotalDelta = roundCurrency(item.line_total_delta || 0);
+
+      if (newLineTotal === 0 && lineTotalDelta < 0) {
+        removedCount += 1;
+        narrativeEntries.push({
+          type: 'item_removed',
+          item_name: itemName,
+          amount: Math.abs(lineTotalDelta),
+          text: `Removed ${itemName}, which reduced the quote by ${formatCurrency(Math.abs(lineTotalDelta))}.`
+        });
+        return;
+      }
+
+      updatedCount += 1;
+      const amountImpact = lineTotalDelta === 0
+        ? null
+        : `${lineTotalDelta > 0 ? 'This increased' : 'This reduced'} the quote by ${formatCurrency(Math.abs(lineTotalDelta))}.`;
+      const detailText = details.length ? `${details.join('; ')}.` : 'Details updated.';
+      narrativeEntries.push({
+        type: 'item_updated',
+        item_name: itemName,
+        text: `Updated ${itemName}: ${detailText}${amountImpact ? ` ${amountImpact}` : ''}`
+      });
+    });
+
+    (changeSummary.removed_items || []).forEach((item) => {
+      removedCount += 1;
+      const itemName = item.item_name || item.label || 'item';
+      narrativeEntries.push({
+        type: 'item_removed',
+        item_name: itemName,
+        amount: Math.abs(item.line_total_delta || item.line_total || 0),
+        text: `Removed ${itemName}, which reduced the quote by ${formatCurrency(Math.abs(item.line_total_delta || item.line_total || 0))}.`
+      });
+    });
+
+    const discountTypeChange = (changeSummary.field_changes || []).find((change) => String(change.field || '').toLowerCase() === 'discount type');
+    const discountValueChange = (changeSummary.field_changes || []).find((change) => String(change.field || '').toLowerCase() === 'discount value');
+    const discountAmountChange = (changeSummary.field_changes || []).find((change) => String(change.field || '').toLowerCase() === 'discount amount');
+
+    if (discountTypeChange || discountValueChange || discountAmountChange) {
+      const parts = [];
+      if (discountTypeChange) {
+        parts.push(`discount type changed from ${discountTypeChange.display_previous || discountTypeChange.previous_value || 'empty'} to ${discountTypeChange.display_new || discountTypeChange.new_value || 'empty'}`);
+      }
+      if (discountValueChange) {
+        parts.push(`discount value changed from ${discountValueChange.display_previous || discountValueChange.previous_value || 'empty'} to ${discountValueChange.display_new || discountValueChange.new_value || 'empty'}`);
+      }
+      if (discountAmountChange) {
+        const previousAmount = discountAmountChange.display_previous || formatCurrency(discountAmountChange.previous_value || 0);
+        const newAmount = discountAmountChange.display_new || formatCurrency(discountAmountChange.new_value || 0);
+        parts.push(`discount amount changed from ${previousAmount} to ${newAmount}`);
+      }
+      narrativeEntries.push({
+        type: 'discount_change',
+        text: `Updated discount: ${parts.join('; ')}.`
+      });
+    }
+
+    (changeSummary.field_changes || [])
+      .filter((change) => !['discount type', 'discount value', 'discount amount'].includes(String(change.field || '').toLowerCase()))
+      .map(formatOverallFieldChange)
+      .filter(Boolean)
+      .forEach((text) => narrativeEntries.push({ type: 'field_change', text }));
+  });
+
+  const lines = [];
+  const removedEntryIndexes = new Set();
+  const latestRemovalByItem = new Map();
+
+  narrativeEntries.forEach((entry, index) => {
+    if (entry.type === 'item_removed') {
+      latestRemovalByItem.set(String(entry.item_name || '').toLowerCase(), { entry, index });
+    }
+  });
+
+  narrativeEntries.forEach((entry, index) => {
+    if (removedEntryIndexes.has(index)) return;
+
+    if (entry.type === 'item_added') {
+      const removal = latestRemovalByItem.get(String(entry.item_name || '').toLowerCase());
+      if (removal && removal.index > index) {
+        removedEntryIndexes.add(removal.index);
+        lines.push(`Added ${entry.item_name} for ${formatCurrency(entry.amount || 0)}, then later removed it.`);
+        return;
+      }
+    }
+
+    lines.push(entry.text);
+  });
+
+  const firstActivity = detailedActivities[0];
+  const lastActivity = detailedActivities[detailedActivities.length - 1];
+  const startingTotal = roundCurrency(firstActivity?.metadata?.previous_total || 0);
+  const endingTotal = roundCurrency(lastActivity?.metadata?.new_total || 0);
+  const totalDelta = roundCurrency(endingTotal - startingTotal);
+  const summaryLine = `Quote total changed from ${formatCurrency(startingTotal)} to ${formatCurrency(endingTotal)} (${formatSignedCurrency(totalDelta)}) across ${detailedActivities.length} update${detailedActivities.length === 1 ? '' : 's'}.`;
+
+  return {
+    summary: summaryLine,
+    lines
+  };
+}
+
+async function getQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
+  if (!quoteId) return null;
+
+  const [latestInvoiceHistory, recentQuoteUpdates] = await Promise.all([
+    db.invoice_send_history?.findOne({
+      where: {
+        quote_id: quoteId,
+        ...(bookingId ? { booking_id: bookingId } : {})
+      },
+      order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']]
+    }) || null,
+    db.sales_quote_activities?.findAll({
+      where: {
+        sales_quote_id: quoteId,
+        activity_type: 'updated'
+      },
+      order: [['created_at', 'DESC'], ['activity_id', 'DESC']],
+      limit: 10
+    }) || []
+  ]);
+
+  const refreshActivity = (recentQuoteUpdates || [])
+    .map((activity) => ({
+      activity,
+      metadata: parseQuoteActivityMetadata(activity?.metadata_json)
+    }))
+    .find(({ metadata }) => {
+      if (!metadata?.invoice_refresh_required) return false;
+      if (bookingId && metadata.booking_id && Number(metadata.booking_id) !== Number(bookingId)) return false;
+      return parseFloat(metadata.extra_amount || 0) > 0 || parseFloat(metadata.reduced_amount || 0) > 0;
+    });
+
+  const refreshInvoiceHistory = refreshActivity?.activity
+    ? await db.invoice_send_history?.findOne({
+        where: {
+          quote_id: quoteId,
+          ...(bookingId ? { booking_id: bookingId } : {}),
+          sent_at: { [Op.gte]: refreshActivity.activity.created_at }
+        },
+        order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']]
+      })
+    : null;
+
+  const additionalAmount = parseFloat(refreshActivity?.metadata?.extra_amount || 0);
+  const reducedAmount = parseFloat(refreshActivity?.metadata?.reduced_amount || 0);
+  const previouslyPaidAmount = parseFloat(refreshActivity?.metadata?.previous_total || 0);
+  const revisedTotal = parseFloat(refreshActivity?.metadata?.new_total || 0);
+  const additionalPaymentStatus = refreshInvoiceHistory?.payment_status || (additionalAmount > 0 ? 'pending' : null);
+  const reducedPaymentStatus = refreshInvoiceHistory?.payment_status || (reducedAmount > 0 ? 'refund_pending' : null);
+
+  const creditSummary = await accountCreditService.getQuoteCreditSummary({
+    salesQuoteId: quoteId,
+    bookingId
+  });
+
+  return {
+    latest_invoice: latestInvoiceHistory ? {
+      invoice_send_history_id: latestInvoiceHistory.invoice_send_history_id,
+      invoice_number: latestInvoiceHistory.invoice_number || null,
+      invoice_url: latestInvoiceHistory.invoice_url || null,
+      invoice_pdf: latestInvoiceHistory.invoice_pdf || null,
+      payment_status: latestInvoiceHistory.payment_status || null,
+      sent_at: latestInvoiceHistory.sent_at || null
+    } : null,
+    additional_payment: refreshActivity && additionalAmount > 0 ? {
+      additional_amount: additionalAmount,
+      previously_paid_amount: previouslyPaidAmount,
+      revised_total: revisedTotal,
+      outstanding_amount: additionalPaymentStatus === 'paid' ? 0 : additionalAmount,
+      payment_status: additionalPaymentStatus,
+      last_sent_at: refreshInvoiceHistory?.sent_at || null,
+      invoice_number: refreshInvoiceHistory?.invoice_number || null,
+      invoice_url: refreshInvoiceHistory?.invoice_url || null
+    } : null,
+    reduced_payment: refreshActivity && reducedAmount > 0 ? {
+      reduced_amount: reducedAmount,
+      previously_paid_amount: previouslyPaidAmount,
+      revised_total: revisedTotal,
+      refund_pending_amount: reducedAmount,
+      payment_status: reducedPaymentStatus,
+      last_sent_at: refreshInvoiceHistory?.sent_at || null,
+      invoice_number: refreshInvoiceHistory?.invoice_number || null,
+      invoice_url: refreshInvoiceHistory?.invoice_url || null
+    } : null,
+    account_credit: creditSummary
+  };
+}
+
 function deriveBookingRoleDataFromQuote(lineItems = []) {
   const crew_roles = {};
   let duration_hours = null;
@@ -2194,6 +2769,27 @@ async function updateQuote(salesQuoteId, payload, user) {
       transaction
     });
     const existingLineItemsPayload = existingLineItems.map(toPersistableLineItemPayload);
+    const previousQuoteSnapshot = {
+      project_description: quote.project_description,
+      video_shoot_type: quote.video_shoot_type,
+      client_name: quote.client_name,
+      client_email: quote.client_email,
+      client_phone: quote.client_phone,
+      client_address: quote.client_address,
+      status: quote.status,
+      discount_type: quote.discount_type,
+      discount_value: quote.discount_value,
+      discount_amount: quote.discount_amount,
+      tax_type: quote.tax_type,
+      tax_rate: quote.tax_rate,
+      tax_amount: quote.tax_amount,
+      subtotal: quote.subtotal,
+      total: quote.total,
+      quote_validity_days: quote.quote_validity_days,
+      valid_until: quote.valid_until,
+      notes: quote.notes,
+      terms_conditions: quote.terms_conditions
+    };
 
     let incomingLineItemsPayload = [];
     let sectionTypesToReplace = [];
@@ -2269,6 +2865,16 @@ async function updateQuote(salesQuoteId, payload, user) {
       terms_conditions: payload.terms_conditions !== undefined ? payload.terms_conditions : quote.terms_conditions,
       updated_at: new Date()
     };
+    const nextQuoteSnapshot = {
+      ...previousQuoteSnapshot,
+      ...quoteUpdatePayload
+    };
+    const changeSummary = buildQuoteChangeSummary({
+      previousQuote: previousQuoteSnapshot,
+      nextQuote: nextQuoteSnapshot,
+      previousLineItems: existingLineItemsPayload,
+      nextLineItems: mergedLineItemsPayload
+    });
 
     await quote.update(quoteUpdatePayload, { transaction });
 
@@ -2377,6 +2983,7 @@ async function updateQuote(salesQuoteId, payload, user) {
       quote_change_type: quoteChangeType,
       payment_status: paymentStatus,
       booking_id: billingState.booking?.stream_project_booking_id || null,
+      change_summary: changeSummary,
       invoice_refresh_required: Boolean(
         billingState.booking?.stream_project_booking_id &&
         (extraAmount > 0 || reducedAmount > 0) &&
@@ -2682,13 +3289,30 @@ async function fetchQuoteById(salesQuoteId, user = null) {
   plain.activities = (plain.activities || []).map((item) => ({
     ...item,
     metadata: parseConfig(item.metadata_json)
-  }));
+  })).map((item) => {
+    const nextItem = { ...item };
+    delete nextItem.metadata_json;
+    return nextItem;
+  });
+  plain.overall_change_summary = buildOverallChangeSummary(plain.activities);
+  const quoteFinancialDetails = await getQuoteFinancialDetails({
+    quoteId: plain.sales_quote_id,
+    bookingId: plain.booking_id || null
+  });
+  if (quoteFinancialDetails) {
+    Object.assign(plain, quoteFinancialDetails);
+  }
 
   return plain;
 }
 
 async function getQuoteById(salesQuoteId, user) {
   return fetchQuoteById(salesQuoteId, user);
+}
+
+async function getQuoteOverallChangeSummary(salesQuoteId, user = null) {
+  const quote = await fetchQuoteById(salesQuoteId, user);
+  return quote?.overall_change_summary || null;
 }
 
 async function getPublicQuoteById(salesQuoteId) {
@@ -3113,6 +3737,7 @@ module.exports = {
   updateQuote,
   convertQuoteToBooking,
   getQuoteById,
+  getQuoteOverallChangeSummary,
   getPublicQuoteById,
   listQuotes,
   getQuoteDashboard,

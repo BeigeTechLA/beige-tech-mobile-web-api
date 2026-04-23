@@ -2,7 +2,7 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzY3NjE5NjYsImV4cCI6MTc3NzM2Njc2Nn0.5bgn8XTW8D7WkadQJ2yP04Y9sZfqJRzyZAHO1W-f_Dk
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjQsInVzZXJSb2xlIjoic2FsZXNfcmVwIiwiaWF0IjoxNzc2OTI0OTU3LCJleHAiOjE3Nzc1Mjk3NTd9._rFpqGVvY1bLORM3gMFmICLKI6SuC4NgsMZ1_9lzTNs
 
 @TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI4OCwidXNlclJvbGUiOiJBZG1pbiIsImlhdCI6MTc3NjY3MjYyMiwiZXhwIjoxNzc3Mjc3NDIyfQ.TvvFxV-jZRKi-lMlOHQwMyztvL-_ZIOvIEqhd-gk_J8
 
@@ -1400,7 +1400,7 @@ Authorization: {{TOKEN}}
 }
 
 ### get sales quote detail
-GET {{URL}}sales/quotes/116 HTTP/1.1
+GET {{URL}}sales/quotes/137 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
