@@ -60,7 +60,6 @@ const {
   CP_NEW_BOOKING_REQUEST_TEMPLATE_ID,
   VERIFICATION_OTP_TEMPLATE_ID,
   PASSWORD_RESET_TEMPLATE_ID,
-  SALES_PAYMENT_SUCCESS_TEMPLATE_ID,
   SALES_LEAD_NOTIFICATION_TEMPLATE_ID,
   CLIENT_SIGNUP_NOTIFICATION_TEMPLATE_ID,
   CREW_SIGNUP_NOTIFICATION_TEMPLATE_ID,
@@ -68,7 +67,15 @@ const {
   PRODUCTION_PROPOSAL_TEMPLATE_ID,
   CP_CONFIRMED_TEMPLATE_ID,
   CUSTOM_QUOTE_PROPOSAL_ID,
-  INVOICE_TEMPLATE_ID
+  QUOTE_ACCEPTED_CLIENT_TEMPLATE_ID,
+  QUOTE_ACCEPTED_SALES_NOTIFICATION_TEMPLATE_ID,
+  INVOICE_TEMPLATE_ID,
+  TASK_ASSIGNMENT_TEMPLATE_ID,
+  MEETING_RESCHEDULED_TEMPLATE_ID,
+  MEETING_SCHEDULED_TEMPLATE_ID,
+  MESSAGING_INITIATED_TEMPLATE_ID,
+  PRE_PRODUCTION_BRIEF_UPLOADED_TEMPLATE_ID,
+  POST_PRODUCTION_UPLOAD_TEMPLATE_ID
 } = require('../config/sendgridTemplates');
 
 const formatDate = (value) => {
@@ -292,22 +299,72 @@ const sendEmail = async ({ to, subject, templateId, dynamicTemplateData }) => {
  */
 const sendTaskAssignmentEmail = async (taskData, assigneeData) => {
   try {
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    if (!process.env.SENDGRID_API_KEY) {
+      return { success: false, error: 'SENDGRID_API_KEY not configured' };
+    }
+
+    if (!assigneeData?.email) {
+      return { success: false, error: 'Recipient email required' };
+    }
+
+    const frontendUrl = process.env.FRONTEND_URL;
     const taskId = taskData.assign_task_id || taskData.task_id;
     const taskLink = `${frontendUrl}/tasks/${taskId}`;
 
-    const mailOptions = {
-      from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_USER}>`,
+    const priority =
+      taskData.priority_id === 1 ? 'Low' :
+      taskData.priority_id === 2 ? 'Medium' : 'High';
+
+    const priorityColor =
+      taskData.priority_id === 1 ? '#10b981' :
+      taskData.priority_id === 2 ? '#f59e0b' : '#ef4444';
+
+    const dueDate = taskData.due_date
+      ? new Date(taskData.due_date).toLocaleDateString('en-US', {
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric'
+        })
+      : 'Not specified';
+
+    const payload = {
       to: assigneeData.email,
-      subject: `New Task Assigned: ${taskData.title}`,
-      html: generateTaskAssignmentTemplate(taskData, assigneeData, taskLink)
+      from: {
+        email: process.env.SENDGRID_FROM_EMAIL,
+        name: process.env.SENDGRID_FROM_NAME
+      },
+      templateId: TASK_ASSIGNMENT_TEMPLATE_ID,
+      dynamicTemplateData: {
+        first_name: assigneeData.first_name || 'there',
+        last_name: assigneeData.last_name || '',
+        task_title: taskData.title || 'Untitled Task',
+        description: taskData.description || null,
+        priority,
+        priority_color: priorityColor,
+        due_date: dueDate,
+        estimated_duration: taskData.estimated_duration
+          ? String(taskData.estimated_duration)
+          : null,
+        status: taskData.status || 'Assigned',
+        task_link: taskLink,
+        additional_notes: taskData.additional_notes || null,
+        year: new Date().getFullYear()
+      }
     };
 
-    const info = await transporter.sendMail(mailOptions);
-    console.log('Task assignment email sent:', info.messageId);
-    return { success: true, messageId: info.messageId };
+    const [response] = await sgMail.send(payload);
+
+    return {
+      success: true,
+      statusCode: response?.statusCode,
+      messageId:
+        response?.headers?.['x-message-id'] ||
+        response?.headers?.['X-Message-Id'] ||
+        null
+    };
+
   } catch (error) {
-    console.error('Error sending task assignment email:', error);
+    console.error('SendGrid Task Assignment Error:', error?.response?.body || error.message);
     return { success: false, error: error.message };
   }
 };
@@ -1415,150 +1472,121 @@ const sendFinalDeliveryWithRevisionEmail = async (data) => {
   }
 };
 
-/**
- * Send payment link to client
- * @param {Object} userData - { name, email }
- * @param {Object} paymentData - { projectTitle, paymentUrl, expiresAt }
- */
-const sendPaymentLinkEmail = async (userData, paymentData) => {
-  try {
-    const mailOptions = {
-      from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_USER}>`,
-      to: userData.email,
-      // Better Subject: Less "spammy"
-      subject: `Your Invoice for ${paymentData.projectTitle}`,
-      // Embed the logo so it shows automatically
-      attachments: [{
-        filename: 'logo.png',
-        path: 'https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/beige_logo_vb.png',
-        cid: 'beigelogo' // Same as in the HTML <img src="cid:beigelogo">
-      }],
-      html: generatePaymentLinkTemplate(userData, paymentData)
-    };
-
-    const info = await transporter.sendMail(mailOptions);
-    return { success: true, messageId: info.messageId };
-  } catch (error) {
-    console.error('Error sending payment link email:', error);
-    return { success: false, error: error.message };
-  }
-};
-
-const generatePaymentLinkTemplate = (userData, paymentData) => {
-  return `
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <style>
-        /* This helps with dark mode */
-        :root { color-scheme: dark light; supported-color-schemes: dark light; }
-      </style>
-    </head>
-    <body style="margin: 0; padding: 0; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #0A0F0D; color: #ffffff;">
-      
-      <!-- PREHEADER: This helps avoid spam folders -->
-      <div style="display:none; max-height:0px; max-width:0px; opacity:0; overflow:hidden; mso-hide:all; font-size:1px; line-height:1px;">
-        Finalize your booking for ${paymentData.projectTitle}. Secure payment link enclosed.
-      </div>
-
-      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #0A0F0D; padding: 40px 10px;">
-        <tr>
-          <td align="center">
-            <table width="600" cellpadding="0" cellspacing="0" border="0" style="background-color: #000000; border: 1px solid rgba(232, 209, 171, 0.2); border-radius: 20px; overflow: hidden;">
-              
-              <!-- LOGO using CID (Embedded) -->
-              <tr>
-                <td align="center" style="padding: 40px 0 20px 0;">
-                  <img src="cid:beigelogo" alt="Beige" width="100" style="display: block; border:0;">
-                </td>
-              </tr>
-
-              <tr>
-                <td style="padding: 0 50px 40px 50px; text-align: center;">
-                  <h1 style="color: #E1CAA1; font-size: 28px; font-weight: 500; margin-bottom: 25px;">Payment Requested</h1>
-                  
-                  <p style="color: #E8D1AB; font-size: 16px; margin-bottom: 15px;">Hi ${userData.name},</p>
-                  
-                  <p style="color: #9ca3af; font-size: 15px; line-height: 1.6; margin-bottom: 30px;">
-                    Thank you for choosing Beige for your upcoming project. To confirm your reservation for <strong>${paymentData.projectTitle}</strong>, please complete the payment using our secure portal.
-                  </p>
-                  
-                  <!-- Payment Details -->
-                  <div style="background-color: rgba(232, 209, 171, 0.05); border: 1px solid rgba(232, 209, 171, 0.1); border-radius: 12px; padding: 20px; margin-bottom: 30px; text-align: left;">
-                    <table width="100%">
-                      <tr>
-                        <td style="color: #9ca3af; font-size: 13px; padding-bottom: 8px;">Project Name</td>
-                        <td align="right" style="color: #ffffff; font-size: 13px; font-weight: 600;">${paymentData.projectTitle}</td>
-                      </tr>
-                      <tr>
-                        <td style="color: #9ca3af; font-size: 13px;">Link Expiration</td>
-                        <td align="right" style="color: #ef4444; font-size: 13px; font-weight: 600;">${paymentData.expiresAt}</td>
-                      </tr>
-                    </table>
-                  </div>
-
-                  <!-- BUTTON -->
-                  <table width="100%" border="0" cellspacing="0" cellpadding="0">
-                    <tr>
-                      <td align="center">
-                        <a href="${paymentData.paymentUrl}" style="background: linear-gradient(180deg, #3D342A 0%, #C79233 100%); color: #ffffff; padding: 18px 40px; text-decoration: none; border-radius: 50px; font-weight: 600; display: inline-block; letter-spacing: 1px;">
-                          COMPLETE PAYMENT &rarr;
-                        </a>
-                      </td>
-                    </tr>
-                  </table>
-                </td>
-              </tr>
-
-              <!-- FOOTER: Physical address helps avoid spam -->
-              <tr>
-                <td style="background-color: #050505; padding: 30px; text-align: center; border-top: 1px solid rgba(232, 209, 171, 0.1);">
-                  <p style="color: #6b7280; font-size: 11px; margin: 0 0 10px 0;">
-                    &copy; ${new Date().getFullYear()} Beige AI Platform. All rights reserved.
-                  </p>
-                  <p style="color: #4b5563; font-size: 11px; margin: 0;">
-                    123 Creative Studio Way, New York, NY 10001 <br>
-                    <a href="#" style="color: #C79233; text-decoration: none;">Unsubscribe</a> | <a href="#" style="color: #C79233; text-decoration: none;">Support</a>
-                  </p>
-                </td>
-              </tr>
-            </table>
-          </td>
-        </tr>
-      </table>
-    </body>
-    </html>
-  `;
-};
-
-/**
- * Send Stripe Invoice/Receipt to client
- * @param {Object} userData - { name, email }
- * @param {Object} invoiceData - { projectTitle, invoiceUrl, invoicePdf, totalAmount, invoiceNumber, isPaid }
- */
-// const sendInvoiceEmail = async (userData, invoiceData) => {
+// /**
+//  * Send payment link to client
+//  * @param {Object} userData - { name, email }
+//  * @param {Object} paymentData - { projectTitle, paymentUrl, expiresAt }
+//  */
+// const sendPaymentLinkEmail = async (userData, paymentData) => {
 //   try {
-//     const statusText = invoiceData.isPaid ? 'Receipt' : 'Invoice';
-    
 //     const mailOptions = {
 //       from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_USER}>`,
 //       to: userData.email,
-//       subject: `${statusText} #${invoiceData.invoiceNumber} for ${invoiceData.projectTitle}`,
+//       // Better Subject: Less "spammy"
+//       subject: `Your Invoice for ${paymentData.projectTitle}`,
+//       // Embed the logo so it shows automatically
 //       attachments: [{
 //         filename: 'logo.png',
-//         path: process.env.BEIGE_ASSET_BASE_URL + 'beige_logo_vb.png',
-//         cid: 'beigelogo'
+//         path: 'https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/beige_logo_vb.png',
+//         cid: 'beigelogo' // Same as in the HTML <img src="cid:beigelogo">
 //       }],
-//       html: generateInvoiceTemplate(userData, invoiceData)
+//       html: generatePaymentLinkTemplate(userData, paymentData)
 //     };
 
 //     const info = await transporter.sendMail(mailOptions);
 //     return { success: true, messageId: info.messageId };
 //   } catch (error) {
-//     console.error('Error sending invoice email:', error);
+//     console.error('Error sending payment link email:', error);
 //     return { success: false, error: error.message };
 //   }
+// };
+
+// const generatePaymentLinkTemplate = (userData, paymentData) => {
+//   return `
+//     <!DOCTYPE html>
+//     <html lang="en">
+//     <head>
+//       <meta charset="UTF-8">
+//       <style>
+//         /* This helps with dark mode */
+//         :root { color-scheme: dark light; supported-color-schemes: dark light; }
+//       </style>
+//     </head>
+//     <body style="margin: 0; padding: 0; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #0A0F0D; color: #ffffff;">
+      
+//       <!-- PREHEADER: This helps avoid spam folders -->
+//       <div style="display:none; max-height:0px; max-width:0px; opacity:0; overflow:hidden; mso-hide:all; font-size:1px; line-height:1px;">
+//         Finalize your booking for ${paymentData.projectTitle}. Secure payment link enclosed.
+//       </div>
+
+//       <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #0A0F0D; padding: 40px 10px;">
+//         <tr>
+//           <td align="center">
+//             <table width="600" cellpadding="0" cellspacing="0" border="0" style="background-color: #000000; border: 1px solid rgba(232, 209, 171, 0.2); border-radius: 20px; overflow: hidden;">
+              
+//               <!-- LOGO using CID (Embedded) -->
+//               <tr>
+//                 <td align="center" style="padding: 40px 0 20px 0;">
+//                   <img src="cid:beigelogo" alt="Beige" width="100" style="display: block; border:0;">
+//                 </td>
+//               </tr>
+
+//               <tr>
+//                 <td style="padding: 0 50px 40px 50px; text-align: center;">
+//                   <h1 style="color: #E1CAA1; font-size: 28px; font-weight: 500; margin-bottom: 25px;">Payment Requested</h1>
+                  
+//                   <p style="color: #E8D1AB; font-size: 16px; margin-bottom: 15px;">Hi ${userData.name},</p>
+                  
+//                   <p style="color: #9ca3af; font-size: 15px; line-height: 1.6; margin-bottom: 30px;">
+//                     Thank you for choosing Beige for your upcoming project. To confirm your reservation for <strong>${paymentData.projectTitle}</strong>, please complete the payment using our secure portal.
+//                   </p>
+                  
+//                   <!-- Payment Details -->
+//                   <div style="background-color: rgba(232, 209, 171, 0.05); border: 1px solid rgba(232, 209, 171, 0.1); border-radius: 12px; padding: 20px; margin-bottom: 30px; text-align: left;">
+//                     <table width="100%">
+//                       <tr>
+//                         <td style="color: #9ca3af; font-size: 13px; padding-bottom: 8px;">Project Name</td>
+//                         <td align="right" style="color: #ffffff; font-size: 13px; font-weight: 600;">${paymentData.projectTitle}</td>
+//                       </tr>
+//                       <tr>
+//                         <td style="color: #9ca3af; font-size: 13px;">Link Expiration</td>
+//                         <td align="right" style="color: #ef4444; font-size: 13px; font-weight: 600;">${paymentData.expiresAt}</td>
+//                       </tr>
+//                     </table>
+//                   </div>
+
+//                   <!-- BUTTON -->
+//                   <table width="100%" border="0" cellspacing="0" cellpadding="0">
+//                     <tr>
+//                       <td align="center">
+//                         <a href="${paymentData.paymentUrl}" style="background: linear-gradient(180deg, #3D342A 0%, #C79233 100%); color: #ffffff; padding: 18px 40px; text-decoration: none; border-radius: 50px; font-weight: 600; display: inline-block; letter-spacing: 1px;">
+//                           COMPLETE PAYMENT &rarr;
+//                         </a>
+//                       </td>
+//                     </tr>
+//                   </table>
+//                 </td>
+//               </tr>
+
+//               <!-- FOOTER: Physical address helps avoid spam -->
+//               <tr>
+//                 <td style="background-color: #050505; padding: 30px; text-align: center; border-top: 1px solid rgba(232, 209, 171, 0.1);">
+//                   <p style="color: #6b7280; font-size: 11px; margin: 0 0 10px 0;">
+//                     &copy; ${new Date().getFullYear()} Beige AI Platform. All rights reserved.
+//                   </p>
+//                   <p style="color: #4b5563; font-size: 11px; margin: 0;">
+//                     123 Creative Studio Way, New York, NY 10001 <br>
+//                     <a href="#" style="color: #C79233; text-decoration: none;">Unsubscribe</a> | <a href="#" style="color: #C79233; text-decoration: none;">Support</a>
+//                   </p>
+//                 </td>
+//               </tr>
+//             </table>
+//           </td>
+//         </tr>
+//       </table>
+//     </body>
+//     </html>
+//   `;
 // };
 
 const sendInvoiceEmail = async (userData, invoiceData) => {
@@ -1576,7 +1604,8 @@ const sendInvoiceEmail = async (userData, invoiceData) => {
       return { success: false, error: 'Sender email not configured' };
     }
 
-    const isPaid = invoiceData.isPaid;
+    const isAdditionalPayment = Boolean(invoiceData?.isAdditionalPayment);
+    const isReducedAmount = Boolean(invoiceData?.isReducedAmount);
 
     const payload = {
       to: userData.email,
@@ -1587,6 +1616,8 @@ const sendInvoiceEmail = async (userData, invoiceData) => {
       templateId: INVOICE_TEMPLATE_ID,
       dynamicTemplateData: {
         first_name: getFirstName(userData?.name, '') || 'there',
+        invoiceNumber: invoiceData.invoiceNumber,
+        projectTitle: invoiceData.projectTitle,
         // Header section
         shoot_type: formatShootTypes(invoiceData?.shootType) || 'Shoot',
         shoot_category: formatContentTypes(invoiceData?.contentType) || 'General',
@@ -1603,10 +1634,25 @@ const sendInvoiceEmail = async (userData, invoiceData) => {
         invoice_amount: invoiceData.totalAmount
           ? parseFloat(invoiceData.totalAmount).toFixed(2)
           : '0.00',
+        additional_amount: invoiceData.additionalAmount != null
+          ? parseFloat(invoiceData.additionalAmount).toFixed(2)
+          : null,
+        previously_paid_amount: invoiceData.previouslyPaidAmount != null
+          ? parseFloat(invoiceData.previouslyPaidAmount).toFixed(2)
+          : null,
+        revised_total: invoiceData.revisedTotal != null
+          ? parseFloat(invoiceData.revisedTotal).toFixed(2)
+          : null,
+        reduced_amount: invoiceData.reducedAmount != null
+          ? parseFloat(invoiceData.reducedAmount).toFixed(2)
+          : null,
         payment_link: invoiceData.invoiceUrl,
         invoice_pdf: invoiceData.invoicePdf || invoiceData.invoiceUrl,
         // Important
-        isPaid: invoiceData.isPaid
+        isPaid: invoiceData.isPaid,
+        isAdditionalPayment,
+        isReducedAmount,
+        refund_status: isReducedAmount ? 'refund_pending' : null
       }
     };
 
@@ -1625,78 +1671,6 @@ const sendInvoiceEmail = async (userData, invoiceData) => {
     console.error('SendGrid Invoice Error:', error?.response?.body || error.message);
     return { success: false, error: error.message };
   }
-};
-
-const generateInvoiceTemplate = (userData, invoiceData) => {
-  const statusColor = invoiceData.isPaid ? '#22c55e' : '#C79233'; // Green for paid, Gold for unpaid
-  const title = invoiceData.isPaid ? 'Payment Received' : 'New Invoice';
-
-  return `
-    <!DOCTYPE html>
-    <html lang="en">
-    <head><meta charset="UTF-8"></head>
-    <body style="margin: 0; padding: 0; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #0A0F0D; color: #ffffff;">
-      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #0A0F0D; padding: 40px 10px;">
-        <tr>
-          <td align="center">
-            <table width="600" cellpadding="0" cellspacing="0" border="0" style="background-color: #000000; border: 1px solid rgba(232, 209, 171, 0.2); border-radius: 20px; overflow: hidden;">
-              <tr>
-                <td align="center" style="padding: 40px 0 20px 0;">
-                  <img src="cid:beigelogo" alt="Beige" width="100" style="display: block; border:0;">
-                </td>
-              </tr>
-              <tr>
-                <td style="padding: 0 50px 40px 50px; text-align: center;">
-                  <h1 style="color: #E1CAA1; font-size: 28px; font-weight: 500; margin-bottom: 10px;">${title}</h1>
-                  <p style="color: ${statusColor}; font-size: 14px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 25px;">${invoiceData.invoiceNumber}</p>
-                  
-                  <p style="color: #E8D1AB; font-size: 16px; margin-bottom: 15px;">Hi ${userData.name},</p>
-                  
-                  <p style="color: #9ca3af; font-size: 15px; line-height: 1.6; margin-bottom: 30px;">
-                    ${invoiceData.isPaid 
-                      ? `Thank you for your payment. Please find your official receipt for <strong>${invoiceData.projectTitle}</strong> below.`
-                      : `An invoice has been generated for your project <strong>${invoiceData.projectTitle}</strong>. Please review the details and complete the payment.`
-                    }
-                  </p>
-                  
-                  <div style="background-color: rgba(232, 209, 171, 0.05); border: 1px solid rgba(232, 209, 171, 0.1); border-radius: 12px; padding: 20px; margin-bottom: 30px; text-align: left;">
-                    <table width="100%">
-                      <tr>
-                        <td style="color: #9ca3af; font-size: 13px; padding-bottom: 8px;">Amount</td>
-                        <td align="right" style="color: #ffffff; font-size: 18px; font-weight: 600;">$${parseFloat(invoiceData.totalAmount).toFixed(2)}</td>
-                      </tr>
-                      <tr>
-                        <td style="color: #9ca3af; font-size: 13px;">Status</td>
-                        <td align="right" style="color: ${statusColor}; font-size: 13px; font-weight: 600;">${invoiceData.isPaid ? 'PAID' : 'DUE'}</td>
-                      </tr>
-                    </table>
-                  </div>
-
-                  <table width="100%" border="0" cellspacing="0" cellpadding="0">
-                    <tr>
-                      <td align="center">
-                        <a href="${invoiceData.invoiceUrl}" style="background: linear-gradient(180deg, #3D342A 0%, #C79233 100%); color: #ffffff; padding: 18px 40px; text-decoration: none; border-radius: 50px; font-weight: 600; display: inline-block; margin-bottom: 15px;">
-                          ${invoiceData.isPaid ? 'VIEW RECEIPT' : 'PAY INVOICE NOW'}
-                        </a>
-                        <br>
-                        <a href="${invoiceData.invoicePdf}" style="color: #9ca3af; font-size: 13px; text-decoration: underline;">Download PDF Version</a>
-                      </td>
-                    </tr>
-                  </table>
-                </td>
-              </tr>
-              <tr>
-                <td style="background-color: #050505; padding: 30px; text-align: center; border-top: 1px solid rgba(232, 209, 171, 0.1);">
-                  <p style="color: #6b7280; font-size: 11px; margin: 0;">&copy; ${new Date().getFullYear()} Beige AI Platform. All rights reserved.</p>
-                </td>
-              </tr>
-            </table>
-          </td>
-        </tr>
-      </table>
-    </body>
-    </html>
-  `;
 };
 
 /**
@@ -1775,7 +1749,16 @@ const sendPaymentSuccessSalesNotification = async (paymentData) => {
  */
 const sendProductionLeadNotification = async (leadData) => {
   try {
-    const to = process.env.PRODUCTION_NOTIFICATION_EMAIL || process.env.SALES_NOTIFICATION_EMAIL;
+    // const to = process.env.SALES_NOTIFICATION_EMAIL;
+    const to = [
+      process.env.SALES_NOTIFICATION_EMAIL,
+      leadData.sales_rep_email
+    ].filter(Boolean);
+
+    if (!to.length) {
+      return { success: false, error: 'No recipient emails configured' };
+    }
+
     const templateId = PRODUCTION_LEAD_NOTIFICATION_TEMPLATE_ID;
 
     if (!to) return { success: false, error: 'PRODUCTION_NOTIFICATION_EMAIL is not configured' };
@@ -2410,7 +2393,8 @@ const sendCustomQuoteProposalEmail = async (data) => {
         quote_validity: data?.quote_validity || 'TBD',
         add_ons: data?.add_ons || 'TBD',
         includes: data?.includes || 'TBD',
-        proposal_amount: proposalAmount
+        proposal_amount: proposalAmount,
+        accept_quote_url: data?.accept_quote_url || ''
       }
     };
 
@@ -2439,13 +2423,275 @@ const sendCustomQuoteProposalEmail = async (data) => {
   }
 };
 
+const sendQuoteAcceptedClientEmail = async (data) => {
+  const to = data?.to_email || data?.email;
+  if (!QUOTE_ACCEPTED_CLIENT_TEMPLATE_ID) {
+    return { success: false, error: 'QUOTE_ACCEPTED_CLIENT_TEMPLATE_ID is not configured' };
+  }
+
+  return sendEmail({
+    to,
+    subject: 'Your quote has been accepted',
+    templateId: QUOTE_ACCEPTED_CLIENT_TEMPLATE_ID,
+    dynamicTemplateData: {
+      client_name: getFirstName(data?.client_name || data?.first_name || '', data?.first_name || 'there') || 'there',
+      quote_number: data?.quote_number || 'TBD',
+      project_description: data?.project_description || 'TBD',
+      proposal_amount: formatAmount(data?.proposal_amount || 0)
+    }
+  });
+};
+
+const sendQuoteAcceptedSalesNotificationEmail = async (data) => {
+  const to = process.env.SALES_NOTIFICATION_EMAIL;
+  if (!to) {
+    return { success: false, error: 'SALES_NOTIFICATION_EMAIL is not configured' };
+  }
+
+  if (!QUOTE_ACCEPTED_SALES_NOTIFICATION_TEMPLATE_ID) {
+    return { success: false, error: 'QUOTE_ACCEPTED_SALES_NOTIFICATION_TEMPLATE_ID is not configured' };
+  }
+
+  return sendEmail({
+    to,
+    subject: `Quote accepted: ${data?.quote_number || 'Quote'}`,
+    templateId: QUOTE_ACCEPTED_SALES_NOTIFICATION_TEMPLATE_ID,
+    dynamicTemplateData: {
+      client_name: data?.client_name || 'TBD',
+      quote_number: data?.quote_number || 'TBD',
+      client_email: data?.client_email || 'TBD',
+      client_phone: data?.client_phone || 'TBD',
+      shoot_type: data?.shoot_type || 'TBD',
+      project_description: data?.project_description || 'TBD',
+      location: data?.location || 'TBD',
+      proposal_amount: formatAmount(data?.proposal_amount || 0),
+      accepted_at: data?.accepted_at || formatDate(new Date())
+    }
+  });
+};
+
+const normalizeEmailAddress = (value) => String(value || '').trim().toLowerCase();
+
+const normalizeRecipients = (to) => {
+  const list = Array.isArray(to) ? to : [to];
+  return [...new Set(list.map(normalizeEmailAddress).filter(Boolean))];
+};
+
+const sendTemplateToRecipients = async ({ recipients = [], subject, templateId, dynamicTemplateData = {} }) => {
+  const normalizedRecipients = normalizeRecipients(recipients);
+  if (!normalizedRecipients.length) {
+    return { success: false, error: 'No recipient emails found' };
+  }
+
+  const settled = await Promise.allSettled(
+    normalizedRecipients.map((to) =>
+      sendEmail({
+        to,
+        subject,
+        templateId,
+        dynamicTemplateData,
+      })
+    )
+  );
+
+  const sent = settled.filter((item) => item.status === 'fulfilled' && item.value?.success).length;
+  const failed = settled
+    .map((item, index) => ({ item, to: normalizedRecipients[index] }))
+    .filter((entry) => entry.item.status === 'rejected' || !entry.item.value?.success)
+    .map((entry) => ({
+      to: entry.to,
+      error:
+        entry.item.status === 'rejected'
+          ? entry.item.reason?.message || 'Unknown error'
+          : entry.item.value?.error || 'Unknown error',
+    }));
+
+  return {
+    success: failed.length === 0,
+    partialSuccess: sent > 0 && failed.length > 0,
+    sentCount: sent,
+    failedCount: failed.length,
+    failedRecipients: failed,
+  };
+};
+
+const formatIsoDate = (value) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toISOString();
+};
+
+const formatHumanDate = (value) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleDateString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'Asia/Kolkata',
+  });
+};
+
+const formatHumanTime = (value) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleTimeString('en-IN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: 'Asia/Kolkata',
+  });
+};
+
+const sendMeetingScheduledTemplateEmail = async ({ recipients = [], data = {} }) => {
+  if (!MEETING_SCHEDULED_TEMPLATE_ID) {
+    return { success: false, error: 'MEETING_SCHEDULED_TEMPLATE_ID is not configured' };
+  }
+
+  const meetingDateTime = data?.meeting_date_time || data?.meetingDateTime || '';
+  const meetingEndTime = data?.meeting_end_time || data?.meetingEndTime || '';
+  const meetLink = data?.meet_link || data?.meetLink || data?.meeting_link || data?.link || '';
+  const agenda = data?.agenda || data?.description || '';
+  const orderId = data?.order_id || data?.booking_id || data?.bookingId || '';
+  const orderName = data?.order_name || data?.project_name || data?.project || '';
+  const isoStart = formatIsoDate(meetingDateTime);
+  const isoEnd = formatIsoDate(meetingEndTime);
+  const humanDate = formatHumanDate(meetingDateTime);
+  const humanTime = formatHumanTime(meetingDateTime);
+  const humanEndTime = formatHumanTime(meetingEndTime);
+
+  return sendTemplateToRecipients({
+    recipients,
+    subject: data?.meeting_title || 'Meeting scheduled',
+    templateId: MEETING_SCHEDULED_TEMPLATE_ID,
+    dynamicTemplateData: {
+      meeting_id: data?.meeting_id || '',
+      booking_id: String(orderId || ''),
+      bookingId: String(orderId || ''),
+      order_id: String(orderId || ''),
+      orderId: String(orderId || ''),
+      order_name: orderName || '',
+      project_name: orderName || '',
+      project: orderName || '',
+      meeting_title: data?.meeting_title || '',
+      meeting_type: data?.meeting_type || '',
+      meeting_status: data?.meeting_status || '',
+      meeting_date_time: isoStart,
+      meetingDateTime: isoStart,
+      meeting_end_time: isoEnd,
+      meetingEndTime: isoEnd,
+      meeting_date: humanDate,
+      meetingDate: humanDate,
+      meeting_time: humanTime,
+      meetingTime: humanTime,
+      meeting_end_time_label: humanEndTime,
+      meetingEndTimeLabel: humanEndTime,
+      agenda,
+      description: agenda,
+      meet_link: meetLink,
+      meetLink,
+      meeting_link: meetLink,
+      link: meetLink,
+      created_by_name: data?.created_by_name || '',
+      recipient_name: data?.recipient_name || '',
+      sent_at: data?.sent_at || new Date().toISOString(),
+    }
+  });
+};
+
+const sendMessagingInitiatedTemplateEmail = async ({ recipients = [], data = {} }) => {
+  if (!MESSAGING_INITIATED_TEMPLATE_ID) {
+    return { success: false, error: 'MESSAGING_INITIATED_TEMPLATE_ID is not configured' };
+  }
+
+  return sendTemplateToRecipients({
+    recipients,
+    subject: 'New message in conversation',
+    templateId: MESSAGING_INITIATED_TEMPLATE_ID,
+    dynamicTemplateData: {
+      chat_room_id: data?.chat_room_id || '',
+      room_id: data?.chat_room_id || '',
+      chat_name: data?.chat_name || '',
+      order_id: data?.order_id || '',
+      booking_id: data?.order_id || '',
+      project_name: data?.project_name || data?.chat_name || '',
+      sender_id: data?.sender_id || '',
+      sender_name: data?.sender_name || '',
+      message_preview: data?.message_preview || '',
+      message: data?.message_preview || '',
+      event_type: data?.event_type || 'message_created',
+      recipient_name: data?.recipient_name || '',
+      sent_at: data?.sent_at || new Date().toISOString(),
+    }
+  });
+};
+
+const sendPreProductionUploadedTemplateEmail = async ({ recipients = [], data = {} }) => {
+  if (!PRE_PRODUCTION_BRIEF_UPLOADED_TEMPLATE_ID) {
+    return { success: false, error: 'PRE_PRODUCTION_BRIEF_UPLOADED_TEMPLATE_ID is not configured' };
+  }
+
+  return sendTemplateToRecipients({
+    recipients,
+    subject: 'Pre-production brief uploaded',
+    templateId: PRE_PRODUCTION_BRIEF_UPLOADED_TEMPLATE_ID,
+    dynamicTemplateData: {
+      recipient_name: data?.recipient_name || 'Client',
+      booking_id: data?.booking_id || data?.order_id || '',
+      bookingId: data?.booking_id || data?.order_id || '',
+      order_id: data?.order_id || data?.booking_id || '',
+      orderId: data?.order_id || data?.booking_id || '',
+      order_name: data?.order_name || data?.project_name || '',
+      project_name: data?.project_name || data?.order_name || '',
+      project: data?.project_name || data?.order_name || '',
+      file_name: data?.file_name || '',
+      file_path: data?.file_path || '',
+      upload_phase: 'pre_production',
+      uploaded_by_name: data?.uploaded_by_name || '',
+      uploaded_by_id: data?.uploaded_by_id || '',
+      uploaded_at: data?.uploaded_at || new Date().toISOString(),
+    }
+  });
+};
+
+const sendPostProductionUploadedTemplateEmail = async ({ recipients = [], data = {} }) => {
+  if (!POST_PRODUCTION_UPLOAD_TEMPLATE_ID) {
+    return { success: false, error: 'POST_PRODUCTION_UPLOAD_TEMPLATE_ID is not configured' };
+  }
+
+  return sendTemplateToRecipients({
+    recipients,
+    subject: 'Post-production file uploaded',
+    templateId: POST_PRODUCTION_UPLOAD_TEMPLATE_ID,
+    dynamicTemplateData: {
+      recipient_name: data?.recipient_name || 'Client',
+      booking_id: data?.booking_id || data?.order_id || '',
+      bookingId: data?.booking_id || data?.order_id || '',
+      order_id: data?.order_id || data?.booking_id || '',
+      orderId: data?.order_id || data?.booking_id || '',
+      order_name: data?.order_name || data?.project_name || '',
+      project_name: data?.project_name || data?.order_name || '',
+      project: data?.project_name || data?.order_name || '',
+      file_name: data?.file_name || '',
+      file_path: data?.file_path || '',
+      upload_phase: 'post_production',
+      uploaded_by_name: data?.uploaded_by_name || '',
+      uploaded_by_id: data?.uploaded_by_id || '',
+      uploaded_at: data?.uploaded_at || new Date().toISOString(),
+    }
+  });
+};
+
 module.exports = {
   formatContentTypes,
   formatShootTypes,
   sendTaskAssignmentEmail,
   sendVerificationOTP,
   sendPasswordResetEmail,
-  sendPaymentLinkEmail,
+  // sendPaymentLinkEmail,
   sendInvoiceEmail,
   sendSalesLeadNotification,
   sendProductionLeadNotification,
@@ -2469,5 +2715,11 @@ module.exports = {
   sendNewCrewSignupNotification,
   sendCPSignupWelcomeEmail,
   sendProductionProposalEmail,
-  sendCustomQuoteProposalEmail
+  sendCustomQuoteProposalEmail,
+  sendQuoteAcceptedClientEmail,
+  sendQuoteAcceptedSalesNotificationEmail,
+  sendMeetingScheduledTemplateEmail,
+  sendMessagingInitiatedTemplateEmail,
+  sendPreProductionUploadedTemplateEmail,
+  sendPostProductionUploadedTemplateEmail
 };

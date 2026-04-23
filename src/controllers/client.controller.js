@@ -6,6 +6,7 @@ const common_model = require('../utils/common_model');
 const { Op } = require('sequelize');
 const { S3UploadFiles } = require('../utils/common.js');
 const { sendTaskAssignmentEmail } = require('../utils/emailService');
+const accountCreditService = require('../services/account-credit.service');
 const { stream_project_booking, crew_members, crew_member_files, tasks, equipment, crew_roles,
   equipment_accessories,
   equipment_category,
@@ -24,6 +25,7 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   assigned_equipment,
   project_brief,
   event_type_master, payment_transactions, assigned_post_production_member, post_production_members, quotes, project_form_submissions,
+  users,
   sales_leads, sales_lead_activities } = require('../models');
 
 function toArray(value) {
@@ -245,6 +247,121 @@ exports.getClientDashboardSummary = async (req, res) => {
     });
   } catch (error) {
     console.error("Get Client Dashboard Summary:", error);
+    return res.status(500).json({
+      error: true,
+      message: "Internal server error"
+    });
+  }
+};
+
+exports.getClientCreditSummary = async (req, res) => {
+  try {
+    const user_id = req.user?.userId;
+    if (!user_id) {
+      return res.status(400).json({
+        error: true,
+        message: "user_id is required"
+      });
+    }
+
+    const user = await users.findByPk(user_id, {
+      attributes: ['id', 'email']
+    });
+
+    const creditSummary = await accountCreditService.getAccountCreditBalance({
+      userId: user_id,
+      guestEmail: user?.email || null
+    });
+
+    return res.status(200).json({
+      error: false,
+      message: "Client credit summary fetched successfully",
+      data: {
+        total_credit_amount: creditSummary?.total_credit_amount || 0,
+        used_credit_amount: creditSummary?.used_credit_amount || 0,
+        pending_credit_amount: creditSummary?.pending_credit_amount || 0,
+        available_credit_amount: creditSummary?.available_credit_amount || 0,
+        latest_credit: creditSummary?.latest_credit || null
+      }
+    });
+  } catch (error) {
+    console.error("Get Client Credit Summary Error:", error);
+    return res.status(500).json({
+      error: true,
+      message: "Internal server error"
+    });
+  }
+};
+
+exports.getClientCreditHistory = async (req, res) => {
+  try {
+    const user_id = req.user?.userId;
+    if (!user_id) {
+      return res.status(400).json({
+        error: true,
+        message: "user_id is required"
+      });
+    }
+
+    const limit = Math.max(1, Math.min(Number(req.query.limit || 50), 200));
+    const page = Math.max(1, Number(req.query.page || 1));
+    const offset = (page - 1) * limit;
+
+    const user = await users.findByPk(user_id, {
+      attributes: ['id', 'email']
+    });
+
+    const [summary, historyRows] = await Promise.all([
+      accountCreditService.getAccountCreditBalance({
+        userId: user_id,
+        guestEmail: user?.email || null
+      }),
+      accountCreditService.getAccountCreditHistory({
+        userId: user_id,
+        guestEmail: user?.email || null,
+        limit,
+        offset
+      })
+    ]);
+
+    const history = (historyRows || []).map((row) => {
+      const plain = row?.toJSON ? row.toJSON() : row;
+      const isDebit = plain.entry_type === 'credit_used' || plain.entry_type === 'credit_reversed';
+      return {
+        account_credit_ledger_id: plain.account_credit_ledger_id,
+        amount: Number(plain.amount || 0),
+        direction: isDebit ? 'debit' : 'credit',
+        entry_type: plain.entry_type,
+        status: plain.status,
+        source: plain.source,
+        notes: plain.notes || null,
+        booking_id: plain.booking_id || null,
+        booking_name: plain.booking?.project_name || null,
+        booking_event_date: plain.booking?.event_date || null,
+        created_at: plain.created_at || null
+      };
+    });
+
+    return res.status(200).json({
+      error: false,
+      message: "Client credit history fetched successfully",
+      data: {
+        summary: {
+          total_credit_amount: summary?.total_credit_amount || 0,
+          used_credit_amount: summary?.used_credit_amount || 0,
+          pending_credit_amount: summary?.pending_credit_amount || 0,
+          available_credit_amount: summary?.available_credit_amount || 0
+        },
+        history,
+        pagination: {
+          page,
+          limit,
+          returned_count: history.length
+        }
+      }
+    });
+  } catch (error) {
+    console.error("Get Client Credit History Error:", error);
     return res.status(500).json({
       error: true,
       message: "Internal server error"

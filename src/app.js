@@ -6,6 +6,7 @@ const routes = require('./routes');
 const errorHandler = require('./middleware/errorHandler');
 const creatorRoutes = require('./routes/creator.routes');
 const paymentsController = require('./controllers/payments.controller');
+const signatureRoutes = require('./routes/signature.routes');
 
 const app = express();
 
@@ -84,7 +85,10 @@ app.get('/health', (req, res) => {
 // Mount API routes with /v1 prefix
 
 app.use('/v1', routes);
+app.use('/v1/signatures', signatureRoutes); 
 // app.use('/api/creator', creatorRoutes);
+
+
 
 
 // 404 handler for unknown routes

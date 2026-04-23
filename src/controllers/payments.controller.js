@@ -3,6 +3,7 @@ const db = require('../models');
 const affiliateController = require('./affiliate.controller');
 const { ensureProjectForBooking } = require('./projects.controller');
 const externalFileManagerController = require('./external-file-manager.controller');
+const accountCreditService = require('../services/account-credit.service');
 const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 const googleSheetService = require('../utils/googleSheetsService');
 // Get Beige margin percentage from environment, default to 25%
@@ -135,7 +136,7 @@ async function markConvertedSalesQuoteAsPaid({
       lead_id: lead.lead_id
     },
     order: [
-      [db.sequelize.literal("CASE WHEN status = 'paid' THEN 0 WHEN status = 'accepted' THEN 1 WHEN status = 'sent' THEN 2 WHEN status = 'viewed' THEN 3 WHEN status = 'pending' THEN 4 ELSE 5 END"), 'ASC'],
+      [db.sequelize.literal("CASE WHEN status = 'paid' THEN 0 WHEN status = 'accepted' THEN 1 WHEN status = 'partially_paid' THEN 2 WHEN status = 'sent' THEN 3 WHEN status = 'viewed' THEN 4 WHEN status = 'pending' THEN 5 ELSE 6 END"), 'ASC'],
       ['accepted_at', 'DESC'],
       ['updated_at', 'DESC'],
       ['sales_quote_id', 'DESC']
@@ -167,6 +168,85 @@ async function markConvertedSalesQuoteAsPaid({
   }, { transaction });
 
   return salesQuote.sales_quote_id;
+}
+
+async function markAdditionalQuoteInvoiceAsPaid({
+  bookingId,
+  stripeInvoice = null,
+  paymentIntentId = null,
+  transaction
+}) {
+  if (!bookingId || !db.invoice_send_history) return false;
+
+  const invoiceNumber = normalizeString(stripeInvoice?.number, 255, null);
+  const invoiceUrl = normalizeString(stripeInvoice?.hosted_invoice_url, 1000, null);
+  const invoicePdf = normalizeString(stripeInvoice?.invoice_pdf, 1000, null);
+  const invoiceAmount = round2((stripeInvoice?.amount_paid || stripeInvoice?.total || 0) / 100);
+
+  let pendingInvoiceHistory = null;
+  if (invoiceNumber) {
+    pendingInvoiceHistory = await db.invoice_send_history.findOne({
+      where: {
+        booking_id: bookingId,
+        invoice_number: invoiceNumber,
+        payment_status: 'pending'
+      },
+      order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+      transaction
+    });
+  }
+
+  if (!pendingInvoiceHistory) {
+    pendingInvoiceHistory = await db.invoice_send_history.findOne({
+      where: {
+        booking_id: bookingId,
+        payment_status: 'pending'
+      },
+      order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+      transaction
+    });
+  }
+
+  if (!pendingInvoiceHistory) return false;
+
+  await pendingInvoiceHistory.update({
+    payment_status: 'paid',
+    invoice_number: invoiceNumber || pendingInvoiceHistory.invoice_number,
+    invoice_url: invoiceUrl || pendingInvoiceHistory.invoice_url,
+    invoice_pdf: invoicePdf || pendingInvoiceHistory.invoice_pdf
+  }, { transaction });
+
+  if (!pendingInvoiceHistory.quote_id) {
+    return true;
+  }
+
+  const salesQuote = await db.sales_quotes.findByPk(pendingInvoiceHistory.quote_id, { transaction });
+  if (!salesQuote) {
+    return true;
+  }
+
+  const now = new Date();
+  await salesQuote.update({
+    status: 'paid',
+    accepted_at: salesQuote.accepted_at || now,
+    updated_at: now
+  }, { transaction });
+
+  await db.sales_quote_activities.create({
+    sales_quote_id: salesQuote.sales_quote_id,
+    activity_type: 'status_changed',
+    performed_by_user_id: null,
+    message: 'Quote marked as paid after additional invoice payment',
+    metadata_json: JSON.stringify({
+      status: 'paid',
+      booking_id: bookingId,
+      payment_intent_id: paymentIntentId,
+      invoice_number: invoiceNumber,
+      amount_paid: invoiceAmount
+    })
+  }, { transaction });
+
+  return true;
 }
 
 
@@ -1292,7 +1372,9 @@ exports.confirmPaymentMulti = async (req, res) => {
   const transaction = await db.sequelize.transaction();
 
   try {
-    const { paymentIntentId, booking_id, referral_code } = req.body;
+    const { paymentIntentId, booking_id, referral_code, use_credit, credit_amount_used } = req.body;
+    const shouldUseCredit = Boolean(use_credit);
+    const requestedCreditAmount = round2(credit_amount_used || 0);
 
     if (!paymentIntentId || !booking_id) {
       if (transaction) await transaction.rollback();
@@ -1309,6 +1391,8 @@ exports.confirmPaymentMulti = async (req, res) => {
       await transaction.rollback();
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
+
+    const quoteTotal = round2(booking.primary_quote?.total || 0);
 
     let normalizedReferralCode = '';
     if (referral_code) {
@@ -1330,10 +1414,12 @@ exports.confirmPaymentMulti = async (req, res) => {
     // --- UPDATED LOGIC HERE ---
     // 2. Check if this is a Free Checkout mock ID
     if (paymentIntentId.startsWith('free_checkout_intent_')) {
-      
-      // SECURITY CHECK: Verify the quote in our DB is actually 0
-      // This prevents users from manually sending a "free_checkout" ID for a paid booking
-      if (!booking.primary_quote || parseFloat(booking.primary_quote.total) !== 0) {
+      const isQuoteZero = quoteTotal === 0;
+      const payableAfterCredit = round2(quoteTotal - requestedCreditAmount);
+      const isCreditCoveredCheckout = shouldUseCredit && requestedCreditAmount > 0 && payableAfterCredit <= 0;
+
+      // SECURITY CHECK: free checkout only if quote is zero or fully covered by account credit.
+      if (!booking.primary_quote || (!isQuoteZero && !isCreditCoveredCheckout)) {
         await transaction.rollback();
         return res.status(400).json({ 
           success: false, 
@@ -1365,8 +1451,22 @@ exports.confirmPaymentMulti = async (req, res) => {
     const existingPayment = await db.payment_transactions.findOne({
       where: { stripe_payment_intent_id: paymentIntentId }
     });
+    let usedCreditEntry = null;
 
     if (existingPayment) {
+      if (shouldUseCredit && requestedCreditAmount > 0) {
+        usedCreditEntry = await accountCreditService.consumeAccountCreditForPayment({
+          userId: booking.user_id || null,
+          guestEmail: booking.guest_email || null,
+          bookingId: booking_id,
+          amount: requestedCreditAmount,
+          paymentId: existingPayment.payment_id,
+          paymentIntentId,
+          createdByUserId: req.user?.userId || null,
+          transaction
+        });
+      }
+
       if (normalizedReferralCode) {
         try {
           // Backfill referral commission for referral-code owner when payment already exists.
@@ -1444,7 +1544,11 @@ exports.confirmPaymentMulti = async (req, res) => {
       return res.status(200).json({
         success: true,
         message: "Payment already processed",
-        data: { payment_id: existingPayment.payment_id, booking_id },
+        data: {
+          payment_id: existingPayment.payment_id,
+          booking_id,
+          credit_applied: round2(usedCreditEntry?.amount || 0)
+        },
       });
     }
 
@@ -1496,6 +1600,19 @@ exports.confirmPaymentMulti = async (req, res) => {
       referral_code: normalizedReferralCode || null,
       status: 'succeeded'
     }, { transaction });
+
+    if (shouldUseCredit && requestedCreditAmount > 0) {
+      usedCreditEntry = await accountCreditService.consumeAccountCreditForPayment({
+        userId: booking.user_id || null,
+        guestEmail: booking.guest_email || null,
+        bookingId: booking_id,
+        amount: requestedCreditAmount,
+        paymentId: payment.payment_id,
+        paymentIntentId,
+        createdByUserId: req.user?.userId || null,
+        transaction
+      });
+    }
 
     // 7. Process referral commissions
     let primaryReferral = null;
@@ -1638,6 +1755,7 @@ exports.confirmPaymentMulti = async (req, res) => {
       data: {
         payment_id: payment.payment_id,
         booking_id,
+        credit_applied: round2(usedCreditEntry?.amount || 0),
         project_id: projectSync.project?.project_id || null,
         project_created: projectSync.created,
         project_sync_error: projectSync.error || null,
@@ -1807,6 +1925,7 @@ exports.handleStripeWebhook = async (req, res) => {
     const dataObject = event.data.object;
     let booking_id = null;
     let paymentIntentId = null;
+    let stripeInvoice = null;
 
     if (event.type === 'payment_intent.succeeded') {
       const bookingIdRaw = dataObject.metadata?.booking_id;
@@ -1829,6 +1948,7 @@ exports.handleStripeWebhook = async (req, res) => {
         }
       }
     } else if (event.type === 'invoice.paid') {
+      stripeInvoice = dataObject;
       const bookingIdRaw = dataObject.metadata?.booking_id;
       booking_id = bookingIdRaw ? parseInt(bookingIdRaw, 10) : null;
       paymentIntentId = typeof dataObject.payment_intent === 'string'
@@ -1871,6 +1991,21 @@ exports.handleStripeWebhook = async (req, res) => {
 
       // Booking-level idempotency: do not create a second payment for an already paid booking.
       if (booking.payment_id || booking.is_completed === 1) {
+        if (event.type === 'invoice.paid') {
+          const additionalInvoiceMarkedPaid = await markAdditionalQuoteInvoiceAsPaid({
+            bookingId: booking_id,
+            stripeInvoice,
+            paymentIntentId,
+            transaction
+          });
+
+          if (additionalInvoiceMarkedPaid) {
+            await transaction.commit();
+            console.log(`Webhook: additional invoice marked paid for booking ${booking_id}`);
+            return res.status(200).json({ received: true, additional_invoice_paid: true });
+          }
+        }
+
         await transaction.rollback();
         console.log(`Webhook: booking ${booking_id} already marked paid`);
         return res.status(200).json({ received: true, booking_already_paid: true });

@@ -34,6 +34,7 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
 const leadAssignmentService = require('../services/lead-assignment.service');
 const db = require('../models');
 const bookingTimelineService = require('../services/bookingTimeline.service');
+const accountCreditService = require('../services/account-credit.service');
 // const NodeGeocoder = require('node-geocoder');
 
 const getCPNewBookingEmailFields = (booking = {}, fallbackClientName = '', fallbackShootAmount = null) => ({
@@ -6711,6 +6712,36 @@ exports.getClientById = async (req, res) => {
     const affiliate = await affiliates.findOne({
       where: { user_id: client.user_id }
     });
+    const [creditSummary, creditHistoryRows] = await Promise.all([
+      accountCreditService.getAccountCreditBalance({
+        userId: client.user_id || null,
+        guestEmail: user?.email || null
+      }),
+      accountCreditService.getAccountCreditHistory({
+        userId: client.user_id || null,
+        guestEmail: user?.email || null,
+        limit: 10,
+        offset: 0
+      })
+    ]);
+
+    const creditHistory = (creditHistoryRows || []).map((row) => {
+      const plain = row?.toJSON ? row.toJSON() : row;
+      const isDebit = plain.entry_type === 'credit_used' || plain.entry_type === 'credit_reversed';
+      return {
+        account_credit_ledger_id: plain.account_credit_ledger_id,
+        amount: parseFloat(plain.amount || 0),
+        direction: isDebit ? 'debit' : 'credit',
+        entry_type: plain.entry_type,
+        status: plain.status,
+        source: plain.source,
+        notes: plain.notes || null,
+        booking_id: plain.booking_id || null,
+        booking_name: plain.booking?.project_name || null,
+        booking_event_date: plain.booking?.event_date || null,
+        created_at: plain.created_at || null
+      };
+    });
 
     return res.status(200).json({
       error: false,
@@ -6718,7 +6749,15 @@ exports.getClientById = async (req, res) => {
       data: {
         client: client,
         user: user,
-        affiliate: affiliate
+        affiliate: affiliate,
+        account_credit: {
+          total_credit_amount: creditSummary?.total_credit_amount || 0,
+          used_credit_amount: creditSummary?.used_credit_amount || 0,
+          pending_credit_amount: creditSummary?.pending_credit_amount || 0,
+          available_credit_amount: creditSummary?.available_credit_amount || 0,
+          latest_credit: creditSummary?.latest_credit || null
+        },
+        credit_history: creditHistory
       }
     });
 
@@ -7965,6 +8004,7 @@ exports.getBookingSummaryById = async (req, res) => {
         // 7. EXTRACT REFERRAL DATA FROM NOTES (Regex Fix)
         let referralDiscount = 0;
         let referralCode = null;
+        let paymentData = null;
         const notes = primaryQuote.notes || '';
 
         // Matches: Referral applied (7321F9): -$518.75
@@ -7980,20 +8020,27 @@ exports.getBookingSummaryById = async (req, res) => {
 
         // Check if there is a payment record for more accurate referral info
         if (bookingJson.payment_id) {
-            const payment = await db.payment_transactions.findByPk(bookingJson.payment_id);
-            if (payment && payment.referral_code) {
-                referralCode = payment.referral_code;
+            paymentData = await db.payment_transactions.findByPk(bookingJson.payment_id);
+            if (paymentData && paymentData.referral_code) {
+                referralCode = paymentData.referral_code;
             }
         }
 
         // Logic: The "Promo Code" discount is whatever is left over after the Referral Discount
         const discountCodeDiscount = Math.max(0, totalDiscountFromDb - referralDiscount);
+        const paidAmountRaw = paymentData ? parseFloat(paymentData.total_amount || 0) : quoteTotal;
+        const normalizedPaidAmount = Number.isFinite(paidAmountRaw) ? paidAmountRaw : quoteTotal;
+        const creditApplied = Math.max(0, quoteTotal - normalizedPaidAmount);
+        const totalAfterCredit = Math.max(0, quoteTotal - creditApplied);
 
-        pricing.total_paid = quoteTotal; // Default to quote total
+        pricing.total_paid = parseFloat(normalizedPaidAmount.toFixed(2));
         pricing.discount_code_discount = parseFloat(discountCodeDiscount.toFixed(2));
         pricing.referral_discount = parseFloat(referralDiscount.toFixed(2));
         pricing.total_before_discounts = subtotal;
         pricing.referral_code = referralCode;
+        pricing.total_before_credit = parseFloat(quoteTotal.toFixed(2));
+        pricing.credit_applied = parseFloat(creditApplied.toFixed(2));
+        pricing.total_after_credit = parseFloat(totalAfterCredit.toFixed(2));
 
         // 8. Final Response
         res.json({

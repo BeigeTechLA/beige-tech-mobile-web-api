@@ -1,5 +1,6 @@
 const { Op } = require('sequelize');
 const db = require('../models');
+const emailService = require('../utils/emailService');
 
 const DEFAULT_BASE_URL = process.env.EXTERNAL_MEETINGS_API_BASE_URL || process.env.MEETINGS_API_BASE_URL || 'http://localhost:5002/v1';
 const INTERNAL_KEY = process.env.EXTERNAL_MEETINGS_KEY || process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
@@ -83,6 +84,23 @@ const getRequestUserRole = (req) => normalizeRole(req.user?.userRole || '');
 const getParticipantKey = (participant) =>
   String(participant?.id || participant?.email || participant?.name || '').trim();
 const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
+
+const collectMeetingEmails = (state = {}, booking = null) => {
+  const emails = new Set();
+  const push = (value) => {
+    const normalized = normalizeEmail(value);
+    if (normalized) emails.add(normalized);
+  };
+
+  push(state?.client?.email);
+  push(state?.admin?.email);
+  (state?.cps || []).forEach((cp) => push(cp?.email));
+  (state?.participants || []).forEach((participant) => push(participant?.email));
+  push(booking?.guest_email);
+  push(booking?.user?.email);
+
+  return [...emails];
+};
 const matchesParticipantByIdentity = (participant, identities = new Set()) => {
   const participantId = String(participant?.id || '').trim();
   const participantEmail = normalizeEmail(participant?.email || '');
@@ -931,6 +949,37 @@ exports.createMeeting = async (req, res) => {
       ],
     });
 
+    if (req.body.send_notification !== false) {
+      const recipients = collectMeetingEmails(participants, plainBooking);
+      if (recipients.length) {
+        const creator = meetingWithCreator?.creator
+          ? (typeof meetingWithCreator.creator.get === 'function'
+            ? meetingWithCreator.creator.get({ plain: true })
+            : meetingWithCreator.creator)
+          : null;
+        await emailService.sendMeetingScheduledTemplateEmail({
+          recipients,
+          data: {
+            meeting_id: String(createdMeeting.meeting_id),
+            booking_id: String(bookingId),
+            order_id: String(bookingId),
+            order_name: plainBooking?.project_name || `Project #${bookingId}`,
+            project_name: plainBooking?.project_name || `Project #${bookingId}`,
+            meeting_title: String(req.body.meeting_title || '').trim() || `Meeting for project ${bookingId}`,
+            meeting_type: meetingType,
+            meeting_status: meetingStatus,
+            meeting_date_time: meetingDateTime?.toISOString?.() || '',
+            meeting_end_time: meetingEndTime?.toISOString?.() || '',
+            meet_link: String(req.body.meetLink || req.body.meet_link || '').trim() || '',
+            description: String(req.body.description || '').trim() || '',
+            agenda: String(req.body.description || '').trim() || '',
+            created_by_name: creator?.name || '',
+            sent_at: new Date().toISOString(),
+          },
+        });
+      }
+    }
+
     return res.status(201).json(
       formatMeeting(meetingWithCreator || createdMeeting, booking, participants)
     );
@@ -1095,6 +1144,31 @@ exports.addParticipants = async (req, res) => {
     await meeting.update({
       participants_json: serializeMeetingState(nextState),
     });
+
+    const addedRecipients = additions.map((participant) => normalizeEmail(participant?.email)).filter(Boolean);
+    if (addedRecipients.length) {
+      const plainBooking = typeof booking?.get === 'function' ? booking.get({ plain: true }) : booking;
+      await emailService.sendMeetingScheduledTemplateEmail({
+        recipients: addedRecipients,
+        data: {
+          meeting_id: String(meeting.meeting_id),
+          booking_id: String(booking?.stream_project_booking_id || ''),
+          order_id: String(booking?.stream_project_booking_id || ''),
+          order_name: plainBooking?.project_name || `Project #${booking?.stream_project_booking_id || ''}`,
+          project_name: plainBooking?.project_name || `Project #${booking?.stream_project_booking_id || ''}`,
+          meeting_title: String(meeting.meeting_title || '').trim() || `Meeting for project ${booking?.stream_project_booking_id || ''}`,
+          meeting_type: meeting.meeting_type || '',
+          meeting_status: meeting.meeting_status || '',
+          meeting_date_time: meeting.meeting_date_time ? new Date(meeting.meeting_date_time).toISOString() : '',
+          meeting_end_time: meeting.meeting_end_time ? new Date(meeting.meeting_end_time).toISOString() : '',
+          meet_link: meeting.meet_link || '',
+          description: meeting.description || '',
+          agenda: meeting.description || '',
+          created_by_name: '',
+          sent_at: new Date().toISOString(),
+        },
+      });
+    }
 
     return res.status(200).json(formatMeeting(meeting, booking, nextState));
   } catch (error) {

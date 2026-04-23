@@ -7,6 +7,7 @@ const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 const pricingService = require('../services/pricing.service');
 const pricingController = require('../controllers/pricing.controller');
 const paymentService = require('../services/payment-links.service');
+const accountCreditService = require('../services/account-credit.service');
 const emailService = require('../utils/emailService');
 const { sendCPNewBookingRequestEmail } = require('../utils/emailService');
 const { resolveEventDateAndStartTime, normalizeTime, splitDateTime } = require('../utils/timezone');
@@ -18,6 +19,104 @@ const normalizeDateOnlyInput = (value) => {
   const { date } = splitDateTime(value);
   return date || null;
 };
+
+const parseQuoteActivityMetadata = (value) => {
+  if (!value) return null;
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch (_) {
+    return null;
+  }
+};
+
+async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
+  if (!quoteId) return null;
+
+  const [latestInvoiceHistory, recentQuoteUpdates] = await Promise.all([
+    db.invoice_send_history?.findOne({
+      where: {
+        quote_id: quoteId,
+        ...(bookingId ? { booking_id: bookingId } : {})
+      },
+      order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']]
+    }) || null,
+    db.sales_quote_activities?.findAll({
+      where: {
+        sales_quote_id: quoteId,
+        activity_type: 'updated'
+      },
+      order: [['created_at', 'DESC'], ['activity_id', 'DESC']],
+      limit: 10
+    }) || []
+  ]);
+
+  const refreshActivity = (recentQuoteUpdates || [])
+    .map((activity) => ({
+      activity,
+      metadata: parseQuoteActivityMetadata(activity?.metadata_json)
+    }))
+    .find(({ metadata }) => {
+      if (!metadata?.invoice_refresh_required) return false;
+      if (bookingId && metadata.booking_id && Number(metadata.booking_id) !== Number(bookingId)) return false;
+      return parseFloat(metadata.extra_amount || 0) > 0 || parseFloat(metadata.reduced_amount || 0) > 0;
+    });
+
+  const refreshInvoiceHistory = refreshActivity?.activity
+    ? await db.invoice_send_history?.findOne({
+        where: {
+          quote_id: quoteId,
+          ...(bookingId ? { booking_id: bookingId } : {}),
+          sent_at: { [Op.gte]: refreshActivity.activity.created_at }
+        },
+        order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']]
+      })
+    : null;
+
+  const additionalAmount = parseFloat(refreshActivity?.metadata?.extra_amount || 0);
+  const reducedAmount = parseFloat(refreshActivity?.metadata?.reduced_amount || 0);
+  const previouslyPaidAmount = parseFloat(refreshActivity?.metadata?.previous_total || 0);
+  const revisedTotal = parseFloat(refreshActivity?.metadata?.new_total || 0);
+  const additionalPaymentStatus = refreshInvoiceHistory?.payment_status || (additionalAmount > 0 ? 'pending' : null);
+  const reducedPaymentStatus = refreshInvoiceHistory?.payment_status || (reducedAmount > 0 ? 'refund_pending' : null);
+
+  const creditSummary = await accountCreditService.getQuoteCreditSummary({
+    salesQuoteId: quoteId,
+    bookingId
+  });
+
+  return {
+    latest_invoice: latestInvoiceHistory ? {
+      invoice_send_history_id: latestInvoiceHistory.invoice_send_history_id,
+      invoice_number: latestInvoiceHistory.invoice_number || null,
+      invoice_url: latestInvoiceHistory.invoice_url || null,
+      invoice_pdf: latestInvoiceHistory.invoice_pdf || null,
+      payment_status: latestInvoiceHistory.payment_status || null,
+      sent_at: latestInvoiceHistory.sent_at || null
+    } : null,
+    additional_payment: refreshActivity ? {
+      additional_amount: additionalAmount,
+      previously_paid_amount: previouslyPaidAmount,
+      revised_total: revisedTotal,
+      outstanding_amount: additionalPaymentStatus === 'paid' ? 0 : additionalAmount,
+      payment_status: additionalPaymentStatus,
+      last_sent_at: refreshInvoiceHistory?.sent_at || null,
+      invoice_number: refreshInvoiceHistory?.invoice_number || null,
+      invoice_url: refreshInvoiceHistory?.invoice_url || null
+    } : null,
+    reduced_payment: refreshActivity && reducedAmount > 0 ? {
+      reduced_amount: reducedAmount,
+      previously_paid_amount: previouslyPaidAmount,
+      revised_total: revisedTotal,
+      refund_pending_amount: reducedAmount,
+      payment_status: reducedPaymentStatus,
+      last_sent_at: refreshInvoiceHistory?.sent_at || null,
+      invoice_number: refreshInvoiceHistory?.invoice_number || null,
+      invoice_url: refreshInvoiceHistory?.invoice_url || null
+    } : null,
+    credit_summary: creditSummary
+  };
+}
 
 /**
  * Internal helper to reuse calculateFromCreators safely.
@@ -1084,6 +1183,7 @@ exports.trackEarlyBookingInterest = async (req, res) => {
           //   endTime: end_time,
           //   editsNeeded: edits_needed
           // }).catch(err => console.error('Sales Email Error:', err));
+          console.log(assignedRep);
 
           emailService.sendProductionLeadNotification({
             client_name: client_name,
@@ -1093,7 +1193,8 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             eventDate: event_date,
             startTime: start_time,
             endTime: end_time,
-            editsNeeded: edits_needed
+            editsNeeded: edits_needed,
+            sales_rep_email: assignedRep.email
           }).catch(err => console.error('Production Email Error:', err));
         } else {
           await lead.update({ last_activity_at: new Date() });
@@ -1993,8 +2094,12 @@ exports.getLeadById = async (req, res) => {
     const leadJson = lead.toJSON();
     const linkedSalesQuote = await sales_quotes.findOne({
       where: { lead_id: lead.lead_id },
-      attributes: ['sales_quote_id', 'quote_number', 'status'],
+      attributes: ['sales_quote_id', 'quote_number', 'status', 'subtotal', 'discount_amount', 'total'],
       order: [['updated_at', 'DESC']]
+    });
+    const customQuoteFinancials = await getCustomQuoteFinancialDetails({
+      quoteId: linkedSalesQuote?.sales_quote_id || null,
+      bookingId: leadJson.booking?.stream_project_booking_id || null
     });
 
     if (leadJson.booking && !Array.isArray(leadJson.booking.booking_days)) {
@@ -2106,7 +2211,26 @@ exports.getLeadById = async (req, res) => {
         pricing_breakdown.discount = parseFloat(leadJson.booking?.primary_quote?.discount_amount || 0);
     }
 
-    pricing_breakdown.total = subtotal - pricing_breakdown.discount;
+    const totalBeforeCredit = parseFloat((subtotal - pricing_breakdown.discount).toFixed(2));
+    let creditApplied = 0;
+    let totalPaid = null;
+
+    if (leadJson.booking?.payment_id) {
+      const paymentData = await db.payment_transactions.findByPk(leadJson.booking.payment_id);
+      if (paymentData) {
+        totalPaid = parseFloat(paymentData.total_amount || 0);
+        if (Number.isFinite(totalPaid)) {
+          creditApplied = Math.max(0, totalBeforeCredit - totalPaid);
+        }
+      }
+    }
+
+    const totalAfterCredit = Math.max(0, totalBeforeCredit - creditApplied);
+    pricing_breakdown.total_before_credit = totalBeforeCredit;
+    pricing_breakdown.credit_applied = parseFloat(creditApplied.toFixed(2));
+    pricing_breakdown.total_after_credit = parseFloat(totalAfterCredit.toFixed(2));
+    pricing_breakdown.total_paid = Number.isFinite(totalPaid) ? parseFloat(totalPaid.toFixed(2)) : null;
+    pricing_breakdown.total = pricing_breakdown.total_after_credit;
 
     const selectedCrewIds = lead.booking?.assigned_crews?.map(c => c.crew_member_id).filter(Boolean) || [];
     
@@ -2215,6 +2339,15 @@ exports.getLeadById = async (req, res) => {
         fulfillmentSummary,
         pricing_breakdown,
         projected_quote: projectedQuote,
+        custom_quote: linkedSalesQuote ? {
+          sales_quote_id: linkedSalesQuote.sales_quote_id,
+          quote_number: linkedSalesQuote.quote_number,
+          status: linkedSalesQuote.status,
+          subtotal: parseFloat(linkedSalesQuote.subtotal || 0),
+          discount_amount: parseFloat(linkedSalesQuote.discount_amount || 0),
+          total: parseFloat(linkedSalesQuote.total || 0),
+          ...customQuoteFinancials
+        } : null,
         custom_quote_id: linkedSalesQuote?.sales_quote_id || null,
         custom_quote_number: linkedSalesQuote?.quote_number || null,
         custom_quote_status: linkedSalesQuote?.status || null
@@ -3018,7 +3151,26 @@ exports.getClientLeadById = async (req, res) => {
       pricing_breakdown.discount = parseFloat(leadJson.booking?.primary_quote?.discount_amount || 0);
     }
 
-    pricing_breakdown.total = subtotal - pricing_breakdown.discount;
+    const totalBeforeCredit = parseFloat((subtotal - pricing_breakdown.discount).toFixed(2));
+    let creditApplied = 0;
+    let totalPaid = null;
+
+    if (leadJson.booking?.payment_id) {
+      const paymentData = await db.payment_transactions.findByPk(leadJson.booking.payment_id);
+      if (paymentData) {
+        totalPaid = parseFloat(paymentData.total_amount || 0);
+        if (Number.isFinite(totalPaid)) {
+          creditApplied = Math.max(0, totalBeforeCredit - totalPaid);
+        }
+      }
+    }
+
+    const totalAfterCredit = Math.max(0, totalBeforeCredit - creditApplied);
+    pricing_breakdown.total_before_credit = totalBeforeCredit;
+    pricing_breakdown.credit_applied = parseFloat(creditApplied.toFixed(2));
+    pricing_breakdown.total_after_credit = parseFloat(totalAfterCredit.toFixed(2));
+    pricing_breakdown.total_paid = Number.isFinite(totalPaid) ? parseFloat(totalPaid.toFixed(2)) : null;
+    pricing_breakdown.total = pricing_breakdown.total_after_credit;
 
     const selectedCrewIds = lead.booking?.assigned_crews?.map(c => c.crew_member_id).filter(Boolean) || [];
     const intent = lead.intent ?? leadAssignmentService.getClientIntent({ lead, booking: lead.booking });

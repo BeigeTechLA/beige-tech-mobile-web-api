@@ -24,6 +24,14 @@ module.exports = function(sequelize, DataTypes) {
         key: 'id'
       }
     },
+    client_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'clients',
+        key: 'client_id'
+      }
+    },
     created_by_user_id: {
       type: DataTypes.INTEGER,
       allowNull: false,
@@ -46,7 +54,7 @@ module.exports = function(sequelize, DataTypes) {
       defaultValue: "general"
     },
     status: {
-      type: DataTypes.ENUM('draft','pending','sent','viewed','accepted','paid','rejected','expired'),
+      type: DataTypes.ENUM('draft','pending','partially_paid','sent','viewed','accepted','paid','rejected','expired'),
       allowNull: false,
       defaultValue: "draft"
     },
@@ -188,6 +196,7 @@ module.exports = function(sequelize, DataTypes) {
         name: "idx_sales_quotes_client",
         using: "BTREE",
         fields: [
+          { name: "client_id" },
           { name: "client_user_id" },
         ]
       },
