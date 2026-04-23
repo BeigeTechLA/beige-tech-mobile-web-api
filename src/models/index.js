@@ -67,7 +67,17 @@ models.clients.belongsTo(models.users, {
   as: 'user'
 });
 
+const Signature = require('./signature.model')(sequelize, DataTypes);
+models.signatures = Signature;
+
+if (models.quotes && models.signatures) {
+  models.signatures.belongsTo(models.quotes, { foreignKey: 'quote_id' });
+  models.quotes.hasOne(models.signatures, { foreignKey: 'quote_id' });
+}
+
 models.sequelize = sequelize;
 models.Sequelize = require('sequelize');
+
+
 
 module.exports = models;

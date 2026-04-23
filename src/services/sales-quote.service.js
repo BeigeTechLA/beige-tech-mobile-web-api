@@ -1,11 +1,17 @@
 const { Op } = require('sequelize');
+const jwt = require('jsonwebtoken');
 const db = require('../models');
-const { sendCustomQuoteProposalEmail } = require('../utils/emailService');
+const {
+  sendCustomQuoteProposalEmail,
+  sendQuoteAcceptedClientEmail,
+  sendQuoteAcceptedSalesNotificationEmail
+} = require('../utils/emailService');
 const { generateQuotePdfBuffer } = require('../utils/quotePdf');
 const { normalizeTime, resolveEventDateAndStartTime } = require('../utils/timezone');
+const accountCreditService = require('./account-credit.service');
 
 const SECTION_TYPES = ['service', 'addon', 'logistics', 'custom'];
-const QUOTE_STATUSES = ['draft', 'pending', 'sent', 'viewed', 'accepted', 'paid', 'rejected', 'expired'];
+const QUOTE_STATUSES = ['draft', 'pending', 'partially_paid', 'sent', 'viewed', 'accepted', 'paid', 'rejected', 'expired'];
 const DISCOUNT_TYPES = ['none', 'percentage', 'fixed_amount'];
 const AI_EDITING_SERVICE_NAME = 'ai editing';
 const CONVERTED_BOOKINGS_LEAD_SOURCE = 'converted bookings';
@@ -178,7 +184,8 @@ function normalizeQuoteFilterStatus(status) {
   const statusGroups = {
     accepted: ['accepted', 'paid'],
     draft: ['draft'],
-    pending: ['pending'],
+    pending: ['pending', 'partially_paid'],
+    partially_paid: ['partially_paid'],
     rejected: ['rejected'],
     sent: ['sent', 'viewed'],
     viewed: ['viewed'],
@@ -409,6 +416,7 @@ function normalizeStatusForDashboardMetrics(status) {
   const normalizedStatus = String(status || '').toLowerCase();
 
   if (normalizedStatus === 'paid') return 'accepted';
+  if (normalizedStatus === 'partially_paid') return 'pending';
   if (normalizedStatus === 'viewed' || normalizedStatus === 'sent') return 'sent';
   return normalizedStatus;
 }
@@ -439,6 +447,76 @@ function parseConfig(config) {
 function stringifyConfig(config) {
   if (!config) return null;
   return JSON.stringify(config);
+}
+
+function getQuoteAcceptTokenSecret() {
+  return process.env.JWT_SECRET || 'quote-accept-secret';
+}
+
+function buildQuoteAcceptUrl(token) {
+  const apiBaseUrl = (process.env.API_BASE_URL || '').trim();
+  if (apiBaseUrl) {
+    return `${apiBaseUrl.replace(/\/$/, '')}/sales/quotes/accept?token=${encodeURIComponent(token)}`;
+  }
+
+  return `http://localhost:${process.env.PORT || 5001}/v1/sales/quotes/accept?token=${encodeURIComponent(token)}`;
+}
+
+function createQuoteAcceptToken(quoteDetails) {
+  return jwt.sign({
+    action: 'accept_quote',
+    sales_quote_id: quoteDetails.sales_quote_id,
+    quote_number: quoteDetails.quote_number,
+    client_email: quoteDetails.client_email || null
+  }, getQuoteAcceptTokenSecret(), {
+    expiresIn: '30d'
+  });
+}
+
+function verifyQuoteAcceptToken(token) {
+  if (!token) {
+    throw new Error('Accept token is required');
+  }
+
+  try {
+    const decoded = jwt.verify(token, getQuoteAcceptTokenSecret());
+    if (decoded?.action !== 'accept_quote' || !decoded?.sales_quote_id) {
+      throw new Error('Invalid accept token');
+    }
+
+    return decoded;
+  } catch (error) {
+    throw new Error('Invalid accept token');
+  }
+}
+
+function deriveQuoteAcceptanceEmailPayload(quoteDetails) {
+  return {
+    to_email: quoteDetails.client_email || null,
+    client_name: quoteDetails.client_name || 'there',
+    client_email: quoteDetails.client_email || null,
+    client_phone: quoteDetails.client_phone || null,
+    quote_number: quoteDetails.quote_number || `Q-${quoteDetails.sales_quote_id}`,
+    shoot_type: quoteDetails.video_shoot_type || 'TBD',
+    project_description: quoteDetails.project_description || 'TBD',
+    location: quoteDetails.client_address || 'TBD',
+    proposal_amount: quoteDetails.total,
+    accepted_at: quoteDetails.accepted_at
+      ? new Date(quoteDetails.accepted_at).toLocaleString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit'
+      })
+      : new Date().toLocaleString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit'
+      })
+  };
 }
 
 function normalizeMode(pricingMode) {
@@ -958,6 +1036,7 @@ async function deleteCatalogItem(catalogItemId) {
 
 async function resolveClientSnapshot(payload = {}, fallback = {}) {
   const snapshot = {
+    client_id: payload.client_id !== undefined ? payload.client_id : fallback.client_id || null,
     client_user_id: payload.client_user_id !== undefined ? payload.client_user_id : fallback.client_user_id || null,
     client_name: payload.client_name !== undefined ? payload.client_name : fallback.client_name || null,
     client_email: payload.client_email !== undefined ? payload.client_email : fallback.client_email || null,
@@ -965,15 +1044,51 @@ async function resolveClientSnapshot(payload = {}, fallback = {}) {
     client_address: payload.client_address !== undefined ? payload.client_address : fallback.client_address || null
   };
 
+  let clientRecordById = null;
+  if (snapshot.client_id) {
+    clientRecordById = await db.clients.findOne({
+      where: { client_id: snapshot.client_id, is_active: 1 }
+    });
+
+    if (clientRecordById) {
+      if (!snapshot.client_user_id && clientRecordById.user_id) {
+        snapshot.client_user_id = clientRecordById.user_id;
+      }
+      if (!snapshot.client_name) snapshot.client_name = clientRecordById.name || null;
+      if (!snapshot.client_email) snapshot.client_email = clientRecordById.email || null;
+      if (!snapshot.client_phone) snapshot.client_phone = clientRecordById.phone_number || null;
+    }
+  }
+
   if (snapshot.client_user_id) {
-    const [clientRecord, userRecord] = await Promise.all([
+    let [clientRecordByUser, userRecord] = await Promise.all([
       db.clients.findOne({ where: { user_id: snapshot.client_user_id, is_active: 1 } }),
       db.users.findByPk(snapshot.client_user_id)
     ]);
 
-    if (!snapshot.client_name) snapshot.client_name = clientRecord?.name || userRecord?.name || null;
-    if (!snapshot.client_email) snapshot.client_email = clientRecord?.email || userRecord?.email || null;
-    if (!snapshot.client_phone) snapshot.client_phone = clientRecord?.phone_number || userRecord?.phone_number || null;
+    // Backward compatibility: old clients dropdown could send guest client_id in client_user_id.
+    if (!clientRecordByUser && !userRecord) {
+      const guestClientRecord = await db.clients.findOne({
+        where: { client_id: snapshot.client_user_id, is_active: 1 }
+      });
+
+      if (guestClientRecord) {
+        snapshot.client_id = guestClientRecord.client_id;
+        snapshot.client_user_id = guestClientRecord.user_id || null;
+        clientRecordById = guestClientRecord;
+        clientRecordByUser = guestClientRecord.user_id
+          ? await db.clients.findOne({ where: { user_id: guestClientRecord.user_id, is_active: 1 } })
+          : null;
+        userRecord = guestClientRecord.user_id ? await db.users.findByPk(guestClientRecord.user_id) : null;
+      }
+    }
+
+    if (!snapshot.client_id) {
+      snapshot.client_id = clientRecordByUser?.client_id || clientRecordById?.client_id || null;
+    }
+    if (!snapshot.client_name) snapshot.client_name = clientRecordByUser?.name || clientRecordById?.name || userRecord?.name || null;
+    if (!snapshot.client_email) snapshot.client_email = clientRecordByUser?.email || clientRecordById?.email || userRecord?.email || null;
+    if (!snapshot.client_phone) snapshot.client_phone = clientRecordByUser?.phone_number || clientRecordById?.phone_number || userRecord?.phone_number || null;
   }
 
   if (!snapshot.client_name) {
@@ -1745,6 +1860,138 @@ async function recordActivity(transaction, salesQuoteId, activityType, userId, m
   }, { transaction });
 }
 
+async function resolveQuoteBillingState(quote, transaction) {
+  const defaultState = {
+    booking: null,
+    latest_invoice_history: null,
+    collected_amount: 0,
+    outstanding_amount: 0,
+    payment_status: 'pending',
+    is_collected: false
+  };
+
+  const latestInvoiceHistory = db.invoice_send_history
+    ? await db.invoice_send_history.findOne({
+        where: { quote_id: quote.sales_quote_id },
+        order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+        transaction
+      })
+    : null;
+
+  if (!quote?.lead_id) {
+    if (latestInvoiceHistory?.payment_status) {
+      defaultState.payment_status = latestInvoiceHistory.payment_status;
+      defaultState.is_collected = latestInvoiceHistory.payment_status === 'paid';
+      defaultState.collected_amount = defaultState.is_collected ? roundCurrency(quote.total) : 0;
+      defaultState.latest_invoice_history = latestInvoiceHistory;
+    }
+    return defaultState;
+  }
+
+  const linkedLead = await db.sales_leads.findOne({
+    where: { lead_id: quote.lead_id },
+    attributes: ['booking_id'],
+    transaction
+  });
+
+  const booking = linkedLead?.booking_id
+    ? await db.stream_project_booking.findByPk(linkedLead.booking_id, {
+        attributes: ['stream_project_booking_id', 'payment_id', 'is_completed', 'stripe_invoice_id'],
+        transaction
+      })
+    : null;
+
+  const bookingMarkedCollected = Boolean(
+    booking && (booking.payment_id || Number(booking.is_completed) === 1)
+  );
+  const historyMarkedCollected = latestInvoiceHistory?.payment_status === 'paid';
+  const refreshActivity = db.sales_quote_activities
+    ? await db.sales_quote_activities.findOne({
+        where: {
+          sales_quote_id: quote.sales_quote_id,
+          activity_type: 'updated'
+        },
+        order: [['created_at', 'DESC'], ['activity_id', 'DESC']],
+        transaction
+      })
+    : null;
+  const refreshMetadata = parseConfig(refreshActivity?.metadata_json);
+  const refreshExtraAmount = roundCurrency(refreshMetadata?.extra_amount || 0);
+  const refreshPreviousTotal = roundCurrency(refreshMetadata?.previous_total || 0);
+  const refreshInvoiceHistory = refreshActivity && db.invoice_send_history
+    ? await db.invoice_send_history.findOne({
+        where: {
+          quote_id: quote.sales_quote_id,
+          ...(booking?.stream_project_booking_id ? { booking_id: booking.stream_project_booking_id } : {}),
+          sent_at: { [Op.gte]: refreshActivity.created_at }
+        },
+        order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+        transaction
+      })
+    : null;
+  const refreshOutstanding = Boolean(
+    refreshMetadata?.invoice_refresh_required &&
+    booking?.stream_project_booking_id &&
+    Number(refreshMetadata?.booking_id || 0) === Number(booking.stream_project_booking_id) &&
+    refreshExtraAmount > 0 &&
+    refreshInvoiceHistory?.payment_status !== 'paid'
+  );
+
+  const isCollected = !refreshOutstanding && (bookingMarkedCollected || historyMarkedCollected);
+  const paymentStatus = refreshOutstanding
+    ? 'partially_paid'
+    : (refreshInvoiceHistory?.payment_status || latestInvoiceHistory?.payment_status || (isCollected ? 'paid' : 'pending'));
+  const collectedAmount = refreshOutstanding
+    ? refreshPreviousTotal
+    : (isCollected ? roundCurrency(quote.total) : 0);
+  const outstandingAmount = roundCurrency(Math.max(roundCurrency(quote.total) - collectedAmount, 0));
+
+  return {
+    booking,
+    latest_invoice_history: latestInvoiceHistory,
+    collected_amount: collectedAmount,
+    outstanding_amount: outstandingAmount,
+    payment_status: paymentStatus,
+    is_collected: isCollected
+  };
+}
+
+async function markQuoteInvoiceRefreshRequired({
+  transaction,
+  salesQuoteId,
+  bookingId = null,
+  userId = null,
+  previousTotal = 0,
+  newTotal = 0,
+  extraAmount = 0,
+  reducedAmount = 0,
+  changeType = null,
+  paymentStatus = 'pending'
+}) {
+  const resolvedChangeType = changeType || (extraAmount > 0 ? 'increase' : reducedAmount > 0 ? 'decrease' : 'unchanged');
+  const activityMessage = resolvedChangeType === 'decrease'
+    ? 'Quote total decreased after invoice/payment state; send updated invoice notice'
+    : 'Quote total increased after invoice/payment state; send updated invoice';
+
+  return recordActivity(
+    transaction,
+    salesQuoteId,
+    'updated',
+    userId,
+    activityMessage,
+    {
+      booking_id: bookingId,
+      previous_total: roundCurrency(previousTotal),
+      new_total: roundCurrency(newTotal),
+      extra_amount: roundCurrency(extraAmount),
+      reduced_amount: roundCurrency(reducedAmount),
+      quote_change_type: resolvedChangeType,
+      payment_status: paymentStatus,
+      invoice_refresh_required: true
+    }
+  );
+}
+
 async function createQuote(payload, user) {
   const transaction = await db.sequelize.transaction();
   try {
@@ -1789,6 +2036,7 @@ async function createQuote(payload, user) {
       quote_number: generateQuoteNumber(),
       lead_id: payload.lead_id || null,
       client_user_id: clientSnapshot.client_user_id,
+      client_id: clientSnapshot.client_id,
       created_by_user_id: user.userId,
       assigned_sales_rep_id: assignedSalesRepId,
       pricing_mode: payload.pricing_mode || 'general',
@@ -1838,6 +2086,94 @@ async function createQuote(payload, user) {
   }
 }
 
+async function duplicateQuote(salesQuoteId, user) {
+  const transaction = await db.sequelize.transaction();
+
+  try {
+    const quote = await db.sales_quotes.findOne({
+      where: { sales_quote_id: salesQuoteId, ...buildQuoteAccessWhere(user) },
+      include: [
+        {
+          model: db.sales_quote_line_items,
+          as: 'line_items',
+          where: { is_active: 1 },
+          required: false
+        }
+      ],
+      order: [[{ model: db.sales_quote_line_items, as: 'line_items' }, 'sort_order', 'ASC']],
+      transaction
+    });
+
+    if (!quote) {
+      throw new Error('Quote not found');
+    }
+
+    const sourceQuote = quote.toJSON();
+    const duplicatedQuote = await db.sales_quotes.create({
+      quote_number: generateQuoteNumber(),
+      lead_id: null,
+      client_user_id: null,
+      client_id: null,
+      created_by_user_id: user.userId,
+      assigned_sales_rep_id: sourceQuote.assigned_sales_rep_id || null,
+      pricing_mode: sourceQuote.pricing_mode || 'general',
+      status: 'pending',
+      client_name: sourceQuote.client_name,
+      client_email: sourceQuote.client_email || null,
+      client_phone: sourceQuote.client_phone || null,
+      client_address: sourceQuote.client_address || null,
+      project_description: sourceQuote.project_description || null,
+      video_shoot_type: sourceQuote.video_shoot_type || null,
+      quote_validity_days: sourceQuote.quote_validity_days || null,
+      valid_until: sourceQuote.valid_until || null,
+      discount_type: sourceQuote.discount_type || 'none',
+      discount_value: sourceQuote.discount_value || 0,
+      discount_amount: sourceQuote.discount_amount || 0,
+      tax_type: sourceQuote.tax_type || null,
+      tax_rate: sourceQuote.tax_rate || 0,
+      tax_amount: sourceQuote.tax_amount || 0,
+      subtotal: sourceQuote.subtotal || 0,
+      total: sourceQuote.total || 0,
+      notes: sourceQuote.notes || null,
+      terms_conditions: sourceQuote.terms_conditions || null
+    }, { transaction });
+
+    const stableQuoteNumber = generateQuoteNumber(duplicatedQuote.sales_quote_id);
+    if (duplicatedQuote.quote_number !== stableQuoteNumber) {
+      await duplicatedQuote.update({ quote_number: stableQuoteNumber }, { transaction });
+    }
+
+    const duplicatedLineItems = (sourceQuote.line_items || []).map((item) => ({
+      ...toPersistableLineItemPayload(item),
+      sales_quote_id: duplicatedQuote.sales_quote_id,
+      is_active: 1
+    }));
+
+    if (duplicatedLineItems.length) {
+      await db.sales_quote_line_items.bulkCreate(duplicatedLineItems, { transaction });
+    }
+
+    await recordActivity(
+      transaction,
+      duplicatedQuote.sales_quote_id,
+      'created',
+      user.userId,
+      'Quote duplicated',
+      {
+        source_quote_id: salesQuoteId,
+        reset_lead_linkage: true,
+        reset_client_user_linkage: true
+      }
+    );
+
+    await transaction.commit();
+    return getQuoteById(duplicatedQuote.sales_quote_id, user);
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
+}
+
 async function updateQuote(salesQuoteId, payload, user) {
   const transaction = await db.sequelize.transaction();
   try {
@@ -1850,6 +2186,7 @@ async function updateQuote(salesQuoteId, payload, user) {
       throw new Error('Quote not found');
     }
 
+    const billingState = await resolveQuoteBillingState(quote, transaction);
     const clientSnapshot = await resolveClientSnapshot(payload, quote);
     const existingLineItems = await db.sales_quote_line_items.findAll({
       where: { sales_quote_id: salesQuoteId, is_active: 1 },
@@ -1888,13 +2225,30 @@ async function updateQuote(salesQuoteId, payload, user) {
     const assignedSalesRepId = isAdminRole(user.role)
       ? (payload.assigned_sales_rep_id !== undefined ? payload.assigned_sales_rep_id : quote.assigned_sales_rep_id)
       : quote.assigned_sales_rep_id;
+    const previousTotal = roundCurrency(quote.total);
+    const newTotal = roundCurrency(totals.total);
+    const collectedAmount = roundCurrency(billingState.collected_amount);
+    const extraAmount = roundCurrency(Math.max(newTotal - collectedAmount, 0));
+    const reducedAmount = roundCurrency(Math.max(collectedAmount - newTotal, 0));
+    const quoteChangeType = newTotal > previousTotal
+      ? 'increase'
+      : newTotal < previousTotal
+        ? 'decrease'
+        : 'unchanged';
+    const paymentStatus = extraAmount > 0
+      ? (billingState.is_collected ? 'partially_paid' : billingState.payment_status)
+      : (billingState.is_collected ? 'paid' : billingState.payment_status);
+    const resolvedStatus = extraAmount > 0 && billingState.is_collected
+      ? 'partially_paid'
+      : nextStatus;
 
-    await quote.update({
+    const quoteUpdatePayload = {
       lead_id: payload.lead_id !== undefined ? payload.lead_id : quote.lead_id,
       client_user_id: clientSnapshot.client_user_id,
+      client_id: clientSnapshot.client_id,
       assigned_sales_rep_id: assignedSalesRepId,
       pricing_mode: payload.pricing_mode || quote.pricing_mode,
-      status: nextStatus,
+      status: resolvedStatus,
       client_name: clientSnapshot.client_name,
       client_email: clientSnapshot.client_email,
       client_phone: clientSnapshot.client_phone,
@@ -1910,11 +2264,13 @@ async function updateQuote(salesQuoteId, payload, user) {
       tax_rate: totals.tax_rate,
       tax_amount: totals.tax_amount,
       subtotal: totals.subtotal,
-      total: totals.total,
+      total: newTotal,
       notes: payload.notes !== undefined ? payload.notes : quote.notes,
       terms_conditions: payload.terms_conditions !== undefined ? payload.terms_conditions : quote.terms_conditions,
       updated_at: new Date()
-    }, { transaction });
+    };
+
+    await quote.update(quoteUpdatePayload, { transaction });
 
     if (Array.isArray(payload.line_items)) {
       if (sectionTypesToReplace.length) {
@@ -2012,7 +2368,51 @@ async function updateQuote(salesQuoteId, payload, user) {
       });
     }
 
-    await recordActivity(transaction, salesQuoteId, 'updated', user.userId, 'Quote updated');
+    await recordActivity(transaction, salesQuoteId, 'updated', user.userId, 'Quote updated', {
+      previous_total: previousTotal,
+      new_total: newTotal,
+      collected_amount: collectedAmount,
+      extra_amount: extraAmount,
+      reduced_amount: reducedAmount,
+      quote_change_type: quoteChangeType,
+      payment_status: paymentStatus,
+      booking_id: billingState.booking?.stream_project_booking_id || null,
+      invoice_refresh_required: Boolean(
+        billingState.booking?.stream_project_booking_id &&
+        (extraAmount > 0 || reducedAmount > 0) &&
+        billingState.is_collected
+      )
+    });
+
+    if (billingState.booking?.stream_project_booking_id && (extraAmount > 0 || reducedAmount > 0) && billingState.is_collected) {
+      const refreshActivity = await markQuoteInvoiceRefreshRequired({
+        transaction,
+        salesQuoteId,
+        bookingId: billingState.booking.stream_project_booking_id,
+        userId: user.userId,
+        previousTotal,
+        newTotal,
+        extraAmount,
+        reducedAmount,
+        changeType: quoteChangeType,
+        paymentStatus
+      });
+
+      if (reducedAmount > 0 && refreshActivity?.activity_id) {
+        await accountCreditService.createCreditForQuoteReduction({
+          salesQuoteId,
+          bookingId: billingState.booking.stream_project_booking_id,
+          salesQuoteActivityId: refreshActivity.activity_id,
+          userId: clientSnapshot.client_user_id || null,
+          guestEmail: clientSnapshot.client_email || null,
+          amount: reducedAmount,
+          createdByUserId: user.userId,
+          notes: `Account credit created for quote reduction from $${previousTotal.toFixed(2)} to $${newTotal.toFixed(2)}.`,
+          transaction
+        });
+      }
+    }
+
     await transaction.commit();
     return getQuoteById(salesQuoteId, user);
   } catch (error) {
@@ -2104,6 +2504,105 @@ async function convertQuoteToBooking(salesQuoteId, payload = {}, user) {
   }
 }
 
+async function buildPaymentBookingPrefillDataFromQuote(quoteDetails, payload = {}) {
+  const roleData = deriveBookingRoleDataFromQuote(quoteDetails.line_items || []);
+  const editSelections = await deriveBookingEditSelectionsFromQuote(quoteDetails.line_items || []);
+
+  let prefillData = {
+    guest_email: quoteDetails.client_email || null,
+    user_id: quoteDetails.client_user_id || null,
+    full_name: quoteDetails.client_name || null,
+    phone: quoteDetails.client_phone || null,
+    location: quoteDetails.client_address || null,
+    content_type: roleData.content_type,
+    shoot_type: mapQuoteShootTypeToBookingShootType(quoteDetails.video_shoot_type),
+    quote_shoot_type_label: quoteDetails.video_shoot_type || null,
+    duration_hours: roleData.duration_hours,
+    crew_roles: roleData.crew_roles,
+    crew_size: roleData.crew_size,
+    video_edit_types: editSelections.video_edit_types,
+    photo_edit_types: editSelections.photo_edit_types,
+    edits_needed: editSelections.edits_needed,
+    unmatched_edit_types: editSelections.unmatched_edit_types,
+    project_description: quoteDetails.project_description || null,
+    reference_links: null,
+    special_instructions: quoteDetails.notes || null
+  };
+
+  prefillData = applyConvertBookingOverrides(prefillData, payload);
+  return prefillData;
+}
+
+async function ensureQuoteBookingForPayment(salesQuoteId, user, payload = {}) {
+  const quoteDetails = await getQuoteById(salesQuoteId, user);
+  if (!quoteDetails) {
+    throw new Error('Quote not found');
+  }
+
+  if (!hasConvertibleServiceInQuote(quoteDetails.line_items || [])) {
+    throw new Error('Quote must include at least one service before invoice/payment can be generated');
+  }
+
+  if (!(Number(quoteDetails.total || 0) > 0)) {
+    throw new Error('Quote total must be greater than zero before invoice/payment can be generated');
+  }
+
+  const prefillData = await buildPaymentBookingPrefillDataFromQuote(quoteDetails, payload);
+  const requirementData = buildQuoteConversionMissingFields(prefillData);
+  const transaction = await db.sequelize.transaction();
+
+  try {
+    const quote = await db.sales_quotes.findOne({
+      where: { sales_quote_id: salesQuoteId, ...buildQuoteAccessWhere(user) },
+      transaction
+    });
+
+    if (!quote) {
+      throw new Error('Quote not found');
+    }
+
+    const { lead, booking, legacyQuote, wasAlreadyConverted } = await syncConvertedQuoteArtifacts({
+      quote,
+      quoteDetails,
+      prefillData,
+      user,
+      transaction,
+      markQuoteAccepted: false,
+      recordConversionActivity: false
+    });
+
+    if (!wasAlreadyConverted) {
+      await recordActivity(
+        transaction,
+        quote.sales_quote_id,
+        'updated',
+        user?.userId || null,
+        'Draft booking auto-created for invoice/payment flow',
+        {
+          lead_id: lead.lead_id,
+          booking_id: booking.stream_project_booking_id,
+          source: 'quote_payment_flow'
+        }
+      );
+    }
+
+    await transaction.commit();
+
+    return {
+      quote_id: quote.sales_quote_id,
+      lead_id: lead.lead_id,
+      booking_id: booking.stream_project_booking_id,
+      legacy_quote_id: legacyQuote.quote_id,
+      already_converted: wasAlreadyConverted,
+      prefill_data: prefillData,
+      missing_required_fields: requirementData.missing_required_fields
+    };
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
+}
+
 async function fetchQuoteById(salesQuoteId, user = null) {
   const accessWhere = user ? buildQuoteAccessWhere(user) : {};
   const quote = await db.sales_quotes.findOne({
@@ -2137,6 +2636,23 @@ async function fetchQuoteById(salesQuoteId, user = null) {
   if (!quote) return null;
 
   const plain = quote.toJSON();
+  try {
+    const signature = await db.sequelize.query(
+      'SELECT signature_base64, signer_name, signer_email, signed_at FROM signatures WHERE quote_id = ? ORDER BY id DESC LIMIT 1',
+      {
+        replacements: [salesQuoteId],
+        type: db.sequelize.QueryTypes.SELECT
+      }
+    );
+
+    if (signature && signature.length > 0) {
+      plain.signature_base64 = signature[0].signature_base64;
+      plain.signer_name = signature[0].signer_name;
+      plain.signed_at = signature[0].signed_at;
+    }
+  } catch (err) {
+    console.error('Signature fetch error:', err);
+  }
   if (plain.lead_id) {
     const linkedLead = await db.sales_leads.findOne({
       where: { lead_id: plain.lead_id },
@@ -2418,6 +2934,12 @@ async function sendQuoteProposal(salesQuoteId, payload, user) {
       throw new Error('Client email is required to send quote proposal');
     }
 
+    const acceptQuoteToken = createQuoteAcceptToken({
+      sales_quote_id: quoteDetails.sales_quote_id,
+      quote_number: quoteDetails.quote_number,
+      client_email: toEmail
+    });
+
     const generatedPdfBuffer = payload?.attachment_content || payload?.pdf_base64
       ? null
       : await generateQuotePdfBuffer(quoteDetails);
@@ -2432,6 +2954,7 @@ async function sendQuoteProposal(salesQuoteId, payload, user) {
       add_ons: deriveQuoteAddOns(quoteDetails.line_items || []),
       includes: deriveQuoteIncludes(quoteDetails.line_items || []),
       proposal_amount: quoteDetails.total,
+      accept_quote_url: buildQuoteAcceptUrl(acceptQuoteToken),
       attachment_content: payload?.attachment_content || payload?.pdf_base64 || (generatedPdfBuffer ? Buffer.from(generatedPdfBuffer).toString('base64') : null),
       attachment_filename: payload?.attachment_filename || `${quoteDetails.quote_number || 'custom-quote'}.pdf`,
       attachment_type: payload?.attachment_type || 'application/pdf'
@@ -2468,6 +2991,98 @@ async function sendQuoteProposal(salesQuoteId, payload, user) {
   }
 }
 
+async function acceptQuoteProposal(token) {
+  const decoded = verifyQuoteAcceptToken(token);
+  const salesQuoteId = Number(decoded.sales_quote_id);
+
+  if (!Number.isInteger(salesQuoteId) || salesQuoteId <= 0) {
+    throw new Error('Invalid accept token');
+  }
+
+  const transaction = await db.sequelize.transaction();
+  let transactionCompleted = false;
+
+  try {
+    const quote = await db.sales_quotes.findOne({
+      where: { sales_quote_id: salesQuoteId },
+      transaction
+    });
+
+    if (!quote) {
+      throw new Error('Quote not found');
+    }
+
+    if (decoded.quote_number && quote.quote_number !== decoded.quote_number) {
+      throw new Error('Invalid accept token');
+    }
+
+    if (decoded.client_email && quote.client_email && String(decoded.client_email).toLowerCase() !== String(quote.client_email).toLowerCase()) {
+      throw new Error('Invalid accept token');
+    }
+
+    if (['rejected', 'expired'].includes(quote.status)) {
+      throw new Error(`Quote cannot be accepted because it is ${quote.status}`);
+    }
+
+    const alreadyAccepted = ['accepted', 'paid'].includes(quote.status);
+
+    if (!alreadyAccepted) {
+      const acceptedAt = new Date();
+      await quote.update({
+        status: 'accepted',
+        accepted_at: acceptedAt,
+        updated_at: acceptedAt
+      }, { transaction });
+
+      await recordActivity(
+        transaction,
+        salesQuoteId,
+        'accepted',
+        null,
+        'Quote accepted by client via email',
+        { source: 'email_accept_link' }
+      );
+    }
+
+    await transaction.commit();
+    transactionCompleted = true;
+
+    const quoteDetails = await getPublicQuoteById(salesQuoteId);
+    if (!quoteDetails) {
+      throw new Error('Quote not found');
+    }
+
+    let notificationResults = {
+      client_email: { success: false, skipped: true },
+      sales_email: { success: false, skipped: true }
+    };
+
+    if (!alreadyAccepted) {
+      const emailPayload = deriveQuoteAcceptanceEmailPayload(quoteDetails);
+      notificationResults = {
+        client_email: quoteDetails.client_email
+          ? await sendQuoteAcceptedClientEmail(emailPayload)
+          : { success: false, skipped: true, error: 'Client email not available' },
+        sales_email: await sendQuoteAcceptedSalesNotificationEmail(emailPayload)
+      };
+    }
+
+    return {
+      already_accepted: alreadyAccepted,
+      quote: quoteDetails,
+      notifications: notificationResults
+    };
+  } catch (error) {
+    if (!transactionCompleted) {
+      await transaction.rollback();
+    }
+    if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') {
+      throw new Error('Invalid accept token');
+    }
+    throw error;
+  }
+}
+
 async function downloadQuotePdf(salesQuoteId, user) {
   const quoteDetails = await getQuoteById(salesQuoteId, user);
   if (!quoteDetails) {
@@ -2494,6 +3109,7 @@ module.exports = {
   updateCatalogItem,
   deleteCatalogItem,
   createQuote,
+  duplicateQuote,
   updateQuote,
   convertQuoteToBooking,
   getQuoteById,
@@ -2502,5 +3118,7 @@ module.exports = {
   getQuoteDashboard,
   updateQuoteStatus,
   sendQuoteProposal,
+  acceptQuoteProposal,
+  ensureQuoteBookingForPayment,
   downloadQuotePdf
 };

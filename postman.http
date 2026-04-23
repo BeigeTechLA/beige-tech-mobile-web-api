@@ -2,9 +2,9 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzY0MDI4OTUsImV4cCI6MTc3NzAwNzY5NX0.q7KzjCqMTxWLILgWzwO8VoaHOzdyfEADgRVummG2mHQ
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzY3NjE5NjYsImV4cCI6MTc3NzM2Njc2Nn0.5bgn8XTW8D7WkadQJ2yP04Y9sZfqJRzyZAHO1W-f_Dk
 
-@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzYyNTc0NDIsImV4cCI6MTc3Njg2MjI0Mn0.D-6nEkuqfog0IC-FsF5oxS27doGTDtNhN5_0HmmREkw
+@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI4OCwidXNlclJvbGUiOiJBZG1pbiIsImlhdCI6MTc3NjY3MjYyMiwiZXhwIjoxNzc3Mjc3NDIyfQ.TvvFxV-jZRKi-lMlOHQwMyztvL-_ZIOvIEqhd-gk_J8
 
 ###
 POST {{URL}}creator/dashboard-count HTTP/1.1
@@ -775,16 +775,6 @@ Authorization: {{TOKEN}}
 }
 
 ### 
-POST {{URL}}sales/send-invoice HTTP/1.1
-Content-Type: application/json
-Authorization: {{TOKEN}}
-
-{
-  "booking_id": 930
-}
-
-
-### 
 POST {{URL}}sales/payment-links/notify HTTP/1.1
 Content-Type: application/json
 
@@ -1111,15 +1101,6 @@ Content-Type: application/json
 }
 
 ### 
-POST {{URL}}sales/send-invoice HTTP/1.1
-Content-Type: application/json
-Authorization: {{TOKEN}}
-
-{
-  "booking_id": 842
-}
-
-### 
 POST {{URL}}sales/discount-codes/REV4D089/apply HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
@@ -1181,7 +1162,7 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### get sales quote detail
-GET {{URL}}sales/quotes/1 HTTP/1.1
+GET {{DEV_URL}}sales/quotes/115 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -1199,7 +1180,7 @@ Authorization: {{TOKEN}}
 }
 
 ### send custom quote proposal email
-POST {{URL}}sales/quotes/121/send HTTP/1.1
+POST {{DEV_URL}}sales/quotes/115/send HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -1233,7 +1214,7 @@ Authorization: {{TOKEN}}
 }
 
 ### sales quote catalog
-GET {{URL}}sales/quotes/catalog HTTP/1.1
+GET {{DEV_URL}}sales/quotes/catalog HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -1302,6 +1283,7 @@ Authorization: {{TOKEN}}
 
 {
   "pricing_mode": "general",
+  "client_id": 15,
   "client_name": "Harsh Panchal",
   "client_email": "harsh.panchal@revurge.com",
   "client_phone": "+1 555 324 568",
@@ -1382,9 +1364,9 @@ Authorization: {{TOKEN}}
 }
 
 ### update sales quote (partial safe)
-PUT {{URL}}sales/quotes/121 HTTP/1.1
+PUT {{DEV_URL}}sales/quotes/117 HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN}}
+Authorization: {{TOKEN2}}
 
 {
     "line_items": [
@@ -1392,14 +1374,14 @@ Authorization: {{TOKEN}}
       "catalog_item_id": 1,
       "section_type": "service",
       "quantity": 1,
-      "duration_hours": 4,
+      "duration_hours": 1,
       "crew_size": 1
     },
     {
       "catalog_item_id": 2,
       "section_type": "service",
       "quantity": 1,
-      "duration_hours": 4,
+      "duration_hours": 1,
       "crew_size": 1
     }
   ]
@@ -1423,14 +1405,14 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### convert quote to booking | Single day:
-POST {{URL}}sales/quotes/121/convert-to-booking HTTP/1.1
+POST {{URL}}sales/quotes/132/convert-to-booking HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
   "booking_type": "single_day",
   "time_zone": "Asia/Calcutta",
-  "start_date": "2026-04-15",
+  "start_date": "2026-04-30",
   "start_time": "09:00:00",
   "end_time": "15:00:00",
   "location": "442 Crocker Street, Los Angeles, California 90013, United States"
@@ -1568,6 +1550,26 @@ Authorization: {{TOKEN}}
 {
   "line_item_sections": ["addon"],
   "line_items": []
+}
+
+### duplicate quote
+POST {{URL}}sales/quotes/123/duplicate HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{}
+
+### update sales quote (partial safe)
+PUT {{URL}}sales/quotes/125 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "client_user_id": 33,
+  "client_name": "Harsh Panchal",
+  "client_email": "harsh.panchal@revurge.com",
+  "client_phone": "+91 98856 99444",
+  "client_address": "Los Angeles, California, United States"
 }
 
 ### 
@@ -1710,7 +1712,7 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### send invoice for quote
-POST {{URL}}sales/quotes/121/send-invoice HTTP/1.1
+POST {{URL}}sales/quotes/138/send-invoice HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -1871,3 +1873,53 @@ Content-Type: application/json
 PUT {{URL}}sales/leads/271/assign-self HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN2}}
+
+### 
+POST {{URL}}admin/assign_task HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+{
+  "title": "Client Shoot Preparation",
+  "description": "Prepare equipment and confirm shoot details with client",
+  "priority_id": 2,
+  "category_id": 1,
+  "due_date": "2026-04-25",
+  "due_time": "14:00:00",
+  "estimated_duration": 120,
+  "dependencies": [
+    { "task_id": 10 },
+    { "task_id": 12 }
+  ],
+  "additional_notes": "Carry backup batteries and lenses",
+  "assigned_to": 2117,
+  "send_sms": 0,
+  "send_email": 1,
+  "checklist": [
+    { "item": "Camera ready", "is_completed": false },
+    { "item": "Lighting setup", "is_completed": false }
+  ],
+  "status": "assigned"
+}
+
+### Sign a Quote
+POST {{URL}}signatures/sign HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "quote_id": 1,
+  "signer_name": "Rahul Sharma",
+  "signer_email": "rahul@gmail.com",
+  "signature_base64": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+}
+
+### Get Signature by Quote ID
+GET {{URL}}signatures/quote/1 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Download Signed PDF
+GET {{URL}}signatures/download/1 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
