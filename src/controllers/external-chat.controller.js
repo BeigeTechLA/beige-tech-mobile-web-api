@@ -1,4 +1,5 @@
 const db = require('../models');
+const emailService = require('../utils/emailService');
 
 const DEFAULT_BASE_URL = process.env.EXTERNAL_CHAT_API_BASE_URL || 'http://localhost:5002/v1/external-chat';
 const INTERNAL_KEY = process.env.EXTERNAL_CHAT_KEY || process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
@@ -385,6 +386,85 @@ const extractParticipantEnvelope = (payload = {}) => {
   }
 
   return { envelope: null, wrapped: false };
+};
+
+const normalizeEmailAddress = (value) => String(value || '').trim().toLowerCase();
+
+const extractChatRecipientEmails = (envelope = {}) => {
+  const emails = new Set();
+  const push = (value) => {
+    const normalized = normalizeEmailAddress(value);
+    if (normalized) emails.add(normalized);
+  };
+
+  push(envelope?.client?.email);
+  push(envelope?.pm?.email);
+  (envelope?.cps || []).forEach((participant) => push(participant?.email));
+  (envelope?.production || []).forEach((participant) => push(participant?.email));
+  (envelope?.managers || []).forEach((participant) => push(participant?.email));
+
+  return [...emails];
+};
+
+const resolveChatEnvelopeForNotifications = async (roomId) => {
+  if (!roomId) return null;
+  const participantPayload = await proxyRequest(`/participants/${roomId}`);
+  const { envelope } = extractParticipantEnvelope(participantPayload);
+  if (!envelope) return null;
+  return enrichParticipantPayload(envelope);
+};
+
+const toObject = (value) => (value && typeof value === 'object' ? value : null);
+
+const resolveChatOrderId = (payload = {}) =>
+  String(
+    payload?.order_id ||
+      payload?.external_order_ref ||
+      payload?.data?.order_id ||
+      payload?.data?.external_order_ref ||
+      ''
+  ).trim();
+
+const resolveChatDisplayName = (payload = {}) =>
+  String(
+    payload?.chat_name ||
+      payload?.name ||
+      payload?.display_name ||
+      payload?.data?.chat_name ||
+      payload?.data?.name ||
+      payload?.data?.display_name ||
+      ''
+  ).trim();
+
+const sendChatNotificationTemplate = async ({
+  roomId,
+  sender,
+  eventType = 'message_created',
+  messagePreview = '',
+  fallbackPayload = {},
+}) => {
+  try {
+    const envelope = await resolveChatEnvelopeForNotifications(roomId);
+    const recipients = extractChatRecipientEmails(envelope || {});
+    if (!recipients.length) return;
+
+    const roomPayload = toObject(fallbackPayload?.data) || toObject(fallbackPayload) || {};
+    await emailService.sendMessagingInitiatedTemplateEmail({
+      recipients,
+      data: {
+        chat_room_id: roomId,
+        chat_name: resolveChatDisplayName(roomPayload),
+        order_id: resolveChatOrderId(roomPayload),
+        sender_id: sender?.id != null ? String(sender.id) : '',
+        sender_name: sender?.name || sender?.email || '',
+        message_preview: String(messagePreview || ''),
+        event_type: eventType,
+        sent_at: new Date().toISOString(),
+      },
+    });
+  } catch (notificationError) {
+    console.error('Chat email notification failed:', notificationError?.message || notificationError);
+  }
 };
 
 const getActiveStaffDirectory = async (search = '') => {
@@ -889,6 +969,18 @@ exports.addChatParticipants = async (req, res) => {
       results.push(result);
     }
 
+    await sendChatNotificationTemplate({
+      roomId: req.params.roomId,
+      sender: adminUser || {
+        id: req.user?.userId || '',
+        email: req.user?.email || '',
+        name: req.user?.name || `User ${req.user?.userId || ''}`.trim(),
+      },
+      eventType: 'participant_added',
+      messagePreview: `${participants.length} participant(s) added`,
+      fallbackPayload: results[results.length - 1] || {},
+    });
+
     return res.status(200).json({
       success: true,
       data: results,
@@ -1045,6 +1137,14 @@ exports.sendChatMessage = async (req, res) => {
           name: sender.name || sender.email || 'Beige User',
         },
       }),
+    });
+
+    await sendChatNotificationTemplate({
+      roomId: req.params.roomId,
+      sender,
+      eventType: 'message_created',
+      messagePreview: String(req.body.message || ''),
+      fallbackPayload: result || {},
     });
 
     return res.status(200).json(result);

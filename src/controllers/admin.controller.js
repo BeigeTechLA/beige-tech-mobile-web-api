@@ -7965,6 +7965,7 @@ exports.getBookingSummaryById = async (req, res) => {
         // 7. EXTRACT REFERRAL DATA FROM NOTES (Regex Fix)
         let referralDiscount = 0;
         let referralCode = null;
+        let paymentData = null;
         const notes = primaryQuote.notes || '';
 
         // Matches: Referral applied (7321F9): -$518.75
@@ -7980,20 +7981,27 @@ exports.getBookingSummaryById = async (req, res) => {
 
         // Check if there is a payment record for more accurate referral info
         if (bookingJson.payment_id) {
-            const payment = await db.payment_transactions.findByPk(bookingJson.payment_id);
-            if (payment && payment.referral_code) {
-                referralCode = payment.referral_code;
+            paymentData = await db.payment_transactions.findByPk(bookingJson.payment_id);
+            if (paymentData && paymentData.referral_code) {
+                referralCode = paymentData.referral_code;
             }
         }
 
         // Logic: The "Promo Code" discount is whatever is left over after the Referral Discount
         const discountCodeDiscount = Math.max(0, totalDiscountFromDb - referralDiscount);
+        const paidAmountRaw = paymentData ? parseFloat(paymentData.total_amount || 0) : quoteTotal;
+        const normalizedPaidAmount = Number.isFinite(paidAmountRaw) ? paidAmountRaw : quoteTotal;
+        const creditApplied = Math.max(0, quoteTotal - normalizedPaidAmount);
+        const totalAfterCredit = Math.max(0, quoteTotal - creditApplied);
 
-        pricing.total_paid = quoteTotal; // Default to quote total
+        pricing.total_paid = parseFloat(normalizedPaidAmount.toFixed(2));
         pricing.discount_code_discount = parseFloat(discountCodeDiscount.toFixed(2));
         pricing.referral_discount = parseFloat(referralDiscount.toFixed(2));
         pricing.total_before_discounts = subtotal;
         pricing.referral_code = referralCode;
+        pricing.total_before_credit = parseFloat(quoteTotal.toFixed(2));
+        pricing.credit_applied = parseFloat(creditApplied.toFixed(2));
+        pricing.total_after_credit = parseFloat(totalAfterCredit.toFixed(2));
 
         // 8. Final Response
         res.json({

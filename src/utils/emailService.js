@@ -2470,6 +2470,144 @@ const sendQuoteAcceptedSalesNotificationEmail = async (data) => {
   });
 };
 
+const normalizeEmailAddress = (value) => String(value || '').trim().toLowerCase();
+
+const normalizeRecipients = (to) => {
+  const list = Array.isArray(to) ? to : [to];
+  return [...new Set(list.map(normalizeEmailAddress).filter(Boolean))];
+};
+
+const sendTemplateToRecipients = async ({ recipients = [], subject, templateId, dynamicTemplateData = {} }) => {
+  const normalizedRecipients = normalizeRecipients(recipients);
+  if (!normalizedRecipients.length) {
+    return { success: false, error: 'No recipient emails found' };
+  }
+
+  const settled = await Promise.allSettled(
+    normalizedRecipients.map((to) =>
+      sendEmail({
+        to,
+        subject,
+        templateId,
+        dynamicTemplateData,
+      })
+    )
+  );
+
+  const sent = settled.filter((item) => item.status === 'fulfilled' && item.value?.success).length;
+  const failed = settled
+    .map((item, index) => ({ item, to: normalizedRecipients[index] }))
+    .filter((entry) => entry.item.status === 'rejected' || !entry.item.value?.success)
+    .map((entry) => ({
+      to: entry.to,
+      error:
+        entry.item.status === 'rejected'
+          ? entry.item.reason?.message || 'Unknown error'
+          : entry.item.value?.error || 'Unknown error',
+    }));
+
+  return {
+    success: failed.length === 0,
+    partialSuccess: sent > 0 && failed.length > 0,
+    sentCount: sent,
+    failedCount: failed.length,
+    failedRecipients: failed,
+  };
+};
+
+const sendMeetingScheduledTemplateEmail = async ({ recipients = [], data = {} }) => {
+  if (!MEETING_SCHEDULED_TEMPLATE_ID) {
+    return { success: false, error: 'MEETING_SCHEDULED_TEMPLATE_ID is not configured' };
+  }
+
+  return sendTemplateToRecipients({
+    recipients,
+    subject: data?.meeting_title || 'Meeting scheduled',
+    templateId: MEETING_SCHEDULED_TEMPLATE_ID,
+    dynamicTemplateData: {
+      meeting_id: data?.meeting_id || '',
+      order_id: data?.order_id || '',
+      order_name: data?.order_name || '',
+      meeting_title: data?.meeting_title || '',
+      meeting_type: data?.meeting_type || '',
+      meeting_status: data?.meeting_status || '',
+      meeting_date_time: data?.meeting_date_time || '',
+      meeting_end_time: data?.meeting_end_time || '',
+      meet_link: data?.meet_link || '',
+      created_by_name: data?.created_by_name || '',
+      sent_at: data?.sent_at || new Date().toISOString(),
+    }
+  });
+};
+
+const sendMessagingInitiatedTemplateEmail = async ({ recipients = [], data = {} }) => {
+  if (!MESSAGING_INITIATED_TEMPLATE_ID) {
+    return { success: false, error: 'MESSAGING_INITIATED_TEMPLATE_ID is not configured' };
+  }
+
+  return sendTemplateToRecipients({
+    recipients,
+    subject: 'New message in conversation',
+    templateId: MESSAGING_INITIATED_TEMPLATE_ID,
+    dynamicTemplateData: {
+      chat_room_id: data?.chat_room_id || '',
+      chat_name: data?.chat_name || '',
+      order_id: data?.order_id || '',
+      sender_id: data?.sender_id || '',
+      sender_name: data?.sender_name || '',
+      message_preview: data?.message_preview || '',
+      event_type: data?.event_type || 'message_created',
+      sent_at: data?.sent_at || new Date().toISOString(),
+    }
+  });
+};
+
+const sendPreProductionUploadedTemplateEmail = async ({ recipients = [], data = {} }) => {
+  if (!PRE_PRODUCTION_BRIEF_UPLOADED_TEMPLATE_ID) {
+    return { success: false, error: 'PRE_PRODUCTION_BRIEF_UPLOADED_TEMPLATE_ID is not configured' };
+  }
+
+  return sendTemplateToRecipients({
+    recipients,
+    subject: 'Pre-production brief uploaded',
+    templateId: PRE_PRODUCTION_BRIEF_UPLOADED_TEMPLATE_ID,
+    dynamicTemplateData: {
+      recipient_name: data?.recipient_name || 'Client',
+      order_id: data?.order_id || '',
+      order_name: data?.order_name || '',
+      file_name: data?.file_name || '',
+      file_path: data?.file_path || '',
+      upload_phase: 'pre_production',
+      uploaded_by_name: data?.uploaded_by_name || '',
+      uploaded_by_id: data?.uploaded_by_id || '',
+      uploaded_at: data?.uploaded_at || new Date().toISOString(),
+    }
+  });
+};
+
+const sendPostProductionUploadedTemplateEmail = async ({ recipients = [], data = {} }) => {
+  if (!POST_PRODUCTION_UPLOAD_TEMPLATE_ID) {
+    return { success: false, error: 'POST_PRODUCTION_UPLOAD_TEMPLATE_ID is not configured' };
+  }
+
+  return sendTemplateToRecipients({
+    recipients,
+    subject: 'Post-production file uploaded',
+    templateId: POST_PRODUCTION_UPLOAD_TEMPLATE_ID,
+    dynamicTemplateData: {
+      recipient_name: data?.recipient_name || 'Client',
+      order_id: data?.order_id || '',
+      order_name: data?.order_name || '',
+      file_name: data?.file_name || '',
+      file_path: data?.file_path || '',
+      upload_phase: 'post_production',
+      uploaded_by_name: data?.uploaded_by_name || '',
+      uploaded_by_id: data?.uploaded_by_id || '',
+      uploaded_at: data?.uploaded_at || new Date().toISOString(),
+    }
+  });
+};
+
 module.exports = {
   formatContentTypes,
   formatShootTypes,
@@ -2502,5 +2640,9 @@ module.exports = {
   sendProductionProposalEmail,
   sendCustomQuoteProposalEmail,
   sendQuoteAcceptedClientEmail,
-  sendQuoteAcceptedSalesNotificationEmail
+  sendQuoteAcceptedSalesNotificationEmail,
+  sendMeetingScheduledTemplateEmail,
+  sendMessagingInitiatedTemplateEmail,
+  sendPreProductionUploadedTemplateEmail,
+  sendPostProductionUploadedTemplateEmail
 };

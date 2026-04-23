@@ -3,6 +3,7 @@ const db = require('../models');
 const affiliateController = require('./affiliate.controller');
 const { ensureProjectForBooking } = require('./projects.controller');
 const externalFileManagerController = require('./external-file-manager.controller');
+const accountCreditService = require('../services/account-credit.service');
 const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 const googleSheetService = require('../utils/googleSheetsService');
 // Get Beige margin percentage from environment, default to 25%
@@ -1371,7 +1372,9 @@ exports.confirmPaymentMulti = async (req, res) => {
   const transaction = await db.sequelize.transaction();
 
   try {
-    const { paymentIntentId, booking_id, referral_code } = req.body;
+    const { paymentIntentId, booking_id, referral_code, use_credit, credit_amount_used } = req.body;
+    const shouldUseCredit = Boolean(use_credit);
+    const requestedCreditAmount = round2(credit_amount_used || 0);
 
     if (!paymentIntentId || !booking_id) {
       if (transaction) await transaction.rollback();
@@ -1388,6 +1391,8 @@ exports.confirmPaymentMulti = async (req, res) => {
       await transaction.rollback();
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
+
+    const quoteTotal = round2(booking.primary_quote?.total || 0);
 
     let normalizedReferralCode = '';
     if (referral_code) {
@@ -1409,10 +1414,12 @@ exports.confirmPaymentMulti = async (req, res) => {
     // --- UPDATED LOGIC HERE ---
     // 2. Check if this is a Free Checkout mock ID
     if (paymentIntentId.startsWith('free_checkout_intent_')) {
-      
-      // SECURITY CHECK: Verify the quote in our DB is actually 0
-      // This prevents users from manually sending a "free_checkout" ID for a paid booking
-      if (!booking.primary_quote || parseFloat(booking.primary_quote.total) !== 0) {
+      const isQuoteZero = quoteTotal === 0;
+      const payableAfterCredit = round2(quoteTotal - requestedCreditAmount);
+      const isCreditCoveredCheckout = shouldUseCredit && requestedCreditAmount > 0 && payableAfterCredit <= 0;
+
+      // SECURITY CHECK: free checkout only if quote is zero or fully covered by account credit.
+      if (!booking.primary_quote || (!isQuoteZero && !isCreditCoveredCheckout)) {
         await transaction.rollback();
         return res.status(400).json({ 
           success: false, 
@@ -1444,8 +1451,22 @@ exports.confirmPaymentMulti = async (req, res) => {
     const existingPayment = await db.payment_transactions.findOne({
       where: { stripe_payment_intent_id: paymentIntentId }
     });
+    let usedCreditEntry = null;
 
     if (existingPayment) {
+      if (shouldUseCredit && requestedCreditAmount > 0) {
+        usedCreditEntry = await accountCreditService.consumeAccountCreditForPayment({
+          userId: booking.user_id || null,
+          guestEmail: booking.guest_email || null,
+          bookingId: booking_id,
+          amount: requestedCreditAmount,
+          paymentId: existingPayment.payment_id,
+          paymentIntentId,
+          createdByUserId: req.user?.userId || null,
+          transaction
+        });
+      }
+
       if (normalizedReferralCode) {
         try {
           // Backfill referral commission for referral-code owner when payment already exists.
@@ -1523,7 +1544,11 @@ exports.confirmPaymentMulti = async (req, res) => {
       return res.status(200).json({
         success: true,
         message: "Payment already processed",
-        data: { payment_id: existingPayment.payment_id, booking_id },
+        data: {
+          payment_id: existingPayment.payment_id,
+          booking_id,
+          credit_applied: round2(usedCreditEntry?.amount || 0)
+        },
       });
     }
 
@@ -1575,6 +1600,19 @@ exports.confirmPaymentMulti = async (req, res) => {
       referral_code: normalizedReferralCode || null,
       status: 'succeeded'
     }, { transaction });
+
+    if (shouldUseCredit && requestedCreditAmount > 0) {
+      usedCreditEntry = await accountCreditService.consumeAccountCreditForPayment({
+        userId: booking.user_id || null,
+        guestEmail: booking.guest_email || null,
+        bookingId: booking_id,
+        amount: requestedCreditAmount,
+        paymentId: payment.payment_id,
+        paymentIntentId,
+        createdByUserId: req.user?.userId || null,
+        transaction
+      });
+    }
 
     // 7. Process referral commissions
     let primaryReferral = null;
@@ -1717,6 +1755,7 @@ exports.confirmPaymentMulti = async (req, res) => {
       data: {
         payment_id: payment.payment_id,
         booking_id,
+        credit_applied: round2(usedCreditEntry?.amount || 0),
         project_id: projectSync.project?.project_id || null,
         project_created: projectSync.created,
         project_sync_error: projectSync.error || null,

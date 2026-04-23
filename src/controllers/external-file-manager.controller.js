@@ -4,6 +4,7 @@ const INTERNAL_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-de
 const db = require('../models');
 const { users, crew_members, assigned_crew, stream_project_booking } = db;
 const bookingTimelineService = require('../services/bookingTimeline.service');
+const emailService = require('../utils/emailService');
 
 const FACE_SCAN_SERVICE_URL = process.env.FACE_SCAN_SERVICE_URL || '';
 const FACE_SCAN_PROVIDER_TIMEOUT_MS = Math.max(15000, Number(process.env.FACE_SCAN_PROVIDER_TIMEOUT_MS || 300000));
@@ -116,7 +117,99 @@ const parseBookingIdFromFilepath = (filepath) => {
     return Number(hashMatch[1]);
   }
 
+  const normalizedForMatch = normalized.toLowerCase();
+  const phaseMatch = normalizedForMatch.match(/\/(pre[-_ ]?production|post[-_ ]?production)\//);
+  if (phaseMatch?.index > 0) {
+    const prefix = normalizedForMatch.slice(0, phaseMatch.index);
+    const digits = prefix.match(/(\d+)(?!.*\d)/);
+    if (digits?.[1]) {
+      return Number(digits[1]);
+    }
+  }
+
   return null;
+};
+
+const normalizeEmailAddress = (value) => String(value || '').trim().toLowerCase();
+
+const resolveUploadPhase = (filepath) => {
+  const normalized = String(filepath || '')
+    .toLowerCase()
+    .replace(/_/g, '-')
+    .replace(/\s+/g, '-');
+  if (normalized.includes('/pre-production/')) return 'pre';
+  if (normalized.includes('/post-production/')) return 'post';
+  return null;
+};
+
+const getBookingForUploadEmail = async (bookingId) => {
+  if (!bookingId) return null;
+  return stream_project_booking.findOne({
+    where: {
+      stream_project_booking_id: Number(bookingId),
+      is_active: 1,
+    },
+    include: [
+      {
+        model: db.users,
+        as: 'user',
+        required: false,
+        attributes: ['id', 'name', 'email'],
+      },
+    ],
+  });
+};
+
+const sendUploadTemplateEmailForFile = async ({ filepath, fileName, uploadedByName = 'Beige User', uploadedById = '' }) => {
+  try {
+    const bookingId = parseBookingIdFromFilepath(filepath);
+    if (!bookingId) return;
+
+    const phase = resolveUploadPhase(filepath);
+    if (!phase) return;
+
+    const booking = await getBookingForUploadEmail(bookingId);
+    if (!booking) return;
+
+    const plainBooking = typeof booking.get === 'function' ? booking.get({ plain: true }) : booking;
+    const recipientEmails = [...new Set([
+      normalizeEmailAddress(plainBooking?.user?.email),
+      normalizeEmailAddress(plainBooking?.guest_email),
+    ].filter(Boolean))];
+    if (!recipientEmails.length) return;
+
+    const recipientName = String(
+      plainBooking?.user?.name ||
+      plainBooking?.client_name ||
+      plainBooking?.project_name ||
+      plainBooking?.guest_email ||
+      'Client'
+    ).trim();
+    const payload = {
+      recipient_name: recipientName,
+      order_id: String(plainBooking?.stream_project_booking_id || bookingId),
+      order_name: String(plainBooking?.project_name || `Project #${bookingId}`),
+      file_name: String(fileName || String(filepath).split('/').pop() || ''),
+      file_path: String(filepath || ''),
+      uploaded_by_name: String(uploadedByName || 'Beige User'),
+      uploaded_by_id: String(uploadedById || ''),
+      uploaded_at: new Date().toISOString(),
+    };
+
+    if (phase === 'pre') {
+      await emailService.sendPreProductionUploadedTemplateEmail({
+        recipients: recipientEmails,
+        data: payload,
+      });
+    } else if (phase === 'post') {
+      await emailService.sendPostProductionUploadedTemplateEmail({
+        recipients: recipientEmails,
+        data: payload,
+      });
+    }
+  } catch (error) {
+    console.error('Upload email trigger failed:', error?.message || error);
+  }
 };
 
 const ensureCommonEventsTable = async () => {
@@ -1829,6 +1922,16 @@ exports.notifyFileUploaded = async (req, res) => {
       }),
     });
 
+    if (result?.success !== false && req.body.filepath) {
+      const uploaderName = await getUserDisplayName(getRequestUserId(req)).catch(() => null);
+      await sendUploadTemplateEmailForFile({
+        filepath: req.body.filepath,
+        fileName: req.body.fileName,
+        uploadedByName: uploaderName || 'Beige User',
+        uploadedById: getRequestUserId(req),
+      });
+    }
+
     try {
       await bookingTimelineService.applyUploadDrivenStatusTransition({
         filepath: req.body.filepath,
@@ -1877,6 +1980,16 @@ exports.notifyFilesUploadedBatch = async (req, res) => {
     const succeededItems = Array.isArray(result?.data?.items)
       ? result.data.items.filter((item) => item?.success && item?.filepath)
       : [];
+    const uploaderName = await getUserDisplayName(getRequestUserId(req)).catch(() => null);
+    for (const item of succeededItems) {
+      await sendUploadTemplateEmailForFile({
+        filepath: item.filepath,
+        fileName: item?.data?.name || item?.fileName || '',
+        uploadedByName: uploaderName || 'Beige User',
+        uploadedById: getRequestUserId(req),
+      });
+    }
+
     for (const item of succeededItems) {
       try {
         await bookingTimelineService.applyUploadDrivenStatusTransition({
