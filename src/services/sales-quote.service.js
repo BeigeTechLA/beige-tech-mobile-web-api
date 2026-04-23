@@ -8,6 +8,7 @@ const {
 } = require('../utils/emailService');
 const { generateQuotePdfBuffer } = require('../utils/quotePdf');
 const { normalizeTime, resolveEventDateAndStartTime } = require('../utils/timezone');
+const accountCreditService = require('./account-credit.service');
 
 const SECTION_TYPES = ['service', 'addon', 'logistics', 'custom'];
 const QUOTE_STATUSES = ['draft', 'pending', 'partially_paid', 'sent', 'viewed', 'accepted', 'paid', 'rejected', 'expired'];
@@ -1972,7 +1973,7 @@ async function markQuoteInvoiceRefreshRequired({
     ? 'Quote total decreased after invoice/payment state; send updated invoice notice'
     : 'Quote total increased after invoice/payment state; send updated invoice';
 
-  await recordActivity(
+  return recordActivity(
     transaction,
     salesQuoteId,
     'updated',
@@ -2384,7 +2385,7 @@ async function updateQuote(salesQuoteId, payload, user) {
     });
 
     if (billingState.booking?.stream_project_booking_id && (extraAmount > 0 || reducedAmount > 0) && billingState.is_collected) {
-      await markQuoteInvoiceRefreshRequired({
+      const refreshActivity = await markQuoteInvoiceRefreshRequired({
         transaction,
         salesQuoteId,
         bookingId: billingState.booking.stream_project_booking_id,
@@ -2396,6 +2397,20 @@ async function updateQuote(salesQuoteId, payload, user) {
         changeType: quoteChangeType,
         paymentStatus
       });
+
+      if (reducedAmount > 0 && refreshActivity?.activity_id) {
+        await accountCreditService.createCreditForQuoteReduction({
+          salesQuoteId,
+          bookingId: billingState.booking.stream_project_booking_id,
+          salesQuoteActivityId: refreshActivity.activity_id,
+          userId: clientSnapshot.client_user_id || null,
+          guestEmail: clientSnapshot.client_email || null,
+          amount: reducedAmount,
+          createdByUserId: user.userId,
+          notes: `Pending credit created for quote reduction from $${previousTotal.toFixed(2)} to $${newTotal.toFixed(2)}.`,
+          transaction
+        });
+      }
     }
 
     await transaction.commit();

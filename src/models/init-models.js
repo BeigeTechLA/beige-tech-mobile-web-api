@@ -1,4 +1,5 @@
 var DataTypes = require("sequelize").DataTypes;
+var _account_credit_ledger = require("./account_credit_ledger");
 var _assigned_crew = require("./assigned_crew");
 var _assigned_equipment = require("./assigned_equipment");
 var _assignment_checklist = require("./assignment_checklist");
@@ -77,6 +78,7 @@ var _sales_shoot_types = require("./sales_shoot_types");
 var _shoot_types = require("./shoot_types");
 
 function initModels(sequelize) {
+  var account_credit_ledger = _account_credit_ledger(sequelize, DataTypes);
   var assigned_crew = _assigned_crew(sequelize, DataTypes);
   var assigned_equipment = _assigned_equipment(sequelize, DataTypes);
   var assignment_checklist = _assignment_checklist(sequelize, DataTypes);
@@ -156,6 +158,19 @@ function initModels(sequelize) {
   var sales_shoot_types = _sales_shoot_types(sequelize, DataTypes);
   
   var shoot_types = _shoot_types(sequelize, DataTypes);
+
+  account_credit_ledger.belongsTo(users, { as: "user", foreignKey: "user_id" });
+  users.hasMany(account_credit_ledger, { as: "account_credit_entries", foreignKey: "user_id" });
+  account_credit_ledger.belongsTo(users, { as: "created_by", foreignKey: "created_by_user_id" });
+  users.hasMany(account_credit_ledger, { as: "created_account_credit_entries", foreignKey: "created_by_user_id" });
+  account_credit_ledger.belongsTo(users, { as: "approved_by", foreignKey: "approved_by_user_id" });
+  users.hasMany(account_credit_ledger, { as: "approved_account_credit_entries", foreignKey: "approved_by_user_id" });
+  account_credit_ledger.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id" });
+  stream_project_booking.hasMany(account_credit_ledger, { as: "account_credit_entries", foreignKey: "booking_id" });
+  account_credit_ledger.belongsTo(sales_quotes, { as: "sales_quote", foreignKey: "sales_quote_id" });
+  sales_quotes.hasMany(account_credit_ledger, { as: "account_credit_entries", foreignKey: "sales_quote_id" });
+  account_credit_ledger.belongsTo(sales_quote_activities, { as: "sales_quote_activity", foreignKey: "sales_quote_activity_id" });
+  sales_quote_activities.hasMany(account_credit_ledger, { as: "account_credit_entries", foreignKey: "sales_quote_activity_id" });
 
   assignment_checklist.belongsTo(checklist_master, { as: "checklist", foreignKey: "checklist_id"});
   checklist_master.hasMany(assignment_checklist, { as: "assignment_checklists", foreignKey: "checklist_id"});
@@ -521,6 +536,7 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
   users.hasMany(sales_quote_activities, { as: "performed_sales_quote_activities", foreignKey: "performed_by_user_id" });
 
   return {
+    account_credit_ledger,
     activity_logs,
     assigned_crew,
     assigned_equipment,
