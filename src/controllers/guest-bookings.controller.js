@@ -7,6 +7,7 @@ const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 const { content } = require('googleapis/build/src/apis/content');
 const { sendCPNewBookingRequestEmail } = require('../utils/emailService');
 const { resolveEventDateAndStartTime, normalizeTime, splitDateTime } = require('../utils/timezone');
+const accountCreditService = require('../services/account-credit.service');
 const REFERRAL_DISCOUNT_PERCENT = 10;
 
 const normalizeDateOnlyInput = (value) => {
@@ -1614,6 +1615,11 @@ exports.getBookingPaymentDetails = async (req, res) => {
       };
     }
 
+    const accountCredit = await accountCreditService.getAccountCreditBalance({
+      userId: booking.user_id || req.userId || null,
+      guestEmail: booking.guest_email || null
+    });
+
     res.status(constants.OK.code).json({
       success: true,
       data: {
@@ -1647,6 +1653,13 @@ exports.getBookingPaymentDetails = async (req, res) => {
         },
         creators: creators,
         quote: quoteResponse,
+        account_credit: {
+          available_credit_amount: accountCredit?.available_credit_amount || 0,
+          can_use_credit: (accountCredit?.available_credit_amount || 0) > 0
+          // total_credit_amount: accountCredit?.total_credit_amount || 0,
+          // pending_credit_amount: accountCredit?.pending_credit_amount || 0,
+          // latest_credit: accountCredit?.latest_credit || null
+        },
         payment_status: booking.payment_id ? 'completed' : 'pending'
       }
     });

@@ -2407,7 +2407,7 @@ async function updateQuote(salesQuoteId, payload, user) {
           guestEmail: clientSnapshot.client_email || null,
           amount: reducedAmount,
           createdByUserId: user.userId,
-          notes: `Pending credit created for quote reduction from $${previousTotal.toFixed(2)} to $${newTotal.toFixed(2)}.`,
+          notes: `Account credit created for quote reduction from $${previousTotal.toFixed(2)} to $${newTotal.toFixed(2)}.`,
           transaction
         });
       }

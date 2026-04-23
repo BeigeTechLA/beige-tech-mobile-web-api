@@ -42,11 +42,87 @@ async function createCreditForQuoteReduction({
     sales_quote_activity_id: salesQuoteActivityId,
     amount: creditAmount,
     entry_type: 'credit_created',
-    status: 'pending',
+    status: 'available',
     source: 'quote_reduction',
-    notes: notes || 'Pending account credit created from paid quote reduction',
+    notes: notes || 'Account credit created from paid quote reduction',
     created_by_user_id: createdByUserId || null
   }, { transaction });
+}
+
+async function getAccountCreditBalance({
+  userId = null,
+  guestEmail = null,
+  transaction = null
+}) {
+  if (!db.account_credit_ledger) {
+    return null;
+  }
+
+  const normalizedUserId = Number(userId || 0) || null;
+  const normalizedGuestEmail = String(guestEmail || '').trim().toLowerCase() || null;
+
+  if (!normalizedUserId && !normalizedGuestEmail) {
+    return {
+      total_credit_amount: 0,
+      pending_credit_amount: 0,
+      available_credit_amount: 0,
+      latest_credit: null
+    };
+  }
+
+  const entries = await db.account_credit_ledger.findAll({
+    where: {
+      entry_type: 'credit_created',
+      ...(normalizedUserId ? { user_id: normalizedUserId } : { guest_email: normalizedGuestEmail })
+    },
+    order: [['created_at', 'DESC'], ['account_credit_ledger_id', 'DESC']],
+    transaction
+  });
+
+  if (!entries.length) {
+    return {
+      total_credit_amount: 0,
+      pending_credit_amount: 0,
+      available_credit_amount: 0,
+      latest_credit: null
+    };
+  }
+
+  const totals = entries.reduce((acc, entry) => {
+    const amount = roundCurrency(entry.amount);
+    acc.total_credit_amount = roundCurrency(acc.total_credit_amount + amount);
+
+    if (entry.status === 'pending') {
+      acc.pending_credit_amount = roundCurrency(acc.pending_credit_amount + amount);
+    }
+
+    if (entry.status === 'available') {
+      acc.available_credit_amount = roundCurrency(acc.available_credit_amount + amount);
+    }
+
+    return acc;
+  }, {
+    total_credit_amount: 0,
+    pending_credit_amount: 0,
+    available_credit_amount: 0
+  });
+
+  const latestEntry = entries[0];
+
+  return {
+    ...totals,
+    latest_credit: {
+      account_credit_ledger_id: latestEntry.account_credit_ledger_id,
+      amount: roundCurrency(latestEntry.amount),
+      status: latestEntry.status,
+      entry_type: latestEntry.entry_type,
+      source: latestEntry.source,
+      guest_email: latestEntry.guest_email || null,
+      user_id: latestEntry.user_id || null,
+      created_at: latestEntry.created_at || null,
+      notes: latestEntry.notes || null
+    }
+  };
 }
 
 async function getQuoteCreditSummary({
@@ -111,5 +187,6 @@ async function getQuoteCreditSummary({
 
 module.exports = {
   createCreditForQuoteReduction,
-  getQuoteCreditSummary
+  getQuoteCreditSummary,
+  getAccountCreditBalance
 };
