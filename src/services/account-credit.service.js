@@ -124,14 +124,20 @@ async function getAccountCreditBalance({
       if (entry.status === 'pending') {
         acc.pending_credit_amount = roundCurrency(acc.pending_credit_amount + amount);
       }
+
+      if (entry.status === 'available') {
+        acc.available_credit_amount = roundCurrency(acc.available_credit_amount + amount);
+      }
     }
 
     if (entry.entry_type === 'credit_used') {
       acc.used_credit_amount = roundCurrency(acc.used_credit_amount + amount);
+      acc.available_credit_amount = roundCurrency(acc.available_credit_amount - amount);
     }
 
     if (entry.entry_type === 'credit_reversed') {
       acc.reversed_credit_amount = roundCurrency(acc.reversed_credit_amount + amount);
+      acc.available_credit_amount = roundCurrency(acc.available_credit_amount - amount);
     }
 
     return acc;
@@ -143,9 +149,6 @@ async function getAccountCreditBalance({
     available_credit_amount: 0
   });
 
-  totals.available_credit_amount = roundCurrency(
-    totals.total_credit_amount - totals.used_credit_amount - totals.reversed_credit_amount
-  );
   if (totals.available_credit_amount < 0) {
     totals.available_credit_amount = 0;
   }
@@ -273,6 +276,17 @@ async function consumeAccountCreditForPayment({
     return null;
   }
 
+  const sourceCreditEntry = await db.account_credit_ledger.findOne({
+    where: {
+      entry_type: 'credit_created',
+      source: 'quote_reduction',
+      status: 'available',
+      ...identityWhere
+    },
+    order: [['approved_at', 'DESC'], ['created_at', 'DESC'], ['account_credit_ledger_id', 'DESC']],
+    transaction
+  });
+
   const noteParts = [
     `Account credit used for booking #${bookingId}`,
     paymentId ? `payment_id=${paymentId}` : null,
@@ -283,6 +297,8 @@ async function consumeAccountCreditForPayment({
     user_id: Number(userId || 0) || null,
     guest_email: String(guestEmail || '').trim().toLowerCase() || null,
     booking_id: Number(bookingId || 0) || null,
+    sales_quote_id: sourceCreditEntry?.sales_quote_id || null,
+    sales_quote_activity_id: sourceCreditEntry?.sales_quote_activity_id || null,
     amount: amountToUse,
     entry_type: 'credit_used',
     status: 'used',

@@ -520,6 +520,17 @@ async function createPaidStripeInvoice(booking, pricingData, options = {}) {
     });
   }
 
+  const creditApplied = safeNumber(pricingData?.credit_applied || 0);
+  if (creditApplied > 0) {
+    await stripe.invoiceItems.create({
+      customer: customer.id,
+      invoice: invoice.id,
+      amount: -Math.round(creditApplied * 100),
+      currency: 'usd',
+      description: 'Account Credit Applied'
+    });
+  }
+
   // 3. HANDLE DISCOUNTS (Negative amounts)
   const totalDiscount = safeNumber(pricingData?.discount_amount || 0);
   if (totalDiscount > 0) {

@@ -336,6 +336,17 @@ const resolveReducedQuoteInvoiceContext = async ({ quoteId, bookingId, transacti
       })
     : null;
 
+  const quote = await db.sales_quotes.findByPk(quoteId, {
+    attributes: ['client_user_id', 'client_email'],
+    transaction
+  });
+
+  const accountBalance = await accountCreditService.getAccountCreditBalance({
+    userId: quote?.client_user_id || null,
+    guestEmail: quote?.client_email || null,
+    transaction
+  });
+
   return {
     reducedAmount,
     revisedTotal,
@@ -346,7 +357,8 @@ const resolveReducedQuoteInvoiceContext = async ({ quoteId, bookingId, transacti
       salesQuoteId: quoteId,
       bookingId,
       transaction
-    })
+    }),
+    accountBalance
   };
 };
 
@@ -621,7 +633,12 @@ const calculateLeadPricing = async (booking) => {
             const totalAfterDiscount = parseFloat(q.price_after_discount || 0);
             const totalFromPayment = parseFloat(paymentTransaction?.total_amount || 0);
             let resolvedTotal = totalFromQuote > 0 ? totalFromQuote : totalAfterDiscount;
+            let creditApplied = 0;
             if (bookingMarkedPaid && totalFromPayment > 0 && resolvedTotal <= 0) {
+                resolvedTotal = totalFromPayment;
+            }
+            if (bookingMarkedPaid && totalFromPayment > 0 && resolvedTotal > totalFromPayment) {
+                creditApplied = Math.max(0, resolvedTotal - totalFromPayment);
                 resolvedTotal = totalFromPayment;
             }
             return {
@@ -629,6 +646,8 @@ const calculateLeadPricing = async (booking) => {
                 is_paid: bookingMarkedPaid,
                 stripe_payment_intent_id: paymentTransaction?.stripe_payment_intent_id || null,
                 total: resolvedTotal,
+                total_before_credit: totalFromQuote > 0 ? totalFromQuote : totalAfterDiscount,
+                credit_applied: parseFloat(creditApplied.toFixed(2)),
                 subtotal: parseFloat(q.subtotal || 0),
                 discount_amount: parseFloat(q.discount_amount || 0),
                 price_after_discount: parseFloat(q.price_after_discount || 0),
@@ -649,6 +668,8 @@ const calculateLeadPricing = async (booking) => {
                 is_paid: true,
                 stripe_payment_intent_id: paymentTransaction.stripe_payment_intent_id,
                 total: parseFloat(paymentTransaction.total_amount || 0),
+                total_before_credit: parseFloat(paymentTransaction.subtotal || paymentTransaction.total_amount || 0),
+                credit_applied: 0,
                 subtotal: parseFloat(paymentTransaction.subtotal || 0),
                 price_after_discount: parseFloat(paymentTransaction.subtotal || 0),
                 tax_type: null,
@@ -694,6 +715,8 @@ const calculateLeadPricing = async (booking) => {
             source: 'calculated',
             is_paid: bookingMarkedPaid,
             total: calculated?.total || 0,
+            total_before_credit: calculated?.total || 0,
+            credit_applied: 0,
             subtotal: calculated?.subtotal || 0,
             discount_amount: calculated?.discountAmount || 0,
             price_after_discount: calculated?.priceAfterDiscount || calculated?.subtotal || 0,
@@ -1280,9 +1303,10 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
         previouslyPaidAmount: reducedInvoiceContext.previouslyPaidAmount,
         revisedTotal: reducedInvoiceContext.revisedTotal,
         reducedAmount: reducedInvoiceContext.reducedAmount,
-        availableCreditAmount: reducedInvoiceContext.creditSummary?.available_credit_amount || 0,
+        availableCreditAmount: reducedInvoiceContext.accountBalance?.available_credit_amount || 0,
         pendingCreditAmount: reducedInvoiceContext.creditSummary?.pending_credit_amount || 0,
-        hasAvailableCredit: (reducedInvoiceContext.creditSummary?.available_credit_amount || 0) > 0
+        hasAvailableCredit: (reducedInvoiceContext.accountBalance?.available_credit_amount || 0) > 0,
+        hasPendingCredit: (reducedInvoiceContext.creditSummary?.pending_credit_amount || 0) > 0
       });
 
       await booking.update({ invoice_generation_status: 'completed' });

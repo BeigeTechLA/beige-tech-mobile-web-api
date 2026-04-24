@@ -1653,6 +1653,7 @@ const sendInvoiceEmail = async (userData, invoiceData) => {
           ? parseFloat(invoiceData.pendingCreditAmount).toFixed(2)
           : null,
         has_available_credit: Boolean(invoiceData.hasAvailableCredit),
+        has_pending_credit: Boolean(invoiceData.hasPendingCredit),
         account_credit_message: invoiceData.hasAvailableCredit
           ? `You have $${parseFloat(invoiceData.availableCreditAmount || 0).toFixed(2)} credit available to use on your next booking.`
           : null,

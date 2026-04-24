@@ -1717,7 +1717,7 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### send invoice for quote
-POST {{URL}}sales/quotes/138/send-invoice HTTP/1.1
+POST {{URL}}sales/quotes/140/send-invoice HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -1940,7 +1940,7 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "activity_id": 310
+  "activity_id": 335
 }
 
 ### reject request (admin/sales admin)

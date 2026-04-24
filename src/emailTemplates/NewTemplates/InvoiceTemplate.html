@@ -66,7 +66,7 @@
               {{else}}
               {{#if isReducedAmount}}
               <h1 style="margin: 0; color: #000000 !important; font-size: 52px; font-weight: 600; line-height: 1.05;">
-                Quote Updated
+                Updated Receipt
               </h1>
               <p style="margin: 18px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
                 Hello {{first_name}},
@@ -87,10 +87,17 @@
                 </p>
               </div>
               {{else}}
+              {{#if has_pending_credit}}
               <p style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
                 The difference is currently under review. Once approved, it will be added to your Beige account as
                 credit for a future booking.
               </p>
+              {{else}}
+              <p style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+                The revised amount is reflected below. If you have any questions about your updated quote, our team is
+                happy to help.
+              </p>
+              {{/if}}
               {{/if}}
               {{else}}
               <h1 style="margin: 0; color: #000000 !important; font-size: 52px; font-weight: 600; line-height: 1.05;">
@@ -301,7 +308,7 @@
                                 {{/if}}
                                 {{else}}
                                 {{#if isReducedAmount}}
-                                Reduced Amount
+                                Updated Amount Summary
                                 {{else}}
                                 Invoice Amount
                                 {{/if}}
@@ -362,22 +369,27 @@
                                       $ {{revised_total}}
                                     </td>
                                   </tr>
+                                  {{#if has_available_credit}}
                                   <tr>
                                     <td style="padding: 8px 18px; color: #525252 !important; font-size: 16px; line-height: 22px;">
-                                      {{#if has_available_credit}}
                                       Available Credit
-                                      {{else}}
-                                      Credit Under Review
-                                      {{/if}}
                                     </td>
                                     <td align="right" style="padding: 8px 18px; color: #000000 !important; font-size: 16px; line-height: 22px; font-weight: 600;">
-                                      {{#if has_available_credit}}
                                       $ {{available_credit_amount}}
-                                      {{else}}
-                                      $ {{pending_credit_amount}}
-                                      {{/if}}
                                     </td>
                                   </tr>
+                                  {{else}}
+                                  {{#if has_pending_credit}}
+                                  <tr>
+                                    <td style="padding: 8px 18px; color: #525252 !important; font-size: 16px; line-height: 22px;">
+                                      Credit Under Review
+                                    </td>
+                                    <td align="right" style="padding: 8px 18px; color: #000000 !important; font-size: 16px; line-height: 22px; font-weight: 600;">
+                                      $ {{pending_credit_amount}}
+                                    </td>
+                                  </tr>
+                                  {{/if}}
+                                  {{/if}}
                                 </table>
                                 {{/if}}
                                 {{/if}}
@@ -439,7 +451,7 @@
                   {{/if}}
                   {{else}}
                   {{#if isReducedAmount}}
-                  After reviewing your updated quote:
+                  After reviewing your updated receipt:
                   {{else}}
                   After confirming your booking:
                   {{/if}}
