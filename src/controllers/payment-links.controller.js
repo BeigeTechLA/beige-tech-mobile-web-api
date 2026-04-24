@@ -280,6 +280,7 @@ const resolveAdditionalQuoteInvoiceContext = async ({ quoteId, bookingId, transa
     additionalAmount,
     revisedTotal,
     previouslyPaidAmount,
+    approvalStatus: metadata.approval_status || 'pending',
     label: 'Additional payment for revised quote',
     existingInvoice: existingAdditionalInvoice
   };
@@ -1216,6 +1217,19 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
     let invoiceDetails = null;
 
     if (additionalInvoiceContext) {
+      const additionalApprovalStatus = String(additionalInvoiceContext.approvalStatus || 'pending').toLowerCase();
+
+      if (additionalApprovalStatus !== 'approved') {
+        await booking.update({ invoice_generation_status: 'completed' });
+        const error = new Error(
+          additionalApprovalStatus === 'rejected'
+            ? 'This paid quote increase request was rejected, so an additional amount invoice cannot be sent.'
+            : 'This paid quote increase request is pending admin approval. Approve it before sending the additional amount invoice.'
+        );
+        error.statusCode = 409;
+        throw error;
+      }
+
       const additionalPricingData = {
         source: 'quote_additional_amount',
         is_paid: false,
@@ -1281,6 +1295,19 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
     }
 
     if (reducedInvoiceContext) {
+      const reducedApprovalStatus = String(reducedInvoiceContext.approvalStatus || 'pending').toLowerCase();
+
+      if (reducedApprovalStatus !== 'approved') {
+        await booking.update({ invoice_generation_status: 'completed' });
+        const error = new Error(
+          reducedApprovalStatus === 'rejected'
+            ? 'This paid quote reduction request was rejected, so an updated receipt cannot be sent.'
+            : 'This paid quote reduction request is pending admin approval. Approve it before sending the updated receipt.'
+        );
+        error.statusCode = 409;
+        throw error;
+      }
+
       let invoiceUrl = reducedInvoiceContext.existingInvoice?.invoice_url || null;
       let invoicePdf = reducedInvoiceContext.existingInvoice?.invoice_pdf || null;
       let invoiceNumber = reducedInvoiceContext.existingInvoice?.invoice_number || null;
@@ -1305,11 +1332,11 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
         revisedTotal: reducedInvoiceContext.revisedTotal,
         reducedAmount: reducedInvoiceContext.reducedAmount,
         availableCreditAmount: reducedInvoiceContext.accountBalance?.available_credit_amount || 0,
-        pendingCreditAmount: reducedInvoiceContext.creditSummary?.pending_credit_amount || 0,
         hasAvailableCredit: (reducedInvoiceContext.accountBalance?.available_credit_amount || 0) > 0,
-        hasPendingCredit: (reducedInvoiceContext.creditSummary?.pending_credit_amount || 0) > 0,
-        creditApprovalStatus: reducedInvoiceContext.approvalStatus || 'pending',
-        isCreditRejected: String(reducedInvoiceContext.approvalStatus || '').toLowerCase() === 'rejected'
+        pendingCreditAmount: 0,
+        hasPendingCredit: false,
+        creditApprovalStatus: 'approved',
+        isCreditRejected: false
       });
 
       await booking.update({ invoice_generation_status: 'completed' });

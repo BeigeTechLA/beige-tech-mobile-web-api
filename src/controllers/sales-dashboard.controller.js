@@ -1380,9 +1380,10 @@ async function reviewQuoteChangeRequest(req, res, decision) {
       });
     }
 
-    const salesQuoteId = activity.sales_quote_id;
-    const bookingId = Number(metadata.booking_id || 0) || null;
-    const reducedAmount = Number(metadata.reduced_amount || 0);
+      const salesQuoteId = activity.sales_quote_id;
+      const bookingId = Number(metadata.booking_id || 0) || null;
+      const extraAmount = Number(metadata.extra_amount || 0);
+      const reducedAmount = Number(metadata.reduced_amount || 0);
 
     let creditResult = null;
     if (reducedAmount > 0) {
@@ -1418,11 +1419,19 @@ async function reviewQuoteChangeRequest(req, res, decision) {
       nextMetadata.rejected_by_user_id = req.userId || null;
     }
 
-    await activity.update({
-      metadata_json: JSON.stringify(nextMetadata)
-    });
+      await activity.update({
+        metadata_json: JSON.stringify(nextMetadata)
+      });
 
-    return res.json({
+      if (extraAmount > 0 && activity.quote) {
+        if (decision === 'approve') {
+          await activity.quote.update({ status: 'partially_paid' });
+        } else if (String(activity.quote.status || '').toLowerCase() === 'partially_paid') {
+          await activity.quote.update({ status: 'paid' });
+        }
+      }
+
+      return res.json({
       success: true,
       message: decision === 'approve'
         ? 'Quote change request approved successfully'

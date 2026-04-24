@@ -2546,6 +2546,7 @@ async function resolveQuoteBillingState(quote, transaction) {
   const refreshMetadata = parseConfig(refreshActivity?.metadata_json);
   const refreshExtraAmount = roundCurrency(refreshMetadata?.extra_amount || 0);
   const refreshPreviousTotal = roundCurrency(refreshMetadata?.previous_total || 0);
+  const refreshApprovalStatus = String(refreshMetadata?.approval_status || 'pending').toLowerCase();
   const refreshInvoiceHistory = refreshActivity && db.invoice_send_history
     ? await db.invoice_send_history.findOne({
         where: {
@@ -2562,6 +2563,7 @@ async function resolveQuoteBillingState(quote, transaction) {
     booking?.stream_project_booking_id &&
     Number(refreshMetadata?.booking_id || 0) === Number(booking.stream_project_booking_id) &&
     refreshExtraAmount > 0 &&
+    refreshApprovalStatus === 'approved' &&
     refreshInvoiceHistory?.payment_status !== 'paid'
   );
 
@@ -2889,10 +2891,10 @@ async function updateQuote(salesQuoteId, payload, user) {
         ? 'decrease'
         : 'unchanged';
     const paymentStatus = extraAmount > 0
-      ? (billingState.is_collected ? 'partially_paid' : billingState.payment_status)
+      ? (billingState.is_collected ? 'paid' : billingState.payment_status)
       : (billingState.is_collected ? 'paid' : billingState.payment_status);
     const resolvedStatus = extraAmount > 0 && billingState.is_collected
-      ? 'partially_paid'
+      ? nextStatus
       : nextStatus;
 
     const quoteUpdatePayload = {
