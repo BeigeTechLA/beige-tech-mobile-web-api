@@ -2,7 +2,7 @@ const { stream_project_booking, assigned_crew, crew_members, crew_member_files }
 const { Op } = require('sequelize');
 const constants = require('../utils/constants');
 const { Sequelize } = require('sequelize');
-const { parseLocation, formatLocationResponse } = require('../utils/locationHelpers');
+const { parseLocation, formatLocationResponse, extractCoordinatesFromPayload } = require('../utils/locationHelpers');
 const { resolveEventDateAndStartTime, normalizeTime } = require('../utils/timezone');
 
 /**
@@ -87,6 +87,8 @@ exports.createBooking = async (req, res) => {
       // Plain strings are kept as-is for backward compatibility
     }
 
+    const { latitude, longitude } = extractCoordinatesFromPayload(req.body, location);
+
     // Prepare booking data mapping frontend fields to database fields
     const bookingData = {
       user_id: userId, // Link booking to authenticated user
@@ -105,6 +107,8 @@ exports.createBooking = async (req, res) => {
       stream_quality: stream_quality || null,
       crew_size_needed: crew_size ? parseInt(crew_size) : null,
       event_location: normalizedLocation || null,
+      event_latitude: latitude,
+      event_longitude: longitude,
       streaming_platforms: streaming_platforms
         ? (typeof streaming_platforms === 'string' ? streaming_platforms : JSON.stringify(streaming_platforms))
         : '[]',
@@ -493,6 +497,8 @@ exports.updateBooking = async (req, res) => {
       is_cancelled
     } = req.body;
 
+    const { latitude, longitude } = extractCoordinatesFromPayload(req.body, location);
+
     // Prepare update data (only include fields that are provided)
     const updateData = {};
 
@@ -513,6 +519,11 @@ exports.updateBooking = async (req, res) => {
       } else {
         updateData.event_location = location;
       }
+      updateData.event_latitude = latitude;
+      updateData.event_longitude = longitude;
+    } else {
+      if (latitude !== null) updateData.event_latitude = latitude;
+      if (longitude !== null) updateData.event_longitude = longitude;
     }
     if (is_draft !== undefined) updateData.is_draft = is_draft ? 1 : 0;
     if (is_completed !== undefined) updateData.is_completed = is_completed ? 1 : 0;

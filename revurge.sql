@@ -1070,3 +1070,14 @@ CREATE TABLE `account_credit_ledger` (
     FOREIGN KEY (`approved_by_user_id`) REFERENCES `users` (`id`)
     ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+-- 24-04-26
+
+ALTER TABLE `stream_project_booking`
+  ADD COLUMN `event_latitude` DECIMAL(10,8) NULL AFTER `event_location`,
+  ADD COLUMN `event_longitude` DECIMAL(11,8) NULL AFTER `event_latitude`;
+
+ALTER TABLE `crew_members`
+  ADD COLUMN `latitude` DECIMAL(10,8) NULL AFTER `old_location`,
+  ADD COLUMN `longitude` DECIMAL(11,8) NULL AFTER `latitude`;

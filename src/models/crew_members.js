@@ -40,6 +40,14 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.TEXT,
       allowNull: true
     },
+    latitude: {
+      type: DataTypes.DECIMAL(10,8),
+      allowNull: true
+    },
+    longitude: {
+      type: DataTypes.DECIMAL(11,8),
+      allowNull: true
+    },
     working_distance: {
       type: DataTypes.STRING(50),
       allowNull: true
