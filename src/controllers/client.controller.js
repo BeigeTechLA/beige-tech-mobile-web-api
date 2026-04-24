@@ -233,7 +233,7 @@ exports.getClientDashboardSummary = async (req, res) => {
 
       stream_project_booking.count({
         where: { user_id, is_active: 1, is_completed: 1, ...bookingDateFilter }
-      })
+      }),
     ]);
 
     return res.status(200).json({
@@ -242,7 +242,7 @@ exports.getClientDashboardSummary = async (req, res) => {
       data: {
         total_shoots: { count: total_shoots, growth: 3 },
         active_shoots: { count: active_shoots, growth: 3 },
-        completed_shoots: { count: completed_shoots, growth: 3 },
+        completed_shoots: { count: completed_shoots, growth: 3 }
       }
     });
   } catch (error) {

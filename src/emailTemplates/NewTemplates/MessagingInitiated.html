@@ -10,70 +10,91 @@
 </head>
 
 <body
-  style="margin: 0; padding: 0; font-family:'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #F7F7F7; color: #484848;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #F7F7F7; padding: 40px 20px;">
+  style="margin:0; padding:0; background-color:#f3f3f3; color:#4f4a45; font-family:'Instrument Sans', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+    style="width:100%; border-collapse:collapse; border-spacing:0; background-color:#f3f3f3; padding:8px 10px;">
     <tr>
       <td align="center">
-        <table width="600" cellpadding="0" cellspacing="0"
-          style="background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%); border: 1px solid rgba(232, 209, 171, 0.3); border-radius: 24px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.04);">
-
-          <!-- Beige Logo -->
+        <table role="presentation" width="404" cellpadding="0" cellspacing="0"
+          style="width:100%; max-width:404px; border-collapse:collapse; border-spacing:0; background:linear-gradient(180deg, #fffdfa 0%, #f5e9d6 100%); border-radius:24px; overflow:hidden; box-shadow:0 10px 28px rgba(63, 44, 16, 0.05);">
           <tr>
-            <td align="center" style="padding: 40px 0 30px;">
+            <td align="center" style="padding:34px 22px 30px;">
               <div
-                style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF; box-shadow: 0 8px 24px 0 rgba(149, 157, 165, 0.20);">
-                <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
-                  alt="Beige" width="110" style="display: block; border: 0;">
+                style="display:inline-block; padding:13px 30px; background-color:#ffffff; border-radius:999px; box-shadow:0 10px 24px rgba(47, 38, 26, 0.08);">
+                <img
+                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
+                  alt="Beige" width="96" style="display:block; border:0; max-width:100%;">
               </div>
             </td>
           </tr>
 
-          <!-- Header -->
           <tr>
-            <td align="center" style="padding: 0 28px 22px;">
+            <td style="padding:0 22px 22px;">
+              <div style="height:1px; background-color:#e6dccd; font-size:0; line-height:0;">&nbsp;</div>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:0 22px 28px;">
               <h1
-                style="margin: 0; font-size: 29px; line-height: 1.1; font-weight: 700; letter-spacing: -1px; color: #000000;">
+                style="margin:0; font-size:37px; line-height:0.96; font-weight:700; letter-spacing:-2.2px; color:#000000; text-align:center; font-family:'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
                 Messaging Initiated
               </h1>
             </td>
           </tr>
 
-          <!-- Intro Card -->
           <tr>
-            <td style="padding: 0 14px 24px;">
-              <table width="100%" cellpadding="0" cellspacing="0"
-                style="background-color: #F8F8F8; border: 1px solid #D9D4CC; border-radius: 14px; box-shadow: 0 7px 29px 0 rgba(100, 100, 111, 0.16);">
+            <td style="padding:0 18px 0;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+                style="width:100%; border-collapse:separate; border-spacing:0; background-color:#f8f8f8; border:1px solid #d8d2ca; border-radius:18px; box-shadow:0 10px 24px rgba(36, 30, 21, 0.08); overflow:hidden;">
                 <tr>
-                  <td align="center" style="padding: 24px 22px 16px;">
-                    <p style="margin: 0 0 12px; font-size: 16px; line-height: 1.5; color: #000000;">
-                      <span style="font-size: 18px; font-weight: 700; line-height: 1.1;">Hello, {{client_name}}</span>
-                    </p>
-                    <p style="margin: 0 0 10px; font-size: 14px; line-height: 1.55; color: #4F4A45;">
-                      A dedicated chat has been created for your project <strong style="color: #000000;">#{{project_id}}</strong>
-                    </p>
-                    <p style="margin: 0; font-size: 13px; line-height: 1.7; color: #6A625B;">
-                      This is where all communication, updates, and discussion will happen moving forward.
-                    </p>
-                  </td>
-                </tr>
-                <tr>
-                  <td align="center" style="padding: 0;">
-                    <table width="100%" cellpadding="0" cellspacing="0"
-                      style="background-color: #FFFFFF; border-top: 1px solid #D9D4CC; border-radius: 0 0 14px 14px; box-shadow: 0 7px 29px 0 rgba(100, 100, 111, 0.10);">
+                  <td align="center">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+                      style="width:100%; border-collapse:collapse; border-spacing:0; background-color:#f8f8f8; border-radius:18px 18px 0 0;">
                       <tr>
-                        <td align="center" style="padding: 18px 20px 20px;">
-                          <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: auto;">
+                        <td align="center" style="padding:30px 30px 22px;">
+                          <p style="margin:0 0 16px; font-size:19px; line-height:1.2; color:#000000; font-weight:700;">
+                            Hello, {{client_name}}
+                          </p>
+                          <p style="margin:0 0 6px; font-size:13px; line-height:1.7; color:#5d564f;">
+                            A dedicated chat has been created for
+                          </p>
+                          <p style="margin:0 0 10px; font-size:13px; line-height:1.7; color:#5d564f;">
+                            your project <strong style="color:#000000; font-weight:700;">#{{project_id}}</strong>
+                          </p>
+                          <p style="margin:0; font-size:13px; line-height:1.7; color:#5d564f;">
+                            This is where all communication, updates, and
+                          </p>
+                          <p style="margin:0; font-size:13px; line-height:1.7; color:#5d564f;">
+                            discussions will happen moving forward.
+                          </p>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+                      style="width:100%; border-collapse:collapse; border-spacing:0; background-color:#f8f8f8;">
+                      <tr>
+                        <td style="border-top:1px dashed #cfc8be; font-size:0; line-height:0; background-color:#f8f8f8;">&nbsp;</td>
+                      </tr>
+                    </table>
+
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+                      style="width:100%; border-collapse:collapse; border-spacing:0; background-color:#f8f8f8; border-radius:0 0 18px 18px;">
+                      <tr>
+                        <td style="padding:28px 24px 32px;" align="center">
+                          <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin:auto;">
                             <tr>
-                              <td align="center" bgcolor="#000000" style="border-radius: 100px;">
+                              <td align="center" bgcolor="#000000" style="border-radius:999px;">
                                 <a href="{{chat_url}}"
-                                  style="display: inline-block; padding: 12px 24px; font-size: 10px; font-weight: 500; line-height: 1.2; color: #E8D1AB; text-decoration: none; text-transform: uppercase; letter-spacing: 0.4px;">
-                                  Open Chat &rarr;
+                                  style="display:inline-block; padding:12px 38px; color:#e7d0a7; text-decoration:none; font-size:12px; line-height:1.2; font-weight:600; text-transform:uppercase;">
+                                  OPEN CHAT &rarr;
                                 </a>
                               </td>
                             </tr>
                           </table>
                           <p
-                            style="margin: 18px 0 0; font-size: 12px; line-height: 1.6; color: #000000; font-style: italic; font-weight: 600;">
+                            style="margin:26px 0 0; font-size:13px; line-height:1.5; color:#000000; font-style:italic; font-weight:600;">
                             Feel free to jump in &amp; connect with the team.
                           </p>
                         </td>
@@ -85,73 +106,83 @@
             </td>
           </tr>
 
-          <!-- Mockup Image -->
           <tr>
-            <td style="padding: 0 0 22px;">
-              <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/MockLaptopImage.png"
-                alt="Beige platform preview" width="100%" style="display: block; border: 0;">
-            </td>
-          </tr>
-
-          <!-- Team Section -->
-          <tr>
-            <td align="center" style="padding: 0 24px 18px;">
-              <p style="margin: 0 0 16px; font-size: 16px; line-height: 1.4; color: #000000; font-weight: 700;">
-                The Beige Team
-              </p>
-              <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: auto;">
+            <td align="center" style="padding:0 0 0;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+                style="width:100%; border-collapse:collapse; border-spacing:0;">
                 <tr>
-                  <td align="center" bgcolor="#000000" style="border-radius: 100px;">
-                    <a href="{{frontend_url}}"
-                      style="display: inline-block; padding: 14px 34px; font-size: 14px; font-weight: 600; line-height: 1.2; color: #E8D1AB; text-decoration: none;">
-                      Beige AI Platform
-                    </a>
+                  <td align="center" style="font-size:0; line-height:0;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse; border-spacing:0;">
+                      <tr>
+                        <td style="width:70px;">&nbsp;</td>
+                        <td style="width:8px; height:36px; background-color:#111111;">&nbsp;</td>
+                        <td style="width:78px;">&nbsp;</td>
+                        <td style="width:8px; height:36px; background-color:#111111;">&nbsp;</td>
+                        <td style="width:70px;">&nbsp;</td>
+                      </tr>
+                    </table>
                   </td>
                 </tr>
               </table>
             </td>
           </tr>
 
-          <!-- Help Message -->
           <tr>
-            <td align="center" style="padding: 0 28px 0;">
-              <div style="padding-bottom: 26px;">
-                <img
-                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
-                  alt="Line Separator" width="100%" style="display: block; border: 0;">
-              </div>
-              <p
-                style="margin: 0 0 18px; font-size: 10px; font-style: normal; font-weight: 400; line-height: 1.5; color: #5A5753;">
-                This is an automated email from BeigeAI. Please do not reply to this email.
-              </p>
-              <p style="margin: 0 0 6px; color: #000000; font-size: 13px; font-weight: 600;">
-                Need Help?
-              </p>
-              <a href="mailto:sales@beigecorporation.io" target="_blank"
-                style="display:block; margin: 0; color: #000000; font-size: 13px; font-weight: 600;">
-                sales@beigecorporation.io
-              </a>
+            <td style="padding:0 0 28px;">
+              <img
+                src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/MockLaptopImage.png"
+                alt="Beige platform preview" width="100%"
+                style="display:block; width:100%; border:0; max-width:100%;">
             </td>
           </tr>
 
-          <!-- Footer -->
           <tr>
-            <td align="center" style="padding: 28px 28px 46px;">
-              <div style="padding-bottom: 26px;">
-                <img
-                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
-                  alt="Line Separator" width="100%" style="display: block; border: 0;">
+            <td align="center" style="padding:0 20px 18px;">
+              <p style="margin:0; font-size:18px; line-height:1.3; color:#000000; font-weight:700;">
+                The Beige Team
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:0 0 56px;">
+              <div style="border-bottom:1px solid #8f887e; line-height:0; font-size:0; text-align:center;">
+                <div
+                  style="display:inline-block; min-width:218px; padding:14px 24px; margin-bottom:-23px; background-color:#000000; border-radius:999px; color:#ead2a8; font-size:18px; line-height:1; font-weight:700; text-align:center;">
+                  Beige AI Platform
+                </div>
               </div>
-              <p style="margin: 0 0 10px; font-size: 9px; color: #8B857E;">
+            </td>
+          </tr>
+
+          <tr>
+            <td align="center" style="padding:18px 26px 0; text-align:center;">
+              <div style="height:1px; background-color:#efe5d5; font-size:0; line-height:0; margin:0 20px 30px;">&nbsp;</div>
+              <p style="margin:0 0 18px; font-size:9px; line-height:1.6; color:#5f5952;">
+                This is an automated email from BeigeAI. Please do not reply to this email.
+              </p>
+              <p style="margin:0 0 6px; font-size:15px; line-height:1.3; color:#000000; font-weight:700;">
+                Need Help?
+              </p>
+              <a href="mailto:sales@beigecorporation.io" target="_blank"
+                style="color:#000000; font-size:14px; line-height:1.4; font-weight:700; text-decoration:underline;">sales@beigecorporation.io</a>
+            </td>
+          </tr>
+
+          <tr>
+            <td align="center" style="padding:52px 22px 34px; text-align:center;">
+              <div style="height:1px; background-color:#efe5d5; font-size:0; line-height:0; margin:0 34px 30px;">&nbsp;</div>
+              <p style="margin:0 0 10px; font-size:10px; line-height:1.5; color:#8a8278;">
                 Help Center &nbsp; &bull; &nbsp; Term of Services &nbsp; &bull; &nbsp; Privacy Policy
               </p>
-              <p style="margin: 0 0 34px; color: #000000; font-size: 16px; font-weight: 700;">
+              <p style="margin:0 0 50px; font-size:18px; line-height:1.2; color:#000000; font-weight:700;">
                 Beige AI
               </p>
               <div
-                style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF;">
-                <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
-                  alt="Beige" width="110" style="display: block; border: 0;">
+                style="display:inline-block; padding:12px 32px; background-color:#ffffff; border-radius:999px; box-shadow:0 10px 24px rgba(47, 38, 26, 0.08);">
+                <img
+                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
+                  alt="Beige" width="92" style="display:block; border:0; max-width:100%;">
               </div>
             </td>
           </tr>

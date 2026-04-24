@@ -32,6 +32,7 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   payments } = require('../models');
   const { deleteSheetRow, updateSheetRow } = require('../utils/googleSheets');
 const leadAssignmentService = require('../services/lead-assignment.service');
+const { extractCoordinatesFromPayload } = require('../utils/locationHelpers');
 const db = require('../models');
 const bookingTimelineService = require('../services/bookingTimeline.service');
 const accountCreditService = require('../services/account-credit.service');
@@ -549,6 +550,8 @@ exports.createProject = async (req, res) => {
 
     const equipmentDetailsArr = allEquipments.map(eq => eq.equipment_name);
 
+    const { latitude, longitude } = extractCoordinatesFromPayload(req.body, event_location);
+
     const booking = await stream_project_booking.create({
       project_name,
       description,
@@ -562,6 +565,8 @@ exports.createProject = async (req, res) => {
       stream_quality: stream_quality || null,
       crew_size_needed: crew_size_needed ?? null,
       event_location: event_location || null,
+      event_latitude: latitude,
+      event_longitude: longitude,
 
       streaming_platforms: toDbJson(platformsArr),
       crew_roles: toDbJson(rolesArr),

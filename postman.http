@@ -2,7 +2,7 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzY3NjE5NjYsImV4cCI6MTc3NzM2Njc2Nn0.5bgn8XTW8D7WkadQJ2yP04Y9sZfqJRzyZAHO1W-f_Dk
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI0MSwidXNlclJvbGUiOiJDbGllbnQiLCJpYXQiOjE3NzY5NDIwMDksImV4cCI6MTc3NzU0NjgwOX0.7Wbh2CnXaxIbZxzeb5H4NF4USyDGdS8bIjGYTGNShaY
 
 @TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI4OCwidXNlclJvbGUiOiJBZG1pbiIsImlhdCI6MTc3NjY3MjYyMiwiZXhwIjoxNzc3Mjc3NDIyfQ.TvvFxV-jZRKi-lMlOHQwMyztvL-_ZIOvIEqhd-gk_J8
 
@@ -336,6 +336,11 @@ Content-Type: application/json
   "post_production_member_id": 7,
   "project_id": 485
 }
+
+###
+GET {{URL}}client/get-dashboard-summary HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
 
 ###
 GET {{URL}}client/get-dashboard-summary?date_on=2026-01-28 HTTP/1.1
@@ -1400,12 +1405,12 @@ Authorization: {{TOKEN}}
 }
 
 ### get sales quote detail
-GET {{URL}}sales/quotes/116 HTTP/1.1
+GET {{URL}}sales/quotes/137 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### convert quote to booking | Single day:
-POST {{URL}}sales/quotes/132/convert-to-booking HTTP/1.1
+POST {{URL}}sales/quotes/137/convert-to-booking HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -1419,7 +1424,7 @@ Authorization: {{TOKEN}}
 }
 
 ### convert quote to booking | Multi day:
-POST {{URL}}sales/quotes/115/convert-to-booking HTTP/1.1
+POST {{URL}}sales/quotes/137/convert-to-booking HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -1429,12 +1434,12 @@ Authorization: {{TOKEN}}
   "location": "442 Crocker Street, Los Angeles, California 90013, United States",
   "booking_days": [
     {
-      "date": "2026-04-15",
+      "date": "2026-04-25",
       "start_time": "09:00:00",
       "end_time": "13:00:00"
     },
     {
-      "date": "2026-04-16",
+      "date": "2026-04-26",
       "start_time": "10:00:00",
       "end_time": "14:00:00"
     }

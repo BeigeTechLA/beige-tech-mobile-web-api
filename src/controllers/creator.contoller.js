@@ -5,6 +5,7 @@ const path = require('path');
 const common_model = require('../utils/common_model');
 const { Op } = require('sequelize');
 const { S3UploadFiles } = require('../utils/common.js');
+const { extractCoordinatesFromPayload } = require('../utils/locationHelpers');
 const { sendTaskAssignmentEmail } = require('../utils/emailService');
 const emailService = require("../utils/emailService");
 const db = require("../models");
@@ -1699,7 +1700,12 @@ exports.editProfile = async (req, res) => {
     if (last_name !== undefined) updateData.last_name = last_name;
     if (email !== undefined) updateData.email = email;
     if (phone_number !== undefined) updateData.phone_number = phone_number;
-    if (location !== undefined) updateData.location = JSON.stringify(location);
+    if (location !== undefined) {
+      const { latitude, longitude } = extractCoordinatesFromPayload(req.body, location);
+      updateData.location = JSON.stringify(location);
+      updateData.latitude = latitude;
+      updateData.longitude = longitude;
+    }
     if (working_distance !== undefined) updateData.working_distance = working_distance;
     if (years_of_experience !== undefined) updateData.years_of_experience = years_of_experience;
     if (hourly_rate !== undefined) updateData.hourly_rate = hourly_rate;
