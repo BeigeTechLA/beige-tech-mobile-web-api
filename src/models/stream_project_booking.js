@@ -87,6 +87,14 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.STRING(255),
       allowNull: true
     },
+    event_latitude: {
+      type: DataTypes.DECIMAL(10,8),
+      allowNull: true
+    },
+    event_longitude: {
+      type: DataTypes.DECIMAL(11,8),
+      allowNull: true
+    },
     streaming_platforms: {
       type: DataTypes.TEXT,
       allowNull: false
