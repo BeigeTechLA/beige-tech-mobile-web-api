@@ -351,6 +351,7 @@ const resolveReducedQuoteInvoiceContext = async ({ quoteId, bookingId, transacti
     reducedAmount,
     revisedTotal,
     previouslyPaidAmount,
+    approvalStatus: metadata.approval_status || 'pending',
     label: 'Quote total reduced after payment',
     existingInvoice: existingReducedInvoice,
     creditSummary: await accountCreditService.getQuoteCreditSummary({
@@ -1306,7 +1307,9 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
         availableCreditAmount: reducedInvoiceContext.accountBalance?.available_credit_amount || 0,
         pendingCreditAmount: reducedInvoiceContext.creditSummary?.pending_credit_amount || 0,
         hasAvailableCredit: (reducedInvoiceContext.accountBalance?.available_credit_amount || 0) > 0,
-        hasPendingCredit: (reducedInvoiceContext.creditSummary?.pending_credit_amount || 0) > 0
+        hasPendingCredit: (reducedInvoiceContext.creditSummary?.pending_credit_amount || 0) > 0,
+        creditApprovalStatus: reducedInvoiceContext.approvalStatus || 'pending',
+        isCreditRejected: String(reducedInvoiceContext.approvalStatus || '').toLowerCase() === 'rejected'
       });
 
       await booking.update({ invoice_generation_status: 'completed' });

@@ -93,10 +93,17 @@
                 credit for a future booking.
               </p>
               {{else}}
+              {{#if is_credit_rejected}}
+              <p style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+                The revised amount is reflected below. The difference was reviewed and was not approved as account
+                credit. If you have any questions about your updated quote, our team is happy to help.
+              </p>
+              {{else}}
               <p style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
                 The revised amount is reflected below. If you have any questions about your updated quote, our team is
                 happy to help.
               </p>
+              {{/if}}
               {{/if}}
               {{/if}}
               {{else}}

@@ -1654,6 +1654,8 @@ const sendInvoiceEmail = async (userData, invoiceData) => {
           : null,
         has_available_credit: Boolean(invoiceData.hasAvailableCredit),
         has_pending_credit: Boolean(invoiceData.hasPendingCredit),
+        credit_approval_status: invoiceData.creditApprovalStatus || null,
+        is_credit_rejected: Boolean(invoiceData.isCreditRejected),
         account_credit_message: invoiceData.hasAvailableCredit
           ? `You have $${parseFloat(invoiceData.availableCreditAmount || 0).toFixed(2)} credit available to use on your next booking.`
           : null,
