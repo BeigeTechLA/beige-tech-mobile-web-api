@@ -34,6 +34,7 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
 const leadAssignmentService = require('../services/lead-assignment.service');
 const db = require('../models');
 const bookingTimelineService = require('../services/bookingTimeline.service');
+const accountCreditService = require('../services/account-credit.service');
 // const NodeGeocoder = require('node-geocoder');
 
 const getCPNewBookingEmailFields = (booking = {}, fallbackClientName = '', fallbackShootAmount = null) => ({
@@ -6711,6 +6712,36 @@ exports.getClientById = async (req, res) => {
     const affiliate = await affiliates.findOne({
       where: { user_id: client.user_id }
     });
+    const [creditSummary, creditHistoryRows] = await Promise.all([
+      accountCreditService.getAccountCreditBalance({
+        userId: client.user_id || null,
+        guestEmail: user?.email || null
+      }),
+      accountCreditService.getAccountCreditHistory({
+        userId: client.user_id || null,
+        guestEmail: user?.email || null,
+        limit: 10,
+        offset: 0
+      })
+    ]);
+
+    const creditHistory = (creditHistoryRows || []).map((row) => {
+      const plain = row?.toJSON ? row.toJSON() : row;
+      const isDebit = plain.entry_type === 'credit_used' || plain.entry_type === 'credit_reversed';
+      return {
+        account_credit_ledger_id: plain.account_credit_ledger_id,
+        amount: parseFloat(plain.amount || 0),
+        direction: isDebit ? 'debit' : 'credit',
+        entry_type: plain.entry_type,
+        status: plain.status,
+        source: plain.source,
+        notes: plain.notes || null,
+        booking_id: plain.booking_id || null,
+        booking_name: plain.booking?.project_name || null,
+        booking_event_date: plain.booking?.event_date || null,
+        created_at: plain.created_at || null
+      };
+    });
 
     return res.status(200).json({
       error: false,
@@ -6718,7 +6749,15 @@ exports.getClientById = async (req, res) => {
       data: {
         client: client,
         user: user,
-        affiliate: affiliate
+        affiliate: affiliate,
+        account_credit: {
+          total_credit_amount: creditSummary?.total_credit_amount || 0,
+          used_credit_amount: creditSummary?.used_credit_amount || 0,
+          pending_credit_amount: creditSummary?.pending_credit_amount || 0,
+          available_credit_amount: creditSummary?.available_credit_amount || 0,
+          latest_credit: creditSummary?.latest_credit || null
+        },
+        credit_history: creditHistory
       }
     });
 
