@@ -2594,7 +2594,8 @@ async function markQuoteInvoiceRefreshRequired({
   extraAmount = 0,
   reducedAmount = 0,
   changeType = null,
-  paymentStatus = 'pending'
+  paymentStatus = 'pending',
+  changeSummary = null
 }) {
   const resolvedChangeType = changeType || (extraAmount > 0 ? 'increase' : reducedAmount > 0 ? 'decrease' : 'unchanged');
   const activityMessage = resolvedChangeType === 'decrease'
@@ -2615,7 +2616,10 @@ async function markQuoteInvoiceRefreshRequired({
       reduced_amount: roundCurrency(reducedAmount),
       quote_change_type: resolvedChangeType,
       payment_status: paymentStatus,
-      invoice_refresh_required: true
+      change_summary: changeSummary,
+      invoice_refresh_required: true,
+      approval_status: 'pending',
+      approval_requested_at: new Date().toISOString()
     }
   );
 }
@@ -3055,7 +3059,8 @@ async function updateQuote(salesQuoteId, payload, user) {
         extraAmount,
         reducedAmount,
         changeType: quoteChangeType,
-        paymentStatus
+        paymentStatus,
+        changeSummary
       });
 
       if (reducedAmount > 0 && refreshActivity?.activity_id) {

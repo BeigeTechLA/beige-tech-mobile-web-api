@@ -284,6 +284,9 @@ router.get('/dashboard/sales-reps', authenticate, requireAdmin, salesDashboardCo
  */
 router.get('/dashboard/recent-activities', authenticate, requireSalesRepOrAdmin, salesDashboardController.getRecentActivities);
 router.get('/dashboard/invoice-history', authenticate, requireSalesRepOrAdmin, salesDashboardController.getInvoiceHistory);
+router.get('/dashboard/quote-change-requests', authenticate, requireAdmin, salesDashboardController.getQuoteChangeRequests);
+router.post('/dashboard/quote-change-requests/approve', authenticate, requireAdmin, salesDashboardController.approveQuoteChangeRequest);
+router.post('/dashboard/quote-change-requests/reject', authenticate, requireAdmin, salesDashboardController.rejectQuoteChangeRequest);
 
 /**
  * @route   GET /api/sales/dashboard/funnel

@@ -1646,6 +1646,16 @@ const sendInvoiceEmail = async (userData, invoiceData) => {
         reduced_amount: invoiceData.reducedAmount != null
           ? parseFloat(invoiceData.reducedAmount).toFixed(2)
           : null,
+        available_credit_amount: invoiceData.availableCreditAmount != null
+          ? parseFloat(invoiceData.availableCreditAmount).toFixed(2)
+          : null,
+        pending_credit_amount: invoiceData.pendingCreditAmount != null
+          ? parseFloat(invoiceData.pendingCreditAmount).toFixed(2)
+          : null,
+        has_available_credit: Boolean(invoiceData.hasAvailableCredit),
+        account_credit_message: invoiceData.hasAvailableCredit
+          ? `You have $${parseFloat(invoiceData.availableCreditAmount || 0).toFixed(2)} credit available to use on your next booking.`
+          : null,
         payment_link: invoiceData.invoiceUrl,
         invoice_pdf: invoiceData.invoicePdf || invoiceData.invoiceUrl,
         // Important

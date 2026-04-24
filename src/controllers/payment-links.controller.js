@@ -2,6 +2,7 @@ const { payment_links, sales_leads, client_leads, sales_lead_activities, client_
 const db = require('../models');
 const paymentLinksService = require('../services/payment-links.service');
 const quoteService = require('../services/sales-quote.service');
+const accountCreditService = require('../services/account-credit.service');
 const constants = require('../utils/constants');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const emailService = require('../utils/emailService');
@@ -340,7 +341,12 @@ const resolveReducedQuoteInvoiceContext = async ({ quoteId, bookingId, transacti
     revisedTotal,
     previouslyPaidAmount,
     label: 'Quote total reduced after payment',
-    existingInvoice: existingReducedInvoice
+    existingInvoice: existingReducedInvoice,
+    creditSummary: await accountCreditService.getQuoteCreditSummary({
+      salesQuoteId: quoteId,
+      bookingId,
+      transaction
+    })
   };
 };
 
@@ -1273,7 +1279,10 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
         paymentStatusOverride: 'refund_pending',
         previouslyPaidAmount: reducedInvoiceContext.previouslyPaidAmount,
         revisedTotal: reducedInvoiceContext.revisedTotal,
-        reducedAmount: reducedInvoiceContext.reducedAmount
+        reducedAmount: reducedInvoiceContext.reducedAmount,
+        availableCreditAmount: reducedInvoiceContext.creditSummary?.available_credit_amount || 0,
+        pendingCreditAmount: reducedInvoiceContext.creditSummary?.pending_credit_amount || 0,
+        hasAvailableCredit: (reducedInvoiceContext.creditSummary?.available_credit_amount || 0) > 0
       });
 
       await booking.update({ invoice_generation_status: 'completed' });
