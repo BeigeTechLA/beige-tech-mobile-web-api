@@ -8,6 +8,7 @@ const pricingService = require('../services/pricing.service');
 const pricingController = require('../controllers/pricing.controller');
 const paymentService = require('../services/payment-links.service');
 const accountCreditService = require('../services/account-credit.service');
+const quoteService = require('../services/sales-quote.service');
 const emailService = require('../utils/emailService');
 const { sendCPNewBookingRequestEmail } = require('../utils/emailService');
 const { resolveEventDateAndStartTime, normalizeTime, splitDateTime } = require('../utils/timezone');
@@ -2097,6 +2098,9 @@ exports.getLeadById = async (req, res) => {
       attributes: ['sales_quote_id', 'quote_number', 'status', 'subtotal', 'discount_amount', 'total'],
       order: [['updated_at', 'DESC']]
     });
+    const overallChangeSummary = linkedSalesQuote?.sales_quote_id
+      ? await quoteService.getQuoteOverallChangeSummary(linkedSalesQuote.sales_quote_id, null)
+      : null;
     const customQuoteFinancials = await getCustomQuoteFinancialDetails({
       quoteId: linkedSalesQuote?.sales_quote_id || null,
       bookingId: leadJson.booking?.stream_project_booking_id || null
@@ -2350,7 +2354,8 @@ exports.getLeadById = async (req, res) => {
         } : null,
         custom_quote_id: linkedSalesQuote?.sales_quote_id || null,
         custom_quote_number: linkedSalesQuote?.quote_number || null,
-        custom_quote_status: linkedSalesQuote?.status || null
+        custom_quote_status: linkedSalesQuote?.status || null,
+        overall_change_summary: overallChangeSummary
       }
     });
   } catch (error) {
