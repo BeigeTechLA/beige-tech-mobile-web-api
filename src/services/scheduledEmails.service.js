@@ -173,6 +173,37 @@ const buildZonedDateTime = (eventDate, startTime, timeZone = DEFAULT_SHOOT_TIME_
   return resolved;
 };
 
+const getTimeZoneLabel = (date, timeZone) => {
+  if (!date || !timeZone) return '';
+
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    timeZoneName: 'short'
+  });
+
+  const zonePart = formatter.formatToParts(date).find((part) => part.type === 'timeZoneName');
+  return zonePart?.value || timeZone;
+};
+
+const formatTimeInTimeZone = (date, timeZone) => {
+  if (!date || !timeZone) return '';
+
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  }).format(date);
+};
+
+const resolveReminderTimeZone = ({ bookingDay, booking }) => {
+  return (
+    bookingDay?.time_zone ||
+    booking?.time_zone ||
+    DEFAULT_SHOOT_TIME_ZONE
+  );
+};
+
 const buildReminderCandidateDates = (now = new Date()) => {
   const dates = new Set();
 
@@ -343,6 +374,7 @@ const runShootReminder5DaysJob = async () => {
         'event_date',
         'start_time',
         'end_time',
+        'time_zone',
         'event_location'
       ]
     });
@@ -491,6 +523,7 @@ const runShootReminder2HoursJob = async () => {
         'event_date',
         'start_time',
         'end_time',
+        'time_zone',
         'event_location'
       ]
     });
@@ -559,14 +592,14 @@ const runShootReminder2HoursJob = async () => {
               event_date: booking.event_date,
               start_time: booking.start_time,
               end_time: booking.end_time,
-              time_zone: DEFAULT_SHOOT_TIME_ZONE
+              time_zone: booking.time_zone || null
             }];
 
         for (const bookingDay of bookingDayEntries) {
           const eventDate = bookingDay?.event_date || booking.event_date;
           const startTime = bookingDay?.start_time || booking.start_time;
           const endTime = bookingDay?.end_time || booking.end_time;
-          const timeZone = bookingDay?.time_zone || DEFAULT_SHOOT_TIME_ZONE;
+          const timeZone = resolveReminderTimeZone({ bookingDay, booking });
 
           if (!eventDate || !startTime) {
             console.log(
@@ -607,21 +640,28 @@ const runShootReminder2HoursJob = async () => {
             continue;
           }
 
-          const dayShootTime = [formatTime(startTime), formatTime(endTime)]
+          const startDisplay = formatTimeInTimeZone(bookingStart, timeZone) || formatTime(startTime);
+          const endDateTime = endTime ? buildZonedDateTime(eventDate, endTime, timeZone) : null;
+          const endDisplay = endDateTime ? formatTimeInTimeZone(endDateTime, timeZone) : formatTime(endTime);
+          const timeZoneLabel = getTimeZoneLabel(bookingStart, timeZone);
+          const dayShootTime = [startDisplay, endDisplay]
             .filter(Boolean)
             .join(' - ');
+          const dayShootTimeWithZone = [dayShootTime, timeZoneLabel].filter(Boolean).join(' ');
 
           const emailResult = await emailService.sendShootReminder2HoursEmail({
             to_email: toEmail,
             booking_id: booking.stream_project_booking_id,
             first_name: firstName,
-            start_time: formatTime(startTime),
-            end_time: formatTime(endTime),
-            shoot_time: dayShootTime || shootTime,
+            start_time: startDisplay,
+            end_time: endDisplay,
+            shoot_time: dayShootTimeWithZone || shootTime,
             shoot_location_address: location,
             location,
             cp_name: cpName,
-            cp_image_url: cpImageUrl
+            cp_image_url: cpImageUrl,
+            time_zone: timeZone,
+            time_zone_label: timeZoneLabel
           });
 
           if (!emailResult?.success) {

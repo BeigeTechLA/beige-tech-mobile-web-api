@@ -920,6 +920,8 @@ const sendShootReminder2HoursEmail = async (data) => {
         start_time: data.start_time || '',
         end_time: data.end_time || '',
         shoot_time: data.shoot_time || [data.start_time, data.end_time].filter(Boolean).join(' - '),
+        time_zone: data.time_zone || '',
+        time_zone_label: data.time_zone_label || '',
         shoot_location_address: data.shoot_location_address || 'TBD',
         cp_name: data.cp_name || 'your Creative Partner',
         userData: { name: data.first_name || 'there' },

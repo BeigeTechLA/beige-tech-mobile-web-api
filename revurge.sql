@@ -1081,3 +1081,7 @@ ALTER TABLE `stream_project_booking`
 ALTER TABLE `crew_members`
   ADD COLUMN `latitude` DECIMAL(10,8) NULL AFTER `old_location`,
   ADD COLUMN `longitude` DECIMAL(11,8) NULL AFTER `latitude`;
+
+--25-04-26
+
+ALTER TABLE stream_project_booking ADD COLUMN time_zone VARCHAR(64) NULL AFTER end_time;
