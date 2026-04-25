@@ -11,6 +11,9 @@ const pricingService = require('../services/pricing.service');
 const { Op } = require('sequelize');
 const https = require('https');
 
+const resolveInvoiceDisplayNumber = (booking, stripeInvoiceNumber = null) =>
+  paymentLinksService.buildBeigeInvoiceReference(booking) || stripeInvoiceNumber || null;
+
 const formatDisplayLabel = (value) => {
   const normalized = String(value || '')
     .replace(/[_-]+/g, ' ')
@@ -205,6 +208,9 @@ const resolveInvoiceSchedule = (booking) => {
 
 const buildInvoiceTemplateDetails = (booking, pricingData, invoiceDetails) => ({
   ...invoiceDetails,
+  bookingReference: paymentLinksService.buildBeigeInvoiceReference(booking),
+  stripeInvoiceNumber: invoiceDetails.stripeInvoiceNumber || null,
+  invoiceNumber: resolveInvoiceDisplayNumber(booking, invoiceDetails.stripeInvoiceNumber || invoiceDetails.invoiceNumber || null),
   projectTitle: formatProposalProjectName(booking?.project_name),
   shootType: booking?.shoot_type || '',
   contentType: booking?.content_type || '',
@@ -1395,6 +1401,7 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
         invoiceDetails = buildInvoiceTemplateDetails(booking, additionalPricingData, {
           invoiceUrl: stripeInvoice?.hosted_invoice_url || additionalInvoiceContext.existingInvoice?.invoice_url,
           invoicePdf: stripeInvoice?.invoice_pdf || additionalInvoiceContext.existingInvoice?.invoice_pdf,
+          stripeInvoiceNumber: stripeInvoice?.number || null,
           invoiceNumber: stripeInvoice?.number || additionalInvoiceContext.existingInvoice?.invoice_number,
           totalAmount: additionalInvoiceContext.additionalAmount,
           isPaid: false,
@@ -1437,6 +1444,7 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
       invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
         invoiceUrl,
         invoicePdf,
+        stripeInvoiceNumber: invoiceNumber,
         invoiceNumber,
         totalAmount: reducedInvoiceContext.reducedAmount,
         isPaid: false,
@@ -1493,6 +1501,7 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
       invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
         invoiceUrl,
         invoicePdf,
+        stripeInvoiceNumber: invoiceNumber,
         invoiceNumber,
         totalAmount: stripeTotalAmount,
         isPaid: true,
@@ -1508,6 +1517,7 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
       invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
         invoiceUrl: stripeInvoice.hosted_invoice_url,
         invoicePdf: stripeInvoice.invoice_pdf,
+        stripeInvoiceNumber: stripeInvoice.number,
         invoiceNumber: stripeInvoice.number,
         totalAmount: pricingData.total,
         isPaid: false,

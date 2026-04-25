@@ -2,6 +2,15 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const crypto = require('crypto');
 const { payment_links } = require('../models');
 
+function buildBeigeInvoiceReference(booking) {
+  const bookingId = booking?.stream_project_booking_id || booking?.booking_id || booking?.project_id || null;
+  if (!bookingId) {
+    return 'INVBEIGE-PENDING';
+  }
+
+  return `INVBEIGE-${bookingId}`;
+}
+
 async function getOrCreateStripeCustomer({ email, name, bookingId }) {
   const customers = await stripe.customers.list({ email: email, limit: 1 });
 
@@ -257,6 +266,7 @@ async function createStripeInvoice(booking, pricingData, options = {}) {
   const expectedTotalCents = getExpectedInvoiceTotalCents(pricingData);
   const pricingKey = `${booking.stream_project_booking_id}-${expectedTotalCents}`;
   const createAttemptKey = `${pricingKey}-${Date.now()}`;
+  const invoiceReference = buildBeigeInvoiceReference(booking);
   
   if (!email) throw new Error("Booking must have an email address.");
 
@@ -326,8 +336,12 @@ async function createStripeInvoice(booking, pricingData, options = {}) {
     collection_method: 'send_invoice',
     days_until_due: 7,
     description: descriptionOverride || `Service Invoice for ${booking.project_name || 'Project'}`,
+    custom_fields: [
+      { name: 'Booking Ref', value: invoiceReference }
+    ],
     metadata: {
       booking_id: booking.stream_project_booking_id.toString(),
+      invoice_reference: invoiceReference,
       ...(metadata || {})
     }
   }, { idempotencyKey: `inv-create-${createAttemptKey}` });
@@ -437,6 +451,7 @@ async function createPaidStripeInvoice(booking, pricingData, options = {}) {
   const { transaction, recipientOverride = null } = options;
   const email = recipientOverride?.email || booking.user?.email || booking.guest_email;
   const recipientName = recipientOverride?.name || booking.user?.name || (booking.project_name ? booking.project_name.split(' - ')[1] : 'Valued Guest');
+  const invoiceReference = buildBeigeInvoiceReference(booking);
 
   // Ensure customer exists in Stripe
   let customer = await getOrCreateStripeCustomer({ 
@@ -475,11 +490,13 @@ async function createPaidStripeInvoice(booking, pricingData, options = {}) {
     footer: `Thank you for your business! This payment of ${totalAmountFormatted} was received and processed manually. Transaction Reference: ${booking.payment_id || 'N/A'}.`,
     // Custom Fields appear as a table on the receipt, clarifying the status
     custom_fields: [
+      { name: "Booking Ref", value: invoiceReference },
       { name: "Payment Status", value: "Paid in Full" },
       { name: "Payment Method", value: "External / Bank Transfer" }
     ],
     metadata: { 
       booking_id: booking.stream_project_booking_id.toString(), 
+      invoice_reference: invoiceReference,
       status: 'paid_receipt' 
     }
   });
@@ -607,6 +624,7 @@ async function createPaidStripeInvoice(booking, pricingData, options = {}) {
 module.exports = {
   generateLinkToken,
   buildPaymentUrl,
+  buildBeigeInvoiceReference,
   checkLinkExpiration,
   getDefaultExpiration,
   markLinkAsUsed,

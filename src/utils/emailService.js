@@ -1606,6 +1606,8 @@ const sendInvoiceEmail = async (userData, invoiceData) => {
 
     const isAdditionalPayment = Boolean(invoiceData?.isAdditionalPayment);
     const isReducedAmount = Boolean(invoiceData?.isReducedAmount);
+    const officialInvoiceNumber = invoiceData?.stripeInvoiceNumber || invoiceData?.invoiceNumber || null;
+    const bookingReference = invoiceData?.bookingReference || invoiceData?.invoiceNumber || null;
 
     const payload = {
       to: userData.email,
@@ -1617,6 +1619,8 @@ const sendInvoiceEmail = async (userData, invoiceData) => {
       dynamicTemplateData: {
         first_name: getFirstName(userData?.name, '') || 'there',
         invoiceNumber: invoiceData.invoiceNumber,
+        officialInvoiceNumber,
+        bookingReference,
         projectTitle: invoiceData.projectTitle,
         // Header section
         shoot_type: formatShootTypes(invoiceData?.shootType) || 'Shoot',
