@@ -8,6 +8,7 @@ const {
 } = require('../utils/emailService');
 const { generateQuotePdfBuffer } = require('../utils/quotePdf');
 const { normalizeTime, resolveEventDateAndStartTime } = require('../utils/timezone');
+const { extractCoordinatesFromPayload } = require('../utils/locationHelpers');
 const accountCreditService = require('./account-credit.service');
 
 const SECTION_TYPES = ['service', 'addon', 'logistics', 'custom'];
@@ -2105,6 +2106,7 @@ function applyConvertBookingOverrides(prefillData, payload = {}) {
     || (normalizedBookingDays.length ? 'multi_day' : null)
     || ((payload.start_date || payload.start_time || payload.start_date_time || payload.end_time) ? 'single_day' : null);
   const bookingType = inferredBookingType;
+  const { latitude, longitude } = extractCoordinatesFromPayload(payload, location);
   const singleDaySchedule = resolveEventDateAndStartTime({
     start_date: payload.start_date,
     start_time: payload.start_time,
@@ -2122,6 +2124,10 @@ function applyConvertBookingOverrides(prefillData, payload = {}) {
   );
 
   if (location !== undefined) next.location = location || null;
+  if (location !== undefined || latitude !== null || longitude !== null) {
+    next.location_latitude = latitude;
+    next.location_longitude = longitude;
+  }
   if (referenceLinks !== undefined) next.reference_links = referenceLinks || null;
   if (specialInstructions !== undefined) next.special_instructions = specialInstructions || null;
   if (bookingType) next.booking_type = bookingType;
@@ -2198,6 +2204,8 @@ async function syncConvertedQuoteArtifacts({
       budget: Number(quoteDetails.total || 0) || null,
       crew_size_needed: prefillData.crew_size,
       event_location: prefillData.location,
+      event_latitude: prefillData.location_latitude ?? null,
+      event_longitude: prefillData.location_longitude ?? null,
       crew_roles: JSON.stringify(prefillData.crew_roles || {}),
       streaming_platforms: JSON.stringify([]),
       reference_links: prefillData.reference_links,
@@ -2226,6 +2234,8 @@ async function syncConvertedQuoteArtifacts({
       budget: Number(quoteDetails.total || 0) || booking.budget || null,
       crew_size_needed: prefillData.crew_size ?? booking.crew_size_needed,
       event_location: prefillData.location || booking.event_location || null,
+      event_latitude: prefillData.location_latitude ?? booking.event_latitude ?? null,
+      event_longitude: prefillData.location_longitude ?? booking.event_longitude ?? null,
       crew_roles: JSON.stringify(
         Object.keys(prefillData.crew_roles || {}).length
           ? prefillData.crew_roles
@@ -3106,6 +3116,8 @@ async function convertQuoteToBooking(salesQuoteId, payload = {}, user) {
     full_name: quoteDetails.client_name || null,
     phone: quoteDetails.client_phone || null,
     location: quoteDetails.client_address || null,
+    location_latitude: null,
+    location_longitude: null,
     content_type: roleData.content_type,
     shoot_type: mapQuoteShootTypeToBookingShootType(quoteDetails.video_shoot_type),
     quote_shoot_type_label: quoteDetails.video_shoot_type || null,
@@ -3181,6 +3193,8 @@ async function buildPaymentBookingPrefillDataFromQuote(quoteDetails, payload = {
     full_name: quoteDetails.client_name || null,
     phone: quoteDetails.client_phone || null,
     location: quoteDetails.client_address || null,
+    location_latitude: null,
+    location_longitude: null,
     content_type: roleData.content_type,
     shoot_type: mapQuoteShootTypeToBookingShootType(quoteDetails.video_shoot_type),
     quote_shoot_type_label: quoteDetails.video_shoot_type || null,
