@@ -132,10 +132,17 @@ const parseBookingIdFromFilepath = (filepath) => {
 
 const normalizeEmailAddress = (value) => String(value || '').trim().toLowerCase();
 
+const getFirstName = (value, fallback = 'Client') => {
+  const normalized = String(value || '').trim();
+  if (!normalized) return fallback;
+  const [firstName] = normalized.split(/\s+/).filter(Boolean);
+  return firstName || fallback;
+};
+
 const buildProjectFilesUrl = (bookingId) => {
   const frontendUrl = String(process.env.FRONTEND_URL || '').trim().replace(/\/+$/, '');
   if (!frontendUrl || !bookingId) return '';
-  return `${frontendUrl}/cms/projects/${encodeURIComponent(String(bookingId))}/files`;
+  return `${frontendUrl}/affiliate/dashboard`;
 };
 
 const getUploadFolderName = (filepath, phase) => {
@@ -216,6 +223,7 @@ const sendUploadTemplateEmailForFile = async ({ filepath, fileName, uploadedByNa
     const projectFilesUrl = buildProjectFilesUrl(bookingReference);
     const payload = {
       recipient_name: recipientName,
+      client_name: getFirstName(recipientName),
       booking_id: bookingReference,
       order_id: bookingReference,
       order_name: projectName,
@@ -223,6 +231,8 @@ const sendUploadTemplateEmailForFile = async ({ filepath, fileName, uploadedByNa
       project_type: projectName,
       file_name: uploadedFileName,
       file_path: String(filepath || ''),
+      brief_url: projectFilesUrl,
+      brief_display_url: projectFilesUrl || String(filepath || ''),
       folder_name: getUploadFolderName(filepath, phase),
       post_production_files_url: projectFilesUrl,
       post_production_files_display_url: projectFilesUrl || String(filepath || ''),

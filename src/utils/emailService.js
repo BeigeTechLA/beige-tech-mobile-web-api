@@ -2636,21 +2636,30 @@ const sendPreProductionUploadedTemplateEmail = async ({ recipients = [], data = 
     return { success: false, error: 'PRE_PRODUCTION_BRIEF_UPLOADED_TEMPLATE_ID is not configured' };
   }
 
+  const bookingId = data?.booking_id || data?.order_id || '';
+  const projectName = data?.project_type || data?.project_name || data?.order_name || '';
+  const briefUrl = data?.brief_url || data?.post_production_files_url || data?.file_path || '';
+  const clientName = data?.client_name || data?.recipient_name || 'Client';
+
   return sendTemplateToRecipients({
     recipients,
     subject: 'Pre-production brief uploaded',
     templateId: PRE_PRODUCTION_BRIEF_UPLOADED_TEMPLATE_ID,
     dynamicTemplateData: {
-      recipient_name: data?.recipient_name || 'Client',
-      booking_id: data?.booking_id || data?.order_id || '',
-      bookingId: data?.booking_id || data?.order_id || '',
-      order_id: data?.order_id || data?.booking_id || '',
-      orderId: data?.order_id || data?.booking_id || '',
-      order_name: data?.order_name || data?.project_name || '',
-      project_name: data?.project_name || data?.order_name || '',
-      project: data?.project_name || data?.order_name || '',
+      recipient_name: data?.recipient_name || clientName,
+      client_name: clientName,
+      booking_id: bookingId,
+      bookingId: bookingId,
+      order_id: data?.order_id || bookingId,
+      orderId: data?.order_id || bookingId,
+      order_name: data?.order_name || projectName,
+      project_name: data?.project_name || projectName,
+      project: data?.project_name || projectName,
+      project_type: projectName,
       file_name: data?.file_name || '',
       file_path: data?.file_path || '',
+      brief_url: briefUrl,
+      brief_display_url: data?.brief_display_url || briefUrl,
       upload_phase: 'pre_production',
       uploaded_by_name: data?.uploaded_by_name || '',
       uploaded_by_id: data?.uploaded_by_id || '',
