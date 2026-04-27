@@ -2556,6 +2556,7 @@ async function resolveQuoteBillingState(quote, transaction) {
   const refreshMetadata = parseConfig(refreshActivity?.metadata_json);
   const refreshExtraAmount = roundCurrency(refreshMetadata?.extra_amount || 0);
   const refreshPreviousTotal = roundCurrency(refreshMetadata?.previous_total || 0);
+  const refreshApprovalStatus = String(refreshMetadata?.approval_status || 'pending').toLowerCase();
   const refreshInvoiceHistory = refreshActivity && db.invoice_send_history
     ? await db.invoice_send_history.findOne({
         where: {
@@ -2572,6 +2573,7 @@ async function resolveQuoteBillingState(quote, transaction) {
     booking?.stream_project_booking_id &&
     Number(refreshMetadata?.booking_id || 0) === Number(booking.stream_project_booking_id) &&
     refreshExtraAmount > 0 &&
+    refreshApprovalStatus === 'approved' &&
     refreshInvoiceHistory?.payment_status !== 'paid'
   );
 
@@ -2604,7 +2606,8 @@ async function markQuoteInvoiceRefreshRequired({
   extraAmount = 0,
   reducedAmount = 0,
   changeType = null,
-  paymentStatus = 'pending'
+  paymentStatus = 'pending',
+  changeSummary = null
 }) {
   const resolvedChangeType = changeType || (extraAmount > 0 ? 'increase' : reducedAmount > 0 ? 'decrease' : 'unchanged');
   const activityMessage = resolvedChangeType === 'decrease'
@@ -2625,7 +2628,10 @@ async function markQuoteInvoiceRefreshRequired({
       reduced_amount: roundCurrency(reducedAmount),
       quote_change_type: resolvedChangeType,
       payment_status: paymentStatus,
-      invoice_refresh_required: true
+      change_summary: changeSummary,
+      invoice_refresh_required: true,
+      approval_status: 'pending',
+      approval_requested_at: new Date().toISOString()
     }
   );
 }
@@ -2895,10 +2901,10 @@ async function updateQuote(salesQuoteId, payload, user) {
         ? 'decrease'
         : 'unchanged';
     const paymentStatus = extraAmount > 0
-      ? (billingState.is_collected ? 'partially_paid' : billingState.payment_status)
+      ? (billingState.is_collected ? 'paid' : billingState.payment_status)
       : (billingState.is_collected ? 'paid' : billingState.payment_status);
     const resolvedStatus = extraAmount > 0 && billingState.is_collected
-      ? 'partially_paid'
+      ? nextStatus
       : nextStatus;
 
     const quoteUpdatePayload = {
@@ -3065,7 +3071,8 @@ async function updateQuote(salesQuoteId, payload, user) {
         extraAmount,
         reducedAmount,
         changeType: quoteChangeType,
-        paymentStatus
+        paymentStatus,
+        changeSummary
       });
 
       if (reducedAmount > 0 && refreshActivity?.activity_id) {

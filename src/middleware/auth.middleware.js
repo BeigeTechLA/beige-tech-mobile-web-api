@@ -244,7 +244,6 @@ exports.requireAdmin = async (req, res, next) => {
     }
 
     const userRole = user.userType?.user_role;
-    console.log("userRole-----------", userRole)
 
     const allowedRoles = ['admin', 'Admin', 'sales_admin'];
 
