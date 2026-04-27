@@ -1751,39 +1751,66 @@ const sendPaymentSuccessSalesNotification = async (paymentData) => {
  */
 const sendProductionLeadNotification = async (leadData) => {
   try {
-    // const to = process.env.SALES_NOTIFICATION_EMAIL;
-    const to = [
-      process.env.SALES_NOTIFICATION_EMAIL,
-      leadData.sales_rep_email
-    ].filter(Boolean);
+    const recipients = [
+      {
+        email: process.env.SALES_NOTIFICATION_EMAIL,
+        frontend_url: `${process.env.FRONTEND_URL}/admin/dashboard`,
+      },
+      {
+        email: leadData.sales_rep_email,
+        frontend_url: `${process.env.FRONTEND_URL}/sales/dashboard`,
+      },
+    ].filter((entry) => entry.email);
 
-    if (!to.length) {
+    if (!recipients.length) {
       return { success: false, error: 'No recipient emails configured' };
     }
 
     const templateId = PRODUCTION_LEAD_NOTIFICATION_TEMPLATE_ID;
 
-    if (!to) return { success: false, error: 'PRODUCTION_NOTIFICATION_EMAIL is not configured' };
+    const settled = await Promise.allSettled(
+      recipients.map((recipient) =>
+        sendEmail({
+          to: recipient.email,
+          subject: 'New Production Lead',
+          templateId,
+          dynamicTemplateData: {
+            client_name: leadData?.client_name || '',
+            guestEmail: leadData?.guestEmail || '',
+            shoot_type: formatShootTypes(leadData?.shootType),
+            contentType: formatContentTypes(leadData?.contentType),
+            shoot_date: formatDate(leadData?.eventDate) || leadData?.eventDate || 'TBD',
+            shoot_time:
+              [formatTime(leadData?.startTime), formatTime(leadData?.endTime)]
+                .filter(Boolean)
+                .join(' to ') || '--',
+            editing: formatEditingStatus(leadData?.editsNeeded),
+            year: new Date().getFullYear(),
+            frontend_url: recipient.frontend_url,
+          }
+        })
+      )
+    );
 
-    return await sendEmail({
-      to,
-      subject: 'New Production Lead',
-      templateId,
-      dynamicTemplateData: {
-        client_name: leadData?.client_name || '',
-        guestEmail: leadData?.guestEmail || '',
-        shoot_type: formatShootTypes(leadData?.shootType),
-        contentType: formatContentTypes(leadData?.contentType),
-        shoot_date: formatDate(leadData?.eventDate) || leadData?.eventDate || 'TBD',
-        shoot_time:
-          [formatTime(leadData?.startTime), formatTime(leadData?.endTime)]
-            .filter(Boolean)
-            .join(' to ') || '--',
-        editing: formatEditingStatus(leadData?.editsNeeded),
-        year: new Date().getFullYear(),
-        frontend_url: `${process.env.FRONTEND_URL}/admin/dashboard`,
-      }
-    });
+    const sent = settled.filter((item) => item.status === 'fulfilled' && item.value?.success).length;
+    const failed = settled
+      .map((item, index) => ({ item, to: recipients[index]?.email }))
+      .filter((entry) => entry.item.status === 'rejected' || !entry.item.value?.success)
+      .map((entry) => ({
+        to: entry.to,
+        error:
+          entry.item.status === 'rejected'
+            ? entry.item.reason?.message || 'Unknown error'
+            : entry.item.value?.error || 'Unknown error',
+      }));
+
+    return {
+      success: failed.length === 0,
+      partialSuccess: sent > 0 && failed.length > 0,
+      sentCount: sent,
+      failedCount: failed.length,
+      failedRecipients: failed,
+    };
   } catch (error) {
     console.error('Error sending production lead notification:', error?.response?.body || error.message);
     return { success: false, error: error.message };
@@ -2517,6 +2544,25 @@ const sendTemplateToRecipients = async ({ recipients = [], subject, templateId, 
   };
 };
 
+const buildMessagingInitiatedDynamicTemplateData = (data = {}) => ({
+  chat_room_id: data?.chat_room_id || '',
+  room_id: data?.chat_room_id || '',
+  chat_name: data?.chat_name || '',
+  order_id: data?.order_id || '',
+  booking_id: data?.order_id || '',
+  project_id: data?.project_id || data?.order_id || '',
+  project_name: data?.project_name || data?.chat_name || '',
+  sender_id: data?.sender_id || '',
+  sender_name: data?.sender_name || '',
+  message_preview: data?.message_preview || '',
+  message: data?.message_preview || '',
+  event_type: data?.event_type || 'message_created',
+  client_name: data?.client_name || data?.recipient_name || '',
+  chat_url: data?.chat_url || '',
+  recipient_name: data?.recipient_name || '',
+  sent_at: data?.sent_at || new Date().toISOString(),
+});
+
 const formatIsoDate = (value) => {
   if (!value) return '';
   const date = new Date(value);
@@ -2609,26 +2655,67 @@ const sendMessagingInitiatedTemplateEmail = async ({ recipients = [], data = {} 
     return { success: false, error: 'MESSAGING_INITIATED_TEMPLATE_ID is not configured' };
   }
 
-  return sendTemplateToRecipients({
-    recipients,
-    subject: 'New message in conversation',
-    templateId: MESSAGING_INITIATED_TEMPLATE_ID,
-    dynamicTemplateData: {
-      chat_room_id: data?.chat_room_id || '',
-      room_id: data?.chat_room_id || '',
-      chat_name: data?.chat_name || '',
-      order_id: data?.order_id || '',
-      booking_id: data?.order_id || '',
-      project_name: data?.project_name || data?.chat_name || '',
-      sender_id: data?.sender_id || '',
-      sender_name: data?.sender_name || '',
-      message_preview: data?.message_preview || '',
-      message: data?.message_preview || '',
-      event_type: data?.event_type || 'message_created',
-      recipient_name: data?.recipient_name || '',
-      sent_at: data?.sent_at || new Date().toISOString(),
-    }
-  });
+  const recipientEntries = (Array.isArray(recipients) ? recipients : [recipients])
+    .map((recipient) => {
+      if (recipient && typeof recipient === 'object' && !Array.isArray(recipient)) {
+        const to = normalizeEmailAddress(recipient.email || recipient.to);
+        if (!to) return null;
+
+        return {
+          to,
+          dynamicTemplateData: buildMessagingInitiatedDynamicTemplateData({
+            ...data,
+            ...(recipient.data || {}),
+            recipient_name: recipient.name || recipient.recipient_name || data?.recipient_name || '',
+            client_name: recipient.name || recipient.client_name || data?.client_name || '',
+          }),
+        };
+      }
+
+      const to = normalizeEmailAddress(recipient);
+      if (!to) return null;
+
+      return {
+        to,
+        dynamicTemplateData: buildMessagingInitiatedDynamicTemplateData(data),
+      };
+    })
+    .filter(Boolean);
+
+  if (!recipientEntries.length) {
+    return { success: false, error: 'No recipient emails found' };
+  }
+
+  const settled = await Promise.allSettled(
+    recipientEntries.map((entry) =>
+      sendEmail({
+        to: entry.to,
+        subject: 'New message in conversation',
+        templateId: MESSAGING_INITIATED_TEMPLATE_ID,
+        dynamicTemplateData: entry.dynamicTemplateData,
+      })
+    )
+  );
+
+  const sent = settled.filter((item) => item.status === 'fulfilled' && item.value?.success).length;
+  const failed = settled
+    .map((item, index) => ({ item, to: recipientEntries[index]?.to }))
+    .filter((entry) => entry.item.status === 'rejected' || !entry.item.value?.success)
+    .map((entry) => ({
+      to: entry.to,
+      error:
+        entry.item.status === 'rejected'
+          ? entry.item.reason?.message || 'Unknown error'
+          : entry.item.value?.error || 'Unknown error',
+    }));
+
+  return {
+    success: failed.length === 0,
+    partialSuccess: sent > 0 && failed.length > 0,
+    sentCount: sent,
+    failedCount: failed.length,
+    failedRecipients: failed,
+  };
 };
 
 const sendPreProductionUploadedTemplateEmail = async ({ recipients = [], data = {} }) => {

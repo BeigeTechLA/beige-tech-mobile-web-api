@@ -1190,7 +1190,7 @@ exports.trackEarlyBookingInterest = async (req, res) => {
           //   endTime: end_time,
           //   editsNeeded: edits_needed
           // }).catch(err => console.error('Sales Email Error:', err));
-          console.log(assignedRep);
+          // console.log(assignedRep);
 
           emailService.sendProductionLeadNotification({
             client_name: client_name,
