@@ -817,6 +817,10 @@ function isAdminRole(role) {
   return role === 'admin' || role === 'Admin' || role === 'sales_admin' || role === 'Sales_Admin' || role === 'sales_rep' || role === 'Sales_Rep';
 }
 
+function isClientRole(role) {
+  return role === 'client' || role === 'Client';
+}
+
 async function getRandomActiveSalesRepId(transaction) {
   const salesRepType = await db.user_type.findOne({
     where: { user_role: 'sales_rep' },
@@ -864,6 +868,11 @@ function buildQuoteAccessWhere(user, options = {}) {
   const { restrictToLoggedInRep = true } = options;
 
   if (isAdminRole(user?.role) || !restrictToLoggedInRep) return {};
+  if (isClientRole(user?.role)) {
+    return {
+      client_user_id: user.userId
+    };
+  }
   return {
     [Op.or]: [
       { created_by_user_id: user.userId },

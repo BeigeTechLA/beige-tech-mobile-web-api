@@ -55,6 +55,78 @@ async function linkGuestBookingsToUser(email, userId) {
   }
 }
 
+async function linkClientQuotesToUser({ email, phoneNumber, userId, transaction = null }) {
+  try {
+    if (!userId || (!email && !phoneNumber)) {
+      return 0;
+    }
+
+    const clientMatchConditions = [];
+    if (email) {
+      clientMatchConditions.push({ email });
+    }
+    if (phoneNumber) {
+      clientMatchConditions.push({ phone_number: phoneNumber });
+    }
+
+    if (!clientMatchConditions.length) {
+      return 0;
+    }
+
+    const existingClient = await db.clients.findOne({
+      where: {
+        is_active: 1,
+        [Op.or]: clientMatchConditions
+      },
+      order: [['client_id', 'ASC']],
+      transaction
+    });
+
+    if (!existingClient) {
+      return 0;
+    }
+
+    await existingClient.update(
+      {
+        user_id: userId,
+        email: email || existingClient.email,
+        phone_number: phoneNumber || existingClient.phone_number
+      },
+      { transaction }
+    );
+
+    const quoteOrConditions = [
+      { client_id: existingClient.client_id }
+    ];
+
+    if (email) {
+      quoteOrConditions.push({ client_email: email });
+    }
+
+    const [updatedQuotesCount] = await db.sales_quotes.update(
+      {
+        client_user_id: userId,
+        client_id: existingClient.client_id,
+        client_email: email || existingClient.email || null,
+        client_phone: phoneNumber || existingClient.phone_number || null,
+        updated_at: new Date()
+      },
+      {
+        where: {
+          client_user_id: { [Op.is]: null },
+          [Op.or]: quoteOrConditions
+        },
+        transaction
+      }
+    );
+
+    return updatedQuotesCount || 0;
+  } catch (error) {
+    console.error('Link Client Quotes Error:', error);
+    return 0;
+  }
+}
+
 // Multer configuration for file uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -331,13 +403,17 @@ exports.register = async (req, res) => {
     
     if (userType == 3) {
       let exisitingClient = null;
+      const clientMatchConditions = [];
+      if (email) clientMatchConditions.push({ email });
+      if (phone_number) clientMatchConditions.push({ phone_number });
 
-      if (email && phone_number) {
+      if (clientMatchConditions.length) {
         exisitingClient = await Clients.findOne({
           where: {
-            email,
-            phone_number
-          }
+            is_active: 1,
+            [Op.or]: clientMatchConditions
+          },
+          order: [['client_id', 'ASC']]
         });
       }
 
@@ -418,6 +494,11 @@ exports.register = async (req, res) => {
     }
 
     const linkedBookingsCount = await linkGuestBookingsToUser(email, newUser.id);
+    const linkedQuotesCount = await linkClientQuotesToUser({
+      email,
+      phoneNumber: phone_number,
+      userId: newUser.id
+    });
 
     return res.status(201).json({
       success: true,
@@ -428,7 +509,8 @@ exports.register = async (req, res) => {
       email: newUser.email,
       affiliate: affiliateData,
       clientId: newClient ? newClient.client_id : null,
-      linked_bookings_count: linkedBookingsCount
+      linked_bookings_count: linkedBookingsCount,
+      linked_quotes_count: linkedQuotesCount
     });
 
   } catch (error) {
