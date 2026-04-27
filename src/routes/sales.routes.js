@@ -316,11 +316,11 @@ router.put('/quotes/catalog/:catalogItemId', authenticate, requireSalesRepOrAdmi
 router.delete('/quotes/catalog/:catalogItemId', authenticate, requireSalesRepOrAdmin, salesQuotesController.deleteCatalogItem);
 
 router.get('/quotes/dashboard', authenticate, requireSalesRepOrAdmin, salesQuotesController.getQuoteDashboard);
-router.get('/quotes', authenticate, requireSalesRepOrAdmin, salesQuotesController.listQuotes);
+router.get('/quotes', authenticate, salesQuotesController.listQuotes);
 router.get('/quotes/accept', salesQuotesController.acceptQuoteProposal);
 router.get('/quotes/public/:quoteId', salesQuotesController.getPublicQuoteById);
-router.get('/quotes/:quoteId', authenticate, requireSalesRepOrAdmin, salesQuotesController.getQuoteById);
-router.get('/quotes/:quoteId/pdf', authenticate, requireSalesRepOrAdmin, salesQuotesController.downloadQuotePdf);
+router.get('/quotes/:quoteId', authenticate, salesQuotesController.getQuoteById);
+router.get('/quotes/:quoteId/pdf', authenticate, salesQuotesController.downloadQuotePdf);
 router.post('/quotes', authenticate, requireSalesRepOrAdmin, salesQuotesController.createQuote);
 router.post('/quotes/:quoteId/duplicate', authenticate, requireSalesRepOrAdmin, salesQuotesController.duplicateQuote);
 router.put('/quotes/:quoteId', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateQuote);

@@ -32,6 +32,18 @@ const parseQuoteActivityMetadata = (value) => {
   }
 };
 
+const buildDealProjectName = ({ shootType = null, contentType = null, clientName = null, guestEmail = null }) => {
+  const normalizedShootType = String(shootType || '').trim();
+  const normalizedContentType = String(contentType || '').trim();
+  const normalizedClientName = String(clientName || '').trim();
+  const normalizedGuestEmail = String(guestEmail || '').trim();
+
+  const titleSource = normalizedShootType || normalizedContentType || 'New';
+  const clientLabel = normalizedClientName || normalizedGuestEmail || 'Client';
+
+  return `${titleSource.toUpperCase()} Shoot - ${clientLabel}`;
+};
+
 async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
   if (!quoteId) return null;
 
@@ -5679,9 +5691,12 @@ exports.finalizeCreateDeal = async (req, res) => {
       {
         user_id: user_id || null,
         guest_email: resolvedEmail,
-        project_name: resolvedName
-          ? `DEAL - ${resolvedName}`
-          : `DEAL - ${resolvedEmail}`,
+        project_name: buildDealProjectName({
+          shootType: shoot_type,
+          contentType: content_type,
+          clientName: resolvedName,
+          guestEmail: resolvedEmail
+        }),
         streaming_platforms: JSON.stringify([]),
         crew_roles: JSON.stringify(crew_roles ?? {}),
         is_draft: 1,
