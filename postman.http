@@ -2,7 +2,7 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI0NywidXNlclJvbGUiOiJDbGllbnQiLCJpYXQiOjE3NzcyNjkyOTMsImV4cCI6MTc3Nzg3NDA5M30.6LNKIYdPgJHm-p1yTj9MOm0npFTdi2GczpQIIi1H-j0
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI0NSwidXNlclJvbGUiOiJDbGllbnQiLCJpYXQiOjE3NzcyNzAwMDksImV4cCI6MTc3Nzg3NDgwOX0.z7cA6ih-STBnsOgS6avo2vKRYK4rmZLPvmIemiH-gPk
 
 @TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzcyNjkyODAsImV4cCI6MTc3Nzg3NDA4MH0.6NCSuJ90ixA8GtdebLlIIDS2e0dlorpJySLS3FRR7Fs
 
@@ -111,7 +111,7 @@ POST {{URL}}auth/login HTTP/1.1
 Content-Type: application/json
 
 {
-  "email": "nehapanchal.np30@gmail.com",
+  "email": "dev@gmail.com",
   "password": "12345678"
 }
 
