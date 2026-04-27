@@ -1,5 +1,5 @@
 const { sales_leads, client_leads, sales_lead_activities, client_lead_activities, stream_project_booking, stream_project_booking_days, users, user_type, discount_codes, payment_links,  quotes, sales_quotes, assigned_crew, crew_members,
-  quote_line_items, crew_member_files } = require('../models');
+  quote_line_items, crew_member_files, assigned_equipment } = require('../models');
 const { Op, Sequelize } = require('sequelize');
 const constants = require('../utils/constants');
 const leadAssignmentService = require('../services/lead-assignment.service');
