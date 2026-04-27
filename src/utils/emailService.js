@@ -920,8 +920,6 @@ const sendShootReminder2HoursEmail = async (data) => {
         start_time: data.start_time || '',
         end_time: data.end_time || '',
         shoot_time: data.shoot_time || [data.start_time, data.end_time].filter(Boolean).join(' - '),
-        time_zone: data.time_zone || '',
-        time_zone_label: data.time_zone_label || '',
         shoot_location_address: data.shoot_location_address || 'TBD',
         cp_name: data.cp_name || 'your Creative Partner',
         userData: { name: data.first_name || 'there' },
@@ -1608,6 +1606,8 @@ const sendInvoiceEmail = async (userData, invoiceData) => {
 
     const isAdditionalPayment = Boolean(invoiceData?.isAdditionalPayment);
     const isReducedAmount = Boolean(invoiceData?.isReducedAmount);
+    const officialInvoiceNumber = invoiceData?.stripeInvoiceNumber || invoiceData?.invoiceNumber || null;
+    const bookingReference = invoiceData?.bookingReference || invoiceData?.invoiceNumber || null;
 
     const payload = {
       to: userData.email,
@@ -1619,6 +1619,8 @@ const sendInvoiceEmail = async (userData, invoiceData) => {
       dynamicTemplateData: {
         first_name: getFirstName(userData?.name, '') || 'there',
         invoiceNumber: invoiceData.invoiceNumber,
+        officialInvoiceNumber,
+        bookingReference,
         projectTitle: invoiceData.projectTitle,
         // Header section
         shoot_type: formatShootTypes(invoiceData?.shootType) || 'Shoot',
@@ -1647,6 +1649,19 @@ const sendInvoiceEmail = async (userData, invoiceData) => {
           : null,
         reduced_amount: invoiceData.reducedAmount != null
           ? parseFloat(invoiceData.reducedAmount).toFixed(2)
+          : null,
+        available_credit_amount: invoiceData.availableCreditAmount != null
+          ? parseFloat(invoiceData.availableCreditAmount).toFixed(2)
+          : null,
+        pending_credit_amount: invoiceData.pendingCreditAmount != null
+          ? parseFloat(invoiceData.pendingCreditAmount).toFixed(2)
+          : null,
+        has_available_credit: Boolean(invoiceData.hasAvailableCredit),
+        has_pending_credit: Boolean(invoiceData.hasPendingCredit),
+        credit_approval_status: invoiceData.creditApprovalStatus || null,
+        is_credit_rejected: Boolean(invoiceData.isCreditRejected),
+        account_credit_message: invoiceData.hasAvailableCredit
+          ? `You have $${parseFloat(invoiceData.availableCreditAmount || 0).toFixed(2)} credit available to use on your next booking.`
           : null,
         payment_link: invoiceData.invoiceUrl,
         invoice_pdf: invoiceData.invoicePdf || invoiceData.invoiceUrl,
@@ -1751,66 +1766,39 @@ const sendPaymentSuccessSalesNotification = async (paymentData) => {
  */
 const sendProductionLeadNotification = async (leadData) => {
   try {
-    const recipients = [
-      {
-        email: process.env.SALES_NOTIFICATION_EMAIL,
-        frontend_url: `${process.env.FRONTEND_URL}/admin/dashboard`,
-      },
-      {
-        email: leadData.sales_rep_email,
-        frontend_url: `${process.env.FRONTEND_URL}/sales/dashboard`,
-      },
-    ].filter((entry) => entry.email);
+    // const to = process.env.SALES_NOTIFICATION_EMAIL;
+    const to = [
+      process.env.SALES_NOTIFICATION_EMAIL,
+      leadData.sales_rep_email
+    ].filter(Boolean);
 
-    if (!recipients.length) {
+    if (!to.length) {
       return { success: false, error: 'No recipient emails configured' };
     }
 
     const templateId = PRODUCTION_LEAD_NOTIFICATION_TEMPLATE_ID;
 
-    const settled = await Promise.allSettled(
-      recipients.map((recipient) =>
-        sendEmail({
-          to: recipient.email,
-          subject: 'New Production Lead',
-          templateId,
-          dynamicTemplateData: {
-            client_name: leadData?.client_name || '',
-            guestEmail: leadData?.guestEmail || '',
-            shoot_type: formatShootTypes(leadData?.shootType),
-            contentType: formatContentTypes(leadData?.contentType),
-            shoot_date: formatDate(leadData?.eventDate) || leadData?.eventDate || 'TBD',
-            shoot_time:
-              [formatTime(leadData?.startTime), formatTime(leadData?.endTime)]
-                .filter(Boolean)
-                .join(' to ') || '--',
-            editing: formatEditingStatus(leadData?.editsNeeded),
-            year: new Date().getFullYear(),
-            frontend_url: recipient.frontend_url,
-          }
-        })
-      )
-    );
+    if (!to) return { success: false, error: 'PRODUCTION_NOTIFICATION_EMAIL is not configured' };
 
-    const sent = settled.filter((item) => item.status === 'fulfilled' && item.value?.success).length;
-    const failed = settled
-      .map((item, index) => ({ item, to: recipients[index]?.email }))
-      .filter((entry) => entry.item.status === 'rejected' || !entry.item.value?.success)
-      .map((entry) => ({
-        to: entry.to,
-        error:
-          entry.item.status === 'rejected'
-            ? entry.item.reason?.message || 'Unknown error'
-            : entry.item.value?.error || 'Unknown error',
-      }));
-
-    return {
-      success: failed.length === 0,
-      partialSuccess: sent > 0 && failed.length > 0,
-      sentCount: sent,
-      failedCount: failed.length,
-      failedRecipients: failed,
-    };
+    return await sendEmail({
+      to,
+      subject: 'New Production Lead',
+      templateId,
+      dynamicTemplateData: {
+        client_name: leadData?.client_name || '',
+        guestEmail: leadData?.guestEmail || '',
+        shoot_type: formatShootTypes(leadData?.shootType),
+        contentType: formatContentTypes(leadData?.contentType),
+        shoot_date: formatDate(leadData?.eventDate) || leadData?.eventDate || 'TBD',
+        shoot_time:
+          [formatTime(leadData?.startTime), formatTime(leadData?.endTime)]
+            .filter(Boolean)
+            .join(' to ') || '--',
+        editing: formatEditingStatus(leadData?.editsNeeded),
+        year: new Date().getFullYear(),
+        frontend_url: `${process.env.FRONTEND_URL}/admin/dashboard`,
+      }
+    });
   } catch (error) {
     console.error('Error sending production lead notification:', error?.response?.body || error.message);
     return { success: false, error: error.message };
@@ -2544,25 +2532,6 @@ const sendTemplateToRecipients = async ({ recipients = [], subject, templateId, 
   };
 };
 
-const buildMessagingInitiatedDynamicTemplateData = (data = {}) => ({
-  chat_room_id: data?.chat_room_id || '',
-  room_id: data?.chat_room_id || '',
-  chat_name: data?.chat_name || '',
-  order_id: data?.order_id || '',
-  booking_id: data?.order_id || '',
-  project_id: data?.project_id || data?.order_id || '',
-  project_name: data?.project_name || data?.chat_name || '',
-  sender_id: data?.sender_id || '',
-  sender_name: data?.sender_name || '',
-  message_preview: data?.message_preview || '',
-  message: data?.message_preview || '',
-  event_type: data?.event_type || 'message_created',
-  client_name: data?.client_name || data?.recipient_name || '',
-  chat_url: data?.chat_url || '',
-  recipient_name: data?.recipient_name || '',
-  sent_at: data?.sent_at || new Date().toISOString(),
-});
-
 const formatIsoDate = (value) => {
   if (!value) return '';
   const date = new Date(value);
@@ -2610,50 +2579,41 @@ const sendMeetingScheduledTemplateEmail = async ({ recipients = [], data = {} })
   const humanDate = formatHumanDate(meetingDateTime);
   const humanTime = formatHumanTime(meetingDateTime);
   const humanEndTime = formatHumanTime(meetingEndTime);
-
-  return sendTemplateToRecipients({
-    recipients,
-    subject: data?.meeting_title || 'Meeting scheduled',
-    templateId: MEETING_SCHEDULED_TEMPLATE_ID,
-    dynamicTemplateData: {
-      meeting_id: data?.meeting_id || '',
-      booking_id: String(orderId || ''),
-      bookingId: String(orderId || ''),
-      order_id: String(orderId || ''),
-      orderId: String(orderId || ''),
-      order_name: orderName || '',
-      project_name: orderName || '',
-      project: orderName || '',
-      meeting_title: data?.meeting_title || '',
-      meeting_type: data?.meeting_type || '',
-      meeting_status: data?.meeting_status || '',
-      meeting_date_time: isoStart,
-      meetingDateTime: isoStart,
-      meeting_end_time: isoEnd,
-      meetingEndTime: isoEnd,
-      meeting_date: humanDate,
-      meetingDate: humanDate,
-      meeting_time: humanTime,
-      meetingTime: humanTime,
-      meeting_end_time_label: humanEndTime,
-      meetingEndTimeLabel: humanEndTime,
-      agenda,
-      description: agenda,
-      meet_link: meetLink,
-      meetLink,
-      meeting_link: meetLink,
-      link: meetLink,
-      created_by_name: data?.created_by_name || '',
-      recipient_name: data?.recipient_name || '',
-      sent_at: data?.sent_at || new Date().toISOString(),
-    }
+  const buildMeetingScheduledDynamicTemplateData = (entryData = {}) => ({
+    meeting_id: entryData?.meeting_id || data?.meeting_id || '',
+    booking_id: String(entryData?.booking_id || orderId || ''),
+    bookingId: String(entryData?.booking_id || orderId || ''),
+    order_id: String(entryData?.order_id || orderId || ''),
+    orderId: String(entryData?.order_id || orderId || ''),
+    project_id: String(entryData?.project_id || entryData?.order_id || data?.project_id || orderId || ''),
+    order_name: entryData?.order_name || orderName || '',
+    project_name: entryData?.project_name || orderName || '',
+    project: entryData?.project || orderName || '',
+    meeting_title: entryData?.meeting_title || data?.meeting_title || '',
+    meeting_type: entryData?.meeting_type || data?.meeting_type || '',
+    meeting_status: entryData?.meeting_status || data?.meeting_status || '',
+    meeting_date_time: isoStart,
+    meetingDateTime: isoStart,
+    meeting_end_time: isoEnd,
+    meetingEndTime: isoEnd,
+    meeting_date: humanDate,
+    meetingDate: humanDate,
+    meeting_time: humanTime,
+    meetingTime: humanTime,
+    meeting_end_time_label: humanEndTime,
+    meetingEndTimeLabel: humanEndTime,
+    agenda,
+    meeting_agenda: entryData?.meeting_agenda || data?.meeting_agenda || agenda,
+    description: agenda,
+    meet_link: meetLink,
+    meetLink,
+    meeting_link: meetLink,
+    link: meetLink,
+    created_by_name: entryData?.created_by_name || data?.created_by_name || '',
+    recipient_name: entryData?.recipient_name || data?.recipient_name || '',
+    view_details_url: entryData?.view_details_url || data?.view_details_url || meetLink,
+    sent_at: entryData?.sent_at || data?.sent_at || new Date().toISOString(),
   });
-};
-
-const sendMessagingInitiatedTemplateEmail = async ({ recipients = [], data = {} }) => {
-  if (!MESSAGING_INITIATED_TEMPLATE_ID) {
-    return { success: false, error: 'MESSAGING_INITIATED_TEMPLATE_ID is not configured' };
-  }
 
   const recipientEntries = (Array.isArray(recipients) ? recipients : [recipients])
     .map((recipient) => {
@@ -2663,11 +2623,11 @@ const sendMessagingInitiatedTemplateEmail = async ({ recipients = [], data = {} 
 
         return {
           to,
-          dynamicTemplateData: buildMessagingInitiatedDynamicTemplateData({
+          dynamicTemplateData: buildMeetingScheduledDynamicTemplateData({
             ...data,
             ...(recipient.data || {}),
             recipient_name: recipient.name || recipient.recipient_name || data?.recipient_name || '',
-            client_name: recipient.name || recipient.client_name || data?.client_name || '',
+            view_details_url: recipient.view_details_url || recipient.data?.view_details_url || data?.view_details_url || '',
           }),
         };
       }
@@ -2677,7 +2637,7 @@ const sendMessagingInitiatedTemplateEmail = async ({ recipients = [], data = {} 
 
       return {
         to,
-        dynamicTemplateData: buildMessagingInitiatedDynamicTemplateData(data),
+        dynamicTemplateData: buildMeetingScheduledDynamicTemplateData(data),
       };
     })
     .filter(Boolean);
@@ -2690,8 +2650,8 @@ const sendMessagingInitiatedTemplateEmail = async ({ recipients = [], data = {} 
     recipientEntries.map((entry) =>
       sendEmail({
         to: entry.to,
-        subject: 'New message in conversation',
-        templateId: MESSAGING_INITIATED_TEMPLATE_ID,
+        subject: data?.meeting_title || 'Meeting scheduled',
+        templateId: MEETING_SCHEDULED_TEMPLATE_ID,
         dynamicTemplateData: entry.dynamicTemplateData,
       })
     )
@@ -2718,35 +2678,53 @@ const sendMessagingInitiatedTemplateEmail = async ({ recipients = [], data = {} 
   };
 };
 
+const sendMessagingInitiatedTemplateEmail = async ({ recipients = [], data = {} }) => {
+  if (!MESSAGING_INITIATED_TEMPLATE_ID) {
+    return { success: false, error: 'MESSAGING_INITIATED_TEMPLATE_ID is not configured' };
+  }
+
+  return sendTemplateToRecipients({
+    recipients,
+    subject: 'New message in conversation',
+    templateId: MESSAGING_INITIATED_TEMPLATE_ID,
+    dynamicTemplateData: {
+      chat_room_id: data?.chat_room_id || '',
+      room_id: data?.chat_room_id || '',
+      chat_name: data?.chat_name || '',
+      order_id: data?.order_id || '',
+      booking_id: data?.order_id || '',
+      project_name: data?.project_name || data?.chat_name || '',
+      sender_id: data?.sender_id || '',
+      sender_name: data?.sender_name || '',
+      message_preview: data?.message_preview || '',
+      message: data?.message_preview || '',
+      event_type: data?.event_type || 'message_created',
+      recipient_name: data?.recipient_name || '',
+      sent_at: data?.sent_at || new Date().toISOString(),
+    }
+  });
+};
+
 const sendPreProductionUploadedTemplateEmail = async ({ recipients = [], data = {} }) => {
   if (!PRE_PRODUCTION_BRIEF_UPLOADED_TEMPLATE_ID) {
     return { success: false, error: 'PRE_PRODUCTION_BRIEF_UPLOADED_TEMPLATE_ID is not configured' };
   }
-
-  const bookingId = data?.booking_id || data?.order_id || '';
-  const projectName = data?.project_type || data?.project_name || data?.order_name || '';
-  const briefUrl = data?.brief_url || data?.post_production_files_url || data?.file_path || '';
-  const clientName = data?.client_name || data?.recipient_name || 'Client';
 
   return sendTemplateToRecipients({
     recipients,
     subject: 'Pre-production brief uploaded',
     templateId: PRE_PRODUCTION_BRIEF_UPLOADED_TEMPLATE_ID,
     dynamicTemplateData: {
-      recipient_name: data?.recipient_name || clientName,
-      client_name: clientName,
-      booking_id: bookingId,
-      bookingId: bookingId,
-      order_id: data?.order_id || bookingId,
-      orderId: data?.order_id || bookingId,
-      order_name: data?.order_name || projectName,
-      project_name: data?.project_name || projectName,
-      project: data?.project_name || projectName,
-      project_type: projectName,
+      recipient_name: data?.recipient_name || 'Client',
+      booking_id: data?.booking_id || data?.order_id || '',
+      bookingId: data?.booking_id || data?.order_id || '',
+      order_id: data?.order_id || data?.booking_id || '',
+      orderId: data?.order_id || data?.booking_id || '',
+      order_name: data?.order_name || data?.project_name || '',
+      project_name: data?.project_name || data?.order_name || '',
+      project: data?.project_name || data?.order_name || '',
       file_name: data?.file_name || '',
       file_path: data?.file_path || '',
-      brief_url: briefUrl,
-      brief_display_url: data?.brief_display_url || briefUrl,
       upload_phase: 'pre_production',
       uploaded_by_name: data?.uploaded_by_name || '',
       uploaded_by_id: data?.uploaded_by_id || '',
@@ -2760,34 +2738,23 @@ const sendPostProductionUploadedTemplateEmail = async ({ recipients = [], data =
     return { success: false, error: 'POST_PRODUCTION_UPLOAD_TEMPLATE_ID is not configured' };
   }
 
-  const bookingId = data?.booking_id || data?.order_id || '';
-  const projectName = data?.project_type || data?.project_name || data?.order_name || '';
-  const uploaderName = data?.cp_firstname || data?.uploaded_by_name || '';
-  const postProductionFilesUrl = data?.post_production_files_url || data?.file_path || '';
-  const folderName = data?.folder_name || data?.file_name || 'post-production';
-
   return sendTemplateToRecipients({
     recipients,
     subject: 'Post-production file uploaded',
     templateId: POST_PRODUCTION_UPLOAD_TEMPLATE_ID,
     dynamicTemplateData: {
       recipient_name: data?.recipient_name || 'Client',
-      booking_id: bookingId,
-      bookingId: bookingId,
-      order_id: data?.order_id || bookingId,
-      orderId: data?.order_id || bookingId,
-      order_name: data?.order_name || projectName,
-      project_name: data?.project_name || projectName,
-      project: data?.project_name || projectName,
-      project_type: projectName,
+      booking_id: data?.booking_id || data?.order_id || '',
+      bookingId: data?.booking_id || data?.order_id || '',
+      order_id: data?.order_id || data?.booking_id || '',
+      orderId: data?.order_id || data?.booking_id || '',
+      order_name: data?.order_name || data?.project_name || '',
+      project_name: data?.project_name || data?.order_name || '',
+      project: data?.project_name || data?.order_name || '',
       file_name: data?.file_name || '',
       file_path: data?.file_path || '',
-      folder_name: folderName,
-      cp_firstname: uploaderName,
-      post_production_files_url: postProductionFilesUrl,
-      post_production_files_display_url: data?.post_production_files_display_url || postProductionFilesUrl,
       upload_phase: 'post_production',
-      uploaded_by_name: data?.uploaded_by_name || uploaderName,
+      uploaded_by_name: data?.uploaded_by_name || '',
       uploaded_by_id: data?.uploaded_by_id || '',
       uploaded_at: data?.uploaded_at || new Date().toISOString(),
     }
