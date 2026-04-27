@@ -3707,6 +3707,26 @@ async function acceptQuoteProposal(token) {
     throw new Error('Invalid accept token');
   }
 
+  return acceptQuoteById(salesQuoteId, {
+    expectedQuoteNumber: decoded.quote_number || null,
+    expectedClientEmail: decoded.client_email || null,
+    activityMessage: 'Quote accepted by client via email',
+    activitySource: 'email_accept_link',
+    sendClientEmail: true,
+    sendSalesEmail: true
+  });
+}
+
+async function acceptQuoteById(salesQuoteId, options = {}) {
+  const {
+    expectedQuoteNumber = null,
+    expectedClientEmail = null,
+    activityMessage = 'Quote accepted',
+    activitySource = 'manual_accept',
+    sendClientEmail = false,
+    sendSalesEmail = true
+  } = options;
+
   const transaction = await db.sequelize.transaction();
   let transactionCompleted = false;
 
@@ -3720,11 +3740,11 @@ async function acceptQuoteProposal(token) {
       throw new Error('Quote not found');
     }
 
-    if (decoded.quote_number && quote.quote_number !== decoded.quote_number) {
+    if (expectedQuoteNumber && quote.quote_number !== expectedQuoteNumber) {
       throw new Error('Invalid accept token');
     }
 
-    if (decoded.client_email && quote.client_email && String(decoded.client_email).toLowerCase() !== String(quote.client_email).toLowerCase()) {
+    if (expectedClientEmail && quote.client_email && String(expectedClientEmail).toLowerCase() !== String(quote.client_email).toLowerCase()) {
       throw new Error('Invalid accept token');
     }
 
@@ -3747,8 +3767,8 @@ async function acceptQuoteProposal(token) {
         salesQuoteId,
         'accepted',
         null,
-        'Quote accepted by client via email',
-        { source: 'email_accept_link' }
+        activityMessage,
+        { source: activitySource }
       );
     }
 
@@ -3768,10 +3788,12 @@ async function acceptQuoteProposal(token) {
     if (!alreadyAccepted) {
       const emailPayload = deriveQuoteAcceptanceEmailPayload(quoteDetails);
       notificationResults = {
-        client_email: quoteDetails.client_email
+        client_email: sendClientEmail && quoteDetails.client_email
           ? await sendQuoteAcceptedClientEmail(emailPayload)
           : { success: false, skipped: true, error: 'Client email not available' },
-        sales_email: await sendQuoteAcceptedSalesNotificationEmail(emailPayload)
+        sales_email: sendSalesEmail
+          ? await sendQuoteAcceptedSalesNotificationEmail(emailPayload)
+          : { success: false, skipped: true }
       };
     }
 
@@ -3789,6 +3811,19 @@ async function acceptQuoteProposal(token) {
     }
     throw error;
   }
+}
+
+async function acceptQuoteOnSignature(salesQuoteId, signatureDetails = {}) {
+  const signerName = String(signatureDetails.signer_name || '').trim();
+
+  return acceptQuoteById(Number(salesQuoteId), {
+    activityMessage: signerName
+      ? `Quote accepted by signature from ${signerName}`
+      : 'Quote accepted by signature',
+    activitySource: 'signature_sign',
+    sendClientEmail: false,
+    sendSalesEmail: true
+  });
 }
 
 async function downloadQuotePdf(salesQuoteId, user) {
@@ -3828,6 +3863,7 @@ module.exports = {
   updateQuoteStatus,
   sendQuoteProposal,
   acceptQuoteProposal,
+  acceptQuoteOnSignature,
   ensureQuoteBookingForPayment,
   downloadQuotePdf
 };
