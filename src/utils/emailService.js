@@ -2664,23 +2664,34 @@ const sendPostProductionUploadedTemplateEmail = async ({ recipients = [], data =
     return { success: false, error: 'POST_PRODUCTION_UPLOAD_TEMPLATE_ID is not configured' };
   }
 
+  const bookingId = data?.booking_id || data?.order_id || '';
+  const projectName = data?.project_type || data?.project_name || data?.order_name || '';
+  const uploaderName = data?.cp_firstname || data?.uploaded_by_name || '';
+  const postProductionFilesUrl = data?.post_production_files_url || data?.file_path || '';
+  const folderName = data?.folder_name || data?.file_name || 'post-production';
+
   return sendTemplateToRecipients({
     recipients,
     subject: 'Post-production file uploaded',
     templateId: POST_PRODUCTION_UPLOAD_TEMPLATE_ID,
     dynamicTemplateData: {
       recipient_name: data?.recipient_name || 'Client',
-      booking_id: data?.booking_id || data?.order_id || '',
-      bookingId: data?.booking_id || data?.order_id || '',
-      order_id: data?.order_id || data?.booking_id || '',
-      orderId: data?.order_id || data?.booking_id || '',
-      order_name: data?.order_name || data?.project_name || '',
-      project_name: data?.project_name || data?.order_name || '',
-      project: data?.project_name || data?.order_name || '',
+      booking_id: bookingId,
+      bookingId: bookingId,
+      order_id: data?.order_id || bookingId,
+      orderId: data?.order_id || bookingId,
+      order_name: data?.order_name || projectName,
+      project_name: data?.project_name || projectName,
+      project: data?.project_name || projectName,
+      project_type: projectName,
       file_name: data?.file_name || '',
       file_path: data?.file_path || '',
+      folder_name: folderName,
+      cp_firstname: uploaderName,
+      post_production_files_url: postProductionFilesUrl,
+      post_production_files_display_url: data?.post_production_files_display_url || postProductionFilesUrl,
       upload_phase: 'post_production',
-      uploaded_by_name: data?.uploaded_by_name || '',
+      uploaded_by_name: data?.uploaded_by_name || uploaderName,
       uploaded_by_id: data?.uploaded_by_id || '',
       uploaded_at: data?.uploaded_at || new Date().toISOString(),
     }

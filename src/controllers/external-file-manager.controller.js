@@ -132,6 +132,31 @@ const parseBookingIdFromFilepath = (filepath) => {
 
 const normalizeEmailAddress = (value) => String(value || '').trim().toLowerCase();
 
+const buildProjectFilesUrl = (bookingId) => {
+  const frontendUrl = String(process.env.FRONTEND_URL || '').trim().replace(/\/+$/, '');
+  if (!frontendUrl || !bookingId) return '';
+  return `${frontendUrl}/cms/projects/${encodeURIComponent(String(bookingId))}/files`;
+};
+
+const getUploadFolderName = (filepath, phase) => {
+  const normalizedPath = String(filepath || '').trim().replace(/\\/g, '/');
+  if (!normalizedPath) return '';
+
+  const phaseSegment = phase === 'post' ? '/post-production/' : '/pre-production/';
+  const normalizedLower = normalizedPath.toLowerCase();
+  const phaseIndex = normalizedLower.indexOf(phaseSegment);
+
+  if (phaseIndex === -1) {
+    const segments = normalizedPath.split('/').filter(Boolean);
+    return segments.length > 1 ? segments[segments.length - 2] : segments[0] || '';
+  }
+
+  const afterPhase = normalizedPath.slice(phaseIndex + phaseSegment.length);
+  const afterSegments = afterPhase.split('/').filter(Boolean);
+  if (afterSegments.length > 1) return afterSegments[0];
+  return phase === 'post' ? 'post-production' : 'pre-production';
+};
+
 const resolveUploadPhase = (filepath) => {
   const normalized = String(filepath || '')
     .toLowerCase()
@@ -185,14 +210,23 @@ const sendUploadTemplateEmailForFile = async ({ filepath, fileName, uploadedByNa
       plainBooking?.guest_email ||
       'Client'
     ).trim();
+    const bookingReference = String(plainBooking?.stream_project_booking_id || bookingId);
+    const projectName = String(plainBooking?.project_name || plainBooking?.client_name || `Project #${bookingId}`);
+    const uploadedFileName = String(fileName || String(filepath).split('/').pop() || '');
+    const projectFilesUrl = buildProjectFilesUrl(bookingReference);
     const payload = {
       recipient_name: recipientName,
-      booking_id: String(plainBooking?.stream_project_booking_id || bookingId),
-      order_id: String(plainBooking?.stream_project_booking_id || bookingId),
-      order_name: String(plainBooking?.project_name || plainBooking?.client_name || `Project #${bookingId}`),
-      project_name: String(plainBooking?.project_name || plainBooking?.client_name || `Project #${bookingId}`),
-      file_name: String(fileName || String(filepath).split('/').pop() || ''),
+      booking_id: bookingReference,
+      order_id: bookingReference,
+      order_name: projectName,
+      project_name: projectName,
+      project_type: projectName,
+      file_name: uploadedFileName,
       file_path: String(filepath || ''),
+      folder_name: getUploadFolderName(filepath, phase),
+      post_production_files_url: projectFilesUrl,
+      post_production_files_display_url: projectFilesUrl || String(filepath || ''),
+      cp_firstname: String(uploadedByName || 'Beige User'),
       uploaded_by_name: String(uploadedByName || 'Beige User'),
       uploaded_by_id: String(uploadedById || ''),
       uploaded_at: new Date().toISOString(),
