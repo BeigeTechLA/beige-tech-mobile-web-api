@@ -2,7 +2,7 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI0NywidXNlclJvbGUiOiJDbGllbnQiLCJpYXQiOjE3NzczNzEzNjQsImV4cCI6MTc3Nzk3NjE2NH0.KdbzLhzHzZa31woziuskMoAAbyDVn4MUKUNNBAWtJM0
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI0MSwidXNlclJvbGUiOiJDbGllbnQiLCJpYXQiOjE3NzczNzg1ODcsImV4cCI6MTc3Nzk4MzM4N30.6LoMSO-Mfp5iHuNYB7oQLABjExK7eeREOT_iD7HEEGk
 
 @TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzcyNjkyODAsImV4cCI6MTc3Nzg3NDA4MH0.6NCSuJ90ixA8GtdebLlIIDS2e0dlorpJySLS3FRR7Fs
 
@@ -111,7 +111,7 @@ POST {{URL}}auth/login HTTP/1.1
 Content-Type: application/json
 
 {
-  "email": "nehapanchal.np30@gmail.com",
+  "email": "dev@gmail.com",
   "password": "12345678"
 }
 
@@ -1423,17 +1423,17 @@ Authorization: {{TOKEN}}
 ### get sales quote detail
 GET {{URL}}sales/quotes/163 HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN2}}
+Authorization: {{TOKEN}}
 
 ### get quote versions
 GET {{URL}}sales/quotes/163/versions HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN2}}
+Authorization: {{TOKEN}}
 
 ### get quote version by version id
 GET {{URL}}sales/quotes/163/versions/1 HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN2}}
+Authorization: {{TOKEN}}
 
 ### convert quote to booking | Single day:
 POST {{URL}}sales/quotes/137/convert-to-booking HTTP/1.1
