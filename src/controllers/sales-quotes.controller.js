@@ -504,6 +504,21 @@ exports.sendQuoteProposal = async (req, res) => {
   }
 };
 
+exports.rejectQuoteProposal = async (req, res) => {
+  try {
+    const status  = 'rejected';
+    const quote = await quoteService.updateQuoteStatus(Number(req.params.quoteId), status, getUserContext(req));
+    return res.json({
+      success: true,
+      data: quote
+    });
+  } catch (error) {
+    console.error('Error updating sales quote status:', error);
+    const statusCode = error.message === 'Quote not found' ? constants.NOT_FOUND.code : constants.BAD_REQUEST.code;
+    return sendError(res, error, error.message || 'Failed to update quote status', statusCode);
+  }
+};
+
 exports.acceptQuoteProposal = async (req, res) => {
   try {
     const token = String(req.query.token || req.body?.token || '').trim();
