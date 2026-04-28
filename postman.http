@@ -2,7 +2,7 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI0NSwidXNlclJvbGUiOiJDbGllbnQiLCJpYXQiOjE3NzcyNzAwMDksImV4cCI6MTc3Nzg3NDgwOX0.z7cA6ih-STBnsOgS6avo2vKRYK4rmZLPvmIemiH-gPk
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI0MSwidXNlclJvbGUiOiJDbGllbnQiLCJpYXQiOjE3NzczNzg1ODcsImV4cCI6MTc3Nzk4MzM4N30.6LoMSO-Mfp5iHuNYB7oQLABjExK7eeREOT_iD7HEEGk
 
 @TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzcyNjkyODAsImV4cCI6MTc3Nzg3NDA4MH0.6NCSuJ90ixA8GtdebLlIIDS2e0dlorpJySLS3FRR7Fs
 
@@ -1156,6 +1156,11 @@ GET {{URL}}sales/quotes/dashboard?assigned_sales_rep_id=1 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
+### reject quote 
+GET {{URL}}sales/quotes/reject/160 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
 ### list sales quotes
 GET {{URL}}sales/quotes HTTP/1.1
 Content-Type: application/json
@@ -1397,6 +1402,17 @@ Authorization: {{TOKEN2}}
   ]
 }
 
+### update sales quote
+PUT {{URL}}sales/quotes/162 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+{
+  "project_description": "Updated scope",
+  "edit_reason": "Client requested urgent update before shoot",
+  "ops_review_confirmed": true
+}
+
 ### update sales quote (only tax/discount)
 PUT {{URL}}sales/quotes/121 HTTP/1.1
 Content-Type: application/json
@@ -1410,7 +1426,22 @@ Authorization: {{TOKEN}}
 }
 
 ### get sales quote detail
-GET {{URL}}sales/quotes/137 HTTP/1.1
+GET {{URL}}signatures/quote/163 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### get sales quote detail
+GET {{URL}}sales/quotes/163 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### get quote versions
+GET {{URL}}sales/quotes/163/versions HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### get quote version by version id
+GET {{URL}}sales/quotes/163/versions/1 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 

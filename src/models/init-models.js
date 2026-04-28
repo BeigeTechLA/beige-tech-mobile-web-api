@@ -74,6 +74,7 @@ var _sales_ai_editing_types = require("./sales_ai_editing_types");
 var _sales_quotes = require("./sales_quotes");
 var _sales_quote_line_items = require("./sales_quote_line_items");
 var _sales_quote_activities = require("./sales_quote_activities");
+var _sales_quote_versions = require("./sales_quote_versions");
 var _sales_shoot_types = require("./sales_shoot_types");
 var _shoot_types = require("./shoot_types");
 
@@ -155,6 +156,7 @@ function initModels(sequelize) {
   var sales_quotes = _sales_quotes(sequelize, DataTypes);
   var sales_quote_line_items = _sales_quote_line_items(sequelize, DataTypes);
   var sales_quote_activities = _sales_quote_activities(sequelize, DataTypes);
+  var sales_quote_versions = _sales_quote_versions(sequelize, DataTypes);
   var sales_shoot_types = _sales_shoot_types(sequelize, DataTypes);
   
   var shoot_types = _shoot_types(sequelize, DataTypes);
@@ -535,6 +537,15 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
   sales_quote_activities.belongsTo(users, { as: "performed_by", foreignKey: "performed_by_user_id" });
   users.hasMany(sales_quote_activities, { as: "performed_sales_quote_activities", foreignKey: "performed_by_user_id" });
 
+  sales_quote_versions.belongsTo(sales_quotes, { as: "quote", foreignKey: "sales_quote_id" });
+  sales_quotes.hasMany(sales_quote_versions, { as: "versions", foreignKey: "sales_quote_id" });
+
+  sales_quote_versions.belongsTo(users, { as: "created_by", foreignKey: "created_by_user_id" });
+  users.hasMany(sales_quote_versions, { as: "created_sales_quote_versions", foreignKey: "created_by_user_id" });
+
+  sales_quote_versions.belongsTo(sales_quote_activities, { as: "source_activity", foreignKey: "source_activity_id" });
+  sales_quote_activities.hasMany(sales_quote_versions, { as: "created_versions", foreignKey: "source_activity_id" });
+
   return {
     account_credit_ledger,
     activity_logs,
@@ -611,6 +622,7 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
     sales_quotes,
     sales_quote_line_items,
     sales_quote_activities,
+    sales_quote_versions,
     sales_shoot_types,
     shoot_types
   };
