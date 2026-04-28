@@ -261,6 +261,15 @@ function buildQuoteEditGuardrailPayload({
 async function getQuoteEditGuardrails(quote, transaction = null) {
   const quoteNumber = quote?.quote_number || null;
   const clientName = quote?.client_name || null;
+  const billingState = await resolveQuoteBillingState(quote, transaction);
+
+  if (!billingState.is_collected) {
+    return buildQuoteEditGuardrailPayload({
+      canEvaluateRestriction: false,
+      quoteNumber,
+      clientName
+    });
+  }
 
   if (!quote?.lead_id) {
     return buildQuoteEditGuardrailPayload({
@@ -3543,6 +3552,7 @@ async function fetchQuoteById(salesQuoteId, user = null) {
   }
 
   plain.edit_guardrails = await getQuoteEditGuardrails({
+    sales_quote_id: plain.sales_quote_id,
     lead_id: plain.lead_id,
     quote_number: plain.quote_number,
     client_name: plain.client_name
