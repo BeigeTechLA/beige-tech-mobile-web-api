@@ -1108,6 +1108,7 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             estimated_delivery_date: normalizedEstimatedDeliveryDate,
             start_time: start_time_final,
             end_time: end_time_final,
+            time_zone: time_zone || null,
             duration_hours: totalDurationHours,
             event_location: location || null,
             event_latitude: latitude,
@@ -1201,7 +1202,7 @@ exports.trackEarlyBookingInterest = async (req, res) => {
           //   endTime: end_time,
           //   editsNeeded: edits_needed
           // }).catch(err => console.error('Sales Email Error:', err));
-          console.log(assignedRep);
+          // console.log(assignedRep);
 
           emailService.sendProductionLeadNotification({
             client_name: client_name,
@@ -5002,6 +5003,7 @@ async function updateBookingScheduleAndLocationCore({ booking, bookingId, payloa
   if (eventDate) updateData.event_date = eventDate;
   if (startTimeFinal) updateData.start_time = startTimeFinal;
   if (endTimeFinal) updateData.end_time = endTimeFinal;
+  if (time_zone !== undefined) updateData.time_zone = time_zone || null;
   if (totalDurationHours != null) updateData.duration_hours = totalDurationHours;
 
   if (Object.keys(updateData).length > 0) {

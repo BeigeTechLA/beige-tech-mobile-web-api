@@ -1081,3 +1081,20 @@ ALTER TABLE `stream_project_booking`
 ALTER TABLE `crew_members`
   ADD COLUMN `latitude` DECIMAL(10,8) NULL AFTER `old_location`,
   ADD COLUMN `longitude` DECIMAL(11,8) NULL AFTER `latitude`;
+
+--25-04-26
+
+ALTER TABLE stream_project_booking ADD COLUMN time_zone VARCHAR(64) NULL AFTER end_time;
+
+-- 27-04-26
+
+CREATE TABLE IF NOT EXISTS chat_room_mappings (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  room_id VARCHAR(191) NOT NULL,
+  booking_id INT NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_chat_room_mappings_room_id (room_id),
+  KEY idx_chat_room_mappings_booking_id (booking_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

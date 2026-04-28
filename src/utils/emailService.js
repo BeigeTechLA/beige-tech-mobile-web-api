@@ -2579,44 +2579,103 @@ const sendMeetingScheduledTemplateEmail = async ({ recipients = [], data = {} })
   const humanDate = formatHumanDate(meetingDateTime);
   const humanTime = formatHumanTime(meetingDateTime);
   const humanEndTime = formatHumanTime(meetingEndTime);
-
-  return sendTemplateToRecipients({
-    recipients,
-    subject: data?.meeting_title || 'Meeting scheduled',
-    templateId: MEETING_SCHEDULED_TEMPLATE_ID,
-    dynamicTemplateData: {
-      meeting_id: data?.meeting_id || '',
-      booking_id: String(orderId || ''),
-      bookingId: String(orderId || ''),
-      order_id: String(orderId || ''),
-      orderId: String(orderId || ''),
-      order_name: orderName || '',
-      project_name: orderName || '',
-      project: orderName || '',
-      meeting_title: data?.meeting_title || '',
-      meeting_type: data?.meeting_type || '',
-      meeting_status: data?.meeting_status || '',
-      meeting_date_time: isoStart,
-      meetingDateTime: isoStart,
-      meeting_end_time: isoEnd,
-      meetingEndTime: isoEnd,
-      meeting_date: humanDate,
-      meetingDate: humanDate,
-      meeting_time: humanTime,
-      meetingTime: humanTime,
-      meeting_end_time_label: humanEndTime,
-      meetingEndTimeLabel: humanEndTime,
-      agenda,
-      description: agenda,
-      meet_link: meetLink,
-      meetLink,
-      meeting_link: meetLink,
-      link: meetLink,
-      created_by_name: data?.created_by_name || '',
-      recipient_name: data?.recipient_name || '',
-      sent_at: data?.sent_at || new Date().toISOString(),
-    }
+  const buildMeetingScheduledDynamicTemplateData = (entryData = {}) => ({
+    meeting_id: entryData?.meeting_id || data?.meeting_id || '',
+    booking_id: String(entryData?.booking_id || orderId || ''),
+    bookingId: String(entryData?.booking_id || orderId || ''),
+    order_id: String(entryData?.order_id || orderId || ''),
+    orderId: String(entryData?.order_id || orderId || ''),
+    project_id: String(entryData?.project_id || entryData?.order_id || data?.project_id || orderId || ''),
+    order_name: entryData?.order_name || orderName || '',
+    project_name: entryData?.project_name || orderName || '',
+    project: entryData?.project || orderName || '',
+    meeting_title: entryData?.meeting_title || data?.meeting_title || '',
+    meeting_type: entryData?.meeting_type || data?.meeting_type || '',
+    meeting_status: entryData?.meeting_status || data?.meeting_status || '',
+    meeting_date_time: isoStart,
+    meetingDateTime: isoStart,
+    meeting_end_time: isoEnd,
+    meetingEndTime: isoEnd,
+    meeting_date: humanDate,
+    meetingDate: humanDate,
+    meeting_time: humanTime,
+    meetingTime: humanTime,
+    meeting_end_time_label: humanEndTime,
+    meetingEndTimeLabel: humanEndTime,
+    agenda,
+    meeting_agenda: entryData?.meeting_agenda || data?.meeting_agenda || agenda,
+    description: agenda,
+    meet_link: meetLink,
+    meetLink,
+    meeting_link: meetLink,
+    link: meetLink,
+    created_by_name: entryData?.created_by_name || data?.created_by_name || '',
+    recipient_name: entryData?.recipient_name || data?.recipient_name || '',
+    view_details_url: entryData?.view_details_url || data?.view_details_url || meetLink,
+    sent_at: entryData?.sent_at || data?.sent_at || new Date().toISOString(),
   });
+
+  const recipientEntries = (Array.isArray(recipients) ? recipients : [recipients])
+    .map((recipient) => {
+      if (recipient && typeof recipient === 'object' && !Array.isArray(recipient)) {
+        const to = normalizeEmailAddress(recipient.email || recipient.to);
+        if (!to) return null;
+
+        return {
+          to,
+          dynamicTemplateData: buildMeetingScheduledDynamicTemplateData({
+            ...data,
+            ...(recipient.data || {}),
+            recipient_name: recipient.name || recipient.recipient_name || data?.recipient_name || '',
+            view_details_url: recipient.view_details_url || recipient.data?.view_details_url || data?.view_details_url || '',
+          }),
+        };
+      }
+
+      const to = normalizeEmailAddress(recipient);
+      if (!to) return null;
+
+      return {
+        to,
+        dynamicTemplateData: buildMeetingScheduledDynamicTemplateData(data),
+      };
+    })
+    .filter(Boolean);
+
+  if (!recipientEntries.length) {
+    return { success: false, error: 'No recipient emails found' };
+  }
+
+  const settled = await Promise.allSettled(
+    recipientEntries.map((entry) =>
+      sendEmail({
+        to: entry.to,
+        subject: data?.meeting_title || 'Meeting scheduled',
+        templateId: MEETING_SCHEDULED_TEMPLATE_ID,
+        dynamicTemplateData: entry.dynamicTemplateData,
+      })
+    )
+  );
+
+  const sent = settled.filter((item) => item.status === 'fulfilled' && item.value?.success).length;
+  const failed = settled
+    .map((item, index) => ({ item, to: recipientEntries[index]?.to }))
+    .filter((entry) => entry.item.status === 'rejected' || !entry.item.value?.success)
+    .map((entry) => ({
+      to: entry.to,
+      error:
+        entry.item.status === 'rejected'
+          ? entry.item.reason?.message || 'Unknown error'
+          : entry.item.value?.error || 'Unknown error',
+    }));
+
+  return {
+    success: failed.length === 0,
+    partialSuccess: sent > 0 && failed.length > 0,
+    sentCount: sent,
+    failedCount: failed.length,
+    failedRecipients: failed,
+  };
 };
 
 const sendMessagingInitiatedTemplateEmail = async ({ recipients = [], data = {} }) => {

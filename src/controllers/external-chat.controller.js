@@ -112,6 +112,88 @@ const getBookingRecord = async (bookingId) => {
   return booking || null;
 };
 
+const extractChatRoomId = (payload = {}) => {
+  const direct = String(
+    payload?._id ||
+    payload?.id ||
+    payload?.room_id ||
+    payload?.roomId ||
+    payload?.data?._id ||
+    payload?.data?.id ||
+    payload?.data?.room_id ||
+    payload?.data?.roomId ||
+    ''
+  ).trim();
+  if (direct) return direct;
+
+  const queue = [payload];
+  const visited = new Set();
+
+  while (queue.length) {
+    const current = queue.shift();
+    if (!current || typeof current !== 'object' || visited.has(current)) continue;
+    visited.add(current);
+
+    const candidate = String(
+      current?._id ||
+      current?.id ||
+      current?.room_id ||
+      current?.roomId ||
+      ''
+    ).trim();
+    if (candidate) return candidate;
+
+    Object.values(current).forEach((value) => {
+      if (value && typeof value === 'object') queue.push(value);
+    });
+  }
+
+  return '';
+};
+
+const saveChatRoomMapping = async ({ roomId, bookingId }) => {
+  const normalizedRoomId = String(roomId || '').trim();
+  const normalizedBookingId = parseBookingIdValue(bookingId);
+  if (!normalizedRoomId || !normalizedBookingId) return false;
+
+  await db.sequelize.query(
+    `
+      INSERT INTO chat_room_mappings (room_id, booking_id)
+      VALUES (:roomId, :bookingId)
+      ON DUPLICATE KEY UPDATE
+        booking_id = VALUES(booking_id),
+        updated_at = CURRENT_TIMESTAMP
+    `,
+    {
+      replacements: {
+        roomId: normalizedRoomId,
+        bookingId: Number(normalizedBookingId),
+      },
+    }
+  );
+
+  return true;
+};
+
+const getMappedBookingIdForRoom = async (roomId) => {
+  const normalizedRoomId = String(roomId || '').trim();
+  if (!normalizedRoomId) return '';
+
+  const [rows] = await db.sequelize.query(
+    `
+      SELECT booking_id
+      FROM chat_room_mappings
+      WHERE room_id = :roomId
+      LIMIT 1
+    `,
+    {
+      replacements: { roomId: normalizedRoomId },
+    }
+  );
+
+  return rows?.[0]?.booking_id != null ? String(rows[0].booking_id).trim() : '';
+};
+
 const normalizeClientEntity = (value) => {
   if (!value) return null;
   if (typeof value === 'string' || typeof value === 'number') {
@@ -390,22 +472,6 @@ const extractParticipantEnvelope = (payload = {}) => {
 
 const normalizeEmailAddress = (value) => String(value || '').trim().toLowerCase();
 
-const extractChatRecipientEmails = (envelope = {}) => {
-  const emails = new Set();
-  const push = (value) => {
-    const normalized = normalizeEmailAddress(value);
-    if (normalized) emails.add(normalized);
-  };
-
-  push(envelope?.client?.email);
-  push(envelope?.pm?.email);
-  (envelope?.cps || []).forEach((participant) => push(participant?.email));
-  (envelope?.production || []).forEach((participant) => push(participant?.email));
-  (envelope?.managers || []).forEach((participant) => push(participant?.email));
-
-  return [...emails];
-};
-
 const toObject = (value) => (value && typeof value === 'object' ? value : null);
 
 const resolveChatOrderId = (payload = {}) =>
@@ -428,28 +494,6 @@ const resolveChatDisplayName = (payload = {}) =>
       ''
   ).trim();
 
-const extractLegacyRecipientEmails = (payload = {}) => {
-  const sources = [payload, payload?.data].filter((entry) => entry && typeof entry === 'object');
-  const emails = new Set();
-  const push = (value) => {
-    const normalized = normalizeEmailAddress(
-      typeof value === 'string' ? value : value?.email
-    );
-    if (normalized) emails.add(normalized);
-  };
-
-  for (const source of sources) {
-    push(source?.client_id);
-    push(source?.client_snapshot);
-    push(source?.pm_id);
-    (source?.cp_ids || []).forEach((entry) => push(entry));
-    (source?.manager_ids || []).forEach((entry) => push(entry));
-    (source?.production_ids || []).forEach((entry) => push(entry));
-  }
-
-  return [...emails];
-};
-
 const parseBookingIdValue = (value) => {
   const raw = String(value || '').trim();
   if (!raw) return null;
@@ -470,34 +514,98 @@ const resolveChatBookingId = (payload = {}) => {
   return null;
 };
 
+const getDashboardUrlForRecipientRole = (role = '') => {
+  const baseUrl = String(process.env.FRONTEND_URL).trim().replace(/\/+$/, '');
+  const normalizedRole = String(role || '').trim().toLowerCase();
+
+  if (normalizedRole === 'client') return `${baseUrl}/affiliate/dashboard`;
+  if (normalizedRole === 'cp') return `${baseUrl}/creator/dashboard`;
+  if (normalizedRole === 'sales_rep') return `${baseUrl}/sales/dashboard`;
+  if (normalizedRole === 'admin') return `${baseUrl}/admin/dashboard`;
+
+  return baseUrl;
+};
+
+const buildChatFrontendUrl = (roomId) => {
+  const baseUrl = String(process.env.FRONTEND_URL).trim().replace(/\/+$/, '');
+  const normalizedRoomId = String(roomId || '').trim();
+  if (!normalizedRoomId) return baseUrl;
+  return `${baseUrl}/chat/${encodeURIComponent(normalizedRoomId)}`;
+};
+
 const getChatBookingFallbackRecipients = async (bookingId) => {
   const normalizedBookingId = parseBookingIdValue(bookingId);
   if (!normalizedBookingId) return [];
 
-  const emails = new Set();
-  const push = (value) => {
-    const normalized = normalizeEmailAddress(value);
-    if (normalized) emails.add(normalized);
+  const recipients = [];
+  const seen = new Set();
+  const pushRecipient = (participant, fallbackRole = '') => {
+    const email = normalizeEmailAddress(participant?.email || participant);
+    if (!email || seen.has(email)) return;
+
+    recipients.push({
+      email,
+      name: String(participant?.name || participant?.email || '').trim(),
+      role: String(participant?.role || fallbackRole || '').trim().toLowerCase(),
+    });
+    seen.add(email);
   };
 
   const booking = await getBookingRecord(normalizedBookingId);
   if (booking) {
-    push(booking?.guest_email);
+    pushRecipient({
+      email: booking?.guest_email,
+      name: booking?.client_name || booking?.guest_email || 'Client',
+      role: 'client',
+    }, 'client');
 
     const bookingUserId = Number(booking?.user_id);
     if (Number.isFinite(bookingUserId)) {
       const bookingUser = await getPlatformUserById(bookingUserId);
-      push(bookingUser?.email);
+      pushRecipient({
+        email: bookingUser?.email,
+        name: booking?.client_name || bookingUser?.name || bookingUser?.email || 'Client',
+        role: 'client',
+      }, 'client');
     }
   }
 
   const salesRep = await getAssignedSalesRepForBooking(normalizedBookingId);
-  push(salesRep?.email);
+  pushRecipient(salesRep, 'sales_rep');
 
   const assignedCps = await getAssignedCpsForBooking(normalizedBookingId);
-  assignedCps.forEach((entry) => push(entry?.crew_member?.email));
+  assignedCps.forEach((entry) => pushRecipient({
+    email: entry?.crew_member?.email,
+    name: `${entry?.crew_member?.first_name || ''} ${entry?.crew_member?.last_name || ''}`.trim() || entry?.crew_member?.email || '',
+    role: 'cp',
+  }, 'cp'));
 
-  return [...emails];
+  return recipients;
+};
+
+const extractChatRecipientTargets = (envelope = {}) => {
+  const recipients = [];
+  const seen = new Set();
+
+  const pushRecipient = (participant, fallbackRole = '') => {
+    const email = normalizeEmailAddress(participant?.email || participant);
+    if (!email || seen.has(email)) return;
+
+    recipients.push({
+      email,
+      name: String(participant?.name || participant?.email || '').trim(),
+      role: String(participant?.role || fallbackRole || '').trim().toLowerCase(),
+    });
+    seen.add(email);
+  };
+
+  pushRecipient(envelope?.client, 'client');
+  pushRecipient(envelope?.pm, 'pm');
+  (envelope?.cps || []).forEach((participant) => pushRecipient(participant, 'cp'));
+  (envelope?.production || []).forEach((participant) => pushRecipient(participant, 'production'));
+  (envelope?.managers || []).forEach((participant) => pushRecipient(participant, 'manager'));
+
+  return recipients;
 };
 
 const sendChatNotificationTemplate = async ({
@@ -511,32 +619,60 @@ const sendChatNotificationTemplate = async ({
     const participantPayload = await proxyRequest(`/participants/${roomId}`).catch(() => null);
     const { envelope } = extractParticipantEnvelope(participantPayload || {});
     const enrichedEnvelope = envelope ? await enrichParticipantPayload(envelope) : null;
-    const recipients = new Set([
-      ...extractChatRecipientEmails(enrichedEnvelope || {}),
-      ...extractLegacyRecipientEmails(participantPayload || {}),
-    ]);
+    let recipientTargets = extractChatRecipientTargets(enrichedEnvelope || {});
 
     const roomPayload = toObject(fallbackPayload?.data) || toObject(fallbackPayload) || {};
-    if (!recipients.size) {
-      const bookingId = resolveChatBookingId(roomPayload);
-      const fallbackRecipients = await getChatBookingFallbackRecipients(bookingId);
-      fallbackRecipients.forEach((email) => recipients.add(email));
+    const mappedBookingId = await getMappedBookingIdForRoom(roomId);
+    const resolvedBookingId =
+      mappedBookingId ||
+      resolveChatBookingId(roomPayload) ||
+      resolveChatBookingId(participantPayload || {}) ||
+      '';
+    const booking = resolvedBookingId ? await getBookingRecord(resolvedBookingId) : null;
+    const projectId = String(booking?.stream_project_booking_id || resolvedBookingId || '').trim();
+    if (projectId) {
+      await saveChatRoomMapping({
+        roomId,
+        bookingId: projectId,
+      });
+    }
+    if (!recipientTargets.length) {
+      recipientTargets = await getChatBookingFallbackRecipients(projectId);
     }
 
-    const recipientList = [...recipients];
-    if (!recipientList.length) return;
+    if (!recipientTargets.length) return;
+    const chatName = resolveChatDisplayName(roomPayload);
+    const clientName = String(
+      booking?.client_name ||
+      enrichedEnvelope?.client?.name ||
+      roomPayload?.client_name ||
+      roomPayload?.data?.client_name ||
+      ''
+    ).trim();
 
     await emailService.sendMessagingInitiatedTemplateEmail({
-      recipients: recipientList,
+      recipients: recipientTargets.map((recipient) => ({
+        email: recipient.email,
+        name: recipient.name,
+        role: recipient.role,
+        data: {
+          client_name: recipient.name || clientName,
+          recipient_name: recipient.name || '',
+          chat_url: getDashboardUrlForRecipientRole(recipient.role),
+        },
+      })),
       data: {
         chat_room_id: roomId,
-        chat_name: resolveChatDisplayName(roomPayload),
-        order_id: resolveChatOrderId(roomPayload),
-        project_name: resolveChatDisplayName(roomPayload),
+        chat_name: chatName,
+        order_id: projectId,
+        project_name: chatName,
+        project_id: projectId,
         sender_id: sender?.id != null ? String(sender.id) : '',
         sender_name: sender?.name || sender?.email || '',
         message_preview: String(messagePreview || ''),
         event_type: eventType,
+        client_name: clientName,
+        chat_url: buildChatFrontendUrl(roomId),
         sent_at: new Date().toISOString(),
       },
     });
@@ -795,7 +931,14 @@ exports.getChatRoomByBooking = async (bookingId) => {
   }
 
   try {
-    return await proxyRequest(`/order/${bookingId}`);
+    const result = await proxyRequest(`/order/${bookingId}`);
+    if (result?.data) {
+      await saveChatRoomMapping({
+        roomId: extractChatRoomId(result.data),
+        bookingId,
+      });
+    }
+    return result;
   } catch (error) {
     if (error.status === 404 || isInvalidExternalOrderReference(error)) {
       return {
@@ -814,7 +957,7 @@ exports.createChatRoomForBooking = async ({ bookingId = null, participants, admi
   const booking = bookingId ? await getBookingRecord(bookingId) : null;
   const normalizedExternalRef = String(externalRef || bookingId || '').trim() || `direct:${Date.now()}`;
   try {
-    return await proxyRequest('/room', {
+    const result = await proxyRequest('/room', {
       method: 'POST',
       body: JSON.stringify({
         order_id: bookingId ? String(bookingId) : undefined,
@@ -832,6 +975,15 @@ exports.createChatRoomForBooking = async ({ bookingId = null, participants, admi
           : null,
       }),
     });
+
+    if (bookingId) {
+      await saveChatRoomMapping({
+        roomId: extractChatRoomId(result),
+        bookingId,
+      });
+    }
+
+    return result;
   } catch (error) {
     if (bookingId && isDuplicateChatCreateError(error)) {
       const existingRoom = await exports.getChatRoomByBooking(bookingId);
@@ -904,6 +1056,10 @@ exports.createChatRoom = async (req, res) => {
 
     const existingChat = bookingId ? await exports.getChatRoomByBooking(bookingId) : null;
     if (existingChat?.data && roomType === 'project') {
+      await saveChatRoomMapping({
+        roomId: extractChatRoomId(existingChat.data),
+        bookingId,
+      });
       return res.status(200).json({
         success: true,
         message: 'Chat room already exists',
@@ -954,6 +1110,13 @@ exports.createChatRoom = async (req, res) => {
         : buildDirectRoomName({ roomName: req.body.roomName, client: directClient, participants: mergedParticipants }),
       externalRef: bookingId || req.body.externalRef || `direct:${req.user?.userId || 'user'}:${directClient?.id || Date.now()}`,
     });
+
+    if (bookingId && result?.data) {
+      await saveChatRoomMapping({
+        roomId: extractChatRoomId(result.data),
+        bookingId,
+      });
+    }
 
     const decoratedRoom = result?.data ? await decorateChatRoom(result.data) : result?.data;
     return res.status(200).json({
