@@ -14,6 +14,7 @@ function sendError(res, error, fallbackMessage, statusCode = constants.BAD_REQUE
   return res.status(statusCode).json({
     success: false,
     message: fallbackMessage,
+    data: error?.details || null,
     error: process.env.NODE_ENV === 'development' ? error.message : undefined
   });
 }
@@ -374,7 +375,7 @@ exports.updateQuote = async (req, res) => {
     });
   } catch (error) {
     console.error('Error updating sales quote:', error);
-    const statusCode = error.message === 'Quote not found' ? constants.NOT_FOUND.code : constants.BAD_REQUEST.code;
+    const statusCode = error.statusCode || (error.message === 'Quote not found' ? constants.NOT_FOUND.code : constants.BAD_REQUEST.code);
     return sendError(res, error, error.message || 'Failed to update quote', statusCode);
   }
 };

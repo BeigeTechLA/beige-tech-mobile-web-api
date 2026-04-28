@@ -1397,6 +1397,17 @@ Authorization: {{TOKEN2}}
   ]
 }
 
+### update sales quote
+PUT {{URL}}sales/quotes/162 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+{
+  "project_description": "Updated scope",
+  "edit_reason": "Client requested urgent update before shoot",
+  "ops_review_confirmed": true
+}
+
 ### update sales quote (only tax/discount)
 PUT {{URL}}sales/quotes/121 HTTP/1.1
 Content-Type: application/json

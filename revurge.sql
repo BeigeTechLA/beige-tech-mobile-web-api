@@ -1081,3 +1081,17 @@ ALTER TABLE `stream_project_booking`
 ALTER TABLE `crew_members`
   ADD COLUMN `latitude` DECIMAL(10,8) NULL AFTER `old_location`,
   ADD COLUMN `longitude` DECIMAL(11,8) NULL AFTER `latitude`;
+
+-- 28-04-26
+
+ALTER TABLE `sales_quote_activities`
+MODIFY COLUMN `activity_type` ENUM(
+  'created',
+  'updated',
+  'status_changed',
+  'sent',
+  'viewed',
+  'accepted',
+  'rejected',
+  'restricted_edit_confirmed'
+) NOT NULL;

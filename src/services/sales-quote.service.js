@@ -1,6 +1,7 @@
 const { Op } = require('sequelize');
 const jwt = require('jsonwebtoken');
 const db = require('../models');
+const constants = require('../utils/constants');
 const {
   sendCustomQuoteProposalEmail,
   sendQuoteAcceptedClientEmail,
@@ -16,6 +17,7 @@ const QUOTE_STATUSES = ['draft', 'pending', 'partially_paid', 'sent', 'viewed', 
 const DISCOUNT_TYPES = ['none', 'percentage', 'fixed_amount'];
 const AI_EDITING_SERVICE_NAME = 'ai editing';
 const CONVERTED_BOOKINGS_LEAD_SOURCE = 'converted bookings';
+const QUOTE_EDIT_RESTRICTION_WINDOW_HOURS = 48;
 const BOOKING_SHOOT_TYPE_MAP = {
   corporateevent: 'corporate',
   wedding: 'wedding',
@@ -199,6 +201,146 @@ function addMonths(date, months) {
 
 function startOfMonth(date) {
   return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function buildDateTimeFromDateAndTime(dateValue, timeValue) {
+  if (!dateValue || !timeValue) return null;
+
+  const normalizedTime = normalizeTime(timeValue);
+  if (!normalizedTime) return null;
+
+  const parsedDateTime = new Date(`${String(dateValue).trim()}T${normalizedTime}`);
+  return Number.isNaN(parsedDateTime.getTime()) ? null : parsedDateTime;
+}
+
+function buildQuoteEditGuardrailPayload({
+  canEvaluateRestriction,
+  isRestricted = false,
+  shootStartAt = null,
+  hoursUntilShootStart = null,
+  bookingId = null,
+  scheduleStatus,
+  message,
+  timeZone = null,
+  quoteNumber = null,
+  clientName = null
+}) {
+  const normalizedHoursUntilShootStart = hoursUntilShootStart !== null && hoursUntilShootStart !== undefined
+    ? roundCurrency(hoursUntilShootStart)
+    : null;
+  const showRestrictionModal = Boolean(canEvaluateRestriction && isRestricted);
+  if (!canEvaluateRestriction) {
+    return {
+      show_restriction_modal: false
+    };
+  }
+
+  if (!showRestrictionModal) {
+    return {
+      show_restriction_modal: false
+    };
+  }
+
+  return {
+    show_restriction_modal: true,
+    modal: {
+      quote_id: quoteNumber,
+      client_name: clientName,
+      shoot_start_at: shootStartAt ? shootStartAt.toISOString() : null,
+      hours_remaining: normalizedHoursUntilShootStart
+    },
+    message: message || 'Quote edits are restricted because the shoot starts within 48 hours.',
+    context: {
+      booking_id: bookingId,
+      schedule_status: scheduleStatus,
+      time_zone: timeZone || null
+    }
+  };
+}
+
+async function getQuoteEditGuardrails(quote, transaction = null) {
+  const quoteNumber = quote?.quote_number || null;
+  const clientName = quote?.client_name || null;
+
+  if (!quote?.lead_id) {
+    return buildQuoteEditGuardrailPayload({
+      canEvaluateRestriction: false,
+      scheduleStatus: 'missing_booking_schedule',
+      message: 'Shoot start time is not available yet because this quote is not linked to a scheduled booking.',
+      quoteNumber,
+      clientName
+    });
+  }
+
+  const linkedLead = await db.sales_leads.findOne({
+    where: { lead_id: quote.lead_id },
+    attributes: ['booking_id'],
+    transaction,
+    raw: true
+  });
+
+  if (!linkedLead?.booking_id) {
+    return buildQuoteEditGuardrailPayload({
+      canEvaluateRestriction: false,
+      scheduleStatus: 'missing_booking_schedule',
+      message: 'Shoot start time is not available yet because this quote does not have a linked booking schedule.',
+      quoteNumber,
+      clientName
+    });
+  }
+
+  const bookingId = linkedLead.booking_id;
+  const booking = await db.stream_project_booking.findByPk(bookingId, {
+    attributes: ['stream_project_booking_id', 'event_date', 'start_time'],
+    transaction
+  });
+
+  const bookingDays = db.stream_project_booking_days
+    ? await db.stream_project_booking_days.findAll({
+        where: { stream_project_booking_id: bookingId },
+        attributes: ['event_date', 'start_time', 'time_zone'],
+        order: [['event_date', 'ASC'], ['start_time', 'ASC'], ['stream_project_booking_day_id', 'ASC']],
+        transaction,
+        raw: true
+      })
+    : [];
+
+  const firstScheduledDay = (bookingDays || []).find((day) => day?.event_date && day?.start_time);
+  const fallbackDate = booking?.event_date || null;
+  const fallbackTime = booking?.start_time || null;
+  const fallbackDateTime = buildDateTimeFromDateAndTime(fallbackDate, fallbackTime);
+  const scheduledDateTime = firstScheduledDay
+    ? buildDateTimeFromDateAndTime(firstScheduledDay.event_date, firstScheduledDay.start_time)
+    : fallbackDateTime;
+
+  if (!scheduledDateTime) {
+    return buildQuoteEditGuardrailPayload({
+      canEvaluateRestriction: false,
+      bookingId,
+      scheduleStatus: fallbackDate || fallbackTime ? 'incomplete_schedule' : 'missing_booking_schedule',
+      timeZone: firstScheduledDay?.time_zone || null,
+      message: 'Shoot start time is not available yet. The 48-hour edit restriction will apply once the booking schedule has both a date and start time.',
+      quoteNumber,
+      clientName
+    });
+  }
+
+  const hoursUntilShootStart = roundCurrency((scheduledDateTime.getTime() - Date.now()) / (60 * 60 * 1000));
+
+  return buildQuoteEditGuardrailPayload({
+    canEvaluateRestriction: true,
+    isRestricted: hoursUntilShootStart <= QUOTE_EDIT_RESTRICTION_WINDOW_HOURS,
+    shootStartAt: scheduledDateTime,
+    hoursUntilShootStart,
+    bookingId,
+    scheduleStatus: 'scheduled',
+    timeZone: firstScheduledDay?.time_zone || null,
+    quoteNumber,
+    clientName,
+    message: hoursUntilShootStart <= QUOTE_EDIT_RESTRICTION_WINDOW_HOURS
+      ? 'Quote edits are restricted because the shoot starts within 48 hours.'
+      : 'Quote can be edited without the 48-hour restriction.'
+  });
 }
 
 function parseDateInput(dateInput) {
@@ -2839,6 +2981,27 @@ async function updateQuote(salesQuoteId, payload, user) {
       throw new Error('Quote not found');
     }
 
+    const editGuardrails = await getQuoteEditGuardrails(quote, transaction);
+    if (editGuardrails.show_restriction_modal) {
+      const editReason = String(payload.edit_reason || '').trim();
+      const opsReviewConfirmed = payload.ops_review_confirmed === true;
+
+      if (!editReason || !opsReviewConfirmed) {
+        const restrictedEditError = new Error('Quote edits within 48 hours of shoot start require edit_reason and ops_review_confirmed');
+        restrictedEditError.statusCode = constants.FORBIDDEN.code;
+        restrictedEditError.details = {
+          show_restriction_modal: true,
+          message: editGuardrails.message,
+          modal: editGuardrails.modal,
+          missing_requirements: [
+            ...(!editReason ? ['edit_reason'] : []),
+            ...(!opsReviewConfirmed ? ['ops_review_confirmed'] : [])
+          ]
+        };
+        throw restrictedEditError;
+      }
+    }
+
     const billingState = await resolveQuoteBillingState(quote, transaction);
     const clientSnapshot = await resolveClientSnapshot(payload, quote);
     const existingLineItems = await db.sales_quote_line_items.findAll({
@@ -3052,6 +3215,23 @@ async function updateQuote(salesQuoteId, payload, user) {
       });
     }
 
+    if (editGuardrails.show_restriction_modal) {
+      await recordActivity(
+        transaction,
+        salesQuoteId,
+        'restricted_edit_confirmed',
+        user.userId,
+        'Restricted quote edit confirmed within 48-hour window',
+        {
+          edit_reason: String(payload.edit_reason || '').trim(),
+          ops_review_confirmed: payload.ops_review_confirmed === true,
+          shoot_start_at: editGuardrails.modal?.shoot_start_at || null,
+          hours_remaining: editGuardrails.modal?.hours_remaining ?? null,
+          booking_id: billingState.booking?.stream_project_booking_id || null
+        }
+      );
+    }
+
     await recordActivity(transaction, salesQuoteId, 'updated', user.userId, 'Quote updated', {
       previous_total: previousTotal,
       new_total: newTotal,
@@ -3062,6 +3242,9 @@ async function updateQuote(salesQuoteId, payload, user) {
       payment_status: paymentStatus,
       booking_id: billingState.booking?.stream_project_booking_id || null,
       change_summary: changeSummary,
+      edit_guardrails: editGuardrails,
+      edit_reason: payload.edit_reason ? String(payload.edit_reason).trim() : null,
+      ops_review_confirmed: payload.ops_review_confirmed === true,
       invoice_refresh_required: Boolean(
         billingState.booking?.stream_project_booking_id &&
         (extraAmount > 0 || reducedAmount > 0) &&
@@ -3358,6 +3541,12 @@ async function fetchQuoteById(salesQuoteId, user = null) {
       plain.lead_source = linkedLead.lead_source;
     }
   }
+
+  plain.edit_guardrails = await getQuoteEditGuardrails({
+    lead_id: plain.lead_id,
+    quote_number: plain.quote_number,
+    client_name: plain.client_name
+  });
 
   plain.line_items = (plain.line_items || []).map((item) => ({
     ...item,
