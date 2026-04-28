@@ -3,7 +3,7 @@ name: Deploy Backend Dev
 on:
   push:
     branches:
-      - development
+      - feature/client-credit
     paths-ignore:
       - ".github/workflows/deploy-dev.yml"
       - ".github/workflows/deploy-staging.yml"
