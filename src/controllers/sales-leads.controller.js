@@ -2024,9 +2024,9 @@ exports.getLeadById = async (req, res) => {
 
     let whereClause = { lead_id: id, is_active: 1 };
 
-    if (req.userRole === 'sales_rep') {
-      whereClause.assigned_sales_rep_id = req.userId;
-    }
+    // if (req.userRole === 'sales_rep') {
+    //   whereClause.assigned_sales_rep_id = req.userId;
+    // }
 
     const lead = await sales_leads.findOne({
       where: whereClause,
