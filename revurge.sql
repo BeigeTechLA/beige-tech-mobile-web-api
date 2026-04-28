@@ -1120,3 +1120,5 @@ CREATE TABLE IF NOT EXISTS `sales_quote_versions` (
     FOREIGN KEY (`created_by_user_id`) REFERENCES `users` (`id`)
     ON DELETE SET NULL ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+ALTER TABLE signatures DROP COLUMN pdf_path;

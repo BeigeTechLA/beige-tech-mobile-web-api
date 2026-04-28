@@ -1,4 +1,3 @@
-const { PDFDocument } = require('pdf-lib');
 const fs = require('fs-extra');
 const path = require('path');
 const os = require('os');
@@ -94,33 +93,9 @@ async function loadSignatureImage({ signature_base64, signature_file }) {
 }
 
 async function saveSignature({ quote_id, signer_name, signer_email, signature_base64, signature_file }) {
-    const pdfDoc = await PDFDocument.create();
-    const page = pdfDoc.addPage([595, 842]);
     const timestamp = Date.now();
     const signatureImage = await loadSignatureImage({ signature_base64, signature_file });
-
-    page.drawText(`Quote ID: ${quote_id}`, { x: 50, y: 780, size: 18 });
-    page.drawText(`Signed by: ${signer_name}`, { x: 50, y: 750, size: 14 });
-    page.drawText(`Email: ${signer_email || 'N/A'}`, { x: 50, y: 725, size: 12 });
-    page.drawText(`Date: ${new Date().toLocaleString()}`, { x: 50, y: 700, size: 12 });
-    page.drawText('Signature:', { x: 50, y: 200, size: 12 });
-
-    const sigImage = signatureImage.mimeType === 'image/png'
-        ? await pdfDoc.embedPng(signatureImage.buffer)
-        : await pdfDoc.embedJpg(signatureImage.buffer);
-
-    page.drawImage(sigImage, {
-        x: 50,
-        y: 100,
-        width: 200,
-        height: 80,
-    });
-
-    const pdfBytes = await pdfDoc.save();
-    const pdfPath = `signatures/${quote_id}/quote_signed_${timestamp}.pdf`;
     const signaturePath = `signatures/${quote_id}/signature_${timestamp}.${signatureImage.extension}`;
-    const tempPdfFilePath = path.join(os.tmpdir(), `quote_${quote_id}_signed_${timestamp}.pdf`);
-    await fs.writeFile(tempPdfFilePath, Buffer.from(pdfBytes));
 
     const tempSignatureFilePath = signatureImage.uploadedFilePath
         ? signatureImage.uploadedFilePath
@@ -130,25 +105,15 @@ async function saveSignature({ quote_id, signer_name, signer_email, signature_ba
         await fs.writeFile(tempSignatureFilePath, signatureImage.buffer);
     }
 
-    let uploadedPdf;
     let uploadedSignature;
 
     try {
-        [uploadedPdf, uploadedSignature] = await Promise.all([
-            uploadSignatureAssetToS3({
-                filePath: tempPdfFilePath,
-                key: pdfPath
-            }),
-            uploadSignatureAssetToS3({
-                filePath: tempSignatureFilePath,
-                key: signaturePath
-            })
-        ]);
+        uploadedSignature = await uploadSignatureAssetToS3({
+            filePath: tempSignatureFilePath,
+            key: signaturePath
+        });
     } finally {
-        if (await fs.pathExists(tempPdfFilePath)) {
-            await fs.remove(tempPdfFilePath);
-        }
-        if (await fs.pathExists(tempSignatureFilePath)) {
+        if (!signatureImage.uploadedFilePath && await fs.pathExists(tempSignatureFilePath)) {
             await fs.remove(tempSignatureFilePath);
         }
     }
@@ -158,16 +123,12 @@ async function saveSignature({ quote_id, signer_name, signer_email, signature_ba
         signer_name,
         signer_email,
         signature_base64: toStoredAssetPath(uploadedSignature?.url, signaturePath),
-        pdf_path: toStoredAssetPath(uploadedPdf?.url, pdfPath),
         status: 'signed',
         signed_at: new Date(),
     });
 
     if (!record.signature_url) {
         record.setDataValue('signature_url', toAbsoluteBeigeAssetUrl(record.signature_base64));
-    }
-    if (!record.pdf_url) {
-        record.setDataValue('pdf_url', toAbsoluteBeigeAssetUrl(record.pdf_path));
     }
 
     const quoteAcceptance = await acceptQuoteOnSignature(quote_id, {
@@ -187,9 +148,6 @@ async function getSignatureByQuote(quote_id) {
 
     if (record && record.signature_base64) {
         record.setDataValue('signature_url', toAbsoluteBeigeAssetUrl(record.signature_base64));
-    }
-    if (record && record.pdf_path) {
-        record.setDataValue('pdf_url', toAbsoluteBeigeAssetUrl(record.pdf_path));
     }
 
     return record;

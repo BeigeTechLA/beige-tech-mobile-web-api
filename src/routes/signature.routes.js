@@ -4,10 +4,22 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs-extra');
 const { saveSignature, getSignatureByQuote } = require('../services/signature.service');
-const { getSignedDownloadUrl } = require('../utils/awsS3Client');
 
 const signatureUploadDir = path.join(__dirname, '../../public/uploads/media');
 fs.ensureDirSync(signatureUploadDir);
+
+function toSignatureResponse(record) {
+    return {
+        id: record.id,
+        quote_id: record.quote_id,
+        signer_name: record.signer_name,
+        signer_email: record.signer_email,
+        signed_at: record.signed_at,
+        status: record.status,
+        signature_url: record.signature_url || record.signature_base64,
+        quote_acceptance: record.quote_acceptance || null
+    };
+}
 
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
@@ -51,16 +63,7 @@ router.post('/sign', upload.single('signature'), async (req, res) => {
         res.json({
             success: true,
             message: 'Signature saved successfully!',
-            data: {
-                id: record.id,
-                quote_id: record.quote_id,
-                signer_name: record.signer_name,
-                signed_at: record.signed_at,
-                signature_url: record.signature_url || record.signature_base64,
-                pdf_path: record.pdf_path,
-                pdf_url: record.pdf_url || record.pdf_path,
-                quote_acceptance: record.quote_acceptance || null
-            }
+            data: toSignatureResponse(record)
         });
     } catch (err) {
         console.error('Signature error:', err);
@@ -78,46 +81,7 @@ router.get('/quote/:quote_id', async (req, res) => {
                 message: 'Signature not found'
             });
         }
-        res.json({ success: true, data: record });
-    } catch (err) {
-        res.status(500).json({ success: false, message: err.message });
-    }
-});
-
-
-router.get('/download/:quote_id', async (req, res) => {
-    try {
-        const record = await getSignatureByQuote(req.params.quote_id);
-        if (!record) {
-            return res.status(404).json({
-                success: false,
-                message: 'Signature not found'
-            });
-        }
-
-        if (!record.pdf_path) {
-            return res.status(404).json({
-                success: false,
-                message: 'PDF file not found'
-            });
-        }
-
-        const downloadUrl = /^https?:\/\//i.test(record.pdf_path)
-            ? record.pdf_path
-            : record.pdf_url
-                ? record.pdf_url
-            : await getSignedDownloadUrl(record.pdf_path, 3600, {
-                responseContentDisposition: `attachment; filename="quote_${req.params.quote_id}_signed.pdf"`
-            });
-
-        res.json({
-            success: true,
-            data: {
-                download_url: downloadUrl,
-                expires_in_seconds: 3600,
-                pdf_path: record.pdf_path
-            }
-        });
+        res.json({ success: true, data: toSignatureResponse(record) });
     } catch (err) {
         res.status(500).json({ success: false, message: err.message });
     }
