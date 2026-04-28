@@ -456,6 +456,42 @@ exports.getQuoteById = async (req, res) => {
   }
 };
 
+exports.listQuoteVersions = async (req, res) => {
+  try {
+    const data = await quoteService.listQuoteVersions(Number(req.params.quoteId), getUserContext(req));
+    return res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    console.error('Error listing quote versions:', error);
+    const statusCode = error.message === 'Quote not found' ? constants.NOT_FOUND.code : constants.BAD_REQUEST.code;
+    return sendError(res, error, error.message || 'Failed to fetch quote versions', statusCode);
+  }
+};
+
+exports.getQuoteVersionByNumber = async (req, res) => {
+  try {
+    const data = await quoteService.getQuoteVersionByNumber(
+      Number(req.params.quoteId),
+      Number(req.params.versionNumber),
+      getUserContext(req)
+    );
+    return res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    console.error('Error fetching quote version:', error);
+    const statusCode = error.message === 'Quote not found'
+      ? constants.NOT_FOUND.code
+      : error.message === 'Quote version not found'
+        ? constants.NOT_FOUND.code
+        : constants.BAD_REQUEST.code;
+    return sendError(res, error, error.message || 'Failed to fetch quote version', statusCode);
+  }
+};
+
 exports.getPublicQuoteById = async (req, res) => {
   try {
     const quote = await quoteService.getPublicQuoteById(Number(req.params.quoteId));

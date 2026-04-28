@@ -1095,3 +1095,28 @@ MODIFY COLUMN `activity_type` ENUM(
   'rejected',
   'restricted_edit_confirmed'
 ) NOT NULL;
+
+CREATE TABLE IF NOT EXISTS `sales_quote_versions` (
+  `sales_quote_version_id` INT NOT NULL AUTO_INCREMENT,
+  `sales_quote_id` INT NOT NULL,
+  `version_number` INT NOT NULL,
+  `source_activity_id` INT NULL,
+  `created_by_user_id` INT NULL,
+  `change_reason` TEXT NULL,
+  `quote_snapshot_json` LONGTEXT NOT NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`sales_quote_version_id`),
+  UNIQUE KEY `uniq_sales_quote_version_number` (`sales_quote_id`, `version_number`),
+  KEY `idx_sales_quote_versions_quote` (`sales_quote_id`, `created_at`),
+  KEY `idx_sales_quote_versions_activity` (`source_activity_id`),
+  KEY `idx_sales_quote_versions_created_by` (`created_by_user_id`),
+  CONSTRAINT `fk_sales_quote_versions_quote`
+    FOREIGN KEY (`sales_quote_id`) REFERENCES `sales_quotes` (`sales_quote_id`)
+    ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `fk_sales_quote_versions_activity`
+    FOREIGN KEY (`source_activity_id`) REFERENCES `sales_quote_activities` (`activity_id`)
+    ON DELETE SET NULL ON UPDATE CASCADE,
+  CONSTRAINT `fk_sales_quote_versions_created_by`
+    FOREIGN KEY (`created_by_user_id`) REFERENCES `users` (`id`)
+    ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

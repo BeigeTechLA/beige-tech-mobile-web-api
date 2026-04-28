@@ -1421,9 +1421,19 @@ Authorization: {{TOKEN}}
 }
 
 ### get sales quote detail
-GET {{URL}}sales/quotes/137 HTTP/1.1
+GET {{URL}}sales/quotes/163 HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN}}
+Authorization: {{TOKEN2}}
+
+### get quote versions
+GET {{URL}}sales/quotes/163/versions HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+### get quote version by version id
+GET {{URL}}sales/quotes/163/versions/1 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
 
 ### convert quote to booking | Single day:
 POST {{URL}}sales/quotes/137/convert-to-booking HTTP/1.1

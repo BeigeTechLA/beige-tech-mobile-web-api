@@ -181,6 +181,163 @@ function stableStringify(value) {
   return JSON.stringify(value);
 }
 
+function toPlainRecord(record) {
+  if (!record) return null;
+  return typeof record.get === 'function' ? record.get({ plain: true }) : record;
+}
+
+function normalizeQuoteVersionLineItems(lineItems = []) {
+  return (Array.isArray(lineItems) ? lineItems : []).map((item) => {
+    const plain = toPlainRecord(item) || {};
+    return {
+      line_item_id: plain.line_item_id || null,
+      sales_quote_id: plain.sales_quote_id || null,
+      catalog_item_id: plain.catalog_item_id || null,
+      source_type: plain.source_type || 'catalog',
+      section_type: plain.section_type || null,
+      item_name: plain.item_name || null,
+      description: plain.description || null,
+      rate_type: plain.rate_type || 'flat',
+      rate_unit: plain.rate_unit || null,
+      quantity: Number(plain.quantity || 0),
+      duration_hours: plain.duration_hours !== null && plain.duration_hours !== undefined ? Number(plain.duration_hours) : null,
+      crew_size: plain.crew_size !== null && plain.crew_size !== undefined ? Number(plain.crew_size) : null,
+      estimated_pricing: plain.estimated_pricing !== null && plain.estimated_pricing !== undefined ? Number(plain.estimated_pricing) : null,
+      unit_rate: Number(plain.unit_rate || 0),
+      line_total: Number(plain.line_total || 0),
+      sort_order: Number(plain.sort_order || 0),
+      is_active: plain.is_active !== undefined ? Boolean(plain.is_active) : true,
+      created_at: plain.created_at || null,
+      updated_at: plain.updated_at || null,
+      catalog_item: plain.catalog_item ? {
+        catalog_item_id: plain.catalog_item.catalog_item_id,
+        section_type: plain.catalog_item.section_type,
+        pricing_mode: plain.catalog_item.pricing_mode,
+        name: plain.catalog_item.name,
+        default_rate: plain.catalog_item.default_rate,
+        rate_type: plain.catalog_item.rate_type,
+        rate_unit: plain.catalog_item.rate_unit,
+        is_active: plain.catalog_item.is_active !== undefined ? Boolean(plain.catalog_item.is_active) : null,
+        is_system_default: plain.catalog_item.is_system_default !== undefined ? Boolean(plain.catalog_item.is_system_default) : null,
+        display_order: plain.catalog_item.display_order,
+        created_by_user_id: plain.catalog_item.created_by_user_id || null,
+        updated_by_user_id: plain.catalog_item.updated_by_user_id || null,
+        created_at: plain.catalog_item.created_at || null,
+        updated_at: plain.catalog_item.updated_at || null
+      } : null,
+      configuration_json: plain.configuration_json || null,
+      configuration: parseConfig(plain.configuration_json)
+    };
+  });
+}
+
+function buildQuoteVersionSnapshot(quoteRecord, lineItems = []) {
+  const quote = toPlainRecord(quoteRecord) || {};
+
+  return {
+    sales_quote_id: quote.sales_quote_id,
+    quote_number: quote.quote_number || null,
+    lead_id: quote.lead_id || null,
+    client_user_id: quote.client_user_id || null,
+    client_id: quote.client_id || null,
+    created_by_user_id: quote.created_by_user_id || null,
+    assigned_sales_rep_id: quote.assigned_sales_rep_id || null,
+    pricing_mode: quote.pricing_mode || null,
+    status: quote.status || null,
+    client_name: quote.client_name || null,
+    client_email: quote.client_email || null,
+    client_phone: quote.client_phone || null,
+    client_address: quote.client_address || null,
+    project_description: quote.project_description || null,
+    video_shoot_type: quote.video_shoot_type || null,
+    quote_validity_days: quote.quote_validity_days || null,
+    valid_until: quote.valid_until || null,
+    discount_type: quote.discount_type || 'none',
+    discount_value: Number(quote.discount_value || 0),
+    discount_amount: Number(quote.discount_amount || 0),
+    tax_type: quote.tax_type || null,
+    tax_rate: Number(quote.tax_rate || 0),
+    tax_amount: Number(quote.tax_amount || 0),
+    subtotal: Number(quote.subtotal || 0),
+    total: Number(quote.total || 0),
+    notes: quote.notes || null,
+    terms_conditions: quote.terms_conditions || null,
+    sent_at: quote.sent_at || null,
+    viewed_at: quote.viewed_at || null,
+    accepted_at: quote.accepted_at || null,
+    rejected_at: quote.rejected_at || null,
+    created_at: quote.created_at || null,
+    updated_at: quote.updated_at || null,
+    line_items: normalizeQuoteVersionLineItems(lineItems)
+  };
+}
+
+function buildQuoteVersionListItem(version, highestVersionNumber = null) {
+  const plain = toPlainRecord(version) || {};
+  return {
+    sales_quote_version_id: plain.sales_quote_version_id || null,
+    version_number: Number(plain.version_number || 0),
+    version_label: `Quote Version ${plain.version_number || 0}`,
+    change_reason: plain.change_reason || null,
+    created_at: plain.created_at || null,
+    created_by_user_id: plain.created_by_user_id || null,
+    created_by: plain.created_by
+      ? {
+          id: plain.created_by.id,
+          name: plain.created_by.name,
+          email: plain.created_by.email
+        }
+      : null,
+    is_current: highestVersionNumber !== null ? Number(plain.version_number || 0) === Number(highestVersionNumber) : null
+  };
+}
+
+function normalizePersistedDateValue(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value;
+  if (typeof value === 'object' && value.fn) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString();
+}
+
+async function normalizeQuoteVersionSnapshotForResponse(snapshot = {}) {
+  const normalizedQuote = {
+    ...snapshot,
+    created_at: normalizePersistedDateValue(snapshot.created_at),
+    updated_at: normalizePersistedDateValue(snapshot.updated_at),
+    sent_at: normalizePersistedDateValue(snapshot.sent_at),
+    viewed_at: normalizePersistedDateValue(snapshot.viewed_at),
+    accepted_at: normalizePersistedDateValue(snapshot.accepted_at),
+    rejected_at: normalizePersistedDateValue(snapshot.rejected_at)
+  };
+
+  const lineItems = Array.isArray(snapshot.line_items) ? snapshot.line_items : [];
+  const missingCatalogItemIds = [...new Set(
+    lineItems
+      .filter((item) => item && item.catalog_item_id && !item.catalog_item)
+      .map((item) => Number(item.catalog_item_id))
+      .filter((id) => Number.isInteger(id) && id > 0)
+  )];
+
+  const catalogItems = missingCatalogItemIds.length
+    ? await db.quote_catalog_items.findAll({
+        where: { catalog_item_id: { [Op.in]: missingCatalogItemIds } },
+        raw: true
+      })
+    : [];
+  const catalogMap = new Map(catalogItems.map((item) => [Number(item.catalog_item_id), item]));
+
+  normalizedQuote.line_items = normalizeQuoteVersionLineItems(
+    lineItems.map((item) => ({
+      ...item,
+      sales_quote_id: item?.sales_quote_id || snapshot.sales_quote_id || null,
+      catalog_item: item?.catalog_item || catalogMap.get(Number(item?.catalog_item_id || 0)) || null
+    }))
+  );
+
+  return normalizedQuote;
+}
+
 function startOfDay(date) {
   const nextDate = new Date(date);
   nextDate.setHours(0, 0, 0, 0);
@@ -2658,6 +2815,94 @@ async function recordActivity(transaction, salesQuoteId, activityType, userId, m
   }, { transaction });
 }
 
+async function loadQuoteLineItemsForVersionSnapshot(salesQuoteId, transaction = null) {
+  return db.sales_quote_line_items.findAll({
+    where: {
+      sales_quote_id: salesQuoteId,
+      is_active: 1
+    },
+    include: [
+      { model: db.quote_catalog_items, as: 'catalog_item', required: false }
+    ],
+    order: [['sort_order', 'ASC'], ['line_item_id', 'ASC']],
+    transaction
+  });
+}
+
+async function getLatestQuoteVersionRecord(salesQuoteId, transaction = null) {
+  return db.sales_quote_versions.findOne({
+    where: { sales_quote_id: salesQuoteId },
+    order: [['version_number', 'DESC'], ['sales_quote_version_id', 'DESC']],
+    transaction
+  });
+}
+
+async function createQuoteVersion({
+  transaction,
+  quoteRecord,
+  lineItems = null,
+  userId = null,
+  sourceActivityId = null,
+  changeReason = null
+}) {
+  const quote = toPlainRecord(quoteRecord) || {};
+  const latestVersion = await getLatestQuoteVersionRecord(quote.sales_quote_id, transaction);
+  const nextVersionNumber = Number(latestVersion?.version_number || 0) + 1;
+  const persistedQuote = await db.sales_quotes.findByPk(quote.sales_quote_id, { transaction });
+  const resolvedLineItems = Array.isArray(lineItems)
+    ? lineItems
+    : await loadQuoteLineItemsForVersionSnapshot(quote.sales_quote_id, transaction);
+  const snapshot = buildQuoteVersionSnapshot(persistedQuote || quoteRecord, resolvedLineItems);
+
+  return db.sales_quote_versions.create({
+    sales_quote_id: quote.sales_quote_id,
+    version_number: nextVersionNumber,
+    source_activity_id: sourceActivityId || null,
+    created_by_user_id: userId || null,
+    change_reason: changeReason || null,
+    quote_snapshot_json: stringifyConfig(snapshot)
+  }, { transaction });
+}
+
+async function ensureInitialQuoteVersion({
+  transaction,
+  quoteRecord,
+  lineItems = null,
+  userId = null,
+  changeReason = null
+}) {
+  const quote = toPlainRecord(quoteRecord) || {};
+  const latestVersion = await getLatestQuoteVersionRecord(quote.sales_quote_id, transaction);
+  if (latestVersion) {
+    return latestVersion;
+  }
+
+  return createQuoteVersion({
+    transaction,
+    quoteRecord,
+    lineItems,
+    userId,
+    changeReason
+  });
+}
+
+async function listQuoteVersionsById(salesQuoteId, transaction = null) {
+  const rows = await db.sales_quote_versions.findAll({
+    where: { sales_quote_id: salesQuoteId },
+    include: [
+      { model: db.users, as: 'created_by', attributes: ['id', 'name', 'email'], required: false }
+    ],
+    order: [['version_number', 'DESC'], ['sales_quote_version_id', 'DESC']],
+    transaction
+  });
+
+  const highestVersionNumber = rows.length
+    ? Math.max(...rows.map((row) => Number(row.version_number || 0)))
+    : null;
+
+  return rows.map((row) => buildQuoteVersionListItem(row, highestVersionNumber));
+}
+
 async function resolveQuoteBillingState(quote, transaction) {
   const defaultState = {
     booking: null,
@@ -2881,7 +3126,14 @@ async function createQuote(payload, user) {
       );
     }
 
-    await recordActivity(transaction, quote.sales_quote_id, 'created', user.userId, 'Quote created');
+    const createdActivity = await recordActivity(transaction, quote.sales_quote_id, 'created', user.userId, 'Quote created');
+    await createQuoteVersion({
+      transaction,
+      quoteRecord: quote,
+      userId: user.userId,
+      sourceActivityId: createdActivity.activity_id,
+      changeReason: 'Quote created'
+    });
     await transaction.commit();
     return getQuoteById(quote.sales_quote_id, user);
   } catch (error) {
@@ -2957,7 +3209,7 @@ async function duplicateQuote(salesQuoteId, user) {
       await db.sales_quote_line_items.bulkCreate(duplicatedLineItems, { transaction });
     }
 
-    await recordActivity(
+    const duplicatedActivity = await recordActivity(
       transaction,
       duplicatedQuote.sales_quote_id,
       'created',
@@ -2969,6 +3221,14 @@ async function duplicateQuote(salesQuoteId, user) {
         reset_client_user_linkage: true
       }
     );
+
+    await createQuoteVersion({
+      transaction,
+      quoteRecord: duplicatedQuote,
+      userId: user.userId,
+      sourceActivityId: duplicatedActivity.activity_id,
+      changeReason: `Quote duplicated from ${sourceQuote.quote_number || salesQuoteId}`
+    });
 
     await transaction.commit();
     return getQuoteById(duplicatedQuote.sales_quote_id, user);
@@ -3019,6 +3279,7 @@ async function updateQuote(salesQuoteId, payload, user) {
       transaction
     });
     const existingLineItemsPayload = existingLineItems.map(toPersistableLineItemPayload);
+    const latestExistingVersion = await getLatestQuoteVersionRecord(salesQuoteId, transaction);
     const previousQuoteSnapshot = {
       project_description: quote.project_description,
       video_shoot_type: quote.video_shoot_type,
@@ -3125,6 +3386,15 @@ async function updateQuote(salesQuoteId, payload, user) {
       previousLineItems: existingLineItemsPayload,
       nextLineItems: mergedLineItemsPayload
     });
+
+    if (!latestExistingVersion) {
+      await ensureInitialQuoteVersion({
+        transaction,
+        quoteRecord: quote,
+        userId: user.userId,
+        changeReason: 'Baseline snapshot before first versioned update'
+      });
+    }
 
     await quote.update(quoteUpdatePayload, { transaction });
 
@@ -3241,7 +3511,7 @@ async function updateQuote(salesQuoteId, payload, user) {
       );
     }
 
-    await recordActivity(transaction, salesQuoteId, 'updated', user.userId, 'Quote updated', {
+    const updatedActivity = await recordActivity(transaction, salesQuoteId, 'updated', user.userId, 'Quote updated', {
       previous_total: previousTotal,
       new_total: newTotal,
       collected_amount: collectedAmount,
@@ -3259,6 +3529,14 @@ async function updateQuote(salesQuoteId, payload, user) {
         (extraAmount > 0 || reducedAmount > 0) &&
         billingState.is_collected
       )
+    });
+
+    await createQuoteVersion({
+      transaction,
+      quoteRecord: quote,
+      userId: user.userId,
+      sourceActivityId: updatedActivity.activity_id,
+      changeReason: payload.edit_reason ? String(payload.edit_reason).trim() : 'Quote updated'
     });
 
     if (billingState.booking?.stream_project_booking_id && (extraAmount > 0 || reducedAmount > 0) && billingState.is_collected) {
@@ -3557,6 +3835,24 @@ async function fetchQuoteById(salesQuoteId, user = null) {
     quote_number: plain.quote_number,
     client_name: plain.client_name
   });
+  const quoteVersions = await listQuoteVersionsById(plain.sales_quote_id);
+  plain.quote_versions = quoteVersions.length
+    ? quoteVersions
+    : [{
+        sales_quote_version_id: null,
+        version_number: 1,
+        version_label: 'Quote Version 1',
+        change_reason: 'Current quote snapshot',
+        created_at: plain.updated_at || plain.created_at || null,
+        created_by_user_id: null,
+        created_by: null,
+        is_current: true,
+        is_fallback_current_version: true
+      }];
+  plain.current_version_number = plain.quote_versions.reduce(
+    (maxVersion, item) => Math.max(maxVersion, Number(item.version_number || 0)),
+    0
+  );
 
   plain.line_items = (plain.line_items || []).map((item) => ({
     ...item,
@@ -3591,6 +3887,93 @@ async function fetchQuoteById(salesQuoteId, user = null) {
 
 async function getQuoteById(salesQuoteId, user) {
   return fetchQuoteById(salesQuoteId, user);
+}
+
+async function listQuoteVersions(salesQuoteId, user) {
+  const quote = await db.sales_quotes.findOne({
+    where: { sales_quote_id: salesQuoteId, ...buildQuoteAccessWhere(user) },
+    attributes: ['sales_quote_id', 'created_at', 'updated_at'],
+    raw: true
+  });
+
+  if (!quote) {
+    throw new Error('Quote not found');
+  }
+
+  const versions = await listQuoteVersionsById(salesQuoteId);
+  if (versions.length) {
+    return versions;
+  }
+
+  return [{
+    sales_quote_version_id: null,
+    version_number: 1,
+    version_label: 'Quote Version 1',
+    change_reason: 'Current quote snapshot',
+    created_at: quote.updated_at || quote.created_at || null,
+    created_by_user_id: null,
+    created_by: null,
+    is_current: true,
+    is_fallback_current_version: true
+  }];
+}
+
+async function getQuoteVersionByNumber(salesQuoteId, versionNumber, user) {
+  const parsedVersionNumber = Number(versionNumber);
+  if (!Number.isInteger(parsedVersionNumber) || parsedVersionNumber <= 0) {
+    throw new Error('Invalid versionNumber');
+  }
+
+  const quote = await db.sales_quotes.findOne({
+    where: { sales_quote_id: salesQuoteId, ...buildQuoteAccessWhere(user) },
+    attributes: ['sales_quote_id', 'created_at', 'updated_at'],
+    raw: true
+  });
+
+  if (!quote) {
+    throw new Error('Quote not found');
+  }
+
+  const version = await db.sales_quote_versions.findOne({
+    where: {
+      sales_quote_id: salesQuoteId,
+      version_number: parsedVersionNumber
+    },
+    include: [
+      { model: db.users, as: 'created_by', attributes: ['id', 'name', 'email'], required: false }
+    ]
+  });
+
+  if (!version) {
+    const existingVersions = await db.sales_quote_versions.count({
+      where: { sales_quote_id: salesQuoteId }
+    });
+
+    if (existingVersions === 0 && parsedVersionNumber === 1) {
+      const currentQuote = await getQuoteById(salesQuoteId, user);
+      return {
+        version: {
+          sales_quote_version_id: null,
+          version_number: 1,
+          version_label: 'Quote Version 1',
+          change_reason: 'Current quote snapshot',
+          created_at: quote.updated_at || quote.created_at || null,
+          created_by_user_id: null,
+          created_by: null,
+          is_current: true,
+          is_fallback_current_version: true
+        },
+        quote: currentQuote
+      };
+    }
+
+    throw new Error('Quote version not found');
+  }
+
+  return {
+    version: buildQuoteVersionListItem(version, Number(version.version_number || 0)),
+    quote: await normalizeQuoteVersionSnapshotForResponse(parseConfig(version.quote_snapshot_json) || {})
+  };
 }
 
 async function getQuoteOverallChangeSummary(salesQuoteId, user = null) {
@@ -4055,6 +4438,8 @@ module.exports = {
   updateQuote,
   convertQuoteToBooking,
   getQuoteById,
+  listQuoteVersions,
+  getQuoteVersionByNumber,
   getQuoteOverallChangeSummary,
   getPublicQuoteById,
   listQuotes,
