@@ -88,6 +88,9 @@ router.delete('/client-leads/:id', authenticate, requireAdmin, salesLeadsControl
  */
 router.put('/leads/:id/status', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateLeadStatus);
 router.put('/client-leads/:id/status', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateClientLeadStatus);
+router.post('/leads/manual-payment/upload-proof', authenticate, requireSalesRepOrAdmin, ...salesLeadsController.uploadManualPaymentProof);
+router.post('/leads/:id/manual-payment', authenticate, requireSalesRepOrAdmin, salesLeadsController.recordManualPayment);
+router.post('/client-leads/:id/manual-payment', authenticate, requireSalesRepOrAdmin, salesLeadsController.recordClientManualPayment);
 router.post('/availability', authenticate, requireSalesRepOrAdmin, salesAvailabilityController.getSalesRepAvailability);
 router.post('/add-availability', authenticate, requireSalesRepOrAdmin, salesAvailabilityController.setSalesRepAvailability);
 router.get('/current-status', authenticate, requireSalesRepOrAdmin, salesAvailabilityController.getSalesRepCurrentStatus);
