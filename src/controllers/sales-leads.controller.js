@@ -7,9 +7,12 @@ const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 const pricingService = require('../services/pricing.service');
 const pricingController = require('../controllers/pricing.controller');
 const paymentService = require('../services/payment-links.service');
+const accountCreditService = require('../services/account-credit.service');
+const quoteService = require('../services/sales-quote.service');
 const emailService = require('../utils/emailService');
 const { sendCPNewBookingRequestEmail } = require('../utils/emailService');
 const { resolveEventDateAndStartTime, normalizeTime, splitDateTime } = require('../utils/timezone');
+const { extractCoordinatesFromPayload } = require('../utils/locationHelpers');
 
 const sequelize = require('../db');
 const db = require('../models');
@@ -79,6 +82,11 @@ async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null
   const additionalPaymentStatus = refreshInvoiceHistory?.payment_status || (additionalAmount > 0 ? 'pending' : null);
   const reducedPaymentStatus = refreshInvoiceHistory?.payment_status || (reducedAmount > 0 ? 'refund_pending' : null);
 
+  const creditSummary = await accountCreditService.getQuoteCreditSummary({
+    salesQuoteId: quoteId,
+    bookingId
+  });
+
   return {
     latest_invoice: latestInvoiceHistory ? {
       invoice_send_history_id: latestInvoiceHistory.invoice_send_history_id,
@@ -107,7 +115,8 @@ async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null
       last_sent_at: refreshInvoiceHistory?.sent_at || null,
       invoice_number: refreshInvoiceHistory?.invoice_number || null,
       invoice_url: refreshInvoiceHistory?.invoice_url || null
-    } : null
+    } : null,
+    credit_summary: creditSummary
   };
 }
 
@@ -1072,6 +1081,8 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             }
         }
 
+        const { latitude, longitude } = extractCoordinatesFromPayload(req.body, location);
+
         const bookingData = {
             user_id: resolvedUserId,
             guest_email: normalizedGuestEmail,
@@ -1087,6 +1098,8 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             end_time: end_time_final,
             duration_hours: totalDurationHours,
             event_location: location || null,
+            event_latitude: latitude,
+            event_longitude: longitude,
             description: specialInstructions || null,
             reference_links: reference_links || null,
             edits_needed: edits_needed ? 1 : 0,
@@ -1999,9 +2012,9 @@ exports.getLeadById = async (req, res) => {
 
     let whereClause = { lead_id: id, is_active: 1 };
 
-    if (req.userRole === 'sales_rep') {
-      whereClause.assigned_sales_rep_id = req.userId;
-    }
+    // if (req.userRole === 'sales_rep') {
+    //   whereClause.assigned_sales_rep_id = req.userId;
+    // }
 
     const lead = await sales_leads.findOne({
       where: whereClause,
@@ -2090,6 +2103,9 @@ exports.getLeadById = async (req, res) => {
       attributes: ['sales_quote_id', 'quote_number', 'status', 'subtotal', 'discount_amount', 'total'],
       order: [['updated_at', 'DESC']]
     });
+    const overallChangeSummary = linkedSalesQuote?.sales_quote_id
+      ? await quoteService.getQuoteOverallChangeSummary(linkedSalesQuote.sales_quote_id, null)
+      : null;
     const customQuoteFinancials = await getCustomQuoteFinancialDetails({
       quoteId: linkedSalesQuote?.sales_quote_id || null,
       bookingId: leadJson.booking?.stream_project_booking_id || null
@@ -2204,7 +2220,26 @@ exports.getLeadById = async (req, res) => {
         pricing_breakdown.discount = parseFloat(leadJson.booking?.primary_quote?.discount_amount || 0);
     }
 
-    pricing_breakdown.total = subtotal - pricing_breakdown.discount;
+    const totalBeforeCredit = parseFloat((subtotal - pricing_breakdown.discount).toFixed(2));
+    let creditApplied = 0;
+    let totalPaid = null;
+
+    if (leadJson.booking?.payment_id) {
+      const paymentData = await db.payment_transactions.findByPk(leadJson.booking.payment_id);
+      if (paymentData) {
+        totalPaid = parseFloat(paymentData.total_amount || 0);
+        if (Number.isFinite(totalPaid)) {
+          creditApplied = Math.max(0, totalBeforeCredit - totalPaid);
+        }
+      }
+    }
+
+    const totalAfterCredit = Math.max(0, totalBeforeCredit - creditApplied);
+    pricing_breakdown.total_before_credit = totalBeforeCredit;
+    pricing_breakdown.credit_applied = parseFloat(creditApplied.toFixed(2));
+    pricing_breakdown.total_after_credit = parseFloat(totalAfterCredit.toFixed(2));
+    pricing_breakdown.total_paid = Number.isFinite(totalPaid) ? parseFloat(totalPaid.toFixed(2)) : null;
+    pricing_breakdown.total = pricing_breakdown.total_after_credit;
 
     const selectedCrewIds = lead.booking?.assigned_crews?.map(c => c.crew_member_id).filter(Boolean) || [];
     
@@ -2324,7 +2359,8 @@ exports.getLeadById = async (req, res) => {
         } : null,
         custom_quote_id: linkedSalesQuote?.sales_quote_id || null,
         custom_quote_number: linkedSalesQuote?.quote_number || null,
-        custom_quote_status: linkedSalesQuote?.status || null
+        custom_quote_status: linkedSalesQuote?.status || null,
+        overall_change_summary: overallChangeSummary
       }
     });
   } catch (error) {
@@ -3125,7 +3161,26 @@ exports.getClientLeadById = async (req, res) => {
       pricing_breakdown.discount = parseFloat(leadJson.booking?.primary_quote?.discount_amount || 0);
     }
 
-    pricing_breakdown.total = subtotal - pricing_breakdown.discount;
+    const totalBeforeCredit = parseFloat((subtotal - pricing_breakdown.discount).toFixed(2));
+    let creditApplied = 0;
+    let totalPaid = null;
+
+    if (leadJson.booking?.payment_id) {
+      const paymentData = await db.payment_transactions.findByPk(leadJson.booking.payment_id);
+      if (paymentData) {
+        totalPaid = parseFloat(paymentData.total_amount || 0);
+        if (Number.isFinite(totalPaid)) {
+          creditApplied = Math.max(0, totalBeforeCredit - totalPaid);
+        }
+      }
+    }
+
+    const totalAfterCredit = Math.max(0, totalBeforeCredit - creditApplied);
+    pricing_breakdown.total_before_credit = totalBeforeCredit;
+    pricing_breakdown.credit_applied = parseFloat(creditApplied.toFixed(2));
+    pricing_breakdown.total_after_credit = parseFloat(totalAfterCredit.toFixed(2));
+    pricing_breakdown.total_paid = Number.isFinite(totalPaid) ? parseFloat(totalPaid.toFixed(2)) : null;
+    pricing_breakdown.total = pricing_breakdown.total_after_credit;
 
     const selectedCrewIds = lead.booking?.assigned_crews?.map(c => c.crew_member_id).filter(Boolean) || [];
     const intent = lead.intent ?? leadAssignmentService.getClientIntent({ lead, booking: lead.booking });
@@ -4377,6 +4432,7 @@ exports.updateBookingCrew = async (req, res) => {
   try {
     const { bookingId } = req.params;
     const { crew_roles, location, description, reference_links } = req.body;
+    const { latitude, longitude } = extractCoordinatesFromPayload(req.body, location);
 
     if (!crew_roles || typeof crew_roles !== 'object') {
       return res.status(constants.BAD_REQUEST.code).json({
@@ -4399,13 +4455,23 @@ exports.updateBookingCrew = async (req, res) => {
       });
     }
 
-    // UPDATE ALL RELEVANT FIELDS
-    await booking.update({
-      crew_roles: JSON.stringify(crew_roles),
-      event_location: location,      // Map 'location' from frontend to 'event_location' in DB
-      special_instructions: description,      // Map 'description' from frontend to 'description' in DB
-      reference_links: reference_links // Store links
-    });
+    const updateData = {
+      crew_roles: JSON.stringify(crew_roles)
+    };
+
+    if (location !== undefined || latitude !== null || longitude !== null) {
+      updateData.event_location = location ?? booking.event_location;
+      updateData.event_latitude = latitude;
+      updateData.event_longitude = longitude;
+    }
+    if (description !== undefined) {
+      updateData.special_instructions = description;
+    }
+    if (reference_links !== undefined) {
+      updateData.reference_links = reference_links;
+    }
+
+    await booking.update(updateData);
 
     await sales_leads.update(
       { lead_status: 'booking_in_progress' },
@@ -4549,6 +4615,7 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
     booking_days,
     time_zone
   } = finalizeBody;
+  const { latitude, longitude } = extractCoordinatesFromPayload(finalizeBody, location);
 
   /* -----------------------------
   Normalize booking days
@@ -4646,6 +4713,10 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
 
   if (location != null)
     updateData.event_location = safeJsonStringify(location);
+  if (location != null || latitude !== null || longitude !== null) {
+    updateData.event_latitude = latitude;
+    updateData.event_longitude = longitude;
+  }
 
   if (crew_roles != null)
     updateData.crew_roles = safeJsonStringify(crew_roles);
@@ -4852,6 +4923,7 @@ async function updateBookingScheduleAndLocationCore({ booking, bookingId, payloa
     end_time,
     duration_hours
   } = payload;
+  const { latitude, longitude } = extractCoordinatesFromPayload(payload, location);
 
   let normalizedBookingDays = Array.isArray(booking_days) ? booking_days : [];
   normalizedBookingDays = normalizedBookingDays
@@ -4907,7 +4979,14 @@ async function updateBookingScheduleAndLocationCore({ booking, bookingId, payloa
   }
 
   const updateData = {};
-  if (location !== undefined) updateData.event_location = safeJsonStringify(location);
+  if (location !== undefined) {
+    updateData.event_location = safeJsonStringify(location);
+    updateData.event_latitude = latitude;
+    updateData.event_longitude = longitude;
+  } else {
+    if (latitude !== null) updateData.event_latitude = latitude;
+    if (longitude !== null) updateData.event_longitude = longitude;
+  }
   if (eventDate) updateData.event_date = eventDate;
   if (startTimeFinal) updateData.start_time = startTimeFinal;
   if (endTimeFinal) updateData.end_time = endTimeFinal;
@@ -4983,6 +5062,8 @@ exports.finalizeGuestBooking = async (req, res) => {
       time_zone,
       duration_hours,
       location,
+      location_latitude,
+      location_longitude,
       crew_roles,
       crew_size,
       selected_crew_ids,
@@ -5028,6 +5109,8 @@ exports.finalizeGuestBooking = async (req, res) => {
         time_zone,
         duration_hours,
         location,
+        location_latitude,
+        location_longitude,
         crew_roles,
         crew_size,
         selected_crew_ids,
@@ -5180,6 +5263,8 @@ exports.finalizeClientLeadBooking = async (req, res) => {
       time_zone,
       duration_hours,
       location,
+      location_latitude,
+      location_longitude,
       crew_roles,
       crew_size,
       selected_crew_ids,
@@ -5245,6 +5330,8 @@ exports.finalizeClientLeadBooking = async (req, res) => {
         time_zone,
         duration_hours,
         location,
+        location_latitude,
+        location_longitude,
         crew_roles,
         crew_size,
         selected_crew_ids,
@@ -5516,6 +5603,8 @@ exports.finalizeCreateDeal = async (req, res) => {
       time_zone,
       duration_hours,
       location,
+      location_latitude,
+      location_longitude,
       crew_roles,
       crew_size,
       selected_crew_ids,
@@ -5726,6 +5815,8 @@ exports.finalizeCreateDeal = async (req, res) => {
         time_zone,
         duration_hours,
         location,
+        location_latitude,
+        location_longitude,
         crew_roles,
         crew_size,
         selected_crew_ids,

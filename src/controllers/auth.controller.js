@@ -2466,11 +2466,11 @@ exports.registerCrewMemberStep1 = [
 
       if (crew_member_id && user_id) {
         await crew_members.update(
-          { first_name, last_name, email, phone_number, location, working_distance }, 
+          { first_name, last_name, email, phone_number, location, latitude: lat || null, longitude: lng || null, working_distance }, 
           { where: { crew_member_id } }
         );
         await User.update(
-          { name: `${first_name} ${last_name}`, email, phone_number }, 
+          { name: `${first_name} ${last_name}`, email, phone_number, location, latitude: lat || null, longitude: lng || null }, 
           { where: { id: user_id } }
         );
 
@@ -2518,6 +2518,8 @@ exports.registerCrewMemberStep1 = [
         email, 
         phone_number, 
         location, 
+        latitude: lat || null,
+        longitude: lng || null,
         working_distance, 
         is_active: 1,
         created_from: 1 // 1 = web

@@ -1,4 +1,5 @@
 const db = require('../models');
+const emailService = require('../utils/emailService');
 
 const DEFAULT_BASE_URL = process.env.EXTERNAL_CHAT_API_BASE_URL || 'http://localhost:5002/v1/external-chat';
 const INTERNAL_KEY = process.env.EXTERNAL_CHAT_KEY || process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
@@ -385,6 +386,163 @@ const extractParticipantEnvelope = (payload = {}) => {
   }
 
   return { envelope: null, wrapped: false };
+};
+
+const normalizeEmailAddress = (value) => String(value || '').trim().toLowerCase();
+
+const extractChatRecipientEmails = (envelope = {}) => {
+  const emails = new Set();
+  const push = (value) => {
+    const normalized = normalizeEmailAddress(value);
+    if (normalized) emails.add(normalized);
+  };
+
+  push(envelope?.client?.email);
+  push(envelope?.pm?.email);
+  (envelope?.cps || []).forEach((participant) => push(participant?.email));
+  (envelope?.production || []).forEach((participant) => push(participant?.email));
+  (envelope?.managers || []).forEach((participant) => push(participant?.email));
+
+  return [...emails];
+};
+
+const toObject = (value) => (value && typeof value === 'object' ? value : null);
+
+const resolveChatOrderId = (payload = {}) =>
+  String(
+    payload?.order_id ||
+      payload?.external_order_ref ||
+      payload?.data?.order_id ||
+      payload?.data?.external_order_ref ||
+      ''
+  ).trim();
+
+const resolveChatDisplayName = (payload = {}) =>
+  String(
+    payload?.chat_name ||
+      payload?.name ||
+      payload?.display_name ||
+      payload?.data?.chat_name ||
+      payload?.data?.name ||
+      payload?.data?.display_name ||
+      ''
+  ).trim();
+
+const extractLegacyRecipientEmails = (payload = {}) => {
+  const sources = [payload, payload?.data].filter((entry) => entry && typeof entry === 'object');
+  const emails = new Set();
+  const push = (value) => {
+    const normalized = normalizeEmailAddress(
+      typeof value === 'string' ? value : value?.email
+    );
+    if (normalized) emails.add(normalized);
+  };
+
+  for (const source of sources) {
+    push(source?.client_id);
+    push(source?.client_snapshot);
+    push(source?.pm_id);
+    (source?.cp_ids || []).forEach((entry) => push(entry));
+    (source?.manager_ids || []).forEach((entry) => push(entry));
+    (source?.production_ids || []).forEach((entry) => push(entry));
+  }
+
+  return [...emails];
+};
+
+const parseBookingIdValue = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  if (/^\d+$/.test(raw)) return raw;
+  const hashMatch = raw.match(/#(\d+)/);
+  if (hashMatch?.[1]) return hashMatch[1];
+  return null;
+};
+
+const resolveChatBookingId = (payload = {}) => {
+  const directOrderId = resolveChatOrderId(payload);
+  const direct = parseBookingIdValue(directOrderId);
+  if (direct) return direct;
+
+  const directRef = parseBookingIdValue(payload?.external_order_ref || payload?.data?.external_order_ref || '');
+  if (directRef) return directRef;
+
+  return null;
+};
+
+const getChatBookingFallbackRecipients = async (bookingId) => {
+  const normalizedBookingId = parseBookingIdValue(bookingId);
+  if (!normalizedBookingId) return [];
+
+  const emails = new Set();
+  const push = (value) => {
+    const normalized = normalizeEmailAddress(value);
+    if (normalized) emails.add(normalized);
+  };
+
+  const booking = await getBookingRecord(normalizedBookingId);
+  if (booking) {
+    push(booking?.guest_email);
+
+    const bookingUserId = Number(booking?.user_id);
+    if (Number.isFinite(bookingUserId)) {
+      const bookingUser = await getPlatformUserById(bookingUserId);
+      push(bookingUser?.email);
+    }
+  }
+
+  const salesRep = await getAssignedSalesRepForBooking(normalizedBookingId);
+  push(salesRep?.email);
+
+  const assignedCps = await getAssignedCpsForBooking(normalizedBookingId);
+  assignedCps.forEach((entry) => push(entry?.crew_member?.email));
+
+  return [...emails];
+};
+
+const sendChatNotificationTemplate = async ({
+  roomId,
+  sender,
+  eventType = 'message_created',
+  messagePreview = '',
+  fallbackPayload = {},
+}) => {
+  try {
+    const participantPayload = await proxyRequest(`/participants/${roomId}`).catch(() => null);
+    const { envelope } = extractParticipantEnvelope(participantPayload || {});
+    const enrichedEnvelope = envelope ? await enrichParticipantPayload(envelope) : null;
+    const recipients = new Set([
+      ...extractChatRecipientEmails(enrichedEnvelope || {}),
+      ...extractLegacyRecipientEmails(participantPayload || {}),
+    ]);
+
+    const roomPayload = toObject(fallbackPayload?.data) || toObject(fallbackPayload) || {};
+    if (!recipients.size) {
+      const bookingId = resolveChatBookingId(roomPayload);
+      const fallbackRecipients = await getChatBookingFallbackRecipients(bookingId);
+      fallbackRecipients.forEach((email) => recipients.add(email));
+    }
+
+    const recipientList = [...recipients];
+    if (!recipientList.length) return;
+
+    await emailService.sendMessagingInitiatedTemplateEmail({
+      recipients: recipientList,
+      data: {
+        chat_room_id: roomId,
+        chat_name: resolveChatDisplayName(roomPayload),
+        order_id: resolveChatOrderId(roomPayload),
+        project_name: resolveChatDisplayName(roomPayload),
+        sender_id: sender?.id != null ? String(sender.id) : '',
+        sender_name: sender?.name || sender?.email || '',
+        message_preview: String(messagePreview || ''),
+        event_type: eventType,
+        sent_at: new Date().toISOString(),
+      },
+    });
+  } catch (notificationError) {
+    console.error('Chat email notification failed:', notificationError?.message || notificationError);
+  }
 };
 
 const getActiveStaffDirectory = async (search = '') => {
@@ -889,6 +1047,18 @@ exports.addChatParticipants = async (req, res) => {
       results.push(result);
     }
 
+    await sendChatNotificationTemplate({
+      roomId: req.params.roomId,
+      sender: adminUser || {
+        id: req.user?.userId || '',
+        email: req.user?.email || '',
+        name: req.user?.name || `User ${req.user?.userId || ''}`.trim(),
+      },
+      eventType: 'participant_added',
+      messagePreview: `${participants.length} participant(s) added`,
+      fallbackPayload: results[results.length - 1] || {},
+    });
+
     return res.status(200).json({
       success: true,
       data: results,
@@ -1045,6 +1215,14 @@ exports.sendChatMessage = async (req, res) => {
           name: sender.name || sender.email || 'Beige User',
         },
       }),
+    });
+
+    await sendChatNotificationTemplate({
+      roomId: req.params.roomId,
+      sender,
+      eventType: 'message_created',
+      messagePreview: String(req.body.message || ''),
+      fallbackPayload: result || {},
     });
 
     return res.status(200).json(result);

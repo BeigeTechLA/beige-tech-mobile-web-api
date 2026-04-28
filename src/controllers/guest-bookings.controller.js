@@ -1,12 +1,13 @@
 const db = require('../models');
 const { stream_project_booking, stream_project_booking_days, assigned_crew, crew_members, crew_member_files, quotes, quote_line_items, discount_codes } = require('../models');
 const constants = require('../utils/constants');
-const { formatLocationResponse } = require('../utils/locationHelpers');
+const { formatLocationResponse, extractCoordinatesFromPayload } = require('../utils/locationHelpers');
 const { appendBookingToSheet } = require('../utils/googleSheetsService');
 const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 const { content } = require('googleapis/build/src/apis/content');
 const { sendCPNewBookingRequestEmail } = require('../utils/emailService');
 const { resolveEventDateAndStartTime, normalizeTime, splitDateTime } = require('../utils/timezone');
+const accountCreditService = require('../services/account-credit.service');
 const REFERRAL_DISCOUNT_PERCENT = 10;
 
 const normalizeDateOnlyInput = (value) => {
@@ -536,6 +537,7 @@ exports.createGuestBooking = async (req, res) => {
         normalizedLocation = JSON.stringify(location);
       }
     }
+    const { latitude, longitude } = extractCoordinatesFromPayload(req.body, location);
 
     // V3: Combine edit types
     let combinedEditTypes = edit_type;
@@ -570,6 +572,8 @@ exports.createGuestBooking = async (req, res) => {
       stream_quality: stream_quality || null,
       crew_size_needed: crew_size ? parseInt(crew_size) : null,
       event_location: normalizedLocation || null,
+      event_latitude: latitude,
+      event_longitude: longitude,
       streaming_platforms: streaming_platforms
         ? (typeof streaming_platforms === 'string' ? streaming_platforms : JSON.stringify(streaming_platforms))
         : '[]',
@@ -840,6 +844,7 @@ exports.updateGuestBooking = async (req, res) => {
         normalizedLocation = JSON.stringify(location);
       }
     }
+    const { latitude, longitude } = extractCoordinatesFromPayload(req.body, location);
 
     // V3: Combine edit types
     let combinedEditTypes = edit_type;
@@ -880,7 +885,14 @@ exports.updateGuestBooking = async (req, res) => {
         ? null
         : parseInt(crew_size);
     }
-    if (location !== undefined) updateData.event_location = normalizedLocation || null;
+    if (location !== undefined) {
+      updateData.event_location = normalizedLocation || null;
+      updateData.event_latitude = latitude;
+      updateData.event_longitude = longitude;
+    } else {
+      if (latitude !== null) updateData.event_latitude = latitude;
+      if (longitude !== null) updateData.event_longitude = longitude;
+    }
     if (streaming_platforms) {
       updateData.streaming_platforms = typeof streaming_platforms === 'string' 
         ? streaming_platforms 
@@ -1614,6 +1626,11 @@ exports.getBookingPaymentDetails = async (req, res) => {
       };
     }
 
+    const accountCredit = await accountCreditService.getAccountCreditBalance({
+      userId: booking.user_id || req.userId || null,
+      guestEmail: booking.guest_email || null
+    });
+
     res.status(constants.OK.code).json({
       success: true,
       data: {
@@ -1647,6 +1664,13 @@ exports.getBookingPaymentDetails = async (req, res) => {
         },
         creators: creators,
         quote: quoteResponse,
+        account_credit: {
+          available_credit_amount: accountCredit?.available_credit_amount || 0,
+          can_use_credit: (accountCredit?.available_credit_amount || 0) > 0
+          // total_credit_amount: accountCredit?.total_credit_amount || 0,
+          // pending_credit_amount: accountCredit?.pending_credit_amount || 0,
+          // latest_credit: accountCredit?.latest_credit || null
+        },
         payment_status: booking.payment_id ? 'completed' : 'pending'
       }
     });

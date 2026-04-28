@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <title>Meeting Scheduled</title>
+</head>
+
+<body
+  style="margin: 0; padding: 0; background-color: #f7f7f7; font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1f1f1f;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+    style="width: 100%; background-color: #f7f7f7; padding: 18px 0;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0"
+          style="width: 100%; max-width: 600px; background-color: #fffdf9; background-image: linear-gradient(180deg, #fffdf9 0%, #fff7ea 45%, #f8ead0 100%); border: 1px solid rgba(232, 209, 171, 0.35); border-radius: 28px; overflow: hidden; box-shadow: 0 14px 40px rgba(0, 0, 0, 0.06);">
+
+          <tr>
+            <td align="center" style="padding: 42px 24px 42px;">
+              <div
+                style="display: inline-block; background-color: #ffffff; border: 1px solid rgba(232, 209, 171, 0.35); border-radius: 999px; padding: 14px 34px; box-shadow: 0 10px 24px rgba(149, 157, 165, 0.18);">
+                <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
+                  alt="Beige" width="116" style="display: block; border: 0;">
+              </div>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding: 0 28px 28px; text-align: center;">
+              <h1 style="margin: 0; font-size: 58px; line-height: 1.04; font-weight: 700; color: #000000;">
+                Meeting Scheduled
+              </h1>
+            </td>
+          </tr>
+
+          <tr>
+            <td align="center" style="padding: 0 28px 40px; text-align: center;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width: 430px;">
+                <tr>
+                  <td style="text-align: center;">
+                    <p
+                      style="margin: 0 0 8px; font-size: 18px; line-height: 1.45; font-weight: 400; color: #3f3a36;">
+                      Hello {{recipient_name}}
+                    </p>
+                    <p
+                      style="margin: 0; font-size: 18px; line-height: 1.5; font-weight: 400; color: #3f3a36;">
+                      A meeting has been scheduled for your project <span
+                        style="font-weight: 700; color: #000000;">[#{{project_id}}]</span>.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding: 0 22px 0;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td align="center" style="padding: 0; line-height: 0; font-size: 0;">
+                    <div style="height: 16px; overflow: hidden; white-space: nowrap;">
+                      <span
+                        style="display: inline-block; width: 24px; height: 24px; background-color: #fffdf9; border-radius: 50%; margin: 0 10px;"></span>
+                      <span
+                        style="display: inline-block; width: 24px; height: 24px; background-color: #fffdf9; border-radius: 50%; margin: 0 10px;"></span>
+                      <span
+                        style="display: inline-block; width: 24px; height: 24px; background-color: #fffdf9; border-radius: 50%; margin: 0 10px;"></span>
+                      <span
+                        style="display: inline-block; width: 24px; height: 24px; background-color: #fffdf9; border-radius: 50%; margin: 0 10px;"></span>
+                      <span
+                        style="display: inline-block; width: 24px; height: 24px; background-color: #fffdf9; border-radius: 50%; margin: 0 10px;"></span>
+                      <span
+                        style="display: inline-block; width: 24px; height: 24px; background-color: #fffdf9; border-radius: 50%; margin: 0 10px;"></span>
+                      <span
+                        style="display: inline-block; width: 24px; height: 24px; background-color: #fffdf9; border-radius: 50%; margin: 0 10px;"></span>
+                      <span
+                        style="display: inline-block; width: 24px; height: 24px; background-color: #fffdf9; border-radius: 50%; margin: 0 10px;"></span>
+                    </div>
+                  </td>
+                </tr>
+                <tr>
+                  <td
+                    style="background-color: #fdf0d8; background-image: linear-gradient(180deg, #fdf0d8 0%, #fff2dc 100%); border-radius: 0 0 36px 36px; padding: 36px 20px 34px;">
+                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                      <tr>
+                        <td align="center" style="padding: 0 10px 26px;">
+                          <h2 style="margin: 0; font-size: 22px; line-height: 1.2; font-weight: 700; color: #000000;">
+                            Meetings Details
+                          </h2>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 0 0 36px;">
+                          <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+                            style="background-color: #ffffff; border-radius: 32px; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.06);">
+
+                            <tr>
+                              <td style="padding: 32px 26px 0;">
+                                <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                                  <tr>
+                                    <td width="84" valign="top" style="width: 84px;">
+                                      <div
+                                        style="width: 60px; height: 60px; border-radius: 50%; background-color: #ffffff; text-align: center; display: table-cell; vertical-align: middle; box-shadow: 1px 1px 1px 0 #fff inset, -1px -1px 0 0 rgba(0, 0, 0, 0.10) inset, 10px 10px 21px rgba(0, 0, 0, 0.05), 6px 6px 8px rgba(0, 0, 0, 0.12), 2px 2px 3px rgba(0, 0, 0, 0.16);">
+                                        <img
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/User.svg"
+                                          alt="Title" width="28" height="28"
+                                          style="display: inline-block; vertical-align: middle; border: 0;">
+                                      </div>
+                                    </td>
+                                    <td valign="middle" style="padding-top: 6px;">
+                                      <p style="margin: 0 0 4px; font-size: 14px; line-height: 1.3; color: #605854;">
+                                        Title</p>
+                                      <p
+                                        style="margin: 0; font-size: 16px; line-height: 1.45; font-weight: 700; color: #000000;">
+                                        {{meeting_title}}</p>
+                                    </td>
+                                  </tr>
+                                </table>
+                              </td>
+                            </tr>
+
+                            <tr>
+                              <td style="padding: 36px 26px 0;">
+                                <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                                  <tr>
+                                    <td width="84" valign="top" style="width: 84px;">
+                                      <div
+                                        style="width: 60px; height: 60px; border-radius: 50%; background-color: #ffffff; text-align: center; display: table-cell; vertical-align: middle; box-shadow: 1px 1px 1px 0 #fff inset, -1px -1px 0 0 rgba(0, 0, 0, 0.10) inset, 10px 10px 21px rgba(0, 0, 0, 0.05), 6px 6px 8px rgba(0, 0, 0, 0.12), 2px 2px 3px rgba(0, 0, 0, 0.16);">
+                                        <img
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/Calendar.png"
+                                          alt="Meeting Date" width="28" height="28"
+                                          style="display: inline-block; vertical-align: middle; border: 0;">
+                                      </div>
+                                    </td>
+                                    <td valign="middle" style="padding-top: 6px;">
+                                      <p
+                                        style="margin: 0 0 4px; font-size: 14px; line-height: 1.3; color: #605854;">
+                                        Meeting Date</p>
+                                      <p
+                                        style="margin: 0; font-size: 16px; line-height: 1.45; font-weight: 700; color: #000000;">
+                                        {{meeting_date}}</p>
+                                    </td>
+                                  </tr>
+                                </table>
+                              </td>
+                            </tr>
+
+                            <tr>
+                              <td style="padding: 36px 26px 0;">
+                                <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                                  <tr>
+                                    <td width="84" valign="top" style="width: 84px;">
+                                      <div
+                                        style="width: 60px; height: 60px; border-radius: 50%; background-color: #ffffff; text-align: center; display: table-cell; vertical-align: middle; box-shadow: 1px 1px 1px 0 #fff inset, -1px -1px 0 0 rgba(0, 0, 0, 0.10) inset, 10px 10px 21px rgba(0, 0, 0, 0.05), 6px 6px 8px rgba(0, 0, 0, 0.12), 2px 2px 3px rgba(0, 0, 0, 0.16);">
+                                        <img
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/ClockCircle.png"
+                                          alt="Meeting Time" width="28" height="28"
+                                          style="display: inline-block; vertical-align: middle; border: 0;">
+                                      </div>
+                                    </td>
+                                    <td valign="middle" style="padding-top: 6px;">
+                                      <p
+                                        style="margin: 0 0 4px; font-size: 14px; line-height: 1.3; color: #605854;">
+                                        Meeting Time</p>
+                                      <p
+                                        style="margin: 0; font-size: 16px; line-height: 1.45; font-weight: 700; color: #000000;">
+                                        {{meeting_time}}</p>
+                                    </td>
+                                  </tr>
+                                </table>
+                              </td>
+                            </tr>
+
+                            <tr>
+                              <td style="padding: 36px 26px 0;">
+                                <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                                  <tr>
+                                    <td width="84" valign="top" style="width: 84px;">
+                                      <div
+                                        style="width: 60px; height: 60px; border-radius: 50%; background-color: #ffffff; text-align: center; display: table-cell; vertical-align: middle; box-shadow: 1px 1px 1px 0 #fff inset, -1px -1px 0 0 rgba(0, 0, 0, 0.10) inset, 10px 10px 21px rgba(0, 0, 0, 0.05), 6px 6px 8px rgba(0, 0, 0, 0.12), 2px 2px 3px rgba(0, 0, 0, 0.16);">
+                                        <img
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/EditPencil.png"
+                                          alt="Agenda" width="28" height="28"
+                                          style="display: inline-block; vertical-align: middle; border: 0;">
+                                      </div>
+                                    </td>
+                                    <td valign="middle" style="padding-top: 6px;">
+                                      <p
+                                        style="margin: 0 0 4px; font-size: 14px; line-height: 1.3; color: #605854;">
+                                        Agenda</p>
+                                      <p
+                                        style="margin: 0; font-size: 16px; line-height: 1.45; font-weight: 700; color: #000000;">
+                                        {{meeting_agenda}}</p>
+                                    </td>
+                                  </tr>
+                                </table>
+                              </td>
+                            </tr>
+
+                            <tr>
+                              <td style="padding: 36px 26px 34px;">
+                                <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                                  <tr>
+                                    <td width="84" valign="top" style="width: 84px;">
+                                      <div
+                                        style="width: 60px; height: 60px; border-radius: 50%; background-color: #ffffff; text-align: center; display: table-cell; vertical-align: middle; box-shadow: 1px 1px 1px 0 #fff inset, -1px -1px 0 0 rgba(0, 0, 0, 0.10) inset, 10px 10px 21px rgba(0, 0, 0, 0.05), 6px 6px 8px rgba(0, 0, 0, 0.12), 2px 2px 3px rgba(0, 0, 0, 0.16);">
+                                        <img
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/Checklist.svg"
+                                          alt="Meet Link" width="28" height="28"
+                                          style="display: inline-block; vertical-align: middle; border: 0;">
+                                      </div>
+                                    </td>
+                                    <td valign="middle" style="padding-top: 6px;">
+                                      <p
+                                        style="margin: 0 0 4px; font-size: 14px; line-height: 1.3; color: #605854;">
+                                        Meet Link</p>
+                                      <a href="{{meeting_link}}" target="_blank"
+                                        style="margin: 0; font-size: 16px; line-height: 1.45; font-weight: 700; color: #000000; text-decoration: underline; word-break: break-word;">
+                                        {{meeting_link}}
+                                      </a>
+                                    </td>
+                                  </tr>
+                                </table>
+                              </td>
+                            </tr>
+
+                          </table>
+                        </td>
+                      </tr>
+
+                      <tr>
+                        <td align="center" style="padding: 0 0 24px;">
+                          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                            <tr>
+                              <td style="border-top: 1px solid #3f3a36; line-height: 0; font-size: 0;">&nbsp;</td>
+                            </tr>
+                            <tr>
+                              <td align="center" style="padding-top: 0;">
+                                <table role="presentation" cellpadding="0" cellspacing="0"
+                                  style="margin-top: -26px;">
+                                  <tr>
+                                    <td align="center" bgcolor="#000000"
+                                      style="background-color: #000000; border-radius: 999px; box-shadow: 0 10px 24px rgba(0, 0, 0, 0.14);">
+                                      <a href="{{view_details_url}}" target="_blank"
+                                        style="display: inline-block; padding: 18px 74px; font-size: 18px; line-height: 1.2; font-weight: 700; color: #e8d1ab; text-decoration: none;">
+                                        View Details
+                                      </a>
+                                    </td>
+                                  </tr>
+                                </table>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+
+                      <tr>
+                        <td align="center" style="padding: 0 20px 6px;">
+                          <p
+                            style="margin: 0; font-size: 15px; line-height: 1.5; font-style: italic; font-weight: 600; color: #000000;">
+                            Please be available at the scheduled time.
+                          </p>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding: 38px 0 0;">
+              <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/MockLaptopImage.png"
+                alt="Beige Platform" width="600"
+                style="display: block; width: 100%; max-width: 600px; height: auto; border: 0;">
+            </td>
+          </tr>
+
+          <tr>
+            <td align="center" style="padding: 34px 0 0;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td align="center" style="padding: 0 24px 20px;">
+                    <p style="margin: 20px; font-size: 18px; line-height: 1.4; font-weight: 400; color: #3f3a36;">
+                      Thanks
+                    </p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="border-top: 1px solid #3f3a36; line-height: 0; font-size: 0;">&nbsp;</td>
+                </tr>
+                <tr>
+                  <td align="center">
+                    <table role="presentation" cellpadding="0" cellspacing="0" style="margin-top: -33px;">
+                      <tr>
+                        <td
+                          style="background-color: #000000; border-radius: 999px; padding: 17px 58px; min-width: 200px; box-shadow: 0 18px 28px rgba(0, 0, 0, 0.14);">
+                          <p
+                            style="margin: 0; text-align: center; font-size: 18px; line-height: 1.2; font-style: italic; font-weight: 700; color: #e8d1ab;">
+                            The Beige Team
+                          </p>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td align="center" style="padding: 56px 32px 0;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td>
+                    <img
+                      src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                      alt="Separator" width="100%" style="display: block; border: 0;">
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td align="center" style="padding: 34px 32px 0;">
+              <p style="margin: 0 0 22px; font-size: 15px; line-height: 1.6; font-weight: 400; color: #3f3a36;">
+                This is an automated email from BeigeAI. Please do not reply to this email.
+              </p>
+              <p style="margin: 0 0 8px; font-size: 18px; line-height: 1.4; font-weight: 700; color: #000000;">
+                Need Help?
+              </p>
+              <a href="mailto:sales@beigecorporation.io" target="_blank"
+                style="display: inline-block; margin: 0; font-size: 18px; line-height: 1.4; font-weight: 700; color: #000000; text-decoration: underline;">
+                sales@beigecorporation.io
+              </a>
+            </td>
+          </tr>
+
+          <tr>
+            <td align="center" style="padding: 40px 32px 0;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td>
+                    <img
+                      src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                      alt="Separator" width="100%" style="display: block; border: 0;">
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td align="center" style="padding: 30px 32px 60px;">
+              <p style="margin: 0 0 22px; font-size: 15px; line-height: 1.6; font-weight: 400; color: #3f3a36;">
+                Help Center &nbsp; &bull; &nbsp; Term of Services &nbsp; &bull; &nbsp; Privacy Policy
+              </p>
+              <p style="margin: 0 0 48px; font-size: 18px; line-height: 1.4; font-weight: 700; color: #000000;">
+                Beige AI
+              </p>
+              <div
+                style="display: inline-block; background-color: #ffffff; border: 1px solid rgba(232, 209, 171, 0.35); border-radius: 999px; padding: 14px 34px; box-shadow: 0 10px 24px rgba(149, 157, 165, 0.12);">
+                <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
+                  alt="Beige" width="116" style="display: block; border: 0;">
+              </div>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+
+</html>

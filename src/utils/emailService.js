@@ -60,7 +60,6 @@ const {
   CP_NEW_BOOKING_REQUEST_TEMPLATE_ID,
   VERIFICATION_OTP_TEMPLATE_ID,
   PASSWORD_RESET_TEMPLATE_ID,
-  SALES_PAYMENT_SUCCESS_TEMPLATE_ID,
   SALES_LEAD_NOTIFICATION_TEMPLATE_ID,
   CLIENT_SIGNUP_NOTIFICATION_TEMPLATE_ID,
   CREW_SIGNUP_NOTIFICATION_TEMPLATE_ID,
@@ -71,7 +70,12 @@ const {
   QUOTE_ACCEPTED_CLIENT_TEMPLATE_ID,
   QUOTE_ACCEPTED_SALES_NOTIFICATION_TEMPLATE_ID,
   INVOICE_TEMPLATE_ID,
-  TASK_ASSIGNMENT_TEMPLATE_ID
+  TASK_ASSIGNMENT_TEMPLATE_ID,
+  MEETING_RESCHEDULED_TEMPLATE_ID,
+  MEETING_SCHEDULED_TEMPLATE_ID,
+  MESSAGING_INITIATED_TEMPLATE_ID,
+  PRE_PRODUCTION_BRIEF_UPLOADED_TEMPLATE_ID,
+  POST_PRODUCTION_UPLOAD_TEMPLATE_ID
 } = require('../config/sendgridTemplates');
 
 const formatDate = (value) => {
@@ -2466,6 +2470,221 @@ const sendQuoteAcceptedSalesNotificationEmail = async (data) => {
   });
 };
 
+const normalizeEmailAddress = (value) => String(value || '').trim().toLowerCase();
+
+const normalizeRecipients = (to) => {
+  const list = Array.isArray(to) ? to : [to];
+  return [...new Set(list.map(normalizeEmailAddress).filter(Boolean))];
+};
+
+const sendTemplateToRecipients = async ({ recipients = [], subject, templateId, dynamicTemplateData = {} }) => {
+  const normalizedRecipients = normalizeRecipients(recipients);
+  if (!normalizedRecipients.length) {
+    return { success: false, error: 'No recipient emails found' };
+  }
+
+  const settled = await Promise.allSettled(
+    normalizedRecipients.map((to) =>
+      sendEmail({
+        to,
+        subject,
+        templateId,
+        dynamicTemplateData,
+      })
+    )
+  );
+
+  const sent = settled.filter((item) => item.status === 'fulfilled' && item.value?.success).length;
+  const failed = settled
+    .map((item, index) => ({ item, to: normalizedRecipients[index] }))
+    .filter((entry) => entry.item.status === 'rejected' || !entry.item.value?.success)
+    .map((entry) => ({
+      to: entry.to,
+      error:
+        entry.item.status === 'rejected'
+          ? entry.item.reason?.message || 'Unknown error'
+          : entry.item.value?.error || 'Unknown error',
+    }));
+
+  return {
+    success: failed.length === 0,
+    partialSuccess: sent > 0 && failed.length > 0,
+    sentCount: sent,
+    failedCount: failed.length,
+    failedRecipients: failed,
+  };
+};
+
+const formatIsoDate = (value) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toISOString();
+};
+
+const formatHumanDate = (value) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleDateString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'Asia/Kolkata',
+  });
+};
+
+const formatHumanTime = (value) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleTimeString('en-IN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: 'Asia/Kolkata',
+  });
+};
+
+const sendMeetingScheduledTemplateEmail = async ({ recipients = [], data = {} }) => {
+  if (!MEETING_SCHEDULED_TEMPLATE_ID) {
+    return { success: false, error: 'MEETING_SCHEDULED_TEMPLATE_ID is not configured' };
+  }
+
+  const meetingDateTime = data?.meeting_date_time || data?.meetingDateTime || '';
+  const meetingEndTime = data?.meeting_end_time || data?.meetingEndTime || '';
+  const meetLink = data?.meet_link || data?.meetLink || data?.meeting_link || data?.link || '';
+  const agenda = data?.agenda || data?.description || '';
+  const orderId = data?.order_id || data?.booking_id || data?.bookingId || '';
+  const orderName = data?.order_name || data?.project_name || data?.project || '';
+  const isoStart = formatIsoDate(meetingDateTime);
+  const isoEnd = formatIsoDate(meetingEndTime);
+  const humanDate = formatHumanDate(meetingDateTime);
+  const humanTime = formatHumanTime(meetingDateTime);
+  const humanEndTime = formatHumanTime(meetingEndTime);
+
+  return sendTemplateToRecipients({
+    recipients,
+    subject: data?.meeting_title || 'Meeting scheduled',
+    templateId: MEETING_SCHEDULED_TEMPLATE_ID,
+    dynamicTemplateData: {
+      meeting_id: data?.meeting_id || '',
+      booking_id: String(orderId || ''),
+      bookingId: String(orderId || ''),
+      order_id: String(orderId || ''),
+      orderId: String(orderId || ''),
+      order_name: orderName || '',
+      project_name: orderName || '',
+      project: orderName || '',
+      meeting_title: data?.meeting_title || '',
+      meeting_type: data?.meeting_type || '',
+      meeting_status: data?.meeting_status || '',
+      meeting_date_time: isoStart,
+      meetingDateTime: isoStart,
+      meeting_end_time: isoEnd,
+      meetingEndTime: isoEnd,
+      meeting_date: humanDate,
+      meetingDate: humanDate,
+      meeting_time: humanTime,
+      meetingTime: humanTime,
+      meeting_end_time_label: humanEndTime,
+      meetingEndTimeLabel: humanEndTime,
+      agenda,
+      description: agenda,
+      meet_link: meetLink,
+      meetLink,
+      meeting_link: meetLink,
+      link: meetLink,
+      created_by_name: data?.created_by_name || '',
+      recipient_name: data?.recipient_name || '',
+      sent_at: data?.sent_at || new Date().toISOString(),
+    }
+  });
+};
+
+const sendMessagingInitiatedTemplateEmail = async ({ recipients = [], data = {} }) => {
+  if (!MESSAGING_INITIATED_TEMPLATE_ID) {
+    return { success: false, error: 'MESSAGING_INITIATED_TEMPLATE_ID is not configured' };
+  }
+
+  return sendTemplateToRecipients({
+    recipients,
+    subject: 'New message in conversation',
+    templateId: MESSAGING_INITIATED_TEMPLATE_ID,
+    dynamicTemplateData: {
+      chat_room_id: data?.chat_room_id || '',
+      room_id: data?.chat_room_id || '',
+      chat_name: data?.chat_name || '',
+      order_id: data?.order_id || '',
+      booking_id: data?.order_id || '',
+      project_name: data?.project_name || data?.chat_name || '',
+      sender_id: data?.sender_id || '',
+      sender_name: data?.sender_name || '',
+      message_preview: data?.message_preview || '',
+      message: data?.message_preview || '',
+      event_type: data?.event_type || 'message_created',
+      recipient_name: data?.recipient_name || '',
+      sent_at: data?.sent_at || new Date().toISOString(),
+    }
+  });
+};
+
+const sendPreProductionUploadedTemplateEmail = async ({ recipients = [], data = {} }) => {
+  if (!PRE_PRODUCTION_BRIEF_UPLOADED_TEMPLATE_ID) {
+    return { success: false, error: 'PRE_PRODUCTION_BRIEF_UPLOADED_TEMPLATE_ID is not configured' };
+  }
+
+  return sendTemplateToRecipients({
+    recipients,
+    subject: 'Pre-production brief uploaded',
+    templateId: PRE_PRODUCTION_BRIEF_UPLOADED_TEMPLATE_ID,
+    dynamicTemplateData: {
+      recipient_name: data?.recipient_name || 'Client',
+      booking_id: data?.booking_id || data?.order_id || '',
+      bookingId: data?.booking_id || data?.order_id || '',
+      order_id: data?.order_id || data?.booking_id || '',
+      orderId: data?.order_id || data?.booking_id || '',
+      order_name: data?.order_name || data?.project_name || '',
+      project_name: data?.project_name || data?.order_name || '',
+      project: data?.project_name || data?.order_name || '',
+      file_name: data?.file_name || '',
+      file_path: data?.file_path || '',
+      upload_phase: 'pre_production',
+      uploaded_by_name: data?.uploaded_by_name || '',
+      uploaded_by_id: data?.uploaded_by_id || '',
+      uploaded_at: data?.uploaded_at || new Date().toISOString(),
+    }
+  });
+};
+
+const sendPostProductionUploadedTemplateEmail = async ({ recipients = [], data = {} }) => {
+  if (!POST_PRODUCTION_UPLOAD_TEMPLATE_ID) {
+    return { success: false, error: 'POST_PRODUCTION_UPLOAD_TEMPLATE_ID is not configured' };
+  }
+
+  return sendTemplateToRecipients({
+    recipients,
+    subject: 'Post-production file uploaded',
+    templateId: POST_PRODUCTION_UPLOAD_TEMPLATE_ID,
+    dynamicTemplateData: {
+      recipient_name: data?.recipient_name || 'Client',
+      booking_id: data?.booking_id || data?.order_id || '',
+      bookingId: data?.booking_id || data?.order_id || '',
+      order_id: data?.order_id || data?.booking_id || '',
+      orderId: data?.order_id || data?.booking_id || '',
+      order_name: data?.order_name || data?.project_name || '',
+      project_name: data?.project_name || data?.order_name || '',
+      project: data?.project_name || data?.order_name || '',
+      file_name: data?.file_name || '',
+      file_path: data?.file_path || '',
+      upload_phase: 'post_production',
+      uploaded_by_name: data?.uploaded_by_name || '',
+      uploaded_by_id: data?.uploaded_by_id || '',
+      uploaded_at: data?.uploaded_at || new Date().toISOString(),
+    }
+  });
+};
+
 module.exports = {
   formatContentTypes,
   formatShootTypes,
@@ -2498,5 +2717,9 @@ module.exports = {
   sendProductionProposalEmail,
   sendCustomQuoteProposalEmail,
   sendQuoteAcceptedClientEmail,
-  sendQuoteAcceptedSalesNotificationEmail
+  sendQuoteAcceptedSalesNotificationEmail,
+  sendMeetingScheduledTemplateEmail,
+  sendMessagingInitiatedTemplateEmail,
+  sendPreProductionUploadedTemplateEmail,
+  sendPostProductionUploadedTemplateEmail
 };

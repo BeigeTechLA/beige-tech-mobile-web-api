@@ -222,11 +222,42 @@ function createLocationWhereClause(location, Op) {
   return null;
 }
 
+function toCoordinate(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function extractCoordinatesFromPayload(payload = {}, locationValue = null) {
+  const location = locationValue !== null ? locationValue : payload.location;
+  const parsedLocation = parseLocation(location);
+  const center = payload?.locationDetails?.center;
+
+  const latitude = toCoordinate(
+    payload.location_latitude ??
+    payload.latitude ??
+    payload.lat ??
+    (Array.isArray(center) ? center[1] : undefined) ??
+    parsedLocation?.lat
+  );
+
+  const longitude = toCoordinate(
+    payload.location_longitude ??
+    payload.longitude ??
+    payload.lng ??
+    (Array.isArray(center) ? center[0] : undefined) ??
+    parsedLocation?.lng
+  );
+
+  return { latitude, longitude };
+}
+
 module.exports = {
   parseLocation,
   calculateDistance,
   isValidCoordinate,
   filterByProximity,
   formatLocationResponse,
-  createLocationWhereClause
+  createLocationWhereClause,
+  extractCoordinatesFromPayload
 };
