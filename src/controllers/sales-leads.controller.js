@@ -1,6 +1,8 @@
 const { sales_leads, client_leads, sales_lead_activities, client_lead_activities, stream_project_booking, stream_project_booking_days, users, user_type, discount_codes, payment_links,  quotes, sales_quotes, assigned_crew, crew_members,
   quote_line_items, crew_member_files, assigned_equipment } = require('../models');
 const { Op, Sequelize } = require('sequelize');
+const multer = require('multer');
+const path = require('path');
 const constants = require('../utils/constants');
 const leadAssignmentService = require('../services/lead-assignment.service');
 const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
@@ -13,9 +15,39 @@ const emailService = require('../utils/emailService');
 const { sendCPNewBookingRequestEmail } = require('../utils/emailService');
 const { resolveEventDateAndStartTime, normalizeTime, splitDateTime } = require('../utils/timezone');
 const { extractCoordinatesFromPayload } = require('../utils/locationHelpers');
+const { S3UploadFiles } = require('../utils/common.js');
 
 const sequelize = require('../db');
 const db = require('../models');
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, path.join(__dirname, '../../public/uploads/media'));
+  },
+  filename: (req, file, cb) => {
+    const filename = Date.now() + path.extname(file.originalname);
+    cb(null, filename);
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = [
+      'image/jpeg',
+      'image/png',
+      'image/webp',
+      'image/jfif',
+      'image/jpg',
+      'application/pdf',
+    ];
+    if (!allowedTypes.includes(file.mimetype)) {
+      return cb(new Error('Invalid file type. Only JPEG, PNG, WEBP, and PDF are allowed.'));
+    }
+    cb(null, true);
+  },
+});
 
 const normalizeDateOnlyInput = (value) => {
   const { date } = splitDateTime(value);
@@ -1807,6 +1839,7 @@ exports.getLeads = async (req, res) => {
         },
         { model: discount_codes, as: "discount_codes" }, // Added for status consistency
         { model: payment_links, as: "payment_links" },   // Added for status consistency
+        { model: sales_lead_activities, as: "activities", required: false },
         {
           model: stream_project_booking,
           as: 'booking',
@@ -1826,10 +1859,19 @@ exports.getLeads = async (req, res) => {
       leads.map(async (lead) => {
         const leadJson = lead.toJSON();
         const pricingData = await calculateLeadPricing(lead.booking);
+        const manualProgress = computeManualPaymentProgress(
+          leadJson.activities || [],
+          pricingData?.total || 0
+        );
 
         // 1. Standardize Booking Status & Intent (Using same methods as Detail API)
         const computedIntent = lead.intent ?? leadAssignmentService.getLeadIntent({ lead, booking: lead.booking });
-        const computedBookingStatus = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
+        let computedBookingStatus = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
+        if (manualProgress.hasFullPayment) {
+          computedBookingStatus = 'Booked';
+        } else if (manualProgress.isPartiallyPaid) {
+          computedBookingStatus = 'Partially Paid';
+        }
 
         // 2. Standardize Payment Status Logic (Check for Payment Links)
         let payment_status = lead.booking?.payment_id ? 'paid' : 'unpaid';
@@ -1850,6 +1892,7 @@ exports.getLeads = async (req, res) => {
           booking_status: computedBookingStatus, 
           intent: computedIntent,
           payment_status: payment_status,
+          manual_payment_summary: manualProgress,
         };
       })
     );
@@ -1947,6 +1990,7 @@ exports.getClientLeads = async (req, res) => {
           as: 'assigned_sales_rep',
           attributes: ['id', 'name', 'email']
         },
+        { model: client_lead_activities, as: "activities", required: false },
         {
           model: stream_project_booking,
           as: 'booking',
@@ -1968,8 +2012,17 @@ exports.getClientLeads = async (req, res) => {
       leads.map(async (lead) => {
         const leadJson = lead.toJSON();
         const pricingData = await calculateLeadPricing(lead.booking);
+        const manualProgress = computeManualPaymentProgress(
+          leadJson.activities || [],
+          pricingData?.total || 0
+        );
         const computedIntent = lead.intent ?? leadAssignmentService.getClientIntent({ lead, booking: lead.booking });
-        const computedBookingStatus = leadAssignmentService.getClientBookingStatus(lead, lead.booking);
+        let computedBookingStatus = leadAssignmentService.getClientBookingStatus(lead, lead.booking);
+        if (manualProgress.hasFullPayment) {
+          computedBookingStatus = 'Booked';
+        } else if (manualProgress.isPartiallyPaid) {
+          computedBookingStatus = 'Partially Paid';
+        }
 
         return {
           ...leadJson,
@@ -1977,6 +2030,7 @@ exports.getClientLeads = async (req, res) => {
           booking_status: computedBookingStatus,
           intent: computedIntent,
           payment_status: lead.booking?.payment_id ? 'paid' : 'unpaid',
+          manual_payment_summary: manualProgress,
         };
       })
     );
@@ -2961,6 +3015,318 @@ exports.updateClientLeadStatus = async (req, res) => {
     });
   }
 };
+
+const MANUAL_PAYMENT_MODES = ['cash', 'bank_transfer', 'credit_card', 'other'];
+
+const parseJsonIfNeeded = (value) => {
+  if (!value) return null;
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+};
+
+const computeManualPaymentProgress = (activities = [], totalAmount = 0) => {
+  const manualEntries = (activities || [])
+    .map((activity) => parseJsonIfNeeded(activity?.activity_data))
+    .filter((entry) => entry && entry.payment_method === 'manual');
+
+  const hasFullPayment = manualEntries.some((entry) => entry.payment_type === 'full');
+  const partialPaid = manualEntries.reduce((sum, entry) => {
+    if (entry.payment_type !== 'partial') return sum;
+    const numeric = Number(entry.amount || 0);
+    return sum + (Number.isFinite(numeric) ? numeric : 0);
+  }, 0);
+
+  const paidAmount = hasFullPayment ? Number(totalAmount || 0) : partialPaid;
+  const pendingAmount = Math.max(Number(totalAmount || 0) - paidAmount, 0);
+
+  return {
+    hasFullPayment,
+    paidAmount,
+    pendingAmount,
+    isPartiallyPaid: !hasFullPayment && paidAmount > 0 && pendingAmount > 0,
+  };
+};
+
+const resolveLeadTotalAmount = (leadRecord, bookingRecord) => {
+  const pricing = parseJsonIfNeeded(leadRecord?.pricing_breakdown);
+  const pricingTotalCandidates = [
+    pricing?.total_after_credit,
+    pricing?.total,
+    pricing?.total_before_credit
+  ];
+
+  for (const candidate of pricingTotalCandidates) {
+    const numeric = Number(candidate);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  }
+
+  const quote = bookingRecord?.primary_quote || null;
+  const quoteTotal = Number(quote?.total);
+  if (Number.isFinite(quoteTotal) && quoteTotal > 0) return quoteTotal;
+
+  return 0;
+};
+
+const buildManualPaymentMeta = async ({ leadModel, leadActivityModel, leadId, req, res, leadLabel }) => {
+  const { payment_type, amount, payment_mode, other_payment_mode, proof_url, notes } = req.body || {};
+  const performedBy = req.userId;
+
+  if (!['full', 'partial'].includes(String(payment_type || '').trim().toLowerCase())) {
+    return res.status(constants.BAD_REQUEST.code).json({
+      success: false,
+      message: 'payment_type must be either "full" or "partial"',
+    });
+  }
+
+  const normalizedPaymentType = String(payment_type).trim().toLowerCase();
+  const normalizedPaymentMode = String(payment_mode || '').trim().toLowerCase();
+
+  if (!MANUAL_PAYMENT_MODES.includes(normalizedPaymentMode)) {
+    return res.status(constants.BAD_REQUEST.code).json({
+      success: false,
+      message: 'payment_mode must be one of cash, bank_transfer, credit_card, or other',
+    });
+  }
+
+  const normalizedProofUrl = String(proof_url || '').trim();
+  if (!normalizedProofUrl) {
+    return res.status(constants.BAD_REQUEST.code).json({
+      success: false,
+      message: 'proof_url is required for manual payment updates',
+    });
+  }
+
+  if (normalizedPaymentMode === 'other' && !String(other_payment_mode || '').trim()) {
+    return res.status(constants.BAD_REQUEST.code).json({
+      success: false,
+      message: 'other_payment_mode is required when payment_mode is other',
+    });
+  }
+
+  const lead = await leadModel.findOne({
+    where: { lead_id: leadId, is_active: 1 },
+    include: [{
+      model: stream_project_booking,
+      as: 'booking',
+      include: [{
+        model: quotes,
+        as: 'primary_quote',
+        required: false
+      }]
+    }]
+  });
+
+  if (!lead) {
+    return res.status(constants.NOT_FOUND.code).json({
+      success: false,
+      message: `${leadLabel} not found`,
+    });
+  }
+
+  const totalAmount = resolveLeadTotalAmount(lead, lead.booking);
+  const previousManualEntries = await leadActivityModel.findAll({
+    where: {
+      lead_id: Number(leadId),
+      activity_type: 'payment_completed'
+    },
+    order: [['created_at', 'ASC']]
+  });
+
+  const manualHistory = previousManualEntries
+    .map((entry) => {
+      const payload = parseJsonIfNeeded(entry.activity_data);
+      if (!payload || payload.payment_method !== 'manual') return null;
+      return payload;
+    })
+    .filter(Boolean);
+
+  const alreadyFullyPaid = manualHistory.some((entry) => entry.payment_type === 'full');
+  const previouslyPaidPartial = manualHistory.reduce((sum, entry) => {
+    if (entry.payment_type !== 'partial') return sum;
+    const numeric = Number(entry.amount || 0);
+    return sum + (Number.isFinite(numeric) ? numeric : 0);
+  }, 0);
+
+  if (alreadyFullyPaid) {
+    return res.status(constants.BAD_REQUEST.code).json({
+      success: false,
+      message: 'This lead is already marked fully paid',
+    });
+  }
+
+  const remainingBefore = Math.max(totalAmount - previouslyPaidPartial, 0);
+  const numericAmount = amount === undefined || amount === null || amount === ''
+    ? null
+    : Number(amount);
+
+  if (normalizedPaymentType === 'partial') {
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'For partial payments, amount must be greater than 0',
+      });
+    }
+
+    if (remainingBefore > 0 && numericAmount > remainingBefore) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Partial amount cannot exceed remaining booking amount',
+      });
+    }
+  }
+
+  if (normalizedPaymentType === 'full' && remainingBefore <= 0 && totalAmount > 0) {
+    return res.status(constants.BAD_REQUEST.code).json({
+      success: false,
+      message: 'No remaining amount to settle',
+    });
+  }
+
+  await leadActivityModel.create({
+    lead_id: Number(leadId),
+    activity_type: 'payment_completed',
+    activity_data: {
+      payment_method: 'manual',
+      payment_type: normalizedPaymentType,
+      payment_mode: normalizedPaymentMode,
+      other_payment_mode: normalizedPaymentMode === 'other' ? String(other_payment_mode).trim() : null,
+      amount: normalizedPaymentType === 'partial' ? Number(numericAmount) : null,
+      total_amount: totalAmount > 0 ? Number(totalAmount) : null,
+      previously_paid_amount: previouslyPaidPartial,
+      remaining_before_payment: remainingBefore,
+      remaining_after_payment:
+        normalizedPaymentType === 'partial'
+          ? Math.max(remainingBefore - Number(numericAmount || 0), 0)
+          : 0,
+      proof_url: normalizedProofUrl,
+      notes: String(notes || '').trim() || null,
+      updated_by: performedBy || null,
+    },
+    performed_by_user_id: performedBy,
+  });
+
+  const leadUpdate = { last_activity_at: new Date() };
+  if (normalizedPaymentType === 'full') {
+    leadUpdate.lead_status = 'booked';
+  }
+  await lead.update(leadUpdate);
+
+  return res.json({
+    success: true,
+    message: normalizedPaymentType === 'full'
+      ? 'Manual full payment recorded and lead marked as booked'
+      : 'Manual partial payment recorded',
+    data: {
+      lead_id: Number(leadId),
+      payment_type: normalizedPaymentType,
+      payment_mode: normalizedPaymentMode,
+      amount: normalizedPaymentType === 'partial' ? Number(numericAmount) : null,
+      total_amount: totalAmount > 0 ? Number(totalAmount) : null,
+      paid_amount_total:
+        normalizedPaymentType === 'partial'
+          ? Number(previouslyPaidPartial + Number(numericAmount || 0))
+          : totalAmount > 0
+            ? Number(totalAmount)
+            : null,
+      pending_amount:
+        normalizedPaymentType === 'partial'
+          ? Math.max(remainingBefore - Number(numericAmount || 0), 0)
+          : 0,
+      proof_url: normalizedProofUrl,
+      lead_status: normalizedPaymentType === 'full' ? 'booked' : lead.lead_status,
+    }
+  });
+};
+
+exports.recordManualPayment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    return await buildManualPaymentMeta({
+      leadModel: sales_leads,
+      leadActivityModel: sales_lead_activities,
+      leadId: id,
+      req,
+      res,
+      leadLabel: 'Lead',
+    });
+  } catch (error) {
+    console.error('Error recording manual payment:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to record manual payment',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+exports.recordClientManualPayment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    return await buildManualPaymentMeta({
+      leadModel: client_leads,
+      leadActivityModel: client_lead_activities,
+      leadId: id,
+      req,
+      res,
+      leadLabel: 'Client lead',
+    });
+  } catch (error) {
+    console.error('Error recording client manual payment:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to record client manual payment',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+exports.uploadManualPaymentProof = [
+  upload.single('proof_file'),
+  async (req, res) => {
+    try {
+      const file = req.file;
+      if (!file) {
+        return res.status(constants.BAD_REQUEST.code).json({
+          success: false,
+          message: 'Proof file is required',
+        });
+      }
+
+      const uploaded = await S3UploadFiles({ proof_file: [file] });
+      const uploadedFilePath = uploaded?.[0]?.file_path || null;
+
+      if (!uploadedFilePath) {
+        return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+          success: false,
+          message: 'Failed to upload proof file',
+        });
+      }
+
+      const s3Prefix = String(process.env.BEIGE_ASSET_BASE_URL || '').replace(/\/+$/, '/');
+      const proofUrl = s3Prefix ? `${s3Prefix}${uploadedFilePath}` : uploadedFilePath;
+
+      return res.json({
+        success: true,
+        message: 'Proof file uploaded successfully',
+        data: {
+          file_path: uploadedFilePath,
+          proof_url: proofUrl,
+        },
+      });
+    } catch (error) {
+      console.error('Error uploading manual payment proof:', error);
+      return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+        success: false,
+        message: 'Failed to upload proof file',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      });
+    }
+  }
+];
 
 exports.getClientLeadById = async (req, res) => {
   try {
