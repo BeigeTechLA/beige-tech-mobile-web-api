@@ -822,17 +822,29 @@ exports.getClientDropdown = async (req, res) => {
 exports.createClient = async (req, res) => {
   try {
     const { name, email, phone_number } = req.body;
+    const duplicateWhere = {
+      [db.Sequelize.Op.or]: [
+        email ? { email } : null,
+        phone_number ? { phone_number } : null
+      ].filter(Boolean)
+    };
 
     const existingUser = await db.users.findOne({
-      where: {
-        [db.Sequelize.Op.or]: [
-          email ? { email } : null,
-          phone_number ? { phone_number } : null
-        ].filter(Boolean)
-      }
+      where: duplicateWhere
     });
 
     if (existingUser) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        error: true,
+        message: 'Client already exists with same email or phone number'
+      });
+    }
+
+    const existingClient = await db.clients.findOne({
+      where: duplicateWhere
+    });
+
+    if (existingClient) {
       return res.status(constants.BAD_REQUEST.code).json({
         error: true,
         message: 'Client already exists with same email or phone number'

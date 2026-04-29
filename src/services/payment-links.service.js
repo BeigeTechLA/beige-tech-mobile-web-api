@@ -24,6 +24,42 @@ async function getStripeCustomerById(customerId) {
   return customer;
 }
 
+function normalizeRecipientValue(value) {
+  const normalized = String(value || '').trim();
+  return normalized || null;
+}
+
+function normalizeRecipientEmail(value) {
+  const normalized = normalizeRecipientValue(value);
+  return normalized ? normalized.toLowerCase() : null;
+}
+
+async function hasRecipientIdentityChanged(booking, recipientOverride = null) {
+  if (!recipientOverride || (!recipientOverride.email && !recipientOverride.name)) {
+    return false;
+  }
+
+  const stripeCustomer = booking?.stripe_customer_id
+    ? await getStripeCustomerById(booking.stripe_customer_id)
+    : null;
+
+  const currentEmail = normalizeRecipientEmail(
+    stripeCustomer?.email || booking?.guest_email || booking?.user?.email
+  );
+  const currentName = normalizeRecipientValue(
+    stripeCustomer?.name || booking?.user?.name || (booking?.project_name ? booking.project_name.split(' - ')[1] : null)
+  );
+
+  const nextEmail = recipientOverride?.email !== undefined
+    ? normalizeRecipientEmail(recipientOverride.email)
+    : currentEmail;
+  const nextName = recipientOverride?.name !== undefined
+    ? normalizeRecipientValue(recipientOverride.name)
+    : currentName;
+
+  return currentEmail !== nextEmail || currentName !== nextName;
+}
+
 async function listStripeCustomersByEmail(email) {
   if (!email) return [];
   const customers = await stripe.customers.list({ email: email, limit: 10 });
@@ -603,5 +639,6 @@ module.exports = {
   cleanupExpiredLinks,
   createStripeInvoice,
   createPaidStripeInvoice,
-  findExistingInvoiceForBooking
+  findExistingInvoiceForBooking,
+  hasRecipientIdentityChanged
 };
