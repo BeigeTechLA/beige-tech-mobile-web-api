@@ -2491,29 +2491,69 @@ const normalizeEmailAddress = (value) => String(value || '').trim().toLowerCase(
 
 const normalizeRecipients = (to) => {
   const list = Array.isArray(to) ? to : [to];
-  return [...new Set(list.map(normalizeEmailAddress).filter(Boolean))];
+  return [...new Set(
+    list
+      .map((entry) => {
+        if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+          return normalizeEmailAddress(entry.email || entry.to);
+        }
+        return normalizeEmailAddress(entry);
+      })
+      .filter(Boolean)
+  )];
 };
 
 const sendTemplateToRecipients = async ({ recipients = [], subject, templateId, dynamicTemplateData = {} }) => {
-  const normalizedRecipients = normalizeRecipients(recipients);
-  if (!normalizedRecipients.length) {
+  const recipientEntries = (Array.isArray(recipients) ? recipients : [recipients])
+    .map((recipient) => {
+      if (recipient && typeof recipient === 'object' && !Array.isArray(recipient)) {
+        const to = normalizeEmailAddress(recipient.email || recipient.to);
+        if (!to) return null;
+
+        return {
+          to,
+          dynamicTemplateData: {
+            ...dynamicTemplateData,
+            ...(recipient.data || {}),
+            recipient_name:
+              recipient.name ||
+              recipient.recipient_name ||
+              recipient.data?.recipient_name ||
+              dynamicTemplateData?.recipient_name ||
+              '',
+          },
+        };
+      }
+
+      const to = normalizeEmailAddress(recipient);
+      if (!to) return null;
+
+      return {
+        to,
+        dynamicTemplateData,
+      };
+    })
+    .filter(Boolean)
+    .filter((entry, index, list) => list.findIndex((candidate) => candidate.to === entry.to) === index);
+
+  if (!recipientEntries.length) {
     return { success: false, error: 'No recipient emails found' };
   }
 
   const settled = await Promise.allSettled(
-    normalizedRecipients.map((to) =>
+    recipientEntries.map((entry) =>
       sendEmail({
-        to,
+        to: entry.to,
         subject,
         templateId,
-        dynamicTemplateData,
+        dynamicTemplateData: entry.dynamicTemplateData,
       })
     )
   );
 
   const sent = settled.filter((item) => item.status === 'fulfilled' && item.value?.success).length;
   const failed = settled
-    .map((item, index) => ({ item, to: normalizedRecipients[index] }))
+    .map((item, index) => ({ item, to: recipientEntries[index]?.to }))
     .filter((entry) => entry.item.status === 'rejected' || !entry.item.value?.success)
     .map((entry) => ({
       to: entry.to,
@@ -2691,8 +2731,12 @@ const sendMessagingInitiatedTemplateEmail = async ({ recipients = [], data = {} 
       chat_room_id: data?.chat_room_id || '',
       room_id: data?.chat_room_id || '',
       chat_name: data?.chat_name || '',
-      order_id: data?.order_id || '',
-      booking_id: data?.order_id || '',
+      order_id: data?.order_id || data?.project_id || '',
+      orderId: data?.order_id || data?.project_id || '',
+      booking_id: data?.booking_id || data?.order_id || data?.project_id || '',
+      bookingId: data?.booking_id || data?.order_id || data?.project_id || '',
+      project_id: data?.project_id || data?.order_id || data?.booking_id || '',
+      projectId: data?.project_id || data?.order_id || data?.booking_id || '',
       project_name: data?.project_name || data?.chat_name || '',
       sender_id: data?.sender_id || '',
       sender_name: data?.sender_name || '',

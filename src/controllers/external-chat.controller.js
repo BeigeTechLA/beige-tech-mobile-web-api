@@ -650,7 +650,7 @@ const sendChatNotificationTemplate = async ({
       ''
     ).trim();
 
-    await emailService.sendMessagingInitiatedTemplateEmail({
+    const emailResult = await emailService.sendMessagingInitiatedTemplateEmail({
       recipients: recipientTargets.map((recipient) => ({
         email: recipient.email,
         name: recipient.name,
@@ -676,6 +676,10 @@ const sendChatNotificationTemplate = async ({
         sent_at: new Date().toISOString(),
       },
     });
+
+    if (!emailResult?.success) {
+      console.error('Chat email notification send result:', emailResult);
+    }
   } catch (notificationError) {
     console.error('Chat email notification failed:', notificationError?.message || notificationError);
   }
