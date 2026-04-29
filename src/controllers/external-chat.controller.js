@@ -614,12 +614,16 @@ const sendChatNotificationTemplate = async ({
   eventType = 'message_created',
   messagePreview = '',
   fallbackPayload = {},
+  recipientTargetsOverride = null,
 }) => {
   try {
     const participantPayload = await proxyRequest(`/participants/${roomId}`).catch(() => null);
     const { envelope } = extractParticipantEnvelope(participantPayload || {});
     const enrichedEnvelope = envelope ? await enrichParticipantPayload(envelope) : null;
-    let recipientTargets = extractChatRecipientTargets(enrichedEnvelope || {});
+    const hasRecipientTargetsOverride = Array.isArray(recipientTargetsOverride);
+    let recipientTargets = hasRecipientTargetsOverride
+      ? recipientTargetsOverride.filter(Boolean)
+      : extractChatRecipientTargets(enrichedEnvelope || {});
 
     const roomPayload = toObject(fallbackPayload?.data) || toObject(fallbackPayload) || {};
     const mappedBookingId = await getMappedBookingIdForRoom(roomId);
@@ -636,7 +640,7 @@ const sendChatNotificationTemplate = async ({
         bookingId: projectId,
       });
     }
-    if (!recipientTargets.length) {
+    if (!recipientTargets.length && !hasRecipientTargetsOverride) {
       recipientTargets = await getChatBookingFallbackRecipients(projectId);
     }
 
@@ -1042,6 +1046,7 @@ exports.createChatRoom = async (req, res) => {
           role: 'client',
         })
       : null;
+    const adminUser = await getPlatformUserById(req.user?.userId || null);
     const roomType = String(req.body.roomType || (bookingId ? 'project' : 'direct')).toLowerCase();
 
     if (!bookingId && roomType === 'project') {
@@ -1104,6 +1109,10 @@ exports.createChatRoom = async (req, res) => {
 
     const mergedParticipants = [...participants, ...requestedParticipants];
     if (directClient) mergedParticipants.push(directClient);
+    const enrichedNotificationRecipients = await enrichParticipantCollection(mergedParticipants, 'participant');
+    const notificationRecipients = enrichedNotificationRecipients.length
+      ? enrichedNotificationRecipients
+      : mergedParticipants;
 
     const result = await exports.createChatRoomForBooking({
       bookingId,
@@ -1115,14 +1124,31 @@ exports.createChatRoom = async (req, res) => {
       externalRef: bookingId || req.body.externalRef || `direct:${req.user?.userId || 'user'}:${directClient?.id || Date.now()}`,
     });
 
-    if (bookingId && result?.data) {
+    const createdRoomPayload = toObject(result?.data) || toObject(result) || null;
+
+    if (bookingId && createdRoomPayload) {
       await saveChatRoomMapping({
-        roomId: extractChatRoomId(result.data),
+        roomId: extractChatRoomId(createdRoomPayload),
         bookingId,
       });
     }
 
-    const decoratedRoom = result?.data ? await decorateChatRoom(result.data) : result?.data;
+    const decoratedRoom = createdRoomPayload ? await decorateChatRoom(createdRoomPayload) : createdRoomPayload;
+    if (result?.created !== false && createdRoomPayload) {
+      await sendChatNotificationTemplate({
+        roomId: extractChatRoomId(createdRoomPayload),
+        sender: adminUser || {
+          id: req.user?.userId || '',
+          email: req.user?.email || '',
+          name: req.user?.name || `User ${req.user?.userId || ''}`.trim(),
+        },
+        eventType: 'participant_added',
+        messagePreview: `${mergedParticipants.length} participant(s) added`,
+        fallbackPayload: result || {},
+        recipientTargetsOverride: notificationRecipients,
+      });
+    }
+
     return res.status(200).json({
       ...result,
       data: decoratedRoom,
@@ -1174,7 +1200,18 @@ exports.getChatDirectory = async (req, res) => {
 exports.addChatParticipants = async (req, res) => {
   try {
     const participants = Array.isArray(req.body.participants)
-      ? req.body.participants.map((participant) => normalizeParticipantInput(participant)).filter(Boolean)
+      ? (
+          await Promise.all(
+            req.body.participants.map(async (participant) => {
+              const normalizedRole = String(participant?.role || '').trim().toLowerCase();
+              if (normalizedRole === 'client') {
+                return resolveClientParticipant(participant);
+              }
+
+              return normalizeParticipantInput(participant);
+            })
+          )
+        ).filter(Boolean)
       : [];
     const explicitRole = String(req.body.role || '').trim().toLowerCase();
 
@@ -1186,6 +1223,7 @@ exports.addChatParticipants = async (req, res) => {
     }
 
     const adminUser = await getPlatformUserById(req.user?.userId || null);
+    const notificationRecipients = await enrichParticipantCollection(participants, 'participant');
     const groupedParticipants = participants.reduce((acc, participant) => {
       const role = explicitRole || participant.role || 'manager';
       if (!acc[role]) acc[role] = [];
@@ -1224,6 +1262,7 @@ exports.addChatParticipants = async (req, res) => {
       eventType: 'participant_added',
       messagePreview: `${participants.length} participant(s) added`,
       fallbackPayload: results[results.length - 1] || {},
+      recipientTargetsOverride: notificationRecipients,
     });
 
     return res.status(200).json({
@@ -1382,14 +1421,6 @@ exports.sendChatMessage = async (req, res) => {
           name: sender.name || sender.email || 'Beige User',
         },
       }),
-    });
-
-    await sendChatNotificationTemplate({
-      roomId: req.params.roomId,
-      sender,
-      eventType: 'message_created',
-      messagePreview: String(req.body.message || ''),
-      fallbackPayload: result || {},
     });
 
     return res.status(200).json(result);
