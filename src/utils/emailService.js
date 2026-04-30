@@ -921,7 +921,7 @@ const sendShootReminder2HoursEmail = async (data) => {
         end_time: data.end_time || '',
         shoot_time: data.shoot_time || [data.start_time, data.end_time].filter(Boolean).join(' - '),
         shoot_location_address: data.shoot_location_address || 'TBD',
-        cp_name: data.cp_name || 'your Creative Partner',
+        cp_name: String(data.cp_name || '').trim(),
         userData: { name: data.first_name || 'there' },
         location: data.location || data.shoot_location_address || 'TBD',
         cp_image_url:
