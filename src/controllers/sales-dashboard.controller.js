@@ -881,11 +881,14 @@ exports.getSalesRepsList = async (req, res) => {
     const { user_type, users, Sequelize } = require('../models');
     const { Op } = Sequelize;
 
-    // Get both roles
+    // TEMP FLOW:
+    // Show admins with assign_lead=1 instead of sales reps.
+    // Old sales_rep filter kept commented for easy rollback.
     const userTypes = await user_type.findAll({
       where: {
         user_role: {
-          [Op.in]: ['sales_rep']
+          [Op.in]: ['admin', 'Admin']
+          // [Op.in]: ['sales_rep']
         }
       },
       attributes: ['user_type_id']
@@ -907,7 +910,8 @@ exports.getSalesRepsList = async (req, res) => {
         user_type: {
           [Op.in]: userTypeIds
         },
-        is_active: 1
+        is_active: 1,
+        assign_lead: 1
       },
       attributes: ['id', 'name', 'email', 'user_type'],
       order: [['name', 'ASC']]

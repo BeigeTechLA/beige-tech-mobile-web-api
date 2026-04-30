@@ -1130,6 +1130,9 @@ function isClientRole(role) {
 }
 
 async function getRandomActiveSalesRepId(transaction) {
+  // TEMP FLOW NOTE:
+  // Random sales_rep assignment is intentionally preserved for rollback,
+  // but current flow assigns to creator admin/sales_admin directly.
   const salesRepType = await db.user_type.findOne({
     where: { user_role: 'sales_rep' },
     transaction
@@ -1154,6 +1157,31 @@ async function getRandomActiveSalesRepId(transaction) {
 
   const randomIndex = Math.floor(Math.random() * salesReps.length);
   return salesReps[randomIndex].id;
+}
+
+async function resolveAssignableAdminId(userId, transaction) {
+  const candidateUserId = Number(userId);
+  if (!Number.isInteger(candidateUserId) || candidateUserId <= 0) {
+    return null;
+  }
+
+  const candidate = await db.users.findByPk(candidateUserId, {
+    include: [
+      {
+        model: db.user_type,
+        as: 'userType',
+        attributes: ['user_role']
+      }
+    ],
+    transaction
+  });
+
+  const candidateRole = String(candidate?.userType?.user_role || '').toLowerCase();
+  if (!candidate || candidateRole !== 'admin' || Number(candidate.assign_lead) !== 1 || Number(candidate.is_active) !== 1) {
+    return null;
+  }
+
+  return candidateUserId;
 }
 
 function resolveQuoteStatus(payload = {}, currentStatus = 'draft') {
@@ -3063,23 +3091,16 @@ async function createQuote(payload, user) {
         : null;
 
       if (Number.isInteger(requestedSalesRepId) && requestedSalesRepId > 0) {
-        const requestedUser = await db.users.findByPk(requestedSalesRepId, {
-          include: [
-            {
-              model: db.user_type,
-              as: 'userType',
-              attributes: ['user_role']
-            }
-          ],
-          transaction
-        });
-
-        const requestedUserRole = String(requestedUser?.userType?.user_role || '').toLowerCase();
-        assignedSalesRepId = requestedUser && requestedUserRole === 'sales_rep'
-          ? requestedSalesRepId
-          : await getRandomActiveSalesRepId(transaction);
+        const requestedAssignableAdminId = await resolveAssignableAdminId(requestedSalesRepId, transaction);
+        assignedSalesRepId = requestedAssignableAdminId || user.userId;
+        // OLD LOGIC (temporary rollback path):
+        // assignedSalesRepId = requestedUser && requestedUserRole === 'sales_rep'
+        //   ? requestedSalesRepId
+        //   : await getRandomActiveSalesRepId(transaction);
       } else {
-        assignedSalesRepId = await getRandomActiveSalesRepId(transaction);
+        assignedSalesRepId = user.userId;
+        // OLD LOGIC (temporary rollback path):
+        // assignedSalesRepId = await getRandomActiveSalesRepId(transaction);
       }
     }
 

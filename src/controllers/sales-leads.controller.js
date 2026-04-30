@@ -268,7 +268,8 @@ async function resolveAssignableSalesRep(salesRepId) {
   const salesRep = await users.findOne({
     where: {
       id: salesRepId,
-      is_active: 1
+      is_active: 1,
+      assign_lead: 1
     },
     include: [
       {
@@ -285,9 +286,9 @@ async function resolveAssignableSalesRep(salesRepId) {
     throw new Error('Sales rep not found or inactive');
   }
 
-  const userRole = salesRep.userType?.user_role;
-  if (userRole !== 'sales_rep' && userRole !== 'sales_admin' && userRole !== 'admin' && userRole !== 'Admin') {
-    throw new Error('Selected user is not a valid sales rep');
+  const userRole = String(salesRep.userType?.user_role || '').toLowerCase();
+  if (userRole !== 'admin') {
+    throw new Error('Selected user is not a valid assignable admin');
   }
 
   return salesRep;
@@ -576,7 +577,7 @@ async function resolveAssignedSalesRepId({
 }) {
   const actorRole = String(req.userRole || '').toLowerCase();
 
-  if (actorRole === 'sales_rep') {
+  if (actorRole === 'sales_rep' || actorRole === 'sales_admin' || actorRole === 'admin') {
     return req.userId || currentAssignedSalesRepId || null;
   }
 
@@ -604,10 +605,9 @@ async function resolveAssignedSalesRepId({
     transaction: tx
   });
 
-  const requestedUserRole = requestedSalesRep?.userType?.user_role;
-
-  if (!requestedSalesRep || requestedUserRole !== 'sales_rep') {
-    throw new Error('Selected sales_rep_id is not a valid sales rep');
+  const requestedUserRole = String(requestedSalesRep?.userType?.user_role || '').toLowerCase();
+  if (!requestedSalesRep || requestedUserRole !== 'admin' || Number(requestedSalesRep.assign_lead) !== 1) {
+    throw new Error('Selected sales_rep_id is not a valid assignable admin');
   }
 
   return normalizedRequestedSalesRepId;
@@ -1223,7 +1223,9 @@ exports.trackEarlyBookingInterest = async (req, res) => {
                 activity_data: { source: 'step_1_capture', user_id: resolvedUserId, guest_email: normalizedGuestEmail }
             });
 
-            assignedRep = await leadAssignmentService.autoAssignLead(lead.lead_id);
+            // TEMP FLOW: direct book-a-shoot leads stay unassigned for now.
+            // assignedRep = await leadAssignmentService.autoAssignLead(lead.lead_id);
+            assignedRep = null;
 
           // emailService.sendSalesLeadNotification({
           //   guestEmail: normalizedGuestEmail,
@@ -1245,7 +1247,7 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             startTime: start_time,
             endTime: end_time,
             editsNeeded: edits_needed,
-            sales_rep_email: assignedRep.email
+            sales_rep_email: assignedRep?.email || null
           }).catch(err => console.error('Production Email Error:', err));
         } else {
           await lead.update({ last_activity_at: new Date() });
@@ -1358,8 +1360,9 @@ exports.trackBookingStart = async (req, res) => {
       }
     });
 
-    // Auto-assign lead
-    const assignedRep = await leadAssignmentService.autoAssignLead(lead.lead_id);
+    // TEMP FLOW: direct book-a-shoot leads stay unassigned for now.
+    // const assignedRep = await leadAssignmentService.autoAssignLead(lead.lead_id);
+    const assignedRep = null;
 
     res.status(constants.CREATED.code).json({
       success: true,
@@ -1498,10 +1501,10 @@ exports.createSalesAssistedLead = async (req, res) => {
       }
     });
 
-    // Auto-assign if not already assigned
-    if (!lead.assigned_sales_rep_id) {
-      await leadAssignmentService.autoAssignLead(lead.lead_id);
-    }
+    // TEMP FLOW: direct book-a-shoot leads stay unassigned for now.
+    // if (!lead.assigned_sales_rep_id) {
+    //   await leadAssignmentService.autoAssignLead(lead.lead_id);
+    // }
 
     res.status(constants.CREATED.code).json({
       success: true,
@@ -6171,10 +6174,19 @@ exports.finalizeCreateDeal = async (req, res) => {
         transaction: tx
       });
     } else {
-      assignedRep = await leadAssignmentService.autoAssignLead(
-        lead.lead_id,
-        { transaction: tx, leadModel }
-      );
+      // TEMP FLOW:
+      // Admin/Sales Admin created leads should stay with creator (resolveAssignedSalesRepId already handles this).
+      // Old random/auto assignment logic kept commented for easy rollback.
+      // assignedRep = await leadAssignmentService.autoAssignLead(
+      //   lead.lead_id,
+      //   { transaction: tx, leadModel }
+      // );
+      assignedRep = req.userId
+        ? await users.findByPk(req.userId, {
+            attributes: ['id', 'name'],
+            transaction: tx
+          })
+        : null;
     }
     if (assignedRep?.id) {
       await lead.update(

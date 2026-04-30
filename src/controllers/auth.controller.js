@@ -2313,3 +2313,76 @@ exports.registerSalesAdmin = async (req, res) => {
     });
   }
 };
+
+exports.createInternalCredential = async (req, res) => {
+  try {
+    const requesterRole = String(req.user?.userRole || '').toLowerCase();
+    if (requesterRole !== 'admin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Only admin can create internal credentials'
+      });
+    }
+
+    const { name, email, password, phone_number, user_type } = req.body;
+    const normalizedUserType = Number(user_type);
+    const allowedUserTypes = [1, 5, 6, 7];
+
+    if (!name || !email || !password || !normalizedUserType) {
+      return res.status(400).json({
+        success: false,
+        message: 'name, email, password and user_type are required'
+      });
+    }
+
+    if (!allowedUserTypes.includes(normalizedUserType)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid user_type. Allowed values: 1, 5, 6, 7'
+      });
+    }
+
+    const existingUser = await User.findOne({
+      where: { email: String(email).trim().toLowerCase() }
+    });
+
+    if (existingUser) {
+      return res.status(409).json({
+        success: false,
+        message: 'Email already exists'
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const createdUser = await User.create({
+      name: String(name).trim(),
+      email: String(email).trim().toLowerCase(),
+      phone_number: phone_number || null,
+      password_hash: hashedPassword,
+      user_type: normalizedUserType,
+      is_active: 1,
+      email_verified: 1,
+      created_from: 1,
+      created_at: new Date()
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: 'Internal credential created successfully',
+      data: {
+        id: createdUser.id,
+        name: createdUser.name,
+        email: createdUser.email,
+        user_type: createdUser.user_type
+      }
+    });
+  } catch (error) {
+    console.error('Create Internal Credential Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while creating internal credential',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
