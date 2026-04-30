@@ -2,9 +2,9 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI0MSwidXNlclJvbGUiOiJDbGllbnQiLCJpYXQiOjE3NzY5NDIwMDksImV4cCI6MTc3NzU0NjgwOX0.7Wbh2CnXaxIbZxzeb5H4NF4USyDGdS8bIjGYTGNShaY
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjQsInVzZXJSb2xlIjoic2FsZXNfcmVwIiwiaWF0IjoxNzc3NDU4MjI0LCJleHAiOjE3NzgwNjMwMjR9.l-zTWs-Zg6ehZXA09RX3slEa4_t9rQ5d5mBFx8RbCPg
 
-@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI4OCwidXNlclJvbGUiOiJBZG1pbiIsImlhdCI6MTc3NjY3MjYyMiwiZXhwIjoxNzc3Mjc3NDIyfQ.TvvFxV-jZRKi-lMlOHQwMyztvL-_ZIOvIEqhd-gk_J8
+@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3Nzc0NTU1MjksImV4cCI6MTc3ODA2MDMyOX0.Jme_5GF7PkDkbSGAKdcptkxjpwmv-k1mqlty93_Ysdc
 
 ###
 POST {{URL}}creator/dashboard-count HTTP/1.1
@@ -1415,7 +1415,7 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### convert quote to booking | Single day:
-POST {{URL}}sales/quotes/137/convert-to-booking HTTP/1.1
+POST {{URL}}sales/quotes/169/convert-to-booking HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -1722,9 +1722,9 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### send invoice for quote
-POST {{URL}}sales/quotes/138/send-invoice HTTP/1.1
+POST {{URL}}sales/quotes/166/send-invoice HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN}}
+Authorization: {{TOKEN2}}
 
 ### Get Sent Invoice History
 GET {{URL}}sales/dashboard/invoice-history?page=1&limit=20

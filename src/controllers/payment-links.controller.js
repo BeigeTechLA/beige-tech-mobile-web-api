@@ -1157,6 +1157,11 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
       recipientName = recipientOverride.name;
     }
 
+    const recipientIdentityChanged = await paymentLinksService.hasRecipientIdentityChanged(
+      booking,
+      recipientOverride
+    );
+
     if (!recipientEmail) {
       await booking.update({ invoice_generation_status: 'failed' });
       throw new Error('No email address associated with this booking.');
@@ -1284,7 +1289,7 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
     if (pricingData && (pricingData.is_paid || bookingMarkedPaid)) {
       let invoiceUrl, invoicePdf, invoiceNumber;
       let stripeTotalAmount = 0;
-      let needsNewInvoice = Boolean(recipientOverride?.email || recipientOverride?.name);
+      let needsNewInvoice = recipientIdentityChanged;
 
       // Check existing invoice for amount mismatch
       if (booking.stripe_invoice_id) {
@@ -1325,7 +1330,7 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
       // --- CASE 2: NOT PAID YET ---
       const stripeInvoice = await paymentLinksService.createStripeInvoice(booking, pricingData, {
         recipientOverride,
-        forceNewInvoice: Boolean(recipientOverride?.email || recipientOverride?.name)
+        forceNewInvoice: recipientIdentityChanged
       });
       invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
         invoiceUrl: stripeInvoice.hosted_invoice_url,
@@ -1381,10 +1386,51 @@ const fetchRemoteFileBuffer = async (url, redirectCount = 0) => {
   });
 };
 
+const resolveQuoteRecipientOverrideForBooking = async (bookingId) => {
+  const parsedBookingId = Number(bookingId);
+  if (!Number.isInteger(parsedBookingId) || parsedBookingId <= 0) {
+    return { salesQuoteId: null, recipientOverride: null };
+  }
+
+  const linkedLead = await db.sales_leads.findOne({
+    where: { booking_id: parsedBookingId },
+    attributes: ['lead_id'],
+    order: [['lead_id', 'DESC']]
+  });
+
+  if (!linkedLead?.lead_id) {
+    return { salesQuoteId: null, recipientOverride: null };
+  }
+
+  const salesQuote = await db.sales_quotes.findOne({
+    where: { lead_id: linkedLead.lead_id },
+    attributes: ['sales_quote_id', 'client_name', 'client_email'],
+    order: [['sales_quote_id', 'DESC']]
+  });
+
+  if (!salesQuote) {
+    return { salesQuoteId: null, recipientOverride: null };
+  }
+
+  return {
+    salesQuoteId: salesQuote.sales_quote_id,
+    recipientOverride: {
+      email: salesQuote.client_email || null,
+      name: salesQuote.client_name || null
+    }
+  };
+};
+
 exports.previewStripeInvoice = async (req, res) => {
   try {
     const { booking_id } = req.body;
-    const { invoiceDetails } = await prepareInvoiceDetailsForBooking(booking_id, req.userId || null);
+    const { salesQuoteId, recipientOverride } = await resolveQuoteRecipientOverrideForBooking(booking_id);
+    const { invoiceDetails } = await prepareInvoiceDetailsForBooking(
+      booking_id,
+      req.userId || null,
+      recipientOverride,
+      salesQuoteId
+    );
 
     return res.status(200).json({
       success: true,
@@ -1428,12 +1474,18 @@ exports.getStripeInvoicePdf = async (req, res) => {
 exports.sendStripeInvoice = async (req, res) => {
   try {
     const { booking_id } = req.body;
+    const { salesQuoteId, recipientOverride } = await resolveQuoteRecipientOverrideForBooking(booking_id);
     const {
       parsedBookingId,
       recipientName,
       recipientEmail,
       invoiceDetails
-    } = await prepareInvoiceDetailsForBooking(booking_id, req.userId || null);
+    } = await prepareInvoiceDetailsForBooking(
+      booking_id,
+      req.userId || null,
+      recipientOverride,
+      salesQuoteId
+    );
 
     const userData = { name: recipientName, email: recipientEmail };
     const emailResult = await emailService.sendInvoiceEmail(userData, invoiceDetails);
@@ -1452,6 +1504,7 @@ exports.sendStripeInvoice = async (req, res) => {
 
     await db.invoice_send_history.create({
       booking_id: parsedBookingId,
+      quote_id: salesQuoteId || null,
       lead_id: associatedLead?.lead_id || null,
       client_lead_id: associatedClientLead?.lead_id || null,
       assigned_sales_rep_id: associatedLead?.assigned_sales_rep_id || associatedClientLead?.assigned_sales_rep_id || null,
@@ -1472,6 +1525,7 @@ exports.sendStripeInvoice = async (req, res) => {
       activityType: 'payment_link_generated',
       activityData: {
         booking_id: parsedBookingId,
+        quote_id: salesQuoteId || null,
         invoice_number: invoiceDetails.invoiceNumber,
         invoice_sent: emailResult.success,
         invoice_url: invoiceDetails.invoiceUrl || null,
