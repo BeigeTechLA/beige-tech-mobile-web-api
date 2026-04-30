@@ -148,20 +148,29 @@ async function getUnavailableSalesRepIdsByLiveStatus(salesRepIds, options = {}) 
 async function getActiveSalesReps(options = {}) {
   const transaction = options.transaction || null;
 
-  // Find user_type_id for 'sales_rep'
-  const salesRepType = await user_type.findOne({
-    where: { user_role: 'sales_rep' },
+  // TEMP FLOW:
+  // Use admins with assign_lead=1 as assignable owners instead of sales reps.
+  // Old sales_rep lookup kept commented for easy rollback.
+  // const salesRepType = await user_type.findOne({
+  //   where: { user_role: 'sales_rep' },
+  //   transaction
+  // });
+  const adminTypes = await user_type.findAll({
+    where: { user_role: { [Op.in]: ['admin', 'Admin'] } },
+    attributes: ['user_type_id'],
     transaction
   });
-  
-  if (!salesRepType) {
-    throw new Error('Sales rep user type not found in database');
+  const adminTypeIds = adminTypes.map((entry) => Number(entry.user_type_id)).filter(Boolean);
+
+  if (!adminTypeIds.length) {
+    return [];
   }
-  
+
   return await users.findAll({
     where: {
-      user_type: salesRepType.user_type_id,
-      is_active: 1
+      user_type: { [Op.in]: adminTypeIds },
+      is_active: 1,
+      assign_lead: 1
     },
     attributes: ['id', 'name', 'email'],
     transaction
@@ -294,16 +303,33 @@ async function autoAssignLead(leadId, options = {}) {
 async function manuallyAssignLead(leadId, salesRepId, performedByUserId) {
   const { sales_lead_activities } = require('../models');
   
-  // Verify sales rep exists and is active
+  // TEMP FLOW: verify assignable admin (assign_lead=1) exists and is active.
+  // Old generic active-user validation kept commented for rollback.
+  // const salesRep = await users.findOne({
+  //   where: {
+  //     id: salesRepId,
+  //     is_active: 1
+  //   }
+  // });
   const salesRep = await users.findOne({
     where: { 
       id: salesRepId,
-      is_active: 1
-    }
+      is_active: 1,
+      assign_lead: 1
+    },
+    include: [
+      {
+        model: user_type,
+        as: 'userType',
+        attributes: ['user_role'],
+        required: false
+      }
+    ]
   });
   
-  if (!salesRep) {
-    throw new Error('Sales rep not found or inactive');
+  const assigneeRole = String(salesRep?.userType?.user_role || '').toLowerCase();
+  if (!salesRep || assigneeRole !== 'admin') {
+    throw new Error('Assignable admin not found or inactive');
   }
   
   // Get current assignment for history
