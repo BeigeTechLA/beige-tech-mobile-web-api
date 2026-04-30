@@ -4216,6 +4216,45 @@ async function updateQuoteStatus(salesQuoteId, status, user) {
     if (status === 'rejected') patch.rejected_at = new Date();
 
     await quote.update(patch, { transaction });
+
+    if (status === 'rejected' && quote.lead_id) {
+      const linkedLead = await db.sales_leads.findOne({
+        where: {
+          lead_id: quote.lead_id,
+          is_active: 1
+        },
+        transaction
+      });
+
+      if (
+        linkedLead &&
+        linkedLead.booking_id &&
+        linkedLead.lead_source === CONVERTED_BOOKINGS_LEAD_SOURCE &&
+        linkedLead.lead_status !== 'abandoned'
+      ) {
+        const oldLeadStatus = linkedLead.lead_status;
+
+        await linkedLead.update({
+          lead_status: 'abandoned',
+          last_activity_at: new Date(),
+          updated_at: new Date()
+        }, { transaction });
+
+        await db.sales_lead_activities.create({
+          lead_id: linkedLead.lead_id,
+          activity_type: 'status_changed',
+          activity_data: {
+            old_status: oldLeadStatus,
+            new_status: 'abandoned',
+            source: 'sales_quote_rejection',
+            sales_quote_id: salesQuoteId,
+            booking_id: linkedLead.booking_id
+          },
+          performed_by_user_id: user.userId || null
+        }, { transaction });
+      }
+    }
+
     await recordActivity(transaction, salesQuoteId, status === 'sent' ? 'sent' : status === 'viewed' ? 'viewed' : status === 'accepted' ? 'accepted' : status === 'rejected' ? 'rejected' : 'status_changed', user.userId, `Quote marked as ${status}`, { status });
     await transaction.commit();
     return getQuoteById(salesQuoteId, user);
