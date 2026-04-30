@@ -39,6 +39,17 @@ function toTitleCase(value) {
 function buildManualReceiptHtml(data) {
   const items = Array.isArray(data.items) ? data.items : [];
   const history = Array.isArray(data.paymentHistory) ? data.paymentHistory : [];
+  const totalAmount = Number(data.total || 0);
+  const totalPaidFromHistory = history.reduce((sum, entry) => {
+    const amount = Number(entry?.amount || 0);
+    return sum + (Number.isFinite(amount) ? amount : 0);
+  }, 0);
+  const fallbackPaidAmount = Number(data.paidAmount || 0);
+  const totalPaidAmount = Math.min(
+    totalAmount,
+    Math.max(totalPaidFromHistory > 0 ? totalPaidFromHistory : fallbackPaidAmount, 0)
+  );
+  const pendingAmount = Math.max(totalAmount - totalPaidAmount, 0);
 
   const itemRows = items
     .map((item) => `
@@ -592,8 +603,9 @@ function buildManualReceiptHtml(data) {
 
           <div class="totals">
             <div class="tot-row"><span>Subtotal</span><span>${formatCurrency(data.subtotal || 0)}</span></div>
-            <div class="tot-row"><span><b>Total</b></span><span><b>${formatCurrency(data.total || 0)}</b></span></div>
-            <div class="tot-row amount-paid"><span>Amount Paid</span><b>${formatCurrencyBold(data.paidAmount || data.total || 0)}</b></div>
+            <div class="tot-row"><span><b>Total</b></span><span><b>${formatCurrency(totalAmount)}</b></span></div>
+            <div class="tot-row amount-paid"><span>Amount Paid</span><b>${formatCurrencyBold(totalPaidAmount)}</b></div>
+            <div class="tot-row"><span>Pending Amount</span><span><b>${formatCurrency(pendingAmount)}</b></span></div>
           </div>
 
           <h3 class="section-title">PAYMENT HISTORY</h3>
@@ -617,7 +629,7 @@ function buildManualReceiptHtml(data) {
               <h4>Terms & Conditions:</h4>
               <p>Fees and payment terms will be established in the contract or agreement prior to the commencement of the project. An initial deposit will be required before any design work begins. We reserve the right to suspend or halt work in the event of non-payment.</p>
               <div class="thank-you">
-                Thank you for your business! This payment of <b>${formatCurrencyBold(data.paidAmount || data.total || 0)}</b> was received and processed manually.${transactionRef ? ` <b>Transaction Reference: ${transactionRef}.</b>` : ''}
+                Thank you for your business! Total paid amount of <b>${formatCurrencyBold(totalPaidAmount)}</b> has been received and processed manually.${transactionRef ? ` <b>Transaction Reference: ${transactionRef}.</b>` : ''}
               </div>
             </div>
             <div class="signature">

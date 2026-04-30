@@ -1892,6 +1892,13 @@ exports.getStripeInvoicePdf = async (req, res) => {
         manualContext.latestManualPayment?.data?.payment_type === 'full' ||
         (Number.isFinite(remainingAfterPayment) && remainingAfterPayment <= 0);
       const totalAmount = Number(pricingData.total || 0);
+      const totalManualPaidAmount = manualHistory.reduce((sum, entry) => {
+        const amount = Number(entry?.amount || 0);
+        return sum + (Number.isFinite(amount) ? amount : 0);
+      }, 0);
+      const normalizedPaidAmount = isPaidManual
+        ? totalAmount
+        : Math.min(totalAmount, Math.max(totalManualPaidAmount, 0));
 
       const pdfBuffer = await generateManualReceiptPdfBuffer({
         invoiceNumber: `INVBEIGE-M-${String(parsedBookingId).padStart(4, '0')}`,
@@ -1917,7 +1924,7 @@ exports.getStripeInvoicePdf = async (req, res) => {
         })),
         subtotal: Number(pricingData.subtotal || totalAmount),
         total: totalAmount,
-        paidAmount: isPaidManual ? totalAmount : Number(manualContext.latestManualPayment?.data?.amount || totalAmount),
+        paidAmount: normalizedPaidAmount,
         paymentHistory: manualHistory.length > 0
           ? manualHistory
           : [{
