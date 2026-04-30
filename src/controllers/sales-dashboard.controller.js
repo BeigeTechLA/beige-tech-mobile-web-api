@@ -4,6 +4,7 @@ const {
   discount_codes,
   payment_links,
   invoice_send_history,
+  sales_quote_activities,
   users,
   sales_rep_live_status,
   stream_project_booking,
@@ -13,6 +14,295 @@ const { Op } = require('sequelize');
 const sequelize = require('../db');
 const constants = require('../utils/constants');
 const leadAssignmentService = require('../services/lead-assignment.service');
+const accountCreditService = require('../services/account-credit.service');
+
+function parseQuoteRequestMetadata(value) {
+  if (!value) return null;
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch (_) {
+    return null;
+  }
+}
+
+function roundCurrency(value) {
+  const numeric = Number(value || 0);
+  return Number(numeric.toFixed(2));
+}
+
+function formatCurrency(value) {
+  return `$${roundCurrency(value).toFixed(2)}`;
+}
+
+function formatSignedCurrency(value) {
+  const amount = roundCurrency(value || 0);
+  if (amount === 0) return formatCurrency(0);
+  return `${amount > 0 ? '+' : '-'}${formatCurrency(Math.abs(amount))}`;
+}
+
+function formatItemChangeDetail(change = {}) {
+  if (change.field === 'duration_hours') {
+    return `duration changed from ${change.previous_value}h to ${change.new_value}h`;
+  }
+
+  if (change.field === 'crew_size') {
+    return `crew size changed from ${change.previous_value} to ${change.new_value}`;
+  }
+
+  if (change.field === 'quantity') {
+    return `quantity changed from ${change.previous_value} to ${change.new_value}`;
+  }
+
+  if (change.field === 'unit_rate' || change.field === 'line_total') {
+    const previousValue = change.display_previous !== undefined
+      ? change.display_previous
+      : formatCurrency(change.previous_value || 0);
+    const newValue = change.display_new !== undefined
+      ? change.display_new
+      : formatCurrency(change.new_value || 0);
+    return `${change.field === 'unit_rate' ? 'unit rate' : 'line total'} changed from ${previousValue} to ${newValue}`;
+  }
+
+  const previousValue = change.display_previous !== undefined
+    ? change.display_previous
+    : (change.previous_value == null ? 'empty' : String(change.previous_value));
+  const newValue = change.display_new !== undefined
+    ? change.display_new
+    : (change.new_value == null ? 'empty' : String(change.new_value));
+
+  return `${change.field || 'value'} changed from ${previousValue} to ${newValue}`;
+}
+
+function formatOverallFieldChange(change = {}) {
+  const field = String(change.field || '').toLowerCase();
+  const previousValue = change.display_previous !== undefined
+    ? change.display_previous
+    : (change.previous_value == null ? 'empty' : String(change.previous_value));
+  const newValue = change.display_new !== undefined
+    ? change.display_new
+    : (change.new_value == null ? 'empty' : String(change.new_value));
+
+  if (field === 'tax type') {
+    return `Changed tax type from ${previousValue} to ${newValue}.`;
+  }
+
+  if (field === 'tax rate') {
+    return `Changed tax rate from ${previousValue} to ${newValue}.`;
+  }
+
+  if (field === 'project description') {
+    return `Updated project description from ${previousValue} to ${newValue}.`;
+  }
+
+  if (field === 'shoot type') {
+    return `Changed shoot type from ${previousValue} to ${newValue}.`;
+  }
+
+  return null;
+}
+
+function buildRequestOverallChangeSummary(metadata = {}) {
+  const changeSummary = metadata?.change_summary;
+  if (!changeSummary?.has_changes) return null;
+
+  const narrativeEntries = [];
+  const latestRemovalByItem = new Map();
+  const removedEntryIndexes = new Set();
+
+  (changeSummary.added_items || []).forEach((item) => {
+    const itemName = item.item_name || item.label || 'item';
+    narrativeEntries.push({
+      type: 'item_added',
+      item_name: itemName,
+      amount: roundCurrency(item.line_total || 0),
+      text: `Added ${itemName} for ${formatCurrency(item.line_total || 0)}.`
+    });
+  });
+
+  (changeSummary.updated_items || []).forEach((item) => {
+    const itemName = item.item_name || item.label || 'item';
+    const newLineTotal = roundCurrency(item.new_line_total || 0);
+    const details = (item.changes || []).map(formatItemChangeDetail).filter(Boolean);
+    const lineTotalDelta = roundCurrency(item.line_total_delta || 0);
+
+    if (newLineTotal === 0 && lineTotalDelta < 0) {
+      narrativeEntries.push({
+        type: 'item_removed',
+        item_name: itemName,
+        amount: Math.abs(lineTotalDelta),
+        text: `Removed ${itemName}, which reduced the quote by ${formatCurrency(Math.abs(lineTotalDelta))}.`
+      });
+      return;
+    }
+
+    const amountImpact = lineTotalDelta === 0
+      ? null
+      : `${lineTotalDelta > 0 ? 'This increased' : 'This reduced'} the quote by ${formatCurrency(Math.abs(lineTotalDelta))}.`;
+    const detailText = details.length ? `${details.join('; ')}.` : 'Details updated.';
+    narrativeEntries.push({
+      type: 'item_updated',
+      item_name: itemName,
+      text: `Updated ${itemName}: ${detailText}${amountImpact ? ` ${amountImpact}` : ''}`
+    });
+  });
+
+  (changeSummary.removed_items || []).forEach((item) => {
+    const itemName = item.item_name || item.label || 'item';
+    narrativeEntries.push({
+      type: 'item_removed',
+      item_name: itemName,
+      amount: Math.abs(item.line_total_delta || item.line_total || 0),
+      text: `Removed ${itemName}, which reduced the quote by ${formatCurrency(Math.abs(item.line_total_delta || item.line_total || 0))}.`
+    });
+  });
+
+  const discountTypeChange = (changeSummary.field_changes || []).find((change) => String(change.field || '').toLowerCase() === 'discount type');
+  const discountValueChange = (changeSummary.field_changes || []).find((change) => String(change.field || '').toLowerCase() === 'discount value');
+  const discountAmountChange = (changeSummary.field_changes || []).find((change) => String(change.field || '').toLowerCase() === 'discount amount');
+
+  if (discountTypeChange || discountValueChange || discountAmountChange) {
+    const parts = [];
+    if (discountTypeChange) {
+      parts.push(`discount type changed from ${discountTypeChange.display_previous || discountTypeChange.previous_value || 'empty'} to ${discountTypeChange.display_new || discountTypeChange.new_value || 'empty'}`);
+    }
+    if (discountValueChange) {
+      parts.push(`discount value changed from ${discountValueChange.display_previous || discountValueChange.previous_value || 'empty'} to ${discountValueChange.display_new || discountValueChange.new_value || 'empty'}`);
+    }
+    if (discountAmountChange) {
+      const previousAmount = discountAmountChange.display_previous || formatCurrency(discountAmountChange.previous_value || 0);
+      const newAmount = discountAmountChange.display_new || formatCurrency(discountAmountChange.new_value || 0);
+      parts.push(`discount amount changed from ${previousAmount} to ${newAmount}`);
+    }
+    narrativeEntries.push({
+      type: 'discount_change',
+      text: `Updated discount: ${parts.join('; ')}.`
+    });
+  }
+
+  (changeSummary.field_changes || [])
+    .filter((change) => !['discount type', 'discount value', 'discount amount'].includes(String(change.field || '').toLowerCase()))
+    .map(formatOverallFieldChange)
+    .filter(Boolean)
+    .forEach((text) => narrativeEntries.push({ type: 'field_change', text }));
+
+  narrativeEntries.forEach((entry, index) => {
+    if (entry.type === 'item_removed') {
+      latestRemovalByItem.set(String(entry.item_name || '').toLowerCase(), { entry, index });
+    }
+  });
+
+  const lines = [];
+  narrativeEntries.forEach((entry, index) => {
+    if (removedEntryIndexes.has(index)) return;
+
+    if (entry.type === 'item_added') {
+      const removal = latestRemovalByItem.get(String(entry.item_name || '').toLowerCase());
+      if (removal && removal.index > index) {
+        removedEntryIndexes.add(removal.index);
+        lines.push(`Added ${entry.item_name} for ${formatCurrency(entry.amount || 0)}, then later removed it.`);
+        return;
+      }
+    }
+
+    lines.push(entry.text);
+  });
+
+  const startingTotal = roundCurrency(metadata.previous_total || changeSummary.amount_summary?.previous_total || 0);
+  const endingTotal = roundCurrency(metadata.new_total || changeSummary.amount_summary?.new_total || 0);
+  const totalDelta = roundCurrency(endingTotal - startingTotal);
+
+  return {
+    summary: `Quote total changed from ${formatCurrency(startingTotal)} to ${formatCurrency(endingTotal)} (${formatSignedCurrency(totalDelta)}) across 1 update.`,
+    lines
+  };
+}
+
+function isQuoteChangeRequestActivity(row, metadata = {}) {
+  const message = String(row?.message || '').toLowerCase();
+  return metadata.invoice_refresh_required === true && (
+    Boolean(metadata.approval_requested_at) ||
+    message.includes('quote total decreased after invoice/payment state') ||
+    message.includes('quote total increased after invoice/payment state')
+  );
+}
+
+function findMatchingQuoteChangeSummary(rows = [], requestRow = null, requestMetadata = {}) {
+  if (requestMetadata?.change_summary?.has_changes) {
+    return requestMetadata.change_summary;
+  }
+
+  if (!requestRow) return null;
+
+  const requestCreatedAt = requestRow.created_at ? new Date(requestRow.created_at).getTime() : null;
+  const previousTotal = roundCurrency(requestMetadata.previous_total || 0);
+  const newTotal = roundCurrency(requestMetadata.new_total || 0);
+  const reducedAmount = roundCurrency(requestMetadata.reduced_amount || 0);
+  const extraAmount = roundCurrency(requestMetadata.extra_amount || 0);
+
+  const sibling = (Array.isArray(rows) ? rows : []).find((candidate) => {
+    if (!candidate || Number(candidate.activity_id) === Number(requestRow.activity_id)) return false;
+    if (Number(candidate.sales_quote_id) !== Number(requestRow.sales_quote_id)) return false;
+
+    const candidateMetadata = parseQuoteRequestMetadata(candidate.metadata_json) || {};
+    if (!candidateMetadata?.change_summary?.has_changes) return false;
+
+    const candidatePreviousTotal = roundCurrency(candidateMetadata.previous_total || 0);
+    const candidateNewTotal = roundCurrency(candidateMetadata.new_total || 0);
+    const candidateReducedAmount = roundCurrency(candidateMetadata.reduced_amount || 0);
+    const candidateExtraAmount = roundCurrency(candidateMetadata.extra_amount || 0);
+
+    if (
+      candidatePreviousTotal !== previousTotal ||
+      candidateNewTotal !== newTotal ||
+      candidateReducedAmount !== reducedAmount ||
+      candidateExtraAmount !== extraAmount
+    ) {
+      return false;
+    }
+
+    if (requestCreatedAt == null || !candidate.created_at) return true;
+    return Math.abs(new Date(candidate.created_at).getTime() - requestCreatedAt) <= 1000;
+  });
+
+  if (!sibling) return null;
+
+  const siblingMetadata = parseQuoteRequestMetadata(sibling.metadata_json) || {};
+  return siblingMetadata.change_summary || null;
+}
+
+function normalizeQuoteChangeRequest(row, metadata = {}, overallChangeSummary = null) {
+  const extraAmount = Number(metadata.extra_amount || 0);
+  const reducedAmount = Number(metadata.reduced_amount || 0);
+  const previousTotal = Number(metadata.previous_total || 0);
+  const newTotal = Number(metadata.new_total || 0);
+  const requestType = metadata.quote_change_type || (extraAmount > 0 ? 'increase' : reducedAmount > 0 ? 'decrease' : 'unknown');
+  const approvalStatus = metadata.approval_status || 'pending';
+
+  return {
+    activity_id: row.activity_id,
+    quote_id: row.sales_quote_id,
+    quote_number: row.quote?.quote_number || null,
+    booking_id: Number(metadata.booking_id || 0) || null,
+    client_name: row.quote?.client_name || null,
+    assigned_sales_rep: row.quote?.assigned_sales_rep ? {
+      id: row.quote.assigned_sales_rep.id,
+      name: row.quote.assigned_sales_rep.name
+    } : null,
+    requested_by: row.performed_by ? {
+      id: row.performed_by.id,
+      name: row.performed_by.name
+    } : null,
+    request_type: requestType,
+    previous_total: Number(previousTotal.toFixed(2)),
+    new_total: Number(newTotal.toFixed(2)),
+    extra_amount: Number(extraAmount.toFixed(2)),
+    reduced_amount: Number(reducedAmount.toFixed(2)),
+    approval_status: approvalStatus,
+    overall_change_summary: overallChangeSummary,
+    created_at: row.created_at
+  };
+}
 
 function getDashboardStartDate(period) {
   if (!period || period === 'all_time' || period === 'all') {
@@ -931,5 +1221,247 @@ exports.getInvoiceHistory = async (req, res) => {
     });
   }
 };
+
+exports.getQuoteChangeRequests = async (req, res) => {
+  try {
+    const limit = Math.max(parseInt(req.query.limit, 10) || 20, 1);
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const approvalStatus = String(req.query.approval_status || 'pending').trim().toLowerCase();
+    const requestType = String(req.query.request_type || '').trim().toLowerCase();
+    const search = String(req.query.search || '').trim().toLowerCase();
+
+    const rows = await sales_quote_activities.findAll({
+      where: {
+        activity_type: 'updated'
+      },
+      include: [
+        {
+          model: sales_quotes,
+          as: 'quote',
+          required: true,
+          attributes: ['sales_quote_id', 'quote_number', 'client_name', 'client_email', 'assigned_sales_rep_id'],
+          include: [{
+            model: users,
+            as: 'assigned_sales_rep',
+            required: false,
+            attributes: ['id', 'name']
+          }]
+        },
+        {
+          model: users,
+          as: 'performed_by',
+          required: false,
+          attributes: ['id', 'name']
+        }
+      ],
+      order: [['created_at', 'DESC'], ['activity_id', 'DESC']]
+    });
+
+    let items = rows
+      .map((row) => {
+        const metadata = parseQuoteRequestMetadata(row?.metadata_json) || {};
+        if (!isQuoteChangeRequestActivity(row, metadata)) {
+          return null;
+        }
+
+        const mergedMetadata = {
+          ...metadata,
+          change_summary: findMatchingQuoteChangeSummary(rows, row, metadata)
+        };
+
+        return {
+          row,
+          metadata: mergedMetadata,
+          item: normalizeQuoteChangeRequest(
+            row,
+            mergedMetadata,
+            buildRequestOverallChangeSummary(mergedMetadata)
+          )
+        };
+      })
+      .filter(Boolean);
+
+    if (approvalStatus && approvalStatus !== 'all') {
+      items = items.filter(({ item }) => item.approval_status === approvalStatus);
+    }
+
+    if (requestType && requestType !== 'all') {
+      items = items.filter(({ item }) => item.request_type === requestType);
+    }
+
+    if (search) {
+      items = items.filter(({ item }) => {
+        const haystack = [
+          item.activity_id,
+          item.quote_id,
+          item.quote_number,
+          item.booking_id,
+          item.client_name,
+          item.client_email,
+          item.assigned_sales_rep?.name,
+          item.requested_by?.name
+        ]
+          .filter((value) => value !== null && value !== undefined)
+          .join(' ')
+          .toLowerCase();
+
+        return haystack.includes(search);
+      });
+    }
+
+    const total = items.length;
+    const offset = (page - 1) * limit;
+    const paginatedItems = items.slice(offset, offset + limit).map(({ item }) => item);
+
+    return res.json({
+      success: true,
+      data: {
+        items: paginatedItems,
+        pagination: {
+          page,
+          limit,
+          total,
+          total_pages: Math.ceil(total / limit)
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching quote change requests:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to fetch quote change requests',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+async function reviewQuoteChangeRequest(req, res, decision) {
+  try {
+    const activityId = Number(req.body.activity_id);
+    const notes = req.body?.notes ? String(req.body.notes).trim() : null;
+
+    if (!Number.isInteger(activityId) || activityId <= 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Invalid activityId'
+      });
+    }
+
+    const activity = await sales_quote_activities.findOne({
+      where: { activity_id: activityId, activity_type: 'updated' },
+      include: [{
+        model: sales_quotes,
+        as: 'quote',
+        required: true,
+        attributes: ['sales_quote_id', 'quote_number', 'client_name', 'client_email']
+      }]
+    });
+
+    if (!activity) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Quote change request not found'
+      });
+    }
+
+    const metadata = parseQuoteRequestMetadata(activity.metadata_json) || {};
+
+    if (metadata.invoice_refresh_required !== true) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'This activity is not a reviewable quote change request'
+      });
+    }
+
+    if (metadata.approval_status && metadata.approval_status !== 'pending') {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: `This request has already been ${metadata.approval_status}`
+      });
+    }
+
+      const salesQuoteId = activity.sales_quote_id;
+      const bookingId = Number(metadata.booking_id || 0) || null;
+      const extraAmount = Number(metadata.extra_amount || 0);
+      const reducedAmount = Number(metadata.reduced_amount || 0);
+
+    let creditResult = null;
+    if (reducedAmount > 0) {
+      creditResult = decision === 'approve'
+        ? await accountCreditService.approveQuoteReductionCredits({
+            salesQuoteId,
+            bookingId,
+            salesQuoteActivityId: activityId,
+            approvedByUserId: req.userId || null
+          })
+        : await accountCreditService.rejectQuoteReductionCredits({
+            salesQuoteId,
+            bookingId,
+            salesQuoteActivityId: activityId,
+            rejectedByUserId: req.userId || null,
+            notes
+          });
+    }
+
+    const reviewedAt = new Date().toISOString();
+    const nextMetadata = {
+      ...metadata,
+      approval_status: decision === 'approve' ? 'approved' : 'rejected',
+      review_notes: notes || null,
+      reviewed_at: reviewedAt
+    };
+
+    if (decision === 'approve') {
+      nextMetadata.approved_at = reviewedAt;
+      nextMetadata.approved_by_user_id = req.userId || null;
+    } else {
+      nextMetadata.rejected_at = reviewedAt;
+      nextMetadata.rejected_by_user_id = req.userId || null;
+    }
+
+      await activity.update({
+        metadata_json: JSON.stringify(nextMetadata)
+      });
+
+      if (extraAmount > 0 && activity.quote) {
+        if (decision === 'approve') {
+          await activity.quote.update({ status: 'partially_paid' });
+        } else if (String(activity.quote.status || '').toLowerCase() === 'partially_paid') {
+          await activity.quote.update({ status: 'paid' });
+        }
+      }
+
+      return res.json({
+      success: true,
+      message: decision === 'approve'
+        ? 'Quote change request approved successfully'
+        : 'Quote change request rejected successfully',
+      data: {
+        request: normalizeQuoteChangeRequest(
+          {
+            ...activity.toJSON(),
+            metadata_json: JSON.stringify(nextMetadata)
+          },
+          nextMetadata,
+          buildRequestOverallChangeSummary(nextMetadata)
+        ),
+        account_credit: creditResult?.quote_credit_summary || null,
+        approved_entries: creditResult?.approved_entries || [],
+        rejected_entries: creditResult?.rejected_entries || []
+      }
+    });
+  } catch (error) {
+    console.error(`Error reviewing quote change request (${decision}):`, error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to review quote change request',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+}
+
+exports.approveQuoteChangeRequest = async (req, res) => reviewQuoteChangeRequest(req, res, 'approve');
+
+exports.rejectQuoteChangeRequest = async (req, res) => reviewQuoteChangeRequest(req, res, 'reject');
 
 module.exports = exports;

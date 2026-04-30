@@ -1393,6 +1393,7 @@ exports.confirmPaymentMulti = async (req, res) => {
     }
 
     const quoteTotal = round2(booking.primary_quote?.total || 0);
+    const bookingAlreadyPaid = Boolean(booking.payment_id || booking.is_completed === 1);
 
     let normalizedReferralCode = '';
     if (referral_code) {
@@ -1454,6 +1455,14 @@ exports.confirmPaymentMulti = async (req, res) => {
     let usedCreditEntry = null;
 
     if (existingPayment) {
+      if (bookingAlreadyPaid) {
+        await markAdditionalQuoteInvoiceAsPaid({
+          bookingId: booking_id,
+          paymentIntentId,
+          transaction
+        });
+      }
+
       if (shouldUseCredit && requestedCreditAmount > 0) {
         usedCreditEntry = await accountCreditService.consumeAccountCreditForPayment({
           userId: booking.user_id || null,
@@ -1651,6 +1660,26 @@ exports.confirmPaymentMulti = async (req, res) => {
         referralCode: normalizedReferralCode,
         paidTotal: totalAmount,
         transaction
+      });
+    }
+
+    if (bookingAlreadyPaid) {
+      await markAdditionalQuoteInvoiceAsPaid({
+        bookingId: booking_id,
+        paymentIntentId,
+        transaction
+      });
+
+      await transaction.commit();
+
+      return res.status(201).json({
+        success: true,
+        message: 'Additional payment confirmed successfully',
+        data: {
+          payment_id: payment.payment_id,
+          booking_id,
+          credit_applied: round2(usedCreditEntry?.amount || 0)
+        }
       });
     }
 
@@ -1991,19 +2020,17 @@ exports.handleStripeWebhook = async (req, res) => {
 
       // Booking-level idempotency: do not create a second payment for an already paid booking.
       if (booking.payment_id || booking.is_completed === 1) {
-        if (event.type === 'invoice.paid') {
-          const additionalInvoiceMarkedPaid = await markAdditionalQuoteInvoiceAsPaid({
-            bookingId: booking_id,
-            stripeInvoice,
-            paymentIntentId,
-            transaction
-          });
+        const additionalInvoiceMarkedPaid = await markAdditionalQuoteInvoiceAsPaid({
+          bookingId: booking_id,
+          stripeInvoice,
+          paymentIntentId,
+          transaction
+        });
 
-          if (additionalInvoiceMarkedPaid) {
-            await transaction.commit();
-            console.log(`Webhook: additional invoice marked paid for booking ${booking_id}`);
-            return res.status(200).json({ received: true, additional_invoice_paid: true });
-          }
+        if (additionalInvoiceMarkedPaid) {
+          await transaction.commit();
+          console.log(`Webhook: additional invoice marked paid for booking ${booking_id}`);
+          return res.status(200).json({ received: true, additional_invoice_paid: true });
         }
 
         await transaction.rollback();

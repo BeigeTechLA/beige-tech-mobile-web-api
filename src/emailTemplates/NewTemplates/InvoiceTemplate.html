@@ -66,7 +66,7 @@
               {{else}}
               {{#if isReducedAmount}}
               <h1 style="margin: 0; color: #000000 !important; font-size: 52px; font-weight: 600; line-height: 1.05;">
-                Quote Updated
+                Updated Receipt
               </h1>
               <p style="margin: 18px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
                 Hello {{first_name}},
@@ -75,10 +75,23 @@
                 Your quote for [<span style="color: #000000 !important; font-weight: 600;">{{shoot_type}} +
                   {{shoot_category}}</span>] was updated after payment and the total has been reduced.
               </p>
+              {{#if has_available_credit}}
               <p style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
-                Please review the revised amount below. Any refund handling will be communicated separately once that
-                process is defined.
+                The difference has been added to your Beige account as credit and can be used on your next booking.
               </p>
+              <div
+                style="margin: 24px 0 0; padding: 20px 22px; border-radius: 20px; background-color: #FFF3DE !important; border: 1px solid rgba(232, 209, 171, 0.8);">
+                <p
+                  style="margin: 0; font-size: 18px; line-height: 1.6; color: #000000 !important; font-weight: 600;">
+                  You have $ {{available_credit_amount}} credit available to use on your next booking.
+                </p>
+              </div>
+              {{else}}
+              <p style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+                The revised amount is reflected below. If you have any questions about your updated quote, our team is
+                happy to help.
+              </p>
+              {{/if}}
               {{else}}
               <h1 style="margin: 0; color: #000000 !important; font-size: 52px; font-weight: 600; line-height: 1.05;">
                 Your Invoice is Ready
@@ -288,7 +301,7 @@
                                 {{/if}}
                                 {{else}}
                                 {{#if isReducedAmount}}
-                                Reduced Amount
+                                Updated Amount Summary
                                 {{else}}
                                 Invoice Amount
                                 {{/if}}
@@ -349,14 +362,16 @@
                                       $ {{revised_total}}
                                     </td>
                                   </tr>
+                                  {{#if has_available_credit}}
                                   <tr>
                                     <td style="padding: 8px 18px; color: #525252 !important; font-size: 16px; line-height: 22px;">
-                                      Refund Pending
+                                      Available Credit
                                     </td>
                                     <td align="right" style="padding: 8px 18px; color: #000000 !important; font-size: 16px; line-height: 22px; font-weight: 600;">
-                                      $ {{reduced_amount}}
+                                      $ {{available_credit_amount}}
                                     </td>
                                   </tr>
+                                  {{/if}}
                                 </table>
                                 {{/if}}
                                 {{/if}}
@@ -418,7 +433,7 @@
                   {{/if}}
                   {{else}}
                   {{#if isReducedAmount}}
-                  After reviewing your updated quote:
+                  After reviewing your updated receipt:
                   {{else}}
                   After confirming your booking:
                   {{/if}}
