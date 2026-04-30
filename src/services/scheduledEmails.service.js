@@ -566,7 +566,7 @@ const runShootReminder2HoursJob = async () => {
         const cpName = [selectedAssignment?.crew_member?.first_name, selectedAssignment?.crew_member?.last_name]
           .filter(Boolean)
           .join(' ')
-          .trim() || 'your Creative Partner';
+          .trim();
         const cpFiles = Array.isArray(selectedAssignment?.crew_member?.crew_member_files)
           ? [...selectedAssignment.crew_member.crew_member_files]
               .filter(f => f?.is_active === 1 || f?.is_active === true || typeof f?.is_active === 'undefined')
