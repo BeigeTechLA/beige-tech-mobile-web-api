@@ -154,42 +154,23 @@ function renderQuoteAcceptPage({
             }
 
             .icon-ring {
-              position: absolute;
-              left: 50%;
-              top: -63px;
-              transform: translateX(-50%);
-              width: 126px;
-              height: 126px;
-              border-radius: 50%;
-              background: #000000;
-              box-shadow: 0 18px 36px rgba(0,0,0,0.45);
-            }
-
-            .icon-core {
-              position: absolute;
-              left: 50%;
-              top: 35px;
-              transform: translateX(-50%);
-              width: 64px;
-              height: 64px;
-              border-radius: 50%;
-              background: ${palette.iconBg};
-              color: #111111;
-              font-size: 40px;
-              line-height: 64px;
-              font-weight: 700;
-              text-align: center;
-              box-shadow: 0 10px 26px rgba(0,0,0,0.24);
-            }
-
-            .confetti {
-              position: absolute;
-              width: 7px;
-              height: 7px;
-              border-radius: 2px;
-              opacity: 0.95;
-            }
-
+  position: absolute;
+  left: 50%;
+  top: -63px;
+  transform: translateX(-50%);
+  width: 126px;
+  height: 126px;
+  border-radius: 50%;
+  background: #000000;
+  box-shadow: 0 18px 36px rgba(0,0,0,0.45);
+  overflow: visible;
+}
+  
+.status-svg {
+  display: block;
+  width: 126px;
+  height: 126px;
+}
             .hero-badge {
               display: none;
             }
@@ -476,16 +457,37 @@ function renderQuoteAcceptPage({
                 <div class="hero-wrap">
                 <div class="hero-card">
                   <div class="icon-ring">
-                    <div class="icon-core">${statusIcon}</div>
+                    <svg class="status-svg" viewBox="0 0 126 126" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                      <circle cx="63" cy="63" r="63" fill="#000000"/>
 
-                    <span class="confetti" style="left:28px;top:72px;background:#4D82FF;transform:rotate(18deg);"></span>
-                    <span class="confetti" style="left:31px;top:51px;background:#5FD68F;border-radius:50%;"></span>
-                    <span class="confetti" style="left:53px;top:28px;background:#EA745F;transform:rotate(42deg);"></span>
-                    <span class="confetti" style="left:104px;top:39px;background:#4D82FF;transform:rotate(28deg);"></span>
-                    <span class="confetti" style="left:116px;top:62px;background:#E3BF61;border-radius:50%;"></span>
-                    <span class="confetti" style="left:107px;top:91px;background:#EA745F;transform:rotate(28deg);"></span>
-                    <span class="confetti" style="left:32px;top:91px;background:#E3BF61;transform:rotate(36deg);"></span>
-                    <span class="confetti" style="left:91px;top:111px;background:#5FD68F;border-radius:50%;"></span>
+                      <!-- confetti -->
+                      <rect x="61" y="9" width="8" height="8" rx="2" fill="#EA745F" transform="rotate(45 65 13)"/>
+                      <rect x="91" y="20" width="8" height="8" rx="2" fill="#4D82FF" transform="rotate(28 95 24)"/>
+                      <circle cx="109" cy="51" r="4" fill="#E3BF61"/>
+                      <rect x="91" y="87" width="8" height="8" rx="2" fill="#EA745F" transform="rotate(28 95 91)"/>
+                      <circle cx="76" cy="104" r="4" fill="#5FD68F"/>
+                      <path d="M42 103 C39 99 41 95 46 96" stroke="#5FD68F" stroke-width="3" fill="none" stroke-linecap="round"/>
+                      <rect x="20" y="83" width="8" height="8" rx="2" fill="#E3BF61" transform="rotate(35 24 87)"/>
+                      <rect x="12" y="57" width="8" height="8" rx="2" fill="#4D82FF" transform="rotate(18 16 61)"/>
+                      <circle cx="21" cy="35" r="4" fill="#5FD68F"/>
+                      <rect x="43" y="16" width="5" height="9" rx="1.5" fill="#EA745F" transform="rotate(-25 45.5 20.5)"/>
+                      <path d="M99 35 C102 31 106 31 108 35" stroke="#4D82FF" stroke-width="3" fill="none" stroke-linecap="round"/>
+                      <path d="M105 75 C109 77 110 81 106 84" stroke="#EA745F" stroke-width="3" fill="none" stroke-linecap="round"/>
+                      <path d="M22 71 C18 70 17 66 20 63" stroke="#E3BF61" stroke-width="3" fill="none" stroke-linecap="round"/>
+
+                      <!-- center circle -->
+                      <circle cx="63" cy="63" r="32" fill="${palette.iconBg}"/>
+
+                      <!-- check -->
+                      <path
+                        d="M48 63.5 L58.5 75 L80 49"
+                        stroke="#111111"
+                        stroke-width="6"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        fill="none"
+                      />
+                    </svg>
                   </div>
 
                   <div class="hero-badge">${badge}</div>
