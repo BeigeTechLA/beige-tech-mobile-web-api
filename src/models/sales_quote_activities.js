@@ -16,7 +16,16 @@ module.exports = function(sequelize, DataTypes) {
       }
     },
     activity_type: {
-      type: DataTypes.ENUM('created','updated','status_changed','sent','viewed','accepted','rejected'),
+      type: DataTypes.ENUM(
+        'created',
+        'updated',
+        'status_changed',
+        'sent',
+        'viewed',
+        'accepted',
+        'rejected',
+        'restricted_edit_confirmed'
+      ),
       allowNull: false
     },
     performed_by_user_id: {

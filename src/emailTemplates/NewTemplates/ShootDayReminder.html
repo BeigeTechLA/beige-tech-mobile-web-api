@@ -43,107 +43,149 @@
 
           <!-- Shoot Details -->
           <tr>
-            <td style="padding: 0; height: 680px; position: relative; overflow: hidden;">
-              <!-- bg wave with blur -->
-              <div style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
-              background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/RibbonWave.png'); 
-              background-repeat: no-repeat; background-position: bottom; background-size: 100% 680px;
-              filter: blur(4px); -webkit-filter: blur(4px); transform: scale(1); z-index: 1;">
-              </div>
+            <td
+              bgcolor="#FFFCF6"
+              style="background-color:#FFFCF6; background-image:url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/RibbonWave.png'); background-repeat:no-repeat; background-position:center 180px; background-size:600px auto; padding:20px 40px 52px;">
 
-              <div style="position: relative; z-index: 2; height: 680px;">
-                <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%"
-                  style="min-height: 660px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/WhiteWaveBg.png'); background-repeat: no-repeat; background-position: top center; background-size: 100% 660px;">
-                  <tr>
-                    <td valign="top" style="padding: 40px;">
-                      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
-                        <tr>
-                          <td style="text-align: center; padding: 45px 40px 30px;">
-                            <h3
-                              style="margin: 0 0 15px; color: #000000; font-size: 30px; font-weight: 600; line-height: 35px;">
-                              Hi, {{userData.name}}
-                            </h3>
-                            <p
-                              style="font-size: 20px;font-style: normal;font-weight: 400;line-height: 35px; color: rgba(0, 0, 0, 0.70); margin: 0;">
-                              It&apos;s shoot day! Your session is set to begin in approximately <span
-                                style="color: #000; font-weight: 500;">2 hours.</span>
-                            </p>
-                          </td>
-                        </tr>
+              <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+                <tr>
+                  <td align="center" style="padding:0;">
 
-                        <tr>
-                          <td style="padding: 0 40px 30px;">
-                            <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%"
-                              style="max-width: 500px; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;">
-                              <tr>
-                                <td align="center">
-                                  <div style="margin-bottom: -35px; position: relative; z-index: 2;">
-                                    <table border="0" cellpadding="0" cellspacing="0" align="center">
-                                      <tr>
-                                        <td align="center" bgcolor="#fcf8f1"
-                                          style="border-radius: 100%; padding: 5px; border: solid 5px #FFFCF6; box-shadow: 0 4px 10px rgba(0,0,0,0.1);">
-                                          <img
-                                            src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/ClockCircle.png"
-                                            width="35" height="35" alt="Clock" style="display: block; border: 0;">
-                                        </td>
-                                      </tr>
-                                    </table>
-                                  </div>
-                                  <table border="0" cellpadding="0" cellspacing="0" width="100%"
-                                    style="background-color: #FEEFD8; border-radius: 18px; border: 1px solid #BDB3B3;">
-                                    <tr>
-                                      <td align="center" style="padding: 45px 30px 32px;">
-                                        <p style="margin: 0 0 5px; font-size: 18px; color: #525252;">Shoot Time</p>
-                                        <p style="margin: 0; font-size: 20px; color: #000; font-weight: 600;">
-                                          {{shoot_time}}</p>
-                                      </td>
-                                    </tr>
-                                  </table>
-                                </td>
-                              </tr>
-                            </table>
-                          </td>
-                        </tr>
+                    <!-- Wavy Top -->
+                    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="line-height:0; font-size:0;">
+                      <tr>
+                        <td align="center" style="padding:0;">
+                          <div style="height:25px; overflow:visible; white-space:nowrap;">
+                            <span style="display:inline-block;width:45px;height:45px;background-color:#FFFFFF;border-radius:50%;margin:0 -2px;border-bottom:1px solid #DADADA;"></span>
+                            <span style="display:inline-block;width:45px;height:45px;background-color:#FFFFFF;border-radius:50%;margin:0 -2px;border-bottom:1px solid #DADADA;"></span>
+                            <span style="display:inline-block;width:45px;height:45px;background-color:#FFFFFF;border-radius:50%;margin:0 -2px;border-bottom:1px solid #DADADA;"></span>
+                            <span style="display:inline-block;width:45px;height:45px;background-color:#FFFFFF;border-radius:50%;margin:0 -2px;border-bottom:1px solid #DADADA;"></span>
+                            <span style="display:inline-block;width:45px;height:45px;background-color:#FFFFFF;border-radius:50%;margin:0 -2px;border-bottom:1px solid #DADADA;"></span>
+                            <span style="display:inline-block;width:45px;height:45px;background-color:#FFFFFF;border-radius:50%;margin:0 -2px;border-bottom:1px solid #DADADA;"></span>
+                            <span style="display:inline-block;width:45px;height:45px;background-color:#FFFFFF;border-radius:50%;margin:0 -2px;border-bottom:1px solid #DADADA;"></span>
+                            <span style="display:inline-block;width:45px;height:45px;background-color:#FFFFFF;border-radius:50%;margin:0 -2px;border-bottom:1px solid #DADADA;"></span>
+                            <span style="display:inline-block;width:45px;height:45px;background-color:#FFFFFF;border-radius:50%;margin:0 -2px;border-bottom:1px solid #DADADA;"></span>
+                            <span style="display:inline-block;width:45px;height:45px;background-color:#FFFFFF;border-radius:50%;margin:0 -2px;border-bottom:1px solid #DADADA;"></span>
+                            <span style="display:inline-block;width:45px;height:45px;background-color:#FFFFFF;border-radius:50%;margin:0 -2px;border-bottom:1px solid #DADADA;"></span>
+                          </div>
+                        </td>
+                      </tr>
+                    </table>
 
-                        <tr>
-                          <td style="padding: 10px 40px 30px;">
-                            <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%"
-                              style="max-width: 500px; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;">
-                              <tr>
-                                <td align="center">
-                                  <div style="margin-bottom: -35px; position: relative; z-index: 2;">
-                                    <table border="0" cellpadding="0" cellspacing="0" align="center">
-                                      <tr>
-                                        <td align="center" bgcolor="#fcf8f1"
-                                          style="border-radius: 100%; padding: 5px; border: solid 5px #FFFCF6; box-shadow: 0 4px 10px rgba(0,0,0,0.1);">
-                                          <img
-                                            src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/location.svg"
-                                            width="35" height="35" alt="Location" style="display: block; border: 0;">
-                                        </td>
-                                      </tr>
-                                    </table>
-                                  </div>
-                                  <table border="0" cellpadding="0" cellspacing="0" width="100%"
-                                    style="background-color: #FEEFD8; border-radius: 18px; border: 1px solid #BDB3B3;">
-                                    <tr>
-                                      <td align="center" style="padding: 45px 30px 32px;">
-                                        <p style="margin: 0 0 5px; font-size: 18px; color: #525252;">Shoot Location</p>
-                                        <p
-                                          style="margin: 0; font-size: 18px; line-height: 24px; color: #000; font-weight: 600;">
-                                          {{location}}</p>
-                                      </td>
-                                    </tr>
-                                  </table>
-                                </td>
-                              </tr>
-                            </table>
-                          </td>
-                        </tr>
-                      </table>
-                    </td>
-                  </tr>
-                </table>
-              </div>
+                    <!-- White Card Body -->
+                    <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%"
+                      style="background-color:#FFFFFF; border-left:1px solid #DADADA; border-right:1px solid #DADADA; border-bottom:1px solid #DADADA; border-radius:0 0 40px 40px; box-shadow:0 10px 30px rgba(0,0,0,0.08);">
+
+                      <!-- Message -->
+                      <tr>
+                        <td style="text-align:center; padding:40px 40px 0;">
+                          <h3
+                            style="margin:0 0 18px; color:#000000; font-size:30px; font-weight:600; line-height:40px;">
+                            Hi, {{userData.name}}
+                          </h3>
+
+                          <p
+                            style="margin:0; font-size:20px; font-weight:400; line-height:35px; color:#222222;">
+                            It&rsquo;s shoot day! Your session is set to begin in approximately
+                            <span style="color:#000000; font-weight:600;">2 hours.</span>
+                          </p>
+                        </td>
+                      </tr>
+
+                      <!-- Shoot Time -->
+                      <tr>
+                        <td style="padding:0 40px;">
+                          <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%"
+                            style="max-width:500px; font-family:'Helvetica Neue', Helvetica, Arial, sans-serif;">
+                            <tr>
+                              <td align="center" style="padding:40px 0 0;">
+
+                                <table border="0" cellpadding="0" cellspacing="0" width="100%"
+                                  style="background-color:#FEEFD8; border-radius:18px; border:1px solid #BDB3B3; box-shadow:0 7px 29px rgba(100,100,111,0.20);">
+                                  <tr>
+                                    <td align="center" style="padding:0 40px 20px;">
+
+                                      <table border="0" cellpadding="0" cellspacing="0"
+                                        style="margin-top:-30px; margin-bottom:20px;">
+                                        <tr>
+                                          <td align="center" bgcolor="#FCF8F1"
+                                            style="border-radius:100%; padding:5px; border:solid 5px #FFFCF6;">
+                                            <img
+                                              src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/ClockCircle.png"
+                                              width="40" height="40" alt="Clock" style="display:block; border:0;">
+                                          </td>
+                                        </tr>
+                                      </table>
+
+                                      <p style="margin:0 0 14px; font-size:22px; line-height:24px; color:#525252;">
+                                        Shoot Time
+                                      </p>
+
+                                      <p
+                                        style="margin:0 0 12px; font-size:22px; line-height:24px; color:#000000; font-weight:600; font-family:sans-serif;">
+                                        {{shoot_time}}
+                                      </p>
+
+                                    </td>
+                                  </tr>
+                                </table>
+
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+
+                      <!-- Shoot Location -->
+                      <tr>
+                        <td style="padding:20px 40px 50px;">
+                          <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%"
+                            style="max-width:500px; font-family:'Helvetica Neue', Helvetica, Arial, sans-serif;">
+                            <tr>
+                              <td align="center" style="padding:40px 0 0;">
+
+                                <table border="0" cellpadding="0" cellspacing="0" width="100%"
+                                  style="background-color:#FEEFD8; border-radius:18px; border:1px solid #BDB3B3; box-shadow:0 7px 29px rgba(100,100,111,0.20);">
+                                  <tr>
+                                    <td align="center" style="padding:0 40px 20px;">
+
+                                      <table border="0" cellpadding="0" cellspacing="0"
+                                        style="margin-top:-30px; margin-bottom:20px;">
+                                        <tr>
+                                          <td align="center" bgcolor="#FCF8F1"
+                                            style="border-radius:100%; padding:5px; border:solid 5px #FFFCF6;">
+                                            <img
+                                              src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/location.svg"
+                                              width="40" height="40" alt="Location" style="display:block; border:0;">
+                                          </td>
+                                        </tr>
+                                      </table>
+
+                                      <p style="margin:0 0 14px; font-size:22px; line-height:24px; color:#525252;">
+                                        Shoot Location
+                                      </p>
+
+                                      <p
+                                        style="margin:0 0 12px; font-size:22px; line-height:24px; color:#000000; font-weight:600; font-family:sans-serif;">
+                                        {{location}}
+                                      </p>
+
+                                    </td>
+                                  </tr>
+                                </table>
+
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+
+                    </table>
+
+                  </td>
+                </tr>
+              </table>
+
             </td>
           </tr>
 
@@ -157,7 +199,7 @@
                     style="padding: 44px; background: linear-gradient(90deg, rgba(254, 239, 216, 0.00) 0%, rgba(254, 239, 216, 0.36) 50%, rgba(254, 239, 216, 0.00) 100%);">
                     <p
                       style="font-size: 20px;font-style: normal;font-weight: 400;line-height: 32px; color: #000; margin: 0;">
-                      Your Creative Partner, <span style="font-weight: 600;">{{cp_name}}</span>, is getting ready to
+                      Your Creative Partner{{#if cp_name}}, <span style="font-weight: 600;">{{cp_name}}</span>{{/if}} is getting ready to
                       head to the location. If you have any urgent issues regarding access or arrival, please reply to
                       this
                       email immediately.

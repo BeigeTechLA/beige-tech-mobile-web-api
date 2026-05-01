@@ -88,6 +88,9 @@ router.delete('/client-leads/:id', authenticate, requireAdmin, salesLeadsControl
  */
 router.put('/leads/:id/status', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateLeadStatus);
 router.put('/client-leads/:id/status', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateClientLeadStatus);
+router.post('/leads/manual-payment/upload-proof', authenticate, requireSalesRepOrAdmin, ...salesLeadsController.uploadManualPaymentProof);
+router.post('/leads/:id/manual-payment', authenticate, requireSalesRepOrAdmin, salesLeadsController.recordManualPayment);
+router.post('/client-leads/:id/manual-payment', authenticate, requireSalesRepOrAdmin, salesLeadsController.recordClientManualPayment);
 router.post('/availability', authenticate, requireSalesRepOrAdmin, salesAvailabilityController.getSalesRepAvailability);
 router.post('/add-availability', authenticate, requireSalesRepOrAdmin, salesAvailabilityController.setSalesRepAvailability);
 router.get('/current-status', authenticate, requireSalesRepOrAdmin, salesAvailabilityController.getSalesRepCurrentStatus);
@@ -284,6 +287,9 @@ router.get('/dashboard/sales-reps', authenticate, requireAdmin, salesDashboardCo
  */
 router.get('/dashboard/recent-activities', authenticate, requireSalesRepOrAdmin, salesDashboardController.getRecentActivities);
 router.get('/dashboard/invoice-history', authenticate, requireSalesRepOrAdmin, salesDashboardController.getInvoiceHistory);
+router.get('/dashboard/quote-change-requests', authenticate, requireAdmin, salesDashboardController.getQuoteChangeRequests);
+router.post('/dashboard/quote-change-requests/approve', authenticate, requireAdmin, salesDashboardController.approveQuoteChangeRequest);
+router.post('/dashboard/quote-change-requests/reject', authenticate, requireAdmin, salesDashboardController.rejectQuoteChangeRequest);
 
 /**
  * @route   GET /api/sales/dashboard/funnel
@@ -313,11 +319,14 @@ router.put('/quotes/catalog/:catalogItemId', authenticate, requireSalesRepOrAdmi
 router.delete('/quotes/catalog/:catalogItemId', authenticate, requireSalesRepOrAdmin, salesQuotesController.deleteCatalogItem);
 
 router.get('/quotes/dashboard', authenticate, requireSalesRepOrAdmin, salesQuotesController.getQuoteDashboard);
-router.get('/quotes', authenticate, requireSalesRepOrAdmin, salesQuotesController.listQuotes);
+router.get('/quotes', authenticate, salesQuotesController.listQuotes);
 router.get('/quotes/accept', salesQuotesController.acceptQuoteProposal);
+router.get('/quotes/reject/:quoteId', authenticate, salesQuotesController.rejectQuoteProposal);
 router.get('/quotes/public/:quoteId', salesQuotesController.getPublicQuoteById);
-router.get('/quotes/:quoteId', authenticate, requireSalesRepOrAdmin, salesQuotesController.getQuoteById);
-router.get('/quotes/:quoteId/pdf', authenticate, requireSalesRepOrAdmin, salesQuotesController.downloadQuotePdf);
+router.get('/quotes/:quoteId/versions', authenticate, salesQuotesController.listQuoteVersions);
+router.get('/quotes/:quoteId/versions/:versionNumber', authenticate, salesQuotesController.getQuoteVersionByNumber);
+router.get('/quotes/:quoteId', authenticate, salesQuotesController.getQuoteById);
+router.get('/quotes/:quoteId/pdf', authenticate, salesQuotesController.downloadQuotePdf);
 router.post('/quotes', authenticate, requireSalesRepOrAdmin, salesQuotesController.createQuote);
 router.post('/quotes/:quoteId/duplicate', authenticate, requireSalesRepOrAdmin, salesQuotesController.duplicateQuote);
 router.put('/quotes/:quoteId', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateQuote);
