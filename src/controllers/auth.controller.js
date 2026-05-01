@@ -2324,9 +2324,17 @@ exports.createInternalCredential = async (req, res) => {
       });
     }
 
-    const { name, email, password, phone_number, user_type } = req.body;
+    const { name, email, password, phone_number, user_type, role } = req.body;
     const normalizedUserType = Number(user_type);
     const allowedUserTypes = [1, 5, 6, 7];
+    const allowedAdminRoles = [
+      'Production Team',
+      'Video Editors',
+      'Photo Editors',
+      'Sales',
+      'Sales Admin'
+    ];
+    const normalizedRole = typeof role === 'string' ? role.trim() : '';
 
     if (!name || !email || !password || !normalizedUserType) {
       return res.status(400).json({
@@ -2339,6 +2347,13 @@ exports.createInternalCredential = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'Invalid user_type. Allowed values: 1, 5, 6, 7'
+      });
+    }
+
+    if (normalizedUserType === 1 && normalizedRole && !allowedAdminRoles.includes(normalizedRole)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid role. Allowed values: ${allowedAdminRoles.join(', ')}`
       });
     }
 
@@ -2361,6 +2376,7 @@ exports.createInternalCredential = async (req, res) => {
       phone_number: phone_number || null,
       password_hash: hashedPassword,
       user_type: normalizedUserType,
+      role: normalizedUserType === 1 ? (normalizedRole || null) : null,
       is_active: 1,
       email_verified: 1,
       created_from: 1,
@@ -2374,7 +2390,8 @@ exports.createInternalCredential = async (req, res) => {
         id: createdUser.id,
         name: createdUser.name,
         email: createdUser.email,
-        user_type: createdUser.user_type
+        user_type: createdUser.user_type,
+        role: createdUser.role
       }
     });
   } catch (error) {

@@ -913,7 +913,7 @@ exports.getSalesRepsList = async (req, res) => {
         is_active: 1,
         assign_lead: 1
       },
-      attributes: ['id', 'name', 'email', 'user_type'],
+      attributes: ['id', 'name', 'email', 'user_type', 'role'],
       order: [['name', 'ASC']]
     });
 
