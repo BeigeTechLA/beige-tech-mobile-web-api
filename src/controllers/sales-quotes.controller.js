@@ -2,7 +2,7 @@ const constants = require('../utils/constants');
 const quoteService = require('../services/sales-quote.service');
 const db = require('../models');
 const { Op } = require('sequelize');
-const { renderQuoteAcceptPage } = require('../utils/quoteAcceptPage');
+const { renderQuoteAcceptPage, renderQuoteAgreementPage } = require('../utils/quoteAcceptPage');
 
 function getUserContext(req) {
   return {
@@ -451,10 +451,11 @@ exports.rejectQuoteProposal = async (req, res) => {
 };
 
 exports.acceptQuoteProposal = async (req, res) => {
+  const wantsHtml = Boolean(req.accepts('html'));
   try {
     const token = String(req.query.token || req.body?.token || '').trim();
     if (!token) {
-      if (req.method === 'GET' && req.accepts('html')) {
+      if (wantsHtml) {
         const page = renderQuoteAcceptPage({
           title: 'Link Invalid',
           badge: 'Unable To Process',
@@ -471,9 +472,70 @@ exports.acceptQuoteProposal = async (req, res) => {
       });
     }
 
+    if (req.method === 'GET') {
+      const preview = await quoteService.getQuoteAcceptancePreview(token);
+
+      if (wantsHtml) {
+        if (preview.alreadyAccepted) {
+          const page = renderQuoteAcceptPage({
+            title: 'Quote Already Confirmed',
+            badge: 'Already Confirmed',
+            description: `${preview.quote_number} was already confirmed earlier. No further action is needed from you right now.`,
+            quoteNumber: preview.quote_number,
+            tone: 'warning',
+            statusCode: constants.OK.code
+          });
+          return res.status(page.statusCode).send(page.html);
+        }
+
+        if (!preview.canAccept) {
+          const page = renderQuoteAcceptPage({
+            title: 'Unable To Confirm Quote',
+            badge: 'Action Needed',
+            description: `This quote cannot be accepted because it is ${preview.blockedReason}. Please contact the Beige team for assistance.`,
+            quoteNumber: preview.quote_number,
+            tone: 'error',
+            statusCode: constants.BAD_REQUEST.code
+          });
+          return res.status(page.statusCode).send(page.html);
+        }
+
+        const page = renderQuoteAgreementPage({
+          quoteNumber: preview.quote_number,
+          token,
+          formAction: `${req.baseUrl}${req.path}`
+        });
+        return res.status(page.statusCode).send(page.html);
+      }
+
+      return res.json({
+        success: true,
+        data: preview
+      });
+    }
+
+    const agreementAccepted = [true, 'true', 'on', '1', 1].includes(req.body?.agreement_accepted);
+    if (!agreementAccepted) {
+      if (wantsHtml) {
+        const preview = await quoteService.getQuoteAcceptancePreview(token);
+        const page = renderQuoteAgreementPage({
+          quoteNumber: preview.quote_number,
+          token,
+          formAction: `${req.baseUrl}${req.path}`,
+          errorMessage: 'Please confirm the service agreement before continuing.'
+        });
+        return res.status(constants.BAD_REQUEST.code).send(page.html);
+      }
+
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Service agreement acceptance is required'
+      });
+    }
+
     const result = await quoteService.acceptQuoteProposal(token);
 
-    if (req.method === 'GET' && req.accepts('html')) {
+    if (wantsHtml) {
       const quoteNumber = result?.quote?.quote_number || 'your quote';
       const title = result.already_accepted ? 'Quote Already Confirmed' : 'Quote Accepted';
       const description = result.already_accepted
@@ -499,7 +561,7 @@ exports.acceptQuoteProposal = async (req, res) => {
     const statusCode = error.message === 'Quote not found'
       ? constants.NOT_FOUND.code
       : constants.BAD_REQUEST.code;
-    if (req.method === 'GET' && req.accepts('html')) {
+    if (wantsHtml) {
       const isMissing = error.message === 'Quote not found';
       const page = renderQuoteAcceptPage({
         title: isMissing ? 'Quote Not Found' : 'Unable To Confirm Quote',
