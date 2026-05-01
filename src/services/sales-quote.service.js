@@ -831,6 +831,50 @@ function verifyQuoteAcceptToken(token) {
   }
 }
 
+async function getQuoteAcceptancePreview(token) {
+  const decoded = verifyQuoteAcceptToken(token);
+  const salesQuoteId = Number(decoded.sales_quote_id);
+
+  if (!Number.isInteger(salesQuoteId) || salesQuoteId <= 0) {
+    throw new Error('Invalid accept token');
+  }
+
+  const quote = await db.sales_quotes.findOne({
+    where: { sales_quote_id: salesQuoteId }
+  });
+
+  if (!quote) {
+    throw new Error('Quote not found');
+  }
+
+  if (decoded.quote_number && quote.quote_number !== decoded.quote_number) {
+    throw new Error('Invalid accept token');
+  }
+
+  if (
+    decoded.client_email &&
+    quote.client_email &&
+    String(decoded.client_email).toLowerCase() !== String(quote.client_email).toLowerCase()
+  ) {
+    throw new Error('Invalid accept token');
+  }
+
+  const status = String(quote.status || '').toLowerCase();
+  const alreadyAccepted = ['accepted', 'paid'].includes(status);
+  const blockedReason = ['rejected', 'expired'].includes(status) ? status : null;
+
+  return {
+    sales_quote_id: quote.sales_quote_id,
+    quote_number: quote.quote_number || decoded.quote_number || `Q-${quote.sales_quote_id}`,
+    client_name: quote.client_name || null,
+    client_email: quote.client_email || null,
+    status,
+    alreadyAccepted,
+    canAccept: !alreadyAccepted && !blockedReason,
+    blockedReason
+  };
+}
+
 function deriveQuoteAcceptanceEmailPayload(quoteDetails) {
   return {
     to_email: quoteDetails.client_email || null,
@@ -4508,6 +4552,7 @@ module.exports = {
   getQuoteDashboard,
   updateQuoteStatus,
   sendQuoteProposal,
+  getQuoteAcceptancePreview,
   acceptQuoteProposal,
   acceptQuoteOnSignature,
   ensureQuoteBookingForPayment,

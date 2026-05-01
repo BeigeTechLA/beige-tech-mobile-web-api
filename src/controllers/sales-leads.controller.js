@@ -76,6 +76,129 @@ const buildDealProjectName = ({ shootType = null, contentType = null, clientName
   return `${titleSource.toUpperCase()} Shoot - ${clientLabel}`;
 };
 
+const normalizeStatusFilterValue = (value) => (
+  String(value || '')
+    .toLowerCase()
+    .replace(/[–—]/g, '-')
+    .replace(/[\s_-]+/g, '')
+);
+
+const normalizeDisplayStatusValue = (value) => (
+  String(value || '')
+    .replace(/â€“|Ã¢â‚¬â€œ/g, '-')
+    .replace(/[–—]/g, '-')
+    .trim()
+);
+
+const isShootStatusFilterValue = (value) => (
+  [
+    'initiated',
+    'preproduction',
+    'shootday',
+    'postproduction',
+    'revision',
+    'completed',
+    'assetsdelivered',
+    'cancelled',
+    'upcoming',
+    'draft'
+  ].includes(normalizeStatusFilterValue(value))
+);
+
+const formatLocalDateParts = (date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const getDateOnlyString = (value) => {
+  if (!value) return null;
+
+  if (typeof value === 'string') {
+    const trimmedValue = value.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmedValue)) {
+      return trimmedValue;
+    }
+
+    const parsedStringDate = new Date(trimmedValue);
+    if (Number.isNaN(parsedStringDate.getTime())) return null;
+    return formatLocalDateParts(parsedStringDate);
+  }
+
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return null;
+    return formatLocalDateParts(value);
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return formatLocalDateParts(parsed);
+};
+
+const getTodayDateOnlyString = () => formatLocalDateParts(new Date());
+
+const matchShootStatusFilter = (booking, rawStatus) => {
+  const normalizedStatus = normalizeStatusFilterValue(rawStatus);
+  if (!normalizedStatus || normalizedStatus === 'all') {
+    return null;
+  }
+
+  const supportedStatuses = new Set([
+    'initiated',
+    'preproduction',
+    'shootday',
+    'postproduction',
+    'revision',
+    'completed',
+    'assetsdelivered',
+    'cancelled',
+    'upcoming',
+    'draft'
+  ]);
+
+  if (!supportedStatuses.has(normalizedStatus)) {
+    return null;
+  }
+
+  if (!booking) {
+    return false;
+  }
+
+  const bookingStatus = Number(booking.status);
+  const eventDate = getDateOnlyString(booking.event_date);
+  const today = getTodayDateOnlyString();
+  const isCancelled = Number(booking.is_cancelled || 0) === 1;
+  const isDraft = Number(booking.is_draft || 0) === 1;
+  const isFutureEvent = eventDate ? eventDate > today : false;
+  const isTodayEvent = eventDate ? eventDate === today : false;
+  const isPastEvent = eventDate ? eventDate < today : false;
+
+  switch (normalizedStatus) {
+    case 'initiated':
+      return bookingStatus === 0 && (!eventDate || isFutureEvent);
+    case 'preproduction':
+      return bookingStatus === 1 && isFutureEvent;
+    case 'shootday':
+      return ![3, 4, 5].includes(bookingStatus) && isTodayEvent;
+    case 'postproduction':
+      return bookingStatus === 2 || ([0, 1].includes(bookingStatus) && isPastEvent);
+    case 'revision':
+      return bookingStatus === 3;
+    case 'completed':
+    case 'assetsdelivered':
+      return bookingStatus === 4;
+    case 'cancelled':
+      return bookingStatus === 5 || isCancelled;
+    case 'upcoming':
+      return ![3, 4, 5].includes(bookingStatus) && isFutureEvent;
+    case 'draft':
+      return isDraft;
+    default:
+      return null;
+  }
+};
+
 async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
   if (!quoteId) return null;
 
@@ -1901,7 +2024,13 @@ exports.getLeads = async (req, res) => {
     );
 
     const activeStatusFilter = (status || booking_status);
-    if (activeStatusFilter && activeStatusFilter !== 'All') {
+    const shootStatusRequested = isShootStatusFilterValue(activeStatusFilter);
+
+    if (shootStatusRequested) {
+      processedLeads = processedLeads.filter((lead) => matchShootStatusFilter(lead.booking, activeStatusFilter));
+    }
+
+    if (!shootStatusRequested && activeStatusFilter && activeStatusFilter !== 'All') {
       processedLeads = processedLeads.filter((lead) => {
         const leadStat = lead.booking_status.replace('–', '-').trim();
         const filterStat = activeStatusFilter.replace('–', '-').trim();
@@ -2039,10 +2168,20 @@ exports.getClientLeads = async (req, res) => {
     );
 
     const activeStatusFilter = (status || booking_status);
-    if (activeStatusFilter && activeStatusFilter !== 'All') {
+    const shootStatusRequested = isShootStatusFilterValue(activeStatusFilter);
+
+    if (shootStatusRequested) {
+      processedLeads = processedLeads.filter((lead) => matchShootStatusFilter(lead.booking, activeStatusFilter));
+    }
+    if (!shootStatusRequested && activeStatusFilter && activeStatusFilter !== 'All') {
       processedLeads = processedLeads.filter((lead) => {
-        const leadStat = lead.booking_status.replace('â€“', '-').trim();
-        const filterStat = activeStatusFilter.replace('â€“', '-').trim();
+        const shootStatusMatch = matchShootStatusFilter(lead.booking, activeStatusFilter);
+        if (shootStatusMatch !== null) {
+          return shootStatusMatch;
+        }
+
+        const leadStat = normalizeDisplayStatusValue(lead.booking_status);
+        const filterStat = normalizeDisplayStatusValue(activeStatusFilter);
         return leadStat === filterStat;
       });
     }
