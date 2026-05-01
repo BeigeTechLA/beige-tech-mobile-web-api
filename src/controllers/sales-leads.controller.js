@@ -1346,9 +1346,20 @@ exports.trackEarlyBookingInterest = async (req, res) => {
                 activity_data: { source: 'step_1_capture', user_id: resolvedUserId, guest_email: normalizedGuestEmail }
             });
 
-            // TEMP FLOW: direct book-a-shoot leads stay unassigned for now.
-            // assignedRep = await leadAssignmentService.autoAssignLead(lead.lead_id);
-            assignedRep = null;
+            // Force assignment to default sales inbox owner for this branch flow.
+            assignedRep = await users.findOne({
+                where: {
+                    email: 'sales@beigecorporation.io',
+                    is_active: 1
+                },
+                attributes: ['id', 'name', 'email']
+            });
+
+            if (assignedRep?.id) {
+                await lead.update({ assigned_sales_rep_id: assignedRep.id });
+            } else {
+                assignedRep = null;
+            }
 
           // emailService.sendSalesLeadNotification({
           //   guestEmail: normalizedGuestEmail,
