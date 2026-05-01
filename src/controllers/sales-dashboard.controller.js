@@ -304,6 +304,24 @@ function normalizeQuoteChangeRequest(row, metadata = {}, overallChangeSummary = 
   };
 }
 
+function keepLatestQuoteChangeRequestPerQuote(items = []) {
+  const seenQuoteIds = new Set();
+
+  return (Array.isArray(items) ? items : []).filter(({ item }) => {
+    const quoteId = Number(item?.quote_id || 0);
+    if (!quoteId) {
+      return true;
+    }
+
+    if (seenQuoteIds.has(quoteId)) {
+      return false;
+    }
+
+    seenQuoteIds.add(quoteId);
+    return true;
+  });
+}
+
 function getDashboardStartDate(period) {
   if (!period || period === 'all_time' || period === 'all') {
     return null;
@@ -1312,6 +1330,8 @@ exports.getQuoteChangeRequests = async (req, res) => {
         return haystack.includes(search);
       });
     }
+
+    items = keepLatestQuoteChangeRequestPerQuote(items);
 
     const total = items.length;
     const offset = (page - 1) * limit;

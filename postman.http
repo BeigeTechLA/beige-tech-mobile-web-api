@@ -2,7 +2,7 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI0MSwidXNlclJvbGUiOiJDbGllbnQiLCJpYXQiOjE3NzczNzg1ODcsImV4cCI6MTc3Nzk4MzM4N30.6LoMSO-Mfp5iHuNYB7oQLABjExK7eeREOT_iD7HEEGk
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3Nzc2MjkzMTksImV4cCI6MTc3ODIzNDExOX0.wWz0_cimUWQ_SW0aP0C5wmvL5mMiR_csNRq4ciR60OI
 
 @TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzcyNjkyODAsImV4cCI6MTc3Nzg3NDA4MH0.6NCSuJ90ixA8GtdebLlIIDS2e0dlorpJySLS3FRR7Fs
 
@@ -38,8 +38,8 @@ POST {{URL}}auth/login HTTP/1.1
 Content-Type: application/json
 
 {
-  "email": "harsh.panchal@revurge.com",
-  "password": "12345678"
+  "email": "harsh.panchal@gmail.com",
+  "password": "password123"
 }
 
 ###
@@ -748,7 +748,7 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "booking_id": 948
+  "booking_id": 1030
 }
 
 ### 
@@ -1753,9 +1753,9 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### send invoice for quote
-POST {{URL}}sales/quotes/175/send-invoice HTTP/1.1
+POST {{URL}}sales/quotes/179/send-invoice HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN2}}
+Authorization: {{TOKEN}}
 
 ### Get Sent Invoice History
 GET {{URL}}sales/dashboard/invoice-history?page=1&limit=20
@@ -1966,7 +1966,7 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### request list (admin/sales admin)
-GET {{URL}}sales/dashboard/quote-change-requests HTTP/1.1
+GET {{URL}}sales/dashboard/quote-change-requests?page=1&limit=10&approval_status=all&request_type=all HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
