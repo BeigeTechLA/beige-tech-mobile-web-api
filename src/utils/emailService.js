@@ -2610,49 +2610,60 @@ const sendMeetingScheduledTemplateEmail = async ({ recipients = [], data = {} })
   const meetingDateTime = data?.meeting_date_time || data?.meetingDateTime || '';
   const meetingEndTime = data?.meeting_end_time || data?.meetingEndTime || '';
   const meetLink = data?.meet_link || data?.meetLink || data?.meeting_link || data?.link || '';
-  const agenda = data?.agenda || data?.description || '';
   const orderId = data?.order_id || data?.booking_id || data?.bookingId || '';
   const orderName = data?.order_name || data?.project_name || data?.project || '';
   const isoStart = formatIsoDate(meetingDateTime);
   const isoEnd = formatIsoDate(meetingEndTime);
-  const humanDate = formatHumanDate(meetingDateTime);
+  const humanDate = formatDate(meetingDateTime);
   const humanTime = formatHumanTime(meetingDateTime);
   const humanEndTime = formatHumanTime(meetingEndTime);
-  const buildMeetingScheduledDynamicTemplateData = (entryData = {}) => ({
-    meeting_id: entryData?.meeting_id || data?.meeting_id || '',
-    booking_id: String(entryData?.booking_id || orderId || ''),
-    bookingId: String(entryData?.booking_id || orderId || ''),
-    order_id: String(entryData?.order_id || orderId || ''),
-    orderId: String(entryData?.order_id || orderId || ''),
-    project_id: String(entryData?.project_id || entryData?.order_id || data?.project_id || orderId || ''),
-    order_name: entryData?.order_name || orderName || '',
-    project_name: entryData?.project_name || orderName || '',
-    project: entryData?.project || orderName || '',
-    meeting_title: entryData?.meeting_title || data?.meeting_title || '',
-    meeting_type: entryData?.meeting_type || data?.meeting_type || '',
-    meeting_status: entryData?.meeting_status || data?.meeting_status || '',
-    meeting_date_time: isoStart,
-    meetingDateTime: isoStart,
-    meeting_end_time: isoEnd,
-    meetingEndTime: isoEnd,
-    meeting_date: humanDate,
-    meetingDate: humanDate,
-    meeting_time: humanTime,
-    meetingTime: humanTime,
-    meeting_end_time_label: humanEndTime,
-    meetingEndTimeLabel: humanEndTime,
-    agenda,
-    meeting_agenda: entryData?.meeting_agenda || data?.meeting_agenda || agenda,
-    description: agenda,
-    meet_link: meetLink,
-    meetLink,
-    meeting_link: meetLink,
-    link: meetLink,
-    created_by_name: entryData?.created_by_name || data?.created_by_name || '',
-    recipient_name: entryData?.recipient_name || data?.recipient_name || '',
-    view_details_url: entryData?.view_details_url || data?.view_details_url || meetLink,
-    sent_at: entryData?.sent_at || data?.sent_at || new Date().toISOString(),
-  });
+  const buildMeetingScheduledDynamicTemplateData = (entryData = {}) => {
+    const agenda =
+      entryData?.meeting_agenda ||
+      entryData?.agenda ||
+      entryData?.description ||
+      data?.meeting_agenda ||
+      data?.agenda ||
+      data?.description ||
+      '';
+    const meetingTimeRange = [humanTime, humanEndTime].filter(Boolean).join(' - ') || humanTime || humanEndTime || '';
+
+    return {
+      meeting_id: entryData?.meeting_id || data?.meeting_id || '',
+      booking_id: String(entryData?.booking_id || orderId || ''),
+      bookingId: String(entryData?.booking_id || orderId || ''),
+      order_id: String(entryData?.order_id || orderId || ''),
+      orderId: String(entryData?.order_id || orderId || ''),
+      project_id: String(entryData?.project_id || entryData?.order_id || data?.project_id || orderId || ''),
+      order_name: entryData?.order_name || orderName || '',
+      project_name: entryData?.project_name || orderName || '',
+      project: entryData?.project || orderName || '',
+      meeting_title: entryData?.meeting_title || data?.meeting_title || '',
+      meeting_type: entryData?.meeting_type || data?.meeting_type || '',
+      meeting_status: entryData?.meeting_status || data?.meeting_status || '',
+      meeting_date_time: isoStart,
+      meetingDateTime: isoStart,
+      meeting_end_time: isoEnd,
+      meetingEndTime: isoEnd,
+      meeting_date: humanDate,
+      meetingDate: humanDate,
+      meeting_time: meetingTimeRange,
+      meetingTime: meetingTimeRange,
+      meeting_end_time_label: humanEndTime,
+      meetingEndTimeLabel: humanEndTime,
+      agenda,
+      meeting_agenda: entryData?.meeting_agenda || data?.meeting_agenda || agenda,
+      description: agenda,
+      meet_link: meetLink,
+      meetLink,
+      meeting_link: meetLink,
+      link: meetLink,
+      created_by_name: entryData?.created_by_name || data?.created_by_name || '',
+      recipient_name: entryData?.recipient_name || data?.recipient_name || '',
+      view_details_url: entryData?.view_details_url || data?.view_details_url || meetLink,
+      sent_at: entryData?.sent_at || data?.sent_at || new Date().toISOString(),
+    };
+  };
 
   const recipientEntries = (Array.isArray(recipients) ? recipients : [recipients])
     .map((recipient) => {
