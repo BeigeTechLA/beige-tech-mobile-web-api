@@ -223,6 +223,29 @@ const getUploadFolderName = (filepath, phase) => {
   return phase === 'post' ? 'post-production' : 'pre-production';
 };
 
+const getUploadFolderPath = (filepath, phase) => {
+  const normalizedPath = String(filepath || '').trim().replace(/\\/g, '/');
+  if (!normalizedPath) return '';
+
+  const phaseSegment = phase === 'post' ? '/post-production/' : '/pre-production/';
+  const normalizedLower = normalizedPath.toLowerCase();
+  const phaseIndex = normalizedLower.indexOf(phaseSegment);
+
+  if (phaseIndex === -1) {
+    const segments = normalizedPath.split('/').filter(Boolean);
+    if (segments.length <= 1) return normalizedPath;
+    return segments.slice(0, -1).join('/');
+  }
+
+  const phaseRoot = normalizedPath.slice(0, phaseIndex + phaseSegment.length - 1);
+  const afterPhase = normalizedPath.slice(phaseIndex + phaseSegment.length);
+  const afterSegments = afterPhase.split('/').filter(Boolean);
+
+  if (!afterSegments.length) return phaseRoot;
+  if (afterSegments.length === 1) return `${phaseRoot}/${afterSegments[0]}`;
+  return `${phaseRoot}/${afterSegments.slice(0, -1).join('/')}`;
+};
+
 const resolveUploadPhase = (filepath) => {
   const normalized = String(filepath || '')
     .toLowerCase()
@@ -257,6 +280,54 @@ const getBookingForUploadEmail = async (bookingId) => {
   });
 };
 
+const getLinkedLeadIdsFromBooking = (booking) =>
+  Array.isArray(booking?.sales_leads)
+    ? booking.sales_leads
+        .map((lead) => Number(lead?.lead_id))
+        .filter((leadId) => Number.isInteger(leadId) && leadId > 0)
+    : [];
+
+const hasPostProductionUploadEmailAlreadyBeenSent = async ({ linkedLeadIds = [], bookingId, folderPath }) => {
+  if (!linkedLeadIds.length || !bookingId || !folderPath) return false;
+
+  const priorActivityRows = await sales_lead_activities.findAll({
+    where: {
+      lead_id: linkedLeadIds,
+      activity_type: 'status_changed',
+    },
+    attributes: ['activity_data'],
+  });
+
+  const normalizedBookingId = String(bookingId).trim();
+  const normalizedFolderPath = String(folderPath).trim().toLowerCase();
+
+  return priorActivityRows.some((row) => {
+    const activityData = parseActivityData(row?.activity_data);
+    return (
+      String(activityData?.email_event || '').trim().toLowerCase() === 'post_production_upload' &&
+      String(activityData?.booking_id || '').trim() === normalizedBookingId &&
+      String(activityData?.folder_path || '').trim().toLowerCase() === normalizedFolderPath
+    );
+  });
+};
+
+const recordPostProductionUploadEmailSent = async ({ linkedLeadIds = [], bookingId, folderPath, filepath }) => {
+  if (!linkedLeadIds.length || !bookingId || !folderPath) return;
+
+  await sales_lead_activities.create({
+    lead_id: linkedLeadIds[0],
+    activity_type: 'status_changed',
+    activity_data: {
+      email_event: 'post_production_upload',
+      booking_id: String(bookingId),
+      folder_path: String(folderPath),
+      filepath: String(filepath || ''),
+      source: 'external_file_manager_upload',
+    },
+    performed_by_user_id: null,
+  });
+};
+
 const sendUploadTemplateEmailForFile = async ({ filepath, fileName, uploadedByName = 'Beige User', uploadedById = '' }) => {
   try {
     const bookingId = parseBookingIdFromFilepath(filepath);
@@ -269,10 +340,11 @@ const sendUploadTemplateEmailForFile = async ({ filepath, fileName, uploadedByNa
     if (!booking) return;
 
     const plainBooking = typeof booking.get === 'function' ? booking.get({ plain: true }) : booking;
-    const recipientEmails = [...new Set([
-      normalizeEmailAddress(plainBooking?.user?.email),
-      normalizeEmailAddress(plainBooking?.guest_email),
-    ].filter(Boolean))];
+    const linkedLeadIds = getLinkedLeadIdsFromBooking(plainBooking);
+    const primaryRecipientEmail =
+      normalizeEmailAddress(plainBooking?.user?.email) ||
+      normalizeEmailAddress(plainBooking?.guest_email);
+    const recipientEmails = primaryRecipientEmail ? [primaryRecipientEmail] : [];
     if (!recipientEmails.length) return;
 
     const recipientName = String(
@@ -286,6 +358,20 @@ const sendUploadTemplateEmailForFile = async ({ filepath, fileName, uploadedByNa
     const projectName = String(plainBooking?.project_name || plainBooking?.client_name || `Project #${bookingId}`);
     const uploadedFileName = String(fileName || String(filepath).split('/').pop() || '');
     const projectFilesUrl = buildProjectFilesUrl(bookingReference);
+    const folderPath = getUploadFolderPath(filepath, phase);
+
+    if (
+      phase === 'post' &&
+      !isRawFootageUploadPath(filepath) &&
+      await hasPostProductionUploadEmailAlreadyBeenSent({
+        linkedLeadIds,
+        bookingId: bookingReference,
+        folderPath,
+      })
+    ) {
+      return;
+    }
+
     const payload = {
       recipient_name: recipientName,
       client_name: getFirstName(recipientName),
@@ -317,6 +403,12 @@ const sendUploadTemplateEmailForFile = async ({ filepath, fileName, uploadedByNa
         recipients: recipientEmails,
         data: payload,
       });
+      await recordPostProductionUploadEmailSent({
+        linkedLeadIds,
+        bookingId: bookingReference,
+        folderPath,
+        filepath,
+      });
     }
   } catch (error) {
     console.error('Upload email trigger failed:', error?.message || error);
@@ -335,6 +427,7 @@ const sendRawFootageReadyEmailForUploadedFiles = async ({ filepaths = [] }) => {
     if (!booking) return;
 
     const plainBooking = typeof booking.get === 'function' ? booking.get({ plain: true }) : booking;
+    // Raw footage ready email is only for raw-footage-only bookings.
     if (bookingHasEditingService(plainBooking)) return;
 
     const linkedLeadIds = Array.isArray(plainBooking?.sales_leads)
@@ -2181,13 +2274,28 @@ exports.notifyFilesUploadedBatch = async (req, res) => {
       ? result.data.items.filter((item) => item?.success && item?.filepath)
       : [];
     const uploaderName = await getUserDisplayName(getRequestUserId(req)).catch(() => null);
+    const notifiedFolderKeys = new Set();
     for (const item of succeededItems) {
+      const phase = resolveUploadPhase(item?.filepath);
+      const folderKey =
+        phase === 'post' && !isRawFootageUploadPath(item?.filepath)
+          ? `${parseBookingIdFromFilepath(item?.filepath) || ''}::${getUploadFolderPath(item?.filepath, phase)}`
+          : null;
+
+      if (folderKey && notifiedFolderKeys.has(folderKey)) {
+        continue;
+      }
+
       await sendUploadTemplateEmailForFile({
         filepath: item.filepath,
         fileName: item?.data?.name || item?.fileName || '',
         uploadedByName: uploaderName || 'Beige User',
         uploadedById: getRequestUserId(req),
       });
+
+      if (folderKey) {
+        notifiedFolderKeys.add(folderKey);
+      }
     }
 
     await sendRawFootageReadyEmailForUploadedFiles({

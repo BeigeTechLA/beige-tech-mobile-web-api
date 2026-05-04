@@ -1143,7 +1143,6 @@ const sendPostProductionStatusUpdateEmail = async (data) => {
 
 /**
  * Send raw footage ready email (Email 10b)
- * Trigger: manual action from dashboard
  * @param {Object} data - raw footage payload
  */
 const sendRawFootageReadyEmail = async (data) => {
@@ -2795,8 +2794,17 @@ const sendPostProductionUploadedTemplateEmail = async ({ recipients = [], data =
       order_name: data?.order_name || data?.project_name || '',
       project_name: data?.project_name || data?.order_name || '',
       project: data?.project_name || data?.order_name || '',
+      project_type: data?.project_type || data?.project_name || data?.order_name || '',
       file_name: data?.file_name || '',
       file_path: data?.file_path || '',
+      folder_name: data?.folder_name || '',
+      post_production_files_url: data?.post_production_files_url || '',
+      post_production_files_display_url:
+        data?.post_production_files_display_url ||
+        data?.post_production_files_url ||
+        data?.file_path ||
+        '',
+      cp_firstname: data?.cp_firstname || data?.uploaded_by_name || '',
       upload_phase: 'post_production',
       uploaded_by_name: data?.uploaded_by_name || '',
       uploaded_by_id: data?.uploaded_by_id || '',
