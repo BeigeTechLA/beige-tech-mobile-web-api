@@ -2759,6 +2759,7 @@ const sendPreProductionUploadedTemplateEmail = async ({ recipients = [], data = 
     templateId: PRE_PRODUCTION_BRIEF_UPLOADED_TEMPLATE_ID,
     dynamicTemplateData: {
       recipient_name: data?.recipient_name || 'Client',
+      client_name: data?.client_name || data?.recipient_name || 'Client',
       booking_id: data?.booking_id || data?.order_id || '',
       bookingId: data?.booking_id || data?.order_id || '',
       order_id: data?.order_id || data?.booking_id || '',
@@ -2768,6 +2769,9 @@ const sendPreProductionUploadedTemplateEmail = async ({ recipients = [], data = 
       project: data?.project_name || data?.order_name || '',
       file_name: data?.file_name || '',
       file_path: data?.file_path || '',
+      brief_url: data?.brief_url || '',
+      brief_display_url: data?.brief_display_url || data?.brief_url || data?.file_path || '',
+      folder_name: data?.folder_name || '',
       upload_phase: 'pre_production',
       uploaded_by_name: data?.uploaded_by_name || '',
       uploaded_by_id: data?.uploaded_by_id || '',

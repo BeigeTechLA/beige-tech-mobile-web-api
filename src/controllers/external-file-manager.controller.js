@@ -220,6 +220,7 @@ const getUploadFolderName = (filepath, phase) => {
   const afterPhase = normalizedPath.slice(phaseIndex + phaseSegment.length);
   const afterSegments = afterPhase.split('/').filter(Boolean);
   if (afterSegments.length > 1) return afterSegments[0];
+  if (afterSegments.length === 1) return phase === 'post' ? 'post-production' : 'pre-production';
   return phase === 'post' ? 'post-production' : 'pre-production';
 };
 
@@ -242,7 +243,7 @@ const getUploadFolderPath = (filepath, phase) => {
   const afterSegments = afterPhase.split('/').filter(Boolean);
 
   if (!afterSegments.length) return phaseRoot;
-  if (afterSegments.length === 1) return `${phaseRoot}/${afterSegments[0]}`;
+  if (afterSegments.length === 1) return phaseRoot;
   return `${phaseRoot}/${afterSegments.slice(0, -1).join('/')}`;
 };
 
@@ -287,8 +288,13 @@ const getLinkedLeadIdsFromBooking = (booking) =>
         .filter((leadId) => Number.isInteger(leadId) && leadId > 0)
     : [];
 
-const hasPostProductionUploadEmailAlreadyBeenSent = async ({ linkedLeadIds = [], bookingId, folderPath }) => {
-  if (!linkedLeadIds.length || !bookingId || !folderPath) return false;
+const hasUploadEmailAlreadyBeenSent = async ({
+  linkedLeadIds = [],
+  bookingId,
+  folderPath,
+  emailEvent = '',
+}) => {
+  if (!linkedLeadIds.length || !bookingId || !folderPath || !emailEvent) return false;
 
   const priorActivityRows = await sales_lead_activities.findAll({
     where: {
@@ -304,21 +310,27 @@ const hasPostProductionUploadEmailAlreadyBeenSent = async ({ linkedLeadIds = [],
   return priorActivityRows.some((row) => {
     const activityData = parseActivityData(row?.activity_data);
     return (
-      String(activityData?.email_event || '').trim().toLowerCase() === 'post_production_upload' &&
+      String(activityData?.email_event || '').trim().toLowerCase() === String(emailEvent).trim().toLowerCase() &&
       String(activityData?.booking_id || '').trim() === normalizedBookingId &&
       String(activityData?.folder_path || '').trim().toLowerCase() === normalizedFolderPath
     );
   });
 };
 
-const recordPostProductionUploadEmailSent = async ({ linkedLeadIds = [], bookingId, folderPath, filepath }) => {
-  if (!linkedLeadIds.length || !bookingId || !folderPath) return;
+const recordUploadEmailSent = ({
+  linkedLeadIds = [],
+  bookingId,
+  folderPath,
+  filepath,
+  emailEvent = '',
+}) => {
+  if (!linkedLeadIds.length || !bookingId || !folderPath || !emailEvent) return null;
 
-  await sales_lead_activities.create({
+  return sales_lead_activities.create({
     lead_id: linkedLeadIds[0],
     activity_type: 'status_changed',
     activity_data: {
-      email_event: 'post_production_upload',
+      email_event: String(emailEvent),
       booking_id: String(bookingId),
       folder_path: String(folderPath),
       filepath: String(filepath || ''),
@@ -359,14 +371,20 @@ const sendUploadTemplateEmailForFile = async ({ filepath, fileName, uploadedByNa
     const uploadedFileName = String(fileName || String(filepath).split('/').pop() || '');
     const projectFilesUrl = buildProjectFilesUrl(bookingReference);
     const folderPath = getUploadFolderPath(filepath, phase);
+    const uploadEmailEvent =
+      phase === 'pre'
+        ? 'pre_production_brief_uploaded'
+        : phase === 'post' && !isRawFootageUploadPath(filepath)
+          ? 'post_production_upload'
+          : '';
 
     if (
-      phase === 'post' &&
-      !isRawFootageUploadPath(filepath) &&
-      await hasPostProductionUploadEmailAlreadyBeenSent({
+      uploadEmailEvent &&
+      await hasUploadEmailAlreadyBeenSent({
         linkedLeadIds,
         bookingId: bookingReference,
         folderPath,
+        emailEvent: uploadEmailEvent,
       })
     ) {
       return;
@@ -398,16 +416,24 @@ const sendUploadTemplateEmailForFile = async ({ filepath, fileName, uploadedByNa
         recipients: recipientEmails,
         data: payload,
       });
+      await recordUploadEmailSent({
+        linkedLeadIds,
+        bookingId: bookingReference,
+        folderPath,
+        filepath,
+        emailEvent: uploadEmailEvent,
+      });
     } else if (phase === 'post' && !isRawFootageUploadPath(filepath)) {
       await emailService.sendPostProductionUploadedTemplateEmail({
         recipients: recipientEmails,
         data: payload,
       });
-      await recordPostProductionUploadEmailSent({
+      await recordUploadEmailSent({
         linkedLeadIds,
         bookingId: bookingReference,
         folderPath,
         filepath,
+        emailEvent: uploadEmailEvent,
       });
     }
   } catch (error) {
@@ -2278,7 +2304,7 @@ exports.notifyFilesUploadedBatch = async (req, res) => {
     for (const item of succeededItems) {
       const phase = resolveUploadPhase(item?.filepath);
       const folderKey =
-        phase === 'post' && !isRawFootageUploadPath(item?.filepath)
+        ((phase === 'pre') || (phase === 'post' && !isRawFootageUploadPath(item?.filepath)))
           ? `${parseBookingIdFromFilepath(item?.filepath) || ''}::${getUploadFolderPath(item?.filepath, phase)}`
           : null;
 
