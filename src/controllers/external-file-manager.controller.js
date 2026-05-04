@@ -55,23 +55,34 @@ const shouldRewriteToPublicOrigin = (origin, hostname) => {
   return false;
 };
 
-const rewriteExternalServiceUrl = (rawUrl) => {
+const getRequestOrigin = (req) => {
+  if (!req) return '';
+  const forwardedProto = String(req.headers?.['x-forwarded-proto'] || '').split(',')[0].trim();
+  const forwardedHost = String(req.headers?.['x-forwarded-host'] || '').split(',')[0].trim();
+  const host = forwardedHost || String(req.headers?.host || '').trim();
+  const proto = forwardedProto || (req.secure ? 'https' : 'http');
+  if (!host) return '';
+  return `${proto}://${host}`;
+};
+
+const rewriteExternalServiceUrl = (rawUrl, req) => {
   const value = String(rawUrl || '').trim();
   if (!value) return value;
-  if (!PUBLIC_FILE_MANAGER_ORIGIN) return value;
 
   try {
     const parsed = new URL(value);
     if (!shouldRewriteToPublicOrigin(parsed.origin, parsed.hostname)) {
       return value;
     }
-    return `${PUBLIC_FILE_MANAGER_ORIGIN}${parsed.pathname}${parsed.search}${parsed.hash}`;
+    const targetOrigin = PUBLIC_FILE_MANAGER_ORIGIN || getRequestOrigin(req);
+    if (!targetOrigin) return value;
+    return `${targetOrigin}${parsed.pathname}${parsed.search}${parsed.hash}`;
   } catch (error) {
     return value;
   }
 };
 
-const withPublicUrl = (result) => {
+const withPublicUrl = (result, req) => {
   const currentUrl = result?.data?.url;
   if (typeof currentUrl !== 'string') return result;
 
@@ -79,7 +90,7 @@ const withPublicUrl = (result) => {
     ...result,
     data: {
       ...(result.data || {}),
-      url: rewriteExternalServiceUrl(currentUrl),
+      url: rewriteExternalServiceUrl(currentUrl, req),
     },
   };
 };
@@ -2253,7 +2264,7 @@ exports.getFileViewUrl = async (req, res) => {
         filepath: req.body.filepath,
       }),
     });
-    return res.status(200).json(withPublicUrl(result));
+    return res.status(200).json(withPublicUrl(result, req));
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
@@ -2325,7 +2336,7 @@ exports.getFileDownloadUrl = async (req, res) => {
         filepath: req.body.filepath,
       }),
     });
-    return res.status(200).json(withPublicUrl(result));
+    return res.status(200).json(withPublicUrl(result, req));
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
