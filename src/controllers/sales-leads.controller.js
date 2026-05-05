@@ -1905,7 +1905,8 @@ exports.getLeads = async (req, res) => {
       start_date,
       end_date,
       intent,
-      booking_status // Fallback key
+      booking_status, // Fallback key
+      cp_assignment
     } = req.query;
 
     const pageNumber = parseInt(page);
@@ -1970,6 +1971,12 @@ exports.getLeads = async (req, res) => {
           model: stream_project_booking,
           as: 'booking',
           include: [
+            {
+              model: assigned_crew,
+              as: 'assigned_crews',
+              required: false,
+              attributes: ['id', 'crew_member_id', 'status', 'project_id']
+            },
             {
               model: quotes,
               as: 'primary_quote',
@@ -2042,6 +2049,18 @@ exports.getLeads = async (req, res) => {
       processedLeads = processedLeads.filter(
         (lead) => lead.intent.toLowerCase() === intent.toLowerCase().trim()
       );
+    }
+
+    if (cp_assignment && cp_assignment !== 'all') {
+      const normalizedCpAssignment = String(cp_assignment).toLowerCase().trim();
+      processedLeads = processedLeads.filter((lead) => {
+        const assignedCrews = Array.isArray(lead?.booking?.assigned_crews) ? lead.booking.assigned_crews : [];
+        const hasAssignedCrew = assignedCrews.length > 0;
+
+        if (normalizedCpAssignment === 'assigned') return hasAssignedCrew;
+        if (normalizedCpAssignment === 'not_assigned') return !hasAssignedCrew;
+        return true;
+      });
     }
 
     const total = processedLeads.length;
