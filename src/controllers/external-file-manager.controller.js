@@ -2,7 +2,7 @@ const DEFAULT_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http
 const PUBLIC_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_PUBLIC_BASE_URL || '';
 const INTERNAL_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
 const db = require('../models');
-const { users, crew_members, assigned_crew, stream_project_booking } = db;
+const { users, crew_members, assigned_crew, stream_project_booking, sales_leads, sales_lead_activities } = db;
 const bookingTimelineService = require('../services/bookingTimeline.service');
 const emailService = require('../utils/emailService');
 
@@ -55,23 +55,34 @@ const shouldRewriteToPublicOrigin = (origin, hostname) => {
   return false;
 };
 
-const rewriteExternalServiceUrl = (rawUrl) => {
+const getRequestOrigin = (req) => {
+  if (!req) return '';
+  const forwardedProto = String(req.headers?.['x-forwarded-proto'] || '').split(',')[0].trim();
+  const forwardedHost = String(req.headers?.['x-forwarded-host'] || '').split(',')[0].trim();
+  const host = forwardedHost || String(req.headers?.host || '').trim();
+  const proto = forwardedProto || (req.secure ? 'https' : 'http');
+  if (!host) return '';
+  return `${proto}://${host}`;
+};
+
+const rewriteExternalServiceUrl = (rawUrl, req) => {
   const value = String(rawUrl || '').trim();
   if (!value) return value;
-  if (!PUBLIC_FILE_MANAGER_ORIGIN) return value;
 
   try {
     const parsed = new URL(value);
     if (!shouldRewriteToPublicOrigin(parsed.origin, parsed.hostname)) {
       return value;
     }
-    return `${PUBLIC_FILE_MANAGER_ORIGIN}${parsed.pathname}${parsed.search}${parsed.hash}`;
+    const targetOrigin = PUBLIC_FILE_MANAGER_ORIGIN || getRequestOrigin(req);
+    if (!targetOrigin) return value;
+    return `${targetOrigin}${parsed.pathname}${parsed.search}${parsed.hash}`;
   } catch (error) {
     return value;
   }
 };
 
-const withPublicUrl = (result) => {
+const withPublicUrl = (result, req) => {
   const currentUrl = result?.data?.url;
   if (typeof currentUrl !== 'string') return result;
 
@@ -79,7 +90,7 @@ const withPublicUrl = (result) => {
     ...result,
     data: {
       ...(result.data || {}),
-      url: rewriteExternalServiceUrl(currentUrl),
+      url: rewriteExternalServiceUrl(currentUrl, req),
     },
   };
 };
@@ -132,6 +143,121 @@ const parseBookingIdFromFilepath = (filepath) => {
 
 const normalizeEmailAddress = (value) => String(value || '').trim().toLowerCase();
 
+const getFirstName = (value, fallback = 'Client') => {
+  const normalized = String(value || '').trim();
+  if (!normalized) return fallback;
+  const [firstName] = normalized.split(/\s+/).filter(Boolean);
+  return firstName || fallback;
+};
+
+const parseArrayLikeValue = (value) => {
+  if (Array.isArray(value)) return value.filter(Boolean);
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed.filter(Boolean);
+      }
+    } catch (error) {
+      // Fall back to comma-separated parsing for legacy string values.
+    }
+
+    return trimmed
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  return [];
+};
+
+const parseActivityData = (value) => {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+
+  try {
+    return JSON.parse(String(value));
+  } catch (error) {
+    return {};
+  }
+};
+
+const bookingHasEditingService = (booking) => {
+  const editsNeeded = booking?.edits_needed;
+  const hasEditsNeededFlag =
+    editsNeeded === 1 ||
+    editsNeeded === true ||
+    String(editsNeeded || '').trim() === '1' ||
+    String(editsNeeded || '').trim().toLowerCase() === 'true';
+
+  return (
+    hasEditsNeededFlag ||
+    parseArrayLikeValue(booking?.video_edit_types).length > 0 ||
+    parseArrayLikeValue(booking?.photo_edit_types).length > 0
+  );
+};
+
+const buildProjectFilesUrl = (bookingId) => {
+  const frontendUrl = String(process.env.FRONTEND_URL || '').trim().replace(/\/+$/, '');
+  if (!frontendUrl || !bookingId) return '';
+  return `${frontendUrl}/affiliate/dashboard`;
+};
+
+const isRawFootageUploadPath = (filepath) =>
+  String(filepath || '')
+    .trim()
+    .replace(/\\/g, '/')
+    .toLowerCase()
+    .replace(/[_\s]+/g, '-')
+    .includes('/post-production/raw-footage/');
+
+const getUploadFolderName = (filepath, phase) => {
+  const normalizedPath = String(filepath || '').trim().replace(/\\/g, '/');
+  if (!normalizedPath) return '';
+
+  const phaseSegment = phase === 'post' ? '/post-production/' : '/pre-production/';
+  const normalizedLower = normalizedPath.toLowerCase();
+  const phaseIndex = normalizedLower.indexOf(phaseSegment);
+
+  if (phaseIndex === -1) {
+    const segments = normalizedPath.split('/').filter(Boolean);
+    return segments.length > 1 ? segments[segments.length - 2] : segments[0] || '';
+  }
+
+  const afterPhase = normalizedPath.slice(phaseIndex + phaseSegment.length);
+  const afterSegments = afterPhase.split('/').filter(Boolean);
+  if (afterSegments.length > 1) return afterSegments[0];
+  if (afterSegments.length === 1) return phase === 'post' ? 'post-production' : 'pre-production';
+  return phase === 'post' ? 'post-production' : 'pre-production';
+};
+
+const getUploadFolderPath = (filepath, phase) => {
+  const normalizedPath = String(filepath || '').trim().replace(/\\/g, '/');
+  if (!normalizedPath) return '';
+
+  const phaseSegment = phase === 'post' ? '/post-production/' : '/pre-production/';
+  const normalizedLower = normalizedPath.toLowerCase();
+  const phaseIndex = normalizedLower.indexOf(phaseSegment);
+
+  if (phaseIndex === -1) {
+    const segments = normalizedPath.split('/').filter(Boolean);
+    if (segments.length <= 1) return normalizedPath;
+    return segments.slice(0, -1).join('/');
+  }
+
+  const phaseRoot = normalizedPath.slice(0, phaseIndex + phaseSegment.length - 1);
+  const afterPhase = normalizedPath.slice(phaseIndex + phaseSegment.length);
+  const afterSegments = afterPhase.split('/').filter(Boolean);
+
+  if (!afterSegments.length) return phaseRoot;
+  if (afterSegments.length === 1) return phaseRoot;
+  return `${phaseRoot}/${afterSegments.slice(0, -1).join('/')}`;
+};
+
 const resolveUploadPhase = (filepath) => {
   const normalized = String(filepath || '')
     .toLowerCase()
@@ -156,7 +282,72 @@ const getBookingForUploadEmail = async (bookingId) => {
         required: false,
         attributes: ['id', 'name', 'email'],
       },
+      {
+        model: sales_leads,
+        as: 'sales_leads',
+        required: false,
+        attributes: ['lead_id'],
+      },
     ],
+  });
+};
+
+const getLinkedLeadIdsFromBooking = (booking) =>
+  Array.isArray(booking?.sales_leads)
+    ? booking.sales_leads
+        .map((lead) => Number(lead?.lead_id))
+        .filter((leadId) => Number.isInteger(leadId) && leadId > 0)
+    : [];
+
+const hasUploadEmailAlreadyBeenSent = async ({
+  linkedLeadIds = [],
+  bookingId,
+  folderPath,
+  emailEvent = '',
+}) => {
+  if (!linkedLeadIds.length || !bookingId || !folderPath || !emailEvent) return false;
+
+  const priorActivityRows = await sales_lead_activities.findAll({
+    where: {
+      lead_id: linkedLeadIds,
+      activity_type: 'status_changed',
+    },
+    attributes: ['activity_data'],
+  });
+
+  const normalizedBookingId = String(bookingId).trim();
+  const normalizedFolderPath = String(folderPath).trim().toLowerCase();
+
+  return priorActivityRows.some((row) => {
+    const activityData = parseActivityData(row?.activity_data);
+    return (
+      String(activityData?.email_event || '').trim().toLowerCase() === String(emailEvent).trim().toLowerCase() &&
+      String(activityData?.booking_id || '').trim() === normalizedBookingId &&
+      String(activityData?.folder_path || '').trim().toLowerCase() === normalizedFolderPath
+    );
+  });
+};
+
+const recordUploadEmailSent = ({
+  linkedLeadIds = [],
+  bookingId,
+  folderPath,
+  filepath,
+  emailEvent = '',
+}) => {
+  if (!linkedLeadIds.length || !bookingId || !folderPath || !emailEvent) return null;
+
+  return sales_lead_activities.create({
+    lead_id: linkedLeadIds[0],
+    activity_type: 'status_changed',
+    activity_data: {
+      email_event: String(emailEvent),
+      booking_id: String(bookingId),
+      folder_path: String(folderPath),
+      filepath: String(filepath || ''),
+      source: 'external_file_manager_upload',
+    },
+    performed_by_user_id: null,
   });
 };
 
@@ -172,10 +363,11 @@ const sendUploadTemplateEmailForFile = async ({ filepath, fileName, uploadedByNa
     if (!booking) return;
 
     const plainBooking = typeof booking.get === 'function' ? booking.get({ plain: true }) : booking;
-    const recipientEmails = [...new Set([
-      normalizeEmailAddress(plainBooking?.user?.email),
-      normalizeEmailAddress(plainBooking?.guest_email),
-    ].filter(Boolean))];
+    const linkedLeadIds = getLinkedLeadIdsFromBooking(plainBooking);
+    const primaryRecipientEmail =
+      normalizeEmailAddress(plainBooking?.user?.email) ||
+      normalizeEmailAddress(plainBooking?.guest_email);
+    const recipientEmails = primaryRecipientEmail ? [primaryRecipientEmail] : [];
     if (!recipientEmails.length) return;
 
     const recipientName = String(
@@ -185,14 +377,46 @@ const sendUploadTemplateEmailForFile = async ({ filepath, fileName, uploadedByNa
       plainBooking?.guest_email ||
       'Client'
     ).trim();
+    const bookingReference = String(plainBooking?.stream_project_booking_id || bookingId);
+    const projectName = String(plainBooking?.project_name || plainBooking?.client_name || `Project #${bookingId}`);
+    const uploadedFileName = String(fileName || String(filepath).split('/').pop() || '');
+    const projectFilesUrl = buildProjectFilesUrl(bookingReference);
+    const folderPath = getUploadFolderPath(filepath, phase);
+    const uploadEmailEvent =
+      phase === 'pre'
+        ? 'pre_production_brief_uploaded'
+        : phase === 'post' && !isRawFootageUploadPath(filepath)
+          ? 'post_production_upload'
+          : '';
+
+    if (
+      uploadEmailEvent &&
+      await hasUploadEmailAlreadyBeenSent({
+        linkedLeadIds,
+        bookingId: bookingReference,
+        folderPath,
+        emailEvent: uploadEmailEvent,
+      })
+    ) {
+      return;
+    }
+
     const payload = {
       recipient_name: recipientName,
-      booking_id: String(plainBooking?.stream_project_booking_id || bookingId),
-      order_id: String(plainBooking?.stream_project_booking_id || bookingId),
-      order_name: String(plainBooking?.project_name || plainBooking?.client_name || `Project #${bookingId}`),
-      project_name: String(plainBooking?.project_name || plainBooking?.client_name || `Project #${bookingId}`),
-      file_name: String(fileName || String(filepath).split('/').pop() || ''),
+      client_name: getFirstName(recipientName),
+      booking_id: bookingReference,
+      order_id: bookingReference,
+      order_name: projectName,
+      project_name: projectName,
+      project_type: projectName,
+      file_name: uploadedFileName,
       file_path: String(filepath || ''),
+      brief_url: projectFilesUrl,
+      brief_display_url: projectFilesUrl || String(filepath || ''),
+      folder_name: getUploadFolderName(filepath, phase),
+      post_production_files_url: projectFilesUrl,
+      post_production_files_display_url: projectFilesUrl || String(filepath || ''),
+      cp_firstname: String(uploadedByName || 'Beige User'),
       uploaded_by_name: String(uploadedByName || 'Beige User'),
       uploaded_by_id: String(uploadedById || ''),
       uploaded_at: new Date().toISOString(),
@@ -203,14 +427,115 @@ const sendUploadTemplateEmailForFile = async ({ filepath, fileName, uploadedByNa
         recipients: recipientEmails,
         data: payload,
       });
-    } else if (phase === 'post') {
+      await recordUploadEmailSent({
+        linkedLeadIds,
+        bookingId: bookingReference,
+        folderPath,
+        filepath,
+        emailEvent: uploadEmailEvent,
+      });
+    } else if (phase === 'post' && !isRawFootageUploadPath(filepath)) {
       await emailService.sendPostProductionUploadedTemplateEmail({
         recipients: recipientEmails,
         data: payload,
       });
+      await recordUploadEmailSent({
+        linkedLeadIds,
+        bookingId: bookingReference,
+        folderPath,
+        filepath,
+        emailEvent: uploadEmailEvent,
+      });
     }
   } catch (error) {
     console.error('Upload email trigger failed:', error?.message || error);
+  }
+};
+
+const sendRawFootageReadyEmailForUploadedFiles = async ({ filepaths = [] }) => {
+  try {
+    const rawFootagePath = filepaths.find((filepath) => isRawFootageUploadPath(filepath));
+    if (!rawFootagePath) return;
+
+    const bookingId = parseBookingIdFromFilepath(rawFootagePath);
+    if (!bookingId) return;
+
+    const booking = await getBookingForUploadEmail(bookingId);
+    if (!booking) return;
+
+    const plainBooking = typeof booking.get === 'function' ? booking.get({ plain: true }) : booking;
+    // Raw footage ready email is only for raw-footage-only bookings.
+    if (bookingHasEditingService(plainBooking)) return;
+
+    const linkedLeadIds = Array.isArray(plainBooking?.sales_leads)
+      ? plainBooking.sales_leads
+          .map((lead) => Number(lead?.lead_id))
+          .filter((leadId) => Number.isInteger(leadId) && leadId > 0)
+      : [];
+
+    if (linkedLeadIds.length) {
+      const priorActivityRows = await sales_lead_activities.findAll({
+        where: {
+          lead_id: linkedLeadIds,
+          activity_type: 'status_changed',
+        },
+        attributes: ['lead_id', 'activity_data'],
+      });
+
+      const alreadySent = priorActivityRows.some((row) => {
+        const activityData = parseActivityData(row?.activity_data);
+        return String(activityData?.email_event || '').trim().toLowerCase() === 'raw_footage_ready';
+      });
+
+      if (alreadySent) return;
+    }
+
+    const toEmail = normalizeEmailAddress(plainBooking?.user?.email || plainBooking?.guest_email);
+    if (!toEmail) return;
+
+    const accessFilesLink = buildProjectFilesUrl(plainBooking?.stream_project_booking_id || bookingId);
+    if (!accessFilesLink) return;
+
+    const recipientName = String(
+      plainBooking?.user?.name ||
+      plainBooking?.client_name ||
+      plainBooking?.project_name ||
+      plainBooking?.guest_email ||
+      ''
+    ).trim();
+
+    const emailResult = await emailService.sendRawFootageReadyEmail({
+      to_email: toEmail,
+      booking_id: plainBooking?.stream_project_booking_id || bookingId,
+      first_name: getFirstName(recipientName, 'there'),
+      access_files_link: accessFilesLink,
+    });
+
+    if (!emailResult?.success) {
+      console.error(
+        'Raw footage ready email trigger failed:',
+        emailResult?.error || 'Unknown email error'
+      );
+      return;
+    }
+
+    if (linkedLeadIds.length) {
+      const rawFootageLeadId = linkedLeadIds[0];
+      await sales_lead_activities.create({
+        lead_id: rawFootageLeadId,
+        activity_type: 'status_changed',
+        activity_data: {
+          email_event: 'raw_footage_ready',
+          booking_id: plainBooking?.stream_project_booking_id || bookingId,
+          access_files_link: accessFilesLink,
+          source: 'external_file_manager_upload',
+          filepath: rawFootagePath,
+        },
+        performed_by_user_id: null,
+      });
+    }
+  } catch (error) {
+    console.error('Raw footage ready email trigger failed:', error?.message || error);
   }
 };
 
@@ -1932,6 +2257,9 @@ exports.notifyFileUploaded = async (req, res) => {
         uploadedByName: uploaderName || 'Beige User',
         uploadedById: getRequestUserId(req),
       });
+      await sendRawFootageReadyEmailForUploadedFiles({
+        filepaths: [req.body.filepath],
+      });
     }
 
     try {
@@ -1983,14 +2311,33 @@ exports.notifyFilesUploadedBatch = async (req, res) => {
       ? result.data.items.filter((item) => item?.success && item?.filepath)
       : [];
     const uploaderName = await getUserDisplayName(getRequestUserId(req)).catch(() => null);
+    const notifiedFolderKeys = new Set();
     for (const item of succeededItems) {
+      const phase = resolveUploadPhase(item?.filepath);
+      const folderKey =
+        ((phase === 'pre') || (phase === 'post' && !isRawFootageUploadPath(item?.filepath)))
+          ? `${parseBookingIdFromFilepath(item?.filepath) || ''}::${getUploadFolderPath(item?.filepath, phase)}`
+          : null;
+
+      if (folderKey && notifiedFolderKeys.has(folderKey)) {
+        continue;
+      }
+
       await sendUploadTemplateEmailForFile({
         filepath: item.filepath,
         fileName: item?.data?.name || item?.fileName || '',
         uploadedByName: uploaderName || 'Beige User',
         uploadedById: getRequestUserId(req),
       });
+
+      if (folderKey) {
+        notifiedFolderKeys.add(folderKey);
+      }
     }
+
+    await sendRawFootageReadyEmailForUploadedFiles({
+      filepaths: succeededItems.map((item) => item?.filepath).filter(Boolean),
+    });
 
     for (const item of succeededItems) {
       try {
@@ -2051,7 +2398,7 @@ exports.getFileViewUrl = async (req, res) => {
         filepath: req.body.filepath,
       }),
     });
-    return res.status(200).json(withPublicUrl(result));
+    return res.status(200).json(withPublicUrl(result, req));
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
@@ -2123,7 +2470,7 @@ exports.getFileDownloadUrl = async (req, res) => {
         filepath: req.body.filepath,
       }),
     });
-    return res.status(200).json(withPublicUrl(result));
+    return res.status(200).json(withPublicUrl(result, req));
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {
       success: false,

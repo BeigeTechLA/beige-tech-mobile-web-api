@@ -1,6 +1,8 @@
 const { sales_leads, client_leads, sales_lead_activities, client_lead_activities, stream_project_booking, stream_project_booking_days, users, user_type, discount_codes, payment_links,  quotes, sales_quotes, assigned_crew, crew_members,
-  quote_line_items, crew_member_files } = require('../models');
+  quote_line_items, crew_member_files, assigned_equipment } = require('../models');
 const { Op, Sequelize } = require('sequelize');
+const multer = require('multer');
+const path = require('path');
 const constants = require('../utils/constants');
 const leadAssignmentService = require('../services/lead-assignment.service');
 const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
@@ -13,9 +15,41 @@ const emailService = require('../utils/emailService');
 const { sendCPNewBookingRequestEmail } = require('../utils/emailService');
 const { resolveEventDateAndStartTime, normalizeTime, splitDateTime } = require('../utils/timezone');
 const { extractCoordinatesFromPayload } = require('../utils/locationHelpers');
+const { S3UploadFiles } = require('../utils/common.js');
 
 const sequelize = require('../db');
 const db = require('../models');
+const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
+const EXTERNAL_FILE_MANAGER_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, path.join(__dirname, '../../public/uploads/media'));
+  },
+  filename: (req, file, cb) => {
+    const filename = Date.now() + path.extname(file.originalname);
+    cb(null, filename);
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = [
+      'image/jpeg',
+      'image/png',
+      'image/webp',
+      'image/jfif',
+      'image/jpg',
+      'application/pdf',
+    ];
+    if (!allowedTypes.includes(file.mimetype)) {
+      return cb(new Error('Invalid file type. Only JPEG, PNG, WEBP, and PDF are allowed.'));
+    }
+    cb(null, true);
+  },
+});
 
 const normalizeDateOnlyInput = (value) => {
   const { date } = splitDateTime(value);
@@ -29,6 +63,259 @@ const parseQuoteActivityMetadata = (value) => {
     return JSON.parse(value);
   } catch (_) {
     return null;
+  }
+};
+
+const buildDealProjectName = ({ shootType = null, contentType = null, clientName = null, guestEmail = null }) => {
+  const normalizedShootType = String(shootType || '').trim();
+  const normalizedContentType = String(contentType || '').trim();
+  const normalizedClientName = String(clientName || '').trim();
+  const normalizedGuestEmail = String(guestEmail || '').trim();
+
+  const titleSource = normalizedShootType || normalizedContentType || 'New';
+  const clientLabel = normalizedClientName || normalizedGuestEmail || 'Client';
+
+  return `${titleSource.toUpperCase()} Shoot - ${clientLabel}`;
+};
+
+const normalizeStatusFilterValue = (value) => (
+  String(value || '')
+    .toLowerCase()
+    .replace(/[–—]/g, '-')
+    .replace(/[\s_-]+/g, '')
+);
+
+const normalizeDisplayStatusValue = (value) => (
+  String(value || '')
+    .replace(/â€“|Ã¢â‚¬â€œ/g, '-')
+    .replace(/[–—]/g, '-')
+    .trim()
+);
+
+const isShootStatusFilterValue = (value) => (
+  [
+    'initiated',
+    'preproduction',
+    'shootday',
+    'postproduction',
+    'revision',
+    'completed',
+    'assetsdelivered',
+    'cancelled',
+    'upcoming',
+    'draft'
+  ].includes(normalizeStatusFilterValue(value))
+);
+
+const formatLocalDateParts = (date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const getDateOnlyString = (value) => {
+  if (!value) return null;
+
+  if (typeof value === 'string') {
+    const trimmedValue = value.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmedValue)) {
+      return trimmedValue;
+    }
+
+    const parsedStringDate = new Date(trimmedValue);
+    if (Number.isNaN(parsedStringDate.getTime())) return null;
+    return formatLocalDateParts(parsedStringDate);
+  }
+
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return null;
+    return formatLocalDateParts(value);
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return formatLocalDateParts(parsed);
+};
+
+const getTodayDateOnlyString = () => formatLocalDateParts(new Date());
+
+const matchShootStatusFilter = (booking, rawStatus) => {
+  const normalizedStatus = normalizeStatusFilterValue(rawStatus);
+  if (!normalizedStatus || normalizedStatus === 'all') {
+    return null;
+  }
+
+  const supportedStatuses = new Set([
+    'initiated',
+    'preproduction',
+    'shootday',
+    'postproduction',
+    'revision',
+    'completed',
+    'assetsdelivered',
+    'cancelled',
+    'upcoming',
+    'draft'
+  ]);
+
+  if (!supportedStatuses.has(normalizedStatus)) {
+    return null;
+  }
+
+  if (!booking) {
+    return false;
+  }
+
+  const bookingStatus = Number(booking.status);
+  const eventDate = getDateOnlyString(booking.event_date);
+  const today = getTodayDateOnlyString();
+  const isCancelled = Number(booking.is_cancelled || 0) === 1;
+  const isDraft = Number(booking.is_draft || 0) === 1;
+  const isFutureEvent = eventDate ? eventDate > today : false;
+  const isTodayEvent = eventDate ? eventDate === today : false;
+  const isPastEvent = eventDate ? eventDate < today : false;
+
+  switch (normalizedStatus) {
+    case 'initiated':
+      return bookingStatus === 0 && (!eventDate || isFutureEvent);
+    case 'preproduction':
+      return bookingStatus === 1 && isFutureEvent;
+    case 'shootday':
+      return ![3, 4, 5].includes(bookingStatus) && isTodayEvent;
+    case 'postproduction':
+      return bookingStatus === 2 || ([0, 1].includes(bookingStatus) && isPastEvent);
+    case 'revision':
+      return bookingStatus === 3;
+    case 'completed':
+    case 'assetsdelivered':
+      return bookingStatus === 4;
+    case 'cancelled':
+      return bookingStatus === 5 || isCancelled;
+    case 'upcoming':
+      return ![3, 4, 5].includes(bookingStatus) && isFutureEvent;
+    case 'draft':
+      return isDraft;
+    default:
+      return null;
+  }
+};
+
+const hasCompletedMeetingOfType = (booking, meetingType) => {
+  const meetings = Array.isArray(booking?.meetings) ? booking.meetings : [];
+  return meetings.some((meeting) =>
+    String(meeting?.meeting_type || '').toLowerCase() === String(meetingType || '').toLowerCase() &&
+    String(meeting?.meeting_status || '').toLowerCase() === 'completed'
+  );
+};
+
+const hasCompletedFileInCategories = (booking, categories = []) => {
+  const files = Array.isArray(booking?.cms_project?.files) ? booking.cms_project.files : [];
+  const allowed = new Set(categories.map((entry) => String(entry || '').toUpperCase()));
+  return files.some((file) => {
+    const category = String(file?.file_category || '').toUpperCase();
+    const uploadStatus = String(file?.upload_status || '').toUpperCase();
+    const isDeleted = Number(file?.is_deleted || 0) === 1;
+    return !isDeleted && uploadStatus === 'COMPLETED' && allowed.has(category);
+  });
+};
+
+const isPostProductionEligible = (booking) => Boolean(
+  matchShootStatusFilter(booking, 'postproduction') ||
+  matchShootStatusFilter(booking, 'revision') ||
+  matchShootStatusFilter(booking, 'completed') ||
+  matchShootStatusFilter(booking, 'assetsdelivered')
+);
+
+const parseActivityData = (value) => {
+  if (!value) return null;
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch (_) {
+    return null;
+  }
+};
+
+const hasPreProductionUploadEvidence = (lead) => {
+  const booking = lead?.booking;
+
+  // Primary signal: file-manager project has at least one completed file.
+  const projectFiles = Array.isArray(booking?.cms_project?.files) ? booking.cms_project.files : [];
+  const hasCompletedProjectFile = projectFiles.some((file) =>
+    Number(file?.is_deleted || 0) !== 1 &&
+    String(file?.upload_status || '').toUpperCase() === 'COMPLETED'
+  );
+  if (hasCompletedProjectFile) return true;
+
+  // Fallback signal: external file manager activity already logged pre-production upload.
+  const activities = Array.isArray(lead?.activities) ? lead.activities : [];
+  return activities.some((activity) => {
+    if (String(activity?.activity_type || '').toLowerCase() !== 'status_changed') return false;
+    const payload = parseActivityData(activity?.activity_data);
+    const emailEvent = String(payload?.email_event || '').toLowerCase();
+    const folderPath = String(payload?.folder_path || '').toLowerCase();
+    const filePath = String(payload?.filepath || '').toLowerCase();
+
+    return (
+      emailEvent === 'pre_production_brief_uploaded' ||
+      folderPath.includes('pre-production') ||
+      filePath.includes('pre-production')
+    );
+  });
+};
+
+const fetchExternalWorkspaceFiles = async (bookingId, phase) => {
+  const query = new URLSearchParams();
+  if (phase) query.set('phase', phase);
+
+  const url = `${EXTERNAL_FILE_MANAGER_API_BASE_URL}/workspace/${encodeURIComponent(String(bookingId))}/files${query.toString() ? `?${query.toString()}` : ''}`;
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-internal-key': EXTERNAL_FILE_MANAGER_KEY
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`External file manager returned ${response.status} for booking ${bookingId}`);
+  }
+
+  return response.json();
+};
+
+const hasExternalWorkspaceFiles = async (bookingId, phase) => {
+  if (!bookingId) return false;
+  try {
+    const payload = await fetchExternalWorkspaceFiles(bookingId, phase);
+    const files = Array.isArray(payload?.data?.files) ? payload.data.files : [];
+    const expectedSegment = phase === 'post' ? 'post-production' : phase === 'pre' ? 'pre-production' : '';
+
+    // Guard against external API returning mixed-phase files:
+    // count only files that clearly belong to the requested phase path.
+    const phaseScopedFiles = files.filter((file) => {
+      const pathCandidate = String(
+        file?.path ||
+        file?.filepath ||
+        file?.key ||
+        file?.filePath ||
+        file?.name ||
+        ''
+      ).toLowerCase();
+
+      if (!expectedSegment) return pathCandidate.length > 0;
+      return pathCandidate.includes(`/${expectedSegment}/`) || pathCandidate.includes(`${expectedSegment}/`);
+    });
+
+    return phaseScopedFiles.length > 0;
+  } catch (error) {
+    console.error('[getLeads] external workspace file check failed:', {
+      bookingId,
+      phase,
+      message: error?.message || error
+    });
+    return false;
   }
 };
 
@@ -224,7 +511,8 @@ async function resolveAssignableSalesRep(salesRepId) {
   const salesRep = await users.findOne({
     where: {
       id: salesRepId,
-      is_active: 1
+      is_active: 1,
+      assign_lead: 1
     },
     include: [
       {
@@ -241,9 +529,9 @@ async function resolveAssignableSalesRep(salesRepId) {
     throw new Error('Sales rep not found or inactive');
   }
 
-  const userRole = salesRep.userType?.user_role;
-  if (userRole !== 'sales_rep' && userRole !== 'sales_admin' && userRole !== 'admin' && userRole !== 'Admin') {
-    throw new Error('Selected user is not a valid sales rep');
+  const userRole = String(salesRep.userType?.user_role || '').toLowerCase();
+  if (userRole !== 'admin') {
+    throw new Error('Selected user is not a valid assignable admin');
   }
 
   return salesRep;
@@ -532,7 +820,7 @@ async function resolveAssignedSalesRepId({
 }) {
   const actorRole = String(req.userRole || '').toLowerCase();
 
-  if (actorRole === 'sales_rep') {
+  if (actorRole === 'sales_rep' || actorRole === 'sales_admin' || actorRole === 'admin') {
     return req.userId || currentAssignedSalesRepId || null;
   }
 
@@ -560,10 +848,9 @@ async function resolveAssignedSalesRepId({
     transaction: tx
   });
 
-  const requestedUserRole = requestedSalesRep?.userType?.user_role;
-
-  if (!requestedSalesRep || requestedUserRole !== 'sales_rep') {
-    throw new Error('Selected sales_rep_id is not a valid sales rep');
+  const requestedUserRole = String(requestedSalesRep?.userType?.user_role || '').toLowerCase();
+  if (!requestedSalesRep || requestedUserRole !== 'admin' || Number(requestedSalesRep.assign_lead) !== 1) {
+    throw new Error('Selected sales_rep_id is not a valid assignable admin');
   }
 
   return normalizedRequestedSalesRepId;
@@ -1096,6 +1383,7 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             estimated_delivery_date: normalizedEstimatedDeliveryDate,
             start_time: start_time_final,
             end_time: end_time_final,
+            time_zone: time_zone || null,
             duration_hours: totalDurationHours,
             event_location: location || null,
             event_latitude: latitude,
@@ -1178,7 +1466,9 @@ exports.trackEarlyBookingInterest = async (req, res) => {
                 activity_data: { source: 'step_1_capture', user_id: resolvedUserId, guest_email: normalizedGuestEmail }
             });
 
-            assignedRep = await leadAssignmentService.autoAssignLead(lead.lead_id);
+            // TEMP FLOW: direct book-a-shoot leads stay unassigned for now.
+            // assignedRep = await leadAssignmentService.autoAssignLead(lead.lead_id);
+            assignedRep = null;
 
           // emailService.sendSalesLeadNotification({
           //   guestEmail: normalizedGuestEmail,
@@ -1189,7 +1479,7 @@ exports.trackEarlyBookingInterest = async (req, res) => {
           //   endTime: end_time,
           //   editsNeeded: edits_needed
           // }).catch(err => console.error('Sales Email Error:', err));
-          console.log(assignedRep);
+          // console.log(assignedRep);
 
           emailService.sendProductionLeadNotification({
             client_name: client_name,
@@ -1200,7 +1490,7 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             startTime: start_time,
             endTime: end_time,
             editsNeeded: edits_needed,
-            sales_rep_email: assignedRep.email
+            sales_rep_email: assignedRep?.email || null
           }).catch(err => console.error('Production Email Error:', err));
         } else {
           await lead.update({ last_activity_at: new Date() });
@@ -1313,8 +1603,9 @@ exports.trackBookingStart = async (req, res) => {
       }
     });
 
-    // Auto-assign lead
-    const assignedRep = await leadAssignmentService.autoAssignLead(lead.lead_id);
+    // TEMP FLOW: direct book-a-shoot leads stay unassigned for now.
+    // const assignedRep = await leadAssignmentService.autoAssignLead(lead.lead_id);
+    const assignedRep = null;
 
     res.status(constants.CREATED.code).json({
       success: true,
@@ -1453,10 +1744,10 @@ exports.createSalesAssistedLead = async (req, res) => {
       }
     });
 
-    // Auto-assign if not already assigned
-    if (!lead.assigned_sales_rep_id) {
-      await leadAssignmentService.autoAssignLead(lead.lead_id);
-    }
+    // TEMP FLOW: direct book-a-shoot leads stay unassigned for now.
+    // if (!lead.assigned_sales_rep_id) {
+    //   await leadAssignmentService.autoAssignLead(lead.lead_id);
+    // }
 
     res.status(constants.CREATED.code).json({
       success: true,
@@ -1734,7 +2025,9 @@ exports.getLeads = async (req, res) => {
       start_date,
       end_date,
       intent,
-      booking_status // Fallback key
+      booking_status, // Fallback key
+      cp_assignment,
+      production_filter
     } = req.query;
 
     const pageNumber = parseInt(page);
@@ -1755,8 +2048,17 @@ exports.getLeads = async (req, res) => {
     if (lead_type) whereClause.lead_type = lead_type;
 
     if (assigned_to) {
-      whereClause.assigned_sales_rep_id =
-        assigned_to === 'unassigned' ? null : parseInt(assigned_to);
+      const normalizedAssignedTo = String(assigned_to).trim().toLowerCase();
+
+      if (normalizedAssignedTo === 'all' || normalizedAssignedTo === '') {
+      } else if (normalizedAssignedTo === 'unassigned') {
+        whereClause.assigned_sales_rep_id = null;
+      } else {
+        const assignedToId = Number.parseInt(String(assigned_to), 10);
+        if (Number.isFinite(assignedToId)) {
+          whereClause.assigned_sales_rep_id = assignedToId;
+        }
+      }
     }
 
     if (search?.trim()) {
@@ -1784,20 +2086,59 @@ exports.getLeads = async (req, res) => {
       ];
     }
 
+    console.log('[getLeads] filters:', {
+      status,
+      lead_type,
+      assigned_to,
+      search,
+      booking_id,
+      intent,
+      cp_assignment,
+      production_filter
+    });
+
     const leads = await sales_leads.findAll({
       where: whereClause,
       include: [
         {
           model: users,
           as: 'assigned_sales_rep',
-          attributes: ['id', 'name', 'email']
+          attributes: ['id', 'name', 'email'],
+          required: false
         },
         { model: discount_codes, as: "discount_codes" }, // Added for status consistency
         { model: payment_links, as: "payment_links" },   // Added for status consistency
+        { model: sales_lead_activities, as: "activities", required: false },
         {
           model: stream_project_booking,
           as: 'booking',
           include: [
+            {
+              model: assigned_crew,
+              as: 'assigned_crews',
+              required: false,
+              attributes: ['id', 'crew_member_id', 'status', 'project_id']
+            },
+            {
+              model: db.project_meetings,
+              as: 'meetings',
+              required: false,
+              attributes: ['meeting_id', 'meeting_type', 'meeting_status']
+            },
+            {
+              model: db.projects,
+              as: 'cms_project',
+              required: false,
+              attributes: ['project_id'],
+              include: [
+                {
+                  model: db.project_files,
+                  as: 'files',
+                  required: false,
+                  attributes: ['file_id', 'file_category', 'upload_status', 'is_deleted']
+                }
+              ]
+            },
             {
               model: quotes,
               as: 'primary_quote',
@@ -1813,10 +2154,19 @@ exports.getLeads = async (req, res) => {
       leads.map(async (lead) => {
         const leadJson = lead.toJSON();
         const pricingData = await calculateLeadPricing(lead.booking);
+        const manualProgress = computeManualPaymentProgress(
+          leadJson.activities || [],
+          pricingData?.total || 0
+        );
 
         // 1. Standardize Booking Status & Intent (Using same methods as Detail API)
         const computedIntent = lead.intent ?? leadAssignmentService.getLeadIntent({ lead, booking: lead.booking });
-        const computedBookingStatus = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
+        let computedBookingStatus = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
+        if (manualProgress.hasFullPayment) {
+          computedBookingStatus = 'Booked';
+        } else if (manualProgress.isPartiallyPaid) {
+          computedBookingStatus = 'Partially Paid';
+        }
 
         // 2. Standardize Payment Status Logic (Check for Payment Links)
         let payment_status = lead.booking?.payment_id ? 'paid' : 'unpaid';
@@ -1837,12 +2187,19 @@ exports.getLeads = async (req, res) => {
           booking_status: computedBookingStatus, 
           intent: computedIntent,
           payment_status: payment_status,
+          manual_payment_summary: manualProgress,
         };
       })
     );
 
     const activeStatusFilter = (status || booking_status);
-    if (activeStatusFilter && activeStatusFilter !== 'All') {
+    const shootStatusRequested = isShootStatusFilterValue(activeStatusFilter);
+
+    if (shootStatusRequested) {
+      processedLeads = processedLeads.filter((lead) => matchShootStatusFilter(lead.booking, activeStatusFilter));
+    }
+
+    if (!shootStatusRequested && activeStatusFilter && activeStatusFilter !== 'All') {
       processedLeads = processedLeads.filter((lead) => {
         const leadStat = lead.booking_status.replace('–', '-').trim();
         const filterStat = activeStatusFilter.replace('–', '-').trim();
@@ -1854,6 +2211,78 @@ exports.getLeads = async (req, res) => {
       processedLeads = processedLeads.filter(
         (lead) => lead.intent.toLowerCase() === intent.toLowerCase().trim()
       );
+    }
+
+    if (cp_assignment && cp_assignment !== 'all') {
+      const normalizedCpAssignment = String(cp_assignment).toLowerCase().trim();
+      processedLeads = processedLeads.filter((lead) => {
+        const assignedCrews = Array.isArray(lead?.booking?.assigned_crews) ? lead.booking.assigned_crews : [];
+        const hasAssignedCrew = assignedCrews.length > 0;
+
+        if (normalizedCpAssignment === 'assigned') return hasAssignedCrew;
+        if (normalizedCpAssignment === 'not_assigned') return !hasAssignedCrew;
+        return true;
+      });
+    }
+
+    if (production_filter && production_filter !== 'all') {
+      const normalizedProductionFilter = String(production_filter).toLowerCase().trim();
+      const externalPreFileMap = new Map();
+      const externalPostFileMap = new Map();
+
+      if (
+        normalizedProductionFilter === 'pre_production_file_not_provided' ||
+        normalizedProductionFilter === 'post_production_file_not_uploaded'
+      ) {
+        const bookingIds = Array.from(
+          new Set(
+            processedLeads
+              .map((lead) => Number(lead?.booking?.stream_project_booking_id || lead?.booking_id))
+              .filter((id) => Number.isFinite(id) && id > 0)
+          )
+        );
+
+        await Promise.all(
+          bookingIds.map(async (bookingId) => {
+            if (normalizedProductionFilter === 'pre_production_file_not_provided') {
+              externalPreFileMap.set(bookingId, await hasExternalWorkspaceFiles(bookingId, 'pre'));
+            }
+            if (normalizedProductionFilter === 'post_production_file_not_uploaded') {
+              externalPostFileMap.set(bookingId, await hasExternalWorkspaceFiles(bookingId, 'post'));
+            }
+          })
+        );
+      }
+
+      processedLeads = processedLeads.filter((lead) => {
+        const booking = lead?.booking;
+        if (!booking) return false;
+        const bookingId = Number(booking?.stream_project_booking_id || lead?.booking_id || 0);
+
+        if (normalizedProductionFilter === 'pre_production_file_not_provided') {
+          const hasExternalPreFiles = externalPreFileMap.get(bookingId) === true;
+          if (hasExternalPreFiles) return false;
+          return !hasPreProductionUploadEvidence(lead);
+        }
+
+        if (normalizedProductionFilter === 'pre_production_meeting_not_done') {
+          return !hasCompletedMeetingOfType(booking, 'pre_production');
+        }
+
+        if (normalizedProductionFilter === 'post_production_meeting_not_done') {
+          if (!isPostProductionEligible(booking)) return false;
+          return !hasCompletedMeetingOfType(booking, 'post_production');
+        }
+
+        if (normalizedProductionFilter === 'post_production_file_not_uploaded') {
+          if (!isPostProductionEligible(booking)) return false;
+          const hasExternalPostFiles = externalPostFileMap.get(bookingId) === true;
+          if (hasExternalPostFiles) return false;
+          return !hasCompletedFileInCategories(booking, ['EDIT_FINAL', 'CLIENT_DELIVERABLE']);
+        }
+
+        return true;
+      });
     }
 
     const total = processedLeads.length;
@@ -1934,6 +2363,7 @@ exports.getClientLeads = async (req, res) => {
           as: 'assigned_sales_rep',
           attributes: ['id', 'name', 'email']
         },
+        { model: client_lead_activities, as: "activities", required: false },
         {
           model: stream_project_booking,
           as: 'booking',
@@ -1955,8 +2385,17 @@ exports.getClientLeads = async (req, res) => {
       leads.map(async (lead) => {
         const leadJson = lead.toJSON();
         const pricingData = await calculateLeadPricing(lead.booking);
+        const manualProgress = computeManualPaymentProgress(
+          leadJson.activities || [],
+          pricingData?.total || 0
+        );
         const computedIntent = lead.intent ?? leadAssignmentService.getClientIntent({ lead, booking: lead.booking });
-        const computedBookingStatus = leadAssignmentService.getClientBookingStatus(lead, lead.booking);
+        let computedBookingStatus = leadAssignmentService.getClientBookingStatus(lead, lead.booking);
+        if (manualProgress.hasFullPayment) {
+          computedBookingStatus = 'Booked';
+        } else if (manualProgress.isPartiallyPaid) {
+          computedBookingStatus = 'Partially Paid';
+        }
 
         return {
           ...leadJson,
@@ -1964,15 +2403,26 @@ exports.getClientLeads = async (req, res) => {
           booking_status: computedBookingStatus,
           intent: computedIntent,
           payment_status: lead.booking?.payment_id ? 'paid' : 'unpaid',
+          manual_payment_summary: manualProgress,
         };
       })
     );
 
     const activeStatusFilter = (status || booking_status);
-    if (activeStatusFilter && activeStatusFilter !== 'All') {
+    const shootStatusRequested = isShootStatusFilterValue(activeStatusFilter);
+
+    if (shootStatusRequested) {
+      processedLeads = processedLeads.filter((lead) => matchShootStatusFilter(lead.booking, activeStatusFilter));
+    }
+    if (!shootStatusRequested && activeStatusFilter && activeStatusFilter !== 'All') {
       processedLeads = processedLeads.filter((lead) => {
-        const leadStat = lead.booking_status.replace('â€“', '-').trim();
-        const filterStat = activeStatusFilter.replace('â€“', '-').trim();
+        const shootStatusMatch = matchShootStatusFilter(lead.booking, activeStatusFilter);
+        if (shootStatusMatch !== null) {
+          return shootStatusMatch;
+        }
+
+        const leadStat = normalizeDisplayStatusValue(lead.booking_status);
+        const filterStat = normalizeDisplayStatusValue(activeStatusFilter);
         return leadStat === filterStat;
       });
     }
@@ -2948,6 +3398,318 @@ exports.updateClientLeadStatus = async (req, res) => {
     });
   }
 };
+
+const MANUAL_PAYMENT_MODES = ['cash', 'bank_transfer', 'credit_card', 'other'];
+
+const parseJsonIfNeeded = (value) => {
+  if (!value) return null;
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+};
+
+const computeManualPaymentProgress = (activities = [], totalAmount = 0) => {
+  const manualEntries = (activities || [])
+    .map((activity) => parseJsonIfNeeded(activity?.activity_data))
+    .filter((entry) => entry && entry.payment_method === 'manual');
+
+  const hasFullPayment = manualEntries.some((entry) => entry.payment_type === 'full');
+  const partialPaid = manualEntries.reduce((sum, entry) => {
+    if (entry.payment_type !== 'partial') return sum;
+    const numeric = Number(entry.amount || 0);
+    return sum + (Number.isFinite(numeric) ? numeric : 0);
+  }, 0);
+
+  const paidAmount = hasFullPayment ? Number(totalAmount || 0) : partialPaid;
+  const pendingAmount = Math.max(Number(totalAmount || 0) - paidAmount, 0);
+
+  return {
+    hasFullPayment,
+    paidAmount,
+    pendingAmount,
+    isPartiallyPaid: !hasFullPayment && paidAmount > 0 && pendingAmount > 0,
+  };
+};
+
+const resolveLeadTotalAmount = (leadRecord, bookingRecord) => {
+  const pricing = parseJsonIfNeeded(leadRecord?.pricing_breakdown);
+  const pricingTotalCandidates = [
+    pricing?.total_after_credit,
+    pricing?.total,
+    pricing?.total_before_credit
+  ];
+
+  for (const candidate of pricingTotalCandidates) {
+    const numeric = Number(candidate);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  }
+
+  const quote = bookingRecord?.primary_quote || null;
+  const quoteTotal = Number(quote?.total);
+  if (Number.isFinite(quoteTotal) && quoteTotal > 0) return quoteTotal;
+
+  return 0;
+};
+
+const buildManualPaymentMeta = async ({ leadModel, leadActivityModel, leadId, req, res, leadLabel }) => {
+  const { payment_type, amount, payment_mode, other_payment_mode, proof_url, notes } = req.body || {};
+  const performedBy = req.userId;
+
+  if (!['full', 'partial'].includes(String(payment_type || '').trim().toLowerCase())) {
+    return res.status(constants.BAD_REQUEST.code).json({
+      success: false,
+      message: 'payment_type must be either "full" or "partial"',
+    });
+  }
+
+  const normalizedPaymentType = String(payment_type).trim().toLowerCase();
+  const normalizedPaymentMode = String(payment_mode || '').trim().toLowerCase();
+
+  if (!MANUAL_PAYMENT_MODES.includes(normalizedPaymentMode)) {
+    return res.status(constants.BAD_REQUEST.code).json({
+      success: false,
+      message: 'payment_mode must be one of cash, bank_transfer, credit_card, or other',
+    });
+  }
+
+  const normalizedProofUrl = String(proof_url || '').trim();
+  if (!normalizedProofUrl) {
+    return res.status(constants.BAD_REQUEST.code).json({
+      success: false,
+      message: 'proof_url is required for manual payment updates',
+    });
+  }
+
+  if (normalizedPaymentMode === 'other' && !String(other_payment_mode || '').trim()) {
+    return res.status(constants.BAD_REQUEST.code).json({
+      success: false,
+      message: 'other_payment_mode is required when payment_mode is other',
+    });
+  }
+
+  const lead = await leadModel.findOne({
+    where: { lead_id: leadId, is_active: 1 },
+    include: [{
+      model: stream_project_booking,
+      as: 'booking',
+      include: [{
+        model: quotes,
+        as: 'primary_quote',
+        required: false
+      }]
+    }]
+  });
+
+  if (!lead) {
+    return res.status(constants.NOT_FOUND.code).json({
+      success: false,
+      message: `${leadLabel} not found`,
+    });
+  }
+
+  const totalAmount = resolveLeadTotalAmount(lead, lead.booking);
+  const previousManualEntries = await leadActivityModel.findAll({
+    where: {
+      lead_id: Number(leadId),
+      activity_type: 'payment_completed'
+    },
+    order: [['created_at', 'ASC']]
+  });
+
+  const manualHistory = previousManualEntries
+    .map((entry) => {
+      const payload = parseJsonIfNeeded(entry.activity_data);
+      if (!payload || payload.payment_method !== 'manual') return null;
+      return payload;
+    })
+    .filter(Boolean);
+
+  const alreadyFullyPaid = manualHistory.some((entry) => entry.payment_type === 'full');
+  const previouslyPaidPartial = manualHistory.reduce((sum, entry) => {
+    if (entry.payment_type !== 'partial') return sum;
+    const numeric = Number(entry.amount || 0);
+    return sum + (Number.isFinite(numeric) ? numeric : 0);
+  }, 0);
+
+  if (alreadyFullyPaid) {
+    return res.status(constants.BAD_REQUEST.code).json({
+      success: false,
+      message: 'This lead is already marked fully paid',
+    });
+  }
+
+  const remainingBefore = Math.max(totalAmount - previouslyPaidPartial, 0);
+  const numericAmount = amount === undefined || amount === null || amount === ''
+    ? null
+    : Number(amount);
+
+  if (normalizedPaymentType === 'partial') {
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'For partial payments, amount must be greater than 0',
+      });
+    }
+
+    if (remainingBefore > 0 && numericAmount > remainingBefore) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Partial amount cannot exceed remaining booking amount',
+      });
+    }
+  }
+
+  if (normalizedPaymentType === 'full' && remainingBefore <= 0 && totalAmount > 0) {
+    return res.status(constants.BAD_REQUEST.code).json({
+      success: false,
+      message: 'No remaining amount to settle',
+    });
+  }
+
+  await leadActivityModel.create({
+    lead_id: Number(leadId),
+    activity_type: 'payment_completed',
+    activity_data: {
+      payment_method: 'manual',
+      payment_type: normalizedPaymentType,
+      payment_mode: normalizedPaymentMode,
+      other_payment_mode: normalizedPaymentMode === 'other' ? String(other_payment_mode).trim() : null,
+      amount: normalizedPaymentType === 'partial' ? Number(numericAmount) : null,
+      total_amount: totalAmount > 0 ? Number(totalAmount) : null,
+      previously_paid_amount: previouslyPaidPartial,
+      remaining_before_payment: remainingBefore,
+      remaining_after_payment:
+        normalizedPaymentType === 'partial'
+          ? Math.max(remainingBefore - Number(numericAmount || 0), 0)
+          : 0,
+      proof_url: normalizedProofUrl,
+      notes: String(notes || '').trim() || null,
+      updated_by: performedBy || null,
+    },
+    performed_by_user_id: performedBy,
+  });
+
+  const leadUpdate = { last_activity_at: new Date() };
+  if (normalizedPaymentType === 'full') {
+    leadUpdate.lead_status = 'booked';
+  }
+  await lead.update(leadUpdate);
+
+  return res.json({
+    success: true,
+    message: normalizedPaymentType === 'full'
+      ? 'Manual full payment recorded and lead marked as booked'
+      : 'Manual partial payment recorded',
+    data: {
+      lead_id: Number(leadId),
+      payment_type: normalizedPaymentType,
+      payment_mode: normalizedPaymentMode,
+      amount: normalizedPaymentType === 'partial' ? Number(numericAmount) : null,
+      total_amount: totalAmount > 0 ? Number(totalAmount) : null,
+      paid_amount_total:
+        normalizedPaymentType === 'partial'
+          ? Number(previouslyPaidPartial + Number(numericAmount || 0))
+          : totalAmount > 0
+            ? Number(totalAmount)
+            : null,
+      pending_amount:
+        normalizedPaymentType === 'partial'
+          ? Math.max(remainingBefore - Number(numericAmount || 0), 0)
+          : 0,
+      proof_url: normalizedProofUrl,
+      lead_status: normalizedPaymentType === 'full' ? 'booked' : lead.lead_status,
+    }
+  });
+};
+
+exports.recordManualPayment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    return await buildManualPaymentMeta({
+      leadModel: sales_leads,
+      leadActivityModel: sales_lead_activities,
+      leadId: id,
+      req,
+      res,
+      leadLabel: 'Lead',
+    });
+  } catch (error) {
+    console.error('Error recording manual payment:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to record manual payment',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+exports.recordClientManualPayment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    return await buildManualPaymentMeta({
+      leadModel: client_leads,
+      leadActivityModel: client_lead_activities,
+      leadId: id,
+      req,
+      res,
+      leadLabel: 'Client lead',
+    });
+  } catch (error) {
+    console.error('Error recording client manual payment:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to record client manual payment',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+exports.uploadManualPaymentProof = [
+  upload.single('proof_file'),
+  async (req, res) => {
+    try {
+      const file = req.file;
+      if (!file) {
+        return res.status(constants.BAD_REQUEST.code).json({
+          success: false,
+          message: 'Proof file is required',
+        });
+      }
+
+      const uploaded = await S3UploadFiles({ proof_file: [file] });
+      const uploadedFilePath = uploaded?.[0]?.file_path || null;
+
+      if (!uploadedFilePath) {
+        return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+          success: false,
+          message: 'Failed to upload proof file',
+        });
+      }
+
+      const s3Prefix = String(process.env.BEIGE_ASSET_BASE_URL || '').replace(/\/+$/, '/');
+      const proofUrl = s3Prefix ? `${s3Prefix}${uploadedFilePath}` : uploadedFilePath;
+
+      return res.json({
+        success: true,
+        message: 'Proof file uploaded successfully',
+        data: {
+          file_path: uploadedFilePath,
+          proof_url: proofUrl,
+        },
+      });
+    } catch (error) {
+      console.error('Error uploading manual payment proof:', error);
+      return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+        success: false,
+        message: 'Failed to upload proof file',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      });
+    }
+  }
+];
 
 exports.getClientLeadById = async (req, res) => {
   try {
@@ -4990,6 +5752,7 @@ async function updateBookingScheduleAndLocationCore({ booking, bookingId, payloa
   if (eventDate) updateData.event_date = eventDate;
   if (startTimeFinal) updateData.start_time = startTimeFinal;
   if (endTimeFinal) updateData.end_time = endTimeFinal;
+  if (time_zone !== undefined) updateData.time_zone = time_zone || null;
   if (totalDurationHours != null) updateData.duration_hours = totalDurationHours;
 
   if (Object.keys(updateData).length > 0) {
@@ -5679,9 +6442,12 @@ exports.finalizeCreateDeal = async (req, res) => {
       {
         user_id: user_id || null,
         guest_email: resolvedEmail,
-        project_name: resolvedName
-          ? `DEAL - ${resolvedName}`
-          : `DEAL - ${resolvedEmail}`,
+        project_name: buildDealProjectName({
+          shootType: shoot_type,
+          contentType: content_type,
+          clientName: resolvedName,
+          guestEmail: resolvedEmail
+        }),
         streaming_platforms: JSON.stringify([]),
         crew_roles: JSON.stringify(crew_roles ?? {}),
         is_draft: 1,
@@ -5788,10 +6554,19 @@ exports.finalizeCreateDeal = async (req, res) => {
         transaction: tx
       });
     } else {
-      assignedRep = await leadAssignmentService.autoAssignLead(
-        lead.lead_id,
-        { transaction: tx, leadModel }
-      );
+      // TEMP FLOW:
+      // Admin/Sales Admin created leads should stay with creator (resolveAssignedSalesRepId already handles this).
+      // Old random/auto assignment logic kept commented for easy rollback.
+      // assignedRep = await leadAssignmentService.autoAssignLead(
+      //   lead.lead_id,
+      //   { transaction: tx, leadModel }
+      // );
+      assignedRep = req.userId
+        ? await users.findByPk(req.userId, {
+            attributes: ['id', 'name'],
+            transaction: tx
+          })
+        : null;
     }
     if (assignedRep?.id) {
       await lead.update(

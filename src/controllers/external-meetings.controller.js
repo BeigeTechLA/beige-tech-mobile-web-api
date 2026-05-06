@@ -101,6 +101,52 @@ const collectMeetingEmails = (state = {}, booking = null) => {
 
   return [...emails];
 };
+
+const getMeetingDashboardUrlByRole = (role = '') => {
+  const baseUrl = String(process.env.FRONTEND_URL || '').trim().replace(/\/+$/, '');
+  const normalizedRole = normalizeRole(role);
+
+  if (normalizedRole === 'client') return `${baseUrl}/affiliate/dashboard`;
+  if (['cp', 'creator', 'creative'].includes(normalizedRole)) return `${baseUrl}/creator/dashboard`;
+  if (normalizedRole === 'sales_rep') return `${baseUrl}/sales/dashboard`;
+  if (['admin', 'production_manager', 'pm', 'sales_admin', 'manager', 'participant'].includes(normalizedRole)) {
+    return `${baseUrl}/admin/dashboard`;
+  }
+
+  return baseUrl;
+};
+
+const collectMeetingRecipientTargets = (state = {}, booking = null) => {
+  const recipients = [];
+  const seen = new Set();
+  const pushRecipient = (participant, fallbackRole = '') => {
+    const email = normalizeEmail(participant?.email || participant);
+    if (!email || seen.has(email)) return;
+
+    recipients.push({
+      email,
+      name: String(participant?.name || participant?.email || '').trim(),
+      role: normalizeRole(participant?.role || fallbackRole),
+    });
+    seen.add(email);
+  };
+
+  pushRecipient(state?.client, 'client');
+  pushRecipient(state?.admin, 'sales_rep');
+  (state?.cps || []).forEach((cp) => pushRecipient(cp, 'cp'));
+  (state?.participants || []).forEach((participant) => pushRecipient(participant, participant?.role || 'participant'));
+
+  if (booking?.guest_email || booking?.user?.email) {
+    pushRecipient({
+      email: booking?.guest_email || booking?.user?.email,
+      name: booking?.cms_project?.client?.name || booking?.user?.name || booking?.client_name || booking?.guest_email || '',
+      role: 'client',
+    }, 'client');
+  }
+
+  return recipients;
+};
+
 const matchesParticipantByIdentity = (participant, identities = new Set()) => {
   const participantId = String(participant?.id || '').trim();
   const participantEmail = normalizeEmail(participant?.email || '');
@@ -950,7 +996,7 @@ exports.createMeeting = async (req, res) => {
     });
 
     if (req.body.send_notification !== false) {
-      const recipients = collectMeetingEmails(participants, plainBooking);
+      const recipients = collectMeetingRecipientTargets(participants, plainBooking);
       if (recipients.length) {
         const creator = meetingWithCreator?.creator
           ? (typeof meetingWithCreator.creator.get === 'function'
@@ -958,11 +1004,15 @@ exports.createMeeting = async (req, res) => {
             : meetingWithCreator.creator)
           : null;
         await emailService.sendMeetingScheduledTemplateEmail({
-          recipients,
+          recipients: recipients.map((recipient) => ({
+            ...recipient,
+            view_details_url: getMeetingDashboardUrlByRole(recipient.role),
+          })),
           data: {
             meeting_id: String(createdMeeting.meeting_id),
             booking_id: String(bookingId),
             order_id: String(bookingId),
+            project_id: String(bookingId),
             order_name: plainBooking?.project_name || `Project #${bookingId}`,
             project_name: plainBooking?.project_name || `Project #${bookingId}`,
             meeting_title: String(req.body.meeting_title || '').trim() || `Meeting for project ${bookingId}`,
@@ -973,7 +1023,9 @@ exports.createMeeting = async (req, res) => {
             meet_link: String(req.body.meetLink || req.body.meet_link || '').trim() || '',
             description: String(req.body.description || '').trim() || '',
             agenda: String(req.body.description || '').trim() || '',
+            meeting_agenda: String(req.body.description || '').trim() || '',
             created_by_name: creator?.name || '',
+            view_details_url: '',
             sent_at: new Date().toISOString(),
           },
         });
@@ -1145,15 +1197,25 @@ exports.addParticipants = async (req, res) => {
       participants_json: serializeMeetingState(nextState),
     });
 
-    const addedRecipients = additions.map((participant) => normalizeEmail(participant?.email)).filter(Boolean);
+    const addedRecipients = additions
+      .map((participant) => ({
+        email: normalizeEmail(participant?.email),
+        name: String(participant?.name || participant?.email || '').trim(),
+        role: normalizeRole(participant?.role || role || 'participant'),
+      }))
+      .filter((participant) => participant.email);
     if (addedRecipients.length) {
       const plainBooking = typeof booking?.get === 'function' ? booking.get({ plain: true }) : booking;
       await emailService.sendMeetingScheduledTemplateEmail({
-        recipients: addedRecipients,
+        recipients: addedRecipients.map((recipient) => ({
+          ...recipient,
+          view_details_url: getMeetingDashboardUrlByRole(recipient.role),
+        })),
         data: {
           meeting_id: String(meeting.meeting_id),
           booking_id: String(booking?.stream_project_booking_id || ''),
           order_id: String(booking?.stream_project_booking_id || ''),
+          project_id: String(booking?.stream_project_booking_id || ''),
           order_name: plainBooking?.project_name || `Project #${booking?.stream_project_booking_id || ''}`,
           project_name: plainBooking?.project_name || `Project #${booking?.stream_project_booking_id || ''}`,
           meeting_title: String(meeting.meeting_title || '').trim() || `Meeting for project ${booking?.stream_project_booking_id || ''}`,
@@ -1164,6 +1226,8 @@ exports.addParticipants = async (req, res) => {
           meet_link: meeting.meet_link || '',
           description: meeting.description || '',
           agenda: meeting.description || '',
+          meeting_agenda: meeting.description || '',
+          view_details_url: '',
           created_by_name: '',
           sent_at: new Date().toISOString(),
         },

@@ -28,10 +28,6 @@ module.exports = function (sequelize, DataTypes) {
             type: DataTypes.TEXT('long'),
             allowNull: false
         },
-        pdf_path: {
-            type: DataTypes.STRING(255),
-            allowNull: true
-        },
         status: {
             type: DataTypes.ENUM('pending', 'signed'),
             defaultValue: 'signed'

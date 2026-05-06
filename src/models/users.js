@@ -74,7 +74,16 @@ module.exports = function(sequelize, DataTypes) {
     created_from: {
       type: DataTypes.INTEGER,
       allowNull: true
-    },    
+    },
+    assign_lead: {
+      type: DataTypes.TINYINT,
+      allowNull: false,
+      defaultValue: 1
+    },
+    role: {
+      type: DataTypes.STRING(100),
+      allowNull: true
+    },
     location: {
       type: DataTypes.STRING(255),
       allowNull: true

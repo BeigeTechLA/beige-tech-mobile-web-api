@@ -1995,7 +1995,7 @@ exports.getProjectDetails = async (req, res) => {
 
 exports.getAllProjectDetails = async (req, res) => {
   try {
-    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category } = req.query;
+    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment } = req.query;
     const today = new Date();
     const noPagination = !limit && !page;
 
@@ -2151,7 +2151,7 @@ exports.getAllProjectDetails = async (req, res) => {
       ],
     });
 
-    const projectDetails = await Promise.all(projects.map(async (project) => {
+    let projectDetails = await Promise.all(projects.map(async (project) => {
       const [assignedCrewData, assignedEquipData, assignedPostProdData, paymentData] = await Promise.all([
         assigned_crew.findAll({
           where: { project_id: project.stream_project_booking_id, is_active: 1 },
@@ -2208,6 +2208,21 @@ exports.getAllProjectDetails = async (req, res) => {
       };
     }));
 
+    if (cp_assignment && cp_assignment !== 'all') {
+      const normalizedCpAssignment = String(cp_assignment).toLowerCase().trim();
+      projectDetails = projectDetails.filter((entry) => {
+        const assignedCrew = Array.isArray(entry?.assignedCrew) ? entry.assignedCrew : [];
+        const selectedCrewIds = Array.isArray(entry?.project?.selected_crew_ids) ? entry.project.selected_crew_ids : [];
+        const hasAssigned = assignedCrew.length > 0 || selectedCrewIds.length > 0;
+
+        if (normalizedCpAssignment === 'assigned') return hasAssigned;
+        if (normalizedCpAssignment === 'not_assigned') return !hasAssigned;
+        return true;
+      });
+    }
+
+    const filteredTotalRecords = projectDetails.length;
+
     return res.status(200).json({
       error: false,
       message: 'Filtered project details retrieved successfully',
@@ -2217,7 +2232,7 @@ exports.getAllProjectDetails = async (req, res) => {
         pagination: noPagination ? null : {
             page: pageNumber,
             limit: pageSize,
-            totalRecords: total_active + total_cancelled + total_completed + total_upcoming + total_draft,
+            totalRecords: filteredTotalRecords,
         }
       },
     });
@@ -6032,22 +6047,55 @@ exports.getShootByCategory = async (req, res) => {
 // Controller to fetch all post production members
 exports.getPostProductionMembers = async (req, res) => {
   try {
-    const postProductionMembers = await post_production_members.findAll({
-      where: { is_active: 1 }, // Optional filter for active members
-      attributes: ['post_production_member_id', 'first_name', 'last_name', 'email', 'is_active'],
+    const allowedRoles = [
+      'Production Team',
+      'Video Editors',
+      'Photo Editors',
+      'Sales',
+      'Sales Admin'
+    ];
+
+    // Source list from internal users so it's consistent with lead/quote flows.
+    const internalMembers = await users.findAll({
+      where: {
+        is_active: 1,
+        assign_lead: 1,
+        user_type: 1,
+        role: {
+          [Op.in]: allowedRoles
+        }
+      },
+      attributes: ['id', 'name', 'email', 'role'],
+      order: [['name', 'ASC']]
     });
 
-    if (!postProductionMembers || postProductionMembers.length === 0) {
+    if (!internalMembers || internalMembers.length === 0) {
       return res.status(404).json({
         error: true,
         message: 'No post-production members found',
       });
     }
 
+    const data = internalMembers.map((member) => {
+      const memberJson = member.toJSON();
+      const fullName = String(memberJson.name || '').trim();
+      const [firstName, ...restParts] = fullName.split(/\s+/).filter(Boolean);
+      const lastName = restParts.join(' ');
+
+      return {
+        post_production_member_id: memberJson.id,
+        first_name: firstName || fullName || 'Unknown',
+        last_name: lastName || '',
+        email: memberJson.email || null,
+        role: memberJson.role || 'Post Production',
+        is_active: 1,
+      };
+    });
+
     return res.status(200).json({
       error: false,
       message: 'Post-production members fetched successfully',
-      data: postProductionMembers,
+      data,
     });
   } catch (error) {
     console.error('Error fetching post production members:', error);
@@ -6070,14 +6118,42 @@ exports.assignPostProductionMember = async (req, res) => {
       });
     }
 
-    const postProductionMember = await post_production_members.findOne({
-      where: { post_production_member_id, is_active: 1 },
+    // Resolve selected member from internal users first.
+    const selectedUser = await users.findOne({
+      where: {
+        id: post_production_member_id,
+        is_active: 1,
+        assign_lead: 1,
+        user_type: 1
+      },
+      attributes: ['id', 'name', 'email', 'role']
+    });
+
+    if (!selectedUser) {
+      return res.status(404).json({
+        error: true,
+        message: 'Selected internal member not found or inactive',
+      });
+    }
+
+    const selectedUserJson = selectedUser.toJSON();
+    const fullName = String(selectedUserJson.name || '').trim();
+    const [firstName, ...restParts] = fullName.split(/\s+/).filter(Boolean);
+    const lastName = restParts.join(' ');
+
+    // Backward-compatible storage in post_production_members table.
+    // Reuse existing row by email, else create a new one.
+    let postProductionMember = await post_production_members.findOne({
+      where: { email: selectedUserJson.email, is_active: 1 },
     });
 
     if (!postProductionMember) {
-      return res.status(404).json({
-        error: true,
-        message: 'Post production member not found or inactive',
+      postProductionMember = await post_production_members.create({
+        first_name: firstName || fullName || 'Unknown',
+        last_name: lastName || '',
+        email: selectedUserJson.email,
+        phone_number: null,
+        is_active: 1,
       });
     }
 
@@ -6092,9 +6168,26 @@ exports.assignPostProductionMember = async (req, res) => {
       });
     }
 
+    // Prevent duplicate active assignment of the same member for this project.
+    const existingAssignment = await assigned_post_production_member.findOne({
+      where: {
+        project_id,
+        post_production_member_id: postProductionMember.post_production_member_id,
+        is_active: 1,
+      }
+    });
+
+    if (existingAssignment) {
+      return res.status(200).json({
+        error: false,
+        message: 'Post production member already assigned',
+        data: existingAssignment,
+      });
+    }
+
     const assignedPostProductionMember = await assigned_post_production_member.create({
       project_id,
-      post_production_member_id,
+      post_production_member_id: postProductionMember.post_production_member_id,
       assigned_date: new Date(),
       status: 'assigned',
       is_active: 1,

@@ -67,6 +67,10 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.TIME,
       allowNull: true
     },
+    time_zone: {
+      type: DataTypes.STRING(64),
+      allowNull: true
+    },
     budget: {
       type: DataTypes.DECIMAL(10,2),
       allowNull: true

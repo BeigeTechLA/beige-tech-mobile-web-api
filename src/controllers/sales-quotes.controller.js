@@ -2,6 +2,7 @@ const constants = require('../utils/constants');
 const quoteService = require('../services/sales-quote.service');
 const db = require('../models');
 const { Op } = require('sequelize');
+const { renderQuoteAcceptPage, renderQuoteAgreementPage } = require('../utils/quoteAcceptPage');
 
 function getUserContext(req) {
   return {
@@ -14,115 +15,9 @@ function sendError(res, error, fallbackMessage, statusCode = constants.BAD_REQUE
   return res.status(statusCode).json({
     success: false,
     message: fallbackMessage,
+    data: error?.details || null,
     error: process.env.NODE_ENV === 'development' ? error.message : undefined
   });
-}
-
-function renderQuoteAcceptPage({
-  title,
-  badge,
-  description,
-  quoteNumber = '',
-  tone = 'success',
-  statusCode = constants.OK.code
-}) {
-  const palette = tone === 'error'
-    ? {
-      accent: '#8F2D2D',
-      accentSoft: '#F8E3DF',
-      border: 'rgba(173, 97, 80, 0.28)',
-      badgeBg: '#FFF1EE',
-      badgeText: '#8F2D2D'
-    }
-    : tone === 'warning'
-      ? {
-        accent: '#73510D',
-        accentSoft: '#FBF0D8',
-        border: 'rgba(214, 182, 112, 0.35)',
-        badgeBg: '#FFF7E7',
-        badgeText: '#73510D'
-      }
-      : {
-        accent: '#1E4D3A',
-        accentSoft: '#EAF5EF',
-        border: 'rgba(93, 149, 120, 0.30)',
-        badgeBg: '#F3FBF6',
-        badgeText: '#1E4D3A'
-      };
-
-  return {
-    statusCode,
-    html: `
-      <!DOCTYPE html>
-      <html lang="en">
-        <head>
-          <meta charset="UTF-8" />
-          <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-          <meta name="x-apple-disable-message-reformatting" />
-          <title>${title}</title>
-        </head>
-        <body style="margin:0;padding:0;background:#f6f5f2;font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f1f1f;">
-          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f6f5f2;padding:40px 20px;">
-            <tr>
-              <td align="center">
-                <table width="640" cellpadding="0" cellspacing="0" style="width:100%;max-width:640px;background:linear-gradient(145deg,#fffdf8 18%,#f5e4c3 190%);border:1px solid rgba(232,209,171,0.35);border-radius:28px;overflow:hidden;box-shadow:0 14px 40px rgba(0,0,0,0.05);">
-                  <tr>
-                    <td align="center" style="padding:42px 40px 26px;">
-                      <div style="display:inline-block;border:1px solid rgba(232,209,171,0.4);padding:12px 32px;border-radius:100px;background:#ffffff;box-shadow:0 8px 24px rgba(149,157,165,0.18);">
-                        <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png" alt="Beige" width="110" style="display:block;border:0;">
-                      </div>
-                    </td>
-                  </tr>
-                  <tr>
-                    <td style="padding:0 40px 22px;">
-                      <div style="background:${palette.accentSoft};border:1px solid ${palette.border};border-radius:24px;padding:28px 28px 30px;text-align:center;">
-                        <span style="display:inline-block;background:${palette.badgeBg};color:${palette.badgeText};border-radius:999px;padding:8px 16px;font-size:13px;font-weight:700;letter-spacing:0.8px;text-transform:uppercase;">
-                          ${badge}
-                        </span>
-                        <h1 style="margin:20px 0 12px;font-size:48px;line-height:1.05;font-weight:700;color:#111111;">
-                          ${title}
-                        </h1>
-                        <p style="margin:0 auto;max-width:480px;font-size:22px;line-height:1.55;color:#4c4a46;">
-                          ${description}
-                        </p>
-                      </div>
-                    </td>
-                  </tr>
-                  <tr>
-                    <td style="padding:0 40px 24px;">
-                      <table width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:24px;box-shadow:0 10px 24px rgba(0,0,0,0.04);">
-                        <tr>
-                          <td style="padding:28px;">
-                            <div style="font-size:15px;line-height:1.7;color:#6a665f;text-transform:uppercase;letter-spacing:1px;padding-bottom:6px;">
-                              Quote Reference
-                            </div>
-                            <div style="font-size:26px;line-height:1.3;font-weight:700;color:#111111;padding-bottom:18px;">
-                              ${quoteNumber || 'Unavailable'}
-                            </div>
-                            <div style="font-size:17px;line-height:1.8;color:#5a5751;">
-                              Our team will continue from here. If you need help, contact
-                              <a href="mailto:sales@beigecorporation.io" style="color:#111111;font-weight:600;text-decoration:underline;">sales@beigecorporation.io</a>.
-                            </div>
-                          </td>
-                        </tr>
-                      </table>
-                    </td>
-                  </tr>
-                  <tr>
-                    <td align="center" style="padding:0 40px 40px;">
-                      <div style="border-top:1px solid rgba(0,0,0,0.12);padding-top:26px;font-size:14px;line-height:1.7;color:#6f6b64;">
-                        This is an automated Beige confirmation page.
-                      </div>
-                    </td>
-                  </tr>
-                </table>
-              </td>
-            </tr>
-          </table>
-        </body>
-      </html>
-    `
-  };
 }
 
 function normalizeShootTypePayload(payload = {}, { partial = false } = {}) {
@@ -374,7 +269,7 @@ exports.updateQuote = async (req, res) => {
     });
   } catch (error) {
     console.error('Error updating sales quote:', error);
-    const statusCode = error.message === 'Quote not found' ? constants.NOT_FOUND.code : constants.BAD_REQUEST.code;
+    const statusCode = error.statusCode || (error.message === 'Quote not found' ? constants.NOT_FOUND.code : constants.BAD_REQUEST.code);
     return sendError(res, error, error.message || 'Failed to update quote', statusCode);
   }
 };
@@ -455,6 +350,42 @@ exports.getQuoteById = async (req, res) => {
   }
 };
 
+exports.listQuoteVersions = async (req, res) => {
+  try {
+    const data = await quoteService.listQuoteVersions(Number(req.params.quoteId), getUserContext(req));
+    return res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    console.error('Error listing quote versions:', error);
+    const statusCode = error.message === 'Quote not found' ? constants.NOT_FOUND.code : constants.BAD_REQUEST.code;
+    return sendError(res, error, error.message || 'Failed to fetch quote versions', statusCode);
+  }
+};
+
+exports.getQuoteVersionByNumber = async (req, res) => {
+  try {
+    const data = await quoteService.getQuoteVersionByNumber(
+      Number(req.params.quoteId),
+      Number(req.params.versionNumber),
+      getUserContext(req)
+    );
+    return res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    console.error('Error fetching quote version:', error);
+    const statusCode = error.message === 'Quote not found'
+      ? constants.NOT_FOUND.code
+      : error.message === 'Quote version not found'
+        ? constants.NOT_FOUND.code
+        : constants.BAD_REQUEST.code;
+    return sendError(res, error, error.message || 'Failed to fetch quote version', statusCode);
+  }
+};
+
 exports.getPublicQuoteById = async (req, res) => {
   try {
     const quote = await quoteService.getPublicQuoteById(Number(req.params.quoteId));
@@ -504,11 +435,27 @@ exports.sendQuoteProposal = async (req, res) => {
   }
 };
 
+exports.rejectQuoteProposal = async (req, res) => {
+  try {
+    const status  = 'rejected';
+    const quote = await quoteService.updateQuoteStatus(Number(req.params.quoteId), status, getUserContext(req));
+    return res.json({
+      success: true,
+      data: quote
+    });
+  } catch (error) {
+    console.error('Error updating sales quote status:', error);
+    const statusCode = error.message === 'Quote not found' ? constants.NOT_FOUND.code : constants.BAD_REQUEST.code;
+    return sendError(res, error, error.message || 'Failed to update quote status', statusCode);
+  }
+};
+
 exports.acceptQuoteProposal = async (req, res) => {
+  const wantsHtml = Boolean(req.accepts('html'));
   try {
     const token = String(req.query.token || req.body?.token || '').trim();
     if (!token) {
-      if (req.method === 'GET' && req.accepts('html')) {
+      if (wantsHtml) {
         const page = renderQuoteAcceptPage({
           title: 'Link Invalid',
           badge: 'Unable To Process',
@@ -525,9 +472,70 @@ exports.acceptQuoteProposal = async (req, res) => {
       });
     }
 
+    if (req.method === 'GET') {
+      const preview = await quoteService.getQuoteAcceptancePreview(token);
+
+      if (wantsHtml) {
+        if (preview.alreadyAccepted) {
+          const page = renderQuoteAcceptPage({
+            title: 'Quote Already Confirmed',
+            badge: 'Already Confirmed',
+            description: `${preview.quote_number} was already confirmed earlier. No further action is needed from you right now.`,
+            quoteNumber: preview.quote_number,
+            tone: 'warning',
+            statusCode: constants.OK.code
+          });
+          return res.status(page.statusCode).send(page.html);
+        }
+
+        if (!preview.canAccept) {
+          const page = renderQuoteAcceptPage({
+            title: 'Unable To Confirm Quote',
+            badge: 'Action Needed',
+            description: `This quote cannot be accepted because it is ${preview.blockedReason}. Please contact the Beige team for assistance.`,
+            quoteNumber: preview.quote_number,
+            tone: 'error',
+            statusCode: constants.BAD_REQUEST.code
+          });
+          return res.status(page.statusCode).send(page.html);
+        }
+
+        const page = renderQuoteAgreementPage({
+          quoteNumber: preview.quote_number,
+          token,
+          formAction: `${req.baseUrl}${req.path}`
+        });
+        return res.status(page.statusCode).send(page.html);
+      }
+
+      return res.json({
+        success: true,
+        data: preview
+      });
+    }
+
+    const agreementAccepted = [true, 'true', 'on', '1', 1].includes(req.body?.agreement_accepted);
+    if (!agreementAccepted) {
+      if (wantsHtml) {
+        const preview = await quoteService.getQuoteAcceptancePreview(token);
+        const page = renderQuoteAgreementPage({
+          quoteNumber: preview.quote_number,
+          token,
+          formAction: `${req.baseUrl}${req.path}`,
+          errorMessage: 'Please confirm the service agreement before continuing.'
+        });
+        return res.status(constants.BAD_REQUEST.code).send(page.html);
+      }
+
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Service agreement acceptance is required'
+      });
+    }
+
     const result = await quoteService.acceptQuoteProposal(token);
 
-    if (req.method === 'GET' && req.accepts('html')) {
+    if (wantsHtml) {
       const quoteNumber = result?.quote?.quote_number || 'your quote';
       const title = result.already_accepted ? 'Quote Already Confirmed' : 'Quote Accepted';
       const description = result.already_accepted
@@ -553,7 +561,7 @@ exports.acceptQuoteProposal = async (req, res) => {
     const statusCode = error.message === 'Quote not found'
       ? constants.NOT_FOUND.code
       : constants.BAD_REQUEST.code;
-    if (req.method === 'GET' && req.accepts('html')) {
+    if (wantsHtml) {
       const isMissing = error.message === 'Quote not found';
       const page = renderQuoteAcceptPage({
         title: isMissing ? 'Quote Not Found' : 'Unable To Confirm Quote',
@@ -822,17 +830,29 @@ exports.getClientDropdown = async (req, res) => {
 exports.createClient = async (req, res) => {
   try {
     const { name, email, phone_number } = req.body;
+    const duplicateWhere = {
+      [db.Sequelize.Op.or]: [
+        email ? { email } : null,
+        phone_number ? { phone_number } : null
+      ].filter(Boolean)
+    };
 
     const existingUser = await db.users.findOne({
-      where: {
-        [db.Sequelize.Op.or]: [
-          email ? { email } : null,
-          phone_number ? { phone_number } : null
-        ].filter(Boolean)
-      }
+      where: duplicateWhere
     });
 
     if (existingUser) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        error: true,
+        message: 'Client already exists with same email or phone number'
+      });
+    }
+
+    const existingClient = await db.clients.findOne({
+      where: duplicateWhere
+    });
+
+    if (existingClient) {
       return res.status(constants.BAD_REQUEST.code).json({
         error: true,
         message: 'Client already exists with same email or phone number'
@@ -861,3 +881,4 @@ exports.createClient = async (req, res) => {
     });
   }
 };
+
