@@ -1364,10 +1364,6 @@ exports.createPaymentIntentMulti = async (req, res) => {
  * Confirm multi-creator payment and update booking status + Google Sheet
  * POST /api/payments/confirm-multi
  */
-/**
- * Confirm multi-creator payment and update booking status
- * POST /api/payments/confirm-multi
- */
 exports.confirmPaymentMulti = async (req, res) => {
   const transaction = await db.sequelize.transaction();
 

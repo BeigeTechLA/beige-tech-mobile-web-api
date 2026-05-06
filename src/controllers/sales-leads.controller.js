@@ -19,6 +19,8 @@ const { S3UploadFiles } = require('../utils/common.js');
 
 const sequelize = require('../db');
 const db = require('../models');
+const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
+const EXTERNAL_FILE_MANAGER_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -196,6 +198,124 @@ const matchShootStatusFilter = (booking, rawStatus) => {
       return isDraft;
     default:
       return null;
+  }
+};
+
+const hasCompletedMeetingOfType = (booking, meetingType) => {
+  const meetings = Array.isArray(booking?.meetings) ? booking.meetings : [];
+  return meetings.some((meeting) =>
+    String(meeting?.meeting_type || '').toLowerCase() === String(meetingType || '').toLowerCase() &&
+    String(meeting?.meeting_status || '').toLowerCase() === 'completed'
+  );
+};
+
+const hasCompletedFileInCategories = (booking, categories = []) => {
+  const files = Array.isArray(booking?.cms_project?.files) ? booking.cms_project.files : [];
+  const allowed = new Set(categories.map((entry) => String(entry || '').toUpperCase()));
+  return files.some((file) => {
+    const category = String(file?.file_category || '').toUpperCase();
+    const uploadStatus = String(file?.upload_status || '').toUpperCase();
+    const isDeleted = Number(file?.is_deleted || 0) === 1;
+    return !isDeleted && uploadStatus === 'COMPLETED' && allowed.has(category);
+  });
+};
+
+const isPostProductionEligible = (booking) => Boolean(
+  matchShootStatusFilter(booking, 'postproduction') ||
+  matchShootStatusFilter(booking, 'revision') ||
+  matchShootStatusFilter(booking, 'completed') ||
+  matchShootStatusFilter(booking, 'assetsdelivered')
+);
+
+const parseActivityData = (value) => {
+  if (!value) return null;
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch (_) {
+    return null;
+  }
+};
+
+const hasPreProductionUploadEvidence = (lead) => {
+  const booking = lead?.booking;
+
+  // Primary signal: file-manager project has at least one completed file.
+  const projectFiles = Array.isArray(booking?.cms_project?.files) ? booking.cms_project.files : [];
+  const hasCompletedProjectFile = projectFiles.some((file) =>
+    Number(file?.is_deleted || 0) !== 1 &&
+    String(file?.upload_status || '').toUpperCase() === 'COMPLETED'
+  );
+  if (hasCompletedProjectFile) return true;
+
+  // Fallback signal: external file manager activity already logged pre-production upload.
+  const activities = Array.isArray(lead?.activities) ? lead.activities : [];
+  return activities.some((activity) => {
+    if (String(activity?.activity_type || '').toLowerCase() !== 'status_changed') return false;
+    const payload = parseActivityData(activity?.activity_data);
+    const emailEvent = String(payload?.email_event || '').toLowerCase();
+    const folderPath = String(payload?.folder_path || '').toLowerCase();
+    const filePath = String(payload?.filepath || '').toLowerCase();
+
+    return (
+      emailEvent === 'pre_production_brief_uploaded' ||
+      folderPath.includes('pre-production') ||
+      filePath.includes('pre-production')
+    );
+  });
+};
+
+const fetchExternalWorkspaceFiles = async (bookingId, phase) => {
+  const query = new URLSearchParams();
+  if (phase) query.set('phase', phase);
+
+  const url = `${EXTERNAL_FILE_MANAGER_API_BASE_URL}/workspace/${encodeURIComponent(String(bookingId))}/files${query.toString() ? `?${query.toString()}` : ''}`;
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-internal-key': EXTERNAL_FILE_MANAGER_KEY
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`External file manager returned ${response.status} for booking ${bookingId}`);
+  }
+
+  return response.json();
+};
+
+const hasExternalWorkspaceFiles = async (bookingId, phase) => {
+  if (!bookingId) return false;
+  try {
+    const payload = await fetchExternalWorkspaceFiles(bookingId, phase);
+    const files = Array.isArray(payload?.data?.files) ? payload.data.files : [];
+    const expectedSegment = phase === 'post' ? 'post-production' : phase === 'pre' ? 'pre-production' : '';
+
+    // Guard against external API returning mixed-phase files:
+    // count only files that clearly belong to the requested phase path.
+    const phaseScopedFiles = files.filter((file) => {
+      const pathCandidate = String(
+        file?.path ||
+        file?.filepath ||
+        file?.key ||
+        file?.filePath ||
+        file?.name ||
+        ''
+      ).toLowerCase();
+
+      if (!expectedSegment) return pathCandidate.length > 0;
+      return pathCandidate.includes(`/${expectedSegment}/`) || pathCandidate.includes(`${expectedSegment}/`);
+    });
+
+    return phaseScopedFiles.length > 0;
+  } catch (error) {
+    console.error('[getLeads] external workspace file check failed:', {
+      bookingId,
+      phase,
+      message: error?.message || error
+    });
+    return false;
   }
 };
 
@@ -1905,7 +2025,9 @@ exports.getLeads = async (req, res) => {
       start_date,
       end_date,
       intent,
-      booking_status // Fallback key
+      booking_status, // Fallback key
+      cp_assignment,
+      production_filter
     } = req.query;
 
     const pageNumber = parseInt(page);
@@ -1926,8 +2048,17 @@ exports.getLeads = async (req, res) => {
     if (lead_type) whereClause.lead_type = lead_type;
 
     if (assigned_to) {
-      whereClause.assigned_sales_rep_id =
-        assigned_to === 'unassigned' ? null : parseInt(assigned_to);
+      const normalizedAssignedTo = String(assigned_to).trim().toLowerCase();
+
+      if (normalizedAssignedTo === 'all' || normalizedAssignedTo === '') {
+      } else if (normalizedAssignedTo === 'unassigned') {
+        whereClause.assigned_sales_rep_id = null;
+      } else {
+        const assignedToId = Number.parseInt(String(assigned_to), 10);
+        if (Number.isFinite(assignedToId)) {
+          whereClause.assigned_sales_rep_id = assignedToId;
+        }
+      }
     }
 
     if (search?.trim()) {
@@ -1955,13 +2086,25 @@ exports.getLeads = async (req, res) => {
       ];
     }
 
+    console.log('[getLeads] filters:', {
+      status,
+      lead_type,
+      assigned_to,
+      search,
+      booking_id,
+      intent,
+      cp_assignment,
+      production_filter
+    });
+
     const leads = await sales_leads.findAll({
       where: whereClause,
       include: [
         {
           model: users,
           as: 'assigned_sales_rep',
-          attributes: ['id', 'name', 'email']
+          attributes: ['id', 'name', 'email'],
+          required: false
         },
         { model: discount_codes, as: "discount_codes" }, // Added for status consistency
         { model: payment_links, as: "payment_links" },   // Added for status consistency
@@ -1970,6 +2113,32 @@ exports.getLeads = async (req, res) => {
           model: stream_project_booking,
           as: 'booking',
           include: [
+            {
+              model: assigned_crew,
+              as: 'assigned_crews',
+              required: false,
+              attributes: ['id', 'crew_member_id', 'status', 'project_id']
+            },
+            {
+              model: db.project_meetings,
+              as: 'meetings',
+              required: false,
+              attributes: ['meeting_id', 'meeting_type', 'meeting_status']
+            },
+            {
+              model: db.projects,
+              as: 'cms_project',
+              required: false,
+              attributes: ['project_id'],
+              include: [
+                {
+                  model: db.project_files,
+                  as: 'files',
+                  required: false,
+                  attributes: ['file_id', 'file_category', 'upload_status', 'is_deleted']
+                }
+              ]
+            },
             {
               model: quotes,
               as: 'primary_quote',
@@ -2042,6 +2211,78 @@ exports.getLeads = async (req, res) => {
       processedLeads = processedLeads.filter(
         (lead) => lead.intent.toLowerCase() === intent.toLowerCase().trim()
       );
+    }
+
+    if (cp_assignment && cp_assignment !== 'all') {
+      const normalizedCpAssignment = String(cp_assignment).toLowerCase().trim();
+      processedLeads = processedLeads.filter((lead) => {
+        const assignedCrews = Array.isArray(lead?.booking?.assigned_crews) ? lead.booking.assigned_crews : [];
+        const hasAssignedCrew = assignedCrews.length > 0;
+
+        if (normalizedCpAssignment === 'assigned') return hasAssignedCrew;
+        if (normalizedCpAssignment === 'not_assigned') return !hasAssignedCrew;
+        return true;
+      });
+    }
+
+    if (production_filter && production_filter !== 'all') {
+      const normalizedProductionFilter = String(production_filter).toLowerCase().trim();
+      const externalPreFileMap = new Map();
+      const externalPostFileMap = new Map();
+
+      if (
+        normalizedProductionFilter === 'pre_production_file_not_provided' ||
+        normalizedProductionFilter === 'post_production_file_not_uploaded'
+      ) {
+        const bookingIds = Array.from(
+          new Set(
+            processedLeads
+              .map((lead) => Number(lead?.booking?.stream_project_booking_id || lead?.booking_id))
+              .filter((id) => Number.isFinite(id) && id > 0)
+          )
+        );
+
+        await Promise.all(
+          bookingIds.map(async (bookingId) => {
+            if (normalizedProductionFilter === 'pre_production_file_not_provided') {
+              externalPreFileMap.set(bookingId, await hasExternalWorkspaceFiles(bookingId, 'pre'));
+            }
+            if (normalizedProductionFilter === 'post_production_file_not_uploaded') {
+              externalPostFileMap.set(bookingId, await hasExternalWorkspaceFiles(bookingId, 'post'));
+            }
+          })
+        );
+      }
+
+      processedLeads = processedLeads.filter((lead) => {
+        const booking = lead?.booking;
+        if (!booking) return false;
+        const bookingId = Number(booking?.stream_project_booking_id || lead?.booking_id || 0);
+
+        if (normalizedProductionFilter === 'pre_production_file_not_provided') {
+          const hasExternalPreFiles = externalPreFileMap.get(bookingId) === true;
+          if (hasExternalPreFiles) return false;
+          return !hasPreProductionUploadEvidence(lead);
+        }
+
+        if (normalizedProductionFilter === 'pre_production_meeting_not_done') {
+          return !hasCompletedMeetingOfType(booking, 'pre_production');
+        }
+
+        if (normalizedProductionFilter === 'post_production_meeting_not_done') {
+          if (!isPostProductionEligible(booking)) return false;
+          return !hasCompletedMeetingOfType(booking, 'post_production');
+        }
+
+        if (normalizedProductionFilter === 'post_production_file_not_uploaded') {
+          if (!isPostProductionEligible(booking)) return false;
+          const hasExternalPostFiles = externalPostFileMap.get(bookingId) === true;
+          if (hasExternalPostFiles) return false;
+          return !hasCompletedFileInCategories(booking, ['EDIT_FINAL', 'CLIENT_DELIVERABLE']);
+        }
+
+        return true;
+      });
     }
 
     const total = processedLeads.length;

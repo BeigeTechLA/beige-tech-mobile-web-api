@@ -1995,7 +1995,7 @@ exports.getProjectDetails = async (req, res) => {
 
 exports.getAllProjectDetails = async (req, res) => {
   try {
-    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category } = req.query;
+    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment } = req.query;
     const today = new Date();
     const noPagination = !limit && !page;
 
@@ -2151,7 +2151,7 @@ exports.getAllProjectDetails = async (req, res) => {
       ],
     });
 
-    const projectDetails = await Promise.all(projects.map(async (project) => {
+    let projectDetails = await Promise.all(projects.map(async (project) => {
       const [assignedCrewData, assignedEquipData, assignedPostProdData, paymentData] = await Promise.all([
         assigned_crew.findAll({
           where: { project_id: project.stream_project_booking_id, is_active: 1 },
@@ -2208,6 +2208,21 @@ exports.getAllProjectDetails = async (req, res) => {
       };
     }));
 
+    if (cp_assignment && cp_assignment !== 'all') {
+      const normalizedCpAssignment = String(cp_assignment).toLowerCase().trim();
+      projectDetails = projectDetails.filter((entry) => {
+        const assignedCrew = Array.isArray(entry?.assignedCrew) ? entry.assignedCrew : [];
+        const selectedCrewIds = Array.isArray(entry?.project?.selected_crew_ids) ? entry.project.selected_crew_ids : [];
+        const hasAssigned = assignedCrew.length > 0 || selectedCrewIds.length > 0;
+
+        if (normalizedCpAssignment === 'assigned') return hasAssigned;
+        if (normalizedCpAssignment === 'not_assigned') return !hasAssigned;
+        return true;
+      });
+    }
+
+    const filteredTotalRecords = projectDetails.length;
+
     return res.status(200).json({
       error: false,
       message: 'Filtered project details retrieved successfully',
@@ -2217,7 +2232,7 @@ exports.getAllProjectDetails = async (req, res) => {
         pagination: noPagination ? null : {
             page: pageNumber,
             limit: pageSize,
-            totalRecords: total_active + total_cancelled + total_completed + total_upcoming + total_draft,
+            totalRecords: filteredTotalRecords,
         }
       },
     });
