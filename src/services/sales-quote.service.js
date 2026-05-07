@@ -8,6 +8,7 @@ const {
   sendQuoteAcceptedSalesNotificationEmail
 } = require('../utils/emailService');
 const { generateQuotePdfBuffer } = require('../utils/quotePdf');
+const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
 const { normalizeTime, resolveEventDateAndStartTime } = require('../utils/timezone');
 const { extractCoordinatesFromPayload } = require('../utils/locationHelpers');
 const accountCreditService = require('./account-credit.service');
@@ -3873,7 +3874,7 @@ async function fetchQuoteById(salesQuoteId, user = null) {
     );
 
     if (signature && signature.length > 0) {
-      plain.signature_base64 = signature[0].signature_base64;
+      plain.signature_base64 = toAbsoluteBeigeAssetUrl(signature[0].signature_base64);
       plain.signer_name = signature[0].signer_name;
       plain.signed_at = signature[0].signed_at;
     }
