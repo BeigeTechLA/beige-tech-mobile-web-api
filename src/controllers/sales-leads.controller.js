@@ -435,6 +435,36 @@ function resolveLeadPaymentStatus({ booking = null, activePaymentLink = null, cu
   return paymentStatus;
 }
 
+function resolveLeadQuoteAmounts({ linkedSalesQuote = null, booking = null, customQuoteFinancials = null }) {
+  const additionalPayment = customQuoteFinancials?.additional_payment || customQuoteFinancials?.partial_payment || null;
+  if (additionalPayment) {
+    return {
+      collected_amount: parseFloat(additionalPayment.previously_paid_amount || 0),
+      outstanding_amount: parseFloat(additionalPayment.outstanding_amount || 0)
+    };
+  }
+
+  if (!linkedSalesQuote) {
+    return {
+      collected_amount: null,
+      outstanding_amount: null
+    };
+  }
+
+  const quoteTotal = parseFloat(linkedSalesQuote.total || 0);
+  if (booking?.payment_id) {
+    return {
+      collected_amount: quoteTotal,
+      outstanding_amount: 0
+    };
+  }
+
+  return {
+    collected_amount: 0,
+    outstanding_amount: quoteTotal
+  };
+}
+
 /**
  * Internal helper to reuse calculateFromCreators safely.
  * DO NOT pass real res here.
@@ -2224,6 +2254,11 @@ exports.getLeads = async (req, res) => {
           activePaymentLink,
           customQuoteFinancials
         });
+        const quoteAmounts = resolveLeadQuoteAmounts({
+          linkedSalesQuote,
+          booking: lead.booking,
+          customQuoteFinancials
+        });
 
         return {
           ...leadJson,
@@ -2231,6 +2266,8 @@ exports.getLeads = async (req, res) => {
           booking_status: computedBookingStatus, 
           intent: computedIntent,
           payment_status: payment_status,
+          collected_amount: quoteAmounts.collected_amount,
+          outstanding_amount: quoteAmounts.outstanding_amount,
           manual_payment_summary: manualProgress,
         };
       })
@@ -2665,6 +2702,11 @@ exports.getLeadById = async (req, res) => {
       activePaymentLink: active_payment_link,
       customQuoteFinancials
     });
+    const quoteAmounts = resolveLeadQuoteAmounts({
+      linkedSalesQuote,
+      booking: lead.booking,
+      customQuoteFinancials
+    });
 
     const projectedQuote = await calculateLeadPricing(lead.booking);
     const activeQuoteSource = leadJson.booking?.primary_quote || projectedQuote;
@@ -2840,6 +2882,8 @@ exports.getLeadById = async (req, res) => {
         intent_source: lead.intent ? 'manual' : 'system',
         booking_status,
         payment_status,
+        collected_amount: quoteAmounts.collected_amount,
+        outstanding_amount: quoteAmounts.outstanding_amount,
         active_payment_link,
         booking_step,
         can_edit_booking,
