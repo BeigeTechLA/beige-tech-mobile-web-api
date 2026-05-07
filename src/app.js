@@ -84,8 +84,12 @@ app.get('/health', (req, res) => {
 
 // Mount API routes with /v1 prefix
 
+const path = require('path');
+app.use(express.static(path.join(__dirname, 'public')));
+
 app.use('/v1', routes);
 app.use('/v1/signatures', signatureRoutes); 
+
 // app.use('/api/creator', creatorRoutes);
 
 

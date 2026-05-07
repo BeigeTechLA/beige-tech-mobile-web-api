@@ -1081,3 +1081,263 @@ ALTER TABLE `stream_project_booking`
 ALTER TABLE `crew_members`
   ADD COLUMN `latitude` DECIMAL(10,8) NULL AFTER `old_location`,
   ADD COLUMN `longitude` DECIMAL(11,8) NULL AFTER `latitude`;
+
+
+
+  --30-04-26
+
+  CREATE TABLE IF NOT EXISTS studios (
+  id           INT AUTO_INCREMENT PRIMARY KEY,
+  user_id      INT          NOT NULL,
+  status       ENUM('draft','published','archived') DEFAULT 'draft',
+  current_step VARCHAR(20)  DEFAULT 'address',
+  createdAt    DATETIME     DEFAULT CURRENT_TIMESTAMP,
+  updatedAt    DATETIME     DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS studio_addresses (
+  id         INT AUTO_INCREMENT PRIMARY KEY,
+  studio_id  INT          NOT NULL,
+  country    VARCHAR(100) DEFAULT 'United States',
+  address    VARCHAR(255) NOT NULL,
+  apartment  VARCHAR(100),
+  city       VARCHAR(100) NOT NULL,
+  state      VARCHAR(100),
+  zip_code   VARCHAR(20),
+  latitude   DECIMAL(10,8),
+  longitude  DECIMAL(11,8),
+  createdAt  DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updatedAt  DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_addr_studio FOREIGN KEY (studio_id) REFERENCES studios(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS studio_info (
+  id               INT AUTO_INCREMENT PRIMARY KEY,
+  studio_id        INT          NOT NULL,
+  space_title      VARCHAR(200) NOT NULL,
+  brand_name       VARCHAR(200),
+  description      TEXT,
+  selected_types   JSON,
+  suggest_type     VARCHAR(200),
+  property_size    VARCHAR(50),
+  height           VARCHAR(50),
+  width            VARCHAR(50),
+  length           VARCHAR(50),
+  max_floor        VARCHAR(50),
+  overnight_stays  TINYINT(1)   DEFAULT 0,
+  security_camera  TINYINT(1)   DEFAULT 0,
+  security_desc    TEXT,
+  createdAt        DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updatedAt        DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_info_studio FOREIGN KEY (studio_id) REFERENCES studios(id) ON DELETE CASCADE
+);
+
+
+CREATE TABLE IF NOT EXISTS studio_facilities (
+  id                   INT AUTO_INCREMENT PRIMARY KEY,
+  studio_id            INT       NOT NULL,
+  parking_options      JSON,
+  parking_desc         TEXT,
+  access_availability  TINYINT(1) DEFAULT 0,
+  access_options       JSON,
+  general_facilities   TINYINT(1) DEFAULT 0,
+  photo_features       TINYINT(1) DEFAULT 0,
+  video_features       TINYINT(1) DEFAULT 0,
+  podcast_features     TINYINT(1) DEFAULT 0,
+  product_features     TINYINT(1) DEFAULT 0,
+  createdAt            DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updatedAt            DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_fac_studio FOREIGN KEY (studio_id) REFERENCES studios(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS studio_media (
+  id         INT AUTO_INCREMENT PRIMARY KEY,
+  studio_id  INT          NOT NULL,
+  url        VARCHAR(500) NOT NULL,
+  type       ENUM('image','video') NOT NULL,
+  sort_order INT          DEFAULT 0,
+  createdAt  DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updatedAt  DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_media_studio FOREIGN KEY (studio_id) REFERENCES studios(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS studio_details (
+  id                   INT AUTO_INCREMENT PRIMARY KEY,
+  studio_id            INT         NOT NULL,
+  preferred_age        VARCHAR(50),
+  wifi_name            VARCHAR(100),
+  wifi_password        VARCHAR(100),
+  host_activities      TINYINT(1)  DEFAULT 1,
+  activity_production  TINYINT(1)  DEFAULT 1,
+  activity_event       TINYINT(1)  DEFAULT 1,
+  activity_recreation  TINYINT(1)  DEFAULT 1,
+  activity_meetings    TINYINT(1)  DEFAULT 1,
+  guests               INT         DEFAULT 0,
+  bedrooms             INT         DEFAULT 0,
+  beds                 INT         DEFAULT 0,
+  bathrooms            INT         DEFAULT 0,
+  amenities            JSON,
+  space_tags           JSON,
+  createdAt            DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updatedAt            DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_det_studio FOREIGN KEY (studio_id) REFERENCES studios(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS studio_hours (
+  id            INT AUTO_INCREMENT PRIMARY KEY,
+  studio_id     INT NOT NULL,
+  day           ENUM('Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday') NOT NULL,
+  is_open       TINYINT(1)  DEFAULT 1,
+  is_24hrs      TINYINT(1)  DEFAULT 0,
+  opening_time  VARCHAR(20),
+  closing_time  VARCHAR(20),
+  createdAt     DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updatedAt     DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_hrs_studio FOREIGN KEY (studio_id) REFERENCES studios(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS studio_rules (
+  id                    INT AUTO_INCREMENT PRIMARY KEY,
+  studio_id             INT       NOT NULL,
+  smoking_allowed       TINYINT(1) DEFAULT 0,
+  alcohol_allowed       TINYINT(1) DEFAULT 1,
+  cooking_allowed       TINYINT(1) DEFAULT 1,
+  electricity_allowed   TINYINT(1) DEFAULT 1,
+  external_food_allowed TINYINT(1) DEFAULT 0,
+  pets_allowed          TINYINT(1) DEFAULT 0,
+  custom_rule           TEXT,
+  createdAt             DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updatedAt             DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_rules_studio FOREIGN KEY (studio_id) REFERENCES studios(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS studio_budget (
+  id               INT AUTO_INCREMENT PRIMARY KEY,
+  studio_id        INT            NOT NULL,
+  hourly_rate      DECIMAL(10,2),
+  overtime_rate    DECIMAL(10,2),
+  minimum_booking  VARCHAR(50),
+  buffer_time      VARCHAR(50),
+  createdAt        DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updatedAt        DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_budget_studio FOREIGN KEY (studio_id) REFERENCES studios(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS studio_categories (
+  id              INT AUTO_INCREMENT PRIMARY KEY,
+  studio_id       INT            NOT NULL,
+  name            VARCHAR(100)   NOT NULL,
+  price_per_hour  DECIMAL(10,2)  DEFAULT 0,
+  min_hours       INT            DEFAULT 1,
+  max_people      INT            DEFAULT 10,
+  is_selected     TINYINT(1)     DEFAULT 0,
+  includes        JSON,
+  createdAt       DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updatedAt       DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_cat_studio FOREIGN KEY (studio_id) REFERENCES studios(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS studio_equipment (
+  id         INT AUTO_INCREMENT PRIMARY KEY,
+  studio_id  INT           NOT NULL,
+  name       VARCHAR(200)  NOT NULL,
+  cost       DECIMAL(10,2) DEFAULT 0,
+  createdAt  DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updatedAt  DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_equip_studio FOREIGN KEY (studio_id) REFERENCES studios(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS studio_policies (
+  id                INT AUTO_INCREMENT PRIMARY KEY,
+  studio_id         INT  NOT NULL,
+  selected_policies JSON,
+  createdAt         DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updatedAt         DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_pol_studio FOREIGN KEY (studio_id) REFERENCES studios(id) ON DELETE CASCADE
+);
+
+
+ALTER TABLE studio_details ADD COLUMN selected_types JSON NULL;
+
+
+--05-05-26
+
+---operation
+
+CREATE TABLE `studio_bookings` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `studio_id` int(11) NOT NULL,
+  `user_id` int(11) DEFAULT NULL,
+  `project_name` varchar(255) DEFAULT NULL,
+  `contact_name` varchar(255) DEFAULT NULL,
+  `contact_email` varchar(255) DEFAULT NULL,
+  `crew_count` int(11) DEFAULT 1,
+  `booking_date` date NOT NULL,
+  `start_time` time NOT NULL,
+  `end_time` time NOT NULL,
+  `hours` decimal(5,2) DEFAULT 0.00,
+  `base_revenue` decimal(10,2) DEFAULT 0.00,
+  `overtime_amount` decimal(10,2) DEFAULT 0.00,
+  `platform_fee` decimal(10,2) DEFAULT 0.00,
+  `net_earnings` decimal(10,2) DEFAULT 0.00,
+  `status` enum('upcoming','completed','cancelled') NOT NULL DEFAULT 'upcoming',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_studio_bookings_studio` (`studio_id`),
+  KEY `idx_studio_bookings_user` (`user_id`),
+  KEY `idx_studio_bookings_status` (`status`),
+  KEY `idx_studio_bookings_date` (`booking_date`),
+  CONSTRAINT `fk_sb_studio` FOREIGN KEY (`studio_id`) REFERENCES `studios` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `fk_sb_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+
+CREATE TABLE `studio_booking_media` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `booking_id` int(11) NOT NULL,
+  `url` varchar(500) NOT NULL,
+  `type` enum('image','video') NOT NULL DEFAULT 'image',
+  `sort_order` int(11) DEFAULT 0,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_sbm_booking` (`booking_id`),
+  CONSTRAINT `fk_sbm_booking` FOREIGN KEY (`booking_id`) REFERENCES `studio_bookings` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE `studio_revenue_snapshots` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `studio_id` int(11) NOT NULL,
+  `snapshot_month` date NOT NULL COMMENT 'Always 1st of month e.g. 2026-02-01',
+  `total_revenue` decimal(10,2) DEFAULT 0.00,
+  `total_bookings` int(11) DEFAULT 0,
+  `avg_booking_value` decimal(10,2) DEFAULT 0.00,
+  `overtime_revenue` decimal(10,2) DEFAULT 0.00,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uniq_srs_studio_month` (`studio_id`, `snapshot_month`),
+  KEY `idx_srs_studio` (`studio_id`),
+  KEY `idx_srs_month` (`snapshot_month`),
+  CONSTRAINT `fk_srs_studio` FOREIGN KEY (`studio_id`) REFERENCES `studios` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+
+--stdios-request
+
+CREATE TABLE `studio_requests` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `studio_id` int(11) NOT NULL,
+  `user_id` int(11) NOT NULL COMMENT 'User who is requesting',
+  `status` enum('pending','approved','rejected') DEFAULT 'pending',
+  `message` text DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_sr_studio` (`studio_id`),
+  KEY `idx_sr_user` (`user_id`),
+  KEY `idx_sr_status` (`status`),
+  CONSTRAINT `fk_sr_studio` FOREIGN KEY (`studio_id`) REFERENCES `studios` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `fk_sr_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

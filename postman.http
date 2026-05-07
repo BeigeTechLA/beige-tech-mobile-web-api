@@ -1928,3 +1928,327 @@ Authorization: {{TOKEN}}
 GET {{URL}}signatures/download/1 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
+
+
+### ═══════════════════════════════════════════════════════════
+### STUDIO APIs
+### ═══════════════════════════════════════════════════════════
+
+### Step 1 - Create Studio
+POST {{URL}}studios/create HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "user_id": 241
+}
+
+### Step 2 - Save Address
+POST {{URL}}studios/1/address HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "address_line1": "123 Studio Lane",
+  "address_line2": "Suite 4B",
+  "city": "Los Angeles",
+  "state": "California",
+  "country": "United States",
+  "postal_code": "90013",
+  "latitude": 34.0522,
+  "longitude": -118.2437
+}
+
+### Step 3 - Save Info
+POST {{URL}}studios/1/info HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "studio_name": "Beige Studio LA",
+  "studio_type": "Photography",
+  "description": "A premium photography and videography studio.",
+  "capacity": 20,
+  "size_sqft": 2500
+}
+
+### Step 4 - Save Facilities
+POST {{URL}}studios/1/facilities HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "facilities": [
+    { "facility_name": "WiFi", "is_available": true },
+    { "facility_name": "Air Conditioning", "is_available": true },
+    { "facility_name": "Parking", "is_available": true },
+    { "facility_name": "Green Room", "is_available": false }
+  ]
+}
+
+### Step 5 - Save Media
+POST {{URL}}studios/1/media HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "media": [
+    { "url": "https://cdn.beige.app/studios/1/photo1.jpg", "type": "image", "sort_order": 1 },
+    { "url": "https://cdn.beige.app/studios/1/photo2.jpg", "type": "image", "sort_order": 2 },
+    { "url": "https://cdn.beige.app/studios/1/tour.mp4",   "type": "video", "sort_order": 3 }
+  ]
+}
+
+### Step 6 - Save Details
+POST {{URL}}studios/1/details HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "parking_available": true,
+  "accessibility": "Wheelchair accessible entrance and restrooms",
+  "floor_level": 1,
+  "has_elevator": true,
+  "additional_info": "Loading dock available at the rear entrance."
+}
+
+### Step 7 - Save Hours & Rules
+POST {{URL}}studios/1/hours HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "hours": [
+    { "day": "Monday",    "is_open": true,  "is_24hrs": false, "opening_time": "09:00", "closing_time": "18:00" },
+    { "day": "Tuesday",   "is_open": true,  "is_24hrs": false, "opening_time": "09:00", "closing_time": "18:00" },
+    { "day": "Wednesday", "is_open": true,  "is_24hrs": false, "opening_time": "09:00", "closing_time": "18:00" },
+    { "day": "Thursday",  "is_open": true,  "is_24hrs": false, "opening_time": "09:00", "closing_time": "18:00" },
+    { "day": "Friday",    "is_open": true,  "is_24hrs": false, "opening_time": "09:00", "closing_time": "20:00" },
+    { "day": "Saturday",  "is_open": true,  "is_24hrs": false, "opening_time": "10:00", "closing_time": "16:00" },
+    { "day": "Sunday",    "is_open": false, "is_24hrs": false, "opening_time": null,    "closing_time": null    }
+  ],
+  "rules": {
+    "smoking_allowed": false,
+    "alcohol_allowed": false,
+    "pets_allowed": true,
+    "loud_music_allowed": false,
+    "outside_food_allowed": true,
+    "custom_rule": "No open flames or candles inside the studio."
+  }
+}
+
+### Step 8 - Save Budget
+POST {{URL}}studios/1/budget HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "hourly_rate": 150,
+  "overtime_rate": 200,
+  "minimum_booking": 2,
+  "buffer_time": 30,
+  "categories": [
+    { "name": "Half Day", "price_per_hour": 130, "min_hours": 4,  "max_people": 10, "is_selected": false, "includes": ["WiFi", "Basic Lighting"] },
+    { "name": "Full Day", "price_per_hour": 110, "min_hours": 8,  "max_people": 20, "is_selected": true,  "includes": ["WiFi", "Full Lighting Kit", "Green Room"] }
+  ],
+  "equipment": [
+    { "name": "Softbox Lighting Kit", "cost": 50 },
+    { "name": "Backdrop Stand",       "cost": 30 },
+    { "name": "Fog Machine",          "cost": 40 }
+  ]
+}
+
+### Step 9 - Save Policies (Final Publish Step)
+POST {{URL}}studios/1/policies HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "selected_policies": [
+    "Cancellation Window & Refunded",
+    "No Show Policy",
+    "Damage Liability"
+  ]
+}
+
+### ─────────────────────────────────────────────────────────────
+### Get Studio by ID
+GET {{URL}}studios/1 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Get All Studios by User
+GET {{URL}}studios/user/241 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Delete Studio
+DELETE {{URL}}studios/1 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+
+### ─────────────────────────────────────────────────────────────
+### STUDIO OPERATIONS APIs
+### ─────────────────────────────────────────────────────────────
+
+POST {{URL}}studios/1/operations/bookings HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "booking_date": "2026-05-10",
+  "start_time": "10:00:00",
+  "end_time": "16:00:00",
+  "hours": 6,
+  "project_name": "Summer Product Launch",
+  "contact_name": "Sarah Johnson",
+  "contact_email": "sarah@example.com",
+  "crew_count": 5,
+  "base_revenue": 425.00,
+  "overtime_amount": 100.00,
+  "platform_fee": 42.50,
+  "net_earnings": 482.50
+}
+
+### Get Bookings (All)
+GET {{URL}}studios/1/operations/bookings HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Get Bookings (Filter by status)
+GET {{URL}}studios/1/operations/bookings?status=upcoming HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Get Bookings (Filter by month)
+GET {{URL}}studios/1/operations/bookings?month=2026-05 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Get Ledger (All)
+GET {{URL}}studios/1/operations/ledger HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Get Ledger (Filter by month)
+GET {{URL}}studios/1/operations/ledger?month=2026-05 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Get Overview (All)
+GET {{URL}}studios/1/operations/overview HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Get Overview (Filter by month)
+GET {{URL}}studios/1/operations/overview?month=2026-05 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Update Booking Status
+PUT {{URL}}studios/1/operations/bookings/1 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "status": "completed"
+}
+
+### Update Studio (Single API - Edit all sections)
+PUT {{URL}}studios/1 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "studio_name": "Beige Studio LA - Updated",
+  "studio_type": "Photography & Videography",
+  "description": "Updated premium studio.",
+  "capacity": 25,
+  "size_sqft": 3000,
+  "address_line1": "456 New Studio Lane",
+  "city": "Los Angeles",
+  "state": "California",
+  "country": "United States",
+  "postal_code": "90014",
+  "facilities": [
+    { "facility_name": "WiFi", "is_available": true },
+    { "facility_name": "Green Room", "is_available": true }
+  ],
+  "media": [
+    { "url": "https://cdn.beige.app/studios/1/new-photo.jpg", "type": "image", "sort_order": 1 }
+  ],
+  "parking_available": true,
+  "has_elevator": false,
+  "hours": [
+    { "day": "Monday", "is_open": true, "is_24hrs": false, "opening_time": "08:00", "closing_time": "20:00" }
+  ],
+  "rules": {
+    "smoking_allowed": false,
+    "pets_allowed": true
+  },
+  "hourly_rate": 175,
+  "overtime_rate": 220,
+  "categories": [
+    { "name": "Full Day", "price_per_hour": 120, "min_hours": 8, "is_selected": true, "includes": ["WiFi"] }
+  ],
+  "selected_policies": ["Cancellation Window & Refunded"]
+}
+
+### ─────────────────────────────────────────────────────────────
+### STUDIO REQUESTS APIs
+### ─────────────────────────────────────────────────────────────
+
+### Get All Requests
+GET {{URL}}studios/requests HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Get Pending Requests
+GET {{URL}}studios/requests?status=pending HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Get Approved Requests
+GET {{URL}}studios/requests?status=approved HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Get Rejected Requests
+GET {{URL}}studios/requests?status=rejected HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Create Request
+POST {{URL}}studios/requests HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "studio_id": 1,
+  "user_id": 1,
+  "message": "Interested in booking this studio"
+}
+
+### Approve Request
+PUT {{URL}}studios/requests/1 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "status": "approved"
+}
+
+### Reject Request
+PUT {{URL}}studios/requests/1 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "status": "rejected"
+}
+
+### Delete Request
+DELETE {{URL}}studios/requests/1 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
