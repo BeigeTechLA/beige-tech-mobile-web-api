@@ -2473,6 +2473,7 @@ exports.getLeadById = async (req, res) => {
           model: users,
           as: "assigned_sales_rep",
           attributes: ["id", "name", "email"],
+          required: false
         },
         {
           model: stream_project_booking,
