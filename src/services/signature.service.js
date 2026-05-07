@@ -1,30 +1,31 @@
-const fs = require('fs-extra');
-const path = require('path');
-const os = require('os');
-const { updateCredentials, uploadFile } = require('s3-bucket');
+const AWS = require('aws-sdk');
 const models = require('../models');
 const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
 const { acceptQuoteOnSignature } = require('./sales-quote.service');
 
-async function uploadSignatureAssetToS3({ filePath, key }) {
-    if (!filePath || !key) {
-        throw new Error('filePath and key are required for signature S3 upload');
+async function uploadSignatureAssetToS3({ buffer, key, contentType = 'image/png' }) {
+    if (!buffer || !key) {
+        throw new Error('buffer and key are required for signature S3 upload');
     }
 
-    updateCredentials({
+    const s3 = new AWS.S3({
         accessKeyId: process.env.S3_BUCKET_ACCESS_KEY_ID,
-        secretAccessKey: process.env.S3_BUCKET_SECRET_ACCESS_KEY
+        secretAccessKey: process.env.S3_BUCKET_SECRET_ACCESS_KEY,
+        region: process.env.S3_BUCKET_REGION
     });
 
-    const res = await uploadFile({
+    const fullKey = (process.env.S3_SUB_FOLDER ? `${process.env.S3_SUB_FOLDER}/` : '') + key;
+    await s3.putObject({
         Bucket: process.env.S3_BUCKET_NAME,
-        filePath,
-        Key: (process.env.S3_SUB_FOLDER ? `${process.env.S3_SUB_FOLDER}/` : '') + key,
-        ACL: undefined
-    });
+        Key: fullKey,
+        Body: buffer,
+        ContentType: contentType
+    }).promise();
 
-    console.log("S3 Upload", res);
-    return res;
+    return {
+        key: fullKey,
+        url: `https://${process.env.S3_BUCKET_NAME}.s3.amazonaws.com/${fullKey}`
+    };
 }
 
 function toStoredAssetPath(urlOrKey, fallbackKey) {
@@ -68,7 +69,7 @@ function parseSignatureImage(signature_base64) {
 }
 
 async function loadSignatureImage({ signature_base64, signature_file }) {
-    if (signature_file?.path) {
+    if (signature_file?.buffer) {
         const mimeType = String(signature_file.mimetype || '').toLowerCase();
         if (!['image/png', 'image/jpeg', 'image/jpg', 'image/webp', 'image/jfif'].includes(mimeType)) {
             throw new Error('Invalid signature image format. Only PNG, JPG, JPEG, WEBP, and JFIF files are supported');
@@ -84,8 +85,7 @@ async function loadSignatureImage({ signature_base64, signature_file }) {
         return {
             mimeType: normalizedMimeType,
             extension,
-            buffer: await fs.readFile(signature_file.path),
-            uploadedFilePath: signature_file.path
+            buffer: signature_file.buffer
         };
     }
 
@@ -96,27 +96,11 @@ async function saveSignature({ quote_id, signer_name, signer_email, signature_ba
     const timestamp = Date.now();
     const signatureImage = await loadSignatureImage({ signature_base64, signature_file });
     const signaturePath = `signatures/${quote_id}/signature_${timestamp}.${signatureImage.extension}`;
-
-    const tempSignatureFilePath = signatureImage.uploadedFilePath
-        ? signatureImage.uploadedFilePath
-        : path.join(os.tmpdir(), `signature_${quote_id}_${timestamp}.${signatureImage.extension}`);
-
-    if (!signatureImage.uploadedFilePath) {
-        await fs.writeFile(tempSignatureFilePath, signatureImage.buffer);
-    }
-
-    let uploadedSignature;
-
-    try {
-        uploadedSignature = await uploadSignatureAssetToS3({
-            filePath: tempSignatureFilePath,
-            key: signaturePath
-        });
-    } finally {
-        if (!signatureImage.uploadedFilePath && await fs.pathExists(tempSignatureFilePath)) {
-            await fs.remove(tempSignatureFilePath);
-        }
-    }
+    const uploadedSignature = await uploadSignatureAssetToS3({
+        buffer: signatureImage.buffer,
+        key: signaturePath,
+        contentType: signatureImage.mimeType
+    });
 
     const record = await models.signatures.create({
         quote_id,

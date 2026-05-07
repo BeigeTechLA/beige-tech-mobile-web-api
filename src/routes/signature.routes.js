@@ -1,12 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
-const path = require('path');
-const fs = require('fs-extra');
 const { saveSignature, getSignatureByQuote } = require('../services/signature.service');
-
-const signatureUploadDir = path.join(__dirname, '../../public/uploads/media');
-fs.ensureDirSync(signatureUploadDir);
 
 function toSignatureResponse(record) {
     return {
@@ -21,17 +16,8 @@ function toSignatureResponse(record) {
     };
 }
 
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        cb(null, signatureUploadDir);
-    },
-    filename: (req, file, cb) => {
-        cb(null, `${Date.now()}${path.extname(file.originalname)}`);
-    }
-});
-
 const upload = multer({
-    storage,
+    storage: multer.memoryStorage(),
     limits: { fileSize: 10 * 1024 * 1024 },
     fileFilter: (req, file, cb) => {
         const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/jfif', 'image/jpg'];
@@ -44,20 +30,35 @@ const upload = multer({
 
 router.post('/sign', upload.single('signature'), async (req, res) => {
     try {
-        const { quote_id, signer_name, signer_email } = req.body;
+        const {
+            quote_id,
+            signer_name,
+            signer_email,
+            signature_base64,
+            quoteId,
+            signerName,
+            signerEmail,
+            signatureBase64
+        } = req.body;
 
-        if (!quote_id || !signer_name || !req.file) {
+        const resolvedQuoteId = quote_id || quoteId;
+        const resolvedSignerName = signer_name || signerName;
+        const resolvedSignerEmail = signer_email || signerEmail;
+        const resolvedSignatureBase64 = signature_base64 || signatureBase64;
+
+        if (!resolvedQuoteId || !resolvedSignerName || (!req.file && !resolvedSignatureBase64)) {
             return res.status(400).json({
                 success: false,
-                message: 'quote_id, signer_name, and signature file are required'
+                message: 'quote_id, signer_name, and signature (file or base64) are required'
             });
         }
 
         const record = await saveSignature({
-            quote_id,
-            signer_name,
-            signer_email,
-            signature_file: req.file
+            quote_id: resolvedQuoteId,
+            signer_name: resolvedSignerName,
+            signer_email: resolvedSignerEmail,
+            signature_base64: resolvedSignatureBase64,
+            signature_file: req.file || null
         });
 
         res.json({
