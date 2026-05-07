@@ -38,6 +38,10 @@ const bookingTimelineService = require('../services/bookingTimeline.service');
 const accountCreditService = require('../services/account-credit.service');
 // const NodeGeocoder = require('node-geocoder');
 
+const EXTERNAL_FILE_MANAGER_API_BASE_URL =
+  process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
+const EXTERNAL_FILE_MANAGER_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
+
 const getCPNewBookingEmailFields = (booking = {}, fallbackClientName = '', fallbackShootAmount = null) => ({
   client_name:
     fallbackClientName ||
@@ -281,6 +285,59 @@ function buildDateFilter(req) {
 
   return {};
 }
+
+const fetchExternalWorkspaceFiles = async (bookingId, phase) => {
+  const query = new URLSearchParams();
+  if (phase) query.set('phase', phase);
+
+  const url = `${EXTERNAL_FILE_MANAGER_API_BASE_URL}/workspace/${encodeURIComponent(String(bookingId))}/files${query.toString() ? `?${query.toString()}` : ''}`;
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-internal-key': EXTERNAL_FILE_MANAGER_KEY
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`External file manager returned ${response.status} for booking ${bookingId}`);
+  }
+
+  return response.json();
+};
+
+const hasExternalWorkspaceFiles = async (bookingId, phase) => {
+  if (!bookingId) return false;
+
+  try {
+    const payload = await fetchExternalWorkspaceFiles(bookingId, phase);
+    const files = Array.isArray(payload?.data?.files) ? payload.data.files : [];
+    const expectedSegment = phase === 'post' ? 'post-production' : phase === 'pre' ? 'pre-production' : '';
+
+    const phaseScopedFiles = files.filter((file) => {
+      const pathCandidate = String(
+        file?.path ||
+        file?.filepath ||
+        file?.key ||
+        file?.filePath ||
+        file?.name ||
+        ''
+      ).toLowerCase();
+
+      if (!expectedSegment) return pathCandidate.length > 0;
+      return pathCandidate.includes(`/${expectedSegment}/`) || pathCandidate.includes(`${expectedSegment}/`);
+    });
+
+    return phaseScopedFiles.length > 0;
+  } catch (error) {
+    console.error('[getAllProjectDetails] external workspace file check failed:', {
+      bookingId,
+      phase,
+      message: error?.message || error
+    });
+    return false;
+  }
+};
 
 const SHOOT_TYPE_TITLES = {
     corporate: "Corporate Event",
@@ -1995,9 +2052,24 @@ exports.getProjectDetails = async (req, res) => {
 
 exports.getAllProjectDetails = async (req, res) => {
   try {
-    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment } = req.query;
+    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment, file_filter } = req.query;
     const today = new Date();
     const noPagination = !limit && !page;
+    const normalizedCpAssignment = cp_assignment ? String(cp_assignment).toLowerCase().trim() : null;
+    const normalizedFileFilter = file_filter ? String(file_filter).toLowerCase().trim() : null;
+    const validFileFilters = new Set([
+      'prewithoutfile',
+      'prewithfile',
+      'postwithoutfile',
+      'postwithfile'
+    ]);
+    const shouldApplyFileFilter = validFileFilters.has(normalizedFileFilter);
+    const requiresInMemoryPagination =
+      !noPagination &&
+      (
+        (normalizedCpAssignment && normalizedCpAssignment !== 'all') ||
+        shouldApplyFileFilter
+      );
 
     let pageNumber = null, pageSize = null, offset = null;
     if (!noPagination) {
@@ -2143,7 +2215,7 @@ exports.getAllProjectDetails = async (req, res) => {
 
     const projects = await stream_project_booking.findAll({
       where: whereConditions,
-      ...(noPagination ? {} : { limit: pageSize, offset }),
+      ...((noPagination || requiresInMemoryPagination) ? {} : { limit: pageSize, offset }),
       order: [
         [Sequelize.literal(`CASE WHEN DATE(event_date) >= CURDATE() THEN 0 ELSE 1 END`), 'ASC'],
         [Sequelize.literal(`CASE WHEN DATE(event_date) >= CURDATE() THEN event_date END`), 'ASC'],
@@ -2208,8 +2280,7 @@ exports.getAllProjectDetails = async (req, res) => {
       };
     }));
 
-    if (cp_assignment && cp_assignment !== 'all') {
-      const normalizedCpAssignment = String(cp_assignment).toLowerCase().trim();
+    if (normalizedCpAssignment && normalizedCpAssignment !== 'all') {
       projectDetails = projectDetails.filter((entry) => {
         const assignedCrew = Array.isArray(entry?.assignedCrew) ? entry.assignedCrew : [];
         const selectedCrewIds = Array.isArray(entry?.project?.selected_crew_ids) ? entry.project.selected_crew_ids : [];
@@ -2221,14 +2292,50 @@ exports.getAllProjectDetails = async (req, res) => {
       });
     }
 
+    if (shouldApplyFileFilter) {
+      const phase = normalizedFileFilter.startsWith('post') ? 'post' : 'pre';
+      const workspaceFileMap = new Map();
+      const bookingIds = Array.from(
+        new Set(
+          projectDetails
+            .map((entry) => Number(entry?.project?.stream_project_booking_id))
+            .filter((id) => Number.isFinite(id) && id > 0)
+        )
+      );
+
+      await Promise.all(
+        bookingIds.map(async (bookingId) => {
+          workspaceFileMap.set(bookingId, await hasExternalWorkspaceFiles(bookingId, phase));
+        })
+      );
+
+      projectDetails = projectDetails.filter((entry) => {
+        const bookingId = Number(entry?.project?.stream_project_booking_id || 0);
+        const hasFiles = workspaceFileMap.get(bookingId) === true;
+
+        if (normalizedFileFilter === 'prewithfile' || normalizedFileFilter === 'postwithfile') {
+          return hasFiles;
+        }
+
+        if (normalizedFileFilter === 'prewithoutfile' || normalizedFileFilter === 'postwithoutfile') {
+          return !hasFiles;
+        }
+
+        return true;
+      });
+    }
+
     const filteredTotalRecords = projectDetails.length;
+    const paginatedProjects = noPagination
+      ? projectDetails
+      : (requiresInMemoryPagination ? projectDetails.slice(offset, offset + pageSize) : projectDetails);
 
     return res.status(200).json({
       error: false,
       message: 'Filtered project details retrieved successfully',
       data: {
         stats: { total_active, total_cancelled, total_completed, total_upcoming, total_draft },
-        projects: projectDetails,
+        projects: paginatedProjects,
         pagination: noPagination ? null : {
             page: pageNumber,
             limit: pageSize,
