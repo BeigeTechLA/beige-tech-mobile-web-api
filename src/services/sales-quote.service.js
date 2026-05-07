@@ -2174,6 +2174,28 @@ async function getQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
     bookingId
   });
 
+  const additionalPayment = refreshActivity && additionalAmount > 0 ? {
+    additional_amount: additionalAmount,
+    previously_paid_amount: previouslyPaidAmount,
+    revised_total: revisedTotal,
+    outstanding_amount: additionalPaymentStatus === 'paid' ? 0 : additionalAmount,
+    payment_status: additionalPaymentStatus,
+    last_sent_at: refreshInvoiceHistory?.sent_at || null,
+    invoice_number: refreshInvoiceHistory?.invoice_number || null,
+    invoice_url: refreshInvoiceHistory?.invoice_url || null
+  } : null;
+
+  const reducedPayment = refreshActivity && reducedAmount > 0 ? {
+    reduced_amount: reducedAmount,
+    previously_paid_amount: previouslyPaidAmount,
+    revised_total: revisedTotal,
+    refund_pending_amount: reducedAmount,
+    payment_status: reducedPaymentStatus,
+    last_sent_at: refreshInvoiceHistory?.sent_at || null,
+    invoice_number: refreshInvoiceHistory?.invoice_number || null,
+    invoice_url: refreshInvoiceHistory?.invoice_url || null
+  } : null;
+
   return {
     latest_invoice: latestInvoiceHistory ? {
       invoice_send_history_id: latestInvoiceHistory.invoice_send_history_id,
@@ -2183,26 +2205,9 @@ async function getQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
       payment_status: latestInvoiceHistory.payment_status || null,
       sent_at: latestInvoiceHistory.sent_at || null
     } : null,
-    additional_payment: refreshActivity && additionalAmount > 0 ? {
-      additional_amount: additionalAmount,
-      previously_paid_amount: previouslyPaidAmount,
-      revised_total: revisedTotal,
-      outstanding_amount: additionalPaymentStatus === 'paid' ? 0 : additionalAmount,
-      payment_status: additionalPaymentStatus,
-      last_sent_at: refreshInvoiceHistory?.sent_at || null,
-      invoice_number: refreshInvoiceHistory?.invoice_number || null,
-      invoice_url: refreshInvoiceHistory?.invoice_url || null
-    } : null,
-    reduced_payment: refreshActivity && reducedAmount > 0 ? {
-      reduced_amount: reducedAmount,
-      previously_paid_amount: previouslyPaidAmount,
-      revised_total: revisedTotal,
-      refund_pending_amount: reducedAmount,
-      payment_status: reducedPaymentStatus,
-      last_sent_at: refreshInvoiceHistory?.sent_at || null,
-      invoice_number: refreshInvoiceHistory?.invoice_number || null,
-      invoice_url: refreshInvoiceHistory?.invoice_url || null
-    } : null,
+    additional_payment: additionalPayment,
+    partial_payment: additionalPayment,
+    reduced_payment: reducedPayment,
     account_credit: creditSummary
   };
 }
@@ -3048,12 +3053,15 @@ async function resolveQuoteBillingState(quote, transaction) {
         transaction
       })
     : null;
+  const refreshBelongsToBooking = Boolean(
+    booking?.stream_project_booking_id &&
+    Number(refreshMetadata?.booking_id || 0) === Number(booking.stream_project_booking_id)
+  );
   const refreshOutstanding = Boolean(
     refreshMetadata?.invoice_refresh_required &&
-    booking?.stream_project_booking_id &&
-    Number(refreshMetadata?.booking_id || 0) === Number(booking.stream_project_booking_id) &&
+    refreshBelongsToBooking &&
     refreshExtraAmount > 0 &&
-    refreshApprovalStatus === 'approved' &&
+    refreshApprovalStatus !== 'rejected' &&
     refreshInvoiceHistory?.payment_status !== 'paid'
   );
 
@@ -4112,6 +4120,24 @@ async function listQuotes(query, user) {
     return acc;
   }, {});
 
+  const rowsWithFinancialDetails = await Promise.all(rows.map(async (item) => {
+    const plain = item.toJSON();
+    const billingState = await resolveQuoteBillingState(plain);
+    const financialDetails = await getQuoteFinancialDetails({
+      quoteId: plain.sales_quote_id,
+      bookingId: billingState.booking?.stream_project_booking_id || null
+    });
+
+    return {
+      ...plain,
+      payment_status: billingState.payment_status,
+      is_collected: billingState.is_collected,
+      collected_amount: billingState.collected_amount,
+      outstanding_amount: billingState.outstanding_amount,
+      ...(financialDetails || {})
+    };
+  }));
+
   return {
     pagination: {
       page,
@@ -4120,7 +4146,7 @@ async function listQuotes(query, user) {
       total_pages: Math.ceil(count / limit)
     },
     summary,
-    rows: rows.map((item) => item.toJSON())
+    rows: rowsWithFinancialDetails
   };
 }
 

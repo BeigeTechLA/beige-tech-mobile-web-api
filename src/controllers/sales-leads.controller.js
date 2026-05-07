@@ -374,6 +374,28 @@ async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null
     bookingId
   });
 
+  const additionalPayment = refreshActivity ? {
+    additional_amount: additionalAmount,
+    previously_paid_amount: previouslyPaidAmount,
+    revised_total: revisedTotal,
+    outstanding_amount: additionalPaymentStatus === 'paid' ? 0 : additionalAmount,
+    payment_status: additionalPaymentStatus,
+    last_sent_at: refreshInvoiceHistory?.sent_at || null,
+    invoice_number: refreshInvoiceHistory?.invoice_number || null,
+    invoice_url: refreshInvoiceHistory?.invoice_url || null
+  } : null;
+
+  const reducedPayment = refreshActivity && reducedAmount > 0 ? {
+    reduced_amount: reducedAmount,
+    previously_paid_amount: previouslyPaidAmount,
+    revised_total: revisedTotal,
+    refund_pending_amount: reducedAmount,
+    payment_status: reducedPaymentStatus,
+    last_sent_at: refreshInvoiceHistory?.sent_at || null,
+    invoice_number: refreshInvoiceHistory?.invoice_number || null,
+    invoice_url: refreshInvoiceHistory?.invoice_url || null
+  } : null;
+
   return {
     latest_invoice: latestInvoiceHistory ? {
       invoice_send_history_id: latestInvoiceHistory.invoice_send_history_id,
@@ -383,27 +405,63 @@ async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null
       payment_status: latestInvoiceHistory.payment_status || null,
       sent_at: latestInvoiceHistory.sent_at || null
     } : null,
-    additional_payment: refreshActivity ? {
-      additional_amount: additionalAmount,
-      previously_paid_amount: previouslyPaidAmount,
-      revised_total: revisedTotal,
-      outstanding_amount: additionalPaymentStatus === 'paid' ? 0 : additionalAmount,
-      payment_status: additionalPaymentStatus,
-      last_sent_at: refreshInvoiceHistory?.sent_at || null,
-      invoice_number: refreshInvoiceHistory?.invoice_number || null,
-      invoice_url: refreshInvoiceHistory?.invoice_url || null
-    } : null,
-    reduced_payment: refreshActivity && reducedAmount > 0 ? {
-      reduced_amount: reducedAmount,
-      previously_paid_amount: previouslyPaidAmount,
-      revised_total: revisedTotal,
-      refund_pending_amount: reducedAmount,
-      payment_status: reducedPaymentStatus,
-      last_sent_at: refreshInvoiceHistory?.sent_at || null,
-      invoice_number: refreshInvoiceHistory?.invoice_number || null,
-      invoice_url: refreshInvoiceHistory?.invoice_url || null
-    } : null,
+    additional_payment: additionalPayment,
+    partial_payment: additionalPayment,
+    reduced_payment: reducedPayment,
     credit_summary: creditSummary
+  };
+}
+
+function hasOutstandingAdditionalPayment(customQuoteFinancials = null) {
+  const additionalPayment = customQuoteFinancials?.additional_payment || customQuoteFinancials?.partial_payment;
+  if (!additionalPayment) return false;
+
+  const outstandingAmount = parseFloat(additionalPayment.outstanding_amount || 0);
+  const paymentStatus = String(additionalPayment.payment_status || '').toLowerCase();
+
+  return outstandingAmount > 0 && paymentStatus !== 'paid';
+}
+
+function resolveLeadPaymentStatus({ booking = null, activePaymentLink = null, customQuoteFinancials = null }) {
+  if (hasOutstandingAdditionalPayment(customQuoteFinancials)) {
+    return 'partial_paid';
+  }
+
+  let paymentStatus = booking?.payment_id ? 'paid' : 'unpaid';
+  if (paymentStatus === 'unpaid' && activePaymentLink) {
+    paymentStatus = activePaymentLink.is_expired ? 'link_expired' : 'link_sent';
+  }
+
+  return paymentStatus;
+}
+
+function resolveLeadQuoteAmounts({ linkedSalesQuote = null, booking = null, customQuoteFinancials = null }) {
+  const additionalPayment = customQuoteFinancials?.additional_payment || customQuoteFinancials?.partial_payment || null;
+  if (additionalPayment) {
+    return {
+      collected_amount: parseFloat(additionalPayment.previously_paid_amount || 0),
+      outstanding_amount: parseFloat(additionalPayment.outstanding_amount || 0)
+    };
+  }
+
+  if (!linkedSalesQuote) {
+    return {
+      collected_amount: null,
+      outstanding_amount: null
+    };
+  }
+
+  const quoteTotal = parseFloat(linkedSalesQuote.total || 0);
+  if (booking?.payment_id) {
+    return {
+      collected_amount: quoteTotal,
+      outstanding_amount: 0
+    };
+  }
+
+  return {
+    collected_amount: 0,
+    outstanding_amount: quoteTotal
   };
 }
 
@@ -2169,6 +2227,15 @@ exports.getLeads = async (req, res) => {
           leadJson.activities || [],
           pricingData?.total || 0
         );
+        const linkedSalesQuote = await sales_quotes.findOne({
+          where: { lead_id: lead.lead_id },
+          attributes: ['sales_quote_id'],
+          order: [['updated_at', 'DESC']]
+        });
+        const customQuoteFinancials = await getCustomQuoteFinancialDetails({
+          quoteId: linkedSalesQuote?.sales_quote_id || null,
+          bookingId: leadJson.booking?.stream_project_booking_id || null
+        });
 
         // 1. Standardize Booking Status & Intent (Using same methods as Detail API)
         const computedIntent = lead.intent ?? leadAssignmentService.getLeadIntent({ lead, booking: lead.booking });
@@ -2177,20 +2244,32 @@ exports.getLeads = async (req, res) => {
           computedBookingStatus = 'Booked';
         } else if (manualProgress.isPartiallyPaid) {
           computedBookingStatus = 'Partially Paid';
+        } else if (hasOutstandingAdditionalPayment(customQuoteFinancials)) {
+          computedBookingStatus = 'Partially Paid';
         }
 
-        // 2. Standardize Payment Status Logic (Check for Payment Links)
-        let payment_status = lead.booking?.payment_id ? 'paid' : 'unpaid';
-        if (payment_status === 'unpaid') {
-          const pLinks = leadJson.payment_links || [];
-          if (pLinks.length > 0) {
-            const latestLink = [...pLinks].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
-            const now = new Date();
-            const expiryDate = latestLink.expires_at ? new Date(latestLink.expires_at) : null;
-            const isExpired = expiryDate ? expiryDate < now : false;
-            payment_status = isExpired ? 'link_expired' : 'link_sent';
-          }
+        const pLinks = leadJson.payment_links || [];
+        let activePaymentLink = null;
+        if (pLinks.length > 0) {
+          const latestLink = [...pLinks].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+          const now = new Date();
+          const expiryDate = latestLink.expires_at ? new Date(latestLink.expires_at) : null;
+          activePaymentLink = {
+            ...latestLink,
+            is_expired: expiryDate ? expiryDate < now : false
+          };
         }
+
+        const payment_status = resolveLeadPaymentStatus({
+          booking: lead.booking,
+          activePaymentLink,
+          customQuoteFinancials
+        });
+        const quoteAmounts = resolveLeadQuoteAmounts({
+          linkedSalesQuote,
+          booking: lead.booking,
+          customQuoteFinancials
+        });
 
         return {
           ...leadJson,
@@ -2198,6 +2277,8 @@ exports.getLeads = async (req, res) => {
           booking_status: computedBookingStatus, 
           intent: computedIntent,
           payment_status: payment_status,
+          collected_amount: quoteAmounts.collected_amount,
+          outstanding_amount: quoteAmounts.outstanding_amount,
           manual_payment_summary: manualProgress,
         };
       })
@@ -2628,10 +2709,16 @@ exports.getLeadById = async (req, res) => {
       }
     }
 
-    let payment_status = lead.booking?.payment_id ? 'paid' : 'unpaid';
-    if (payment_status === 'unpaid' && active_payment_link) {
-        payment_status = active_payment_link.is_expired ? 'link_expired' : 'link_sent';
-    }
+    const payment_status = resolveLeadPaymentStatus({
+      booking: lead.booking,
+      activePaymentLink: active_payment_link,
+      customQuoteFinancials
+    });
+    const quoteAmounts = resolveLeadQuoteAmounts({
+      linkedSalesQuote,
+      booking: lead.booking,
+      customQuoteFinancials
+    });
 
     const projectedQuote = await calculateLeadPricing(lead.booking);
     const activeQuoteSource = leadJson.booking?.primary_quote || projectedQuote;
@@ -2707,7 +2794,10 @@ exports.getLeadById = async (req, res) => {
     
     // --- STANDARDIZED STATUS & INTENT CALLS ---
     const intent = lead.intent ?? leadAssignmentService.getLeadIntent({ lead, booking: lead.booking });
-    const booking_status = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
+    let booking_status = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
+    if (hasOutstandingAdditionalPayment(customQuoteFinancials)) {
+      booking_status = 'Partially Paid';
+    }
     // ------------------------------------------
 
     const booking_step = leadAssignmentService.getLeadBookingStep(lead, lead.booking, lead.activities);
@@ -2804,6 +2894,8 @@ exports.getLeadById = async (req, res) => {
         intent_source: lead.intent ? 'manual' : 'system',
         booking_status,
         payment_status,
+        collected_amount: quoteAmounts.collected_amount,
+        outstanding_amount: quoteAmounts.outstanding_amount,
         active_payment_link,
         booking_step,
         can_edit_booking,
