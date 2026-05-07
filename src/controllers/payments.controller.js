@@ -2096,7 +2096,7 @@ exports.handleStripeWebhook = async (req, res) => {
       }, { transaction });
 
       await db.stream_project_booking.update({
-        is_completed: 1,
+        // is_completed: 1,
         is_draft: 0,
         payment_id: payment.payment_id,
         payment_completed_at: new Date()
