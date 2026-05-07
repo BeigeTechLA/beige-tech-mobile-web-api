@@ -3052,12 +3052,15 @@ async function resolveQuoteBillingState(quote, transaction) {
         transaction
       })
     : null;
+  const refreshBelongsToBooking = Boolean(
+    booking?.stream_project_booking_id &&
+    Number(refreshMetadata?.booking_id || 0) === Number(booking.stream_project_booking_id)
+  );
   const refreshOutstanding = Boolean(
     refreshMetadata?.invoice_refresh_required &&
-    booking?.stream_project_booking_id &&
-    Number(refreshMetadata?.booking_id || 0) === Number(booking.stream_project_booking_id) &&
+    refreshBelongsToBooking &&
     refreshExtraAmount > 0 &&
-    refreshApprovalStatus === 'approved' &&
+    refreshApprovalStatus !== 'rejected' &&
     refreshInvoiceHistory?.payment_status !== 'paid'
   );
 
