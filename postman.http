@@ -1177,7 +1177,7 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### get sales quote detail
-GET {{DEV_URL}}sales/quotes/115 HTTP/1.1
+GET {{URL}}sales/quotes/182 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
