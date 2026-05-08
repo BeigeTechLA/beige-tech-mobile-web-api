@@ -2222,7 +2222,12 @@ exports.getAllProjectDetails = async (req, res) => {
       dateFilter = { event_date: { [Sequelize.Op.eq]: `${date_on} 00:00:00` } };
     }
 
-    const [bookedSalesLeads, bookedClientLeads] = await Promise.all([
+    const [
+      bookedSalesLeads,
+      bookedClientLeads,
+      salesManualPaymentActivities,
+      clientManualPaymentActivities,
+    ] = await Promise.all([
       sales_leads.findAll({
         where: {
           is_active: 1,
@@ -2240,12 +2245,65 @@ exports.getAllProjectDetails = async (req, res) => {
         },
         attributes: ['booking_id'],
         raw: true
-      })
+      }),
+      sales_lead_activities.findAll({
+        where: {
+          activity_type: 'payment_completed',
+        },
+        attributes: ['lead_id'],
+        raw: true,
+      }),
+      client_lead_activities.findAll({
+        where: {
+          activity_type: 'payment_completed',
+        },
+        attributes: ['lead_id'],
+        raw: true,
+      }),
+    ]);
+
+    const manualSalesLeadIds = Array.from(new Set(
+      salesManualPaymentActivities
+        .map((row) => Number(row.lead_id))
+        .filter(Number.isFinite)
+    ));
+
+    const manualClientLeadIds = Array.from(new Set(
+      clientManualPaymentActivities
+        .map((row) => Number(row.lead_id))
+        .filter(Number.isFinite)
+    ));
+
+    const [manualPaidSalesLeads, manualPaidClientLeads] = await Promise.all([
+      manualSalesLeadIds.length
+        ? sales_leads.findAll({
+            where: {
+              is_active: 1,
+              lead_id: { [Sequelize.Op.in]: manualSalesLeadIds },
+              booking_id: { [Sequelize.Op.ne]: null }
+            },
+            attributes: ['booking_id'],
+            raw: true
+          })
+        : Promise.resolve([]),
+      manualClientLeadIds.length
+        ? client_leads.findAll({
+            where: {
+              is_active: 1,
+              lead_id: { [Sequelize.Op.in]: manualClientLeadIds },
+              booking_id: { [Sequelize.Op.ne]: null }
+            },
+            attributes: ['booking_id'],
+            raw: true
+          })
+        : Promise.resolve([]),
     ]);
 
     const bookedBookingIds = Array.from(new Set([
       ...bookedSalesLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
       ...bookedClientLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
+      ...manualPaidSalesLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
+      ...manualPaidClientLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
     ]));
 
     const paidOnlyFilter = {

@@ -8,6 +8,7 @@ const leadAssignmentService = require('../services/lead-assignment.service');
 const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 const pricingService = require('../services/pricing.service');
 const pricingController = require('../controllers/pricing.controller');
+const externalFileManagerController = require('../controllers/external-file-manager.controller');
 const paymentService = require('../services/payment-links.service');
 const accountCreditService = require('../services/account-credit.service');
 const quoteService = require('../services/sales-quote.service');
@@ -3558,6 +3559,22 @@ const resolveLeadTotalAmount = (leadRecord, bookingRecord) => {
   return 0;
 };
 
+const syncExternalWorkspaceAfterManualPayment = async (bookingRecord) => {
+  if (!bookingRecord?.stream_project_booking_id) {
+    return { success: false, message: 'No booking linked for workspace sync' };
+  }
+
+  try {
+    return await externalFileManagerController.syncWorkspaceForBookingFromRecord(bookingRecord);
+  } catch (error) {
+    console.error(
+      `External workspace sync failed for manual payment booking ${bookingRecord.stream_project_booking_id}:`,
+      error.message
+    );
+    return { success: false, message: error.message };
+  }
+};
+
 const buildManualPaymentMeta = async ({ leadModel, leadActivityModel, leadId, req, res, leadLabel }) => {
   const { payment_type, amount, payment_mode, other_payment_mode, proof_url, notes } = req.body || {};
   const performedBy = req.userId;
@@ -3702,6 +3719,8 @@ const buildManualPaymentMeta = async ({ leadModel, leadActivityModel, leadId, re
   }
   await lead.update(leadUpdate);
 
+  const externalWorkspaceSync = await syncExternalWorkspaceAfterManualPayment(lead.booking);
+
   return res.json({
     success: true,
     message: normalizedPaymentType === 'full'
@@ -3725,6 +3744,8 @@ const buildManualPaymentMeta = async ({ leadModel, leadActivityModel, leadId, re
           : 0,
       proof_url: normalizedProofUrl,
       lead_status: normalizedPaymentType === 'full' ? 'booked' : lead.lead_status,
+      external_workspace_synced: !!externalWorkspaceSync.success,
+      external_workspace_message: externalWorkspaceSync.message || null,
     }
   });
 };
