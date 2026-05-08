@@ -554,6 +554,46 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
   sales_quote_versions.belongsTo(sales_quote_activities, { as: "source_activity", foreignKey: "source_activity_id" });
   sales_quote_activities.hasMany(sales_quote_versions, { as: "created_versions", foreignKey: "source_activity_id" });
 
+  user_roles.belongsTo(roles, {
+    as: "role",
+    foreignKey: "role_id"
+  });
+
+  roles.hasMany(user_roles, {
+    as: "user_roles",
+    foreignKey: "role_id"
+  });
+
+  user_roles.belongsTo(users, {
+    as: "user",
+    foreignKey: "user_id"
+  });
+
+  users.hasMany(user_roles, {
+    as: "user_roles",
+    foreignKey: "user_id"
+  });
+
+  role_permissions.belongsTo(roles, {
+    as: "role",
+    foreignKey: "role_id"
+  });
+
+  roles.hasMany(role_permissions, {
+    as: "role_permissions",
+    foreignKey: "role_id"
+  });
+
+  role_permissions.belongsTo(permissions, {
+    as: "permission",
+    foreignKey: "permission_id"
+  });
+
+  permissions.hasMany(role_permissions, {
+    as: "role_permissions",
+    foreignKey: "permission_id"
+  });
+
   return {
     account_credit_ledger,
     activity_logs,

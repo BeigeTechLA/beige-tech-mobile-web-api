@@ -9337,8 +9337,8 @@ exports.createRole = async (req, res) => {
       description,
       is_system: 0,
       is_active: 1,
-      created_by: req.user.user_id,
-      updated_by: req.user.user_id
+      created_by: req.user.userId,
+      updated_by: req.user.userId
     });
 
     let permissionKeys = [];
@@ -9384,21 +9384,59 @@ exports.createRole = async (req, res) => {
 
 exports.getRoles = async (req, res) => {
   try {
+    const { search = '', sort_by = 'role_id', order = 'DESC' } = req.query;
+
+    const whereCondition = {
+      is_active: 1
+    };
+
+    if (search) {
+      whereCondition.name = {
+        [Op.like]: `%${search}%`
+      };
+    }
+
     const roles = await db.roles.findAll({
-      where: { is_active: 1 },
-      order: [['role_id', 'DESC']]
+      where: whereCondition,
+      order: [[sort_by, order]]
     });
+
+    const formattedRoles = await Promise.all(
+      roles.map(async (role) => {
+        const totalUsers = await db.user_roles.count({
+          where: {
+            role_id: role.role_id,
+            is_active: 1
+          }
+        });
+
+        return {
+          role_id: role.role_id,
+          name: role.name,
+          description: role.description,
+          is_system: role.is_system,
+          is_active: role.is_active,
+          created_by: role.created_by,
+          updated_by: role.updated_by,
+          created_at: role.created_at,
+          updated_at: role.updated_at,
+          total_users: totalUsers
+        };
+      })
+    );
 
     return res.status(200).json({
       success: true,
-      data: roles
+      total_roles: formattedRoles.length,
+      data: formattedRoles
     });
 
   } catch (error) {
     console.error('Get Roles Error:', error);
     return res.status(500).json({
       success: false,
-      message: 'Server error while fetching roles'
+      message: 'Server error while fetching roles',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
@@ -9414,9 +9452,36 @@ exports.assignRoleToUser = async (req, res) => {
       });
     }
 
+    const user = await db.users.findOne({
+      where: {
+        id: user_id
+      }
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const role = await db.roles.findOne({
+      where: {
+        role_id,
+        is_active: 1
+      }
+    });
+
+    if (!role) {
+      return res.status(404).json({
+        success: false,
+        message: 'Role not found or inactive'
+      });
+    }
+
     await db.user_roles.update(
       { is_active: 0 },
-      { where: { user_id } }
+      { where: { user_id }}
     );
 
     await db.user_roles.create({
@@ -9434,7 +9499,513 @@ exports.assignRoleToUser = async (req, res) => {
     console.error('Assign Role Error:', error);
     return res.status(500).json({
       success: false,
-      message: 'Server error while assigning role'
+      message: 'Server error while assigning role',
+      error:
+        process.env.NODE_ENV === 'development'
+          ? error.message
+          : undefined
+    });
+  }
+};
+
+exports.updateRole = async (req, res) => {
+  try {
+    const { role_id, name, description, permissions } = req.body;
+
+    if (!role_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Role ID is required'
+      });
+    }
+
+    const existingRole = await db.roles.findOne({
+      where: {
+        role_id,
+        is_active: 1
+      }
+    });
+
+    if (!existingRole) {
+      return res.status(404).json({
+        success: false,
+        message: 'Role not found'
+      });
+    }
+
+    if (existingRole.is_system === 1) {
+      return res.status(403).json({
+        success: false,
+        message: 'System roles cannot be modified'
+      });
+    }
+
+    await db.roles.update({
+      name,
+      description,
+      updated_by: req.user.userId
+    }, {
+      where: { role_id }
+    });
+
+    await db.role_permissions.update({
+      is_active: 0
+    }, {
+      where: { role_id }
+    });
+
+    let permissionKeys = [];
+
+    Object.keys(permissions).forEach(module => {
+      permissions[module].forEach(action => {
+        permissionKeys.push(`${module}.${action}`);
+      });
+    });
+
+    const permissionRecords = await db.permissions.findAll({
+      where: {
+        permission_key: {
+          [Op.in]: permissionKeys
+        },
+        is_active: 1
+      }
+    });
+
+    const rolePermissionData = permissionRecords.map(permission => ({
+      role_id,
+      permission_id: permission.permission_id,
+      is_active: 1
+    }));
+
+    await db.role_permissions.bulkCreate(rolePermissionData);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Role updated successfully'
+    });
+
+  } catch (error) {
+    console.error('Update Role Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while updating role'
+    });
+  }
+};
+
+exports.deleteRole = async (req, res) => {
+  try {
+    const { role_id } = req.params;
+
+    if (!role_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Role ID is required'
+      });
+    }
+
+    const role = await db.roles.findOne({
+      where: {
+        role_id,
+        is_active: 1
+      }
+    });
+
+    if (!role) {
+      return res.status(404).json({
+        success: false,
+        message: 'Role not found'
+      });
+    }
+
+    if (role.is_system === 1) {
+      return res.status(403).json({
+        success: false,
+        message: 'System roles cannot be deleted'
+      });
+    }
+
+    const assignedUsers = await db.user_roles.count({
+      where: {
+        role_id,
+        is_active: 1
+      }
+    });
+
+    if (assignedUsers > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Role is assigned to users and cannot be deleted'
+      });
+    }
+
+    await db.roles.update({
+      is_active: 0
+    }, {
+      where: { role_id }
+    });
+
+    await db.role_permissions.update({
+      is_active: 0
+    }, {
+      where: { role_id }
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Role deleted successfully'
+    });
+
+  } catch (error) {
+    console.error('Delete Role Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while deleting role'
+    });
+  }
+};
+
+exports.getRoleById = async (req, res) => {
+  try {
+    const { role_id } = req.params;
+
+    const role = await db.roles.findOne({
+      where: {
+        role_id,
+        is_active: 1
+      }
+    });
+
+    if (!role) {
+      return res.status(404).json({
+        success: false,
+        message: 'Role not found'
+      });
+    }
+
+    const rolePermissions = await db.role_permissions.findAll({
+      where: {
+        role_id,
+        is_active: 1
+      },
+      include: [{
+        model: db.permissions,
+        as: 'permissionDetails'
+      }]
+    });
+
+    const formattedPermissions = {};
+
+    rolePermissions.forEach(item => {
+      const module = item.permissionDetails.module_key;
+      const action = item.permissionDetails.action_key;
+
+      if (!formattedPermissions[module]) {
+        formattedPermissions[module] = {
+          view: false,
+          create: false,
+          edit: false,
+          delete: false
+        };
+      }
+
+      formattedPermissions[module][action] = true;
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        role,
+        permissions: formattedPermissions
+      }
+    });
+
+  } catch (error) {
+    console.error('Get Role By ID Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while fetching role details'
+    });
+  }
+};
+
+exports.getUsersWithRoles = async (req, res) => {
+  try {
+    const {
+      search = '',
+      status = '',
+      role_id = '',
+      sort_by = 'id',
+      order = 'DESC'
+    } = req.query;
+
+    const validSortFields = ['id', 'name', 'created_at'];
+    const sortField = validSortFields.includes(sort_by) ? sort_by : 'id';
+    const sortOrder = order.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+
+    const userWhereCondition = {};
+
+    if (status !== '') {
+      userWhereCondition.is_active = status;
+    }
+
+    if (search) {
+      userWhereCondition[Op.or] = [
+        {
+          name: {
+            [Op.like]: `%${search}%`
+          }
+        },
+        {
+          email: {
+            [Op.like]: `%${search}%`
+          }
+        }
+      ];
+    }
+
+    const users = await db.users.findAll({
+      where: userWhereCondition,
+      attributes: [
+        'id',
+        'name',
+        'email',
+        'user_type',
+        'created_at',
+        'is_active'
+      ],
+      order: [[sortField, sortOrder]]
+    });
+
+    const userIds = users.map(user => user.id);
+
+    const userRoles = await db.user_roles.findAll({
+      where: {
+        user_id: {
+          [Op.in]: userIds
+        },
+        is_active: 1
+      }
+    });
+
+    const roleIds = [...new Set(userRoles.map(item => item.role_id))];
+
+    const roles = await db.roles.findAll({
+      where: {
+        role_id: {
+          [Op.in]: roleIds
+        },
+        is_active: 1
+      }
+    });
+
+    const userTypes = await db.user_type.findAll({
+      where: {
+        is_active: 1
+      }
+    });
+
+    const roleMap = {};
+    roles.forEach(role => {
+      roleMap[role.role_id] = role;
+    });
+
+    const userTypeMap = {};
+    userTypes.forEach(type => {
+      userTypeMap[type.user_type_id] = type.user_role;
+    });
+
+    const userRoleMap = {};
+    userRoles.forEach(userRole => {
+      userRoleMap[userRole.user_id] = userRole.role_id;
+    });
+
+    let formattedUsers = users.map(user => {
+      const assignedRoleId = userRoleMap[user.id] || null;
+      const assignedRole = assignedRoleId ? roleMap[assignedRoleId] : null;
+
+      return {
+        user_id: user.id,
+        name: user.name,
+        email: user.email,
+        user_type: user.user_type,
+        user_type_name: userTypeMap[user.user_type] || null,
+        role_id: assignedRole ? assignedRole.role_id : user.user_type,
+        role_name: assignedRole
+          ? assignedRole.name
+          : userTypeMap[user.user_type] || null,        
+        display_role: assignedRole
+          ? assignedRole.name
+          : userTypeMap[user.user_type] || null,
+        created_at: user.created_at,
+        is_active: user.is_active,
+        status_label: user.is_active ? 'Active' : 'In-Active'
+      };
+    });
+
+    if (role_id) {
+      formattedUsers = formattedUsers.filter(
+        user => user.role_id == role_id
+      );
+    }
+
+    return res.status(200).json({
+      success: true,
+      total_users: formattedUsers.length,
+      data: formattedUsers
+    });
+
+  } catch (error) {
+    console.error('Get Users With Roles Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while fetching users with roles',
+      error:
+        process.env.NODE_ENV === 'development'
+          ? error.message
+          : undefined
+    });
+  }
+};
+
+exports.getUserRoleDetails = async (req, res) => {
+  try {
+    const { user_id } = req.params;
+
+    if (!user_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'User ID is required'
+      });
+    }
+
+    const user = await db.users.findOne({
+      where: {
+        id: user_id
+      },
+      attributes: [
+        'id',
+        'name',
+        'email',
+        'user_type',
+        'created_at',
+        'is_active'
+      ]
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const userType = await db.user_type.findOne({
+      where: {
+        user_type_id: user.user_type,
+        is_active: 1
+      }
+    });
+
+    const userRole = await db.user_roles.findOne({
+      where: {
+        user_id,
+        is_active: 1
+      }
+    });
+
+    let role = null;
+    let formattedPermissions = {};
+
+    if (userRole) {
+      role = await db.roles.findOne({
+        where: {
+          role_id: userRole.role_id,
+          is_active: 1
+        }
+      });
+
+      if (role) {
+        const rolePermissions = await db.role_permissions.findAll({
+          where: {
+            role_id: role.role_id,
+            is_active: 1
+          },
+          include: [
+            {
+              model: db.permissions,
+              as: 'permissionDetails'
+            }
+          ]
+        });
+
+        rolePermissions.forEach(item => {
+          const module = item.permissionDetails.module_key;
+          const action = item.permissionDetails.action_key;
+
+          if (!formattedPermissions[module]) {
+            formattedPermissions[module] = {
+              view: false,
+              create: false,
+              edit: false,
+              delete: false
+            };
+          }
+
+          formattedPermissions[module][action] = true;
+        });
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        user: {
+          user_id: user.id,
+          name: user.name,
+          email: user.email,
+          user_type: user.user_type,
+          user_type_name: userType ? userType.user_role : null,
+          is_active: user.is_active,
+          status_label: user.is_active ? 'Active' : 'In-Active',
+          created_at: user.created_at
+        },
+
+        role: role
+          ? {
+              role_id: role.role_id,
+              name: role.name,
+              description: role.description,
+              is_active: role.is_active,
+              created_at: role.created_at,
+              updated_at: role.updated_at
+            }
+          : {
+              role_id: user.user_type,
+              name: userType ? userType.user_role : null,
+              description: 'Default role from user type',
+              is_active: 1
+            },
+
+        display_role: role
+          ? role.name
+          : userType
+            ? userType.user_role
+            : null,
+
+        permissions: formattedPermissions
+      }
+    });
+
+  } catch (error) {
+    console.error('Get User Role Details Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while fetching user role details',
+      error:
+        process.env.NODE_ENV === 'development'
+          ? error.message
+          : undefined
     });
   }
 };

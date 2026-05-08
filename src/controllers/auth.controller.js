@@ -877,7 +877,32 @@ exports.login = async (req, res) => {
 
       // Generate tokens
       const { token, refreshToken } = generateTokens(user.id, role);
-      const permissions = getPermissionsForRole(role);
+
+      const userRoles = await db.user_roles.findAll({
+        where: {
+          user_id: user.id,
+          is_active: 1
+        }
+      });
+
+      const roleIds = userRoles.map(role => role.role_id);
+
+      const rolePermissions = await db.role_permissions.findAll({
+        where: {
+          role_id: {
+            [Op.in]: roleIds
+          },
+          is_active: 1
+        },
+        include: [{
+          model: db.permissions,
+          as: 'permissionDetails'
+        }]
+      });
+
+      const permissions = rolePermissions.map(item => item.permissionDetails.permission_key);
+
+      // const permissions = getPermissionsForRole(role);
 
       return res.status(200).json({
         success: true,

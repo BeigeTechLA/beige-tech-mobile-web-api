@@ -1200,7 +1200,7 @@ CREATE TABLE `user_roles` (
   KEY `fk_user_roles_user_id` (`user_id`),
   KEY `fk_user_roles_role_id` (`role_id`),
   CONSTRAINT `fk_user_roles_user_id`
-    FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`) ON DELETE CASCADE,
+    FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_user_roles_role_id`
     FOREIGN KEY (`role_id`) REFERENCES `roles` (`role_id`) ON DELETE CASCADE
 );

@@ -93,5 +93,10 @@ router.post('/crew-member-assigned-projects', admin.getAllAssignedRequests);
 router.post('/roles/create', authMiddleware, admin.createRole);
 router.get('/roles', authMiddleware, admin.getRoles);
 router.post('/users/assign-role', authMiddleware, admin.assignRoleToUser);
+router.put('/roles/update', authMiddleware, admin.updateRole);
+router.delete('/roles/delete/:role_id', authMiddleware, admin.deleteRole);
+router.get('/roles/:role_id', authMiddleware, admin.getRoleById);
+router.get('/users/roles', authMiddleware, admin.getUsersWithRoles);
+router.get('/users/:user_id/role-details', authMiddleware, admin.getUserRoleDetails);
 
 module.exports = router;
