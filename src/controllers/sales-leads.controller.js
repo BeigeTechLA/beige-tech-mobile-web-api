@@ -3504,7 +3504,7 @@ exports.updateClientLeadStatus = async (req, res) => {
   }
 };
 
-const MANUAL_PAYMENT_MODES = ['cash', 'bank_transfer', 'credit_card', 'other'];
+const MANUAL_PAYMENT_MODES = ['cash', 'wire', 'ach', 'zelle', 'venmo', 'cashapp', 'applepay', 'other'];
 
 const parseJsonIfNeeded = (value) => {
   if (!value) return null;
@@ -3592,7 +3592,7 @@ const buildManualPaymentMeta = async ({ leadModel, leadActivityModel, leadId, re
   if (!MANUAL_PAYMENT_MODES.includes(normalizedPaymentMode)) {
     return res.status(constants.BAD_REQUEST.code).json({
       success: false,
-      message: 'payment_mode must be one of cash, bank_transfer, credit_card, or other',
+      message: 'payment_mode must be one of cash, wire, ach, zelle, venmo, cashapp, applepay, or other',
     });
   }
 
