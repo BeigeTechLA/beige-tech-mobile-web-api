@@ -9470,12 +9470,21 @@ exports.createRole = async (req, res) => {
 
 exports.getRoles = async (req, res) => {
   try {
-    const { search = '', sort_by = 'role_id', order = 'DESC' } = req.query;
+    const {
+      search = '',
+      month = '', // 1-12
+      year = '', // optional
+      sort_by = 'role_id',
+      order = 'DESC'
+    } = req.query;
+
     const sortMap = {
       role_id: 'user_type_id',
       name: 'user_role',
-      is_active: 'is_active'
+      is_active: 'is_active',
+      created_at: 'created_at'
     };
+
     const sortField = sortMap[sort_by] || 'user_type_id';
     const sortOrder = order.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
 
@@ -9483,9 +9492,23 @@ exports.getRoles = async (req, res) => {
       is_active: 1
     };
 
+    // Search filter
     if (search) {
       whereCondition.user_role = {
         [Op.like]: `%${search}%`
+      };
+    }
+
+    // Month + Year filter for "Sort by Date"
+    if (month) {
+      const selectedYear = year || new Date().getFullYear();
+
+      const startDate = new Date(selectedYear, month - 1, 1);
+      const endDate = new Date(selectedYear, month, 1);
+
+      whereCondition.created_at = {
+        [Op.gte]: startDate,
+        [Op.lt]: endDate
       };
     }
 
@@ -9518,7 +9541,10 @@ exports.getRoles = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Server error while fetching roles',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error:
+        process.env.NODE_ENV === 'development'
+          ? error.message
+          : undefined
     });
   }
 };
@@ -9757,6 +9783,8 @@ exports.getUsersWithRoles = async (req, res) => {
       search = '',
       status = '',
       role_id = '',
+      month = '', // format: 1-12
+      year = '', // optional, defaults current year
       sort_by = 'id',
       order = 'DESC'
     } = req.query;
@@ -9767,10 +9795,12 @@ exports.getUsersWithRoles = async (req, res) => {
 
     const userWhereCondition = {};
 
+    // Status filter
     if (status !== '') {
       userWhereCondition.is_active = status;
     }
 
+    // Search filter
     if (search) {
       userWhereCondition[Op.or] = [
         {
@@ -9784,6 +9814,19 @@ exports.getUsersWithRoles = async (req, res) => {
           }
         }
       ];
+    }
+
+    // Month + Year filter
+    if (month) {
+      const selectedYear = year || new Date().getFullYear();
+
+      const startDate = new Date(selectedYear, month - 1, 1);
+      const endDate = new Date(selectedYear, month, 1);
+
+      userWhereCondition.created_at = {
+        [Op.gte]: startDate,
+        [Op.lt]: endDate
+      };
     }
 
     const users = await db.users.findAll({
@@ -9818,12 +9861,14 @@ exports.getUsersWithRoles = async (req, res) => {
 
     const roleMap = {};
     const userTypeMap = {};
+
     userTypes.forEach(type => {
       roleMap[type.user_type_id] = type;
       userTypeMap[type.user_type_id] = type.user_role;
     });
 
     const userRoleMap = {};
+
     userRoles.forEach(userRole => {
       userRoleMap[userRole.user_id] = userRole.role_id;
     });
@@ -9836,7 +9881,9 @@ exports.getUsersWithRoles = async (req, res) => {
         user_id: user.id,
         name: user.name,
         email: user.email,
-        role_id: assignedRole ? assignedRole.user_type_id : user.user_type,
+        role_id: assignedRole
+          ? assignedRole.user_type_id
+          : user.user_type,
         role_name: assignedRole
           ? assignedRole.user_role
           : userTypeMap[user.user_type] || null,
@@ -9846,6 +9893,7 @@ exports.getUsersWithRoles = async (req, res) => {
       };
     });
 
+    // Role filter
     if (role_id) {
       formattedUsers = formattedUsers.filter(
         user => user.role_id == role_id
@@ -9860,6 +9908,7 @@ exports.getUsersWithRoles = async (req, res) => {
 
   } catch (error) {
     console.error('Get Users With Roles Error:', error);
+
     return res.status(500).json({
       success: false,
       message: 'Server error while fetching users with roles',
