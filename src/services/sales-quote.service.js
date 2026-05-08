@@ -3084,6 +3084,31 @@ async function resolveQuoteBillingState(quote, transaction) {
   };
 }
 
+function computeManualPaymentProgressFromActivities(activities = [], totalAmount = 0) {
+  const manualEntries = (activities || [])
+    .map((activity) => parseConfig(activity?.activity_data))
+    .filter((entry) => entry && entry.payment_method === 'manual');
+
+  const hasFullPayment = manualEntries.some(
+    (entry) => String(entry.payment_type || '').toLowerCase() === 'full'
+  );
+  const partialPaid = manualEntries.reduce((sum, entry) => {
+    if (String(entry.payment_type || '').toLowerCase() !== 'partial') return sum;
+    const numeric = Number(entry.amount || 0);
+    return sum + (Number.isFinite(numeric) ? numeric : 0);
+  }, 0);
+
+  const paidAmount = hasFullPayment ? Number(totalAmount || 0) : partialPaid;
+  const pendingAmount = Math.max(Number(totalAmount || 0) - paidAmount, 0);
+
+  return {
+    hasFullPayment,
+    paidAmount,
+    pendingAmount,
+    isPartiallyPaid: !hasFullPayment && paidAmount > 0 && pendingAmount > 0
+  };
+}
+
 async function markQuoteInvoiceRefreshRequired({
   transaction,
   salesQuoteId,
@@ -4120,6 +4145,34 @@ async function listQuotes(query, user) {
     return acc;
   }, {});
 
+  const leadIds = Array.from(
+    new Set(
+      rows
+        .map((item) => Number(item.lead_id || 0))
+        .filter((leadId) => Number.isFinite(leadId) && leadId > 0)
+    )
+  );
+
+  const paymentActivities = leadIds.length
+    ? await db.sales_lead_activities.findAll({
+        where: {
+          lead_id: { [Op.in]: leadIds },
+          activity_type: 'payment_completed'
+        },
+        attributes: ['lead_id', 'activity_data', 'created_at'],
+        order: [['created_at', 'DESC']],
+        raw: true
+      })
+    : [];
+
+  const paymentActivitiesByLead = paymentActivities.reduce((acc, activity) => {
+    const leadId = Number(activity.lead_id || 0);
+    if (!leadId) return acc;
+    if (!acc[leadId]) acc[leadId] = [];
+    acc[leadId].push(activity);
+    return acc;
+  }, {});
+
   const rowsWithFinancialDetails = await Promise.all(rows.map(async (item) => {
     const plain = item.toJSON();
     const billingState = await resolveQuoteBillingState(plain);
@@ -4127,13 +4180,34 @@ async function listQuotes(query, user) {
       quoteId: plain.sales_quote_id,
       bookingId: billingState.booking?.stream_project_booking_id || null
     });
+    const manualActivities = paymentActivitiesByLead[Number(plain.lead_id || 0)] || [];
+    const manualPaymentSummary = computeManualPaymentProgressFromActivities(
+      manualActivities,
+      Number(plain.total || 0)
+    );
+    const hasManualFullPayment = manualPaymentSummary.hasFullPayment;
+    const hasManualPartialPayment = manualPaymentSummary.isPartiallyPaid;
+
+    const resolvedPaymentStatus = hasManualFullPayment
+      ? 'paid'
+      : hasManualPartialPayment
+        ? 'partially_paid'
+        : billingState.payment_status;
+
+    const resolvedCollectedAmount = hasManualFullPayment || hasManualPartialPayment
+      ? manualPaymentSummary.paidAmount
+      : billingState.collected_amount;
+    const resolvedOutstandingAmount = hasManualFullPayment || hasManualPartialPayment
+      ? manualPaymentSummary.pendingAmount
+      : billingState.outstanding_amount;
 
     return {
       ...plain,
-      payment_status: billingState.payment_status,
-      is_collected: billingState.is_collected,
-      collected_amount: billingState.collected_amount,
-      outstanding_amount: billingState.outstanding_amount,
+      payment_status: resolvedPaymentStatus,
+      is_collected: hasManualFullPayment ? true : billingState.is_collected,
+      collected_amount: resolvedCollectedAmount,
+      outstanding_amount: resolvedOutstandingAmount,
+      manual_payment_summary: manualPaymentSummary,
       ...(financialDetails || {})
     };
   }));
