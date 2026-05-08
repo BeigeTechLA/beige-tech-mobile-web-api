@@ -90,5 +90,8 @@ router.post('/remove-project-crew',authMiddleware, admin.removeProjectAssignedCr
 router.get('/get-project-form/:project_id',authMiddleware, admin.getProjectFormByProjectId);
 router.post('/get-assigned-project-crew', admin.getAllAssignedRequests);
 router.post('/crew-member-assigned-projects', admin.getAllAssignedRequests);
+router.post('/roles/create', authMiddleware, admin.createRole);
+router.get('/roles', authMiddleware, admin.getRoles);
+router.post('/users/assign-role', authMiddleware, admin.assignRoleToUser);
 
 module.exports = router;

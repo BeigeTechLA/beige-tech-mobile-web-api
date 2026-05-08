@@ -1992,3 +1992,33 @@ Authorization: {{TOKEN}}
 {
   "activity_id": 362
 }
+
+### create role
+POST {{URL}}admin/roles/create HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "name": "Production Team",
+  "description": "Can manage shoots and file manager",
+  "permissions": {
+    "dashboard": ["view"],
+    "shoots": ["view", "create", "edit"],
+    "file_manager": ["view"]
+  }
+}
+
+### get roles
+GET {{URL}}admin/roles HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### assign role
+POST {{URL}}admin/users/assign-role HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "user_id": 25,
+  "role_id": 1
+}

@@ -9306,3 +9306,135 @@ exports.getAllAssignedRequests = async (req, res) => {
     });
   }
 };
+
+exports.createRole = async (req, res) => {
+  try {
+    const { name, description, permissions } = req.body;
+
+    if (!name) {
+      return res.status(400).json({
+        success: false,
+        message: 'Role name is required'
+      });
+    }
+
+    const existingRole = await db.roles.findOne({
+      where: {
+        name,
+        is_active: 1
+      }
+    });
+
+    if (existingRole) {
+      return res.status(409).json({
+        success: false,
+        message: 'Role already exists'
+      });
+    }
+
+    const newRole = await db.roles.create({
+      name,
+      description,
+      is_system: 0,
+      is_active: 1,
+      created_by: req.user.user_id,
+      updated_by: req.user.user_id
+    });
+
+    let permissionKeys = [];
+
+    Object.keys(permissions).forEach(module => {
+      permissions[module].forEach(action => {
+        permissionKeys.push(`${module}.${action}`);
+      });
+    });
+
+    const permissionRecords = await db.permissions.findAll({
+      where: {
+        permission_key: {
+          [Op.in]: permissionKeys
+        },
+        is_active: 1
+      }
+    });
+
+    const rolePermissionData = permissionRecords.map(permission => ({
+      role_id: newRole.role_id,
+      permission_id: permission.permission_id,
+      is_active: 1
+    }));
+
+    await db.role_permissions.bulkCreate(rolePermissionData);
+
+    return res.status(201).json({
+      success: true,
+      message: 'Role created successfully',
+      data: newRole
+    });
+
+  } catch (error) {
+    console.error('Create Role Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while creating role',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.getRoles = async (req, res) => {
+  try {
+    const roles = await db.roles.findAll({
+      where: { is_active: 1 },
+      order: [['role_id', 'DESC']]
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: roles
+    });
+
+  } catch (error) {
+    console.error('Get Roles Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while fetching roles'
+    });
+  }
+};
+
+exports.assignRoleToUser = async (req, res) => {
+  try {
+    const { user_id, role_id } = req.body;
+
+    if (!user_id || !role_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'User ID and Role ID are required'
+      });
+    }
+
+    await db.user_roles.update(
+      { is_active: 0 },
+      { where: { user_id } }
+    );
+
+    await db.user_roles.create({
+      user_id,
+      role_id,
+      is_active: 1
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Role assigned successfully'
+    });
+
+  } catch (error) {
+    console.error('Assign Role Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while assigning role'
+    });
+  }
+};

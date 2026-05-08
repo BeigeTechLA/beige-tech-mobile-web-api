@@ -1150,3 +1150,79 @@ ADD COLUMN assign_lead TINYINT(1) NOT NULL DEFAULT 1;
 
 ALTER TABLE `users`
 ADD COLUMN `role` VARCHAR(100) NULL DEFAULT NULL AFTER `assign_lead`;
+
+-- 08-05-26
+
+CREATE TABLE `roles` (
+  `role_id` INT NOT NULL AUTO_INCREMENT,
+  `name` VARCHAR(150) NOT NULL,
+  `description` TEXT DEFAULT NULL,
+  `is_system` TINYINT(1) NOT NULL DEFAULT 0,
+  `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+  `created_by` INT DEFAULT NULL,
+  `updated_by` INT DEFAULT NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`role_id`),
+  UNIQUE KEY `unique_role_name` (`name`)
+);
+
+CREATE TABLE `permissions` (
+  `permission_id` INT NOT NULL AUTO_INCREMENT,
+  `module_key` VARCHAR(100) NOT NULL,
+  `action_key` VARCHAR(50) NOT NULL,
+  `permission_key` VARCHAR(150) NOT NULL,
+  `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+  PRIMARY KEY (`permission_id`),
+  UNIQUE KEY `unique_permission_key` (`permission_key`)
+);
+
+CREATE TABLE `role_permissions` (
+  `role_permission_id` INT NOT NULL AUTO_INCREMENT,
+  `role_id` INT NOT NULL,
+  `permission_id` INT NOT NULL,
+  `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+  PRIMARY KEY (`role_permission_id`),
+  KEY `fk_role_permissions_role_id` (`role_id`),
+  KEY `fk_role_permissions_permission_id` (`permission_id`),
+  CONSTRAINT `fk_role_permissions_role_id`
+    FOREIGN KEY (`role_id`) REFERENCES `roles` (`role_id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_role_permissions_permission_id`
+    FOREIGN KEY (`permission_id`) REFERENCES `permissions` (`permission_id`) ON DELETE CASCADE
+);
+
+CREATE TABLE `user_roles` (
+  `user_role_id` INT NOT NULL AUTO_INCREMENT,
+  `user_id` INT NOT NULL,
+  `role_id` INT NOT NULL,
+  `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+  PRIMARY KEY (`user_role_id`),
+  KEY `fk_user_roles_user_id` (`user_id`),
+  KEY `fk_user_roles_role_id` (`role_id`),
+  CONSTRAINT `fk_user_roles_user_id`
+    FOREIGN KEY (`user_id`) REFERENCES `users` (`user_id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_user_roles_role_id`
+    FOREIGN KEY (`role_id`) REFERENCES `roles` (`role_id`) ON DELETE CASCADE
+);
+
+INSERT INTO permissions (module_key, action_key, permission_key) VALUES
+('dashboard', 'view', 'dashboard.view'),
+('dashboard', 'create', 'dashboard.create'),
+('dashboard', 'edit', 'dashboard.edit'),
+('dashboard', 'delete', 'dashboard.delete'),
+
+('users', 'view', 'users.view'),
+('users', 'create', 'users.create'),
+('users', 'edit', 'users.edit'),
+('users', 'delete', 'users.delete'),
+
+('shoots', 'view', 'shoots.view'),
+('shoots', 'create', 'shoots.create'),
+('shoots', 'edit', 'shoots.edit'),
+('shoots', 'delete', 'shoots.delete'),
+
+('quotes', 'view', 'quotes.view'),
+('quotes', 'create', 'quotes.create'),
+('quotes', 'edit', 'quotes.edit'),
+('quotes', 'delete', 'quotes.delete');
+
