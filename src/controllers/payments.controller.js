@@ -1364,10 +1364,6 @@ exports.createPaymentIntentMulti = async (req, res) => {
  * Confirm multi-creator payment and update booking status + Google Sheet
  * POST /api/payments/confirm-multi
  */
-/**
- * Confirm multi-creator payment and update booking status
- * POST /api/payments/confirm-multi
- */
 exports.confirmPaymentMulti = async (req, res) => {
   const transaction = await db.sequelize.transaction();
 
@@ -2100,7 +2096,7 @@ exports.handleStripeWebhook = async (req, res) => {
       }, { transaction });
 
       await db.stream_project_booking.update({
-        is_completed: 1,
+        // is_completed: 1,
         is_draft: 0,
         payment_id: payment.payment_id,
         payment_completed_at: new Date()

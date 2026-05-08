@@ -2174,6 +2174,28 @@ async function getQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
     bookingId
   });
 
+  const additionalPayment = refreshActivity && additionalAmount > 0 ? {
+    additional_amount: additionalAmount,
+    previously_paid_amount: previouslyPaidAmount,
+    revised_total: revisedTotal,
+    outstanding_amount: additionalPaymentStatus === 'paid' ? 0 : additionalAmount,
+    payment_status: additionalPaymentStatus,
+    last_sent_at: refreshInvoiceHistory?.sent_at || null,
+    invoice_number: refreshInvoiceHistory?.invoice_number || null,
+    invoice_url: refreshInvoiceHistory?.invoice_url || null
+  } : null;
+
+  const reducedPayment = refreshActivity && reducedAmount > 0 ? {
+    reduced_amount: reducedAmount,
+    previously_paid_amount: previouslyPaidAmount,
+    revised_total: revisedTotal,
+    refund_pending_amount: reducedAmount,
+    payment_status: reducedPaymentStatus,
+    last_sent_at: refreshInvoiceHistory?.sent_at || null,
+    invoice_number: refreshInvoiceHistory?.invoice_number || null,
+    invoice_url: refreshInvoiceHistory?.invoice_url || null
+  } : null;
+
   return {
     latest_invoice: latestInvoiceHistory ? {
       invoice_send_history_id: latestInvoiceHistory.invoice_send_history_id,
@@ -2183,26 +2205,9 @@ async function getQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
       payment_status: latestInvoiceHistory.payment_status || null,
       sent_at: latestInvoiceHistory.sent_at || null
     } : null,
-    additional_payment: refreshActivity && additionalAmount > 0 ? {
-      additional_amount: additionalAmount,
-      previously_paid_amount: previouslyPaidAmount,
-      revised_total: revisedTotal,
-      outstanding_amount: additionalPaymentStatus === 'paid' ? 0 : additionalAmount,
-      payment_status: additionalPaymentStatus,
-      last_sent_at: refreshInvoiceHistory?.sent_at || null,
-      invoice_number: refreshInvoiceHistory?.invoice_number || null,
-      invoice_url: refreshInvoiceHistory?.invoice_url || null
-    } : null,
-    reduced_payment: refreshActivity && reducedAmount > 0 ? {
-      reduced_amount: reducedAmount,
-      previously_paid_amount: previouslyPaidAmount,
-      revised_total: revisedTotal,
-      refund_pending_amount: reducedAmount,
-      payment_status: reducedPaymentStatus,
-      last_sent_at: refreshInvoiceHistory?.sent_at || null,
-      invoice_number: refreshInvoiceHistory?.invoice_number || null,
-      invoice_url: refreshInvoiceHistory?.invoice_url || null
-    } : null,
+    additional_payment: additionalPayment,
+    partial_payment: additionalPayment,
+    reduced_payment: reducedPayment,
     account_credit: creditSummary
   };
 }
@@ -3048,12 +3053,15 @@ async function resolveQuoteBillingState(quote, transaction) {
         transaction
       })
     : null;
+  const refreshBelongsToBooking = Boolean(
+    booking?.stream_project_booking_id &&
+    Number(refreshMetadata?.booking_id || 0) === Number(booking.stream_project_booking_id)
+  );
   const refreshOutstanding = Boolean(
     refreshMetadata?.invoice_refresh_required &&
-    booking?.stream_project_booking_id &&
-    Number(refreshMetadata?.booking_id || 0) === Number(booking.stream_project_booking_id) &&
+    refreshBelongsToBooking &&
     refreshExtraAmount > 0 &&
-    refreshApprovalStatus === 'approved' &&
+    refreshApprovalStatus !== 'rejected' &&
     refreshInvoiceHistory?.payment_status !== 'paid'
   );
 
@@ -3073,6 +3081,31 @@ async function resolveQuoteBillingState(quote, transaction) {
     outstanding_amount: outstandingAmount,
     payment_status: paymentStatus,
     is_collected: isCollected
+  };
+}
+
+function computeManualPaymentProgressFromActivities(activities = [], totalAmount = 0) {
+  const manualEntries = (activities || [])
+    .map((activity) => parseConfig(activity?.activity_data))
+    .filter((entry) => entry && entry.payment_method === 'manual');
+
+  const hasFullPayment = manualEntries.some(
+    (entry) => String(entry.payment_type || '').toLowerCase() === 'full'
+  );
+  const partialPaid = manualEntries.reduce((sum, entry) => {
+    if (String(entry.payment_type || '').toLowerCase() !== 'partial') return sum;
+    const numeric = Number(entry.amount || 0);
+    return sum + (Number.isFinite(numeric) ? numeric : 0);
+  }, 0);
+
+  const paidAmount = hasFullPayment ? Number(totalAmount || 0) : partialPaid;
+  const pendingAmount = Math.max(Number(totalAmount || 0) - paidAmount, 0);
+
+  return {
+    hasFullPayment,
+    paidAmount,
+    pendingAmount,
+    isPartiallyPaid: !hasFullPayment && paidAmount > 0 && pendingAmount > 0
   };
 }
 
@@ -4112,6 +4145,73 @@ async function listQuotes(query, user) {
     return acc;
   }, {});
 
+  const leadIds = Array.from(
+    new Set(
+      rows
+        .map((item) => Number(item.lead_id || 0))
+        .filter((leadId) => Number.isFinite(leadId) && leadId > 0)
+    )
+  );
+
+  const paymentActivities = leadIds.length
+    ? await db.sales_lead_activities.findAll({
+        where: {
+          lead_id: { [Op.in]: leadIds },
+          activity_type: 'payment_completed'
+        },
+        attributes: ['lead_id', 'activity_data', 'created_at'],
+        order: [['created_at', 'DESC']],
+        raw: true
+      })
+    : [];
+
+  const paymentActivitiesByLead = paymentActivities.reduce((acc, activity) => {
+    const leadId = Number(activity.lead_id || 0);
+    if (!leadId) return acc;
+    if (!acc[leadId]) acc[leadId] = [];
+    acc[leadId].push(activity);
+    return acc;
+  }, {});
+
+  const rowsWithFinancialDetails = await Promise.all(rows.map(async (item) => {
+    const plain = item.toJSON();
+    const billingState = await resolveQuoteBillingState(plain);
+    const financialDetails = await getQuoteFinancialDetails({
+      quoteId: plain.sales_quote_id,
+      bookingId: billingState.booking?.stream_project_booking_id || null
+    });
+    const manualActivities = paymentActivitiesByLead[Number(plain.lead_id || 0)] || [];
+    const manualPaymentSummary = computeManualPaymentProgressFromActivities(
+      manualActivities,
+      Number(plain.total || 0)
+    );
+    const hasManualFullPayment = manualPaymentSummary.hasFullPayment;
+    const hasManualPartialPayment = manualPaymentSummary.isPartiallyPaid;
+
+    const resolvedPaymentStatus = hasManualFullPayment
+      ? 'paid'
+      : hasManualPartialPayment
+        ? 'partially_paid'
+        : billingState.payment_status;
+
+    const resolvedCollectedAmount = hasManualFullPayment || hasManualPartialPayment
+      ? manualPaymentSummary.paidAmount
+      : billingState.collected_amount;
+    const resolvedOutstandingAmount = hasManualFullPayment || hasManualPartialPayment
+      ? manualPaymentSummary.pendingAmount
+      : billingState.outstanding_amount;
+
+    return {
+      ...plain,
+      payment_status: resolvedPaymentStatus,
+      is_collected: hasManualFullPayment ? true : billingState.is_collected,
+      collected_amount: resolvedCollectedAmount,
+      outstanding_amount: resolvedOutstandingAmount,
+      manual_payment_summary: manualPaymentSummary,
+      ...(financialDetails || {})
+    };
+  }));
+
   return {
     pagination: {
       page,
@@ -4120,7 +4220,7 @@ async function listQuotes(query, user) {
       total_pages: Math.ceil(count / limit)
     },
     summary,
-    rows: rows.map((item) => item.toJSON())
+    rows: rowsWithFinancialDetails
   };
 }
 

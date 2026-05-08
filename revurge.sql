@@ -1141,3 +1141,12 @@ CREATE TABLE IF NOT EXISTS `sales_quote_versions` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 ALTER TABLE signatures DROP COLUMN pdf_path;
+
+-- 06-05-26
+
+ALTER TABLE users
+ADD COLUMN assign_lead TINYINT(1) NOT NULL DEFAULT 1;
+
+
+ALTER TABLE `users`
+ADD COLUMN `role` VARCHAR(100) NULL DEFAULT NULL AFTER `assign_lead`;

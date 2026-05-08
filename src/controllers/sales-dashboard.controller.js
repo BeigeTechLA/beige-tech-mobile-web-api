@@ -1,6 +1,8 @@
 const {
   sales_leads,
   client_leads,
+  sales_lead_activities,
+  client_lead_activities,
   discount_codes,
   payment_links,
   invoice_send_history,
@@ -17,6 +19,16 @@ const leadAssignmentService = require('../services/lead-assignment.service');
 const accountCreditService = require('../services/account-credit.service');
 
 function parseQuoteRequestMetadata(value) {
+  if (!value) return null;
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch (_) {
+    return null;
+  }
+}
+
+function parseJsonSafely(value) {
   if (!value) return null;
   if (typeof value === 'object') return value;
   try {
@@ -1194,6 +1206,193 @@ exports.getInvoiceHistory = async (req, res) => {
       } : null,
       created_at: row.created_at
     }));
+
+    const existingBookingIds = new Set(
+      items
+        .map((item) => Number(item.booking_id))
+        .filter((bookingId) => Number.isFinite(bookingId) && bookingId > 0)
+    );
+
+    const [allSalesManualActivities, allClientManualActivities] = await Promise.all([
+      sales_lead_activities.findAll({
+        where: { activity_type: 'payment_completed' },
+        attributes: ['lead_id', 'activity_data', 'created_at'],
+        order: [['created_at', 'DESC']]
+      }),
+      client_lead_activities.findAll({
+        where: { activity_type: 'payment_completed' },
+        attributes: ['lead_id', 'activity_data', 'created_at'],
+        order: [['created_at', 'DESC']]
+      })
+    ]);
+
+    const manualLeadStatus = new Map();
+    const upsertManualStatus = (leadKey, payload) => {
+      if (!leadKey || !payload || payload.payment_method !== 'manual') return;
+      const hasManualPaid =
+        String(payload.payment_type || '').toLowerCase() === 'full' ||
+        Number(payload.remaining_after_payment) <= 0;
+      if (!manualLeadStatus.has(leadKey)) {
+        manualLeadStatus.set(leadKey, { isManual: true, isManualPaid: hasManualPaid });
+        return;
+      }
+      const existing = manualLeadStatus.get(leadKey);
+      manualLeadStatus.set(leadKey, {
+        isManual: true,
+        isManualPaid: existing.isManualPaid || hasManualPaid
+      });
+    };
+
+    allSalesManualActivities.forEach((activity) => {
+      const payload = parseJsonSafely(activity.activity_data);
+      upsertManualStatus(`sales:${activity.lead_id}`, payload);
+    });
+    allClientManualActivities.forEach((activity) => {
+      const payload = parseJsonSafely(activity.activity_data);
+      upsertManualStatus(`client:${activity.lead_id}`, payload);
+    });
+
+    const manualPaidSalesLeadIds = Array.from(manualLeadStatus.entries())
+      .filter(([leadKey, value]) => leadKey.startsWith('sales:') && value?.isManualPaid)
+      .map(([leadKey]) => Number(leadKey.split(':')[1]))
+      .filter((leadId) => Number.isFinite(leadId));
+
+    const manualPaidClientLeadIds = Array.from(manualLeadStatus.entries())
+      .filter(([leadKey, value]) => leadKey.startsWith('client:') && value?.isManualPaid)
+      .map(([leadKey]) => Number(leadKey.split(':')[1]))
+      .filter((leadId) => Number.isFinite(leadId));
+
+    const [manualPaidSalesLeads, manualPaidClientLeads] = await Promise.all([
+      manualPaidSalesLeadIds.length
+        ? sales_leads.findAll({
+            where: { lead_id: { [Op.in]: manualPaidSalesLeadIds } },
+            attributes: ['lead_id', 'booking_id']
+          })
+        : [],
+      manualPaidClientLeadIds.length
+        ? client_leads.findAll({
+            where: { lead_id: { [Op.in]: manualPaidClientLeadIds } },
+            attributes: ['lead_id', 'booking_id']
+          })
+        : []
+    ]);
+
+    const manualPaidBookingIds = new Set([
+      ...manualPaidSalesLeads.map((lead) => Number(lead.booking_id)),
+      ...manualPaidClientLeads.map((lead) => Number(lead.booking_id))
+    ].filter((bookingId) => Number.isFinite(bookingId) && bookingId > 0));
+
+    const paidBookingOrFilters = [
+      { payment_id: { [Op.ne]: null } },
+      { payment_completed_at: { [Op.ne]: null } }
+    ];
+
+    if (manualPaidBookingIds.size > 0) {
+      paidBookingOrFilters.push({
+        stream_project_booking_id: { [Op.in]: Array.from(manualPaidBookingIds) }
+      });
+    }
+
+    const paidBookingsWhere = {
+      is_cancelled: 0,
+      [Op.or]: paidBookingOrFilters
+    };
+
+    if (existingBookingIds.size > 0) {
+      paidBookingsWhere.stream_project_booking_id = {
+        [Op.notIn]: Array.from(existingBookingIds)
+      };
+    }
+
+    const paidBookings = await stream_project_booking.findAll({
+      where: paidBookingsWhere,
+      attributes: ['stream_project_booking_id', 'payment_id', 'payment_completed_at', 'created_at'],
+      order: [['payment_completed_at', 'DESC'], ['created_at', 'DESC']]
+    });
+
+    const paidBookingIds = paidBookings
+      .map((booking) => Number(booking.stream_project_booking_id))
+      .filter((bookingId) => Number.isFinite(bookingId) && bookingId > 0);
+
+    if (paidBookingIds.length > 0) {
+      const [salesLeadsForBookings, clientLeadsForBookings] = await Promise.all([
+        sales_leads.findAll({
+          where: { booking_id: { [Op.in]: paidBookingIds } },
+          attributes: ['lead_id', 'booking_id', 'client_name', 'guest_email', 'assigned_sales_rep_id', 'created_at']
+        }),
+        client_leads.findAll({
+          where: { booking_id: { [Op.in]: paidBookingIds } },
+          attributes: ['lead_id', 'booking_id', 'client_name', 'guest_email', 'assigned_sales_rep_id', 'created_at']
+        })
+      ]);
+
+      const salesLeadByBookingId = new Map();
+      salesLeadsForBookings.forEach((lead) => {
+        const bookingId = Number(lead.booking_id);
+        if (!Number.isFinite(bookingId) || bookingId <= 0 || salesLeadByBookingId.has(bookingId)) return;
+        salesLeadByBookingId.set(bookingId, lead);
+      });
+
+      const clientLeadByBookingId = new Map();
+      clientLeadsForBookings.forEach((lead) => {
+        const bookingId = Number(lead.booking_id);
+        if (!Number.isFinite(bookingId) || bookingId <= 0 || clientLeadByBookingId.has(bookingId)) return;
+        clientLeadByBookingId.set(bookingId, lead);
+      });
+
+      const apiBase = `${req.protocol}://${req.get('host')}/v1`;
+      const syntheticItems = paidBookings
+        .map((booking) => {
+          const bookingId = Number(booking.stream_project_booking_id);
+          if (!Number.isFinite(bookingId) || bookingId <= 0) return null;
+
+          const salesLead = salesLeadByBookingId.get(bookingId) || null;
+          const clientLead = clientLeadByBookingId.get(bookingId) || null;
+          const effectiveLead = salesLead || clientLead;
+          const leadTypePrefix = salesLead ? 'sales' : clientLead ? 'client' : null;
+          const manualStatusKey = leadTypePrefix && effectiveLead?.lead_id
+            ? `${leadTypePrefix}:${effectiveLead.lead_id}`
+            : null;
+          const manualStatus = manualStatusKey ? manualLeadStatus.get(manualStatusKey) : null;
+          const isManualInvoice = Boolean(manualStatus?.isManual);
+          const isPaid = isManualInvoice ? Boolean(manualStatus?.isManualPaid) : Boolean(booking.payment_id);
+          if (!isPaid) return null;
+          if (salesRepId && Number(effectiveLead?.assigned_sales_rep_id) !== Number(salesRepId)) return null;
+
+          const sendDate = booking.payment_completed_at || booking.created_at || effectiveLead?.created_at || new Date();
+          const invoicePdf = `${apiBase}/sales/invoice-pdf/${bookingId}${isManualInvoice ? '?manual=1' : ''}`;
+
+          return {
+            invoice_send_history_id: -bookingId,
+            lead_id: salesLead?.lead_id || null,
+            client_lead_id: clientLead?.lead_id || null,
+            booking_id: bookingId,
+            quote_id: null,
+            quote_number: null,
+            client_name: effectiveLead?.client_name || null,
+            client_email: effectiveLead?.guest_email || null,
+            send_date_time: sendDate,
+            payment_status: 'paid',
+            invoice_number: isManualInvoice
+              ? `INVBEIGE-M-${String(bookingId).padStart(4, '0')}`
+              : null,
+            invoice_url: null,
+            invoice_pdf: invoicePdf,
+            sent_by: null,
+            sales_rep: effectiveLead?.assigned_sales_rep_id
+              ? { id: effectiveLead.assigned_sales_rep_id, name: null }
+              : null,
+            created_at: sendDate
+          };
+        })
+        .filter(Boolean);
+
+      items = [...items, ...syntheticItems];
+    }
+
+    if (status === 'paid' || status === 'pending') {
+      items = items.filter((item) => String(item.payment_status || '').toLowerCase() === status);
+    }
 
     if (search) {
       items = items.filter((item) => {

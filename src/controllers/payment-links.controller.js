@@ -10,6 +10,7 @@ const { generateManualReceiptPdfBuffer } = require('../utils/manualReceiptPdf');
 const discountService = require('../services/discount.service');
 const pricingService = require('../services/pricing.service');
 const { Op } = require('sequelize');
+const http = require('http');
 const https = require('https');
 
 const resolveInvoiceDisplayNumber = (booking, stripeInvoiceNumber = null) =>
@@ -448,13 +449,13 @@ const persistInvoiceSendHistory = async ({
   });
 };
 
-const sendInvoiceForBooking = async ({ bookingId, quoteId = null, performedByUserId = null, recipientOverride = null }) => {
+const sendInvoiceForBooking = async ({ bookingId, quoteId = null, performedByUserId = null, recipientOverride = null, requestBaseUrl = null }) => {
   const {
     parsedBookingId,
     recipientName,
     recipientEmail,
     invoiceDetails
-  } = await prepareInvoiceDetailsForBooking(bookingId, performedByUserId, recipientOverride, quoteId);
+  } = await prepareInvoiceDetailsForBooking(bookingId, performedByUserId, recipientOverride, quoteId, requestBaseUrl);
 
   const userData = { name: recipientName, email: recipientEmail };
   const emailResult = await emailService.sendInvoiceEmail(userData, invoiceDetails);
@@ -592,7 +593,9 @@ const prepareManualInvoiceDetailsForBooking = async (bookingId, req, recipientOv
 
   const manualContext = await getBookingManualPaymentContext(parsedBookingId);
   const remainingAfterPayment = Number(manualContext.latestManualPayment?.data?.remaining_after_payment ?? NaN);
+  const totalAmount = Number(pricingData.total || 0);
   const isPaidManual =
+    totalAmount <= 0 ||
     manualContext.latestManualPayment?.data?.payment_type === 'full' ||
     (Number.isFinite(remainingAfterPayment) && remainingAfterPayment <= 0);
 
@@ -600,7 +603,7 @@ const prepareManualInvoiceDetailsForBooking = async (bookingId, req, recipientOv
     invoiceUrl: invoicePdfUrl,
     invoicePdf: invoicePdfUrl,
     invoiceNumber: `INVBEIGE-M-${String(parsedBookingId).padStart(4, '0')}`,
-    totalAmount: pricingData.total,
+    totalAmount,
     isPaid: isPaidManual,
     isAdditionalPayment: false
   });
@@ -1389,7 +1392,7 @@ const bookingInvoiceIncludes = [
   }
 ];
 
-const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = null, recipientOverride = null, quoteId = null) => {
+const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = null, recipientOverride = null, quoteId = null, requestBaseUrl = null) => {
   let lockTransaction = null;
   try {
     const parsedBookingId = parseInt(bookingId, 10);
@@ -1467,6 +1470,29 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
       transaction: null
     });
     let invoiceDetails = null;
+    const totalAmount = Number(pricingData.total || 0);
+
+    // Stripe does not support collecting a 0 amount, so for fully discounted bookings we always use BEIGE manual invoice.
+    if (totalAmount <= 0) {
+      const apiBase = `${requestBaseUrl || process.env.API_URL || ''}`.replace(/\/$/, '');
+      if (!apiBase) {
+        const error = new Error('Invoice API base URL is not configured.');
+        error.statusCode = 500;
+        throw error;
+      }
+      const invoicePdfUrl = `${apiBase}/sales/invoice-pdf/${parsedBookingId}?manual=1`;
+      invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
+        invoiceUrl: invoicePdfUrl,
+        invoicePdf: invoicePdfUrl,
+        invoiceNumber: `INVBEIGE-M-${String(parsedBookingId).padStart(4, '0')}`,
+        totalAmount: 0,
+        isPaid: true,
+        isAdditionalPayment: false
+      });
+
+      await booking.update({ invoice_generation_status: 'completed' });
+      return { parsedBookingId, recipientName, recipientEmail, invoiceDetails };
+    }
 
     if (additionalInvoiceContext) {
       const additionalApprovalStatus = String(additionalInvoiceContext.approvalStatus || 'pending').toLowerCase();
@@ -1729,7 +1755,8 @@ const fetchRemoteFileBuffer = async (url, redirectCount = 0) => {
   if (redirectCount > 5) throw new Error('Too many redirects while fetching file');
 
   return new Promise((resolve, reject) => {
-    https.get(url, (response) => {
+    const client = String(url || '').toLowerCase().startsWith('http://') ? http : https;
+    client.get(url, (response) => {
       const statusCode = response.statusCode || 500;
       const location = response.headers.location;
 
@@ -1800,13 +1827,15 @@ exports.previewStripeInvoice = async (req, res) => {
     const resolvedQuoteId = await resolveConvertedBookingSalesQuoteId(booking_id);
     const effectiveQuoteId = resolvedQuoteId || salesQuoteId || null;
     const manualContext = await getBookingManualPaymentContext(booking_id);
+    const requestBaseUrl = `${req.protocol}://${req.get('host')}/v1`;
     const { invoiceDetails } = manualContext.isManual
       ? await prepareManualInvoiceDetailsForBooking(booking_id, req, recipientOverride)
       : await prepareInvoiceDetailsForBooking(
           booking_id,
           req.userId || null,
           recipientOverride,
-          effectiveQuoteId
+          effectiveQuoteId,
+          requestBaseUrl
         );
 
     return res.status(200).json({
@@ -1829,12 +1858,6 @@ exports.getStripeInvoicePdf = async (req, res) => {
 
     if (isManualRequested) {
       const manualContext = await getBookingManualPaymentContext(booking_id);
-      if (!manualContext.isManual) {
-        return res.status(400).json({
-          success: false,
-          message: 'Manual invoice is not available for this booking'
-        });
-      }
 
       const parsedBookingId = Number(booking_id);
       const booking = await db.stream_project_booking.findOne({
@@ -1854,6 +1877,14 @@ exports.getStripeInvoicePdf = async (req, res) => {
         return res.status(400).json({
           success: false,
           message: `Could not calculate pricing for booking ${parsedBookingId}.`
+        });
+      }
+      const totalAmount = Number(pricingData.total || 0);
+      const allowManualForZeroTotal = totalAmount <= 0;
+      if (!manualContext.isManual && !allowManualForZeroTotal) {
+        return res.status(400).json({
+          success: false,
+          message: 'Manual invoice is not available for this booking'
         });
       }
 
@@ -1887,11 +1918,27 @@ exports.getStripeInvoicePdf = async (req, res) => {
         });
 
       const lineItems = Array.isArray(pricingData.line_items) ? pricingData.line_items : [];
+      const quoteDiscountAmount = Number(pricingData.discount_amount || 0);
+      let quoteDiscountCode = null;
+      let quoteDiscountType = null;
+      let quoteDiscountValue = null;
+      const primaryQuote = booking.primary_quote || null;
+      if (primaryQuote?.discount_code_id) {
+        const linkedDiscountCode = await discount_codes.findByPk(primaryQuote.discount_code_id, {
+          attributes: ['code', 'discount_type', 'discount_value']
+        });
+        if (linkedDiscountCode) {
+          quoteDiscountCode = linkedDiscountCode.code || null;
+          quoteDiscountType = linkedDiscountCode.discount_type || null;
+          quoteDiscountValue = linkedDiscountCode.discount_value != null
+            ? Number(linkedDiscountCode.discount_value)
+            : null;
+        }
+      }
       const remainingAfterPayment = Number(manualContext.latestManualPayment?.data?.remaining_after_payment ?? NaN);
       const isPaidManual =
         manualContext.latestManualPayment?.data?.payment_type === 'full' ||
         (Number.isFinite(remainingAfterPayment) && remainingAfterPayment <= 0);
-      const totalAmount = Number(pricingData.total || 0);
       const totalManualPaidAmount = manualHistory.reduce((sum, entry) => {
         const amount = Number(entry?.amount || 0);
         return sum + (Number.isFinite(amount) ? amount : 0);
@@ -1923,6 +1970,10 @@ exports.getStripeInvoicePdf = async (req, res) => {
           total: Number(item.total || item.line_total || 0)
         })),
         subtotal: Number(pricingData.subtotal || totalAmount),
+        discountAmount: quoteDiscountAmount,
+        discountCode: quoteDiscountCode,
+        discountType: quoteDiscountType,
+        discountValue: quoteDiscountValue,
         total: totalAmount,
         paidAmount: normalizedPaidAmount,
         paymentHistory: manualHistory.length > 0
@@ -1944,7 +1995,8 @@ exports.getStripeInvoicePdf = async (req, res) => {
       return res.status(200).send(pdfBuffer);
     }
 
-    const { invoiceDetails } = await prepareInvoiceDetailsForBooking(booking_id, req.userId || null);
+    const requestBaseUrl = `${req.protocol}://${req.get('host')}/v1`;
+    const { invoiceDetails } = await prepareInvoiceDetailsForBooking(booking_id, req.userId || null, null, null, requestBaseUrl);
 
     if (!invoiceDetails?.invoicePdf) {
       return res.status(404).json({
@@ -1974,6 +2026,7 @@ exports.sendStripeInvoice = async (req, res) => {
     const resolvedQuoteId = await resolveConvertedBookingSalesQuoteId(booking_id);
     const effectiveQuoteId = resolvedQuoteId || salesQuoteId || null;
     const manualContext = await getBookingManualPaymentContext(booking_id);
+    const requestBaseUrl = `${req.protocol}://${req.get('host')}/v1`;
     const {
       parsedBookingId,
       recipientName,
@@ -1985,7 +2038,8 @@ exports.sendStripeInvoice = async (req, res) => {
           booking_id,
           req.userId || null,
           recipientOverride,
-          effectiveQuoteId
+          effectiveQuoteId,
+          requestBaseUrl
         );
 
     const userData = { name: recipientName, email: recipientEmail };
@@ -2092,10 +2146,12 @@ exports.sendQuoteInvoice = async (req, res) => {
       bookingId = ensuredBooking.booking_id;
     }
 
+    const requestBaseUrl = `${req.protocol}://${req.get('host')}/v1`;
     const { invoiceDetails } = await sendInvoiceForBooking({
       bookingId,
       quoteId: salesQuote.sales_quote_id,
       performedByUserId: req.userId || null,
+      requestBaseUrl,
       recipientOverride: {
         email: salesQuote.client_email || null,
         name: salesQuote.client_name || null
@@ -2158,10 +2214,11 @@ exports.previewQuoteInvoice = async (req, res) => {
       bookingId = ensuredBooking.booking_id;
     }
 
+    const requestBaseUrl = `${req.protocol}://${req.get('host')}/v1`;
     const { invoiceDetails } = await prepareInvoiceDetailsForBooking(bookingId, req.userId || null, {
       email: salesQuote.client_email || null,
       name: salesQuote.client_name || null
-    }, salesQuote.sales_quote_id);
+    }, salesQuote.sales_quote_id, requestBaseUrl);
 
     return res.status(200).json({
       success: true,

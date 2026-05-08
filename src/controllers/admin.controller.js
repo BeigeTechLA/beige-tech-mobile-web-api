@@ -6,7 +6,7 @@ const common_model = require('../utils/common_model');
 const { Op } = require('sequelize');
 const { S3UploadFiles } = require('../utils/common.js');
 const moment = require('moment');
-const { sendTaskAssignmentEmail, sendCPNewBookingRequestEmail } = require('../utils/emailService');
+const { sendTaskAssignmentEmail, sendCPNewBookingRequestEmail, sendPostProductionAssignmentEmail } = require('../utils/emailService');
 const { stream_project_booking, crew_members, crew_member_files, tasks, equipment, crew_roles,
   equipment_accessories,
   equipment_category,
@@ -145,6 +145,131 @@ const resolveAdminBookingShootAmount = async (booking = null, fallbackShootAmoun
   }
 
   return null;
+};
+
+const parseAmountCandidate = (value) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+};
+
+const resolveProjectDisplayAmount = async ({ project, paymentData }) => {
+  const paymentAmount = parseAmountCandidate(paymentData?.total_amount);
+  if (paymentAmount !== null && paymentAmount > 0) {
+    return paymentAmount;
+  }
+
+  const quoteAmountFromLinkedQuote = project?.quote_id
+    ? await quotes.findByPk(project.quote_id, {
+        attributes: ['total', 'price_after_discount', 'subtotal'],
+      }).then((quote) => {
+        if (!quote) return null;
+        return (
+          parseAmountCandidate(quote.total) ??
+          parseAmountCandidate(quote.price_after_discount) ??
+          parseAmountCandidate(quote.subtotal)
+        );
+      })
+    : null;
+
+  if (quoteAmountFromLinkedQuote !== null && quoteAmountFromLinkedQuote > 0) {
+    return quoteAmountFromLinkedQuote;
+  }
+
+  const quoteAmountFromBooking = await quotes.findOne({
+    where: { booking_id: project?.stream_project_booking_id },
+    attributes: ['total', 'price_after_discount', 'subtotal'],
+    order: [['quote_id', 'DESC']],
+  }).then((quote) => {
+    if (!quote) return null;
+    return (
+      parseAmountCandidate(quote.total) ??
+      parseAmountCandidate(quote.price_after_discount) ??
+      parseAmountCandidate(quote.subtotal)
+    );
+  });
+
+  if (quoteAmountFromBooking !== null && quoteAmountFromBooking > 0) {
+    return quoteAmountFromBooking;
+  }
+
+  return 0;
+};
+
+const resolveProjectTotalValueAmount = async ({ project }) => {
+  const quoteAmountFromLinkedQuote = project?.quote_id
+    ? await quotes.findByPk(project.quote_id, {
+        attributes: ['subtotal', 'total', 'price_after_discount'],
+      }).then((quote) => {
+        if (!quote) return null;
+        return (
+          parseAmountCandidate(quote.subtotal) ??
+          parseAmountCandidate(quote.total) ??
+          parseAmountCandidate(quote.price_after_discount)
+        );
+      })
+    : null;
+
+  if (quoteAmountFromLinkedQuote !== null && quoteAmountFromLinkedQuote > 0) {
+    return quoteAmountFromLinkedQuote;
+  }
+
+  const quoteAmountFromBooking = await quotes.findOne({
+    where: { booking_id: project?.stream_project_booking_id },
+    attributes: ['subtotal', 'total', 'price_after_discount'],
+    order: [['quote_id', 'DESC']],
+  }).then((quote) => {
+    if (!quote) return null;
+    return (
+      parseAmountCandidate(quote.subtotal) ??
+      parseAmountCandidate(quote.total) ??
+      parseAmountCandidate(quote.price_after_discount)
+    );
+  });
+
+  if (quoteAmountFromBooking !== null && quoteAmountFromBooking > 0) {
+    return quoteAmountFromBooking;
+  }
+
+  const budgetAmount = parseAmountCandidate(project?.budget);
+  if (budgetAmount !== null && budgetAmount > 0) {
+    return budgetAmount;
+  }
+
+  return 0;
+};
+
+const parseActivityPayload = (rawValue) => {
+  if (!rawValue) return null;
+  if (typeof rawValue === 'object') return rawValue;
+  try {
+    return JSON.parse(rawValue);
+  } catch (_) {
+    return null;
+  }
+};
+
+const buildManualPaymentSummaryFromActivities = (activities = [], totalAmount = 0) => {
+  const manualEntries = (activities || [])
+    .filter((activity) => activity?.activity_type === 'payment_completed')
+    .map((activity) => parseActivityPayload(activity?.activity_data))
+    .filter((payload) => payload && payload.payment_method === 'manual');
+
+  const hasFullPayment = manualEntries.some((entry) => String(entry?.payment_type || '').toLowerCase() === 'full');
+  const partialPaidAmount = manualEntries.reduce((sum, entry) => {
+    if (String(entry?.payment_type || '').toLowerCase() !== 'partial') return sum;
+    const numeric = Number(entry?.amount || 0);
+    return sum + (Number.isFinite(numeric) ? numeric : 0);
+  }, 0);
+
+  const paidAmount = hasFullPayment ? Number(totalAmount || 0) : partialPaidAmount;
+  const pendingAmount = Math.max(Number(totalAmount || 0) - paidAmount, 0);
+
+  return {
+    hasFullPayment,
+    paidAmount,
+    pendingAmount,
+    isPartiallyPaid: !hasFullPayment && paidAmount > 0 && pendingAmount > 0,
+  };
 };
 
 // Initialize geocoder
@@ -1226,11 +1351,41 @@ exports.getProjectDetails = async (req, res) => {
     // Get the first lead associated (usually there's only one)
     const lead = projectJson.sales_leads?.[0] || null;
 
-    // 3. Fetch Transaction Total (from payment_transactions table)
-    const paymentData = await payment_transactions.findOne({
-      where: { payment_id: projectJson.payment_id },
-      attributes: ['total_amount'],
+    // Fallback: fetch lead + payment activities directly by booking_id
+    // because some association payloads may not include full activities reliably.
+    const leadRecord = await sales_leads.findOne({
+      where: { booking_id: projectJson.stream_project_booking_id, is_active: 1 },
+      attributes: ['lead_id', 'lead_status'],
       raw: true
+    });
+
+    const leadPaymentActivities = leadRecord?.lead_id
+      ? await sales_lead_activities.findAll({
+          where: {
+            lead_id: leadRecord.lead_id,
+            activity_type: 'payment_completed'
+          },
+          attributes: ['activity_type', 'activity_data', 'created_at'],
+          order: [['created_at', 'ASC']],
+          raw: true
+        })
+      : [];
+
+    // 3. Fetch Transaction Total (from payment_transactions table)
+    const [paymentData] = await Promise.all([
+      payment_transactions.findOne({
+        where: { payment_id: projectJson.payment_id },
+        attributes: ['total_amount'],
+        raw: true
+      })
+    ]);
+
+    const displayAmount = await resolveProjectDisplayAmount({
+      project: projectJson,
+      paymentData,
+    });
+    const totalValueAmount = await resolveProjectTotalValueAmount({
+      project: projectJson,
     });
 
     // 4. Process Event Type Labels
@@ -1248,7 +1403,17 @@ exports.getProjectDetails = async (req, res) => {
     const projectedQuote = typeof calculateLeadPricing === 'function' ? await calculateLeadPricing(projectJson) : null;
     const activeQuoteSource = projectJson.primary_quote || projectedQuote;
     
-    let pricing_breakdown = { shoot_cost: 0, editing_cost: 0, total: 0, discount: parseFloat(projectJson.primary_quote?.discount_amount || 0) };
+    const parsedQuoteTotal = parseFloat(activeQuoteSource?.total || 0);
+    let pricing_breakdown = {
+      shoot_cost: 0,
+      editing_cost: 0,
+      subtotal: 0,
+      total_before_credit: 0,
+      credit_applied: 0,
+      discount: parseFloat(activeQuoteSource?.discount_amount || projectJson.primary_quote?.discount_amount || 0),
+      total_after_credit: 0,
+      total: 0
+    };
     let subtotal = 0;
 
     (activeQuoteSource?.line_items || []).forEach(item => {
@@ -1258,7 +1423,13 @@ exports.getProjectDetails = async (req, res) => {
         if (name.includes('edit') || name.includes('reel') || name.includes('post')) pricing_breakdown.editing_cost += cost;
         else pricing_breakdown.shoot_cost += cost;
     });
-    pricing_breakdown.total = subtotal - pricing_breakdown.discount;
+    pricing_breakdown.subtotal = subtotal;
+    pricing_breakdown.total_before_credit = subtotal;
+    pricing_breakdown.total_after_credit =
+      parsedQuoteTotal > 0
+        ? parsedQuoteTotal
+        : Math.max(subtotal - pricing_breakdown.discount, 0);
+    pricing_breakdown.total = pricing_breakdown.total_after_credit;
 
     // 6. Crew Processing & Fulfillment Summary
     const ROLE_GROUPS = { videographer: ['9', '1'], photographer: ['10', '2'], cinematographer: ['11', '3'] };
@@ -1313,6 +1484,19 @@ exports.getProjectDetails = async (req, res) => {
 
     const timelineStatus = bookingTimelineService.getTimelineStage(projectJson);
     const timelineLabel = bookingTimelineService.getTimelineLabel(timelineStatus);
+    const manualPaymentSummary = buildManualPaymentSummaryFromActivities(
+      (leadPaymentActivities && leadPaymentActivities.length > 0)
+        ? leadPaymentActivities
+        : (lead?.activities || []),
+      totalValueAmount || displayAmount
+    );
+    const resolvedPaymentStatus = projectJson.payment_id
+      ? 'paid'
+      : manualPaymentSummary.hasFullPayment
+        ? 'paid'
+        : String(leadRecord?.lead_status || lead?.lead_status || '').toLowerCase() === 'booked'
+          ? 'paid'
+        : (active_payment_link ? 'link_sent' : 'unpaid');
 
     // 8. Construct Response
     return res.status(200).json({
@@ -1321,7 +1505,8 @@ exports.getProjectDetails = async (req, res) => {
       data: {
         project: {
           ...projectJson,
-          total_paid_amount: paymentData ? paymentData.total_amount : 0,
+          total_paid_amount: displayAmount,
+          total_value_amount: totalValueAmount,
           event_type_labels: eventTypeLabels.join(', '),
           timeline_status: timelineStatus,
           timeline_label: timelineLabel,
@@ -1330,8 +1515,9 @@ exports.getProjectDetails = async (req, res) => {
         timeline_status: timelineStatus,
         timeline_label: timelineLabel,
         lead_details: lead, // Sales rep, activities, etc.
+        manual_payment_summary: manualPaymentSummary,
         pricing_breakdown,
-        payment_status: projectJson.payment_id ? 'paid' : (active_payment_link ? 'link_sent' : 'unpaid'),
+        payment_status: resolvedPaymentStatus,
         active_payment_link,
         fulfillmentSummary,
         assignedCrew: processedCrew,
@@ -1995,7 +2181,7 @@ exports.getProjectDetails = async (req, res) => {
 
 exports.getAllProjectDetails = async (req, res) => {
   try {
-    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category } = req.query;
+    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment } = req.query;
     const today = new Date();
     const noPagination = !limit && !page;
 
@@ -2036,9 +2222,98 @@ exports.getAllProjectDetails = async (req, res) => {
       dateFilter = { event_date: { [Sequelize.Op.eq]: `${date_on} 00:00:00` } };
     }
 
-    const paidOnlyFilter = { 
-      payment_id: { [Sequelize.Op.ne]: null },
-      is_active: 1 
+    const [
+      bookedSalesLeads,
+      bookedClientLeads,
+      salesManualPaymentActivities,
+      clientManualPaymentActivities,
+    ] = await Promise.all([
+      sales_leads.findAll({
+        where: {
+          is_active: 1,
+          lead_status: 'booked',
+          booking_id: { [Sequelize.Op.ne]: null }
+        },
+        attributes: ['booking_id'],
+        raw: true
+      }),
+      client_leads.findAll({
+        where: {
+          is_active: 1,
+          lead_status: 'booked',
+          booking_id: { [Sequelize.Op.ne]: null }
+        },
+        attributes: ['booking_id'],
+        raw: true
+      }),
+      sales_lead_activities.findAll({
+        where: {
+          activity_type: 'payment_completed',
+        },
+        attributes: ['lead_id'],
+        raw: true,
+      }),
+      client_lead_activities.findAll({
+        where: {
+          activity_type: 'payment_completed',
+        },
+        attributes: ['lead_id'],
+        raw: true,
+      }),
+    ]);
+
+    const manualSalesLeadIds = Array.from(new Set(
+      salesManualPaymentActivities
+        .map((row) => Number(row.lead_id))
+        .filter(Number.isFinite)
+    ));
+
+    const manualClientLeadIds = Array.from(new Set(
+      clientManualPaymentActivities
+        .map((row) => Number(row.lead_id))
+        .filter(Number.isFinite)
+    ));
+
+    const [manualPaidSalesLeads, manualPaidClientLeads] = await Promise.all([
+      manualSalesLeadIds.length
+        ? sales_leads.findAll({
+            where: {
+              is_active: 1,
+              lead_id: { [Sequelize.Op.in]: manualSalesLeadIds },
+              booking_id: { [Sequelize.Op.ne]: null }
+            },
+            attributes: ['booking_id'],
+            raw: true
+          })
+        : Promise.resolve([]),
+      manualClientLeadIds.length
+        ? client_leads.findAll({
+            where: {
+              is_active: 1,
+              lead_id: { [Sequelize.Op.in]: manualClientLeadIds },
+              booking_id: { [Sequelize.Op.ne]: null }
+            },
+            attributes: ['booking_id'],
+            raw: true
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const bookedBookingIds = Array.from(new Set([
+      ...bookedSalesLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
+      ...bookedClientLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
+      ...manualPaidSalesLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
+      ...manualPaidClientLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
+    ]));
+
+    const paidOnlyFilter = {
+      is_active: 1,
+      [Sequelize.Op.or]: [
+        { payment_id: { [Sequelize.Op.ne]: null } },
+        ...(bookedBookingIds.length > 0
+          ? [{ stream_project_booking_id: { [Sequelize.Op.in]: bookedBookingIds } }]
+          : []),
+      ]
     };
 
     let whereConditions = { ...paidOnlyFilter, ...dateFilter };
@@ -2048,7 +2323,13 @@ exports.getAllProjectDetails = async (req, res) => {
       const categoryConditions = keywords.map(word => ({
         project_name: { [Sequelize.Op.like]: `%${word}%` }
       }));
-      whereConditions = { ...whereConditions, [Sequelize.Op.or]: categoryConditions };
+      whereConditions = {
+        ...whereConditions,
+        [Sequelize.Op.and]: [
+          ...(whereConditions[Sequelize.Op.and] || []),
+          { [Sequelize.Op.or]: categoryConditions }
+        ]
+      };
     }
 
     if (status) {
@@ -2125,11 +2406,13 @@ exports.getAllProjectDetails = async (req, res) => {
     
     if (search) {
       const searchCondition = Sequelize.where(Sequelize.fn('LOWER', Sequelize.col('project_name')), { [Sequelize.Op.like]: `%${search.toLowerCase()}%` });
-      if (whereConditions[Sequelize.Op.or]) {
-        whereConditions = { [Sequelize.Op.and]: [{ [Sequelize.Op.or]: whereConditions[Sequelize.Op.or] }, searchCondition], ...paidOnlyFilter, ...dateFilter };
-      } else {
-        whereConditions.project_name = searchCondition;
-      }
+      whereConditions = {
+        ...whereConditions,
+        [Sequelize.Op.and]: [
+          ...(whereConditions[Sequelize.Op.and] || []),
+          searchCondition
+        ]
+      };
     }
 
     const [ total_active, total_cancelled, total_completed, total_upcoming, total_draft, allEventMasterTypes ] = await Promise.all([
@@ -2151,7 +2434,7 @@ exports.getAllProjectDetails = async (req, res) => {
       ],
     });
 
-    const projectDetails = await Promise.all(projects.map(async (project) => {
+    let projectDetails = await Promise.all(projects.map(async (project) => {
       const [assignedCrewData, assignedEquipData, assignedPostProdData, paymentData] = await Promise.all([
         assigned_crew.findAll({
           where: { project_id: project.stream_project_booking_id, is_active: 1 },
@@ -2168,8 +2451,16 @@ exports.getAllProjectDetails = async (req, res) => {
         payment_transactions.findOne({
           where: { payment_id: project.payment_id },
           attributes: ['total_amount']
-        })
+        }),
       ]);
+
+      const displayAmount = await resolveProjectDisplayAmount({
+        project,
+        paymentData,
+      });
+      const totalValueAmount = await resolveProjectTotalValueAmount({
+        project,
+      });
 
       const rawTypes = project.event_type ? project.event_type.split(',') : [];
       const formattedTypes = rawTypes.map(t => {
@@ -2186,7 +2477,8 @@ exports.getAllProjectDetails = async (req, res) => {
       return {
         project: {
           ...project.toJSON(),
-          total_paid_amount: paymentData ? paymentData.total_amount : 0,
+          total_paid_amount: displayAmount,
+          total_value_amount: totalValueAmount,
           event_type_labels: formattedTypes.join(', '),
           timeline_status: timelineStatus,
           timeline_label: timelineLabel,
@@ -2208,6 +2500,21 @@ exports.getAllProjectDetails = async (req, res) => {
       };
     }));
 
+    if (cp_assignment && cp_assignment !== 'all') {
+      const normalizedCpAssignment = String(cp_assignment).toLowerCase().trim();
+      projectDetails = projectDetails.filter((entry) => {
+        const assignedCrew = Array.isArray(entry?.assignedCrew) ? entry.assignedCrew : [];
+        const selectedCrewIds = Array.isArray(entry?.project?.selected_crew_ids) ? entry.project.selected_crew_ids : [];
+        const hasAssigned = assignedCrew.length > 0 || selectedCrewIds.length > 0;
+
+        if (normalizedCpAssignment === 'assigned') return hasAssigned;
+        if (normalizedCpAssignment === 'not_assigned') return !hasAssigned;
+        return true;
+      });
+    }
+
+    const filteredTotalRecords = projectDetails.length;
+
     return res.status(200).json({
       error: false,
       message: 'Filtered project details retrieved successfully',
@@ -2217,7 +2524,7 @@ exports.getAllProjectDetails = async (req, res) => {
         pagination: noPagination ? null : {
             page: pageNumber,
             limit: pageSize,
-            totalRecords: total_active + total_cancelled + total_completed + total_upcoming + total_draft,
+            totalRecords: filteredTotalRecords,
         }
       },
     });
@@ -6178,6 +6485,32 @@ exports.assignPostProductionMember = async (req, res) => {
       is_active: 1,
     });
 
+    try {
+      const emailClientName = await resolveAdminBookingClientName(project);
+      const emailShootAmount = await resolveAdminBookingShootAmount(project);
+
+      const mailResult = await sendPostProductionAssignmentEmail({
+        to_email: postProductionMember.email,
+        member_name: fullName || `${postProductionMember.first_name || ''} ${postProductionMember.last_name || ''}`.trim(),
+        first_name: postProductionMember.first_name || firstName || '',
+        booking_id: project.stream_project_booking_id,
+        project_id: project.stream_project_booking_id,
+        client: emailClientName,
+        shoot_type: project.shoot_type || project.event_type || project.content_type,
+        date: project.event_date,
+        start_time: project.start_time,
+        end_time: project.end_time,
+        shoot_amount: emailShootAmount,
+        location: project.event_location,
+      });
+
+      if (!mailResult?.success) {
+        console.error('Post-production assignment email failed:', mailResult?.error);
+      }
+    } catch (mailErr) {
+      console.error('Post-production assignment email trigger error:', mailErr?.response?.body || mailErr.message);
+    }
+
     return res.status(201).json({
       error: false,
       message: 'Post production member assigned successfully',
@@ -6254,6 +6587,7 @@ exports.getClients = async (req, res) => {
         {
           model: users,
           as: 'user',
+          required: false,
           attributes: ['id'],
           include: [
             {
@@ -6299,9 +6633,14 @@ exports.getClients = async (req, res) => {
     const data = rows.map(client => {
       const lead = client.user?.sales_leads?.[0] || null;
       const booking = lead?.booking || null;
+      const hasLinkedUser = Boolean(client.user?.id);
+      const clientType = hasLinkedUser ? 'registered' : 'guest';
 
       return {
         ...client.toJSON(),
+        client_type: clientType,
+        registration_type: clientType,
+        is_guest: !hasLinkedUser,
         referral_code: affiliateMap.get(Number(client.user_id)) || null,
         intent: leadAssignmentService.getClientIntent({ lead, booking }),
         booking_status: leadAssignmentService.getClientBookingStatus(booking)
@@ -6830,7 +7169,12 @@ exports.getClientById = async (req, res) => {
       error: false,
       message: 'Client details fetched successfully',
       data: {
-        client: client,
+        client: {
+          ...client.toJSON(),
+          client_type: user ? 'registered' : 'guest',
+          registration_type: user ? 'registered' : 'guest',
+          is_guest: !Boolean(user)
+        },
         user: user,
         affiliate: affiliate,
         account_credit: {
@@ -6874,6 +7218,24 @@ exports.getClientsShoots = async (req, res) => {
     }
 
     const user_id = client.user_id;
+    const clientEmail = String(client.email || '').trim().toLowerCase();
+    // Scope projects correctly:
+    // - Registered client: by user_id
+    // - Guest client: by guest_email only
+    const clientProjectScope = user_id
+      ? { user_id }
+      : {
+          ...(clientEmail
+            ? {
+                [Sequelize.Op.and]: [
+                  Sequelize.where(
+                    Sequelize.fn('LOWER', Sequelize.col('guest_email')),
+                    clientEmail
+                  )
+                ]
+              }
+            : { guest_email: { [Sequelize.Op.eq]: '__no_guest_email__' } })
+        };
 
     // -------- PAGINATION --------
     const noPagination = !limit && !page;
@@ -6922,8 +7284,8 @@ exports.getClientsShoots = async (req, res) => {
 
     // -------- BASE WHERE --------
     const whereConditions = {
-      user_id,
       is_active: 1,
+      ...clientProjectScope,
       ...dateFilter
     };
 
@@ -6970,24 +7332,24 @@ exports.getClientsShoots = async (req, res) => {
       total_draft
     ] = await Promise.all([
       stream_project_booking.count({
-        where: { user_id, is_active: 1, is_cancelled: 0, is_completed: 0, is_draft: 0 }
+        where: { ...clientProjectScope, is_active: 1, is_cancelled: 0, is_completed: 0, is_draft: 0 }
       }),
       stream_project_booking.count({
-        where: { user_id, is_cancelled: 1 }
+        where: { ...clientProjectScope, is_cancelled: 1 }
       }),
       stream_project_booking.count({
-        where: { user_id, is_completed: 1 }
+        where: { ...clientProjectScope, is_completed: 1 }
       }),
       stream_project_booking.count({
         where: {
-          user_id,
+          ...clientProjectScope,
           is_cancelled: 0,
           is_draft: 0,
           event_date: { [Sequelize.Op.gt]: today }
         }
       }),
       stream_project_booking.count({
-        where: { user_id, is_draft: 1 }
+        where: { ...clientProjectScope, is_draft: 1 }
       }),
     ]);
 
@@ -6997,6 +7359,28 @@ exports.getClientsShoots = async (req, res) => {
       ...(noPagination ? {} : { limit: pageSize, offset }),
       order: [['event_date', 'DESC']]
     });
+
+    const bookingIds = projects
+      .map((project) => Number(project.stream_project_booking_id))
+      .filter((id) => Number.isFinite(id));
+
+    const bookedLeadRows = bookingIds.length
+      ? await sales_leads.findAll({
+          where: {
+            booking_id: { [Sequelize.Op.in]: bookingIds },
+            lead_status: 'booked',
+            is_active: 1
+          },
+          attributes: ['booking_id'],
+          raw: true
+        })
+      : [];
+
+    const bookedBookingIdSet = new Set(
+      bookedLeadRows
+        .map((row) => Number(row.booking_id))
+        .filter((id) => Number.isFinite(id))
+    );
 
     // -------- FETCH ASSOCIATED DATA --------
     const projectDetails = await Promise.all(
@@ -7038,10 +7422,19 @@ exports.getClientsShoots = async (req, res) => {
         val.charAt(0).toUpperCase() + val.slice(1);
     });
 
+    const displayAmount = await resolveProjectDisplayAmount({
+      project,
+      paymentData
+    });
+    const totalValueAmount = await resolveProjectTotalValueAmount({
+      project
+    });
+
     return {
       project: {
         ...project.toJSON(),
-        total_paid_amount: paymentData ? paymentData.total_amount : 0,
+        total_paid_amount: displayAmount,
+        total_value_amount: totalValueAmount,
         event_type_labels: formattedTypes.join(', '),
         event_location: (() => {
           const loc = project.event_location;
@@ -7070,8 +7463,11 @@ exports.getClientsShoots = async (req, res) => {
 
     projectDetails.forEach(item => {
       const proj = item.project;
+      const isManualPaid = bookedBookingIdSet.has(Number(proj.stream_project_booking_id));
+      const isStripePaid = Boolean(proj.payment_id);
+      const isPaid = (isStripePaid || isManualPaid) && proj.is_draft !== 1;
 
-      if (proj.payment_id && proj.is_draft !== 1) {
+      if (isPaid) {
         paid.push(item);
       } else {
         unpaid_or_draft.push(item);
@@ -7082,7 +7478,12 @@ exports.getClientsShoots = async (req, res) => {
       error: false,
       message: 'Client shoots fetched successfully',
       data: {
-        client: client,
+        client: {
+          ...client.toJSON(),
+          client_type: user_id ? 'registered' : 'guest',
+          registration_type: user_id ? 'registered' : 'guest',
+          is_guest: !Boolean(user_id)
+        },
         stats: {
           total_active,
           total_cancelled,
