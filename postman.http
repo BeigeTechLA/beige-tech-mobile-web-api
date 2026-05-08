@@ -2014,7 +2014,7 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### get roles
-GET {{URL}}admin/roles?sort_by=created_at&order=desc HTTP/1.1
+GET {{URL}}admin/roles?search=client&sort_by=created_at&order=desc HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
