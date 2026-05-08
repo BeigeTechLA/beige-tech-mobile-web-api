@@ -1226,3 +1226,21 @@ INSERT INTO permissions (module_key, action_key, permission_key) VALUES
 ('quotes', 'edit', 'quotes.edit'),
 ('quotes', 'delete', 'quotes.delete');
 
+ALTER TABLE `role_permissions`
+DROP FOREIGN KEY `fk_role_permissions_role_id`;
+
+ALTER TABLE `user_roles`
+DROP FOREIGN KEY `fk_user_roles_role_id`;
+
+DROP TABLE IF EXISTS `roles`;
+
+ALTER TABLE `role_permissions`
+ADD CONSTRAINT `fk_role_permissions_user_type_id`
+FOREIGN KEY (`role_id`) REFERENCES `user_type` (`user_type_id`) ON DELETE CASCADE;
+
+ALTER TABLE `user_roles`
+ADD CONSTRAINT `fk_user_roles_user_type_id`
+FOREIGN KEY (`role_id`) REFERENCES `user_type` (`user_type_id`) ON DELETE CASCADE;
+
+ALTER TABLE `user_type`
+ADD COLUMN `description` TEXT DEFAULT NULL AFTER `user_role`;

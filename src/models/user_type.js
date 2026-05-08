@@ -11,6 +11,10 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.STRING(255),
       allowNull: true
     },
+    description: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
     is_active: {
       type: DataTypes.INTEGER,
       allowNull: false,

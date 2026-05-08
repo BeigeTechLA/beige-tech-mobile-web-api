@@ -9307,6 +9307,118 @@ exports.getAllAssignedRequests = async (req, res) => {
   }
 };
 
+const formatUserTypeAsRole = (role, totalUsers = 0) => ({
+  role_id: role.user_type_id,
+  name: role.user_role,
+  description: role.description || null,
+  is_system: 0,
+  is_active: role.is_active,
+  created_by: null,
+  updated_by: null,
+  created_at: null,
+  updated_at: null,
+  total_users: totalUsers
+});
+
+const buildPermissionKeys = (permissions = {}) => {
+  const permissionKeys = [];
+
+  Object.keys(permissions || {}).forEach(module => {
+    const actions = permissions[module];
+
+    if (Array.isArray(actions)) {
+      actions.forEach(action => {
+        permissionKeys.push(`${module}.${action}`);
+      });
+      return;
+    }
+
+    if (actions && typeof actions === 'object') {
+      Object.keys(actions).forEach(action => {
+        if (actions[action]) {
+          permissionKeys.push(`${module}.${action}`);
+        }
+      });
+    }
+  });
+
+  return permissionKeys;
+};
+
+const syncRolePermissions = async (roleId, permissions = {}) => {
+  const permissionKeys = buildPermissionKeys(permissions);
+
+  await db.role_permissions.update(
+    { is_active: 0 },
+    { where: { role_id: roleId } }
+  );
+
+  if (!permissionKeys.length) {
+    return;
+  }
+
+  const permissionRecords = await db.permissions.findAll({
+    where: {
+      permission_key: {
+        [Op.in]: permissionKeys
+      },
+      is_active: 1
+    }
+  });
+
+  const rolePermissionData = permissionRecords.map(permission => ({
+    role_id: roleId,
+    permission_id: permission.permission_id,
+    is_active: 1
+  }));
+
+  if (rolePermissionData.length) {
+    await db.role_permissions.bulkCreate(rolePermissionData);
+  }
+};
+
+const formatRolePermissions = async (roleId) => {
+  const rolePermissions = await db.role_permissions.findAll({
+    where: {
+      role_id: roleId,
+      is_active: 1
+    },
+    include: [
+      {
+        model: db.permissions,
+        as: 'permission',
+        required: false
+      }
+    ]
+  });
+
+  const formattedPermissions = {};
+
+  rolePermissions.forEach(item => {
+    const permission = item.permission || item.permissionDetails;
+
+    if (!permission) {
+      return;
+    }
+
+    const module = permission.module_key;
+    const action = permission.action_key;
+
+    if (!formattedPermissions[module]) {
+      formattedPermissions[module] = {
+        view: false,
+        create: false,
+        edit: false,
+        delete: false
+      };
+    }
+
+    formattedPermissions[module][action] = true;
+  });
+
+  return formattedPermissions;
+};
+
 exports.createRole = async (req, res) => {
   try {
     const { name, description, permissions } = req.body;
@@ -9318,9 +9430,9 @@ exports.createRole = async (req, res) => {
       });
     }
 
-    const existingRole = await db.roles.findOne({
+    const existingRole = await db.user_type.findOne({
       where: {
-        name,
+        user_role: name,
         is_active: 1
       }
     });
@@ -9332,44 +9444,18 @@ exports.createRole = async (req, res) => {
       });
     }
 
-    const newRole = await db.roles.create({
-      name,
+    const newRole = await db.user_type.create({
+      user_role: name,
       description,
-      is_system: 0,
-      is_active: 1,
-      created_by: req.user.userId,
-      updated_by: req.user.userId
-    });
-
-    let permissionKeys = [];
-
-    Object.keys(permissions).forEach(module => {
-      permissions[module].forEach(action => {
-        permissionKeys.push(`${module}.${action}`);
-      });
-    });
-
-    const permissionRecords = await db.permissions.findAll({
-      where: {
-        permission_key: {
-          [Op.in]: permissionKeys
-        },
-        is_active: 1
-      }
-    });
-
-    const rolePermissionData = permissionRecords.map(permission => ({
-      role_id: newRole.role_id,
-      permission_id: permission.permission_id,
       is_active: 1
-    }));
+    });
 
-    await db.role_permissions.bulkCreate(rolePermissionData);
+    await syncRolePermissions(newRole.user_type_id, permissions);
 
     return res.status(201).json({
       success: true,
       message: 'Role created successfully',
-      data: newRole
+      data: formatUserTypeAsRole(newRole)
     });
 
   } catch (error) {
@@ -9385,43 +9471,39 @@ exports.createRole = async (req, res) => {
 exports.getRoles = async (req, res) => {
   try {
     const { search = '', sort_by = 'role_id', order = 'DESC' } = req.query;
+    const sortMap = {
+      role_id: 'user_type_id',
+      name: 'user_role',
+      is_active: 'is_active'
+    };
+    const sortField = sortMap[sort_by] || 'user_type_id';
+    const sortOrder = order.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
 
     const whereCondition = {
       is_active: 1
     };
 
     if (search) {
-      whereCondition.name = {
+      whereCondition.user_role = {
         [Op.like]: `%${search}%`
       };
     }
 
-    const roles = await db.roles.findAll({
+    const roles = await db.user_type.findAll({
       where: whereCondition,
-      order: [[sort_by, order]]
+      order: [[sortField, sortOrder]]
     });
 
     const formattedRoles = await Promise.all(
       roles.map(async (role) => {
         const totalUsers = await db.user_roles.count({
           where: {
-            role_id: role.role_id,
+            role_id: role.user_type_id,
             is_active: 1
           }
         });
 
-        return {
-          role_id: role.role_id,
-          name: role.name,
-          description: role.description,
-          is_system: role.is_system,
-          is_active: role.is_active,
-          created_by: role.created_by,
-          updated_by: role.updated_by,
-          created_at: role.created_at,
-          updated_at: role.updated_at,
-          total_users: totalUsers
-        };
+        return formatUserTypeAsRole(role, totalUsers);
       })
     );
 
@@ -9465,9 +9547,9 @@ exports.assignRoleToUser = async (req, res) => {
       });
     }
 
-    const role = await db.roles.findOne({
+    const role = await db.user_type.findOne({
       where: {
-        role_id,
+        user_type_id: role_id,
         is_active: 1
       }
     });
@@ -9519,9 +9601,9 @@ exports.updateRole = async (req, res) => {
       });
     }
 
-    const existingRole = await db.roles.findOne({
+    const existingRole = await db.user_type.findOne({
       where: {
-        role_id,
+        user_type_id: role_id,
         is_active: 1
       }
     });
@@ -9533,51 +9615,25 @@ exports.updateRole = async (req, res) => {
       });
     }
 
-    if (existingRole.is_system === 1) {
-      return res.status(403).json({
-        success: false,
-        message: 'System roles cannot be modified'
+    const roleUpdateData = {};
+
+    if (name !== undefined) {
+      roleUpdateData.user_role = name;
+    }
+
+    if (description !== undefined) {
+      roleUpdateData.description = description;
+    }
+
+    if (Object.keys(roleUpdateData).length) {
+      await db.user_type.update(roleUpdateData, {
+        where: { user_type_id: role_id }
       });
     }
 
-    await db.roles.update({
-      name,
-      description,
-      updated_by: req.user.userId
-    }, {
-      where: { role_id }
-    });
-
-    await db.role_permissions.update({
-      is_active: 0
-    }, {
-      where: { role_id }
-    });
-
-    let permissionKeys = [];
-
-    Object.keys(permissions).forEach(module => {
-      permissions[module].forEach(action => {
-        permissionKeys.push(`${module}.${action}`);
-      });
-    });
-
-    const permissionRecords = await db.permissions.findAll({
-      where: {
-        permission_key: {
-          [Op.in]: permissionKeys
-        },
-        is_active: 1
-      }
-    });
-
-    const rolePermissionData = permissionRecords.map(permission => ({
-      role_id,
-      permission_id: permission.permission_id,
-      is_active: 1
-    }));
-
-    await db.role_permissions.bulkCreate(rolePermissionData);
+    if (Object.prototype.hasOwnProperty.call(req.body, 'permissions')) {
+      await syncRolePermissions(role_id, permissions);
+    }
 
     return res.status(200).json({
       success: true,
@@ -9604,9 +9660,9 @@ exports.deleteRole = async (req, res) => {
       });
     }
 
-    const role = await db.roles.findOne({
+    const role = await db.user_type.findOne({
       where: {
-        role_id,
+        user_type_id: role_id,
         is_active: 1
       }
     });
@@ -9615,13 +9671,6 @@ exports.deleteRole = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: 'Role not found'
-      });
-    }
-
-    if (role.is_system === 1) {
-      return res.status(403).json({
-        success: false,
-        message: 'System roles cannot be deleted'
       });
     }
 
@@ -9639,10 +9688,10 @@ exports.deleteRole = async (req, res) => {
       });
     }
 
-    await db.roles.update({
+    await db.user_type.update({
       is_active: 0
     }, {
-      where: { role_id }
+      where: { user_type_id: role_id }
     });
 
     await db.role_permissions.update({
@@ -9669,9 +9718,9 @@ exports.getRoleById = async (req, res) => {
   try {
     const { role_id } = req.params;
 
-    const role = await db.roles.findOne({
+    const role = await db.user_type.findOne({
       where: {
-        role_id,
+        user_type_id: role_id,
         is_active: 1
       }
     });
@@ -9683,39 +9732,12 @@ exports.getRoleById = async (req, res) => {
       });
     }
 
-    const rolePermissions = await db.role_permissions.findAll({
-      where: {
-        role_id,
-        is_active: 1
-      },
-      include: [{
-        model: db.permissions,
-        as: 'permissionDetails'
-      }]
-    });
-
-    const formattedPermissions = {};
-
-    rolePermissions.forEach(item => {
-      const module = item.permissionDetails.module_key;
-      const action = item.permissionDetails.action_key;
-
-      if (!formattedPermissions[module]) {
-        formattedPermissions[module] = {
-          view: false,
-          create: false,
-          edit: false,
-          delete: false
-        };
-      }
-
-      formattedPermissions[module][action] = true;
-    });
+    const formattedPermissions = await formatRolePermissions(role_id);
 
     return res.status(200).json({
       success: true,
       data: {
-        role,
+        role: formatUserTypeAsRole(role),
         permissions: formattedPermissions
       }
     });
@@ -9788,17 +9810,6 @@ exports.getUsersWithRoles = async (req, res) => {
       }
     });
 
-    const roleIds = [...new Set(userRoles.map(item => item.role_id))];
-
-    const roles = await db.roles.findAll({
-      where: {
-        role_id: {
-          [Op.in]: roleIds
-        },
-        is_active: 1
-      }
-    });
-
     const userTypes = await db.user_type.findAll({
       where: {
         is_active: 1
@@ -9806,12 +9817,9 @@ exports.getUsersWithRoles = async (req, res) => {
     });
 
     const roleMap = {};
-    roles.forEach(role => {
-      roleMap[role.role_id] = role;
-    });
-
     const userTypeMap = {};
     userTypes.forEach(type => {
+      roleMap[type.user_type_id] = type;
       userTypeMap[type.user_type_id] = type.user_role;
     });
 
@@ -9828,14 +9836,9 @@ exports.getUsersWithRoles = async (req, res) => {
         user_id: user.id,
         name: user.name,
         email: user.email,
-        user_type: user.user_type,
-        user_type_name: userTypeMap[user.user_type] || null,
-        role_id: assignedRole ? assignedRole.role_id : user.user_type,
+        role_id: assignedRole ? assignedRole.user_type_id : user.user_type,
         role_name: assignedRole
-          ? assignedRole.name
-          : userTypeMap[user.user_type] || null,        
-        display_role: assignedRole
-          ? assignedRole.name
+          ? assignedRole.user_role
           : userTypeMap[user.user_type] || null,
         created_at: user.created_at,
         is_active: user.is_active,
@@ -9918,42 +9921,15 @@ exports.getUserRoleDetails = async (req, res) => {
     let formattedPermissions = {};
 
     if (userRole) {
-      role = await db.roles.findOne({
+      role = await db.user_type.findOne({
         where: {
-          role_id: userRole.role_id,
+          user_type_id: userRole.role_id,
           is_active: 1
         }
       });
 
       if (role) {
-        const rolePermissions = await db.role_permissions.findAll({
-          where: {
-            role_id: role.role_id,
-            is_active: 1
-          },
-          include: [
-            {
-              model: db.permissions,
-              as: 'permissionDetails'
-            }
-          ]
-        });
-
-        rolePermissions.forEach(item => {
-          const module = item.permissionDetails.module_key;
-          const action = item.permissionDetails.action_key;
-
-          if (!formattedPermissions[module]) {
-            formattedPermissions[module] = {
-              view: false,
-              create: false,
-              edit: false,
-              delete: false
-            };
-          }
-
-          formattedPermissions[module][action] = true;
-        });
+        formattedPermissions = await formatRolePermissions(role.user_type_id);
       }
     }
 
@@ -9973,12 +9949,12 @@ exports.getUserRoleDetails = async (req, res) => {
 
         role: role
           ? {
-              role_id: role.role_id,
-              name: role.name,
-              description: role.description,
+              role_id: role.user_type_id,
+              name: role.user_role,
+              description: role.description || null,
               is_active: role.is_active,
-              created_at: role.created_at,
-              updated_at: role.updated_at
+              created_at: null,
+              updated_at: null
             }
           : {
               role_id: user.user_type,
@@ -9988,7 +9964,7 @@ exports.getUserRoleDetails = async (req, res) => {
             },
 
         display_role: role
-          ? role.name
+          ? role.user_role
           : userType
             ? userType.user_role
             : null,
