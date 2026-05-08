@@ -6,7 +6,7 @@ const common_model = require('../utils/common_model');
 const { Op } = require('sequelize');
 const { S3UploadFiles } = require('../utils/common.js');
 const moment = require('moment');
-const { sendTaskAssignmentEmail, sendCPNewBookingRequestEmail } = require('../utils/emailService');
+const { sendTaskAssignmentEmail, sendCPNewBookingRequestEmail, sendPostProductionAssignmentEmail } = require('../utils/emailService');
 const { stream_project_booking, crew_members, crew_member_files, tasks, equipment, crew_roles,
   equipment_accessories,
   equipment_category,
@@ -2222,7 +2222,12 @@ exports.getAllProjectDetails = async (req, res) => {
       dateFilter = { event_date: { [Sequelize.Op.eq]: `${date_on} 00:00:00` } };
     }
 
-    const [bookedSalesLeads, bookedClientLeads] = await Promise.all([
+    const [
+      bookedSalesLeads,
+      bookedClientLeads,
+      salesManualPaymentActivities,
+      clientManualPaymentActivities,
+    ] = await Promise.all([
       sales_leads.findAll({
         where: {
           is_active: 1,
@@ -2240,12 +2245,65 @@ exports.getAllProjectDetails = async (req, res) => {
         },
         attributes: ['booking_id'],
         raw: true
-      })
+      }),
+      sales_lead_activities.findAll({
+        where: {
+          activity_type: 'payment_completed',
+        },
+        attributes: ['lead_id'],
+        raw: true,
+      }),
+      client_lead_activities.findAll({
+        where: {
+          activity_type: 'payment_completed',
+        },
+        attributes: ['lead_id'],
+        raw: true,
+      }),
+    ]);
+
+    const manualSalesLeadIds = Array.from(new Set(
+      salesManualPaymentActivities
+        .map((row) => Number(row.lead_id))
+        .filter(Number.isFinite)
+    ));
+
+    const manualClientLeadIds = Array.from(new Set(
+      clientManualPaymentActivities
+        .map((row) => Number(row.lead_id))
+        .filter(Number.isFinite)
+    ));
+
+    const [manualPaidSalesLeads, manualPaidClientLeads] = await Promise.all([
+      manualSalesLeadIds.length
+        ? sales_leads.findAll({
+            where: {
+              is_active: 1,
+              lead_id: { [Sequelize.Op.in]: manualSalesLeadIds },
+              booking_id: { [Sequelize.Op.ne]: null }
+            },
+            attributes: ['booking_id'],
+            raw: true
+          })
+        : Promise.resolve([]),
+      manualClientLeadIds.length
+        ? client_leads.findAll({
+            where: {
+              is_active: 1,
+              lead_id: { [Sequelize.Op.in]: manualClientLeadIds },
+              booking_id: { [Sequelize.Op.ne]: null }
+            },
+            attributes: ['booking_id'],
+            raw: true
+          })
+        : Promise.resolve([]),
     ]);
 
     const bookedBookingIds = Array.from(new Set([
       ...bookedSalesLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
       ...bookedClientLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
+      ...manualPaidSalesLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
+      ...manualPaidClientLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
     ]));
 
     const paidOnlyFilter = {
@@ -6426,6 +6484,32 @@ exports.assignPostProductionMember = async (req, res) => {
       status: 'assigned',
       is_active: 1,
     });
+
+    try {
+      const emailClientName = await resolveAdminBookingClientName(project);
+      const emailShootAmount = await resolveAdminBookingShootAmount(project);
+
+      const mailResult = await sendPostProductionAssignmentEmail({
+        to_email: postProductionMember.email,
+        member_name: fullName || `${postProductionMember.first_name || ''} ${postProductionMember.last_name || ''}`.trim(),
+        first_name: postProductionMember.first_name || firstName || '',
+        booking_id: project.stream_project_booking_id,
+        project_id: project.stream_project_booking_id,
+        client: emailClientName,
+        shoot_type: project.shoot_type || project.event_type || project.content_type,
+        date: project.event_date,
+        start_time: project.start_time,
+        end_time: project.end_time,
+        shoot_amount: emailShootAmount,
+        location: project.event_location,
+      });
+
+      if (!mailResult?.success) {
+        console.error('Post-production assignment email failed:', mailResult?.error);
+      }
+    } catch (mailErr) {
+      console.error('Post-production assignment email trigger error:', mailErr?.response?.body || mailErr.message);
+    }
 
     return res.status(201).json({
       error: false,

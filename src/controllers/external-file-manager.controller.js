@@ -1315,11 +1315,8 @@ const isPreProductionPath = (filepath) =>
 const isCreatorAllowedUploadPath = (filepath) =>
   isCreatorPostProductionPath(filepath) || isPreProductionPath(filepath);
 
-const isAdminRestrictedPostProductionUpload = (req, filepath) =>
-  getNormalizedRequestUserRole(req) === 'admin' && isCreatorPostProductionPath(filepath);
-
 const isPreProductionOnlyRole = (req) =>
-  ['admin', 'sales_rep', 'sales_representative', 'sales', 'client'].includes(getNormalizedRequestUserRole(req));
+  ['sales_rep', 'sales_representative', 'sales', 'client'].includes(getNormalizedRequestUserRole(req));
 
 const getTodayDateOnly = () => {
   const now = new Date();
@@ -1376,12 +1373,6 @@ const validateUploadAccessForPath = async (req, filepath) => {
   }
 
   await ensureCreatorPostProductionUploadWindow(req, filepath);
-
-  if (isAdminRestrictedPostProductionUpload(req, filepath)) {
-    const error = new Error('Admin uploads are allowed only in Pre-Production');
-    error.status = 403;
-    throw error;
-  }
 
   if (isPreProductionOnlyRole(req) && !isPreProductionPath(filepath)) {
     const error = new Error('Uploads are allowed only in Pre-Production');
