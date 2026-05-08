@@ -10009,3 +10009,58 @@ exports.getUserRoleDetails = async (req, res) => {
     });
   }
 };
+
+exports.getPermissionModules = async (req, res) => {
+  try {
+    const permissions = await db.permissions.findAll({
+      where: {
+        is_active: 1
+      },
+      attributes: [
+        'module_key',
+        'action_key'
+      ],
+      order: [
+        ['module_key', 'ASC'],
+        ['action_key', 'ASC']
+      ]
+    });
+
+    const moduleMap = {};
+
+    permissions.forEach(permission => {
+      const module = permission.module_key;
+      const action = permission.action_key;
+
+      if (!moduleMap[module]) {
+        moduleMap[module] = {
+          module_key: module,
+          actions: []
+        };
+      }
+
+      if (!moduleMap[module].actions.includes(action)) {
+        moduleMap[module].actions.push(action);
+      }
+    });
+
+    const formattedModules = Object.values(moduleMap);
+
+    return res.status(200).json({
+      success: true,
+      total_modules: formattedModules.length,
+      data: formattedModules
+    });
+
+  } catch (error) {
+    console.error('Get Permission Modules Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while fetching permission modules',
+      error:
+        process.env.NODE_ENV === 'development'
+          ? error.message
+          : undefined
+    });
+  }
+};
