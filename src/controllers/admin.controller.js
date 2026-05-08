@@ -6,7 +6,7 @@ const common_model = require('../utils/common_model');
 const { Op } = require('sequelize');
 const { S3UploadFiles } = require('../utils/common.js');
 const moment = require('moment');
-const { sendTaskAssignmentEmail, sendCPNewBookingRequestEmail } = require('../utils/emailService');
+const { sendTaskAssignmentEmail, sendCPNewBookingRequestEmail, sendPostProductionAssignmentEmail } = require('../utils/emailService');
 const { stream_project_booking, crew_members, crew_member_files, tasks, equipment, crew_roles,
   equipment_accessories,
   equipment_category,
@@ -6484,6 +6484,32 @@ exports.assignPostProductionMember = async (req, res) => {
       status: 'assigned',
       is_active: 1,
     });
+
+    try {
+      const emailClientName = await resolveAdminBookingClientName(project);
+      const emailShootAmount = await resolveAdminBookingShootAmount(project);
+
+      const mailResult = await sendPostProductionAssignmentEmail({
+        to_email: postProductionMember.email,
+        member_name: fullName || `${postProductionMember.first_name || ''} ${postProductionMember.last_name || ''}`.trim(),
+        first_name: postProductionMember.first_name || firstName || '',
+        booking_id: project.stream_project_booking_id,
+        project_id: project.stream_project_booking_id,
+        client: emailClientName,
+        shoot_type: project.shoot_type || project.event_type || project.content_type,
+        date: project.event_date,
+        start_time: project.start_time,
+        end_time: project.end_time,
+        shoot_amount: emailShootAmount,
+        location: project.event_location,
+      });
+
+      if (!mailResult?.success) {
+        console.error('Post-production assignment email failed:', mailResult?.error);
+      }
+    } catch (mailErr) {
+      console.error('Post-production assignment email trigger error:', mailErr?.response?.body || mailErr.message);
+    }
 
     return res.status(201).json({
       error: false,
