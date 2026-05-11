@@ -2626,6 +2626,28 @@ const extractBearerToken = (req) => {
   return authHeader.slice(7).trim();
 };
 
+const ensureSharedScopeAccess = (share, requestedPhase, requestedPath) => {
+  const shareType = String(share?.resource_type || '').toLowerCase();
+  if (shareType === 'file') return true;
+
+  const basePhase = normalizeWorkspacePhase(share?.phase, null);
+  const basePath = normalizePathForAccess(share?.path || '');
+  const targetPhase = normalizeWorkspacePhase(requestedPhase, basePhase);
+  const targetPath = normalizePathForAccess(requestedPath || '');
+
+  if (basePhase && targetPhase && basePhase !== targetPhase) {
+    throw new Error('Requested path is outside the shared scope');
+  }
+
+  if (!basePath) return true;
+
+  if (!targetPath) return true;
+  if (!isPathWithin(basePath, targetPath)) {
+    throw new Error('Requested path is outside the shared scope');
+  }
+  return true;
+};
+
 exports.createShare = async (req, res) => {
   try {
     await ensureFileShareTable();
@@ -2784,22 +2806,127 @@ exports.getSharedContent = async (req, res) => {
       });
     }
 
+    const requestedPhase = String(req.query.phase || '').trim() || null;
+    const requestedPath = String(req.query.path || '').trim() || null;
+    ensureSharedScopeAccess(share, requestedPhase, requestedPath);
+
+    const phaseToUse = requestedPhase || share.phase || null;
+    const pathToUse = requestedPath || share.path || null;
+
     const query = new URLSearchParams();
-    if (share.phase) query.set('phase', share.phase);
-    if (share.path) query.set('path', share.path);
+    if (phaseToUse) query.set('phase', phaseToUse);
+    if (pathToUse) query.set('path', pathToUse);
     const listing = await proxyRequest(`/workspace/${encodeURIComponent(String(share.external_id))}/files${query.toString() ? `?${query.toString()}` : ''}`);
     return res.status(200).json({
       success: true,
       data: {
         type: share.resource_type === 'workspace' ? 'workspace' : 'folder',
         externalId: share.external_id,
-        phase: share.phase,
-        path: share.path,
+        phase: phaseToUse,
+        path: pathToUse,
+        rootPhase: share.phase,
+        rootPath: share.path,
         ...listing.data,
       },
     });
   } catch (error) {
-    return res.status(401).json({ success: false, message: error.message || 'Invalid or expired share access token' });
+    const statusCode = String(error?.message || '').toLowerCase().includes('outside the shared scope') ? 403 : 401;
+    return res.status(statusCode).json({ success: false, message: error.message || 'Invalid or expired share access token' });
+  }
+};
+
+exports.listShares = async (req, res) => {
+  try {
+    await ensureFileShareTable();
+    const resourceType = String(req.query.resourceType || '').trim().toLowerCase();
+    const externalId = String(req.query.externalId || '').trim();
+    const phase = String(req.query.phase || '').trim() || null;
+    const path = String(req.query.path || '').trim() || null;
+    const filepath = String(req.query.filepath || '').trim() || null;
+
+    if (!['workspace', 'folder', 'file'].includes(resourceType)) {
+      return res.status(400).json({ success: false, message: 'resourceType must be workspace, folder, or file' });
+    }
+    if (!externalId) return res.status(400).json({ success: false, message: 'externalId is required' });
+
+    await ensureCreatorWorkspaceAccess(req, externalId);
+    if (resourceType === 'file' && filepath) {
+      await ensureCreatorFileAccess(req, filepath);
+    }
+
+    const [rows] = await db.sequelize.query(
+      `SELECT share_id, share_token, resource_type, shared_with_email, phase, path, filepath, created_at
+       FROM file_manager_shares
+       WHERE is_active = 1
+         AND resource_type = :resourceType
+         AND external_id = :externalId
+         AND (:phase IS NULL OR IFNULL(phase,'') = IFNULL(:phase,''))
+         AND (:path IS NULL OR IFNULL(path,'') = IFNULL(:path,''))
+         AND (:filepath IS NULL OR IFNULL(filepath,'') = IFNULL(:filepath,''))
+       ORDER BY created_at DESC`,
+      {
+        replacements: { resourceType, externalId, phase, path, filepath },
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        shares: (rows || []).map((row) => ({
+          shareId: row.share_id,
+          shareToken: row.share_token,
+          email: row.shared_with_email,
+          resourceType: row.resource_type,
+          phase: row.phase,
+          path: row.path,
+          filepath: row.filepath,
+          createdAt: row.created_at,
+        })),
+      },
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || { success: false, message: error.message });
+  }
+};
+
+exports.revokeShare = async (req, res) => {
+  try {
+    await ensureFileShareTable();
+    const shareId = Number(req.body.shareId);
+    const shareToken = String(req.body.shareToken || '').trim();
+
+    if (!shareId && !shareToken) {
+      return res.status(400).json({ success: false, message: 'shareId or shareToken is required' });
+    }
+
+    let shareRow = null;
+    if (shareId) {
+      const [rows] = await db.sequelize.query(
+        `SELECT * FROM file_manager_shares WHERE share_id = :shareId AND is_active = 1 LIMIT 1`,
+        { replacements: { shareId } }
+      );
+      shareRow = Array.isArray(rows) && rows.length ? rows[0] : null;
+    } else if (shareToken) {
+      shareRow = await getShareByToken(shareToken);
+    }
+
+    if (!shareRow) {
+      return res.status(404).json({ success: false, message: 'Share not found' });
+    }
+
+    await ensureCreatorWorkspaceAccess(req, String(shareRow.external_id || ''));
+    if (String(shareRow.resource_type || '').toLowerCase() === 'file' && shareRow.filepath) {
+      await ensureCreatorFileAccess(req, shareRow.filepath);
+    }
+
+    await db.sequelize.query(
+      `UPDATE file_manager_shares SET is_active = 0, updated_at = NOW() WHERE share_id = :shareId`,
+      { replacements: { shareId: shareRow.share_id } }
+    );
+
+    return res.status(200).json({ success: true, message: 'Share revoked successfully' });
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || { success: false, message: error.message });
   }
 };
 
@@ -2834,12 +2961,21 @@ exports.getSharedDownloadUrl = async (req, res) => {
       return res.status(400).json({ success: false, message: 'filepath query is required for folder/workspace shares' });
     }
 
+    const normalizedFilepath = normalizePathForAccess(filepath);
+    const requestedPhase = normalizeWorkspacePhase(req.query.phase, null);
+    const requestedRelativePath = normalizePathForAccess(req.query.path || '');
+    const extractedFromFilepath = extractPhaseAndRelativePath(normalizedFilepath, requestedPhase);
+    const scopePhase = extractedFromFilepath.phase || requestedPhase;
+    const scopePath = extractedFromFilepath.relativePath || requestedRelativePath;
+    ensureSharedScopeAccess(share, scopePhase, scopePath);
+
     const result = await proxyRequest('/file-download-url', {
       method: 'POST',
-      body: JSON.stringify({ filepath }),
+      body: JSON.stringify({ filepath: normalizedFilepath }),
     });
     return res.status(200).json(withPublicUrl(result, req));
   } catch (error) {
-    return res.status(401).json({ success: false, message: error.message || 'Invalid or expired share access token' });
+    const statusCode = String(error?.message || '').toLowerCase().includes('outside the shared scope') ? 403 : 401;
+    return res.status(statusCode).json({ success: false, message: error.message || 'Invalid or expired share access token' });
   }
 };

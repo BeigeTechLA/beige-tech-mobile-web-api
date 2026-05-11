@@ -22,6 +22,8 @@ router.post('/file-download-url', authenticate, externalFileManagerController.ge
 router.post('/folder-download-url', authenticate, externalFileManagerController.getFolderDownloadUrl);
 router.post('/delete', authenticate, externalFileManagerController.deleteEntry);
 router.post('/share', authenticate, externalFileManagerController.createShare);
+router.get('/share', authenticate, externalFileManagerController.listShares);
+router.delete('/share', authenticate, externalFileManagerController.revokeShare);
 router.post('/share/request-otp', externalFileManagerController.requestShareOtp);
 router.post('/share/verify-otp', externalFileManagerController.verifyShareOtp);
 router.get('/share/:shareToken/content', externalFileManagerController.getSharedContent);
