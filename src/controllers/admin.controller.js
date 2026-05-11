@@ -9313,10 +9313,10 @@ const formatUserTypeAsRole = (role, totalUsers = 0) => ({
   description: role.description || null,
   is_system: 0,
   is_active: role.is_active,
-  created_by: null,
-  updated_by: null,
-  created_at: null,
-  updated_at: null,
+  created_by: role.created_by || null,
+  updated_by: role.updated_by || null,
+  created_at: role.created_at || null,
+  updated_at: role.updated_at || null,
   total_users: totalUsers
 });
 
