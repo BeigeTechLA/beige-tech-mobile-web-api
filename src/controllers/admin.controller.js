@@ -10002,8 +10002,8 @@ exports.getUserRoleDetails = async (req, res) => {
               name: role.user_role,
               description: role.description || null,
               is_active: role.is_active,
-              created_at: null,
-              updated_at: null
+              created_at: role.created_at,
+              updated_at: role.updated_at,
             }
           : {
               role_id: user.user_type,
