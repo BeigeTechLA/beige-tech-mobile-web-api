@@ -1,10 +1,13 @@
 const DEFAULT_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
 const PUBLIC_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_PUBLIC_BASE_URL || '';
 const INTERNAL_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
+const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
 const db = require('../models');
 const { users, crew_members, assigned_crew, stream_project_booking, sales_leads, sales_lead_activities } = db;
 const bookingTimelineService = require('../services/bookingTimeline.service');
 const emailService = require('../utils/emailService');
+const otpService = require('../utils/otpService');
 
 const FACE_SCAN_SERVICE_URL = process.env.FACE_SCAN_SERVICE_URL || '';
 const FACE_SCAN_PROVIDER_TIMEOUT_MS = Math.max(15000, Number(process.env.FACE_SCAN_PROVIDER_TIMEOUT_MS || 300000));
@@ -18,6 +21,8 @@ const COMMON_EVENT_ID_PREFIX = 'event_';
 let commonEventsTableReadyPromise = null;
 let commonEventCreatorFoldersTableReadyPromise = null;
 let faceEmbeddingsTableReadyPromise = null;
+let fileShareTableReadyPromise = null;
+let fileShareOtpTableReadyPromise = null;
 
 const buildHeaders = () => ({
   'Content-Type': 'application/json',
@@ -560,6 +565,75 @@ const ensureCommonEventsTable = async () => {
   }
 
   await commonEventsTableReadyPromise;
+};
+
+const ensureFileShareTable = async () => {
+  if (!fileShareTableReadyPromise) {
+    fileShareTableReadyPromise = db.sequelize.query(`
+      CREATE TABLE IF NOT EXISTS file_manager_shares (
+        share_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        share_token VARCHAR(128) NOT NULL,
+        resource_type ENUM('workspace', 'folder', 'file') NOT NULL DEFAULT 'folder',
+        external_id VARCHAR(255) NOT NULL,
+        phase VARCHAR(64) DEFAULT NULL,
+        path VARCHAR(2048) DEFAULT NULL,
+        filepath VARCHAR(2048) DEFAULT NULL,
+        shared_with_email VARCHAR(255) NOT NULL,
+        created_by_user_id BIGINT UNSIGNED DEFAULT NULL,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (share_id),
+        UNIQUE KEY uq_file_manager_share_token (share_token),
+        KEY idx_file_manager_share_external_id (external_id),
+        KEY idx_file_manager_share_email (shared_with_email)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+  }
+
+  await fileShareTableReadyPromise;
+};
+
+const ensureFileShareOtpTable = async () => {
+  if (!fileShareOtpTableReadyPromise) {
+    fileShareOtpTableReadyPromise = db.sequelize.query(`
+      CREATE TABLE IF NOT EXISTS file_manager_share_otp (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        share_id BIGINT UNSIGNED NOT NULL,
+        email VARCHAR(255) NOT NULL,
+        otp_code VARCHAR(16) NOT NULL,
+        otp_expires_at DATETIME NOT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        verified_at DATETIME DEFAULT NULL,
+        PRIMARY KEY (id),
+        KEY idx_file_manager_share_otp_lookup (share_id, email, created_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+  }
+
+  await fileShareOtpTableReadyPromise;
+};
+
+const generateShareToken = () => `shr_${crypto.randomBytes(24).toString('hex')}`;
+const getShareAccessSecret = () => process.env.FILE_SHARE_ACCESS_SECRET || process.env.JWT_SECRET || 'beige-share-access-secret';
+
+const signShareAccessToken = ({ shareToken, email }) =>
+  jwt.sign(
+    {
+      purpose: 'external_file_share',
+      shareToken: String(shareToken || ''),
+      email: normalizeEmailAddress(email),
+    },
+    getShareAccessSecret(),
+    { expiresIn: process.env.FILE_SHARE_ACCESS_TOKEN_EXPIRES_IN || '12h' }
+  );
+
+const verifyShareAccessToken = (token) => {
+  const payload = jwt.verify(String(token || ''), getShareAccessSecret());
+  if (payload?.purpose !== 'external_file_share' || !payload?.shareToken || !payload?.email) {
+    throw new Error('Invalid share access token');
+  }
+  return payload;
 };
 
 const ensureCommonEventCreatorFoldersTable = async () => {
@@ -2534,5 +2608,238 @@ exports.deleteEntry = async (req, res) => {
       success: false,
       message: error.message,
     });
+  }
+};
+
+const getShareByToken = async (shareToken) => {
+  await ensureFileShareTable();
+  const [rows] = await db.sequelize.query(
+    `SELECT * FROM file_manager_shares WHERE share_token = :shareToken AND is_active = 1 LIMIT 1`,
+    { replacements: { shareToken: String(shareToken || '').trim() } }
+  );
+  return Array.isArray(rows) && rows.length ? rows[0] : null;
+};
+
+const extractBearerToken = (req) => {
+  const authHeader = String(req.headers?.authorization || '').trim();
+  if (!authHeader.toLowerCase().startsWith('bearer ')) return '';
+  return authHeader.slice(7).trim();
+};
+
+exports.createShare = async (req, res) => {
+  try {
+    await ensureFileShareTable();
+    const resourceType = String(req.body.resourceType || '').trim().toLowerCase();
+    const externalId = String(req.body.externalId || '').trim();
+    const phase = String(req.body.phase || '').trim() || null;
+    const path = String(req.body.path || '').trim() || null;
+    const filepath = String(req.body.filepath || '').trim() || null;
+    const email = normalizeEmailAddress(req.body.email);
+
+    if (!['workspace', 'folder', 'file'].includes(resourceType)) {
+      return res.status(400).json({ success: false, message: 'resourceType must be workspace, folder, or file' });
+    }
+    if (!externalId) return res.status(400).json({ success: false, message: 'externalId is required' });
+    if (!email) return res.status(400).json({ success: false, message: 'email is required' });
+    if (resourceType === 'file' && !filepath) {
+      return res.status(400).json({ success: false, message: 'filepath is required for file share' });
+    }
+
+    await ensureCreatorWorkspaceAccess(req, externalId);
+    if (resourceType === 'file' && filepath) {
+      await ensureCreatorFileAccess(req, filepath);
+    }
+
+    const shareToken = generateShareToken();
+    await db.sequelize.query(
+      `INSERT INTO file_manager_shares
+      (share_token, resource_type, external_id, phase, path, filepath, shared_with_email, created_by_user_id, is_active)
+      VALUES (:shareToken, :resourceType, :externalId, :phase, :path, :filepath, :email, :createdBy, 1)`,
+      {
+        replacements: {
+          shareToken,
+          resourceType,
+          externalId,
+          phase,
+          path,
+          filepath,
+          email,
+          createdBy: getRequestUserId(req) || null,
+        },
+      }
+    );
+
+    const frontendBase = String(process.env.FRONTEND_URL || '').trim().replace(/\/+$/, '');
+    const shareUrl = frontendBase ? `${frontendBase}/shared/file-manager/${shareToken}` : `/shared/file-manager/${shareToken}`;
+    return res.status(201).json({ success: true, data: { shareToken, shareUrl } });
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || { success: false, message: error.message });
+  }
+};
+
+exports.requestShareOtp = async (req, res) => {
+  try {
+    await ensureFileShareOtpTable();
+    const shareToken = String(req.body.shareToken || '').trim();
+    const email = normalizeEmailAddress(req.body.email);
+    if (!shareToken || !email) {
+      return res.status(400).json({ success: false, message: 'shareToken and email are required' });
+    }
+
+    const share = await getShareByToken(shareToken);
+    if (!share) return res.status(404).json({ success: false, message: 'Share link not found' });
+    if (normalizeEmailAddress(share.shared_with_email) !== email) {
+      return res.status(403).json({ success: false, message: 'This email is not allowed for this share link' });
+    }
+
+    const otp = otpService.generateOTP();
+    const otpExpiry = otpService.generateOTPExpiry(10);
+    await db.sequelize.query(
+      `INSERT INTO file_manager_share_otp (share_id, email, otp_code, otp_expires_at) VALUES (:shareId, :email, :otpCode, :otpExpiry)`,
+      { replacements: { shareId: share.share_id, email, otpCode: otp, otpExpiry } }
+    );
+
+    const emailResult = await emailService.sendVerificationOTP({ name: 'Client', email }, otp);
+    if (!emailResult?.success) {
+      return res.status(500).json({ success: false, message: emailResult?.error || 'Failed to send OTP email' });
+    }
+
+    return res.status(200).json({ success: true, message: 'OTP sent to email' });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message || 'Failed to request OTP' });
+  }
+};
+
+exports.verifyShareOtp = async (req, res) => {
+  try {
+    await ensureFileShareOtpTable();
+    const shareToken = String(req.body.shareToken || '').trim();
+    const email = normalizeEmailAddress(req.body.email);
+    const otp = String(req.body.otp || '').trim();
+    if (!shareToken || !email || !otp) {
+      return res.status(400).json({ success: false, message: 'shareToken, email and otp are required' });
+    }
+
+    const share = await getShareByToken(shareToken);
+    if (!share) return res.status(404).json({ success: false, message: 'Share link not found' });
+    if (normalizeEmailAddress(share.shared_with_email) !== email) {
+      return res.status(403).json({ success: false, message: 'This email is not allowed for this share link' });
+    }
+
+    const [rows] = await db.sequelize.query(
+      `SELECT * FROM file_manager_share_otp
+      WHERE share_id = :shareId AND email = :email
+      ORDER BY id DESC LIMIT 1`,
+      { replacements: { shareId: share.share_id, email } }
+    );
+    const otpRow = Array.isArray(rows) && rows.length ? rows[0] : null;
+    if (!otpRow) return res.status(400).json({ success: false, message: 'No OTP found. Please request a new OTP.' });
+
+    const validation = otpService.validateOTP(otp, otpRow.otp_code, otpRow.otp_expires_at);
+    if (!validation.valid) {
+      return res.status(400).json({ success: false, message: validation.message || 'Invalid OTP' });
+    }
+
+    await db.sequelize.query(`UPDATE file_manager_share_otp SET verified_at = NOW() WHERE id = :id`, {
+      replacements: { id: otpRow.id },
+    });
+
+    const accessToken = signShareAccessToken({ shareToken, email });
+    return res.status(200).json({ success: true, data: { accessToken } });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message || 'Failed to verify OTP' });
+  }
+};
+
+exports.getSharedContent = async (req, res) => {
+  try {
+    const shareToken = String(req.params.shareToken || '').trim();
+    const accessToken = extractBearerToken(req);
+    if (!shareToken || !accessToken) {
+      return res.status(401).json({ success: false, message: 'Share token and access token are required' });
+    }
+    const claims = verifyShareAccessToken(accessToken);
+    if (String(claims.shareToken) !== shareToken) {
+      return res.status(403).json({ success: false, message: 'Access token does not match share link' });
+    }
+
+    const share = await getShareByToken(shareToken);
+    if (!share) return res.status(404).json({ success: false, message: 'Share link not found' });
+    if (normalizeEmailAddress(share.shared_with_email) !== normalizeEmailAddress(claims.email)) {
+      return res.status(403).json({ success: false, message: 'Access denied for this email' });
+    }
+
+    if (share.resource_type === 'file') {
+      const viewResult = await proxyRequest('/file-view-url', {
+        method: 'POST',
+        body: JSON.stringify({ filepath: share.filepath }),
+      });
+      return res.status(200).json({
+        success: true,
+        data: {
+          type: 'file',
+          file: { path: share.filepath, name: String(share.filepath || '').split('/').pop() || '' },
+          view: withPublicUrl(viewResult, req)?.data || null,
+        },
+      });
+    }
+
+    const query = new URLSearchParams();
+    if (share.phase) query.set('phase', share.phase);
+    if (share.path) query.set('path', share.path);
+    const listing = await proxyRequest(`/workspace/${encodeURIComponent(String(share.external_id))}/files${query.toString() ? `?${query.toString()}` : ''}`);
+    return res.status(200).json({
+      success: true,
+      data: {
+        type: share.resource_type === 'workspace' ? 'workspace' : 'folder',
+        externalId: share.external_id,
+        phase: share.phase,
+        path: share.path,
+        ...listing.data,
+      },
+    });
+  } catch (error) {
+    return res.status(401).json({ success: false, message: error.message || 'Invalid or expired share access token' });
+  }
+};
+
+exports.getSharedDownloadUrl = async (req, res) => {
+  try {
+    const shareToken = String(req.params.shareToken || '').trim();
+    const accessToken = extractBearerToken(req);
+    const filepath = String(req.query.filepath || '').trim();
+    if (!shareToken || !accessToken) {
+      return res.status(401).json({ success: false, message: 'Share token and access token are required' });
+    }
+    const claims = verifyShareAccessToken(accessToken);
+    if (String(claims.shareToken) !== shareToken) {
+      return res.status(403).json({ success: false, message: 'Access token does not match share link' });
+    }
+
+    const share = await getShareByToken(shareToken);
+    if (!share) return res.status(404).json({ success: false, message: 'Share link not found' });
+    if (normalizeEmailAddress(share.shared_with_email) !== normalizeEmailAddress(claims.email)) {
+      return res.status(403).json({ success: false, message: 'Access denied for this email' });
+    }
+
+    if (share.resource_type === 'file') {
+      const result = await proxyRequest('/file-download-url', {
+        method: 'POST',
+        body: JSON.stringify({ filepath: share.filepath }),
+      });
+      return res.status(200).json(withPublicUrl(result, req));
+    }
+
+    if (!filepath) {
+      return res.status(400).json({ success: false, message: 'filepath query is required for folder/workspace shares' });
+    }
+
+    const result = await proxyRequest('/file-download-url', {
+      method: 'POST',
+      body: JSON.stringify({ filepath }),
+    });
+    return res.status(200).json(withPublicUrl(result, req));
+  } catch (error) {
+    return res.status(401).json({ success: false, message: error.message || 'Invalid or expired share access token' });
   }
 };
