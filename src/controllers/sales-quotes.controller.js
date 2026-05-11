@@ -537,17 +537,22 @@ exports.acceptQuoteProposal = async (req, res) => {
 
     if (wantsHtml) {
       const quoteNumber = result?.quote?.quote_number || 'your quote';
+      const paymentUrl = result?.payment?.payment_url || null;
       const title = result.already_accepted ? 'Quote Already Confirmed' : 'Quote Accepted';
       const description = result.already_accepted
         ? `${quoteNumber} was already confirmed earlier. No further action is needed from you right now.`
-        : `${quoteNumber} has been accepted successfully. Our sales team will send the invoice shortly.`;
+        : `${quoteNumber} has been accepted successfully and your booking has been created. Continue to payment to confirm your booking.`;
       const page = renderQuoteAcceptPage({
         title,
         badge: result.already_accepted ? 'Already Confirmed' : 'Approval Received',
         description,
         quoteNumber,
         tone: result.already_accepted ? 'warning' : 'success',
-        statusCode: constants.OK.code
+        statusCode: constants.OK.code,
+        ...(paymentUrl ? {
+          ctaHref: paymentUrl,
+          ctaLabel: 'CONTINUE TO PAYMENT'
+        } : {})
       });
       return res.status(page.statusCode).send(page.html);
     }
