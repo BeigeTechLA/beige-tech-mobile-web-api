@@ -2757,6 +2757,28 @@ exports.createShare = async (req, res) => {
 
     const frontendBase = String(process.env.FRONTEND_URL || '').trim().replace(/\/+$/, '');
     const shareUrl = frontendBase ? `${frontendBase}/shared/file-manager/${shareToken}` : `/shared/file-manager/${shareToken}`;
+    if (email) {
+      const senderName = await getUserDisplayName(getRequestUserId(req)).catch(() => null);
+      const emailResult = await emailService.sendFileShareInvitationEmail({
+        to: email,
+        data: {
+          sender_name: senderName || 'Beige',
+          shared_files_url: shareUrl,
+          share_message: shareMessage || '',
+          resource_type: resourceType,
+          external_id: externalId,
+          access_mode: normalizedAccessMode,
+        },
+      });
+
+      if (!emailResult?.success) {
+        console.error(
+          'File share invitation email failed:',
+          emailResult?.error || 'Unknown email error'
+        );
+      }
+    }
+
     return res.status(201).json({ success: true, data: { shareToken, shareUrl, message: shareMessage } });
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || { success: false, message: error.message });
@@ -2781,14 +2803,19 @@ exports.requestShareOtp = async (req, res) => {
       return res.status(403).json({ success: false, message: 'This email is not allowed for this share link' });
     }
 
+    const otpExpiryMinutes = 10;
     const otp = otpService.generateOTP();
-    const otpExpiry = otpService.generateOTPExpiry(10);
+    const otpExpiry = otpService.generateOTPExpiry(otpExpiryMinutes);
     await db.sequelize.query(
       `INSERT INTO file_manager_share_otp (share_id, email, otp_code, otp_expires_at) VALUES (:shareId, :email, :otpCode, :otpExpiry)`,
       { replacements: { shareId: share.share_id, email, otpCode: otp, otpExpiry } }
     );
 
-    const emailResult = await emailService.sendVerificationOTP({ name: 'Client', email }, otp);
+    const emailResult = await emailService.sendFileShareVerificationOTP(
+      { name: 'Client', email },
+      otp,
+      otpExpiryMinutes
+    );
     if (!emailResult?.success) {
       return res.status(500).json({ success: false, message: emailResult?.error || 'Failed to send OTP email' });
     }
