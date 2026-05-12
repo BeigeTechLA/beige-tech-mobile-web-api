@@ -1835,3 +1835,193 @@ VALUES
 (616, 2010, 1200.00, 1200.00, 'pending', NOW(), NOW()),
 (622, 2010, 1200.00, 1200.00, 'paid', NOW(), NOW()),
 (626, 2010, 1200.00, 1200.00, 'earned', NOW(), NOW());
+-- 12-05-26
+
+CREATE TABLE IF NOT EXISTS studios (
+  studio_id INT PRIMARY KEY AUTO_INCREMENT,
+  owner_user_id INT NULL,
+  host_name VARCHAR(255) NULL,
+  host_email VARCHAR(255) NULL,
+  studio_name VARCHAR(255) NOT NULL,
+  brand_name VARCHAR(255) NULL,
+  slug VARCHAR(255) NULL,
+  status ENUM('draft', 'active', 'inactive', 'pending_review', 'rejected') NOT NULL DEFAULT 'draft',
+  verification_status ENUM('unverified', 'verified') NOT NULL DEFAULT 'unverified',
+  space_type VARCHAR(100) NULL,
+  description TEXT NULL,
+  short_description VARCHAR(500) NULL,
+  country VARCHAR(100) NULL,
+  address_line1 VARCHAR(255) NULL,
+  address_line2 VARCHAR(255) NULL,
+  city VARCHAR(120) NULL,
+  state VARCHAR(120) NULL,
+  zip_code VARCHAR(30) NULL,
+  latitude DECIMAL(10,8) NULL,
+  longitude DECIMAL(11,8) NULL,
+  timezone VARCHAR(64) NULL,
+  hourly_rate DECIMAL(10,2) NULL,
+  overtime_rate DECIMAL(10,2) NULL,
+  minimum_booking_hours DECIMAL(5,2) NULL,
+  buffer_time_minutes INT NULL,
+  capacity_min INT NULL,
+  capacity_max INT NULL,
+  square_feet INT NULL,
+  height VARCHAR(80) NULL,
+  width VARCHAR(80) NULL,
+  length VARCHAR(80) NULL,
+  main_floor_number VARCHAR(80) NULL,
+  overnight_stays_allowed BOOLEAN NOT NULL DEFAULT 0,
+  security_recording_enabled BOOLEAN NOT NULL DEFAULT 0,
+  security_recording_description TEXT NULL,
+  wifi_name VARCHAR(255) NULL,
+  wifi_password VARCHAR(255) NULL,
+  preferred_age VARCHAR(80) NULL,
+  parking_options JSON NULL,
+  access_features JSON NULL,
+  facility_features JSON NULL,
+  supported_shoot_types JSON NULL,
+  suggested_type VARCHAR(255) NULL,
+  activities JSON NULL,
+  space_basics JSON NULL,
+  amenities JSON NULL,
+  description_tags JSON NULL,
+  house_rules JSON NULL,
+  policies JSON NULL,
+  pricing_settings JSON NULL,
+  metadata JSON NULL,
+  created_by_user_id INT NULL,
+  updated_by_user_id INT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  UNIQUE KEY uq_studios_slug (slug),
+  INDEX idx_studios_status (status),
+  INDEX idx_studios_city_state (city, state),
+  INDEX idx_studios_owner (owner_user_id),
+  FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE SET NULL,
+  FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
+  FOREIGN KEY (updated_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS studio_media (
+  studio_media_id INT PRIMARY KEY AUTO_INCREMENT,
+  studio_id INT NOT NULL,
+  media_type ENUM('image', 'video') NOT NULL DEFAULT 'image',
+  url TEXT NOT NULL,
+  thumbnail_url TEXT NULL,
+  title VARCHAR(255) NULL,
+  alt_text VARCHAR(255) NULL,
+  sort_order INT NOT NULL DEFAULT 0,
+  is_cover BOOLEAN NOT NULL DEFAULT 0,
+  metadata JSON NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  INDEX idx_studio_media_studio (studio_id),
+  INDEX idx_studio_media_cover (studio_id, is_cover),
+  FOREIGN KEY (studio_id) REFERENCES studios(studio_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS studio_operating_hours (
+  studio_operating_hour_id INT PRIMARY KEY AUTO_INCREMENT,
+  studio_id INT NOT NULL,
+  day_of_week TINYINT NOT NULL COMMENT '0=Sunday, 1=Monday, ... 6=Saturday',
+  is_open BOOLEAN NOT NULL DEFAULT 1,
+  opens_at TIME NULL,
+  closes_at TIME NULL,
+  metadata JSON NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  UNIQUE KEY uq_studio_operating_day (studio_id, day_of_week),
+  FOREIGN KEY (studio_id) REFERENCES studios(studio_id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS studio_availability (
+  studio_availability_id INT PRIMARY KEY AUTO_INCREMENT,
+  studio_id INT NOT NULL,
+  availability_date DATE NOT NULL,
+  start_time TIME NULL,
+  end_time TIME NULL,
+  status ENUM('available', 'disabled', 'shoot_booked', 'conflict') NOT NULL DEFAULT 'available',
+  notes TEXT NULL,
+  metadata JSON NULL,
+  created_by_user_id INT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  INDEX idx_studio_availability_studio_date (studio_id, availability_date),
+  INDEX idx_studio_availability_status (status),
+  FOREIGN KEY (studio_id) REFERENCES studios(studio_id) ON DELETE CASCADE,
+  FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS studio_reviews (
+  studio_review_id INT PRIMARY KEY AUTO_INCREMENT,
+  studio_id INT NOT NULL,
+  reviewer_user_id INT NULL,
+  reviewer_name VARCHAR(255) NULL,
+  reviewer_avatar_url TEXT NULL,
+  rating DECIMAL(2,1) NOT NULL DEFAULT 5.0,
+  cleanliness_rating DECIMAL(2,1) NULL,
+  communication_rating DECIMAL(2,1) NULL,
+  check_in_rating DECIMAL(2,1) NULL,
+  review_text TEXT NULL,
+  reviewed_at DATE NULL,
+  is_active BOOLEAN NOT NULL DEFAULT 1,
+  metadata JSON NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  INDEX idx_studio_reviews_studio (studio_id),
+  INDEX idx_studio_reviews_user (reviewer_user_id),
+  INDEX idx_studio_reviews_active (is_active),
+
+  FOREIGN KEY (studio_id) REFERENCES studios(studio_id) ON DELETE CASCADE,
+  FOREIGN KEY (reviewer_user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS studio_bookings (
+  studio_booking_id INT PRIMARY KEY AUTO_INCREMENT,
+  stream_project_booking_id INT NULL,
+  studio_id INT NOT NULL,
+  user_id INT NULL,
+
+  booking_date DATE NULL,
+  start_time TIME NULL,
+  end_time TIME NULL,
+  duration_hours DECIMAL(5,2) NULL,
+
+  status ENUM('requested', 'confirmed', 'completed', 'cancelled', 'rejected') NOT NULL DEFAULT 'requested',
+
+  base_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  overtime_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  platform_fee DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  net_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+
+  source ENUM('manual', 'book_a_shoot') NOT NULL DEFAULT 'manual',
+  metadata JSON NULL,
+
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  INDEX idx_studio_bookings_booking (stream_project_booking_id),
+  INDEX idx_studio_bookings_studio (studio_id),
+  INDEX idx_studio_bookings_user (user_id),
+  INDEX idx_studio_bookings_date (booking_date),
+  INDEX idx_studio_bookings_status (status),
+  INDEX idx_studio_bookings_source (source),
+
+  FOREIGN KEY (stream_project_booking_id)
+    REFERENCES stream_project_booking(stream_project_booking_id)
+    ON DELETE SET NULL,
+
+  FOREIGN KEY (studio_id)
+    REFERENCES studios(studio_id)
+    ON DELETE CASCADE,
+
+  FOREIGN KEY (user_id)
+    REFERENCES users(id)
+    ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
