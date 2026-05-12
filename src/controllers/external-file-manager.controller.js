@@ -597,6 +597,10 @@ const ensureFileShareTable = async () => {
     ALTER TABLE file_manager_shares
     ADD COLUMN IF NOT EXISTS access_mode ENUM('email_only', 'anyone_with_link') NOT NULL DEFAULT 'email_only' AFTER shared_with_email
   `).catch(() => null);
+  await db.sequelize.query(`
+    ALTER TABLE file_manager_shares
+    ADD COLUMN IF NOT EXISTS share_message TEXT NULL AFTER access_mode
+  `).catch(() => null);
 };
 
 const ensureFileShareOtpTable = async () => {
@@ -2714,6 +2718,7 @@ exports.createShare = async (req, res) => {
     const accessMode = String(req.body.accessMode || 'email_only').trim().toLowerCase();
     const normalizedAccessMode = accessMode === 'anyone_with_link' ? 'anyone_with_link' : 'email_only';
     const effectiveEmail = normalizedAccessMode === 'anyone_with_link' ? 'anyone@link.local' : email;
+    const shareMessage = String(req.body.message || '').trim().slice(0, 2000) || null;
 
     if (!['workspace', 'folder', 'file'].includes(resourceType)) {
       return res.status(400).json({ success: false, message: 'resourceType must be workspace, folder, or file' });
@@ -2732,8 +2737,8 @@ exports.createShare = async (req, res) => {
     const shareToken = generateShareToken();
     await db.sequelize.query(
       `INSERT INTO file_manager_shares
-      (share_token, resource_type, external_id, phase, path, filepath, shared_with_email, access_mode, created_by_user_id, is_active)
-      VALUES (:shareToken, :resourceType, :externalId, :phase, :path, :filepath, :email, :accessMode, :createdBy, 1)`,
+      (share_token, resource_type, external_id, phase, path, filepath, shared_with_email, access_mode, share_message, created_by_user_id, is_active)
+      VALUES (:shareToken, :resourceType, :externalId, :phase, :path, :filepath, :email, :accessMode, :shareMessage, :createdBy, 1)`,
       {
         replacements: {
           shareToken,
@@ -2744,6 +2749,7 @@ exports.createShare = async (req, res) => {
           filepath,
           email: effectiveEmail,
           accessMode: normalizedAccessMode,
+          shareMessage,
           createdBy: getRequestUserId(req) || null,
         },
       }
@@ -2751,7 +2757,7 @@ exports.createShare = async (req, res) => {
 
     const frontendBase = String(process.env.FRONTEND_URL || '').trim().replace(/\/+$/, '');
     const shareUrl = frontendBase ? `${frontendBase}/shared/file-manager/${shareToken}` : `/shared/file-manager/${shareToken}`;
-    return res.status(201).json({ success: true, data: { shareToken, shareUrl } });
+    return res.status(201).json({ success: true, data: { shareToken, shareUrl, message: shareMessage } });
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || { success: false, message: error.message });
   }
@@ -2923,7 +2929,7 @@ exports.listShares = async (req, res) => {
     }
 
     const [rows] = await db.sequelize.query(
-      `SELECT share_id, share_token, resource_type, shared_with_email, access_mode, phase, path, filepath, created_at
+      `SELECT share_id, share_token, resource_type, shared_with_email, access_mode, share_message, phase, path, filepath, created_at
        FROM file_manager_shares
        WHERE is_active = 1
          AND resource_type = :resourceType
@@ -2945,6 +2951,7 @@ exports.listShares = async (req, res) => {
           shareToken: row.share_token,
           email: row.shared_with_email,
           accessMode: row.access_mode || 'email_only',
+          message: row.share_message || null,
           resourceType: row.resource_type,
           phase: row.phase,
           path: row.path,
