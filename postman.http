@@ -2301,6 +2301,23 @@ Authorization: {{TOKEN}}
   "action": "approve"
 }
 
+### upload studio media
+POST {{URL}}admin/studios/media/upload HTTP/1.1
+Authorization: Bearer {{TOKEN}}
+Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW
+
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="studio_media"; filename="flower.jpg"
+Content-Type: image/jpeg
+
+(data)
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="studio_media"; filename="5.jpeg"
+Content-Type: image/jpeg
+
+(data)
+------WebKitFormBoundary7MA4YWxkTrZu0gW--
+
 # ### Admin - Add Review
 # POST {{URL}}admin/studios/2/reviews HTTP/1.1
 # Content-Type: application/json
