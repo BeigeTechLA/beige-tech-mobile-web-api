@@ -76,7 +76,9 @@ const {
   MESSAGING_INITIATED_TEMPLATE_ID,
   PRE_PRODUCTION_BRIEF_UPLOADED_TEMPLATE_ID,
   POST_PRODUCTION_UPLOAD_TEMPLATE_ID,
-  EMAIL_TO_POST_PRODUCTION_TEAM_TEMPLATE_ID
+  EMAIL_TO_POST_PRODUCTION_TEAM_TEMPLATE_ID,
+  OTP_VERIFICATION_FILE_SHARE_TEMPLATE_ID,
+  FILE_SHARE_INVITATION_TEMPLATE_ID
 } = require('../config/sendgridTemplates');
 
 const formatDate = (value) => {
@@ -581,6 +583,63 @@ const sendVerificationOTP = async (userData, otp) => {
     };
   } catch (error) {
     console.error('Error sending verification OTP email via SendGrid:', error?.response?.body || error.message);
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Send file share access OTP
+ * @param {Object} userData - Recipient details
+ * @param {string} otp - 6-digit OTP
+ * @param {number} expiryMinutes - OTP expiry in minutes
+ */
+const sendFileShareVerificationOTP = async (userData, otp, expiryMinutes = 10) => {
+  try {
+    if (!userData?.email) {
+      return { success: false, error: 'Recipient email is required' };
+    }
+
+    if (!process.env.SENDGRID_API_KEY) {
+      return { success: false, error: 'SENDGRID_API_KEY is not configured' };
+    }
+
+    if (!OTP_VERIFICATION_FILE_SHARE_TEMPLATE_ID) {
+      return { success: false, error: 'OTP_VERIFICATION_FILE_SHARE_TEMPLATE_ID is not configured' };
+    }
+
+    const fromEmail = getSendgridFromAddress();
+    if (!fromEmail) {
+      return { success: false, error: 'Sender email not configured' };
+    }
+
+    const [response] = await sgMail.send({
+      to: userData.email,
+      from: {
+        email: fromEmail,
+        name: getSendgridFromName()
+      },
+      subject: 'Your File Share Access Code - BeigeAI',
+      templateId: OTP_VERIFICATION_FILE_SHARE_TEMPLATE_ID,
+      dynamicTemplateData: {
+        userData: {
+          name: userData.name || 'there'
+        },
+        otp,
+        expiry_minutes: expiryMinutes,
+        year: new Date().getFullYear()
+      }
+    });
+
+    return {
+      success: true,
+      statusCode: response?.statusCode,
+      messageId:
+        response?.headers?.['x-message-id'] ||
+        response?.headers?.['X-Message-Id'] ||
+        null
+    };
+  } catch (error) {
+    console.error('Error sending file share OTP email via SendGrid:', error?.response?.body || error.message);
     return { success: false, error: error.message };
   }
 };
@@ -2892,11 +2951,47 @@ const sendPostProductionUploadedTemplateEmail = async ({ recipients = [], data =
   });
 };
 
+const sendFileShareInvitationEmail = async ({ to, data = {} }) => {
+  if (!FILE_SHARE_INVITATION_TEMPLATE_ID) {
+    return { success: false, error: 'FILE_SHARE_INVITATION_TEMPLATE_ID is not configured' };
+  }
+
+  if (!to) {
+    return { success: false, error: 'Recipient email is required' };
+  }
+
+  return sendEmail({
+    to,
+    subject: 'Files Have Been Shared With You - BeigeAI',
+    templateId: FILE_SHARE_INVITATION_TEMPLATE_ID,
+    dynamicTemplateData: {
+      sender_name: data?.sender_name || 'Beige',
+      shared_files_url: data?.shared_files_url || '',
+      share_url: data?.shared_files_url || '',
+      share_message: data?.share_message || '',
+      resource_type: data?.resource_type || '',
+      external_id: data?.external_id || '',
+      access_mode: data?.access_mode || '',
+      preview_image_1:
+        data?.preview_image_1 ||
+        'https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/file_share_preview_team_01.jpg',
+      preview_image_2:
+        data?.preview_image_2 ||
+        'https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/file_share_preview_portrait_01.jpg',
+      preview_image_3:
+        data?.preview_image_3 ||
+        'https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/file_share_preview_group_01.jpg',
+      year: new Date().getFullYear(),
+    }
+  });
+};
+
 module.exports = {
   formatContentTypes,
   formatShootTypes,
   sendTaskAssignmentEmail,
   sendVerificationOTP,
+  sendFileShareVerificationOTP,
   sendPasswordResetEmail,
   // sendPaymentLinkEmail,
   sendInvoiceEmail,
@@ -2929,5 +3024,6 @@ module.exports = {
   sendMeetingScheduledTemplateEmail,
   sendMessagingInitiatedTemplateEmail,
   sendPreProductionUploadedTemplateEmail,
-  sendPostProductionUploadedTemplateEmail
+  sendPostProductionUploadedTemplateEmail,
+  sendFileShareInvitationEmail
 };
