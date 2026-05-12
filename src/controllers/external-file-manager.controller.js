@@ -2778,7 +2778,7 @@ exports.requestShareOtp = async (req, res) => {
       String(share.access_mode || 'email_only') !== 'anyone_with_link' &&
       normalizeEmailAddress(share.shared_with_email) !== email
     ) {
-      return res.status(403).json({ success: false, message: 'This email is not allowed for this share link' });
+      return res.status(403).json({ success: false, message: 'This email does not have access for the Shared link' });
     }
 
     const otp = otpService.generateOTP();
@@ -2815,7 +2815,7 @@ exports.verifyShareOtp = async (req, res) => {
       String(share.access_mode || 'email_only') !== 'anyone_with_link' &&
       normalizeEmailAddress(share.shared_with_email) !== email
     ) {
-      return res.status(403).json({ success: false, message: 'This email is not allowed for this share link' });
+      return res.status(403).json({ success: false, message: 'This email does not have access for the shared link' });
     }
 
     const [rows] = await db.sequelize.query(
