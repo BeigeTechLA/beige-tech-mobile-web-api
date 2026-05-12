@@ -23,6 +23,7 @@ let commonEventCreatorFoldersTableReadyPromise = null;
 let faceEmbeddingsTableReadyPromise = null;
 let fileShareTableReadyPromise = null;
 let fileShareOtpTableReadyPromise = null;
+let fileShareAccessLogsTableReadyPromise = null;
 
 const buildHeaders = () => ({
   'Content-Type': 'application/json',
@@ -592,6 +593,10 @@ const ensureFileShareTable = async () => {
   }
 
   await fileShareTableReadyPromise;
+  await db.sequelize.query(`
+    ALTER TABLE file_manager_shares
+    ADD COLUMN IF NOT EXISTS access_mode ENUM('email_only', 'anyone_with_link') NOT NULL DEFAULT 'email_only' AFTER shared_with_email
+  `).catch(() => null);
 };
 
 const ensureFileShareOtpTable = async () => {
@@ -2626,6 +2631,55 @@ const extractBearerToken = (req) => {
   return authHeader.slice(7).trim();
 };
 
+const ensureFileShareAccessLogsTable = async () => {
+  if (!fileShareAccessLogsTableReadyPromise) {
+    fileShareAccessLogsTableReadyPromise = db.sequelize.query(`
+      CREATE TABLE IF NOT EXISTS file_manager_share_access_logs (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        share_id BIGINT UNSIGNED NOT NULL,
+        share_token VARCHAR(128) NOT NULL,
+        email VARCHAR(255) NOT NULL,
+        action VARCHAR(32) NOT NULL DEFAULT 'content_view',
+        ip_address VARCHAR(64) DEFAULT NULL,
+        user_agent VARCHAR(512) DEFAULT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        KEY idx_file_manager_share_access_logs_share_id (share_id),
+        KEY idx_file_manager_share_access_logs_token (share_token),
+        KEY idx_file_manager_share_access_logs_email (email)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+  }
+
+  await fileShareAccessLogsTableReadyPromise;
+};
+
+const getClientIpAddress = (req) => {
+  const forwarded = String(req.headers?.['x-forwarded-for'] || '').split(',')[0].trim();
+  if (forwarded) return forwarded;
+  return String(req.ip || req.socket?.remoteAddress || '').trim() || null;
+};
+
+const recordShareAccessLog = async (req, share, email, action = 'content_view') => {
+  if (!share?.share_id || !share?.share_token || !email) return;
+  await ensureFileShareAccessLogsTable();
+  await db.sequelize.query(
+    `INSERT INTO file_manager_share_access_logs
+    (share_id, share_token, email, action, ip_address, user_agent)
+    VALUES (:shareId, :shareToken, :email, :action, :ipAddress, :userAgent)`,
+    {
+      replacements: {
+        shareId: share.share_id,
+        shareToken: String(share.share_token || ''),
+        email: normalizeEmailAddress(email),
+        action: String(action || 'content_view'),
+        ipAddress: getClientIpAddress(req),
+        userAgent: String(req.headers?.['user-agent'] || '').slice(0, 512) || null,
+      },
+    }
+  ).catch(() => null);
+};
+
 const ensureSharedScopeAccess = (share, requestedPhase, requestedPath) => {
   const shareType = String(share?.resource_type || '').toLowerCase();
   if (shareType === 'file') return true;
@@ -2657,12 +2711,15 @@ exports.createShare = async (req, res) => {
     const path = String(req.body.path || '').trim() || null;
     const filepath = String(req.body.filepath || '').trim() || null;
     const email = normalizeEmailAddress(req.body.email);
+    const accessMode = String(req.body.accessMode || 'email_only').trim().toLowerCase();
+    const normalizedAccessMode = accessMode === 'anyone_with_link' ? 'anyone_with_link' : 'email_only';
+    const effectiveEmail = normalizedAccessMode === 'anyone_with_link' ? 'anyone@link.local' : email;
 
     if (!['workspace', 'folder', 'file'].includes(resourceType)) {
       return res.status(400).json({ success: false, message: 'resourceType must be workspace, folder, or file' });
     }
     if (!externalId) return res.status(400).json({ success: false, message: 'externalId is required' });
-    if (!email) return res.status(400).json({ success: false, message: 'email is required' });
+    if (normalizedAccessMode === 'email_only' && !email) return res.status(400).json({ success: false, message: 'email is required' });
     if (resourceType === 'file' && !filepath) {
       return res.status(400).json({ success: false, message: 'filepath is required for file share' });
     }
@@ -2675,8 +2732,8 @@ exports.createShare = async (req, res) => {
     const shareToken = generateShareToken();
     await db.sequelize.query(
       `INSERT INTO file_manager_shares
-      (share_token, resource_type, external_id, phase, path, filepath, shared_with_email, created_by_user_id, is_active)
-      VALUES (:shareToken, :resourceType, :externalId, :phase, :path, :filepath, :email, :createdBy, 1)`,
+      (share_token, resource_type, external_id, phase, path, filepath, shared_with_email, access_mode, created_by_user_id, is_active)
+      VALUES (:shareToken, :resourceType, :externalId, :phase, :path, :filepath, :email, :accessMode, :createdBy, 1)`,
       {
         replacements: {
           shareToken,
@@ -2685,7 +2742,8 @@ exports.createShare = async (req, res) => {
           phase,
           path,
           filepath,
-          email,
+          email: effectiveEmail,
+          accessMode: normalizedAccessMode,
           createdBy: getRequestUserId(req) || null,
         },
       }
@@ -2710,7 +2768,10 @@ exports.requestShareOtp = async (req, res) => {
 
     const share = await getShareByToken(shareToken);
     if (!share) return res.status(404).json({ success: false, message: 'Share link not found' });
-    if (normalizeEmailAddress(share.shared_with_email) !== email) {
+    if (
+      String(share.access_mode || 'email_only') !== 'anyone_with_link' &&
+      normalizeEmailAddress(share.shared_with_email) !== email
+    ) {
       return res.status(403).json({ success: false, message: 'This email is not allowed for this share link' });
     }
 
@@ -2744,7 +2805,10 @@ exports.verifyShareOtp = async (req, res) => {
 
     const share = await getShareByToken(shareToken);
     if (!share) return res.status(404).json({ success: false, message: 'Share link not found' });
-    if (normalizeEmailAddress(share.shared_with_email) !== email) {
+    if (
+      String(share.access_mode || 'email_only') !== 'anyone_with_link' &&
+      normalizeEmailAddress(share.shared_with_email) !== email
+    ) {
       return res.status(403).json({ success: false, message: 'This email is not allowed for this share link' });
     }
 
@@ -2787,9 +2851,13 @@ exports.getSharedContent = async (req, res) => {
 
     const share = await getShareByToken(shareToken);
     if (!share) return res.status(404).json({ success: false, message: 'Share link not found' });
-    if (normalizeEmailAddress(share.shared_with_email) !== normalizeEmailAddress(claims.email)) {
+    if (
+      String(share.access_mode || 'email_only') !== 'anyone_with_link' &&
+      normalizeEmailAddress(share.shared_with_email) !== normalizeEmailAddress(claims.email)
+    ) {
       return res.status(403).json({ success: false, message: 'Access denied for this email' });
     }
+    await recordShareAccessLog(req, share, claims.email, 'content_view');
 
     if (share.resource_type === 'file') {
       const viewResult = await proxyRequest('/file-view-url', {
@@ -2855,7 +2923,7 @@ exports.listShares = async (req, res) => {
     }
 
     const [rows] = await db.sequelize.query(
-      `SELECT share_id, share_token, resource_type, shared_with_email, phase, path, filepath, created_at
+      `SELECT share_id, share_token, resource_type, shared_with_email, access_mode, phase, path, filepath, created_at
        FROM file_manager_shares
        WHERE is_active = 1
          AND resource_type = :resourceType
@@ -2876,6 +2944,7 @@ exports.listShares = async (req, res) => {
           shareId: row.share_id,
           shareToken: row.share_token,
           email: row.shared_with_email,
+          accessMode: row.access_mode || 'email_only',
           resourceType: row.resource_type,
           phase: row.phase,
           path: row.path,
@@ -2930,6 +2999,61 @@ exports.revokeShare = async (req, res) => {
   }
 };
 
+exports.listShareAccessLogs = async (req, res) => {
+  try {
+    await ensureFileShareTable();
+    await ensureFileShareAccessLogsTable();
+    const resourceType = String(req.query.resourceType || '').trim().toLowerCase();
+    const externalId = String(req.query.externalId || '').trim();
+    const phase = String(req.query.phase || '').trim() || null;
+    const path = String(req.query.path || '').trim() || null;
+    const filepath = String(req.query.filepath || '').trim() || null;
+
+    if (!['workspace', 'folder', 'file'].includes(resourceType)) {
+      return res.status(400).json({ success: false, message: 'resourceType must be workspace, folder, or file' });
+    }
+    if (!externalId) return res.status(400).json({ success: false, message: 'externalId is required' });
+
+    await ensureCreatorWorkspaceAccess(req, externalId);
+    if (resourceType === 'file' && filepath) {
+      await ensureCreatorFileAccess(req, filepath);
+    }
+
+    const [rows] = await db.sequelize.query(
+      `SELECT l.id, l.share_id, l.share_token, l.email, l.action, l.ip_address, l.user_agent, l.created_at
+       FROM file_manager_share_access_logs l
+       INNER JOIN file_manager_shares s ON s.share_id = l.share_id
+       WHERE s.is_active = 1
+         AND s.resource_type = :resourceType
+         AND s.external_id = :externalId
+         AND (:phase IS NULL OR IFNULL(s.phase,'') = IFNULL(:phase,''))
+         AND (:path IS NULL OR IFNULL(s.path,'') = IFNULL(:path,''))
+         AND (:filepath IS NULL OR IFNULL(s.filepath,'') = IFNULL(:filepath,''))
+       ORDER BY l.created_at DESC
+       LIMIT 500`,
+      { replacements: { resourceType, externalId, phase, path, filepath } }
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        logs: (rows || []).map((row) => ({
+          id: row.id,
+          shareId: row.share_id,
+          shareToken: row.share_token,
+          email: row.email,
+          action: row.action,
+          ipAddress: row.ip_address,
+          userAgent: row.user_agent,
+          createdAt: row.created_at,
+        })),
+      },
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || { success: false, message: error.message });
+  }
+};
+
 exports.getSharedDownloadUrl = async (req, res) => {
   try {
     const shareToken = String(req.params.shareToken || '').trim();
@@ -2945,9 +3069,13 @@ exports.getSharedDownloadUrl = async (req, res) => {
 
     const share = await getShareByToken(shareToken);
     if (!share) return res.status(404).json({ success: false, message: 'Share link not found' });
-    if (normalizeEmailAddress(share.shared_with_email) !== normalizeEmailAddress(claims.email)) {
+    if (
+      String(share.access_mode || 'email_only') !== 'anyone_with_link' &&
+      normalizeEmailAddress(share.shared_with_email) !== normalizeEmailAddress(claims.email)
+    ) {
       return res.status(403).json({ success: false, message: 'Access denied for this email' });
     }
+    await recordShareAccessLog(req, share, claims.email, 'download');
 
     if (share.resource_type === 'file') {
       const result = await proxyRequest('/file-download-url', {
