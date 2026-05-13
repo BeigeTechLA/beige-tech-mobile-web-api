@@ -2222,87 +2222,171 @@ exports.getLeads = async (req, res) => {
 
     let processedLeads = await Promise.all(
       leads.map(async (lead) => {
-        const leadJson = lead.toJSON();
-        const pricingData = await calculateLeadPricing(lead.booking);
-        const manualProgress = computeManualPaymentProgress(
-          leadJson.activities || [],
-          pricingData?.total || 0
-        );
-        const linkedSalesQuote = await sales_quotes.findOne({
-          where: { lead_id: lead.lead_id },
-          attributes: ['sales_quote_id'],
-          order: [['updated_at', 'DESC']]
-        });
-        const customQuoteFinancials = await getCustomQuoteFinancialDetails({
-          quoteId: linkedSalesQuote?.sales_quote_id || null,
-          bookingId: leadJson.booking?.stream_project_booking_id || null
-        });
+        try {
+          console.log("[getLeads] Processing lead:", lead.lead_id);
 
-        // 1. Standardize Booking Status & Intent (Using same methods as Detail API)
-        const computedIntent = lead.intent ?? leadAssignmentService.getLeadIntent({ lead, booking: lead.booking });
-        let computedBookingStatus = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
-        if (manualProgress.hasFullPayment) {
-          computedBookingStatus = 'Booked';
-        } else if (manualProgress.isPartiallyPaid) {
-          computedBookingStatus = 'Partially Paid';
-        } else if (hasOutstandingAdditionalPayment(customQuoteFinancials)) {
-          computedBookingStatus = 'Partially Paid';
-        }
+          // KEEPING ALL ORIGINAL CODE EXACTLY SAME
+          const leadJson = lead.toJSON();
 
-        const pLinks = leadJson.payment_links || [];
-        let activePaymentLink = null;
-        if (pLinks.length > 0) {
-          const latestLink = [...pLinks].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
-          const now = new Date();
-          const expiryDate = latestLink.expires_at ? new Date(latestLink.expires_at) : null;
-          activePaymentLink = {
-            ...latestLink,
-            is_expired: expiryDate ? expiryDate < now : false
+          const pricingData = await calculateLeadPricing(lead.booking).catch((err) => {
+            console.error("[getLeads] calculateLeadPricing failed:", lead.lead_id, err);
+            return { total: 0 };
+          });
+
+          const manualProgress = computeManualPaymentProgress(
+            leadJson.activities || [],
+            pricingData?.total || 0
+          );
+
+          const linkedSalesQuote = await sales_quotes.findOne({
+            where: { lead_id: lead.lead_id },
+            attributes: ['sales_quote_id'],
+            order: [['updated_at', 'DESC']]
+          }).catch((err) => {
+            console.error("[getLeads] sales_quotes.findOne failed:", lead.lead_id, err);
+            return null;
+          });
+
+          const customQuoteFinancials = await getCustomQuoteFinancialDetails({
+            quoteId: linkedSalesQuote?.sales_quote_id || null,
+            bookingId: leadJson.booking?.stream_project_booking_id || null
+          }).catch((err) => {
+            console.error("[getLeads] getCustomQuoteFinancialDetails failed:", lead.lead_id, err);
+            return null;
+          });
+
+          // 1. Standardize Booking Status & Intent (UNCHANGED)
+          const computedIntent =
+            lead.intent ??
+            leadAssignmentService.getLeadIntent({
+              lead,
+              booking: lead.booking
+            });
+
+          let computedBookingStatus =
+            leadAssignmentService.getLeadBookingStatus(
+              lead,
+              lead.booking
+            );
+
+          if (manualProgress.hasFullPayment) {
+            computedBookingStatus = 'Booked';
+          } else if (manualProgress.isPartiallyPaid) {
+            computedBookingStatus = 'Partially Paid';
+          } else if (hasOutstandingAdditionalPayment(customQuoteFinancials)) {
+            computedBookingStatus = 'Partially Paid';
+          }
+
+          const pLinks = leadJson.payment_links || [];
+          let activePaymentLink = null;
+
+          if (pLinks.length > 0) {
+            const latestLink = [...pLinks].sort(
+              (a, b) =>
+                new Date(b.created_at) - new Date(a.created_at)
+            )[0];
+
+            const now = new Date();
+            const expiryDate = latestLink.expires_at
+              ? new Date(latestLink.expires_at)
+              : null;
+
+            activePaymentLink = {
+              ...latestLink,
+              is_expired: expiryDate
+                ? expiryDate < now
+                : false
+            };
+          }
+
+          const payment_status = resolveLeadPaymentStatus({
+            booking: lead.booking,
+            activePaymentLink,
+            customQuoteFinancials
+          });
+
+          const quoteAmounts = resolveLeadQuoteAmounts({
+            linkedSalesQuote,
+            booking: lead.booking,
+            customQuoteFinancials
+          });
+
+          // ORIGINAL RETURN KEPT
+          return {
+            ...leadJson,
+            potential_value: pricingData
+              ? pricingData.total
+              : 0,
+            booking_status:
+              computedBookingStatus || 'Unknown',
+            intent: computedIntent || '',
+            payment_status:
+              payment_status || 'Unknown',
+            collected_amount:
+              quoteAmounts?.collected_amount || 0,
+            outstanding_amount:
+              quoteAmounts?.outstanding_amount || 0,
+            manual_payment_summary:
+              manualProgress || {
+                hasFullPayment: false,
+                isPartiallyPaid: false
+              }
+          };
+
+        } catch (leadError) {
+          console.error(
+            "[getLeads] Lead processing failed:",
+            lead?.lead_id,
+            leadError
+          );
+
+          // SAFE FALLBACK WITHOUT BREAKING ENTIRE API
+          return {
+            ...lead.toJSON(),
+            potential_value: 0,
+            booking_status: 'Unknown',
+            intent: lead?.intent || '',
+            payment_status: 'Unknown',
+            collected_amount: 0,
+            outstanding_amount: 0,
+            manual_payment_summary: {
+              hasFullPayment: false,
+              isPartiallyPaid: false
+            }
           };
         }
-
-        const payment_status = resolveLeadPaymentStatus({
-          booking: lead.booking,
-          activePaymentLink,
-          customQuoteFinancials
-        });
-        const quoteAmounts = resolveLeadQuoteAmounts({
-          linkedSalesQuote,
-          booking: lead.booking,
-          customQuoteFinancials
-        });
-
-        return {
-          ...leadJson,
-          potential_value: pricingData ? pricingData.total : 0,
-          booking_status: computedBookingStatus, 
-          intent: computedIntent,
-          payment_status: payment_status,
-          collected_amount: quoteAmounts.collected_amount,
-          outstanding_amount: quoteAmounts.outstanding_amount,
-          manual_payment_summary: manualProgress,
-        };
       })
     );
 
     const activeStatusFilter = (status || booking_status);
     const shootStatusRequested = isShootStatusFilterValue(activeStatusFilter);
-
+    
     if (shootStatusRequested) {
       processedLeads = processedLeads.filter((lead) => matchShootStatusFilter(lead.booking, activeStatusFilter));
     }
 
     if (!shootStatusRequested && activeStatusFilter && activeStatusFilter !== 'All') {
       processedLeads = processedLeads.filter((lead) => {
-        const leadStat = lead.booking_status.replace('–', '-').trim();
-        const filterStat = activeStatusFilter.replace('–', '-').trim();
+        const leadStat = String(lead.booking_status || '')
+          .replace('–', '-')
+          .trim();
+
+        const filterStat = String(activeStatusFilter || '')
+          .replace('–', '-')
+          .trim();
+
         return leadStat === filterStat;
       });
     }
 
     if (intent && intent !== 'All') {
       processedLeads = processedLeads.filter(
-        (lead) => lead.intent.toLowerCase() === intent.toLowerCase().trim()
+        (lead) =>
+          String(lead.intent || '')
+            .toLowerCase() ===
+          String(intent)
+            .toLowerCase()
+            .trim()
       );
     }
 
@@ -2401,6 +2485,7 @@ exports.getLeads = async (req, res) => {
     });
   }
 };
+
 
 exports.getClientLeads = async (req, res) => {
   try {
