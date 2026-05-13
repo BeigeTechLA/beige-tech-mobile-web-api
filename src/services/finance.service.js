@@ -1,6 +1,15 @@
 const db = require('../models');
+const pricingService = require('./pricing.service');
 
 const DEFAULT_PLATFORM_FEE_PERCENT = Number(process.env.BEIGE_MARGIN_PERCENT || 25);
+const ROLE_TO_ITEM_MAP = {
+  videographer: 11,
+  photographer: 10,
+  cinematographer: 12,
+  11: 11,
+  10: 10,
+  12: 12
+};
 
 function roundCurrency(value) {
   return Number(Number(value || 0).toFixed(2));
@@ -25,6 +34,24 @@ function stringifyMetadata(value) {
   }
 }
 
+function toPlainRecord(record) {
+  if (!record) return null;
+  if (typeof record.get === 'function') return record.get({ plain: true });
+  if (typeof record.toJSON === 'function') return record.toJSON();
+  return record;
+}
+
+function parseFlexibleJson(value, fallback = null) {
+  if (value === null || value === undefined || value === '') return fallback;
+  if (typeof value === 'object') return value;
+  try {
+    const parsed = JSON.parse(value);
+    return typeof parsed === 'string' ? parseFlexibleJson(parsed, fallback) : parsed;
+  } catch (_) {
+    return fallback;
+  }
+}
+
 function buildTransactionCode(paymentId, bookingId) {
   const date = new Date();
   const yyyy = date.getFullYear();
@@ -38,12 +65,221 @@ function normalizeStatus(paymentStatus, hasPayment) {
   return 'pending';
 }
 
+function calculateTimeDiffHours(startTime, endTime) {
+  if (!startTime || !endTime) return 0;
+  const [startHour = 0, startMinute = 0] = String(startTime).split(':').map(Number);
+  const [endHour = 0, endMinute = 0] = String(endTime).split(':').map(Number);
+  if (![startHour, startMinute, endHour, endMinute].every(Number.isFinite)) return 0;
+
+  const start = startHour + (startMinute / 60);
+  let end = endHour + (endMinute / 60);
+  if (end < start) end += 24;
+  return roundCurrency(end - start);
+}
+
+function deriveBookingHours(booking, pricingSnapshot = null) {
+  const bookingDays = Array.isArray(booking.booking_days) ? booking.booking_days : [];
+  const daysTotal = bookingDays.reduce((sum, day) => {
+    const explicitHours = Number(day.duration_hours || 0);
+    return sum + (explicitHours > 0 ? explicitHours : calculateTimeDiffHours(day.start_time, day.end_time));
+  }, 0);
+  if (daysTotal > 0) return roundCurrency(daysTotal);
+
+  const snapshotHours = Number(pricingSnapshot?.shoot_hours || pricingSnapshot?.shootHours || 0);
+  if (snapshotHours > 0) return roundCurrency(snapshotHours);
+
+  const bookingHours = Number(booking.duration_hours || 0);
+  if (bookingHours > 0) return roundCurrency(bookingHours);
+
+  return calculateTimeDiffHours(booking.start_time, booking.end_time);
+}
+
+function normalizeLineItems(lineItems = []) {
+  return (Array.isArray(lineItems) ? lineItems : []).map((item) => {
+    const plain = toPlainRecord(item) || {};
+    const pricingItem = toPlainRecord(plain.pricing_item) || {};
+    const category = toPlainRecord(pricingItem.category) || {};
+
+    return {
+      ...plain,
+      item_name: plain.item_name || plain.name || pricingItem.name || null,
+      quantity: Number(plain.quantity || 1),
+      unit_price: roundCurrency(plain.unit_price ?? plain.unit_rate ?? pricingItem.rate ?? 0),
+      line_total: roundCurrency(plain.line_total ?? plain.total ?? 0),
+      rate_type: plain.rate_type || pricingItem.rate_type || null,
+      duration_hours: plain.duration_hours !== null && plain.duration_hours !== undefined
+        ? Number(plain.duration_hours)
+        : null,
+      crew_size: plain.crew_size !== null && plain.crew_size !== undefined
+        ? Number(plain.crew_size)
+        : null,
+      section_type: plain.section_type || category.slug || null,
+      category_slug: plain.category_slug || category.slug || null,
+      pricing_item: pricingItem.item_id ? pricingItem : null
+    };
+  });
+}
+
+function isCreatorServiceLine(item = {}) {
+  const name = String(item.item_name || '').toLowerCase();
+  const section = String(item.section_type || item.category_slug || '').toLowerCase();
+
+  if (section === 'editing' || name.includes('edit') || name.includes('reel') || name.includes('highlight')) return false;
+  if (name.includes('equipment') || name.includes('rush') || name.includes('pre-production') || name.includes('studio')) return false;
+
+  return (
+    section === 'service' ||
+    section === 'crew' ||
+    section === 'photography' ||
+    section === 'videography' ||
+    name.includes('photographer') ||
+    name.includes('videographer') ||
+    name.includes('cinematographer')
+  );
+}
+
+function applyDiscountToLineTotal(lineTotal, snapshot = {}) {
+  const subtotal = Number(snapshot.subtotal || 0);
+  const discountAmount = Number(snapshot.discount_amount || snapshot.discountAmount || 0);
+  if (!(subtotal > 0) || !(discountAmount > 0)) return roundCurrency(lineTotal);
+  return roundCurrency(lineTotal * Math.max((subtotal - discountAmount) / subtotal, 0));
+}
+
+function calculateCreatorServicePool(pricingSnapshot = {}) {
+  const lineItems = normalizeLineItems(pricingSnapshot.line_items || pricingSnapshot.lineItems || []);
+  return roundCurrency(lineItems.reduce((sum, item) => (
+    isCreatorServiceLine(item) ? sum + applyDiscountToLineTotal(item.line_total, pricingSnapshot) : sum
+  ), 0));
+}
+
+function buildSnapshotFromClassicQuote(quoteRecord) {
+  const quote = toPlainRecord(quoteRecord);
+  if (!quote) return null;
+
+  return {
+    source: 'primary_quote',
+    quote_id: quote.quote_id || null,
+    pricing_mode: quote.pricing_mode || null,
+    shoot_hours: Number(quote.shoot_hours || 0),
+    subtotal: roundCurrency(quote.subtotal || 0),
+    discount_percent: roundCurrency(quote.discount_percent || 0),
+    discount_amount: roundCurrency(quote.discount_amount || 0),
+    tax_type: quote.tax_type || null,
+    tax_rate: roundCurrency(quote.tax_rate || 0),
+    tax_amount: roundCurrency(quote.tax_amount || 0),
+    price_after_discount: roundCurrency(quote.price_after_discount || 0),
+    margin_percent: roundCurrency(quote.margin_percent ?? DEFAULT_PLATFORM_FEE_PERCENT),
+    margin_amount: roundCurrency(quote.margin_amount || 0),
+    total: roundCurrency(quote.total || quote.price_after_discount || 0),
+    line_items: normalizeLineItems(quote.line_items || [])
+  };
+}
+
+function buildSnapshotFromSalesQuote(quoteRecord) {
+  const quote = toPlainRecord(quoteRecord);
+  if (!quote) return null;
+
+  const latestVersion = Array.isArray(quote.versions) && quote.versions.length
+    ? [...quote.versions].sort((a, b) => Number(b.version_number || 0) - Number(a.version_number || 0))[0]
+    : null;
+  const versionSnapshot = parseFlexibleJson(latestVersion?.quote_snapshot_json, null);
+  if (versionSnapshot) {
+    return {
+      ...versionSnapshot,
+      source: 'sales_quote_snapshot',
+      sales_quote_id: quote.sales_quote_id || versionSnapshot.sales_quote_id || null,
+      quote_id: null,
+      subtotal: roundCurrency(versionSnapshot.subtotal || 0),
+      discount_amount: roundCurrency(versionSnapshot.discount_amount || 0),
+      tax_amount: roundCurrency(versionSnapshot.tax_amount || 0),
+      total: roundCurrency(versionSnapshot.total || 0),
+      line_items: normalizeLineItems(versionSnapshot.line_items || [])
+    };
+  }
+
+  return {
+    source: 'sales_quote',
+    sales_quote_id: quote.sales_quote_id || null,
+    quote_id: null,
+    pricing_mode: quote.pricing_mode || null,
+    subtotal: roundCurrency(quote.subtotal || 0),
+    discount_amount: roundCurrency(quote.discount_amount || 0),
+    tax_type: quote.tax_type || null,
+    tax_rate: roundCurrency(quote.tax_rate || 0),
+    tax_amount: roundCurrency(quote.tax_amount || 0),
+    total: roundCurrency(quote.total || 0),
+    line_items: normalizeLineItems(quote.line_items || [])
+  };
+}
+
+async function buildPricingSnapshotFromBooking(booking) {
+  const primaryQuoteSnapshot = buildSnapshotFromClassicQuote(booking.primary_quote);
+  if (primaryQuoteSnapshot) return primaryQuoteSnapshot;
+
+  const invoiceRows = Array.isArray(booking.invoice_send_history) ? booking.invoice_send_history : [];
+  const salesQuote = invoiceRows.map((invoice) => toPlainRecord(invoice)?.quote).find(Boolean);
+  const salesQuoteSnapshot = buildSnapshotFromSalesQuote(salesQuote);
+  if (salesQuoteSnapshot) return salesQuoteSnapshot;
+
+  const roleCounts = parseFlexibleJson(booking.crew_roles, {});
+  const items = [];
+  if (roleCounts && typeof roleCounts === 'object' && !Array.isArray(roleCounts)) {
+    Object.entries(roleCounts).forEach(([role, count]) => {
+      const itemId = ROLE_TO_ITEM_MAP[String(role).toLowerCase()] || ROLE_TO_ITEM_MAP[role];
+      const quantity = Number(count || 0);
+      if (itemId && quantity > 0) items.push({ item_id: itemId, quantity });
+    });
+  }
+
+  if (items.length === 0) return null;
+
+  const hours = deriveBookingHours(booking);
+  const calculatedQuote = await pricingService.calculateQuote({
+    items,
+    shootHours: hours,
+    eventType: booking.shoot_type || booking.event_type || null,
+    shootStartDate: booking.event_date || null,
+    videoEditTypes: parseFlexibleJson(booking.video_edit_types, []),
+    photoEditTypes: parseFlexibleJson(booking.photo_edit_types, []),
+  });
+
+  return {
+    source: 'pricing_service_booking_fallback',
+    pricing_mode: calculatedQuote.pricingMode || null,
+    shoot_hours: Number(calculatedQuote.shootHours || hours || 0),
+    subtotal: roundCurrency(calculatedQuote.subtotal || 0),
+    discount_percent: roundCurrency(calculatedQuote.discountPercent || 0),
+    discount_amount: roundCurrency(calculatedQuote.discountAmount || 0),
+    price_after_discount: roundCurrency(calculatedQuote.priceAfterDiscount || 0),
+    margin_percent: roundCurrency(calculatedQuote.marginPercent ?? DEFAULT_PLATFORM_FEE_PERCENT),
+    margin_amount: roundCurrency(calculatedQuote.marginAmount || 0),
+    total: roundCurrency(calculatedQuote.total || 0),
+    line_items: normalizeLineItems(calculatedQuote.lineItems || [])
+  };
+}
+
 async function loadBookingFinanceContext(bookingId, transaction = null) {
   const booking = await db.stream_project_booking.findByPk(bookingId, {
     include: [
       {
         model: db.quotes,
         as: 'primary_quote',
+        required: false,
+        include: [{
+          model: db.quote_line_items,
+          as: 'line_items',
+          required: false,
+          include: [{
+            model: db.pricing_items,
+            as: 'pricing_item',
+            required: false,
+            include: [{ model: db.pricing_categories, as: 'category', required: false }]
+          }]
+        }]
+      },
+      {
+        model: db.stream_project_booking_days,
+        as: 'booking_days',
         required: false
       },
       {
@@ -62,7 +298,16 @@ async function loadBookingFinanceContext(bookingId, transaction = null) {
       {
         model: db.invoice_send_history,
         as: 'invoice_send_history',
-        required: false
+        required: false,
+        include: [{
+          model: db.sales_quotes,
+          as: 'quote',
+          required: false,
+          include: [
+            { model: db.sales_quote_line_items, as: 'line_items', required: false },
+            { model: db.sales_quote_versions, as: 'versions', required: false }
+          ]
+        }]
       }
     ],
     transaction
@@ -75,36 +320,59 @@ async function loadBookingFinanceContext(bookingId, transaction = null) {
   }
 
   const payment = booking.payment_id
-    ? await db.payment_transactions.findByPk(booking.payment_id, { transaction })
+    ? await db.payment_transactions.findByPk(booking.payment_id, {
+        include: [{ model: db.crew_members, as: 'creator', required: false }],
+        transaction
+      })
     : null;
 
   return { booking, payment };
 }
 
-function calculateCreatorRows({ booking, payment, financeTransactionId = null }) {
+function calculateCreatorRows({ booking, payment, pricingSnapshot = null, financeTransactionId = null }) {
   const assigned = Array.isArray(booking.assigned_crews) ? booking.assigned_crews : [];
-  const creators = assigned
-    .map((assignment) => assignment.crew_member)
-    .filter((creator) => creator && creator.crew_member_id);
+  const creatorsById = new Map();
 
-  if (creators.length === 0 && payment?.creator_id) {
-    creators.push({
-      crew_member_id: payment.creator_id,
-      hourly_rate: payment.hourly_rate || 0
+  assigned
+    .map((assignment) => assignment.crew_member)
+    .filter((creator) => creator && creator.crew_member_id)
+    .forEach((creator) => creatorsById.set(Number(creator.crew_member_id), toPlainRecord(creator)));
+
+  const paymentCreator = toPlainRecord(payment?.creator);
+  if (creatorsById.size === 0 && paymentCreator?.crew_member_id) {
+    creatorsById.set(Number(paymentCreator.crew_member_id), paymentCreator);
+  }
+
+  const creators = Array.from(creatorsById.values());
+  if (creators.length === 0) return [];
+
+  const hours = deriveBookingHours(booking, pricingSnapshot);
+  const creatorServicePool = calculateCreatorServicePool(pricingSnapshot || {});
+  const creatorAmounts = creators.map((creator) => {
+    const hourlyRate = roundCurrency(creator.hourly_rate || 0);
+    return {
+      creator,
+      hourlyRate,
+      amount: hourlyRate > 0 && hours > 0 ? roundCurrency(hourlyRate * hours) : 0
+    };
+  });
+
+  const ratedTotal = roundCurrency(creatorAmounts.reduce((sum, item) => sum + item.amount, 0));
+  const missingRateRows = creatorAmounts.filter((item) => !(item.amount > 0));
+  if (missingRateRows.length > 0 && creatorServicePool > ratedTotal) {
+    const fallbackShare = roundCurrency((creatorServicePool - ratedTotal) / missingRateRows.length);
+    missingRateRows.forEach((item) => {
+      item.amount = fallbackShare;
+    });
+  } else if (ratedTotal === 0 && creatorServicePool > 0) {
+    const equalShare = roundCurrency(creatorServicePool / creators.length);
+    creatorAmounts.forEach((item) => {
+      item.amount = equalShare;
     });
   }
 
-  if (creators.length === 0) return [];
-
-  const hours = roundCurrency(payment?.hours || booking.duration_hours || 0);
-  const paymentCpCost = roundCurrency(payment?.cp_cost || 0);
-  const equalShare = paymentCpCost > 0 ? roundCurrency(paymentCpCost / creators.length) : 0;
-
-  return creators.map((creator) => {
-    const rateBasedAmount = roundCurrency((creator.hourly_rate || 0) * hours);
-    const netEarning = paymentCpCost > 0
-      ? equalShare
-      : rateBasedAmount;
+  return creatorAmounts.map(({ creator, hourlyRate, amount }) => {
+    const netEarning = roundCurrency(amount);
 
     return {
       booking_id: booking.stream_project_booking_id,
@@ -118,37 +386,47 @@ function calculateCreatorRows({ booking, payment, financeTransactionId = null })
       status: payment ? 'earned' : 'pending',
       earned_at: payment ? (booking.payment_completed_at || new Date()) : null,
       metadata_json: stringifyMetadata({
-        source: paymentCpCost > 0 ? 'payment_cp_cost' : 'creator_hourly_rate',
+        source: hourlyRate > 0 ? 'creator_hourly_rate_booking_duration' : 'quote_creator_service_pool_fallback',
+        pricing_source: pricingSnapshot?.source || null,
         hours,
-        hourly_rate: roundCurrency(creator.hourly_rate || 0)
+        hourly_rate: hourlyRate,
+        creator_service_pool: creatorServicePool
       })
     };
   });
 }
 
-function calculateBreakdown({ booking, payment, creatorRows }) {
-  const quote = booking.primary_quote;
-  const totalFromQuote = roundCurrency(quote?.total || quote?.price_after_discount || 0);
+function calculateBreakdown({ booking, payment, pricingSnapshot, creatorRows }) {
+  const quote = pricingSnapshot || {};
+  const totalFromQuote = roundCurrency(quote.total || quote.price_after_discount || 0);
   const totalFromPayment = roundCurrency(payment?.total_amount || 0);
-  const totalAmount = totalFromPayment || totalFromQuote || roundCurrency(booking.budget || 0);
+  const totalAmount = totalFromQuote || totalFromPayment || roundCurrency(booking.budget || 0);
 
-  const subtotal = roundCurrency(payment?.subtotal || quote?.subtotal || totalAmount);
-  const discount = roundCurrency(quote?.discount_amount || 0);
-  const tax = roundCurrency(quote?.tax_amount || 0);
-  const equipment = roundCurrency(payment?.equipment_cost || 0);
-  const platformFeePercent = roundCurrency(payment?.beige_margin_percent ?? DEFAULT_PLATFORM_FEE_PERCENT);
-  const platformFee = payment
-    ? roundCurrency(payment.beige_margin_amount || 0)
-    : roundCurrency(totalAmount * (platformFeePercent / 100));
+  const subtotal = roundCurrency(quote.subtotal || totalAmount);
+  const discount = roundCurrency(quote.discount_amount || quote.discountAmount || 0);
+  const tax = roundCurrency(quote.tax_amount || quote.taxAmount || 0);
+  const equipment = roundCurrency(
+    normalizeLineItems(quote.line_items || quote.lineItems || []).reduce((sum, item) => {
+      const name = String(item.item_name || '').toLowerCase();
+      return name.includes('equipment') ? sum + Number(item.line_total || 0) : sum;
+    }, 0)
+  );
   const creatorEarnings = roundCurrency(
     creatorRows.reduce((sum, item) => sum + Number(item.net_earning_amount || 0), 0)
   );
-  const collected = payment ? totalAmount : 0;
+  const quoteMarginAmount = roundCurrency(quote.margin_amount || quote.marginAmount || 0);
+  const platformFee = quoteMarginAmount > 0
+    ? quoteMarginAmount
+    : roundCurrency(Math.max((subtotal - discount) - creatorEarnings - equipment, 0));
+  const platformFeePercent = quote.margin_percent !== undefined || quote.marginPercent !== undefined
+    ? roundCurrency(quote.margin_percent ?? quote.marginPercent)
+    : roundCurrency((subtotal - discount) > 0 ? (platformFee / (subtotal - discount)) * 100 : DEFAULT_PLATFORM_FEE_PERCENT);
+  const collected = payment ? totalFromPayment : 0;
   const outstanding = roundCurrency(Math.max(totalAmount - collected, 0));
 
   return {
     booking_id: booking.stream_project_booking_id,
-    quote_id: booking.quote_id || quote?.quote_id || null,
+    quote_id: booking.quote_id || quote.quote_id || null,
     client_user_id: booking.user_id || null,
     guest_email: booking.guest_email || null,
     currency: 'USD',
@@ -165,6 +443,8 @@ function calculateBreakdown({ booking, payment, creatorRows }) {
     payment_status: payment ? normalizeStatus(payment.status, true) : (totalAmount > 0 ? 'unpaid' : 'pending'),
     metadata_json: stringifyMetadata({
       source: 'finance_phase_1_sync',
+      pricing_source: quote.source || null,
+      sales_quote_id: quote.sales_quote_id || null,
       payment_id: payment?.payment_id || null,
       invoice_count: Array.isArray(booking.invoice_send_history) ? booking.invoice_send_history.length : 0
     }),
@@ -179,8 +459,9 @@ async function syncBookingFinance(bookingId, options = {}) {
 
   try {
     const { booking, payment } = await loadBookingFinanceContext(bookingId, transaction);
-    const creatorRowsPreview = calculateCreatorRows({ booking, payment });
-    const breakdownPayload = calculateBreakdown({ booking, payment, creatorRows: creatorRowsPreview });
+    const pricingSnapshot = await buildPricingSnapshotFromBooking(booking);
+    const creatorRowsPreview = calculateCreatorRows({ booking, payment, pricingSnapshot });
+    const breakdownPayload = calculateBreakdown({ booking, payment, pricingSnapshot, creatorRows: creatorRowsPreview });
 
     const transactionPayload = {
       transaction_code: buildTransactionCode(payment?.payment_id, booking.stream_project_booking_id),
@@ -225,10 +506,11 @@ async function syncBookingFinance(bookingId, options = {}) {
     const creatorRows = calculateCreatorRows({
       booking,
       payment,
+      pricingSnapshot,
       financeTransactionId: financeTransaction.finance_transaction_id
     });
 
-    const recalculatedBreakdown = calculateBreakdown({ booking, payment, creatorRows });
+    const recalculatedBreakdown = calculateBreakdown({ booking, payment, pricingSnapshot, creatorRows });
     const [breakdown] = await db.finance_project_breakdowns.findOrCreate({
       where: { booking_id: booking.stream_project_booking_id },
       defaults: recalculatedBreakdown,
