@@ -9597,6 +9597,11 @@ exports.assignRoleToUser = async (req, res) => {
       is_active: 1
     });
 
+    await db.users.update(
+      { user_type: role_id },
+      { where: { id: user_id } }
+    );
+
     return res.status(200).json({
       success: true,
       message: 'Role assigned successfully'
