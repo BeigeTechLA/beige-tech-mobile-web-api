@@ -621,9 +621,6 @@ const sendFileShareVerificationOTP = async (userData, otp, expiryMinutes = 10) =
       subject: 'Your File Share Access Code - BeigeAI',
       templateId: OTP_VERIFICATION_FILE_SHARE_TEMPLATE_ID,
       dynamicTemplateData: {
-        userData: {
-          name: userData.name || 'there'
-        },
         otp,
         expiry_minutes: expiryMinutes,
         year: new Date().getFullYear()

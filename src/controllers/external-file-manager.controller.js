@@ -2812,7 +2812,7 @@ exports.requestShareOtp = async (req, res) => {
     );
 
     const emailResult = await emailService.sendFileShareVerificationOTP(
-      { name: 'Client', email },
+      { email },
       otp,
       otpExpiryMinutes
     );
