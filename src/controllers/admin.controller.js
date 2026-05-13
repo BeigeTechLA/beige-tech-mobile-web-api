@@ -10048,3 +10048,158 @@ exports.getPermissionModules = async (req, res) => {
     });
   }
 };
+
+exports.deleteUser = async (req, res) => {
+  const user_id = Number(req.params.user_id);
+
+  if (!Number.isInteger(user_id) || user_id <= 0) {
+    return res.status(400).json({
+      error: true,
+      message: 'Valid user_id is required'
+    });
+  }
+
+  const transaction = await db.sequelize.transaction();
+
+  try {
+    const user = await users.findOne({
+      where: {
+        id: user_id,
+        is_active: 1
+      },
+      transaction
+    });
+
+    if (!user) {
+      await transaction.rollback();
+      return res.status(404).json({
+        error: true,
+        message: 'User not found or inactive'
+      });
+    }
+
+    // ================= CLIENT DELETE =================
+    if (user.user_type == 3) {
+      const client = await clients.findOne({
+        where: {
+          user_id,
+          is_active: 1
+        },
+        transaction
+      });
+
+      if (client) {
+        await client.update(
+          { is_active: 0 },
+          { transaction }
+        );
+
+        const clientLeadRows = await db.client_leads.findAll({
+          where: { user_id },
+          attributes: ['lead_id', 'booking_id'],
+          transaction
+        });
+
+        const unbookedLeadIdList = clientLeadRows
+          .filter(lead => !lead.booking_id)
+          .map(lead => lead.lead_id);
+
+        if (unbookedLeadIdList.length > 0) {
+          await db.client_leads.update(
+            { is_active: 0 },
+            {
+              where: {
+                lead_id: { [Op.in]: unbookedLeadIdList }
+              },
+              transaction
+            }
+          );
+
+          await db.client_lead_activities.update(
+            { is_active: 0 },
+            {
+              where: {
+                lead_id: { [Op.in]: unbookedLeadIdList }
+              },
+              transaction
+            }
+          );
+        }
+      }
+    }
+
+    // ================= CREW MEMBER DELETE =================
+    else if (user.user_type == 2 || user.user_type == 4) {
+      const crew_member = await crew_members.findOne({
+        where: {
+          user_id,
+          is_active: 1
+        },
+        transaction
+      });
+
+      if (crew_member) {
+        // Deactivate crew member
+        await crew_member.update(
+          { is_active: 0 },
+          { transaction }
+        );
+
+        await crew_member_files.update(
+          { is_active: 0 },
+          {
+            where: {
+              crew_member_id: crew_member.crew_member_id
+            },
+            transaction
+          }
+        );
+      }
+    }
+
+    // ================= AFFILIATE DELETE =================
+    await db.affiliates.update(
+      { is_active: 0 },
+      {
+        where: {
+          user_id
+        },
+        transaction
+      }
+    );
+
+    // ================= USER ROLE DELETE =================
+    await db.user_roles.update(
+      { is_active: 0 },
+      {
+        where: {
+          user_id
+        },
+        transaction
+      }
+    );
+
+    // ================= USER DELETE =================
+    await user.update(
+      { is_active: 0 },
+      { transaction }
+    );
+
+    await transaction.commit();
+
+    return res.status(200).json({
+      error: false,
+      message: 'User deactivated successfully'
+    });
+
+  } catch (error) {
+    await transaction.rollback();
+
+    console.error('Error deleting user:', error);
+
+    return res.status(500).json({
+      error: true,
+      message: 'Internal server error'
+    });
+  }
+};

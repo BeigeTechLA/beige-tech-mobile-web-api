@@ -2053,16 +2053,26 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### get users with roles
+GET {{URL}}admin/users/roles HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### get users with roles
 GET {{URL}}admin/users/roles?search=harsh&status=1&month=4 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### get user role details
-GET {{URL}}admin/users/231/role-details HTTP/1.1
+GET {{URL}}admin/users/252/role-details HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### get permissions module
 GET {{URL}}admin/permissions/modules HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### delete user
+DELETE {{URL}}admin/delete-user/239 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
