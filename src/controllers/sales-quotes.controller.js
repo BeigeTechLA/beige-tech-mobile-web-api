@@ -304,6 +304,28 @@ exports.convertQuoteToBooking = async (req, res) => {
   }
 };
 
+exports.convertPublicQuoteToBooking = async (req, res) => {
+  try {
+    const pseudoUser = {
+      userId: null,
+      role: 'admin'
+    };
+    const data = await quoteService.convertQuoteToBooking(
+      Number(req.params.quoteId),
+      req.body || {},
+      pseudoUser
+    );
+    return res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    console.error('Error converting public quote to booking:', error);
+    const statusCode = error.message === 'Quote not found' ? constants.NOT_FOUND.code : constants.BAD_REQUEST.code;
+    return sendError(res, error, error.message || 'Failed to convert quote to booking', statusCode);
+  }
+};
+
 exports.listQuotes = async (req, res) => {
   try {
     const data = await quoteService.listQuotes(req.query, getUserContext(req));
