@@ -109,6 +109,19 @@ exports.getCreatorWallet = async (req, res) => {
   }
 };
 
+exports.getAdminCreatorWalletOverview = async (req, res) => {
+  try {
+    const data = await financeService.getAdminCreatorWalletOverview(req.query);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error('Get admin creator wallet overview error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch creator wallet overview'
+    });
+  }
+};
+
 exports.listCreatorPayouts = async (req, res) => {
   try {
     const data = await financeService.listCreatorPayouts(req.query);

@@ -6,6 +6,7 @@ const { authenticate, requireAdmin, requireSalesRepOrAdmin } = require('../middl
 router.get('/transactions', authenticate, requireSalesRepOrAdmin, financeController.listTransactions);
 router.get('/shoots', authenticate, requireSalesRepOrAdmin, financeController.listShootBreakdowns);
 router.get('/shoots/:bookingId', authenticate, requireSalesRepOrAdmin, financeController.getShootFinance);
+router.get('/admin/creator-wallet-overview', authenticate, requireAdmin, financeController.getAdminCreatorWalletOverview);
 router.get('/creator-wallets/:creatorId', authenticate, requireSalesRepOrAdmin, financeController.getCreatorWallet);
 router.get('/creator-payouts', authenticate, requireSalesRepOrAdmin, financeController.listCreatorPayouts);
 router.post('/creator-payout-accounts', authenticate, requireSalesRepOrAdmin, financeController.upsertCreatorPayoutAccount);

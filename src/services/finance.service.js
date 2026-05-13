@@ -1152,6 +1152,53 @@ async function getCreatorWallet(creatorId) {
   };
 }
 
+async function getAdminCreatorWalletOverview(filters = {}) {
+  const Op = db.Sequelize.Op;
+  const payoutWhere = {};
+
+  if (filters.date_from || filters.date_to) {
+    payoutWhere.requested_at = {};
+    if (filters.date_from) payoutWhere.requested_at[Op.gte] = new Date(filters.date_from);
+    if (filters.date_to) payoutWhere.requested_at[Op.lte] = new Date(filters.date_to);
+  }
+
+  const [
+    availableBalance,
+    pendingBalance,
+    reservedBalance,
+    totalPaidOut,
+    requestedPayouts,
+    approvedPayouts,
+    processingPayouts,
+    paidPayouts,
+    rejectedPayouts
+  ] = await Promise.all([
+    db.creator_wallets.sum('available_balance'),
+    db.creator_wallets.sum('pending_balance'),
+    db.creator_wallets.sum('reserved_balance'),
+    db.creator_wallets.sum('lifetime_payouts'),
+    db.creator_payout_requests.count({ where: { ...payoutWhere, status: 'requested' } }),
+    db.creator_payout_requests.count({ where: { ...payoutWhere, status: 'approved' } }),
+    db.creator_payout_requests.count({ where: { ...payoutWhere, status: 'processing' } }),
+    db.creator_payout_requests.count({ where: { ...payoutWhere, status: 'paid' } }),
+    db.creator_payout_requests.count({ where: { ...payoutWhere, status: 'rejected' } })
+  ]);
+
+  return {
+    available_balance: toMoney(availableBalance || 0),
+    pending_balance: toMoney(pendingBalance || 0),
+    reserved_balance: toMoney(reservedBalance || 0),
+    total_paid_out: toMoney(totalPaidOut || 0),
+    payout_counts: {
+      requested: requestedPayouts,
+      approved: approvedPayouts,
+      processing: processingPayouts,
+      paid: paidPayouts,
+      rejected: rejectedPayouts
+    }
+  };
+}
+
 async function listCreatorPayouts(filters = {}) {
   const Op = db.Sequelize.Op;
   const page = Math.max(parseInt(filters.page, 10) || 1, 1);
@@ -1564,6 +1611,7 @@ module.exports = {
   listShootBreakdowns,
   getShootFinance,
   getCreatorWallet,
+  getAdminCreatorWalletOverview,
   listCreatorPayouts,
   upsertCreatorPayoutAccount,
   releaseCreatorEarnings,
