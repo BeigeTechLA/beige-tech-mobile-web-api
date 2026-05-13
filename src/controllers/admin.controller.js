@@ -9519,10 +9519,9 @@ exports.getRoles = async (req, res) => {
 
     const formattedRoles = await Promise.all(
       roles.map(async (role) => {
-        const totalUsers = await db.user_roles.count({
+        const totalUsers = await db.users.count({
           where: {
-            role_id: role.user_type_id,
-            is_active: 1
+            user_type: role.user_type_id
           }
         });
 
