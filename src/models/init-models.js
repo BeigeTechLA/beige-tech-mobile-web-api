@@ -50,6 +50,10 @@ var _assigned_post_production_member = require("./assigned_post_production_membe
 var _clients = require("./clients");
 var _client_leads = require("./client_leads");
 var _client_lead_activities = require("./client_lead_activities");
+var _finance_transactions = require("./finance_transactions");
+var _finance_project_breakdowns = require("./finance_project_breakdowns");
+var _finance_invoice_payments = require("./finance_invoice_payments");
+var _creator_earnings = require("./creator_earnings");
 
 // CMS Approval States Models
 var _projects = require("./projects");
@@ -130,6 +134,10 @@ function initModels(sequelize) {
   var clients = _clients(sequelize, DataTypes);
   var client_leads = _client_leads(sequelize, DataTypes);
   var client_lead_activities = _client_lead_activities(sequelize, DataTypes);
+  var finance_transactions = _finance_transactions(sequelize, DataTypes);
+  var finance_project_breakdowns = _finance_project_breakdowns(sequelize, DataTypes);
+  var finance_invoice_payments = _finance_invoice_payments(sequelize, DataTypes);
+  var creator_earnings = _creator_earnings(sequelize, DataTypes);
 
   // CMS Approval States Models
   var projects = _projects(sequelize, DataTypes);
@@ -173,6 +181,47 @@ function initModels(sequelize) {
   sales_quotes.hasMany(account_credit_ledger, { as: "account_credit_entries", foreignKey: "sales_quote_id" });
   account_credit_ledger.belongsTo(sales_quote_activities, { as: "sales_quote_activity", foreignKey: "sales_quote_activity_id" });
   sales_quote_activities.hasMany(account_credit_ledger, { as: "account_credit_entries", foreignKey: "sales_quote_activity_id" });
+
+  // Finance module relationships (Phase 1)
+  finance_transactions.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id" });
+  stream_project_booking.hasMany(finance_transactions, { as: "finance_transactions", foreignKey: "booking_id" });
+  finance_transactions.belongsTo(payment_transactions, { as: "payment", foreignKey: "payment_id" });
+  payment_transactions.hasMany(finance_transactions, { as: "finance_transactions", foreignKey: "payment_id" });
+  finance_transactions.belongsTo(invoice_send_history, { as: "invoice", foreignKey: "invoice_send_history_id" });
+  invoice_send_history.hasMany(finance_transactions, { as: "finance_transactions", foreignKey: "invoice_send_history_id" });
+  finance_transactions.belongsTo(users, { as: "client", foreignKey: "client_user_id" });
+  users.hasMany(finance_transactions, { as: "finance_transactions", foreignKey: "client_user_id" });
+  finance_transactions.belongsTo(users, { as: "created_by", foreignKey: "created_by_user_id" });
+  users.hasMany(finance_transactions, { as: "created_finance_transactions", foreignKey: "created_by_user_id" });
+
+  finance_project_breakdowns.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id" });
+  stream_project_booking.hasOne(finance_project_breakdowns, { as: "finance_breakdown", foreignKey: "booking_id" });
+  finance_project_breakdowns.belongsTo(users, { as: "client", foreignKey: "client_user_id" });
+  users.hasMany(finance_project_breakdowns, { as: "finance_breakdowns", foreignKey: "client_user_id" });
+
+  finance_invoice_payments.belongsTo(invoice_send_history, { as: "invoice", foreignKey: "invoice_send_history_id" });
+  invoice_send_history.hasMany(finance_invoice_payments, { as: "finance_invoice_payments", foreignKey: "invoice_send_history_id" });
+  finance_invoice_payments.belongsTo(payment_transactions, { as: "payment", foreignKey: "payment_id" });
+  payment_transactions.hasMany(finance_invoice_payments, { as: "finance_invoice_payments", foreignKey: "payment_id" });
+  finance_invoice_payments.belongsTo(finance_transactions, { as: "finance_transaction", foreignKey: "finance_transaction_id" });
+  finance_transactions.hasMany(finance_invoice_payments, { as: "invoice_payments", foreignKey: "finance_transaction_id" });
+  finance_invoice_payments.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id" });
+  stream_project_booking.hasMany(finance_invoice_payments, { as: "finance_invoice_payments", foreignKey: "booking_id" });
+
+  creator_earnings.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id" });
+  stream_project_booking.hasMany(creator_earnings, { as: "creator_earnings", foreignKey: "booking_id" });
+  creator_earnings.belongsTo(crew_members, { as: "creator", foreignKey: "creator_id" });
+  crew_members.hasMany(creator_earnings, { as: "creator_earnings", foreignKey: "creator_id" });
+  creator_earnings.belongsTo(payment_transactions, { as: "payment", foreignKey: "payment_id" });
+  payment_transactions.hasMany(creator_earnings, { as: "creator_earnings", foreignKey: "payment_id" });
+  creator_earnings.belongsTo(finance_transactions, { as: "finance_transaction", foreignKey: "finance_transaction_id" });
+  finance_transactions.hasMany(creator_earnings, { as: "creator_earnings", foreignKey: "finance_transaction_id" });
+  finance_project_breakdowns.hasMany(creator_earnings, {
+    as: "creator_earnings",
+    foreignKey: "booking_id",
+    sourceKey: "booking_id",
+    constraints: false
+  });
 
   assignment_checklist.belongsTo(checklist_master, { as: "checklist", foreignKey: "checklist_id"});
   checklist_master.hasMany(assignment_checklist, { as: "assignment_checklists", foreignKey: "checklist_id"});
@@ -616,6 +665,10 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
     post_production_members,
     assigned_post_production_member,
     clients,
+    finance_transactions,
+    finance_project_breakdowns,
+    finance_invoice_payments,
+    creator_earnings,
     project_form_submissions,
     quote_catalog_items,
     sales_ai_editing_types,

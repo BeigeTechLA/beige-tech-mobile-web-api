@@ -1992,3 +1992,23 @@ Authorization: {{TOKEN}}
 {
   "activity_id": 362
 }
+
+### 
+GET {{URL}}finance/transactions HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### 
+GET {{URL}}finance/shoots HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### 
+GET {{URL}}finance/shoots/1 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### 
+POST {{URL}}finance/bookings/1/sync HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
