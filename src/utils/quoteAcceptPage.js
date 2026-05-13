@@ -127,7 +127,9 @@ function renderQuoteAcceptPage({
   description,
   quoteNumber = '',
   tone = 'success',
-  statusCode = constants.OK.code
+  statusCode = constants.OK.code,
+  ctaHref: explicitCtaHref = null,
+  ctaLabel: explicitCtaLabel = null
 }) {
   const dashboardLink = String(process.env.FRONTEND_URL || 'https://beige.app/')
     .trim()
@@ -170,17 +172,17 @@ function renderQuoteAcceptPage({
 
   const statusIcon = tone === 'error' ? '&#10005;' : '&#10003;';
 
-  const ctaLabel = tone === 'error'
+  const ctaLabel = explicitCtaLabel || (tone === 'error'
     ? 'CONTACT SALES'
     : tone === 'warning'
       ? 'OPEN DASHBOARD'
-      : 'SIGN UP TO DASHBOARD';
+      : 'SIGN UP TO DASHBOARD');
 
-  const ctaHref = tone === 'error'
+  const ctaHref = explicitCtaHref || (tone === 'error'
     ? 'mailto:sales@beigecorporation.io'
     : tone === 'success'
       ? `${dashboardLink}/signup/user`
-      : dashboardLink;
+      : dashboardLink);
 
   return {
     statusCode,
