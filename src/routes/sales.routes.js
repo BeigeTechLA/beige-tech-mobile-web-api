@@ -324,6 +324,7 @@ router.get('/quotes/accept', salesQuotesController.acceptQuoteProposal);
 router.post('/quotes/accept', salesQuotesController.acceptQuoteProposal);
 router.get('/quotes/reject/:quoteId', authenticate, salesQuotesController.rejectQuoteProposal);
 router.get('/quotes/public/:quoteId', salesQuotesController.getPublicQuoteById);
+router.post('/quotes/public/:quoteId/convert-to-booking', salesQuotesController.convertPublicQuoteToBooking);
 router.get('/quotes/:quoteId/versions', authenticate, salesQuotesController.listQuoteVersions);
 router.get('/quotes/:quoteId/versions/:versionNumber', authenticate, salesQuotesController.getQuoteVersionByNumber);
 router.get('/quotes/:quoteId', authenticate, salesQuotesController.getQuoteById);
