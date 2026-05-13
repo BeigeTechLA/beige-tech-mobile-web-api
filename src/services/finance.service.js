@@ -152,6 +152,191 @@ function calculateCreatorServicePool(pricingSnapshot = {}) {
   ), 0));
 }
 
+function findNestedValue(source, keys = []) {
+  if (!source || typeof source !== 'object') return undefined;
+
+  for (const key of keys) {
+    if (source[key] !== undefined && source[key] !== null) return source[key];
+  }
+
+  const nestedContainers = [
+    source.pricing,
+    source.pricing_breakdown,
+    source.price_breakdown,
+    source.breakdown,
+    source.metadata,
+    source.metadata_json ? parseFlexibleJson(source.metadata_json, null) : null
+  ].filter(Boolean);
+
+  for (const container of nestedContainers) {
+    const value = findNestedValue(container, keys);
+    if (value !== undefined && value !== null) return value;
+  }
+
+  return undefined;
+}
+
+function getCreatorRoleKeys(creator = {}) {
+  const rawRoles = parseFlexibleJson(creator.primary_role, creator.primary_role || []);
+  const roles = Array.isArray(rawRoles) ? rawRoles : [rawRoles];
+  const keys = new Set();
+
+  roles.forEach((role) => {
+    const normalized = String(role || '').trim().toLowerCase();
+    if (!normalized) return;
+    keys.add(normalized);
+
+    if (['1', '9', 'videographer', 'video'].includes(normalized)) {
+      keys.add('videographer');
+      keys.add('video');
+    }
+    if (['2', '10', 'photographer', 'photo'].includes(normalized)) {
+      keys.add('photographer');
+      keys.add('photo');
+    }
+    if (['3', '11', 'cinematographer', 'cinema'].includes(normalized)) {
+      keys.add('cinematographer');
+      keys.add('cinema');
+    }
+  });
+
+  return keys;
+}
+
+function getLineItemRoleKey(item = {}) {
+  const name = String(item.item_name || item.name || '').toLowerCase();
+  if (name.includes('videographer') || name.includes('videography') || name.includes('video')) return 'videographer';
+  if (name.includes('photographer') || name.includes('photography') || name.includes('photo')) return 'photographer';
+  if (name.includes('cinematographer') || name.includes('cinematography')) return 'cinematographer';
+  return null;
+}
+
+function getBreakdownAmount(entry = {}) {
+  return roundCurrency(
+    entry.amount ??
+    entry.payout_amount ??
+    entry.creator_payout_amount ??
+    entry.net_earning_amount ??
+    entry.net_amount ??
+    entry.base_amount ??
+    entry.price ??
+    entry.total ??
+    entry.line_total ??
+    0
+  );
+}
+
+function normalizeCreativeBreakdownEntries(rawBreakdown) {
+  const parsed = parseFlexibleJson(rawBreakdown, rawBreakdown);
+  if (!parsed) return [];
+
+  if (Array.isArray(parsed)) {
+    return parsed.map((entry) => {
+      if (typeof entry === 'number') return { amount: entry };
+      if (typeof entry === 'string') return { amount: Number(entry) || 0 };
+      return entry || {};
+    });
+  }
+
+  if (typeof parsed === 'object') {
+    return Object.entries(parsed).map(([key, value]) => {
+      if (typeof value === 'number' || typeof value === 'string') {
+        return {
+          creator_id: Number(key) || null,
+          role: Number(key) ? null : key,
+          amount: Number(value) || 0
+        };
+      }
+
+      return {
+        ...(value || {}),
+        creator_id: value?.creator_id || value?.crew_member_id || (Number(key) || null),
+        role: value?.role || value?.role_key || value?.service || (Number(key) ? null : key)
+      };
+    });
+  }
+
+  return [];
+}
+
+function extractCreativePricing(pricingSnapshot = {}) {
+  const rawBreakdown = findNestedValue(pricingSnapshot, [
+    'creative_price_breakdown',
+    'creator_price_breakdown',
+    'creative_breakdown',
+    'creator_breakdown',
+    'assigned_creator_pricing'
+  ]);
+  const configuredLineBreakdowns = normalizeLineItems(pricingSnapshot.line_items || pricingSnapshot.lineItems || [])
+    .flatMap((item) => {
+      const config = parseFlexibleJson(item.configuration_json || item.configuration, null);
+      return normalizeCreativeBreakdownEntries(
+        config?.creative_price_breakdown ||
+        config?.creator_price_breakdown ||
+        config?.creative_breakdown ||
+        null
+      );
+    });
+
+  const creativePriceBreakdown = [
+    ...normalizeCreativeBreakdownEntries(rawBreakdown),
+    ...configuredLineBreakdowns
+  ].map((entry) => ({
+    ...entry,
+    creator_id: Number(entry.creator_id || entry.crew_member_id || 0) || null,
+    role: entry.role || entry.role_key || entry.service || entry.item_name || null,
+    amount: getBreakdownAmount(entry)
+  })).filter((entry) => entry.amount > 0);
+
+  const explicitBaseTotal = roundCurrency(findNestedValue(pricingSnapshot, [
+    'creative_base_total',
+    'creator_base_total',
+    'creative_total',
+    'creator_total',
+    'base_creator_total'
+  ]) || 0);
+  const breakdownTotal = roundCurrency(creativePriceBreakdown.reduce((sum, entry) => sum + entry.amount, 0));
+
+  return {
+    creative_base_total: explicitBaseTotal || breakdownTotal || calculateCreatorServicePool(pricingSnapshot),
+    creative_price_breakdown: creativePriceBreakdown,
+    source: explicitBaseTotal || breakdownTotal ? 'creative_pricing_snapshot' : 'quote_service_line_items'
+  };
+}
+
+function allocateCreatorPricingFromQuoteLines(creators, pricingSnapshot = {}) {
+  const lineItems = normalizeLineItems(pricingSnapshot.line_items || pricingSnapshot.lineItems || [])
+    .filter(isCreatorServiceLine);
+  const assigned = new Set();
+  const allocations = new Map();
+
+  lineItems.forEach((item) => {
+    const roleKey = getLineItemRoleKey(item);
+    const lineAmount = applyDiscountToLineTotal(item.line_total, pricingSnapshot);
+    if (!(lineAmount > 0)) return;
+
+    const matches = creators.filter((creator) => {
+      if (assigned.has(Number(creator.crew_member_id))) return false;
+      if (!roleKey) return false;
+      return getCreatorRoleKeys(creator).has(roleKey);
+    });
+    const targetCreators = matches.length > 0
+      ? matches.slice(0, Math.max(1, Number(item.quantity || item.crew_size || matches.length || 1)))
+      : creators.filter((creator) => !assigned.has(Number(creator.crew_member_id)));
+
+    if (targetCreators.length === 0) return;
+
+    const share = roundCurrency(lineAmount / targetCreators.length);
+    targetCreators.forEach((creator) => {
+      const creatorId = Number(creator.crew_member_id);
+      allocations.set(creatorId, roundCurrency((allocations.get(creatorId) || 0) + share));
+      assigned.add(creatorId);
+    });
+  });
+
+  return allocations;
+}
+
 function buildSnapshotFromClassicQuote(quoteRecord) {
   const quote = toPlainRecord(quoteRecord);
   if (!quote) return null;
@@ -346,32 +531,34 @@ function calculateCreatorRows({ booking, payment, pricingSnapshot = null, financ
   const creators = Array.from(creatorsById.values());
   if (creators.length === 0) return [];
 
-  const hours = deriveBookingHours(booking, pricingSnapshot);
-  const creatorServicePool = calculateCreatorServicePool(pricingSnapshot || {});
+  const creativePricing = extractCreativePricing(pricingSnapshot || {});
+  const creatorServicePool = creativePricing.creative_base_total;
+  const explicitBreakdown = creativePricing.creative_price_breakdown;
+  const lineItemAllocations = explicitBreakdown.length > 0
+    ? new Map()
+    : allocateCreatorPricingFromQuoteLines(creators, pricingSnapshot || {});
+  const equalShare = creators.length > 0 ? roundCurrency(creatorServicePool / creators.length) : 0;
+  let remainingPool = creatorServicePool;
+
   const creatorAmounts = creators.map((creator) => {
-    const hourlyRate = roundCurrency(creator.hourly_rate || 0);
-    return {
-      creator,
-      hourlyRate,
-      amount: hourlyRate > 0 && hours > 0 ? roundCurrency(hourlyRate * hours) : 0
-    };
+    const creatorId = Number(creator.crew_member_id);
+    const directBreakdown = explicitBreakdown.find((entry) => Number(entry.creator_id) === creatorId);
+    const roleBreakdown = !directBreakdown
+      ? explicitBreakdown.find((entry) => entry.role && getCreatorRoleKeys(creator).has(String(entry.role).toLowerCase()))
+      : null;
+    const allocatedAmount = directBreakdown?.amount || roleBreakdown?.amount || lineItemAllocations.get(creatorId) || 0;
+    const amount = roundCurrency(allocatedAmount || equalShare);
+    remainingPool = roundCurrency(remainingPool - amount);
+
+    return { creator, amount };
   });
 
-  const ratedTotal = roundCurrency(creatorAmounts.reduce((sum, item) => sum + item.amount, 0));
-  const missingRateRows = creatorAmounts.filter((item) => !(item.amount > 0));
-  if (missingRateRows.length > 0 && creatorServicePool > ratedTotal) {
-    const fallbackShare = roundCurrency((creatorServicePool - ratedTotal) / missingRateRows.length);
-    missingRateRows.forEach((item) => {
-      item.amount = fallbackShare;
-    });
-  } else if (ratedTotal === 0 && creatorServicePool > 0) {
-    const equalShare = roundCurrency(creatorServicePool / creators.length);
-    creatorAmounts.forEach((item) => {
-      item.amount = equalShare;
-    });
+  if (creatorAmounts.length > 0 && Math.abs(remainingPool) >= 0.01) {
+    const last = creatorAmounts[creatorAmounts.length - 1];
+    last.amount = roundCurrency(last.amount + remainingPool);
   }
 
-  return creatorAmounts.map(({ creator, hourlyRate, amount }) => {
+  return creatorAmounts.map(({ creator, amount }) => {
     const netEarning = roundCurrency(amount);
 
     return {
@@ -386,11 +573,10 @@ function calculateCreatorRows({ booking, payment, pricingSnapshot = null, financ
       status: payment ? 'earned' : 'pending',
       earned_at: payment ? (booking.payment_completed_at || new Date()) : null,
       metadata_json: stringifyMetadata({
-        source: hourlyRate > 0 ? 'creator_hourly_rate_booking_duration' : 'quote_creator_service_pool_fallback',
+        source: explicitBreakdown.length > 0 ? 'quote_creative_price_breakdown' : 'quote_service_line_items',
         pricing_source: pricingSnapshot?.source || null,
-        hours,
-        hourly_rate: hourlyRate,
-        creator_service_pool: creatorServicePool
+        creative_base_total: creatorServicePool,
+        allocation_source: creativePricing.source
       })
     };
   });
