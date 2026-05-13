@@ -9761,21 +9761,32 @@ exports.getRoleById = async (req, res) => {
       });
     }
 
+    const totalUsers = await db.users.count({
+      where: {
+        user_type: role_id
+      }
+    });
+
     const formattedPermissions = await formatRolePermissions(role_id);
 
     return res.status(200).json({
       success: true,
       data: {
-        role: formatUserTypeAsRole(role),
+        role: formatUserTypeAsRole(role, totalUsers),
         permissions: formattedPermissions
       }
     });
 
   } catch (error) {
     console.error('Get Role By ID Error:', error);
+
     return res.status(500).json({
       success: false,
-      message: 'Server error while fetching role details'
+      message: 'Server error while fetching role details',
+      error:
+        process.env.NODE_ENV === 'development'
+          ? error.message
+          : undefined
     });
   }
 };

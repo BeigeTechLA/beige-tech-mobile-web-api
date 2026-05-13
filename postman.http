@@ -2034,13 +2034,11 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "role_id": 8,
-  "name": "Client",
-  "description": "Can book/view/edit/delete shoots and view dashboard and file manager",
+  "role_id": 1,
   "permissions": {
-    "dashboard": ["view", "create"],
+    "dashboard": ["view", "create", "edit", "delete"],
     "shoots": ["view", "create", "edit", "delete"],
-    "users": ["view"]
+    "users": ["view", "create", "edit", "delete"]
   }
 }
 
@@ -2050,7 +2048,7 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### get role
-GET {{URL}}admin/roles/8 HTTP/1.1
+GET {{URL}}admin/roles/1 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
