@@ -1199,12 +1199,229 @@ async function getAdminCreatorWalletOverview(filters = {}) {
   };
 }
 
+function normalizeSortOrder(value) {
+  return String(value || '').toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+}
+
+function buildCreatorName(creator = null) {
+  if (!creator) return null;
+  return [creator.first_name, creator.last_name].filter(Boolean).join(' ').trim() || creator.email || null;
+}
+
+function buildCreatorInitials(creator = null) {
+  if (!creator) return null;
+  const first = String(creator.first_name || '').trim().charAt(0);
+  const last = String(creator.last_name || '').trim().charAt(0);
+  return `${first}${last}`.toUpperCase() || null;
+}
+
+function formatPayoutMethod(method = null) {
+  const value = String(method || '').replace(/_/g, ' ').trim();
+  return value ? value.replace(/\b\w/g, (char) => char.toUpperCase()) : null;
+}
+
+function getPayoutSort(filters = {}) {
+  const direction = normalizeSortOrder(filters.sort_order || filters.order);
+  const sortBy = String(filters.sort_by || 'requested_at').toLowerCase();
+  const allowed = {
+    requested_at: 'requested_at',
+    date: 'requested_at',
+    amount: 'amount',
+    status: 'status',
+    payout_method: 'payout_method',
+    paid_at: 'paid_at',
+    processed_at: 'processed_at',
+    creator_payout_request_id: 'creator_payout_request_id'
+  };
+
+  return [[allowed[sortBy] || 'requested_at', direction], ['creator_payout_request_id', direction]];
+}
+
+function getMetadataArray(metadata, keys = []) {
+  for (const key of keys) {
+    const value = metadata?.[key];
+    if (Array.isArray(value)) return value.map(Number).filter(Boolean);
+    if (value) return [Number(value)].filter(Boolean);
+  }
+  return [];
+}
+
+async function findPayoutIdsForShootSearch(search) {
+  const shootId = Number(String(search || '').replace(/^#/, '').trim());
+  if (!shootId) return [];
+
+  const earnings = await db.creator_earnings.findAll({
+    where: {
+      booking_id: shootId,
+      payout_id: { [db.Sequelize.Op.ne]: null }
+    },
+    attributes: ['payout_id'],
+    raw: true
+  });
+
+  return [...new Set(earnings.map((row) => Number(row.payout_id)).filter(Boolean))];
+}
+
+async function getLinkedPayoutEarnings(payoutRows = []) {
+  const Op = db.Sequelize.Op;
+  const payoutIds = payoutRows.map((row) => Number(row.creator_payout_request_id)).filter(Boolean);
+  const metadataEarningIds = [];
+  const metadataBookingPairs = [];
+
+  payoutRows.forEach((row) => {
+    const metadata = parseJson(row.metadata_json, {});
+    metadataEarningIds.push(...getMetadataArray(metadata, ['creator_earning_ids', 'earning_ids', 'creator_earning_id']));
+    getMetadataArray(metadata, ['booking_ids', 'booking_id', 'shoot_ids', 'shoot_id']).forEach((bookingId) => {
+      metadataBookingPairs.push({ payoutId: Number(row.creator_payout_request_id), bookingId, creatorId: Number(row.creator_id) });
+    });
+  });
+
+  const or = [];
+  if (payoutIds.length) or.push({ payout_id: { [Op.in]: payoutIds } });
+  if (metadataEarningIds.length) or.push({ creator_earning_id: { [Op.in]: [...new Set(metadataEarningIds)] } });
+  metadataBookingPairs.forEach((pair) => {
+    or.push({ booking_id: pair.bookingId, creator_id: pair.creatorId });
+  });
+
+  if (!or.length) return new Map();
+
+  const earnings = await db.creator_earnings.findAll({
+    where: { [Op.or]: or },
+    include: [
+      {
+        model: db.stream_project_booking,
+        as: 'booking',
+        required: false,
+        attributes: ['stream_project_booking_id', 'project_name', 'shoot_type', 'event_type', 'event_date']
+      }
+    ]
+  });
+
+  const map = new Map();
+  earnings.forEach((earning) => {
+    const plain = earning.get({ plain: true });
+    let payoutId = Number(plain.payout_id);
+    if (!payoutId) {
+      const linkedRow = payoutRows.find((row) => {
+        const metadata = parseJson(row.metadata_json, {});
+        const earningIds = getMetadataArray(metadata, ['creator_earning_ids', 'earning_ids', 'creator_earning_id']);
+        const bookingIds = getMetadataArray(metadata, ['booking_ids', 'booking_id', 'shoot_ids', 'shoot_id']);
+        return earningIds.includes(Number(plain.creator_earning_id)) ||
+          (bookingIds.includes(Number(plain.booking_id)) && Number(row.creator_id) === Number(plain.creator_id));
+      });
+      payoutId = Number(linkedRow?.creator_payout_request_id);
+    }
+
+    if (!payoutId) return;
+    if (!map.has(payoutId)) map.set(payoutId, []);
+    map.get(payoutId).push({ ...plain, metadata: parseJson(plain.metadata_json, null) });
+  });
+
+  return map;
+}
+
+async function getLinkedInvoicesByBookingIds(bookingIds = []) {
+  const uniqueBookingIds = [...new Set(bookingIds.map(Number).filter(Boolean))];
+  if (!uniqueBookingIds.length) return new Map();
+
+  const invoicePayments = await db.finance_invoice_payments.findAll({
+    where: { booking_id: { [db.Sequelize.Op.in]: uniqueBookingIds } },
+    include: [
+      {
+        model: db.invoice_send_history,
+        as: 'invoice',
+        required: false,
+        attributes: ['invoice_send_history_id', 'invoice_number', 'invoice_url', 'invoice_pdf', 'payment_status', 'sent_at']
+      }
+    ],
+    order: [['created_at', 'DESC']]
+  });
+
+  const map = new Map();
+  invoicePayments.forEach((row) => {
+    const plain = row.get({ plain: true });
+    if (!map.has(Number(plain.booking_id))) map.set(Number(plain.booking_id), []);
+    map.get(Number(plain.booking_id)).push({
+      finance_invoice_payment_id: plain.finance_invoice_payment_id,
+      invoice_send_history_id: plain.invoice_send_history_id,
+      invoice_number: plain.invoice?.invoice_number || `INV-${plain.invoice_send_history_id}`,
+      invoice_url: plain.invoice?.invoice_url || null,
+      invoice_pdf: plain.invoice?.invoice_pdf || null,
+      payment_status: plain.invoice?.payment_status || plain.status,
+      amount: toMoney(plain.amount),
+      paid_at: plain.paid_at,
+      sent_at: plain.invoice?.sent_at || null
+    });
+  });
+
+  return map;
+}
+
+function buildPayoutScreenRow(row, linkedEarnings = [], invoiceMap = new Map()) {
+  const plain = row.get ? row.get({ plain: true }) : row;
+  const creatorName = buildCreatorName(plain.creator);
+  const bookingIds = [...new Set(linkedEarnings.map((earning) => Number(earning.booking_id)).filter(Boolean))];
+  const serviceTypes = [...new Set(linkedEarnings.map((earning) => (
+    earning.booking?.shoot_type || earning.booking?.event_type || null
+  )).filter(Boolean))];
+  const linkedInvoices = bookingIds.flatMap((bookingId) => invoiceMap.get(bookingId) || []).map((invoice) => ({
+    id: invoice.invoice_send_history_id,
+    invoice_number: invoice.invoice_number,
+    invoice_url: invoice.invoice_url,
+    invoice_pdf: invoice.invoice_pdf,
+    payment_status: invoice.payment_status,
+    amount: invoice.amount
+  }));
+  const serviceEarnings = toMoney(linkedEarnings.reduce((sum, earning) => sum + Number(earning.gross_amount || 0), 0));
+  const platformFee = toMoney(linkedEarnings.reduce((sum, earning) => sum + Number(earning.platform_fee_amount || 0), 0));
+  const netPayout = toMoney(linkedEarnings.reduce((sum, earning) => sum + Number(earning.net_earning_amount || 0), 0));
+  const fallbackAmount = toMoney(plain.amount);
+  const serviceType = serviceTypes.length > 1 ? serviceTypes.join(' + ') : (serviceTypes[0] || plain.creator?.primary_role || null);
+  const canApprove = plain.status === 'requested';
+  const canReject = ['requested', 'approved', 'processing'].includes(plain.status);
+  const canMarkPaid = ['approved', 'processing'].includes(plain.status);
+
+  return {
+    payout_request_id: plain.creator_payout_request_id,
+    request_code: plain.request_code,
+    shoot_id: bookingIds[0] || null,
+    shoot_ids: bookingIds,
+    creator: {
+      id: plain.creator_id,
+      name: creatorName,
+      email: plain.creator?.email || null,
+      initials: buildCreatorInitials(plain.creator)
+    },
+    service_type: serviceType,
+    net_payout: netPayout || fallbackAmount,
+    payment_method: plain.payout_method,
+    payment_method_label: formatPayoutMethod(plain.payout_method),
+    status: plain.status,
+    requested_at: plain.requested_at,
+    approved_at: plain.approved_at,
+    paid_at: plain.paid_at,
+    payout_breakdown: {
+      service_earnings: serviceEarnings || fallbackAmount,
+      platform_fee: platformFee,
+      net_payout: netPayout || fallbackAmount
+    },
+    linked_invoices: linkedInvoices,
+    actions: {
+      can_approve: canApprove,
+      can_reject: canReject,
+      can_mark_paid: canMarkPaid
+    }
+  };
+}
+
 async function listCreatorPayouts(filters = {}) {
   const Op = db.Sequelize.Op;
   const page = Math.max(parseInt(filters.page, 10) || 1, 1);
   const limit = Math.min(Math.max(parseInt(filters.limit, 10) || 20, 1), 100);
   const offset = (page - 1) * limit;
   const where = {};
+  const creatorWhere = {};
+  const search = String(filters.search || filters.q || '').trim();
 
   if (filters.creator_id) where.creator_id = filters.creator_id;
   if (filters.status) where.status = filters.status;
@@ -1214,19 +1431,34 @@ async function listCreatorPayouts(filters = {}) {
     if (filters.date_from) where.requested_at[Op.gte] = new Date(filters.date_from);
     if (filters.date_to) where.requested_at[Op.lte] = new Date(filters.date_to);
   }
+  if (search) {
+    const term = `%${search}%`;
+    const shootMatchedPayoutIds = await findPayoutIdsForShootSearch(search);
+    const searchOr = [
+      { request_code: { [Op.like]: term } },
+      { external_reference: { [Op.like]: term } },
+      { '$creator.first_name$': { [Op.like]: term } },
+      { '$creator.last_name$': { [Op.like]: term } },
+      { '$creator.email$': { [Op.like]: term } }
+    ];
+    if (shootMatchedPayoutIds.length) searchOr.push({ creator_payout_request_id: { [Op.in]: shootMatchedPayoutIds } });
+    where[Op.or] = searchOr;
+  }
 
   const result = await db.creator_payout_requests.findAndCountAll({
     where,
     distinct: true,
     limit,
     offset,
-    order: [['requested_at', 'DESC'], ['creator_payout_request_id', 'DESC']],
+    order: getPayoutSort(filters),
+    subQuery: false,
     include: [
       {
         model: db.crew_members,
         as: 'creator',
         required: false,
-        attributes: ['crew_member_id', 'first_name', 'last_name', 'email']
+        where: creatorWhere,
+        attributes: ['crew_member_id', 'first_name', 'last_name', 'email', 'primary_role']
       },
       {
         model: db.creator_payout_accounts,
@@ -1235,12 +1467,13 @@ async function listCreatorPayouts(filters = {}) {
       }
     ]
   });
+  const plainRows = result.rows.map((row) => row.get({ plain: true }));
+  const earningsMap = await getLinkedPayoutEarnings(plainRows);
+  const bookingIds = [...earningsMap.values()].flat().map((earning) => earning.booking_id);
+  const invoiceMap = await getLinkedInvoicesByBookingIds(bookingIds);
 
   return {
-    rows: result.rows.map((row) => {
-      const plain = row.get({ plain: true });
-      return { ...plain, metadata: parseJson(plain.metadata_json, null) };
-    }),
+    rows: plainRows.map((row) => buildPayoutScreenRow(row, earningsMap.get(Number(row.creator_payout_request_id)) || [], invoiceMap)),
     pagination: {
       page,
       limit,
@@ -1248,6 +1481,21 @@ async function listCreatorPayouts(filters = {}) {
       total_pages: Math.ceil(result.count / limit)
     }
   };
+}
+
+async function getAdminPayoutsScreen(filters = {}) {
+  const [walletOverview, payout_history] = await Promise.all([
+    getAdminCreatorWalletOverview(filters),
+    listCreatorPayouts(filters)
+  ]);
+  const overview = {
+    available_balance: walletOverview.available_balance,
+    pending_balance: walletOverview.pending_balance,
+    reserved_balance: walletOverview.reserved_balance,
+    total_paid_out: walletOverview.total_paid_out
+  };
+
+  return { overview, payout_history };
 }
 
 async function upsertCreatorPayoutAccount(payload = {}, options = {}) {
@@ -1373,6 +1621,7 @@ async function releaseCreatorEarnings(payload = {}, options = {}) {
 }
 
 async function requestCreatorPayout(payload = {}, options = {}) {
+  const Op = db.Sequelize.Op;
   const creatorId = Number(payload.creator_id);
   const amount = assertPositiveAmount(payload.amount);
   if (!creatorId) {
@@ -1409,6 +1658,9 @@ async function requestCreatorPayout(payload = {}, options = {}) {
     }
 
     const payoutMethod = payload.payout_method || payoutAccount?.payout_method || 'manual';
+    const creatorEarningIds = Array.isArray(payload.creator_earning_ids)
+      ? payload.creator_earning_ids.map(Number).filter(Boolean)
+      : [];
     const payoutRequest = await db.creator_payout_requests.create({
       request_code: buildPayoutRequestCode(creatorId),
       creator_id: creatorId,
@@ -1418,9 +1670,30 @@ async function requestCreatorPayout(payload = {}, options = {}) {
       payout_method: payoutMethod,
       status: 'requested',
       requested_at: new Date(),
-      metadata_json: stringifyMetadata(payload.metadata || null),
+      metadata_json: stringifyMetadata({
+        ...(payload.metadata || {}),
+        ...(creatorEarningIds.length ? { creator_earning_ids: creatorEarningIds } : {})
+      }),
       updated_at: new Date()
     }, { transaction });
+
+    if (creatorEarningIds.length) {
+      await db.creator_earnings.update(
+        {
+          payout_id: payoutRequest.creator_payout_request_id,
+          status: 'payout_pending',
+          updated_at: new Date()
+        },
+        {
+          where: {
+            creator_earning_id: { [Op.in]: creatorEarningIds },
+            creator_id: creatorId,
+            status: { [Op.in]: ['earned', 'payout_pending'] }
+          },
+          transaction
+        }
+      );
+    }
 
     await postWalletTransaction({
       creatorId,
@@ -1517,6 +1790,11 @@ async function rejectCreatorPayout(payoutRequestId, payload = {}, options = {}) 
       updated_at: new Date()
     }, { transaction });
 
+    await db.creator_earnings.update(
+      { status: 'earned', payout_id: null, updated_at: new Date() },
+      { where: { payout_id: payoutRequest.creator_payout_request_id, status: 'payout_pending' }, transaction }
+    );
+
     if (!externalTransaction) await transaction.commit();
     return payoutRequest;
   } catch (error) {
@@ -1597,6 +1875,11 @@ async function markCreatorPayoutPaid(payoutRequestId, payload = {}, options = {}
       updated_at: new Date()
     }, { transaction });
 
+    await db.creator_earnings.update(
+      { status: 'paid', updated_at: new Date() },
+      { where: { payout_id: payoutRequest.creator_payout_request_id }, transaction }
+    );
+
     if (!externalTransaction) await transaction.commit();
     return payoutRequest;
   } catch (error) {
@@ -1612,6 +1895,7 @@ module.exports = {
   getShootFinance,
   getCreatorWallet,
   getAdminCreatorWalletOverview,
+  getAdminPayoutsScreen,
   listCreatorPayouts,
   upsertCreatorPayoutAccount,
   releaseCreatorEarnings,

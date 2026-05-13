@@ -122,6 +122,19 @@ exports.getAdminCreatorWalletOverview = async (req, res) => {
   }
 };
 
+exports.getAdminPayoutsScreen = async (req, res) => {
+  try {
+    const data = await financeService.getAdminPayoutsScreen(req.query);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error('Get admin payouts screen error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch admin payouts screen'
+    });
+  }
+};
+
 exports.listCreatorPayouts = async (req, res) => {
   try {
     const data = await financeService.listCreatorPayouts(req.query);
