@@ -58,6 +58,173 @@ function buildTransactionCode(paymentId, bookingId) {
   return `TXN-${yyyy}-${String(paymentId || bookingId).padStart(6, '0')}`;
 }
 
+function buildPayoutRequestCode(creatorId) {
+  const date = new Date();
+  const yyyy = date.getFullYear();
+  const random = Math.random().toString(36).slice(2, 8).toUpperCase();
+  return `PO-${yyyy}-${String(creatorId).padStart(5, '0')}-${random}`;
+}
+
+function toMoney(value) {
+  return roundCurrency(value);
+}
+
+function assertPositiveAmount(amount, message = 'Amount must be greater than zero') {
+  const parsed = toMoney(amount);
+  if (!(parsed > 0)) {
+    const error = new Error(message);
+    error.statusCode = 400;
+    throw error;
+  }
+  return parsed;
+}
+
+async function ensureCreatorWallet(creatorId, options = {}) {
+  const creator = await db.crew_members.findByPk(creatorId, { transaction: options.transaction || null });
+  if (!creator) {
+    const error = new Error('Creator not found');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const [wallet] = await db.creator_wallets.findOrCreate({
+    where: { creator_id: creatorId },
+    defaults: {
+      creator_id: creatorId,
+      currency: options.currency || 'USD',
+      pending_balance: 0,
+      available_balance: 0,
+      reserved_balance: 0,
+      lifetime_earnings: 0,
+      lifetime_payouts: 0,
+      last_reconciled_at: new Date()
+    },
+    transaction: options.transaction || null
+  });
+
+  return wallet;
+}
+
+async function postWalletTransaction({
+  creatorId,
+  transactionType,
+  direction,
+  amount,
+  sourceType = null,
+  sourceId = null,
+  sourceReference = null,
+  payoutRequestId = null,
+  payoutAccountId = null,
+  metadata = null,
+  balanceChanges = {}
+}, transaction = null) {
+  const wallet = await ensureCreatorWallet(creatorId, { transaction });
+  const pendingBefore = toMoney(wallet.pending_balance);
+  const availableBefore = toMoney(wallet.available_balance);
+  const reservedBefore = toMoney(wallet.reserved_balance);
+  const lifetimeEarningsBefore = toMoney(wallet.lifetime_earnings);
+  const lifetimePayoutsBefore = toMoney(wallet.lifetime_payouts);
+
+  wallet.pending_balance = toMoney(pendingBefore + Number(balanceChanges.pending || 0));
+  wallet.available_balance = toMoney(availableBefore + Number(balanceChanges.available || 0));
+  wallet.reserved_balance = toMoney(reservedBefore + Number(balanceChanges.reserved || 0));
+  wallet.lifetime_earnings = toMoney(lifetimeEarningsBefore + Number(balanceChanges.lifetimeEarnings || 0));
+  wallet.lifetime_payouts = toMoney(lifetimePayoutsBefore + Number(balanceChanges.lifetimePayouts || 0));
+  wallet.last_reconciled_at = new Date();
+  wallet.updated_at = new Date();
+
+  if (wallet.pending_balance < 0 || wallet.available_balance < 0 || wallet.reserved_balance < 0) {
+    const error = new Error('Wallet balance cannot go negative');
+    error.statusCode = 409;
+    throw error;
+  }
+
+  await wallet.save({ transaction });
+
+  const walletTransaction = await db.creator_payout_transactions.create({
+    creator_id: creatorId,
+    creator_payout_request_id: payoutRequestId,
+    creator_payout_account_id: payoutAccountId,
+    transaction_type: transactionType,
+    direction,
+    currency: wallet.currency || 'USD',
+    amount,
+    source_type: sourceType,
+    source_id: sourceId,
+    source_reference: sourceReference,
+    balance_pending_after: wallet.pending_balance,
+    balance_available_after: wallet.available_balance,
+    balance_reserved_after: wallet.reserved_balance,
+    status: 'posted',
+    metadata_json: stringifyMetadata(metadata),
+    updated_at: new Date()
+  }, { transaction });
+
+  return { wallet, walletTransaction };
+}
+
+async function syncCreatorEarningToWallet(earning, transaction = null) {
+  const plain = toPlainRecord(earning);
+  if (!plain || !plain.creator_id || plain.status === 'cancelled') return null;
+
+  const amount = toMoney(plain.net_earning_amount);
+  if (!(amount > 0)) return null;
+
+  const sourceReference = `${plain.booking_id}:${plain.creator_id}`;
+  const existing = await db.creator_payout_transactions.findOne({
+    where: {
+      source_type: 'creator_earning',
+      source_reference: sourceReference,
+      transaction_type: 'earning_pending',
+      status: 'posted'
+    },
+    transaction
+  });
+
+  if (existing) {
+    const released = await db.creator_payout_transactions.findOne({
+      where: {
+        source_type: 'creator_earning',
+        source_reference: sourceReference,
+        transaction_type: 'earning_released',
+        status: 'posted'
+      },
+      transaction
+    });
+
+    if (released && plain.status === 'pending' && earning.update) {
+      await earning.update({
+        status: 'earned',
+        earned_at: released.created_at || new Date(),
+        updated_at: new Date()
+      }, { transaction });
+    }
+
+    return null;
+  }
+
+  await postWalletTransaction({
+    creatorId: plain.creator_id,
+    transactionType: 'earning_pending',
+    direction: 'credit',
+    amount,
+    sourceType: 'creator_earning',
+    sourceId: plain.creator_earning_id,
+    sourceReference,
+    metadata: {
+      booking_id: plain.booking_id,
+      payment_id: plain.payment_id || null,
+      finance_transaction_id: plain.finance_transaction_id || null
+    },
+    balanceChanges: {
+      pending: amount,
+      lifetimeEarnings: amount
+    }
+  }, transaction);
+
+  return true;
+}
+
 function normalizeStatus(paymentStatus, hasPayment) {
   if (paymentStatus === 'succeeded' || paymentStatus === 'paid' || hasPayment) return 'paid';
   if (paymentStatus === 'failed') return 'failed';
@@ -570,8 +737,8 @@ function calculateCreatorRows({ booking, payment, pricingSnapshot = null, financ
       gross_amount: netEarning,
       platform_fee_amount: 0,
       net_earning_amount: netEarning,
-      status: payment ? 'earned' : 'pending',
-      earned_at: payment ? (booking.payment_completed_at || new Date()) : null,
+      status: 'pending',
+      earned_at: null,
       metadata_json: stringifyMetadata({
         source: explicitBreakdown.length > 0 ? 'quote_creative_price_breakdown' : 'quote_service_line_items',
         pricing_source: pricingSnapshot?.source || null,
@@ -712,6 +879,13 @@ async function syncBookingFinance(bookingId, options = {}) {
     });
     if (creatorRows.length > 0) {
       await db.creator_earnings.bulkCreate(creatorRows, { transaction });
+      const storedCreatorRows = await db.creator_earnings.findAll({
+        where: { booking_id: booking.stream_project_booking_id },
+        transaction
+      });
+      for (const earning of storedCreatorRows) {
+        await syncCreatorEarningToWallet(earning, transaction);
+      }
     }
 
     const invoiceRows = Array.isArray(booking.invoice_send_history) ? booking.invoice_send_history : [];
@@ -939,9 +1113,462 @@ async function getShootFinance(bookingId) {
   };
 }
 
+async function getCreatorWallet(creatorId) {
+  const wallet = await ensureCreatorWallet(creatorId);
+  const pendingPayoutTotal = await db.creator_payout_requests.sum('amount', {
+    where: {
+      creator_id: creatorId,
+      status: { [db.Sequelize.Op.in]: ['requested', 'approved', 'processing'] }
+    }
+  });
+
+  const recentPayouts = await db.creator_payout_requests.findAll({
+    where: { creator_id: creatorId },
+    limit: 10,
+    order: [['requested_at', 'DESC'], ['creator_payout_request_id', 'DESC']],
+    include: [{ model: db.creator_payout_accounts, as: 'payout_account', required: false }]
+  });
+
+  const pendingEarnings = await db.creator_earnings.findAll({
+    where: { creator_id: creatorId, status: { [db.Sequelize.Op.in]: ['pending', 'earned', 'held'] } },
+    limit: 20,
+    order: [['created_at', 'DESC'], ['creator_earning_id', 'DESC']],
+    include: [{ model: db.stream_project_booking, as: 'booking', required: false }]
+  });
+
+  const plainWallet = wallet.get({ plain: true });
+  return {
+    ...plainWallet,
+    pending_payout_balance: toMoney(pendingPayoutTotal || 0),
+    metadata: parseJson(plainWallet.metadata_json, null),
+    recent_payouts: recentPayouts.map((row) => {
+      const plain = row.get({ plain: true });
+      return { ...plain, metadata: parseJson(plain.metadata_json, null) };
+    }),
+    earnings: pendingEarnings.map((row) => {
+      const plain = row.get({ plain: true });
+      return { ...plain, metadata: parseJson(plain.metadata_json, null) };
+    })
+  };
+}
+
+async function listCreatorPayouts(filters = {}) {
+  const Op = db.Sequelize.Op;
+  const page = Math.max(parseInt(filters.page, 10) || 1, 1);
+  const limit = Math.min(Math.max(parseInt(filters.limit, 10) || 20, 1), 100);
+  const offset = (page - 1) * limit;
+  const where = {};
+
+  if (filters.creator_id) where.creator_id = filters.creator_id;
+  if (filters.status) where.status = filters.status;
+  if (filters.payout_method) where.payout_method = filters.payout_method;
+  if (filters.date_from || filters.date_to) {
+    where.requested_at = {};
+    if (filters.date_from) where.requested_at[Op.gte] = new Date(filters.date_from);
+    if (filters.date_to) where.requested_at[Op.lte] = new Date(filters.date_to);
+  }
+
+  const result = await db.creator_payout_requests.findAndCountAll({
+    where,
+    distinct: true,
+    limit,
+    offset,
+    order: [['requested_at', 'DESC'], ['creator_payout_request_id', 'DESC']],
+    include: [
+      {
+        model: db.crew_members,
+        as: 'creator',
+        required: false,
+        attributes: ['crew_member_id', 'first_name', 'last_name', 'email']
+      },
+      {
+        model: db.creator_payout_accounts,
+        as: 'payout_account',
+        required: false
+      }
+    ]
+  });
+
+  return {
+    rows: result.rows.map((row) => {
+      const plain = row.get({ plain: true });
+      return { ...plain, metadata: parseJson(plain.metadata_json, null) };
+    }),
+    pagination: {
+      page,
+      limit,
+      total: result.count,
+      total_pages: Math.ceil(result.count / limit)
+    }
+  };
+}
+
+async function upsertCreatorPayoutAccount(payload = {}, options = {}) {
+  const creatorId = Number(payload.creator_id);
+  if (!creatorId) {
+    const error = new Error('creator_id is required');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const transaction = options.transaction || await db.sequelize.transaction();
+  const externalTransaction = Boolean(options.transaction);
+
+  try {
+    await ensureCreatorWallet(creatorId, { transaction });
+
+    if (payload.is_default) {
+      await db.creator_payout_accounts.update(
+        { is_default: 0, updated_at: new Date() },
+        { where: { creator_id: creatorId }, transaction }
+      );
+    }
+
+    const accountPayload = {
+      creator_id: creatorId,
+      payout_method: payload.payout_method || 'manual',
+      account_label: payload.account_label || null,
+      stripe_account_id: payload.stripe_account_id || null,
+      account_holder_name: payload.account_holder_name || null,
+      bank_name: payload.bank_name || null,
+      account_last4: payload.account_last4 || null,
+      currency: payload.currency || 'USD',
+      is_default: payload.is_default === undefined ? 1 : Boolean(payload.is_default),
+      status: payload.status || 'pending',
+      metadata_json: stringifyMetadata(payload.metadata || null),
+      updated_at: new Date()
+    };
+
+    const account = payload.creator_payout_account_id
+      ? await db.creator_payout_accounts.findOne({
+          where: {
+            creator_payout_account_id: payload.creator_payout_account_id,
+            creator_id: creatorId
+          },
+          transaction
+        })
+      : null;
+
+    let savedAccount;
+    if (account) {
+      savedAccount = await account.update(accountPayload, { transaction });
+    } else {
+      savedAccount = await db.creator_payout_accounts.create(accountPayload, { transaction });
+    }
+
+    if (!externalTransaction) await transaction.commit();
+    return savedAccount;
+  } catch (error) {
+    if (!externalTransaction && transaction && !transaction.finished) await transaction.rollback();
+    throw error;
+  }
+}
+
+async function releaseCreatorEarnings(payload = {}, options = {}) {
+  const Op = db.Sequelize.Op;
+  const transaction = options.transaction || await db.sequelize.transaction();
+  const externalTransaction = Boolean(options.transaction);
+
+  try {
+    if (!payload.creator_earning_ids && !payload.creator_id && !payload.booking_id) {
+      const error = new Error('creator_earning_ids, creator_id, or booking_id is required');
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const where = { status: 'pending' };
+    if (payload.creator_earning_ids) where.creator_earning_id = { [Op.in]: payload.creator_earning_ids };
+    if (payload.creator_id) where.creator_id = payload.creator_id;
+    if (payload.booking_id) where.booking_id = payload.booking_id;
+
+    const earnings = await db.creator_earnings.findAll({ where, transaction });
+    if (earnings.length === 0) {
+      const error = new Error('No pending creator earnings found for release');
+      error.statusCode = 404;
+      throw error;
+    }
+
+    let releasedAmount = 0;
+    for (const earning of earnings) {
+      const amount = toMoney(earning.net_earning_amount);
+      await earning.update({
+        status: 'earned',
+        earned_at: new Date(),
+        updated_at: new Date()
+      }, { transaction });
+
+      await postWalletTransaction({
+        creatorId: earning.creator_id,
+        transactionType: 'earning_released',
+        direction: 'internal',
+        amount,
+        sourceType: 'creator_earning',
+        sourceId: earning.creator_earning_id,
+        sourceReference: `${earning.booking_id}:${earning.creator_id}`,
+        metadata: {
+          booking_id: earning.booking_id,
+          released_by_user_id: options.userId || null
+        },
+        balanceChanges: {
+          pending: -amount,
+          available: amount
+        }
+      }, transaction);
+      releasedAmount = toMoney(releasedAmount + amount);
+    }
+
+    if (!externalTransaction) await transaction.commit();
+    return { released_count: earnings.length, released_amount: releasedAmount };
+  } catch (error) {
+    if (!externalTransaction && transaction && !transaction.finished) await transaction.rollback();
+    throw error;
+  }
+}
+
+async function requestCreatorPayout(payload = {}, options = {}) {
+  const creatorId = Number(payload.creator_id);
+  const amount = assertPositiveAmount(payload.amount);
+  if (!creatorId) {
+    const error = new Error('creator_id is required');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const transaction = options.transaction || await db.sequelize.transaction();
+  const externalTransaction = Boolean(options.transaction);
+
+  try {
+    const wallet = await ensureCreatorWallet(creatorId, { transaction });
+    if (toMoney(wallet.available_balance) < amount) {
+      const error = new Error('Insufficient available balance for payout request');
+      error.statusCode = 409;
+      throw error;
+    }
+
+    let payoutAccount = null;
+    if (payload.creator_payout_account_id) {
+      payoutAccount = await db.creator_payout_accounts.findOne({
+        where: {
+          creator_payout_account_id: payload.creator_payout_account_id,
+          creator_id: creatorId
+        },
+        transaction
+      });
+    } else {
+      payoutAccount = await db.creator_payout_accounts.findOne({
+        where: { creator_id: creatorId, is_default: 1 },
+        transaction
+      });
+    }
+
+    const payoutMethod = payload.payout_method || payoutAccount?.payout_method || 'manual';
+    const payoutRequest = await db.creator_payout_requests.create({
+      request_code: buildPayoutRequestCode(creatorId),
+      creator_id: creatorId,
+      creator_payout_account_id: payoutAccount?.creator_payout_account_id || null,
+      currency: payload.currency || wallet.currency || 'USD',
+      amount,
+      payout_method: payoutMethod,
+      status: 'requested',
+      requested_at: new Date(),
+      metadata_json: stringifyMetadata(payload.metadata || null),
+      updated_at: new Date()
+    }, { transaction });
+
+    await postWalletTransaction({
+      creatorId,
+      transactionType: 'payout_requested',
+      direction: 'debit',
+      amount,
+      payoutRequestId: payoutRequest.creator_payout_request_id,
+      payoutAccountId: payoutAccount?.creator_payout_account_id || null,
+      sourceType: 'creator_payout_request',
+      sourceId: payoutRequest.creator_payout_request_id,
+      sourceReference: payoutRequest.request_code,
+      metadata: { payout_method: payoutMethod },
+      balanceChanges: { available: -amount }
+    }, transaction);
+
+    if (!externalTransaction) await transaction.commit();
+    return payoutRequest;
+  } catch (error) {
+    if (!externalTransaction && transaction && !transaction.finished) await transaction.rollback();
+    throw error;
+  }
+}
+
+async function approveCreatorPayout(payoutRequestId, payload = {}, options = {}) {
+  const payoutRequest = await db.creator_payout_requests.findByPk(payoutRequestId);
+  if (!payoutRequest) {
+    const error = new Error('Payout request not found');
+    error.statusCode = 404;
+    throw error;
+  }
+  if (payoutRequest.status !== 'requested') {
+    const error = new Error('Only requested payouts can be approved');
+    error.statusCode = 409;
+    throw error;
+  }
+
+  await payoutRequest.update({
+    status: payload.status === 'processing' ? 'processing' : 'approved',
+    approved_by_user_id: options.userId || null,
+    approved_at: new Date(),
+    metadata_json: stringifyMetadata({
+      ...parseJson(payoutRequest.metadata_json, {}),
+      approval_note: payload.note || null
+    }),
+    updated_at: new Date()
+  });
+
+  return payoutRequest;
+}
+
+async function returnPayoutBalance(payoutRequest, transaction, metadata = {}) {
+  await postWalletTransaction({
+    creatorId: payoutRequest.creator_id,
+    transactionType: 'payout_returned',
+    direction: 'credit',
+    amount: toMoney(payoutRequest.amount),
+    payoutRequestId: payoutRequest.creator_payout_request_id,
+    payoutAccountId: payoutRequest.creator_payout_account_id,
+    sourceType: 'creator_payout_request',
+    sourceId: payoutRequest.creator_payout_request_id,
+    sourceReference: payoutRequest.request_code,
+    metadata,
+    balanceChanges: { available: toMoney(payoutRequest.amount) }
+  }, transaction);
+}
+
+async function rejectCreatorPayout(payoutRequestId, payload = {}, options = {}) {
+  const transaction = options.transaction || await db.sequelize.transaction();
+  const externalTransaction = Boolean(options.transaction);
+
+  try {
+    const payoutRequest = await db.creator_payout_requests.findByPk(payoutRequestId, { transaction });
+    if (!payoutRequest) {
+      const error = new Error('Payout request not found');
+      error.statusCode = 404;
+      throw error;
+    }
+    if (!['requested', 'approved', 'processing'].includes(payoutRequest.status)) {
+      const error = new Error('Payout request cannot be rejected from its current status');
+      error.statusCode = 409;
+      throw error;
+    }
+
+    await returnPayoutBalance(payoutRequest, transaction, {
+      reason: payload.rejection_reason || null,
+      rejected_by_user_id: options.userId || null
+    });
+
+    await payoutRequest.update({
+      status: 'rejected',
+      rejection_reason: payload.rejection_reason || null,
+      processed_by_user_id: options.userId || null,
+      processed_at: new Date(),
+      updated_at: new Date()
+    }, { transaction });
+
+    if (!externalTransaction) await transaction.commit();
+    return payoutRequest;
+  } catch (error) {
+    if (!externalTransaction && transaction && !transaction.finished) await transaction.rollback();
+    throw error;
+  }
+}
+
+async function markCreatorPayoutPaid(payoutRequestId, payload = {}, options = {}) {
+  const transaction = options.transaction || await db.sequelize.transaction();
+  const externalTransaction = Boolean(options.transaction);
+
+  try {
+    const payoutRequest = await db.creator_payout_requests.findByPk(payoutRequestId, { transaction });
+    if (!payoutRequest) {
+      const error = new Error('Payout request not found');
+      error.statusCode = 404;
+      throw error;
+    }
+    if (!['approved', 'processing'].includes(payoutRequest.status)) {
+      const error = new Error('Only approved or processing payouts can be marked paid');
+      error.statusCode = 409;
+      throw error;
+    }
+
+    const amount = toMoney(payoutRequest.amount);
+    await postWalletTransaction({
+      creatorId: payoutRequest.creator_id,
+      transactionType: 'payout_paid',
+      direction: 'debit',
+      amount,
+      payoutRequestId: payoutRequest.creator_payout_request_id,
+      payoutAccountId: payoutRequest.creator_payout_account_id,
+      sourceType: 'creator_payout_request',
+      sourceId: payoutRequest.creator_payout_request_id,
+      sourceReference: payoutRequest.request_code,
+      metadata: {
+        external_reference: payload.external_reference || null,
+        payout_method: payoutRequest.payout_method
+      },
+      balanceChanges: { lifetimePayouts: amount }
+    }, transaction);
+
+    const financeTransaction = await db.finance_transactions.create({
+      transaction_code: `CPO-${payoutRequest.request_code}`,
+      transaction_type: 'creator_earning',
+      direction: 'outflow',
+      source: payoutRequest.payout_method === 'stripe' ? 'stripe' : 'manual',
+      payment_method: payoutRequest.payout_method,
+      status: 'paid',
+      currency: payoutRequest.currency || 'USD',
+      gross_amount: amount,
+      platform_fee_amount: 0,
+      creator_earnings_amount: amount,
+      gateway_fee_amount: 0,
+      net_amount: amount,
+      external_reference: payload.external_reference || payoutRequest.external_reference || null,
+      transaction_date: payload.paid_at ? new Date(payload.paid_at) : new Date(),
+      metadata_json: stringifyMetadata({
+        creator_id: payoutRequest.creator_id,
+        payout_request_id: payoutRequest.creator_payout_request_id,
+        request_code: payoutRequest.request_code
+      }),
+      created_by_user_id: options.userId || null,
+      updated_at: new Date()
+    }, { transaction });
+
+    await payoutRequest.update({
+      status: 'paid',
+      external_reference: payload.external_reference || payoutRequest.external_reference || null,
+      processed_by_user_id: options.userId || null,
+      processed_at: new Date(),
+      paid_at: payload.paid_at ? new Date(payload.paid_at) : new Date(),
+      metadata_json: stringifyMetadata({
+        ...parseJson(payoutRequest.metadata_json, {}),
+        finance_transaction_id: financeTransaction.finance_transaction_id
+      }),
+      updated_at: new Date()
+    }, { transaction });
+
+    if (!externalTransaction) await transaction.commit();
+    return payoutRequest;
+  } catch (error) {
+    if (!externalTransaction && transaction && !transaction.finished) await transaction.rollback();
+    throw error;
+  }
+}
+
 module.exports = {
   syncBookingFinance,
   listTransactions,
   listShootBreakdowns,
-  getShootFinance
+  getShootFinance,
+  getCreatorWallet,
+  listCreatorPayouts,
+  upsertCreatorPayoutAccount,
+  releaseCreatorEarnings,
+  requestCreatorPayout,
+  approveCreatorPayout,
+  rejectCreatorPayout,
+  markCreatorPayoutPaid
 };

@@ -1152,6 +1152,7 @@ ALTER TABLE `users`
 ADD COLUMN `role` VARCHAR(100) NULL DEFAULT NULL AFTER `assign_lead`;
 
 -- 13-05-26
+
 CREATE TABLE IF NOT EXISTS finance_transactions (
   finance_transaction_id INT NOT NULL AUTO_INCREMENT,
   transaction_code VARCHAR(64) NOT NULL,
@@ -1269,4 +1270,102 @@ CREATE TABLE IF NOT EXISTS creator_earnings (
   CONSTRAINT fk_creator_earnings_creator FOREIGN KEY (creator_id) REFERENCES crew_members(crew_member_id),
   CONSTRAINT fk_creator_earnings_payment FOREIGN KEY (payment_id) REFERENCES payment_transactions(payment_id),
   CONSTRAINT fk_creator_earnings_transaction FOREIGN KEY (finance_transaction_id) REFERENCES finance_transactions(finance_transaction_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS creator_wallets (
+  creator_wallet_id INT NOT NULL AUTO_INCREMENT,
+  creator_id INT NOT NULL,
+  currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+  pending_balance DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  available_balance DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  reserved_balance DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  lifetime_earnings DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  lifetime_payouts DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  last_reconciled_at DATETIME NULL,
+  metadata_json TEXT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (creator_wallet_id),
+  UNIQUE KEY uniq_creator_wallets_creator (creator_id),
+  CONSTRAINT fk_creator_wallets_creator FOREIGN KEY (creator_id) REFERENCES crew_members(crew_member_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS creator_payout_accounts (
+  creator_payout_account_id INT NOT NULL AUTO_INCREMENT,
+  creator_id INT NOT NULL,
+  payout_method ENUM('stripe', 'bank_transfer', 'manual') NOT NULL DEFAULT 'manual',
+  account_label VARCHAR(120) NULL,
+  stripe_account_id VARCHAR(255) NULL,
+  account_holder_name VARCHAR(255) NULL,
+  bank_name VARCHAR(255) NULL,
+  account_last4 VARCHAR(4) NULL,
+  currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+  is_default TINYINT(1) NOT NULL DEFAULT 0,
+  status ENUM('pending', 'verified', 'disabled') NOT NULL DEFAULT 'pending',
+  metadata_json TEXT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (creator_payout_account_id),
+  KEY idx_creator_payout_accounts_creator (creator_id),
+  KEY idx_creator_payout_accounts_status (status),
+  CONSTRAINT fk_creator_payout_accounts_creator FOREIGN KEY (creator_id) REFERENCES crew_members(crew_member_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS creator_payout_requests (
+  creator_payout_request_id INT NOT NULL AUTO_INCREMENT,
+  request_code VARCHAR(64) NOT NULL,
+  creator_id INT NOT NULL,
+  creator_payout_account_id INT NULL,
+  currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+  amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  payout_method ENUM('stripe', 'bank_transfer', 'manual') NOT NULL DEFAULT 'manual',
+  status ENUM('requested', 'approved', 'processing', 'paid', 'rejected', 'cancelled', 'failed') NOT NULL DEFAULT 'requested',
+  external_reference VARCHAR(255) NULL,
+  requested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  approved_by_user_id INT NULL,
+  approved_at DATETIME NULL,
+  processed_by_user_id INT NULL,
+  processed_at DATETIME NULL,
+  paid_at DATETIME NULL,
+  rejection_reason TEXT NULL,
+  metadata_json TEXT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (creator_payout_request_id),
+  UNIQUE KEY uniq_creator_payout_requests_code (request_code),
+  KEY idx_creator_payout_requests_creator (creator_id),
+  KEY idx_creator_payout_requests_status (status),
+  KEY idx_creator_payout_requests_requested_at (requested_at),
+  CONSTRAINT fk_creator_payout_requests_creator FOREIGN KEY (creator_id) REFERENCES crew_members(crew_member_id),
+  CONSTRAINT fk_creator_payout_requests_account FOREIGN KEY (creator_payout_account_id) REFERENCES creator_payout_accounts(creator_payout_account_id),
+  CONSTRAINT fk_creator_payout_requests_approved_by FOREIGN KEY (approved_by_user_id) REFERENCES users(id),
+  CONSTRAINT fk_creator_payout_requests_processed_by FOREIGN KEY (processed_by_user_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS creator_payout_transactions (
+  creator_payout_transaction_id INT NOT NULL AUTO_INCREMENT,
+  creator_id INT NOT NULL,
+  creator_payout_request_id INT NULL,
+  creator_payout_account_id INT NULL,
+  transaction_type ENUM('earning_pending', 'earning_released', 'payout_requested', 'payout_paid', 'payout_returned', 'hold_reserved', 'hold_released', 'manual_adjustment') NOT NULL,
+  direction ENUM('credit', 'debit', 'internal') NOT NULL,
+  currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+  amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  source_type VARCHAR(64) NULL,
+  source_id INT NULL,
+  source_reference VARCHAR(120) NULL,
+  balance_pending_after DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  balance_available_after DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  balance_reserved_after DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  status ENUM('posted', 'void') NOT NULL DEFAULT 'posted',
+  metadata_json TEXT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (creator_payout_transaction_id),
+  KEY idx_creator_payout_transactions_creator (creator_id),
+  KEY idx_creator_payout_transactions_request (creator_payout_request_id),
+  KEY idx_creator_payout_transactions_source (source_type, source_reference),
+  CONSTRAINT fk_creator_payout_transactions_creator FOREIGN KEY (creator_id) REFERENCES crew_members(crew_member_id),
+  CONSTRAINT fk_creator_payout_transactions_request FOREIGN KEY (creator_payout_request_id) REFERENCES creator_payout_requests(creator_payout_request_id),
+  CONSTRAINT fk_creator_payout_transactions_account FOREIGN KEY (creator_payout_account_id) REFERENCES creator_payout_accounts(creator_payout_account_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

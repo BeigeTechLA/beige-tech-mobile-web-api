@@ -1997,7 +1997,7 @@ Authorization: {{TOKEN}}
 GET {{URL}}finance/transactions HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
-
+curl http://localhost:5001/v1/sales/leads?page=1\&limit=10
 ### 
 GET {{URL}}finance/shoots HTTP/1.1
 Content-Type: application/json

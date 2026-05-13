@@ -54,6 +54,10 @@ var _finance_transactions = require("./finance_transactions");
 var _finance_project_breakdowns = require("./finance_project_breakdowns");
 var _finance_invoice_payments = require("./finance_invoice_payments");
 var _creator_earnings = require("./creator_earnings");
+var _creator_wallets = require("./creator_wallets");
+var _creator_payout_accounts = require("./creator_payout_accounts");
+var _creator_payout_requests = require("./creator_payout_requests");
+var _creator_payout_transactions = require("./creator_payout_transactions");
 
 // CMS Approval States Models
 var _projects = require("./projects");
@@ -138,6 +142,10 @@ function initModels(sequelize) {
   var finance_project_breakdowns = _finance_project_breakdowns(sequelize, DataTypes);
   var finance_invoice_payments = _finance_invoice_payments(sequelize, DataTypes);
   var creator_earnings = _creator_earnings(sequelize, DataTypes);
+  var creator_wallets = _creator_wallets(sequelize, DataTypes);
+  var creator_payout_accounts = _creator_payout_accounts(sequelize, DataTypes);
+  var creator_payout_requests = _creator_payout_requests(sequelize, DataTypes);
+  var creator_payout_transactions = _creator_payout_transactions(sequelize, DataTypes);
 
   // CMS Approval States Models
   var projects = _projects(sequelize, DataTypes);
@@ -222,6 +230,26 @@ function initModels(sequelize) {
     sourceKey: "booking_id",
     constraints: false
   });
+
+  creator_wallets.belongsTo(crew_members, { as: "creator", foreignKey: "creator_id" });
+  crew_members.hasOne(creator_wallets, { as: "creator_wallet", foreignKey: "creator_id" });
+
+  creator_payout_accounts.belongsTo(crew_members, { as: "creator", foreignKey: "creator_id" });
+  crew_members.hasMany(creator_payout_accounts, { as: "payout_accounts", foreignKey: "creator_id" });
+
+  creator_payout_requests.belongsTo(crew_members, { as: "creator", foreignKey: "creator_id" });
+  crew_members.hasMany(creator_payout_requests, { as: "payout_requests", foreignKey: "creator_id" });
+  creator_payout_requests.belongsTo(creator_payout_accounts, { as: "payout_account", foreignKey: "creator_payout_account_id" });
+  creator_payout_accounts.hasMany(creator_payout_requests, { as: "payout_requests", foreignKey: "creator_payout_account_id" });
+  creator_payout_requests.belongsTo(users, { as: "approved_by", foreignKey: "approved_by_user_id" });
+  creator_payout_requests.belongsTo(users, { as: "processed_by", foreignKey: "processed_by_user_id" });
+
+  creator_payout_transactions.belongsTo(crew_members, { as: "creator", foreignKey: "creator_id" });
+  crew_members.hasMany(creator_payout_transactions, { as: "payout_transactions", foreignKey: "creator_id" });
+  creator_payout_transactions.belongsTo(creator_payout_requests, { as: "payout_request", foreignKey: "creator_payout_request_id" });
+  creator_payout_requests.hasMany(creator_payout_transactions, { as: "payout_transactions", foreignKey: "creator_payout_request_id" });
+  creator_payout_transactions.belongsTo(creator_payout_accounts, { as: "payout_account", foreignKey: "creator_payout_account_id" });
+  creator_payout_accounts.hasMany(creator_payout_transactions, { as: "payout_transactions", foreignKey: "creator_payout_account_id" });
 
   assignment_checklist.belongsTo(checklist_master, { as: "checklist", foreignKey: "checklist_id"});
   checklist_master.hasMany(assignment_checklist, { as: "assignment_checklists", foreignKey: "checklist_id"});
@@ -669,6 +697,10 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
     finance_project_breakdowns,
     finance_invoice_payments,
     creator_earnings,
+    creator_wallets,
+    creator_payout_accounts,
+    creator_payout_requests,
+    creator_payout_transactions,
     project_form_submissions,
     quote_catalog_items,
     sales_ai_editing_types,
