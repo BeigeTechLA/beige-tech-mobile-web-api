@@ -2646,16 +2646,26 @@ const ensureFileShareAccessLogsTable = async () => {
         action VARCHAR(32) NOT NULL DEFAULT 'content_view',
         ip_address VARCHAR(64) DEFAULT NULL,
         user_agent VARCHAR(512) DEFAULT NULL,
+        access_session_key VARCHAR(64) DEFAULT NULL,
         created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (id),
         KEY idx_file_manager_share_access_logs_share_id (share_id),
         KEY idx_file_manager_share_access_logs_token (share_token),
-        KEY idx_file_manager_share_access_logs_email (email)
+        KEY idx_file_manager_share_access_logs_email (email),
+        KEY idx_file_manager_share_access_logs_session (access_session_key)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     `);
   }
 
   await fileShareAccessLogsTableReadyPromise;
+  await db.sequelize.query(`
+    ALTER TABLE file_manager_share_access_logs
+    ADD COLUMN IF NOT EXISTS access_session_key VARCHAR(64) DEFAULT NULL
+  `).catch(() => null);
+  await db.sequelize.query(`
+    ALTER TABLE file_manager_share_access_logs
+    ADD INDEX idx_file_manager_share_access_logs_session (access_session_key)
+  `).catch(() => null);
 };
 
 const getClientIpAddress = (req) => {
@@ -2664,21 +2674,72 @@ const getClientIpAddress = (req) => {
   return String(req.ip || req.socket?.remoteAddress || '').trim() || null;
 };
 
-const recordShareAccessLog = async (req, share, email, action = 'content_view') => {
+const getAccessSessionKey = (accessToken) => {
+  const token = String(accessToken || '').trim();
+  if (!token) return null;
+  return crypto.createHash('sha256').update(token).digest('hex');
+};
+
+const recordShareAccessLog = async (req, share, email, action = 'content_view', accessToken = '') => {
   if (!share?.share_id || !share?.share_token || !email) return;
   await ensureFileShareAccessLogsTable();
+  const normalizedEmail = normalizeEmailAddress(email);
+  const normalizedAction = String(action || 'content_view').trim().toLowerCase();
+  const accessSessionKey = getAccessSessionKey(accessToken);
+
+  const [latestRows] = await db.sequelize.query(
+    `SELECT id, action
+     FROM file_manager_share_access_logs
+     WHERE share_id = :shareId
+       AND email = :email
+       AND (
+         (:accessSessionKey IS NOT NULL AND access_session_key = :accessSessionKey)
+         OR (:accessSessionKey IS NULL AND created_at >= (NOW() - INTERVAL 60 SECOND))
+       )
+     ORDER BY id DESC
+     LIMIT 1`,
+    {
+      replacements: {
+        shareId: share.share_id,
+        email: normalizedEmail,
+        accessSessionKey,
+      },
+    }
+  ).catch(() => [[]]);
+
+  const latestLog = Array.isArray(latestRows) && latestRows.length ? latestRows[0] : null;
+  const latestAction = String(latestLog?.action || '').trim().toLowerCase();
+
+  if (normalizedAction === 'content_view') {
+    if (latestAction === 'content_view' || latestAction === 'view_download') return;
+  }
+
+  if (normalizedAction === 'download') {
+    if (latestAction === 'view_download') return;
+    if (latestAction === 'content_view' && latestLog?.id) {
+      await db.sequelize.query(
+        `UPDATE file_manager_share_access_logs
+         SET action = 'view_download'
+         WHERE id = :id`,
+        { replacements: { id: latestLog.id } }
+      ).catch(() => null);
+      return;
+    }
+  }
+
   await db.sequelize.query(
     `INSERT INTO file_manager_share_access_logs
-    (share_id, share_token, email, action, ip_address, user_agent)
-    VALUES (:shareId, :shareToken, :email, :action, :ipAddress, :userAgent)`,
+    (share_id, share_token, email, action, ip_address, user_agent, access_session_key)
+    VALUES (:shareId, :shareToken, :email, :action, :ipAddress, :userAgent, :accessSessionKey)`,
     {
       replacements: {
         shareId: share.share_id,
         shareToken: String(share.share_token || ''),
-        email: normalizeEmailAddress(email),
-        action: String(action || 'content_view'),
+        email: normalizedEmail,
+        action: normalizedAction,
         ipAddress: getClientIpAddress(req),
         userAgent: String(req.headers?.['user-agent'] || '').slice(0, 512) || null,
+        accessSessionKey,
       },
     }
   ).catch(() => null);
@@ -2800,7 +2861,7 @@ exports.requestShareOtp = async (req, res) => {
       String(share.access_mode || 'email_only') !== 'anyone_with_link' &&
       normalizeEmailAddress(share.shared_with_email) !== email
     ) {
-      return res.status(403).json({ success: false, message: 'This email is not allowed for this share link' });
+      return res.status(403).json({ success: false, message: 'This email does not have access for the Shared link' });
     }
 
     const otpExpiryMinutes = 10;
@@ -2842,7 +2903,7 @@ exports.verifyShareOtp = async (req, res) => {
       String(share.access_mode || 'email_only') !== 'anyone_with_link' &&
       normalizeEmailAddress(share.shared_with_email) !== email
     ) {
-      return res.status(403).json({ success: false, message: 'This email is not allowed for this share link' });
+      return res.status(403).json({ success: false, message: 'This email does not have access for the shared link' });
     }
 
     const [rows] = await db.sequelize.query(
@@ -2890,7 +2951,7 @@ exports.getSharedContent = async (req, res) => {
     ) {
       return res.status(403).json({ success: false, message: 'Access denied for this email' });
     }
-    await recordShareAccessLog(req, share, claims.email, 'content_view');
+    await recordShareAccessLog(req, share, claims.email, 'content_view', accessToken);
 
     if (share.resource_type === 'file') {
       const viewResult = await proxyRequest('/file-view-url', {
@@ -3109,7 +3170,7 @@ exports.getSharedDownloadUrl = async (req, res) => {
     ) {
       return res.status(403).json({ success: false, message: 'Access denied for this email' });
     }
-    await recordShareAccessLog(req, share, claims.email, 'download');
+    await recordShareAccessLog(req, share, claims.email, 'download', accessToken);
 
     if (share.resource_type === 'file') {
       const result = await proxyRequest('/file-download-url', {
@@ -3132,6 +3193,59 @@ exports.getSharedDownloadUrl = async (req, res) => {
     ensureSharedScopeAccess(share, scopePhase, scopePath);
 
     const result = await proxyRequest('/file-download-url', {
+      method: 'POST',
+      body: JSON.stringify({ filepath: normalizedFilepath }),
+    });
+    return res.status(200).json(withPublicUrl(result, req));
+  } catch (error) {
+    const statusCode = String(error?.message || '').toLowerCase().includes('outside the shared scope') ? 403 : 401;
+    return res.status(statusCode).json({ success: false, message: error.message || 'Invalid or expired share access token' });
+  }
+};
+
+exports.getSharedViewUrl = async (req, res) => {
+  try {
+    const shareToken = String(req.params.shareToken || '').trim();
+    const accessToken = extractBearerToken(req);
+    const filepath = String(req.query.filepath || '').trim();
+    if (!shareToken || !accessToken) {
+      return res.status(401).json({ success: false, message: 'Share token and access token are required' });
+    }
+    const claims = verifyShareAccessToken(accessToken);
+    if (String(claims.shareToken) !== shareToken) {
+      return res.status(403).json({ success: false, message: 'Access token does not match share link' });
+    }
+
+    const share = await getShareByToken(shareToken);
+    if (!share) return res.status(404).json({ success: false, message: 'Share link not found' });
+    if (
+      String(share.access_mode || 'email_only') !== 'anyone_with_link' &&
+      normalizeEmailAddress(share.shared_with_email) !== normalizeEmailAddress(claims.email)
+    ) {
+      return res.status(403).json({ success: false, message: 'Access denied for this email' });
+    }
+
+    if (share.resource_type === 'file') {
+      const result = await proxyRequest('/file-view-url', {
+        method: 'POST',
+        body: JSON.stringify({ filepath: share.filepath }),
+      });
+      return res.status(200).json(withPublicUrl(result, req));
+    }
+
+    if (!filepath) {
+      return res.status(400).json({ success: false, message: 'filepath query is required for folder/workspace shares' });
+    }
+
+    const normalizedFilepath = normalizePathForAccess(filepath);
+    const requestedPhase = normalizeWorkspacePhase(req.query.phase, null);
+    const requestedRelativePath = normalizePathForAccess(req.query.path || '');
+    const extractedFromFilepath = extractPhaseAndRelativePath(normalizedFilepath, requestedPhase);
+    const scopePhase = extractedFromFilepath.phase || requestedPhase;
+    const scopePath = extractedFromFilepath.relativePath || requestedRelativePath;
+    ensureSharedScopeAccess(share, scopePhase, scopePath);
+
+    const result = await proxyRequest('/file-view-url', {
       method: 'POST',
       body: JSON.stringify({ filepath: normalizedFilepath }),
     });
