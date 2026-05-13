@@ -2083,6 +2083,9 @@ exports.createSalesAssistedLead = async (req, res) => {
 
 
 exports.getLeads = async (req, res) => {
+  const requestId = req.headers?.['x-request-id'] || req.headers?.['x-correlation-id'] || `getLeads-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const requestStartedAt = Date.now();
+  const logContext = { requestId };
   try {
     const {
       page = 1,
@@ -2103,6 +2106,30 @@ exports.getLeads = async (req, res) => {
     const pageNumber = parseInt(page);
     const pageLimit = parseInt(limit);
     const offset = (pageNumber - 1) * pageLimit;
+    const safeQueryLog = {
+      page: pageNumber,
+      limit: pageLimit,
+      status: status || null,
+      booking_status: booking_status || null,
+      lead_type: lead_type || null,
+      assigned_to: assigned_to ? String(assigned_to) : null,
+      has_search: Boolean(search?.trim()),
+      has_booking_id: Boolean(booking_id),
+      start_date: start_date || null,
+      end_date: end_date || null,
+      intent: intent || null,
+      cp_assignment: cp_assignment || null,
+      production_filter: production_filter || null,
+      user_id: req.userId || null,
+      user_role: req.userRole || null
+    };
+
+    getLeadsSafeLog('info', 'request started', {
+      request_id: requestId,
+      query: safeQueryLog,
+      batch_size: GET_LEADS_BATCH_SIZE,
+      process_concurrency: GET_LEADS_PROCESS_CONCURRENCY
+    });
 
     const whereClause = { is_active: 1 };
     // if (req.userRole === 'sales_rep') {
@@ -2156,232 +2183,143 @@ exports.getLeads = async (req, res) => {
       ];
     }
 
-    console.log('[getLeads] filters:', {
-      status,
-      lead_type,
-      assigned_to,
-      search,
-      booking_id,
-      intent,
-      cp_assignment,
-      production_filter
+    getLeadsSafeLog('info', 'filters normalized', {
+      request_id: requestId,
+      where_keys: Object.keys(whereClause),
+      query: safeQueryLog
     });
-
-    const leads = await sales_leads.findAll({
-      where: whereClause,
-      include: [
-        {
-          model: users,
-          as: 'assigned_sales_rep',
-          attributes: ['id', 'name', 'email'],
-          required: false
-        },
-        { model: discount_codes, as: "discount_codes" }, // Added for status consistency
-        { model: payment_links, as: "payment_links" },   // Added for status consistency
-        { model: sales_lead_activities, as: "activities", required: false },
-        {
-          model: stream_project_booking,
-          as: 'booking',
-          include: [
-            {
-              model: assigned_crew,
-              as: 'assigned_crews',
-              required: false,
-              attributes: ['id', 'crew_member_id', 'status', 'project_id']
-            },
-            {
-              model: db.project_meetings,
-              as: 'meetings',
-              required: false,
-              attributes: ['meeting_id', 'meeting_type', 'meeting_status']
-            },
-            {
-              model: db.projects,
-              as: 'cms_project',
-              required: false,
-              attributes: ['project_id'],
-              include: [
-                {
-                  model: db.project_files,
-                  as: 'files',
-                  required: false,
-                  attributes: ['file_id', 'file_category', 'upload_status', 'is_deleted']
-                }
-              ]
-            },
-            {
-              model: quotes,
-              as: 'primary_quote',
-              include: [{ model: quote_line_items, as: 'line_items' }]
-            }
-          ]
-        }
-      ],
-      order: [['created_at', 'DESC']]
-    });
-
-    let processedLeads = await Promise.all(
-      leads.map(async (lead) => {
-        const leadJson = lead.toJSON();
-        const pricingData = await calculateLeadPricing(lead.booking);
-        const manualProgress = computeManualPaymentProgress(
-          leadJson.activities || [],
-          pricingData?.total || 0
-        );
-        const linkedSalesQuote = await sales_quotes.findOne({
-          where: { lead_id: lead.lead_id },
-          attributes: ['sales_quote_id'],
-          order: [['updated_at', 'DESC']]
-        });
-        const customQuoteFinancials = await getCustomQuoteFinancialDetails({
-          quoteId: linkedSalesQuote?.sales_quote_id || null,
-          bookingId: leadJson.booking?.stream_project_booking_id || null
-        });
-
-        // 1. Standardize Booking Status & Intent (Using same methods as Detail API)
-        const computedIntent = lead.intent ?? leadAssignmentService.getLeadIntent({ lead, booking: lead.booking });
-        let computedBookingStatus = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
-        if (manualProgress.hasFullPayment) {
-          computedBookingStatus = 'Booked';
-        } else if (manualProgress.isPartiallyPaid) {
-          computedBookingStatus = 'Partially Paid';
-        } else if (hasOutstandingAdditionalPayment(customQuoteFinancials)) {
-          computedBookingStatus = 'Partially Paid';
-        }
-
-        const pLinks = leadJson.payment_links || [];
-        let activePaymentLink = null;
-        if (pLinks.length > 0) {
-          const latestLink = [...pLinks].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
-          const now = new Date();
-          const expiryDate = latestLink.expires_at ? new Date(latestLink.expires_at) : null;
-          activePaymentLink = {
-            ...latestLink,
-            is_expired: expiryDate ? expiryDate < now : false
-          };
-        }
-
-        const payment_status = resolveLeadPaymentStatus({
-          booking: lead.booking,
-          activePaymentLink,
-          customQuoteFinancials
-        });
-        const quoteAmounts = resolveLeadQuoteAmounts({
-          linkedSalesQuote,
-          booking: lead.booking,
-          customQuoteFinancials
-        });
-
-        return {
-          ...leadJson,
-          potential_value: pricingData ? pricingData.total : 0,
-          booking_status: computedBookingStatus, 
-          intent: computedIntent,
-          payment_status: payment_status,
-          collected_amount: quoteAmounts.collected_amount,
-          outstanding_amount: quoteAmounts.outstanding_amount,
-          manual_payment_summary: manualProgress,
-        };
-      })
-    );
 
     const activeStatusFilter = (status || booking_status);
     const shootStatusRequested = isShootStatusFilterValue(activeStatusFilter);
+    const listFilters = {
+      activeStatusFilter,
+      shootStatusRequested,
+      intent,
+      cp_assignment,
+      production_filter
+    };
 
-    if (shootStatusRequested) {
-      processedLeads = processedLeads.filter((lead) => matchShootStatusFilter(lead.booking, activeStatusFilter));
-    }
+    const leadIdQueryStartedAt = Date.now();
+    const leadIdRows = await sales_leads.findAll({
+      where: whereClause,
+      attributes: ['lead_id'],
+      order: [['created_at', 'DESC']],
+      raw: true
+    });
+    getLeadsSafeLog('info', 'lead id query completed', {
+      request_id: requestId,
+      lead_id_count: leadIdRows.length,
+      duration_ms: Date.now() - leadIdQueryStartedAt
+    });
 
-    if (!shootStatusRequested && activeStatusFilter && activeStatusFilter !== 'All') {
-      processedLeads = processedLeads.filter((lead) => {
-        const leadStat = lead.booking_status.replace('–', '-').trim();
-        const filterStat = activeStatusFilter.replace('–', '-').trim();
-        return leadStat === filterStat;
-      });
-    }
+    const leadIds = leadIdRows
+      .map((row) => Number(row.lead_id))
+      .filter((id) => Number.isFinite(id));
 
-    if (intent && intent !== 'All') {
-      processedLeads = processedLeads.filter(
-        (lead) => lead.intent.toLowerCase() === intent.toLowerCase().trim()
-      );
-    }
+    let total = 0;
+    const paginatedLeads = [];
+    const externalFileCache = new Map();
 
-    if (cp_assignment && cp_assignment !== 'all') {
-      const normalizedCpAssignment = String(cp_assignment).toLowerCase().trim();
-      processedLeads = processedLeads.filter((lead) => {
-        const assignedCrews = Array.isArray(lead?.booking?.assigned_crews) ? lead.booking.assigned_crews : [];
-        const hasAssignedCrew = assignedCrews.length > 0;
+    for (let index = 0; index < leadIds.length; index += GET_LEADS_BATCH_SIZE) {
+      const batchNumber = Math.floor(index / GET_LEADS_BATCH_SIZE) + 1;
+      const totalBatches = Math.ceil(leadIds.length / GET_LEADS_BATCH_SIZE);
+      const batchStartedAt = Date.now();
+      const batchIds = leadIds.slice(index, index + GET_LEADS_BATCH_SIZE);
+      try {
+        getLeadsSafeLog('info', 'batch started', {
+          request_id: requestId,
+          batch_number: batchNumber,
+          total_batches: totalBatches,
+          batch_size: batchIds.length,
+          first_lead_id: batchIds[0] || null,
+          last_lead_id: batchIds[batchIds.length - 1] || null
+        });
 
-        if (normalizedCpAssignment === 'assigned') return hasAssignedCrew;
-        if (normalizedCpAssignment === 'not_assigned') return !hasAssignedCrew;
-        return true;
-      });
-    }
+        const batchQueryStartedAt = Date.now();
+        const batchLeads = await sales_leads.findAll({
+          where: {
+            lead_id: { [Op.in]: batchIds },
+            is_active: 1
+          },
+          include: getSalesLeadListIncludes(),
+          order: [['created_at', 'DESC']]
+        });
+        getLeadsSafeLog('info', 'batch query completed', {
+          request_id: requestId,
+          batch_number: batchNumber,
+          loaded_count: batchLeads.length,
+          duration_ms: Date.now() - batchQueryStartedAt
+        });
 
-    if (production_filter && production_filter !== 'all') {
-      const normalizedProductionFilter = String(production_filter).toLowerCase().trim();
-      const externalPreFileMap = new Map();
-      const externalPostFileMap = new Map();
-
-      if (
-        normalizedProductionFilter === 'pre_production_file_not_provided' ||
-        normalizedProductionFilter === 'post_production_file_not_uploaded'
-      ) {
-        const bookingIds = Array.from(
-          new Set(
-            processedLeads
-              .map((lead) => Number(lead?.booking?.stream_project_booking_id || lead?.booking_id))
-              .filter((id) => Number.isFinite(id) && id > 0)
-          )
+        const processStartedAt = Date.now();
+        const processedBatch = await mapWithConcurrency(
+          batchLeads,
+          GET_LEADS_PROCESS_CONCURRENCY,
+          (lead) => processSalesLeadForList(lead, logContext)
         );
+        getLeadsSafeLog('info', 'batch processing completed', {
+          request_id: requestId,
+          batch_number: batchNumber,
+          processed_count: processedBatch.length,
+          duration_ms: Date.now() - processStartedAt
+        });
 
-        await Promise.all(
-          bookingIds.map(async (bookingId) => {
-            if (normalizedProductionFilter === 'pre_production_file_not_provided') {
-              externalPreFileMap.set(bookingId, await hasExternalWorkspaceFiles(bookingId, 'pre'));
+        let batchMatched = 0;
+        for (const processedLead of processedBatch) {
+          try {
+            const matchesFilters = await salesLeadMatchesListFilters(
+              processedLead,
+              listFilters,
+              externalFileCache,
+              logContext
+            );
+            if (!matchesFilters) continue;
+
+            batchMatched += 1;
+            if (total >= offset && paginatedLeads.length < pageLimit) {
+              paginatedLeads.push(processedLead);
             }
-            if (normalizedProductionFilter === 'post_production_file_not_uploaded') {
-              externalPostFileMap.set(bookingId, await hasExternalWorkspaceFiles(bookingId, 'post'));
-            }
-          })
-        );
+            total += 1;
+          } catch (filterError) {
+            getLeadsSafeLog('error', 'filter evaluation failed; skipping lead', {
+              request_id: requestId,
+              batch_number: batchNumber,
+              lead_id: processedLead?.lead_id || null,
+              booking_id: processedLead?.booking?.stream_project_booking_id || processedLead?.booking_id || null,
+              error: getSafeErrorLog(filterError)
+            });
+          }
+        }
+
+        getLeadsSafeLog('info', 'batch completed', {
+          request_id: requestId,
+          batch_number: batchNumber,
+          matched_count: batchMatched,
+          running_total: total,
+          page_items_collected: paginatedLeads.length,
+          duration_ms: Date.now() - batchStartedAt
+        });
+      } catch (batchError) {
+        getLeadsSafeLog('error', 'batch failed; continuing with next batch', {
+          request_id: requestId,
+          batch_number: batchNumber,
+          batch_size: batchIds.length,
+          first_lead_id: batchIds[0] || null,
+          last_lead_id: batchIds[batchIds.length - 1] || null,
+          error: getSafeErrorLog(batchError)
+        });
       }
-
-      processedLeads = processedLeads.filter((lead) => {
-        const booking = lead?.booking;
-        if (!booking) return false;
-        const bookingId = Number(booking?.stream_project_booking_id || lead?.booking_id || 0);
-
-        if (normalizedProductionFilter === 'pre_production_file_not_provided') {
-          const hasExternalPreFiles = externalPreFileMap.get(bookingId) === true;
-          if (hasExternalPreFiles) return false;
-          return !hasPreProductionUploadEvidence(lead);
-        }
-
-        if (normalizedProductionFilter === 'pre_production_meeting_not_done') {
-          return !hasCompletedMeetingOfType(booking, 'pre_production');
-        }
-
-        if (normalizedProductionFilter === 'post_production_meeting_not_done') {
-          if (!isPostProductionEligible(booking)) return false;
-          return !hasCompletedMeetingOfType(booking, 'post_production');
-        }
-
-        if (normalizedProductionFilter === 'post_production_file_not_uploaded') {
-          if (!isPostProductionEligible(booking)) return false;
-          const hasExternalPostFiles = externalPostFileMap.get(bookingId) === true;
-          if (hasExternalPostFiles) return false;
-          return !hasCompletedFileInCategories(booking, ['EDIT_FINAL', 'CLIENT_DELIVERABLE']);
-        }
-
-        return true;
-      });
     }
 
-    const total = processedLeads.length;
-    const paginatedLeads = processedLeads.slice(offset, offset + pageLimit);
+    getLeadsSafeLog('info', 'request completed', {
+      request_id: requestId,
+      total,
+      returned_count: paginatedLeads.length,
+      external_file_cache_entries: externalFileCache.size,
+      duration_ms: Date.now() - requestStartedAt
+    });
 
-    res.json({
+    return res.json({
       success: true,
       data: {
         leads: paginatedLeads,
@@ -2392,8 +2330,13 @@ exports.getLeads = async (req, res) => {
         }
       }
     });
+
   } catch (error) {
-    console.error('getLeads Error:', error);
+    getLeadsSafeLog('error', 'request failed', {
+      request_id: requestId,
+      duration_ms: Date.now() - requestStartedAt,
+      error: getSafeErrorLog(error)
+    });
     res.status(500).json({
       success: false,
       message: 'Failed to fetch leads',
@@ -2401,6 +2344,7 @@ exports.getLeads = async (req, res) => {
     });
   }
 };
+
 
 exports.getClientLeads = async (req, res) => {
   try {
@@ -3538,6 +3482,370 @@ const computeManualPaymentProgress = (activities = [], totalAmount = 0) => {
     isPartiallyPaid: !hasFullPayment && paidAmount > 0 && pendingAmount > 0,
   };
 };
+
+const GET_LEADS_BATCH_SIZE = Math.max(parseInt(process.env.GET_LEADS_BATCH_SIZE || '50', 10), 1);
+const GET_LEADS_PROCESS_CONCURRENCY = Math.max(parseInt(process.env.GET_LEADS_PROCESS_CONCURRENCY || '5', 10), 1);
+
+function getSafeErrorLog(error) {
+  return {
+    name: error?.name || 'Error',
+    message: error?.message || String(error || 'Unknown error'),
+    code: error?.code || null,
+    errno: error?.errno || null,
+    sqlState: error?.parent?.sqlState || error?.original?.sqlState || null,
+    sqlMessage: error?.parent?.sqlMessage || error?.original?.sqlMessage || null,
+    stack: process.env.NODE_ENV === 'development' ? error?.stack : undefined
+  };
+}
+
+function getMemoryLog() {
+  const memory = process.memoryUsage();
+  return {
+    rss_mb: Math.round(memory.rss / 1024 / 1024),
+    heap_used_mb: Math.round(memory.heapUsed / 1024 / 1024),
+    heap_total_mb: Math.round(memory.heapTotal / 1024 / 1024),
+    external_mb: Math.round(memory.external / 1024 / 1024)
+  };
+}
+
+function getLeadsSafeLog(level, message, meta = {}) {
+  const logger = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
+  logger(`[getLeads] ${message}`, {
+    ...meta,
+    memory: getMemoryLog()
+  });
+}
+
+const getSalesLeadListIncludes = () => ([
+  {
+    model: users,
+    as: 'assigned_sales_rep',
+    attributes: ['id', 'name', 'email'],
+    required: false
+  },
+  { model: discount_codes, as: "discount_codes" },
+  { model: payment_links, as: "payment_links" },
+  { model: sales_lead_activities, as: "activities", required: false },
+  {
+    model: stream_project_booking,
+    as: 'booking',
+    include: [
+      {
+        model: assigned_crew,
+        as: 'assigned_crews',
+        required: false,
+        attributes: ['id', 'crew_member_id', 'status', 'project_id']
+      },
+      {
+        model: db.project_meetings,
+        as: 'meetings',
+        required: false,
+        attributes: ['meeting_id', 'meeting_type', 'meeting_status']
+      },
+      {
+        model: db.projects,
+        as: 'cms_project',
+        required: false,
+        attributes: ['project_id'],
+        include: [
+          {
+            model: db.project_files,
+            as: 'files',
+            required: false,
+            attributes: ['file_id', 'file_category', 'upload_status', 'is_deleted']
+          }
+        ]
+      },
+      {
+        model: quotes,
+        as: 'primary_quote',
+        include: [{ model: quote_line_items, as: 'line_items' }]
+      }
+    ]
+  }
+]);
+
+async function mapWithConcurrency(items, concurrency, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(concurrency, items.length);
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+        results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+      }
+    })
+  );
+
+  return results;
+}
+
+async function getCachedExternalWorkspaceFiles(cache, bookingId, phase) {
+  if (!bookingId) return false;
+  const cacheKey = `${phase}:${bookingId}`;
+  if (!cache.has(cacheKey)) {
+    cache.set(cacheKey, hasExternalWorkspaceFiles(bookingId, phase));
+  }
+  return cache.get(cacheKey);
+}
+
+async function processSalesLeadForList(lead, context = {}) {
+  try {
+    const startedAt = Date.now();
+    console.log("[getLeads] Processing lead:", {
+      request_id: context.requestId,
+      lead_id: lead?.lead_id
+    });
+
+    const leadJson = lead?.toJSON ? lead.toJSON() : {};
+
+    const pricingData = await calculateLeadPricing(lead?.booking).catch((err) => {
+      getLeadsSafeLog('warn', 'calculateLeadPricing failed', {
+        request_id: context.requestId,
+        lead_id: lead?.lead_id,
+        error: getSafeErrorLog(err)
+      });
+      return { total: 0 };
+    });
+
+    const manualProgress = computeManualPaymentProgress(
+      leadJson.activities || [],
+      pricingData?.total || 0
+    );
+
+    const linkedSalesQuote = await sales_quotes.findOne({
+      where: { lead_id: lead?.lead_id },
+      attributes: ['sales_quote_id'],
+      order: [['updated_at', 'DESC']]
+    }).catch((err) => {
+      getLeadsSafeLog('warn', 'sales_quotes.findOne failed', {
+        request_id: context.requestId,
+        lead_id: lead?.lead_id,
+        error: getSafeErrorLog(err)
+      });
+      return null;
+    });
+
+    const customQuoteFinancials = await getCustomQuoteFinancialDetails({
+      quoteId: linkedSalesQuote?.sales_quote_id || null,
+      bookingId: leadJson.booking?.stream_project_booking_id || null
+    }).catch((err) => {
+      getLeadsSafeLog('warn', 'getCustomQuoteFinancialDetails failed', {
+        request_id: context.requestId,
+        lead_id: lead?.lead_id,
+        booking_id: leadJson.booking?.stream_project_booking_id || null,
+        error: getSafeErrorLog(err)
+      });
+      return null;
+    });
+
+    const computedIntent =
+      lead?.intent ??
+      leadAssignmentService.getLeadIntent({
+        lead,
+        booking: lead?.booking
+      });
+
+    let computedBookingStatus =
+      leadAssignmentService.getLeadBookingStatus(
+        lead,
+        lead?.booking
+      );
+
+    if (manualProgress.hasFullPayment) {
+      computedBookingStatus = 'Booked';
+    } else if (manualProgress.isPartiallyPaid) {
+      computedBookingStatus = 'Partially Paid';
+    } else if (hasOutstandingAdditionalPayment(customQuoteFinancials)) {
+      computedBookingStatus = 'Partially Paid';
+    }
+
+    const pLinks = leadJson.payment_links || [];
+    let activePaymentLink = null;
+
+    if (pLinks.length > 0) {
+      const latestLink = [...pLinks].sort(
+        (a, b) =>
+          new Date(b.created_at) - new Date(a.created_at)
+      )[0];
+
+      const now = new Date();
+      const expiryDate = latestLink.expires_at
+        ? new Date(latestLink.expires_at)
+        : null;
+
+      activePaymentLink = {
+        ...latestLink,
+        is_expired: expiryDate
+          ? expiryDate < now
+          : false
+      };
+    }
+
+    const payment_status = resolveLeadPaymentStatus({
+      booking: lead?.booking,
+      activePaymentLink,
+      customQuoteFinancials
+    });
+
+    const quoteAmounts = resolveLeadQuoteAmounts({
+      linkedSalesQuote,
+      booking: lead?.booking,
+      customQuoteFinancials
+    });
+
+    const processedLead = {
+      ...leadJson,
+      potential_value: pricingData
+        ? pricingData.total
+        : 0,
+      booking_status:
+        computedBookingStatus || 'Unknown',
+      intent: computedIntent || '',
+      payment_status:
+        payment_status || 'Unknown',
+      collected_amount:
+        quoteAmounts?.collected_amount || 0,
+      outstanding_amount:
+        quoteAmounts?.outstanding_amount || 0,
+      manual_payment_summary:
+        manualProgress || {
+          hasFullPayment: false,
+          isPartiallyPaid: false
+        }
+    };
+
+    if (Date.now() - startedAt > 3000) {
+      getLeadsSafeLog('warn', 'slow lead processing', {
+        request_id: context.requestId,
+        lead_id: lead?.lead_id,
+        duration_ms: Date.now() - startedAt
+      });
+    }
+
+    return processedLead;
+
+  } catch (leadError) {
+    getLeadsSafeLog('error', 'Lead processing failed; returning fallback lead payload', {
+      request_id: context.requestId,
+      lead_id: lead?.lead_id,
+      error: getSafeErrorLog(leadError)
+    });
+
+    return {
+      ...(lead?.toJSON ? lead.toJSON() : {}),
+      potential_value: 0,
+      booking_status: 'Unknown',
+      intent: lead?.intent || '',
+      payment_status: 'Unknown',
+      collected_amount: 0,
+      outstanding_amount: 0,
+      manual_payment_summary: {
+        hasFullPayment: false,
+        isPartiallyPaid: false
+      }
+    };
+  }
+}
+
+async function salesLeadMatchesListFilters(lead, filters, externalFileCache, context = {}) {
+  const {
+    activeStatusFilter,
+    shootStatusRequested,
+    intent,
+    cp_assignment,
+    production_filter
+  } = filters;
+
+  if (shootStatusRequested && !matchShootStatusFilter(lead?.booking, activeStatusFilter)) {
+    return false;
+  }
+
+  if (!shootStatusRequested && activeStatusFilter && activeStatusFilter !== 'All') {
+    const leadStat = String(lead?.booking_status || '')
+      .replace('â€“', '-')
+      .trim();
+
+    const filterStat = String(activeStatusFilter || '')
+      .replace('â€“', '-')
+      .trim();
+
+    if (leadStat !== filterStat) return false;
+  }
+
+  if (intent && intent !== 'All') {
+    if (
+      String(lead?.intent || '')
+        .toLowerCase() !==
+      String(intent)
+        .toLowerCase()
+        .trim()
+    ) {
+      return false;
+    }
+  }
+
+  if (cp_assignment && cp_assignment !== 'all') {
+    const normalizedCpAssignment = String(cp_assignment).toLowerCase().trim();
+    const assignedCrews = Array.isArray(lead?.booking?.assigned_crews) ? lead.booking.assigned_crews : [];
+    const hasAssignedCrew = assignedCrews.length > 0;
+
+    if (normalizedCpAssignment === 'assigned' && !hasAssignedCrew) return false;
+    if (normalizedCpAssignment === 'not_assigned' && hasAssignedCrew) return false;
+  }
+
+  if (production_filter && production_filter !== 'all') {
+    const normalizedProductionFilter = String(production_filter).toLowerCase().trim();
+    const booking = lead?.booking;
+    if (!booking) return false;
+    const bookingId = Number(booking?.stream_project_booking_id || lead?.booking_id || 0);
+
+    if (normalizedProductionFilter === 'pre_production_file_not_provided') {
+      const startedAt = Date.now();
+      const hasExternalPreFiles = await getCachedExternalWorkspaceFiles(externalFileCache, bookingId, 'pre');
+      if (Date.now() - startedAt > 3000) {
+        getLeadsSafeLog('warn', 'slow external pre-production file check', {
+          request_id: context.requestId,
+          lead_id: lead?.lead_id,
+          booking_id: bookingId,
+          duration_ms: Date.now() - startedAt
+        });
+      }
+      if (hasExternalPreFiles) return false;
+      return !hasPreProductionUploadEvidence(lead);
+    }
+
+    if (normalizedProductionFilter === 'pre_production_meeting_not_done') {
+      return !hasCompletedMeetingOfType(booking, 'pre_production');
+    }
+
+    if (normalizedProductionFilter === 'post_production_meeting_not_done') {
+      if (!isPostProductionEligible(booking)) return false;
+      return !hasCompletedMeetingOfType(booking, 'post_production');
+    }
+
+    if (normalizedProductionFilter === 'post_production_file_not_uploaded') {
+      if (!isPostProductionEligible(booking)) return false;
+      const startedAt = Date.now();
+      const hasExternalPostFiles = await getCachedExternalWorkspaceFiles(externalFileCache, bookingId, 'post');
+      if (Date.now() - startedAt > 3000) {
+        getLeadsSafeLog('warn', 'slow external post-production file check', {
+          request_id: context.requestId,
+          lead_id: lead?.lead_id,
+          booking_id: bookingId,
+          duration_ms: Date.now() - startedAt
+        });
+      }
+      if (hasExternalPostFiles) return false;
+      return !hasCompletedFileInCategories(booking, ['EDIT_FINAL', 'CLIENT_DELIVERABLE']);
+    }
+  }
+
+  return true;
+}
 
 const resolveLeadTotalAmount = (leadRecord, bookingRecord) => {
   const pricing = parseJsonIfNeeded(leadRecord?.pricing_breakdown);
