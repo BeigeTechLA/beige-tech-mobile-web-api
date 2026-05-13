@@ -9704,10 +9704,9 @@ exports.deleteRole = async (req, res) => {
       });
     }
 
-    const assignedUsers = await db.user_roles.count({
+    const assignedUsers = await db.users.count({
       where: {
-        role_id,
-        is_active: 1
+        user_type: role_id
       }
     });
 
@@ -9787,8 +9786,8 @@ exports.getUsersWithRoles = async (req, res) => {
       search = '',
       status = '',
       role_id = '',
-      month = '', // format: 1-12
-      year = '', // optional, defaults current year
+      month = '',
+      year = '',
       sort_by = 'id',
       order = 'DESC'
     } = req.query;
@@ -9833,6 +9832,11 @@ exports.getUsersWithRoles = async (req, res) => {
       };
     }
 
+    // Role filter
+    if (role_id) {
+      userWhereCondition.user_type = role_id;
+    }
+
     const users = await db.users.findAll({
       where: userWhereCondition,
       attributes: [
@@ -9846,63 +9850,28 @@ exports.getUsersWithRoles = async (req, res) => {
       order: [[sortField, sortOrder]]
     });
 
-    const userIds = users.map(user => user.id);
-
-    const userRoles = await db.user_roles.findAll({
-      where: {
-        user_id: {
-          [Op.in]: userIds
-        },
-        is_active: 1
-      }
-    });
-
     const userTypes = await db.user_type.findAll({
       where: {
         is_active: 1
       }
     });
 
-    const roleMap = {};
     const userTypeMap = {};
 
     userTypes.forEach(type => {
-      roleMap[type.user_type_id] = type;
       userTypeMap[type.user_type_id] = type.user_role;
     });
 
-    const userRoleMap = {};
-
-    userRoles.forEach(userRole => {
-      userRoleMap[userRole.user_id] = userRole.role_id;
-    });
-
-    let formattedUsers = users.map(user => {
-      const assignedRoleId = userRoleMap[user.id] || null;
-      const assignedRole = assignedRoleId ? roleMap[assignedRoleId] : null;
-
-      return {
-        user_id: user.id,
-        name: user.name,
-        email: user.email,
-        role_id: assignedRole
-          ? assignedRole.user_type_id
-          : user.user_type,
-        role_name: assignedRole
-          ? assignedRole.user_role
-          : userTypeMap[user.user_type] || null,
-        created_at: user.created_at,
-        is_active: user.is_active,
-        status_label: user.is_active ? 'Active' : 'In-Active'
-      };
-    });
-
-    // Role filter
-    if (role_id) {
-      formattedUsers = formattedUsers.filter(
-        user => user.role_id == role_id
-      );
-    }
+    const formattedUsers = users.map(user => ({
+      user_id: user.id,
+      name: user.name,
+      email: user.email,
+      role_id: user.user_type,
+      role_name: userTypeMap[user.user_type] || null,
+      created_at: user.created_at,
+      is_active: user.is_active,
+      status_label: user.is_active ? 'Active' : 'In-Active'
+    }));
 
     return res.status(200).json({
       success: true,
@@ -9956,34 +9925,17 @@ exports.getUserRoleDetails = async (req, res) => {
       });
     }
 
-    const userType = await db.user_type.findOne({
+    const role = await db.user_type.findOne({
       where: {
         user_type_id: user.user_type,
         is_active: 1
       }
     });
 
-    const userRole = await db.user_roles.findOne({
-      where: {
-        user_id,
-        is_active: 1
-      }
-    });
-
-    let role = null;
     let formattedPermissions = {};
 
-    if (userRole) {
-      role = await db.user_type.findOne({
-        where: {
-          user_type_id: userRole.role_id,
-          is_active: 1
-        }
-      });
-
-      if (role) {
-        formattedPermissions = await formatRolePermissions(role.user_type_id);
-      }
+    if (role) {
+      formattedPermissions = await formatRolePermissions(role.user_type_id);
     }
 
     return res.status(200).json({
@@ -9994,7 +9946,7 @@ exports.getUserRoleDetails = async (req, res) => {
           name: user.name,
           email: user.email,
           user_type: user.user_type,
-          user_type_name: userType ? userType.user_role : null,
+          user_type_name: role ? role.user_role : null,
           is_active: user.is_active,
           status_label: user.is_active ? 'Active' : 'In-Active',
           created_at: user.created_at
@@ -10007,20 +9959,11 @@ exports.getUserRoleDetails = async (req, res) => {
               description: role.description || null,
               is_active: role.is_active,
               created_at: role.created_at,
-              updated_at: role.updated_at,
+              updated_at: role.updated_at
             }
-          : {
-              role_id: user.user_type,
-              name: userType ? userType.user_role : null,
-              description: 'Default role from user type',
-              is_active: 1
-            },
+          : null,
 
-        display_role: role
-          ? role.user_role
-          : userType
-            ? userType.user_role
-            : null,
+        display_role: role ? role.user_role : null,
 
         permissions: formattedPermissions
       }
@@ -10028,6 +9971,7 @@ exports.getUserRoleDetails = async (req, res) => {
 
   } catch (error) {
     console.error('Get User Role Details Error:', error);
+
     return res.status(500).json({
       success: false,
       message: 'Server error while fetching user role details',

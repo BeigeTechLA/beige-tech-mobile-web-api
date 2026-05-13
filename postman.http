@@ -2045,7 +2045,7 @@ Authorization: {{TOKEN}}
 }
 
 ### delete role
-DELETE {{URL}}admin/roles/delete/1 HTTP/1.1
+DELETE {{URL}}admin/roles/delete/9 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
