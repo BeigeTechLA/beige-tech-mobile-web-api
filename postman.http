@@ -38,8 +38,8 @@ POST {{URL}}auth/login HTTP/1.1
 Content-Type: application/json
 
 {
-  "email": "harsh.patel@revurge.com",
-  "password": "12345678"
+  "email": "sales@beigecorporation.io",
+  "password": "Sales@2026!"
 }
 
 ###
@@ -2063,7 +2063,7 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### get user role details
-GET {{URL}}admin/users/252/role-details HTTP/1.1
+GET {{URL}}admin/users/236/role-details HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -2077,13 +2077,13 @@ DELETE {{URL}}admin/delete-user/239 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
-### Assign user custom permissions
+### assign user custom permissions
 POST {{URL}}admin/users/permissions/assign HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "user_id": 249,
+  "user_id": 236,
   "permissions": {
     "dashboard": {
       "view": true,
@@ -2106,13 +2106,13 @@ Authorization: {{TOKEN}}
   }
 }
 
-### Update user custom permissions
+### update user custom permissions
 PUT {{URL}}admin/users/permissions/update HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "user_id": 249,
+  "user_id": 236,
   "permissions": {
     "dashboard": {
       "view": true,
@@ -2135,12 +2135,13 @@ Authorization: {{TOKEN}}
   }
 }
 
-### Get full user permissions 
-GET {{URL}}admin/users/249/permissions HTTP/1.1
-Content-Type: application/json
+### get full user permissions 
+GET {{URL}}admin/users/236/permissions HTTP/1.1
 Authorization: {{TOKEN}}
 
-### Delete single custom permission
-DELETE {{URL}}admin/users/249/permissions/15 HTTP/1.1
-Content-Type: application/json
+### delete one permission for a user
+### 236- user_id
+### users - module_key: permission module name from permissions.module_key
+### create - action_key: permission action from permissions.action_key
+DELETE {{URL}}admin/users/236/permissions/users/create
 Authorization: {{TOKEN}}

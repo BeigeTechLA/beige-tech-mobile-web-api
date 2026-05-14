@@ -77,7 +77,6 @@ var _sales_quote_activities = require("./sales_quote_activities");
 var _sales_quote_versions = require("./sales_quote_versions");
 var _sales_shoot_types = require("./sales_shoot_types");
 var _shoot_types = require("./shoot_types");
-var _roles = require("./roles");
 var _permissions = require("./permissions");
 var _role_permissions = require("./role_permissions");
 var _user_roles = require("./user_roles");
@@ -165,7 +164,6 @@ function initModels(sequelize) {
   var sales_shoot_types = _sales_shoot_types(sequelize, DataTypes);
   
   var shoot_types = _shoot_types(sequelize, DataTypes);
-  var roles = _roles(sequelize, DataTypes);
   var permissions = _permissions(sequelize, DataTypes);
   var role_permissions = _role_permissions(sequelize, DataTypes);
   var user_roles = _user_roles(sequelize, DataTypes);
@@ -556,14 +554,15 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
   sales_quote_versions.belongsTo(sales_quote_activities, { as: "source_activity", foreignKey: "source_activity_id" });
   sales_quote_activities.hasMany(sales_quote_versions, { as: "created_versions", foreignKey: "source_activity_id" });
 
-  user_roles.belongsTo(roles, {
+  user_roles.belongsTo(user_type, {
     as: "role",
     foreignKey: "role_id"
   });
 
-  roles.hasMany(user_roles, {
+  user_type.hasMany(user_roles, {
     as: "user_roles",
-    foreignKey: "role_id"
+    foreignKey: "role_id",
+    sourceKey: "user_type_id"
   });
 
   user_roles.belongsTo(users, {
@@ -576,14 +575,15 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
     foreignKey: "user_id"
   });
 
-  role_permissions.belongsTo(roles, {
+  role_permissions.belongsTo(user_type, {
     as: "role",
     foreignKey: "role_id"
   });
 
-  roles.hasMany(role_permissions, {
+  user_type.hasMany(role_permissions, {
     as: "role_permissions",
-    foreignKey: "role_id"
+    foreignKey: "role_id",
+    sourceKey: "user_type_id"
   });
 
   role_permissions.belongsTo(permissions, {
@@ -697,7 +697,6 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
     sales_quote_versions,
     sales_shoot_types,
     shoot_types,
-    roles,
     permissions,
     role_permissions,
     user_roles,

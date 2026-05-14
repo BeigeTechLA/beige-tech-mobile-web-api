@@ -798,7 +798,7 @@ const getCombinedUserPermissions = async (userId, roleId) => {
     include: [
       {
         model: db.permissions,
-        as: 'permissionDetails'
+        as: 'permission'
       }
     ]
   });
@@ -823,7 +823,7 @@ const getCombinedUserPermissions = async (userId, roleId) => {
   // ROLE DEFAULT PERMISSIONS
   // =========================================
   rolePermissions.forEach(item => {
-    const permission = item.permissionDetails;
+    const permission = item.permission;
 
     if (!permission) return;
 

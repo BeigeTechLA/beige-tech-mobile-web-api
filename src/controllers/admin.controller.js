@@ -9404,29 +9404,40 @@ const formatUserTypeAsRole = (role, totalUsers = 0) => ({
   total_users: totalUsers
 });
 
-const buildPermissionKeys = (permissions = {}) => {
-  const permissionKeys = [];
+const buildPermissionEntries = (permissions = {}, includeDenied = false) => {
+  const permissionEntries = [];
 
   Object.keys(permissions || {}).forEach(module => {
     const actions = permissions[module];
 
     if (Array.isArray(actions)) {
       actions.forEach(action => {
-        permissionKeys.push(`${module}.${action}`);
+        permissionEntries.push({
+          permission_key: `${module}.${action}`,
+          is_allowed: 1
+        });
       });
       return;
     }
 
     if (actions && typeof actions === 'object') {
       Object.keys(actions).forEach(action => {
-        if (actions[action]) {
-          permissionKeys.push(`${module}.${action}`);
+        const isAllowed = Boolean(actions[action]);
+        if (isAllowed || includeDenied) {
+          permissionEntries.push({
+            permission_key: `${module}.${action}`,
+            is_allowed: isAllowed ? 1 : 0
+          });
         }
       });
     }
   });
 
-  return permissionKeys;
+  return permissionEntries;
+};
+
+const buildPermissionKeys = (permissions = {}) => {
+  return buildPermissionEntries(permissions).map(entry => entry.permission_key);
 };
 
 const syncRolePermissions = async (roleId, permissions = {}) => {
@@ -9479,7 +9490,7 @@ const formatRolePermissions = async (roleId) => {
   const formattedPermissions = {};
 
   rolePermissions.forEach(item => {
-    const permission = item.permission || item.permissionDetails;
+    const permission = item.permission;
 
     if (!permission) {
       return;
@@ -9504,7 +9515,12 @@ const formatRolePermissions = async (roleId) => {
 };
 
 const syncUserPermissions = async (userId, permissions = {}) => {
-  const permissionKeys = buildPermissionKeys(permissions);
+  const permissionEntries = buildPermissionEntries(permissions, true);
+  const permissionKeys = permissionEntries.map(entry => entry.permission_key);
+  const permissionEntryMap = permissionEntries.reduce((map, entry) => {
+    map[entry.permission_key] = entry.is_allowed;
+    return map;
+  }, {});
 
   await db.user_permissions.update(
     { is_active: 0 },
@@ -9527,7 +9543,7 @@ const syncUserPermissions = async (userId, permissions = {}) => {
   const userPermissionData = permissionRecords.map(permission => ({
     user_id: userId,
     permission_id: permission.permission_id,
-    is_allowed: 1,
+    is_allowed: permissionEntryMap[permission.permission_key] === 1 ? 1 : 0,
     is_active: 1
   }));
 
@@ -10125,7 +10141,10 @@ exports.getUserRoleDetails = async (req, res) => {
     let formattedPermissions = {};
 
     if (role) {
-      formattedPermissions = await formatRolePermissions(role.user_type_id);
+      formattedPermissions = await getCombinedUserPermissions(
+        user.id,
+        role.user_type_id
+      );
     }
 
     return res.status(200).json({
@@ -10180,8 +10199,10 @@ exports.getPermissionModules = async (req, res) => {
         is_active: 1
       },
       attributes: [
+        'permission_id',
         'module_key',
-        'action_key'
+        'action_key',
+        'permission_key'
       ],
       order: [
         ['module_key', 'ASC'],
@@ -10202,8 +10223,12 @@ exports.getPermissionModules = async (req, res) => {
         };
       }
 
-      if (!moduleMap[module].actions.includes(action)) {
-        moduleMap[module].actions.push(action);
+      if (!moduleMap[module].actions.some(item => item.action_key === action)) {
+        moduleMap[module].actions.push({
+          permission_id: permission.permission_id,
+          action_key: action,
+          permission_key: permission.permission_key
+        });
       }
     });
 
@@ -10436,6 +10461,20 @@ exports.updateUserPermissions = async (req, res) => {
       });
     }
 
+    const user = await db.users.findOne({
+      where: {
+        id: user_id,
+        is_active: 1
+      }
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
     await syncUserPermissions(user_id, permissions);
 
     return res.status(200).json({
@@ -10496,19 +10535,84 @@ exports.getUserPermissions = async (req, res) => {
 
 exports.deleteUserPermission = async (req, res) => {
   try {
-    const { user_id, permission_id } = req.params;
+    const { user_id, permission_id, module_key, action_key } = req.params;
 
-    await db.user_permissions.update(
-      {
-        is_active: 0
-      },
-      {
-        where: {
-          user_id,
-          permission_id
-        }
+    const user = await db.users.findOne({
+      where: {
+        id: user_id,
+        is_active: 1
       }
-    );
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const permissionWhere = {
+      is_active: 1
+    };
+
+    if (module_key && action_key) {
+      permissionWhere.module_key = module_key;
+      permissionWhere.action_key = action_key;
+    } else if (permission_id && /^\d+$/.test(String(permission_id))) {
+      permissionWhere.permission_id = permission_id;
+    } else if (permission_id) {
+      permissionWhere.permission_key = permission_id;
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: 'Permission identifier is required'
+      });
+    }
+
+    const permission = await db.permissions.findOne({
+      where: permissionWhere
+    });
+
+    if (!permission) {
+      return res.status(404).json({
+        success: false,
+        message: 'Permission not found'
+      });
+    }
+
+    const rolePermission = await db.role_permissions.findOne({
+      where: {
+        role_id: user.user_type,
+        permission_id: permission.permission_id,
+        is_active: 1
+      }
+    });
+
+    if (rolePermission) {
+      await db.user_permissions.bulkCreate(
+        [{
+          user_id,
+          permission_id: permission.permission_id,
+          is_allowed: 0,
+          is_active: 1
+        }],
+        {
+          updateOnDuplicate: ['is_active', 'is_allowed']
+        }
+      );
+    } else {
+      await db.user_permissions.update(
+        {
+          is_active: 0
+        },
+        {
+          where: {
+            user_id,
+            permission_id: permission.permission_id
+          }
+        }
+      );
+    }
 
     return res.status(200).json({
       success: true,

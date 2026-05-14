@@ -103,6 +103,7 @@ router.delete('/delete-user/:user_id', authMiddleware, admin.deleteUser);
 router.post('/users/permissions/assign', authMiddleware, admin.assignPermissionsToUser);
 router.put('/users/permissions/update', authMiddleware, admin.updateUserPermissions);
 router.get('/users/:user_id/permissions', authMiddleware, admin.getUserPermissions);
+router.delete('/users/:user_id/permissions/:module_key/:action_key', authMiddleware, admin.deleteUserPermission);
 router.delete('/users/:user_id/permissions/:permission_id', authMiddleware, admin.deleteUserPermission);
 
 module.exports = router;

@@ -5,7 +5,6 @@ const initModels = require('./init-models');
 const salesRepAvailabilityFactory = require('./sales_rep_availability');
 const salesRepLiveStatusFactory = require('./sales_rep_live_status');
 const salesRepStatusActivityFactory = require('./sales_rep_status_activity');
-const role_permissions = require('./role_permissions');
 
 // initialize all auto-generated models properly
 const models = initModels(sequelize);
@@ -75,11 +74,6 @@ if (models.quotes && models.signatures) {
   models.signatures.belongsTo(models.quotes, { foreignKey: 'quote_id' });
   models.quotes.hasOne(models.signatures, { foreignKey: 'quote_id' });
 }
-
-models.role_permissions.belongsTo(models.permissions, {
-  foreignKey: 'permission_id',
-  as: 'permissionDetails'
-});
 
 models.sequelize = sequelize;
 models.Sequelize = require('sequelize');
