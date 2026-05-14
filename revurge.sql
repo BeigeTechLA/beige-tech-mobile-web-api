@@ -1393,8 +1393,6 @@ ALTER TABLE account_credit_ledger
     FOREIGN KEY (source_account_credit_ledger_id) REFERENCES account_credit_ledger(account_credit_ledger_id)
     ON DELETE SET NULL ON UPDATE CASCADE;
 
--- 14-05-26 manual credit issuance metadata
-
 ALTER TABLE account_credit_ledger
   ADD COLUMN credit_type VARCHAR(50) NULL AFTER source,
   ADD COLUMN expires_at DATETIME NULL AFTER credit_type,
