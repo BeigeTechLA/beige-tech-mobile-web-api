@@ -1997,14 +1997,14 @@ Authorization: {{TOKEN}}
 GET {{URL}}finance/transactions HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
-curl http://localhost:5001/v1/sales/leads?page=1\&limit=10
+
 ### 
 GET {{URL}}finance/shoots HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### 
-GET {{URL}}finance/shoots/1099 HTTP/1.1
+GET {{URL}}finance/shoots/1098 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -2081,3 +2081,150 @@ Authorization: {{TOKEN}}
   },
   "notify_user": true
 }
+
+### ADMIN DISPUTES DASHBOARD
+GET {{URL}}finance/admin/disputes/dashboard?page=1&limit=10&status=open HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### ADMIN DISPUTE LIST
+GET {{URL}}finance/admin/disputes?page=1&limit=10&search=DIS-001&status=open&category=quality&raised_by_type=client HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### ADMIN DISPUTE DETAILS
+GET {{URL}}finance/admin/disputes/1 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### CREATE ADMIN DISPUTE
+POST {{URL}}finance/admin/disputes HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "booking_id": 1098,
+  "invoice_send_history_id": null,
+  "client_user_id": 241,
+  "creator_id": 2120,
+  "raised_by_type": "admin",
+  "category": "quality",
+  "subject": "Wedding photos quality issue",
+  "description": "Client reported blurry final photos and missing deliverables.",
+  "priority": "high",
+  "currency": "USD",
+  "disputed_amount": 5000,
+  "impacted_payout_amount": 4500,
+  "comment": "Initial admin dispute created after client complaint."
+}
+
+### UPDATE ADMIN DISPUTE
+PATCH {{URL}}finance/admin/disputes/1 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "subject": "Updated wedding deliverable issue",
+  "description": "Expanded issue after reviewing files.",
+  "priority": "urgent",
+  "status": "in_review",
+  "notes": "Admin escalated priority after evidence review.",
+  "impacted_payout_amount": 800
+}
+
+### ADD DISPUTE COMMENT
+POST {{URL}}finance/admin/disputes/1/comments HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "comment_type": "internal",
+  "visibility": "internal",
+  "body": "Support team is reviewing original raw files from creator."
+}
+
+### ADD DISPUTE ATTACHMENT
+POST {{URL}}finance/admin/disputes/1/attachments HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "attachments": [
+    {
+      "file_name": "blurred_sample_photos.zip",
+      "file_path": "finance/disputes/blurred_sample_photos.zip",
+      "file_url": "https://your-s3-url.com/blurred_sample_photos.zip",
+      "attachment_type": "evidence"
+    },
+    {
+      "file_name": "contract.pdf",
+      "file_path": "finance/disputes/contract.pdf",
+      "file_url": "https://your-s3-url.com/contract.pdf",
+      "attachment_type": "invoice"
+    }
+  ]
+}
+
+### HOLD CREATOR PAYOUT
+POST {{URL}}finance/admin/disputes/1/hold-payout HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "creator_id": 2120,
+  "creator_earning_id": 3,
+  "creator_payout_request_id": 1,
+  "hold_amount": 800,
+  "currency": "USD",
+  "reason": "Payout frozen pending dispute resolution."
+}
+
+### RESOLVE DISPUTE
+POST {{URL}}finance/admin/disputes/1/resolve HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "resolution_type": "payout_release",
+  "resolution_notes": "Dispute resolved after evidence review. Creator payout released.",
+  "release_payout_holds": true
+}
+
+### REFUND CLIENT (FULL/PARTIAL)
+POST {{URL}}finance/admin/disputes/1/reject-refund HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "resolution_type": "partial_refund",
+  "refund_amount": 2500,
+  "resolution_notes": "Partial refund approved for incomplete deliverables."
+}
+
+### ESCALATE DISPUTE
+POST {{URL}}finance/admin/disputes/1/escalate HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "priority": "urgent",
+  "reason": "High-value dispute requiring senior admin review.",
+  "assigned_team": "Finance Resolution Team",
+  "notes": "Escalated due to payout and refund complexity."
+}
+
+### FILTER EXAMPLES
+GET {{URL}}finance/admin/disputes?status=in_review HTTP/1.1
+Authorization: {{TOKEN}}
+
+###
+GET {{URL}}finance/admin/disputes?raised_by_type=client HTTP/1.1
+Authorization: {{TOKEN}}
+
+###
+GET {{URL}}finance/admin/disputes?category=refund HTTP/1.1
+Authorization: {{TOKEN}}
+
+###
+GET {{URL}}finance/admin/disputes?date_from=2026-05-01&date_to=2026-05-31 HTTP/1.1
+Authorization: {{TOKEN}}

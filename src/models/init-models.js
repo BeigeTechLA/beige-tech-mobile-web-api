@@ -58,6 +58,11 @@ var _creator_wallets = require("./creator_wallets");
 var _creator_payout_accounts = require("./creator_payout_accounts");
 var _creator_payout_requests = require("./creator_payout_requests");
 var _creator_payout_transactions = require("./creator_payout_transactions");
+var _finance_disputes = require("./finance_disputes");
+var _finance_dispute_comments = require("./finance_dispute_comments");
+var _finance_dispute_attachments = require("./finance_dispute_attachments");
+var _finance_dispute_resolution_logs = require("./finance_dispute_resolution_logs");
+var _finance_dispute_payout_holds = require("./finance_dispute_payout_holds");
 
 // CMS Approval States Models
 var _projects = require("./projects");
@@ -146,6 +151,11 @@ function initModels(sequelize) {
   var creator_payout_accounts = _creator_payout_accounts(sequelize, DataTypes);
   var creator_payout_requests = _creator_payout_requests(sequelize, DataTypes);
   var creator_payout_transactions = _creator_payout_transactions(sequelize, DataTypes);
+  var finance_disputes = _finance_disputes(sequelize, DataTypes);
+  var finance_dispute_comments = _finance_dispute_comments(sequelize, DataTypes);
+  var finance_dispute_attachments = _finance_dispute_attachments(sequelize, DataTypes);
+  var finance_dispute_resolution_logs = _finance_dispute_resolution_logs(sequelize, DataTypes);
+  var finance_dispute_payout_holds = _finance_dispute_payout_holds(sequelize, DataTypes);
 
   // CMS Approval States Models
   var projects = _projects(sequelize, DataTypes);
@@ -256,6 +266,47 @@ function initModels(sequelize) {
   creator_payout_requests.hasMany(creator_payout_transactions, { as: "payout_transactions", foreignKey: "creator_payout_request_id" });
   creator_payout_transactions.belongsTo(creator_payout_accounts, { as: "payout_account", foreignKey: "creator_payout_account_id" });
   creator_payout_accounts.hasMany(creator_payout_transactions, { as: "payout_transactions", foreignKey: "creator_payout_account_id" });
+
+  // Finance disputes relationships (Phase 4A)
+  finance_disputes.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id" });
+  stream_project_booking.hasMany(finance_disputes, { as: "finance_disputes", foreignKey: "booking_id" });
+  finance_disputes.belongsTo(invoice_send_history, { as: "invoice", foreignKey: "invoice_send_history_id" });
+  invoice_send_history.hasMany(finance_disputes, { as: "finance_disputes", foreignKey: "invoice_send_history_id" });
+  finance_disputes.belongsTo(finance_transactions, { as: "finance_transaction", foreignKey: "finance_transaction_id" });
+  finance_transactions.hasMany(finance_disputes, { as: "finance_disputes", foreignKey: "finance_transaction_id" });
+  finance_disputes.belongsTo(users, { as: "client", foreignKey: "client_user_id" });
+  users.hasMany(finance_disputes, { as: "client_finance_disputes", foreignKey: "client_user_id" });
+  finance_disputes.belongsTo(crew_members, { as: "creator", foreignKey: "creator_id" });
+  crew_members.hasMany(finance_disputes, { as: "finance_disputes", foreignKey: "creator_id" });
+  finance_disputes.belongsTo(users, { as: "raised_by_user", foreignKey: "raised_by_user_id" });
+  finance_disputes.belongsTo(crew_members, { as: "raised_by_creator", foreignKey: "raised_by_creator_id" });
+  finance_disputes.belongsTo(users, { as: "created_by", foreignKey: "created_by_user_id" });
+  finance_disputes.belongsTo(users, { as: "updated_by", foreignKey: "updated_by_user_id" });
+  finance_disputes.belongsTo(users, { as: "resolved_by", foreignKey: "resolved_by_user_id" });
+
+  finance_dispute_comments.belongsTo(finance_disputes, { as: "dispute", foreignKey: "finance_dispute_id" });
+  finance_disputes.hasMany(finance_dispute_comments, { as: "comments", foreignKey: "finance_dispute_id" });
+  finance_dispute_comments.belongsTo(users, { as: "created_by", foreignKey: "created_by_user_id" });
+  finance_dispute_comments.belongsTo(crew_members, { as: "created_by_creator", foreignKey: "created_by_creator_id" });
+
+  finance_dispute_attachments.belongsTo(finance_disputes, { as: "dispute", foreignKey: "finance_dispute_id" });
+  finance_disputes.hasMany(finance_dispute_attachments, { as: "attachments", foreignKey: "finance_dispute_id" });
+  finance_dispute_attachments.belongsTo(users, { as: "uploaded_by", foreignKey: "uploaded_by_user_id" });
+
+  finance_dispute_resolution_logs.belongsTo(finance_disputes, { as: "dispute", foreignKey: "finance_dispute_id" });
+  finance_disputes.hasMany(finance_dispute_resolution_logs, { as: "resolution_logs", foreignKey: "finance_dispute_id" });
+  finance_dispute_resolution_logs.belongsTo(users, { as: "performed_by", foreignKey: "performed_by_user_id" });
+
+  finance_dispute_payout_holds.belongsTo(finance_disputes, { as: "dispute", foreignKey: "finance_dispute_id" });
+  finance_disputes.hasMany(finance_dispute_payout_holds, { as: "payout_holds", foreignKey: "finance_dispute_id" });
+  finance_dispute_payout_holds.belongsTo(crew_members, { as: "creator", foreignKey: "creator_id" });
+  crew_members.hasMany(finance_dispute_payout_holds, { as: "finance_dispute_payout_holds", foreignKey: "creator_id" });
+  finance_dispute_payout_holds.belongsTo(creator_earnings, { as: "creator_earning", foreignKey: "creator_earning_id" });
+  creator_earnings.hasMany(finance_dispute_payout_holds, { as: "finance_dispute_payout_holds", foreignKey: "creator_earning_id" });
+  finance_dispute_payout_holds.belongsTo(creator_payout_requests, { as: "payout_request", foreignKey: "creator_payout_request_id" });
+  creator_payout_requests.hasMany(finance_dispute_payout_holds, { as: "finance_dispute_payout_holds", foreignKey: "creator_payout_request_id" });
+  finance_dispute_payout_holds.belongsTo(users, { as: "held_by", foreignKey: "held_by_user_id" });
+  finance_dispute_payout_holds.belongsTo(users, { as: "released_by", foreignKey: "released_by_user_id" });
 
   assignment_checklist.belongsTo(checklist_master, { as: "checklist", foreignKey: "checklist_id"});
   checklist_master.hasMany(assignment_checklist, { as: "assignment_checklists", foreignKey: "checklist_id"});
@@ -707,6 +758,11 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
     creator_payout_accounts,
     creator_payout_requests,
     creator_payout_transactions,
+    finance_disputes,
+    finance_dispute_comments,
+    finance_dispute_attachments,
+    finance_dispute_resolution_logs,
+    finance_dispute_payout_holds,
     project_form_submissions,
     quote_catalog_items,
     sales_ai_editing_types,
