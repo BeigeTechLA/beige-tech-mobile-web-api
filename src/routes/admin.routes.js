@@ -100,5 +100,9 @@ router.get('/users/roles', authMiddleware, admin.getUsersWithRoles);
 router.get('/users/:user_id/role-details', authMiddleware, admin.getUserRoleDetails);
 router.get('/permissions/modules', authMiddleware, admin.getPermissionModules);
 router.delete('/delete-user/:user_id', authMiddleware, admin.deleteUser);
+router.post('/users/permissions/assign', authMiddleware, admin.assignPermissionsToUser);
+router.put('/users/permissions/update', authMiddleware, admin.updateUserPermissions);
+router.get('/users/:user_id/permissions', authMiddleware, admin.getUserPermissions);
+router.delete('/users/:user_id/permissions/:permission_id', authMiddleware, admin.deleteUserPermission);
 
 module.exports = router;

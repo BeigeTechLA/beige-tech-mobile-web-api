@@ -788,6 +788,86 @@ exports.verifyEmail = async (req, res) => {
 
 // ==================== LOGIN ====================
 
+const getCombinedUserPermissions = async (userId, roleId) => {
+  // Get role permissions
+  const rolePermissions = await db.role_permissions.findAll({
+    where: {
+      role_id: roleId,
+      is_active: 1
+    },
+    include: [
+      {
+        model: db.permissions,
+        as: 'permissionDetails'
+      }
+    ]
+  });
+
+  // Get user custom permissions
+  const userPermissions = await db.user_permissions.findAll({
+    where: {
+      user_id: userId,
+      is_active: 1
+    },
+    include: [
+      {
+        model: db.permissions,
+        as: 'permission'
+      }
+    ]
+  });
+
+  const formattedPermissions = {};
+
+  // =========================================
+  // ROLE DEFAULT PERMISSIONS
+  // =========================================
+  rolePermissions.forEach(item => {
+    const permission = item.permissionDetails;
+
+    if (!permission) return;
+
+    const module = permission.module_key;
+    const action = permission.action_key;
+
+    if (!formattedPermissions[module]) {
+      formattedPermissions[module] = {
+        view: false,
+        create: false,
+        edit: false,
+        delete: false
+      };
+    }
+
+    formattedPermissions[module][action] = true;
+  });
+
+  // =========================================
+  // USER CUSTOM OVERRIDE PERMISSIONS
+  // =========================================
+  userPermissions.forEach(item => {
+    const permission = item.permission;
+
+    if (!permission) return;
+
+    const module = permission.module_key;
+    const action = permission.action_key;
+
+    if (!formattedPermissions[module]) {
+      formattedPermissions[module] = {
+        view: false,
+        create: false,
+        edit: false,
+        delete: false
+      };
+    }
+
+    formattedPermissions[module][action] = item.is_allowed === 1;
+  });
+
+  return formattedPermissions;
+};
+
 /**
  * Login user with email/password or phone/OTP
  * POST /auth/login
@@ -878,29 +958,10 @@ exports.login = async (req, res) => {
       // Generate tokens
       const { token, refreshToken } = generateTokens(user.id, role);
 
-      const userRoles = await db.user_roles.findAll({
-        where: {
-          user_id: user.id,
-          is_active: 1
-        }
-      });
-
-      const roleIds = userRoles.map(role => role.role_id);
-
-      const rolePermissions = await db.role_permissions.findAll({
-        where: {
-          role_id: {
-            [Op.in]: roleIds
-          },
-          is_active: 1
-        },
-        include: [{
-          model: db.permissions,
-          as: 'permissionDetails'
-        }]
-      });
-
-      const permissions = rolePermissions.map(item => item.permissionDetails.permission_key);
+      const permissions = await getCombinedUserPermissions(
+        user.id,
+        user.user_type
+      );
 
       // const permissions = getPermissionsForRole(role);
 
@@ -1029,7 +1090,11 @@ const affiliate = await Affiliate.findOne({
 affiliate_id = affiliate ? affiliate.affiliate_id : null;
 
       const { token, refreshToken } = generateTokens(user.id, role);
-      const permissions = getPermissionsForRole(role);
+      
+      const permissions = await getCombinedUserPermissions(
+        user.id,
+        user.user_type
+      );
 
       return res.json({
         success: true,

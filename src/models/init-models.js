@@ -81,6 +81,7 @@ var _roles = require("./roles");
 var _permissions = require("./permissions");
 var _role_permissions = require("./role_permissions");
 var _user_roles = require("./user_roles");
+var _user_permissions = require("./user_permissions");
 
 function initModels(sequelize) {
   var account_credit_ledger = _account_credit_ledger(sequelize, DataTypes);
@@ -168,6 +169,7 @@ function initModels(sequelize) {
   var permissions = _permissions(sequelize, DataTypes);
   var role_permissions = _role_permissions(sequelize, DataTypes);
   var user_roles = _user_roles(sequelize, DataTypes);
+  var user_permissions = _user_permissions(sequelize, DataTypes);
 
   account_credit_ledger.belongsTo(users, { as: "user", foreignKey: "user_id" });
   users.hasMany(account_credit_ledger, { as: "account_credit_entries", foreignKey: "user_id" });
@@ -594,6 +596,28 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
     foreignKey: "permission_id"
   });
 
+  // User -> user_permissions
+  user_permissions.belongsTo(users, {
+    as: "user",
+    foreignKey: "user_id"
+  });
+
+  users.hasMany(user_permissions, {
+    as: "user_permissions",
+    foreignKey: "user_id"
+  });
+
+  // Permission -> user_permissions
+  user_permissions.belongsTo(permissions, {
+    as: "permission",
+    foreignKey: "permission_id"
+  });
+
+  permissions.hasMany(user_permissions, {
+    as: "user_permissions",
+    foreignKey: "permission_id"
+  });
+
   return {
     account_credit_ledger,
     activity_logs,
@@ -676,7 +700,8 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
     roles,
     permissions,
     role_permissions,
-    user_roles
+    user_roles,
+    user_permissions,
   };
 }
 module.exports = initModels;

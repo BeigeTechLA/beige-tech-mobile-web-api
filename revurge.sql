@@ -1253,3 +1253,23 @@ ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMES
 
 ALTER TABLE `client_lead_activities` ADD `is_active` BOOLEAN NOT NULL DEFAULT TRUE AFTER `created_at`;
 ALTER TABLE `affiliates` ADD `is_active` BOOLEAN NOT NULL DEFAULT TRUE AFTER `updated_at`;
+
+-- 14-05-26
+
+CREATE TABLE `user_permissions` (
+  `user_permission_id` INT NOT NULL AUTO_INCREMENT,
+  `user_id` INT NOT NULL,
+  `permission_id` INT NOT NULL,
+  `is_allowed` TINYINT(1) NOT NULL DEFAULT 1,
+  `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`user_permission_id`),
+  UNIQUE KEY `unique_user_permission` (`user_id`, `permission_id`),
+  KEY `fk_user_permissions_user_id` (`user_id`),
+  KEY `fk_user_permissions_permission_id` (`permission_id`),
+  CONSTRAINT `fk_user_permissions_user_id`
+    FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_user_permissions_permission_id`
+    FOREIGN KEY (`permission_id`) REFERENCES `permissions` (`permission_id`) ON DELETE CASCADE
+);

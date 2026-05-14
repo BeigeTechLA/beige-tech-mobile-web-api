@@ -9503,6 +9503,101 @@ const formatRolePermissions = async (roleId) => {
   return formattedPermissions;
 };
 
+const syncUserPermissions = async (userId, permissions = {}) => {
+  const permissionKeys = buildPermissionKeys(permissions);
+
+  await db.user_permissions.update(
+    { is_active: 0 },
+    {
+      where: { user_id: userId }
+    }
+  );
+
+  if (!permissionKeys.length) return;
+
+  const permissionRecords = await db.permissions.findAll({
+    where: {
+      permission_key: {
+        [Op.in]: permissionKeys
+      },
+      is_active: 1
+    }
+  });
+
+  const userPermissionData = permissionRecords.map(permission => ({
+    user_id: userId,
+    permission_id: permission.permission_id,
+    is_allowed: 1,
+    is_active: 1
+  }));
+
+  if (userPermissionData.length) {
+    await db.user_permissions.bulkCreate(userPermissionData, {
+      updateOnDuplicate: ['is_active', 'is_allowed']
+    });
+  }
+};
+
+const formatUserPermissions = async (userId) => {
+  const userPermissions = await db.user_permissions.findAll({
+    where: {
+      user_id: userId,
+      is_active: 1
+    },
+    include: [
+      {
+        model: db.permissions,
+        as: 'permission'
+      }
+    ]
+  });
+
+  const formattedPermissions = {};
+
+  userPermissions.forEach(item => {
+    const permission = item.permission;
+    if (!permission) return;
+
+    const module = permission.module_key;
+    const action = permission.action_key;
+
+    if (!formattedPermissions[module]) {
+      formattedPermissions[module] = {
+        view: false,
+        create: false,
+        edit: false,
+        delete: false
+      };
+    }
+
+    formattedPermissions[module][action] = item.is_allowed === 1;
+  });
+
+  return formattedPermissions;
+};
+
+const getCombinedUserPermissions = async (userId, roleId) => {
+  const rolePermissions = await formatRolePermissions(roleId);
+  const userPermissions = await formatUserPermissions(userId);
+
+  Object.keys(userPermissions).forEach(module => {
+    if (!rolePermissions[module]) {
+      rolePermissions[module] = {
+        view: false,
+        create: false,
+        edit: false,
+        delete: false
+      };
+    }
+
+    Object.keys(userPermissions[module]).forEach(action => {
+      rolePermissions[module][action] = userPermissions[module][action];
+    });
+  });
+
+  return rolePermissions;
+};
+
 exports.createRole = async (req, res) => {
   try {
     const { name, description, permissions } = req.body;
@@ -10284,6 +10379,148 @@ exports.deleteUser = async (req, res) => {
     return res.status(500).json({
       error: true,
       message: 'Internal server error'
+    });
+  }
+};
+
+exports.assignPermissionsToUser = async (req, res) => {
+  try {
+    const { user_id, permissions } = req.body;
+
+    if (!user_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'User ID is required'
+      });
+    }
+
+    const user = await db.users.findOne({
+      where: {
+        id: user_id,
+        is_active: 1
+      }
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    await syncUserPermissions(user_id, permissions);
+
+    return res.status(200).json({
+      success: true,
+      message: 'User permissions assigned successfully'
+    });
+
+  } catch (error) {
+    console.error('Assign User Permissions Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while assigning permissions'
+    });
+  }
+};
+
+exports.updateUserPermissions = async (req, res) => {
+  try {
+    const { user_id, permissions } = req.body;
+
+    if (!user_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'User ID is required'
+      });
+    }
+
+    await syncUserPermissions(user_id, permissions);
+
+    return res.status(200).json({
+      success: true,
+      message: 'User permissions updated successfully'
+    });
+
+  } catch (error) {
+    console.error('Update User Permissions Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while updating permissions'
+    });
+  }
+};
+
+exports.getUserPermissions = async (req, res) => {
+  try {
+    const { user_id } = req.params;
+
+    const user = await db.users.findOne({
+      where: {
+        id: user_id,
+        is_active: 1
+      }
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const permissions = await getCombinedUserPermissions(
+      user.id,
+      user.user_type
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        user_id: user.id,
+        permissions
+      }
+    });
+
+  } catch (error) {
+    console.error('Get User Permissions Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while fetching permissions'
+    });
+  }
+};
+
+exports.deleteUserPermission = async (req, res) => {
+  try {
+    const { user_id, permission_id } = req.params;
+
+    await db.user_permissions.update(
+      {
+        is_active: 0
+      },
+      {
+        where: {
+          user_id,
+          permission_id
+        }
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'Permission removed successfully'
+    });
+
+  } catch (error) {
+    console.error('Delete User Permission Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while deleting permission'
     });
   }
 };
