@@ -12,6 +12,7 @@ const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
 const { normalizeTime, resolveEventDateAndStartTime } = require('../utils/timezone');
 const { extractCoordinatesFromPayload } = require('../utils/locationHelpers');
 const accountCreditService = require('./account-credit.service');
+const paymentLinksService = require('./payment-links.service');
 
 const SECTION_TYPES = ['service', 'addon', 'logistics', 'custom'];
 const QUOTE_STATUSES = ['draft', 'pending', 'partially_paid', 'sent', 'viewed', 'accepted', 'paid', 'rejected', 'expired'];
@@ -902,6 +903,81 @@ function deriveQuoteAcceptanceEmailPayload(quoteDetails) {
         hour: 'numeric',
         minute: '2-digit'
       })
+  };
+}
+
+function buildQuoteInvoicePricingData(quoteDetails = {}) {
+  const lineItems = Array.isArray(quoteDetails.line_items) ? quoteDetails.line_items : [];
+  const total = Number(quoteDetails.total || 0);
+  const subtotal = Number(quoteDetails.subtotal || 0);
+  const discountAmount = Number(quoteDetails.discount_amount || 0);
+  const priceAfterDiscount = roundCurrency(subtotal - discountAmount);
+
+  return {
+    source: 'sales_quote_acceptance',
+    is_paid: false,
+    total,
+    total_before_credit: total,
+    credit_applied: 0,
+    subtotal,
+    discount_amount: discountAmount,
+    price_after_discount: priceAfterDiscount,
+    tax_type: quoteDetails.tax_type || null,
+    tax_rate: Number(quoteDetails.tax_rate || 0),
+    tax_amount: Number(quoteDetails.tax_amount || 0),
+    line_items: lineItems.map((item) => ({
+      name: item.item_name || item.name || 'Service',
+      quantity: Number(item.quantity || 1),
+      unit_price: Number(item.unit_rate || item.estimated_pricing || 0),
+      total: Number(item.line_total || 0)
+    }))
+  };
+}
+
+async function buildQuoteAcceptancePaymentDetails({ bookingId, quoteDetails }) {
+  const parsedBookingId = Number(bookingId);
+  if (!Number.isInteger(parsedBookingId) || parsedBookingId <= 0) {
+    return null;
+  }
+
+  if (!(Number(quoteDetails?.total || 0) > 0)) {
+    return null;
+  }
+
+  const booking = await db.stream_project_booking.findOne({
+    where: { stream_project_booking_id: parsedBookingId },
+    include: [
+      { model: db.users, as: 'user', required: false },
+      {
+        model: db.quotes,
+        as: 'primary_quote',
+        required: false,
+        include: [{ model: db.quote_line_items, as: 'line_items', required: false }]
+      }
+    ]
+  });
+
+  if (!booking) {
+    return null;
+  }
+
+  const stripeInvoice = await paymentLinksService.createStripeInvoice(
+    booking,
+    buildQuoteInvoicePricingData(quoteDetails),
+    {
+      recipientOverride: {
+        email: quoteDetails.client_email || null,
+        name: quoteDetails.client_name || null
+      }
+    }
+  );
+
+  return {
+    booking_id: parsedBookingId,
+    invoice_id: stripeInvoice?.id || null,
+    invoice_number: stripeInvoice?.number || null,
+    payment_url: stripeInvoice?.hosted_invoice_url || null,
+    invoice_pdf: stripeInvoice?.invoice_pdf || null
   };
 }
 
@@ -3084,6 +3160,31 @@ async function resolveQuoteBillingState(quote, transaction) {
   };
 }
 
+function computeManualPaymentProgressFromActivities(activities = [], totalAmount = 0) {
+  const manualEntries = (activities || [])
+    .map((activity) => parseConfig(activity?.activity_data))
+    .filter((entry) => entry && entry.payment_method === 'manual');
+
+  const hasFullPayment = manualEntries.some(
+    (entry) => String(entry.payment_type || '').toLowerCase() === 'full'
+  );
+  const partialPaid = manualEntries.reduce((sum, entry) => {
+    if (String(entry.payment_type || '').toLowerCase() !== 'partial') return sum;
+    const numeric = Number(entry.amount || 0);
+    return sum + (Number.isFinite(numeric) ? numeric : 0);
+  }, 0);
+
+  const paidAmount = hasFullPayment ? Number(totalAmount || 0) : partialPaid;
+  const pendingAmount = Math.max(Number(totalAmount || 0) - paidAmount, 0);
+
+  return {
+    hasFullPayment,
+    paidAmount,
+    pendingAmount,
+    isPartiallyPaid: !hasFullPayment && paidAmount > 0 && pendingAmount > 0
+  };
+}
+
 async function markQuoteInvoiceRefreshRequired({
   transaction,
   salesQuoteId,
@@ -4120,6 +4221,34 @@ async function listQuotes(query, user) {
     return acc;
   }, {});
 
+  const leadIds = Array.from(
+    new Set(
+      rows
+        .map((item) => Number(item.lead_id || 0))
+        .filter((leadId) => Number.isFinite(leadId) && leadId > 0)
+    )
+  );
+
+  const paymentActivities = leadIds.length
+    ? await db.sales_lead_activities.findAll({
+        where: {
+          lead_id: { [Op.in]: leadIds },
+          activity_type: 'payment_completed'
+        },
+        attributes: ['lead_id', 'activity_data', 'created_at'],
+        order: [['created_at', 'DESC']],
+        raw: true
+      })
+    : [];
+
+  const paymentActivitiesByLead = paymentActivities.reduce((acc, activity) => {
+    const leadId = Number(activity.lead_id || 0);
+    if (!leadId) return acc;
+    if (!acc[leadId]) acc[leadId] = [];
+    acc[leadId].push(activity);
+    return acc;
+  }, {});
+
   const rowsWithFinancialDetails = await Promise.all(rows.map(async (item) => {
     const plain = item.toJSON();
     const billingState = await resolveQuoteBillingState(plain);
@@ -4127,13 +4256,34 @@ async function listQuotes(query, user) {
       quoteId: plain.sales_quote_id,
       bookingId: billingState.booking?.stream_project_booking_id || null
     });
+    const manualActivities = paymentActivitiesByLead[Number(plain.lead_id || 0)] || [];
+    const manualPaymentSummary = computeManualPaymentProgressFromActivities(
+      manualActivities,
+      Number(plain.total || 0)
+    );
+    const hasManualFullPayment = manualPaymentSummary.hasFullPayment;
+    const hasManualPartialPayment = manualPaymentSummary.isPartiallyPaid;
+
+    const resolvedPaymentStatus = hasManualFullPayment
+      ? 'paid'
+      : hasManualPartialPayment
+        ? 'partially_paid'
+        : billingState.payment_status;
+
+    const resolvedCollectedAmount = hasManualFullPayment || hasManualPartialPayment
+      ? manualPaymentSummary.paidAmount
+      : billingState.collected_amount;
+    const resolvedOutstandingAmount = hasManualFullPayment || hasManualPartialPayment
+      ? manualPaymentSummary.pendingAmount
+      : billingState.outstanding_amount;
 
     return {
       ...plain,
-      payment_status: billingState.payment_status,
-      is_collected: billingState.is_collected,
-      collected_amount: billingState.collected_amount,
-      outstanding_amount: billingState.outstanding_amount,
+      payment_status: resolvedPaymentStatus,
+      is_collected: hasManualFullPayment ? true : billingState.is_collected,
+      collected_amount: resolvedCollectedAmount,
+      outstanding_amount: resolvedOutstandingAmount,
+      manual_payment_summary: manualPaymentSummary,
       ...(financialDetails || {})
     };
   }));
@@ -4439,11 +4589,14 @@ async function acceptQuoteById(salesQuoteId, options = {}) {
     activityMessage = 'Quote accepted',
     activitySource = 'manual_accept',
     sendClientEmail = false,
-    sendSalesEmail = true
+    sendSalesEmail = true,
+    convertToBooking = true
   } = options;
 
   const transaction = await db.sequelize.transaction();
   let transactionCompleted = false;
+  let bookingConversion = null;
+  let paymentDetails = null;
 
   try {
     const quote = await db.sales_quotes.findOne({
@@ -4468,8 +4621,39 @@ async function acceptQuoteById(salesQuoteId, options = {}) {
     }
 
     const alreadyAccepted = ['accepted', 'paid'].includes(quote.status);
+    const quoteDetails = await fetchQuoteById(salesQuoteId);
+    if (!quoteDetails) {
+      throw new Error('Quote not found');
+    }
 
-    if (!alreadyAccepted) {
+    if (convertToBooking) {
+      if (!hasConvertibleServiceInQuote(quoteDetails.line_items || [])) {
+        throw new Error('Quote must include at least one service to convert into a booking');
+      }
+
+      const prefillData = await buildPaymentBookingPrefillDataFromQuote(quoteDetails);
+      const conversionUser = {
+        userId: quote.assigned_sales_rep_id || quote.created_by_user_id || null,
+        role: 'admin'
+      };
+
+      const conversionResult = await syncConvertedQuoteArtifacts({
+        quote,
+        quoteDetails,
+        prefillData,
+        user: conversionUser,
+        transaction,
+        markQuoteAccepted: true,
+        recordConversionActivity: !alreadyAccepted
+      });
+
+      bookingConversion = {
+        lead_id: conversionResult.lead?.lead_id || null,
+        booking_id: conversionResult.booking?.stream_project_booking_id || null,
+        legacy_quote_id: conversionResult.legacyQuote?.quote_id || null,
+        already_converted: conversionResult.wasAlreadyConverted
+      };
+    } else if (!alreadyAccepted) {
       const acceptedAt = new Date();
       await quote.update({
         status: 'accepted',
@@ -4490,9 +4674,25 @@ async function acceptQuoteById(salesQuoteId, options = {}) {
     await transaction.commit();
     transactionCompleted = true;
 
-    const quoteDetails = await getPublicQuoteById(salesQuoteId);
-    if (!quoteDetails) {
+    const acceptedQuoteDetails = await getPublicQuoteById(salesQuoteId);
+    if (!acceptedQuoteDetails) {
       throw new Error('Quote not found');
+    }
+
+    if (bookingConversion?.booking_id) {
+      try {
+        paymentDetails = await buildQuoteAcceptancePaymentDetails({
+          bookingId: bookingConversion.booking_id,
+          quoteDetails: acceptedQuoteDetails
+        });
+      } catch (paymentError) {
+        console.error('Error preparing quote acceptance payment link:', paymentError);
+        paymentDetails = {
+          booking_id: bookingConversion.booking_id,
+          payment_url: null,
+          error: paymentError.message || 'Failed to prepare payment link'
+        };
+      }
     }
 
     let notificationResults = {
@@ -4501,9 +4701,9 @@ async function acceptQuoteById(salesQuoteId, options = {}) {
     };
 
     if (!alreadyAccepted) {
-      const emailPayload = deriveQuoteAcceptanceEmailPayload(quoteDetails);
+      const emailPayload = deriveQuoteAcceptanceEmailPayload(acceptedQuoteDetails);
       notificationResults = {
-        client_email: sendClientEmail && quoteDetails.client_email
+        client_email: sendClientEmail && acceptedQuoteDetails.client_email
           ? await sendQuoteAcceptedClientEmail(emailPayload)
           : { success: false, skipped: true, error: 'Client email not available' },
         sales_email: sendSalesEmail
@@ -4514,7 +4714,9 @@ async function acceptQuoteById(salesQuoteId, options = {}) {
 
     return {
       already_accepted: alreadyAccepted,
-      quote: quoteDetails,
+      quote: acceptedQuoteDetails,
+      booking_conversion: bookingConversion,
+      payment: paymentDetails,
       notifications: notificationResults
     };
   } catch (error) {

@@ -75,7 +75,8 @@ const {
   MEETING_SCHEDULED_TEMPLATE_ID,
   MESSAGING_INITIATED_TEMPLATE_ID,
   PRE_PRODUCTION_BRIEF_UPLOADED_TEMPLATE_ID,
-  POST_PRODUCTION_UPLOAD_TEMPLATE_ID
+  POST_PRODUCTION_UPLOAD_TEMPLATE_ID,
+  EMAIL_TO_POST_PRODUCTION_TEAM_TEMPLATE_ID
 } = require('../config/sendgridTemplates');
 
 const formatDate = (value) => {
@@ -2332,6 +2333,69 @@ const sendCPNewBookingRequestEmail = async (data) => {
   }
 };
 
+const sendPostProductionAssignmentEmail = async (data) => {
+  try {
+    if (!process.env.SENDGRID_API_KEY) {
+      return { success: false, error: 'SENDGRID_API_KEY is not configured' };
+    }
+
+    if (!EMAIL_TO_POST_PRODUCTION_TEAM_TEMPLATE_ID) {
+      return { success: false, error: 'EMAIL_TO_POST_PRODUCTION_TEAM_TEMPLATE_ID is not configured' };
+    }
+
+    const to = data?.to_email || data?.email;
+    if (!to) {
+      return { success: false, error: 'Recipient email is required' };
+    }
+
+    const fromEmail = getSendgridFromAddress();
+    if (!fromEmail) {
+      return { success: false, error: 'Sender email not configured' };
+    }
+
+    const rawAmount = data?.shoot_amount;
+    const shootAmount = rawAmount !== undefined && rawAmount !== null && rawAmount !== ''
+      ? (String(rawAmount).startsWith('$') ? String(rawAmount) : `$${formatAmount(rawAmount)}`)
+      : 'TBD';
+    const baseFrontendUrl = String(process.env.FRONTEND_URL || 'https://beige.app').replace(/\/+$/, '');
+
+    const [response] = await sgMail.send({
+      to,
+      from: {
+        email: fromEmail,
+        name: getSendgridFromName()
+      },
+      subject: 'New Project Assigned',
+      templateId: EMAIL_TO_POST_PRODUCTION_TEAM_TEMPLATE_ID,
+      dynamicTemplateData: {
+        client_name: getFirstName(data?.member_name || data?.client_name || data?.recipient_name || '', data?.first_name) || 'there',
+        booking_id: data?.booking_id || data?.project_id || '',
+        client: data?.client || data?.client_display_name || 'TBD',
+        shoot_type: formatShootTypes(data?.shoot_type || data?.event_type || data?.service_type) || 'TBD',
+        shoot_date: data?.shoot_date || (data?.date ? formatDate(data.date) : 'TBD'),
+        start_time: data?.start_time ? formatTime(data.start_time) : 'TBD',
+        end_time: data?.end_time ? formatTime(data.end_time) : 'TBD',
+        shoot_amount: shootAmount,
+        location: formatLocation(data?.location || data?.event_location) || 'TBD',
+        dashboard_link: data?.dashboard_link || data?.dashboardLink || `${baseFrontendUrl}/admin/dashboard`,
+        year: new Date().getFullYear()
+      }
+    });
+
+    return {
+      success: true,
+      statusCode: response?.statusCode,
+      messageId:
+        response?.headers?.['x-message-id'] ||
+        response?.headers?.['X-Message-Id'] ||
+        null
+    };
+  } catch (error) {
+    console.error('Error sending post-production assignment email:', error?.response?.body || error.message);
+    return { success: false, error: error?.response?.body || error.message };
+  }
+};
+
 const sendProductionProposalEmail = async (data) => {
   try {
     const to = data?.to_email || data?.email;
@@ -2854,6 +2918,7 @@ module.exports = {
   sendCPStatusUpdateByRequest,
   sendCPConfirmedEmailByRequest,
   sendCPNewBookingRequestEmail,
+  sendPostProductionAssignmentEmail,
   sendNewClientSignupNotification,
   sendNewCrewSignupNotification,
   sendCPSignupWelcomeEmail,
