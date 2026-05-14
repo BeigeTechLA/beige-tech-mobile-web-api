@@ -2052,3 +2052,32 @@ Authorization: {{TOKEN}}
 PATCH {{URL}}finance/creator-payouts/:payoutRequestId/paid HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
+
+### 
+GET {{URL}}finance/admin/credit-points/dashboard HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### 
+GET {{URL}}finance/admin/credit-points/users/245 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### 
+POST {{URL}}finance/admin/credit-points/manual HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "user_type": "client",
+  "target_user_id": 245,
+  "amount": 100,
+  "credit_type": "promo",
+  "expires_at": "2026-05-14",
+  "reason": "Loyalty adjustment",
+  "notes": "Issued from admin",
+  "restrictions_json": {
+    "allowed_usage_contexts": ["shoot_payment"]
+  },
+  "notify_user": true
+}

@@ -1,4 +1,5 @@
 const financeService = require('../services/finance.service');
+const accountCreditService = require('../services/account-credit.service');
 
 exports.syncBookingFinance = async (req, res) => {
   try {
@@ -131,6 +132,68 @@ exports.getAdminPayoutsScreen = async (req, res) => {
     return res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || 'Failed to fetch admin payouts screen'
+    });
+  }
+};
+
+exports.getAdminCreditPointsDashboard = async (req, res) => {
+  try {
+    const data = await accountCreditService.getAdminCreditDashboard(req.query);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error('Get admin credit points dashboard error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch credit points dashboard'
+    });
+  }
+};
+
+exports.listAdminCreditPointTransactions = async (req, res) => {
+  try {
+    const data = await accountCreditService.getAdminCreditTransactions(req.query);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error('List admin credit point transactions error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch credit point transactions'
+    });
+  }
+};
+
+exports.getAdminCreditPointUserDetails = async (req, res) => {
+  try {
+    const data = await accountCreditService.getAdminCreditUserDetails({
+      ...req.query,
+      user_id: req.params.userId || req.query.user_id
+    });
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error('Get admin credit point user details error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch credit point user details'
+    });
+  }
+};
+
+exports.createAdminManualCredit = async (req, res) => {
+  try {
+    const data = await accountCreditService.createManualCredit({
+      ...req.body,
+      createdByUserId: req.userId || req.user?.userId || null
+    });
+    return res.status(201).json({
+      success: true,
+      message: 'Credit points added successfully',
+      data
+    });
+  } catch (error) {
+    console.error('Create admin manual credit error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to add credit points'
     });
   }
 };

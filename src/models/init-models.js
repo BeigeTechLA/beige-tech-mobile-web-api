@@ -185,6 +185,12 @@ function initModels(sequelize) {
   users.hasMany(account_credit_ledger, { as: "approved_account_credit_entries", foreignKey: "approved_by_user_id" });
   account_credit_ledger.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id" });
   stream_project_booking.hasMany(account_credit_ledger, { as: "account_credit_entries", foreignKey: "booking_id" });
+  account_credit_ledger.belongsTo(payment_transactions, { as: "payment", foreignKey: "payment_id" });
+  payment_transactions.hasMany(account_credit_ledger, { as: "account_credit_entries", foreignKey: "payment_id" });
+  account_credit_ledger.belongsTo(invoice_send_history, { as: "invoice", foreignKey: "invoice_send_history_id" });
+  invoice_send_history.hasMany(account_credit_ledger, { as: "account_credit_entries", foreignKey: "invoice_send_history_id" });
+  account_credit_ledger.belongsTo(account_credit_ledger, { as: "source_entry", foreignKey: "source_account_credit_ledger_id" });
+  account_credit_ledger.hasMany(account_credit_ledger, { as: "usage_entries", foreignKey: "source_account_credit_ledger_id" });
   account_credit_ledger.belongsTo(sales_quotes, { as: "sales_quote", foreignKey: "sales_quote_id" });
   sales_quotes.hasMany(account_credit_ledger, { as: "account_credit_entries", foreignKey: "sales_quote_id" });
   account_credit_ledger.belongsTo(sales_quote_activities, { as: "sales_quote_activity", foreignKey: "sales_quote_activity_id" });

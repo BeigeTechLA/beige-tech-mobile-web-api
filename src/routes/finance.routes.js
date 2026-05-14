@@ -8,6 +8,10 @@ router.get('/shoots', authenticate, requireSalesRepOrAdmin, financeController.li
 router.get('/shoots/:bookingId', authenticate, requireSalesRepOrAdmin, financeController.getShootFinance);
 router.get('/admin/payouts-screen', authenticate, requireAdmin, financeController.getAdminPayoutsScreen);
 router.get('/admin/creator-wallet-overview', authenticate, requireAdmin, financeController.getAdminCreatorWalletOverview);
+router.get('/admin/credit-points/dashboard', authenticate, requireAdmin, financeController.getAdminCreditPointsDashboard);
+router.get('/admin/credit-points/users/:userId', authenticate, requireAdmin, financeController.getAdminCreditPointUserDetails);
+router.post('/admin/credit-points/manual', authenticate, requireAdmin, financeController.createAdminManualCredit);
+router.get('/admin/credit-points/export', authenticate, requireAdmin, financeController.listAdminCreditPointTransactions);
 router.get('/creator-wallets/:creatorId', authenticate, requireSalesRepOrAdmin, financeController.getCreatorWallet);
 router.get('/creator-payouts', authenticate, requireSalesRepOrAdmin, financeController.listCreatorPayouts);
 router.post('/creator-payout-accounts', authenticate, requireSalesRepOrAdmin, financeController.upsertCreatorPayoutAccount);

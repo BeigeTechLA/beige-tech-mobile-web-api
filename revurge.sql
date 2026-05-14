@@ -1369,3 +1369,37 @@ CREATE TABLE IF NOT EXISTS creator_payout_transactions (
   CONSTRAINT fk_creator_payout_transactions_request FOREIGN KEY (creator_payout_request_id) REFERENCES creator_payout_requests(creator_payout_request_id),
   CONSTRAINT fk_creator_payout_transactions_account FOREIGN KEY (creator_payout_account_id) REFERENCES creator_payout_accounts(creator_payout_account_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 14-05-26
+
+ALTER TABLE account_credit_ledger
+  MODIFY COLUMN source ENUM('quote_reduction', 'referral_bonus', 'loyalty_reward', 'manual_admin', 'payment_adjustment') NOT NULL DEFAULT 'quote_reduction',
+  ADD COLUMN payment_id INT NULL AFTER booking_id,
+  ADD COLUMN invoice_send_history_id INT NULL AFTER payment_id,
+  ADD COLUMN source_account_credit_ledger_id INT NULL AFTER invoice_send_history_id,
+  ADD COLUMN usage_context ENUM('general', 'shoot_payment', 'studio_rental') NOT NULL DEFAULT 'general' AFTER source,
+  ADD COLUMN user_segment ENUM('client', 'creator') NOT NULL DEFAULT 'client' AFTER usage_context,
+  ADD KEY idx_account_credit_payment (payment_id),
+  ADD KEY idx_account_credit_invoice (invoice_send_history_id),
+  ADD KEY idx_account_credit_source_entry (source_account_credit_ledger_id),
+  ADD KEY idx_account_credit_segment (user_segment),
+  ADD CONSTRAINT fk_account_credit_payment
+    FOREIGN KEY (payment_id) REFERENCES payment_transactions(payment_id)
+    ON DELETE SET NULL ON UPDATE CASCADE,
+  ADD CONSTRAINT fk_account_credit_invoice
+    FOREIGN KEY (invoice_send_history_id) REFERENCES invoice_send_history(invoice_send_history_id)
+    ON DELETE SET NULL ON UPDATE CASCADE,
+  ADD CONSTRAINT fk_account_credit_source_entry
+    FOREIGN KEY (source_account_credit_ledger_id) REFERENCES account_credit_ledger(account_credit_ledger_id)
+    ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- 14-05-26 manual credit issuance metadata
+
+ALTER TABLE account_credit_ledger
+  ADD COLUMN credit_type VARCHAR(50) NULL AFTER source,
+  ADD COLUMN expires_at DATETIME NULL AFTER credit_type,
+  ADD COLUMN restrictions_json JSON NULL AFTER notes,
+  ADD COLUMN created_by_admin TINYINT(1) NOT NULL DEFAULT 0 AFTER restrictions_json,
+  ADD COLUMN notification_status ENUM('not_requested', 'pending', 'sent', 'failed', 'skipped') NOT NULL DEFAULT 'not_requested' AFTER created_by_admin,
+  ADD KEY idx_account_credit_credit_type (credit_type),
+  ADD KEY idx_account_credit_expires_at (expires_at);
