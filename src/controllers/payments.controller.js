@@ -12,6 +12,18 @@ const REFERRAL_DISCOUNT_PERCENT = 10;
 const emailService = require('../utils/emailService');
 const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
 
+const PAYMENT_SOURCE = {
+  BOOKING_CHECKOUT: 'booking_checkout',
+  QUOTE_INVOICE: 'quote_invoice',
+  ADDITIONAL_INVOICE: 'additional_invoice'
+};
+
+function normalizePaymentSource(value) {
+  return Object.values(PAYMENT_SOURCE).includes(value)
+    ? value
+    : PAYMENT_SOURCE.BOOKING_CHECKOUT;
+}
+
 /**
  * Calculate pricing breakdown for CP + equipment booking
  * @param {number} hours - Number of hours
@@ -1888,6 +1900,7 @@ exports.getPaymentStatus = async (req, res) => {
         creator: payment.creator,
         user: payment.user,
         guest_email: payment.guest_email,
+        payment_source: payment.payment_source,
         hours: payment.hours,
         hourly_rate: payment.hourly_rate,
         pricing: {
@@ -1951,22 +1964,27 @@ exports.handleStripeWebhook = async (req, res) => {
     let booking_id = null;
     let paymentIntentId = null;
     let stripeInvoice = null;
+    let invoiceMetadata = {};
 
     if (event.type === 'payment_intent.succeeded') {
       const bookingIdRaw = dataObject.metadata?.booking_id;
       booking_id = bookingIdRaw ? parseInt(bookingIdRaw, 10) : null;
       paymentIntentId = dataObject.id;
+      invoiceMetadata = dataObject.metadata || {};
 
-      // Fallback: when booking_id is only present on the related invoice metadata.
-      if ((!booking_id || Number.isNaN(booking_id)) && dataObject.invoice) {
+      // Fallback/source lookup: booking_id and quote metadata are often on the related invoice.
+      if (dataObject.invoice && (!booking_id || Number.isNaN(booking_id) || !invoiceMetadata.payment_source)) {
         try {
           const invoiceId = typeof dataObject.invoice === 'string'
             ? dataObject.invoice
             : dataObject.invoice.id;
           if (invoiceId) {
             const linkedInvoice = await stripe.invoices.retrieve(invoiceId);
-            const invoiceBookingIdRaw = linkedInvoice.metadata?.booking_id;
-            booking_id = invoiceBookingIdRaw ? parseInt(invoiceBookingIdRaw, 10) : null;
+            invoiceMetadata = linkedInvoice.metadata || invoiceMetadata;
+            if (!booking_id || Number.isNaN(booking_id)) {
+              const invoiceBookingIdRaw = linkedInvoice.metadata?.booking_id;
+              booking_id = invoiceBookingIdRaw ? parseInt(invoiceBookingIdRaw, 10) : null;
+            }
           }
         } catch (invoiceLookupError) {
           console.warn(`Webhook payment_intent.succeeded: failed to fetch linked invoice metadata: ${invoiceLookupError.message}`);
@@ -1974,6 +1992,7 @@ exports.handleStripeWebhook = async (req, res) => {
       }
     } else if (event.type === 'invoice.paid') {
       stripeInvoice = dataObject;
+      invoiceMetadata = dataObject.metadata || {};
       const bookingIdRaw = dataObject.metadata?.booking_id;
       booking_id = bookingIdRaw ? parseInt(bookingIdRaw, 10) : null;
       paymentIntentId = typeof dataObject.payment_intent === 'string'
@@ -2012,6 +2031,28 @@ exports.handleStripeWebhook = async (req, res) => {
         await transaction.rollback();
         console.log(`Webhook: booking ${booking_id} not found`);
         return res.status(200).json({ received: true, booking_found: false });
+      }
+
+      let paymentSource = normalizePaymentSource(invoiceMetadata.payment_source);
+      if (
+        paymentSource === PAYMENT_SOURCE.BOOKING_CHECKOUT &&
+        (invoiceMetadata.sales_quote_id || invoiceMetadata.quote_id)
+      ) {
+        paymentSource = PAYMENT_SOURCE.QUOTE_INVOICE;
+      }
+
+      if (paymentSource === PAYMENT_SOURCE.BOOKING_CHECKOUT && event.type === 'invoice.paid') {
+        const convertedLead = await db.sales_leads.findOne({
+          where: {
+            booking_id,
+            lead_source: 'converted bookings'
+          },
+          attributes: ['lead_id'],
+          transaction
+        });
+        if (convertedLead) {
+          paymentSource = PAYMENT_SOURCE.QUOTE_INVOICE;
+        }
       }
 
       // Booking-level idempotency: do not create a second payment for an already paid booking.
@@ -2074,13 +2115,33 @@ exports.handleStripeWebhook = async (req, res) => {
           : JSON.stringify(booking.event_location))
         : 'Stripe Webhook';
 
+      const bookingHours = Number(booking.shoot_hours || booking.duration_hours || 0);
+      const canDeferHours =
+        paymentSource === PAYMENT_SOURCE.QUOTE_INVOICE ||
+        paymentSource === PAYMENT_SOURCE.ADDITIONAL_INVOICE;
+
+      if ((!Number.isFinite(bookingHours) || bookingHours <= 0) && !canDeferHours) {
+        throw new Error(`Cannot process webhook for booking ${booking_id}: booking duration is required for ${paymentSource}`);
+      }
+
+      const paymentTransactionHours = Number.isFinite(bookingHours) && bookingHours > 0
+        ? bookingHours
+        : null;
+      const paymentNotes = [
+        booking.special_requests || null,
+        paymentTransactionHours === null
+          ? 'Invoice paid before schedule/duration was finalized; payment transaction hours left empty.'
+          : null
+      ].filter(Boolean).join('\n') || null;
+
       const payment = await db.payment_transactions.create({
         stripe_payment_intent_id: paymentIntentId || null,
         stripe_charge_id: chargeId,
         creator_id: validCreatorId,
         user_id: booking.user_id || null,
         guest_email: dataObject.customer_email || dataObject.receipt_email || booking.guest_email || null,
-        hours: booking.shoot_hours || booking.duration_hours || 0,
+        payment_source: paymentSource,
+        hours: paymentTransactionHours,
         hourly_rate: 0,
         cp_cost: 0,
         equipment_cost: 0,
@@ -2091,7 +2152,7 @@ exports.handleStripeWebhook = async (req, res) => {
         shoot_date: finalShootDate,
         location: finalLocation,
         shoot_type: booking.shoot_type || null,
-        notes: booking.special_requests || null,
+        notes: paymentNotes,
         status: 'succeeded'
       }, { transaction });
 

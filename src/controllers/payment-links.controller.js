@@ -1549,7 +1549,11 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
         stripeInvoice = stripeInvoice || await paymentLinksService.createStripeInvoice(booking, additionalPricingData, {
           recipientOverride,
           forceNewInvoice: true,
-          descriptionOverride: `${additionalInvoiceContext.label} - ${booking.project_name || 'Project'}`
+          descriptionOverride: `${additionalInvoiceContext.label} - ${booking.project_name || 'Project'}`,
+          metadata: {
+            payment_source: 'additional_invoice',
+            ...(quoteId ? { sales_quote_id: String(quoteId) } : {})
+          }
         });
       }
       const additionalInvoicePaid = stripeInvoice?.status === 'paid';
@@ -1669,7 +1673,13 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
       // --- CASE 2: NOT PAID YET ---
       const stripeInvoice = await paymentLinksService.createStripeInvoice(booking, pricingData, {
         recipientOverride,
-        forceNewInvoice: recipientIdentityChanged
+        forceNewInvoice: recipientIdentityChanged,
+        metadata: quoteId ? {
+          payment_source: 'quote_invoice',
+          sales_quote_id: String(quoteId)
+        } : {
+          payment_source: 'booking_checkout'
+        }
       });
       invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
         invoiceUrl: stripeInvoice.hosted_invoice_url,

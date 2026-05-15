@@ -1150,3 +1150,24 @@ ADD COLUMN assign_lead TINYINT(1) NOT NULL DEFAULT 1;
 
 ALTER TABLE `users`
 ADD COLUMN `role` VARCHAR(100) NULL DEFAULT NULL AFTER `assign_lead`;
+
+-- 15-05-26
+
+ALTER TABLE payment_transactions
+  DROP CONSTRAINT chk_hours_positive;
+
+ALTER TABLE payment_transactions
+  ADD COLUMN payment_source ENUM('booking_checkout', 'quote_invoice', 'additional_invoice')
+    NOT NULL DEFAULT 'booking_checkout'
+    COMMENT 'Origin of the payment transaction'
+    AFTER guest_email,
+  MODIFY COLUMN hours DECIMAL(10,2) NULL
+    COMMENT 'Number of hours booked; nullable for quote invoices before scheduling',
+  ADD INDEX idx_payment_source (payment_source);
+
+ALTER TABLE payment_transactions
+  ADD CONSTRAINT chk_hours_positive CHECK (
+    (payment_source = 'quote_invoice' AND (hours IS NULL OR hours >= 0))
+    OR (payment_source = 'additional_invoice' AND (hours IS NULL OR hours >= 0))
+    OR (payment_source = 'booking_checkout' AND hours > 0)
+  );
