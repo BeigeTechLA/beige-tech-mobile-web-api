@@ -293,6 +293,42 @@ exports.getClientCreditSummary = async (req, res) => {
   }
 };
 
+exports.getClientCreditDashboard = async (req, res) => {
+  try {
+    const user_id = req.user?.userId;
+    if (!user_id) {
+      return res.status(400).json({
+        error: true,
+        message: "user_id is required"
+      });
+    }
+
+    const user = await users.findByPk(user_id, {
+      attributes: ['id', 'email']
+    });
+
+    const dashboard = await accountCreditService.getClientCreditDashboard({
+      userId: user_id,
+      guestEmail: user?.email || null,
+      page: req.query.page,
+      limit: req.query.limit,
+      expiringDays: req.query.expiring_days || req.query.expiringDays
+    });
+
+    return res.status(200).json({
+      error: false,
+      message: "Client credit dashboard fetched successfully",
+      data: dashboard
+    });
+  } catch (error) {
+    console.error("Get Client Credit Dashboard Error:", error);
+    return res.status(error.statusCode || 500).json({
+      error: true,
+      message: error.message || "Internal server error"
+    });
+  }
+};
+
 exports.getClientCreditHistory = async (req, res) => {
   try {
     const user_id = req.user?.userId;
@@ -311,57 +347,22 @@ exports.getClientCreditHistory = async (req, res) => {
       attributes: ['id', 'email']
     });
 
-    const [summary, historyRows] = await Promise.all([
-      accountCreditService.getAccountCreditBalance({
-        userId: user_id,
-        guestEmail: user?.email || null
-      }),
-      accountCreditService.getAccountCreditHistory({
-        userId: user_id,
-        guestEmail: user?.email || null,
-        limit,
-        offset
-      })
-    ]);
-
-    const history = (historyRows || []).map((row) => {
-      const plain = row?.toJSON ? row.toJSON() : row;
-      const isDebit = plain.entry_type === 'credit_used' || plain.entry_type === 'credit_reversed';
-      return {
-        account_credit_ledger_id: plain.account_credit_ledger_id,
-        amount: Number(plain.amount || 0),
-        direction: isDebit ? 'debit' : 'credit',
-        entry_type: plain.entry_type,
-        status: plain.status,
-        source: plain.source,
-        credit_type: plain.credit_type || null,
-        expires_at: plain.expires_at || null,
-        restrictions: plain.restrictions_json || null,
-        notification_status: plain.notification_status || 'not_requested',
-        notes: plain.notes || null,
-        booking_id: plain.booking_id || null,
-        booking_name: plain.booking?.project_name || null,
-        booking_event_date: plain.booking?.event_date || null,
-        created_at: plain.created_at || null
-      };
+    const dashboard = await accountCreditService.getClientCreditDashboard({
+      userId: user_id,
+      guestEmail: user?.email || null,
+      page,
+      limit,
+      expiringDays: req.query.expiring_days || req.query.expiringDays
     });
 
     return res.status(200).json({
       error: false,
       message: "Client credit history fetched successfully",
       data: {
-        summary: {
-          total_credit_amount: summary?.total_credit_amount || 0,
-          used_credit_amount: summary?.used_credit_amount || 0,
-          pending_credit_amount: summary?.pending_credit_amount || 0,
-          available_credit_amount: summary?.available_credit_amount || 0
-        },
-        history,
-        pagination: {
-          page,
-          limit,
-          returned_count: history.length
-        }
+        summary: dashboard.wallet_summary,
+        expiring_credits: dashboard.expiring_credits,
+        history: dashboard.transaction_history.rows,
+        pagination: dashboard.transaction_history.pagination
       }
     });
   } catch (error) {

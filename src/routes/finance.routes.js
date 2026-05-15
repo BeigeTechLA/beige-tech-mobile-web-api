@@ -37,6 +37,7 @@ router.post('/admin/disputes/:disputeId/resolve', authenticate, requireAdmin, fi
 router.post('/admin/disputes/:disputeId/reject-refund', authenticate, requireAdmin, financeController.rejectOrRefundDispute);
 router.post('/admin/disputes/:disputeId/escalate', authenticate, requireAdmin, financeController.escalateDispute);
 router.get('/admin/credit-points/dashboard', authenticate, requireAdmin, financeController.getAdminCreditPointsDashboard);
+router.get('/admin/credit-points/users', authenticate, requireAdmin, financeController.getAdminCreditPointUserDetails);
 router.get('/admin/credit-points/users/:userId', authenticate, requireAdmin, financeController.getAdminCreditPointUserDetails);
 router.post('/admin/credit-points/manual', authenticate, requireAdmin, financeController.createAdminManualCredit);
 router.get('/admin/credit-points/export', authenticate, requireAdmin, financeController.listAdminCreditPointTransactions);

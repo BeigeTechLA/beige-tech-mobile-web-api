@@ -1208,6 +1208,203 @@ function buildAdminCreditWhere(filters = {}) {
   return where;
 }
 
+function buildClientDashboardCreditWhere({ userId = null, guestEmail = null } = {}) {
+  const identityWhere = buildIdentityWhere({ userId, guestEmail });
+  if (!identityWhere) return null;
+
+  return {
+    ...identityWhere,
+    user_segment: 'client',
+    source: { [Op.in]: ['quote_reduction', 'manual_admin', 'payment_adjustment'] },
+    entry_type: { [Op.in]: ['credit_created', 'credit_used'] }
+  };
+}
+
+function formatClientDashboardLedgerRow(entry) {
+  const quoteId = entry.source_quote_id || null;
+  const bookingId = entry.source_booking_id || null;
+  const invoiceId = entry.invoice_id || null;
+
+  return {
+    account_credit_ledger_id: entry.account_credit_ledger_id,
+    credit_reference: `CR-${entry.account_credit_ledger_id}`,
+    direction: entry.direction,
+    date: entry.transaction_date,
+    amount: entry.amount,
+    booking_id: bookingId,
+    booking_name: entry.source_booking_name || null,
+    invoice_id: invoiceId,
+    invoice_number: entry.invoice_number || null,
+    quote_id: quoteId,
+    quote_number: entry.source_quote_number || null,
+    payment_id: entry.payment_id || null,
+    source: entry.source,
+    transaction_type: entry.source === 'quote_reduction'
+      ? 'quote_adjustment_credit'
+      : entry.source === 'manual_admin'
+        ? 'admin_added_credit'
+        : 'shoot_payment_credit_used',
+    title: entry.source === 'quote_reduction'
+      ? 'Quote adjustment credit'
+      : entry.source === 'manual_admin'
+        ? 'Admin-added credit'
+        : 'Applied to shoot payment',
+    entry_type: entry.entry_type,
+    status: entry.status,
+    credit_type: entry.credit_type || null,
+    expires_at: entry.expires_at || null,
+    is_expired: entry.is_expired,
+    remaining_balance: entry.remaining_balance,
+    notes: entry.notes || null,
+    created_at: entry.created_at,
+    approved_at: entry.approved_at
+  };
+}
+
+async function getClientCreditDashboard({
+  userId = null,
+  guestEmail = null,
+  page = 1,
+  limit = 20,
+  expiringDays = 30,
+  transaction = null
+} = {}) {
+  if (!db.account_credit_ledger) {
+    return {
+      wallet_summary: emptyCreditTotals(),
+      expiring_credits: null,
+      transaction_history: {
+        rows: [],
+        pagination: { page: 1, limit: 20, total: 0, total_pages: 0 }
+      }
+    };
+  }
+
+  const where = buildClientDashboardCreditWhere({ userId, guestEmail });
+  if (!where) {
+    const error = new Error('user_id or guest_email is required');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  await syncExpiredAccountCredits({
+    where: buildIdentityWhere({ userId, guestEmail }),
+    transaction
+  });
+
+  const safePage = Math.max(parseInt(page, 10) || 1, 1);
+  const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 200);
+  const offset = (safePage - 1) * safeLimit;
+
+  const [allRows, pagedResult] = await Promise.all([
+    db.account_credit_ledger.findAll({
+      where,
+      order: [['created_at', 'DESC'], ['account_credit_ledger_id', 'DESC']],
+      transaction
+    }),
+    db.account_credit_ledger.findAndCountAll({
+      where,
+      distinct: true,
+      limit: safeLimit,
+      offset,
+      order: [['created_at', 'DESC'], ['account_credit_ledger_id', 'DESC']],
+      include: buildLedgerIncludes(),
+      transaction
+    })
+  ]);
+
+  const plainRows = (allRows || []).map(toPlain);
+  const totals = finalizeCreditTotals(plainRows.reduce((acc, row) => {
+    applyEntryToTotals(acc, row);
+    return acc;
+  }, emptyCreditTotals()));
+
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const expiringUntil = new Date(now);
+  expiringUntil.setDate(expiringUntil.getDate() + Math.max(parseInt(expiringDays, 10) || 30, 1));
+
+  const earnedThisMonth = roundCurrency(plainRows
+    .filter((entry) => entry.entry_type === 'credit_created' && new Date(entry.created_at) >= monthStart)
+    .reduce((sum, entry) => sum + roundCurrency(entry.amount), 0));
+  const usedThisMonth = roundCurrency(plainRows
+    .filter((entry) => entry.entry_type === 'credit_used' && new Date(entry.created_at) >= monthStart)
+    .reduce((sum, entry) => sum + roundCurrency(entry.amount), 0));
+  const shootUsageRows = plainRows.filter((entry) => (
+    entry.entry_type === 'credit_used' &&
+    entry.source === 'payment_adjustment' &&
+    entry.usage_context === 'shoot_payment'
+  ));
+  const shootUsageAmount = roundCurrency(shootUsageRows.reduce((sum, entry) => (
+    sum + roundCurrency(entry.amount)
+  ), 0));
+
+  const expiringRows = plainRows
+    .filter((entry) => (
+      entry.entry_type === 'credit_created' &&
+      entry.status === 'available' &&
+      entry.expires_at &&
+      new Date(entry.expires_at) > now &&
+      new Date(entry.expires_at) <= expiringUntil
+    ));
+
+  const expiringCreditsAmount = roundCurrency(expiringRows.reduce((sum, entry) => (
+    sum + roundCurrency(entry.amount)
+  ), 0));
+
+  const formattedRows = attachRunningBalances(
+    pagedResult.rows.map(formatLedgerEntry)
+  ).map(formatClientDashboardLedgerRow);
+
+  return {
+    overview: {
+      total_points: totals.total_credit_amount,
+      earned_this_month: earnedThisMonth,
+      used_this_month: usedThisMonth,
+      expiring_soon: expiringRows.length,
+      expiring_soon_amount: expiringCreditsAmount,
+      expiring_within_days: Math.max(parseInt(expiringDays, 10) || 30, 1)
+    },
+    wallet_summary: {
+      total_points: totals.total_credit_amount,
+      available_balance: totals.available_credit_amount,
+      total_earned: totals.issued_credit_amount,
+      total_used: totals.used_credit_amount,
+      pending_points: totals.pending_credit_amount,
+      expired_points: totals.expired_credit_amount,
+      reversed_points: totals.reversed_credit_amount,
+      currency: 'USD'
+    },
+    expiring_credits: expiringRows.length ? {
+      amount: expiringCreditsAmount,
+      count: expiringRows.length,
+      within_days: Math.max(parseInt(expiringDays, 10) || 30, 1),
+      next_expiring_at: expiringRows
+        .map((entry) => entry.expires_at)
+        .sort((a, b) => new Date(a) - new Date(b))[0]
+    } : null,
+    transaction_history: {
+      rows: formattedRows,
+      pagination: {
+        page: safePage,
+        limit: safeLimit,
+        total: pagedResult.count,
+        total_pages: Math.ceil(pagedResult.count / safeLimit),
+        returned_count: formattedRows.length
+      }
+    },
+    credit_usage_summary: {
+      credits_used_in_shoots: shootUsageAmount,
+      shoot_transactions_count: shootUsageRows.length,
+      credits_per_shoot_avg: shootUsageRows.length
+        ? roundCurrency(shootUsageAmount / shootUsageRows.length)
+        : 0,
+      total_value_saved: shootUsageAmount,
+      currency: 'USD'
+    }
+  };
+}
+
 async function getAdminCreditTransactions(filters = {}) {
   if (!db.account_credit_ledger) {
     return { rows: [], pagination: { page: 1, limit: 20, total: 0, total_pages: 0 } };
@@ -1437,17 +1634,19 @@ async function getAdminCreditDashboard(filters = {}) {
 
 async function getAdminCreditUserDetails(filters = {}) {
   const userId = Number(filters.user_id || 0) || null;
-  if (!userId) {
-    const error = new Error('user_id is required');
+  const guestEmail = normalizeGuestEmail(filters.guest_email);
+  if (!userId && !guestEmail) {
+    const error = new Error('user_id or guest_email is required');
     error.statusCode = 400;
     throw error;
   }
 
   const [summary, history] = await Promise.all([
-    getAccountCreditBalance({ userId }),
+    getAccountCreditBalance({ userId, guestEmail }),
     getAdminCreditTransactions({
       ...filters,
       user_id: userId || undefined,
+      guest_email: guestEmail || undefined,
       limit: filters.limit || 50
     })
   ]);
@@ -1458,7 +1657,11 @@ async function getAdminCreditUserDetails(filters = {}) {
   }
 
   return {
-    user: user ? toPlain(user) : null,
+    user: user ? toPlain(user) : {
+      id: null,
+      name: history.rows[0]?.client_name || guestEmail || 'Guest Client',
+      email: guestEmail
+    },
     summary: {
       total_credit_points: summary?.total_credit_amount || 0,
       current_balance: summary?.available_credit_amount || 0,
@@ -1480,6 +1683,7 @@ module.exports = {
   getAccountCreditBalance,
   consumeAccountCreditForPayment,
   getAccountCreditHistory,
+  getClientCreditDashboard,
   approveQuoteReductionCredits,
   rejectQuoteReductionCredits,
   getAdminCreditDashboard,

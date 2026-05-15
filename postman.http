@@ -4,7 +4,7 @@
 
 @TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3Nzg0ODI1ODcsImV4cCI6MTc3OTA4NzM4N30.HM2j-tyER5CTOxr6Vk8iacJnJ_TbIBF77j9Mzc_DSPc
 
-@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzcyNjkyODAsImV4cCI6MTc3Nzg3NDA4MH0.6NCSuJ90ixA8GtdebLlIIDS2e0dlorpJySLS3FRR7Fs
+@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI0NSwidXNlclJvbGUiOiJDbGllbnQiLCJpYXQiOjE3Nzg4NDc1OTEsImV4cCI6MTc3OTQ1MjM5MX0.QbY4oalixhyzuuiFPE-uUuWN451stVYHUxibOLIDwus
 
 ###
 POST {{URL}}creator/dashboard-count HTTP/1.1
@@ -111,7 +111,7 @@ POST {{URL}}auth/login HTTP/1.1
 Content-Type: application/json
 
 {
-  "email": "dev@gmail.com",
+  "email": "bhumi29882@gmail.com",
   "password": "12345678"
 }
 
@@ -2059,6 +2059,16 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### 
+GET {{URL}}finance/admin/credit-points/export HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### 
+GET {{URL}}finance/admin/credit-points/users?guest_email=vishnupanchal2309@gmail.com HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### 
 GET {{URL}}finance/admin/credit-points/users/245 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
@@ -2070,10 +2080,10 @@ Authorization: {{TOKEN}}
 
 {
   "user_type": "client",
-  "target_user_id": 245,
+  "guest_email": "vishnupanchal2309@gmail.com",
   "amount": 100,
   "credit_type": "promo",
-  "expires_at": "2026-05-14",
+  "expires_at": "2026-05-28",
   "reason": "Loyalty adjustment",
   "notes": "Issued from admin",
   "restrictions_json": {
@@ -2228,3 +2238,7 @@ Authorization: {{TOKEN}}
 ###
 GET {{URL}}finance/admin/disputes?date_from=2026-05-01&date_to=2026-05-31 HTTP/1.1
 Authorization: {{TOKEN}}
+
+###
+GET {{URL}}client/credit/dashboard HTTP/1.1
+Authorization: {{TOKEN2}}
