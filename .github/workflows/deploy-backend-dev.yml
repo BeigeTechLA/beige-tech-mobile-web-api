@@ -3,7 +3,7 @@ name: Deploy Backend Dev
 on:
   push:
     branches:
-      - feature/file-manager-share
+      - development
     paths-ignore:
       - ".github/workflows/deploy-dev.yml"
       - ".github/workflows/deploy-staging.yml"
