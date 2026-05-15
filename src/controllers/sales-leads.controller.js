@@ -2402,6 +2402,129 @@ exports.getLeads = async (req, res) => {
   }
 };
 
+const BOARD_STATUSES = [
+  'Signed Up - Lead Created',
+  'Book a shoot - Lead Created',
+  'Manual - Lead Created',
+  'Booking In Progress',
+  'Proposal Sent',
+  'Ready for Payment',
+  'Payment Sent',
+  'Booked',
+  'Closed - Lost',
+];
+
+const BOARD_SOURCE_LIMIT = 5000;
+
+const normalizeBoardStatusLabel = (rawStatus) => {
+  const value = String(rawStatus || '').replace(/â€“|—|–/g, '-').trim().toLowerCase();
+  if (!value) return 'Unknown';
+  if (value === 'signed up' || value === 'singed up' || value.includes('signed up - lead created')) return 'Signed Up - Lead Created';
+  if (value.includes('book a shoot - lead created')) return 'Book a shoot - Lead Created';
+  if (value.includes('manual - lead created')) return 'Manual - Lead Created';
+  if (value === 'booking in progress' || value === 'in-progress') return 'Booking In Progress';
+  if (value === 'proposal sent' || value === 'payment link sent' || value === 'link sent') return 'Proposal Sent';
+  if (value === 'ready for payment') return 'Ready for Payment';
+  if (value === 'payment sent') return 'Payment Sent';
+  if (value === 'booked' || value === 'paid') return 'Booked';
+  if (value.includes('closed - lost') || value === 'cancelled') return 'Closed - Lost';
+  if (value === 'partially paid') return 'Partially Paid';
+  return String(rawStatus || '').trim() || 'Unknown';
+};
+
+const invokeGetLeadsSnapshot = async (baseReq, queryOverrides = {}) => {
+  return new Promise((resolve, reject) => {
+    const mergedQuery = { ...baseReq.query, ...queryOverrides };
+    const reqLike = {
+      ...baseReq,
+      query: mergedQuery,
+    };
+
+    const resLike = {
+      json: (payload) => resolve(payload),
+      status: (statusCode) => ({
+        json: (payload) => reject(new Error(payload?.message || `getLeads failed with status ${statusCode}`)),
+      }),
+    };
+
+    exports.getLeads(reqLike, resLike);
+  });
+};
+
+exports.getLeadsBoard = async (req, res) => {
+  try {
+    const rawLimit = Number.parseInt(String(req.query.limit || 10), 10);
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 10;
+    const requestedStatus = String(req.query.status || '').trim();
+    const page = Number.parseInt(String(req.query.page || 1), 10) || 1;
+    const snapshot = await invokeGetLeadsSnapshot(req, {
+      status: undefined,
+      page: 1,
+      limit: BOARD_SOURCE_LIMIT,
+    });
+
+    const payload = snapshot?.data || {};
+    const allLeads = Array.isArray(payload.leads) ? payload.leads : [];
+    const filteredTotal = Number(payload?.pagination?.total || allLeads.length);
+
+    const groupedByStatus = new Map();
+    allLeads.forEach((lead) => {
+      const normalizedStatus = normalizeBoardStatusLabel(lead?.booking_status);
+      if (!groupedByStatus.has(normalizedStatus)) {
+        groupedByStatus.set(normalizedStatus, []);
+      }
+      groupedByStatus.get(normalizedStatus).push(lead);
+    });
+
+    const extraStatuses = Array.from(groupedByStatus.keys()).filter(
+      (statusLabel) => !BOARD_STATUSES.includes(statusLabel)
+    );
+    const statuses = requestedStatus ? [requestedStatus] : [...BOARD_STATUSES, ...extraStatuses];
+
+    const columns = {};
+    statuses.forEach((statusLabel) => {
+      const fullStatusLeads = groupedByStatus.get(statusLabel) || [];
+      const total = fullStatusLeads.length;
+      const totalPages = total > 0 ? Math.ceil(total / limit) : 0;
+      const safePage = Math.max(1, page);
+      const offset = (safePage - 1) * limit;
+      const leads = fullStatusLeads.slice(offset, offset + limit);
+
+      columns[statusLabel] = {
+        status: statusLabel,
+        leads,
+        pagination: {
+          total,
+          page: safePage,
+          limit,
+          totalPages,
+          hasMore: safePage < totalPages,
+        },
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        columns,
+        statuses,
+        pagination: {
+          total: filteredTotal,
+          page,
+          limit,
+        },
+      },
+    });
+  } catch (error) {
+    console.error('getLeadsBoard Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch leads board',
+      error: error.message,
+    });
+  }
+};
+
 exports.getClientLeads = async (req, res) => {
   try {
     const {

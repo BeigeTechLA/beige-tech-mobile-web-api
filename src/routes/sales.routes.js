@@ -57,6 +57,7 @@ router.post('/leads/contact-sales', salesLeadsController.createSalesAssistedLead
  * @access  Sales Rep / Admin
  */
 router.get('/leads', authenticate, requireSalesRepOrAdmin, salesLeadsController.getLeads);
+router.get('/leads/board', authenticate, requireSalesRepOrAdmin, salesLeadsController.getLeadsBoard);
 router.get('/client-leads', authenticate, requireSalesRepOrAdmin, salesLeadsController.getClientLeads);
 
 /**
