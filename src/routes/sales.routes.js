@@ -324,6 +324,7 @@ router.get('/quotes/accept', salesQuotesController.acceptQuoteProposal);
 router.post('/quotes/accept', salesQuotesController.acceptQuoteProposal);
 router.get('/quotes/reject/:quoteId', authenticate, salesQuotesController.rejectQuoteProposal);
 router.get('/quotes/public/:quoteId', salesQuotesController.getPublicQuoteById);
+router.get('/quotes/public/by-key/:quoteKey', salesQuotesController.getPublicQuoteByKey);
 router.post('/quotes/public/:quoteId/convert-to-booking', salesQuotesController.convertPublicQuoteToBooking);
 router.get('/quotes/:quoteId/versions', authenticate, salesQuotesController.listQuoteVersions);
 router.get('/quotes/:quoteId/versions/:versionNumber', authenticate, salesQuotesController.getQuoteVersionByNumber);
@@ -334,6 +335,7 @@ router.post('/quotes/:quoteId/duplicate', authenticate, requireSalesRepOrAdmin, 
 router.put('/quotes/:quoteId', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateQuote);
 router.post('/quotes/:quoteId/convert-to-booking', authenticate, requireSalesRepOrAdmin, salesQuotesController.convertQuoteToBooking);
 router.post('/quotes/:quoteId/send', authenticate, requireSalesRepOrAdmin, salesQuotesController.sendQuoteProposal);
+router.post('/quotes/:quoteId/preview-link', authenticate, requireSalesRepOrAdmin, salesQuotesController.createQuotePreviewLink);
 router.post('/quotes/:quoteId/preview-invoice', authenticate, requireSalesRepOrAdmin, paymentLinksController.previewQuoteInvoice);
 router.post('/quotes/:quoteId/send-invoice', authenticate, requireSalesRepOrAdmin, paymentLinksController.sendQuoteInvoice);
 router.patch('/quotes/:quoteId/status', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateQuoteStatus);
