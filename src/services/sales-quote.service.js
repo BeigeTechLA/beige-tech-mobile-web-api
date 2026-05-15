@@ -1,5 +1,6 @@
 const { Op } = require('sequelize');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const db = require('../models');
 const constants = require('../utils/constants');
 const {
@@ -4086,6 +4087,192 @@ async function getPublicQuoteById(salesQuoteId) {
   return fetchQuoteById(salesQuoteId);
 }
 
+function getQuotePreviewExpiryFromValidUntil(validUntil) {
+  if (!validUntil) return null;
+  const expiry = new Date(`${String(validUntil).trim()}T23:59:59.999Z`);
+  return Number.isNaN(expiry.getTime()) ? null : expiry;
+}
+
+async function createQuotePreviewLink(salesQuoteId, user) {
+  const quote = await db.sales_quotes.findOne({
+    where: { sales_quote_id: salesQuoteId, ...buildQuoteAccessWhere(user) },
+    attributes: ['sales_quote_id', 'valid_until']
+  });
+
+  if (!quote) {
+    throw new Error('Quote not found');
+  }
+
+  const expiresAt = getQuotePreviewExpiryFromValidUntil(quote.valid_until);
+  if (!expiresAt) {
+    throw new Error('Set quote valid date before generating preview link');
+  }
+
+  const [existingRows] = await db.sequelize.query(
+    `
+      SELECT quote_key, expires_at
+      FROM sales_quote_preview_links
+      WHERE sales_quote_id = :salesQuoteId
+        AND is_active = 1
+      ORDER BY sales_quote_preview_link_id DESC
+      LIMIT 1
+    `,
+    {
+      replacements: { salesQuoteId },
+      type: db.Sequelize.QueryTypes.SELECT
+    }
+  );
+
+  if (existingRows?.quote_key) {
+    await db.sequelize.query(
+      `
+        UPDATE sales_quote_preview_links
+        SET expires_at = :expiresAt,
+            updated_at = NOW()
+        WHERE quote_key = :quoteKey
+      `,
+      {
+        replacements: {
+          quoteKey: existingRows.quote_key,
+          expiresAt
+        },
+        type: db.Sequelize.QueryTypes.UPDATE
+      }
+    );
+
+    return {
+      quote_key: existingRows.quote_key,
+      expires_at: expiresAt.toISOString()
+    };
+  }
+
+  const quoteKey = crypto.randomBytes(32).toString('hex');
+
+  await db.sequelize.query(
+    `
+      INSERT INTO sales_quote_preview_links
+        (sales_quote_id, quote_key, expires_at, created_by_user_id, is_active, created_at, updated_at)
+      VALUES
+        (:salesQuoteId, :quoteKey, :expiresAt, :createdByUserId, 1, NOW(), NOW())
+    `,
+    {
+      replacements: {
+        salesQuoteId,
+        quoteKey,
+        expiresAt,
+        createdByUserId: user?.userId || null
+      },
+      type: db.Sequelize.QueryTypes.INSERT
+    }
+  );
+
+  return {
+    quote_key: quoteKey,
+    expires_at: expiresAt.toISOString()
+  };
+}
+
+async function getPublicQuoteByKey(quoteKey) {
+  const normalizedKey = String(quoteKey || '').trim();
+  if (!normalizedKey) {
+    throw new Error('Quote key is required');
+  }
+  const now = new Date();
+
+  const rows = await db.sequelize.query(
+    `
+      SELECT
+        l.sales_quote_id,
+        l.expires_at,
+        q.valid_until
+      FROM sales_quote_preview_links l
+      INNER JOIN sales_quotes q ON q.sales_quote_id = l.sales_quote_id
+      WHERE l.quote_key = :quoteKey
+        AND l.is_active = 1
+      LIMIT 1
+    `,
+    {
+      replacements: { quoteKey: normalizedKey },
+      type: db.Sequelize.QueryTypes.SELECT
+    }
+  );
+
+  const linkRow = rows?.[0];
+  if (!linkRow?.sales_quote_id) {
+    // Backward compatibility for old frontend-generated signed links.
+    const legacyQuoteId = resolveLegacyQuotePreviewTokenQuoteId(normalizedKey);
+    if (!legacyQuoteId) {
+      throw new Error('Quote preview link is invalid or expired');
+    }
+
+    const legacyQuote = await fetchQuoteById(Number(legacyQuoteId));
+    if (!legacyQuote) {
+      throw new Error('Quote preview link is invalid or expired');
+    }
+
+    const legacyValidUntilExpiry = getQuotePreviewExpiryFromValidUntil(legacyQuote.valid_until);
+    if (legacyValidUntilExpiry && now > legacyValidUntilExpiry) {
+      throw new Error('Quote preview link is invalid or expired');
+    }
+
+    return legacyQuote;
+  }
+
+  const linkExpiresAt = linkRow.expires_at ? new Date(linkRow.expires_at) : null;
+  const quoteValidUntilExpiry = getQuotePreviewExpiryFromValidUntil(linkRow.valid_until);
+
+  if (
+    (linkExpiresAt && now > linkExpiresAt) ||
+    (quoteValidUntilExpiry && now > quoteValidUntilExpiry)
+  ) {
+    throw new Error('Quote preview link is invalid or expired');
+  }
+
+  return fetchQuoteById(Number(linkRow.sales_quote_id));
+}
+
+function getLegacyQuotePreviewSecret() {
+  return process.env.QUOTE_PREVIEW_SECRET
+    || process.env.DO_SECRET
+    || 'local-dev-quote-preview-secret-change-me';
+}
+
+function resolveLegacyQuotePreviewTokenQuoteId(token) {
+  const [encodedPayload, signature] = String(token || '').split('.');
+  if (!encodedPayload || !signature) return null;
+
+  const expectedSignature = crypto
+    .createHmac('sha256', getLegacyQuotePreviewSecret())
+    .update(encodedPayload)
+    .digest('base64url');
+
+  const signatureBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expectedSignature);
+  if (
+    signatureBuffer.length !== expectedBuffer.length ||
+    !crypto.timingSafeEqual(signatureBuffer, expectedBuffer)
+  ) {
+    return null;
+  }
+
+  try {
+    const payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'));
+    const quoteId = String(payload?.qid || '').trim();
+    const exp = Number(payload?.exp || 0);
+    if (!quoteId || !/^\d+$/.test(quoteId) || !Number.isFinite(exp)) {
+      return null;
+    }
+
+    if (exp < Math.floor(Date.now() / 1000)) {
+      return null;
+    }
+
+    return Number(quoteId);
+  } catch (_) {
+    return null;
+  }
+}
+
 async function listQuotes(query, user) {
   const page = Math.max(1, Number(query.page || 1));
   const limit = Math.min(100, Math.max(1, Number(query.limit || 20)));
@@ -4649,6 +4836,8 @@ module.exports = {
   getQuoteVersionByNumber,
   getQuoteOverallChangeSummary,
   getPublicQuoteById,
+  createQuotePreviewLink,
+  getPublicQuoteByKey,
   listQuotes,
   getQuoteDashboard,
   updateQuoteStatus,
