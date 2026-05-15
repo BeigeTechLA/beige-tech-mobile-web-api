@@ -5355,7 +5355,7 @@ exports.updateBookingCrew = async (req, res) => {
       updateData.special_instructions = description;
     }
     if (reference_links !== undefined) {
-      updateData.reference_links = reference_links;
+      updateData.reference_links = JSON.stringify(reference_links);
     }
 
     await booking.update(updateData);
