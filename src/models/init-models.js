@@ -50,6 +50,19 @@ var _assigned_post_production_member = require("./assigned_post_production_membe
 var _clients = require("./clients");
 var _client_leads = require("./client_leads");
 var _client_lead_activities = require("./client_lead_activities");
+var _finance_transactions = require("./finance_transactions");
+var _finance_project_breakdowns = require("./finance_project_breakdowns");
+var _finance_invoice_payments = require("./finance_invoice_payments");
+var _creator_earnings = require("./creator_earnings");
+var _creator_wallets = require("./creator_wallets");
+var _creator_payout_accounts = require("./creator_payout_accounts");
+var _creator_payout_requests = require("./creator_payout_requests");
+var _creator_payout_transactions = require("./creator_payout_transactions");
+var _finance_disputes = require("./finance_disputes");
+var _finance_dispute_comments = require("./finance_dispute_comments");
+var _finance_dispute_attachments = require("./finance_dispute_attachments");
+var _finance_dispute_resolution_logs = require("./finance_dispute_resolution_logs");
+var _finance_dispute_payout_holds = require("./finance_dispute_payout_holds");
 
 // CMS Approval States Models
 var _projects = require("./projects");
@@ -130,6 +143,19 @@ function initModels(sequelize) {
   var clients = _clients(sequelize, DataTypes);
   var client_leads = _client_leads(sequelize, DataTypes);
   var client_lead_activities = _client_lead_activities(sequelize, DataTypes);
+  var finance_transactions = _finance_transactions(sequelize, DataTypes);
+  var finance_project_breakdowns = _finance_project_breakdowns(sequelize, DataTypes);
+  var finance_invoice_payments = _finance_invoice_payments(sequelize, DataTypes);
+  var creator_earnings = _creator_earnings(sequelize, DataTypes);
+  var creator_wallets = _creator_wallets(sequelize, DataTypes);
+  var creator_payout_accounts = _creator_payout_accounts(sequelize, DataTypes);
+  var creator_payout_requests = _creator_payout_requests(sequelize, DataTypes);
+  var creator_payout_transactions = _creator_payout_transactions(sequelize, DataTypes);
+  var finance_disputes = _finance_disputes(sequelize, DataTypes);
+  var finance_dispute_comments = _finance_dispute_comments(sequelize, DataTypes);
+  var finance_dispute_attachments = _finance_dispute_attachments(sequelize, DataTypes);
+  var finance_dispute_resolution_logs = _finance_dispute_resolution_logs(sequelize, DataTypes);
+  var finance_dispute_payout_holds = _finance_dispute_payout_holds(sequelize, DataTypes);
 
   // CMS Approval States Models
   var projects = _projects(sequelize, DataTypes);
@@ -169,10 +195,118 @@ function initModels(sequelize) {
   users.hasMany(account_credit_ledger, { as: "approved_account_credit_entries", foreignKey: "approved_by_user_id" });
   account_credit_ledger.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id" });
   stream_project_booking.hasMany(account_credit_ledger, { as: "account_credit_entries", foreignKey: "booking_id" });
+  account_credit_ledger.belongsTo(payment_transactions, { as: "payment", foreignKey: "payment_id" });
+  payment_transactions.hasMany(account_credit_ledger, { as: "account_credit_entries", foreignKey: "payment_id" });
+  account_credit_ledger.belongsTo(invoice_send_history, { as: "invoice", foreignKey: "invoice_send_history_id" });
+  invoice_send_history.hasMany(account_credit_ledger, { as: "account_credit_entries", foreignKey: "invoice_send_history_id" });
+  account_credit_ledger.belongsTo(account_credit_ledger, { as: "source_entry", foreignKey: "source_account_credit_ledger_id" });
+  account_credit_ledger.hasMany(account_credit_ledger, { as: "usage_entries", foreignKey: "source_account_credit_ledger_id" });
   account_credit_ledger.belongsTo(sales_quotes, { as: "sales_quote", foreignKey: "sales_quote_id" });
   sales_quotes.hasMany(account_credit_ledger, { as: "account_credit_entries", foreignKey: "sales_quote_id" });
   account_credit_ledger.belongsTo(sales_quote_activities, { as: "sales_quote_activity", foreignKey: "sales_quote_activity_id" });
   sales_quote_activities.hasMany(account_credit_ledger, { as: "account_credit_entries", foreignKey: "sales_quote_activity_id" });
+
+  // Finance module relationships (Phase 1)
+  finance_transactions.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id" });
+  stream_project_booking.hasMany(finance_transactions, { as: "finance_transactions", foreignKey: "booking_id" });
+  finance_transactions.belongsTo(payment_transactions, { as: "payment", foreignKey: "payment_id" });
+  payment_transactions.hasMany(finance_transactions, { as: "finance_transactions", foreignKey: "payment_id" });
+  finance_transactions.belongsTo(invoice_send_history, { as: "invoice", foreignKey: "invoice_send_history_id" });
+  invoice_send_history.hasMany(finance_transactions, { as: "finance_transactions", foreignKey: "invoice_send_history_id" });
+  finance_transactions.belongsTo(users, { as: "client", foreignKey: "client_user_id" });
+  users.hasMany(finance_transactions, { as: "finance_transactions", foreignKey: "client_user_id" });
+  finance_transactions.belongsTo(users, { as: "created_by", foreignKey: "created_by_user_id" });
+  users.hasMany(finance_transactions, { as: "created_finance_transactions", foreignKey: "created_by_user_id" });
+
+  finance_project_breakdowns.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id" });
+  stream_project_booking.hasOne(finance_project_breakdowns, { as: "finance_breakdown", foreignKey: "booking_id" });
+  finance_project_breakdowns.belongsTo(users, { as: "client", foreignKey: "client_user_id" });
+  users.hasMany(finance_project_breakdowns, { as: "finance_breakdowns", foreignKey: "client_user_id" });
+
+  finance_invoice_payments.belongsTo(invoice_send_history, { as: "invoice", foreignKey: "invoice_send_history_id" });
+  invoice_send_history.hasMany(finance_invoice_payments, { as: "finance_invoice_payments", foreignKey: "invoice_send_history_id" });
+  finance_invoice_payments.belongsTo(payment_transactions, { as: "payment", foreignKey: "payment_id" });
+  payment_transactions.hasMany(finance_invoice_payments, { as: "finance_invoice_payments", foreignKey: "payment_id" });
+  finance_invoice_payments.belongsTo(finance_transactions, { as: "finance_transaction", foreignKey: "finance_transaction_id" });
+  finance_transactions.hasMany(finance_invoice_payments, { as: "invoice_payments", foreignKey: "finance_transaction_id" });
+  finance_invoice_payments.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id" });
+  stream_project_booking.hasMany(finance_invoice_payments, { as: "finance_invoice_payments", foreignKey: "booking_id" });
+
+  creator_earnings.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id" });
+  stream_project_booking.hasMany(creator_earnings, { as: "creator_earnings", foreignKey: "booking_id" });
+  creator_earnings.belongsTo(crew_members, { as: "creator", foreignKey: "creator_id" });
+  crew_members.hasMany(creator_earnings, { as: "creator_earnings", foreignKey: "creator_id" });
+  creator_earnings.belongsTo(payment_transactions, { as: "payment", foreignKey: "payment_id" });
+  payment_transactions.hasMany(creator_earnings, { as: "creator_earnings", foreignKey: "payment_id" });
+  creator_earnings.belongsTo(finance_transactions, { as: "finance_transaction", foreignKey: "finance_transaction_id" });
+  finance_transactions.hasMany(creator_earnings, { as: "creator_earnings", foreignKey: "finance_transaction_id" });
+  finance_project_breakdowns.hasMany(creator_earnings, {
+    as: "creator_earnings",
+    foreignKey: "booking_id",
+    sourceKey: "booking_id",
+    constraints: false
+  });
+
+  creator_wallets.belongsTo(crew_members, { as: "creator", foreignKey: "creator_id" });
+  crew_members.hasOne(creator_wallets, { as: "creator_wallet", foreignKey: "creator_id" });
+
+  creator_payout_accounts.belongsTo(crew_members, { as: "creator", foreignKey: "creator_id" });
+  crew_members.hasMany(creator_payout_accounts, { as: "payout_accounts", foreignKey: "creator_id" });
+
+  creator_payout_requests.belongsTo(crew_members, { as: "creator", foreignKey: "creator_id" });
+  crew_members.hasMany(creator_payout_requests, { as: "payout_requests", foreignKey: "creator_id" });
+  creator_payout_requests.belongsTo(creator_payout_accounts, { as: "payout_account", foreignKey: "creator_payout_account_id" });
+  creator_payout_accounts.hasMany(creator_payout_requests, { as: "payout_requests", foreignKey: "creator_payout_account_id" });
+  creator_payout_requests.belongsTo(users, { as: "approved_by", foreignKey: "approved_by_user_id" });
+  creator_payout_requests.belongsTo(users, { as: "processed_by", foreignKey: "processed_by_user_id" });
+
+  creator_payout_transactions.belongsTo(crew_members, { as: "creator", foreignKey: "creator_id" });
+  crew_members.hasMany(creator_payout_transactions, { as: "payout_transactions", foreignKey: "creator_id" });
+  creator_payout_transactions.belongsTo(creator_payout_requests, { as: "payout_request", foreignKey: "creator_payout_request_id" });
+  creator_payout_requests.hasMany(creator_payout_transactions, { as: "payout_transactions", foreignKey: "creator_payout_request_id" });
+  creator_payout_transactions.belongsTo(creator_payout_accounts, { as: "payout_account", foreignKey: "creator_payout_account_id" });
+  creator_payout_accounts.hasMany(creator_payout_transactions, { as: "payout_transactions", foreignKey: "creator_payout_account_id" });
+
+  // Finance disputes relationships (Phase 4A)
+  finance_disputes.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id" });
+  stream_project_booking.hasMany(finance_disputes, { as: "finance_disputes", foreignKey: "booking_id" });
+  finance_disputes.belongsTo(invoice_send_history, { as: "invoice", foreignKey: "invoice_send_history_id" });
+  invoice_send_history.hasMany(finance_disputes, { as: "finance_disputes", foreignKey: "invoice_send_history_id" });
+  finance_disputes.belongsTo(finance_transactions, { as: "finance_transaction", foreignKey: "finance_transaction_id" });
+  finance_transactions.hasMany(finance_disputes, { as: "finance_disputes", foreignKey: "finance_transaction_id" });
+  finance_disputes.belongsTo(users, { as: "client", foreignKey: "client_user_id" });
+  users.hasMany(finance_disputes, { as: "client_finance_disputes", foreignKey: "client_user_id" });
+  finance_disputes.belongsTo(crew_members, { as: "creator", foreignKey: "creator_id" });
+  crew_members.hasMany(finance_disputes, { as: "finance_disputes", foreignKey: "creator_id" });
+  finance_disputes.belongsTo(users, { as: "raised_by_user", foreignKey: "raised_by_user_id" });
+  finance_disputes.belongsTo(crew_members, { as: "raised_by_creator", foreignKey: "raised_by_creator_id" });
+  finance_disputes.belongsTo(users, { as: "created_by", foreignKey: "created_by_user_id" });
+  finance_disputes.belongsTo(users, { as: "updated_by", foreignKey: "updated_by_user_id" });
+  finance_disputes.belongsTo(users, { as: "resolved_by", foreignKey: "resolved_by_user_id" });
+
+  finance_dispute_comments.belongsTo(finance_disputes, { as: "dispute", foreignKey: "finance_dispute_id" });
+  finance_disputes.hasMany(finance_dispute_comments, { as: "comments", foreignKey: "finance_dispute_id" });
+  finance_dispute_comments.belongsTo(users, { as: "created_by", foreignKey: "created_by_user_id" });
+  finance_dispute_comments.belongsTo(crew_members, { as: "created_by_creator", foreignKey: "created_by_creator_id" });
+
+  finance_dispute_attachments.belongsTo(finance_disputes, { as: "dispute", foreignKey: "finance_dispute_id" });
+  finance_disputes.hasMany(finance_dispute_attachments, { as: "attachments", foreignKey: "finance_dispute_id" });
+  finance_dispute_attachments.belongsTo(users, { as: "uploaded_by", foreignKey: "uploaded_by_user_id" });
+
+  finance_dispute_resolution_logs.belongsTo(finance_disputes, { as: "dispute", foreignKey: "finance_dispute_id" });
+  finance_disputes.hasMany(finance_dispute_resolution_logs, { as: "resolution_logs", foreignKey: "finance_dispute_id" });
+  finance_dispute_resolution_logs.belongsTo(users, { as: "performed_by", foreignKey: "performed_by_user_id" });
+
+  finance_dispute_payout_holds.belongsTo(finance_disputes, { as: "dispute", foreignKey: "finance_dispute_id" });
+  finance_disputes.hasMany(finance_dispute_payout_holds, { as: "payout_holds", foreignKey: "finance_dispute_id" });
+  finance_dispute_payout_holds.belongsTo(crew_members, { as: "creator", foreignKey: "creator_id" });
+  crew_members.hasMany(finance_dispute_payout_holds, { as: "finance_dispute_payout_holds", foreignKey: "creator_id" });
+  finance_dispute_payout_holds.belongsTo(creator_earnings, { as: "creator_earning", foreignKey: "creator_earning_id" });
+  creator_earnings.hasMany(finance_dispute_payout_holds, { as: "finance_dispute_payout_holds", foreignKey: "creator_earning_id" });
+  finance_dispute_payout_holds.belongsTo(creator_payout_requests, { as: "payout_request", foreignKey: "creator_payout_request_id" });
+  creator_payout_requests.hasMany(finance_dispute_payout_holds, { as: "finance_dispute_payout_holds", foreignKey: "creator_payout_request_id" });
+  finance_dispute_payout_holds.belongsTo(users, { as: "held_by", foreignKey: "held_by_user_id" });
+  finance_dispute_payout_holds.belongsTo(users, { as: "released_by", foreignKey: "released_by_user_id" });
 
   assignment_checklist.belongsTo(checklist_master, { as: "checklist", foreignKey: "checklist_id"});
   checklist_master.hasMany(assignment_checklist, { as: "assignment_checklists", foreignKey: "checklist_id"});
@@ -616,6 +750,19 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
     post_production_members,
     assigned_post_production_member,
     clients,
+    finance_transactions,
+    finance_project_breakdowns,
+    finance_invoice_payments,
+    creator_earnings,
+    creator_wallets,
+    creator_payout_accounts,
+    creator_payout_requests,
+    creator_payout_transactions,
+    finance_disputes,
+    finance_dispute_comments,
+    finance_dispute_attachments,
+    finance_dispute_resolution_logs,
+    finance_dispute_payout_holds,
     project_form_submissions,
     quote_catalog_items,
     sales_ai_editing_types,

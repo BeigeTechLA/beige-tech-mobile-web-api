@@ -1628,7 +1628,8 @@ exports.getBookingPaymentDetails = async (req, res) => {
 
     const accountCredit = await accountCreditService.getAccountCreditBalance({
       userId: booking.user_id || req.userId || null,
-      guestEmail: booking.guest_email || null
+      guestEmail: booking.guest_email || null,
+      usageContext: 'shoot_payment'
     });
 
     res.status(constants.OK.code).json({
