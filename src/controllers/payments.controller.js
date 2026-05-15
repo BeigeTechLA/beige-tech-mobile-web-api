@@ -24,6 +24,44 @@ function normalizePaymentSource(value) {
     : PAYMENT_SOURCE.BOOKING_CHECKOUT;
 }
 
+async function isConvertedSalesQuoteBooking(bookingId, transaction = null) {
+  const convertedLead = await db.sales_leads.findOne({
+    where: {
+      booking_id: bookingId,
+      lead_source: 'converted bookings'
+    },
+    attributes: ['lead_id'],
+    transaction
+  });
+
+  return Boolean(convertedLead);
+}
+
+async function resolvePaymentSourceForBooking({
+  bookingId,
+  currentSource = PAYMENT_SOURCE.BOOKING_CHECKOUT,
+  metadata = {},
+  transaction = null
+}) {
+  let paymentSource = normalizePaymentSource(currentSource || metadata.payment_source);
+
+  if (
+    paymentSource === PAYMENT_SOURCE.BOOKING_CHECKOUT &&
+    (metadata.sales_quote_id || metadata.quote_id)
+  ) {
+    paymentSource = PAYMENT_SOURCE.QUOTE_INVOICE;
+  }
+
+  if (
+    paymentSource === PAYMENT_SOURCE.BOOKING_CHECKOUT &&
+    await isConvertedSalesQuoteBooking(bookingId, transaction)
+  ) {
+    paymentSource = PAYMENT_SOURCE.QUOTE_INVOICE;
+  }
+
+  return paymentSource;
+}
+
 /**
  * Calculate pricing breakdown for CP + equipment booking
  * @param {number} hours - Number of hours
@@ -1341,11 +1379,16 @@ exports.createPaymentIntentMulti = async (req, res) => {
       });
     }
 
+    const paymentSource = await resolvePaymentSourceForBooking({
+      bookingId: booking_id
+    });
+
     const paymentIntent = await stripe.paymentIntents.create({
       amount: Math.round(amount * 100), // Convert to cents
       currency: 'usd',
       metadata: {
         booking_id: booking_id.toString(),
+        payment_source: paymentSource,
         guest_email: guest_email || booking.guest_email || '',
         type: 'multi-creator',
         shoot_name: booking.shoot_name || '',
@@ -1590,11 +1633,31 @@ exports.confirmPaymentMulti = async (req, res) => {
 
     // 6. Create Payment Transaction Record
     const finalShootDate = normalizeDateOnly(booking.shoot_date || booking.event_date || new Date());
-    const rawHours = booking.shoot_hours || booking.duration_hours || 1;
-    const finalHours = parseFloat(rawHours) > 0 ? parseFloat(rawHours) : 1;
+    const paymentSource = await resolvePaymentSourceForBooking({
+      bookingId: booking_id,
+      currentSource: paymentIntent?.metadata?.payment_source,
+      metadata: paymentIntent?.metadata || {},
+      transaction
+    });
+    const rawHours = booking.shoot_hours || booking.duration_hours || 0;
+    const parsedHours = parseFloat(rawHours);
+    const canDeferHours =
+      paymentSource === PAYMENT_SOURCE.QUOTE_INVOICE ||
+      paymentSource === PAYMENT_SOURCE.ADDITIONAL_INVOICE;
+
+    if ((!Number.isFinite(parsedHours) || parsedHours <= 0) && !canDeferHours) {
+      throw new Error(`Cannot process booking ${booking_id}: booking duration is required for ${paymentSource}`);
+    }
+
+    const finalHours = Number.isFinite(parsedHours) && parsedHours > 0 ? parsedHours : null;
     const safeLocation = normalizeString(booking.event_location, 255, 'See Booking Details');
     const safeShootType = normalizeString(booking.shoot_type, 100, null);
-    const safeNotes = normalizeString(booking.special_requests || booking.special_instructions, null, null);
+    const safeNotes = normalizeString([
+      booking.special_requests || booking.special_instructions || null,
+      finalHours === null
+        ? 'Payment completed before schedule/duration was finalized; payment transaction hours left empty.'
+        : null
+    ].filter(Boolean).join('\n'), null, null);
 
     const payment = await db.payment_transactions.create({
       stripe_payment_intent_id: paymentIntentId,
@@ -1602,6 +1665,7 @@ exports.confirmPaymentMulti = async (req, res) => {
       creator_id: validCreatorId,
       user_id: booking.user_id || null,
       guest_email: booking.guest_email || null,
+      payment_source: paymentSource,
       hours: finalHours,
       hourly_rate: 0,
       cp_cost: 0,
@@ -2033,27 +2097,12 @@ exports.handleStripeWebhook = async (req, res) => {
         return res.status(200).json({ received: true, booking_found: false });
       }
 
-      let paymentSource = normalizePaymentSource(invoiceMetadata.payment_source);
-      if (
-        paymentSource === PAYMENT_SOURCE.BOOKING_CHECKOUT &&
-        (invoiceMetadata.sales_quote_id || invoiceMetadata.quote_id)
-      ) {
-        paymentSource = PAYMENT_SOURCE.QUOTE_INVOICE;
-      }
-
-      if (paymentSource === PAYMENT_SOURCE.BOOKING_CHECKOUT && event.type === 'invoice.paid') {
-        const convertedLead = await db.sales_leads.findOne({
-          where: {
-            booking_id,
-            lead_source: 'converted bookings'
-          },
-          attributes: ['lead_id'],
-          transaction
-        });
-        if (convertedLead) {
-          paymentSource = PAYMENT_SOURCE.QUOTE_INVOICE;
-        }
-      }
+      const paymentSource = await resolvePaymentSourceForBooking({
+        bookingId: booking_id,
+        currentSource: invoiceMetadata.payment_source,
+        metadata: invoiceMetadata,
+        transaction
+      });
 
       // Booking-level idempotency: do not create a second payment for an already paid booking.
       if (booking.payment_id || booking.is_completed === 1) {
