@@ -36,6 +36,16 @@ function toTitleCase(value) {
     .replace(/\b\w/g, (ch) => ch.toUpperCase());
 }
 
+function formatDiscountMeta(type, value) {
+  if (!type || value == null || Number.isNaN(Number(value))) return '';
+  const normalizedType = String(type).toLowerCase();
+  const numericValue = Number(value);
+  if (normalizedType === 'percentage') {
+    return `${numericValue}%`;
+  }
+  return formatCurrency(numericValue);
+}
+
 function buildManualReceiptHtml(data) {
   const items = Array.isArray(data.items) ? data.items : [];
   const history = Array.isArray(data.paymentHistory) ? data.paymentHistory : [];
@@ -50,6 +60,12 @@ function buildManualReceiptHtml(data) {
     Math.max(totalPaidFromHistory > 0 ? totalPaidFromHistory : fallbackPaidAmount, 0)
   );
   const pendingAmount = Math.max(totalAmount - totalPaidAmount, 0);
+  const discountAmount = Math.max(0, Number(data.discountAmount || 0));
+  const discountCode = data.discountCode ? String(data.discountCode) : '';
+  const discountMeta = formatDiscountMeta(data.discountType, data.discountValue);
+  const discountLabel = discountCode
+    ? `Discount (${escapeHtml(discountCode)}${discountMeta ? `, ${escapeHtml(discountMeta)}` : ''})`
+    : (discountMeta ? `Discount (${escapeHtml(discountMeta)})` : 'Discount');
 
   const itemRows = items
     .map((item) => `
@@ -603,6 +619,7 @@ function buildManualReceiptHtml(data) {
 
           <div class="totals">
             <div class="tot-row"><span>Subtotal</span><span>${formatCurrency(data.subtotal || 0)}</span></div>
+            ${discountAmount > 0 ? `<div class="tot-row"><span>${discountLabel}</span><span>- ${formatCurrency(discountAmount)}</span></div>` : ''}
             <div class="tot-row"><span><b>Total</b></span><span><b>${formatCurrency(totalAmount)}</b></span></div>
             <div class="tot-row amount-paid"><span>Amount Paid</span><b>${formatCurrencyBold(totalPaidAmount)}</b></div>
             <div class="tot-row"><span>Pending Amount</span><span><b>${formatCurrency(pendingAmount)}</b></span></div>
@@ -631,10 +648,6 @@ function buildManualReceiptHtml(data) {
               <div class="thank-you">
                 Thank you for your business! Total paid amount of <b>${formatCurrencyBold(totalPaidAmount)}</b> has been received and processed manually.${transactionRef ? ` <b>Transaction Reference: ${transactionRef}.</b>` : ''}
               </div>
-            </div>
-            <div class="signature">
-              <div class="name">Your Name & Signature</div>
-              <div class="role">Account Manager</div>
             </div>
           </div>
         </div>

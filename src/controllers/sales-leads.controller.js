@@ -8,6 +8,7 @@ const leadAssignmentService = require('../services/lead-assignment.service');
 const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 const pricingService = require('../services/pricing.service');
 const pricingController = require('../controllers/pricing.controller');
+const externalFileManagerController = require('../controllers/external-file-manager.controller');
 const paymentService = require('../services/payment-links.service');
 const accountCreditService = require('../services/account-credit.service');
 const quoteService = require('../services/sales-quote.service');
@@ -19,6 +20,8 @@ const { S3UploadFiles } = require('../utils/common.js');
 
 const sequelize = require('../db');
 const db = require('../models');
+const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
+const EXTERNAL_FILE_MANAGER_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -199,6 +202,124 @@ const matchShootStatusFilter = (booking, rawStatus) => {
   }
 };
 
+const hasCompletedMeetingOfType = (booking, meetingType) => {
+  const meetings = Array.isArray(booking?.meetings) ? booking.meetings : [];
+  return meetings.some((meeting) =>
+    String(meeting?.meeting_type || '').toLowerCase() === String(meetingType || '').toLowerCase() &&
+    String(meeting?.meeting_status || '').toLowerCase() === 'completed'
+  );
+};
+
+const hasCompletedFileInCategories = (booking, categories = []) => {
+  const files = Array.isArray(booking?.cms_project?.files) ? booking.cms_project.files : [];
+  const allowed = new Set(categories.map((entry) => String(entry || '').toUpperCase()));
+  return files.some((file) => {
+    const category = String(file?.file_category || '').toUpperCase();
+    const uploadStatus = String(file?.upload_status || '').toUpperCase();
+    const isDeleted = Number(file?.is_deleted || 0) === 1;
+    return !isDeleted && uploadStatus === 'COMPLETED' && allowed.has(category);
+  });
+};
+
+const isPostProductionEligible = (booking) => Boolean(
+  matchShootStatusFilter(booking, 'postproduction') ||
+  matchShootStatusFilter(booking, 'revision') ||
+  matchShootStatusFilter(booking, 'completed') ||
+  matchShootStatusFilter(booking, 'assetsdelivered')
+);
+
+const parseActivityData = (value) => {
+  if (!value) return null;
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch (_) {
+    return null;
+  }
+};
+
+const hasPreProductionUploadEvidence = (lead) => {
+  const booking = lead?.booking;
+
+  // Primary signal: file-manager project has at least one completed file.
+  const projectFiles = Array.isArray(booking?.cms_project?.files) ? booking.cms_project.files : [];
+  const hasCompletedProjectFile = projectFiles.some((file) =>
+    Number(file?.is_deleted || 0) !== 1 &&
+    String(file?.upload_status || '').toUpperCase() === 'COMPLETED'
+  );
+  if (hasCompletedProjectFile) return true;
+
+  // Fallback signal: external file manager activity already logged pre-production upload.
+  const activities = Array.isArray(lead?.activities) ? lead.activities : [];
+  return activities.some((activity) => {
+    if (String(activity?.activity_type || '').toLowerCase() !== 'status_changed') return false;
+    const payload = parseActivityData(activity?.activity_data);
+    const emailEvent = String(payload?.email_event || '').toLowerCase();
+    const folderPath = String(payload?.folder_path || '').toLowerCase();
+    const filePath = String(payload?.filepath || '').toLowerCase();
+
+    return (
+      emailEvent === 'pre_production_brief_uploaded' ||
+      folderPath.includes('pre-production') ||
+      filePath.includes('pre-production')
+    );
+  });
+};
+
+const fetchExternalWorkspaceFiles = async (bookingId, phase) => {
+  const query = new URLSearchParams();
+  if (phase) query.set('phase', phase);
+
+  const url = `${EXTERNAL_FILE_MANAGER_API_BASE_URL}/workspace/${encodeURIComponent(String(bookingId))}/files${query.toString() ? `?${query.toString()}` : ''}`;
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-internal-key': EXTERNAL_FILE_MANAGER_KEY
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error(`External file manager returned ${response.status} for booking ${bookingId}`);
+  }
+
+  return response.json();
+};
+
+const hasExternalWorkspaceFiles = async (bookingId, phase) => {
+  if (!bookingId) return false;
+  try {
+    const payload = await fetchExternalWorkspaceFiles(bookingId, phase);
+    const files = Array.isArray(payload?.data?.files) ? payload.data.files : [];
+    const expectedSegment = phase === 'post' ? 'post-production' : phase === 'pre' ? 'pre-production' : '';
+
+    // Guard against external API returning mixed-phase files:
+    // count only files that clearly belong to the requested phase path.
+    const phaseScopedFiles = files.filter((file) => {
+      const pathCandidate = String(
+        file?.path ||
+        file?.filepath ||
+        file?.key ||
+        file?.filePath ||
+        file?.name ||
+        ''
+      ).toLowerCase();
+
+      if (!expectedSegment) return pathCandidate.length > 0;
+      return pathCandidate.includes(`/${expectedSegment}/`) || pathCandidate.includes(`${expectedSegment}/`);
+    });
+
+    return phaseScopedFiles.length > 0;
+  } catch (error) {
+    console.error('[getLeads] external workspace file check failed:', {
+      bookingId,
+      phase,
+      message: error?.message || error
+    });
+    return false;
+  }
+};
+
 async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
   if (!quoteId) return null;
 
@@ -254,6 +375,28 @@ async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null
     bookingId
   });
 
+  const additionalPayment = refreshActivity ? {
+    additional_amount: additionalAmount,
+    previously_paid_amount: previouslyPaidAmount,
+    revised_total: revisedTotal,
+    outstanding_amount: additionalPaymentStatus === 'paid' ? 0 : additionalAmount,
+    payment_status: additionalPaymentStatus,
+    last_sent_at: refreshInvoiceHistory?.sent_at || null,
+    invoice_number: refreshInvoiceHistory?.invoice_number || null,
+    invoice_url: refreshInvoiceHistory?.invoice_url || null
+  } : null;
+
+  const reducedPayment = refreshActivity && reducedAmount > 0 ? {
+    reduced_amount: reducedAmount,
+    previously_paid_amount: previouslyPaidAmount,
+    revised_total: revisedTotal,
+    refund_pending_amount: reducedAmount,
+    payment_status: reducedPaymentStatus,
+    last_sent_at: refreshInvoiceHistory?.sent_at || null,
+    invoice_number: refreshInvoiceHistory?.invoice_number || null,
+    invoice_url: refreshInvoiceHistory?.invoice_url || null
+  } : null;
+
   return {
     latest_invoice: latestInvoiceHistory ? {
       invoice_send_history_id: latestInvoiceHistory.invoice_send_history_id,
@@ -263,27 +406,63 @@ async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null
       payment_status: latestInvoiceHistory.payment_status || null,
       sent_at: latestInvoiceHistory.sent_at || null
     } : null,
-    additional_payment: refreshActivity ? {
-      additional_amount: additionalAmount,
-      previously_paid_amount: previouslyPaidAmount,
-      revised_total: revisedTotal,
-      outstanding_amount: additionalPaymentStatus === 'paid' ? 0 : additionalAmount,
-      payment_status: additionalPaymentStatus,
-      last_sent_at: refreshInvoiceHistory?.sent_at || null,
-      invoice_number: refreshInvoiceHistory?.invoice_number || null,
-      invoice_url: refreshInvoiceHistory?.invoice_url || null
-    } : null,
-    reduced_payment: refreshActivity && reducedAmount > 0 ? {
-      reduced_amount: reducedAmount,
-      previously_paid_amount: previouslyPaidAmount,
-      revised_total: revisedTotal,
-      refund_pending_amount: reducedAmount,
-      payment_status: reducedPaymentStatus,
-      last_sent_at: refreshInvoiceHistory?.sent_at || null,
-      invoice_number: refreshInvoiceHistory?.invoice_number || null,
-      invoice_url: refreshInvoiceHistory?.invoice_url || null
-    } : null,
+    additional_payment: additionalPayment,
+    partial_payment: additionalPayment,
+    reduced_payment: reducedPayment,
     credit_summary: creditSummary
+  };
+}
+
+function hasOutstandingAdditionalPayment(customQuoteFinancials = null) {
+  const additionalPayment = customQuoteFinancials?.additional_payment || customQuoteFinancials?.partial_payment;
+  if (!additionalPayment) return false;
+
+  const outstandingAmount = parseFloat(additionalPayment.outstanding_amount || 0);
+  const paymentStatus = String(additionalPayment.payment_status || '').toLowerCase();
+
+  return outstandingAmount > 0 && paymentStatus !== 'paid';
+}
+
+function resolveLeadPaymentStatus({ booking = null, activePaymentLink = null, customQuoteFinancials = null }) {
+  if (hasOutstandingAdditionalPayment(customQuoteFinancials)) {
+    return 'partial_paid';
+  }
+
+  let paymentStatus = booking?.payment_id ? 'paid' : 'unpaid';
+  if (paymentStatus === 'unpaid' && activePaymentLink) {
+    paymentStatus = activePaymentLink.is_expired ? 'link_expired' : 'link_sent';
+  }
+
+  return paymentStatus;
+}
+
+function resolveLeadQuoteAmounts({ linkedSalesQuote = null, booking = null, customQuoteFinancials = null }) {
+  const additionalPayment = customQuoteFinancials?.additional_payment || customQuoteFinancials?.partial_payment || null;
+  if (additionalPayment) {
+    return {
+      collected_amount: parseFloat(additionalPayment.previously_paid_amount || 0),
+      outstanding_amount: parseFloat(additionalPayment.outstanding_amount || 0)
+    };
+  }
+
+  if (!linkedSalesQuote) {
+    return {
+      collected_amount: null,
+      outstanding_amount: null
+    };
+  }
+
+  const quoteTotal = parseFloat(linkedSalesQuote.total || 0);
+  if (booking?.payment_id) {
+    return {
+      collected_amount: quoteTotal,
+      outstanding_amount: 0
+    };
+  }
+
+  return {
+    collected_amount: 0,
+    outstanding_amount: quoteTotal
   };
 }
 
@@ -1916,7 +2095,9 @@ exports.getLeads = async (req, res) => {
       start_date,
       end_date,
       intent,
-      booking_status // Fallback key
+      booking_status, // Fallback key
+      cp_assignment,
+      production_filter
     } = req.query;
 
     const pageNumber = parseInt(page);
@@ -1937,8 +2118,17 @@ exports.getLeads = async (req, res) => {
     if (lead_type) whereClause.lead_type = lead_type;
 
     if (assigned_to) {
-      whereClause.assigned_sales_rep_id =
-        assigned_to === 'unassigned' ? null : parseInt(assigned_to);
+      const normalizedAssignedTo = String(assigned_to).trim().toLowerCase();
+
+      if (normalizedAssignedTo === 'all' || normalizedAssignedTo === '') {
+      } else if (normalizedAssignedTo === 'unassigned') {
+        whereClause.assigned_sales_rep_id = null;
+      } else {
+        const assignedToId = Number.parseInt(String(assigned_to), 10);
+        if (Number.isFinite(assignedToId)) {
+          whereClause.assigned_sales_rep_id = assignedToId;
+        }
+      }
     }
 
     if (search?.trim()) {
@@ -1966,13 +2156,25 @@ exports.getLeads = async (req, res) => {
       ];
     }
 
+    console.log('[getLeads] filters:', {
+      status,
+      lead_type,
+      assigned_to,
+      search,
+      booking_id,
+      intent,
+      cp_assignment,
+      production_filter
+    });
+
     const leads = await sales_leads.findAll({
       where: whereClause,
       include: [
         {
           model: users,
           as: 'assigned_sales_rep',
-          attributes: ['id', 'name', 'email']
+          attributes: ['id', 'name', 'email'],
+          required: false
         },
         { model: discount_codes, as: "discount_codes" }, // Added for status consistency
         { model: payment_links, as: "payment_links" },   // Added for status consistency
@@ -1981,6 +2183,32 @@ exports.getLeads = async (req, res) => {
           model: stream_project_booking,
           as: 'booking',
           include: [
+            {
+              model: assigned_crew,
+              as: 'assigned_crews',
+              required: false,
+              attributes: ['id', 'crew_member_id', 'status', 'project_id']
+            },
+            {
+              model: db.project_meetings,
+              as: 'meetings',
+              required: false,
+              attributes: ['meeting_id', 'meeting_type', 'meeting_status']
+            },
+            {
+              model: db.projects,
+              as: 'cms_project',
+              required: false,
+              attributes: ['project_id'],
+              include: [
+                {
+                  model: db.project_files,
+                  as: 'files',
+                  required: false,
+                  attributes: ['file_id', 'file_category', 'upload_status', 'is_deleted']
+                }
+              ]
+            },
             {
               model: quotes,
               as: 'primary_quote',
@@ -2000,6 +2228,15 @@ exports.getLeads = async (req, res) => {
           leadJson.activities || [],
           pricingData?.total || 0
         );
+        const linkedSalesQuote = await sales_quotes.findOne({
+          where: { lead_id: lead.lead_id },
+          attributes: ['sales_quote_id'],
+          order: [['updated_at', 'DESC']]
+        });
+        const customQuoteFinancials = await getCustomQuoteFinancialDetails({
+          quoteId: linkedSalesQuote?.sales_quote_id || null,
+          bookingId: leadJson.booking?.stream_project_booking_id || null
+        });
 
         // 1. Standardize Booking Status & Intent (Using same methods as Detail API)
         const computedIntent = lead.intent ?? leadAssignmentService.getLeadIntent({ lead, booking: lead.booking });
@@ -2008,20 +2245,32 @@ exports.getLeads = async (req, res) => {
           computedBookingStatus = 'Booked';
         } else if (manualProgress.isPartiallyPaid) {
           computedBookingStatus = 'Partially Paid';
+        } else if (hasOutstandingAdditionalPayment(customQuoteFinancials)) {
+          computedBookingStatus = 'Partially Paid';
         }
 
-        // 2. Standardize Payment Status Logic (Check for Payment Links)
-        let payment_status = lead.booking?.payment_id ? 'paid' : 'unpaid';
-        if (payment_status === 'unpaid') {
-          const pLinks = leadJson.payment_links || [];
-          if (pLinks.length > 0) {
-            const latestLink = [...pLinks].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
-            const now = new Date();
-            const expiryDate = latestLink.expires_at ? new Date(latestLink.expires_at) : null;
-            const isExpired = expiryDate ? expiryDate < now : false;
-            payment_status = isExpired ? 'link_expired' : 'link_sent';
-          }
+        const pLinks = leadJson.payment_links || [];
+        let activePaymentLink = null;
+        if (pLinks.length > 0) {
+          const latestLink = [...pLinks].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+          const now = new Date();
+          const expiryDate = latestLink.expires_at ? new Date(latestLink.expires_at) : null;
+          activePaymentLink = {
+            ...latestLink,
+            is_expired: expiryDate ? expiryDate < now : false
+          };
         }
+
+        const payment_status = resolveLeadPaymentStatus({
+          booking: lead.booking,
+          activePaymentLink,
+          customQuoteFinancials
+        });
+        const quoteAmounts = resolveLeadQuoteAmounts({
+          linkedSalesQuote,
+          booking: lead.booking,
+          customQuoteFinancials
+        });
 
         return {
           ...leadJson,
@@ -2029,6 +2278,8 @@ exports.getLeads = async (req, res) => {
           booking_status: computedBookingStatus, 
           intent: computedIntent,
           payment_status: payment_status,
+          collected_amount: quoteAmounts.collected_amount,
+          outstanding_amount: quoteAmounts.outstanding_amount,
           manual_payment_summary: manualProgress,
         };
       })
@@ -2053,6 +2304,78 @@ exports.getLeads = async (req, res) => {
       processedLeads = processedLeads.filter(
         (lead) => lead.intent.toLowerCase() === intent.toLowerCase().trim()
       );
+    }
+
+    if (cp_assignment && cp_assignment !== 'all') {
+      const normalizedCpAssignment = String(cp_assignment).toLowerCase().trim();
+      processedLeads = processedLeads.filter((lead) => {
+        const assignedCrews = Array.isArray(lead?.booking?.assigned_crews) ? lead.booking.assigned_crews : [];
+        const hasAssignedCrew = assignedCrews.length > 0;
+
+        if (normalizedCpAssignment === 'assigned') return hasAssignedCrew;
+        if (normalizedCpAssignment === 'not_assigned') return !hasAssignedCrew;
+        return true;
+      });
+    }
+
+    if (production_filter && production_filter !== 'all') {
+      const normalizedProductionFilter = String(production_filter).toLowerCase().trim();
+      const externalPreFileMap = new Map();
+      const externalPostFileMap = new Map();
+
+      if (
+        normalizedProductionFilter === 'pre_production_file_not_provided' ||
+        normalizedProductionFilter === 'post_production_file_not_uploaded'
+      ) {
+        const bookingIds = Array.from(
+          new Set(
+            processedLeads
+              .map((lead) => Number(lead?.booking?.stream_project_booking_id || lead?.booking_id))
+              .filter((id) => Number.isFinite(id) && id > 0)
+          )
+        );
+
+        await Promise.all(
+          bookingIds.map(async (bookingId) => {
+            if (normalizedProductionFilter === 'pre_production_file_not_provided') {
+              externalPreFileMap.set(bookingId, await hasExternalWorkspaceFiles(bookingId, 'pre'));
+            }
+            if (normalizedProductionFilter === 'post_production_file_not_uploaded') {
+              externalPostFileMap.set(bookingId, await hasExternalWorkspaceFiles(bookingId, 'post'));
+            }
+          })
+        );
+      }
+
+      processedLeads = processedLeads.filter((lead) => {
+        const booking = lead?.booking;
+        if (!booking) return false;
+        const bookingId = Number(booking?.stream_project_booking_id || lead?.booking_id || 0);
+
+        if (normalizedProductionFilter === 'pre_production_file_not_provided') {
+          const hasExternalPreFiles = externalPreFileMap.get(bookingId) === true;
+          if (hasExternalPreFiles) return false;
+          return !hasPreProductionUploadEvidence(lead);
+        }
+
+        if (normalizedProductionFilter === 'pre_production_meeting_not_done') {
+          return !hasCompletedMeetingOfType(booking, 'pre_production');
+        }
+
+        if (normalizedProductionFilter === 'post_production_meeting_not_done') {
+          if (!isPostProductionEligible(booking)) return false;
+          return !hasCompletedMeetingOfType(booking, 'post_production');
+        }
+
+        if (normalizedProductionFilter === 'post_production_file_not_uploaded') {
+          if (!isPostProductionEligible(booking)) return false;
+          const hasExternalPostFiles = externalPostFileMap.get(bookingId) === true;
+          if (hasExternalPostFiles) return false;
+          return !hasCompletedFileInCategories(booking, ['EDIT_FINAL', 'CLIENT_DELIVERABLE']);
+        }
+
+        return true;
+      });
     }
 
     const total = processedLeads.length;
@@ -2243,6 +2566,7 @@ exports.getLeadById = async (req, res) => {
           model: users,
           as: "assigned_sales_rep",
           attributes: ["id", "name", "email"],
+          required: false
         },
         {
           model: stream_project_booking,
@@ -2386,10 +2710,16 @@ exports.getLeadById = async (req, res) => {
       }
     }
 
-    let payment_status = lead.booking?.payment_id ? 'paid' : 'unpaid';
-    if (payment_status === 'unpaid' && active_payment_link) {
-        payment_status = active_payment_link.is_expired ? 'link_expired' : 'link_sent';
-    }
+    const payment_status = resolveLeadPaymentStatus({
+      booking: lead.booking,
+      activePaymentLink: active_payment_link,
+      customQuoteFinancials
+    });
+    const quoteAmounts = resolveLeadQuoteAmounts({
+      linkedSalesQuote,
+      booking: lead.booking,
+      customQuoteFinancials
+    });
 
     const projectedQuote = await calculateLeadPricing(lead.booking);
     const activeQuoteSource = leadJson.booking?.primary_quote || projectedQuote;
@@ -2465,7 +2795,10 @@ exports.getLeadById = async (req, res) => {
     
     // --- STANDARDIZED STATUS & INTENT CALLS ---
     const intent = lead.intent ?? leadAssignmentService.getLeadIntent({ lead, booking: lead.booking });
-    const booking_status = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
+    let booking_status = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
+    if (hasOutstandingAdditionalPayment(customQuoteFinancials)) {
+      booking_status = 'Partially Paid';
+    }
     // ------------------------------------------
 
     const booking_step = leadAssignmentService.getLeadBookingStep(lead, lead.booking, lead.activities);
@@ -2562,6 +2895,8 @@ exports.getLeadById = async (req, res) => {
         intent_source: lead.intent ? 'manual' : 'system',
         booking_status,
         payment_status,
+        collected_amount: quoteAmounts.collected_amount,
+        outstanding_amount: quoteAmounts.outstanding_amount,
         active_payment_link,
         booking_step,
         can_edit_booking,
@@ -3169,7 +3504,7 @@ exports.updateClientLeadStatus = async (req, res) => {
   }
 };
 
-const MANUAL_PAYMENT_MODES = ['cash', 'bank_transfer', 'credit_card', 'other'];
+const MANUAL_PAYMENT_MODES = ['cash', 'wire', 'ach', 'zelle', 'venmo', 'cashapp', 'applepay', 'other'];
 
 const parseJsonIfNeeded = (value) => {
   if (!value) return null;
@@ -3224,6 +3559,22 @@ const resolveLeadTotalAmount = (leadRecord, bookingRecord) => {
   return 0;
 };
 
+const syncExternalWorkspaceAfterManualPayment = async (bookingRecord) => {
+  if (!bookingRecord?.stream_project_booking_id) {
+    return { success: false, message: 'No booking linked for workspace sync' };
+  }
+
+  try {
+    return await externalFileManagerController.syncWorkspaceForBookingFromRecord(bookingRecord);
+  } catch (error) {
+    console.error(
+      `External workspace sync failed for manual payment booking ${bookingRecord.stream_project_booking_id}:`,
+      error.message
+    );
+    return { success: false, message: error.message };
+  }
+};
+
 const buildManualPaymentMeta = async ({ leadModel, leadActivityModel, leadId, req, res, leadLabel }) => {
   const { payment_type, amount, payment_mode, other_payment_mode, proof_url, notes } = req.body || {};
   const performedBy = req.userId;
@@ -3241,7 +3592,7 @@ const buildManualPaymentMeta = async ({ leadModel, leadActivityModel, leadId, re
   if (!MANUAL_PAYMENT_MODES.includes(normalizedPaymentMode)) {
     return res.status(constants.BAD_REQUEST.code).json({
       success: false,
-      message: 'payment_mode must be one of cash, bank_transfer, credit_card, or other',
+      message: 'payment_mode must be one of cash, wire, ach, zelle, venmo, cashapp, applepay, or other',
     });
   }
 
@@ -3368,6 +3719,8 @@ const buildManualPaymentMeta = async ({ leadModel, leadActivityModel, leadId, re
   }
   await lead.update(leadUpdate);
 
+  const externalWorkspaceSync = await syncExternalWorkspaceAfterManualPayment(lead.booking);
+
   return res.json({
     success: true,
     message: normalizedPaymentType === 'full'
@@ -3391,6 +3744,8 @@ const buildManualPaymentMeta = async ({ leadModel, leadActivityModel, leadId, re
           : 0,
       proof_url: normalizedProofUrl,
       lead_status: normalizedPaymentType === 'full' ? 'booked' : lead.lead_status,
+      external_workspace_synced: !!externalWorkspaceSync.success,
+      external_workspace_message: externalWorkspaceSync.message || null,
     }
   });
 };

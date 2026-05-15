@@ -11,7 +11,8 @@
     "db:seed:reference": "node src/db/seeders/index.js --reference-only",
     "db:seed:full": "node src/db/seeders/index.js --full",
     "db:seed:reset": "node src/db/seeders/index.js --reset --full",
-    "db:setup": "npm run db:init && npm run db:seed:full"
+    "db:setup": "npm run db:init && npm run db:seed:full",
+    "db:backfill:clients": "node scripts/backfill-clients-from-users.js"
   },
   "keywords": [
     "revure",
