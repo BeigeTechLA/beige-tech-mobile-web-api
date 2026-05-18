@@ -4,7 +4,7 @@
 
 @TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzkwOTczMzksImV4cCI6MTc3OTcwMjEzOX0.bMeR90sshYz-Sy5yuZFx_9h5oOHS_JBFAxtglc6FCrc
 
-@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI0NSwidXNlclJvbGUiOiJDbGllbnQiLCJpYXQiOjE3Nzg4NDc1OTEsImV4cCI6MTc3OTQ1MjM5MX0.QbY4oalixhyzuuiFPE-uUuWN451stVYHUxibOLIDwus
+@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI0NywidXNlclJvbGUiOiJDbGllbnQiLCJpYXQiOjE3NzkxMDk1NjksImV4cCI6MTc3OTcxNDM2OX0.xMc13NVpt0Dtq-koGOvJhyjxE53LIftoCpwIubMR6vI
 
 ###
 POST {{URL}}creator/dashboard-count HTTP/1.1
@@ -2242,3 +2242,56 @@ Authorization: {{TOKEN}}
 ###
 GET {{URL}}client/credit/dashboard HTTP/1.1
 Authorization: {{TOKEN2}}
+
+### Client payment list for logged-in client
+GET {{URL}}finance/client/payments HTTP/1.1
+Authorization: {{TOKEN2}}
+
+### Client payment details by booking ID
+GET {{URL}}finance/client/payments/1109 HTTP/1.1
+Authorization: {{TOKEN2}}
+
+### CREATE CLIENT DISPUTE
+POST {{URL}}finance/client/disputes HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+{
+  "booking_id": 1109,
+  "category": "quality", // quality, payment_delay, wrong_deliverables, refund, payout_issues, other
+  "subject": "Final video quality issue",
+  "description": "The final video does not match the agreed quality and some requested edits are missing."
+}
+
+### GET CLIENT DISPUTES LIST
+GET {{URL}}finance/client/disputes?page=1&limit=10 HTTP/1.1
+Authorization: {{TOKEN2}}
+
+### GET CLIENT DISPUTE DETAILS
+GET {{URL}}finance/client/disputes/1 HTTP/1.1
+Authorization: {{TOKEN2}}
+
+### ADD CLIENT DISPUTE COMMENT
+POST {{URL}}finance/client/disputes/1/comments HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+{
+  "body": "Please review this dispute. I have attached the reference file and final delivery issue details."
+}
+
+### ADD CLIENT DISPUTE ATTACHMENT - FILE UPLOAD
+POST {{URL}}finance/client/disputes/1/attachments HTTP/1.1
+Authorization: {{TOKEN2}}
+Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW
+
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="attachment"; filename="5.jpeg"
+Content-Type: image/jpeg
+
+(data)
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="attachment_type" // evidence, invoice, deliverable, refund_proof, payout_proof, other
+
+evidence
+------WebKitFormBoundary7MA4YWxkTrZu0gW--

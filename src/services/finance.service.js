@@ -643,6 +643,7 @@ async function loadBookingFinanceContext(bookingId, transaction = null) {
       'is_cancelled',
       'is_active',
       'payment_id',
+      'payment_completed_at',
       'status'
     ],
     include: [
@@ -1195,6 +1196,299 @@ function buildFinanceTransactionListRow(plain, leadInfo = {}, invoiceCount = 0) 
     external_reference: plain.external_reference || payment.stripe_payment_intent_id || null,
     invoices_count: invoiceCount,
     metadata
+  };
+}
+
+function buildClientWhere(userContext = {}, filters = {}) {
+  const Op = db.Sequelize.Op;
+  const userId = Number(userContext.userId || filters.client_user_id || 0) || null;
+  const email = String(userContext.email || filters.guest_email || '').trim();
+  const where = {};
+  const clientOr = [];
+
+  if (userId) clientOr.push({ client_user_id: userId });
+  if (email) clientOr.push({ guest_email: email });
+  if (clientOr.length === 1) Object.assign(where, clientOr[0]);
+  if (clientOr.length > 1) where[Op.or] = clientOr;
+
+  return where;
+}
+
+function buildCostBreakdownRow(breakdown = {}) {
+  const subtotal = toMoney(breakdown.subtotal_amount);
+  const discount = toMoney(breakdown.discount_amount);
+  const tax = toMoney(breakdown.tax_amount);
+  const equipment = toMoney(breakdown.equipment_amount);
+  const total = toMoney(breakdown.total_amount);
+  const baseCost = toMoney(Math.max(subtotal - equipment, 0));
+
+  return {
+    base_cost: baseCost,
+    add_ons: equipment,
+    taxes: tax,
+    discounts: discount,
+    total_amount: total,
+    collected_amount: toMoney(breakdown.collected_amount),
+    outstanding_amount: toMoney(breakdown.outstanding_amount),
+    currency: breakdown.currency || 'USD'
+  };
+}
+
+function formatClientInvoice(invoice = {}) {
+  return {
+    invoice_send_history_id: invoice.invoice_send_history_id,
+    invoice_id: invoice.invoice_number || (invoice.invoice_send_history_id ? `INV-${invoice.invoice_send_history_id}` : null),
+    invoice_number: invoice.invoice_number || null,
+    invoice_url: invoice.invoice_url || null,
+    invoice_pdf: invoice.invoice_pdf || null,
+    payment_status: invoice.payment_status || 'pending',
+    sent_at: invoice.sent_at || invoice.created_at || null
+  };
+}
+
+function normalizeClientDisputeStatus(status) {
+  if (status === 'open') return 'dispute_open';
+  if (status === 'in_review' || status === 'escalated') return 'in_progress';
+  if (status === 'resolved') return 'resolved';
+  if (status === 'rejected') return 'rejected';
+  return null;
+}
+
+function buildClientPaymentRow(plain, invoices = [], disputes = []) {
+  const metadata = parseJson(plain.metadata_json, {}) || {};
+  const booking = plain.booking || {};
+  const latestInvoice = invoices[0] || null;
+  const openDispute = disputes.find((dispute) => !['resolved', 'rejected'].includes(dispute.status));
+  const disputeStatus = openDispute ? normalizeClientDisputeStatus(openDispute.status) : null;
+
+  return {
+    booking_id: plain.booking_id,
+    shoot_id: plain.booking_id ? `BK-${String(plain.booking_id).padStart(3, '0')}` : null,
+    shoot_type: formatShootType(booking, metadata),
+    project_name: booking.project_name || null,
+    total_amount: toMoney(plain.total_amount),
+    currency: plain.currency || 'USD',
+    invoices_count: invoices.length,
+    invoices: invoices.map(formatClientInvoice),
+    latest_invoice: latestInvoice ? formatClientInvoice(latestInvoice) : null,
+    date_time: booking.payment_completed_at || booking.event_date || plain.calculated_at || plain.created_at,
+    event_date: formatDateOnly(booking.event_date),
+    payment_method: formatPaymentMethod(
+      plain.finance_transaction?.payment_method,
+      plain.finance_transaction?.source,
+      plain.finance_transaction?.external_reference
+    ),
+    status: disputeStatus || normalizeDisplayStatus(plain.payment_status, Number(plain.collected_amount || 0) > 0),
+    payment_status: plain.payment_status,
+    cost_breakdown: buildCostBreakdownRow(plain),
+    dispute: openDispute ? {
+      dispute_id: openDispute.finance_dispute_id,
+      dispute_code: openDispute.dispute_code,
+      status: openDispute.status,
+      category: openDispute.category,
+      subject: openDispute.subject,
+      created_at: openDispute.created_at
+    } : null,
+    actions: {
+      can_view_details: true,
+      can_view_invoice: Boolean(latestInvoice?.invoice_url || latestInvoice?.invoice_pdf),
+      can_download_invoice: Boolean(latestInvoice?.invoice_pdf || latestInvoice?.invoice_url),
+      can_raise_dispute: !openDispute && normalizeDisplayStatus(plain.payment_status, Number(plain.collected_amount || 0) > 0) === 'paid'
+    }
+  };
+}
+
+async function getClientUserContext(userContext = {}) {
+  const userId = Number(userContext.userId || 0) || null;
+  if (!userId) return { userId: null, email: userContext.email || null };
+
+  const user = await db.users.findByPk(userId, { attributes: ['id', 'email', 'name'] });
+  return {
+    userId,
+    email: userContext.email || user?.email || null,
+    name: user?.name || null
+  };
+}
+
+async function getClientPaymentManagement(filters = {}, userContext = {}) {
+  const Op = db.Sequelize.Op;
+  const clientContext = await getClientUserContext(userContext);
+  const page = Math.max(parseInt(filters.page, 10) || 1, 1);
+  const limit = Math.min(Math.max(parseInt(filters.limit, 10) || 10, 1), 100);
+  const offset = (page - 1) * limit;
+  const where = buildClientWhere(clientContext, filters);
+  const bookingWhere = {};
+  const search = String(filters.search || filters.q || '').trim();
+
+  await syncRecentPaidBookingsMissingFinance(Math.max(limit * 2, 50));
+
+  if (!where[Op.or] && !where.client_user_id && !where.guest_email) {
+    const error = new Error('Client identity is required');
+    error.statusCode = 401;
+    throw error;
+  }
+
+  if (filters.status) {
+    const status = String(filters.status).trim();
+    if (status === 'paid') where.payment_status = 'paid';
+    if (status === 'pending') where.payment_status = { [Op.in]: ['unpaid', 'pending', 'partially_paid'] };
+    if (status === 'refunded') where.payment_status = 'refunded';
+    if (status === 'failed') where.payment_status = 'failed';
+  }
+
+  if (filters.month) {
+    const month = String(filters.month).trim();
+    const start = new Date(`${month}-01T00:00:00.000Z`);
+    if (!Number.isNaN(start.getTime())) {
+      const end = new Date(start);
+      end.setUTCMonth(end.getUTCMonth() + 1);
+      where.calculated_at = { [Op.gte]: start, [Op.lt]: end };
+    }
+  }
+
+  if (search) {
+    const term = `%${search}%`;
+    bookingWhere[Op.or] = [
+      { project_name: { [Op.like]: term } },
+      { shoot_type: { [Op.like]: term } },
+      { event_type: { [Op.like]: term } },
+      { content_type: { [Op.like]: term } },
+      { guest_email: { [Op.like]: term } }
+    ];
+  }
+
+  const result = await db.finance_project_breakdowns.findAndCountAll({
+    where,
+    distinct: true,
+    limit,
+    offset,
+    order: [['calculated_at', 'DESC'], ['finance_project_breakdown_id', 'DESC']],
+    include: [
+      {
+        model: db.stream_project_booking,
+        as: 'booking',
+        required: Object.keys(bookingWhere).length > 0,
+        where: bookingWhere,
+        attributes: ['stream_project_booking_id', 'project_name', 'shoot_type', 'event_type', 'content_type', 'event_date', 'guest_email', 'payment_completed_at']
+      }
+    ]
+  });
+
+  const rows = result.rows.map((row) => row.get({ plain: true }));
+  const bookingIds = rows.map((row) => Number(row.booking_id)).filter(Boolean);
+  const [invoices, disputes, transactions] = await Promise.all([
+    db.invoice_send_history.findAll({
+      where: { booking_id: { [Op.in]: bookingIds.length ? bookingIds : [0] } },
+      order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+      raw: true
+    }),
+    db.finance_disputes.findAll({
+      where: { booking_id: { [Op.in]: bookingIds.length ? bookingIds : [0] } },
+      order: [['created_at', 'DESC'], ['finance_dispute_id', 'DESC']],
+      raw: true
+    }),
+    db.finance_transactions.findAll({
+      where: { booking_id: { [Op.in]: bookingIds.length ? bookingIds : [0] }, transaction_type: 'client_payment' },
+      order: [['transaction_date', 'DESC'], ['finance_transaction_id', 'DESC']],
+      raw: true
+    })
+  ]);
+
+  const invoiceMap = new Map();
+  invoices.forEach((invoice) => {
+    const bookingId = Number(invoice.booking_id);
+    invoiceMap.set(bookingId, [...(invoiceMap.get(bookingId) || []), invoice]);
+  });
+
+  const disputeMap = new Map();
+  disputes.forEach((dispute) => {
+    const bookingId = Number(dispute.booking_id);
+    disputeMap.set(bookingId, [...(disputeMap.get(bookingId) || []), dispute]);
+  });
+
+  const transactionMap = new Map();
+  transactions.forEach((transaction) => {
+    const bookingId = Number(transaction.booking_id);
+    if (!transactionMap.has(bookingId)) transactionMap.set(bookingId, transaction);
+  });
+
+  const paymentRows = rows.map((row) => buildClientPaymentRow(
+    { ...row, finance_transaction: transactionMap.get(Number(row.booking_id)) || null },
+    invoiceMap.get(Number(row.booking_id)) || [],
+    disputeMap.get(Number(row.booking_id)) || []
+  ));
+
+  return {
+    rows: paymentRows,
+    pagination: {
+      page,
+      limit,
+      total: result.count,
+      total_pages: Math.ceil(result.count / limit)
+    },
+    filters: {
+      statuses: ['paid', 'pending', 'dispute_open', 'in_progress', 'resolved', 'refunded'],
+      dispute_types: ['quality', 'payment_delay', 'wrong_deliverables', 'refund', 'payout_issues', 'other']
+    }
+  };
+}
+
+async function getClientPaymentDetails(bookingId, userContext = {}) {
+  const clientContext = await getClientUserContext(userContext);
+  const where = {
+    booking_id: bookingId,
+    ...buildClientWhere(clientContext, {})
+  };
+
+  const breakdown = await db.finance_project_breakdowns.findOne({
+    where,
+    include: [
+      { model: db.stream_project_booking, as: 'booking', required: false },
+      {
+        model: db.creator_earnings,
+        as: 'creator_earnings',
+        required: false,
+        include: [{ model: db.crew_members, as: 'creator', required: false }]
+      }
+    ]
+  });
+
+  if (!breakdown) {
+    const error = new Error('Payment record not found');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const plain = breakdown.get({ plain: true });
+  const [invoices, disputes, transaction] = await Promise.all([
+    db.invoice_send_history.findAll({
+      where: { booking_id: bookingId },
+      order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+      raw: true
+    }),
+    db.finance_disputes.findAll({
+      where: { booking_id: bookingId },
+      order: [['created_at', 'DESC'], ['finance_dispute_id', 'DESC']],
+      raw: true
+    }),
+    db.finance_transactions.findOne({
+      where: { booking_id: bookingId, transaction_type: 'client_payment' },
+      order: [['transaction_date', 'DESC'], ['finance_transaction_id', 'DESC']],
+      raw: true
+    })
+  ]);
+
+  return {
+    ...buildClientPaymentRow({ ...plain, finance_transaction: transaction }, invoices, disputes),
+    creators: (plain.creator_earnings || []).map((earning) => ({
+      creator_earning_id: earning.creator_earning_id,
+      creator_id: earning.creator_id,
+      name: [earning.creator?.first_name, earning.creator?.last_name].filter(Boolean).join(' ').trim() || earning.creator?.email || null,
+      gross_amount: toMoney(earning.gross_amount),
+      net_earning_amount: toMoney(earning.net_earning_amount),
+      status: earning.status
+    })),
+    metadata: parseJson(plain.metadata_json, {})
   };
 }
 
@@ -2174,6 +2468,8 @@ module.exports = {
   listTransactions,
   listShootBreakdowns,
   getShootFinance,
+  getClientPaymentManagement,
+  getClientPaymentDetails,
   getCreatorWallet,
   getAdminCreatorWalletOverview,
   getAdminPayoutsScreen,
