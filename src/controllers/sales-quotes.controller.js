@@ -618,24 +618,29 @@ exports.acceptQuoteProposal = async (req, res) => {
       const quoteNumber = result?.quote?.quote_number || 'your quote';
       const paymentUrl = result?.payment?.payment_url || null;
       const isAdditionalPayment = Boolean(result?.payment?.is_additional_payment);
+      const isReducedPayment = Boolean(result?.payment?.is_reduced_payment);
       const title = isAdditionalPayment
         ? 'Revised Quote Confirmed'
+        : isReducedPayment
+          ? 'Updated Quote Confirmed'
         : (result.already_accepted ? 'Quote Already Confirmed' : 'Quote Accepted');
       const description = isAdditionalPayment
         ? `${quoteNumber} has been updated. Continue to payment to pay only the approved additional amount.`
+        : isReducedPayment
+          ? `${quoteNumber} has been updated and no additional payment is due. You can view the updated paid receipt.`
         : (result.already_accepted
           ? `${quoteNumber} was already confirmed earlier. No further action is needed from you right now.`
           : `${quoteNumber} has been accepted successfully and your booking has been created. Continue to payment to confirm your booking.`);
       const page = renderQuoteAcceptPage({
         title,
-        badge: isAdditionalPayment ? 'Additional Payment Due' : (result.already_accepted ? 'Already Confirmed' : 'Approval Received'),
+        badge: isAdditionalPayment ? 'Additional Payment Due' : isReducedPayment ? 'Paid Update' : (result.already_accepted ? 'Already Confirmed' : 'Approval Received'),
         description,
         quoteNumber,
-        tone: isAdditionalPayment ? 'success' : (result.already_accepted ? 'warning' : 'success'),
+        tone: isAdditionalPayment || isReducedPayment ? 'success' : (result.already_accepted ? 'warning' : 'success'),
         statusCode: constants.OK.code,
         ...(paymentUrl ? {
           ctaHref: paymentUrl,
-          ctaLabel: 'CONTINUE TO PAYMENT'
+          ctaLabel: isReducedPayment ? 'VIEW UPDATED RECEIPT' : 'CONTINUE TO PAYMENT'
         } : {})
       });
       return res.status(page.statusCode).send(page.html);

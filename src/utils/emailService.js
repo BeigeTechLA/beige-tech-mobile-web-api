@@ -2537,9 +2537,11 @@ const sendCustomQuoteProposalEmail = async (data) => {
         proposal_amount: proposalAmount,
         proposal_amount_label: data?.proposal_amount_label || 'Estimate Proposal Amount',
         is_additional_payment: Boolean(data?.is_additional_payment),
+        is_reduced_payment: Boolean(data?.is_reduced_payment),
         previously_paid_amount: formatOptionalAmount(data?.previously_paid_amount),
         revised_total: formatOptionalAmount(data?.revised_total),
         additional_amount: formatOptionalAmount(data?.additional_amount),
+        reduced_amount: formatOptionalAmount(data?.reduced_amount),
         payment_note: data?.payment_note || '',
         accept_quote_url: data?.accept_quote_url || ''
       }
@@ -2592,9 +2594,11 @@ const sendQuoteAcceptedClientEmail = async (data) => {
       proposal_amount: formatAmount(data?.proposal_amount || 0),
       accepted_amount_label: data?.accepted_amount_label || 'Accepted Amount',
       is_additional_payment: Boolean(data?.is_additional_payment),
+      is_reduced_payment: Boolean(data?.is_reduced_payment),
       previously_paid_amount: formatOptionalAmount(data?.previously_paid_amount),
       revised_total: formatOptionalAmount(data?.revised_total),
       additional_amount: formatOptionalAmount(data?.additional_amount),
+      reduced_amount: formatOptionalAmount(data?.reduced_amount),
       payment_note: data?.payment_note || ''
     }
   });
@@ -2630,9 +2634,11 @@ const sendQuoteAcceptedSalesNotificationEmail = async (data) => {
       proposal_amount: formatAmount(data?.proposal_amount || 0),
       accepted_amount_label: data?.accepted_amount_label || 'Accepted Amount',
       is_additional_payment: Boolean(data?.is_additional_payment),
+      is_reduced_payment: Boolean(data?.is_reduced_payment),
       previously_paid_amount: formatOptionalAmount(data?.previously_paid_amount),
       revised_total: formatOptionalAmount(data?.revised_total),
       additional_amount: formatOptionalAmount(data?.additional_amount),
+      reduced_amount: formatOptionalAmount(data?.reduced_amount),
       payment_note: data?.payment_note || '',
       accepted_at: data?.accepted_at || formatDate(new Date())
     }
