@@ -224,6 +224,7 @@ async function markAdditionalQuoteInvoiceAsPaid({
   bookingId,
   stripeInvoice = null,
   paymentIntentId = null,
+  paymentMetadata = {},
   transaction
 }) {
   if (!bookingId || !db.invoice_send_history) return false;
@@ -246,11 +247,37 @@ async function markAdditionalQuoteInvoiceAsPaid({
     });
   }
 
+  const metadataQuoteId = Number(paymentMetadata?.sales_quote_id || paymentMetadata?.quote_id || 0) || null;
+  const metadataPaymentSource = normalizePaymentSource(paymentMetadata?.payment_source);
+
+  if (!pendingInvoiceHistory && metadataQuoteId) {
+    pendingInvoiceHistory = await db.invoice_send_history.findOne({
+      where: {
+        booking_id: bookingId,
+        quote_id: metadataQuoteId,
+        payment_status: { [db.Sequelize.Op.ne]: 'paid' }
+      },
+      order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+      transaction
+    });
+  }
+
+  if (!pendingInvoiceHistory && metadataPaymentSource === PAYMENT_SOURCE.ADDITIONAL_INVOICE) {
+    pendingInvoiceHistory = await db.invoice_send_history.findOne({
+      where: {
+        booking_id: bookingId,
+        payment_status: { [db.Sequelize.Op.ne]: 'paid' }
+      },
+      order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+      transaction
+    });
+  }
+
   if (!pendingInvoiceHistory) {
     pendingInvoiceHistory = await db.invoice_send_history.findOne({
       where: {
         booking_id: bookingId,
-        payment_status: 'pending'
+        payment_status: { [db.Sequelize.Op.ne]: 'paid' }
       },
       order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
       transaction
@@ -1337,7 +1364,8 @@ exports.createPaymentIntentMulti = async (req, res) => {
     const {
       booking_id,
       amount,
-      guest_email
+      guest_email,
+      payment_source
     } = req.body;
 
     // 1. Validation
@@ -1380,7 +1408,8 @@ exports.createPaymentIntentMulti = async (req, res) => {
     }
 
     const paymentSource = await resolvePaymentSourceForBooking({
-      bookingId: booking_id
+      bookingId: booking_id,
+      currentSource: payment_source
     });
 
     const paymentIntent = await stripe.paymentIntents.create({
@@ -1510,6 +1539,7 @@ exports.confirmPaymentMulti = async (req, res) => {
         await markAdditionalQuoteInvoiceAsPaid({
           bookingId: booking_id,
           paymentIntentId,
+          paymentMetadata: paymentIntent?.metadata || {},
           transaction
         });
       }
@@ -1739,6 +1769,7 @@ exports.confirmPaymentMulti = async (req, res) => {
       await markAdditionalQuoteInvoiceAsPaid({
         bookingId: booking_id,
         paymentIntentId,
+        paymentMetadata: paymentIntent?.metadata || {},
         transaction
       });
 
@@ -2110,6 +2141,7 @@ exports.handleStripeWebhook = async (req, res) => {
           bookingId: booking_id,
           stripeInvoice,
           paymentIntentId,
+          paymentMetadata: invoiceMetadata || {},
           transaction
         });
 

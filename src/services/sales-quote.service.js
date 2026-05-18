@@ -2199,6 +2199,25 @@ function buildOverallChangeSummary(activities = []) {
 async function getQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
   if (!quoteId) return null;
 
+  let settledByFollowupTransaction = false;
+  if (bookingId) {
+    const bookingRecord = await db.stream_project_booking.findByPk(bookingId, {
+      attributes: ['payment_id']
+    });
+    const basePaymentId = Number(bookingRecord?.payment_id || 0);
+    if (basePaymentId > 0) {
+      const followupPayment = await db.payment_transactions.findOne({
+        where: {
+          payment_id: { [Op.gt]: basePaymentId },
+          status: 'succeeded',
+          payment_source: { [Op.in]: ['additional_invoice', 'quote_invoice'] }
+        },
+        order: [['payment_id', 'DESC']]
+      });
+      settledByFollowupTransaction = Boolean(followupPayment);
+    }
+  }
+
   const [latestInvoiceHistory, recentQuoteUpdates] = await Promise.all([
     db.invoice_send_history?.findOne({
       where: {
@@ -2243,7 +2262,13 @@ async function getQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
   const reducedAmount = parseFloat(refreshActivity?.metadata?.reduced_amount || 0);
   const previouslyPaidAmount = parseFloat(refreshActivity?.metadata?.previous_total || 0);
   const revisedTotal = parseFloat(refreshActivity?.metadata?.new_total || 0);
-  const additionalPaymentStatus = refreshInvoiceHistory?.payment_status || (additionalAmount > 0 ? 'pending' : null);
+  const normalizedRefreshPaymentStatus = String(refreshInvoiceHistory?.payment_status || '').toLowerCase();
+  const isRefreshInvoiceSettled =
+    settledByFollowupTransaction ||
+    ['paid', 'succeeded', 'completed', 'success'].includes(normalizedRefreshPaymentStatus);
+  const additionalPaymentStatus = settledByFollowupTransaction
+    ? 'paid'
+    : (refreshInvoiceHistory?.payment_status || (additionalAmount > 0 ? 'pending' : null));
   const reducedPaymentStatus = refreshInvoiceHistory?.payment_status || (reducedAmount > 0 ? 'refund_pending' : null);
 
   const creditSummary = await accountCreditService.getQuoteCreditSummary({
@@ -2255,7 +2280,7 @@ async function getQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
     additional_amount: additionalAmount,
     previously_paid_amount: previouslyPaidAmount,
     revised_total: revisedTotal,
-    outstanding_amount: additionalPaymentStatus === 'paid' ? 0 : additionalAmount,
+    outstanding_amount: (additionalPaymentStatus === 'paid' || isRefreshInvoiceSettled) ? 0 : additionalAmount,
     payment_status: additionalPaymentStatus,
     last_sent_at: refreshInvoiceHistory?.sent_at || null,
     invoice_number: refreshInvoiceHistory?.invoice_number || null,
@@ -4450,12 +4475,23 @@ async function listQuotes(query, user) {
     );
     const hasManualFullPayment = manualPaymentSummary.hasFullPayment;
     const hasManualPartialPayment = manualPaymentSummary.isPartiallyPaid;
+    const additionalPayment = financialDetails?.additional_payment || financialDetails?.partial_payment || null;
+    const additionalOutstanding = Number(additionalPayment?.outstanding_amount || 0);
+    const additionalPaymentStatus = String(additionalPayment?.payment_status || '').toLowerCase();
+    const additionalSettled =
+      additionalOutstanding <= 0 ||
+      ['paid', 'succeeded', 'completed', 'success'].includes(additionalPaymentStatus);
+    const hasAdditionalPending = additionalPayment && !additionalSettled && additionalOutstanding > 0;
 
-    const resolvedPaymentStatus = hasManualFullPayment
-      ? 'paid'
-      : hasManualPartialPayment
-        ? 'partially_paid'
-        : billingState.payment_status;
+    const resolvedPaymentStatus = hasAdditionalPending
+      ? 'partially_paid'
+      : (additionalSettled && additionalPayment)
+        ? 'paid'
+        : hasManualFullPayment
+          ? 'paid'
+          : hasManualPartialPayment
+            ? 'partially_paid'
+            : billingState.payment_status;
 
     const resolvedCollectedAmount = hasManualFullPayment || hasManualPartialPayment
       ? manualPaymentSummary.paidAmount

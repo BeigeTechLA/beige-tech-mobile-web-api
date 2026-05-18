@@ -8739,6 +8739,7 @@ exports.getBookingSummaryById = async (req, res) => {
         let referralDiscount = 0;
         let referralCode = null;
         let paymentData = null;
+        let latestPaymentData = null;
         const notes = primaryQuote.notes || '';
 
         // Matches: Referral applied (7321F9): -$518.75
@@ -8759,13 +8760,55 @@ exports.getBookingSummaryById = async (req, res) => {
                 referralCode = paymentData.referral_code;
             }
         }
+        if (paymentData) {
+            latestPaymentData = paymentData;
+        }
+
+        const identityOr = [
+            ...(bookingJson.guest_email ? [{ guest_email: bookingJson.guest_email }] : []),
+            ...(bookingJson.user_id ? [{ user_id: bookingJson.user_id }] : [])
+        ];
+
+        if (identityOr.length > 0 && bookingJson.payment_id) {
+            const followupPayment = await db.payment_transactions.findOne({
+                where: {
+                    status: 'succeeded',
+                    payment_id: { [Sequelize.Op.gt]: Number(bookingJson.payment_id) || 0 },
+                    payment_source: { [Sequelize.Op.in]: ['additional_invoice', 'quote_invoice'] },
+                    [Sequelize.Op.or]: identityOr
+                },
+                order: [['payment_id', 'DESC']]
+            });
+            if (followupPayment) {
+                latestPaymentData = followupPayment;
+            }
+        }
+
+        if (!latestPaymentData && identityOr.length > 0) {
+            latestPaymentData = await db.payment_transactions.findOne({
+                where: {
+                    status: 'succeeded',
+                    payment_source: { [Sequelize.Op.in]: ['quote_invoice', 'additional_invoice', 'booking_checkout'] },
+                    [Sequelize.Op.or]: identityOr
+                },
+                order: [['payment_id', 'DESC']]
+            });
+        }
+        if (!paymentData && latestPaymentData?.referral_code) {
+            referralCode = latestPaymentData.referral_code;
+        }
 
         // Logic: The "Promo Code" discount is whatever is left over after the Referral Discount
         const discountCodeDiscount = Math.max(0, totalDiscountFromDb - referralDiscount);
-        const paidAmountRaw = paymentData ? parseFloat(paymentData.total_amount || 0) : quoteTotal;
+        const paidAmountRaw = latestPaymentData
+            ? parseFloat(latestPaymentData.total_amount || 0)
+            : (paymentData ? parseFloat(paymentData.total_amount || 0) : quoteTotal);
         const normalizedPaidAmount = Number.isFinite(paidAmountRaw) ? paidAmountRaw : quoteTotal;
-        const creditApplied = Math.max(0, quoteTotal - normalizedPaidAmount);
-        const totalAfterCredit = Math.max(0, quoteTotal - creditApplied);
+        const isAdditionalPaymentFlow = String(latestPaymentData?.payment_source || '').toLowerCase() === 'additional_invoice';
+        const creditApplied = isAdditionalPaymentFlow ? 0 : Math.max(0, quoteTotal - normalizedPaidAmount);
+        const totalAfterCredit = isAdditionalPaymentFlow
+            ? normalizedPaidAmount
+            : Math.max(0, quoteTotal - creditApplied);
 
         pricing.total_paid = parseFloat(normalizedPaidAmount.toFixed(2));
         pricing.discount_code_discount = parseFloat(discountCodeDiscount.toFixed(2));
