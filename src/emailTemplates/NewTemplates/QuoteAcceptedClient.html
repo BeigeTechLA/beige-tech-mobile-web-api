@@ -120,7 +120,7 @@
                               </td>
                               <td>
                                 <div style="font-size: 16px; color: #707070 !important; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
-                                  Accepted Amount
+                                  {{accepted_amount_label}}
                                 </div>
                                 <div style="font-size: 18px; font-weight: 600; color: #000000 !important; line-height: 24px;">
                                   $ {{proposal_amount}}
@@ -130,6 +130,35 @@
                           </table>
                         </td>
                       </tr>
+                      {{#if is_additional_payment}}
+                      <tr>
+                        <td style="padding: 18px 0 0;">
+                          <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #FFF8ED !important; border-radius: 22px;">
+                            <tr>
+                              <td style="padding: 18px 22px;">
+                                <table width="100%" cellpadding="0" cellspacing="0">
+                                  <tr>
+                                    <td style="font-size: 15px; color: #707070 !important; padding: 0 0 8px;">Previously paid</td>
+                                    <td align="right" style="font-size: 15px; font-weight: 600; color: #000000 !important; padding: 0 0 8px;">$ {{previously_paid_amount}}</td>
+                                  </tr>
+                                  <tr>
+                                    <td style="font-size: 15px; color: #707070 !important; padding: 0 0 8px;">Revised quote total</td>
+                                    <td align="right" style="font-size: 15px; font-weight: 600; color: #000000 !important; padding: 0 0 8px;">$ {{revised_total}}</td>
+                                  </tr>
+                                  <tr>
+                                    <td style="font-size: 15px; color: #000000 !important; font-weight: 600;">Additional amount accepted</td>
+                                    <td align="right" style="font-size: 15px; font-weight: 700; color: #000000 !important;">$ {{additional_amount}}</td>
+                                  </tr>
+                                </table>
+                                <div style="font-size: 14px; line-height: 1.6; color: #5A5A5A !important; padding-top: 12px;">
+                                  {{payment_note}}
+                                </div>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                      {{/if}}
                     </table>
                   </td>
                 </tr>

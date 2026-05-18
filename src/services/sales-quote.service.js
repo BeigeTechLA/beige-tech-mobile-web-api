@@ -879,6 +879,8 @@ async function getQuoteAcceptancePreview(token) {
 }
 
 function deriveQuoteAcceptanceEmailPayload(quoteDetails) {
+  const paymentSummary = buildQuoteProposalPaymentSummary(quoteDetails);
+
   return {
     to_email: quoteDetails.client_email || null,
     client_name: quoteDetails.client_name || 'there',
@@ -888,7 +890,13 @@ function deriveQuoteAcceptanceEmailPayload(quoteDetails) {
     shoot_type: quoteDetails.video_shoot_type || 'TBD',
     project_description: quoteDetails.project_description || 'TBD',
     location: quoteDetails.client_address || 'TBD',
-    proposal_amount: quoteDetails.total,
+    proposal_amount: paymentSummary.amount_due,
+    accepted_amount_label: paymentSummary.is_additional_payment ? 'Additional Amount Accepted' : 'Accepted Amount',
+    is_additional_payment: paymentSummary.is_additional_payment,
+    previously_paid_amount: paymentSummary.previously_paid_amount,
+    revised_total: paymentSummary.revised_total,
+    additional_amount: paymentSummary.additional_amount,
+    payment_note: paymentSummary.payment_note,
     accepted_at: quoteDetails.accepted_at
       ? new Date(quoteDetails.accepted_at).toLocaleString('en-US', {
         year: 'numeric',
@@ -935,6 +943,109 @@ function buildQuoteInvoicePricingData(quoteDetails = {}) {
   };
 }
 
+function getApprovedAdditionalPaymentDue(quoteDetails = {}) {
+  const additionalPayment = quoteDetails.additional_payment || quoteDetails.partial_payment || null;
+  if (!additionalPayment) return null;
+
+  const outstandingAmount = roundCurrency(additionalPayment.outstanding_amount || additionalPayment.additional_amount || 0);
+  const approvalStatus = String(additionalPayment.approval_status || '').toLowerCase();
+  const paymentStatus = String(additionalPayment.payment_status || '').toLowerCase();
+
+  if (!(outstandingAmount > 0)) return null;
+  if (approvalStatus && approvalStatus !== 'approved') return null;
+  if (['paid', 'succeeded', 'completed', 'success'].includes(paymentStatus)) return null;
+
+  return {
+    ...additionalPayment,
+    outstanding_amount: outstandingAmount,
+    additional_amount: roundCurrency(additionalPayment.additional_amount || outstandingAmount),
+    previously_paid_amount: roundCurrency(additionalPayment.previously_paid_amount || 0),
+    revised_total: roundCurrency(additionalPayment.revised_total || quoteDetails.total || 0)
+  };
+}
+
+function getBlockedQuotePaymentChange(quoteDetails = {}) {
+  const additionalPayment = quoteDetails.additional_payment || quoteDetails.partial_payment || null;
+  const reducedPayment = quoteDetails.reduced_payment || null;
+  const change = additionalPayment || reducedPayment;
+  if (!change) return null;
+
+  const approvalStatus = String(change.approval_status || '').toLowerCase();
+  const paymentStatus = String(change.payment_status || '').toLowerCase();
+  const additionalAmount = roundCurrency(change.outstanding_amount || change.additional_amount || 0);
+  const reducedAmount = roundCurrency(change.reduced_amount || change.refund_pending_amount || 0);
+  const hasOpenChange = additionalAmount > 0 || reducedAmount > 0;
+
+  if (!hasOpenChange) return null;
+  if (['paid', 'succeeded', 'completed', 'success'].includes(paymentStatus)) return null;
+  if (approvalStatus === 'approved') return null;
+
+  return {
+    type: additionalAmount > 0 ? 'increase' : 'decrease',
+    approval_status: approvalStatus || 'pending',
+    amount: additionalAmount > 0 ? additionalAmount : reducedAmount
+  };
+}
+
+function assertQuotePaymentChangeApproved(quoteDetails = {}) {
+  const blockedChange = getBlockedQuotePaymentChange(quoteDetails);
+  if (!blockedChange) return;
+
+  const message = blockedChange.approval_status === 'rejected'
+    ? `This paid quote ${blockedChange.type} request was rejected, so it cannot be sent to the client.`
+    : `This paid quote ${blockedChange.type} request is pending admin approval. Approve it before sending the quote or payment link to the client.`;
+  const error = new Error(message);
+  error.statusCode = 409;
+  throw error;
+}
+
+function buildAdditionalQuoteInvoicePricingData(additionalPayment = {}) {
+  const additionalAmount = roundCurrency(additionalPayment.outstanding_amount || additionalPayment.additional_amount || 0);
+
+  return {
+    source: 'quote_additional_amount',
+    is_paid: false,
+    total: additionalAmount,
+    total_before_credit: additionalAmount,
+    credit_applied: 0,
+    subtotal: additionalAmount,
+    discount_amount: 0,
+    price_after_discount: additionalAmount,
+    tax_type: null,
+    tax_rate: 0,
+    tax_amount: 0,
+    line_items: [
+      {
+        name: 'Additional payment for revised quote',
+        quantity: 1,
+        unit_price: additionalAmount,
+        total: additionalAmount
+      }
+    ]
+  };
+}
+
+function buildQuoteProposalPaymentSummary(quoteDetails = {}) {
+  const additionalPayment = getApprovedAdditionalPaymentDue(quoteDetails);
+  if (!additionalPayment) {
+    return {
+      is_additional_payment: false,
+      amount_due: roundCurrency(quoteDetails.total || 0),
+      proposal_amount_label: 'Estimate Proposal Amount'
+    };
+  }
+
+  return {
+    is_additional_payment: true,
+    proposal_amount_label: 'Additional Amount Due',
+    amount_due: roundCurrency(additionalPayment.outstanding_amount || additionalPayment.additional_amount || 0),
+    previously_paid_amount: roundCurrency(additionalPayment.previously_paid_amount || 0),
+    revised_total: roundCurrency(additionalPayment.revised_total || quoteDetails.total || 0),
+    additional_amount: roundCurrency(additionalPayment.additional_amount || additionalPayment.outstanding_amount || 0),
+    payment_note: `You have already paid ${formatCurrency(additionalPayment.previously_paid_amount || 0)}. Your revised quote total is ${formatCurrency(additionalPayment.revised_total || quoteDetails.total || 0)}, so only the additional ${formatCurrency(additionalPayment.outstanding_amount || additionalPayment.additional_amount || 0)} is due now.`
+  };
+}
+
 async function buildQuoteAcceptancePaymentDetails({ bookingId, quoteDetails }) {
   const parsedBookingId = Number(bookingId);
   if (!Number.isInteger(parsedBookingId) || parsedBookingId <= 0) {
@@ -960,6 +1071,70 @@ async function buildQuoteAcceptancePaymentDetails({ bookingId, quoteDetails }) {
 
   if (!booking) {
     return null;
+  }
+
+  assertQuotePaymentChangeApproved(quoteDetails);
+
+  const additionalPayment = getApprovedAdditionalPaymentDue(quoteDetails);
+  if (additionalPayment) {
+    if (additionalPayment.invoice_url) {
+      return {
+        booking_id: parsedBookingId,
+        invoice_id: null,
+        invoice_number: additionalPayment.invoice_number || null,
+        payment_url: additionalPayment.invoice_url || null,
+        invoice_pdf: additionalPayment.invoice_pdf || null,
+        is_additional_payment: true,
+        additional_amount: additionalPayment.additional_amount,
+        previously_paid_amount: additionalPayment.previously_paid_amount,
+        revised_total: additionalPayment.revised_total
+      };
+    }
+
+    const stripeInvoice = await paymentLinksService.createStripeInvoice(
+      booking,
+      buildAdditionalQuoteInvoicePricingData(additionalPayment),
+      {
+        recipientOverride: {
+          email: quoteDetails.client_email || null,
+          name: quoteDetails.client_name || null
+        },
+        forceNewInvoice: true,
+        descriptionOverride: `Additional payment for revised quote - ${booking.project_name || 'Project'}`,
+        metadata: {
+          payment_source: 'additional_invoice',
+          sales_quote_id: String(quoteDetails.sales_quote_id || '')
+        }
+      }
+    );
+
+    if (db.invoice_send_history) {
+      await db.invoice_send_history.create({
+        booking_id: parsedBookingId,
+        quote_id: quoteDetails.sales_quote_id || null,
+        lead_id: quoteDetails.lead_id || null,
+        client_name: quoteDetails.client_name || null,
+        client_email: quoteDetails.client_email || null,
+        invoice_number: stripeInvoice?.number || null,
+        invoice_url: stripeInvoice?.hosted_invoice_url || null,
+        invoice_pdf: stripeInvoice?.invoice_pdf || null,
+        payment_status: 'pending',
+        sent_by_user_id: null,
+        sent_at: new Date()
+      });
+    }
+
+    return {
+      booking_id: parsedBookingId,
+      invoice_id: stripeInvoice?.id || null,
+      invoice_number: stripeInvoice?.number || null,
+      payment_url: stripeInvoice?.hosted_invoice_url || null,
+      invoice_pdf: stripeInvoice?.invoice_pdf || null,
+      is_additional_payment: true,
+      additional_amount: additionalPayment.additional_amount,
+      previously_paid_amount: additionalPayment.previously_paid_amount,
+      revised_total: additionalPayment.revised_total
+    };
   }
 
   const stripeInvoice = await paymentLinksService.createStripeInvoice(
@@ -2277,25 +2452,31 @@ async function getQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
   });
 
   const additionalPayment = refreshActivity && additionalAmount > 0 ? {
+    sales_quote_activity_id: refreshActivity.activity.activity_id,
     additional_amount: additionalAmount,
     previously_paid_amount: previouslyPaidAmount,
     revised_total: revisedTotal,
     outstanding_amount: (additionalPaymentStatus === 'paid' || isRefreshInvoiceSettled) ? 0 : additionalAmount,
     payment_status: additionalPaymentStatus,
+    approval_status: refreshActivity.metadata.approval_status || 'pending',
     last_sent_at: refreshInvoiceHistory?.sent_at || null,
     invoice_number: refreshInvoiceHistory?.invoice_number || null,
-    invoice_url: refreshInvoiceHistory?.invoice_url || null
+    invoice_url: refreshInvoiceHistory?.invoice_url || null,
+    invoice_pdf: refreshInvoiceHistory?.invoice_pdf || null
   } : null;
 
   const reducedPayment = refreshActivity && reducedAmount > 0 ? {
+    sales_quote_activity_id: refreshActivity.activity.activity_id,
     reduced_amount: reducedAmount,
     previously_paid_amount: previouslyPaidAmount,
     revised_total: revisedTotal,
     refund_pending_amount: reducedAmount,
     payment_status: reducedPaymentStatus,
+    approval_status: refreshActivity.metadata.approval_status || 'pending',
     last_sent_at: refreshInvoiceHistory?.sent_at || null,
     invoice_number: refreshInvoiceHistory?.invoice_number || null,
-    invoice_url: refreshInvoiceHistory?.invoice_url || null
+    invoice_url: refreshInvoiceHistory?.invoice_url || null,
+    invoice_pdf: refreshInvoiceHistory?.invoice_pdf || null
   } : null;
 
   return {
@@ -4730,15 +4911,21 @@ async function sendQuoteProposal(salesQuoteId, payload, user) {
       throw new Error('Client email is required to send quote proposal');
     }
 
+    assertQuotePaymentChangeApproved(quoteDetails);
+
     const acceptQuoteToken = createQuoteAcceptToken({
       sales_quote_id: quoteDetails.sales_quote_id,
       quote_number: quoteDetails.quote_number,
       client_email: toEmail
     });
 
+    const paymentSummary = buildQuoteProposalPaymentSummary(quoteDetails);
+    const quoteDetailsForPdf = paymentSummary.is_additional_payment
+      ? { ...quoteDetails, payment_summary: paymentSummary }
+      : quoteDetails;
     const generatedPdfBuffer = payload?.attachment_content || payload?.pdf_base64
       ? null
-      : await generateQuotePdfBuffer(quoteDetails);
+      : await generateQuotePdfBuffer(quoteDetailsForPdf);
 
     const emailResult = await sendCustomQuoteProposalEmail({
       to_email: toEmail,
@@ -4749,7 +4936,13 @@ async function sendQuoteProposal(salesQuoteId, payload, user) {
       quote_validity: deriveQuoteValidityText(quoteDetails),
       add_ons: deriveQuoteAddOns(quoteDetails.line_items || []),
       includes: deriveQuoteIncludes(quoteDetails.line_items || []),
-      proposal_amount: quoteDetails.total,
+      proposal_amount: paymentSummary.amount_due,
+      proposal_amount_label: paymentSummary.proposal_amount_label,
+      is_additional_payment: paymentSummary.is_additional_payment,
+      previously_paid_amount: paymentSummary.previously_paid_amount,
+      revised_total: paymentSummary.revised_total,
+      additional_amount: paymentSummary.additional_amount,
+      payment_note: paymentSummary.payment_note,
       accept_quote_url: buildQuoteAcceptUrl(acceptQuoteToken),
       attachment_content: payload?.attachment_content || payload?.pdf_base64 || (generatedPdfBuffer ? Buffer.from(generatedPdfBuffer).toString('base64') : null),
       attachment_filename: payload?.attachment_filename || `${quoteDetails.quote_number || 'custom-quote'}.pdf`,
@@ -4972,7 +5165,12 @@ async function downloadQuotePdf(salesQuoteId, user) {
     throw new Error('Quote not found');
   }
 
-  const buffer = await generateQuotePdfBuffer(quoteDetails);
+  const paymentSummary = buildQuoteProposalPaymentSummary(quoteDetails);
+  const buffer = await generateQuotePdfBuffer(
+    paymentSummary.is_additional_payment
+      ? { ...quoteDetails, payment_summary: paymentSummary }
+      : quoteDetails
+  );
 
   return {
     buffer,

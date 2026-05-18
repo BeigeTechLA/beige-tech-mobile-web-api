@@ -82,6 +82,32 @@ function buildTerms(quote) {
   `).join('');
 }
 
+function buildPaymentSummaryRows(paymentSummary) {
+  if (!paymentSummary?.is_additional_payment) return '';
+
+  return `
+    <div style="margin-top: 12px; background: #FFFFFF; border-radius: 8px; padding: 12px 14px; color: #111111;">
+      <div style="display:flex; justify-content:space-between; font-size: 13px; margin-bottom: 8px;">
+        <span>Previously Paid</span>
+        <span>${formatCurrency(paymentSummary.previously_paid_amount)}</span>
+      </div>
+      <div style="display:flex; justify-content:space-between; font-size: 13px; margin-bottom: 8px;">
+        <span>Revised Quote Total</span>
+        <span>${formatCurrency(paymentSummary.revised_total)}</span>
+      </div>
+      <div style="display:flex; justify-content:space-between; font-size: 13px; font-weight: 700;">
+        <span>Additional Amount Due</span>
+        <span>${formatCurrency(paymentSummary.amount_due || paymentSummary.additional_amount)}</span>
+      </div>
+    </div>
+    ${paymentSummary.payment_note ? `
+      <div style="margin-top: 10px; color: #333333; font-size: 12px; line-height: 1.6;">
+        ${escapeHtml(paymentSummary.payment_note)}
+      </div>
+    ` : ''}
+  `;
+}
+
 function buildQuotePdfHtml(quote) {
   const lineItems = quote.line_items || [];
   const services = lineItems.filter((item) => item.section_type === 'service');
@@ -271,6 +297,7 @@ function buildQuotePdfHtml(quote) {
                 <span>${formatCurrency(quote.total)}</span>
               </div>
             </div>
+            ${buildPaymentSummaryRows(quote.payment_summary)}
           </div>
 
           <div class="divider"></div>

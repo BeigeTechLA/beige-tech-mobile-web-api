@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const paymentsController = require('../controllers/payments.controller');
-const { authenticate, optionalAuth } = require('../middleware/auth.middleware');
+const { authenticate, optionalAuth, requireSalesRepOrAdmin } = require('../middleware/auth.middleware');
 
 /**
  * @route   POST /api/payments/create-intent
@@ -37,5 +37,12 @@ router.post('/create-intent-multi', optionalAuth, paymentsController.createPayme
  * @access  Public
  */
 router.post('/confirm-multi', optionalAuth, paymentsController.confirmPaymentMulti);
+
+/**
+ * @route   POST /api/payments/manual-webhook-paid
+ * @desc    Local/dev helper to simulate Stripe invoice.paid webhook
+ * @access  Sales Rep / Admin
+ */
+router.post('/manual-webhook-paid', optionalAuth, paymentsController.manualMarkWebhookPaid);
 
 module.exports = router;
