@@ -612,6 +612,39 @@ async function buildPricingSnapshotFromBooking(booking) {
 
 async function loadBookingFinanceContext(bookingId, transaction = null) {
   const booking = await db.stream_project_booking.findByPk(bookingId, {
+    attributes: [
+      'stream_project_booking_id',
+      'user_id',
+      'quote_id',
+      'guest_email',
+      'project_name',
+      'description',
+      'event_type',
+      'shoot_type',
+      'content_type',
+      'event_date',
+      'duration_hours',
+      'start_time',
+      'end_time',
+      'budget',
+      'crew_size_needed',
+      'event_location',
+      'streaming_platforms',
+      'crew_roles',
+      'skills_needed',
+      'equipments_needed',
+      'reference_links',
+      'edits_needed',
+      'video_edit_types',
+      'photo_edit_types',
+      'special_instructions',
+      'is_draft',
+      'is_completed',
+      'is_cancelled',
+      'is_active',
+      'payment_id',
+      'status'
+    ],
     include: [
       {
         model: db.quotes,
@@ -935,24 +968,261 @@ async function syncBookingFinance(bookingId, options = {}) {
   }
 }
 
+function formatDateOnly(value) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toISOString().slice(0, 10);
+}
+
+function normalizeDisplayStatus(status, hasPayment = false) {
+  if (status === 'failed') return 'failed';
+  if (status === 'refunded') return 'refunded';
+  if (status === 'cancelled' || status === 'void') return status;
+  if (status === 'succeeded' || status === 'paid' || hasPayment) return 'paid';
+  return 'pending';
+}
+
+function formatPaymentMethod(method, source, externalReference) {
+  const raw = String(method || source || '').trim().toLowerCase();
+  if (raw === 'stripe' || String(externalReference || '').startsWith('pi_')) return 'Stripe';
+  if (raw === 'card') return 'Credit Card';
+  if (raw === 'bank_transfer') return 'Bank Transfer';
+  if (raw === 'account_credit') return 'Account Credit';
+  if (raw === 'manual') return 'Manual';
+  if (!raw) return null;
+  return raw.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function formatShootType(booking = {}, metadata = {}) {
+  const contentType = String(booking.content_type || booking.event_type || '').trim();
+  const shootType = String(booking.shoot_type || metadata.shoot_type || '').trim();
+  const normalizedContent = contentType
+    ? contentType.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase())
+    : '';
+  const normalizedShoot = shootType
+    ? shootType.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase())
+    : '';
+
+  if (normalizedShoot && normalizedContent && normalizedShoot.toLowerCase() !== normalizedContent.toLowerCase()) {
+    return `${normalizedShoot} ${normalizedContent}`;
+  }
+  return normalizedShoot || normalizedContent || booking.project_name || null;
+}
+
+function deriveNameFromEmail(email) {
+  const localPart = String(email || '').includes('@') ? String(email).split('@')[0] : '';
+  return localPart
+    .replace(/[._-]+/g, ' ')
+    .replace(/\b\d+\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase()) || null;
+}
+
+async function getLeadInfoByBookingIds(bookingIds = []) {
+  const ids = [...new Set(bookingIds.map(Number).filter(Boolean))];
+  if (ids.length === 0) return new Map();
+
+  const where = { booking_id: { [db.Sequelize.Op.in]: ids } };
+  const [salesLeads, clientLeads] = await Promise.all([
+    db.sales_leads.findAll({
+      where,
+      attributes: ['booking_id', 'client_name', 'guest_email', 'phone'],
+      raw: true
+    }),
+    db.client_leads.findAll({
+      where,
+      attributes: ['booking_id', 'client_name', 'guest_email', 'phone'],
+      raw: true
+    })
+  ]);
+
+  const map = new Map();
+  [...clientLeads, ...salesLeads].forEach((lead) => {
+    if (!lead?.booking_id) return;
+    const existing = map.get(Number(lead.booking_id)) || {};
+    map.set(Number(lead.booking_id), {
+      ...existing,
+      client_name: lead.client_name || existing.client_name || null,
+      guest_email: lead.guest_email || existing.guest_email || null,
+      phone: lead.phone || existing.phone || null
+    });
+  });
+
+  return map;
+}
+
+async function getInvoiceCountsByBookingIds(bookingIds = []) {
+  const ids = [...new Set(bookingIds.map(Number).filter(Boolean))];
+  if (ids.length === 0 || !db.invoice_send_history) return new Map();
+
+  const rows = await db.invoice_send_history.findAll({
+    where: { booking_id: { [db.Sequelize.Op.in]: ids } },
+    attributes: [
+      'booking_id',
+      [db.sequelize.fn('COUNT', db.sequelize.col('invoice_send_history_id')), 'invoice_count']
+    ],
+    group: ['booking_id'],
+    raw: true
+  });
+
+  return new Map(rows.map((row) => [Number(row.booking_id), Number(row.invoice_count || 0)]));
+}
+
+async function getSearchMatchedBookingIds(search) {
+  const term = String(search || '').trim();
+  if (!term) return [];
+
+  const Op = db.Sequelize.Op;
+  const like = `%${term}%`;
+  const directId = Number(term.replace(/^#/, ''));
+  const ids = new Set(Number.isFinite(directId) && directId > 0 ? [directId] : []);
+
+  const [salesMatches, clientMatches, userMatches] = await Promise.all([
+    db.sales_leads.findAll({
+      where: {
+        [Op.or]: [
+          { client_name: { [Op.like]: like } },
+          { guest_email: { [Op.like]: like } },
+          { phone: { [Op.like]: like } }
+        ]
+      },
+      attributes: ['booking_id'],
+      raw: true
+    }),
+    db.client_leads.findAll({
+      where: {
+        [Op.or]: [
+          { client_name: { [Op.like]: like } },
+          { guest_email: { [Op.like]: like } },
+          { phone: { [Op.like]: like } }
+        ]
+      },
+      attributes: ['booking_id'],
+      raw: true
+    }),
+    db.stream_project_booking.findAll({
+      where: {
+        [Op.or]: [
+          { project_name: { [Op.like]: like } },
+          { shoot_type: { [Op.like]: like } },
+          { event_type: { [Op.like]: like } },
+          { content_type: { [Op.like]: like } },
+          { guest_email: { [Op.like]: like } }
+        ]
+      },
+      attributes: ['stream_project_booking_id'],
+      raw: true
+    })
+  ]);
+
+  salesMatches.forEach((row) => row.booking_id && ids.add(Number(row.booking_id)));
+  clientMatches.forEach((row) => row.booking_id && ids.add(Number(row.booking_id)));
+  userMatches.forEach((row) => row.stream_project_booking_id && ids.add(Number(row.stream_project_booking_id)));
+
+  return [...ids];
+}
+
+async function syncRecentPaidBookingsMissingFinance(limit = 50) {
+  const Op = db.Sequelize.Op;
+  const paidBookings = await db.stream_project_booking.findAll({
+    where: {
+      payment_id: { [Op.ne]: null },
+      is_draft: 0
+    },
+    attributes: ['stream_project_booking_id'],
+    include: [{
+      model: db.finance_transactions,
+      as: 'finance_transactions',
+      required: false,
+      attributes: ['finance_transaction_id']
+    }],
+    order: [['stream_project_booking_id', 'DESC']],
+    limit
+  });
+
+  const missingBookingIds = paidBookings
+    .filter((booking) => !Array.isArray(booking.finance_transactions) || booking.finance_transactions.length === 0)
+    .map((booking) => Number(booking.stream_project_booking_id))
+    .filter(Boolean);
+
+  for (const bookingId of missingBookingIds) {
+    try {
+      await syncBookingFinance(bookingId);
+    } catch (error) {
+      console.error(`Finance backfill skipped for booking ${bookingId}:`, error.message);
+    }
+  }
+}
+
+function buildFinanceTransactionListRow(plain, leadInfo = {}, invoiceCount = 0) {
+  const metadata = parseJson(plain.metadata_json, null) || {};
+  const booking = plain.booking || {};
+  const payment = plain.payment || {};
+  const client = plain.client || {};
+  const bookingId = plain.booking_id || booking.stream_project_booking_id || null;
+  const clientName =
+    client.name ||
+    leadInfo.client_name ||
+    metadata.client_name ||
+    deriveNameFromEmail(plain.guest_email || leadInfo.guest_email || client.email) ||
+    'Guest Client';
+  const clientEmail = client.email || plain.guest_email || leadInfo.guest_email || payment.guest_email || null;
+  const status = normalizeDisplayStatus(plain.status, Boolean(plain.payment_id || payment.payment_id));
+
+  return {
+    finance_transaction_id: plain.finance_transaction_id,
+    transaction_id: plain.transaction_code,
+    transaction_code: plain.transaction_code,
+    booking_id: bookingId,
+    shoot_id: bookingId,
+    payment_id: plain.payment_id || payment.payment_id || null,
+    quote_id: booking.quote_id || metadata.quote_id || null,
+    client_name: clientName,
+    client_email: clientEmail,
+    client_phone: leadInfo.phone || metadata.phone || null,
+    shoot_type: formatShootType(booking, metadata),
+    project_name: booking.project_name || metadata.project_name || null,
+    event_date: formatDateOnly(booking.event_date || payment.shoot_date || null),
+    transaction_date: plain.transaction_date,
+    total_amount: toMoney(plain.gross_amount || payment.total_amount || 0),
+    currency: plain.currency || 'USD',
+    payment_method: formatPaymentMethod(plain.payment_method, plain.source, plain.external_reference),
+    status,
+    transaction_type: plain.transaction_type,
+    source: plain.source,
+    external_reference: plain.external_reference || payment.stripe_payment_intent_id || null,
+    invoices_count: invoiceCount,
+    metadata
+  };
+}
+
 async function listTransactions(filters = {}) {
   const Op = db.Sequelize.Op;
   const page = Math.max(parseInt(filters.page, 10) || 1, 1);
   const limit = Math.min(Math.max(parseInt(filters.limit, 10) || 20, 1), 100);
   const offset = (page - 1) * limit;
   const where = {};
+  const search = String(filters.search || filters.q || '').trim();
+
+  await syncRecentPaidBookingsMissingFinance(Math.max(limit * 2, 50));
 
   if (filters.status) where.status = filters.status;
   if (filters.transaction_type) where.transaction_type = filters.transaction_type;
   if (filters.booking_id) where.booking_id = filters.booking_id;
   if (filters.payment_id) where.payment_id = filters.payment_id;
-  if (filters.search) {
-    const term = `%${String(filters.search).trim()}%`;
+  if (search) {
+    const term = `%${search}%`;
+    const matchedBookingIds = await getSearchMatchedBookingIds(search);
     where[Op.or] = [
       { transaction_code: { [Op.like]: term } },
       { guest_email: { [Op.like]: term } },
       { external_reference: { [Op.like]: term } }
     ];
+    if (matchedBookingIds.length > 0) {
+      where[Op.or].push({ booking_id: { [Op.in]: matchedBookingIds } });
+    }
   }
   if (filters.date_from || filters.date_to) {
     where.transaction_date = {};
@@ -970,7 +1240,13 @@ async function listTransactions(filters = {}) {
         model: db.stream_project_booking,
         as: 'booking',
         required: false,
-        attributes: ['stream_project_booking_id', 'project_name', 'shoot_type', 'event_type', 'event_date']
+        attributes: ['stream_project_booking_id', 'quote_id', 'project_name', 'shoot_type', 'event_type', 'content_type', 'event_date', 'guest_email']
+      },
+      {
+        model: db.payment_transactions,
+        as: 'payment',
+        required: false,
+        attributes: ['payment_id', 'stripe_payment_intent_id', 'stripe_charge_id', 'guest_email', 'payment_source', 'total_amount', 'shoot_date', 'status']
       },
       {
         model: db.users,
@@ -981,14 +1257,19 @@ async function listTransactions(filters = {}) {
     ]
   });
 
+  const plainRows = result.rows.map((row) => row.get({ plain: true }));
+  const bookingIds = plainRows.map((row) => row.booking_id || row.booking?.stream_project_booking_id).filter(Boolean);
+  const [leadInfoByBookingId, invoiceCountsByBookingId] = await Promise.all([
+    getLeadInfoByBookingIds(bookingIds),
+    getInvoiceCountsByBookingIds(bookingIds)
+  ]);
+
   return {
-    rows: result.rows.map((row) => {
-      const plain = row.get({ plain: true });
-      return {
-        ...plain,
-        metadata: parseJson(plain.metadata_json, null)
-      };
-    }),
+    rows: plainRows.map((plain) => buildFinanceTransactionListRow(
+      plain,
+      leadInfoByBookingId.get(Number(plain.booking_id || plain.booking?.stream_project_booking_id)) || {},
+      invoiceCountsByBookingId.get(Number(plain.booking_id || plain.booking?.stream_project_booking_id)) || 0
+    )),
     pagination: {
       page,
       limit,
