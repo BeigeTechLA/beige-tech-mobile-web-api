@@ -34,6 +34,17 @@
       outline: none;
       text-decoration: none;
     }
+
+    @media only screen and (max-width: 600px) {
+      .responsive-img-cell {
+        width: 220px !important;
+      }
+
+      .responsive-img {
+        width: 220px !important;
+        height: auto !important;
+      }
+    }
   </style>
 </head>
 
@@ -132,10 +143,9 @@
                           <table border="0" cellpadding="0" cellspacing="0" width="100%"
                             style="background-color:#FEEFD8; border-radius:18px; border:1px solid #BDB3B3; box-shadow:0 7px 29px rgba(100,100,111,0.20);">
                             <tr>
-                              <td align="center" style="padding:0 40px 20px;">
+                              <td align="center" style="padding:20px 40px;">
                                 <!-- Shoot Time Icon -->
-                                <table border="0" cellpadding="0" cellspacing="0"
-                                  style="margin-top:-30px; margin-bottom:20px;">
+                                <table border="0" cellpadding="0" cellspacing="0" style="margin-bottom:20px;">
                                   <tr>
                                     <td align="center" bgcolor="#FCF8F1" style="border-radius:100%; padding:10px;">
                                       <img
@@ -163,10 +173,9 @@
                           <table border="0" cellpadding="0" cellspacing="0" width="100%"
                             style="background-color:#FEEFD8; border-radius:18px; border:1px solid #BDB3B3; box-shadow:0 7px 29px rgba(100,100,111,0.20);">
                             <tr>
-                              <td align="center" style="padding:0 40px 20px;">
+                              <td align="center" style="padding:20px 40px;">
                                 <!-- Location Icon -->
-                                <table border="0" cellpadding="0" cellspacing="0"
-                                  style="margin-top:-30px; margin-bottom:20px;">
+                                <table border="0" cellpadding="0" cellspacing="0" style="margin-bottom:20px;">
                                   <tr>
                                     <td align="center" bgcolor="#FCF8F1" style="border-radius:100%; padding:10px;">
                                       <img
@@ -247,12 +256,12 @@
 
                           <!-- Image -->
                           <table border="0" cellpadding="0" cellspacing="0" align="center"
-                            style="position: relative; z-index: 10; margin-bottom: -30px;">
+                            style="position: relative; z-index: 10;">
                             <tr>
-                              <td align="center" bgcolor="#000000"
-                                style="border-radius: 36px; padding: 0; width: 220px;">
-                                <img src="{{cp_image_url}}" alt="CP Image" width="220"
-                                  style="display: block; border: 0; border-radius: 36px;" />
+                              <td align="center" bgcolor="#000000" class="responsive-img-cell"
+                                style="border-radius: 36px; padding: 0; width: 540px;">
+                                <img src="{{cp_image_url}}" alt="CP Image" class="responsive-img" width="540"
+                                  style="display: block; border: 0; border-radius: 36px; max-width: 100%; height: auto;" />
                               </td>
                             </tr>
                           </table>
@@ -264,7 +273,7 @@
 
                 <!-- Beige Team Message -->
                 <tr>
-                  <td style="padding:40px 0 0;">
+                  <td style="padding:0;">
                     <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%"
                       style="width: 100%;">
                       <tr>
