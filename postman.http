@@ -1212,7 +1212,7 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "booking_id": 1104
+  "booking_id": 1106
 }
 
 ### download sales quote pdf

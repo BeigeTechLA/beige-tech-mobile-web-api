@@ -14,6 +14,7 @@ const { normalizeTime, resolveEventDateAndStartTime } = require('../utils/timezo
 const { extractCoordinatesFromPayload } = require('../utils/locationHelpers');
 const accountCreditService = require('./account-credit.service');
 const paymentLinksService = require('./payment-links.service');
+const { expireQuotesPastValidUntil } = require('./sales-quote-expiration.service');
 
 const SECTION_TYPES = ['service', 'addon', 'logistics', 'custom'];
 const QUOTE_STATUSES = ['draft', 'pending', 'partially_paid', 'sent', 'viewed', 'accepted', 'paid', 'rejected', 'expired'];
@@ -841,6 +842,8 @@ async function getQuoteAcceptancePreview(token) {
   if (!Number.isInteger(salesQuoteId) || salesQuoteId <= 0) {
     throw new Error('Invalid accept token');
   }
+
+  await expireQuotesPastValidUntil();
 
   const quote = await db.sales_quotes.findOne({
     where: { sales_quote_id: salesQuoteId }
@@ -3962,9 +3965,15 @@ async function updateQuote(salesQuoteId, payload, user) {
 }
 
 async function convertQuoteToBooking(salesQuoteId, payload = {}, user) {
+  await expireQuotesPastValidUntil();
+
   const quoteDetails = await getQuoteById(salesQuoteId, user);
   if (!quoteDetails) {
     throw new Error('Quote not found');
+  }
+
+  if (String(quoteDetails.status || '').toLowerCase() === 'expired') {
+    throw new Error('Quote cannot be converted because it is expired');
   }
 
   if (!hasConvertibleServiceInQuote(quoteDetails.line_items || [])) {
@@ -4078,9 +4087,15 @@ async function buildPaymentBookingPrefillDataFromQuote(quoteDetails, payload = {
 }
 
 async function ensureQuoteBookingForPayment(salesQuoteId, user, payload = {}) {
+  await expireQuotesPastValidUntil();
+
   const quoteDetails = await getQuoteById(salesQuoteId, user);
   if (!quoteDetails) {
     throw new Error('Quote not found');
+  }
+
+  if (String(quoteDetails.status || '').toLowerCase() === 'expired') {
+    throw new Error('Quote cannot be used for payment because it is expired');
   }
 
   if (!hasConvertibleServiceInQuote(quoteDetails.line_items || [])) {
@@ -4270,6 +4285,7 @@ async function fetchQuoteById(salesQuoteId, user = null) {
 }
 
 async function getQuoteById(salesQuoteId, user) {
+  await expireQuotesPastValidUntil();
   return fetchQuoteById(salesQuoteId, user);
 }
 
@@ -4366,6 +4382,7 @@ async function getQuoteOverallChangeSummary(salesQuoteId, user = null) {
 }
 
 async function getPublicQuoteById(salesQuoteId) {
+  await expireQuotesPastValidUntil();
   return fetchQuoteById(salesQuoteId);
 }
 
@@ -4455,6 +4472,8 @@ async function createQuotePreviewLink(salesQuoteId, user) {
 }
 
 async function getPublicQuoteByKey(quoteKey) {
+  await expireQuotesPastValidUntil();
+
   const normalizedKey = String(quoteKey || '').trim();
   if (!normalizedKey) {
     throw new Error('Quote key is required');
@@ -4556,6 +4575,8 @@ function resolveLegacyQuotePreviewTokenQuoteId(token) {
 }
 
 async function listQuotes(query, user) {
+  await expireQuotesPastValidUntil();
+
   const page = Math.max(1, Number(query.page || 1));
   const limit = Math.min(100, Math.max(1, Number(query.limit || 20)));
   const offset = (page - 1) * limit;
@@ -4705,6 +4726,8 @@ async function listQuotes(query, user) {
 }
 
 async function getQuoteDashboard(query, user) {
+  await expireQuotesPastValidUntil();
+
   const where = { ...buildQuoteAccessWhere(user) };
 
   const statusFilter = normalizeQuoteFilterStatus(query.status);
@@ -4890,6 +4913,8 @@ async function updateQuoteStatus(salesQuoteId, status, user) {
 }
 
 async function sendQuoteProposal(salesQuoteId, payload, user) {
+  await expireQuotesPastValidUntil();
+
   const transaction = await db.sequelize.transaction();
   try {
     const quote = await db.sales_quotes.findOne({
@@ -4899,6 +4924,10 @@ async function sendQuoteProposal(salesQuoteId, payload, user) {
 
     if (!quote) {
       throw new Error('Quote not found');
+    }
+
+    if (String(quote.status || '').toLowerCase() === 'expired') {
+      throw new Error('Quote cannot be sent because it is expired');
     }
 
     const quoteDetails = await getQuoteById(salesQuoteId, user);
@@ -5015,6 +5044,8 @@ async function acceptQuoteById(salesQuoteId, options = {}) {
   let paymentDetails = null;
 
   try {
+    await expireQuotesPastValidUntil({ transaction });
+
     const quote = await db.sales_quotes.findOne({
       where: { sales_quote_id: salesQuoteId },
       transaction
