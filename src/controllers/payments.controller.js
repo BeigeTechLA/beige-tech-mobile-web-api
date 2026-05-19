@@ -12,6 +12,152 @@ const REFERRAL_DISCOUNT_PERCENT = 10;
 const emailService = require('../utils/emailService');
 const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
 
+const PAYMENT_SOURCE = {
+  BOOKING_CHECKOUT: 'booking_checkout',
+  QUOTE_INVOICE: 'quote_invoice',
+  ADDITIONAL_INVOICE: 'additional_invoice'
+};
+
+function normalizePaymentSource(value) {
+  return Object.values(PAYMENT_SOURCE).includes(value)
+    ? value
+    : PAYMENT_SOURCE.BOOKING_CHECKOUT;
+}
+
+async function isConvertedSalesQuoteBooking(bookingId, transaction = null) {
+  const convertedLead = await db.sales_leads.findOne({
+    where: {
+      booking_id: bookingId,
+      lead_source: 'converted bookings'
+    },
+    attributes: ['lead_id'],
+    transaction
+  });
+
+  return Boolean(convertedLead);
+}
+
+async function resolvePaymentSourceForBooking({
+  bookingId,
+  currentSource = PAYMENT_SOURCE.BOOKING_CHECKOUT,
+  metadata = {},
+  transaction = null
+}) {
+  let paymentSource = normalizePaymentSource(currentSource || metadata.payment_source);
+
+  if (
+    paymentSource === PAYMENT_SOURCE.BOOKING_CHECKOUT &&
+    (metadata.sales_quote_id || metadata.quote_id)
+  ) {
+    paymentSource = PAYMENT_SOURCE.QUOTE_INVOICE;
+  }
+
+  if (
+    paymentSource === PAYMENT_SOURCE.BOOKING_CHECKOUT &&
+    await isConvertedSalesQuoteBooking(bookingId, transaction)
+  ) {
+    paymentSource = PAYMENT_SOURCE.QUOTE_INVOICE;
+  }
+
+  return paymentSource;
+}
+
+async function resolveManualWebhookAmount({ booking, paymentSource, amount = null, transaction = null }) {
+  const requestedAmount = Number(amount);
+  if (Number.isFinite(requestedAmount) && requestedAmount > 0) {
+    return round2(requestedAmount);
+  }
+
+  const bookingId = booking.stream_project_booking_id;
+
+  if (paymentSource === PAYMENT_SOURCE.ADDITIONAL_INVOICE) {
+    const linkedLead = await db.sales_leads.findOne({
+      where: { booking_id: bookingId },
+      attributes: ['lead_id'],
+      transaction
+    });
+
+    const salesQuote = linkedLead?.lead_id
+      ? await db.sales_quotes.findOne({
+          where: { lead_id: linkedLead.lead_id },
+          attributes: ['sales_quote_id'],
+          order: [['sales_quote_id', 'DESC']],
+          transaction
+        })
+      : null;
+
+    if (salesQuote?.sales_quote_id && db.sales_quote_activities) {
+      const recentActivities = await db.sales_quote_activities.findAll({
+        where: {
+          sales_quote_id: salesQuote.sales_quote_id,
+          activity_type: 'updated'
+        },
+        order: [['created_at', 'DESC'], ['activity_id', 'DESC']],
+        limit: 10,
+        transaction
+      });
+
+      const approvedIncrease = recentActivities
+        .map((activity) => {
+          try {
+            return typeof activity.metadata_json === 'object'
+              ? activity.metadata_json
+              : JSON.parse(activity.metadata_json || '{}');
+          } catch (_) {
+            return {};
+          }
+        })
+        .find((metadata) => (
+          metadata?.invoice_refresh_required === true &&
+          Number(metadata.booking_id || 0) === Number(bookingId) &&
+          String(metadata.approval_status || '').toLowerCase() === 'approved' &&
+          Number(metadata.extra_amount || 0) > 0
+        ));
+
+      if (approvedIncrease) {
+        return round2(approvedIncrease.extra_amount);
+      }
+    }
+  }
+
+  if (booking.quote_id) {
+    const quote = await db.quotes.findByPk(booking.quote_id, {
+      attributes: ['total', 'price_after_discount', 'subtotal'],
+      transaction
+    });
+    const quoteAmount = Number(quote?.total || quote?.price_after_discount || quote?.subtotal || 0);
+    if (Number.isFinite(quoteAmount) && quoteAmount > 0) {
+      return round2(quoteAmount);
+    }
+  }
+
+  const convertedLead = await db.sales_leads.findOne({
+    where: { booking_id: bookingId },
+    attributes: ['lead_id'],
+    transaction
+  });
+
+  if (convertedLead?.lead_id) {
+    const salesQuote = await db.sales_quotes.findOne({
+      where: { lead_id: convertedLead.lead_id },
+      attributes: ['total', 'price_after_discount', 'subtotal'],
+      order: [['sales_quote_id', 'DESC']],
+      transaction
+    });
+    const salesQuoteAmount = Number(salesQuote?.total || salesQuote?.price_after_discount || salesQuote?.subtotal || 0);
+    if (Number.isFinite(salesQuoteAmount) && salesQuoteAmount > 0) {
+      return round2(salesQuoteAmount);
+    }
+  }
+
+  const fallbackAmount = Number(booking.budget || booking.total_amount || 0);
+  if (Number.isFinite(fallbackAmount) && fallbackAmount > 0) {
+    return round2(fallbackAmount);
+  }
+
+  throw new Error('Unable to resolve payment amount. Pass amount in request body.');
+}
+
 /**
  * Calculate pricing breakdown for CP + equipment booking
  * @param {number} hours - Number of hours
@@ -174,6 +320,7 @@ async function markAdditionalQuoteInvoiceAsPaid({
   bookingId,
   stripeInvoice = null,
   paymentIntentId = null,
+  paymentMetadata = {},
   transaction
 }) {
   if (!bookingId || !db.invoice_send_history) return false;
@@ -196,11 +343,37 @@ async function markAdditionalQuoteInvoiceAsPaid({
     });
   }
 
+  const metadataQuoteId = Number(paymentMetadata?.sales_quote_id || paymentMetadata?.quote_id || 0) || null;
+  const metadataPaymentSource = normalizePaymentSource(paymentMetadata?.payment_source);
+
+  if (!pendingInvoiceHistory && metadataQuoteId) {
+    pendingInvoiceHistory = await db.invoice_send_history.findOne({
+      where: {
+        booking_id: bookingId,
+        quote_id: metadataQuoteId,
+        payment_status: { [db.Sequelize.Op.ne]: 'paid' }
+      },
+      order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+      transaction
+    });
+  }
+
+  if (!pendingInvoiceHistory && metadataPaymentSource === PAYMENT_SOURCE.ADDITIONAL_INVOICE) {
+    pendingInvoiceHistory = await db.invoice_send_history.findOne({
+      where: {
+        booking_id: bookingId,
+        payment_status: { [db.Sequelize.Op.ne]: 'paid' }
+      },
+      order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+      transaction
+    });
+  }
+
   if (!pendingInvoiceHistory) {
     pendingInvoiceHistory = await db.invoice_send_history.findOne({
       where: {
         booking_id: bookingId,
-        payment_status: 'pending'
+        payment_status: { [db.Sequelize.Op.ne]: 'paid' }
       },
       order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
       transaction
@@ -247,6 +420,275 @@ async function markAdditionalQuoteInvoiceAsPaid({
   }, { transaction });
 
   return true;
+}
+
+async function processStripePaidWebhookEvent(event, req = {}) {
+  if (event.type !== 'invoice.paid' && event.type !== 'payment_intent.succeeded') {
+    return { received: true };
+  }
+
+  const dataObject = event.data.object;
+  let booking_id = null;
+  let paymentIntentId = null;
+  let stripeInvoice = null;
+  let invoiceMetadata = {};
+
+  if (event.type === 'payment_intent.succeeded') {
+    const bookingIdRaw = dataObject.metadata?.booking_id;
+    booking_id = bookingIdRaw ? parseInt(bookingIdRaw, 10) : null;
+    paymentIntentId = dataObject.id;
+    invoiceMetadata = dataObject.metadata || {};
+
+    if (dataObject.invoice && (!booking_id || Number.isNaN(booking_id) || !invoiceMetadata.payment_source)) {
+      try {
+        const invoiceId = typeof dataObject.invoice === 'string'
+          ? dataObject.invoice
+          : dataObject.invoice.id;
+        if (invoiceId) {
+          const linkedInvoice = await stripe.invoices.retrieve(invoiceId);
+          invoiceMetadata = linkedInvoice.metadata || invoiceMetadata;
+          if (!booking_id || Number.isNaN(booking_id)) {
+            const invoiceBookingIdRaw = linkedInvoice.metadata?.booking_id;
+            booking_id = invoiceBookingIdRaw ? parseInt(invoiceBookingIdRaw, 10) : null;
+          }
+        }
+      } catch (invoiceLookupError) {
+        console.warn(`Webhook payment_intent.succeeded: failed to fetch linked invoice metadata: ${invoiceLookupError.message}`);
+      }
+    }
+  } else if (event.type === 'invoice.paid') {
+    stripeInvoice = dataObject;
+    invoiceMetadata = dataObject.metadata || {};
+    const bookingIdRaw = dataObject.metadata?.booking_id;
+    booking_id = bookingIdRaw ? parseInt(bookingIdRaw, 10) : null;
+    paymentIntentId = typeof dataObject.payment_intent === 'string'
+      ? dataObject.payment_intent
+      : dataObject.payment_intent?.id;
+  }
+
+  if (!booking_id || Number.isNaN(booking_id)) {
+    console.log(`Webhook ${event.type} ignored: missing metadata.booking_id`);
+    return { received: true };
+  }
+
+  const transaction = await db.sequelize.transaction();
+
+  try {
+    if (paymentIntentId) {
+      const existing = await db.payment_transactions.findOne({
+        where: { stripe_payment_intent_id: paymentIntentId },
+        transaction
+      });
+
+      if (existing) {
+        await transaction.rollback();
+        console.log(`Webhook: payment already processed for booking ${booking_id}`);
+        return { received: true, duplicate: true };
+      }
+    } else {
+      console.log(`Webhook ${event.type}: no payment intent id for booking ${booking_id}, continuing with booking-level idempotency`);
+    }
+
+    const booking = await db.stream_project_booking.findByPk(booking_id, {
+      transaction,
+      lock: transaction.LOCK.UPDATE
+    });
+    if (!booking) {
+      await transaction.rollback();
+      console.log(`Webhook: booking ${booking_id} not found`);
+      return { received: true, booking_found: false };
+    }
+
+    const paymentSource = await resolvePaymentSourceForBooking({
+      bookingId: booking_id,
+      currentSource: invoiceMetadata.payment_source,
+      metadata: invoiceMetadata,
+      transaction
+    });
+
+    if (booking.payment_id || booking.is_completed === 1) {
+      const additionalInvoiceMarkedPaid = await markAdditionalQuoteInvoiceAsPaid({
+        bookingId: booking_id,
+        stripeInvoice,
+        paymentIntentId,
+        paymentMetadata: invoiceMetadata || {},
+        transaction
+      });
+
+      if (additionalInvoiceMarkedPaid) {
+        await transaction.commit();
+        console.log(`Webhook: additional invoice marked paid for booking ${booking_id}`);
+        return { received: true, additional_invoice_paid: true };
+      }
+
+      await transaction.rollback();
+      console.log(`Webhook: booking ${booking_id} already marked paid`);
+      return { received: true, booking_already_paid: true };
+    }
+
+    let validCreatorId = null;
+    if (booking.creator_id) {
+      const creator = await db.crew_members.findByPk(booking.creator_id, { transaction });
+      if (creator) validCreatorId = booking.creator_id;
+    }
+    if (!validCreatorId) {
+      const assigned = await db.assigned_crew.findOne({
+        where: { project_id: booking_id },
+        transaction
+      });
+      if (assigned) validCreatorId = assigned.crew_member_id;
+    }
+    if (!validCreatorId) {
+      const firstCreator = await db.crew_members.findOne({
+        attributes: ['crew_member_id'],
+        transaction
+      });
+      validCreatorId = firstCreator ? firstCreator.crew_member_id : null;
+    }
+    if (!validCreatorId) {
+      throw new Error(`Cannot process webhook for booking ${booking_id}: no valid creator found`);
+    }
+
+    const amountInCents =
+      dataObject.amount_paid ?? dataObject.amount_received ?? dataObject.amount ?? 0;
+    const amountPaid = parseFloat((amountInCents / 100).toFixed(2));
+
+    const chargeId =
+      dataObject.charge ||
+      dataObject.latest_charge ||
+      dataObject.charges?.data?.[0]?.id ||
+      null;
+
+    const finalShootDate = booking.shoot_date || booking.event_date || new Date();
+    const finalLocation = booking.event_location
+      ? (typeof booking.event_location === 'string'
+        ? booking.event_location
+        : JSON.stringify(booking.event_location))
+      : 'Stripe Webhook';
+
+    const bookingHours = Number(booking.shoot_hours || booking.duration_hours || 0);
+    const canDeferHours =
+      paymentSource === PAYMENT_SOURCE.QUOTE_INVOICE ||
+      paymentSource === PAYMENT_SOURCE.ADDITIONAL_INVOICE;
+
+    if ((!Number.isFinite(bookingHours) || bookingHours <= 0) && !canDeferHours) {
+      throw new Error(`Cannot process webhook for booking ${booking_id}: booking duration is required for ${paymentSource}`);
+    }
+
+    const paymentTransactionHours = Number.isFinite(bookingHours) && bookingHours > 0
+      ? bookingHours
+      : null;
+    const paymentNotes = [
+      booking.special_requests || null,
+      paymentTransactionHours === null
+        ? 'Invoice paid before schedule/duration was finalized; payment transaction hours left empty.'
+        : null
+    ].filter(Boolean).join('\n') || null;
+
+    const payment = await db.payment_transactions.create({
+      stripe_payment_intent_id: paymentIntentId || null,
+      stripe_charge_id: chargeId,
+      creator_id: validCreatorId,
+      user_id: booking.user_id || null,
+      guest_email: dataObject.customer_email || dataObject.receipt_email || booking.guest_email || null,
+      payment_source: paymentSource,
+      hours: paymentTransactionHours,
+      hourly_rate: 0,
+      cp_cost: 0,
+      equipment_cost: 0,
+      subtotal: amountPaid,
+      beige_margin_percent: 0,
+      beige_margin_amount: 0,
+      total_amount: amountPaid,
+      shoot_date: finalShootDate,
+      location: finalLocation,
+      shoot_type: booking.shoot_type || null,
+      notes: paymentNotes,
+      status: 'succeeded'
+    }, { transaction });
+
+    await db.stream_project_booking.update({
+      is_draft: 0,
+      payment_id: payment.payment_id,
+      payment_completed_at: new Date()
+    }, {
+      where: { stream_project_booking_id: booking_id },
+      transaction
+    });
+
+    await db.sales_leads.update({
+      lead_status: 'booked'
+    }, {
+      where: { booking_id: booking_id },
+      transaction
+    });
+
+    await markConvertedSalesQuoteAsPaid({
+      bookingId: booking_id,
+      paymentId: payment.payment_id,
+      paymentIntentId,
+      paidAmount: amountPaid,
+      transaction
+    });
+
+    await ensureProjectAfterPayment({
+      bookingId: booking_id,
+      transaction,
+      initiatedByUserId: booking.user_id || null,
+      ipAddress: req.ip || req.connection?.remoteAddress,
+      userAgent: req.headers?.['user-agent']
+    });
+    await syncExternalWorkspaceAfterPayment(booking);
+
+    await transaction.commit();
+    console.log(`Webhook: booking ${booking_id} marked as paid`);
+
+    const lead = await db.sales_leads.findOne({
+      where: { booking_id }
+    });
+
+    const user = booking.user_id
+      ? await db.users.findByPk(booking.user_id, {
+        attributes: ['name', 'email', 'phone_number']
+      })
+      : null;
+
+    const guestEmail = booking.guest_email || user?.email || lead?.guest_email || '';
+    const clientName = user?.name || lead?.client_name || '';
+    const phoneNumber = user?.phone_number || lead?.phone || '';
+
+    emailService.sendPaymentSuccessSalesNotification({
+      guestEmail: guestEmail || 'Unknown Client',
+      email: user?.email || guestEmail,
+      clientName,
+      phone_number: phoneNumber,
+      amount: amountPaid,
+      shootType: booking.shoot_type || 'Shoot',
+      shoot_date: booking.shoot_date || booking.event_date,
+      startTime: booking.start_time,
+      endTime: booking.end_time,
+      editsNeeded: booking.edits_needed ?? lead?.edits_needed,
+      paymentIntentId
+    }).catch(err => console.error('Sales Notification Error:', err));
+
+    const webhookPaymentMethod =
+      dataObject.payment_method_details?.type ||
+      dataObject.payment_method_types?.[0] ||
+      'card';
+    sendBookingConfirmationForBooking({
+      bookingId: booking_id,
+      amountPaid,
+      paymentMethod: webhookPaymentMethod,
+      transactionId: paymentIntentId
+    }).catch(err => console.error('Booking Confirmation Email Error:', err));
+    notifyAssignedCreatorsAfterPayment(booking_id)
+      .catch(err => console.error('Assigned Creator Notification Error:', err));
+
+    return { received: true };
+  } catch (dbError) {
+    await transaction.rollback();
+    throw dbError;
+  }
 }
 
 
@@ -1287,7 +1729,8 @@ exports.createPaymentIntentMulti = async (req, res) => {
     const {
       booking_id,
       amount,
-      guest_email
+      guest_email,
+      payment_source
     } = req.body;
 
     // 1. Validation
@@ -1329,11 +1772,17 @@ exports.createPaymentIntentMulti = async (req, res) => {
       });
     }
 
+    const paymentSource = await resolvePaymentSourceForBooking({
+      bookingId: booking_id,
+      currentSource: payment_source
+    });
+
     const paymentIntent = await stripe.paymentIntents.create({
       amount: Math.round(amount * 100), // Convert to cents
       currency: 'usd',
       metadata: {
         booking_id: booking_id.toString(),
+        payment_source: paymentSource,
         guest_email: guest_email || booking.guest_email || '',
         type: 'multi-creator',
         shoot_name: booking.shoot_name || '',
@@ -1455,6 +1904,7 @@ exports.confirmPaymentMulti = async (req, res) => {
         await markAdditionalQuoteInvoiceAsPaid({
           bookingId: booking_id,
           paymentIntentId,
+          paymentMetadata: paymentIntent?.metadata || {},
           transaction
         });
       }
@@ -1578,11 +2028,31 @@ exports.confirmPaymentMulti = async (req, res) => {
 
     // 6. Create Payment Transaction Record
     const finalShootDate = normalizeDateOnly(booking.shoot_date || booking.event_date || new Date());
-    const rawHours = booking.shoot_hours || booking.duration_hours || 1;
-    const finalHours = parseFloat(rawHours) > 0 ? parseFloat(rawHours) : 1;
+    const paymentSource = await resolvePaymentSourceForBooking({
+      bookingId: booking_id,
+      currentSource: paymentIntent?.metadata?.payment_source,
+      metadata: paymentIntent?.metadata || {},
+      transaction
+    });
+    const rawHours = booking.shoot_hours || booking.duration_hours || 0;
+    const parsedHours = parseFloat(rawHours);
+    const canDeferHours =
+      paymentSource === PAYMENT_SOURCE.QUOTE_INVOICE ||
+      paymentSource === PAYMENT_SOURCE.ADDITIONAL_INVOICE;
+
+    if ((!Number.isFinite(parsedHours) || parsedHours <= 0) && !canDeferHours) {
+      throw new Error(`Cannot process booking ${booking_id}: booking duration is required for ${paymentSource}`);
+    }
+
+    const finalHours = Number.isFinite(parsedHours) && parsedHours > 0 ? parsedHours : null;
     const safeLocation = normalizeString(booking.event_location, 255, 'See Booking Details');
     const safeShootType = normalizeString(booking.shoot_type, 100, null);
-    const safeNotes = normalizeString(booking.special_requests || booking.special_instructions, null, null);
+    const safeNotes = normalizeString([
+      booking.special_requests || booking.special_instructions || null,
+      finalHours === null
+        ? 'Payment completed before schedule/duration was finalized; payment transaction hours left empty.'
+        : null
+    ].filter(Boolean).join('\n'), null, null);
 
     const payment = await db.payment_transactions.create({
       stripe_payment_intent_id: paymentIntentId,
@@ -1590,6 +2060,7 @@ exports.confirmPaymentMulti = async (req, res) => {
       creator_id: validCreatorId,
       user_id: booking.user_id || null,
       guest_email: booking.guest_email || null,
+      payment_source: paymentSource,
       hours: finalHours,
       hourly_rate: 0,
       cp_cost: 0,
@@ -1663,6 +2134,7 @@ exports.confirmPaymentMulti = async (req, res) => {
       await markAdditionalQuoteInvoiceAsPaid({
         bookingId: booking_id,
         paymentIntentId,
+        paymentMetadata: paymentIntent?.metadata || {},
         transaction
       });
 
@@ -1888,6 +2360,7 @@ exports.getPaymentStatus = async (req, res) => {
         creator: payment.creator,
         user: payment.user,
         guest_email: payment.guest_email,
+        payment_source: payment.payment_source,
         hours: payment.hours,
         hourly_rate: payment.hourly_rate,
         pricing: {
@@ -1951,22 +2424,27 @@ exports.handleStripeWebhook = async (req, res) => {
     let booking_id = null;
     let paymentIntentId = null;
     let stripeInvoice = null;
+    let invoiceMetadata = {};
 
     if (event.type === 'payment_intent.succeeded') {
       const bookingIdRaw = dataObject.metadata?.booking_id;
       booking_id = bookingIdRaw ? parseInt(bookingIdRaw, 10) : null;
       paymentIntentId = dataObject.id;
+      invoiceMetadata = dataObject.metadata || {};
 
-      // Fallback: when booking_id is only present on the related invoice metadata.
-      if ((!booking_id || Number.isNaN(booking_id)) && dataObject.invoice) {
+      // Fallback/source lookup: booking_id and quote metadata are often on the related invoice.
+      if (dataObject.invoice && (!booking_id || Number.isNaN(booking_id) || !invoiceMetadata.payment_source)) {
         try {
           const invoiceId = typeof dataObject.invoice === 'string'
             ? dataObject.invoice
             : dataObject.invoice.id;
           if (invoiceId) {
             const linkedInvoice = await stripe.invoices.retrieve(invoiceId);
-            const invoiceBookingIdRaw = linkedInvoice.metadata?.booking_id;
-            booking_id = invoiceBookingIdRaw ? parseInt(invoiceBookingIdRaw, 10) : null;
+            invoiceMetadata = linkedInvoice.metadata || invoiceMetadata;
+            if (!booking_id || Number.isNaN(booking_id)) {
+              const invoiceBookingIdRaw = linkedInvoice.metadata?.booking_id;
+              booking_id = invoiceBookingIdRaw ? parseInt(invoiceBookingIdRaw, 10) : null;
+            }
           }
         } catch (invoiceLookupError) {
           console.warn(`Webhook payment_intent.succeeded: failed to fetch linked invoice metadata: ${invoiceLookupError.message}`);
@@ -1974,6 +2452,7 @@ exports.handleStripeWebhook = async (req, res) => {
       }
     } else if (event.type === 'invoice.paid') {
       stripeInvoice = dataObject;
+      invoiceMetadata = dataObject.metadata || {};
       const bookingIdRaw = dataObject.metadata?.booking_id;
       booking_id = bookingIdRaw ? parseInt(bookingIdRaw, 10) : null;
       paymentIntentId = typeof dataObject.payment_intent === 'string'
@@ -2014,12 +2493,20 @@ exports.handleStripeWebhook = async (req, res) => {
         return res.status(200).json({ received: true, booking_found: false });
       }
 
+      const paymentSource = await resolvePaymentSourceForBooking({
+        bookingId: booking_id,
+        currentSource: invoiceMetadata.payment_source,
+        metadata: invoiceMetadata,
+        transaction
+      });
+
       // Booking-level idempotency: do not create a second payment for an already paid booking.
       if (booking.payment_id || booking.is_completed === 1) {
         const additionalInvoiceMarkedPaid = await markAdditionalQuoteInvoiceAsPaid({
           bookingId: booking_id,
           stripeInvoice,
           paymentIntentId,
+          paymentMetadata: invoiceMetadata || {},
           transaction
         });
 
@@ -2074,13 +2561,33 @@ exports.handleStripeWebhook = async (req, res) => {
           : JSON.stringify(booking.event_location))
         : 'Stripe Webhook';
 
+      const bookingHours = Number(booking.shoot_hours || booking.duration_hours || 0);
+      const canDeferHours =
+        paymentSource === PAYMENT_SOURCE.QUOTE_INVOICE ||
+        paymentSource === PAYMENT_SOURCE.ADDITIONAL_INVOICE;
+
+      if ((!Number.isFinite(bookingHours) || bookingHours <= 0) && !canDeferHours) {
+        throw new Error(`Cannot process webhook for booking ${booking_id}: booking duration is required for ${paymentSource}`);
+      }
+
+      const paymentTransactionHours = Number.isFinite(bookingHours) && bookingHours > 0
+        ? bookingHours
+        : null;
+      const paymentNotes = [
+        booking.special_requests || null,
+        paymentTransactionHours === null
+          ? 'Invoice paid before schedule/duration was finalized; payment transaction hours left empty.'
+          : null
+      ].filter(Boolean).join('\n') || null;
+
       const payment = await db.payment_transactions.create({
         stripe_payment_intent_id: paymentIntentId || null,
         stripe_charge_id: chargeId,
         creator_id: validCreatorId,
         user_id: booking.user_id || null,
         guest_email: dataObject.customer_email || dataObject.receipt_email || booking.guest_email || null,
-        hours: booking.shoot_hours || booking.duration_hours || 0,
+        payment_source: paymentSource,
+        hours: paymentTransactionHours,
         hourly_rate: 0,
         cp_cost: 0,
         equipment_cost: 0,
@@ -2091,7 +2598,7 @@ exports.handleStripeWebhook = async (req, res) => {
         shoot_date: finalShootDate,
         location: finalLocation,
         shoot_type: booking.shoot_type || null,
-        notes: booking.special_requests || null,
+        notes: paymentNotes,
         status: 'succeeded'
       }, { transaction });
 
@@ -2182,5 +2689,404 @@ exports.handleStripeWebhook = async (req, res) => {
   } catch (error) {
     console.error('Webhook processing error:', error);
     return res.status(500).send('Internal Server Error');
+  }
+};
+
+/**
+ * Manual local helper for testing the same payment side effects as Stripe webhook.
+ * POST /v1/payments/manual-webhook-paid
+ *
+ * Body:
+ * {
+ *   "booking_id": 123,
+ *   "payment_source": "quote_invoice", // optional: booking_checkout | quote_invoice | additional_invoice
+ *   "amount": 100,                     // optional; resolved from quote if omitted
+ *   "payment_intent_id": "manual_pi_..." // optional
+ * }
+ */
+exports.manualMarkWebhookPaid = async (req, res) => {
+  const allowManualWebhook =
+    process.env.NODE_ENV !== 'production' ||
+    String(process.env.ALLOW_MANUAL_PAYMENT_WEBHOOK || '').toLowerCase() === 'true';
+
+  if (!allowManualWebhook) {
+    return res.status(403).json({
+      success: false,
+      message: 'Manual webhook payment endpoint is disabled in this environment'
+    });
+  }
+
+  const bookingId = Number(req.body?.booking_id || req.body?.bookingId);
+  if (!Number.isInteger(bookingId) || bookingId <= 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'booking_id is required'
+    });
+  }
+
+  try {
+    const booking = await db.stream_project_booking.findByPk(bookingId);
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: 'Booking not found'
+      });
+    }
+
+    const requestedSource = req.body?.payment_source || req.body?.paymentSource || null;
+    const paymentSource = await resolvePaymentSourceForBooking({
+      bookingId,
+      currentSource: requestedSource || (
+        booking.payment_id || booking.is_completed === 1
+          ? PAYMENT_SOURCE.ADDITIONAL_INVOICE
+          : PAYMENT_SOURCE.QUOTE_INVOICE
+      ),
+      metadata: {
+        payment_source: requestedSource || null,
+        sales_quote_id: req.body?.sales_quote_id || req.body?.quote_id || null
+      }
+    });
+    const amountPaid = await resolveManualWebhookAmount({
+      booking,
+      paymentSource,
+      amount: req.body?.amount
+    });
+    const amountInCents = Math.round(amountPaid * 100);
+    const paymentIntentId = req.body?.payment_intent_id ||
+      req.body?.paymentIntentId ||
+      `manual_webhook_${bookingId}_${Date.now()}`;
+    const invoiceMetadata = {
+      payment_source: paymentSource,
+      booking_id: String(bookingId),
+      ...(req.body?.sales_quote_id || req.body?.quote_id
+        ? { sales_quote_id: String(req.body.sales_quote_id || req.body.quote_id) }
+        : {})
+    };
+    const event = {
+      id: `evt_manual_${Date.now()}`,
+      type: 'invoice.paid',
+      data: {
+        object: {
+          id: req.body?.stripe_invoice_id || `in_manual_${bookingId}_${Date.now()}`,
+          number: req.body?.invoice_number || req.body?.invoiceNumber || null,
+          hosted_invoice_url: req.body?.invoice_url || null,
+          invoice_pdf: req.body?.invoice_pdf || null,
+          amount_paid: amountInCents,
+          total: amountInCents,
+          customer_email: req.body?.customer_email || booking.guest_email || null,
+          receipt_email: req.body?.receipt_email || booking.guest_email || null,
+          payment_intent: paymentIntentId,
+          payment_method_types: [req.body?.payment_method || 'manual_local'],
+          metadata: invoiceMetadata
+        }
+      }
+    };
+
+    const result = await processStripePaidWebhookEvent(event, req);
+    return res.status(200).json({
+      success: true,
+      manual: true,
+      ...result,
+      data: {
+        booking_id: bookingId,
+        amount_paid: amountPaid,
+        payment_source: paymentSource,
+        payment_intent_id: paymentIntentId
+      }
+    });
+  } catch (error) {
+    console.error('Manual webhook processing error:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Manual webhook processing failed'
+    });
+  }
+
+  const transaction = await db.sequelize.transaction();
+
+  try {
+    const booking = await db.stream_project_booking.findByPk(bookingId, {
+      transaction,
+      lock: transaction.LOCK.UPDATE
+    });
+
+    if (!booking) {
+      await transaction.rollback();
+      return res.status(404).json({
+        success: false,
+        message: 'Booking not found'
+      });
+    }
+
+    const requestedSource = req.body?.payment_source || req.body?.paymentSource || null;
+    const paymentSource = await resolvePaymentSourceForBooking({
+      bookingId,
+      currentSource: requestedSource || (
+        booking.payment_id || booking.is_completed === 1
+          ? PAYMENT_SOURCE.ADDITIONAL_INVOICE
+          : PAYMENT_SOURCE.QUOTE_INVOICE
+      ),
+      metadata: {
+        payment_source: requestedSource || null,
+        sales_quote_id: req.body?.sales_quote_id || req.body?.quote_id || null
+      },
+      transaction
+    });
+
+    const amountPaid = await resolveManualWebhookAmount({
+      booking,
+      paymentSource,
+      amount: req.body?.amount,
+      transaction
+    });
+    const amountInCents = Math.round(amountPaid * 100);
+    const paymentIntentId = req.body?.payment_intent_id ||
+      req.body?.paymentIntentId ||
+      `manual_webhook_${bookingId}_${Date.now()}`;
+    const invoiceNumber = req.body?.invoice_number || req.body?.invoiceNumber || null;
+    const invoiceMetadata = {
+      payment_source: paymentSource,
+      booking_id: String(bookingId),
+      ...(req.body?.sales_quote_id || req.body?.quote_id
+        ? { sales_quote_id: String(req.body.sales_quote_id || req.body.quote_id) }
+        : {})
+    };
+    const stripeInvoice = {
+      id: req.body?.stripe_invoice_id || null,
+      number: invoiceNumber,
+      hosted_invoice_url: req.body?.invoice_url || null,
+      invoice_pdf: req.body?.invoice_pdf || null,
+      amount_paid: amountInCents,
+      total: amountInCents,
+      metadata: invoiceMetadata,
+      payment_intent: paymentIntentId
+    };
+
+    if (paymentIntentId) {
+      const existing = await db.payment_transactions.findOne({
+        where: { stripe_payment_intent_id: paymentIntentId },
+        transaction
+      });
+
+      if (existing) {
+        await transaction.rollback();
+        return res.status(200).json({
+          success: true,
+          received: true,
+          duplicate: true,
+          message: 'Payment already processed for this payment_intent_id',
+          data: {
+            booking_id: bookingId,
+            payment_id: existing.payment_id
+          }
+        });
+      }
+    }
+
+    if (booking.payment_id || booking.is_completed === 1) {
+      const additionalInvoiceMarkedPaid = await markAdditionalQuoteInvoiceAsPaid({
+        bookingId,
+        stripeInvoice,
+        paymentIntentId,
+        paymentMetadata: invoiceMetadata,
+        transaction
+      });
+
+      if (additionalInvoiceMarkedPaid) {
+        await transaction.commit();
+        return res.status(200).json({
+          success: true,
+          received: true,
+          additional_invoice_paid: true,
+          message: 'Additional invoice marked paid successfully',
+          data: {
+            booking_id: bookingId,
+            amount_paid: amountPaid,
+            payment_source: paymentSource,
+            payment_intent_id: paymentIntentId
+          }
+        });
+      }
+
+      await transaction.rollback();
+      return res.status(409).json({
+        success: false,
+        message: 'Booking is already paid and no pending additional invoice was found'
+      });
+    }
+
+    let validCreatorId = null;
+    if (booking.creator_id) {
+      const creator = await db.crew_members.findByPk(booking.creator_id, { transaction });
+      if (creator) validCreatorId = booking.creator_id;
+    }
+    if (!validCreatorId) {
+      const assigned = await db.assigned_crew.findOne({
+        where: { project_id: bookingId },
+        transaction
+      });
+      if (assigned) validCreatorId = assigned.crew_member_id;
+    }
+    if (!validCreatorId) {
+      const firstCreator = await db.crew_members.findOne({
+        attributes: ['crew_member_id'],
+        transaction
+      });
+      validCreatorId = firstCreator ? firstCreator.crew_member_id : null;
+    }
+    if (!validCreatorId) {
+      throw new Error(`Cannot process manual webhook for booking ${bookingId}: no valid creator found`);
+    }
+
+    const finalShootDate = booking.shoot_date || booking.event_date || new Date();
+    const finalLocation = booking.event_location
+      ? (typeof booking.event_location === 'string'
+        ? booking.event_location
+        : JSON.stringify(booking.event_location))
+      : 'Manual Webhook';
+
+    const bookingHours = Number(booking.shoot_hours || booking.duration_hours || 0);
+    const canDeferHours =
+      paymentSource === PAYMENT_SOURCE.QUOTE_INVOICE ||
+      paymentSource === PAYMENT_SOURCE.ADDITIONAL_INVOICE;
+
+    if ((!Number.isFinite(bookingHours) || bookingHours <= 0) && !canDeferHours) {
+      throw new Error(`Cannot process manual webhook for booking ${bookingId}: booking duration is required for ${paymentSource}`);
+    }
+
+    const paymentTransactionHours = Number.isFinite(bookingHours) && bookingHours > 0
+      ? bookingHours
+      : null;
+    const paymentNotes = [
+      booking.special_requests || null,
+      'Payment marked through manual local webhook helper.',
+      paymentTransactionHours === null
+        ? 'Invoice paid before schedule/duration was finalized; payment transaction hours left empty.'
+        : null
+    ].filter(Boolean).join('\n') || null;
+
+    const payment = await db.payment_transactions.create({
+      stripe_payment_intent_id: paymentIntentId,
+      stripe_charge_id: req.body?.charge_id || null,
+      creator_id: validCreatorId,
+      user_id: booking.user_id || null,
+      guest_email: req.body?.customer_email || booking.guest_email || null,
+      payment_source: paymentSource,
+      hours: paymentTransactionHours,
+      hourly_rate: 0,
+      cp_cost: 0,
+      equipment_cost: 0,
+      subtotal: amountPaid,
+      beige_margin_percent: 0,
+      beige_margin_amount: 0,
+      total_amount: amountPaid,
+      shoot_date: finalShootDate,
+      location: finalLocation,
+      shoot_type: booking.shoot_type || null,
+      notes: paymentNotes,
+      status: 'succeeded'
+    }, { transaction });
+
+    await db.stream_project_booking.update({
+      is_draft: 0,
+      payment_id: payment.payment_id,
+      payment_completed_at: new Date()
+    }, {
+      where: { stream_project_booking_id: bookingId },
+      transaction
+    });
+
+    await db.sales_leads.update({
+      lead_status: 'booked'
+    }, {
+      where: { booking_id: bookingId },
+      transaction
+    });
+
+    await markConvertedSalesQuoteAsPaid({
+      bookingId,
+      paymentId: payment.payment_id,
+      paymentIntentId,
+      paidAmount: amountPaid,
+      transaction
+    });
+
+    await markAdditionalQuoteInvoiceAsPaid({
+      bookingId,
+      stripeInvoice,
+      paymentIntentId,
+      paymentMetadata: invoiceMetadata,
+      transaction
+    });
+
+    await ensureProjectAfterPayment({
+      bookingId,
+      transaction,
+      initiatedByUserId: booking.user_id || null,
+      ipAddress: req.ip || req.connection?.remoteAddress,
+      userAgent: req.headers['user-agent']
+    });
+
+    await syncExternalWorkspaceAfterPayment(booking);
+
+    await transaction.commit();
+
+    const lead = await db.sales_leads.findOne({
+      where: { booking_id: bookingId }
+    });
+
+    const user = booking.user_id
+      ? await db.users.findByPk(booking.user_id, {
+          attributes: ['name', 'email', 'phone_number']
+        })
+      : null;
+
+    const guestEmail = booking.guest_email || user?.email || lead?.guest_email || '';
+    const clientName = user?.name || lead?.client_name || '';
+    const phoneNumber = user?.phone_number || lead?.phone || '';
+
+    emailService.sendPaymentSuccessSalesNotification({
+      guestEmail: guestEmail || 'Unknown Client',
+      email: user?.email || guestEmail,
+      clientName,
+      phone_number: phoneNumber,
+      amount: amountPaid,
+      shootType: booking.shoot_type || 'Shoot',
+      shoot_date: booking.shoot_date || booking.event_date,
+      startTime: booking.start_time,
+      endTime: booking.end_time,
+      editsNeeded: booking.edits_needed ?? lead?.edits_needed,
+      paymentIntentId
+    }).catch(err => console.error('Manual webhook sales notification error:', err));
+
+    sendBookingConfirmationForBooking({
+      bookingId,
+      amountPaid,
+      paymentMethod: req.body?.payment_method || 'manual_local',
+      transactionId: paymentIntentId
+    }).catch(err => console.error('Manual webhook booking confirmation email error:', err));
+
+    notifyAssignedCreatorsAfterPayment(bookingId)
+      .catch(err => console.error('Manual webhook assigned creator notification error:', err));
+
+    return res.status(200).json({
+      success: true,
+      received: true,
+      message: 'Booking marked paid successfully using manual webhook helper',
+      data: {
+        booking_id: bookingId,
+        payment_id: payment.payment_id,
+        amount_paid: amountPaid,
+        payment_source: paymentSource,
+        payment_intent_id: paymentIntentId
+      }
+    });
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Manual webhook processing error:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Manual webhook processing failed'
+    });
   }
 };

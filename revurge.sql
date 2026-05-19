@@ -1150,3 +1150,411 @@ ADD COLUMN assign_lead TINYINT(1) NOT NULL DEFAULT 1;
 
 ALTER TABLE `users`
 ADD COLUMN `role` VARCHAR(100) NULL DEFAULT NULL AFTER `assign_lead`;
+
+-- 13-05-26
+
+CREATE TABLE IF NOT EXISTS finance_transactions (
+  finance_transaction_id INT NOT NULL AUTO_INCREMENT,
+  transaction_code VARCHAR(64) NOT NULL,
+  booking_id INT NULL,
+  payment_id INT NULL,
+  invoice_send_history_id INT NULL,
+  client_user_id INT NULL,
+  guest_email VARCHAR(255) NULL,
+  transaction_type ENUM('client_payment', 'manual_payment', 'refund', 'adjustment', 'credit', 'creator_earning', 'platform_fee') NOT NULL DEFAULT 'client_payment',
+  direction ENUM('inflow', 'outflow', 'internal') NOT NULL DEFAULT 'inflow',
+  source ENUM('stripe', 'manual', 'account_credit', 'system', 'admin') NOT NULL DEFAULT 'system',
+  payment_method VARCHAR(64) NULL,
+  status ENUM('pending', 'paid', 'failed', 'refunded', 'void', 'cancelled') NOT NULL DEFAULT 'pending',
+  currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+  gross_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  platform_fee_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  creator_earnings_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  gateway_fee_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  net_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  external_reference VARCHAR(255) NULL,
+  transaction_date DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  metadata_json TEXT NULL,
+  created_by_user_id INT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (finance_transaction_id),
+  UNIQUE KEY uniq_finance_transaction_code (transaction_code),
+  KEY idx_finance_transactions_booking (booking_id),
+  KEY idx_finance_transactions_payment (payment_id),
+  KEY idx_finance_transactions_status (status),
+  KEY idx_finance_transactions_type (transaction_type),
+  KEY idx_finance_transactions_date (transaction_date),
+  CONSTRAINT fk_finance_transactions_booking FOREIGN KEY (booking_id) REFERENCES stream_project_booking(stream_project_booking_id),
+  CONSTRAINT fk_finance_transactions_payment FOREIGN KEY (payment_id) REFERENCES payment_transactions(payment_id),
+  CONSTRAINT fk_finance_transactions_invoice FOREIGN KEY (invoice_send_history_id) REFERENCES invoice_send_history(invoice_send_history_id),
+  CONSTRAINT fk_finance_transactions_client_user FOREIGN KEY (client_user_id) REFERENCES users(id),
+  CONSTRAINT fk_finance_transactions_created_by FOREIGN KEY (created_by_user_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS finance_project_breakdowns (
+  finance_project_breakdown_id INT NOT NULL AUTO_INCREMENT,
+  booking_id INT NOT NULL,
+  quote_id INT NULL,
+  client_user_id INT NULL,
+  guest_email VARCHAR(255) NULL,
+  currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+  subtotal_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  discount_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  tax_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  equipment_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  platform_fee_percent DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+  platform_fee_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  creator_earnings_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  total_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  collected_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  outstanding_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  payment_status ENUM('unpaid', 'pending', 'partially_paid', 'paid', 'failed', 'refunded') NOT NULL DEFAULT 'unpaid',
+  metadata_json TEXT NULL,
+  calculated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (finance_project_breakdown_id),
+  UNIQUE KEY uniq_finance_breakdown_booking (booking_id),
+  KEY idx_finance_breakdowns_client (client_user_id),
+  KEY idx_finance_breakdowns_status (payment_status),
+  CONSTRAINT fk_finance_breakdowns_booking FOREIGN KEY (booking_id) REFERENCES stream_project_booking(stream_project_booking_id),
+  CONSTRAINT fk_finance_breakdowns_client_user FOREIGN KEY (client_user_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS finance_invoice_payments (
+  finance_invoice_payment_id INT NOT NULL AUTO_INCREMENT,
+  invoice_send_history_id INT NOT NULL,
+  payment_id INT NULL,
+  finance_transaction_id INT NULL,
+  booking_id INT NOT NULL,
+  amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  status ENUM('pending', 'paid', 'failed', 'void') NOT NULL DEFAULT 'pending',
+  paid_at DATETIME NULL,
+  metadata_json TEXT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (finance_invoice_payment_id),
+  KEY idx_finance_invoice_payments_invoice (invoice_send_history_id),
+  KEY idx_finance_invoice_payments_payment (payment_id),
+  KEY idx_finance_invoice_payments_booking (booking_id),
+  KEY idx_finance_invoice_payments_status (status),
+  CONSTRAINT fk_finance_invoice_payments_invoice FOREIGN KEY (invoice_send_history_id) REFERENCES invoice_send_history(invoice_send_history_id),
+  CONSTRAINT fk_finance_invoice_payments_payment FOREIGN KEY (payment_id) REFERENCES payment_transactions(payment_id),
+  CONSTRAINT fk_finance_invoice_payments_transaction FOREIGN KEY (finance_transaction_id) REFERENCES finance_transactions(finance_transaction_id),
+  CONSTRAINT fk_finance_invoice_payments_booking FOREIGN KEY (booking_id) REFERENCES stream_project_booking(stream_project_booking_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS creator_earnings (
+  creator_earning_id INT NOT NULL AUTO_INCREMENT,
+  booking_id INT NOT NULL,
+  creator_id INT NOT NULL,
+  payment_id INT NULL,
+  finance_transaction_id INT NULL,
+  currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+  gross_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  platform_fee_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  net_earning_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  status ENUM('pending', 'earned', 'payout_pending', 'paid', 'held', 'cancelled') NOT NULL DEFAULT 'pending',
+  earned_at DATETIME NULL,
+  payout_id INT NULL,
+  metadata_json TEXT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (creator_earning_id),
+  KEY idx_creator_earnings_booking (booking_id),
+  KEY idx_creator_earnings_creator (creator_id),
+  KEY idx_creator_earnings_payment (payment_id),
+  KEY idx_creator_earnings_status (status),
+  CONSTRAINT fk_creator_earnings_booking FOREIGN KEY (booking_id) REFERENCES stream_project_booking(stream_project_booking_id),
+  CONSTRAINT fk_creator_earnings_creator FOREIGN KEY (creator_id) REFERENCES crew_members(crew_member_id),
+  CONSTRAINT fk_creator_earnings_payment FOREIGN KEY (payment_id) REFERENCES payment_transactions(payment_id),
+  CONSTRAINT fk_creator_earnings_transaction FOREIGN KEY (finance_transaction_id) REFERENCES finance_transactions(finance_transaction_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS creator_wallets (
+  creator_wallet_id INT NOT NULL AUTO_INCREMENT,
+  creator_id INT NOT NULL,
+  currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+  pending_balance DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  available_balance DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  reserved_balance DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  lifetime_earnings DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  lifetime_payouts DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  last_reconciled_at DATETIME NULL,
+  metadata_json TEXT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (creator_wallet_id),
+  UNIQUE KEY uniq_creator_wallets_creator (creator_id),
+  CONSTRAINT fk_creator_wallets_creator FOREIGN KEY (creator_id) REFERENCES crew_members(crew_member_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS creator_payout_accounts (
+  creator_payout_account_id INT NOT NULL AUTO_INCREMENT,
+  creator_id INT NOT NULL,
+  payout_method ENUM('stripe', 'bank_transfer', 'manual') NOT NULL DEFAULT 'manual',
+  account_label VARCHAR(120) NULL,
+  stripe_account_id VARCHAR(255) NULL,
+  account_holder_name VARCHAR(255) NULL,
+  bank_name VARCHAR(255) NULL,
+  account_last4 VARCHAR(4) NULL,
+  currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+  is_default TINYINT(1) NOT NULL DEFAULT 0,
+  status ENUM('pending', 'verified', 'disabled') NOT NULL DEFAULT 'pending',
+  metadata_json TEXT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (creator_payout_account_id),
+  KEY idx_creator_payout_accounts_creator (creator_id),
+  KEY idx_creator_payout_accounts_status (status),
+  CONSTRAINT fk_creator_payout_accounts_creator FOREIGN KEY (creator_id) REFERENCES crew_members(crew_member_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS creator_payout_requests (
+  creator_payout_request_id INT NOT NULL AUTO_INCREMENT,
+  request_code VARCHAR(64) NOT NULL,
+  creator_id INT NOT NULL,
+  creator_payout_account_id INT NULL,
+  currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+  amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  payout_method ENUM('stripe', 'bank_transfer', 'manual') NOT NULL DEFAULT 'manual',
+  status ENUM('requested', 'approved', 'processing', 'paid', 'rejected', 'cancelled', 'failed') NOT NULL DEFAULT 'requested',
+  external_reference VARCHAR(255) NULL,
+  requested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  approved_by_user_id INT NULL,
+  approved_at DATETIME NULL,
+  processed_by_user_id INT NULL,
+  processed_at DATETIME NULL,
+  paid_at DATETIME NULL,
+  rejection_reason TEXT NULL,
+  metadata_json TEXT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (creator_payout_request_id),
+  UNIQUE KEY uniq_creator_payout_requests_code (request_code),
+  KEY idx_creator_payout_requests_creator (creator_id),
+  KEY idx_creator_payout_requests_status (status),
+  KEY idx_creator_payout_requests_requested_at (requested_at),
+  CONSTRAINT fk_creator_payout_requests_creator FOREIGN KEY (creator_id) REFERENCES crew_members(crew_member_id),
+  CONSTRAINT fk_creator_payout_requests_account FOREIGN KEY (creator_payout_account_id) REFERENCES creator_payout_accounts(creator_payout_account_id),
+  CONSTRAINT fk_creator_payout_requests_approved_by FOREIGN KEY (approved_by_user_id) REFERENCES users(id),
+  CONSTRAINT fk_creator_payout_requests_processed_by FOREIGN KEY (processed_by_user_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS creator_payout_transactions (
+  creator_payout_transaction_id INT NOT NULL AUTO_INCREMENT,
+  creator_id INT NOT NULL,
+  creator_payout_request_id INT NULL,
+  creator_payout_account_id INT NULL,
+  transaction_type ENUM('earning_pending', 'earning_released', 'payout_requested', 'payout_paid', 'payout_returned', 'hold_reserved', 'hold_released', 'manual_adjustment') NOT NULL,
+  direction ENUM('credit', 'debit', 'internal') NOT NULL,
+  currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+  amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  source_type VARCHAR(64) NULL,
+  source_id INT NULL,
+  source_reference VARCHAR(120) NULL,
+  balance_pending_after DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  balance_available_after DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  balance_reserved_after DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  status ENUM('posted', 'void') NOT NULL DEFAULT 'posted',
+  metadata_json TEXT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (creator_payout_transaction_id),
+  KEY idx_creator_payout_transactions_creator (creator_id),
+  KEY idx_creator_payout_transactions_request (creator_payout_request_id),
+  KEY idx_creator_payout_transactions_source (source_type, source_reference),
+  CONSTRAINT fk_creator_payout_transactions_creator FOREIGN KEY (creator_id) REFERENCES crew_members(crew_member_id),
+  CONSTRAINT fk_creator_payout_transactions_request FOREIGN KEY (creator_payout_request_id) REFERENCES creator_payout_requests(creator_payout_request_id),
+  CONSTRAINT fk_creator_payout_transactions_account FOREIGN KEY (creator_payout_account_id) REFERENCES creator_payout_accounts(creator_payout_account_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 14-05-26
+
+ALTER TABLE account_credit_ledger
+  MODIFY COLUMN source ENUM('quote_reduction', 'referral_bonus', 'loyalty_reward', 'manual_admin', 'payment_adjustment') NOT NULL DEFAULT 'quote_reduction',
+  ADD COLUMN payment_id INT NULL AFTER booking_id,
+  ADD COLUMN invoice_send_history_id INT NULL AFTER payment_id,
+  ADD COLUMN source_account_credit_ledger_id INT NULL AFTER invoice_send_history_id,
+  ADD COLUMN usage_context ENUM('general', 'shoot_payment', 'studio_rental') NOT NULL DEFAULT 'general' AFTER source,
+  ADD COLUMN user_segment ENUM('client', 'creator') NOT NULL DEFAULT 'client' AFTER usage_context,
+  ADD KEY idx_account_credit_payment (payment_id),
+  ADD KEY idx_account_credit_invoice (invoice_send_history_id),
+  ADD KEY idx_account_credit_source_entry (source_account_credit_ledger_id),
+  ADD KEY idx_account_credit_segment (user_segment),
+  ADD CONSTRAINT fk_account_credit_payment
+    FOREIGN KEY (payment_id) REFERENCES payment_transactions(payment_id)
+    ON DELETE SET NULL ON UPDATE CASCADE,
+  ADD CONSTRAINT fk_account_credit_invoice
+    FOREIGN KEY (invoice_send_history_id) REFERENCES invoice_send_history(invoice_send_history_id)
+    ON DELETE SET NULL ON UPDATE CASCADE,
+  ADD CONSTRAINT fk_account_credit_source_entry
+    FOREIGN KEY (source_account_credit_ledger_id) REFERENCES account_credit_ledger(account_credit_ledger_id)
+    ON DELETE SET NULL ON UPDATE CASCADE;
+
+ALTER TABLE account_credit_ledger
+  ADD COLUMN credit_type VARCHAR(50) NULL AFTER source,
+  ADD COLUMN expires_at DATETIME NULL AFTER credit_type,
+  ADD COLUMN restrictions_json JSON NULL AFTER notes,
+  ADD COLUMN created_by_admin TINYINT(1) NOT NULL DEFAULT 0 AFTER restrictions_json,
+  ADD COLUMN notification_status ENUM('not_requested', 'pending', 'sent', 'failed', 'skipped') NOT NULL DEFAULT 'not_requested' AFTER created_by_admin,
+  ADD KEY idx_account_credit_credit_type (credit_type),
+  ADD KEY idx_account_credit_expires_at (expires_at);
+
+CREATE TABLE IF NOT EXISTS finance_disputes (
+  finance_dispute_id INT NOT NULL AUTO_INCREMENT,
+  dispute_code VARCHAR(64) NOT NULL,
+  booking_id INT NULL,
+  invoice_send_history_id INT NULL,
+  finance_transaction_id INT NULL,
+  client_user_id INT NULL,
+  creator_id INT NULL,
+  raised_by_type ENUM('client','creator','admin') NOT NULL DEFAULT 'admin',
+  raised_by_user_id INT NULL,
+  raised_by_creator_id INT NULL,
+  category ENUM('quality','payment_delay','wrong_deliverables','refund','payout_issues','other') NOT NULL DEFAULT 'other',
+  subject VARCHAR(255) NOT NULL,
+  description TEXT NULL,
+  status ENUM('open','in_review','resolved','rejected','escalated') NOT NULL DEFAULT 'open',
+  priority ENUM('low','medium','high','urgent') NOT NULL DEFAULT 'medium',
+  currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+  disputed_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  payout_hold_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  impacted_payout_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  resolution_type ENUM('payout_release','refund','partial_refund','credit_compensation','payout_adjustment','no_action','other') NULL,
+  resolution_notes TEXT NULL,
+  resolved_by_user_id INT NULL,
+  resolved_at DATETIME NULL,
+  metadata_json TEXT NULL,
+  created_by_user_id INT NULL,
+  updated_by_user_id INT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (finance_dispute_id),
+  UNIQUE KEY uniq_finance_disputes_code (dispute_code),
+  KEY idx_finance_disputes_booking (booking_id),
+  KEY idx_finance_disputes_invoice (invoice_send_history_id),
+  KEY idx_finance_disputes_status (status),
+  KEY idx_finance_disputes_category (category),
+  KEY idx_finance_disputes_client (client_user_id),
+  KEY idx_finance_disputes_creator (creator_id),
+  KEY idx_finance_disputes_created_at (created_at),
+  CONSTRAINT fk_finance_disputes_booking FOREIGN KEY (booking_id) REFERENCES stream_project_booking(stream_project_booking_id) ON DELETE SET NULL,
+  CONSTRAINT fk_finance_disputes_invoice FOREIGN KEY (invoice_send_history_id) REFERENCES invoice_send_history(invoice_send_history_id) ON DELETE SET NULL,
+  CONSTRAINT fk_finance_disputes_transaction FOREIGN KEY (finance_transaction_id) REFERENCES finance_transactions(finance_transaction_id) ON DELETE SET NULL,
+  CONSTRAINT fk_finance_disputes_client FOREIGN KEY (client_user_id) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_finance_disputes_creator FOREIGN KEY (creator_id) REFERENCES crew_members(crew_member_id) ON DELETE SET NULL,
+  CONSTRAINT fk_finance_disputes_raised_user FOREIGN KEY (raised_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_finance_disputes_raised_creator FOREIGN KEY (raised_by_creator_id) REFERENCES crew_members(crew_member_id) ON DELETE SET NULL,
+  CONSTRAINT fk_finance_disputes_resolved_by FOREIGN KEY (resolved_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS finance_dispute_comments (
+  finance_dispute_comment_id INT NOT NULL AUTO_INCREMENT,
+  finance_dispute_id INT NOT NULL,
+  comment_type ENUM('internal','status_update','resolution','system') NOT NULL DEFAULT 'internal',
+  visibility ENUM('internal','client','creator','all') NOT NULL DEFAULT 'internal',
+  body TEXT NOT NULL,
+  created_by_user_id INT NULL,
+  created_by_creator_id INT NULL,
+  metadata_json TEXT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (finance_dispute_comment_id),
+  KEY idx_finance_dispute_comments_dispute (finance_dispute_id),
+  KEY idx_finance_dispute_comments_created_at (created_at),
+  CONSTRAINT fk_finance_dispute_comments_dispute FOREIGN KEY (finance_dispute_id) REFERENCES finance_disputes(finance_dispute_id) ON DELETE CASCADE,
+  CONSTRAINT fk_finance_dispute_comments_user FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_finance_dispute_comments_creator FOREIGN KEY (created_by_creator_id) REFERENCES crew_members(crew_member_id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS finance_dispute_attachments (
+  finance_dispute_attachment_id INT NOT NULL AUTO_INCREMENT,
+  finance_dispute_id INT NOT NULL,
+  file_name VARCHAR(500) NOT NULL,
+  file_path VARCHAR(1000) NOT NULL,
+  file_url TEXT NULL,
+  file_size_bytes BIGINT NULL,
+  mime_type VARCHAR(100) NULL,
+  attachment_type ENUM('evidence','invoice','deliverable','refund_proof','payout_proof','other') NOT NULL DEFAULT 'evidence',
+  uploaded_by_user_id INT NULL,
+  metadata_json TEXT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (finance_dispute_attachment_id),
+  KEY idx_finance_dispute_attachments_dispute (finance_dispute_id),
+  KEY idx_finance_dispute_attachments_created_at (created_at),
+  CONSTRAINT fk_finance_dispute_attachments_dispute FOREIGN KEY (finance_dispute_id) REFERENCES finance_disputes(finance_dispute_id) ON DELETE CASCADE,
+  CONSTRAINT fk_finance_dispute_attachments_user FOREIGN KEY (uploaded_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS finance_dispute_resolution_logs (
+  finance_dispute_resolution_log_id INT NOT NULL AUTO_INCREMENT,
+  finance_dispute_id INT NOT NULL,
+  action ENUM('created','updated','comment_added','attachment_added','payout_hold_created','payout_hold_released','resolved','rejected','refunded','escalated') NOT NULL,
+  from_status VARCHAR(32) NULL,
+  to_status VARCHAR(32) NULL,
+  amount DECIMAL(12,2) NULL,
+  notes TEXT NULL,
+  metadata_json TEXT NULL,
+  performed_by_user_id INT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (finance_dispute_resolution_log_id),
+  KEY idx_finance_dispute_logs_dispute (finance_dispute_id),
+  KEY idx_finance_dispute_logs_action (action),
+  KEY idx_finance_dispute_logs_created_at (created_at),
+  CONSTRAINT fk_finance_dispute_logs_dispute FOREIGN KEY (finance_dispute_id) REFERENCES finance_disputes(finance_dispute_id) ON DELETE CASCADE,
+  CONSTRAINT fk_finance_dispute_logs_user FOREIGN KEY (performed_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS finance_dispute_payout_holds (
+  finance_dispute_payout_hold_id INT NOT NULL AUTO_INCREMENT,
+  finance_dispute_id INT NOT NULL,
+  creator_id INT NOT NULL,
+  creator_earning_id INT NULL,
+  creator_payout_request_id INT NULL,
+  currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+  hold_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  released_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  status ENUM('held','partially_released','released','cancelled') NOT NULL DEFAULT 'held',
+  reason TEXT NULL,
+  held_by_user_id INT NULL,
+  held_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  released_by_user_id INT NULL,
+  released_at DATETIME NULL,
+  metadata_json TEXT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (finance_dispute_payout_hold_id),
+  KEY idx_finance_dispute_holds_dispute (finance_dispute_id),
+  KEY idx_finance_dispute_holds_creator (creator_id),
+  KEY idx_finance_dispute_holds_status (status),
+  CONSTRAINT fk_finance_dispute_holds_dispute FOREIGN KEY (finance_dispute_id) REFERENCES finance_disputes(finance_dispute_id) ON DELETE CASCADE,
+  CONSTRAINT fk_finance_dispute_holds_creator FOREIGN KEY (creator_id) REFERENCES crew_members(crew_member_id) ON DELETE CASCADE,
+  CONSTRAINT fk_finance_dispute_holds_earning FOREIGN KEY (creator_earning_id) REFERENCES creator_earnings(creator_earning_id) ON DELETE SET NULL,
+  CONSTRAINT fk_finance_dispute_holds_payout FOREIGN KEY (creator_payout_request_id) REFERENCES creator_payout_requests(creator_payout_request_id) ON DELETE SET NULL,
+  CONSTRAINT fk_finance_dispute_holds_held_by FOREIGN KEY (held_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_finance_dispute_holds_released_by FOREIGN KEY (released_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
+
+
+-- 15-05-26
+
+ALTER TABLE payment_transactions
+  DROP CONSTRAINT chk_hours_positive;
+
+ALTER TABLE payment_transactions
+  ADD COLUMN payment_source ENUM('booking_checkout', 'quote_invoice', 'additional_invoice')
+    NOT NULL DEFAULT 'booking_checkout'
+    COMMENT 'Origin of the payment transaction'
+    AFTER guest_email,
+  MODIFY COLUMN hours DECIMAL(10,2) NULL
+    COMMENT 'Number of hours booked; nullable for quote invoices before scheduling',
+  ADD INDEX idx_payment_source (payment_source);
+
+ALTER TABLE payment_transactions
+  ADD CONSTRAINT chk_hours_positive CHECK (
+    (payment_source = 'quote_invoice' AND (hours IS NULL OR hours >= 0))
+    OR (payment_source = 'additional_invoice' AND (hours IS NULL OR hours >= 0))
+    OR (payment_source = 'booking_checkout' AND hours > 0)
+  );

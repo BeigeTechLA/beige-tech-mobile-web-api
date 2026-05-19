@@ -42,10 +42,16 @@ module.exports = function(sequelize, DataTypes) {
       allowNull: true,
       comment: 'Email for guest bookings'
     },
+    payment_source: {
+      type: DataTypes.ENUM('booking_checkout', 'quote_invoice', 'additional_invoice'),
+      allowNull: false,
+      defaultValue: 'booking_checkout',
+      comment: 'Origin of the payment transaction'
+    },
     hours: {
       type: DataTypes.DECIMAL(10, 2),
-      allowNull: false,
-      comment: 'Number of hours booked'
+      allowNull: true,
+      comment: 'Number of hours booked; nullable for quote invoices before scheduling'
     },
     hourly_rate: {
       type: DataTypes.DECIMAL(10, 2),
@@ -166,6 +172,13 @@ module.exports = function(sequelize, DataTypes) {
         using: "BTREE",
         fields: [
           { name: "user_id" },
+        ]
+      },
+      {
+        name: "idx_payment_source",
+        using: "BTREE",
+        fields: [
+          { name: "payment_source" },
         ]
       },
       {

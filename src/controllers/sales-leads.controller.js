@@ -323,6 +323,25 @@ const hasExternalWorkspaceFiles = async (bookingId, phase) => {
 async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
   if (!quoteId) return null;
 
+  let settledByFollowupTransaction = false;
+  if (bookingId) {
+    const bookingRecord = await db.stream_project_booking.findByPk(bookingId, {
+      attributes: ['payment_id']
+    });
+    const basePaymentId = Number(bookingRecord?.payment_id || 0);
+    if (basePaymentId > 0) {
+      const followupPayment = await db.payment_transactions.findOne({
+        where: {
+          payment_id: { [Op.gt]: basePaymentId },
+          status: 'succeeded',
+          payment_source: { [Op.in]: ['additional_invoice', 'quote_invoice'] }
+        },
+        order: [['payment_id', 'DESC']]
+      });
+      settledByFollowupTransaction = Boolean(followupPayment);
+    }
+  }
+
   const [latestInvoiceHistory, recentQuoteUpdates] = await Promise.all([
     db.invoice_send_history?.findOne({
       where: {
@@ -367,7 +386,13 @@ async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null
   const reducedAmount = parseFloat(refreshActivity?.metadata?.reduced_amount || 0);
   const previouslyPaidAmount = parseFloat(refreshActivity?.metadata?.previous_total || 0);
   const revisedTotal = parseFloat(refreshActivity?.metadata?.new_total || 0);
-  const additionalPaymentStatus = refreshInvoiceHistory?.payment_status || (additionalAmount > 0 ? 'pending' : null);
+  const normalizedRefreshPaymentStatus = String(refreshInvoiceHistory?.payment_status || '').toLowerCase();
+  const isRefreshInvoiceSettled =
+    settledByFollowupTransaction ||
+    ['paid', 'succeeded', 'completed', 'success'].includes(normalizedRefreshPaymentStatus);
+  const additionalPaymentStatus = settledByFollowupTransaction
+    ? 'paid'
+    : (refreshInvoiceHistory?.payment_status || (additionalAmount > 0 ? 'pending' : null));
   const reducedPaymentStatus = refreshInvoiceHistory?.payment_status || (reducedAmount > 0 ? 'refund_pending' : null);
 
   const creditSummary = await accountCreditService.getQuoteCreditSummary({
@@ -379,7 +404,7 @@ async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null
     additional_amount: additionalAmount,
     previously_paid_amount: previouslyPaidAmount,
     revised_total: revisedTotal,
-    outstanding_amount: additionalPaymentStatus === 'paid' ? 0 : additionalAmount,
+    outstanding_amount: (additionalPaymentStatus === 'paid' || isRefreshInvoiceSettled) ? 0 : additionalAmount,
     payment_status: additionalPaymentStatus,
     last_sent_at: refreshInvoiceHistory?.sent_at || null,
     invoice_number: refreshInvoiceHistory?.invoice_number || null,
@@ -2345,6 +2370,128 @@ exports.getLeads = async (req, res) => {
   }
 };
 
+const BOARD_STATUSES = [
+  'Signed Up - Lead Created',
+  'Book a shoot - Lead Created',
+  'Manual - Lead Created',
+  'Booking In Progress',
+  'Proposal Sent',
+  'Ready for Payment',
+  'Payment Sent',
+  'Booked',
+  'Closed - Lost',
+];
+
+const BOARD_SOURCE_LIMIT = 5000;
+
+const normalizeBoardStatusLabel = (rawStatus) => {
+  const value = String(rawStatus || '').replace(/â€“|—|–/g, '-').trim().toLowerCase();
+  if (!value) return 'Unknown';
+  if (value === 'signed up' || value === 'singed up' || value.includes('signed up - lead created')) return 'Signed Up - Lead Created';
+  if (value.includes('book a shoot - lead created')) return 'Book a shoot - Lead Created';
+  if (value.includes('manual - lead created')) return 'Manual - Lead Created';
+  if (value === 'booking in progress' || value === 'in-progress') return 'Booking In Progress';
+  if (value === 'proposal sent' || value === 'payment link sent' || value === 'link sent') return 'Proposal Sent';
+  if (value === 'ready for payment') return 'Ready for Payment';
+  if (value === 'payment sent') return 'Payment Sent';
+  if (value === 'booked' || value === 'paid') return 'Booked';
+  if (value.includes('closed - lost') || value === 'cancelled') return 'Closed - Lost';
+  if (value === 'partially paid') return 'Partially Paid';
+  return String(rawStatus || '').trim() || 'Unknown';
+};
+
+const invokeGetLeadsSnapshot = async (baseReq, queryOverrides = {}) => {
+  return new Promise((resolve, reject) => {
+    const mergedQuery = { ...baseReq.query, ...queryOverrides };
+    const reqLike = {
+      ...baseReq,
+      query: mergedQuery,
+    };
+
+    const resLike = {
+      json: (payload) => resolve(payload),
+      status: (statusCode) => ({
+        json: (payload) => reject(new Error(payload?.message || `getLeads failed with status ${statusCode}`)),
+      }),
+    };
+
+    exports.getLeads(reqLike, resLike);
+  });
+};
+
+exports.getLeadsBoard = async (req, res) => {
+  try {
+    const rawLimit = Number.parseInt(String(req.query.limit || 10), 10);
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 10;
+    const requestedStatus = String(req.query.status || '').trim();
+    const page = Number.parseInt(String(req.query.page || 1), 10) || 1;
+    const snapshot = await invokeGetLeadsSnapshot(req, {
+      status: undefined,
+      page: 1,
+      limit: BOARD_SOURCE_LIMIT,
+    });
+
+    const payload = snapshot?.data || {};
+    const allLeads = Array.isArray(payload.leads) ? payload.leads : [];
+    const filteredTotal = Number(payload?.pagination?.total || allLeads.length);
+
+    const groupedByStatus = new Map();
+    allLeads.forEach((lead) => {
+      const normalizedStatus = normalizeBoardStatusLabel(lead?.booking_status);
+      if (!groupedByStatus.has(normalizedStatus)) {
+        groupedByStatus.set(normalizedStatus, []);
+      }
+      groupedByStatus.get(normalizedStatus).push(lead);
+    });
+
+    const extraStatuses = Array.from(groupedByStatus.keys()).filter(
+      (statusLabel) => !BOARD_STATUSES.includes(statusLabel)
+    );
+    const statuses = requestedStatus ? [requestedStatus] : [...BOARD_STATUSES, ...extraStatuses];
+
+    const columns = {};
+    statuses.forEach((statusLabel) => {
+      const fullStatusLeads = groupedByStatus.get(statusLabel) || [];
+      const total = fullStatusLeads.length;
+      const totalPages = total > 0 ? Math.ceil(total / limit) : 0;
+      const safePage = Math.max(1, page);
+      const offset = (safePage - 1) * limit;
+      const leads = fullStatusLeads.slice(offset, offset + limit);
+
+      columns[statusLabel] = {
+        status: statusLabel,
+        leads,
+        pagination: {
+          total,
+          page: safePage,
+          limit,
+          totalPages,
+          hasMore: safePage < totalPages,
+        },
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        columns,
+        statuses,
+        pagination: {
+          total: filteredTotal,
+          page,
+          limit,
+        },
+      },
+    });
+  } catch (error) {
+    console.error('getLeadsBoard Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch leads board',
+      error: error.message,
+    });
+  }
+};
 
 exports.getClientLeads = async (req, res) => {
   try {
@@ -5663,7 +5810,7 @@ exports.updateBookingCrew = async (req, res) => {
       updateData.special_instructions = description;
     }
     if (reference_links !== undefined) {
-      updateData.reference_links = reference_links;
+      updateData.reference_links = JSON.stringify(reference_links);
     }
 
     await booking.update(updateData);

@@ -37,6 +37,9 @@ const db = require('../models');
 const bookingTimelineService = require('../services/bookingTimeline.service');
 const accountCreditService = require('../services/account-credit.service');
 // const NodeGeocoder = require('node-geocoder');
+const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
+const EXTERNAL_MEETINGS_API_BASE_URL = process.env.EXTERNAL_MEETINGS_API_BASE_URL || 'http://localhost:5002/v1/external-meetings';
+const EXTERNAL_FILE_MANAGER_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
 
 const getCPNewBookingEmailFields = (booking = {}, fallbackClientName = '', fallbackShootAmount = null) => ({
   client_name:
@@ -247,6 +250,184 @@ const parseActivityPayload = (rawValue) => {
     return null;
   }
 };
+
+const normalizeStatusFilterValue = (value) => (
+  String(value || '')
+    .toLowerCase()
+    .replace(/[–—]/g, '-')
+    .replace(/[\s_-]+/g, '')
+);
+
+const formatLocalDateParts = (date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const getDateOnlyString = (value) => {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return formatLocalDateParts(parsed);
+};
+
+const getTodayDateOnlyString = () => formatLocalDateParts(new Date());
+
+const matchShootStatusFilter = (booking, rawStatus) => {
+  const normalizedStatus = normalizeStatusFilterValue(rawStatus);
+  if (!normalizedStatus || normalizedStatus === 'all') return null;
+
+  const bookingStatus = Number(booking?.status);
+  const eventDate = getDateOnlyString(booking?.event_date);
+  const today = getTodayDateOnlyString();
+  const isCancelled = Number(booking?.is_cancelled || 0) === 1;
+  const isDraft = Number(booking?.is_draft || 0) === 1;
+  const isFutureEvent = eventDate ? eventDate > today : false;
+  const isTodayEvent = eventDate ? eventDate === today : false;
+  const isPastEvent = eventDate ? eventDate < today : false;
+
+  switch (normalizedStatus) {
+    case 'initiated':
+      return bookingStatus === 0 && (!eventDate || isFutureEvent);
+    case 'preproduction':
+      return bookingStatus === 1 && isFutureEvent;
+    case 'shootday':
+      return ![3, 4, 5].includes(bookingStatus) && isTodayEvent;
+    case 'postproduction':
+      return bookingStatus === 2 || ([0, 1].includes(bookingStatus) && isPastEvent);
+    case 'revision':
+      return bookingStatus === 3;
+    case 'completed':
+    case 'assetsdelivered':
+      return bookingStatus === 4;
+    case 'cancelled':
+      return bookingStatus === 5 || isCancelled;
+    case 'upcoming':
+      return ![3, 4, 5].includes(bookingStatus) && isFutureEvent;
+    case 'draft':
+      return isDraft;
+    default:
+      return null;
+  }
+};
+
+const hasScheduledMeetingOfType = (meetings, meetingType) => {
+  const meetingList = Array.isArray(meetings) ? meetings : [];
+  return meetingList.some((meeting) =>
+    String(meeting?.meeting_type || '').toLowerCase() === String(meetingType || '').toLowerCase() &&
+    String(meeting?.meeting_status || '').toLowerCase() !== 'cancelled'
+  );
+};
+
+const buildExternalHeaders = ({ authHeader } = {}) => {
+  const headers = {
+    'Content-Type': 'application/json',
+    'x-internal-key': EXTERNAL_FILE_MANAGER_KEY
+  };
+
+  if (authHeader) {
+    headers.Authorization = authHeader;
+  }
+
+  return headers;
+};
+
+const fetchExternalWorkspaceFiles = async (bookingId, phase, options = {}) => {
+  const query = new URLSearchParams();
+  if (phase) query.set('phase', phase);
+
+  const url = `${EXTERNAL_FILE_MANAGER_API_BASE_URL}/workspace/${encodeURIComponent(String(bookingId))}/files${query.toString() ? `?${query.toString()}` : ''}`;
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: buildExternalHeaders({ authHeader: options?.authHeader })
+  });
+
+  if (!response.ok) {
+    throw new Error(`External file manager returned ${response.status} for booking ${bookingId}`);
+  }
+
+  return response.json();
+};
+
+const hasExternalWorkspaceFiles = async (bookingId, phase, options = {}) => {
+  if (!bookingId) return false;
+  try {
+    const payload = await fetchExternalWorkspaceFiles(bookingId, phase, options);
+    const files = Array.isArray(payload?.data?.files) ? payload.data.files : [];
+    const expectedSegment = phase === 'post' ? 'post-production' : phase === 'pre' ? 'pre-production' : '';
+
+    const phaseScopedFiles = files.filter((file) => {
+      const pathCandidate = String(
+        file?.path ||
+        file?.filepath ||
+        file?.key ||
+        file?.filePath ||
+        file?.name ||
+        ''
+      ).toLowerCase();
+
+      if (!expectedSegment) return pathCandidate.length > 0;
+      return pathCandidate.includes(`/${expectedSegment}/`) || pathCandidate.includes(`${expectedSegment}/`);
+    });
+
+    return phaseScopedFiles.length > 0;
+  } catch (error) {
+    if (String(error?.message || '').includes('returned 404')) {
+      return false;
+    }
+    console.error('[admin/get-projects] external workspace file check failed:', {
+      bookingId,
+      phase,
+      message: error?.message || error
+    });
+    return false;
+  }
+};
+
+const fetchExternalMeetingsByBookingIds = async (bookingIds = [], options = {}) => {
+  try {
+    const url = `${EXTERNAL_MEETINGS_API_BASE_URL}?limit=5000&page=1&sortBy=meeting_date_time:desc`;
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: buildExternalHeaders({ authHeader: options?.authHeader })
+    });
+
+    if (!response.ok) {
+      throw new Error(`External meetings returned ${response.status}`);
+    }
+
+    const payload = await response.json();
+    const allMeetings = Array.isArray(payload?.results)
+      ? payload.results
+      : Array.isArray(payload?.data?.results)
+        ? payload.data.results
+        : [];
+    const bookingIdSet = new Set(
+      bookingIds.map((id) => String(id)).filter(Boolean)
+    );
+
+    const byBookingId = new Map();
+    allMeetings.forEach((meeting) => {
+      const orderId = String(meeting?.order?.id || '');
+      if (!orderId || !bookingIdSet.has(orderId)) return;
+      if (!byBookingId.has(orderId)) byBookingId.set(orderId, []);
+      byBookingId.get(orderId).push(meeting);
+    });
+
+    return byBookingId;
+  } catch (error) {
+    console.error('[admin/get-projects] external meetings fetch failed:', error?.message || error);
+    return new Map();
+  }
+};
+
+const isPostProductionEligible = (booking) => Boolean(
+  matchShootStatusFilter(booking, 'postproduction') ||
+  matchShootStatusFilter(booking, 'revision') ||
+  matchShootStatusFilter(booking, 'completed') ||
+  matchShootStatusFilter(booking, 'assetsdelivered')
+);
 
 const buildManualPaymentSummaryFromActivities = (activities = [], totalAmount = 0) => {
   const manualEntries = (activities || [])
@@ -2181,7 +2362,7 @@ exports.getProjectDetails = async (req, res) => {
 
 exports.getAllProjectDetails = async (req, res) => {
   try {
-    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment } = req.query;
+    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment, production_filter } = req.query;
     const today = new Date();
     const noPagination = !limit && !page;
 
@@ -2424,7 +2605,7 @@ exports.getAllProjectDetails = async (req, res) => {
       event_type_master.findAll({ attributes: ['event_type_id', 'event_type_name'], raw: true })
     ]);
 
-    const projects = await stream_project_booking.findAll({
+    const projectRows = await stream_project_booking.findAll({
       where: whereConditions,
       ...(noPagination ? {} : { limit: pageSize, offset }),
       order: [
@@ -2434,7 +2615,7 @@ exports.getAllProjectDetails = async (req, res) => {
       ],
     });
 
-    let projectDetails = await Promise.all(projects.map(async (project) => {
+    let projectDetails = await Promise.all(projectRows.map(async (project) => {
       const [assignedCrewData, assignedEquipData, assignedPostProdData, paymentData] = await Promise.all([
         assigned_crew.findAll({
           where: { project_id: project.stream_project_booking_id, is_active: 1 },
@@ -2509,6 +2690,75 @@ exports.getAllProjectDetails = async (req, res) => {
 
         if (normalizedCpAssignment === 'assigned') return hasAssigned;
         if (normalizedCpAssignment === 'not_assigned') return !hasAssigned;
+        return true;
+      });
+    }
+
+    if (production_filter && production_filter !== 'all') {
+      const normalizedProductionFilter = String(production_filter).toLowerCase().trim();
+      const authHeader = req.headers?.authorization || null;
+      const bookingIds = Array.from(
+        new Set(
+          projectDetails
+            .map((entry) => Number(entry?.project?.stream_project_booking_id || 0))
+            .filter((id) => Number.isFinite(id) && id > 0)
+        )
+      );
+
+      const needsMeetingData =
+        normalizedProductionFilter === 'pre_production_meeting_not_done' ||
+        normalizedProductionFilter === 'post_production_meeting_not_done';
+      const needsPreFileData = normalizedProductionFilter === 'pre_production_file_not_provided';
+      const needsPostFileData = normalizedProductionFilter === 'post_production_file_not_uploaded';
+
+      const [meetingsByBookingId, preFileFlags, postFileFlags] = await Promise.all([
+        needsMeetingData ? fetchExternalMeetingsByBookingIds(bookingIds, { authHeader }) : Promise.resolve(new Map()),
+        (async () => {
+          if (!needsPreFileData) return new Map();
+          const map = new Map();
+          await Promise.all(
+            bookingIds.map(async (bookingId) => {
+              map.set(bookingId, await hasExternalWorkspaceFiles(bookingId, 'pre', { authHeader }));
+            })
+          );
+          return map;
+        })(),
+        (async () => {
+          if (!needsPostFileData) return new Map();
+          const map = new Map();
+          await Promise.all(
+            bookingIds.map(async (bookingId) => {
+              map.set(bookingId, await hasExternalWorkspaceFiles(bookingId, 'post', { authHeader }));
+            })
+          );
+          return map;
+        })(),
+      ]);
+
+      projectDetails = projectDetails.filter((entry) => {
+        const booking = entry?.project;
+        if (!booking) return false;
+        const bookingId = Number(booking.stream_project_booking_id || 0);
+        const bookingMeetings = meetingsByBookingId.get(String(bookingId)) || meetingsByBookingId.get(bookingId) || [];
+
+        if (normalizedProductionFilter === 'pre_production_file_not_provided') {
+          return preFileFlags.get(bookingId) !== true;
+        }
+
+        if (normalizedProductionFilter === 'pre_production_meeting_not_done') {
+          return !hasScheduledMeetingOfType(bookingMeetings, 'pre_production');
+        }
+
+        if (normalizedProductionFilter === 'post_production_meeting_not_done') {
+          if (!isPostProductionEligible(booking)) return false;
+          return !hasScheduledMeetingOfType(bookingMeetings, 'post_production');
+        }
+
+        if (normalizedProductionFilter === 'post_production_file_not_uploaded') {
+          if (!isPostProductionEligible(booking)) return false;
+          return postFileFlags.get(bookingId) !== true;
+        }
+
         return true;
       });
     }
@@ -8489,6 +8739,7 @@ exports.getBookingSummaryById = async (req, res) => {
         let referralDiscount = 0;
         let referralCode = null;
         let paymentData = null;
+        let latestPaymentData = null;
         const notes = primaryQuote.notes || '';
 
         // Matches: Referral applied (7321F9): -$518.75
@@ -8509,13 +8760,55 @@ exports.getBookingSummaryById = async (req, res) => {
                 referralCode = paymentData.referral_code;
             }
         }
+        if (paymentData) {
+            latestPaymentData = paymentData;
+        }
+
+        const identityOr = [
+            ...(bookingJson.guest_email ? [{ guest_email: bookingJson.guest_email }] : []),
+            ...(bookingJson.user_id ? [{ user_id: bookingJson.user_id }] : [])
+        ];
+
+        if (identityOr.length > 0 && bookingJson.payment_id) {
+            const followupPayment = await db.payment_transactions.findOne({
+                where: {
+                    status: 'succeeded',
+                    payment_id: { [Sequelize.Op.gt]: Number(bookingJson.payment_id) || 0 },
+                    payment_source: { [Sequelize.Op.in]: ['additional_invoice', 'quote_invoice'] },
+                    [Sequelize.Op.or]: identityOr
+                },
+                order: [['payment_id', 'DESC']]
+            });
+            if (followupPayment) {
+                latestPaymentData = followupPayment;
+            }
+        }
+
+        if (!latestPaymentData && identityOr.length > 0) {
+            latestPaymentData = await db.payment_transactions.findOne({
+                where: {
+                    status: 'succeeded',
+                    payment_source: { [Sequelize.Op.in]: ['quote_invoice', 'additional_invoice', 'booking_checkout'] },
+                    [Sequelize.Op.or]: identityOr
+                },
+                order: [['payment_id', 'DESC']]
+            });
+        }
+        if (!paymentData && latestPaymentData?.referral_code) {
+            referralCode = latestPaymentData.referral_code;
+        }
 
         // Logic: The "Promo Code" discount is whatever is left over after the Referral Discount
         const discountCodeDiscount = Math.max(0, totalDiscountFromDb - referralDiscount);
-        const paidAmountRaw = paymentData ? parseFloat(paymentData.total_amount || 0) : quoteTotal;
+        const paidAmountRaw = latestPaymentData
+            ? parseFloat(latestPaymentData.total_amount || 0)
+            : (paymentData ? parseFloat(paymentData.total_amount || 0) : quoteTotal);
         const normalizedPaidAmount = Number.isFinite(paidAmountRaw) ? paidAmountRaw : quoteTotal;
-        const creditApplied = Math.max(0, quoteTotal - normalizedPaidAmount);
-        const totalAfterCredit = Math.max(0, quoteTotal - creditApplied);
+        const isAdditionalPaymentFlow = String(latestPaymentData?.payment_source || '').toLowerCase() === 'additional_invoice';
+        const creditApplied = isAdditionalPaymentFlow ? 0 : Math.max(0, quoteTotal - normalizedPaidAmount);
+        const totalAfterCredit = isAdditionalPaymentFlow
+            ? normalizedPaidAmount
+            : Math.max(0, quoteTotal - creditApplied);
 
         pricing.total_paid = parseFloat(normalizedPaidAmount.toFixed(2));
         pricing.discount_code_discount = parseFloat(discountCodeDiscount.toFixed(2));

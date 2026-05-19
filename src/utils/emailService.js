@@ -76,7 +76,9 @@ const {
   MESSAGING_INITIATED_TEMPLATE_ID,
   PRE_PRODUCTION_BRIEF_UPLOADED_TEMPLATE_ID,
   POST_PRODUCTION_UPLOAD_TEMPLATE_ID,
-  EMAIL_TO_POST_PRODUCTION_TEAM_TEMPLATE_ID
+  EMAIL_TO_POST_PRODUCTION_TEAM_TEMPLATE_ID,
+  OTP_VERIFICATION_FILE_SHARE_TEMPLATE_ID,
+  FILE_SHARE_INVITATION_TEMPLATE_ID
 } = require('../config/sendgridTemplates');
 
 const formatDate = (value) => {
@@ -581,6 +583,60 @@ const sendVerificationOTP = async (userData, otp) => {
     };
   } catch (error) {
     console.error('Error sending verification OTP email via SendGrid:', error?.response?.body || error.message);
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Send file share access OTP
+ * @param {Object} userData - Recipient details
+ * @param {string} otp - 6-digit OTP
+ * @param {number} expiryMinutes - OTP expiry in minutes
+ */
+const sendFileShareVerificationOTP = async (userData, otp, expiryMinutes = 10) => {
+  try {
+    if (!userData?.email) {
+      return { success: false, error: 'Recipient email is required' };
+    }
+
+    if (!process.env.SENDGRID_API_KEY) {
+      return { success: false, error: 'SENDGRID_API_KEY is not configured' };
+    }
+
+    if (!OTP_VERIFICATION_FILE_SHARE_TEMPLATE_ID) {
+      return { success: false, error: 'OTP_VERIFICATION_FILE_SHARE_TEMPLATE_ID is not configured' };
+    }
+
+    const fromEmail = getSendgridFromAddress();
+    if (!fromEmail) {
+      return { success: false, error: 'Sender email not configured' };
+    }
+
+    const [response] = await sgMail.send({
+      to: userData.email,
+      from: {
+        email: fromEmail,
+        name: getSendgridFromName()
+      },
+      subject: 'Your File Share Access Code - BeigeAI',
+      templateId: OTP_VERIFICATION_FILE_SHARE_TEMPLATE_ID,
+      dynamicTemplateData: {
+        otp,
+        expiry_minutes: expiryMinutes,
+        year: new Date().getFullYear()
+      }
+    });
+
+    return {
+      success: true,
+      statusCode: response?.statusCode,
+      messageId:
+        response?.headers?.['x-message-id'] ||
+        response?.headers?.['X-Message-Id'] ||
+        null
+    };
+  } catch (error) {
+    console.error('Error sending file share OTP email via SendGrid:', error?.response?.body || error.message);
     return { success: false, error: error.message };
   }
 };
@@ -2453,6 +2509,11 @@ const sendCustomQuoteProposalEmail = async (data) => {
         ? String(data.proposal_amount).replace(/^\$/, '')
         : formatAmount(data.proposal_amount))
       : 'TBD';
+    const formatOptionalAmount = (value) => (
+      value !== undefined && value !== null && value !== ''
+        ? (String(value).startsWith('$') ? String(value).replace(/^\$/, '') : formatAmount(value))
+        : ''
+    );
     const attachmentContent = typeof data?.attachment_content === 'string'
       ? data.attachment_content.replace(/^data:.*;base64,/, '').trim()
       : null;
@@ -2474,6 +2535,14 @@ const sendCustomQuoteProposalEmail = async (data) => {
         add_ons: data?.add_ons || 'TBD',
         includes: data?.includes || 'TBD',
         proposal_amount: proposalAmount,
+        proposal_amount_label: data?.proposal_amount_label || 'Estimate Proposal Amount',
+        is_additional_payment: Boolean(data?.is_additional_payment),
+        is_reduced_payment: Boolean(data?.is_reduced_payment),
+        previously_paid_amount: formatOptionalAmount(data?.previously_paid_amount),
+        revised_total: formatOptionalAmount(data?.revised_total),
+        additional_amount: formatOptionalAmount(data?.additional_amount),
+        reduced_amount: formatOptionalAmount(data?.reduced_amount),
+        payment_note: data?.payment_note || '',
         accept_quote_url: data?.accept_quote_url || ''
       }
     };
@@ -2508,6 +2577,11 @@ const sendQuoteAcceptedClientEmail = async (data) => {
   if (!QUOTE_ACCEPTED_CLIENT_TEMPLATE_ID) {
     return { success: false, error: 'QUOTE_ACCEPTED_CLIENT_TEMPLATE_ID is not configured' };
   }
+  const formatOptionalAmount = (value) => (
+    value !== undefined && value !== null && value !== ''
+      ? (String(value).startsWith('$') ? String(value).replace(/^\$/, '') : formatAmount(value))
+      : ''
+  );
 
   return sendEmail({
     to,
@@ -2517,7 +2591,15 @@ const sendQuoteAcceptedClientEmail = async (data) => {
       client_name: getFirstName(data?.client_name || data?.first_name || '', data?.first_name || 'there') || 'there',
       quote_number: data?.quote_number || 'TBD',
       project_description: data?.project_description || 'TBD',
-      proposal_amount: formatAmount(data?.proposal_amount || 0)
+      proposal_amount: formatAmount(data?.proposal_amount || 0),
+      accepted_amount_label: data?.accepted_amount_label || 'Accepted Amount',
+      is_additional_payment: Boolean(data?.is_additional_payment),
+      is_reduced_payment: Boolean(data?.is_reduced_payment),
+      previously_paid_amount: formatOptionalAmount(data?.previously_paid_amount),
+      revised_total: formatOptionalAmount(data?.revised_total),
+      additional_amount: formatOptionalAmount(data?.additional_amount),
+      reduced_amount: formatOptionalAmount(data?.reduced_amount),
+      payment_note: data?.payment_note || ''
     }
   });
 };
@@ -2531,6 +2613,11 @@ const sendQuoteAcceptedSalesNotificationEmail = async (data) => {
   if (!QUOTE_ACCEPTED_SALES_NOTIFICATION_TEMPLATE_ID) {
     return { success: false, error: 'QUOTE_ACCEPTED_SALES_NOTIFICATION_TEMPLATE_ID is not configured' };
   }
+  const formatOptionalAmount = (value) => (
+    value !== undefined && value !== null && value !== ''
+      ? (String(value).startsWith('$') ? String(value).replace(/^\$/, '') : formatAmount(value))
+      : ''
+  );
 
   return sendEmail({
     to,
@@ -2545,6 +2632,14 @@ const sendQuoteAcceptedSalesNotificationEmail = async (data) => {
       project_description: data?.project_description || 'TBD',
       location: data?.location || 'TBD',
       proposal_amount: formatAmount(data?.proposal_amount || 0),
+      accepted_amount_label: data?.accepted_amount_label || 'Accepted Amount',
+      is_additional_payment: Boolean(data?.is_additional_payment),
+      is_reduced_payment: Boolean(data?.is_reduced_payment),
+      previously_paid_amount: formatOptionalAmount(data?.previously_paid_amount),
+      revised_total: formatOptionalAmount(data?.revised_total),
+      additional_amount: formatOptionalAmount(data?.additional_amount),
+      reduced_amount: formatOptionalAmount(data?.reduced_amount),
+      payment_note: data?.payment_note || '',
       accepted_at: data?.accepted_at || formatDate(new Date())
     }
   });
@@ -2892,11 +2987,47 @@ const sendPostProductionUploadedTemplateEmail = async ({ recipients = [], data =
   });
 };
 
+const sendFileShareInvitationEmail = async ({ to, data = {} }) => {
+  if (!FILE_SHARE_INVITATION_TEMPLATE_ID) {
+    return { success: false, error: 'FILE_SHARE_INVITATION_TEMPLATE_ID is not configured' };
+  }
+
+  if (!to) {
+    return { success: false, error: 'Recipient email is required' };
+  }
+
+  return sendEmail({
+    to,
+    subject: 'Files Have Been Shared With You - BeigeAI',
+    templateId: FILE_SHARE_INVITATION_TEMPLATE_ID,
+    dynamicTemplateData: {
+      sender_name: data?.sender_name || 'Beige',
+      shared_files_url: data?.shared_files_url || '',
+      share_url: data?.shared_files_url || '',
+      share_message: data?.share_message || '',
+      resource_type: data?.resource_type || '',
+      external_id: data?.external_id || '',
+      access_mode: data?.access_mode || '',
+      preview_image_1:
+        data?.preview_image_1 ||
+        'https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/file_share_preview_team_01.jpg',
+      preview_image_2:
+        data?.preview_image_2 ||
+        'https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/file_share_preview_portrait_01.jpg',
+      preview_image_3:
+        data?.preview_image_3 ||
+        'https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/file_share_preview_group_01.jpg',
+      year: new Date().getFullYear(),
+    }
+  });
+};
+
 module.exports = {
   formatContentTypes,
   formatShootTypes,
   sendTaskAssignmentEmail,
   sendVerificationOTP,
+  sendFileShareVerificationOTP,
   sendPasswordResetEmail,
   // sendPaymentLinkEmail,
   sendInvoiceEmail,
@@ -2929,5 +3060,6 @@ module.exports = {
   sendMeetingScheduledTemplateEmail,
   sendMessagingInitiatedTemplateEmail,
   sendPreProductionUploadedTemplateEmail,
-  sendPostProductionUploadedTemplateEmail
+  sendPostProductionUploadedTemplateEmail,
+  sendFileShareInvitationEmail
 };

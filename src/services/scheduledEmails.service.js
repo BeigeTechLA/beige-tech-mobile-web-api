@@ -1,6 +1,7 @@
 const db = require('../models');
 const emailService = require('../utils/emailService');
 const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
+const { expireQuotesPastValidUntil } = require('./sales-quote-expiration.service');
 
 const JOB_INTERVAL_MINUTES = parseInt(process.env.SHOOT_REMINDER_JOB_INTERVAL_MINUTES || '30', 10);
 const REMINDER_MARKER = 'shoot_reminder_5_days';
@@ -953,6 +954,13 @@ const startScheduledEmailJobs = () => {
   runFinalNudge7DaysJob().catch((err) => {
     console.error('[Email Job] Initial final-nudge-7d run failed:', err.message);
   });
+  expireQuotesPastValidUntil().then((result) => {
+    if (result.expired_count) {
+      console.log(`[Quote Expiration Job] Expired ${result.expired_count} quote(s)`);
+    }
+  }).catch((err) => {
+    console.error('[Quote Expiration Job] Initial run failed:', err.message);
+  });
 
   setInterval(() => {
     runShootReminder5DaysJob().catch((err) => {
@@ -966,6 +974,13 @@ const startScheduledEmailJobs = () => {
     });
     runFinalNudge7DaysJob().catch((err) => {
       console.error('[Email Job] Interval final-nudge-7d run failed:', err.message);
+    });
+    expireQuotesPastValidUntil().then((result) => {
+      if (result.expired_count) {
+        console.log(`[Quote Expiration Job] Expired ${result.expired_count} quote(s)`);
+      }
+    }).catch((err) => {
+      console.error('[Quote Expiration Job] Interval run failed:', err.message);
     });
   }, intervalMs);
 };

@@ -86,9 +86,37 @@
                         <td align="right" style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">{{location}}</td>
                       </tr>
                       <tr>
-                        <td style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">Accepted Amount</td>
+                        <td style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">{{accepted_amount_label}}</td>
                         <td align="right" style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">$ {{proposal_amount}}</td>
                       </tr>
+                      {{#if is_additional_payment}}
+                      <tr>
+                        <td style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">Previously Paid</td>
+                        <td align="right" style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">$ {{previously_paid_amount}}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">Revised Quote Total</td>
+                        <td align="right" style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">$ {{revised_total}}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">Additional Amount Accepted</td>
+                        <td align="right" style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">$ {{additional_amount}}</td>
+                      </tr>
+                      {{/if}}
+                      {{#if is_reduced_payment}}
+                      <tr>
+                        <td style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">Previously Paid</td>
+                        <td align="right" style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">$ {{previously_paid_amount}}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">Revised Quote Total</td>
+                        <td align="right" style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">$ {{revised_total}}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">Reduction Recorded</td>
+                        <td align="right" style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">$ {{reduced_amount}}</td>
+                      </tr>
+                      {{/if}}
                       <tr>
                         <td style="padding: 14px 0 0; font-size: 14px; color: #6A655D;">Accepted At</td>
                         <td align="right" style="padding: 14px 0 0; font-size: 15px; color: #000000; font-weight: 600;">{{accepted_at}}</td>
