@@ -406,6 +406,63 @@ exports.getPublicQuoteById = async (req, res) => {
   }
 };
 
+exports.createQuotePreviewLink = async (req, res) => {
+  try {
+    const quoteId = Number(req.params.quoteId);
+    if (!Number.isInteger(quoteId) || quoteId <= 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Invalid quoteId'
+      });
+    }
+
+    const data = await quoteService.createQuotePreviewLink(quoteId, getUserContext(req));
+    return res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    console.error('Error creating quote preview link:', error);
+    const message = error.message || 'Failed to create quote preview link';
+    const statusCode = message === 'Quote not found'
+      ? constants.NOT_FOUND.code
+      : constants.BAD_REQUEST.code;
+    return sendError(res, error, message, statusCode);
+  }
+};
+
+exports.getPublicQuoteByKey = async (req, res) => {
+  try {
+    const quoteKey = String(req.params.quoteKey || '').trim();
+    if (!quoteKey) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Quote key is required'
+      });
+    }
+
+    const quote = await quoteService.getPublicQuoteByKey(quoteKey);
+    if (!quote) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Quote not found'
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: quote
+    });
+  } catch (error) {
+    console.error('Error fetching public quote by key:', error);
+    const message = error.message || 'Failed to fetch quote';
+    const statusCode = message === 'Quote not found'
+      ? constants.NOT_FOUND.code
+      : constants.BAD_REQUEST.code;
+    return sendError(res, error, message, statusCode);
+  }
+};
+
 exports.updateQuoteStatus = async (req, res) => {
   try {
     const { status } = req.body;
