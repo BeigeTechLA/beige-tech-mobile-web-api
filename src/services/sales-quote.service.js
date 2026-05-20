@@ -14,6 +14,7 @@ const { normalizeTime, resolveEventDateAndStartTime } = require('../utils/timezo
 const { extractCoordinatesFromPayload } = require('../utils/locationHelpers');
 const accountCreditService = require('./account-credit.service');
 const paymentLinksService = require('./payment-links.service');
+const bookingPaymentSummaryService = require('./booking-payment-summary.service');
 const { expireQuotesPastValidUntil } = require('./sales-quote-expiration.service');
 
 const SECTION_TYPES = ['service', 'addon', 'logistics', 'custom'];
@@ -4034,6 +4035,26 @@ async function updateQuote(salesQuoteId, payload, user) {
         changeType: quoteChangeType,
         paymentStatus,
         changeSummary
+      });
+
+      const existingPaymentSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(
+        billingState.booking.stream_project_booking_id,
+        transaction
+      );
+
+      await bookingPaymentSummaryService.upsertBookingPaymentSummary({
+        bookingId: billingState.booking.stream_project_booking_id,
+        salesQuoteId,
+        quoteTotal: newTotal,
+        paidAmount: existingPaymentSummary?.paid_amount || collectedAmount,
+        creditUsedAmount: existingPaymentSummary?.credit_used_amount || 0,
+        creditCreatedAmount: existingPaymentSummary?.credit_created_amount || 0,
+        lastQuoteChangeType: quoteChangeType === 'increase' || quoteChangeType === 'decrease'
+          ? quoteChangeType
+          : 'none',
+        lastQuoteChangeAmount: extraAmount > 0 ? extraAmount : reducedAmount,
+        lastQuoteChangeStatus: 'pending',
+        transaction
       });
 
       if (reducedAmount > 0 && refreshActivity?.activity_id) {

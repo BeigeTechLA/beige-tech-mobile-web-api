@@ -1558,3 +1558,51 @@ ALTER TABLE payment_transactions
     OR (payment_source = 'additional_invoice' AND (hours IS NULL OR hours >= 0))
     OR (payment_source = 'booking_checkout' AND hours > 0)
   );
+
+CREATE TABLE IF NOT EXISTS sales_quote_preview_links (
+  sales_quote_preview_link_id INT AUTO_INCREMENT PRIMARY KEY,
+  sales_quote_id INT NOT NULL,
+  quote_key VARCHAR(128) NOT NULL,
+  expires_at DATETIME NOT NULL,
+  created_by_user_id INT NULL,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_sales_quote_preview_links_quote_key (quote_key),
+  KEY idx_sales_quote_preview_links_quote_id (sales_quote_id),
+  KEY idx_sales_quote_preview_links_expires_at (expires_at),
+  CONSTRAINT fk_sales_quote_preview_links_quote
+    FOREIGN KEY (sales_quote_id) REFERENCES sales_quotes(sales_quote_id)
+    ON DELETE CASCADE
+    ON UPDATE CASCADE,
+  CONSTRAINT fk_sales_quote_preview_links_created_by
+    FOREIGN KEY (created_by_user_id) REFERENCES users(id)
+    ON DELETE SET NULL
+    ON UPDATE CASCADE
+);
+
+CREATE TABLE booking_payment_summary (
+  booking_payment_summary_id INT AUTO_INCREMENT PRIMARY KEY,
+  booking_id INT NOT NULL,
+  sales_quote_id INT NULL,
+  quote_total DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+  paid_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+  credit_used_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+  credit_created_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+  due_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+  payment_status ENUM(
+    'pending',
+    'partially_paid',
+    'paid',
+    'approval_pending',
+    'no_payment_due'
+  ) NOT NULL DEFAULT 'pending',
+  last_quote_change_type ENUM('none', 'increase', 'decrease') NOT NULL DEFAULT 'none',
+  last_quote_change_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+  last_quote_change_status ENUM('none', 'pending', 'approved', 'rejected') NOT NULL DEFAULT 'none',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_booking_payment_summary_booking_id (booking_id),
+  INDEX idx_booking_payment_summary_sales_quote_id (sales_quote_id),
+  INDEX idx_booking_payment_summary_payment_status (payment_status)
+);

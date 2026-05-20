@@ -4,6 +4,7 @@ const affiliateController = require('./affiliate.controller');
 const { ensureProjectForBooking } = require('./projects.controller');
 const externalFileManagerController = require('./external-file-manager.controller');
 const accountCreditService = require('../services/account-credit.service');
+const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
 const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 const googleSheetService = require('../utils/googleSheetsService');
 // Get Beige margin percentage from environment, default to 25%
@@ -140,11 +141,11 @@ async function resolveManualWebhookAmount({ booking, paymentSource, amount = nul
   if (convertedLead?.lead_id) {
     const salesQuote = await db.sales_quotes.findOne({
       where: { lead_id: convertedLead.lead_id },
-      attributes: ['total', 'price_after_discount', 'subtotal'],
+      attributes: ['total', 'subtotal'],
       order: [['sales_quote_id', 'DESC']],
       transaction
     });
-    const salesQuoteAmount = Number(salesQuote?.total || salesQuote?.price_after_discount || salesQuote?.subtotal || 0);
+    const salesQuoteAmount = Number(salesQuote?.total || salesQuote?.subtotal || 0);
     if (Number.isFinite(salesQuoteAmount) && salesQuoteAmount > 0) {
       return round2(salesQuoteAmount);
     }
@@ -185,6 +186,63 @@ function calculatePricing(hours, hourlyRate, equipmentItems = [], marginPercent 
 
 function round2(value) {
   return parseFloat(Number(value || 0).toFixed(2));
+}
+
+async function getSalesQuoteForBooking(bookingId, transaction = null) {
+  if (!bookingId) return null;
+
+  const lead = await db.sales_leads.findOne({
+    where: { booking_id: bookingId },
+    attributes: ['lead_id'],
+    transaction
+  });
+
+  if (!lead?.lead_id) return null;
+
+  return db.sales_quotes.findOne({
+    where: { lead_id: lead.lead_id },
+    attributes: ['sales_quote_id', 'total', 'subtotal'],
+    order: [['sales_quote_id', 'DESC']],
+    transaction
+  });
+}
+
+async function saveStripePaymentSummary({
+  bookingId,
+  salesQuoteId = null,
+  quoteTotal = null,
+  amountPaid = 0,
+  lastQuoteChangeType = 'none',
+  lastQuoteChangeAmount = 0,
+  lastQuoteChangeStatus = 'none',
+  transaction = null
+}) {
+  const quote = salesQuoteId && quoteTotal !== null
+    ? null
+    : await getSalesQuoteForBooking(bookingId, transaction);
+
+  const resolvedSalesQuoteId = salesQuoteId || quote?.sales_quote_id || null;
+  const resolvedQuoteTotal = round2(
+    quoteTotal !== null && quoteTotal !== undefined
+      ? quoteTotal
+      : (quote?.total || quote?.subtotal || amountPaid)
+  );
+
+  const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId, transaction);
+  const totalPaid = round2(Number(existingSummary?.paid_amount || 0) + Number(amountPaid || 0));
+
+  return bookingPaymentSummaryService.upsertBookingPaymentSummary({
+    bookingId,
+    salesQuoteId: resolvedSalesQuoteId,
+    quoteTotal: resolvedQuoteTotal,
+    paidAmount: totalPaid,
+    creditUsedAmount: existingSummary?.credit_used_amount || 0,
+    creditCreatedAmount: existingSummary?.credit_created_amount || 0,
+    lastQuoteChangeType,
+    lastQuoteChangeAmount,
+    lastQuoteChangeStatus,
+    transaction
+  });
 }
 
 function normalizeDateOnly(value, fallback = new Date()) {
@@ -623,11 +681,18 @@ async function processStripePaidWebhookEvent(event, req = {}) {
       transaction
     });
 
-    await markConvertedSalesQuoteAsPaid({
+    const salesQuoteId = await markConvertedSalesQuoteAsPaid({
       bookingId: booking_id,
       paymentId: payment.payment_id,
       paymentIntentId,
       paidAmount: amountPaid,
+      transaction
+    });
+
+    await saveStripePaymentSummary({
+      bookingId: booking_id,
+      salesQuoteId,
+      amountPaid,
       transaction
     });
 
@@ -2619,11 +2684,18 @@ exports.handleStripeWebhook = async (req, res) => {
         transaction
       });
 
-      await markConvertedSalesQuoteAsPaid({
+      const salesQuoteId = await markConvertedSalesQuoteAsPaid({
         bookingId: booking_id,
         paymentId: payment.payment_id,
         paymentIntentId,
         paidAmount: amountPaid,
+        transaction
+      });
+
+      await saveStripePaymentSummary({
+        bookingId: booking_id,
+        salesQuoteId,
+        amountPaid,
         transaction
       });
       
