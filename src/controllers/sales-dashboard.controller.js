@@ -17,6 +17,7 @@ const sequelize = require('../db');
 const constants = require('../utils/constants');
 const leadAssignmentService = require('../services/lead-assignment.service');
 const accountCreditService = require('../services/account-credit.service');
+const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
 
 function parseQuoteRequestMetadata(value) {
   if (!value) return null;
@@ -51,6 +52,49 @@ function formatSignedCurrency(value) {
   const amount = roundCurrency(value || 0);
   if (amount === 0) return formatCurrency(0);
   return `${amount > 0 ? '+' : '-'}${formatCurrency(Math.abs(amount))}`;
+}
+
+async function updatePaymentSummaryForQuoteChangeReview({
+  bookingId,
+  salesQuoteId,
+  metadata,
+  decision,
+  creditResult = null
+}) {
+  if (!bookingId || !salesQuoteId) return null;
+
+  const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId);
+  const previousTotal = roundCurrency(metadata.previous_total);
+  const newTotal = roundCurrency(metadata.new_total || previousTotal);
+  const extraAmount = roundCurrency(metadata.extra_amount);
+  const reducedAmount = roundCurrency(metadata.reduced_amount);
+  const changeType = metadata.quote_change_type || (extraAmount > 0 ? 'increase' : reducedAmount > 0 ? 'decrease' : 'none');
+  const changeAmount = extraAmount > 0 ? extraAmount : reducedAmount;
+  const approvedCreditAmount = decision === 'approve'
+    ? roundCurrency(
+        (creditResult?.approved_entries || []).reduce((sum, entry) => sum + Number(entry.amount || 0), 0)
+      )
+    : 0;
+
+  const quoteTotal = decision === 'approve'
+    ? newTotal
+    : roundCurrency(existingSummary?.quote_total || previousTotal);
+  const paidAmount = roundCurrency(existingSummary?.paid_amount || metadata.collected_amount || previousTotal || 0);
+  const creditCreatedAmount = decision === 'approve'
+    ? roundCurrency(Number(existingSummary?.credit_created_amount || 0) + approvedCreditAmount)
+    : roundCurrency(existingSummary?.credit_created_amount || 0);
+
+  return bookingPaymentSummaryService.upsertBookingPaymentSummary({
+    bookingId,
+    salesQuoteId,
+    quoteTotal,
+    paidAmount,
+    creditUsedAmount: existingSummary?.credit_used_amount || 0,
+    creditCreatedAmount,
+    lastQuoteChangeType: changeType === 'increase' || changeType === 'decrease' ? changeType : 'none',
+    lastQuoteChangeAmount: changeAmount,
+    lastQuoteChangeStatus: decision === 'approve' ? 'approved' : 'rejected'
+  });
 }
 
 function formatItemChangeDetail(change = {}) {
@@ -1653,6 +1697,14 @@ async function reviewQuoteChangeRequest(req, res, decision) {
           await activity.quote.update({ status: 'paid' });
         }
       }
+
+      await updatePaymentSummaryForQuoteChangeReview({
+        bookingId,
+        salesQuoteId,
+        metadata,
+        decision,
+        creditResult
+      });
 
       return res.json({
       success: true,

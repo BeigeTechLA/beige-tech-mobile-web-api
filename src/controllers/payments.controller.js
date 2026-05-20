@@ -212,6 +212,7 @@ async function saveStripePaymentSummary({
   salesQuoteId = null,
   quoteTotal = null,
   amountPaid = 0,
+  creditUsedAmount = 0,
   lastQuoteChangeType = 'none',
   lastQuoteChangeAmount = 0,
   lastQuoteChangeStatus = 'none',
@@ -230,13 +231,14 @@ async function saveStripePaymentSummary({
 
   const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId, transaction);
   const totalPaid = round2(Number(existingSummary?.paid_amount || 0) + Number(amountPaid || 0));
+  const totalCreditUsed = round2(Number(existingSummary?.credit_used_amount || 0) + Number(creditUsedAmount || 0));
 
   return bookingPaymentSummaryService.upsertBookingPaymentSummary({
     bookingId,
     salesQuoteId: resolvedSalesQuoteId,
     quoteTotal: resolvedQuoteTotal,
     paidAmount: totalPaid,
-    creditUsedAmount: existingSummary?.credit_used_amount || 0,
+    creditUsedAmount: totalCreditUsed,
     creditCreatedAmount: existingSummary?.credit_created_amount || 0,
     lastQuoteChangeType,
     lastQuoteChangeAmount,
@@ -374,11 +376,49 @@ async function markConvertedSalesQuoteAsPaid({
   return salesQuote.sales_quote_id;
 }
 
+function parseMetadataJson(value) {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch (_) {
+    return {};
+  }
+}
+
+async function getLatestApprovedAdditionalQuoteChange({
+  bookingId,
+  salesQuoteId,
+  transaction = null
+}) {
+  if (!bookingId || !salesQuoteId || !db.sales_quote_activities) return null;
+
+  const activities = await db.sales_quote_activities.findAll({
+    where: {
+      sales_quote_id: salesQuoteId,
+      activity_type: 'updated'
+    },
+    order: [['created_at', 'DESC'], ['activity_id', 'DESC']],
+    limit: 10,
+    transaction
+  });
+
+  return (activities || [])
+    .map((activity) => parseMetadataJson(activity.metadata_json))
+    .find((metadata) => (
+      metadata?.invoice_refresh_required === true &&
+      Number(metadata.booking_id || 0) === Number(bookingId) &&
+      String(metadata.approval_status || '').toLowerCase() === 'approved' &&
+      Number(metadata.extra_amount || 0) > 0
+    )) || null;
+}
+
 async function markAdditionalQuoteInvoiceAsPaid({
   bookingId,
   stripeInvoice = null,
   paymentIntentId = null,
   paymentMetadata = {},
+  paidAmount = null,
   transaction
 }) {
   if (!bookingId || !db.invoice_send_history) return false;
@@ -386,7 +426,11 @@ async function markAdditionalQuoteInvoiceAsPaid({
   const invoiceNumber = normalizeString(stripeInvoice?.number, 255, null);
   const invoiceUrl = normalizeString(stripeInvoice?.hosted_invoice_url, 1000, null);
   const invoicePdf = normalizeString(stripeInvoice?.invoice_pdf, 1000, null);
-  const invoiceAmount = round2((stripeInvoice?.amount_paid || stripeInvoice?.total || 0) / 100);
+  let invoiceAmount = round2(
+    paidAmount !== null && paidAmount !== undefined
+      ? paidAmount
+      : ((stripeInvoice?.amount_paid || stripeInvoice?.total || 0) / 100)
+  );
 
   let pendingInvoiceHistory = null;
   if (invoiceNumber) {
@@ -456,6 +500,15 @@ async function markAdditionalQuoteInvoiceAsPaid({
     return true;
   }
 
+  const approvedAdditionalChange = await getLatestApprovedAdditionalQuoteChange({
+    bookingId,
+    salesQuoteId: salesQuote.sales_quote_id,
+    transaction
+  });
+  if (!(invoiceAmount > 0) && approvedAdditionalChange) {
+    invoiceAmount = round2(approvedAdditionalChange.extra_amount || 0);
+  }
+
   const now = new Date();
   await salesQuote.update({
     status: 'paid',
@@ -476,6 +529,27 @@ async function markAdditionalQuoteInvoiceAsPaid({
       amount_paid: invoiceAmount
     })
   }, { transaction });
+
+  if (approvedAdditionalChange || metadataPaymentSource === PAYMENT_SOURCE.ADDITIONAL_INVOICE) {
+    const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId, transaction);
+    const quoteTotal = round2(salesQuote.total || 0);
+    const creditUsedAmount = round2(existingSummary?.credit_used_amount || 0);
+    const paidAfterAdditional = round2(Number(existingSummary?.paid_amount || 0) + Number(invoiceAmount || 0));
+    const settledPaidAmount = round2(Math.max(paidAfterAdditional, Math.max(quoteTotal - creditUsedAmount, 0)));
+
+    await bookingPaymentSummaryService.upsertBookingPaymentSummary({
+      bookingId,
+      salesQuoteId: salesQuote.sales_quote_id,
+      quoteTotal,
+      paidAmount: settledPaidAmount,
+      creditUsedAmount,
+      creditCreatedAmount: existingSummary?.credit_created_amount || 0,
+      lastQuoteChangeType: 'increase',
+      lastQuoteChangeAmount: round2(approvedAdditionalChange?.extra_amount || invoiceAmount),
+      lastQuoteChangeStatus: 'approved',
+      transaction
+    });
+  }
 
   return true;
 }
@@ -1970,6 +2044,7 @@ exports.confirmPaymentMulti = async (req, res) => {
           bookingId: booking_id,
           paymentIntentId,
           paymentMetadata: paymentIntent?.metadata || {},
+          paidAmount: existingPayment.total_amount,
           transaction
         });
       }
@@ -2200,6 +2275,7 @@ exports.confirmPaymentMulti = async (req, res) => {
         bookingId: booking_id,
         paymentIntentId,
         paymentMetadata: paymentIntent?.metadata || {},
+        paidAmount: totalAmount,
         transaction
       });
 
@@ -2232,11 +2308,19 @@ exports.confirmPaymentMulti = async (req, res) => {
       { where: { booking_id: booking_id }, transaction }
     );
 
-    await markConvertedSalesQuoteAsPaid({
+    const salesQuoteId = await markConvertedSalesQuoteAsPaid({
       bookingId: booking_id,
       paymentId: payment.payment_id,
       paymentIntentId,
       paidAmount: totalAmount,
+      transaction
+    });
+
+    await saveStripePaymentSummary({
+      bookingId: booking_id,
+      salesQuoteId,
+      amountPaid: totalAmount,
+      creditUsedAmount: usedCreditEntry?.amount || 0,
       transaction
     });
 
@@ -3075,11 +3159,18 @@ exports.manualMarkWebhookPaid = async (req, res) => {
       transaction
     });
 
-    await markConvertedSalesQuoteAsPaid({
+    const salesQuoteId = await markConvertedSalesQuoteAsPaid({
       bookingId,
       paymentId: payment.payment_id,
       paymentIntentId,
       paidAmount: amountPaid,
+      transaction
+    });
+
+    await saveStripePaymentSummary({
+      bookingId,
+      salesQuoteId,
+      amountPaid,
       transaction
     });
 
@@ -3088,6 +3179,7 @@ exports.manualMarkWebhookPaid = async (req, res) => {
       stripeInvoice,
       paymentIntentId,
       paymentMetadata: invoiceMetadata,
+      paidAmount: amountPaid,
       transaction
     });
 

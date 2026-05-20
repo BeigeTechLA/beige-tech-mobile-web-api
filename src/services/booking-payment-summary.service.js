@@ -16,9 +16,11 @@ function calculateDueAmount({ quoteTotal, paidAmount, creditUsedAmount }) {
 function resolvePaymentStatus({
   dueAmount,
   paidAmount,
+  quoteTotal,
   lastQuoteChangeStatus
 }) {
   if (lastQuoteChangeStatus === 'pending') return 'approval_pending';
+  if (dueAmount <= 0 && paidAmount > quoteTotal) return 'no_payment_due';
   if (dueAmount <= 0 && paidAmount > 0) return 'paid';
   if (dueAmount <= 0) return 'no_payment_due';
   if (paidAmount > 0) return 'partially_paid';
@@ -55,6 +57,7 @@ async function upsertBookingPaymentSummary({
   const paymentStatus = resolvePaymentStatus({
     dueAmount,
     paidAmount: finalPaidAmount,
+    quoteTotal: finalQuoteTotal,
     lastQuoteChangeStatus
   });
 
