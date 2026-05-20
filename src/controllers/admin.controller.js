@@ -2398,7 +2398,7 @@ exports.getAllProjectDetails = async (req, res) => {
         Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('event_date')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
       ]};
     } else if (range === 'all') {
-      dateFilter = { event_date: { [Sequelize.Op.ne]: null } };
+      dateFilter = {};
     } else if (date_on) {
       dateFilter = { event_date: { [Sequelize.Op.eq]: `${date_on} 00:00:00` } };
     }
