@@ -1893,10 +1893,10 @@ const sendNewClientSignupNotification = async (userData) => {
  */
 const sendNewCrewSignupNotification = async (crewData) => {
   try {
-    const to = process.env.SALES_NOTIFICATION_EMAIL;
+    const to = process.env.CP_NOTIFICATION_EMAIL;
     const templateId = CREW_SIGNUP_NOTIFICATION_TEMPLATE_ID;
 
-    if (!to) return { success: false, error: 'SALES_NOTIFICATION_EMAIL is not configured' };
+    if (!to) return { success: false, error: 'CP_NOTIFICATION_EMAIL is not configured' };
 
     return await sendEmail({
       to,
@@ -2143,9 +2143,9 @@ const sendCPStatusUpdateByRequest = async ({ project_id, crew_member_id, cp_acti
       attributes: ['first_name', 'last_name']
     });
 
-    const toEmail = process.env.CP_NOTIFICATION_EMAIL;
+    const toEmail = process.env.SALES_NOTIFICATION_EMAIL;
     if (!toEmail) {
-      return { success: false, error: 'CP_NOTIFICATION_EMAIL is not configured' };
+      return { success: false, error: 'SALES_NOTIFICATION_EMAIL is not configured' };
     }
 
     const cpName =
