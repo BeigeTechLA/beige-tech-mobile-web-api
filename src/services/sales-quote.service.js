@@ -999,13 +999,11 @@ function getBlockedQuotePaymentChange(quoteDetails = {}) {
   if (!change) return null;
 
   const approvalStatus = String(change.approval_status || '').toLowerCase();
-  const paymentStatus = String(change.payment_status || '').toLowerCase();
   const additionalAmount = roundCurrency(change.outstanding_amount || change.additional_amount || 0);
   const reducedAmount = roundCurrency(change.reduced_amount || change.refund_pending_amount || 0);
   const hasOpenChange = additionalAmount > 0 || reducedAmount > 0;
 
   if (!hasOpenChange) return null;
-  if (['paid', 'succeeded', 'completed', 'success'].includes(paymentStatus)) return null;
   if (approvalStatus === 'approved') return null;
 
   return {
@@ -2474,25 +2472,6 @@ function buildOverallChangeSummary(activities = []) {
 async function getQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
   if (!quoteId) return null;
 
-  let settledByFollowupTransaction = false;
-  if (bookingId) {
-    const bookingRecord = await db.stream_project_booking.findByPk(bookingId, {
-      attributes: ['payment_id']
-    });
-    const basePaymentId = Number(bookingRecord?.payment_id || 0);
-    if (basePaymentId > 0) {
-      const followupPayment = await db.payment_transactions.findOne({
-        where: {
-          payment_id: { [Op.gt]: basePaymentId },
-          status: 'succeeded',
-          payment_source: { [Op.in]: ['additional_invoice', 'quote_invoice'] }
-        },
-        order: [['payment_id', 'DESC']]
-      });
-      settledByFollowupTransaction = Boolean(followupPayment);
-    }
-  }
-
   const [latestInvoiceHistory, recentQuoteUpdates] = await Promise.all([
     db.invoice_send_history?.findOne({
       where: {
@@ -2537,6 +2516,25 @@ async function getQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
   const reducedAmount = parseFloat(refreshActivity?.metadata?.reduced_amount || 0);
   const previouslyPaidAmount = parseFloat(refreshActivity?.metadata?.previous_total || 0);
   const revisedTotal = parseFloat(refreshActivity?.metadata?.new_total || 0);
+  let settledByFollowupTransaction = false;
+  if (bookingId && refreshActivity?.activity && additionalAmount > 0) {
+    const bookingRecord = await db.stream_project_booking.findByPk(bookingId, {
+      attributes: ['payment_id']
+    });
+    const basePaymentId = Number(bookingRecord?.payment_id || 0);
+    if (basePaymentId > 0) {
+      const followupPayment = await db.payment_transactions.findOne({
+        where: {
+          payment_id: { [Op.gt]: basePaymentId },
+          created_at: { [Op.gte]: refreshActivity.activity.created_at },
+          status: 'succeeded',
+          payment_source: { [Op.in]: ['additional_invoice', 'quote_invoice'] }
+        },
+        order: [['payment_id', 'DESC']]
+      });
+      settledByFollowupTransaction = Boolean(followupPayment);
+    }
+  }
   const normalizedRefreshPaymentStatus = String(refreshInvoiceHistory?.payment_status || '').toLowerCase();
   const isRefreshInvoiceSettled =
     settledByFollowupTransaction ||
