@@ -11,6 +11,7 @@ const pricingController = require('../controllers/pricing.controller');
 const externalFileManagerController = require('../controllers/external-file-manager.controller');
 const paymentService = require('../services/payment-links.service');
 const accountCreditService = require('../services/account-credit.service');
+const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
 const quoteService = require('../services/sales-quote.service');
 const emailService = require('../utils/emailService');
 const { sendCPNewBookingRequestEmail } = require('../utils/emailService');
@@ -323,6 +324,10 @@ const hasExternalWorkspaceFiles = async (bookingId, phase) => {
 async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
   if (!quoteId) return null;
 
+  const paymentSummary = bookingId
+    ? await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId)
+    : null;
+
   let settledByFollowupTransaction = false;
   if (bookingId) {
     const bookingRecord = await db.stream_project_booking.findByPk(bookingId, {
@@ -400,16 +405,41 @@ async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null
     bookingId
   });
 
-  const additionalPayment = refreshActivity ? {
+  const summaryChangeType = String(paymentSummary?.last_quote_change_type || '').toLowerCase();
+  const summaryChangeAmount = parseFloat(paymentSummary?.last_quote_change_amount || 0);
+  const summaryDueAmount = parseFloat(paymentSummary?.due_amount || 0);
+  const summaryPaymentStatus = String(paymentSummary?.payment_status || '').toLowerCase();
+  const summaryApprovalStatus = String(paymentSummary?.last_quote_change_status || '').toLowerCase();
+  const summaryAdditionalPayment = paymentSummary &&
+    summaryChangeType === 'increase' &&
+    (summaryChangeAmount > 0 || summaryDueAmount > 0)
+      ? {
+          additional_amount: summaryChangeAmount || summaryDueAmount,
+          previously_paid_amount: parseFloat(paymentSummary.paid_amount || 0),
+          revised_total: parseFloat(paymentSummary.quote_total || 0),
+          outstanding_amount: summaryDueAmount,
+          payment_status: summaryPaymentStatus || null,
+          approval_status: summaryApprovalStatus || null,
+          last_sent_at: refreshInvoiceHistory?.sent_at || null,
+          invoice_number: refreshInvoiceHistory?.invoice_number || null,
+          invoice_url: refreshInvoiceHistory?.invoice_url || null
+        }
+      : null;
+
+  const activityAdditionalPayment = refreshActivity ? {
     additional_amount: additionalAmount,
     previously_paid_amount: previouslyPaidAmount,
     revised_total: revisedTotal,
     outstanding_amount: (additionalPaymentStatus === 'paid' || isRefreshInvoiceSettled) ? 0 : additionalAmount,
     payment_status: additionalPaymentStatus,
+    approval_status: refreshActivity.metadata?.approval_status || null,
     last_sent_at: refreshInvoiceHistory?.sent_at || null,
     invoice_number: refreshInvoiceHistory?.invoice_number || null,
     invoice_url: refreshInvoiceHistory?.invoice_url || null
   } : null;
+  const additionalPayment = paymentSummary
+    ? summaryAdditionalPayment
+    : activityAdditionalPayment;
 
   const reducedPayment = refreshActivity && reducedAmount > 0 ? {
     reduced_amount: reducedAmount,
@@ -434,7 +464,8 @@ async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null
     additional_payment: additionalPayment,
     partial_payment: additionalPayment,
     reduced_payment: reducedPayment,
-    credit_summary: creditSummary
+    credit_summary: creditSummary,
+    payment_summary: paymentSummary
   };
 }
 
@@ -449,6 +480,11 @@ function hasOutstandingAdditionalPayment(customQuoteFinancials = null) {
 }
 
 function resolveLeadPaymentStatus({ booking = null, activePaymentLink = null, customQuoteFinancials = null }) {
+  const summaryStatus = String(customQuoteFinancials?.payment_summary?.payment_status || '').toLowerCase();
+  if (summaryStatus) {
+    return summaryStatus;
+  }
+
   if (hasOutstandingAdditionalPayment(customQuoteFinancials)) {
     return 'partial_paid';
   }
@@ -2921,8 +2957,12 @@ exports.getLeadById = async (req, res) => {
     const totalBeforeCredit = parseFloat((subtotal - pricing_breakdown.discount).toFixed(2));
     let creditApplied = 0;
     let totalPaid = null;
+    const paymentSummary = customQuoteFinancials?.payment_summary || null;
 
-    if (leadJson.booking?.payment_id) {
+    if (paymentSummary) {
+      creditApplied = parseFloat(paymentSummary.credit_used_amount || 0);
+      totalPaid = parseFloat(paymentSummary.paid_amount || 0);
+    } else if (leadJson.booking?.payment_id) {
       const paymentData = await db.payment_transactions.findByPk(leadJson.booking.payment_id);
       if (paymentData) {
         totalPaid = parseFloat(paymentData.total_amount || 0);

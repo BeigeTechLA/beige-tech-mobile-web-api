@@ -1606,3 +1606,14 @@ CREATE TABLE booking_payment_summary (
   INDEX idx_booking_payment_summary_sales_quote_id (sales_quote_id),
   INDEX idx_booking_payment_summary_payment_status (payment_status)
 );
+
+-- 21-05-26
+
+ALTER TABLE booking_payment_summary
+  ADD COLUMN lead_id INT NULL AFTER booking_id,
+  ADD INDEX idx_booking_payment_summary_lead_id (lead_id);
+
+UPDATE booking_payment_summary bps
+JOIN sales_leads sl ON sl.booking_id = bps.booking_id
+SET bps.lead_id = sl.lead_id
+WHERE bps.lead_id IS NULL;

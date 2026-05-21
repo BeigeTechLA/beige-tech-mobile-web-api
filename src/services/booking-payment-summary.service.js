@@ -27,8 +27,20 @@ function resolvePaymentStatus({
   return 'pending';
 }
 
+async function resolveLeadIdForBooking(bookingId, transaction = null) {
+  const lead = await db.sales_leads.findOne({
+    where: { booking_id: bookingId },
+    attributes: ['lead_id'],
+    order: [['lead_id', 'DESC']],
+    transaction
+  });
+
+  return lead?.lead_id || null;
+}
+
 async function upsertBookingPaymentSummary({
   bookingId,
+  leadId = null,
   salesQuoteId = null,
   quoteTotal = 0,
   paidAmount = 0,
@@ -47,6 +59,7 @@ async function upsertBookingPaymentSummary({
   const finalPaidAmount = roundAmount(paidAmount);
   const finalCreditUsedAmount = roundAmount(creditUsedAmount);
   const finalCreditCreatedAmount = roundAmount(creditCreatedAmount);
+  const finalLeadId = leadId || await resolveLeadIdForBooking(bookingId, transaction);
 
   const dueAmount = calculateDueAmount({
     quoteTotal: finalQuoteTotal,
@@ -65,6 +78,7 @@ async function upsertBookingPaymentSummary({
     `
     INSERT INTO booking_payment_summary (
       booking_id,
+      lead_id,
       sales_quote_id,
       quote_total,
       paid_amount,
@@ -78,6 +92,7 @@ async function upsertBookingPaymentSummary({
     )
     VALUES (
       :bookingId,
+      :leadId,
       :salesQuoteId,
       :quoteTotal,
       :paidAmount,
@@ -90,6 +105,7 @@ async function upsertBookingPaymentSummary({
       :lastQuoteChangeStatus
     )
     ON DUPLICATE KEY UPDATE
+      lead_id = VALUES(lead_id),
       sales_quote_id = VALUES(sales_quote_id),
       quote_total = VALUES(quote_total),
       paid_amount = VALUES(paid_amount),
@@ -105,6 +121,7 @@ async function upsertBookingPaymentSummary({
     {
       replacements: {
         bookingId,
+        leadId: finalLeadId,
         salesQuoteId,
         quoteTotal: finalQuoteTotal,
         paidAmount: finalPaidAmount,
