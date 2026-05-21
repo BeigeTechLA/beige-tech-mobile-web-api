@@ -482,20 +482,27 @@ async function markAdditionalQuoteInvoiceAsPaid({
     });
   }
 
-  if (!pendingInvoiceHistory) return false;
+  const fallbackSalesQuote = pendingInvoiceHistory?.quote_id
+    ? null
+    : await getSalesQuoteForBooking(bookingId, transaction);
+  const resolvedSalesQuoteId = pendingInvoiceHistory?.quote_id || metadataQuoteId || fallbackSalesQuote?.sales_quote_id || null;
 
-  await pendingInvoiceHistory.update({
-    payment_status: 'paid',
-    invoice_number: invoiceNumber || pendingInvoiceHistory.invoice_number,
-    invoice_url: invoiceUrl || pendingInvoiceHistory.invoice_url,
-    invoice_pdf: invoicePdf || pendingInvoiceHistory.invoice_pdf
-  }, { transaction });
+  if (!pendingInvoiceHistory && !resolvedSalesQuoteId) return false;
 
-  if (!pendingInvoiceHistory.quote_id) {
+  if (pendingInvoiceHistory) {
+    await pendingInvoiceHistory.update({
+      payment_status: 'paid',
+      invoice_number: invoiceNumber || pendingInvoiceHistory.invoice_number,
+      invoice_url: invoiceUrl || pendingInvoiceHistory.invoice_url,
+      invoice_pdf: invoicePdf || pendingInvoiceHistory.invoice_pdf
+    }, { transaction });
+  }
+
+  if (!resolvedSalesQuoteId) {
     return true;
   }
 
-  const salesQuote = await db.sales_quotes.findByPk(pendingInvoiceHistory.quote_id, { transaction });
+  const salesQuote = fallbackSalesQuote || await db.sales_quotes.findByPk(resolvedSalesQuoteId, { transaction });
   if (!salesQuote) {
     return true;
   }
@@ -507,6 +514,10 @@ async function markAdditionalQuoteInvoiceAsPaid({
   });
   if (!(invoiceAmount > 0) && approvedAdditionalChange) {
     invoiceAmount = round2(approvedAdditionalChange.extra_amount || 0);
+  }
+
+  if (!pendingInvoiceHistory && !approvedAdditionalChange && metadataPaymentSource !== PAYMENT_SOURCE.ADDITIONAL_INVOICE) {
+    return false;
   }
 
   const now = new Date();

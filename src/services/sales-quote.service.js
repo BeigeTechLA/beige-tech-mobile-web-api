@@ -2550,7 +2550,32 @@ async function getQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
     bookingId
   });
 
-  const additionalPayment = refreshActivity && additionalAmount > 0 ? {
+  const paymentSummary = bookingId
+    ? await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId)
+    : null;
+  const summaryDueAmount = roundCurrency(paymentSummary?.due_amount || 0);
+  const summaryChangeType = String(paymentSummary?.last_quote_change_type || '').toLowerCase();
+  const summaryApprovalStatus = String(paymentSummary?.last_quote_change_status || 'none').toLowerCase();
+  const summaryAdditionalPayment = paymentSummary &&
+    summaryChangeType === 'increase' &&
+    summaryDueAmount > 0 &&
+    ['pending', 'approved'].includes(summaryApprovalStatus)
+      ? {
+          sales_quote_activity_id: refreshActivity?.activity?.activity_id || null,
+          additional_amount: roundCurrency(paymentSummary.last_quote_change_amount || summaryDueAmount),
+          previously_paid_amount: roundCurrency(paymentSummary.paid_amount || 0),
+          revised_total: roundCurrency(paymentSummary.quote_total || 0),
+          outstanding_amount: summaryDueAmount,
+          payment_status: summaryApprovalStatus === 'approved' ? 'pending' : 'approval_pending',
+          approval_status: summaryApprovalStatus,
+          last_sent_at: refreshInvoiceHistory?.sent_at || null,
+          invoice_number: refreshInvoiceHistory?.invoice_number || null,
+          invoice_url: refreshInvoiceHistory?.invoice_url || null,
+          invoice_pdf: refreshInvoiceHistory?.invoice_pdf || null
+        }
+      : null;
+
+  const activityAdditionalPayment = refreshActivity && additionalAmount > 0 ? {
     sales_quote_activity_id: refreshActivity.activity.activity_id,
     additional_amount: additionalAmount,
     previously_paid_amount: previouslyPaidAmount,
@@ -2563,6 +2588,9 @@ async function getQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
     invoice_url: refreshInvoiceHistory?.invoice_url || null,
     invoice_pdf: refreshInvoiceHistory?.invoice_pdf || null
   } : null;
+  const additionalPayment = paymentSummary
+    ? summaryAdditionalPayment
+    : activityAdditionalPayment;
 
   const reducedPayment = refreshActivity && reducedAmount > 0 ? {
     sales_quote_activity_id: refreshActivity.activity.activity_id,
@@ -3439,21 +3467,39 @@ async function resolveQuoteBillingState(quote, transaction) {
     booking?.stream_project_booking_id &&
     Number(refreshMetadata?.booking_id || 0) === Number(booking.stream_project_booking_id)
   );
+  const paymentSummary = booking?.stream_project_booking_id
+    ? await bookingPaymentSummaryService.getBookingPaymentSummary(
+        booking.stream_project_booking_id,
+        transaction
+      )
+    : null;
+  const summaryCollectedAmount = roundCurrency(
+    Number(paymentSummary?.paid_amount || 0) + Number(paymentSummary?.credit_used_amount || 0)
+  );
+  const summaryPaymentStatus = String(paymentSummary?.payment_status || '').toLowerCase();
+  const summaryMarkedCollected = summaryCollectedAmount > 0 && [
+    'paid',
+    'no_payment_due',
+    'partially_paid',
+    'approval_pending'
+  ].includes(summaryPaymentStatus);
   const refreshOutstanding = Boolean(
     refreshMetadata?.invoice_refresh_required &&
     refreshBelongsToBooking &&
     refreshExtraAmount > 0 &&
     refreshApprovalStatus !== 'rejected' &&
-    refreshInvoiceHistory?.payment_status !== 'paid'
+    refreshInvoiceHistory?.payment_status !== 'paid' &&
+    summaryCollectedAmount < roundCurrency(quote.total)
   );
 
-  const isCollected = !refreshOutstanding && (bookingMarkedCollected || historyMarkedCollected);
+  const isCollected = !refreshOutstanding && (bookingMarkedCollected || historyMarkedCollected || summaryMarkedCollected);
   const paymentStatus = refreshOutstanding
     ? 'partially_paid'
-    : (refreshInvoiceHistory?.payment_status || latestInvoiceHistory?.payment_status || (isCollected ? 'paid' : 'pending'));
+    : (summaryPaymentStatus || refreshInvoiceHistory?.payment_status || latestInvoiceHistory?.payment_status || (isCollected ? 'paid' : 'pending'));
+  const fallbackCollectedAmount = isCollected ? roundCurrency(quote.total) : 0;
   const collectedAmount = refreshOutstanding
-    ? refreshPreviousTotal
-    : (isCollected ? roundCurrency(quote.total) : 0);
+    ? Math.max(refreshPreviousTotal, summaryCollectedAmount)
+    : Math.max(fallbackCollectedAmount, summaryCollectedAmount);
   const outstandingAmount = roundCurrency(Math.max(roundCurrency(quote.total) - collectedAmount, 0));
 
   return {
@@ -4022,6 +4068,22 @@ async function updateQuote(salesQuoteId, payload, user) {
       changeReason: payload.edit_reason ? String(payload.edit_reason).trim() : 'Quote updated'
     });
 
+    const currentPaymentSummary = billingState.booking?.stream_project_booking_id
+      ? await bookingPaymentSummaryService.getBookingPaymentSummary(
+          billingState.booking.stream_project_booking_id,
+          transaction
+        )
+      : null;
+    const summaryPaidAmount = roundCurrency(
+      Number(currentPaymentSummary?.paid_amount || 0) + Number(currentPaymentSummary?.credit_used_amount || 0)
+    );
+    const hasPaymentSummary = Boolean(currentPaymentSummary);
+    const shouldUpdatePaymentSummaryForPaidQuote = Boolean(
+      billingState.booking?.stream_project_booking_id &&
+      quoteChangeType !== 'unchanged' &&
+      (billingState.is_collected || hasPaymentSummary)
+    );
+
     if (billingState.booking?.stream_project_booking_id && (extraAmount > 0 || reducedAmount > 0) && billingState.is_collected) {
       const refreshActivity = await markQuoteInvoiceRefreshRequired({
         transaction,
@@ -4037,21 +4099,18 @@ async function updateQuote(salesQuoteId, payload, user) {
         changeSummary
       });
 
-      const existingPaymentSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(
-        billingState.booking.stream_project_booking_id,
-        transaction
-      );
-
       await bookingPaymentSummaryService.upsertBookingPaymentSummary({
         bookingId: billingState.booking.stream_project_booking_id,
         salesQuoteId,
         quoteTotal: newTotal,
-        paidAmount: existingPaymentSummary?.paid_amount || collectedAmount,
-        creditUsedAmount: existingPaymentSummary?.credit_used_amount || 0,
-        creditCreatedAmount: existingPaymentSummary?.credit_created_amount || 0,
-        lastQuoteChangeType: quoteChangeType === 'increase' || quoteChangeType === 'decrease'
-          ? quoteChangeType
-          : 'none',
+        paidAmount: currentPaymentSummary?.paid_amount || collectedAmount,
+        creditUsedAmount: currentPaymentSummary?.credit_used_amount || 0,
+        creditCreatedAmount: currentPaymentSummary?.credit_created_amount || 0,
+        lastQuoteChangeType: extraAmount > 0
+          ? 'increase'
+          : reducedAmount > 0
+            ? 'decrease'
+            : (quoteChangeType === 'increase' || quoteChangeType === 'decrease' ? quoteChangeType : 'none'),
         lastQuoteChangeAmount: extraAmount > 0 ? extraAmount : reducedAmount,
         lastQuoteChangeStatus: 'pending',
         transaction
@@ -4070,6 +4129,35 @@ async function updateQuote(salesQuoteId, payload, user) {
           transaction
         });
       }
+    } else if (shouldUpdatePaymentSummaryForPaidQuote) {
+      const amountDueAfterChange = roundCurrency(Math.max(newTotal - summaryPaidAmount, 0));
+      const overpaidAfterChange = roundCurrency(Math.max(summaryPaidAmount - newTotal, 0));
+      const summaryChangeType = amountDueAfterChange > 0
+        ? 'increase'
+        : overpaidAfterChange > 0
+          ? 'decrease'
+          : (quoteChangeType === 'increase' || quoteChangeType === 'decrease' ? quoteChangeType : 'none');
+      const summaryChangeAmount = amountDueAfterChange > 0
+        ? amountDueAfterChange
+        : overpaidAfterChange > 0
+          ? overpaidAfterChange
+          : roundCurrency(Math.abs(newTotal - previousTotal));
+      const summaryChangeStatus = amountDueAfterChange > 0 || overpaidAfterChange > 0
+        ? 'pending'
+        : 'approved';
+
+      await bookingPaymentSummaryService.upsertBookingPaymentSummary({
+        bookingId: billingState.booking.stream_project_booking_id,
+        salesQuoteId,
+        quoteTotal: newTotal,
+        paidAmount: currentPaymentSummary?.paid_amount || collectedAmount,
+        creditUsedAmount: currentPaymentSummary?.credit_used_amount || 0,
+        creditCreatedAmount: currentPaymentSummary?.credit_created_amount || 0,
+        lastQuoteChangeType: summaryChangeType,
+        lastQuoteChangeAmount: summaryChangeAmount,
+        lastQuoteChangeStatus: summaryChangeStatus,
+        transaction
+      });
     }
 
     await transaction.commit();

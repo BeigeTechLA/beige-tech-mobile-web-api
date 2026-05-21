@@ -68,7 +68,11 @@ async function updatePaymentSummaryForQuoteChangeReview({
   const newTotal = roundCurrency(metadata.new_total || previousTotal);
   const extraAmount = roundCurrency(metadata.extra_amount);
   const reducedAmount = roundCurrency(metadata.reduced_amount);
-  const changeType = metadata.quote_change_type || (extraAmount > 0 ? 'increase' : reducedAmount > 0 ? 'decrease' : 'none');
+  const changeType = extraAmount > 0
+    ? 'increase'
+    : reducedAmount > 0
+      ? 'decrease'
+      : (metadata.quote_change_type || 'none');
   const changeAmount = extraAmount > 0 ? extraAmount : reducedAmount;
   const approvedCreditAmount = decision === 'approve'
     ? roundCurrency(
@@ -276,8 +280,17 @@ function buildRequestOverallChangeSummary(metadata = {}) {
 
 function isQuoteChangeRequestActivity(row, metadata = {}) {
   const message = String(row?.message || '').toLowerCase();
-  return metadata.invoice_refresh_required === true && (
+  const hasPaymentChangeAmount = roundCurrency(metadata.extra_amount || 0) > 0 ||
+    roundCurrency(metadata.reduced_amount || 0) > 0;
+  const hasBookingContext = Number(metadata.booking_id || 0) > 0;
+
+  return (
+    metadata.invoice_refresh_required === true ||
+    (hasBookingContext && hasPaymentChangeAmount)
+  ) && (
     Boolean(metadata.approval_requested_at) ||
+    Boolean(metadata.approval_status) ||
+    message.includes('quote updated') ||
     message.includes('quote total decreased after invoice/payment state') ||
     message.includes('quote total increased after invoice/payment state')
   );
@@ -332,7 +345,11 @@ function normalizeQuoteChangeRequest(row, metadata = {}, overallChangeSummary = 
   const reducedAmount = Number(metadata.reduced_amount || 0);
   const previousTotal = Number(metadata.previous_total || 0);
   const newTotal = Number(metadata.new_total || 0);
-  const requestType = metadata.quote_change_type || (extraAmount > 0 ? 'increase' : reducedAmount > 0 ? 'decrease' : 'unknown');
+  const requestType = extraAmount > 0
+    ? 'increase'
+    : reducedAmount > 0
+      ? 'decrease'
+      : (metadata.quote_change_type || 'unknown');
   const approvalStatus = metadata.approval_status || 'pending';
 
   return {
@@ -1633,7 +1650,7 @@ async function reviewQuoteChangeRequest(req, res, decision) {
 
     const metadata = parseQuoteRequestMetadata(activity.metadata_json) || {};
 
-    if (metadata.invoice_refresh_required !== true) {
+    if (!isQuoteChangeRequestActivity(activity, metadata)) {
       return res.status(constants.BAD_REQUEST.code).json({
         success: false,
         message: 'This activity is not a reviewable quote change request'

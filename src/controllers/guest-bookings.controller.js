@@ -8,6 +8,7 @@ const { content } = require('googleapis/build/src/apis/content');
 const { sendCPNewBookingRequestEmail } = require('../utils/emailService');
 const { resolveEventDateAndStartTime, normalizeTime, splitDateTime } = require('../utils/timezone');
 const accountCreditService = require('../services/account-credit.service');
+const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
 const REFERRAL_DISCOUNT_PERCENT = 10;
 
 const parseQuoteActivityMetadata = (value) => {
@@ -23,6 +24,34 @@ const parseQuoteActivityMetadata = (value) => {
 const resolveAdditionalPaymentContextForBooking = async (bookingId) => {
   const normalizedBookingId = Number(bookingId);
   if (!Number.isFinite(normalizedBookingId) || normalizedBookingId <= 0) return null;
+
+  const paymentSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(normalizedBookingId);
+  const summaryDueAmount = Number(paymentSummary?.due_amount || 0);
+  const summaryQuoteTotal = Number(paymentSummary?.quote_total || 0);
+  const summaryPaidAmount = Number(paymentSummary?.paid_amount || 0);
+  const summaryChangeType = String(paymentSummary?.last_quote_change_type || '').toLowerCase();
+  const summaryApprovalStatus = String(paymentSummary?.last_quote_change_status || 'none').toLowerCase();
+
+  if (
+    paymentSummary &&
+    summaryChangeType === 'increase' &&
+    summaryDueAmount > 0 &&
+    ['pending', 'approved'].includes(summaryApprovalStatus)
+  ) {
+    return {
+      sales_quote_id: paymentSummary.sales_quote_id,
+      approval_status: summaryApprovalStatus,
+      additional_amount: Number(paymentSummary.last_quote_change_amount || summaryDueAmount),
+      previously_paid_amount: summaryPaidAmount,
+      revised_total: summaryQuoteTotal,
+      outstanding_amount: summaryDueAmount,
+      payment_status: summaryApprovalStatus === 'approved' ? 'pending' : 'approval_pending'
+    };
+  }
+
+  if (paymentSummary) {
+    return null;
+  }
 
   const linkedLead = await db.sales_leads.findOne({
     where: { booking_id: normalizedBookingId },
@@ -89,6 +118,7 @@ const resolveAdditionalPaymentContextForBooking = async (bookingId) => {
     const followupPayment = await db.payment_transactions.findOne({
       where: {
         payment_id: { [db.Sequelize.Op.gt]: basePaymentId },
+        created_at: { [db.Sequelize.Op.gte]: refreshActivity.activity.created_at },
         status: 'succeeded',
         payment_source: { [db.Sequelize.Op.in]: ['additional_invoice', 'quote_invoice'] }
       },
@@ -1698,6 +1728,15 @@ exports.getBookingPaymentDetails = async (req, res) => {
 
       const finalTotal = parseFloat((baseTotal - referralDiscountAmount).toFixed(2));
       const finalPriceAfterDiscount = parseFloat((basePriceAfterDiscount - referralDiscountAmount).toFixed(2));
+      const additionalOutstandingAmount = Number(additionalPaymentContext?.outstanding_amount || 0);
+      const hasPendingAdditionalPayment = additionalOutstandingAmount > 0 &&
+        String(additionalPaymentContext?.approval_status || '').toLowerCase() === 'approved' &&
+        !['paid', 'succeeded', 'completed', 'success'].includes(
+          String(additionalPaymentContext?.payment_status || '').toLowerCase()
+        );
+      const payableTotal = hasPendingAdditionalPayment
+        ? parseFloat(additionalOutstandingAmount.toFixed(2))
+        : finalTotal;
 
       quoteResponse = {
         quote_id: booking.primary_quote.quote_id,
@@ -1720,7 +1759,12 @@ exports.getBookingPaymentDetails = async (req, res) => {
         marginPercent: parseFloat(booking.primary_quote.margin_percent || 0),
         marginAmount: parseFloat(booking.primary_quote.margin_amount || 0),
         total_before_referral_discount: baseTotal,
-        total: finalTotal,
+        revised_total: finalTotal,
+        total_before_additional_payment: finalTotal,
+        payable_amount: payableTotal,
+        amount_due: payableTotal,
+        is_additional_payment: hasPendingAdditionalPayment,
+        total: payableTotal,
         status: booking.primary_quote.status,
         lineItems: (booking.primary_quote.line_items || []).map(item => ({
           item_id: item.item_id,
