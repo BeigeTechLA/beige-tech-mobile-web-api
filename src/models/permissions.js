@@ -19,6 +19,10 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.STRING(150),
       allowNull: false
     },
+    role_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
     is_active: {
       type: DataTypes.INTEGER,
       defaultValue: 1

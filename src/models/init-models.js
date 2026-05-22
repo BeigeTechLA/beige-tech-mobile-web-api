@@ -586,6 +586,17 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
     sourceKey: "user_type_id"
   });
 
+  permissions.belongsTo(user_type, {
+    as: "role",
+    foreignKey: "role_id"
+  });
+
+  user_type.hasMany(permissions, {
+    as: "permissions",
+    foreignKey: "role_id",
+    sourceKey: "user_type_id"
+  });
+
   role_permissions.belongsTo(permissions, {
     as: "permission",
     foreignKey: "permission_id"

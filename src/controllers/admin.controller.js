@@ -9413,6 +9413,8 @@ const buildPermissionEntries = (permissions = {}, includeDenied = false) => {
     if (Array.isArray(actions)) {
       actions.forEach(action => {
         permissionEntries.push({
+          module_key: module,
+          action_key: action,
           permission_key: `${module}.${action}`,
           is_allowed: 1
         });
@@ -9425,6 +9427,8 @@ const buildPermissionEntries = (permissions = {}, includeDenied = false) => {
         const isAllowed = Boolean(actions[action]);
         if (isAllowed || includeDenied) {
           permissionEntries.push({
+            module_key: module,
+            action_key: action,
             permission_key: `${module}.${action}`,
             is_allowed: isAllowed ? 1 : 0
           });
@@ -9437,7 +9441,64 @@ const buildPermissionEntries = (permissions = {}, includeDenied = false) => {
 };
 
 const buildPermissionKeys = (permissions = {}) => {
-  return buildPermissionEntries(permissions).map(entry => entry.permission_key);
+  return [...new Set(buildPermissionEntries(permissions).map(entry => entry.permission_key))];
+};
+
+const ensureRolePermissionRecords = async (roleId, permissions = {}, includeDenied = false) => {
+  const permissionEntries = buildPermissionEntries(permissions, includeDenied);
+  const permissionEntryMap = permissionEntries.reduce((map, entry) => {
+    if (!map[entry.permission_key]) {
+      map[entry.permission_key] = entry;
+    }
+    return map;
+  }, {});
+  const permissionKeys = Object.keys(permissionEntryMap);
+
+  if (!permissionKeys.length) {
+    return [];
+  }
+
+  const existingPermissions = await db.permissions.findAll({
+    where: {
+      role_id: roleId,
+      permission_key: {
+        [Op.in]: permissionKeys
+      },
+      is_active: 1
+    }
+  });
+
+  const existingPermissionKeys = new Set(
+    existingPermissions.map(permission => permission.permission_key)
+  );
+
+  const missingPermissions = permissionKeys
+    .filter(permissionKey => !existingPermissionKeys.has(permissionKey))
+    .map(permissionKey => {
+      const entry = permissionEntryMap[permissionKey];
+
+      return {
+        role_id: roleId,
+        module_key: entry.module_key,
+        action_key: entry.action_key,
+        permission_key: entry.permission_key,
+        is_active: 1
+      };
+    });
+
+  if (missingPermissions.length) {
+    await db.permissions.bulkCreate(missingPermissions);
+  }
+
+  return db.permissions.findAll({
+    where: {
+      role_id: roleId,
+      permission_key: {
+        [Op.in]: permissionKeys
+      },
+      is_active: 1
+    }
+  });
 };
 
 const syncRolePermissions = async (roleId, permissions = {}) => {
@@ -9452,14 +9513,7 @@ const syncRolePermissions = async (roleId, permissions = {}) => {
     return;
   }
 
-  const permissionRecords = await db.permissions.findAll({
-    where: {
-      permission_key: {
-        [Op.in]: permissionKeys
-      },
-      is_active: 1
-    }
-  });
+  const permissionRecords = await ensureRolePermissionRecords(roleId, permissions);
 
   const rolePermissionData = permissionRecords.map(permission => ({
     role_id: roleId,
@@ -9531,16 +9585,23 @@ const syncUserPermissions = async (userId, permissions = {}) => {
 
   if (!permissionKeys.length) return;
 
-  const permissionRecords = await db.permissions.findAll({
+  const user = await db.users.findOne({
     where: {
-      permission_key: {
-        [Op.in]: permissionKeys
-      },
+      id: userId,
       is_active: 1
-    }
+    },
+    attributes: ['id', 'user_type']
   });
 
-  const userPermissionData = permissionRecords.map(permission => ({
+  if (!user) return;
+
+  const permissionRecords = await ensureRolePermissionRecords(user.user_type, permissions, true);
+
+  const allowedPermissionRecords = permissionRecords.filter(permission =>
+    permissionKeys.includes(permission.permission_key)
+  );
+
+  const userPermissionData = allowedPermissionRecords.map(permission => ({
     user_id: userId,
     permission_id: permission.permission_id,
     is_allowed: permissionEntryMap[permission.permission_key] === 1 ? 1 : 0,
@@ -9552,6 +9613,37 @@ const syncUserPermissions = async (userId, permissions = {}) => {
       updateOnDuplicate: ['is_active', 'is_allowed']
     });
   }
+};
+
+const getRequestRoleId = async (req) => {
+  const requestedRoleId = Number(req.query.role_id);
+  const loginRoleId = Number(req.user && req.user.userTypeId);
+  const loginRoleName = req.user && req.user.userRole;
+  const canViewOtherRoles = ['Admin', 'production_manager'].includes(loginRoleName);
+
+  if (requestedRoleId > 0 && canViewOtherRoles) {
+    return requestedRoleId;
+  }
+
+  if (loginRoleId > 0) {
+    return loginRoleId;
+  }
+
+  const userId = Number(req.user && req.user.userId);
+
+  if (!userId) {
+    return null;
+  }
+
+  const user = await db.users.findOne({
+    where: {
+      id: userId,
+      is_active: 1
+    },
+    attributes: ['user_type']
+  });
+
+  return user ? user.user_type : null;
 };
 
 const formatUserPermissions = async (userId) => {
@@ -10194,12 +10286,23 @@ exports.getUserRoleDetails = async (req, res) => {
 
 exports.getPermissionModules = async (req, res) => {
   try {
+    const roleId = await getRequestRoleId(req);
+
+    if (!roleId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Role could not be resolved from logged-in user'
+      });
+    }
+
     const permissions = await db.permissions.findAll({
       where: {
+        role_id: roleId,
         is_active: 1
       },
       attributes: [
         'permission_id',
+        'role_id',
         'module_key',
         'action_key',
         'permission_key'
@@ -10218,6 +10321,7 @@ exports.getPermissionModules = async (req, res) => {
 
       if (!moduleMap[module]) {
         moduleMap[module] = {
+          role_id: permission.role_id,
           module_key: module,
           actions: []
         };
@@ -10236,6 +10340,7 @@ exports.getPermissionModules = async (req, res) => {
 
     return res.status(200).json({
       success: true,
+      role_id: roleId,
       total_modules: formattedModules.length,
       data: formattedModules
     });
@@ -10558,10 +10663,12 @@ exports.deleteUserPermission = async (req, res) => {
     if (module_key && action_key) {
       permissionWhere.module_key = module_key;
       permissionWhere.action_key = action_key;
+      permissionWhere.role_id = user.user_type;
     } else if (permission_id && /^\d+$/.test(String(permission_id))) {
       permissionWhere.permission_id = permission_id;
     } else if (permission_id) {
       permissionWhere.permission_key = permission_id;
+      permissionWhere.role_id = user.user_type;
     } else {
       return res.status(400).json({
         success: false,

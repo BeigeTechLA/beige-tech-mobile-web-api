@@ -2,7 +2,7 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzgyMzMzMDcsImV4cCI6MTc3ODgzODEwN30.PhlORGEMXK95h4qGLRo71HF03a9UfMBQiEP4_FPct0A
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3Nzk0MjYxMDYsImV4cCI6MTc4MDAzMDkwNn0.ofnW-76LnBAFp_EKNDT9UOZEncIHwSzt9Fq794KVt9U
 
 @TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzcyNjkyODAsImV4cCI6MTc3Nzg3NDA4MH0.6NCSuJ90ixA8GtdebLlIIDS2e0dlorpJySLS3FRR7Fs
 
@@ -56,6 +56,16 @@ Content-Type: application/json
 {
   "email": "admin@beigecorporation.io",
   "password": "Admin@2026!"
+}
+
+###
+###
+POST {{URL}}auth/login HTTP/1.1
+Content-Type: application/json
+
+{
+  "email": "harsh.panchal@gmail.com",
+  "password": "password123"
 }
 
 ###
