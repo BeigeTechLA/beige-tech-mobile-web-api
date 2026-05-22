@@ -1481,3 +1481,6 @@ WHERE `action_key` = 'view';
 
 DROP TEMPORARY TABLE IF EXISTS `permission_action_seed`;
 DROP TEMPORARY TABLE IF EXISTS `permission_module_seed`;
+
+ALTER TABLE `users` ADD COLUMN `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER `created_at`;
+UPDATE `users` SET `updated_at` = `created_at`;

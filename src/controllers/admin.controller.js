@@ -10045,7 +10045,7 @@ exports.getUsersWithRoles = async (req, res) => {
       order = 'DESC'
     } = req.query;
 
-    const validSortFields = ['id', 'name', 'created_at'];
+    const validSortFields = ['id', 'name', 'created_at', 'updated_at'];
     const sortField = validSortFields.includes(sort_by) ? sort_by : 'id';
     const sortOrder = order.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
 
@@ -10098,6 +10098,7 @@ exports.getUsersWithRoles = async (req, res) => {
         'email',
         'user_type',
         'created_at',
+        'updated_at',
         'is_active'
       ],
       order: [[sortField, sortOrder]]
@@ -10122,6 +10123,7 @@ exports.getUsersWithRoles = async (req, res) => {
       role_id: user.user_type,
       role_name: userTypeMap[user.user_type] || null,
       created_at: user.created_at,
+      updated_at: user.updated_at,
       is_active: user.is_active,
       status_label: user.is_active ? 'Active' : 'In-Active'
     }));
