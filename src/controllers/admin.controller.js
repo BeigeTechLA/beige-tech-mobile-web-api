@@ -9444,63 +9444,6 @@ const buildPermissionKeys = (permissions = {}) => {
   return [...new Set(buildPermissionEntries(permissions).map(entry => entry.permission_key))];
 };
 
-const ensureRolePermissionRecords = async (roleId, permissions = {}, includeDenied = false) => {
-  const permissionEntries = buildPermissionEntries(permissions, includeDenied);
-  const permissionEntryMap = permissionEntries.reduce((map, entry) => {
-    if (!map[entry.permission_key]) {
-      map[entry.permission_key] = entry;
-    }
-    return map;
-  }, {});
-  const permissionKeys = Object.keys(permissionEntryMap);
-
-  if (!permissionKeys.length) {
-    return [];
-  }
-
-  const existingPermissions = await db.permissions.findAll({
-    where: {
-      role_id: roleId,
-      permission_key: {
-        [Op.in]: permissionKeys
-      },
-      is_active: 1
-    }
-  });
-
-  const existingPermissionKeys = new Set(
-    existingPermissions.map(permission => permission.permission_key)
-  );
-
-  const missingPermissions = permissionKeys
-    .filter(permissionKey => !existingPermissionKeys.has(permissionKey))
-    .map(permissionKey => {
-      const entry = permissionEntryMap[permissionKey];
-
-      return {
-        role_id: roleId,
-        module_key: entry.module_key,
-        action_key: entry.action_key,
-        permission_key: entry.permission_key,
-        is_active: 1
-      };
-    });
-
-  if (missingPermissions.length) {
-    await db.permissions.bulkCreate(missingPermissions);
-  }
-
-  return db.permissions.findAll({
-    where: {
-      role_id: roleId,
-      permission_key: {
-        [Op.in]: permissionKeys
-      },
-      is_active: 1
-    }
-  });
-};
-
 const syncRolePermissions = async (roleId, permissions = {}) => {
   const permissionKeys = buildPermissionKeys(permissions);
 
@@ -9513,7 +9456,15 @@ const syncRolePermissions = async (roleId, permissions = {}) => {
     return;
   }
 
-  const permissionRecords = await ensureRolePermissionRecords(roleId, permissions);
+  const permissionRecords = await db.permissions.findAll({
+    where: {
+      role_id: roleId,
+      permission_key: {
+        [Op.in]: permissionKeys
+      },
+      is_active: 1
+    }
+  });
 
   const rolePermissionData = permissionRecords.map(permission => ({
     role_id: roleId,
@@ -9595,13 +9546,17 @@ const syncUserPermissions = async (userId, permissions = {}) => {
 
   if (!user) return;
 
-  const permissionRecords = await ensureRolePermissionRecords(user.user_type, permissions, true);
+  const permissionRecords = await db.permissions.findAll({
+    where: {
+      role_id: user.user_type,
+      permission_key: {
+        [Op.in]: permissionKeys
+      },
+      is_active: 1
+    }
+  });
 
-  const allowedPermissionRecords = permissionRecords.filter(permission =>
-    permissionKeys.includes(permission.permission_key)
-  );
-
-  const userPermissionData = allowedPermissionRecords.map(permission => ({
+  const userPermissionData = permissionRecords.map(permission => ({
     user_id: userId,
     permission_id: permission.permission_id,
     is_allowed: permissionEntryMap[permission.permission_key] === 1 ? 1 : 0,
