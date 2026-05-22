@@ -3,6 +3,7 @@ const db = require('../models');
 const paymentLinksService = require('../services/payment-links.service');
 const quoteService = require('../services/sales-quote.service');
 const accountCreditService = require('../services/account-credit.service');
+const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
 const constants = require('../utils/constants');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const emailService = require('../utils/emailService');
@@ -237,6 +238,33 @@ const resolveAdditionalQuoteInvoiceContext = async ({ quoteId, bookingId, transa
     return null;
   }
 
+  const paymentSummary = bookingId
+    ? await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId, transaction)
+    : null;
+  const summaryChangeType = String(paymentSummary?.last_quote_change_type || '').toLowerCase();
+  const summaryApprovalStatus = String(paymentSummary?.last_quote_change_status || '').toLowerCase();
+  const summaryDueAmount = parseFloat(paymentSummary?.due_amount || 0);
+  const summaryChangeAmount = parseFloat(paymentSummary?.last_quote_change_amount || 0);
+
+  if (paymentSummary) {
+    if (
+      summaryChangeType === 'increase' &&
+      summaryDueAmount > 0 &&
+      (summaryChangeAmount > 0 || summaryDueAmount > 0)
+    ) {
+      return {
+        additionalAmount: summaryChangeAmount || summaryDueAmount,
+        revisedTotal: parseFloat(paymentSummary.quote_total || 0),
+        previouslyPaidAmount: parseFloat(paymentSummary.paid_amount || 0),
+        approvalStatus: summaryApprovalStatus || 'pending',
+        label: 'Additional payment for revised quote',
+        existingInvoice: null
+      };
+    }
+
+    return null;
+  }
+
   const recentUpdateActivities = await db.sales_quote_activities.findAll({
     where: {
       sales_quote_id: quoteId,
@@ -299,6 +327,45 @@ const resolveAdditionalQuoteInvoiceContext = async ({ quoteId, bookingId, transa
 
 const resolveReducedQuoteInvoiceContext = async ({ quoteId, bookingId, transaction }) => {
   if (!quoteId || !db.sales_quote_activities) {
+    return null;
+  }
+
+  const paymentSummary = bookingId
+    ? await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId, transaction)
+    : null;
+  const summaryChangeType = String(paymentSummary?.last_quote_change_type || '').toLowerCase();
+  const summaryApprovalStatus = String(paymentSummary?.last_quote_change_status || '').toLowerCase();
+  const summaryChangeAmount = parseFloat(paymentSummary?.last_quote_change_amount || 0);
+
+  if (paymentSummary) {
+    if (summaryChangeType === 'decrease' && summaryChangeAmount > 0) {
+      const quote = await db.sales_quotes.findByPk(quoteId, {
+        attributes: ['client_user_id', 'client_email'],
+        transaction
+      });
+
+      const accountBalance = await accountCreditService.getAccountCreditBalance({
+        userId: quote?.client_user_id || null,
+        guestEmail: quote?.client_email || null,
+        transaction
+      });
+
+      return {
+        reducedAmount: summaryChangeAmount,
+        revisedTotal: parseFloat(paymentSummary.quote_total || 0),
+        previouslyPaidAmount: parseFloat(paymentSummary.paid_amount || 0),
+        approvalStatus: summaryApprovalStatus || 'pending',
+        label: 'Quote total reduced after payment',
+        existingInvoice: null,
+        creditSummary: await accountCreditService.getQuoteCreditSummary({
+          salesQuoteId: quoteId,
+          bookingId,
+          transaction
+        }),
+        accountBalance
+      };
+    }
+
     return null;
   }
 
@@ -754,33 +821,54 @@ const calculateLeadPricing = async (booking) => {
         // so invoice/receipt keeps full breakdown (additional creatives, etc.).
         const q = booking.primary_quote; 
         if (q) {
+            const paymentSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(
+                booking.stream_project_booking_id
+            );
             const totalFromQuote = parseFloat(q.total || 0);
             const totalAfterDiscount = parseFloat(q.price_after_discount || 0);
             const totalFromPayment = parseFloat(paymentTransaction?.total_amount || 0);
+            const summaryQuoteTotal = parseFloat(paymentSummary?.quote_total || 0);
+            const summaryDueAmount = parseFloat(paymentSummary?.due_amount || 0);
+            const summaryPaidAmount = parseFloat(paymentSummary?.paid_amount || 0);
+            const summaryCreditUsedAmount = parseFloat(paymentSummary?.credit_used_amount || 0);
+            const summaryStatus = String(paymentSummary?.payment_status || '').toLowerCase();
             let resolvedTotal = totalFromQuote > 0 ? totalFromQuote : totalAfterDiscount;
             let creditApplied = 0;
             let effectivePaidFlag = bookingMarkedPaid;
-            if (bookingMarkedPaid && totalFromPayment > 0 && resolvedTotal <= 0) {
-                resolvedTotal = totalFromPayment;
-            }
-            if (bookingMarkedPaid && totalFromPayment > 0 && resolvedTotal > totalFromPayment) {
-                // When quote total is revised upward after an earlier payment,
-                // collect only the remaining balance in the next payment flow.
-                creditApplied = Math.max(0, resolvedTotal - totalFromPayment);
-                resolvedTotal = creditApplied;
-                effectivePaidFlag = resolvedTotal <= 0;
-            } else if (bookingMarkedPaid && totalFromPayment > 0 && resolvedTotal <= totalFromPayment) {
-                // Booking has already covered current quote total.
-                resolvedTotal = 0;
-                effectivePaidFlag = true;
+
+            if (paymentSummary) {
+                const fullQuoteTotal = summaryQuoteTotal > 0 ? summaryQuoteTotal : resolvedTotal;
+                const isSettled = summaryDueAmount <= 0 && ['paid', 'no_payment_due'].includes(summaryStatus);
+                resolvedTotal = isSettled ? fullQuoteTotal : summaryDueAmount;
+                creditApplied = summaryCreditUsedAmount;
+                effectivePaidFlag = isSettled;
+            } else {
+                if (bookingMarkedPaid && totalFromPayment > 0 && resolvedTotal <= 0) {
+                    resolvedTotal = totalFromPayment;
+                }
+                if (bookingMarkedPaid && totalFromPayment > 0 && resolvedTotal > totalFromPayment) {
+                    // When quote total is revised upward after an earlier payment,
+                    // collect only the remaining balance in the next payment flow.
+                    creditApplied = Math.max(0, resolvedTotal - totalFromPayment);
+                    resolvedTotal = creditApplied;
+                    effectivePaidFlag = resolvedTotal <= 0;
+                } else if (bookingMarkedPaid && totalFromPayment > 0 && resolvedTotal <= totalFromPayment) {
+                    // Booking has already covered current quote total.
+                    resolvedTotal = 0;
+                    effectivePaidFlag = true;
+                }
             }
             return {
                 source: 'database',
                 is_paid: effectivePaidFlag,
                 stripe_payment_intent_id: paymentTransaction?.stripe_payment_intent_id || null,
                 total: resolvedTotal,
-                total_before_credit: totalFromQuote > 0 ? totalFromQuote : totalAfterDiscount,
+                total_before_credit: paymentSummary && summaryQuoteTotal > 0
+                    ? summaryQuoteTotal
+                    : (totalFromQuote > 0 ? totalFromQuote : totalAfterDiscount),
                 credit_applied: parseFloat(creditApplied.toFixed(2)),
+                paid_amount: paymentSummary ? summaryPaidAmount : totalFromPayment,
+                due_amount: paymentSummary ? summaryDueAmount : resolvedTotal,
                 subtotal: parseFloat(q.subtotal || 0),
                 discount_amount: parseFloat(q.discount_amount || 0),
                 price_after_discount: parseFloat(q.price_after_discount || 0),
