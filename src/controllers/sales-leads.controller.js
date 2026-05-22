@@ -3888,9 +3888,16 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
   const paidAmountAfter = Math.max(previouslyPaidAmount + amountToApply, 0);
 
   const normalizedSalesQuoteId = Number(sales_quote_id || 0);
+  const latestLeadSalesQuote = Number.isFinite(normalizedSalesQuoteId) && normalizedSalesQuoteId > 0
+    ? null
+    : await sales_quotes.findOne({
+        where: { lead_id: Number(leadId) },
+        attributes: ['sales_quote_id'],
+        order: [['updated_at', 'DESC'], ['sales_quote_id', 'DESC']]
+      });
   const resolvedSalesQuoteId = Number.isFinite(normalizedSalesQuoteId) && normalizedSalesQuoteId > 0
     ? normalizedSalesQuoteId
-    : (existingSummary?.sales_quote_id || null);
+    : (existingSummary?.sales_quote_id || latestLeadSalesQuote?.sales_quote_id || null);
   const normalizedOtherPaymentMode = normalizedPaymentMode === 'other' ? String(other_payment_mode).trim() : null;
   const normalizedProofFilePath = String(proof_file_path || '').trim() || null;
   const normalizedProofFileName = String(proof_file_name || '').trim() || null;
@@ -4204,6 +4211,9 @@ exports.getClientLeadById = async (req, res) => {
     leadJson.payment_links = bookingId
       ? await payment_links.findAll({ where: { booking_id: bookingId } })
       : [];
+    const paymentSummary = bookingId
+      ? await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId)
+      : null;
 
     let final_phone = leadJson.phone || leadJson.phone_number;
     if (!final_phone && leadJson.booking?.description) {
@@ -4247,7 +4257,8 @@ exports.getClientLeadById = async (req, res) => {
       }
     }
 
-    let payment_status = lead.booking?.payment_id ? 'paid' : 'unpaid';
+    let payment_status = String(paymentSummary?.payment_status || '').toLowerCase() ||
+      (lead.booking?.payment_id ? 'paid' : 'unpaid');
     if (payment_status === 'unpaid' && active_payment_link) {
       payment_status = active_payment_link.is_expired ? 'link_expired' : 'link_sent';
     }
@@ -4303,7 +4314,10 @@ exports.getClientLeadById = async (req, res) => {
     let creditApplied = 0;
     let totalPaid = null;
 
-    if (leadJson.booking?.payment_id) {
+    if (paymentSummary) {
+      creditApplied = parseFloat(paymentSummary.credit_used_amount || 0);
+      totalPaid = parseFloat(paymentSummary.paid_amount || 0);
+    } else if (leadJson.booking?.payment_id) {
       const paymentData = await db.payment_transactions.findByPk(leadJson.booking.payment_id);
       if (paymentData) {
         totalPaid = parseFloat(paymentData.total_amount || 0);
@@ -4322,7 +4336,12 @@ exports.getClientLeadById = async (req, res) => {
 
     const selectedCrewIds = lead.booking?.assigned_crews?.map(c => c.crew_member_id).filter(Boolean) || [];
     const intent = lead.intent ?? leadAssignmentService.getClientIntent({ lead, booking: lead.booking });
-    const booking_status = leadAssignmentService.getClientBookingStatus(lead, lead.booking);
+    let booking_status = leadAssignmentService.getClientBookingStatus(lead, lead.booking);
+    if (['partially_paid', 'approval_pending'].includes(payment_status)) {
+      booking_status = 'Partially Paid';
+    } else if (payment_status === 'paid') {
+      booking_status = 'Paid';
+    }
     const booking_step = leadAssignmentService.getLeadBookingStep(lead, lead.booking, lead.activities);
     const can_edit_booking = canEditBooking(lead, lead.booking);
 
@@ -4417,6 +4436,13 @@ exports.getClientLeadById = async (req, res) => {
         intent_source: lead.intent ? 'manual' : 'system',
         booking_status,
         payment_status,
+        collected_amount: paymentSummary
+          ? parseFloat(paymentSummary.paid_amount || 0)
+          : (Number.isFinite(totalPaid) ? totalPaid : null),
+        outstanding_amount: paymentSummary
+          ? parseFloat(paymentSummary.due_amount || 0)
+          : null,
+        payment_summary: paymentSummary,
         active_payment_link,
         booking_step,
         can_edit_booking,

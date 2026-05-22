@@ -36,6 +36,7 @@ const { extractCoordinatesFromPayload } = require('../utils/locationHelpers');
 const db = require('../models');
 const bookingTimelineService = require('../services/bookingTimeline.service');
 const accountCreditService = require('../services/account-credit.service');
+const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
 // const NodeGeocoder = require('node-geocoder');
 const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
 const EXTERNAL_MEETINGS_API_BASE_URL = process.env.EXTERNAL_MEETINGS_API_BASE_URL || 'http://localhost:5002/v1/external-meetings';
@@ -8798,17 +8799,27 @@ exports.getBookingSummaryById = async (req, res) => {
             referralCode = latestPaymentData.referral_code;
         }
 
+        const paymentSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(
+            bookingJson.stream_project_booking_id
+        );
+
         // Logic: The "Promo Code" discount is whatever is left over after the Referral Discount
         const discountCodeDiscount = Math.max(0, totalDiscountFromDb - referralDiscount);
-        const paidAmountRaw = latestPaymentData
-            ? parseFloat(latestPaymentData.total_amount || 0)
-            : (paymentData ? parseFloat(paymentData.total_amount || 0) : quoteTotal);
+        const paidAmountRaw = paymentSummary
+            ? parseFloat(paymentSummary.paid_amount || 0)
+            : (latestPaymentData
+                ? parseFloat(latestPaymentData.total_amount || 0)
+                : (paymentData ? parseFloat(paymentData.total_amount || 0) : quoteTotal));
         const normalizedPaidAmount = Number.isFinite(paidAmountRaw) ? paidAmountRaw : quoteTotal;
         const isAdditionalPaymentFlow = String(latestPaymentData?.payment_source || '').toLowerCase() === 'additional_invoice';
-        const creditApplied = isAdditionalPaymentFlow ? 0 : Math.max(0, quoteTotal - normalizedPaidAmount);
-        const totalAfterCredit = isAdditionalPaymentFlow
-            ? normalizedPaidAmount
-            : Math.max(0, quoteTotal - creditApplied);
+        const creditApplied = paymentSummary
+            ? parseFloat(paymentSummary.credit_used_amount || 0)
+            : (isAdditionalPaymentFlow ? 0 : Math.max(0, quoteTotal - normalizedPaidAmount));
+        const totalAfterCredit = paymentSummary
+            ? Math.max(0, quoteTotal - creditApplied)
+            : (isAdditionalPaymentFlow
+                ? normalizedPaidAmount
+                : Math.max(0, quoteTotal - creditApplied));
 
         pricing.total_paid = parseFloat(normalizedPaidAmount.toFixed(2));
         pricing.discount_code_discount = parseFloat(discountCodeDiscount.toFixed(2));
@@ -8818,6 +8829,10 @@ exports.getBookingSummaryById = async (req, res) => {
         pricing.total_before_credit = parseFloat(quoteTotal.toFixed(2));
         pricing.credit_applied = parseFloat(creditApplied.toFixed(2));
         pricing.total_after_credit = parseFloat(totalAfterCredit.toFixed(2));
+        pricing.due_amount = paymentSummary
+            ? parseFloat(Number(paymentSummary.due_amount || 0).toFixed(2))
+            : Math.max(0, parseFloat((quoteTotal - normalizedPaidAmount - creditApplied).toFixed(2)));
+        pricing.payment_summary = paymentSummary || null;
 
         // 8. Final Response
         res.json({

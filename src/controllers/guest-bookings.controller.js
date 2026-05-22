@@ -1670,6 +1670,7 @@ exports.getBookingPaymentDetails = async (req, res) => {
     }).filter(c => c !== null);
 
     const additionalPaymentContext = await resolveAdditionalPaymentContextForBooking(id);
+    const paymentSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(id);
 
     let quoteResponse = null;
     if (booking.primary_quote) {
@@ -1729,6 +1730,10 @@ exports.getBookingPaymentDetails = async (req, res) => {
       const finalTotal = parseFloat((baseTotal - referralDiscountAmount).toFixed(2));
       const finalPriceAfterDiscount = parseFloat((basePriceAfterDiscount - referralDiscountAmount).toFixed(2));
       const additionalOutstandingAmount = Number(additionalPaymentContext?.outstanding_amount || 0);
+      const summaryDueAmount = Number(paymentSummary?.due_amount || 0);
+      const summaryPaymentStatus = String(paymentSummary?.payment_status || '').toLowerCase();
+      const hasSummaryRemainingPayment = summaryDueAmount > 0 &&
+        ['pending', 'partially_paid'].includes(summaryPaymentStatus);
       const hasPendingAdditionalPayment = additionalOutstandingAmount > 0 &&
         String(additionalPaymentContext?.approval_status || '').toLowerCase() === 'approved' &&
         !['paid', 'succeeded', 'completed', 'success'].includes(
@@ -1736,7 +1741,9 @@ exports.getBookingPaymentDetails = async (req, res) => {
         );
       const payableTotal = hasPendingAdditionalPayment
         ? parseFloat(additionalOutstandingAmount.toFixed(2))
-        : finalTotal;
+        : hasSummaryRemainingPayment
+          ? parseFloat(summaryDueAmount.toFixed(2))
+          : finalTotal;
 
       quoteResponse = {
         quote_id: booking.primary_quote.quote_id,
@@ -1763,7 +1770,7 @@ exports.getBookingPaymentDetails = async (req, res) => {
         total_before_additional_payment: finalTotal,
         payable_amount: payableTotal,
         amount_due: payableTotal,
-        is_additional_payment: hasPendingAdditionalPayment,
+        is_additional_payment: hasPendingAdditionalPayment || hasSummaryRemainingPayment,
         total: payableTotal,
         status: booking.primary_quote.status,
         lineItems: (booking.primary_quote.line_items || []).map(item => ({
@@ -1775,7 +1782,8 @@ exports.getBookingPaymentDetails = async (req, res) => {
           line_total: parseFloat(item.line_total)
         })),
         additional_payment: additionalPaymentContext,
-        partial_payment: additionalPaymentContext
+        partial_payment: additionalPaymentContext,
+        payment_summary: paymentSummary || null
       };
     }
 
