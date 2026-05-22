@@ -10243,48 +10243,40 @@ exports.getUserRoleDetails = async (req, res) => {
 
 exports.getPermissionModules = async (req, res) => {
   try {
-    const roleId = await getRequestRoleId(req);
-
-    if (!roleId) {
-      return res.status(400).json({
-        success: false,
-        message: 'Role could not be resolved from logged-in user'
-      });
-    }
-
     const permissions = await db.permissions.findAll({
       where: {
-        role_id: roleId,
         is_active: 1
       },
       attributes: [
         'permission_id',
-        'role_id',
         'module_key',
         'action_key',
         'permission_key'
       ],
       order: [
         ['module_key', 'ASC'],
-        ['action_key', 'ASC']
+        ['action_key', 'ASC'],
+        ['permission_id', 'ASC']
       ]
     });
 
     const moduleMap = {};
+    const actionMap = {};
 
     permissions.forEach(permission => {
       const module = permission.module_key;
       const action = permission.action_key;
+      const actionKey = `${module}.${action}`;
 
       if (!moduleMap[module]) {
         moduleMap[module] = {
-          role_id: permission.role_id,
           module_key: module,
           actions: []
         };
       }
+      if (!actionMap[actionKey]) {
+        actionMap[actionKey] = true;
 
-      if (!moduleMap[module].actions.some(item => item.action_key === action)) {
         moduleMap[module].actions.push({
           permission_id: permission.permission_id,
           action_key: action,
@@ -10297,7 +10289,6 @@ exports.getPermissionModules = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      role_id: roleId,
       total_modules: formattedModules.length,
       data: formattedModules
     });
