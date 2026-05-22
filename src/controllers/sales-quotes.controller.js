@@ -304,6 +304,28 @@ exports.convertQuoteToBooking = async (req, res) => {
   }
 };
 
+exports.convertPublicQuoteToBooking = async (req, res) => {
+  try {
+    const pseudoUser = {
+      userId: null,
+      role: 'admin'
+    };
+    const data = await quoteService.convertQuoteToBooking(
+      Number(req.params.quoteId),
+      req.body || {},
+      pseudoUser
+    );
+    return res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    console.error('Error converting public quote to booking:', error);
+    const statusCode = error.message === 'Quote not found' ? constants.NOT_FOUND.code : constants.BAD_REQUEST.code;
+    return sendError(res, error, error.message || 'Failed to convert quote to booking', statusCode);
+  }
+};
+
 exports.listQuotes = async (req, res) => {
   try {
     const data = await quoteService.listQuotes(req.query, getUserContext(req));
@@ -403,6 +425,63 @@ exports.getPublicQuoteById = async (req, res) => {
   } catch (error) {
     console.error('Error fetching public sales quote:', error);
     return sendError(res, error, 'Failed to fetch quote', constants.INTERNAL_SERVER_ERROR.code);
+  }
+};
+
+exports.createQuotePreviewLink = async (req, res) => {
+  try {
+    const quoteId = Number(req.params.quoteId);
+    if (!Number.isInteger(quoteId) || quoteId <= 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Invalid quoteId'
+      });
+    }
+
+    const data = await quoteService.createQuotePreviewLink(quoteId, getUserContext(req));
+    return res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    console.error('Error creating quote preview link:', error);
+    const message = error.message || 'Failed to create quote preview link';
+    const statusCode = message === 'Quote not found'
+      ? constants.NOT_FOUND.code
+      : constants.BAD_REQUEST.code;
+    return sendError(res, error, message, statusCode);
+  }
+};
+
+exports.getPublicQuoteByKey = async (req, res) => {
+  try {
+    const quoteKey = String(req.params.quoteKey || '').trim();
+    if (!quoteKey) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Quote key is required'
+      });
+    }
+
+    const quote = await quoteService.getPublicQuoteByKey(quoteKey);
+    if (!quote) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Quote not found'
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: quote
+    });
+  } catch (error) {
+    console.error('Error fetching public quote by key:', error);
+    const message = error.message || 'Failed to fetch quote';
+    const statusCode = message === 'Quote not found'
+      ? constants.NOT_FOUND.code
+      : constants.BAD_REQUEST.code;
+    return sendError(res, error, message, statusCode);
   }
 };
 
@@ -538,20 +617,30 @@ exports.acceptQuoteProposal = async (req, res) => {
     if (wantsHtml) {
       const quoteNumber = result?.quote?.quote_number || 'your quote';
       const paymentUrl = result?.payment?.payment_url || null;
-      const title = result.already_accepted ? 'Quote Already Confirmed' : 'Quote Accepted';
-      const description = result.already_accepted
-        ? `${quoteNumber} was already confirmed earlier. No further action is needed from you right now.`
-        : `${quoteNumber} has been accepted successfully and your booking has been created. Continue to payment to confirm your booking.`;
+      const isAdditionalPayment = Boolean(result?.payment?.is_additional_payment);
+      const isReducedPayment = Boolean(result?.payment?.is_reduced_payment);
+      const title = isAdditionalPayment
+        ? 'Revised Quote Confirmed'
+        : isReducedPayment
+          ? 'Updated Quote Confirmed'
+        : (result.already_accepted ? 'Quote Already Confirmed' : 'Quote Accepted');
+      const description = isAdditionalPayment
+        ? `${quoteNumber} has been updated. Continue to payment to pay only the approved additional amount.`
+        : isReducedPayment
+          ? `${quoteNumber} has been updated and no additional payment is due. You can view the updated paid receipt.`
+        : (result.already_accepted
+          ? `${quoteNumber} was already confirmed earlier. No further action is needed from you right now.`
+          : `${quoteNumber} has been accepted successfully and your booking has been created. Continue to payment to confirm your booking.`);
       const page = renderQuoteAcceptPage({
         title,
-        badge: result.already_accepted ? 'Already Confirmed' : 'Approval Received',
+        badge: isAdditionalPayment ? 'Additional Payment Due' : isReducedPayment ? 'Paid Update' : (result.already_accepted ? 'Already Confirmed' : 'Approval Received'),
         description,
         quoteNumber,
-        tone: result.already_accepted ? 'warning' : 'success',
+        tone: isAdditionalPayment || isReducedPayment ? 'success' : (result.already_accepted ? 'warning' : 'success'),
         statusCode: constants.OK.code,
         ...(paymentUrl ? {
           ctaHref: paymentUrl,
-          ctaLabel: 'CONTINUE TO PAYMENT'
+          ctaLabel: isReducedPayment ? 'VIEW UPDATED RECEIPT' : 'CONTINUE TO PAYMENT'
         } : {})
       });
       return res.status(page.statusCode).send(page.html);

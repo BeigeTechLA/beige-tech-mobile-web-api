@@ -5,6 +5,7 @@ const client = require('../controllers/client.controller');
 const { optionalAuth } = require('../middleware/auth');
 
 router.get('/get-dashboard-summary', optionalAuth, client.getClientDashboardSummary);
+router.get('/credit/dashboard', optionalAuth, client.getClientCreditDashboard);
 router.get('/credit/summary', optionalAuth, client.getClientCreditSummary);
 router.get('/credit/history', optionalAuth, client.getClientCreditHistory);
 router.get('/get-shoots-count-by-category', optionalAuth, client.getShootByCategoryForUser);

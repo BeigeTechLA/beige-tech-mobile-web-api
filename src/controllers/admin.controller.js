@@ -32,11 +32,14 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   payments } = require('../models');
   const { deleteSheetRow, updateSheetRow } = require('../utils/googleSheets');
 const leadAssignmentService = require('../services/lead-assignment.service');
-const { extractCoordinatesFromPayload } = require('../utils/locationHelpers');
+const { extractCoordinatesFromPayload, calculateDistance } = require('../utils/locationHelpers');
 const db = require('../models');
 const bookingTimelineService = require('../services/bookingTimeline.service');
 const accountCreditService = require('../services/account-credit.service');
 // const NodeGeocoder = require('node-geocoder');
+const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
+const EXTERNAL_MEETINGS_API_BASE_URL = process.env.EXTERNAL_MEETINGS_API_BASE_URL || 'http://localhost:5002/v1/external-meetings';
+const EXTERNAL_FILE_MANAGER_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
 
 const getCPNewBookingEmailFields = (booking = {}, fallbackClientName = '', fallbackShootAmount = null) => ({
   client_name:
@@ -247,6 +250,184 @@ const parseActivityPayload = (rawValue) => {
     return null;
   }
 };
+
+const normalizeStatusFilterValue = (value) => (
+  String(value || '')
+    .toLowerCase()
+    .replace(/[–—]/g, '-')
+    .replace(/[\s_-]+/g, '')
+);
+
+const formatLocalDateParts = (date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const getDateOnlyString = (value) => {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return formatLocalDateParts(parsed);
+};
+
+const getTodayDateOnlyString = () => formatLocalDateParts(new Date());
+
+const matchShootStatusFilter = (booking, rawStatus) => {
+  const normalizedStatus = normalizeStatusFilterValue(rawStatus);
+  if (!normalizedStatus || normalizedStatus === 'all') return null;
+
+  const bookingStatus = Number(booking?.status);
+  const eventDate = getDateOnlyString(booking?.event_date);
+  const today = getTodayDateOnlyString();
+  const isCancelled = Number(booking?.is_cancelled || 0) === 1;
+  const isDraft = Number(booking?.is_draft || 0) === 1;
+  const isFutureEvent = eventDate ? eventDate > today : false;
+  const isTodayEvent = eventDate ? eventDate === today : false;
+  const isPastEvent = eventDate ? eventDate < today : false;
+
+  switch (normalizedStatus) {
+    case 'initiated':
+      return bookingStatus === 0 && (!eventDate || isFutureEvent);
+    case 'preproduction':
+      return bookingStatus === 1 && isFutureEvent;
+    case 'shootday':
+      return ![3, 4, 5].includes(bookingStatus) && isTodayEvent;
+    case 'postproduction':
+      return bookingStatus === 2 || ([0, 1].includes(bookingStatus) && isPastEvent);
+    case 'revision':
+      return bookingStatus === 3;
+    case 'completed':
+    case 'assetsdelivered':
+      return bookingStatus === 4;
+    case 'cancelled':
+      return bookingStatus === 5 || isCancelled;
+    case 'upcoming':
+      return ![3, 4, 5].includes(bookingStatus) && isFutureEvent;
+    case 'draft':
+      return isDraft;
+    default:
+      return null;
+  }
+};
+
+const hasScheduledMeetingOfType = (meetings, meetingType) => {
+  const meetingList = Array.isArray(meetings) ? meetings : [];
+  return meetingList.some((meeting) =>
+    String(meeting?.meeting_type || '').toLowerCase() === String(meetingType || '').toLowerCase() &&
+    String(meeting?.meeting_status || '').toLowerCase() !== 'cancelled'
+  );
+};
+
+const buildExternalHeaders = ({ authHeader } = {}) => {
+  const headers = {
+    'Content-Type': 'application/json',
+    'x-internal-key': EXTERNAL_FILE_MANAGER_KEY
+  };
+
+  if (authHeader) {
+    headers.Authorization = authHeader;
+  }
+
+  return headers;
+};
+
+const fetchExternalWorkspaceFiles = async (bookingId, phase, options = {}) => {
+  const query = new URLSearchParams();
+  if (phase) query.set('phase', phase);
+
+  const url = `${EXTERNAL_FILE_MANAGER_API_BASE_URL}/workspace/${encodeURIComponent(String(bookingId))}/files${query.toString() ? `?${query.toString()}` : ''}`;
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: buildExternalHeaders({ authHeader: options?.authHeader })
+  });
+
+  if (!response.ok) {
+    throw new Error(`External file manager returned ${response.status} for booking ${bookingId}`);
+  }
+
+  return response.json();
+};
+
+const hasExternalWorkspaceFiles = async (bookingId, phase, options = {}) => {
+  if (!bookingId) return false;
+  try {
+    const payload = await fetchExternalWorkspaceFiles(bookingId, phase, options);
+    const files = Array.isArray(payload?.data?.files) ? payload.data.files : [];
+    const expectedSegment = phase === 'post' ? 'post-production' : phase === 'pre' ? 'pre-production' : '';
+
+    const phaseScopedFiles = files.filter((file) => {
+      const pathCandidate = String(
+        file?.path ||
+        file?.filepath ||
+        file?.key ||
+        file?.filePath ||
+        file?.name ||
+        ''
+      ).toLowerCase();
+
+      if (!expectedSegment) return pathCandidate.length > 0;
+      return pathCandidate.includes(`/${expectedSegment}/`) || pathCandidate.includes(`${expectedSegment}/`);
+    });
+
+    return phaseScopedFiles.length > 0;
+  } catch (error) {
+    if (String(error?.message || '').includes('returned 404')) {
+      return false;
+    }
+    console.error('[admin/get-projects] external workspace file check failed:', {
+      bookingId,
+      phase,
+      message: error?.message || error
+    });
+    return false;
+  }
+};
+
+const fetchExternalMeetingsByBookingIds = async (bookingIds = [], options = {}) => {
+  try {
+    const url = `${EXTERNAL_MEETINGS_API_BASE_URL}?limit=5000&page=1&sortBy=meeting_date_time:desc`;
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: buildExternalHeaders({ authHeader: options?.authHeader })
+    });
+
+    if (!response.ok) {
+      throw new Error(`External meetings returned ${response.status}`);
+    }
+
+    const payload = await response.json();
+    const allMeetings = Array.isArray(payload?.results)
+      ? payload.results
+      : Array.isArray(payload?.data?.results)
+        ? payload.data.results
+        : [];
+    const bookingIdSet = new Set(
+      bookingIds.map((id) => String(id)).filter(Boolean)
+    );
+
+    const byBookingId = new Map();
+    allMeetings.forEach((meeting) => {
+      const orderId = String(meeting?.order?.id || '');
+      if (!orderId || !bookingIdSet.has(orderId)) return;
+      if (!byBookingId.has(orderId)) byBookingId.set(orderId, []);
+      byBookingId.get(orderId).push(meeting);
+    });
+
+    return byBookingId;
+  } catch (error) {
+    console.error('[admin/get-projects] external meetings fetch failed:', error?.message || error);
+    return new Map();
+  }
+};
+
+const isPostProductionEligible = (booking) => Boolean(
+  matchShootStatusFilter(booking, 'postproduction') ||
+  matchShootStatusFilter(booking, 'revision') ||
+  matchShootStatusFilter(booking, 'completed') ||
+  matchShootStatusFilter(booking, 'assetsdelivered')
+);
 
 const buildManualPaymentSummaryFromActivities = (activities = [], totalAmount = 0) => {
   const manualEntries = (activities || [])
@@ -2181,7 +2362,7 @@ exports.getProjectDetails = async (req, res) => {
 
 exports.getAllProjectDetails = async (req, res) => {
   try {
-    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment } = req.query;
+    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment, production_filter } = req.query;
     const today = new Date();
     const noPagination = !limit && !page;
 
@@ -2217,7 +2398,7 @@ exports.getAllProjectDetails = async (req, res) => {
         Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('event_date')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
       ]};
     } else if (range === 'all') {
-      dateFilter = { event_date: { [Sequelize.Op.ne]: null } };
+      dateFilter = {};
     } else if (date_on) {
       dateFilter = { event_date: { [Sequelize.Op.eq]: `${date_on} 00:00:00` } };
     }
@@ -2424,7 +2605,7 @@ exports.getAllProjectDetails = async (req, res) => {
       event_type_master.findAll({ attributes: ['event_type_id', 'event_type_name'], raw: true })
     ]);
 
-    const projects = await stream_project_booking.findAll({
+    const projectRows = await stream_project_booking.findAll({
       where: whereConditions,
       ...(noPagination ? {} : { limit: pageSize, offset }),
       order: [
@@ -2434,7 +2615,7 @@ exports.getAllProjectDetails = async (req, res) => {
       ],
     });
 
-    let projectDetails = await Promise.all(projects.map(async (project) => {
+    let projectDetails = await Promise.all(projectRows.map(async (project) => {
       const [assignedCrewData, assignedEquipData, assignedPostProdData, paymentData] = await Promise.all([
         assigned_crew.findAll({
           where: { project_id: project.stream_project_booking_id, is_active: 1 },
@@ -2509,6 +2690,75 @@ exports.getAllProjectDetails = async (req, res) => {
 
         if (normalizedCpAssignment === 'assigned') return hasAssigned;
         if (normalizedCpAssignment === 'not_assigned') return !hasAssigned;
+        return true;
+      });
+    }
+
+    if (production_filter && production_filter !== 'all') {
+      const normalizedProductionFilter = String(production_filter).toLowerCase().trim();
+      const authHeader = req.headers?.authorization || null;
+      const bookingIds = Array.from(
+        new Set(
+          projectDetails
+            .map((entry) => Number(entry?.project?.stream_project_booking_id || 0))
+            .filter((id) => Number.isFinite(id) && id > 0)
+        )
+      );
+
+      const needsMeetingData =
+        normalizedProductionFilter === 'pre_production_meeting_not_done' ||
+        normalizedProductionFilter === 'post_production_meeting_not_done';
+      const needsPreFileData = normalizedProductionFilter === 'pre_production_file_not_provided';
+      const needsPostFileData = normalizedProductionFilter === 'post_production_file_not_uploaded';
+
+      const [meetingsByBookingId, preFileFlags, postFileFlags] = await Promise.all([
+        needsMeetingData ? fetchExternalMeetingsByBookingIds(bookingIds, { authHeader }) : Promise.resolve(new Map()),
+        (async () => {
+          if (!needsPreFileData) return new Map();
+          const map = new Map();
+          await Promise.all(
+            bookingIds.map(async (bookingId) => {
+              map.set(bookingId, await hasExternalWorkspaceFiles(bookingId, 'pre', { authHeader }));
+            })
+          );
+          return map;
+        })(),
+        (async () => {
+          if (!needsPostFileData) return new Map();
+          const map = new Map();
+          await Promise.all(
+            bookingIds.map(async (bookingId) => {
+              map.set(bookingId, await hasExternalWorkspaceFiles(bookingId, 'post', { authHeader }));
+            })
+          );
+          return map;
+        })(),
+      ]);
+
+      projectDetails = projectDetails.filter((entry) => {
+        const booking = entry?.project;
+        if (!booking) return false;
+        const bookingId = Number(booking.stream_project_booking_id || 0);
+        const bookingMeetings = meetingsByBookingId.get(String(bookingId)) || meetingsByBookingId.get(bookingId) || [];
+
+        if (normalizedProductionFilter === 'pre_production_file_not_provided') {
+          return preFileFlags.get(bookingId) !== true;
+        }
+
+        if (normalizedProductionFilter === 'pre_production_meeting_not_done') {
+          return !hasScheduledMeetingOfType(bookingMeetings, 'pre_production');
+        }
+
+        if (normalizedProductionFilter === 'post_production_meeting_not_done') {
+          if (!isPostProductionEligible(booking)) return false;
+          return !hasScheduledMeetingOfType(bookingMeetings, 'post_production');
+        }
+
+        if (normalizedProductionFilter === 'post_production_file_not_uploaded') {
+          if (!isPostProductionEligible(booking)) return false;
+          return postFileFlags.get(bookingId) !== true;
+        }
+
         return true;
       });
     }
@@ -7511,13 +7761,25 @@ exports.getClientsShoots = async (req, res) => {
 
 exports.searchCrewForLead = async (req, res) => {
     try {
-        const { lead_id, role_type, search_query, max_distance, date } = req.query;
+        const {
+            lead_id,
+            role_type,
+            search_query,
+            max_distance,
+            radius,
+            latitude,
+            longitude,
+            date
+        } = req.query;
+
+        const requestedRadius = Number(max_distance ?? radius ?? 50);
 
         let projectDate;
         let currentBookingId = null;
         let eventLocation = null;
+        let centerLatitude = null;
+        let centerLongitude = null;
 
-        // 1️⃣ Get Lead and identify the correct Booking ID
         if (lead_id) {
             const lead = await sales_leads.findOne({
                 where: { lead_id },
@@ -7527,32 +7789,40 @@ exports.searchCrewForLead = async (req, res) => {
             if (!lead || !lead.booking) {
                 return res.status(404).json({
                     success: false,
-                    message: "Lead or associated Booking not found"
+                    message: 'Lead or associated Booking not found'
                 });
             }
 
             projectDate = lead.booking.event_date;
             eventLocation = lead.booking.event_location;
             currentBookingId = lead.booking.stream_project_booking_id;
+            centerLatitude = Number(lead.booking.event_latitude);
+            centerLongitude = Number(lead.booking.event_longitude);
         } else {
             if (!date) {
                 return res.status(400).json({
                     success: false,
-                    message: "Date is required when lead_id is not provided"
+                    message: 'Date is required when lead_id is not provided'
                 });
             }
             projectDate = date;
         }
 
-        // ---------------------------------------------------------
-        // 2️⃣ Get IDs to Exclude
-        // ---------------------------------------------------------
-        
-        // A: Get crew busy on this date (Accepted on ANY other project)
+        if (latitude !== undefined && longitude !== undefined) {
+            centerLatitude = Number(latitude);
+            centerLongitude = Number(longitude);
+        } else if ((!Number.isFinite(centerLatitude) || !Number.isFinite(centerLongitude)) && eventLocation) {
+            const coords = extractCoordinatesFromPayload({}, eventLocation);
+            centerLatitude = Number(coords.latitude);
+            centerLongitude = Number(coords.longitude);
+        }
+
+        const hasSearchCenter = Number.isFinite(centerLatitude) && Number.isFinite(centerLongitude);
+
         const busyCrewRecords = await assigned_crew.findAll({
-            where: { 
-                crew_accept: 1, // Already Accepted
-                is_active: 1 
+            where: {
+                crew_accept: 1,
+                is_active: 1
             },
             include: [{
                 model: stream_project_booking,
@@ -7562,17 +7832,13 @@ exports.searchCrewForLead = async (req, res) => {
             attributes: ['crew_member_id']
         });
 
-        // B: Get crew already assigned to THIS lead who are Pending or Accepted
         let alreadyAssignedToThisLead = [];
         if (currentBookingId) {
             const currentAssignments = await assigned_crew.findAll({
                 where: {
-                    // FIXED: Changed booking_id to project_id based on your screenshot
-                    project_id: currentBookingId, 
+                    project_id: currentBookingId,
                     is_active: 1,
-                    // EXCLUDE if they are 0 (Pending) or 1 (Accepted)
-                    // INCLUDE if they are 2 (Rejected) so they appear in search again
-                    crew_accept: { [Op.in]: [0, 1] } 
+                    crew_accept: { [Op.in]: [0, 1] }
                 },
                 attributes: ['crew_member_id']
             });
@@ -7580,21 +7846,17 @@ exports.searchCrewForLead = async (req, res) => {
             alreadyAssignedToThisLead = currentAssignments.map(a => Number(a.crew_member_id));
         }
 
-        // Combine unique IDs to exclude
         const busyIds = busyCrewRecords.map(r => Number(r.crew_member_id));
         const excludeIds = [...new Set([...busyIds, ...alreadyAssignedToThisLead])];
 
-        // -----------------------------
-        // 3️⃣ Role Mapping
-        // -----------------------------
         const ROLE_GROUPS = {
-            videographer: ["9", "1"],
-            photographer: ["10", "2"],
-            cinematographer: ["11", "3"]
+            videographer: ['9', '1'],
+            photographer: ['10', '2'],
+            cinematographer: ['11', '3']
         };
 
         const requestedRoles = role_type
-            ? role_type.split(",").map(r => r.trim().toLowerCase())
+            ? role_type.split(',').map(r => r.trim().toLowerCase())
             : [];
 
         let targetRoleIds = [];
@@ -7605,14 +7867,10 @@ exports.searchCrewForLead = async (req, res) => {
         });
         targetRoleIds = [...new Set(targetRoleIds)];
 
-        // -----------------------------
-        // 4️⃣ Crew Filter Conditions
-        // -----------------------------
-        let crewWhere = {
+        const crewWhere = {
             is_active: true,
             is_available: true,
             is_crew_verified: 1,
-            // Strict exclusion of the IDs found above
             crew_member_id: { [Op.notIn]: excludeIds.length ? excludeIds : [0] }
         };
 
@@ -7627,86 +7885,96 @@ exports.searchCrewForLead = async (req, res) => {
                 [Op.or]: [
                     { first_name: { [Op.like]: `%${search_query}%` } },
                     { last_name: { [Op.like]: `%${search_query}%` } },
-                    { location: { [Op.like]: `%${search_query}%` } }
+                    { email: { [Op.like]: `%${search_query}%` } }
                 ]
             }];
         }
 
-        // 5️⃣ Fetch Available Crew
         const availableCrew = await crew_members.findAll({
             where: crewWhere,
             include: [
                 {
                     model: crew_member_files,
-                    as: "crew_member_files",
-                    attributes: ["file_path"],
-                    where: { is_active: 1, file_type: "profile_photo" },
+                    as: 'crew_member_files',
+                    attributes: ['file_path'],
+                    where: { is_active: 1, file_type: 'profile_photo' },
                     required: false,
                 }
             ],
-            limit: 50
+            limit: 200
         });
 
-        // 6️⃣ Format Response
-      const crewWithRoles = availableCrew.map(crewMember => {
-        let matchedRoles = [];
-        let rawRoles = [];
+        const crewWithRoles = availableCrew.map(crewMember => {
+            let matchedRoles = [];
+            let rawRoles = [];
 
-        try {
-          if (crewMember.primary_role) {
-            if (Array.isArray(crewMember.primary_role)) {
-              rawRoles = crewMember.primary_role;
-            } else if (typeof crewMember.primary_role === "string") {
-              try {
-                const parsed = JSON.parse(crewMember.primary_role);
-                rawRoles = Array.isArray(parsed) ? parsed : [parsed];
-              } catch {
-                rawRoles = crewMember.primary_role.split(',').map(r => r.trim());
-              }
-            }
-          }
-        } catch (e) { rawRoles = []; }
+            try {
+                if (crewMember.primary_role) {
+                    if (Array.isArray(crewMember.primary_role)) {
+                        rawRoles = crewMember.primary_role;
+                    } else if (typeof crewMember.primary_role === 'string') {
+                        try {
+                            const parsed = JSON.parse(crewMember.primary_role);
+                            rawRoles = Array.isArray(parsed) ? parsed : [parsed];
+                        } catch {
+                            rawRoles = crewMember.primary_role.split(',').map(r => r.trim());
+                        }
+                    }
+                }
+            } catch (e) { rawRoles = []; }
 
-        const stringRoleIds = rawRoles.map(String);
-        if (stringRoleIds.some(id => ROLE_GROUPS.videographer.includes(id))) matchedRoles.push("videographer");
-        if (stringRoleIds.some(id => ROLE_GROUPS.photographer.includes(id))) matchedRoles.push("photographer");
-        if (stringRoleIds.some(id => ROLE_GROUPS.cinematographer.includes(id))) matchedRoles.push("cinematographer");
+            const stringRoleIds = rawRoles.map(String);
+            if (stringRoleIds.some(id => ROLE_GROUPS.videographer.includes(id))) matchedRoles.push('videographer');
+            if (stringRoleIds.some(id => ROLE_GROUPS.photographer.includes(id))) matchedRoles.push('photographer');
+            if (stringRoleIds.some(id => ROLE_GROUPS.cinematographer.includes(id))) matchedRoles.push('cinematographer');
 
-        const profilePhoto = crewMember.crew_member_files && crewMember.crew_member_files.length > 0
-          ? crewMember.crew_member_files[0].file_path
-          : null;
+            const profilePhoto = crewMember.crew_member_files && crewMember.crew_member_files.length > 0
+                ? crewMember.crew_member_files[0].file_path
+                : null;
 
-        const crewJson = crewMember.toJSON();
-        delete crewJson.crew_member_files;
+            const crewJson = crewMember.toJSON();
+            delete crewJson.crew_member_files;
 
-        const formattedFirstName = crewJson.first_name.charAt(0).toUpperCase() + crewJson.first_name.slice(1).toLowerCase();
+            const formattedFirstName = crewJson.first_name.charAt(0).toUpperCase() + crewJson.first_name.slice(1).toLowerCase();
+            const formattedLastName = crewJson.last_name.charAt(0).toUpperCase();
 
-        const formattedLastName = crewJson.last_name.charAt(0).toUpperCase();
+            const crewLatitude = Number(crewJson.latitude);
+            const crewLongitude = Number(crewJson.longitude);
+            const distanceMiles = hasSearchCenter && Number.isFinite(crewLatitude) && Number.isFinite(crewLongitude)
+                ? calculateDistance(centerLatitude, centerLongitude, crewLatitude, crewLongitude)
+                : null;
 
-        return {
-          ...crewJson,
-          profile_photo: profilePhoto,
-          first_name: formattedFirstName,
-          last_name: formattedLastName,
-          role_names: matchedRoles.length > 0 ? matchedRoles : ["Unspecified"],
-          role: matchedRoles.length > 0 ? matchedRoles.join(", ") : "Unspecified"
-        };
-      });
+            return {
+                ...crewJson,
+                profile_photo: profilePhoto,
+                first_name: formattedFirstName,
+                last_name: formattedLastName,
+                role_names: matchedRoles.length > 0 ? matchedRoles : ['Unspecified'],
+                role: matchedRoles.length > 0 ? matchedRoles.join(', ') : 'Unspecified',
+                distance: distanceMiles
+            };
+        });
 
-      res.json({
-        success: true,
-        project_date: projectDate,
-        available_count: crewWithRoles.length,
-        data: crewWithRoles
-      });
+        const filteredCrew = hasSearchCenter
+            ? crewWithRoles
+                .filter(crew => crew.distance !== null && crew.distance <= requestedRadius)
+                .sort((a, b) => a.distance - b.distance)
+            : crewWithRoles;
+
+        res.json({
+            success: true,
+            project_date: projectDate,
+            available_count: filteredCrew.length,
+            search_center: hasSearchCenter ? { latitude: centerLatitude, longitude: centerLongitude } : null,
+            radius: Number.isFinite(requestedRadius) ? requestedRadius : null,
+            data: filteredCrew
+        });
 
     } catch (error) {
-        console.error("searchCrewForLead error:", error);
+        console.error('searchCrewForLead error:', error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
-
 // const geocoder = NodeGeocoder({ 
 //     provider: 'openstreetmap',
 //     httpAdapter: 'fetch',
@@ -8489,6 +8757,7 @@ exports.getBookingSummaryById = async (req, res) => {
         let referralDiscount = 0;
         let referralCode = null;
         let paymentData = null;
+        let latestPaymentData = null;
         const notes = primaryQuote.notes || '';
 
         // Matches: Referral applied (7321F9): -$518.75
@@ -8509,13 +8778,55 @@ exports.getBookingSummaryById = async (req, res) => {
                 referralCode = paymentData.referral_code;
             }
         }
+        if (paymentData) {
+            latestPaymentData = paymentData;
+        }
+
+        const identityOr = [
+            ...(bookingJson.guest_email ? [{ guest_email: bookingJson.guest_email }] : []),
+            ...(bookingJson.user_id ? [{ user_id: bookingJson.user_id }] : [])
+        ];
+
+        if (identityOr.length > 0 && bookingJson.payment_id) {
+            const followupPayment = await db.payment_transactions.findOne({
+                where: {
+                    status: 'succeeded',
+                    payment_id: { [Sequelize.Op.gt]: Number(bookingJson.payment_id) || 0 },
+                    payment_source: { [Sequelize.Op.in]: ['additional_invoice', 'quote_invoice'] },
+                    [Sequelize.Op.or]: identityOr
+                },
+                order: [['payment_id', 'DESC']]
+            });
+            if (followupPayment) {
+                latestPaymentData = followupPayment;
+            }
+        }
+
+        if (!latestPaymentData && identityOr.length > 0) {
+            latestPaymentData = await db.payment_transactions.findOne({
+                where: {
+                    status: 'succeeded',
+                    payment_source: { [Sequelize.Op.in]: ['quote_invoice', 'additional_invoice', 'booking_checkout'] },
+                    [Sequelize.Op.or]: identityOr
+                },
+                order: [['payment_id', 'DESC']]
+            });
+        }
+        if (!paymentData && latestPaymentData?.referral_code) {
+            referralCode = latestPaymentData.referral_code;
+        }
 
         // Logic: The "Promo Code" discount is whatever is left over after the Referral Discount
         const discountCodeDiscount = Math.max(0, totalDiscountFromDb - referralDiscount);
-        const paidAmountRaw = paymentData ? parseFloat(paymentData.total_amount || 0) : quoteTotal;
+        const paidAmountRaw = latestPaymentData
+            ? parseFloat(latestPaymentData.total_amount || 0)
+            : (paymentData ? parseFloat(paymentData.total_amount || 0) : quoteTotal);
         const normalizedPaidAmount = Number.isFinite(paidAmountRaw) ? paidAmountRaw : quoteTotal;
-        const creditApplied = Math.max(0, quoteTotal - normalizedPaidAmount);
-        const totalAfterCredit = Math.max(0, quoteTotal - creditApplied);
+        const isAdditionalPaymentFlow = String(latestPaymentData?.payment_source || '').toLowerCase() === 'additional_invoice';
+        const creditApplied = isAdditionalPaymentFlow ? 0 : Math.max(0, quoteTotal - normalizedPaidAmount);
+        const totalAfterCredit = isAdditionalPaymentFlow
+            ? normalizedPaidAmount
+            : Math.max(0, quoteTotal - creditApplied);
 
         pricing.total_paid = parseFloat(normalizedPaidAmount.toFixed(2));
         pricing.discount_code_discount = parseFloat(discountCodeDiscount.toFixed(2));
@@ -8809,10 +9120,24 @@ exports.getProjectFulfillmentStatus = async (req, res) => {
 
 exports.searchCrewForProject = async (req, res) => {
     try {
-        const { project_id, role_type, search_query, date } = req.query;
+        const {
+            project_id,
+            role_type,
+            search_query,
+            max_distance,
+            radius,
+            latitude,
+            longitude,
+            date
+        } = req.query;
+
+        const requestedRadius = Number(max_distance ?? radius ?? 50);
 
         let projectDate;
         let currentBookingId = null;
+        let eventLocation = null;
+        let centerLatitude = null;
+        let centerLongitude = null;
 
         if (project_id) {
             const booking = await stream_project_booking.findOne({
@@ -8822,26 +9147,40 @@ exports.searchCrewForProject = async (req, res) => {
             if (!booking) {
                 return res.status(404).json({
                     success: false,
-                    message: "Project Booking not found"
+                    message: 'Project Booking not found'
                 });
             }
 
             projectDate = booking.event_date;
             currentBookingId = booking.stream_project_booking_id;
+            eventLocation = booking.event_location;
+            centerLatitude = Number(booking.event_latitude);
+            centerLongitude = Number(booking.event_longitude);
         } else {
             if (!date) {
                 return res.status(400).json({
                     success: false,
-                    message: "Date is required when project_id is not provided"
+                    message: 'Date is required when project_id is not provided'
                 });
             }
             projectDate = date;
         }
 
+        if (latitude !== undefined && longitude !== undefined) {
+            centerLatitude = Number(latitude);
+            centerLongitude = Number(longitude);
+        } else if ((!Number.isFinite(centerLatitude) || !Number.isFinite(centerLongitude)) && eventLocation) {
+            const coords = extractCoordinatesFromPayload({}, eventLocation);
+            centerLatitude = Number(coords.latitude);
+            centerLongitude = Number(coords.longitude);
+        }
+
+        const hasSearchCenter = Number.isFinite(centerLatitude) && Number.isFinite(centerLongitude);
+
         const busyCrewRecords = await assigned_crew.findAll({
-            where: { 
+            where: {
                 crew_accept: 1,
-                is_active: 1 
+                is_active: 1
             },
             include: [{
                 model: stream_project_booking,
@@ -8855,9 +9194,9 @@ exports.searchCrewForProject = async (req, res) => {
         if (currentBookingId) {
             const currentAssignments = await assigned_crew.findAll({
                 where: {
-                    project_id: currentBookingId, 
+                    project_id: currentBookingId,
                     is_active: 1,
-                    crew_accept: { [Op.in]: [0, 1] } 
+                    crew_accept: { [Op.in]: [0, 1] }
                 },
                 attributes: ['crew_member_id']
             });
@@ -8869,13 +9208,13 @@ exports.searchCrewForProject = async (req, res) => {
         const excludeIds = [...new Set([...busyIds, ...alreadyAssignedToThisProject])];
 
         const ROLE_GROUPS = {
-            videographer: ["9", "1"],
-            photographer: ["10", "2"],
-            cinematographer: ["11", "3"]
+            videographer: ['9', '1'],
+            photographer: ['10', '2'],
+            cinematographer: ['11', '3']
         };
 
         const requestedRoles = role_type
-            ? role_type.split(",").map(r => r.trim().toLowerCase())
+            ? role_type.split(',').map(r => r.trim().toLowerCase())
             : [];
 
         let targetRoleIds = [];
@@ -8886,7 +9225,7 @@ exports.searchCrewForProject = async (req, res) => {
         });
         targetRoleIds = [...new Set(targetRoleIds)];
 
-        let crewWhere = {
+        const crewWhere = {
             is_active: true,
             is_available: true,
             is_crew_verified: 1,
@@ -8904,7 +9243,7 @@ exports.searchCrewForProject = async (req, res) => {
                 [Op.or]: [
                     { first_name: { [Op.like]: `%${search_query}%` } },
                     { last_name: { [Op.like]: `%${search_query}%` } },
-                    { location: { [Op.like]: `%${search_query}%` } }
+                    { email: { [Op.like]: `%${search_query}%` } }
                 ]
             }];
         }
@@ -8914,13 +9253,13 @@ exports.searchCrewForProject = async (req, res) => {
             include: [
                 {
                     model: crew_member_files,
-                    as: "crew_member_files",
-                    attributes: ["file_path"],
-                    where: { is_active: 1, file_type: "profile_photo" },
+                    as: 'crew_member_files',
+                    attributes: ['file_path'],
+                    where: { is_active: 1, file_type: 'profile_photo' },
                     required: false,
                 }
             ],
-            limit: 50
+            limit: 200
         });
 
         const crewWithRoles = availableCrew.map(crewMember => {
@@ -8930,45 +9269,59 @@ exports.searchCrewForProject = async (req, res) => {
             try {
                 if (crewMember.primary_role) {
                     const roleData = crewMember.primary_role;
-                    rawRoles = (typeof roleData === 'string' && roleData.startsWith('[')) 
-                        ? JSON.parse(roleData) 
+                    rawRoles = (typeof roleData === 'string' && roleData.startsWith('['))
+                        ? JSON.parse(roleData)
                         : (Array.isArray(roleData) ? roleData : [roleData]);
                 }
             } catch (e) { rawRoles = []; }
 
             const stringRoleIds = rawRoles.map(String);
-            if (stringRoleIds.some(id => ROLE_GROUPS.videographer.includes(id))) matchedRoles.push("videographer");
-            if (stringRoleIds.some(id => ROLE_GROUPS.photographer.includes(id))) matchedRoles.push("photographer");
-            if (stringRoleIds.some(id => ROLE_GROUPS.cinematographer.includes(id))) matchedRoles.push("cinematographer");
+            if (stringRoleIds.some(id => ROLE_GROUPS.videographer.includes(id))) matchedRoles.push('videographer');
+            if (stringRoleIds.some(id => ROLE_GROUPS.photographer.includes(id))) matchedRoles.push('photographer');
+            if (stringRoleIds.some(id => ROLE_GROUPS.cinematographer.includes(id))) matchedRoles.push('cinematographer');
 
             const profilePhoto = crewMember.crew_member_files?.[0]?.file_path || null;
             const crewJson = crewMember.toJSON();
             delete crewJson.crew_member_files;
+
+            const crewLatitude = Number(crewJson.latitude);
+            const crewLongitude = Number(crewJson.longitude);
+            const distanceMiles = hasSearchCenter && Number.isFinite(crewLatitude) && Number.isFinite(crewLongitude)
+                ? calculateDistance(centerLatitude, centerLongitude, crewLatitude, crewLongitude)
+                : null;
 
             return {
                 ...crewJson,
                 profile_photo: profilePhoto,
                 first_name: crewJson.first_name.charAt(0).toUpperCase() + crewJson.first_name.slice(1).toLowerCase(),
                 last_name: crewJson.last_name.charAt(0).toUpperCase(),
-                role_names: matchedRoles.length > 0 ? matchedRoles : ["Unspecified"],
-                role: matchedRoles.length > 0 ? matchedRoles.join(", ") : "Unspecified"
+                role_names: matchedRoles.length > 0 ? matchedRoles : ['Unspecified'],
+                role: matchedRoles.length > 0 ? matchedRoles.join(', ') : 'Unspecified',
+                distance: distanceMiles
             };
         });
+
+        const filteredCrew = hasSearchCenter
+            ? crewWithRoles
+                .filter(crew => crew.distance !== null && crew.distance <= requestedRadius)
+                .sort((a, b) => a.distance - b.distance)
+            : crewWithRoles;
 
         res.json({
             success: true,
             project_id: currentBookingId,
             project_date: projectDate,
-            available_count: crewWithRoles.length,
-            data: crewWithRoles
+            available_count: filteredCrew.length,
+            search_center: hasSearchCenter ? { latitude: centerLatitude, longitude: centerLongitude } : null,
+            radius: Number.isFinite(requestedRadius) ? requestedRadius : null,
+            data: filteredCrew
         });
 
     } catch (error) {
-        console.error("searchCrewForProject error:", error);
+        console.error('searchCrewForProject error:', error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
-
 exports.assignProjectCrewBulk = async (req, res) => {
     try {
         const assigned_by_user_id = req.user?.userId;

@@ -759,16 +759,24 @@ const calculateLeadPricing = async (booking) => {
             const totalFromPayment = parseFloat(paymentTransaction?.total_amount || 0);
             let resolvedTotal = totalFromQuote > 0 ? totalFromQuote : totalAfterDiscount;
             let creditApplied = 0;
+            let effectivePaidFlag = bookingMarkedPaid;
             if (bookingMarkedPaid && totalFromPayment > 0 && resolvedTotal <= 0) {
                 resolvedTotal = totalFromPayment;
             }
             if (bookingMarkedPaid && totalFromPayment > 0 && resolvedTotal > totalFromPayment) {
+                // When quote total is revised upward after an earlier payment,
+                // collect only the remaining balance in the next payment flow.
                 creditApplied = Math.max(0, resolvedTotal - totalFromPayment);
-                resolvedTotal = totalFromPayment;
+                resolvedTotal = creditApplied;
+                effectivePaidFlag = resolvedTotal <= 0;
+            } else if (bookingMarkedPaid && totalFromPayment > 0 && resolvedTotal <= totalFromPayment) {
+                // Booking has already covered current quote total.
+                resolvedTotal = 0;
+                effectivePaidFlag = true;
             }
             return {
                 source: 'database',
-                is_paid: bookingMarkedPaid,
+                is_paid: effectivePaidFlag,
                 stripe_payment_intent_id: paymentTransaction?.stripe_payment_intent_id || null,
                 total: resolvedTotal,
                 total_before_credit: totalFromQuote > 0 ? totalFromQuote : totalAfterDiscount,
@@ -1549,7 +1557,11 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
         stripeInvoice = stripeInvoice || await paymentLinksService.createStripeInvoice(booking, additionalPricingData, {
           recipientOverride,
           forceNewInvoice: true,
-          descriptionOverride: `${additionalInvoiceContext.label} - ${booking.project_name || 'Project'}`
+          descriptionOverride: `${additionalInvoiceContext.label} - ${booking.project_name || 'Project'}`,
+          metadata: {
+            payment_source: 'additional_invoice',
+            ...(quoteId ? { sales_quote_id: String(quoteId) } : {})
+          }
         });
       }
       const additionalInvoicePaid = stripeInvoice?.status === 'paid';
@@ -1669,7 +1681,13 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
       // --- CASE 2: NOT PAID YET ---
       const stripeInvoice = await paymentLinksService.createStripeInvoice(booking, pricingData, {
         recipientOverride,
-        forceNewInvoice: recipientIdentityChanged
+        forceNewInvoice: recipientIdentityChanged,
+        metadata: quoteId ? {
+          payment_source: 'quote_invoice',
+          sales_quote_id: String(quoteId)
+        } : {
+          payment_source: 'booking_checkout'
+        }
       });
       invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
         invoiceUrl: stripeInvoice.hosted_invoice_url,
