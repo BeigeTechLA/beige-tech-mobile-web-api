@@ -1597,6 +1597,14 @@ CREATE TABLE booking_payment_summary (
     'approval_pending',
     'no_payment_due'
   ) NOT NULL DEFAULT 'pending',
+  manual_payment_mode VARCHAR(32) NULL,
+  manual_payment_other_mode VARCHAR(100) NULL,
+  manual_payment_proof_url TEXT NULL,
+  manual_payment_proof_file_path VARCHAR(1024) NULL,
+  manual_payment_proof_file_name VARCHAR(255) NULL,
+  manual_payment_notes TEXT NULL,
+  manual_payment_updated_by_user_id INT NULL,
+  manual_payment_updated_at DATETIME NULL,
   last_quote_change_type ENUM('none', 'increase', 'decrease') NOT NULL DEFAULT 'none',
   last_quote_change_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
   last_quote_change_status ENUM('none', 'pending', 'approved', 'rejected') NOT NULL DEFAULT 'none',
@@ -1617,3 +1625,38 @@ UPDATE booking_payment_summary bps
 JOIN sales_leads sl ON sl.booking_id = bps.booking_id
 SET bps.lead_id = sl.lead_id
 WHERE bps.lead_id IS NULL;
+
+
+-- 22-05-26
+
+ALTER TABLE booking_payment_summary
+  ADD COLUMN manual_payment_mode VARCHAR(32) NULL AFTER payment_status,
+  ADD COLUMN manual_payment_other_mode VARCHAR(100) NULL AFTER manual_payment_mode,
+  ADD COLUMN manual_payment_proof_url TEXT NULL AFTER manual_payment_other_mode,
+  ADD COLUMN manual_payment_proof_file_path VARCHAR(1024) NULL AFTER manual_payment_proof_url,
+  ADD COLUMN manual_payment_proof_file_name VARCHAR(255) NULL AFTER manual_payment_proof_file_path,
+  ADD COLUMN manual_payment_notes TEXT NULL AFTER manual_payment_proof_file_name,
+  ADD COLUMN manual_payment_updated_by_user_id INT NULL AFTER manual_payment_notes,
+  ADD COLUMN manual_payment_updated_at DATETIME NULL AFTER manual_payment_updated_by_user_id;
+
+CREATE TABLE IF NOT EXISTS booking_manual_payments (
+  booking_manual_payment_id INT AUTO_INCREMENT PRIMARY KEY,
+  booking_id INT NOT NULL,
+  lead_id INT NULL,
+  sales_quote_id INT NULL,
+  payment_type ENUM('full', 'partial') NOT NULL,
+  amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+  payment_mode VARCHAR(32) NOT NULL,
+  other_payment_mode VARCHAR(100) NULL,
+  proof_url TEXT NULL,
+  proof_file_path VARCHAR(1024) NULL,
+  proof_file_name VARCHAR(255) NULL,
+  notes TEXT NULL,
+  performed_by_user_id INT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_booking_manual_payments_booking_id (booking_id),
+  INDEX idx_booking_manual_payments_lead_id (lead_id),
+  INDEX idx_booking_manual_payments_sales_quote_id (sales_quote_id),
+  INDEX idx_booking_manual_payments_created_at (created_at)
+);

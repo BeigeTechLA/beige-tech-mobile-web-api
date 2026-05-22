@@ -3763,8 +3763,18 @@ const syncExternalWorkspaceAfterManualPayment = async (bookingRecord) => {
   }
 };
 
-const buildManualPaymentMeta = async ({ leadModel, leadActivityModel, leadId, req, res, leadLabel }) => {
-  const { payment_type, amount, payment_mode, other_payment_mode, proof_url, notes } = req.body || {};
+const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }) => {
+  const {
+    payment_type,
+    amount,
+    payment_mode,
+    other_payment_mode,
+    proof_url,
+    proof_file_path,
+    proof_file_name,
+    notes,
+    sales_quote_id
+  } = req.body || {};
   const performedBy = req.userId;
 
   if (!['full', 'partial'].includes(String(payment_type || '').trim().toLowerCase())) {
@@ -3819,29 +3829,24 @@ const buildManualPaymentMeta = async ({ leadModel, leadActivityModel, leadId, re
     });
   }
 
-  const totalAmount = resolveLeadTotalAmount(lead, lead.booking);
-  const previousManualEntries = await leadActivityModel.findAll({
-    where: {
-      lead_id: Number(leadId),
-      activity_type: 'payment_completed'
-    },
-    order: [['created_at', 'ASC']]
-  });
+  const bookingId = Number(lead?.booking?.stream_project_booking_id || lead?.booking_id || 0);
+  if (!Number.isFinite(bookingId) || bookingId <= 0) {
+    return res.status(constants.BAD_REQUEST.code).json({
+      success: false,
+      message: 'Booking is required to record manual payment',
+    });
+  }
 
-  const manualHistory = previousManualEntries
-    .map((entry) => {
-      const payload = parseJsonIfNeeded(entry.activity_data);
-      if (!payload || payload.payment_method !== 'manual') return null;
-      return payload;
-    })
-    .filter(Boolean);
-
-  const alreadyFullyPaid = manualHistory.some((entry) => entry.payment_type === 'full');
-  const previouslyPaidPartial = manualHistory.reduce((sum, entry) => {
-    if (entry.payment_type !== 'partial') return sum;
-    const numeric = Number(entry.amount || 0);
-    return sum + (Number.isFinite(numeric) ? numeric : 0);
-  }, 0);
+  const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId);
+  const summaryQuoteTotal = Number(existingSummary?.quote_total || 0);
+  const totalAmount = Math.max(resolveLeadTotalAmount(lead, lead.booking), summaryQuoteTotal, 0);
+  const previouslyPaidAmount = Number(existingSummary?.paid_amount || 0);
+  const creditUsedAmount = Number(existingSummary?.credit_used_amount || 0);
+  const dueFromSummary = Number(existingSummary?.due_amount);
+  const remainingBefore = Number.isFinite(dueFromSummary)
+    ? Math.max(dueFromSummary, 0)
+    : Math.max(totalAmount - previouslyPaidAmount - creditUsedAmount, 0);
+  const alreadyFullyPaid = remainingBefore <= 0 && previouslyPaidAmount > 0;
 
   if (alreadyFullyPaid) {
     return res.status(constants.BAD_REQUEST.code).json({
@@ -3850,7 +3855,6 @@ const buildManualPaymentMeta = async ({ leadModel, leadActivityModel, leadId, re
     });
   }
 
-  const remainingBefore = Math.max(totalAmount - previouslyPaidPartial, 0);
   const numericAmount = amount === undefined || amount === null || amount === ''
     ? null
     : Number(amount);
@@ -3878,27 +3882,88 @@ const buildManualPaymentMeta = async ({ leadModel, leadActivityModel, leadId, re
     });
   }
 
-  await leadActivityModel.create({
-    lead_id: Number(leadId),
-    activity_type: 'payment_completed',
-    activity_data: {
-      payment_method: 'manual',
-      payment_type: normalizedPaymentType,
-      payment_mode: normalizedPaymentMode,
-      other_payment_mode: normalizedPaymentMode === 'other' ? String(other_payment_mode).trim() : null,
-      amount: normalizedPaymentType === 'partial' ? Number(numericAmount) : null,
-      total_amount: totalAmount > 0 ? Number(totalAmount) : null,
-      previously_paid_amount: previouslyPaidPartial,
-      remaining_before_payment: remainingBefore,
-      remaining_after_payment:
-        normalizedPaymentType === 'partial'
-          ? Math.max(remainingBefore - Number(numericAmount || 0), 0)
-          : 0,
-      proof_url: normalizedProofUrl,
-      notes: String(notes || '').trim() || null,
-      updated_by: performedBy || null,
-    },
-    performed_by_user_id: performedBy,
+  const amountToApply = normalizedPaymentType === 'partial'
+    ? Number(numericAmount || 0)
+    : remainingBefore;
+  const paidAmountAfter = Math.max(previouslyPaidAmount + amountToApply, 0);
+
+  const normalizedSalesQuoteId = Number(sales_quote_id || 0);
+  const resolvedSalesQuoteId = Number.isFinite(normalizedSalesQuoteId) && normalizedSalesQuoteId > 0
+    ? normalizedSalesQuoteId
+    : (existingSummary?.sales_quote_id || null);
+  const normalizedOtherPaymentMode = normalizedPaymentMode === 'other' ? String(other_payment_mode).trim() : null;
+  const normalizedProofFilePath = String(proof_file_path || '').trim() || null;
+  const normalizedProofFileName = String(proof_file_name || '').trim() || null;
+  const normalizedNotes = String(notes || '').trim() || null;
+
+  await db.sequelize.query(
+    `
+      INSERT INTO booking_manual_payments (
+        booking_id,
+        lead_id,
+        sales_quote_id,
+        payment_type,
+        amount,
+        payment_mode,
+        other_payment_mode,
+        proof_url,
+        proof_file_path,
+        proof_file_name,
+        notes,
+        performed_by_user_id
+      ) VALUES (
+        :bookingId,
+        :leadId,
+        :salesQuoteId,
+        :paymentType,
+        :amount,
+        :paymentMode,
+        :otherPaymentMode,
+        :proofUrl,
+        :proofFilePath,
+        :proofFileName,
+        :notes,
+        :performedBy
+      )
+    `,
+    {
+      replacements: {
+        bookingId,
+        leadId: Number(leadId),
+        salesQuoteId: resolvedSalesQuoteId,
+        paymentType: normalizedPaymentType,
+        amount: Number(amountToApply || 0),
+        paymentMode: normalizedPaymentMode,
+        otherPaymentMode: normalizedOtherPaymentMode,
+        proofUrl: normalizedProofUrl,
+        proofFilePath: normalizedProofFilePath,
+        proofFileName: normalizedProofFileName,
+        notes: normalizedNotes,
+        performedBy: performedBy || null,
+      },
+      type: Sequelize.QueryTypes.INSERT,
+    }
+  );
+
+  await bookingPaymentSummaryService.upsertBookingPaymentSummary({
+    bookingId,
+    leadId: Number(leadId),
+    salesQuoteId: resolvedSalesQuoteId,
+    quoteTotal: totalAmount,
+    paidAmount: paidAmountAfter,
+    creditUsedAmount,
+    creditCreatedAmount: Number(existingSummary?.credit_created_amount || 0),
+    manualPaymentMode: normalizedPaymentMode,
+    manualPaymentOtherMode: normalizedOtherPaymentMode,
+    manualPaymentProofUrl: normalizedProofUrl,
+    manualPaymentProofFilePath: normalizedProofFilePath,
+    manualPaymentProofFileName: normalizedProofFileName,
+    manualPaymentNotes: normalizedNotes,
+    manualPaymentUpdatedByUserId: performedBy || null,
+    manualPaymentUpdatedAt: new Date(),
+    lastQuoteChangeType: existingSummary?.last_quote_change_type || 'none',
+    lastQuoteChangeAmount: Number(existingSummary?.last_quote_change_amount || 0),
+    lastQuoteChangeStatus: existingSummary?.last_quote_change_status || 'none',
   });
 
   const leadUpdate = { last_activity_at: new Date() };
@@ -3922,7 +3987,7 @@ const buildManualPaymentMeta = async ({ leadModel, leadActivityModel, leadId, re
       total_amount: totalAmount > 0 ? Number(totalAmount) : null,
       paid_amount_total:
         normalizedPaymentType === 'partial'
-          ? Number(previouslyPaidPartial + Number(numericAmount || 0))
+          ? Number(previouslyPaidAmount + Number(numericAmount || 0))
           : totalAmount > 0
             ? Number(totalAmount)
             : null,
@@ -3943,7 +4008,6 @@ exports.recordManualPayment = async (req, res) => {
     const { id } = req.params;
     return await buildManualPaymentMeta({
       leadModel: sales_leads,
-      leadActivityModel: sales_lead_activities,
       leadId: id,
       req,
       res,
@@ -3964,7 +4028,6 @@ exports.recordClientManualPayment = async (req, res) => {
     const { id } = req.params;
     return await buildManualPaymentMeta({
       leadModel: client_leads,
-      leadActivityModel: client_lead_activities,
       leadId: id,
       req,
       res,
