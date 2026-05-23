@@ -1671,7 +1671,10 @@ exports.getBookingPaymentDetails = async (req, res) => {
     }).filter(c => c !== null);
 
     const additionalPaymentContext = await resolveAdditionalPaymentContextForBooking(id);
-    const paymentSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(id);
+    const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+      bookingId: id
+    });
+    const paymentSummary = paymentState.paymentSummary;
 
     let quoteResponse = null;
     if (booking.primary_quote) {
@@ -1731,13 +1734,9 @@ exports.getBookingPaymentDetails = async (req, res) => {
       const finalTotal = parseFloat((baseTotal - referralDiscountAmount).toFixed(2));
       const finalPriceAfterDiscount = parseFloat((basePriceAfterDiscount - referralDiscountAmount).toFixed(2));
       const additionalOutstandingAmount = Number(additionalPaymentContext?.outstanding_amount || 0);
-      const summaryDueAmount = Number(paymentSummary?.due_amount || 0);
-      const summaryPaymentStatus = String(paymentSummary?.payment_status || '').toLowerCase();
-      const hasPaymentSummary = Boolean(paymentSummary);
-      const hasSummaryRemainingPayment = summaryDueAmount > 0 &&
-        ['pending', 'partially_paid'].includes(summaryPaymentStatus);
-      const hasSummaryNoPaymentDue = hasPaymentSummary && summaryDueAmount <= 0 &&
-        ['paid', 'no_payment_due', 'completed', 'success'].includes(summaryPaymentStatus);
+      const hasPaymentSummary = paymentState.hasSummary;
+      const hasSummaryRemainingPayment = paymentState.requiresPayment;
+      const hasSummaryNoPaymentDue = paymentState.isPaid;
       const hasPendingAdditionalPayment = additionalOutstandingAmount > 0 &&
         String(additionalPaymentContext?.approval_status || '').toLowerCase() === 'approved' &&
         !['paid', 'succeeded', 'completed', 'success'].includes(
@@ -1746,7 +1745,7 @@ exports.getBookingPaymentDetails = async (req, res) => {
       const payableTotal = hasPendingAdditionalPayment
         ? parseFloat(additionalOutstandingAmount.toFixed(2))
         : hasPaymentSummary
-          ? parseFloat(Math.max(summaryDueAmount, 0).toFixed(2))
+          ? paymentState.payableAmount
           : finalTotal;
 
       quoteResponse = {

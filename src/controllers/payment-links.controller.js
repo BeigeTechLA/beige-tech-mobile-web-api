@@ -623,9 +623,9 @@ const getBookingManualPaymentContext = async (bookingId) => {
 const shouldUseManualInvoiceReceipt = async (bookingId, manualContext) => {
   if (!manualContext?.isManual) return false;
 
-  const paymentSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId);
-  if (paymentSummary) {
-    return Number(paymentSummary.due_amount || 0) <= 0;
+  const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({ bookingId });
+  if (paymentState.hasSummary) {
+    return !paymentState.requiresPayment;
   }
 
   const remainingAfterPayment = Number(manualContext.latestManualPayment?.data?.remaining_after_payment ?? NaN);
@@ -673,15 +673,12 @@ const prepareManualInvoiceDetailsForBooking = async (bookingId, req, recipientOv
   const invoicePdfUrl = `${apiBase}/sales/invoice-pdf/${parsedBookingId}?manual=1`;
 
   const manualContext = await getBookingManualPaymentContext(parsedBookingId);
-  const paymentSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(parsedBookingId);
+  const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({ bookingId: parsedBookingId });
+  const paymentSummary = paymentState.paymentSummary;
   const remainingAfterPayment = Number(manualContext.latestManualPayment?.data?.remaining_after_payment ?? NaN);
   const totalAmount = Number(pricingData.total || 0);
-  const summaryDueAmount = Number(paymentSummary?.due_amount || 0);
-  const summaryPaidAmount = Number(paymentSummary?.paid_amount || 0);
-  const summaryPaymentStatus = String(paymentSummary?.payment_status || '').toLowerCase();
   const isPaidManual =
-    (paymentSummary && summaryDueAmount <= 0 && summaryPaidAmount > 0 &&
-      ['paid', 'no_payment_due', 'completed', 'success'].includes(summaryPaymentStatus)) ||
+    paymentState.isPaid ||
     totalAmount <= 0 ||
     manualContext.latestManualPayment?.data?.payment_type === 'full' ||
     (Number.isFinite(remainingAfterPayment) && remainingAfterPayment <= 0);
@@ -841,26 +838,26 @@ const calculateLeadPricing = async (booking) => {
         // so invoice/receipt keeps full breakdown (additional creatives, etc.).
         const q = booking.primary_quote; 
         if (q) {
-            const paymentSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(
-                booking.stream_project_booking_id
-            );
             const totalFromQuote = parseFloat(q.total || 0);
             const totalAfterDiscount = parseFloat(q.price_after_discount || 0);
             const totalFromPayment = parseFloat(paymentTransaction?.total_amount || 0);
-            const summaryQuoteTotal = parseFloat(paymentSummary?.quote_total || 0);
-            const summaryDueAmount = parseFloat(paymentSummary?.due_amount || 0);
-            const summaryPaidAmount = parseFloat(paymentSummary?.paid_amount || 0);
-            const summaryCreditUsedAmount = parseFloat(paymentSummary?.credit_used_amount || 0);
-            const summaryStatus = String(paymentSummary?.payment_status || '').toLowerCase();
+            const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+                bookingId: booking.stream_project_booking_id,
+                salesQuoteId: q.quote_id,
+                quoteTotal: totalFromQuote > 0 ? totalFromQuote : totalAfterDiscount,
+                paidAmount: totalFromPayment,
+                paymentStatus: bookingMarkedPaid ? 'paid' : 'pending'
+            });
+            const paymentSummary = paymentState.paymentSummary;
             let resolvedTotal = totalFromQuote > 0 ? totalFromQuote : totalAfterDiscount;
             let creditApplied = 0;
             let effectivePaidFlag = bookingMarkedPaid;
 
             if (paymentSummary) {
-                const fullQuoteTotal = summaryQuoteTotal > 0 ? summaryQuoteTotal : resolvedTotal;
-                const isSettled = summaryDueAmount <= 0 && ['paid', 'no_payment_due'].includes(summaryStatus);
-                resolvedTotal = isSettled ? fullQuoteTotal : summaryDueAmount;
-                creditApplied = summaryCreditUsedAmount;
+                const fullQuoteTotal = paymentState.quoteTotal > 0 ? paymentState.quoteTotal : resolvedTotal;
+                const isSettled = paymentState.isPaid;
+                resolvedTotal = isSettled ? fullQuoteTotal : paymentState.dueAmount;
+                creditApplied = paymentState.creditUsedAmount;
                 effectivePaidFlag = isSettled;
             } else {
                 if (bookingMarkedPaid && totalFromPayment > 0 && resolvedTotal <= 0) {
@@ -883,12 +880,12 @@ const calculateLeadPricing = async (booking) => {
                 is_paid: effectivePaidFlag,
                 stripe_payment_intent_id: paymentTransaction?.stripe_payment_intent_id || null,
                 total: resolvedTotal,
-                total_before_credit: paymentSummary && summaryQuoteTotal > 0
-                    ? summaryQuoteTotal
+                total_before_credit: paymentSummary && paymentState.quoteTotal > 0
+                    ? paymentState.quoteTotal
                     : (totalFromQuote > 0 ? totalFromQuote : totalAfterDiscount),
                 credit_applied: parseFloat(creditApplied.toFixed(2)),
-                paid_amount: paymentSummary ? summaryPaidAmount : totalFromPayment,
-                due_amount: paymentSummary ? summaryDueAmount : resolvedTotal,
+                paid_amount: paymentSummary ? paymentState.paidAmount : totalFromPayment,
+                due_amount: paymentSummary ? paymentState.dueAmount : resolvedTotal,
                 subtotal: paymentSummary && !effectivePaidFlag
                     ? resolvedTotal
                     : parseFloat(q.subtotal || 0),
@@ -1229,17 +1226,15 @@ exports.sendPaymentLinkEmail = async (req, res) => {
       .filter(Boolean)
       .join(' - ');
     const formattedProjectName = formatProposalProjectName(link.booking.project_name);
-    const paymentSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(
-      link.booking.stream_project_booking_id
-    );
-    const summaryPaidAmount = Number(paymentSummary?.paid_amount || 0);
-    const summaryDueAmount = Math.max(Number(paymentSummary?.due_amount || 0), 0);
-    const summaryQuoteTotal = Number(paymentSummary?.quote_total || 0);
+    const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+      bookingId: link.booking.stream_project_booking_id,
+      quoteTotal: link.booking.primary_quote?.total || 0
+    });
     const proposedAmount = hasApprovedAdditionalAmount
       ? approvedAdditionalAmount
-      : summaryPaidAmount > 0
-        ? summaryDueAmount
-        : (summaryQuoteTotal > 0 ? summaryQuoteTotal : (link.booking.primary_quote?.total || ''));
+      : paymentState.hasSummary
+        ? (paymentState.paidAmount > 0 ? paymentState.payableAmount : paymentState.quoteTotal)
+        : (link.booking.primary_quote?.total || '');
 
     // 4. Send Email
     const result = await emailService.sendProductionProposalEmail({
@@ -2025,17 +2020,12 @@ exports.getStripeInvoicePdf = async (req, res) => {
         });
       }
 
-      const paymentSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(parsedBookingId);
-      const summaryQuoteTotal = Number(paymentSummary?.quote_total || 0);
-      const summaryPaidAmount = Number(paymentSummary?.paid_amount || 0);
-      const summaryDueAmount = Math.max(Number(paymentSummary?.due_amount || 0), 0);
-      const summaryStatus = String(paymentSummary?.payment_status || '').toLowerCase();
-      const hasPaymentSummary = Boolean(paymentSummary);
-      const isPaidFromSummary =
-        hasPaymentSummary &&
-        summaryPaidAmount > 0 &&
-        summaryDueAmount <= 0 &&
-        ['paid', 'no_payment_due', 'completed', 'success'].includes(summaryStatus);
+      const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+        bookingId: parsedBookingId
+      });
+      const paymentSummary = paymentState.paymentSummary;
+      const hasPaymentSummary = paymentState.hasSummary;
+      const isPaidFromSummary = paymentState.isPaid;
 
       const pricingData = await calculateLeadPricing(booking);
       if (!pricingData) {
@@ -2045,7 +2035,7 @@ exports.getStripeInvoicePdf = async (req, res) => {
         });
       }
       const pricingTotalAmount = Number(pricingData.total || 0);
-      const totalAmount = summaryQuoteTotal > 0 ? summaryQuoteTotal : pricingTotalAmount;
+      const totalAmount = paymentState.quoteTotal > 0 ? paymentState.quoteTotal : pricingTotalAmount;
       const allowManualForZeroTotal = totalAmount <= 0 || isPaidFromSummary;
       if (!manualContext.isManual && !allowManualForZeroTotal) {
         return res.status(400).json({
@@ -2109,8 +2099,8 @@ exports.getStripeInvoicePdf = async (req, res) => {
         const amount = Number(entry?.amount || 0);
         return sum + (Number.isFinite(amount) ? amount : 0);
       }, 0);
-      const summaryPaidTotal = hasPaymentSummary && Number.isFinite(summaryPaidAmount)
-        ? Math.max(summaryPaidAmount, 0)
+      const summaryPaidTotal = hasPaymentSummary && Number.isFinite(paymentState.paidAmount)
+        ? Math.max(paymentState.paidAmount, 0)
         : null;
       const normalizedPaidAmount = summaryPaidTotal !== null
         ? Math.min(totalAmount, summaryPaidTotal)
@@ -2127,7 +2117,7 @@ exports.getStripeInvoicePdf = async (req, res) => {
           amount: nonManualPaidAmount
         });
       }
-      const receiptIsPaid = isPaidFromSummary || isPaidManual || (hasPaymentSummary && summaryDueAmount <= 0 && normalizedPaidAmount >= totalAmount);
+      const receiptIsPaid = isPaidFromSummary || isPaidManual || (hasPaymentSummary && paymentState.dueAmount <= 0 && normalizedPaidAmount >= totalAmount);
 
       const pdfBuffer = await generateManualReceiptPdfBuffer({
         invoiceNumber: `INVBEIGE-M-${String(parsedBookingId).padStart(4, '0')}`,

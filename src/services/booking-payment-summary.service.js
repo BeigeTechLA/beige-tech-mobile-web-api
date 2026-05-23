@@ -4,6 +4,90 @@ function roundAmount(value) {
   return Number(Number(value || 0).toFixed(2));
 }
 
+const PAID_STATUSES = new Set(['paid', 'no_payment_due', 'completed', 'success']);
+
+function normalizePaymentSummaryState(paymentSummary, fallback = {}) {
+  const hasSummary = Boolean(paymentSummary);
+  const quoteTotal = roundAmount(
+    hasSummary
+      ? paymentSummary.quote_total
+      : fallback.quoteTotal
+  );
+  const paidAmount = roundAmount(
+    hasSummary
+      ? paymentSummary.paid_amount
+      : fallback.paidAmount
+  );
+  const creditUsedAmount = roundAmount(
+    hasSummary
+      ? paymentSummary.credit_used_amount
+      : fallback.creditUsedAmount
+  );
+  const creditCreatedAmount = roundAmount(
+    hasSummary
+      ? paymentSummary.credit_created_amount
+      : fallback.creditCreatedAmount
+  );
+  const dueAmount = hasSummary
+    ? roundAmount(Math.max(Number(paymentSummary.due_amount || 0), 0))
+    : calculateDueAmount({ quoteTotal, paidAmount, creditUsedAmount });
+  const rawStatus = String(
+    hasSummary
+      ? paymentSummary.payment_status
+      : fallback.paymentStatus
+  || '').toLowerCase();
+  const paymentStatus = rawStatus || resolvePaymentStatus({
+    dueAmount,
+    paidAmount,
+    quoteTotal,
+    lastQuoteChangeStatus: hasSummary ? paymentSummary.last_quote_change_status : fallback.lastQuoteChangeStatus
+  });
+  const isPaid =
+    dueAmount <= 0 &&
+    (paidAmount > 0 || creditUsedAmount > 0 || PAID_STATUSES.has(paymentStatus));
+  const isPartiallyPaid = !isPaid && paidAmount > 0 && dueAmount > 0;
+  const payableAmount = isPaid ? 0 : dueAmount;
+
+  return {
+    source: hasSummary ? 'booking_payment_summary' : 'fallback',
+    hasSummary,
+    paymentSummary: paymentSummary || null,
+    quoteTotal,
+    paidAmount,
+    paid_amount: paidAmount,
+    paidAmountTotal: paidAmount,
+    paid_amount_total: paidAmount,
+    creditUsedAmount,
+    credit_used_amount: creditUsedAmount,
+    creditCreatedAmount,
+    credit_created_amount: creditCreatedAmount,
+    dueAmount,
+    due_amount: dueAmount,
+    pendingAmount: dueAmount,
+    pending_amount: dueAmount,
+    outstandingAmount: dueAmount,
+    outstanding_amount: dueAmount,
+    payableAmount,
+    payable_amount: payableAmount,
+    paymentStatus,
+    payment_status: paymentStatus,
+    isPaid,
+    is_paid: isPaid,
+    isPartiallyPaid,
+    is_partially_paid: isPartiallyPaid,
+    requiresPayment: payableAmount > 0,
+    requires_payment: payableAmount > 0,
+    isCollected: isPaid,
+    is_collected: isPaid,
+    lastQuoteChangeType: hasSummary ? paymentSummary.last_quote_change_type : fallback.lastQuoteChangeType,
+    last_quote_change_type: hasSummary ? paymentSummary.last_quote_change_type : fallback.lastQuoteChangeType,
+    lastQuoteChangeAmount: roundAmount(hasSummary ? paymentSummary.last_quote_change_amount : fallback.lastQuoteChangeAmount),
+    last_quote_change_amount: roundAmount(hasSummary ? paymentSummary.last_quote_change_amount : fallback.lastQuoteChangeAmount),
+    lastQuoteChangeStatus: hasSummary ? paymentSummary.last_quote_change_status : fallback.lastQuoteChangeStatus,
+    last_quote_change_status: hasSummary ? paymentSummary.last_quote_change_status : fallback.lastQuoteChangeStatus
+  };
+}
+
 function calculateDueAmount({ quoteTotal, paidAmount, creditUsedAmount }) {
   return roundAmount(
     Math.max(
@@ -217,8 +301,45 @@ async function getBookingPaymentSummaryBySalesQuoteId(salesQuoteId, transaction 
   return rows[0] || null;
 }
 
+async function resolveBookingPaymentState({
+  bookingId = null,
+  salesQuoteId = null,
+  quoteTotal = 0,
+  paidAmount = 0,
+  creditUsedAmount = 0,
+  creditCreatedAmount = 0,
+  paymentStatus = null,
+  lastQuoteChangeType = null,
+  lastQuoteChangeAmount = 0,
+  lastQuoteChangeStatus = null,
+  transaction = null
+} = {}) {
+  let paymentSummary = null;
+
+  if (bookingId) {
+    paymentSummary = await getBookingPaymentSummary(bookingId, transaction);
+  }
+
+  if (!paymentSummary && salesQuoteId) {
+    paymentSummary = await getBookingPaymentSummaryBySalesQuoteId(salesQuoteId, transaction);
+  }
+
+  return normalizePaymentSummaryState(paymentSummary, {
+    quoteTotal,
+    paidAmount,
+    creditUsedAmount,
+    creditCreatedAmount,
+    paymentStatus,
+    lastQuoteChangeType,
+    lastQuoteChangeAmount,
+    lastQuoteChangeStatus
+  });
+}
+
 module.exports = {
   upsertBookingPaymentSummary,
   getBookingPaymentSummary,
-  getBookingPaymentSummaryBySalesQuoteId
+  getBookingPaymentSummaryBySalesQuoteId,
+  normalizePaymentSummaryState,
+  resolveBookingPaymentState
 };

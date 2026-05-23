@@ -70,15 +70,16 @@ async function resolveManualWebhookAmount({ booking, paymentSource, amount = nul
   }
 
   const bookingId = booking.stream_project_booking_id;
-  const paymentSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId, transaction);
-  const summaryDueAmount = round2(paymentSummary?.due_amount || 0);
-  const summaryPaidAmount = round2(paymentSummary?.paid_amount || 0);
+  const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+    bookingId,
+    transaction
+  });
 
-  if (paymentSummary && summaryDueAmount > 0) {
-    return summaryDueAmount;
+  if (paymentState.hasSummary && paymentState.dueAmount > 0) {
+    return paymentState.dueAmount;
   }
 
-  if (paymentSummary && summaryDueAmount <= 0 && summaryPaidAmount > 0) {
+  if (paymentState.hasSummary && paymentState.isPaid) {
     return 0;
   }
 
@@ -1919,9 +1920,13 @@ exports.createPaymentIntentMulti = async (req, res) => {
         message: 'Booking not found'
       });
     }
-    const paymentSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(booking_id);
-    const summaryDueAmount = round2(paymentSummary?.due_amount || 0);
-    const amountToCharge = paymentSummary ? summaryDueAmount : round2(amount || 0);
+    const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+      bookingId: booking_id,
+      salesQuoteId: booking.quote_id,
+      quoteTotal: amount,
+      transaction: null
+    });
+    const amountToCharge = paymentState.hasSummary ? paymentState.payableAmount : round2(amount || 0);
 
     // 3. Handle 100% Discount ($0.00) Case
     // Stripe does not allow creating intents for $0.00
@@ -2012,14 +2017,13 @@ exports.confirmPaymentMulti = async (req, res) => {
 
     const quoteTotal = round2(booking.primary_quote?.total || 0);
     const bookingAlreadyPaid = Boolean(booking.payment_id || booking.is_completed === 1);
-    const paymentSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(booking_id, transaction);
-    const summaryDueAmount = round2(paymentSummary?.due_amount || 0);
-    const summaryPaidAmount = round2(paymentSummary?.paid_amount || 0);
-    const summaryStatus = String(paymentSummary?.payment_status || '').toLowerCase();
-    const isSummaryNoPaymentDue = Boolean(paymentSummary) &&
-      summaryDueAmount <= 0 &&
-      summaryPaidAmount > 0 &&
-      ['paid', 'no_payment_due', 'completed', 'success'].includes(summaryStatus);
+    const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+      bookingId: booking_id,
+      salesQuoteId: booking.primary_quote?.quote_id,
+      quoteTotal,
+      transaction
+    });
+    const isSummaryNoPaymentDue = paymentState.hasSummary && paymentState.isPaid;
 
     let normalizedReferralCode = '';
     if (referral_code) {

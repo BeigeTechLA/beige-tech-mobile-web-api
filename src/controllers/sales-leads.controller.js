@@ -324,9 +324,11 @@ const hasExternalWorkspaceFiles = async (bookingId, phase) => {
 async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
   if (!quoteId) return null;
 
-  const paymentSummary = bookingId
-    ? await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId)
-    : null;
+  const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+    bookingId,
+    salesQuoteId: quoteId
+  });
+  const paymentSummary = paymentState.paymentSummary;
 
   let settledByFollowupTransaction = false;
   if (bookingId) {
@@ -405,10 +407,10 @@ async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null
     bookingId
   });
 
-  const summaryChangeType = String(paymentSummary?.last_quote_change_type || '').toLowerCase();
-  const summaryChangeAmount = parseFloat(paymentSummary?.last_quote_change_amount || 0);
-  const summaryDueAmount = parseFloat(paymentSummary?.due_amount || 0);
-  const summaryPaymentStatus = String(paymentSummary?.payment_status || '').toLowerCase();
+  const summaryChangeType = String(paymentState.lastQuoteChangeType || '').toLowerCase();
+  const summaryChangeAmount = parseFloat(paymentState.lastQuoteChangeAmount || 0);
+  const summaryDueAmount = paymentState.dueAmount;
+  const summaryPaymentStatus = String(paymentState.paymentStatus || '').toLowerCase();
   const summaryApprovalStatus = String(paymentSummary?.last_quote_change_status || '').toLowerCase();
   const summaryAdditionalPayment = paymentSummary &&
     summaryChangeType === 'increase' &&
@@ -416,8 +418,8 @@ async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null
       ? {
           additional_amount: summaryDueAmount,
           original_increase_amount: summaryChangeAmount || summaryDueAmount,
-          previously_paid_amount: parseFloat(paymentSummary.paid_amount || 0),
-          revised_total: parseFloat(paymentSummary.quote_total || 0),
+          previously_paid_amount: paymentState.paidAmount,
+          revised_total: paymentState.quoteTotal,
           outstanding_amount: summaryDueAmount,
           payment_status: summaryPaymentStatus || null,
           approval_status: summaryApprovalStatus || null,
@@ -441,6 +443,9 @@ async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null
   const additionalPayment = paymentSummary
     ? summaryAdditionalPayment
     : activityAdditionalPayment;
+  const currentInvoiceHistory = additionalPayment
+    ? refreshInvoiceHistory
+    : latestInvoiceHistory;
 
   const reducedPayment = refreshActivity && reducedAmount > 0 ? {
     reduced_amount: reducedAmount,
@@ -454,13 +459,13 @@ async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null
   } : null;
 
   return {
-    latest_invoice: latestInvoiceHistory ? {
-      invoice_send_history_id: latestInvoiceHistory.invoice_send_history_id,
-      invoice_number: latestInvoiceHistory.invoice_number || null,
-      invoice_url: latestInvoiceHistory.invoice_url || null,
-      invoice_pdf: latestInvoiceHistory.invoice_pdf || null,
-      payment_status: latestInvoiceHistory.payment_status || null,
-      sent_at: latestInvoiceHistory.sent_at || null
+    latest_invoice: currentInvoiceHistory ? {
+      invoice_send_history_id: currentInvoiceHistory.invoice_send_history_id,
+      invoice_number: currentInvoiceHistory.invoice_number || null,
+      invoice_url: currentInvoiceHistory.invoice_url || null,
+      invoice_pdf: currentInvoiceHistory.invoice_pdf || null,
+      payment_status: currentInvoiceHistory.payment_status || null,
+      sent_at: currentInvoiceHistory.sent_at || null
     } : null,
     additional_payment: additionalPayment,
     partial_payment: additionalPayment,
@@ -4242,9 +4247,11 @@ exports.getClientLeadById = async (req, res) => {
     leadJson.payment_links = bookingId
       ? await payment_links.findAll({ where: { booking_id: bookingId } })
       : [];
-    const paymentSummary = bookingId
-      ? await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId)
-      : null;
+    const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+      bookingId,
+      quoteTotal: leadJson.booking?.primary_quote?.total || leadJson.booking?.primary_quote?.price_after_discount || 0
+    });
+    const paymentSummary = paymentState.paymentSummary;
 
     let final_phone = leadJson.phone || leadJson.phone_number;
     if (!final_phone && leadJson.booking?.description) {
@@ -4288,7 +4295,7 @@ exports.getClientLeadById = async (req, res) => {
       }
     }
 
-    let payment_status = String(paymentSummary?.payment_status || '').toLowerCase() ||
+    let payment_status = String(paymentState.hasSummary ? paymentState.paymentStatus : '').toLowerCase() ||
       (lead.booking?.payment_id ? 'paid' : 'unpaid');
     if (payment_status === 'unpaid' && active_payment_link) {
       payment_status = active_payment_link.is_expired ? 'link_expired' : 'link_sent';
@@ -4345,9 +4352,9 @@ exports.getClientLeadById = async (req, res) => {
     let creditApplied = 0;
     let totalPaid = null;
 
-    if (paymentSummary) {
-      creditApplied = parseFloat(paymentSummary.credit_used_amount || 0);
-      totalPaid = parseFloat(paymentSummary.paid_amount || 0);
+    if (paymentState.hasSummary) {
+      creditApplied = paymentState.creditUsedAmount;
+      totalPaid = paymentState.paidAmount;
     } else if (leadJson.booking?.payment_id) {
       const paymentData = await db.payment_transactions.findByPk(leadJson.booking.payment_id);
       if (paymentData) {
@@ -4467,11 +4474,11 @@ exports.getClientLeadById = async (req, res) => {
         intent_source: lead.intent ? 'manual' : 'system',
         booking_status,
         payment_status,
-        collected_amount: paymentSummary
-          ? parseFloat(paymentSummary.paid_amount || 0)
+        collected_amount: paymentState.hasSummary
+          ? paymentState.paidAmount
           : (Number.isFinite(totalPaid) ? totalPaid : null),
-        outstanding_amount: paymentSummary
-          ? parseFloat(paymentSummary.due_amount || 0)
+        outstanding_amount: paymentState.hasSummary
+          ? paymentState.dueAmount
           : null,
         payment_summary: paymentSummary,
         active_payment_link,

@@ -2653,17 +2653,20 @@ async function getQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
     bookingId
   });
 
-  const paymentSummary = bookingId
-    ? await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId)
-    : await bookingPaymentSummaryService.getBookingPaymentSummaryBySalesQuoteId(quoteId);
-  const summaryDueAmount = roundCurrency(paymentSummary?.due_amount || 0);
+  const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+    bookingId,
+    salesQuoteId: quoteId,
+    quoteTotal: revisedTotal || 0
+  });
+  const paymentSummary = paymentState.paymentSummary;
+  const summaryDueAmount = paymentState.dueAmount;
   const manualPaymentSummary = computeManualPaymentProgressFromSummary(
     paymentSummary,
-    paymentSummary?.quote_total || revisedTotal || 0
+    paymentState.quoteTotal || revisedTotal || 0
   );
-  const summaryPaidAmount = roundCurrency(paymentSummary?.paid_amount || 0);
-  const summaryQuoteTotal = roundCurrency(paymentSummary?.quote_total || 0);
-  const summaryPaymentStatus = paymentSummary?.payment_status || null;
+  const summaryPaidAmount = paymentState.paidAmount;
+  const summaryQuoteTotal = paymentState.quoteTotal;
+  const summaryPaymentStatus = paymentState.paymentStatus || null;
   const summaryChangeType = String(paymentSummary?.last_quote_change_type || '').toLowerCase();
   const summaryApprovalStatus = String(paymentSummary?.last_quote_change_status || 'none').toLowerCase();
   const summaryAdditionalPayment = paymentSummary &&
@@ -2702,6 +2705,9 @@ async function getQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
   const additionalPayment = paymentSummary
     ? summaryAdditionalPayment
     : activityAdditionalPayment;
+  const currentInvoiceHistory = additionalPayment
+    ? refreshInvoiceHistory
+    : latestInvoiceHistory;
 
   const reducedPayment = refreshActivity && reducedAmount > 0 ? {
     sales_quote_activity_id: refreshActivity.activity.activity_id,
@@ -2718,13 +2724,13 @@ async function getQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
   } : null;
 
   return {
-    latest_invoice: latestInvoiceHistory ? {
-      invoice_send_history_id: latestInvoiceHistory.invoice_send_history_id,
-      invoice_number: latestInvoiceHistory.invoice_number || null,
-      invoice_url: latestInvoiceHistory.invoice_url || null,
-      invoice_pdf: latestInvoiceHistory.invoice_pdf || null,
-      payment_status: latestInvoiceHistory.payment_status || null,
-      sent_at: latestInvoiceHistory.sent_at || null
+    latest_invoice: currentInvoiceHistory ? {
+      invoice_send_history_id: currentInvoiceHistory.invoice_send_history_id,
+      invoice_number: currentInvoiceHistory.invoice_number || null,
+      invoice_url: currentInvoiceHistory.invoice_url || null,
+      invoice_pdf: currentInvoiceHistory.invoice_pdf || null,
+      payment_status: currentInvoiceHistory.payment_status || null,
+      sent_at: currentInvoiceHistory.sent_at || null
     } : null,
     additional_payment: additionalPayment,
     partial_payment: additionalPayment,
@@ -2740,7 +2746,7 @@ async function getQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
       outstanding_amount: summaryDueAmount,
       due_amount: summaryDueAmount,
       quote_total_amount: summaryQuoteTotal,
-      is_collected: summaryDueAmount <= 0 && summaryPaidAmount > 0
+      is_collected: paymentState.isPaid
     } : {})
   };
 }
@@ -3590,16 +3596,16 @@ async function resolveQuoteBillingState(quote, transaction) {
     booking?.stream_project_booking_id &&
     Number(refreshMetadata?.booking_id || 0) === Number(booking.stream_project_booking_id)
   );
-  const paymentSummary = booking?.stream_project_booking_id
-    ? await bookingPaymentSummaryService.getBookingPaymentSummary(
-        booking.stream_project_booking_id,
-        transaction
-      )
-    : null;
+  const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+    bookingId: booking?.stream_project_booking_id || null,
+    salesQuoteId: quote.sales_quote_id,
+    quoteTotal: quote.total,
+    transaction
+  });
   const summaryCollectedAmount = roundCurrency(
-    Number(paymentSummary?.paid_amount || 0) + Number(paymentSummary?.credit_used_amount || 0)
+    Number(paymentState.paidAmount || 0) + Number(paymentState.creditUsedAmount || 0)
   );
-  const summaryPaymentStatus = String(paymentSummary?.payment_status || '').toLowerCase();
+  const summaryPaymentStatus = String(paymentState.paymentStatus || '').toLowerCase();
   const summaryMarkedCollected = summaryCollectedAmount > 0 && [
     'paid',
     'no_payment_due',
@@ -3612,7 +3618,7 @@ async function resolveQuoteBillingState(quote, transaction) {
     refreshExtraAmount > 0 &&
     refreshApprovalStatus !== 'rejected' &&
     refreshInvoiceHistory?.payment_status !== 'paid' &&
-    summaryCollectedAmount < roundCurrency(quote.total)
+    (!paymentState.hasSummary || paymentState.requiresPayment)
   );
 
   const isCollected = !refreshOutstanding && (bookingMarkedCollected || historyMarkedCollected || summaryMarkedCollected);
