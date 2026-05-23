@@ -414,7 +414,8 @@ async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null
     summaryChangeType === 'increase' &&
     (summaryChangeAmount > 0 || summaryDueAmount > 0)
       ? {
-          additional_amount: summaryChangeAmount || summaryDueAmount,
+          additional_amount: summaryDueAmount,
+          original_increase_amount: summaryChangeAmount || summaryDueAmount,
           previously_paid_amount: parseFloat(paymentSummary.paid_amount || 0),
           revised_total: parseFloat(paymentSummary.quote_total || 0),
           outstanding_amount: summaryDueAmount,
@@ -3971,6 +3972,36 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
     lastQuoteChangeType: existingSummary?.last_quote_change_type || 'none',
     lastQuoteChangeAmount: Number(existingSummary?.last_quote_change_amount || 0),
     lastQuoteChangeStatus: existingSummary?.last_quote_change_status || 'none',
+  });
+
+  const activityModel = leadModel === client_leads
+    ? client_lead_activities
+    : sales_lead_activities;
+  await activityModel.create({
+    lead_id: Number(leadId),
+    activity_type: 'payment_completed',
+    activity_data: {
+      source: 'manual_payment',
+      payment_method: 'manual',
+      payment_type: normalizedPaymentType,
+      payment_mode: normalizedPaymentMode,
+      other_payment_mode: normalizedOtherPaymentMode,
+      amount: Number(amountToApply || 0),
+      total_amount: totalAmount,
+      paid_amount_before: previouslyPaidAmount,
+      paid_amount_after: paidAmountAfter,
+      remaining_before_payment: remainingBefore,
+      remaining_after_payment: Math.max(remainingBefore - amountToApply, 0),
+      proof_url: normalizedProofUrl,
+      proof_file_path: normalizedProofFilePath,
+      proof_file_name: normalizedProofFileName,
+      notes: normalizedNotes,
+      updated_by: performedBy || null,
+      previously_paid_amount: previouslyPaidAmount,
+      booking_id: bookingId,
+      sales_quote_id: resolvedSalesQuoteId
+    },
+    performed_by_user_id: performedBy || null
   });
 
   const leadUpdate = { last_activity_at: new Date() };

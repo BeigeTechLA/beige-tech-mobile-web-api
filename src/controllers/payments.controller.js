@@ -70,6 +70,17 @@ async function resolveManualWebhookAmount({ booking, paymentSource, amount = nul
   }
 
   const bookingId = booking.stream_project_booking_id;
+  const paymentSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId, transaction);
+  const summaryDueAmount = round2(paymentSummary?.due_amount || 0);
+  const summaryPaidAmount = round2(paymentSummary?.paid_amount || 0);
+
+  if (paymentSummary && summaryDueAmount > 0) {
+    return summaryDueAmount;
+  }
+
+  if (paymentSummary && summaryDueAmount <= 0 && summaryPaidAmount > 0) {
+    return 0;
+  }
 
   if (paymentSource === PAYMENT_SOURCE.ADDITIONAL_INVOICE) {
     const linkedLead = await db.sales_leads.findOne({
@@ -507,6 +518,15 @@ async function markAdditionalQuoteInvoiceAsPaid({
     return true;
   }
 
+  const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId, transaction);
+  const summaryDueAmount = round2(existingSummary?.due_amount || 0);
+  const summaryPaidAmount = round2(existingSummary?.paid_amount || 0);
+  const summaryQuoteTotal = round2(existingSummary?.quote_total || 0);
+  const amountToApply = existingSummary
+    ? Math.min(Math.max(invoiceAmount, 0), Math.max(summaryDueAmount, 0))
+    : Math.max(invoiceAmount, 0);
+  invoiceAmount = round2(amountToApply);
+
   const approvedAdditionalChange = await getLatestApprovedAdditionalQuoteChange({
     bookingId,
     salesQuoteId: salesQuote.sales_quote_id,
@@ -542,11 +562,11 @@ async function markAdditionalQuoteInvoiceAsPaid({
   }, { transaction });
 
   if (approvedAdditionalChange || metadataPaymentSource === PAYMENT_SOURCE.ADDITIONAL_INVOICE) {
-    const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId, transaction);
-    const quoteTotal = round2(salesQuote.total || 0);
+    const quoteTotal = round2(summaryQuoteTotal || salesQuote.total || 0);
     const creditUsedAmount = round2(existingSummary?.credit_used_amount || 0);
-    const paidAfterAdditional = round2(Number(existingSummary?.paid_amount || 0) + Number(invoiceAmount || 0));
-    const settledPaidAmount = round2(Math.max(paidAfterAdditional, Math.max(quoteTotal - creditUsedAmount, 0)));
+    const targetPaidAmount = round2(Math.max(quoteTotal - creditUsedAmount, 0));
+    const paidAfterAdditional = round2(summaryPaidAmount + Number(invoiceAmount || 0));
+    const settledPaidAmount = round2(Math.min(Math.max(paidAfterAdditional, 0), targetPaidAmount));
 
     await bookingPaymentSummaryService.upsertBookingPaymentSummary({
       bookingId,
@@ -556,7 +576,7 @@ async function markAdditionalQuoteInvoiceAsPaid({
       creditUsedAmount,
       creditCreatedAmount: existingSummary?.credit_created_amount || 0,
       lastQuoteChangeType: 'increase',
-      lastQuoteChangeAmount: round2(approvedAdditionalChange?.extra_amount || invoiceAmount),
+      lastQuoteChangeAmount: round2(existingSummary?.last_quote_change_amount || approvedAdditionalChange?.extra_amount || invoiceAmount),
       lastQuoteChangeStatus: 'approved',
       transaction
     });
@@ -1899,10 +1919,13 @@ exports.createPaymentIntentMulti = async (req, res) => {
         message: 'Booking not found'
       });
     }
+    const paymentSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(booking_id);
+    const summaryDueAmount = round2(paymentSummary?.due_amount || 0);
+    const amountToCharge = paymentSummary ? summaryDueAmount : round2(amount || 0);
 
     // 3. Handle 100% Discount ($0.00) Case
     // Stripe does not allow creating intents for $0.00
-    if (parseFloat(amount) === 0) {
+    if (amountToCharge === 0) {
       return res.status(200).json({
         success: true,
         data: {
@@ -1915,7 +1938,7 @@ exports.createPaymentIntentMulti = async (req, res) => {
     }
 
     // 4. Standard Stripe logic for paid bookings
-    if (!amount || amount < 0) {
+    if (!amountToCharge || amountToCharge < 0) {
       return res.status(400).json({
         success: false,
         message: 'Valid amount is required'
@@ -1928,7 +1951,7 @@ exports.createPaymentIntentMulti = async (req, res) => {
     });
 
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: Math.round(amount * 100), // Convert to cents
+      amount: Math.round(amountToCharge * 100), // Convert to cents
       currency: 'usd',
       metadata: {
         booking_id: booking_id.toString(),
@@ -1944,7 +1967,7 @@ exports.createPaymentIntentMulti = async (req, res) => {
       data: {
         clientSecret: paymentIntent.client_secret,
         paymentIntentId: paymentIntent.id,
-        amount: amount,
+        amount: amountToCharge,
         isFree: false
       }
     });
@@ -1989,6 +2012,14 @@ exports.confirmPaymentMulti = async (req, res) => {
 
     const quoteTotal = round2(booking.primary_quote?.total || 0);
     const bookingAlreadyPaid = Boolean(booking.payment_id || booking.is_completed === 1);
+    const paymentSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(booking_id, transaction);
+    const summaryDueAmount = round2(paymentSummary?.due_amount || 0);
+    const summaryPaidAmount = round2(paymentSummary?.paid_amount || 0);
+    const summaryStatus = String(paymentSummary?.payment_status || '').toLowerCase();
+    const isSummaryNoPaymentDue = Boolean(paymentSummary) &&
+      summaryDueAmount <= 0 &&
+      summaryPaidAmount > 0 &&
+      ['paid', 'no_payment_due', 'completed', 'success'].includes(summaryStatus);
 
     let normalizedReferralCode = '';
     if (referral_code) {
@@ -2015,7 +2046,7 @@ exports.confirmPaymentMulti = async (req, res) => {
       const isCreditCoveredCheckout = shouldUseCredit && requestedCreditAmount > 0 && payableAfterCredit <= 0;
 
       // SECURITY CHECK: free checkout only if quote is zero or fully covered by account credit.
-      if (!booking.primary_quote || (!isQuoteZero && !isCreditCoveredCheckout)) {
+      if (!booking.primary_quote || (!isQuoteZero && !isCreditCoveredCheckout && !isSummaryNoPaymentDue)) {
         await transaction.rollback();
         return res.status(400).json({ 
           success: false, 

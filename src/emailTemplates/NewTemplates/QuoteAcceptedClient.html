@@ -159,6 +159,20 @@
                         </td>
                       </tr>
                       {{/if}}
+                      {{#if is_partial_payment}}
+                      <tr>
+                        <td style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">Previously Paid</td>
+                        <td align="right" style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">$ {{previously_paid_amount}}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">Quote Total</td>
+                        <td align="right" style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">$ {{revised_total}}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">Remaining Amount Accepted</td>
+                        <td align="right" style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">$ {{proposal_amount}}</td>
+                      </tr>
+                      {{/if}}
                       {{#if is_reduced_payment}}
                       <tr>
                         <td style="padding: 18px 0 0;">

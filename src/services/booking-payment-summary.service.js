@@ -198,7 +198,27 @@ async function getBookingPaymentSummary(bookingId, transaction = null) {
   return rows[0] || null;
 }
 
+async function getBookingPaymentSummaryBySalesQuoteId(salesQuoteId, transaction = null) {
+  const rows = await db.sequelize.query(
+    `
+    SELECT *
+    FROM booking_payment_summary
+    WHERE sales_quote_id = :salesQuoteId
+    ORDER BY updated_at DESC, booking_payment_summary_id DESC
+    LIMIT 1
+    `,
+    {
+      replacements: { salesQuoteId },
+      type: db.Sequelize.QueryTypes.SELECT,
+      transaction
+    }
+  );
+
+  return rows[0] || null;
+}
+
 module.exports = {
   upsertBookingPaymentSummary,
-  getBookingPaymentSummary
+  getBookingPaymentSummary,
+  getBookingPaymentSummaryBySalesQuoteId
 };

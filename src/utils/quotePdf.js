@@ -83,7 +83,31 @@ function buildTerms(quote) {
 }
 
 function buildPaymentSummaryRows(paymentSummary) {
-  if (!paymentSummary?.is_additional_payment && !paymentSummary?.is_reduced_payment) return '';
+  if (!paymentSummary?.is_additional_payment && !paymentSummary?.is_reduced_payment && !paymentSummary?.is_partial_payment) return '';
+
+  if (paymentSummary.is_partial_payment) {
+    return `
+      <div style="margin-top: 12px; background: #FFFFFF; border-radius: 8px; padding: 12px 14px; color: #111111;">
+        <div style="display:flex; justify-content:space-between; font-size: 13px; margin-bottom: 8px;">
+          <span>Previously Paid</span>
+          <span>${formatCurrency(paymentSummary.previously_paid_amount)}</span>
+        </div>
+        <div style="display:flex; justify-content:space-between; font-size: 13px; margin-bottom: 8px;">
+          <span>Quote Total</span>
+          <span>${formatCurrency(paymentSummary.revised_total)}</span>
+        </div>
+        <div style="display:flex; justify-content:space-between; font-size: 13px; font-weight: 700;">
+          <span>Remaining Amount Due</span>
+          <span>${formatCurrency(paymentSummary.amount_due || paymentSummary.remaining_amount)}</span>
+        </div>
+      </div>
+      ${paymentSummary.payment_note ? `
+        <div style="margin-top: 10px; color: #333333; font-size: 12px; line-height: 1.6;">
+          ${escapeHtml(paymentSummary.payment_note)}
+        </div>
+      ` : ''}
+    `;
+  }
 
   if (paymentSummary.is_reduced_payment) {
     return `

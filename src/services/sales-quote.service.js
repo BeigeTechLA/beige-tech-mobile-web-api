@@ -899,9 +899,12 @@ function deriveQuoteAcceptanceEmailPayload(quoteDetails) {
       ? 'Additional Amount Accepted'
       : paymentSummary.is_reduced_payment
         ? 'Updated Paid Amount'
-        : 'Accepted Amount',
+        : paymentSummary.is_partial_payment
+          ? 'Remaining Amount Accepted'
+          : 'Accepted Amount',
     is_additional_payment: paymentSummary.is_additional_payment,
     is_reduced_payment: paymentSummary.is_reduced_payment,
+    is_partial_payment: paymentSummary.is_partial_payment,
     previously_paid_amount: paymentSummary.previously_paid_amount,
     revised_total: paymentSummary.revised_total,
     additional_amount: paymentSummary.additional_amount,
@@ -931,6 +934,31 @@ function buildQuoteInvoicePricingData(quoteDetails = {}) {
   const subtotal = Number(quoteDetails.subtotal || 0);
   const discountAmount = Number(quoteDetails.discount_amount || 0);
   const priceAfterDiscount = roundCurrency(subtotal - discountAmount);
+  const summaryBalance = getBookingPaymentSummaryBalance(quoteDetails);
+
+  if (summaryBalance?.amount_due > 0 && summaryBalance.previously_paid_amount > 0) {
+    return {
+      source: 'sales_quote_acceptance_remaining_balance',
+      is_paid: false,
+      total: summaryBalance.amount_due,
+      total_before_credit: summaryBalance.amount_due,
+      credit_applied: 0,
+      subtotal: summaryBalance.amount_due,
+      discount_amount: 0,
+      price_after_discount: summaryBalance.amount_due,
+      tax_type: null,
+      tax_rate: 0,
+      tax_amount: 0,
+      line_items: [
+        {
+          name: 'Remaining balance',
+          quantity: 1,
+          unit_price: summaryBalance.amount_due,
+          total: summaryBalance.amount_due
+        }
+      ]
+    };
+  }
 
   return {
     source: 'sales_quote_acceptance',
@@ -950,6 +978,36 @@ function buildQuoteInvoicePricingData(quoteDetails = {}) {
       unit_price: Number(item.unit_rate || item.estimated_pricing || 0),
       total: Number(item.line_total || 0)
     }))
+  };
+}
+
+function getBookingPaymentSummaryBalance(quoteDetails = {}) {
+  const paymentSummary = quoteDetails.payment_summary || null;
+  if (!paymentSummary) return null;
+
+  const revisedTotal = roundCurrency(paymentSummary.quote_total || quoteDetails.total || 0);
+  const previouslyPaidAmount = roundCurrency(paymentSummary.paid_amount || 0);
+  const amountDue = Math.max(roundCurrency(paymentSummary.due_amount || 0), 0);
+  const paymentStatus = String(paymentSummary.payment_status || '').toLowerCase();
+
+  if (!(revisedTotal > 0) || !(previouslyPaidAmount > 0)) return null;
+
+  if (['paid', 'succeeded', 'completed', 'success'].includes(paymentStatus) && amountDue <= 0) {
+    return {
+      amount_due: 0,
+      previously_paid_amount: previouslyPaidAmount,
+      revised_total: revisedTotal,
+      payment_status: paymentStatus
+    };
+  }
+
+  if (amountDue >= revisedTotal && previouslyPaidAmount <= 0) return null;
+
+  return {
+    amount_due: amountDue,
+    previously_paid_amount: previouslyPaidAmount,
+    revised_total: revisedTotal,
+    payment_status: paymentStatus
   };
 }
 
@@ -1060,6 +1118,7 @@ function buildQuoteProposalPaymentSummary(quoteDetails = {}) {
       return {
         is_additional_payment: false,
         is_reduced_payment: true,
+        is_partial_payment: false,
         proposal_amount_label: 'Updated Paid Quote Total',
         amount_due: roundCurrency(reducedPayment.revised_total || quoteDetails.total || 0),
         previously_paid_amount: roundCurrency(reducedPayment.previously_paid_amount || 0),
@@ -1069,8 +1128,28 @@ function buildQuoteProposalPaymentSummary(quoteDetails = {}) {
       };
     }
 
+    const summaryBalance = getBookingPaymentSummaryBalance(quoteDetails);
+    if (summaryBalance) {
+      const amountDue = roundCurrency(summaryBalance.amount_due || 0);
+      return {
+        is_additional_payment: false,
+        is_reduced_payment: false,
+        is_partial_payment: amountDue > 0,
+        proposal_amount_label: amountDue > 0 ? 'Remaining Amount Due' : 'Amount Due',
+        amount_due: amountDue,
+        previously_paid_amount: summaryBalance.previously_paid_amount,
+        revised_total: summaryBalance.revised_total,
+        remaining_amount: amountDue,
+        payment_note: amountDue > 0
+          ? `You have already paid ${formatCurrency(summaryBalance.previously_paid_amount)}. Your quote total is ${formatCurrency(summaryBalance.revised_total)}, so only the remaining ${formatCurrency(amountDue)} is due now.`
+          : `You have already paid ${formatCurrency(summaryBalance.previously_paid_amount)}. No additional payment is due for this quote.`
+      };
+    }
+
     return {
       is_additional_payment: false,
+      is_reduced_payment: false,
+      is_partial_payment: false,
       amount_due: roundCurrency(quoteDetails.total || 0),
       proposal_amount_label: 'Estimate Proposal Amount'
     };
@@ -1078,6 +1157,8 @@ function buildQuoteProposalPaymentSummary(quoteDetails = {}) {
 
   return {
     is_additional_payment: true,
+    is_reduced_payment: false,
+    is_partial_payment: false,
     proposal_amount_label: 'Additional Amount Due',
     amount_due: roundCurrency(additionalPayment.outstanding_amount || additionalPayment.additional_amount || 0),
     previously_paid_amount: roundCurrency(additionalPayment.previously_paid_amount || 0),
@@ -1236,6 +1317,22 @@ async function buildQuoteAcceptancePaymentDetails({ bookingId, quoteDetails }) {
     };
   }
 
+  const summaryBalance = getBookingPaymentSummaryBalance(quoteDetails);
+  if (summaryBalance && summaryBalance.amount_due <= 0) {
+    return {
+      booking_id: parsedBookingId,
+      invoice_id: null,
+      invoice_number: null,
+      payment_url: null,
+      invoice_pdf: null,
+      requires_payment: false,
+      is_partial_payment: false,
+      previously_paid_amount: summaryBalance.previously_paid_amount,
+      revised_total: summaryBalance.revised_total,
+      remaining_amount: 0
+    };
+  }
+
   const stripeInvoice = await paymentLinksService.createStripeInvoice(
     booking,
     buildQuoteInvoicePricingData(quoteDetails),
@@ -1252,7 +1349,13 @@ async function buildQuoteAcceptancePaymentDetails({ bookingId, quoteDetails }) {
     invoice_id: stripeInvoice?.id || null,
     invoice_number: stripeInvoice?.number || null,
     payment_url: stripeInvoice?.hosted_invoice_url || null,
-    invoice_pdf: stripeInvoice?.invoice_pdf || null
+    invoice_pdf: stripeInvoice?.invoice_pdf || null,
+    ...(summaryBalance?.amount_due > 0 ? {
+      is_partial_payment: true,
+      previously_paid_amount: summaryBalance.previously_paid_amount,
+      revised_total: summaryBalance.revised_total,
+      remaining_amount: summaryBalance.amount_due
+    } : {})
   };
 }
 
@@ -2552,8 +2655,15 @@ async function getQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
 
   const paymentSummary = bookingId
     ? await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId)
-    : null;
+    : await bookingPaymentSummaryService.getBookingPaymentSummaryBySalesQuoteId(quoteId);
   const summaryDueAmount = roundCurrency(paymentSummary?.due_amount || 0);
+  const manualPaymentSummary = computeManualPaymentProgressFromSummary(
+    paymentSummary,
+    paymentSummary?.quote_total || revisedTotal || 0
+  );
+  const summaryPaidAmount = roundCurrency(paymentSummary?.paid_amount || 0);
+  const summaryQuoteTotal = roundCurrency(paymentSummary?.quote_total || 0);
+  const summaryPaymentStatus = paymentSummary?.payment_status || null;
   const summaryChangeType = String(paymentSummary?.last_quote_change_type || '').toLowerCase();
   const summaryApprovalStatus = String(paymentSummary?.last_quote_change_status || 'none').toLowerCase();
   const summaryAdditionalPayment = paymentSummary &&
@@ -2562,7 +2672,8 @@ async function getQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
     ['pending', 'approved'].includes(summaryApprovalStatus)
       ? {
           sales_quote_activity_id: refreshActivity?.activity?.activity_id || null,
-          additional_amount: roundCurrency(paymentSummary.last_quote_change_amount || summaryDueAmount),
+          additional_amount: summaryDueAmount,
+          original_increase_amount: roundCurrency(paymentSummary.last_quote_change_amount || summaryDueAmount),
           previously_paid_amount: roundCurrency(paymentSummary.paid_amount || 0),
           revised_total: roundCurrency(paymentSummary.quote_total || 0),
           outstanding_amount: summaryDueAmount,
@@ -2618,7 +2729,19 @@ async function getQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
     additional_payment: additionalPayment,
     partial_payment: additionalPayment,
     reduced_payment: reducedPayment,
-    account_credit: creditSummary
+    account_credit: creditSummary,
+    payment_summary: paymentSummary || null,
+    manual_payment_summary: manualPaymentSummary,
+    ...(paymentSummary ? {
+      payment_status: summaryPaymentStatus,
+      collected_amount: summaryPaidAmount,
+      total_paid_amount: summaryPaidAmount,
+      paid_amount: summaryPaidAmount,
+      outstanding_amount: summaryDueAmount,
+      due_amount: summaryDueAmount,
+      quote_total_amount: summaryQuoteTotal,
+      is_collected: summaryDueAmount <= 0 && summaryPaidAmount > 0
+    } : {})
   };
 }
 
@@ -3533,7 +3656,154 @@ function computeManualPaymentProgressFromActivities(activities = [], totalAmount
     hasFullPayment,
     paidAmount,
     pendingAmount,
+    paid_amount: paidAmount,
+    paid_amount_total: paidAmount,
+    pending_amount: pendingAmount,
+    due_amount: pendingAmount,
+    total_amount: Number(totalAmount || 0),
     isPartiallyPaid: !hasFullPayment && paidAmount > 0 && pendingAmount > 0
+  };
+}
+
+function computeManualPaymentProgressFromSummary(paymentSummary = null, totalAmount = 0) {
+  if (!paymentSummary) return null;
+
+  const hasManualPayment = Boolean(
+    paymentSummary.manual_payment_mode ||
+    paymentSummary.manual_payment_proof_url ||
+    paymentSummary.manual_payment_updated_at
+  );
+  if (!hasManualPayment) return null;
+
+  const quoteTotal = Number(paymentSummary.quote_total || totalAmount || 0);
+  const paidAmount = Number(paymentSummary.paid_amount || 0);
+  const pendingAmount = Math.max(Number(paymentSummary.due_amount || 0), 0);
+  const hasFullPayment = paidAmount > 0 && pendingAmount <= 0;
+
+  return {
+    hasFullPayment,
+    paidAmount,
+    pendingAmount,
+    paid_amount: paidAmount,
+    paid_amount_total: paidAmount,
+    pending_amount: pendingAmount,
+    due_amount: pendingAmount,
+    isPartiallyPaid: !hasFullPayment && paidAmount > 0 && pendingAmount > 0,
+    is_partially_paid: !hasFullPayment && paidAmount > 0 && pendingAmount > 0,
+    paymentMode: paymentSummary.manual_payment_mode || null,
+    payment_mode: paymentSummary.manual_payment_mode || null,
+    otherPaymentMode: paymentSummary.manual_payment_other_mode || null,
+    other_payment_mode: paymentSummary.manual_payment_other_mode || null,
+    proofUrl: paymentSummary.manual_payment_proof_url || null,
+    proof_url: paymentSummary.manual_payment_proof_url || null,
+    proofFilePath: paymentSummary.manual_payment_proof_file_path || null,
+    proof_file_path: paymentSummary.manual_payment_proof_file_path || null,
+    proofFileName: paymentSummary.manual_payment_proof_file_name || null,
+    proof_file_name: paymentSummary.manual_payment_proof_file_name || null,
+    notes: paymentSummary.manual_payment_notes || null,
+    updatedByUserId: paymentSummary.manual_payment_updated_by_user_id || null,
+    updated_by_user_id: paymentSummary.manual_payment_updated_by_user_id || null,
+    updatedAt: paymentSummary.manual_payment_updated_at || null,
+    updated_at: paymentSummary.manual_payment_updated_at || null,
+    totalAmount: quoteTotal,
+    total_amount: quoteTotal,
+    payment_status: paymentSummary.payment_status || null
+  };
+}
+
+async function hasPersistedManualPaymentLeadActivityForQuote(quote = {}) {
+  const leadId = Number(quote.lead_id || 0);
+  const salesQuoteId = Number(quote.sales_quote_id || 0);
+  const bookingId = Number(quote.booking_id || 0);
+
+  if (!leadId && !salesQuoteId && !bookingId) return false;
+
+  const where = {
+    activity_type: 'payment_completed'
+  };
+  if (leadId > 0) where.lead_id = leadId;
+
+  const activityModels = [db.sales_lead_activities, db.client_lead_activities].filter(Boolean);
+
+  for (const activityModel of activityModels) {
+    const rows = await activityModel.findAll({
+      where,
+      attributes: ['activity_data'],
+      order: [['created_at', 'DESC']],
+      limit: 20,
+      raw: true
+    });
+
+    const hasMatchingActivity = rows.some((row) => {
+      const payload = parseConfig(row.activity_data);
+      if (!payload || payload.payment_method !== 'manual') return false;
+
+      const payloadQuoteId = Number(payload.sales_quote_id || payload.quote_id || 0);
+      const payloadBookingId = Number(payload.booking_id || 0);
+
+      return (
+        (salesQuoteId > 0 && payloadQuoteId === salesQuoteId) ||
+        (bookingId > 0 && payloadBookingId === bookingId) ||
+        (leadId > 0 && !payloadQuoteId && !payloadBookingId)
+      );
+    });
+
+    if (hasMatchingActivity) return true;
+  }
+
+  return false;
+}
+
+function ensureManualPaymentActivityForQuote(quote = {}, options = {}) {
+  if (options.includeSynthetic === false) return quote;
+  if (!quote?.manual_payment_summary) return quote;
+
+  const activities = Array.isArray(quote.activities) ? quote.activities : [];
+  const hasManualPaymentActivity = activities.some((activity) => {
+    if (activity?.activity_type !== 'payment_completed') return false;
+    const payload = parseConfig(activity?.activity_data);
+    return payload?.payment_method === 'manual';
+  });
+
+  if (hasManualPaymentActivity) return quote;
+
+  const manualSummary = quote.manual_payment_summary;
+  return {
+    ...quote,
+    activities: [
+      {
+        activity_id: `manual-payment-summary-${quote.sales_quote_id}`,
+        sales_quote_id: quote.sales_quote_id,
+        activity_type: 'payment_completed',
+        performed_by_user_id: manualSummary.updatedByUserId || manualSummary.updated_by_user_id || null,
+        message: 'Manual payment recorded',
+        created_at: manualSummary.updatedAt || manualSummary.updated_at || quote.updated_at || new Date(),
+        performed_by: null,
+        activity_data: {
+          source: 'booking_payment_summary',
+          payment_method: 'manual',
+          payment_type: manualSummary.hasFullPayment ? 'full' : 'partial',
+          payment_mode: manualSummary.paymentMode || manualSummary.payment_mode || null,
+          other_payment_mode: manualSummary.otherPaymentMode || manualSummary.other_payment_mode || null,
+          amount: manualSummary.hasFullPayment
+            ? Number(manualSummary.totalAmount || manualSummary.total_amount || quote.total || 0)
+            : Number(manualSummary.paidAmount || manualSummary.paid_amount || 0),
+          total_amount: Number(manualSummary.totalAmount || manualSummary.total_amount || quote.total || 0),
+          paid_amount_after: Number(manualSummary.paidAmount || manualSummary.paid_amount || 0),
+          previously_paid_amount: 0,
+          remaining_before_payment: Number(manualSummary.totalAmount || manualSummary.total_amount || quote.total || 0),
+          remaining_after_payment: Number(manualSummary.pendingAmount || manualSummary.pending_amount || 0),
+          proof_url: manualSummary.proofUrl || manualSummary.proof_url || null,
+          proof_file_path: manualSummary.proofFilePath || manualSummary.proof_file_path || null,
+          proof_file_name: manualSummary.proofFileName || manualSummary.proof_file_name || null,
+          notes: manualSummary.notes || null,
+          updated_by: manualSummary.updatedByUserId || manualSummary.updated_by_user_id || null,
+          booking_id: quote.booking_id || null,
+          sales_quote_id: quote.sales_quote_id
+        }
+      },
+      ...activities
+    ]
   };
 }
 
@@ -4483,6 +4753,10 @@ async function fetchQuoteById(salesQuoteId, user = null) {
   if (quoteFinancialDetails) {
     Object.assign(plain, quoteFinancialDetails);
   }
+  const hasPersistedManualPaymentActivity = await hasPersistedManualPaymentLeadActivityForQuote(plain);
+  Object.assign(plain, ensureManualPaymentActivityForQuote(plain, {
+    includeSynthetic: !hasPersistedManualPaymentActivity
+  }));
   plain.converted_booking_details = await getConvertedBookingDetails(plain.booking_id || null);
 
   return plain;
@@ -4574,9 +4848,29 @@ async function getQuoteVersionByNumber(salesQuoteId, versionNumber, user) {
     throw new Error('Quote version not found');
   }
 
+  const normalizedVersionQuote = await normalizeQuoteVersionSnapshotForResponse(parseConfig(version.quote_snapshot_json) || {});
+  const currentQuote = await fetchQuoteById(salesQuoteId, user);
+  const currentVersion = Number(currentQuote?.current_version_number || 0);
+  const isCurrentVersion = currentVersion > 0 && Number(version.version_number || 0) === currentVersion;
+  const versionQuoteWithPaymentContext = isCurrentVersion && currentQuote
+    ? ensureManualPaymentActivityForQuote({
+        ...normalizedVersionQuote,
+        booking_id: currentQuote.booking_id || normalizedVersionQuote.booking_id || null,
+        activities: currentQuote.activities || normalizedVersionQuote.activities || [],
+        payment_summary: currentQuote.payment_summary || null,
+        manual_payment_summary: currentQuote.manual_payment_summary || null,
+        payment_status: currentQuote.payment_status || normalizedVersionQuote.payment_status,
+        collected_amount: currentQuote.collected_amount,
+        total_paid_amount: currentQuote.total_paid_amount,
+        paid_amount: currentQuote.paid_amount,
+        outstanding_amount: currentQuote.outstanding_amount,
+        due_amount: currentQuote.due_amount
+      }, { includeSynthetic: false })
+    : normalizedVersionQuote;
+
   return {
     version: buildQuoteVersionListItem(version, Number(version.version_number || 0)),
-    quote: await normalizeQuoteVersionSnapshotForResponse(parseConfig(version.quote_snapshot_json) || {})
+    quote: versionQuoteWithPaymentContext
   };
 }
 
@@ -4905,15 +5199,26 @@ async function listQuotes(query, user) {
     const resolvedOutstandingAmount = hasManualFullPayment || hasManualPartialPayment
       ? manualPaymentSummary.pendingAmount
       : billingState.outstanding_amount;
+    const resolvedManualPaymentSummary = financialDetails?.manual_payment_summary || manualPaymentSummary;
+    const hasSummaryManualFullPayment = Boolean(resolvedManualPaymentSummary?.hasFullPayment);
+    const hasSummaryManualPartialPayment = Boolean(resolvedManualPaymentSummary?.isPartiallyPaid);
 
     return {
       ...plain,
-      payment_status: resolvedPaymentStatus,
-      is_collected: hasManualFullPayment ? true : billingState.is_collected,
-      collected_amount: resolvedCollectedAmount,
-      outstanding_amount: resolvedOutstandingAmount,
-      manual_payment_summary: manualPaymentSummary,
-      ...(financialDetails || {})
+      ...(financialDetails || {}),
+      payment_status: hasSummaryManualFullPayment
+        ? 'paid'
+        : hasSummaryManualPartialPayment
+          ? 'partially_paid'
+          : resolvedPaymentStatus,
+      is_collected: hasSummaryManualFullPayment ? true : (hasManualFullPayment ? true : billingState.is_collected),
+      collected_amount: hasSummaryManualFullPayment || hasSummaryManualPartialPayment
+        ? resolvedManualPaymentSummary.paidAmount
+        : resolvedCollectedAmount,
+      outstanding_amount: hasSummaryManualFullPayment || hasSummaryManualPartialPayment
+        ? resolvedManualPaymentSummary.pendingAmount
+        : resolvedOutstandingAmount,
+      manual_payment_summary: resolvedManualPaymentSummary
     };
   }));
 
@@ -5153,7 +5458,7 @@ async function sendQuoteProposal(salesQuoteId, payload, user) {
     });
 
     const paymentSummary = buildQuoteProposalPaymentSummary(quoteDetails);
-    const quoteDetailsForPdf = paymentSummary.is_additional_payment || paymentSummary.is_reduced_payment
+    const quoteDetailsForPdf = paymentSummary.is_additional_payment || paymentSummary.is_reduced_payment || paymentSummary.is_partial_payment
       ? { ...quoteDetails, payment_summary: paymentSummary }
       : quoteDetails;
     const generatedPdfBuffer = payload?.attachment_content || payload?.pdf_base64
@@ -5173,6 +5478,7 @@ async function sendQuoteProposal(salesQuoteId, payload, user) {
       proposal_amount_label: paymentSummary.proposal_amount_label,
       is_additional_payment: paymentSummary.is_additional_payment,
       is_reduced_payment: paymentSummary.is_reduced_payment,
+      is_partial_payment: paymentSummary.is_partial_payment,
       previously_paid_amount: paymentSummary.previously_paid_amount,
       revised_total: paymentSummary.revised_total,
       additional_amount: paymentSummary.additional_amount,
@@ -5404,7 +5710,7 @@ async function downloadQuotePdf(salesQuoteId, user) {
 
   const paymentSummary = buildQuoteProposalPaymentSummary(quoteDetails);
   const buffer = await generateQuotePdfBuffer(
-    paymentSummary.is_additional_payment || paymentSummary.is_reduced_payment
+    paymentSummary.is_additional_payment || paymentSummary.is_reduced_payment || paymentSummary.is_partial_payment
       ? { ...quoteDetails, payment_summary: paymentSummary }
       : quoteDetails
   );
