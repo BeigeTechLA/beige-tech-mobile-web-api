@@ -4350,8 +4350,12 @@ async function updateQuote(salesQuoteId, payload, user) {
           transaction
         )
       : null;
+    const currentSummaryPaidAmount = roundCurrency(currentPaymentSummary?.paid_amount || collectedAmount);
+    const paidAmountForSummary = reducedAmount > 0
+      ? Math.min(currentSummaryPaidAmount, newTotal)
+      : currentSummaryPaidAmount;
     const summaryPaidAmount = roundCurrency(
-      Number(currentPaymentSummary?.paid_amount || 0) + Number(currentPaymentSummary?.credit_used_amount || 0)
+      Number(paidAmountForSummary || 0) + Number(currentPaymentSummary?.credit_used_amount || 0)
     );
     const hasPaymentSummary = Boolean(currentPaymentSummary);
     const shouldUpdatePaymentSummaryForPaidQuote = Boolean(
@@ -4379,7 +4383,7 @@ async function updateQuote(salesQuoteId, payload, user) {
         bookingId: billingState.booking.stream_project_booking_id,
         salesQuoteId,
         quoteTotal: newTotal,
-        paidAmount: currentPaymentSummary?.paid_amount || collectedAmount,
+        paidAmount: paidAmountForSummary,
         creditUsedAmount: currentPaymentSummary?.credit_used_amount || 0,
         creditCreatedAmount: currentPaymentSummary?.credit_created_amount || 0,
         lastQuoteChangeType: extraAmount > 0
@@ -4426,7 +4430,7 @@ async function updateQuote(salesQuoteId, payload, user) {
         bookingId: billingState.booking.stream_project_booking_id,
         salesQuoteId,
         quoteTotal: newTotal,
-        paidAmount: currentPaymentSummary?.paid_amount || collectedAmount,
+        paidAmount: paidAmountForSummary,
         creditUsedAmount: currentPaymentSummary?.credit_used_amount || 0,
         creditCreatedAmount: currentPaymentSummary?.credit_created_amount || 0,
         lastQuoteChangeType: summaryChangeType,

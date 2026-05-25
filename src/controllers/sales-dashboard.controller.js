@@ -83,7 +83,10 @@ async function updatePaymentSummaryForQuoteChangeReview({
   const quoteTotal = decision === 'approve'
     ? newTotal
     : roundCurrency(existingSummary?.quote_total || previousTotal);
-  const paidAmount = roundCurrency(existingSummary?.paid_amount || metadata.collected_amount || previousTotal || 0);
+  const existingPaidAmount = roundCurrency(existingSummary?.paid_amount || metadata.collected_amount || previousTotal || 0);
+  const paidAmount = decision === 'approve' && reducedAmount > 0
+    ? Math.min(existingPaidAmount, newTotal)
+    : existingPaidAmount;
   const creditCreatedAmount = decision === 'approve'
     ? roundCurrency(Number(existingSummary?.credit_created_amount || 0) + approvedCreditAmount)
     : roundCurrency(existingSummary?.credit_created_amount || 0);

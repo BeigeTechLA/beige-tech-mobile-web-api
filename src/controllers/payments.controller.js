@@ -431,6 +431,7 @@ async function markAdditionalQuoteInvoiceAsPaid({
   paymentIntentId = null,
   paymentMetadata = {},
   paidAmount = null,
+  creditUsedAmount = 0,
   transaction
 }) {
   if (!bookingId || !db.invoice_send_history) return false;
@@ -523,17 +524,22 @@ async function markAdditionalQuoteInvoiceAsPaid({
   const summaryDueAmount = round2(existingSummary?.due_amount || 0);
   const summaryPaidAmount = round2(existingSummary?.paid_amount || 0);
   const summaryQuoteTotal = round2(existingSummary?.quote_total || 0);
+  const existingCreditUsedAmount = round2(existingSummary?.credit_used_amount || 0);
+  const requestedCreditUsedAmount = round2(creditUsedAmount || 0);
   const amountToApply = existingSummary
     ? Math.min(Math.max(invoiceAmount, 0), Math.max(summaryDueAmount, 0))
     : Math.max(invoiceAmount, 0);
   invoiceAmount = round2(amountToApply);
+  const creditAmountToApply = existingSummary
+    ? Math.min(Math.max(requestedCreditUsedAmount, 0), Math.max(summaryDueAmount - invoiceAmount, 0))
+    : Math.max(requestedCreditUsedAmount, 0);
 
   const approvedAdditionalChange = await getLatestApprovedAdditionalQuoteChange({
     bookingId,
     salesQuoteId: salesQuote.sales_quote_id,
     transaction
   });
-  if (!(invoiceAmount > 0) && approvedAdditionalChange) {
+  if (!(invoiceAmount > 0) && !(creditAmountToApply > 0) && approvedAdditionalChange) {
     invoiceAmount = round2(approvedAdditionalChange.extra_amount || 0);
   }
 
@@ -564,8 +570,8 @@ async function markAdditionalQuoteInvoiceAsPaid({
 
   if (approvedAdditionalChange || metadataPaymentSource === PAYMENT_SOURCE.ADDITIONAL_INVOICE) {
     const quoteTotal = round2(summaryQuoteTotal || salesQuote.total || 0);
-    const creditUsedAmount = round2(existingSummary?.credit_used_amount || 0);
-    const targetPaidAmount = round2(Math.max(quoteTotal - creditUsedAmount, 0));
+    const totalCreditUsedAmount = round2(existingCreditUsedAmount + creditAmountToApply);
+    const targetPaidAmount = round2(Math.max(quoteTotal - totalCreditUsedAmount, 0));
     const paidAfterAdditional = round2(summaryPaidAmount + Number(invoiceAmount || 0));
     const settledPaidAmount = round2(Math.min(Math.max(paidAfterAdditional, 0), targetPaidAmount));
 
@@ -574,7 +580,7 @@ async function markAdditionalQuoteInvoiceAsPaid({
       salesQuoteId: salesQuote.sales_quote_id,
       quoteTotal,
       paidAmount: settledPaidAmount,
-      creditUsedAmount,
+      creditUsedAmount: totalCreditUsedAmount,
       creditCreatedAmount: existingSummary?.credit_created_amount || 0,
       lastQuoteChangeType: 'increase',
       lastQuoteChangeAmount: round2(existingSummary?.last_quote_change_amount || approvedAdditionalChange?.extra_amount || invoiceAmount),
@@ -1995,7 +2001,8 @@ exports.confirmPaymentMulti = async (req, res) => {
   const transaction = await db.sequelize.transaction();
 
   try {
-    const { paymentIntentId, booking_id, referral_code, use_credit, credit_amount_used } = req.body;
+    const { booking_id, referral_code, use_credit, credit_amount_used } = req.body;
+    let { paymentIntentId } = req.body;
     const shouldUseCredit = Boolean(use_credit);
     const requestedCreditAmount = round2(credit_amount_used || 0);
 
@@ -2024,6 +2031,16 @@ exports.confirmPaymentMulti = async (req, res) => {
       transaction
     });
     const isSummaryNoPaymentDue = paymentState.hasSummary && paymentState.isPaid;
+    const payableAmount = paymentState.hasSummary ? paymentState.payableAmount : quoteTotal;
+    const isCreditCoveredCheckout =
+      shouldUseCredit &&
+      requestedCreditAmount > 0 &&
+      round2(payableAmount - requestedCreditAmount) <= 0;
+    const looksLikeClientSecret = typeof paymentIntentId === 'string' && paymentIntentId.includes('_secret_');
+
+    if (isCreditCoveredCheckout && (!paymentIntentId || looksLikeClientSecret)) {
+      paymentIntentId = `free_checkout_intent_${booking_id}`;
+    }
 
     let normalizedReferralCode = '';
     if (referral_code) {
@@ -2046,8 +2063,6 @@ exports.confirmPaymentMulti = async (req, res) => {
     // 2. Check if this is a Free Checkout mock ID
     if (paymentIntentId.startsWith('free_checkout_intent_')) {
       const isQuoteZero = quoteTotal === 0;
-      const payableAfterCredit = round2(quoteTotal - requestedCreditAmount);
-      const isCreditCoveredCheckout = shouldUseCredit && requestedCreditAmount > 0 && payableAfterCredit <= 0;
 
       // SECURITY CHECK: free checkout only if quote is zero or fully covered by account credit.
       if (!booking.primary_quote || (!isQuoteZero && !isCreditCoveredCheckout && !isSummaryNoPaymentDue)) {
@@ -2085,16 +2100,6 @@ exports.confirmPaymentMulti = async (req, res) => {
     let usedCreditEntry = null;
 
     if (existingPayment) {
-      if (bookingAlreadyPaid) {
-        await markAdditionalQuoteInvoiceAsPaid({
-          bookingId: booking_id,
-          paymentIntentId,
-          paymentMetadata: paymentIntent?.metadata || {},
-          paidAmount: existingPayment.total_amount,
-          transaction
-        });
-      }
-
       if (shouldUseCredit && requestedCreditAmount > 0) {
         usedCreditEntry = await accountCreditService.consumeAccountCreditForPayment({
           userId: booking.user_id || null,
@@ -2104,6 +2109,17 @@ exports.confirmPaymentMulti = async (req, res) => {
           paymentId: existingPayment.payment_id,
           paymentIntentId,
           createdByUserId: req.user?.userId || null,
+          transaction
+        });
+      }
+
+      if (bookingAlreadyPaid) {
+        await markAdditionalQuoteInvoiceAsPaid({
+          bookingId: booking_id,
+          paymentIntentId,
+          paymentMetadata: paymentIntent?.metadata || {},
+          paidAmount: existingPayment.total_amount,
+          creditUsedAmount: usedCreditEntry?.amount || 0,
           transaction
         });
       }
@@ -2322,6 +2338,7 @@ exports.confirmPaymentMulti = async (req, res) => {
         paymentIntentId,
         paymentMetadata: paymentIntent?.metadata || {},
         paidAmount: totalAmount,
+        creditUsedAmount: usedCreditEntry?.amount || 0,
         transaction
       });
 
