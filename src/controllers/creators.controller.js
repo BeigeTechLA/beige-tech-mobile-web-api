@@ -139,6 +139,12 @@ const findRadiusStepIndex = (distance) => {
   return RADIUS_STEPS.length - 1;
 };
 
+const toCoordinate = (value) => {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
 /**
  * Search creators with filters
  * GET /api/creators/search
@@ -170,6 +176,12 @@ exports.searchCreators = async (req, res) => {
       min_budget,
       max_budget,
       location,
+      latitude,
+      longitude,
+      lat,
+      lng,
+      location_latitude,
+      location_longitude,
       skills,
       content_type,
       content_types,
@@ -188,6 +200,12 @@ exports.searchCreators = async (req, res) => {
       min_budget,
       max_budget,
       location,
+      latitude,
+      longitude,
+      lat,
+      lng,
+      location_latitude,
+      location_longitude,
       skills,
       content_type,
       content_types,
@@ -199,12 +217,21 @@ exports.searchCreators = async (req, res) => {
 
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
-    // Parse location to determine if we have coordinates for proximity search
+    // Resolve coordinates from explicit query params first, then fallback to location payload parsing.
     let parsedLocation = null;
     let useProximitySearch = false;
     let initialRadius = maxDistance ? parseFloat(maxDistance) : 50; // Default 50 miles
+    const queryLatitude = toCoordinate(location_latitude ?? latitude ?? lat);
+    const queryLongitude = toCoordinate(location_longitude ?? longitude ?? lng);
 
-    if (location) {
+    if (queryLatitude !== null && queryLongitude !== null) {
+      parsedLocation = {
+        lat: queryLatitude,
+        lng: queryLongitude,
+        address: location || null
+      };
+      useProximitySearch = true;
+    } else if (location) {
       parsedLocation = parseLocation(location);
       // Enable proximity search if we have coordinates (with or without maxDistance)
       useProximitySearch = Boolean(
@@ -380,6 +407,8 @@ exports.searchCreators = async (req, res) => {
         'first_name',
         'last_name',
         'primary_role',
+        'latitude',
+        'longitude',
         'hourly_rate',
         'rating',
         'location',
@@ -494,6 +523,11 @@ exports.searchCreators = async (req, res) => {
         total_reviews: generateReviewCount(rating), // Generate realistic count based on rating
         profile_photo: profilePhoto ? profilePhoto.file_path : null,
         location: creatorData.location,
+        search_location: {
+          lat: creatorData.latitude !== null && creatorData.latitude !== undefined ? Number(creatorData.latitude) : null,
+          lng: creatorData.longitude !== null && creatorData.longitude !== undefined ? Number(creatorData.longitude) : null,
+          address: creatorData.location || null
+        },
         experience_years: creatorData.years_of_experience,
         bio: creatorData.bio,
         skills: creatorData.skills,
@@ -516,7 +550,7 @@ exports.searchCreators = async (req, res) => {
         transformedCreators,
         parsedLocation,
         initialRadius,
-        'location'
+        'search_location'
       );
       actualRadius = initialRadius;
 
@@ -536,8 +570,8 @@ exports.searchCreators = async (req, res) => {
             transformedCreators,
             parsedLocation,
             newRadius,
-            'location'
-          );
+            'search_location'
+      );
           actualRadius = newRadius;
           radiusExpanded = true;
 
@@ -548,24 +582,7 @@ exports.searchCreators = async (req, res) => {
           });
         }
       }
-
-      // If still not enough after all radius steps, include all creators (no distance limit)
-      if (proximityResults.length < requiredCount) {
-        // Get all creators sorted by distance (no max distance filter)
-        proximityResults = filterByProximity(
-          transformedCreators,
-          parsedLocation,
-          null, // No limit - include all
-          'location'
-        );
-        actualRadius = null; // Indicates unlimited
-        radiusExpanded = true;
-
-        console.log('🔍 DEBUG: Removed radius limit (unlimited):', {
-          resultsFound: proximityResults.length,
-          requiredCount
-        });
-      }
+      // Keep radius-limited results only; do not include far-away creators.
 
       transformedCreators = proximityResults;
       finalCount = transformedCreators.length;
@@ -1034,3 +1051,4 @@ exports.getRandomCreators = async (req, res) => {
     });
   }
 };
+

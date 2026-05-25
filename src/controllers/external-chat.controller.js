@@ -1445,6 +1445,7 @@ exports.editChatMessage = async (req, res) => {
       method: 'POST',
       body: JSON.stringify({
         content: req.body.content,
+        roomId: req.body.roomId,
         sender: {
           id: sender.id != null ? String(sender.id) : null,
           email: sender.email || null,
@@ -1474,6 +1475,7 @@ exports.deleteChatMessage = async (req, res) => {
     const result = await proxyRequest(`/messages/${req.params.messageId}/delete`, {
       method: 'POST',
       body: JSON.stringify({
+        roomId: req.body.roomId,
         sender: {
           id: sender.id != null ? String(sender.id) : null,
           email: sender.email || null,
@@ -1504,6 +1506,37 @@ exports.reactToChatMessage = async (req, res) => {
       method: 'POST',
       body: JSON.stringify({
         emoji: req.body.emoji,
+        roomId: req.body.roomId,
+        sender: {
+          id: sender.id != null ? String(sender.id) : null,
+          email: sender.email || null,
+          name: sender.name || sender.email || 'Beige User',
+        },
+      }),
+    });
+
+    return res.status(200).json(result);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.markChatRoomRead = async (req, res) => {
+  try {
+    const platformUser = await getPlatformUserById(req.user?.userId || null);
+    const sender = platformUser || {
+      id: String(req.user?.userId || ''),
+      email: null,
+      name: `User ${req.user?.userId || ''}`.trim(),
+    };
+
+    const result = await proxyRequest(`/rooms/${req.params.roomId}/mark-read`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        userId: sender.id != null ? String(sender.id) : null,
         sender: {
           id: sender.id != null ? String(sender.id) : null,
           email: sender.email || null,
