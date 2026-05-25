@@ -2305,17 +2305,6 @@ exports.getLeads = async (req, res) => {
           bookingId: leadJson.booking?.stream_project_booking_id || null
         });
 
-        // 1. Standardize Booking Status & Intent (Using same methods as Detail API)
-        const computedIntent = lead.intent ?? leadAssignmentService.getLeadIntent({ lead, booking: lead.booking });
-        let computedBookingStatus = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
-        if (manualProgress.hasFullPayment) {
-          computedBookingStatus = 'Booked';
-        } else if (manualProgress.isPartiallyPaid) {
-          computedBookingStatus = 'Partially Paid';
-        } else if (hasOutstandingAdditionalPayment(customQuoteFinancials)) {
-          computedBookingStatus = 'Partially Paid';
-        }
-
         const pLinks = leadJson.payment_links || [];
         let activePaymentLink = null;
         if (pLinks.length > 0) {
@@ -2338,6 +2327,28 @@ exports.getLeads = async (req, res) => {
           booking: lead.booking,
           customQuoteFinancials
         });
+        const isFinanciallySettled =
+          payment_status === 'paid' &&
+          Number(quoteAmounts.outstanding_amount || 0) <= 0;
+        const effectiveManualProgress = isFinanciallySettled
+          ? {
+              hasFullPayment: true,
+              paidAmount: Number(quoteAmounts.collected_amount || pricingData?.total || 0),
+              pendingAmount: 0,
+              isPartiallyPaid: false,
+            }
+          : manualProgress;
+
+        // 1. Standardize Booking Status & Intent (Using same methods as Detail API)
+        const computedIntent = lead.intent ?? leadAssignmentService.getLeadIntent({ lead, booking: lead.booking });
+        let computedBookingStatus = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
+        if (hasOutstandingAdditionalPayment(customQuoteFinancials)) {
+          computedBookingStatus = 'Partially Paid';
+        } else if (!isFinanciallySettled && manualProgress.hasFullPayment) {
+          computedBookingStatus = 'Paid';
+        } else if (!isFinanciallySettled && manualProgress.isPartiallyPaid) {
+          computedBookingStatus = 'Partially Paid';
+        }
 
         return {
           ...leadJson,
@@ -2347,7 +2358,7 @@ exports.getLeads = async (req, res) => {
           payment_status: payment_status,
           collected_amount: quoteAmounts.collected_amount,
           outstanding_amount: quoteAmounts.outstanding_amount,
-          manual_payment_summary: manualProgress,
+          manual_payment_summary: effectiveManualProgress,
         };
       })
     );
