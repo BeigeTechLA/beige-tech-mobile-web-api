@@ -1898,7 +1898,17 @@ exports.getStripeInvoicePdf = async (req, res) => {
         });
       }
       const totalAmount = Number(pricingData.total || 0);
-      const allowManualForZeroTotal = totalAmount <= 0;
+      const receiptTotalAmount = Number(
+        pricingData.total_before_credit ||
+        pricingData.subtotal ||
+        totalAmount ||
+        0
+      );
+      const paymentTransaction = booking.payment_id
+        ? await db.payment_transactions.findByPk(booking.payment_id)
+        : null;
+      const paymentPaidAmount = Number(paymentTransaction?.total_amount || 0);
+      const allowManualForZeroTotal = totalAmount <= 0 || Boolean(paymentTransaction);
       if (!manualContext.isManual && !allowManualForZeroTotal) {
         return res.status(400).json({
           success: false,
@@ -1956,14 +1966,19 @@ exports.getStripeInvoicePdf = async (req, res) => {
       const remainingAfterPayment = Number(manualContext.latestManualPayment?.data?.remaining_after_payment ?? NaN);
       const isPaidManual =
         manualContext.latestManualPayment?.data?.payment_type === 'full' ||
-        (Number.isFinite(remainingAfterPayment) && remainingAfterPayment <= 0);
+        (Number.isFinite(remainingAfterPayment) && remainingAfterPayment <= 0) ||
+        Boolean(paymentTransaction);
       const totalManualPaidAmount = manualHistory.reduce((sum, entry) => {
         const amount = Number(entry?.amount || 0);
         return sum + (Number.isFinite(amount) ? amount : 0);
       }, 0);
       const normalizedPaidAmount = isPaidManual
-        ? totalAmount
-        : Math.min(totalAmount, Math.max(totalManualPaidAmount, 0));
+        ? (paymentPaidAmount > 0 ? paymentPaidAmount : receiptTotalAmount)
+        : Math.min(receiptTotalAmount, Math.max(totalManualPaidAmount, 0));
+      const paymentMethodLabel = paymentTransaction?.stripe_payment_intent_id
+        ? 'Stripe'
+        : 'Manual';
+      const paymentDate = paymentTransaction?.created_at || booking.payment_completed_at || new Date();
 
       const pdfBuffer = await generateManualReceiptPdfBuffer({
         invoiceNumber: `INVBEIGE-M-${String(parsedBookingId).padStart(4, '0')}`,
@@ -1992,14 +2007,14 @@ exports.getStripeInvoicePdf = async (req, res) => {
         discountCode: quoteDiscountCode,
         discountType: quoteDiscountType,
         discountValue: quoteDiscountValue,
-        total: totalAmount,
+        total: receiptTotalAmount,
         paidAmount: normalizedPaidAmount,
         paymentHistory: manualHistory.length > 0
           ? manualHistory
           : [{
-              method: 'Manual',
-              date: formatInvoiceDate(new Date()),
-              amount: totalAmount
+              method: paymentMethodLabel,
+              date: formatInvoiceDate(paymentDate),
+              amount: normalizedPaidAmount
             }]
       });
 

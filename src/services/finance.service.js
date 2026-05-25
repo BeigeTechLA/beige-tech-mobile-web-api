@@ -58,6 +58,19 @@ function buildTransactionCode(paymentId, bookingId) {
   return `TXN-${yyyy}-${String(paymentId || bookingId).padStart(6, '0')}`;
 }
 
+function buildInternalInvoicePdfUrl(bookingId) {
+  const baseUrl = String(
+    process.env.API_BASE_URL ||
+    ''
+  ).trim().replace(/\/+$/, '');
+  const invoicePath = `/sales/invoice-pdf/${bookingId}?manual=1`;
+  return baseUrl ? `${baseUrl}${invoicePath}` : `/v1${invoicePath}`;
+}
+
+function buildInternalInvoiceNumber(bookingId) {
+  return `INVBEIGE-M-${String(bookingId).padStart(4, '0')}`;
+}
+
 function buildPayoutRequestCode(creatorId) {
   const date = new Date();
   const yyyy = date.getFullYear();
@@ -715,6 +728,69 @@ async function loadBookingFinanceContext(bookingId, transaction = null) {
   return { booking, payment };
 }
 
+async function ensurePaidBookingInvoiceHistory(booking, payment, transaction = null) {
+  if (!db.invoice_send_history || !booking || !payment) return null;
+
+  const bookingId = Number(booking.stream_project_booking_id);
+  if (!bookingId) return null;
+
+  const existingPaidInvoice = await db.invoice_send_history.findOne({
+    where: { booking_id: bookingId, payment_status: 'paid' },
+    order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+    transaction
+  });
+  if (existingPaidInvoice) return existingPaidInvoice;
+
+  const existingInvoice = await db.invoice_send_history.findOne({
+    where: { booking_id: bookingId },
+    order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+    transaction
+  });
+
+  if (existingInvoice) {
+    await existingInvoice.update({
+      payment_status: 'paid',
+      invoice_number: existingInvoice.invoice_number || buildInternalInvoiceNumber(bookingId),
+      invoice_pdf: existingInvoice.invoice_pdf || buildInternalInvoicePdfUrl(bookingId),
+      sent_at: existingInvoice.sent_at || new Date()
+    }, { transaction });
+    return existingInvoice;
+  }
+
+  const [salesLead, clientLead] = await Promise.all([
+    db.sales_leads.findOne({ where: { booking_id: bookingId }, transaction }),
+    db.client_leads.findOne({ where: { booking_id: bookingId }, transaction })
+  ]);
+
+  const clientName =
+    salesLead?.client_name ||
+    clientLead?.client_name ||
+    deriveNameFromEmail(booking.guest_email || payment.guest_email) ||
+    null;
+  const clientEmail =
+    booking.guest_email ||
+    payment.guest_email ||
+    salesLead?.guest_email ||
+    clientLead?.guest_email ||
+    null;
+
+  return db.invoice_send_history.create({
+    booking_id: bookingId,
+    quote_id: null,
+    lead_id: salesLead?.lead_id || null,
+    client_lead_id: clientLead?.lead_id || null,
+    assigned_sales_rep_id: salesLead?.assigned_sales_rep_id || clientLead?.assigned_sales_rep_id || null,
+    client_name: clientName,
+    client_email: clientEmail,
+    invoice_number: buildInternalInvoiceNumber(bookingId),
+    invoice_url: null,
+    invoice_pdf: buildInternalInvoicePdfUrl(bookingId),
+    payment_status: 'paid',
+    sent_by_user_id: null,
+    sent_at: booking.payment_completed_at || payment.created_at || new Date()
+  }, { transaction });
+}
+
 function calculateCreatorRows({ booking, payment, pricingSnapshot = null, financeTransactionId = null }) {
   const assigned = Array.isArray(booking.assigned_crews) ? booking.assigned_crews : [];
   const creatorsById = new Map();
@@ -846,15 +922,27 @@ async function syncBookingFinance(bookingId, options = {}) {
 
   try {
     const { booking, payment } = await loadBookingFinanceContext(bookingId, transaction);
+    const ensuredInvoice = await ensurePaidBookingInvoiceHistory(booking, payment, transaction);
+    if (ensuredInvoice) {
+      const invoiceRows = Array.isArray(booking.invoice_send_history) ? booking.invoice_send_history : [];
+      const ensuredInvoiceId = Number(ensuredInvoice.invoice_send_history_id);
+      booking.invoice_send_history = [
+        ensuredInvoice,
+        ...invoiceRows.filter((invoice) => Number(invoice.invoice_send_history_id) !== ensuredInvoiceId)
+      ];
+    }
     const pricingSnapshot = await buildPricingSnapshotFromBooking(booking);
     const creatorRowsPreview = calculateCreatorRows({ booking, payment, pricingSnapshot });
     const breakdownPayload = calculateBreakdown({ booking, payment, pricingSnapshot, creatorRows: creatorRowsPreview });
+    const latestInvoice = Array.isArray(booking.invoice_send_history) && booking.invoice_send_history.length
+      ? booking.invoice_send_history[0]
+      : null;
 
     const transactionPayload = {
       transaction_code: buildTransactionCode(payment?.payment_id, booking.stream_project_booking_id),
       booking_id: booking.stream_project_booking_id,
       payment_id: payment?.payment_id || null,
-      invoice_send_history_id: null,
+      invoice_send_history_id: latestInvoice?.invoice_send_history_id || null,
       client_user_id: booking.user_id || null,
       guest_email: booking.guest_email || payment?.guest_email || null,
       transaction_type: 'client_payment',
@@ -1071,6 +1159,24 @@ async function getInvoiceCountsByBookingIds(bookingIds = []) {
   return new Map(rows.map((row) => [Number(row.booking_id), Number(row.invoice_count || 0)]));
 }
 
+async function getLatestInvoicesByBookingIds(bookingIds = []) {
+  const ids = [...new Set(bookingIds.map(Number).filter(Boolean))];
+  if (ids.length === 0 || !db.invoice_send_history) return new Map();
+
+  const rows = await db.invoice_send_history.findAll({
+    where: { booking_id: { [db.Sequelize.Op.in]: ids } },
+    order: [['booking_id', 'ASC'], ['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+    raw: true
+  });
+
+  const map = new Map();
+  rows.forEach((invoice) => {
+    const bookingId = Number(invoice.booking_id);
+    if (!map.has(bookingId)) map.set(bookingId, invoice);
+  });
+  return map;
+}
+
 async function getSearchMatchedBookingIds(search) {
   const term = String(search || '').trim();
   if (!term) return [];
@@ -1157,7 +1263,7 @@ async function syncRecentPaidBookingsMissingFinance(limit = 50) {
   }
 }
 
-function buildFinanceTransactionListRow(plain, leadInfo = {}, invoiceCount = 0) {
+function buildFinanceTransactionListRow(plain, leadInfo = {}, invoiceCount = 0, latestInvoice = null) {
   const metadata = parseJson(plain.metadata_json, null) || {};
   const booking = plain.booking || {};
   const payment = plain.payment || {};
@@ -1195,6 +1301,7 @@ function buildFinanceTransactionListRow(plain, leadInfo = {}, invoiceCount = 0) 
     source: plain.source,
     external_reference: plain.external_reference || payment.stripe_payment_intent_id || null,
     invoices_count: invoiceCount,
+    latest_invoice: latestInvoice ? formatClientInvoice(latestInvoice) : null,
     metadata
   };
 }
@@ -1553,16 +1660,18 @@ async function listTransactions(filters = {}) {
 
   const plainRows = result.rows.map((row) => row.get({ plain: true }));
   const bookingIds = plainRows.map((row) => row.booking_id || row.booking?.stream_project_booking_id).filter(Boolean);
-  const [leadInfoByBookingId, invoiceCountsByBookingId] = await Promise.all([
+  const [leadInfoByBookingId, invoiceCountsByBookingId, latestInvoicesByBookingId] = await Promise.all([
     getLeadInfoByBookingIds(bookingIds),
-    getInvoiceCountsByBookingIds(bookingIds)
+    getInvoiceCountsByBookingIds(bookingIds),
+    getLatestInvoicesByBookingIds(bookingIds)
   ]);
 
   return {
     rows: plainRows.map((plain) => buildFinanceTransactionListRow(
       plain,
       leadInfoByBookingId.get(Number(plain.booking_id || plain.booking?.stream_project_booking_id)) || {},
-      invoiceCountsByBookingId.get(Number(plain.booking_id || plain.booking?.stream_project_booking_id)) || 0
+      invoiceCountsByBookingId.get(Number(plain.booking_id || plain.booking?.stream_project_booking_id)) || 0,
+      latestInvoicesByBookingId.get(Number(plain.booking_id || plain.booking?.stream_project_booking_id)) || null
     )),
     pagination: {
       page,
