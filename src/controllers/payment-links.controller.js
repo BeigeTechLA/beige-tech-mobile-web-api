@@ -2094,8 +2094,7 @@ exports.getStripeInvoicePdf = async (req, res) => {
       const remainingAfterPayment = Number(manualContext.latestManualPayment?.data?.remaining_after_payment ?? NaN);
       const isPaidManual =
         manualContext.latestManualPayment?.data?.payment_type === 'full' ||
-        (Number.isFinite(remainingAfterPayment) && remainingAfterPayment <= 0) ||
-        Boolean(paymentTransaction);
+        (Number.isFinite(remainingAfterPayment) && remainingAfterPayment <= 0);
       const totalManualPaidAmount = manualHistory.reduce((sum, entry) => {
         const amount = Number(entry?.amount || 0);
         return sum + (Number.isFinite(amount) ? amount : 0);
@@ -2147,13 +2146,13 @@ exports.getStripeInvoicePdf = async (req, res) => {
         discountCode: quoteDiscountCode,
         discountType: quoteDiscountType,
         discountValue: quoteDiscountValue,
-        total: receiptTotalAmount,
+        total: totalAmount,
         paidAmount: normalizedPaidAmount,
         paymentHistory: manualHistory.length > 0
           ? manualHistory
           : [{
-              method: paymentMethodLabel,
-              date: formatInvoiceDate(paymentDate),
+              method: hasPaymentSummary ? 'Online Payment' : 'Manual',
+              date: formatInvoiceDate(paymentSummary?.updated_at || new Date()),
               amount: normalizedPaidAmount
             }]
       });

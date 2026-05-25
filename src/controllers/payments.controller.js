@@ -2385,28 +2385,19 @@ exports.confirmPaymentMulti = async (req, res) => {
       transaction
     });
 
-    const projectSync = await ensureProjectAfterPayment({
+    let projectSync = await ensureProjectAfterPayment({
       bookingId: booking_id,
       transaction,
       initiatedByUserId: req.user?.userId || booking.user_id || null,
       ipAddress: req.ip || req.connection?.remoteAddress,
       userAgent: req.headers['user-agent'],
     });
-    const externalWorkspaceSync = await syncExternalWorkspaceAfterPayment(booking);
+    let externalWorkspaceSync = await syncExternalWorkspaceAfterPayment(booking);
 
 
     await transaction.commit();
 
-    let projectSync = { project: null, created: false, error: null };
-    let externalWorkspaceSync = { success: false, message: null };
     try {
-      projectSync = await ensureProjectAfterPayment({
-        bookingId: booking_id,
-        initiatedByUserId: req.user?.userId || booking.user_id || null,
-        ipAddress: req.ip || req.connection?.remoteAddress,
-        userAgent: req.headers['user-agent'],
-      });
-      externalWorkspaceSync = await syncExternalWorkspaceAfterPayment(booking);
       await financeService.syncBookingFinance(booking_id, {
         userId: req.user?.userId || booking.user_id || null
       });
