@@ -1893,10 +1893,10 @@ const sendNewClientSignupNotification = async (userData) => {
  */
 const sendNewCrewSignupNotification = async (crewData) => {
   try {
-    const to = process.env.SALES_NOTIFICATION_EMAIL;
+    const to = process.env.CP_NOTIFICATION_EMAIL;
     const templateId = CREW_SIGNUP_NOTIFICATION_TEMPLATE_ID;
 
-    if (!to) return { success: false, error: 'SALES_NOTIFICATION_EMAIL is not configured' };
+    if (!to) return { success: false, error: 'CP_NOTIFICATION_EMAIL is not configured' };
 
     return await sendEmail({
       to,
@@ -2143,9 +2143,9 @@ const sendCPStatusUpdateByRequest = async ({ project_id, crew_member_id, cp_acti
       attributes: ['first_name', 'last_name']
     });
 
-    const toEmail = process.env.CP_NOTIFICATION_EMAIL;
+    const toEmail = process.env.SALES_NOTIFICATION_EMAIL;
     if (!toEmail) {
-      return { success: false, error: 'CP_NOTIFICATION_EMAIL is not configured' };
+      return { success: false, error: 'SALES_NOTIFICATION_EMAIL is not configured' };
     }
 
     const cpName =
@@ -2509,6 +2509,11 @@ const sendCustomQuoteProposalEmail = async (data) => {
         ? String(data.proposal_amount).replace(/^\$/, '')
         : formatAmount(data.proposal_amount))
       : 'TBD';
+    const formatOptionalAmount = (value) => (
+      value !== undefined && value !== null && value !== ''
+        ? (String(value).startsWith('$') ? String(value).replace(/^\$/, '') : formatAmount(value))
+        : ''
+    );
     const attachmentContent = typeof data?.attachment_content === 'string'
       ? data.attachment_content.replace(/^data:.*;base64,/, '').trim()
       : null;
@@ -2530,6 +2535,14 @@ const sendCustomQuoteProposalEmail = async (data) => {
         add_ons: data?.add_ons || 'TBD',
         includes: data?.includes || 'TBD',
         proposal_amount: proposalAmount,
+        proposal_amount_label: data?.proposal_amount_label || 'Estimate Proposal Amount',
+        is_additional_payment: Boolean(data?.is_additional_payment),
+        is_reduced_payment: Boolean(data?.is_reduced_payment),
+        previously_paid_amount: formatOptionalAmount(data?.previously_paid_amount),
+        revised_total: formatOptionalAmount(data?.revised_total),
+        additional_amount: formatOptionalAmount(data?.additional_amount),
+        reduced_amount: formatOptionalAmount(data?.reduced_amount),
+        payment_note: data?.payment_note || '',
         accept_quote_url: data?.accept_quote_url || ''
       }
     };
@@ -2564,6 +2577,11 @@ const sendQuoteAcceptedClientEmail = async (data) => {
   if (!QUOTE_ACCEPTED_CLIENT_TEMPLATE_ID) {
     return { success: false, error: 'QUOTE_ACCEPTED_CLIENT_TEMPLATE_ID is not configured' };
   }
+  const formatOptionalAmount = (value) => (
+    value !== undefined && value !== null && value !== ''
+      ? (String(value).startsWith('$') ? String(value).replace(/^\$/, '') : formatAmount(value))
+      : ''
+  );
 
   return sendEmail({
     to,
@@ -2573,7 +2591,15 @@ const sendQuoteAcceptedClientEmail = async (data) => {
       client_name: getFirstName(data?.client_name || data?.first_name || '', data?.first_name || 'there') || 'there',
       quote_number: data?.quote_number || 'TBD',
       project_description: data?.project_description || 'TBD',
-      proposal_amount: formatAmount(data?.proposal_amount || 0)
+      proposal_amount: formatAmount(data?.proposal_amount || 0),
+      accepted_amount_label: data?.accepted_amount_label || 'Accepted Amount',
+      is_additional_payment: Boolean(data?.is_additional_payment),
+      is_reduced_payment: Boolean(data?.is_reduced_payment),
+      previously_paid_amount: formatOptionalAmount(data?.previously_paid_amount),
+      revised_total: formatOptionalAmount(data?.revised_total),
+      additional_amount: formatOptionalAmount(data?.additional_amount),
+      reduced_amount: formatOptionalAmount(data?.reduced_amount),
+      payment_note: data?.payment_note || ''
     }
   });
 };
@@ -2587,6 +2613,11 @@ const sendQuoteAcceptedSalesNotificationEmail = async (data) => {
   if (!QUOTE_ACCEPTED_SALES_NOTIFICATION_TEMPLATE_ID) {
     return { success: false, error: 'QUOTE_ACCEPTED_SALES_NOTIFICATION_TEMPLATE_ID is not configured' };
   }
+  const formatOptionalAmount = (value) => (
+    value !== undefined && value !== null && value !== ''
+      ? (String(value).startsWith('$') ? String(value).replace(/^\$/, '') : formatAmount(value))
+      : ''
+  );
 
   return sendEmail({
     to,
@@ -2601,6 +2632,14 @@ const sendQuoteAcceptedSalesNotificationEmail = async (data) => {
       project_description: data?.project_description || 'TBD',
       location: data?.location || 'TBD',
       proposal_amount: formatAmount(data?.proposal_amount || 0),
+      accepted_amount_label: data?.accepted_amount_label || 'Accepted Amount',
+      is_additional_payment: Boolean(data?.is_additional_payment),
+      is_reduced_payment: Boolean(data?.is_reduced_payment),
+      previously_paid_amount: formatOptionalAmount(data?.previously_paid_amount),
+      revised_total: formatOptionalAmount(data?.revised_total),
+      additional_amount: formatOptionalAmount(data?.additional_amount),
+      reduced_amount: formatOptionalAmount(data?.reduced_amount),
+      payment_note: data?.payment_note || '',
       accepted_at: data?.accepted_at || formatDate(new Date())
     }
   });

@@ -10,6 +10,111 @@ const { resolveEventDateAndStartTime, normalizeTime, splitDateTime } = require('
 const accountCreditService = require('../services/account-credit.service');
 const REFERRAL_DISCOUNT_PERCENT = 10;
 
+const parseQuoteActivityMetadata = (value) => {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch (_) {
+    return {};
+  }
+};
+
+const resolveAdditionalPaymentContextForBooking = async (bookingId) => {
+  const normalizedBookingId = Number(bookingId);
+  if (!Number.isFinite(normalizedBookingId) || normalizedBookingId <= 0) return null;
+
+  const linkedLead = await db.sales_leads.findOne({
+    where: { booking_id: normalizedBookingId },
+    attributes: ['lead_id'],
+    order: [['lead_id', 'DESC']]
+  });
+
+  if (!linkedLead?.lead_id) return null;
+
+  const salesQuote = await db.sales_quotes.findOne({
+    where: { lead_id: linkedLead.lead_id },
+    attributes: ['sales_quote_id'],
+    order: [['sales_quote_id', 'DESC']]
+  });
+
+  if (!salesQuote?.sales_quote_id || !db.sales_quote_activities) return null;
+
+  const recentUpdates = await db.sales_quote_activities.findAll({
+    where: {
+      sales_quote_id: salesQuote.sales_quote_id,
+      activity_type: 'updated'
+    },
+    order: [['created_at', 'DESC'], ['activity_id', 'DESC']],
+    limit: 10
+  });
+
+  const refreshActivity = (recentUpdates || [])
+    .map((activity) => ({
+      activity,
+      metadata: parseQuoteActivityMetadata(activity?.metadata_json)
+    }))
+    .find(({ metadata }) => {
+      if (!metadata?.invoice_refresh_required) return false;
+      if (metadata.booking_id && Number(metadata.booking_id) !== normalizedBookingId) return false;
+      return Number(metadata.extra_amount || 0) > 0;
+    });
+
+  if (!refreshActivity?.metadata) return null;
+
+  const additionalAmount = Number(refreshActivity.metadata.extra_amount || 0);
+  if (!(additionalAmount > 0)) return null;
+
+  const revisedTotal = Number(refreshActivity.metadata.new_total || 0);
+  const previouslyPaidAmount = Number(refreshActivity.metadata.previous_total || 0);
+  const approvalStatus = String(refreshActivity.metadata.approval_status || 'pending').toLowerCase();
+
+  const latestRefreshInvoice = db.invoice_send_history
+    ? await db.invoice_send_history.findOne({
+        where: {
+          quote_id: salesQuote.sales_quote_id,
+          booking_id: normalizedBookingId,
+          sent_at: { [db.Sequelize.Op.gte]: refreshActivity.activity.created_at }
+        },
+        order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']]
+      })
+    : null;
+
+  let settledByFollowupTransaction = false;
+  const bookingRecord = await db.stream_project_booking.findByPk(normalizedBookingId, {
+    attributes: ['payment_id']
+  });
+  const basePaymentId = Number(bookingRecord?.payment_id || 0);
+  if (basePaymentId > 0) {
+    const followupPayment = await db.payment_transactions.findOne({
+      where: {
+        payment_id: { [db.Sequelize.Op.gt]: basePaymentId },
+        status: 'succeeded',
+        payment_source: { [db.Sequelize.Op.in]: ['additional_invoice', 'quote_invoice'] }
+      },
+      order: [['payment_id', 'DESC']]
+    });
+    settledByFollowupTransaction = Boolean(followupPayment);
+  }
+
+  const paymentStatus = String(
+    settledByFollowupTransaction
+      ? 'paid'
+      : (latestRefreshInvoice?.payment_status || (additionalAmount > 0 ? 'pending' : ''))
+  ).toLowerCase();
+  const outstandingAmount = ['paid', 'succeeded', 'completed', 'success'].includes(paymentStatus) ? 0 : additionalAmount;
+
+  return {
+    sales_quote_id: salesQuote.sales_quote_id,
+    approval_status: approvalStatus,
+    additional_amount: additionalAmount,
+    previously_paid_amount: previouslyPaidAmount,
+    revised_total: revisedTotal,
+    outstanding_amount: outstandingAmount,
+    payment_status: paymentStatus || null
+  };
+};
+
 const normalizeDateOnlyInput = (value) => {
   const { date } = splitDateTime(value);
   return date || null;
@@ -1534,6 +1639,8 @@ exports.getBookingPaymentDetails = async (req, res) => {
       };
     }).filter(c => c !== null);
 
+    const additionalPaymentContext = await resolveAdditionalPaymentContextForBooking(id);
+
     let quoteResponse = null;
     if (booking.primary_quote) {
       const baseSubtotal = parseFloat(booking.primary_quote.subtotal || 0);
@@ -1622,7 +1729,9 @@ exports.getBookingPaymentDetails = async (req, res) => {
           rate: parseFloat(item.rate),
           rate_type: item.rate_type,
           line_total: parseFloat(item.line_total)
-        }))
+        })),
+        additional_payment: additionalPaymentContext,
+        partial_payment: additionalPaymentContext
       };
     }
 

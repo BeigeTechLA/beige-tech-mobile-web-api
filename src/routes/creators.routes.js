@@ -12,7 +12,8 @@ const creatorsController = require('../controllers/creators.controller');
  * @route   GET /api/creators/search
  * @desc    Search creators with filters
  * @query   budget - max hourly rate
- * @query   location - location search term
+ * @query   location - location search term (fallback)
+ * @query   latitude / longitude (or lat / lng) - preferred for proximity search
  * @query   skills - skills search term
  * @query   content_type - role_id for filtering by role
  * @query   page - page number (default: 1)

@@ -1200,11 +1200,20 @@ Authorization: {{TOKEN}}
 }
 
 ### send custom quote proposal email
-POST {{DEV_URL}}sales/quotes/115/send HTTP/1.1
+POST {{URL}}sales/quotes/1103/send HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {}
+
+### 
+POST {{URL}}payments/manual-webhook-paid HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "booking_id": 1108
+}
 
 ### download sales quote pdf
 GET {{URL}}sales/quotes/1/pdf HTTP/1.1
