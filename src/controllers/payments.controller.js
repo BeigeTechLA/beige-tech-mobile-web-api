@@ -533,6 +533,7 @@ async function markAdditionalQuoteInvoiceAsPaid({
   const creditAmountToApply = existingSummary
     ? Math.min(Math.max(requestedCreditUsedAmount, 0), Math.max(summaryDueAmount - invoiceAmount, 0))
     : Math.max(requestedCreditUsedAmount, 0);
+  const hasOutstandingSummaryPayment = Boolean(existingSummary && summaryDueAmount > 0);
 
   const approvedAdditionalChange = await getLatestApprovedAdditionalQuoteChange({
     bookingId,
@@ -543,13 +544,26 @@ async function markAdditionalQuoteInvoiceAsPaid({
     invoiceAmount = round2(approvedAdditionalChange.extra_amount || 0);
   }
 
-  if (!pendingInvoiceHistory && !approvedAdditionalChange && metadataPaymentSource !== PAYMENT_SOURCE.ADDITIONAL_INVOICE) {
+  if (
+    !pendingInvoiceHistory &&
+    !approvedAdditionalChange &&
+    metadataPaymentSource !== PAYMENT_SOURCE.ADDITIONAL_INVOICE &&
+    !hasOutstandingSummaryPayment
+  ) {
     return false;
   }
 
+  const quoteTotal = round2(summaryQuoteTotal || salesQuote.total || 0);
+  const totalCreditUsedAmount = round2(existingCreditUsedAmount + creditAmountToApply);
+  const targetPaidAmount = round2(Math.max(quoteTotal - totalCreditUsedAmount, 0));
+  const paidAfterAdditional = round2(summaryPaidAmount + Number(invoiceAmount || 0));
+  const settledPaidAmount = round2(Math.min(Math.max(paidAfterAdditional, 0), targetPaidAmount));
+  const nextDueAmount = round2(Math.max(quoteTotal - settledPaidAmount - totalCreditUsedAmount, 0));
+  const nextPaymentStatus = nextDueAmount <= 0 ? 'paid' : (settledPaidAmount > 0 || totalCreditUsedAmount > 0 ? 'partially_paid' : 'pending');
+
   const now = new Date();
   await salesQuote.update({
-    status: 'paid',
+    status: nextPaymentStatus,
     accepted_at: salesQuote.accepted_at || now,
     updated_at: now
   }, { transaction });
@@ -558,23 +572,21 @@ async function markAdditionalQuoteInvoiceAsPaid({
     sales_quote_id: salesQuote.sales_quote_id,
     activity_type: 'status_changed',
     performed_by_user_id: null,
-    message: 'Quote marked as paid after additional invoice payment',
+    message: nextPaymentStatus === 'paid'
+      ? 'Quote marked as paid after additional invoice payment'
+      : 'Quote payment summary updated after invoice payment',
     metadata_json: JSON.stringify({
-      status: 'paid',
+      status: nextPaymentStatus,
       booking_id: bookingId,
       payment_intent_id: paymentIntentId,
       invoice_number: invoiceNumber,
-      amount_paid: invoiceAmount
+      amount_paid: invoiceAmount,
+      credit_used_amount: creditAmountToApply,
+      due_amount: nextDueAmount
     })
   }, { transaction });
 
-  if (approvedAdditionalChange || metadataPaymentSource === PAYMENT_SOURCE.ADDITIONAL_INVOICE) {
-    const quoteTotal = round2(summaryQuoteTotal || salesQuote.total || 0);
-    const totalCreditUsedAmount = round2(existingCreditUsedAmount + creditAmountToApply);
-    const targetPaidAmount = round2(Math.max(quoteTotal - totalCreditUsedAmount, 0));
-    const paidAfterAdditional = round2(summaryPaidAmount + Number(invoiceAmount || 0));
-    const settledPaidAmount = round2(Math.min(Math.max(paidAfterAdditional, 0), targetPaidAmount));
-
+  if (approvedAdditionalChange || metadataPaymentSource === PAYMENT_SOURCE.ADDITIONAL_INVOICE || hasOutstandingSummaryPayment) {
     await bookingPaymentSummaryService.upsertBookingPaymentSummary({
       bookingId,
       salesQuoteId: salesQuote.sales_quote_id,
@@ -582,9 +594,13 @@ async function markAdditionalQuoteInvoiceAsPaid({
       paidAmount: settledPaidAmount,
       creditUsedAmount: totalCreditUsedAmount,
       creditCreatedAmount: existingSummary?.credit_created_amount || 0,
-      lastQuoteChangeType: 'increase',
+      lastQuoteChangeType: approvedAdditionalChange || metadataPaymentSource === PAYMENT_SOURCE.ADDITIONAL_INVOICE
+        ? 'increase'
+        : existingSummary?.last_quote_change_type || 'none',
       lastQuoteChangeAmount: round2(existingSummary?.last_quote_change_amount || approvedAdditionalChange?.extra_amount || invoiceAmount),
-      lastQuoteChangeStatus: 'approved',
+      lastQuoteChangeStatus: approvedAdditionalChange || metadataPaymentSource === PAYMENT_SOURCE.ADDITIONAL_INVOICE
+        ? 'approved'
+        : existingSummary?.last_quote_change_status || 'none',
       transaction
     });
   }
@@ -644,18 +660,7 @@ async function processStripePaidWebhookEvent(event, req = {}) {
   const transaction = await db.sequelize.transaction();
 
   try {
-    if (paymentIntentId) {
-      const existing = await db.payment_transactions.findOne({
-        where: { stripe_payment_intent_id: paymentIntentId },
-        transaction
-      });
-
-      if (existing) {
-        await transaction.rollback();
-        console.log(`Webhook: payment already processed for booking ${booking_id}`);
-        return { received: true, duplicate: true };
-      }
-    } else {
+    if (!paymentIntentId) {
       console.log(`Webhook ${event.type}: no payment intent id for booking ${booking_id}, continuing with booking-level idempotency`);
     }
 
@@ -675,13 +680,82 @@ async function processStripePaidWebhookEvent(event, req = {}) {
       metadata: invoiceMetadata,
       transaction
     });
+    const webhookShouldUseCredit =
+      ['1', 'true', 'yes'].includes(String(invoiceMetadata?.use_credit || '').toLowerCase());
+    const webhookRequestedCreditAmount = round2(invoiceMetadata?.credit_amount_used || 0);
+
+    if (paymentIntentId) {
+      const existing = await db.payment_transactions.findOne({
+        where: { stripe_payment_intent_id: paymentIntentId },
+        transaction
+      });
+
+      if (existing) {
+        const duplicateSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(booking_id, transaction);
+        const duplicateSummaryDueAmount = round2(duplicateSummary?.due_amount || 0);
+        let usedCreditEntry = null;
+        if (webhookShouldUseCredit && webhookRequestedCreditAmount > 0) {
+          usedCreditEntry = await accountCreditService.consumeAccountCreditForPayment({
+            userId: booking.user_id || null,
+            guestEmail: booking.guest_email || dataObject.customer_email || dataObject.receipt_email || null,
+            bookingId: booking_id,
+            amount: webhookRequestedCreditAmount,
+            paymentId: existing.payment_id,
+            paymentIntentId,
+            createdByUserId: null,
+            transaction
+          });
+        }
+        const duplicateCreditApplied = round2(usedCreditEntry?.amount || 0);
+        const duplicateCashAmountToApply = duplicateSummary
+          ? round2(Math.min(
+            round2(existing.total_amount || 0),
+            Math.max(duplicateSummaryDueAmount - duplicateCreditApplied, 0)
+          ))
+          : round2(existing.total_amount || 0);
+
+        const additionalInvoiceMarkedPaid = await markAdditionalQuoteInvoiceAsPaid({
+          bookingId: booking_id,
+          stripeInvoice,
+          paymentIntentId,
+          paymentMetadata: invoiceMetadata || {},
+          paidAmount: duplicateCashAmountToApply,
+          creditUsedAmount: duplicateCreditApplied,
+          transaction
+        });
+
+        await transaction.commit();
+        console.log(`Webhook: payment already processed for booking ${booking_id}`);
+        return {
+          received: true,
+          duplicate: true,
+          additional_invoice_paid: Boolean(additionalInvoiceMarkedPaid),
+          credit_applied: duplicateCreditApplied
+        };
+      }
+    }
 
     if (booking.payment_id || booking.is_completed === 1) {
+      let usedCreditEntry = null;
+      if (webhookShouldUseCredit && webhookRequestedCreditAmount > 0) {
+        usedCreditEntry = await accountCreditService.consumeAccountCreditForPayment({
+          userId: booking.user_id || null,
+          guestEmail: booking.guest_email || null,
+          bookingId: booking_id,
+          amount: webhookRequestedCreditAmount,
+          paymentId: null,
+          paymentIntentId,
+          createdByUserId: null,
+          transaction
+        });
+      }
+
       const additionalInvoiceMarkedPaid = await markAdditionalQuoteInvoiceAsPaid({
         bookingId: booking_id,
         stripeInvoice,
         paymentIntentId,
         paymentMetadata: invoiceMetadata || {},
+        creditUsedAmount: usedCreditEntry?.amount || 0,
         transaction
       });
 
@@ -777,6 +851,20 @@ async function processStripePaidWebhookEvent(event, req = {}) {
       status: 'succeeded'
     }, { transaction });
 
+    let usedCreditEntry = null;
+    if (webhookShouldUseCredit && webhookRequestedCreditAmount > 0) {
+      usedCreditEntry = await accountCreditService.consumeAccountCreditForPayment({
+        userId: booking.user_id || null,
+        guestEmail: booking.guest_email || dataObject.customer_email || dataObject.receipt_email || null,
+        bookingId: booking_id,
+        amount: webhookRequestedCreditAmount,
+        paymentId: payment.payment_id,
+        paymentIntentId,
+        createdByUserId: null,
+        transaction
+      });
+    }
+
     await db.stream_project_booking.update({
       is_draft: 0,
       payment_id: payment.payment_id,
@@ -805,6 +893,7 @@ async function processStripePaidWebhookEvent(event, req = {}) {
       bookingId: booking_id,
       salesQuoteId,
       amountPaid,
+      creditUsedAmount: usedCreditEntry?.amount || 0,
       transaction
     });
 
@@ -1907,8 +1996,12 @@ exports.createPaymentIntentMulti = async (req, res) => {
       booking_id,
       amount,
       guest_email,
-      payment_source
+      payment_source,
+      use_credit,
+      credit_amount_used
     } = req.body;
+    const shouldUseCredit = Boolean(use_credit);
+    const requestedCreditAmount = round2(credit_amount_used || 0);
 
     // 1. Validation
     if (!booking_id) {
@@ -1932,7 +2025,14 @@ exports.createPaymentIntentMulti = async (req, res) => {
       quoteTotal: amount,
       transaction: null
     });
-    const amountToCharge = paymentState.hasSummary ? paymentState.payableAmount : round2(amount || 0);
+    const requestedAmount = round2(amount || 0);
+    const amountToCharge = paymentState.hasSummary
+      ? (
+        requestedAmount > 0
+          ? round2(Math.min(requestedAmount, paymentState.payableAmount))
+          : round2(Math.max(paymentState.payableAmount - requestedCreditAmount, 0))
+      )
+      : requestedAmount;
 
     // 3. Handle 100% Discount ($0.00) Case
     // Stripe does not allow creating intents for $0.00
@@ -1970,6 +2070,8 @@ exports.createPaymentIntentMulti = async (req, res) => {
         guest_email: guest_email || booking.guest_email || '',
         type: 'multi-creator',
         shoot_name: booking.shoot_name || '',
+        use_credit: shouldUseCredit ? '1' : '0',
+        credit_amount_used: shouldUseCredit ? String(requestedCreditAmount) : '0',
       }
     });
 
