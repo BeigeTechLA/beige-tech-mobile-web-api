@@ -1959,3 +1959,4 @@ CREATE TABLE IF NOT EXISTS booking_manual_payments (
 
 ALTER TABLE `users` ADD COLUMN `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER `created_at`;
 UPDATE `users` SET `updated_at` = `created_at`;
+
