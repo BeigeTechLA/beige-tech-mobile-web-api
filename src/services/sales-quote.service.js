@@ -3505,6 +3505,44 @@ async function ensureInitialQuoteVersion({
   });
 }
 
+async function updateLatestQuoteVersionSnapshot({
+  transaction,
+  quoteRecord,
+  lineItems = null,
+  userId = null,
+  sourceActivityId = null,
+  changeReason = null
+}) {
+  const quote = toPlainRecord(quoteRecord) || {};
+  const latestVersion = await getLatestQuoteVersionRecord(quote.sales_quote_id, transaction);
+
+  if (!latestVersion) {
+    return createQuoteVersion({
+      transaction,
+      quoteRecord,
+      lineItems,
+      userId,
+      sourceActivityId,
+      changeReason
+    });
+  }
+
+  const persistedQuote = await db.sales_quotes.findByPk(quote.sales_quote_id, { transaction });
+  const resolvedLineItems = Array.isArray(lineItems)
+    ? lineItems
+    : await loadQuoteLineItemsForVersionSnapshot(quote.sales_quote_id, transaction);
+  const snapshot = buildQuoteVersionSnapshot(persistedQuote || quoteRecord, resolvedLineItems);
+
+  await latestVersion.update({
+    source_activity_id: sourceActivityId || latestVersion.source_activity_id || null,
+    created_by_user_id: userId || latestVersion.created_by_user_id || null,
+    change_reason: changeReason || latestVersion.change_reason || null,
+    quote_snapshot_json: stringifyConfig(snapshot)
+  }, { transaction });
+
+  return latestVersion;
+}
+
 async function listQuoteVersionsById(salesQuoteId, transaction = null) {
   const rows = await db.sales_quote_versions.findAll({
     where: { sales_quote_id: salesQuoteId },
@@ -4336,13 +4374,24 @@ async function updateQuote(salesQuoteId, payload, user) {
       )
     });
 
-    await createQuoteVersion({
-      transaction,
-      quoteRecord: quote,
-      userId: user.userId,
-      sourceActivityId: updatedActivity.activity_id,
-      changeReason: payload.edit_reason ? String(payload.edit_reason).trim() : 'Quote updated'
-    });
+    const versionChangeReason = payload.edit_reason ? String(payload.edit_reason).trim() : 'Quote updated';
+    if (previousQuoteSnapshot.status === 'draft') {
+      await updateLatestQuoteVersionSnapshot({
+        transaction,
+        quoteRecord: quote,
+        userId: user.userId,
+        sourceActivityId: updatedActivity.activity_id,
+        changeReason: versionChangeReason
+      });
+    } else {
+      await createQuoteVersion({
+        transaction,
+        quoteRecord: quote,
+        userId: user.userId,
+        sourceActivityId: updatedActivity.activity_id,
+        changeReason: versionChangeReason
+      });
+    }
 
     const currentPaymentSummary = billingState.booking?.stream_project_booking_id
       ? await bookingPaymentSummaryService.getBookingPaymentSummary(
