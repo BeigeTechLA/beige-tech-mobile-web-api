@@ -66,6 +66,31 @@ const buildShootNeedsAttention = (project = {}, formSubmission = null) => {
   };
 };
 
+const normalizeLocationForStorage = (location) => {
+  if (location === undefined) return undefined;
+  if (location === null) return null;
+  if (typeof location === 'string') return location.trim() || null;
+  if (typeof location === 'object') return JSON.stringify(location);
+  return String(location);
+};
+
+const isValidDateOnly = (date) => moment(String(date), 'YYYY-MM-DD', true).isValid();
+
+const normalizeScheduleTime = (time) => {
+  if (time === null || time === undefined || time === '') return null;
+  const parsed = moment(String(time), ['HH:mm:ss', 'HH:mm'], true);
+  return parsed.isValid() ? parsed.format('HH:mm:ss') : null;
+};
+
+const calculateDurationHours = (startTime, endTime) => {
+  if (!startTime || !endTime) return null;
+  const start = moment(startTime, 'HH:mm:ss', true);
+  const end = moment(endTime, 'HH:mm:ss', true);
+  if (!start.isValid() || !end.isValid()) return null;
+  const diff = end.diff(start, 'minutes');
+  return diff > 0 ? Math.round((diff / 60) * 100) / 100 : null;
+};
+
 const getCPNewBookingEmailFields = (booking = {}, fallbackClientName = '', fallbackShootAmount = null) => ({
   client_name:
     fallbackClientName ||
@@ -1741,6 +1766,265 @@ exports.getProjectDetails = async (req, res) => {
 
   } catch (error) {
     console.error('Error fetching project details:', error);
+    return res.status(500).json({ error: true, message: 'Internal server error', details: error.message });
+  }
+};
+
+exports.updateProjectDateLocation = async (req, res) => {
+  let transaction = null;
+  try {
+    const { project_id } = req.params;
+    const {
+      event_date,
+      date,
+      start_date,
+      event_location,
+      location,
+      booking_type,
+      booking_days,
+      start_time,
+      end_time,
+      duration_hours,
+      time_zone
+    } = req.body || {};
+
+    if (!project_id) {
+      return res.status(400).json({ error: true, message: 'Project ID is required' });
+    }
+
+    const requestedBookingType = booking_type ? String(booking_type).toLowerCase().trim() : null;
+    const nextDate = event_date ?? date ?? start_date;
+    const nextLocation = event_location !== undefined ? event_location : location;
+    const hasBookingDaysPayload = Array.isArray(booking_days);
+    const hasScheduleUpdate =
+      nextDate !== undefined ||
+      hasBookingDaysPayload ||
+      requestedBookingType === 'single_day' ||
+      requestedBookingType === 'multi_day';
+    const hasLocationUpdate = nextLocation !== undefined;
+
+    if (!hasScheduleUpdate && !hasLocationUpdate) {
+      return res.status(400).json({
+        error: true,
+        message: 'Please provide schedule fields or event_location/location to update.'
+      });
+    }
+
+    const normalizedBookingDays = hasBookingDaysPayload
+      ? booking_days
+          .filter((day) => day)
+          .map((day) => {
+            const dayDate = day.date || day.event_date || day.start_date;
+            const startTime = normalizeScheduleTime(day.start_time || day.startTime);
+            const endTime = normalizeScheduleTime(day.end_time || day.endTime);
+            return {
+              event_date: dayDate,
+              start_time: startTime,
+              end_time: endTime,
+              duration_hours: day.duration_hours != null
+                ? Number(day.duration_hours)
+                : calculateDurationHours(startTime, endTime),
+              time_zone: day.time_zone || day.timeZone || time_zone || null
+            };
+          })
+      : [];
+
+    const resolvedBookingType =
+      requestedBookingType ||
+      (normalizedBookingDays.length > 0 ? 'multi_day' : nextDate !== undefined ? 'single_day' : null);
+
+    if (resolvedBookingType && !['single_day', 'multi_day'].includes(resolvedBookingType)) {
+      return res.status(400).json({
+        error: true,
+        message: 'booking_type must be single_day or multi_day.'
+      });
+    }
+
+    if (resolvedBookingType === 'multi_day' && normalizedBookingDays.length === 0) {
+      return res.status(400).json({
+        error: true,
+        message: 'booking_days is required for multi_day booking_type.'
+      });
+    }
+
+    const invalidBookingDay = normalizedBookingDays.find((day) => !hasValue(day.event_date) || !isValidDateOnly(day.event_date));
+    if (invalidBookingDay) {
+      return res.status(400).json({
+        error: true,
+        message: 'Each booking_days item must include date in YYYY-MM-DD format.'
+      });
+    }
+
+    if (resolvedBookingType === 'single_day' && (!hasValue(nextDate) || !isValidDateOnly(nextDate))) {
+      return res.status(400).json({
+        error: true,
+        message: 'start_date/event_date must be in YYYY-MM-DD format for single_day booking_type.'
+      });
+    }
+
+    const normalizedLocation = normalizeLocationForStorage(nextLocation);
+    if (hasLocationUpdate && !hasValue(normalizedLocation)) {
+      return res.status(400).json({
+        error: true,
+        message: 'event_location cannot be empty.'
+      });
+    }
+
+    const normalizedStartTime = normalizeScheduleTime(start_time);
+    const normalizedEndTime = normalizeScheduleTime(end_time);
+    if (start_time && !normalizedStartTime) {
+      return res.status(400).json({ error: true, message: 'start_time must be in HH:mm or HH:mm:ss format.' });
+    }
+    if (end_time && !normalizedEndTime) {
+      return res.status(400).json({ error: true, message: 'end_time must be in HH:mm or HH:mm:ss format.' });
+    }
+
+    const project = await stream_project_booking.findOne({
+      where: { stream_project_booking_id: project_id }
+    });
+
+    if (!project) {
+      return res.status(404).json({ error: true, message: 'Project not found' });
+    }
+
+    transaction = await db.sequelize.transaction();
+
+    const sortedBookingDays = [...normalizedBookingDays].sort(
+      (a, b) => new Date(a.event_date) - new Date(b.event_date)
+    );
+
+    const primaryBookingDay =
+      resolvedBookingType === 'multi_day'
+        ? sortedBookingDays[0]
+        : null;
+
+    const primaryScheduleDate =
+      resolvedBookingType === 'multi_day'
+        ? primaryBookingDay?.event_date || null
+        : nextDate || null;
+
+    const primaryStartTime =
+      resolvedBookingType === 'multi_day'
+        ? primaryBookingDay?.start_time || null
+        : normalizedStartTime || null;
+
+    const primaryEndTime =
+      resolvedBookingType === 'multi_day'
+        ? primaryBookingDay?.end_time || null
+        : normalizedEndTime || null;
+
+    const primaryTimeZone =
+      resolvedBookingType === 'multi_day'
+        ? primaryBookingDay?.time_zone || null
+        : time_zone || null;
+
+    let totalDurationHours =
+      resolvedBookingType === 'multi_day'
+        ? sortedBookingDays.reduce((sum, day) => {
+          return sum + (Number(day.duration_hours) || 0);
+        }, 0)
+        : duration_hours != null
+          ? Number(duration_hours)
+          : calculateDurationHours(normalizedStartTime, normalizedEndTime);
+
+    if (totalDurationHours > 0) {
+      totalDurationHours = Math.round(totalDurationHours * 100) / 100;
+    } else {
+      totalDurationHours = null;
+    }
+
+    const updatePayload = {
+      event_date: primaryScheduleDate,
+      start_time: primaryStartTime,
+      end_time: primaryEndTime,
+      time_zone: primaryTimeZone,
+      duration_hours: totalDurationHours
+    };
+
+    if (hasLocationUpdate) {
+      const latitude = req.body.latitude ?? null;
+      const longitude = req.body.longitude ?? null;
+      updatePayload.event_location = normalizedLocation;
+      updatePayload.event_latitude = latitude;
+      updatePayload.event_longitude = longitude;
+    }
+
+    if (Object.keys(updatePayload).length > 0) {
+      await project.update(updatePayload, { transaction });
+    }
+
+    if (resolvedBookingType === 'multi_day') {
+      await db.stream_project_booking_days.destroy({
+        where: { stream_project_booking_id: project.stream_project_booking_id },
+        transaction
+      });
+
+      await db.stream_project_booking_days.bulkCreate(
+        sortedBookingDays.map((day) => ({
+          stream_project_booking_id: project.stream_project_booking_id,
+          event_date: day.event_date,
+          start_time: day.start_time,
+          end_time: day.end_time,
+          duration_hours: day.duration_hours,
+          time_zone: day.time_zone,
+          updated_at: new Date()
+        })),
+        { transaction }
+      );
+    }
+
+    if (resolvedBookingType === 'single_day') {
+      await db.stream_project_booking_days.destroy({
+        where: { stream_project_booking_id: project.stream_project_booking_id },
+        transaction
+      });
+    }
+
+    const [bookingDays, formSubmission] = await Promise.all([
+      db.stream_project_booking_days.findAll({
+        where: { stream_project_booking_id: project.stream_project_booking_id },
+        attributes: ['event_date', 'start_time', 'end_time', 'duration_hours', 'time_zone'],
+        order: [['event_date', 'ASC']],
+        transaction,
+        raw: true
+      }),
+      project_form_submissions.findOne({
+        where: { project_id: project.stream_project_booking_id, is_active: 1 },
+        attributes: ['id'],
+        order: [['created_at', 'DESC']],
+        transaction,
+        raw: true
+      })
+    ]);
+
+    const refreshedProject = project.toJSON();
+    refreshedProject.booking_days = bookingDays;
+
+    await transaction.commit();
+
+    return res.status(200).json({
+      error: false,
+      message: 'Project date/location updated successfully',
+      data: {
+        project_id: refreshedProject.stream_project_booking_id,
+        booking_type: resolvedBookingType,
+        event_date: refreshedProject.event_date,
+        start_time: refreshedProject.start_time,
+        end_time: refreshedProject.end_time,
+        duration_hours: refreshedProject.duration_hours,
+        time_zone: refreshedProject.time_zone,
+        event_location: refreshedProject.event_location,
+        event_latitude: refreshedProject.event_latitude,
+        event_longitude: refreshedProject.event_longitude,
+        booking_days: bookingDays,
+        needs_attention: buildShootNeedsAttention(refreshedProject, formSubmission)
+      }
+    });
+  } catch (error) {
+    if (transaction) {
+      try { await transaction.rollback(); } catch (_) {}
+    }
+    console.error('Error updating project attention fields:', error);
     return res.status(500).json({ error: true, message: 'Internal server error', details: error.message });
   }
 };
