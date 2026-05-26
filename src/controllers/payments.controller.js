@@ -2290,6 +2290,7 @@ exports.confirmPaymentMulti = async (req, res) => {
     let usedCreditEntry = null;
 
     if (existingPayment) {
+      const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(booking_id, transaction);
       if (shouldUseCredit && requestedCreditAmount > 0) {
         usedCreditEntry = await accountCreditService.consumeAccountCreditForPayment({
           userId: booking.user_id || null,
@@ -2303,13 +2304,22 @@ exports.confirmPaymentMulti = async (req, res) => {
         });
       }
 
-      if (bookingAlreadyPaid) {
+      const creditApplied = round2(usedCreditEntry?.amount || 0);
+      const existingSummaryDueAmount = round2(existingSummary?.due_amount || 0);
+      const cashAmountToApply = existingSummary
+        ? round2(Math.min(
+          round2(existingPayment.total_amount || 0),
+          Math.max(existingSummaryDueAmount - creditApplied, 0)
+        ))
+        : round2(existingPayment.total_amount || 0);
+
+      if (bookingAlreadyPaid || existingSummaryDueAmount > 0 || creditApplied > 0) {
         await markAdditionalQuoteInvoiceAsPaid({
           bookingId: booking_id,
           paymentIntentId,
           paymentMetadata: paymentIntent?.metadata || {},
-          paidAmount: existingPayment.total_amount,
-          creditUsedAmount: usedCreditEntry?.amount || 0,
+          paidAmount: cashAmountToApply,
+          creditUsedAmount: creditApplied,
           transaction
         });
       }
@@ -2394,7 +2404,7 @@ exports.confirmPaymentMulti = async (req, res) => {
         data: {
           payment_id: existingPayment.payment_id,
           booking_id,
-          credit_applied: round2(usedCreditEntry?.amount || 0)
+          credit_applied: creditApplied
         },
       });
     }
@@ -2678,12 +2688,64 @@ exports.confirmPaymentMulti = async (req, res) => {
           : null;
 
         if (existingPayment) {
+          const bookingIdFromBody = req.body?.booking_id || null;
+          const shouldUseCreditFromBody = Boolean(req.body?.use_credit);
+          const requestedCreditFromBody = round2(req.body?.credit_amount_used || 0);
+          let creditApplied = 0;
+
+          if (bookingIdFromBody) {
+            await db.sequelize.transaction(async (repairTransaction) => {
+              const repairBooking = await db.stream_project_booking.findByPk(bookingIdFromBody, {
+                transaction: repairTransaction,
+                lock: repairTransaction.LOCK.UPDATE
+              });
+
+              if (!repairBooking) return;
+
+              let usedCreditEntry = null;
+              if (shouldUseCreditFromBody && requestedCreditFromBody > 0) {
+                usedCreditEntry = await accountCreditService.consumeAccountCreditForPayment({
+                  userId: repairBooking.user_id || null,
+                  guestEmail: repairBooking.guest_email || null,
+                  bookingId: bookingIdFromBody,
+                  amount: requestedCreditFromBody,
+                  paymentId: existingPayment.payment_id,
+                  paymentIntentId: paymentIntentIdFromBody,
+                  createdByUserId: req.user?.userId || null,
+                  transaction: repairTransaction
+                });
+              }
+
+              creditApplied = round2(usedCreditEntry?.amount || 0);
+              const repairSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingIdFromBody, repairTransaction);
+              const repairSummaryDueAmount = round2(repairSummary?.due_amount || 0);
+              const cashAmountToApply = repairSummary
+                ? round2(Math.min(
+                  round2(existingPayment.total_amount || 0),
+                  Math.max(repairSummaryDueAmount - creditApplied, 0)
+                ))
+                : round2(existingPayment.total_amount || 0);
+
+              if (repairSummaryDueAmount > 0 || creditApplied > 0) {
+                await markAdditionalQuoteInvoiceAsPaid({
+                  bookingId: bookingIdFromBody,
+                  paymentIntentId: paymentIntentIdFromBody,
+                  paymentMetadata: {},
+                  paidAmount: cashAmountToApply,
+                  creditUsedAmount: creditApplied,
+                  transaction: repairTransaction
+                });
+              }
+            });
+          }
+
           return res.status(200).json({
             success: true,
             message: 'Payment already processed',
             data: {
               payment_id: existingPayment.payment_id,
-              booking_id: req.body?.booking_id || null
+              booking_id: bookingIdFromBody,
+              credit_applied: creditApplied
             }
           });
         }
