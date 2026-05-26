@@ -42,6 +42,30 @@ const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API
 const EXTERNAL_MEETINGS_API_BASE_URL = process.env.EXTERNAL_MEETINGS_API_BASE_URL || 'http://localhost:5002/v1/external-meetings';
 const EXTERNAL_FILE_MANAGER_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
 
+const hasValue = (value) => {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') return value.trim() !== '';
+  if (Array.isArray(value)) return value.length > 0;
+  return true;
+};
+
+const buildShootNeedsAttention = (project = {}, formSubmission = null) => {
+  const missingFields = [];
+  const bookingDays = Array.isArray(project.booking_days) ? project.booking_days : [];
+  const hasDate = hasValue(project.event_date) || bookingDays.some((day) => hasValue(day.event_date));
+  const hasLocation = hasValue(project.event_location);
+  const hasOnboardingForm = !!formSubmission;
+
+  if (!hasDate) missingFields.push('date');
+  if (!hasLocation) missingFields.push('location');
+  if (!hasOnboardingForm) missingFields.push('onboarding_form');
+
+  return {
+    required: missingFields.length > 0,
+    missing_fields: missingFields,
+  };
+};
+
 const getCPNewBookingEmailFields = (booking = {}, fallbackClientName = '', fallbackShootAmount = null) => ({
   client_name:
     fallbackClientName ||
@@ -1554,10 +1578,16 @@ exports.getProjectDetails = async (req, res) => {
       : [];
 
     // 3. Fetch Transaction Total (from payment_transactions table)
-    const [paymentData] = await Promise.all([
+    const [paymentData, formSubmission] = await Promise.all([
       payment_transactions.findOne({
         where: { payment_id: projectJson.payment_id },
         attributes: ['total_amount'],
+        raw: true
+      }),
+      project_form_submissions.findOne({
+        where: { project_id: projectJson.stream_project_booking_id, is_active: 1 },
+        attributes: ['id'],
+        order: [['created_at', 'DESC']],
         raw: true
       })
     ]);
@@ -1692,6 +1722,7 @@ exports.getProjectDetails = async (req, res) => {
           event_type_labels: eventTypeLabels.join(', '),
           timeline_status: timelineStatus,
           timeline_label: timelineLabel,
+          needs_attention: buildShootNeedsAttention(projectJson, formSubmission),
           sales_leads: undefined // Remove from main object to avoid redundancy
         },
         timeline_status: timelineStatus,
@@ -2617,7 +2648,7 @@ exports.getAllProjectDetails = async (req, res) => {
     });
 
     let projectDetails = await Promise.all(projectRows.map(async (project) => {
-      const [assignedCrewData, assignedEquipData, assignedPostProdData, paymentData] = await Promise.all([
+      const [assignedCrewData, assignedEquipData, assignedPostProdData, paymentData, formSubmission, bookingDaysData] = await Promise.all([
         assigned_crew.findAll({
           where: { project_id: project.stream_project_booking_id, is_active: 1 },
           include: [{ model: crew_members, as: 'crew_member', attributes: ['crew_member_id', 'first_name', 'last_name', 'primary_role'] }],
@@ -2633,6 +2664,17 @@ exports.getAllProjectDetails = async (req, res) => {
         payment_transactions.findOne({
           where: { payment_id: project.payment_id },
           attributes: ['total_amount']
+        }),
+        project_form_submissions.findOne({
+          where: { project_id: project.stream_project_booking_id, is_active: 1 },
+          attributes: ['id'],
+          order: [['created_at', 'DESC']],
+          raw: true
+        }),
+        db.stream_project_booking_days.findAll({
+          where: { stream_project_booking_id: project.stream_project_booking_id },
+          attributes: ['event_date'],
+          raw: true
         }),
       ]);
 
@@ -2655,15 +2697,20 @@ exports.getAllProjectDetails = async (req, res) => {
 
       const timelineStatus = bookingTimelineService.getTimelineStage(project);
       const timelineLabel = bookingTimelineService.getTimelineLabel(timelineStatus);
+      const projectJson = {
+        ...project.toJSON(),
+        booking_days: bookingDaysData
+      };
 
       return {
         project: {
-          ...project.toJSON(),
+          ...projectJson,
           total_paid_amount: displayAmount,
           total_value_amount: totalValueAmount,
           event_type_labels: formattedTypes.join(', '),
           timeline_status: timelineStatus,
           timeline_label: timelineLabel,
+          needs_attention: buildShootNeedsAttention(projectJson, formSubmission),
           event_location: (() => {
             const loc = project.event_location;
             if (!loc) return null;
