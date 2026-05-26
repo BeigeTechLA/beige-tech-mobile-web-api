@@ -3,6 +3,7 @@ const quoteService = require('../services/sales-quote.service');
 const db = require('../models');
 const { Op } = require('sequelize');
 const { renderQuoteAcceptPage, renderQuoteAgreementPage } = require('../utils/quoteAcceptPage');
+const { notifyQuoteApproval, notifyQuoteRejected } = require('../services/notify.service');
 
 function getUserContext(req) {
   return {
@@ -410,6 +411,42 @@ exports.updateQuoteStatus = async (req, res) => {
   try {
     const { status } = req.body;
     const quote = await quoteService.updateQuoteStatus(Number(req.params.quoteId), status, getUserContext(req));
+
+    if (['accepted', 'paid', 'rejected'].includes(status)) {
+      try {
+        const quoteData = quote?.quote || quote;
+        const clientName = quoteData?.client_name
+          || quoteData?.lead?.client_name
+          || quoteData?.client?.name
+          || 'Client';
+        const notifyUserId = quoteData?.assigned_sales_rep_id
+          || quoteData?.created_by_user_id
+          || quoteData?.created_by
+          || quoteData?.lead?.assigned_to_user_id
+          || req.userId;
+        const bookingId = quoteData?.booking_id || quoteData?.lead?.booking_id || null;
+
+        if (status === 'rejected') {
+          await notifyQuoteRejected({
+            quote_id: quoteData?.sales_quote_id || quoteData?.quote_id || Number(req.params.quoteId),
+            booking_id: bookingId,
+            client_name: clientName,
+            sales_rep_user_id: notifyUserId
+          });
+        } else {
+          await notifyQuoteApproval({
+            quote_id: quoteData?.sales_quote_id || quoteData?.quote_id || Number(req.params.quoteId),
+            booking_id: bookingId,
+            client_name: clientName,
+            total_amount: quoteData?.total || quoteData?.price_after_discount || quoteData?.subtotal || 0,
+            sales_rep_user_id: notifyUserId
+          });
+        }
+      } catch (notifErr) {
+        console.error('Quote status notification error:', notifErr?.message || notifErr);
+      }
+    }
+
     return res.json({
       success: true,
       data: quote
@@ -437,8 +474,33 @@ exports.sendQuoteProposal = async (req, res) => {
 
 exports.rejectQuoteProposal = async (req, res) => {
   try {
-    const status  = 'rejected';
+    const status = 'rejected';
     const quote = await quoteService.updateQuoteStatus(Number(req.params.quoteId), status, getUserContext(req));
+
+    // ✅ Notification trigger
+    try {
+      const quoteData = quote?.quote || quote;
+      const clientName = quoteData?.client_name
+        || quoteData?.lead?.client_name
+        || quoteData?.client?.name
+        || 'Client';
+      const notifyUserId = quoteData?.created_by
+        || quoteData?.lead?.assigned_to_user_id
+        || quoteData?.assigned_to_user_id
+        || req.userId;
+
+      if (notifyUserId) {
+        await notifyQuoteRejected({
+          quote_id: quoteData?.quote_id || Number(req.params.quoteId),
+          booking_id: quoteData?.booking_id || null,
+          client_name: clientName,
+          sales_rep_user_id: notifyUserId
+        });
+      }
+    } catch (notifErr) {
+      console.error('Quote rejection notification error:', notifErr?.message);
+    }
+
     return res.json({
       success: true,
       data: quote
@@ -534,6 +596,34 @@ exports.acceptQuoteProposal = async (req, res) => {
     }
 
     const result = await quoteService.acceptQuoteProposal(token);
+    if (!result.already_accepted) {
+      try {
+        const quoteData = result?.quote;
+        const clientName = quoteData?.client_name
+          || quoteData?.lead?.client_name
+          || quoteData?.client?.name
+          || 'Client';
+        const totalAmount = quoteData?.total
+          || quoteData?.price_after_discount
+          || quoteData?.subtotal
+          || 0;
+        const notifyUserId = quoteData?.created_by
+          || quoteData?.lead?.assigned_to_user_id
+          || quoteData?.assigned_to_user_id;
+
+        if (notifyUserId) {
+          await notifyQuoteApproval({
+            quote_id: quoteData?.quote_id,
+            booking_id: quoteData?.booking_id || null,
+            client_name: clientName,
+            total_amount: totalAmount,
+            sales_rep_user_id: notifyUserId
+          });
+        }
+      } catch (notifErr) {
+        console.error('Quote acceptance notification error:', notifErr?.message);
+      }
+    }
 
     if (wantsHtml) {
       const quoteNumber = result?.quote?.quote_number || 'your quote';

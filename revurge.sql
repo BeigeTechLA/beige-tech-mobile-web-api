@@ -1341,3 +1341,51 @@ INSERT INTO `permissions` (`module_key`, `action_key`, `permission_key`, `is_act
 ('finances', 'create', 'finances.create', 1),
 ('finances', 'edit', 'finances.edit', 1),
 ('finances', 'delete', 'finances.delete', 1);
+
+
+--22-05-26
+
+-- Notifications Table
+CREATE TABLE IF NOT EXISTS `notifications_reverge` (
+  `notification_id` INT NOT NULL AUTO_INCREMENT,
+  `user_id` INT NULL COMMENT 'Recipient user ID',
+  `type` ENUM(
+    'book_a_shoot',
+    'quote_approval', 
+    'quote_rejected',
+    'cp_booking_request',
+    'cp_request_approved',
+    'cp_request_rejected',
+    'cp_accepted',
+    'cp_rejected'
+  ) NOT NULL,
+  `title` VARCHAR(255) NOT NULL,
+  `message` TEXT NOT NULL,
+  `data` JSON NULL COMMENT 'Extra data like booking_id, quote_id etc',
+  `is_read` TINYINT(1) NOT NULL DEFAULT 0,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`notification_id`),
+  KEY `idx_notifications_user_id` (`user_id`),
+  KEY `idx_notifications_type` (`type`),
+  KEY `idx_notifications_is_read` (`is_read`),
+  CONSTRAINT `fk_notifications_user`
+    FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)
+    ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+ALTER TABLE `notifications_reverge` 
+MODIFY COLUMN `type` ENUM(
+    'book_a_shoot',
+    'quote_approval', 
+    'quote_rejected',
+    'cp_booking_request',
+    'cp_request_approved',
+    'cp_request_rejected',
+    'cp_accepted',
+    'cp_rejected',
+    'quote_change_request',
+    'quote_change_approved',
+    'quote_change_rejected'
+) NOT NULL;

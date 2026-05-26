@@ -34,6 +34,7 @@ router.use('/guest-bookings', require('./guest-bookings.routes'));
 router.use('/payments', require('./payments.routes'));
 router.use('/waitlist', require('./waitlist.routes'));
 router.use('/investors', require('./investor.routes'));
+router.use('/admin/notifications', require('./notification.routes'));
 router.use('/admin', require('./admin.routes'));
 router.use('/creator', require('./creator.routes'));
 router.use('/reviews', require('./reviews.routes'));

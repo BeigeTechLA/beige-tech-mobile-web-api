@@ -66,7 +66,7 @@ router.get('/dashboard/category-wise-cp/count', authenticateAdmin, admin.getCate
 router.get('/dashboard/shoot-status', authenticateAdmin, admin.getShootStatus)
 router.get('/dashboard/top-creative-partners', authenticateAdmin, admin.getTopCreativePartners)
 router.post('/dashboard-detail', authenticateAdmin, admin.getDashboardDetails);
-router.post('/verify-crew-member', admin.verifyCrewMember);
+router.post('/verify-crew-member', authMiddleware, admin.verifyCrewMember);
 router.get('/shoot-category-count', admin.getShootByCategory);
 router.get('/get-post-production-members', admin.getPostProductionMembers);
 router.post('/assign-post-production-member', admin.assignPostProductionMember);

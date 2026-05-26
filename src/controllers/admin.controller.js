@@ -35,6 +35,15 @@ const leadAssignmentService = require('../services/lead-assignment.service');
 const { extractCoordinatesFromPayload } = require('../utils/locationHelpers');
 const db = require('../models');
 const bookingTimelineService = require('../services/bookingTimeline.service');
+const {
+  notifyBookAShoot,
+  notifyCPBookingRequest,
+  notifyCPRequestApproved,
+  notifyCPRequestRejected,
+  notifyCPRequestReviewedForAdmins,
+  notifyCPAccepted,
+  notifyCPRejected
+} = require('../services/notify.service');
 const accountCreditService = require('../services/account-credit.service');
 // const NodeGeocoder = require('node-geocoder');
 
@@ -711,6 +720,23 @@ exports.createProject = async (req, res) => {
       equipment_name: eq.equipment_name
     }));
 
+    // Notification trigger — Book a Shoot
+    try {
+      const adminUsers = await users.findAll({
+        where: { user_type: 1, is_active: 1 },
+        attributes: ['id']
+      });
+      await notifyBookAShoot({
+        booking_id: booking.stream_project_booking_id,
+        client_name: req.body.client_name || 'Client',
+        shoot_type: req.body.shoot_type || req.body.event_type,
+        event_date: req.body.event_date,
+        admin_user_ids: adminUsers.map(u => u.id)
+      });
+    } catch (notifErr) {
+      console.error('Book a shoot notification error:', notifErr?.message);
+    }
+
     return res.status(constants.CREATED.code).json({
       error: false,
       code: constants.CREATED.code,
@@ -943,11 +969,12 @@ exports.assignCrew = async (req, res) => {
     try {
       const crews = await crew_members.findAll({
         where: { crew_member_id: uniqueCrewIds },
-        attributes: ['crew_member_id', 'first_name', 'last_name', 'email']
+        attributes: ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email']
       });
       const booking = await stream_project_booking.findByPk(project_id, {
         attributes: [
           'stream_project_booking_id',
+          'project_name',
           'user_id',
           'guest_email',
           'quote_id',
@@ -985,8 +1012,22 @@ exports.assignCrew = async (req, res) => {
             })
           )
       );
+
+      await Promise.allSettled(
+        crews
+          .filter(c => c.user_id)
+          .map(c =>
+            notifyCPBookingRequest({
+              crew_user_id: c.user_id,
+              crew_member_id: c.crew_member_id,
+              booking_id: project_id,
+              project_name: booking?.project_name || 'Project',
+              event_date: booking?.event_date || null
+            })
+          )
+      );
     } catch (mailErr) {
-      console.error('assignCrew email send error:', mailErr?.message || mailErr);
+      console.error('assignCrew notification/email send error:', mailErr?.message || mailErr);
     }
 
     return res.status(200).json({
@@ -3724,13 +3765,24 @@ exports.getCrewMembers = async (req, res) => {
 
 exports.verifyCrewMember = async (req, res) => {
   try {
-    const { crew_member_id, status } = req.body;
+    const { crew_member_id } = req.body;
+    const status = Number(req.body.status);
+    const reviewedByAdminId = req.user?.userId || req.userId || null;
 
     if (!crew_member_id || (status !== 1 && status !== 2)) {
       return res.status(400).json({
         error: true,
         message: "Missing or invalid 'crew_member_id' or 'status'.",
       });
+    }
+
+    const crewMember = await crew_members.findOne({
+      where: { crew_member_id },
+      attributes: ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email']
+    });
+
+    if (!crewMember) {
+      return res.status(404).json({ error: true, message: "Crew member not found." });
     }
 
     const updatedMember = await crew_members.update(
@@ -3752,6 +3804,41 @@ exports.verifyCrewMember = async (req, res) => {
       }
     } catch (sheetErr) {
       console.error("Google Sheets Sync Error:", sheetErr.message);
+    }
+
+    try {
+      let crewUserId = crewMember.user_id;
+      if (!crewUserId && crewMember.email) {
+        const crewUser = await users.findOne({
+          where: { email: crewMember.email },
+          attributes: ['id']
+        });
+        crewUserId = crewUser?.id || null;
+      }
+
+      const crewName = [crewMember.first_name, crewMember.last_name].filter(Boolean).join(' ');
+      if (status === 1) {
+        await notifyCPRequestApproved({
+          crew_user_id: crewUserId,
+          crew_member_id,
+          crew_name: crewName
+        });
+      } else if (status === 2) {
+        await notifyCPRequestRejected({
+          crew_user_id: crewUserId,
+          crew_member_id,
+          crew_name: crewName
+        });
+      }
+
+      await notifyCPRequestReviewedForAdmins({
+        crew_member_id,
+        crew_name: crewName,
+        status,
+        admin_user_ids: reviewedByAdminId ? [reviewedByAdminId] : []
+      });
+    } catch (notifErr) {
+      console.error('Crew verification notification error:', notifErr?.message || notifErr);
     }
 
     return res.status(200).json({
@@ -9100,7 +9187,7 @@ exports.assignProjectCrewBulk = async (req, res) => {
                 const createdIds = assignmentsToCreate.map(a => a.crew_member_id);
                 const crews = await crew_members.findAll({
                     where: { crew_member_id: createdIds },
-                    attributes: ['first_name', 'last_name', 'email']
+                    attributes: ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email']
                 });
 
                 const dashboardLink = process.env.CP_DASHBOARD_LINK || 'https://beige.app/';
@@ -9121,8 +9208,20 @@ exports.assignProjectCrewBulk = async (req, res) => {
                         })
                     )
                 );
+
+                await Promise.allSettled(
+                    crews.filter(c => c.user_id).map(c =>
+                        notifyCPBookingRequest({
+                            crew_user_id: c.user_id,
+                            crew_member_id: c.crew_member_id,
+                            booking_id: booking.stream_project_booking_id,
+                            project_name: booking.project_name || 'Project',
+                            event_date: booking.event_date || null
+                        })
+                    )
+                );
             } catch (mailErr) {
-                console.error('Mail trigger error:', mailErr);
+                console.error('Mail/notification trigger error:', mailErr);
             }
         }
 

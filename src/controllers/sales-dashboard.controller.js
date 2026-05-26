@@ -17,6 +17,10 @@ const sequelize = require('../db');
 const constants = require('../utils/constants');
 const leadAssignmentService = require('../services/lead-assignment.service');
 const accountCreditService = require('../services/account-credit.service');
+const {
+  notifyQuoteChangeApproved,
+  notifyQuoteChangeRejected
+} = require('../services/notify.service');
 
 function parseQuoteRequestMetadata(value) {
   if (!value) return null;
@@ -1645,6 +1649,68 @@ async function reviewQuoteChangeRequest(req, res, decision) {
       await activity.update({
         metadata_json: JSON.stringify(nextMetadata)
       });
+    await activity.update({
+      metadata_json: JSON.stringify(nextMetadata)
+    });
+    try {
+      const quoteNumber = activity.quote?.quote_number || null;
+      const clientName = activity.quote?.client_name || 'Client';
+      // sales_rep dhundho - quote se ya phir admin users se
+      let salesRepUserId = activity.quote?.assigned_sales_rep_id || null;
+
+      // Agar sales_rep null hai to saare admins ko notify karo
+      if (!salesRepUserId) {
+        const adminUsers = await users.findAll({
+          where: { user_type: 1, is_active: 1 },
+          attributes: ['id']
+        });
+        const adminIds = adminUsers.map(u => u.id);
+
+        if (decision === 'approve') {
+          await Promise.allSettled(adminIds.map(adminId =>
+            notifyQuoteChangeApproved({
+              quote_id: salesQuoteId,
+              quote_number: activity.quote?.quote_number || null,
+              booking_id: bookingId,
+              client_name: activity.quote?.client_name || 'Client',
+              after_amount: Number(metadata.new_total || 0),
+              sales_rep_user_id: adminId
+            })
+          ));
+        } else {
+          await Promise.allSettled(adminIds.map(adminId =>
+            notifyQuoteChangeRejected({
+              quote_id: salesQuoteId,
+              quote_number: activity.quote?.quote_number || null,
+              booking_id: bookingId,
+              client_name: activity.quote?.client_name || 'Client',
+              sales_rep_user_id: adminId
+            })
+          ));
+        }
+      } else {
+        if (decision === 'approve') {
+          await notifyQuoteChangeApproved({
+            quote_id: salesQuoteId,
+            quote_number: activity.quote?.quote_number || null,
+            booking_id: bookingId,
+            client_name: activity.quote?.client_name || 'Client',
+            after_amount: Number(metadata.new_total || 0),
+            sales_rep_user_id: salesRepUserId
+          });
+        } else {
+          await notifyQuoteChangeRejected({
+            quote_id: salesQuoteId,
+            quote_number: activity.quote?.quote_number || null,
+            booking_id: bookingId,
+            client_name: activity.quote?.client_name || 'Client',
+            sales_rep_user_id: salesRepUserId
+          });
+        }
+      }
+    } catch (notifErr) {
+      console.error('Quote change review notification error:', notifErr?.message);
+    }
 
       if (extraAmount > 0 && activity.quote) {
         if (decision === 'approve') {

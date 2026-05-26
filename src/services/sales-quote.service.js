@@ -13,6 +13,9 @@ const { normalizeTime, resolveEventDateAndStartTime } = require('../utils/timezo
 const { extractCoordinatesFromPayload } = require('../utils/locationHelpers');
 const accountCreditService = require('./account-credit.service');
 const paymentLinksService = require('./payment-links.service');
+const {
+  notifyQuoteChangeRequest
+} = require('../services/notify.service');
 
 const SECTION_TYPES = ['service', 'addon', 'logistics', 'custom'];
 const QUOTE_STATUSES = ['draft', 'pending', 'partially_paid', 'sent', 'viewed', 'accepted', 'paid', 'rejected', 'expired'];
@@ -3730,6 +3733,28 @@ async function updateQuote(salesQuoteId, payload, user) {
         paymentStatus,
         changeSummary
       });
+      try {
+        const adminUsers = await db.users.findAll({
+          where: { user_type: 1, is_active: 1 },
+          attributes: ['id'],
+          transaction
+        });
+        await notifyQuoteChangeRequest({
+          quote_id: salesQuoteId,
+          quote_number: quote.quote_number || null,
+          booking_id: billingState.booking.stream_project_booking_id,
+          client_name: quote.client_name || 'Client',
+          change_type: quoteChangeType,
+          change_amount: roundCurrency(Math.max(extraAmount, reducedAmount)),
+          before_amount: previousTotal,
+          after_amount: newTotal,
+          activity_id: refreshActivity?.activity_id || null,
+          admin_user_ids: adminUsers.map(u => u.id)
+        });
+      } catch (notifErr) {
+        console.error('Quote change request notification error:', notifErr?.message);
+      }
+
 
       if (reducedAmount > 0 && refreshActivity?.activity_id) {
         await accountCreditService.createCreditForQuoteReduction({

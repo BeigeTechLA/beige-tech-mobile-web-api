@@ -627,6 +627,26 @@ exports.createGuestBooking = async (req, res) => {
       throw err;
     }
 
+    try {
+      const { notifyBookAShoot } = require('../services/notify.service');
+      const { users } = require('../models');
+
+      const adminUsers = await users.findAll({
+        where: { user_type: 1, is_active: 1 },
+        attributes: ['id']
+      });
+
+      await notifyBookAShoot({
+        booking_id: booking.stream_project_booking_id,
+        client_name: full_name || normalizedGuestEmail || 'Client',
+        shoot_type: content_type || event_type || shoot_type || project_type || 'Shoot',
+        event_date: event_date || null,
+        admin_user_ids: adminUsers.map(u => u.id)
+      });
+    } catch (notifErr) {
+      console.error('Book a shoot notification error:', notifErr?.message);
+    }
+
     appendToSheet('Shoot_data', [
       booking.stream_project_booking_id,
       order_name,                    

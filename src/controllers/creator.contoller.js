@@ -8,6 +8,7 @@ const { S3UploadFiles } = require('../utils/common.js');
 const { extractCoordinatesFromPayload } = require('../utils/locationHelpers');
 const { sendTaskAssignmentEmail } = require('../utils/emailService');
 const emailService = require("../utils/emailService");
+const { notifyCPAccepted, notifyCPRejected } = require('../services/notify.service');
 const db = require("../models");
 const { stream_project_booking, crew_members, crew_member_files, tasks, equipment,
   equipment_accessories,
@@ -537,6 +538,16 @@ exports.updateRequestStatus = async (req, res) => {
     }
 
     if (decision === 2) {
+      const currentCrew = await crew_members.findOne({ where: { crew_member_id } });
+      const project = await stream_project_booking.findOne({
+        where: { stream_project_booking_id: project_id },
+        attributes: ['stream_project_booking_id', 'project_name']
+      });
+
+      if (!currentCrew || !project) {
+        return res.status(404).json({ error: true, message: "Project or Crew Member not found." });
+      }
+
       const updateResult = await assigned_crew.update(
         { 
           crew_accept: 2, 
@@ -556,6 +567,25 @@ exports.updateRequestStatus = async (req, res) => {
         cp_status: "Rejected",
       });
       console.log('CP email result:', emailRes);
+
+      // Decline block mein - emailRes ke baad
+      try {
+        const adminUsers = await users.findAll({
+          where: { user_type: 1, is_active: 1 },
+          attributes: ['id']
+        });
+        await notifyCPRejected({
+          crew_member_id,
+          crew_name: `${currentCrew.first_name} ${currentCrew.last_name}`,
+          booking_id: project_id,
+          project_name: project?.project_name || 'Project',
+          admin_user_ids: adminUsers.map(u => u.id),
+        
+        });
+      } catch (notifErr) {
+        console.error('Notify error:', notifErr?.message);
+      }
+
       return res.status(200).json({ error: false, message: "Request declined successfully." });
     }
 
@@ -636,7 +666,6 @@ exports.updateRequestStatus = async (req, res) => {
           message: `The project slots for ${crewCategories.join(' / ')} are already full.`
         });
       }
-
       const updateResult = await assigned_crew.update(
         { 
           crew_accept: 1,
@@ -656,6 +685,22 @@ exports.updateRequestStatus = async (req, res) => {
         cp_status: "Accepted",
       });
       console.log('CP status email result:', emailRes);
+
+      try {
+        const adminUsers = await users.findAll({
+          where: { user_type: 1, is_active: 1 },
+          attributes: ['id']
+        });
+        await notifyCPAccepted({
+          crew_member_id,
+          crew_name: `${currentCrew.first_name} ${currentCrew.last_name}`,
+          booking_id: project_id,
+          project_name: project.project_name,
+          admin_user_ids: adminUsers.map(u => u.id),
+        });
+      } catch (notifErr) {
+        console.error('Notify error:', notifErr?.message);
+      }
 
       return res.status(200).json({ error: false, message: "Request accepted successfully." });
     }

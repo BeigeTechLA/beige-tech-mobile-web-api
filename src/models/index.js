@@ -75,6 +75,9 @@ if (models.quotes && models.signatures) {
   models.quotes.hasOne(models.signatures, { foreignKey: 'quote_id' });
 }
 
+const notificationsFactory = require('./notify'); 
+models.notify = notificationsFactory(sequelize, DataTypes);
+
 models.sequelize = sequelize;
 models.Sequelize = require('sequelize');
 

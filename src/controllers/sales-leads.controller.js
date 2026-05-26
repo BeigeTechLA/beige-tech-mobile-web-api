@@ -5352,10 +5352,12 @@ exports.updateBookingCrew = async (req, res) => {
       updateData.event_longitude = longitude;
     }
     if (description !== undefined) {
-      updateData.special_instructions = description;
+      updateData.description = description;
     }
-    if (reference_links !== undefined) {
-      updateData.reference_links = reference_links;
+   if (reference_links !== undefined) {
+      updateData.reference_links = Array.isArray(reference_links)
+        ? JSON.stringify(reference_links)
+        : reference_links;
     }
 
     await booking.update(updateData);

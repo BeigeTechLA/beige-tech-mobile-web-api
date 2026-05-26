@@ -2,8 +2,7 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzgyMzMzMDcsImV4cCI6MTc3ODgzODEwN30.PhlORGEMXK95h4qGLRo71HF03a9UfMBQiEP4_FPct0A
-
+@TOKEN =  Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3Nzk1MTkzNDMsImV4cCI6MTc4MDEyNDE0M30.kU0nKcEPdR3m6TxRLrS4RyZYqWdMEm4KiuA6uAOQ_BI
 @TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3NzcyNjkyODAsImV4cCI6MTc3Nzg3NDA4MH0.6NCSuJ90ixA8GtdebLlIIDS2e0dlorpJySLS3FRR7Fs
 
 ###
@@ -2144,4 +2143,83 @@ Authorization: {{TOKEN}}
 ### users - module_key: permission module name from permissions.module_key
 ### create - action_key: permission action from permissions.action_key
 DELETE {{URL}}admin/users/236/permissions/users/create
+Authorization: {{TOKEN}}
+
+
+### Admin Login - Fresh Token Lo
+POST {{URL}}auth/login HTTP/1.1
+Content-Type: application/json
+
+{
+  "email": "harsh.panchal@gmail.com",
+  "password": "password123"
+}
+### Admin create project
+POST {{URL}}creator/accept-project HTTP/1.1
+Content-Type: application/json
+
+{
+  "crew_member_id": 2077,
+  "project_id": 892,
+  "crew_accept": 1
+}
+
+### Get All Notifications
+GET {{URL}}notifications HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Get Notifications - Unread Only
+GET {{URL}}notifications?is_read=0 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Get Notifications - By Type (book_a_shoot)
+GET {{URL}}notifications?type=book_a_shoot HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Get Notifications - By Type (quote_approval)
+GET {{URL}}notifications?type=quote_approval HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Get Notifications - By Type (quote_rejected)
+GET {{URL}}notifications?type=quote_rejected HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Get Notifications - By Type (cp_accepted)
+GET {{URL}}notifications?type=cp_accepted HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Get Notifications - By Type (cp_rejected)
+GET {{URL}}notifications?type=cp_rejected HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Get Notifications - With Pagination
+GET {{URL}}notifications?page=1&limit=10 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Get Unread Count
+GET {{URL}}notifications/unread-count HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Mark All As Read
+PUT {{URL}}notifications/mark-all-read HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Mark Single Notification As Read (replace 1 with notification_id)
+PUT {{URL}}notifications/1/read HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Delete Notification (replace 1 with notification_id)
+DELETE {{URL}}notifications/1 HTTP/1.1
+Content-Type: application/json
 Authorization: {{TOKEN}}
