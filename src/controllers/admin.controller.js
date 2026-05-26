@@ -1798,6 +1798,10 @@ exports.updateProjectDateLocation = async (req, res) => {
     const hasBookingDaysPayload = Array.isArray(booking_days);
     const hasScheduleUpdate =
       nextDate !== undefined ||
+      start_time !== undefined ||
+      end_time !== undefined ||
+      duration_hours !== undefined ||
+      time_zone !== undefined ||
       hasBookingDaysPayload ||
       requestedBookingType === 'single_day' ||
       requestedBookingType === 'multi_day';
@@ -1831,7 +1835,7 @@ exports.updateProjectDateLocation = async (req, res) => {
 
     const resolvedBookingType =
       requestedBookingType ||
-      (normalizedBookingDays.length > 0 ? 'multi_day' : nextDate !== undefined ? 'single_day' : null);
+      (normalizedBookingDays.length > 0 ? 'multi_day' : null);
 
     if (resolvedBookingType && !['single_day', 'multi_day'].includes(resolvedBookingType)) {
       return res.status(400).json({
@@ -1855,7 +1859,7 @@ exports.updateProjectDateLocation = async (req, res) => {
       });
     }
 
-    if (resolvedBookingType === 'single_day' && (!hasValue(nextDate) || !isValidDateOnly(nextDate))) {
+    if (nextDate !== undefined && (!hasValue(nextDate) || !isValidDateOnly(nextDate))) {
       return res.status(400).json({
         error: true,
         message: 'start_date/event_date must be in YYYY-MM-DD format for single_day booking_type.'
@@ -1901,22 +1905,22 @@ exports.updateProjectDateLocation = async (req, res) => {
     const primaryScheduleDate =
       resolvedBookingType === 'multi_day'
         ? primaryBookingDay?.event_date || null
-        : nextDate || null;
+        : nextDate;
 
     const primaryStartTime =
       resolvedBookingType === 'multi_day'
         ? primaryBookingDay?.start_time || null
-        : normalizedStartTime || null;
+        : normalizedStartTime;
 
     const primaryEndTime =
       resolvedBookingType === 'multi_day'
         ? primaryBookingDay?.end_time || null
-        : normalizedEndTime || null;
+        : normalizedEndTime;
 
     const primaryTimeZone =
       resolvedBookingType === 'multi_day'
         ? primaryBookingDay?.time_zone || null
-        : time_zone || null;
+        : time_zone;
 
     let totalDurationHours =
       resolvedBookingType === 'multi_day'
@@ -1933,13 +1937,14 @@ exports.updateProjectDateLocation = async (req, res) => {
       totalDurationHours = null;
     }
 
-    const updatePayload = {
-      event_date: primaryScheduleDate,
-      start_time: primaryStartTime,
-      end_time: primaryEndTime,
-      time_zone: primaryTimeZone,
-      duration_hours: totalDurationHours
-    };
+    const updatePayload = {};
+    if (primaryScheduleDate !== undefined && primaryScheduleDate !== null) updatePayload.event_date = primaryScheduleDate;
+    if (start_time !== undefined || resolvedBookingType === 'multi_day') updatePayload.start_time = primaryStartTime || null;
+    if (end_time !== undefined || resolvedBookingType === 'multi_day') updatePayload.end_time = primaryEndTime || null;
+    if (time_zone !== undefined || resolvedBookingType === 'multi_day') updatePayload.time_zone = primaryTimeZone || null;
+    if (duration_hours !== undefined || totalDurationHours !== null || resolvedBookingType === 'multi_day') {
+      updatePayload.duration_hours = totalDurationHours;
+    }
 
     if (hasLocationUpdate) {
       const latitude = req.body.latitude ?? null;
