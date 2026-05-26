@@ -16,6 +16,7 @@ const accountCreditService = require('./account-credit.service');
 const paymentLinksService = require('./payment-links.service');
 const bookingPaymentSummaryService = require('./booking-payment-summary.service');
 const { expireQuotesPastValidUntil } = require('./sales-quote-expiration.service');
+const notificationCenterService = require('./notification-center.service');
 
 const SECTION_TYPES = ['service', 'addon', 'logistics', 'custom'];
 const QUOTE_STATUSES = ['draft', 'pending', 'partially_paid', 'sent', 'viewed', 'accepted', 'paid', 'rejected', 'expired'];
@@ -4363,6 +4364,7 @@ async function updateQuote(salesQuoteId, payload, user) {
       quoteChangeType !== 'unchanged' &&
       (billingState.is_collected || hasPaymentSummary)
     );
+    let pendingQuoteChangeNotification = null;
 
     if (billingState.booking?.stream_project_booking_id && (extraAmount > 0 || reducedAmount > 0) && billingState.is_collected) {
       const refreshActivity = await markQuoteInvoiceRefreshRequired({
@@ -4409,6 +4411,22 @@ async function updateQuote(salesQuoteId, payload, user) {
           transaction
         });
       }
+
+      if (refreshActivity?.activity_id) {
+        pendingQuoteChangeNotification = {
+          activityId: refreshActivity.activity_id,
+          quoteId: salesQuoteId,
+          quoteNumber: quote.quote_number || null,
+          clientName: updatedQuoteDetails.client_name || clientSnapshot.client_name || null,
+          requestType: extraAmount > 0 ? 'increase' : 'decrease',
+          previousTotal,
+          newTotal,
+          extraAmount,
+          reducedAmount,
+          requestedByUserId: user.userId || null,
+          requestedByName: user.name || user.email || null,
+        };
+      }
     } else if (shouldUpdatePaymentSummaryForPaidQuote) {
       const amountDueAfterChange = roundCurrency(Math.max(newTotal - summaryPaidAmount, 0));
       const overpaidAfterChange = roundCurrency(Math.max(summaryPaidAmount - newTotal, 0));
@@ -4441,6 +4459,10 @@ async function updateQuote(salesQuoteId, payload, user) {
     }
 
     await transaction.commit();
+    if (pendingQuoteChangeNotification) {
+      notificationCenterService.notifyQuoteChangeApprovalRequired(pendingQuoteChangeNotification)
+        .catch(err => console.error('Quote change approval notification error:', err));
+    }
     return getQuoteById(salesQuoteId, user);
   } catch (error) {
     await transaction.rollback();

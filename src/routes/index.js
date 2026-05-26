@@ -45,4 +45,5 @@ router.use('/external-file-manager', require('./external-file-manager.routes'));
 router.use('/external-chat', require('./external-chat.routes'));
 router.use('/external-meetings', require('./external-meetings.routes'));
 router.use('/comments', require('./comments.routes'));
+router.use('/notifications', require('./notifications.routes'));
 module.exports = router;

@@ -1541,9 +1541,6 @@ CREATE TABLE IF NOT EXISTS finance_dispute_payout_holds (
 -- 15-05-26
 
 ALTER TABLE payment_transactions
-  DROP CONSTRAINT chk_hours_positive;
-
-ALTER TABLE payment_transactions
   ADD COLUMN payment_source ENUM('booking_checkout', 'quote_invoice', 'additional_invoice')
     NOT NULL DEFAULT 'booking_checkout'
     COMMENT 'Origin of the payment transaction'
@@ -1554,9 +1551,7 @@ ALTER TABLE payment_transactions
 
 ALTER TABLE payment_transactions
   ADD CONSTRAINT chk_hours_positive CHECK (
-    (payment_source = 'quote_invoice' AND (hours IS NULL OR hours >= 0))
-    OR (payment_source = 'additional_invoice' AND (hours IS NULL OR hours >= 0))
-    OR (payment_source = 'booking_checkout' AND hours > 0)
+    hours IS NULL OR hours >= 0
   );
 
 CREATE TABLE IF NOT EXISTS sales_quote_preview_links (
@@ -1659,4 +1654,54 @@ CREATE TABLE IF NOT EXISTS booking_manual_payments (
   INDEX idx_booking_manual_payments_lead_id (lead_id),
   INDEX idx_booking_manual_payments_sales_quote_id (sales_quote_id),
   INDEX idx_booking_manual_payments_created_at (created_at)
+);
+
+-- 26-05-26
+
+CREATE TABLE IF NOT EXISTS notification_center (
+  notification_center_id INT AUTO_INCREMENT PRIMARY KEY,
+  recipient_user_id INT NOT NULL,
+  notification_type ENUM(
+    'CP_REGISTRATION_APPROVAL',
+    'QUOTE_CHANGE_APPROVAL',
+    'GENERAL'
+  ) NOT NULL DEFAULT 'GENERAL',
+  category ENUM(
+    'approvals',
+    'system',
+    'projects',
+    'payments',
+    'files',
+    'messages'
+  ) NOT NULL DEFAULT 'system',
+  priority ENUM(
+    'low',
+    'medium',
+    'high',
+    'critical'
+  ) NOT NULL DEFAULT 'medium',
+  title VARCHAR(255) NOT NULL,
+  message TEXT NULL,
+  entity_type VARCHAR(80) NULL,
+  entity_id INT NULL,
+  action_url VARCHAR(500) NULL,
+  action_label VARCHAR(80) NULL,
+  actor_user_id INT NULL,
+  actor_name VARCHAR(200) NULL,
+  actor_avatar_url VARCHAR(500) NULL,
+  metadata_json TEXT NULL,
+  is_read TINYINT(1) NOT NULL DEFAULT 0,
+  read_at DATETIME NULL,
+  is_archived TINYINT(1) NOT NULL DEFAULT 0,
+  archived_at DATETIME NULL,
+  is_muted TINYINT(1) NOT NULL DEFAULT 0,
+  expires_at DATETIME NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_notification_center_recipient (recipient_user_id, created_at),
+  INDEX idx_notification_center_unread (recipient_user_id, is_read),
+  INDEX idx_notification_center_type (notification_type),
+  INDEX idx_notification_center_entity (entity_type, entity_id),
+  INDEX idx_notification_center_category (recipient_user_id, category),
+  INDEX idx_notification_center_archived (recipient_user_id, is_archived)
 );

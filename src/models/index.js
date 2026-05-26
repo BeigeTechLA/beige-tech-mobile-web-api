@@ -5,12 +5,14 @@ const initModels = require('./init-models');
 const salesRepAvailabilityFactory = require('./sales_rep_availability');
 const salesRepLiveStatusFactory = require('./sales_rep_live_status');
 const salesRepStatusActivityFactory = require('./sales_rep_status_activity');
+const notificationCenterFactory = require('./notification_center');
 
 // initialize all auto-generated models properly
 const models = initModels(sequelize);
 models.sales_rep_availability = salesRepAvailabilityFactory(sequelize, DataTypes);
 models.sales_rep_live_status = salesRepLiveStatusFactory(sequelize, DataTypes);
 models.sales_rep_status_activity = salesRepStatusActivityFactory(sequelize, DataTypes);
+models.notification_center = notificationCenterFactory(sequelize, DataTypes);
 
 if (models.sales_rep_availability && models.users) {
   models.sales_rep_availability.belongsTo(models.users, {
@@ -45,6 +47,23 @@ if (models.sales_rep_status_activity && models.users) {
   models.users.hasMany(models.sales_rep_status_activity, {
     foreignKey: 'sales_rep_id',
     as: 'sales_rep_status_activities'
+  });
+}
+
+if (models.notification_center && models.users) {
+  models.notification_center.belongsTo(models.users, {
+    foreignKey: 'recipient_user_id',
+    as: 'recipient'
+  });
+
+  models.users.hasMany(models.notification_center, {
+    foreignKey: 'recipient_user_id',
+    as: 'notification_center_items'
+  });
+
+  models.notification_center.belongsTo(models.users, {
+    foreignKey: 'actor_user_id',
+    as: 'actor'
   });
 }
 

@@ -23,6 +23,7 @@ const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 // Import new utilities
 const otpService = require('../utils/otpService');
 const emailService = require('../utils/emailService');
+const notificationCenterService = require('../services/notification-center.service');
 
 async function linkGuestBookingsToUser(email, userId) {
   try {
@@ -1678,6 +1679,13 @@ exports.registerCrewMemberStep1 = [
       emailService.sendNewCrewSignupNotification({
         first_name, last_name, email, phone_number, location, working_distance
       }).catch(err => console.error('Admin Notification Error:', err));
+
+      notificationCenterService.notifyCpRegistrationApprovalRequired({
+        crewMemberId: newCrewMember.crew_member_id,
+        name: `${first_name} ${last_name}`.trim(),
+        email,
+        location,
+      }).catch(err => console.error('Admin CP approval notification error:', err));
 
       // await emailService.sendVerificationOTP(
       //   { name: `${first_name} ${last_name}`, email },
