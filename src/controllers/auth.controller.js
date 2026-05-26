@@ -1680,13 +1680,6 @@ exports.registerCrewMemberStep1 = [
         first_name, last_name, email, phone_number, location, working_distance
       }).catch(err => console.error('Admin Notification Error:', err));
 
-      notificationCenterService.notifyCpRegistrationApprovalRequired({
-        crewMemberId: newCrewMember.crew_member_id,
-        name: `${first_name} ${last_name}`.trim(),
-        email,
-        location,
-      }).catch(err => console.error('Admin CP approval notification error:', err));
-
       // await emailService.sendVerificationOTP(
       //   { name: `${first_name} ${last_name}`, email },
       //   otp
@@ -1766,13 +1759,13 @@ exports.registerCrewMemberStep2 = async (req, res) => {
     member.equipment_ownership = JSON.stringify(equipment_ownership);
     await member.save();
 
-     await updateSheetRow('Crew_data', crew_member_id, {
-      'I': primaryRoleNames.join(', '),
-      'J': years_of_experience,
-      'K': hourly_rate,
-      'L': bio,
-      'M': skillNameList.join(', ')
-    });
+    //  await updateSheetRow('Crew_data', crew_member_id, {
+    //   'I': primaryRoleNames.join(', '),
+    //   'J': years_of_experience,
+    //   'K': hourly_rate,
+    //   'L': bio,
+    //   'M': skillNameList.join(', ')
+    // });
 
     return res.status(200).json({ success: true, message: 'Step 2 completed' });
   } catch (error) {
@@ -1928,9 +1921,9 @@ exports.registerCrewMemberStep3 = [
       }
       // ------------------------------------------------
 
-      await updateSheetRow('Crew_data', crew_member_id, {
-        'N': JSON.stringify(social_media_links),
-      });
+      // await updateSheetRow('Crew_data', crew_member_id, {
+      //   'N': JSON.stringify(social_media_links),
+      // });
 
       // SEND WELCOME EMAIL
       const user = await User.findOne({
@@ -1944,6 +1937,13 @@ exports.registerCrewMemberStep3 = [
           email: user.email
         }).catch(err => console.error('CP Welcome Email Error:', err));
       }
+
+      notificationCenterService.notifyCpRegistrationApprovalRequired({
+        crewMemberId: member.crew_member_id,
+        name: `${member.first_name || ''} ${member.last_name || ''}`.trim(),
+        email: member.email,
+        location: member.location,
+      }).catch(err => console.error('Admin CP approval notification error:', err));
 
       return res.status(200).json({ success: true, message: 'Step 3 completed. Registration finished!' });
     } catch (error) {

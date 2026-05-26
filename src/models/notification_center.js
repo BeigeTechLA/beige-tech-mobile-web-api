@@ -10,11 +10,20 @@ module.exports = function(sequelize, DataTypes) {
     },
     recipient_user_id: {
       type: DataTypes.INTEGER,
-      allowNull: false,
+      allowNull: true,
       references: {
         model: 'users',
         key: 'id'
       }
+    },
+    recipient_scope: {
+      type: DataTypes.ENUM('user', 'role', 'all'),
+      allowNull: false,
+      defaultValue: 'user'
+    },
+    recipient_roles: {
+      type: DataTypes.STRING(255),
+      allowNull: true
     },
     notification_type: {
       type: DataTypes.ENUM(
@@ -131,6 +140,11 @@ module.exports = function(sequelize, DataTypes) {
         name: 'idx_notification_center_recipient',
         using: 'BTREE',
         fields: [{ name: 'recipient_user_id' }, { name: 'created_at' }]
+      },
+      {
+        name: 'idx_notification_center_scope',
+        using: 'BTREE',
+        fields: [{ name: 'recipient_scope' }]
       },
       {
         name: 'idx_notification_center_unread',

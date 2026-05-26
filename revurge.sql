@@ -1660,7 +1660,9 @@ CREATE TABLE IF NOT EXISTS booking_manual_payments (
 
 CREATE TABLE IF NOT EXISTS notification_center (
   notification_center_id INT AUTO_INCREMENT PRIMARY KEY,
-  recipient_user_id INT NOT NULL,
+  recipient_user_id INT NULL,
+  recipient_scope ENUM('user', 'role', 'all') NOT NULL DEFAULT 'user',
+  recipient_roles VARCHAR(255) NULL,
   notification_type ENUM(
     'CP_REGISTRATION_APPROVAL',
     'QUOTE_CHANGE_APPROVAL',
@@ -1699,9 +1701,34 @@ CREATE TABLE IF NOT EXISTS notification_center (
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   INDEX idx_notification_center_recipient (recipient_user_id, created_at),
+  INDEX idx_notification_center_scope (recipient_scope),
   INDEX idx_notification_center_unread (recipient_user_id, is_read),
   INDEX idx_notification_center_type (notification_type),
   INDEX idx_notification_center_entity (entity_type, entity_id),
   INDEX idx_notification_center_category (recipient_user_id, category),
   INDEX idx_notification_center_archived (recipient_user_id, is_archived)
+);
+
+CREATE TABLE IF NOT EXISTS notification_center_user_state (
+  notification_center_user_state_id INT AUTO_INCREMENT PRIMARY KEY,
+  notification_center_id INT NOT NULL,
+  user_id INT NOT NULL,
+  is_read TINYINT(1) NOT NULL DEFAULT 0,
+  read_at DATETIME NULL,
+  is_archived TINYINT(1) NOT NULL DEFAULT 0,
+  archived_at DATETIME NULL,
+  is_muted TINYINT(1) NOT NULL DEFAULT 0,
+  muted_at DATETIME NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_notification_center_user (notification_center_id, user_id),
+  INDEX idx_notification_center_user_state_user (user_id, is_read, is_archived),
+  CONSTRAINT fk_notification_center_user_state_notification
+    FOREIGN KEY (notification_center_id) REFERENCES notification_center(notification_center_id)
+    ON DELETE CASCADE
+    ON UPDATE CASCADE,
+  CONSTRAINT fk_notification_center_user_state_user
+    FOREIGN KEY (user_id) REFERENCES users(id)
+    ON DELETE CASCADE
+    ON UPDATE CASCADE
 );

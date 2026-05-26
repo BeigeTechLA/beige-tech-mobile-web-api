@@ -4417,7 +4417,7 @@ async function updateQuote(salesQuoteId, payload, user) {
           activityId: refreshActivity.activity_id,
           quoteId: salesQuoteId,
           quoteNumber: quote.quote_number || null,
-          clientName: updatedQuoteDetails.client_name || clientSnapshot.client_name || null,
+          clientName: quote.client_name || clientSnapshot.client_name || null,
           requestType: extraAmount > 0 ? 'increase' : 'decrease',
           previousTotal,
           newTotal,

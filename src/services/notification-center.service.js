@@ -30,10 +30,20 @@ function parseMetadata(metadataJson) {
 
 function toNotificationJson(row) {
   const notification = typeof row.get === 'function' ? row.get({ plain: true }) : row;
+  const currentUserState = Array.isArray(notification.user_states)
+    ? notification.user_states[0]
+    : null;
+
   return {
     ...notification,
+    is_read: currentUserState ? currentUserState.is_read : notification.is_read,
+    read_at: currentUserState ? currentUserState.read_at : notification.read_at,
+    is_archived: currentUserState ? currentUserState.is_archived : notification.is_archived,
+    archived_at: currentUserState ? currentUserState.archived_at : notification.archived_at,
+    is_muted: currentUserState ? currentUserState.is_muted : notification.is_muted,
     metadata: parseMetadata(notification.metadata_json),
     metadata_json: undefined,
+    user_states: undefined,
   };
 }
 
@@ -42,34 +52,43 @@ function formatCurrency(value) {
   return `$${numeric.toFixed(2)}`;
 }
 
-async function getAdminUserIds() {
-  const adminTypes = await db.user_type.findAll({
-    where: {
-      user_role: { [Op.in]: ADMIN_ROLE_NAMES },
-      is_active: 1,
-    },
-    attributes: ['user_type_id'],
-    raw: true,
-  });
-
-  const adminTypeIds = adminTypes.map((type) => Number(type.user_type_id)).filter(Boolean);
-  if (!adminTypeIds.length) return [];
-
-  const adminUsers = await db.users.findAll({
-    where: {
-      user_type: { [Op.in]: adminTypeIds },
-      is_active: 1,
-    },
-    attributes: ['id'],
-    raw: true,
-  });
-
-  return adminUsers.map((user) => Number(user.id)).filter(Boolean);
-}
-
 async function createNotification(recipientUserId, payload) {
   const notification = await db.notification_center.create({
     recipient_user_id: recipientUserId,
+    recipient_scope: 'user',
+    recipient_roles: null,
+    notification_type: payload.notification_type || NOTIFICATION_CENTER_TYPES.GENERAL,
+    category: payload.category || 'system',
+    priority: payload.priority || 'medium',
+    title: payload.title,
+    message: payload.message || null,
+    entity_type: payload.entity_type || null,
+    entity_id: payload.entity_id || null,
+    action_url: payload.action_url || null,
+    action_label: payload.action_label || null,
+    actor_user_id: payload.actor_user_id || null,
+    actor_name: payload.actor_name || null,
+    actor_avatar_url: payload.actor_avatar_url || null,
+    metadata_json: stringifyMetadata(payload.metadata),
+    expires_at: payload.expires_at || null,
+    is_read: 0,
+    is_archived: 0,
+    is_muted: 0,
+  });
+
+  return toNotificationJson(notification);
+}
+
+async function createRoleNotification(recipientRoles, payload) {
+  const normalizedRoles = [...new Set((recipientRoles || []).map(String).map(role => role.trim()).filter(Boolean))];
+  if (!normalizedRoles.length) {
+    return null;
+  }
+
+  const notification = await db.notification_center.create({
+    recipient_user_id: null,
+    recipient_scope: 'role',
+    recipient_roles: normalizedRoles.join(','),
     notification_type: payload.notification_type || NOTIFICATION_CENTER_TYPES.GENERAL,
     category: payload.category || 'system',
     priority: payload.priority || 'medium',
@@ -116,13 +135,13 @@ async function createBulkNotifications(recipientUserIds, payload) {
 }
 
 async function notifyAdmins(payload) {
-  const adminUserIds = await getAdminUserIds();
-  if (!adminUserIds.length) {
-    console.warn(`No active admin users found for notification center item: ${payload.title}`);
-    return { total: 0, created: 0, failed: 0, notifications: [] };
-  }
-
-  return createBulkNotifications(adminUserIds, payload);
+  const notification = await createRoleNotification(ADMIN_ROLE_NAMES, payload);
+  return {
+    total: notification ? 1 : 0,
+    created: notification ? 1 : 0,
+    failed: notification ? 0 : 1,
+    notifications: notification ? [notification] : [],
+  };
 }
 
 async function notifyCpRegistrationApprovalRequired(params) {
@@ -212,17 +231,10 @@ async function listNotifications(userId, options = {}) {
   const page = Math.max(parseInt(options.page, 10) || 1, 1);
   const limit = Math.max(parseInt(options.limit, 10) || 20, 1);
   const offset = (page - 1) * limit;
+  const userRole = await getUserRole(userId);
 
-  const where = {
-    recipient_user_id: userId,
-    is_archived: options.archived ? 1 : 0,
-    [Op.or]: [
-      { expires_at: null },
-      { expires_at: { [Op.gt]: new Date() } },
-    ],
-  };
+  const where = buildNotificationWhere(userId, userRole, options);
 
-  if (options.unreadOnly) where.is_read = 0;
   if (options.category && options.category !== 'all') where.category = options.category;
   if (options.notificationType && options.notificationType !== 'all') {
     where.notification_type = options.notificationType;
@@ -237,7 +249,15 @@ async function listNotifications(userId, options = {}) {
         attributes: ['id', 'name', 'email'],
         required: false,
       },
+      {
+        model: db.notification_center_user_state,
+        as: 'user_states',
+        attributes: ['is_read', 'read_at', 'is_archived', 'archived_at', 'is_muted'],
+        where: { user_id: userId },
+        required: false,
+      },
     ],
+    distinct: true,
     order: [['created_at', 'DESC'], ['notification_center_id', 'DESC']],
     limit,
     offset,
@@ -259,64 +279,150 @@ async function listNotifications(userId, options = {}) {
 }
 
 async function getUnreadCount(userId) {
+  const userRole = await getUserRole(userId);
   return db.notification_center.count({
-    where: {
-      recipient_user_id: userId,
-      is_read: 0,
-      is_archived: 0,
+    where: buildNotificationWhere(userId, userRole, { unreadOnly: true, archived: false }),
+    distinct: true,
+  });
+}
+
+async function markAsRead(notificationId, userId) {
+  const canAccess = await canAccessNotification(notificationId, userId);
+  if (!canAccess) return false;
+
+  await upsertUserState(notificationId, userId, {
+    is_read: 1,
+    read_at: new Date(),
+  });
+  return true;
+}
+
+async function markAllAsRead(userId) {
+  const userRole = await getUserRole(userId);
+  const notifications = await db.notification_center.findAll({
+    where: buildNotificationWhere(userId, userRole, { unreadOnly: true, archived: false }),
+    attributes: ['notification_center_id'],
+    raw: true,
+  });
+
+  for (const notification of notifications) {
+    await upsertUserState(notification.notification_center_id, userId, {
+      is_read: 1,
+      read_at: new Date(),
+    });
+  }
+
+  return notifications.length;
+}
+
+async function archiveNotification(notificationId, userId) {
+  const canAccess = await canAccessNotification(notificationId, userId);
+  if (!canAccess) return false;
+
+  await upsertUserState(notificationId, userId, {
+    is_archived: 1,
+    archived_at: new Date(),
+  });
+  return true;
+}
+
+async function getUserRole(userId) {
+  const user = await db.users.findByPk(userId, {
+    include: [{
+      model: db.user_type,
+      as: 'userType',
+      attributes: ['user_role'],
+      required: false,
+    }],
+  });
+
+  return user?.userType?.user_role || null;
+}
+
+function buildNotificationWhere(userId, userRole, options = {}) {
+  const andConditions = [
+    {
+      [Op.or]: [
+        { recipient_scope: 'all' },
+        { recipient_scope: 'user', recipient_user_id: userId },
+        userRole
+          ? {
+              [Op.and]: [
+                { recipient_scope: 'role' },
+                db.Sequelize.literal(`FIND_IN_SET(${db.sequelize.escape(String(userRole))}, recipient_roles) > 0`),
+              ],
+            }
+          : null,
+      ].filter(Boolean),
+    },
+    {
       [Op.or]: [
         { expires_at: null },
         { expires_at: { [Op.gt]: new Date() } },
       ],
     },
+  ];
+
+  if (options.archived) {
+    andConditions.push(db.Sequelize.literal(`EXISTS (SELECT 1 FROM notification_center_user_state ncs WHERE ncs.notification_center_id = notification_center.notification_center_id AND ncs.user_id = ${Number(userId)} AND ncs.is_archived = 1)`));
+  } else {
+    andConditions.push(db.Sequelize.literal(`NOT EXISTS (SELECT 1 FROM notification_center_user_state ncs WHERE ncs.notification_center_id = notification_center.notification_center_id AND ncs.user_id = ${Number(userId)} AND ncs.is_archived = 1)`));
+  }
+
+  if (options.unreadOnly) {
+    andConditions.push(db.Sequelize.literal(`NOT EXISTS (SELECT 1 FROM notification_center_user_state ncs WHERE ncs.notification_center_id = notification_center.notification_center_id AND ncs.user_id = ${Number(userId)} AND ncs.is_read = 1)`));
+  }
+
+  return { [Op.and]: andConditions };
+}
+
+async function canAccessNotification(notificationId, userId) {
+  const userRole = await getUserRole(userId);
+  const notification = await db.notification_center.findOne({
+    where: {
+      notification_center_id: notificationId,
+      ...buildNotificationWhere(userId, userRole, { archived: false }),
+    },
+    attributes: ['notification_center_id'],
+    raw: true,
   });
+
+  return Boolean(notification);
 }
 
-async function markAsRead(notificationId, userId) {
-  const [updatedCount] = await db.notification_center.update(
-    { is_read: 1, read_at: new Date(), updated_at: new Date() },
-    {
-      where: {
-        notification_center_id: notificationId,
-        recipient_user_id: userId,
-      },
-    }
-  );
+async function upsertUserState(notificationId, userId, patch) {
+  const now = new Date();
+  const [state, created] = await db.notification_center_user_state.findOrCreate({
+    where: {
+      notification_center_id: notificationId,
+      user_id: userId,
+    },
+    defaults: {
+      notification_center_id: notificationId,
+      user_id: userId,
+      is_read: 0,
+      is_archived: 0,
+      is_muted: 0,
+      created_at: now,
+      updated_at: now,
+      ...patch,
+    },
+  });
 
-  return updatedCount > 0;
-}
+  if (!created) {
+    await state.update({
+      ...patch,
+      updated_at: now,
+    });
+  }
 
-async function markAllAsRead(userId) {
-  const [updatedCount] = await db.notification_center.update(
-    { is_read: 1, read_at: new Date(), updated_at: new Date() },
-    {
-      where: {
-        recipient_user_id: userId,
-        is_read: 0,
-      },
-    }
-  );
-
-  return updatedCount;
-}
-
-async function archiveNotification(notificationId, userId) {
-  const [updatedCount] = await db.notification_center.update(
-    { is_archived: 1, archived_at: new Date(), updated_at: new Date() },
-    {
-      where: {
-        notification_center_id: notificationId,
-        recipient_user_id: userId,
-      },
-    }
-  );
-
-  return updatedCount > 0;
+  return state;
 }
 
 module.exports = {
   NOTIFICATION_CENTER_TYPES,
   createNotification,
+  createRoleNotification,
   createBulkNotifications,
   notifyAdmins,
   notifyCpRegistrationApprovalRequired,
