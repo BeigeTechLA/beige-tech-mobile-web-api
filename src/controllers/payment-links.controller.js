@@ -13,6 +13,14 @@ const { Op } = require('sequelize');
 const http = require('http');
 const https = require('https');
 
+const getFrontendBaseUrl = () =>
+  String(process.env.FRONTEND_URL || 'http://localhost:3000').trim().replace(/\/+$/, '');
+
+const buildManualInvoiceFrontendUrl = (bookingId) => {
+  const frontendBaseUrl = getFrontendBaseUrl();
+  return `${frontendBaseUrl}/beige_invoice/${encodeURIComponent(String(bookingId))}?manual=1`;
+};
+
 const resolveInvoiceDisplayNumber = (booking, stripeInvoiceNumber = null) =>
   paymentLinksService.buildBeigeInvoiceReference(booking) || stripeInvoiceNumber || null;
 
@@ -588,8 +596,7 @@ const prepareManualInvoiceDetailsForBooking = async (bookingId, req, recipientOv
     throw error;
   }
 
-  const apiBase = `${req.protocol}://${req.get('host')}/v1`;
-  const invoicePdfUrl = `${apiBase}/sales/invoice-pdf/${parsedBookingId}?manual=1`;
+  const invoicePdfUrl = buildManualInvoiceFrontendUrl(parsedBookingId);
 
   const manualContext = await getBookingManualPaymentContext(parsedBookingId);
   const remainingAfterPayment = Number(manualContext.latestManualPayment?.data?.remaining_after_payment ?? NaN);
@@ -1482,13 +1489,7 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
 
     // Stripe does not support collecting a 0 amount, so for fully discounted bookings we always use BEIGE manual invoice.
     if (totalAmount <= 0) {
-      const apiBase = `${requestBaseUrl || process.env.API_URL || ''}`.replace(/\/$/, '');
-      if (!apiBase) {
-        const error = new Error('Invoice API base URL is not configured.');
-        error.statusCode = 500;
-        throw error;
-      }
-      const invoicePdfUrl = `${apiBase}/sales/invoice-pdf/${parsedBookingId}?manual=1`;
+      const invoicePdfUrl = buildManualInvoiceFrontendUrl(parsedBookingId);
       invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
         invoiceUrl: invoicePdfUrl,
         invoicePdf: invoicePdfUrl,
