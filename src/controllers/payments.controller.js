@@ -259,6 +259,52 @@ async function saveStripePaymentSummary({
   });
 }
 
+async function inferCreditAmountForPayment({
+  booking,
+  bookingId,
+  amountPaid = 0,
+  requestedCreditAmount = 0,
+  shouldUseCredit = false,
+  transaction = null
+}) {
+  const explicitCreditAmount = round2(requestedCreditAmount || 0);
+  if (shouldUseCredit && explicitCreditAmount > 0) {
+    return explicitCreditAmount;
+  }
+
+  if (!bookingId || !booking) {
+    return 0;
+  }
+
+  const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+    bookingId,
+    salesQuoteId: booking.quote_id,
+    quoteTotal: booking.budget || booking.total || null,
+    transaction
+  });
+  const payableAmount = round2(
+    paymentState.hasSummary
+      ? paymentState.payableAmount
+      : paymentState.quoteTotal
+  );
+  const paidAmount = round2(amountPaid || 0);
+  const creditGap = round2(payableAmount - paidAmount);
+
+  if (!(creditGap > 0)) {
+    return 0;
+  }
+
+  const balance = await accountCreditService.getAccountCreditBalance({
+    userId: booking.user_id || null,
+    guestEmail: booking.guest_email || null,
+    usageContext: 'shoot_payment',
+    transaction
+  });
+  const availableCredit = round2(balance?.available_credit_amount || 0);
+
+  return availableCredit >= creditGap ? creditGap : 0;
+}
+
 function normalizeDateOnly(value, fallback = new Date()) {
   const source = value || fallback;
   const date = source instanceof Date ? source : new Date(source);
@@ -682,7 +728,13 @@ async function processStripePaidWebhookEvent(event, req = {}) {
     });
     const webhookShouldUseCredit =
       ['1', 'true', 'yes'].includes(String(invoiceMetadata?.use_credit || '').toLowerCase());
-    const webhookRequestedCreditAmount = round2(invoiceMetadata?.credit_amount_used || 0);
+    let webhookRequestedCreditAmount = round2(invoiceMetadata?.credit_amount_used || 0);
+    console.log(`Webhook ${event.type}: payment metadata for booking ${booking_id}`, {
+      paymentIntentId,
+      paymentSource,
+      use_credit: invoiceMetadata?.use_credit || null,
+      credit_amount_used: invoiceMetadata?.credit_amount_used || null
+    });
 
     if (paymentIntentId) {
       const existing = await db.payment_transactions.findOne({
@@ -693,8 +745,16 @@ async function processStripePaidWebhookEvent(event, req = {}) {
       if (existing) {
         const duplicateSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(booking_id, transaction);
         const duplicateSummaryDueAmount = round2(duplicateSummary?.due_amount || 0);
+        webhookRequestedCreditAmount = await inferCreditAmountForPayment({
+          booking,
+          bookingId: booking_id,
+          amountPaid: existing.total_amount,
+          requestedCreditAmount: webhookRequestedCreditAmount,
+          shouldUseCredit: webhookShouldUseCredit,
+          transaction
+        });
         let usedCreditEntry = null;
-        if (webhookShouldUseCredit && webhookRequestedCreditAmount > 0) {
+        if (webhookRequestedCreditAmount > 0) {
           usedCreditEntry = await accountCreditService.consumeAccountCreditForPayment({
             userId: booking.user_id || null,
             guestEmail: booking.guest_email || dataObject.customer_email || dataObject.receipt_email || null,
@@ -736,8 +796,19 @@ async function processStripePaidWebhookEvent(event, req = {}) {
     }
 
     if (booking.payment_id || booking.is_completed === 1) {
+      const paidAmountForInference = round2(
+        (dataObject.amount_paid ?? dataObject.amount_received ?? dataObject.amount ?? 0) / 100
+      );
+      webhookRequestedCreditAmount = await inferCreditAmountForPayment({
+        booking,
+        bookingId: booking_id,
+        amountPaid: paidAmountForInference,
+        requestedCreditAmount: webhookRequestedCreditAmount,
+        shouldUseCredit: webhookShouldUseCredit,
+        transaction
+      });
       let usedCreditEntry = null;
-      if (webhookShouldUseCredit && webhookRequestedCreditAmount > 0) {
+      if (webhookRequestedCreditAmount > 0) {
         usedCreditEntry = await accountCreditService.consumeAccountCreditForPayment({
           userId: booking.user_id || null,
           guestEmail: booking.guest_email || null,
@@ -796,6 +867,14 @@ async function processStripePaidWebhookEvent(event, req = {}) {
     const amountInCents =
       dataObject.amount_paid ?? dataObject.amount_received ?? dataObject.amount ?? 0;
     const amountPaid = parseFloat((amountInCents / 100).toFixed(2));
+    webhookRequestedCreditAmount = await inferCreditAmountForPayment({
+      booking,
+      bookingId: booking_id,
+      amountPaid,
+      requestedCreditAmount: webhookRequestedCreditAmount,
+      shouldUseCredit: webhookShouldUseCredit,
+      transaction
+    });
 
     const chargeId =
       dataObject.charge ||
@@ -852,7 +931,7 @@ async function processStripePaidWebhookEvent(event, req = {}) {
     }, { transaction });
 
     let usedCreditEntry = null;
-    if (webhookShouldUseCredit && webhookRequestedCreditAmount > 0) {
+    if (webhookRequestedCreditAmount > 0) {
       usedCreditEntry = await accountCreditService.consumeAccountCreditForPayment({
         userId: booking.user_id || null,
         guestEmail: booking.guest_email || dataObject.customer_email || dataObject.receipt_email || null,
@@ -2059,6 +2138,15 @@ exports.createPaymentIntentMulti = async (req, res) => {
     const paymentSource = await resolvePaymentSourceForBooking({
       bookingId: booking_id,
       currentSource: payment_source
+    });
+    
+    console.log('create-intent-multi credit context', {
+      booking_id,
+      requested_amount: requestedAmount,
+      amount_to_charge: amountToCharge,
+      payment_summary_due: paymentState.dueAmount,
+      use_credit: shouldUseCredit,
+      credit_amount_used: requestedCreditAmount
     });
 
     const paymentIntent = await stripe.paymentIntents.create({
