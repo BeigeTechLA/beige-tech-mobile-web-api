@@ -50,6 +50,41 @@ exports.getUnreadCount = async (req, res) => {
   }
 };
 
+exports.getPreferences = async (req, res) => {
+  try {
+    const data = await notificationCenterService.getNotificationCenterPreferences(req.userId);
+    return res.status(constants.OK.code).json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    console.error('Get notification preferences error:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to fetch notification preferences',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+exports.updatePreferences = async (req, res) => {
+  try {
+    const data = await notificationCenterService.updateNotificationCenterPreferences(req.userId, req.body || {});
+    return res.status(constants.OK.code).json({
+      success: true,
+      message: 'Notification preferences updated',
+      data,
+    });
+  } catch (error) {
+    console.error('Update notification preferences error:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to update notification preferences',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
 exports.getNotificationDetail = async (req, res) => {
   try {
     const notificationId = Number(req.params.notificationId);
@@ -224,6 +259,55 @@ exports.muteSimilarNotifications = async (req, res) => {
     return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
       success: false,
       message: 'Failed to mute similar notifications',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+exports.getMutedRules = async (req, res) => {
+  try {
+    const data = await notificationCenterService.listMutedRules(req.userId);
+    return res.status(constants.OK.code).json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    console.error('Get muted notification rules error:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to fetch muted notification rules',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+exports.deleteMutedRule = async (req, res) => {
+  try {
+    const ruleId = Number(req.params.ruleId);
+    if (!Number.isInteger(ruleId) || ruleId <= 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Invalid muted rule id',
+      });
+    }
+
+    const deleted = await notificationCenterService.deleteMutedRule(ruleId, req.userId);
+    if (!deleted) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Muted rule not found',
+      });
+    }
+
+    return res.status(constants.OK.code).json({
+      success: true,
+      message: 'Muted notification rule removed',
+    });
+  } catch (error) {
+    console.error('Delete muted notification rule error:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to delete muted notification rule',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }

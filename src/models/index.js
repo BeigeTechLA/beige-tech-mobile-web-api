@@ -7,6 +7,8 @@ const salesRepLiveStatusFactory = require('./sales_rep_live_status');
 const salesRepStatusActivityFactory = require('./sales_rep_status_activity');
 const notificationCenterFactory = require('./notification_center');
 const notificationCenterUserStateFactory = require('./notification_center_user_state');
+const notificationCenterPreferencesFactory = require('./notification_center_preferences');
+const notificationCenterMutedRulesFactory = require('./notification_center_muted_rules');
 
 // initialize all auto-generated models properly
 const models = initModels(sequelize);
@@ -15,6 +17,8 @@ models.sales_rep_live_status = salesRepLiveStatusFactory(sequelize, DataTypes);
 models.sales_rep_status_activity = salesRepStatusActivityFactory(sequelize, DataTypes);
 models.notification_center = notificationCenterFactory(sequelize, DataTypes);
 models.notification_center_user_state = notificationCenterUserStateFactory(sequelize, DataTypes);
+models.notification_center_preferences = notificationCenterPreferencesFactory(sequelize, DataTypes);
+models.notification_center_muted_rules = notificationCenterMutedRulesFactory(sequelize, DataTypes);
 
 if (models.sales_rep_availability && models.users) {
   models.sales_rep_availability.belongsTo(models.users, {
@@ -83,6 +87,30 @@ if (models.notification_center_user_state && models.notification_center && model
   models.notification_center_user_state.belongsTo(models.users, {
     foreignKey: 'user_id',
     as: 'user'
+  });
+}
+
+if (models.notification_center_preferences && models.users) {
+  models.notification_center_preferences.belongsTo(models.users, {
+    foreignKey: 'user_id',
+    as: 'user'
+  });
+
+  models.users.hasOne(models.notification_center_preferences, {
+    foreignKey: 'user_id',
+    as: 'notification_center_preferences'
+  });
+}
+
+if (models.notification_center_muted_rules && models.users) {
+  models.notification_center_muted_rules.belongsTo(models.users, {
+    foreignKey: 'user_id',
+    as: 'user'
+  });
+
+  models.users.hasMany(models.notification_center_muted_rules, {
+    foreignKey: 'user_id',
+    as: 'notification_center_muted_rules'
   });
 }
 

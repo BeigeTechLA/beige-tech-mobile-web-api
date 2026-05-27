@@ -5,6 +5,10 @@ const { authenticate } = require('../middleware/auth.middleware');
 
 router.get('/', authenticate, notificationsController.getNotifications);
 router.get('/unread-count', authenticate, notificationsController.getUnreadCount);
+router.get('/preferences', authenticate, notificationsController.getPreferences);
+router.put('/preferences', authenticate, notificationsController.updatePreferences);
+router.get('/muted-rules', authenticate, notificationsController.getMutedRules);
+router.delete('/muted-rules/:ruleId', authenticate, notificationsController.deleteMutedRule);
 router.get('/:notificationId', authenticate, notificationsController.getNotificationDetail);
 router.patch('/mark-all-read', authenticate, notificationsController.markAllAsRead);
 router.patch('/:notificationId/read', authenticate, notificationsController.markAsRead);

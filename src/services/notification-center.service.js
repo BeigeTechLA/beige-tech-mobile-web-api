@@ -9,6 +9,10 @@ const NOTIFICATION_CENTER_TYPES = {
 
 const ADMIN_ROLE_NAMES = ['admin', 'Admin', 'sales_admin', 'Sales_Admin', 'Sales_admin'];
 
+const DEFAULT_CENTER_CATEGORIES = {
+  approvals: true,
+};
+
 function stringifyMetadata(metadata) {
   if (!metadata) return null;
   try {
@@ -386,7 +390,8 @@ async function listNotifications(userId, options = {}) {
   const offset = (page - 1) * limit;
   const userRole = await getUserRole(userId);
 
-  const where = buildNotificationWhere(userId, userRole, options);
+  const preferences = await getNotificationCenterPreferences(userId);
+  const where = buildNotificationWhere(userId, userRole, options, preferences);
 
   if (options.category && options.category !== 'all') where.category = options.category;
   if (options.notificationType && options.notificationType !== 'all') {
@@ -433,10 +438,11 @@ async function listNotifications(userId, options = {}) {
 
 async function getNotificationDetail(notificationId, userId) {
   const userRole = await getUserRole(userId);
+  const preferences = await getNotificationCenterPreferences(userId);
   const notification = await db.notification_center.findOne({
     where: {
       notification_center_id: notificationId,
-      ...buildNotificationWhere(userId, userRole, { archived: false }),
+      ...buildNotificationWhere(userId, userRole, { archived: false }, preferences),
     },
     include: [
       {
@@ -461,8 +467,9 @@ async function getNotificationDetail(notificationId, userId) {
 
 async function getUnreadCount(userId) {
   const userRole = await getUserRole(userId);
+  const preferences = await getNotificationCenterPreferences(userId);
   return db.notification_center.count({
-    where: buildNotificationWhere(userId, userRole, { unreadOnly: true, archived: false }),
+    where: buildNotificationWhere(userId, userRole, { unreadOnly: true, archived: false }, preferences),
     distinct: true,
   });
 }
@@ -491,8 +498,9 @@ async function markAsUnread(notificationId, userId) {
 
 async function markAllAsRead(userId) {
   const userRole = await getUserRole(userId);
+  const preferences = await getNotificationCenterPreferences(userId);
   const notifications = await db.notification_center.findAll({
-    where: buildNotificationWhere(userId, userRole, { unreadOnly: true, archived: false }),
+    where: buildNotificationWhere(userId, userRole, { unreadOnly: true, archived: false }, preferences),
     attributes: ['notification_center_id'],
     raw: true,
   });
@@ -520,10 +528,11 @@ async function archiveNotification(notificationId, userId) {
 
 async function muteSimilarNotifications(notificationId, userId) {
   const userRole = await getUserRole(userId);
+  const preferences = await getNotificationCenterPreferences(userId);
   const notification = await db.notification_center.findOne({
     where: {
       notification_center_id: notificationId,
-      ...buildNotificationWhere(userId, userRole, { archived: false, muted: false }),
+      ...buildNotificationWhere(userId, userRole, { archived: false, muted: false }, preferences),
     },
     attributes: ['notification_center_id', 'notification_type', 'category'],
     raw: true,
@@ -533,12 +542,26 @@ async function muteSimilarNotifications(notificationId, userId) {
 
   const similarNotifications = await db.notification_center.findAll({
     where: {
-      ...buildNotificationWhere(userId, userRole, { archived: false, muted: false }),
+      ...buildNotificationWhere(userId, userRole, { archived: false, muted: false }, preferences),
       notification_type: notification.notification_type,
       category: notification.category,
     },
     attributes: ['notification_center_id'],
     raw: true,
+  });
+
+  const [rule] = await db.notification_center_muted_rules.findOrCreate({
+    where: {
+      user_id: userId,
+      notification_type: notification.notification_type,
+      category: notification.category,
+    },
+    defaults: {
+      user_id: userId,
+      notification_type: notification.notification_type,
+      category: notification.category,
+      muted_at: new Date(),
+    },
   });
 
   for (const item of similarNotifications) {
@@ -550,9 +573,36 @@ async function muteSimilarNotifications(notificationId, userId) {
 
   return {
     muted_count: similarNotifications.length,
+    rule: {
+      notification_center_muted_rule_id: rule.notification_center_muted_rule_id,
+      notification_type: rule.notification_type,
+      category: rule.category,
+      muted_at: rule.muted_at,
+    },
     notification_type: notification.notification_type,
     category: notification.category,
   };
+}
+
+async function listMutedRules(userId) {
+  const rules = await db.notification_center_muted_rules.findAll({
+    where: { user_id: userId },
+    order: [['muted_at', 'DESC'], ['notification_center_muted_rule_id', 'DESC']],
+    raw: true,
+  });
+
+  return { rules };
+}
+
+async function deleteMutedRule(ruleId, userId) {
+  const deletedCount = await db.notification_center_muted_rules.destroy({
+    where: {
+      notification_center_muted_rule_id: ruleId,
+      user_id: userId,
+    },
+  });
+
+  return deletedCount > 0;
 }
 
 async function getUserRole(userId) {
@@ -568,7 +618,7 @@ async function getUserRole(userId) {
   return user?.userType?.user_role || null;
 }
 
-function buildNotificationWhere(userId, userRole, options = {}) {
+function buildNotificationWhere(userId, userRole, options = {}, preferences = null) {
   const andConditions = [
     {
       [Op.or]: [
@@ -600,10 +650,18 @@ function buildNotificationWhere(userId, userRole, options = {}) {
 
   if (!options.muted) {
     andConditions.push(db.Sequelize.literal(`NOT EXISTS (SELECT 1 FROM notification_center_user_state ncs WHERE ncs.notification_center_id = notification_center.notification_center_id AND ncs.user_id = ${Number(userId)} AND ncs.is_muted = 1)`));
+    andConditions.push(db.Sequelize.literal(`NOT EXISTS (SELECT 1 FROM notification_center_muted_rules ncmr WHERE ncmr.user_id = ${Number(userId)} AND ncmr.notification_type = notification_center.notification_type AND ncmr.category = notification_center.category)`));
   }
 
   if (options.unreadOnly) {
     andConditions.push(db.Sequelize.literal(`NOT EXISTS (SELECT 1 FROM notification_center_user_state ncs WHERE ncs.notification_center_id = notification_center.notification_center_id AND ncs.user_id = ${Number(userId)} AND ncs.is_read = 1)`));
+  }
+
+  const approvalEnabled = preferences?.categories?.approvals !== false;
+  if (!approvalEnabled) {
+    andConditions.push({
+      category: { [Op.ne]: 'approvals' },
+    });
   }
 
   return { [Op.and]: andConditions };
@@ -611,16 +669,87 @@ function buildNotificationWhere(userId, userRole, options = {}) {
 
 async function canAccessNotification(notificationId, userId) {
   const userRole = await getUserRole(userId);
+  const preferences = await getNotificationCenterPreferences(userId);
   const notification = await db.notification_center.findOne({
     where: {
       notification_center_id: notificationId,
-      ...buildNotificationWhere(userId, userRole, { archived: false }),
+      ...buildNotificationWhere(userId, userRole, { archived: false }, preferences),
     },
     attributes: ['notification_center_id'],
     raw: true,
   });
 
   return Boolean(notification);
+}
+
+async function getOrCreatePreferenceRow(userId) {
+  const [preferences] = await db.notification_center_preferences.findOrCreate({
+    where: { user_id: userId },
+    defaults: {
+      user_id: userId,
+    },
+  });
+
+  return preferences;
+}
+
+async function getNotificationCenterPreferences(userId) {
+  const preferences = await getOrCreatePreferenceRow(userId);
+  const plain = preferences.get({ plain: true });
+
+  return {
+    push_enabled: plain.push_enabled !== 0,
+    email_enabled: plain.email_enabled !== 0,
+    categories: {
+      ...DEFAULT_CENTER_CATEGORIES,
+      approvals: plain.approvals_push_enabled !== 0,
+    },
+    email_categories: {
+      approvals: plain.approvals_email_enabled !== 0,
+    },
+    smart_delivery: {
+      enabled: plain.smart_delivery_enabled !== 0,
+      critical_always_sent: true,
+      active_app_suppression: true,
+    },
+    raw: {
+      notification_center_preference_id: plain.notification_center_preference_id,
+    },
+  };
+}
+
+async function updateNotificationCenterPreferences(userId, payload = {}) {
+  const preferences = await getOrCreatePreferenceRow(userId);
+  const patch = {};
+
+  if (payload.push_enabled !== undefined) {
+    patch.push_enabled = payload.push_enabled ? 1 : 0;
+  }
+
+  if (payload.email_enabled !== undefined) {
+    patch.email_enabled = payload.email_enabled ? 1 : 0;
+  }
+
+  const categories = payload.categories || {};
+  if (categories.approvals !== undefined) {
+    patch.approvals_push_enabled = categories.approvals ? 1 : 0;
+  }
+
+  const emailCategories = payload.email_categories || {};
+  if (emailCategories.approvals !== undefined) {
+    patch.approvals_email_enabled = emailCategories.approvals ? 1 : 0;
+  }
+
+  if (payload.smart_delivery?.enabled !== undefined) {
+    patch.smart_delivery_enabled = payload.smart_delivery.enabled ? 1 : 0;
+  }
+
+  if (Object.keys(patch).length) {
+    patch.updated_at = new Date();
+    await preferences.update(patch);
+  }
+
+  return getNotificationCenterPreferences(userId);
 }
 
 async function upsertUserState(notificationId, userId, patch) {
@@ -662,10 +791,14 @@ module.exports = {
   notifyQuoteChangeApprovalRequired,
   listNotifications,
   getNotificationDetail,
+  getNotificationCenterPreferences,
+  updateNotificationCenterPreferences,
   getUnreadCount,
   markAsRead,
   markAsUnread,
   markAllAsRead,
   archiveNotification,
   muteSimilarNotifications,
+  listMutedRules,
+  deleteMutedRule,
 };

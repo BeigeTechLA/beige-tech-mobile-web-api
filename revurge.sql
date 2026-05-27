@@ -1732,3 +1732,47 @@ CREATE TABLE IF NOT EXISTS notification_center_user_state (
     ON DELETE CASCADE
     ON UPDATE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS notification_center_preferences (
+  notification_center_preference_id INT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NOT NULL,
+  push_enabled TINYINT(1) NOT NULL DEFAULT 1,
+  email_enabled TINYINT(1) NOT NULL DEFAULT 0,
+  approvals_push_enabled TINYINT(1) NOT NULL DEFAULT 1,
+  approvals_email_enabled TINYINT(1) NOT NULL DEFAULT 0,
+  smart_delivery_enabled TINYINT(1) NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_notification_center_preferences_user (user_id),
+  CONSTRAINT fk_notification_center_preferences_user
+    FOREIGN KEY (user_id) REFERENCES users(id)
+    ON DELETE CASCADE
+    ON UPDATE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS notification_center_muted_rules (
+  notification_center_muted_rule_id INT AUTO_INCREMENT PRIMARY KEY,
+  user_id INT NOT NULL,
+  notification_type ENUM(
+    'CP_REGISTRATION_APPROVAL',
+    'QUOTE_CHANGE_APPROVAL',
+    'GENERAL'
+  ) NOT NULL,
+  category ENUM(
+    'approvals',
+    'system',
+    'projects',
+    'payments',
+    'files',
+    'messages'
+  ) NOT NULL,
+  muted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_notification_center_muted_rule (user_id, notification_type, category),
+  INDEX idx_notification_center_muted_rules_user (user_id),
+  CONSTRAINT fk_notification_center_muted_rules_user
+    FOREIGN KEY (user_id) REFERENCES users(id)
+    ON DELETE CASCADE
+    ON UPDATE CASCADE
+);

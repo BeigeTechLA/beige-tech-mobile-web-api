@@ -2282,6 +2282,27 @@ GET {{URL}}notifications/unread-count HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
+### Notification Center - get preferences
+GET {{URL}}notifications/preferences HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Notification Center - update preferences
+PUT {{URL}}notifications/preferences HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "push_enabled": true,
+  "email_enabled": false,
+  "categories": {
+    "approvals": true
+  },
+  "email_categories": {
+    "approvals": false
+  }
+}
+
 ### Notification Center - detail
 GET {{URL}}notifications/1 HTTP/1.1
 Content-Type: application/json
@@ -2308,6 +2329,16 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### Notification Center - mute similar notifications
-PATCH {{URL}}notifications/3/mute-similar HTTP/1.1
+PATCH {{URL}}notifications/4/mute-similar HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Notification Center - list muted similar rules
+GET {{URL}}notifications/muted-rules HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Notification Center - remove muted similar rule
+DELETE {{URL}}notifications/muted-rules/1 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
