@@ -1,27 +1,104 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
 
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light">
+  <meta name="supported-color-schemes" content="light">
+
   <title>New Creative Profile</title>
+
+  <!-- Enforce Light Theme Overrides for Email Clients -->
+  <style type="text/css">
+    :root {
+      color-scheme: light;
+      supported-color-schemes: light;
+    }
+
+    /* Force Light Mode Styles in Dark Mode Environments */
+    @media (prefers-color-scheme: dark) {
+
+      body,
+      .body-wrapper {
+        background-color: #F7F7F7 !important;
+        color: #484848 !important;
+      }
+
+      .main-container {
+        background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%) !important;
+      }
+
+      .header-accent-section {
+        background-color: #FDF0DA !important;
+      }
+
+      .white-bg-card {
+        background-color: #FFFFFF !important;
+      }
+
+      .action-banner-card {
+        background-color: #FFF6D9 !important;
+      }
+
+      .logo-pill {
+        background-color: #FFFFFF !important;
+        border-color: #FFFFFF !important;
+      }
+
+      h1,
+      h2,
+      p,
+      strong {
+        color: #000000 !important;
+      }
+
+      .primary-heading {
+        color: #171717 !important;
+      }
+
+      .secondary-text {
+        color: #707070 !important;
+      }
+
+      .meta-label {
+        color: #525252 !important;
+      }
+
+      .action-subtext {
+        color: #535252 !important;
+      }
+
+      .footer-text {
+        color: #3C3B3B !important;
+      }
+
+      .primary-btn {
+        background-color: #000000 !important;
+        color: #E8D1AB !important;
+      }
+    }
+  </style>
 </head>
 
-<body
-  style="margin: 0; padding: 0; font-family:'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #F7F7F7; color: #484848;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #F7F7F7; padding: 20px 0;">
+<body class="body-wrapper"
+  style="margin: 0; padding: 0; font-family:'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #F7F7F7; color: #484848; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">
+  <table class="body-wrapper" width="100%" cellpadding="0" cellspacing="0"
+    style="background-color: #F7F7F7; padding: 20px 0;">
     <tr>
       <td align="center">
-        <table width="600" cellpadding="0" cellspacing="0"
+        <table class="main-container" width="600" cellpadding="0" cellspacing="0"
           style="width: 100%; max-width: 600px; background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%); border-radius: 40px; overflow: hidden; box-shadow: 0px 10px 40px rgba(0,0,0,0.03);">
 
+          <!-- Header Section -->
           <tr>
-            <td style="background-color: #FDF0DA; position: relative; vertical-align: top;">
+            <td class="header-accent-section"
+              style="background-color: #FDF0DA; position: relative; vertical-align: top;">
               <table width="100%" cellpadding="0" cellspacing="0">
                 <tr>
                   <td style="padding: 30px 40px 10px;">
-                    <a href="{{frontend_url}}"
-                      style="background: #FFFFFF; display: inline-block; padding: 8px 24px; border-radius: 100px; border: 1px solid #fff; text-decoration: none;">
+                    <a class="logo-pill" href="{{frontend_url}}"
+                      style="background: #FFFFFF; display: inline-block; padding: 8px 24px; border-radius: 100px; border: 1px solid #ffffff; text-decoration: none;">
                       <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
                         alt="Beige" width="80" style="display: block; border: 0;">
                     </a>
@@ -29,7 +106,7 @@
                 </tr>
                 <tr>
                   <td style="padding: 10px 40px 30px;">
-                    <h1
+                    <h1 class="primary-heading"
                       style="margin: 0; font-size: 45px; font-weight: 700; color: #171717; letter-spacing: -1px; line-height: 54px;">
                       New Creative Profile</h1>
                   </td>
@@ -55,15 +132,18 @@
             </td>
           </tr>
 
+          <!-- Sub-header Message -->
           <tr>
             <td style="padding: 40px 40px 0; text-align: left;">
-              <p style="margin: 0; font-size: 30px; color: #707070; font-weight: 500; line-height: 1.4;">
+              <p class="secondary-text"
+                style="margin: 0; font-size: 30px; color: #707070; font-weight: 500; line-height: 1.4;">
                 A new creator has initiated their<br>
-                <strong style="font-weight: 700; color: #000;">Profile Creation Process</strong>
+                <strong style="font-weight: 700; color: #000000;">Profile Creation Process</strong>
               </p>
             </td>
           </tr>
 
+          <!-- Creative Partner Metadata Card -->
           <tr>
             <td>
               <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%"
@@ -76,10 +156,13 @@
                       <tr>
                         <td align="center" style="padding: 50px 20px 20px;">
                           <h2
-                            style="margin: 0 0 25px; font-size: 30px; color: #000; text-align: center; font-weight: 600;">
+                            style="margin: 0 0 25px; font-size: 30px; color: #000000; text-align: center; font-weight: 600;">
                             Creative Partner Details</h2>
-                          <table width="100%" cellpadding="0" cellspacing="0"
+
+                          <table class="white-bg-card" width="100%" cellpadding="0" cellspacing="0"
                             style="background-color: #FFFFFF; border-radius: 20px; padding: 10px; border-collapse: separate; table-layout: fixed; width: 100%; max-width: 100%;">
+
+                            <!-- Name Row -->
                             <tr>
                               <td style="padding: 15px 15px 0 15px;">
                                 <table width="100%" cellpadding="0" cellspacing="0">
@@ -94,10 +177,11 @@
                                       </div>
                                     </td>
                                     <td style="padding-bottom: 15px; word-break: break-word; overflow-wrap: anywhere;">
-                                      <div
+                                      <div class="meta-label"
                                         style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
                                         Name</div>
-                                      <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
+                                      <div
+                                        style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px;">
                                         {{first_name}} {{last_name}}</div>
                                     </td>
                                   </tr>
@@ -108,6 +192,7 @@
                               </td>
                             </tr>
 
+                            <!-- Email Row -->
                             <tr>
                               <td style="padding: 15px 15px 0 15px;">
                                 <table width="100%" cellpadding="0" cellspacing="0">
@@ -118,14 +203,15 @@
                                         <img
                                           src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/Email.svg"
                                           width="40" height="40"
-                                          style="margin-top: 25px; margin-right: 18px; display: inline-block;">
+                                          style="margin-top: 25px; margin-right: 18px; display: inline-block; border: 0;">
                                       </div>
                                     </td>
                                     <td style="padding-bottom: 15px; word-break: break-word; overflow-wrap: anywhere;">
-                                      <div
+                                      <div class="meta-label"
                                         style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
                                         Email Id</div>
-                                      <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
+                                      <div
+                                        style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px;">
                                         {{email}}</div>
                                     </td>
                                   </tr>
@@ -136,6 +222,7 @@
                               </td>
                             </tr>
 
+                            <!-- Contact Row -->
                             <tr>
                               <td style="padding: 15px 15px 0 15px;">
                                 <table width="100%" cellpadding="0" cellspacing="0">
@@ -146,16 +233,16 @@
                                         <img
                                           src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/contactphone.svg"
                                           width="40" height="40"
-                                          style="margin-top: 25px; margin-right: 18px; display: inline-block;">
+                                          style="margin-top: 25px; margin-right: 18px; display: inline-block; border: 0;">
                                       </div>
                                     </td>
                                     <td style="padding-bottom: 15px; word-break: break-word; overflow-wrap: anywhere;">
-                                      <div
+                                      <div class="meta-label"
                                         style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
                                         Contact</div>
-                                      <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
-                                        {{phone_number}}
-                                      </div>
+                                      <div
+                                        style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px;">
+                                        {{phone_number}}</div>
                                     </td>
                                   </tr>
                                 </table>
@@ -165,7 +252,7 @@
                               </td>
                             </tr>
 
-
+                            <!-- Location Row -->
                             <tr>
                               <td style="padding: 15px 15px 0 15px;">
                                 <table width="100%" cellpadding="0" cellspacing="0">
@@ -176,14 +263,15 @@
                                         <img
                                           src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/location.svg"
                                           width="40" height="40"
-                                          style="margin-top: 25px; margin-right: 18px; display: inline-block;">
+                                          style="margin-top: 25px; margin-right: 18px; display: inline-block; border: 0;">
                                       </div>
                                     </td>
                                     <td style="padding-bottom: 15px; word-break: break-word; overflow-wrap: anywhere;">
-                                      <div
+                                      <div class="meta-label"
                                         style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
                                         Location</div>
-                                      <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
+                                      <div
+                                        style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px;">
                                         {{location}}</div>
                                     </td>
                                   </tr>
@@ -194,6 +282,7 @@
                               </td>
                             </tr>
 
+                            <!-- Distance Row -->
                             <tr>
                               <td style="padding: 15px 15px 0 15px;">
                                 <table width="100%" cellpadding="0" cellspacing="0">
@@ -204,22 +293,23 @@
                                         <img
                                           src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/Map.svg"
                                           width="40" height="40"
-                                          style="margin-top: 25px; margin-right: 18px; display: inline-block;">
+                                          style="margin-top: 25px; margin-right: 18px; display: inline-block; border: 0;">
                                       </div>
                                     </td>
                                     <td style="padding-bottom: 15px; word-break: break-word; overflow-wrap: anywhere;">
-                                      <div
+                                      <div class="meta-label"
                                         style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
                                         Working distance</div>
-                                      <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
+                                      <div
+                                        style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px;">
                                         {{working_distance}} miles</div>
-                                      <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
                                     </td>
                                   </tr>
                                 </table>
                               </td>
                             </tr>
                           </table>
+
                         </td>
                       </tr>
                     </table>
@@ -229,6 +319,7 @@
             </td>
           </tr>
 
+          <!-- Action Interactive Banner Section -->
           <tr>
             <td style="padding: 0 20px 40px; position: relative; padding-bottom: 40px;">
               <!-- Image -->
@@ -238,17 +329,17 @@
                   style="width: 100%; display: block; object-fit: cover; object-position: left; border-radius: 35px; border: 0;">
               </div>
               <!-- Review Profile  -->
-              <table width="85%" align="center" cellpadding="0" cellspacing="0"
+              <table class="action-banner-card" width="85%" align="center" cellpadding="0" cellspacing="0"
                 style="background-color: #FFF6D9; padding: 30px; border-radius: 35px; margin: 0 auto; position: relative; z-index: 99; top: -80px; box-shadow: 0 15px 35px rgba(0,0,0,0.1);">
                 <tr>
                   <td align="center">
                     <div style="padding-bottom: 25px;">
-                      <a href="{{frontend_url}}"
+                      <a class="primary-btn" href="{{frontend_url}}"
                         style="background-color: #000000; color: #E8D1AB; padding: 22px 55px; border-radius: 100px; text-decoration: none; font-size: 17px; font-weight: 600; text-transform: uppercase; display: inline-block; letter-spacing: 1px; box-shadow: 0 4px 10px rgba(0,0,0,0.2); line-height: 31px;">
                         Review Profile
                       </a>
                     </div>
-                    <p
+                    <p class="action-subtext"
                       style="margin: 0 0 25px; font-size: 22px; color: #535252; line-height: 1.5; font-family: Arial, sans-serif;">
                       Please review their details & approve or reject their application to move
                       them to the next step.
@@ -265,10 +356,11 @@
             </td>
           </tr>
 
+          <!-- Footer Section -->
           <tr>
-            <td align="center" style="padding: 40px 40px 60px; border-top: 1px solid #00000014;">
-              <p style="margin: 0; font-size: 16px; color: #3C3B3B;">
-                Help Center &nbsp; • &nbsp; Term of Services &nbsp; • &nbsp; Privacy Policy
+            <td align="center" style="padding: 40px 40px 60px; border-top: 1px solid rgba(0,0,0,0.08);">
+              <p class="footer-text" style="margin: 0; font-size: 16px; color: #3C3B3B;">
+                Help Center &nbsp; • &nbsp; Terms of Services &nbsp; • &nbsp; Privacy Policy
               </p>
               <p style="margin: 20px 0 0; font-size: 26px; font-weight: 600; color: #000;">
                 Beige AI
