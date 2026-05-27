@@ -1,21 +1,26 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
 
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
   <meta name="color-scheme" content="light">
   <meta name="supported-color-schemes" content="light">
-
+  <title>Beige Booking Confirmation</title>
   <style>
     /* Forces the light background and dark text even if the device is in Dark Mode */
+    :root {
+      color-scheme: light;
+      supported-color-schemes: light;
+    }
+
     @media (prefers-color-scheme: dark) {
       .body-bg {
         background-color: #F7F7F7 !important;
       }
 
-      .main-content {
+      .white-card-container,
+      .white-card-container td {
         background-color: #FFFFFF !important;
       }
 
@@ -37,7 +42,6 @@
       color: #484848 !important;
     }
   </style>
-  <title>Booking Confirmed</title>
 </head>
 
 <body class="body-bg"
@@ -420,12 +424,12 @@
             </td>
           </tr>
 
-          <!-- Assignment section -->
+          <!-- Creative Partner Assignment Section -->
           <tr>
             <td width="100%">
               <table border="0" cellpadding="0" cellspacing="0" width="100%" style="margin: 0; width: 100%;">
                 <tr>
-                  <td style="background-color: #FFFFFF;">
+                  <td class="white-card-container" style="background-color: #FFFFFF;">
                     <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%"
                       style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;">
                       <tr>
@@ -463,7 +467,8 @@
                 </tr>
 
                 <tr>
-                  <td style="padding: 32px 40px ; text-align: center; background-color: #FFFFFF;">
+                  <td class="white-card-container"
+                    style="padding: 32px 40px ; text-align: center; background-color: #FFFFFF;">
                     <p
                       style="font-size: 24px; font-weight: 400; line-height: 33px; color: rgba(0, 0, 0, 0.70); margin-bottom: 20px;">
                       Your shoot has been matched with a vetted <span style="font-weight: 600; color: #000;">Beige
@@ -567,8 +572,7 @@
                       style="background: linear-gradient(90deg, #F9EAD0 0%, rgba(240, 221, 190, 0.00) 69.4%, rgba(232, 209, 171, 0.00) 100%); margin: 0; padding: 36px; font-size: 20px; font-weight: 600; font-style: italic; color: #000; line-height: 1.5;">
                       If you need to update any details or have questions prior to your shoot, simply reply to this
                       email and our team will assist.
-                      <br />
-                      <br />
+                      <br><br>
                       Thank you for choosing Beige.
                     </p>
                   </td>
@@ -605,12 +609,12 @@
                   alt="Line Separator" width="100%" style="display: block; border: 0;">
               </div>
               <p
-                style="margin: 0 0 20px; font-size: 16px; font-style: normal;font-weight: 400;line-height: normal; color: #3C3B3B;">
+                style="margin: 0 0 20px; font-size: 16px; font-style: normal; font-weight: 400; line-height: normal; color: #3C3B3B;">
                 This is an automated email from BeigeAI. Please do not reply to this email.
               </p>
-              <p style="margin: 0 0 10px; color: #000000; font-size: 26px;font-weight: 600;">Need Help?</p>
+              <p style="margin: 0 0 10px; color: #000000; font-size: 26px; font-weight: 600;">Need Help?</p>
               <a href="mailto:sales@beigecorporation.io" target="_blank"
-                style="display:block; margin: 0; color: #000000; font-size: 26px;font-weight: 600;">
+                style="display: block; margin: 0; color: #000000; font-size: 26px; font-weight: 600;">
                 sales@beigecorporation.io
               </a>
             </td>
@@ -625,9 +629,9 @@
                   alt="Line Separator" width="100%" style="display: block; border: 0;">
               </div>
               <p style="margin: 0 0 20px; font-size: 16px; color: #3C3B3B;">
-                Help Center &nbsp; • &nbsp; Term of Services &nbsp; • &nbsp; Privacy Policy
+                Help Center &nbsp; • &nbsp; Terms of Service &nbsp; • &nbsp; Privacy Policy
               </p>
-              <p style="margin: 0 0 60px; color: #000000; font-size: 26px;font-weight: 600;">
+              <p style="margin: 0 0 60px; color: #000000; font-size: 26px; font-weight: 600;">
                 Beige AI
               </p>
               <div
@@ -642,4 +646,5 @@
     </tr>
   </table>
 </body>
+
 </html>

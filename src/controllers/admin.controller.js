@@ -8727,12 +8727,33 @@ exports.getBookingSummaryById = async (req, res) => {
             }
         } catch (e) { crewCounts = []; }
 
+        const paymentSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(
+            bookingJson.stream_project_booking_id
+        );
+        const linkedLeadIds = Array.isArray(bookingJson.sales_leads)
+            ? bookingJson.sales_leads.map((lead) => lead.lead_id).filter(Boolean)
+            : (bookingJson.sales_leads?.lead_id ? [bookingJson.sales_leads.lead_id] : []);
+        const customQuote = await db.sales_quotes.findOne({
+            where: paymentSummary?.sales_quote_id
+                ? { sales_quote_id: paymentSummary.sales_quote_id }
+                : (linkedLeadIds.length ? { lead_id: { [Op.in]: linkedLeadIds } } : { sales_quote_id: null }),
+            include: [{
+                model: db.sales_quote_line_items,
+                as: 'line_items',
+                required: false,
+                where: { is_active: 1 }
+            }],
+            order: [[{ model: db.sales_quote_line_items, as: 'line_items' }, 'sort_order', 'ASC']]
+        });
+        const activeQuote = customQuote ? customQuote.toJSON() : primaryQuote;
+
         // 6. Pricing Breakdown & Discount Logic
         
         // Total discount recorded in the DB column (e.g., 5706.25)
-        const totalDiscountFromDb = parseFloat(primaryQuote.discount_amount || 0);
-        const subtotal = parseFloat(primaryQuote.subtotal || 0);
-        const quoteTotal = parseFloat(primaryQuote.total || 0);
+        const totalDiscountFromDb = parseFloat(activeQuote.discount_amount || 0);
+        const summaryQuoteTotal = paymentSummary ? parseFloat(paymentSummary.quote_total || 0) : 0;
+        const subtotal = parseFloat(activeQuote.subtotal || summaryQuoteTotal || 0);
+        const quoteTotal = summaryQuoteTotal || parseFloat(activeQuote.total || 0);
 
         let pricing = {
             shoot_cost: 0,
@@ -8743,7 +8764,7 @@ exports.getBookingSummaryById = async (req, res) => {
         };
 
         // Categorize Line Items into Shoot vs Editing
-        const items = primaryQuote.line_items || [];
+        const items = activeQuote.line_items || [];
         items.forEach(item => {
             const name = (item.item_name || "").toLowerCase();
             const total = parseFloat(item.line_total || 0);
@@ -8759,7 +8780,7 @@ exports.getBookingSummaryById = async (req, res) => {
         let referralCode = null;
         let paymentData = null;
         let latestPaymentData = null;
-        const notes = primaryQuote.notes || '';
+        const notes = activeQuote.notes || primaryQuote.notes || '';
 
         // Matches: Referral applied (7321F9): -$518.75
         const referralAmountMatch = String(notes).match(/Referral applied.*?-\$([\d,.]+)/i);
@@ -8816,10 +8837,6 @@ exports.getBookingSummaryById = async (req, res) => {
         if (!paymentData && latestPaymentData?.referral_code) {
             referralCode = latestPaymentData.referral_code;
         }
-
-        const paymentSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(
-            bookingJson.stream_project_booking_id
-        );
 
         // Logic: The "Promo Code" discount is whatever is left over after the Referral Discount
         const discountCodeDiscount = Math.max(0, totalDiscountFromDb - referralDiscount);
