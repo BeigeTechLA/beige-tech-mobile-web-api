@@ -41,10 +41,95 @@ function toNotificationJson(row) {
     is_archived: currentUserState ? currentUserState.is_archived : notification.is_archived,
     archived_at: currentUserState ? currentUserState.archived_at : notification.archived_at,
     is_muted: currentUserState ? currentUserState.is_muted : notification.is_muted,
+    muted_at: currentUserState ? currentUserState.muted_at : notification.muted_at,
     metadata: parseMetadata(notification.metadata_json),
     metadata_json: undefined,
     user_states: undefined,
   };
+}
+
+function toNotificationDetailJson(row) {
+  const notification = toNotificationJson(row);
+  const metadata = notification.metadata || {};
+
+  return {
+    notification,
+    detail: {
+      id: notification.notification_center_id,
+      title: notification.title,
+      message: notification.message,
+      category: notification.category,
+      type: notification.notification_type,
+      priority: notification.priority,
+      actor: {
+        user_id: notification.actor_user_id || notification.actor?.id || null,
+        name: notification.actor_name || notification.actor?.name || null,
+        email: notification.actor?.email || null,
+        avatar_url: notification.actor_avatar_url || null,
+      },
+      entity: {
+        type: notification.entity_type,
+        id: notification.entity_id,
+      },
+      action: {
+        label: notification.action_label,
+        url: notification.action_url,
+        approve_api: metadata.approve_api || null,
+        reject_api: metadata.reject_api || null,
+      },
+      state: {
+        is_read: Boolean(notification.is_read),
+        read_at: notification.read_at,
+        is_archived: Boolean(notification.is_archived),
+        archived_at: notification.archived_at,
+        is_muted: Boolean(notification.is_muted),
+        muted_at: notification.muted_at,
+      },
+      metadata,
+      timeline: buildNotificationTimeline(notification),
+      created_at: notification.created_at,
+      updated_at: notification.updated_at,
+      expires_at: notification.expires_at,
+    },
+  };
+}
+
+function buildNotificationTimeline(notification) {
+  const timeline = [];
+
+  if (notification.created_at) {
+    timeline.push({
+      label: 'Notification created',
+      occurred_at: notification.created_at,
+      type: 'created',
+    });
+  }
+
+  if (notification.read_at) {
+    timeline.push({
+      label: 'Marked read',
+      occurred_at: notification.read_at,
+      type: 'read',
+    });
+  }
+
+  if (notification.archived_at) {
+    timeline.push({
+      label: 'Archived',
+      occurred_at: notification.archived_at,
+      type: 'archived',
+    });
+  }
+
+  if (notification.muted_at) {
+    timeline.push({
+      label: 'Muted similar',
+      occurred_at: notification.muted_at,
+      type: 'muted',
+    });
+  }
+
+  return timeline;
 }
 
 function formatCurrency(value) {
@@ -153,7 +238,11 @@ async function notifyCpRegistrationApprovalRequired(params) {
     roleName,
   } = params;
 
-  const displayName = name || email || `CP #${crewMemberId}`;
+  const crewContext = await getCrewApprovalNotificationContext(crewMemberId);
+  const displayName = name || crewContext.name || email || crewContext.email || `CP #${crewMemberId}`;
+  const resolvedEmail = email || crewContext.email || null;
+  const resolvedLocation = location || crewContext.location || null;
+  const resolvedRoleName = roleName || crewContext.roleName || null;
 
   return notifyAdmins({
     notification_type: NOTIFICATION_CENTER_TYPES.CP_REGISTRATION_APPROVAL,
@@ -163,19 +252,83 @@ async function notifyCpRegistrationApprovalRequired(params) {
     message: `${displayName} registered as a Creative Partner and is waiting for approval.`,
     entity_type: 'crew_member',
     entity_id: crewMemberId,
-    action_url: `/admin/creative-partners?status=pending&crew_member_id=${encodeURIComponent(String(crewMemberId))}`,
+    action_url: `/v1/admin/crew-member/${encodeURIComponent(String(crewMemberId))}`,
     action_label: 'Review CP',
     actor_name: displayName,
     metadata: {
       crew_member_id: crewMemberId,
       name: displayName,
-      email: email || null,
-      location: location || null,
-      role_name: roleName || null,
+      email: resolvedEmail,
+      location: resolvedLocation,
+      role_name: resolvedRoleName,
+      review_api: `/v1/admin/crew-member/${crewMemberId}`,
+      list_api: '/v1/admin/get-crew-members',
       approve_api: '/v1/admin/verify-crew-member',
       reject_api: '/v1/admin/verify-crew-member',
+      approve_payload: {
+        crew_member_id: crewMemberId,
+        status: 1,
+      },
+      reject_payload: {
+        crew_member_id: crewMemberId,
+        status: 2,
+      },
     },
   });
+}
+
+async function getCrewApprovalNotificationContext(crewMemberId) {
+  if (!crewMemberId) {
+    return {};
+  }
+
+  try {
+    const crew = await db.crew_members.findByPk(crewMemberId, {
+      attributes: ['crew_member_id', 'first_name', 'last_name', 'email', 'location', 'primary_role'],
+      raw: true,
+    });
+
+    if (!crew) return {};
+
+    const roleIds = parseRoleIds(crew.primary_role);
+    let roleName = null;
+    if (roleIds.length) {
+      const roles = await db.crew_roles.findAll({
+        where: { role_id: { [Op.in]: roleIds } },
+        attributes: ['role_name'],
+        raw: true,
+      });
+      roleName = roles.map((role) => role.role_name).filter(Boolean).join(', ') || null;
+    }
+
+    return {
+      name: [crew.first_name, crew.last_name].filter(Boolean).join(' ').trim() || null,
+      email: crew.email || null,
+      location: crew.location || null,
+      roleName,
+    };
+  } catch (error) {
+    console.error('Failed to build CP notification context:', error);
+    return {};
+  }
+}
+
+function parseRoleIds(value) {
+  if (!value) return [];
+
+  try {
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+    if (Array.isArray(parsed)) {
+      return parsed.map(Number).filter(Boolean);
+    }
+    const numeric = Number(parsed);
+    return numeric ? [numeric] : [];
+  } catch (_) {
+    return String(value)
+      .split(',')
+      .map((entry) => Number(entry.trim()))
+      .filter(Boolean);
+  }
 }
 
 async function notifyQuoteChangeApprovalRequired(params) {
@@ -252,7 +405,7 @@ async function listNotifications(userId, options = {}) {
       {
         model: db.notification_center_user_state,
         as: 'user_states',
-        attributes: ['is_read', 'read_at', 'is_archived', 'archived_at', 'is_muted'],
+        attributes: ['is_read', 'read_at', 'is_archived', 'archived_at', 'is_muted', 'muted_at'],
         where: { user_id: userId },
         required: false,
       },
@@ -278,6 +431,34 @@ async function listNotifications(userId, options = {}) {
   };
 }
 
+async function getNotificationDetail(notificationId, userId) {
+  const userRole = await getUserRole(userId);
+  const notification = await db.notification_center.findOne({
+    where: {
+      notification_center_id: notificationId,
+      ...buildNotificationWhere(userId, userRole, { archived: false }),
+    },
+    include: [
+      {
+        model: db.users,
+        as: 'actor',
+        attributes: ['id', 'name', 'email'],
+        required: false,
+      },
+      {
+        model: db.notification_center_user_state,
+        as: 'user_states',
+        attributes: ['is_read', 'read_at', 'is_archived', 'archived_at', 'is_muted', 'muted_at'],
+        where: { user_id: userId },
+        required: false,
+      },
+    ],
+  });
+
+  if (!notification) return null;
+  return toNotificationDetailJson(notification);
+}
+
 async function getUnreadCount(userId) {
   const userRole = await getUserRole(userId);
   return db.notification_center.count({
@@ -293,6 +474,17 @@ async function markAsRead(notificationId, userId) {
   await upsertUserState(notificationId, userId, {
     is_read: 1,
     read_at: new Date(),
+  });
+  return true;
+}
+
+async function markAsUnread(notificationId, userId) {
+  const canAccess = await canAccessNotification(notificationId, userId);
+  if (!canAccess) return false;
+
+  await upsertUserState(notificationId, userId, {
+    is_read: 0,
+    read_at: null,
   });
   return true;
 }
@@ -324,6 +516,43 @@ async function archiveNotification(notificationId, userId) {
     archived_at: new Date(),
   });
   return true;
+}
+
+async function muteSimilarNotifications(notificationId, userId) {
+  const userRole = await getUserRole(userId);
+  const notification = await db.notification_center.findOne({
+    where: {
+      notification_center_id: notificationId,
+      ...buildNotificationWhere(userId, userRole, { archived: false, muted: false }),
+    },
+    attributes: ['notification_center_id', 'notification_type', 'category'],
+    raw: true,
+  });
+
+  if (!notification) return null;
+
+  const similarNotifications = await db.notification_center.findAll({
+    where: {
+      ...buildNotificationWhere(userId, userRole, { archived: false, muted: false }),
+      notification_type: notification.notification_type,
+      category: notification.category,
+    },
+    attributes: ['notification_center_id'],
+    raw: true,
+  });
+
+  for (const item of similarNotifications) {
+    await upsertUserState(item.notification_center_id, userId, {
+      is_muted: 1,
+      muted_at: new Date(),
+    });
+  }
+
+  return {
+    muted_count: similarNotifications.length,
+    notification_type: notification.notification_type,
+    category: notification.category,
+  };
 }
 
 async function getUserRole(userId) {
@@ -367,6 +596,10 @@ function buildNotificationWhere(userId, userRole, options = {}) {
     andConditions.push(db.Sequelize.literal(`EXISTS (SELECT 1 FROM notification_center_user_state ncs WHERE ncs.notification_center_id = notification_center.notification_center_id AND ncs.user_id = ${Number(userId)} AND ncs.is_archived = 1)`));
   } else {
     andConditions.push(db.Sequelize.literal(`NOT EXISTS (SELECT 1 FROM notification_center_user_state ncs WHERE ncs.notification_center_id = notification_center.notification_center_id AND ncs.user_id = ${Number(userId)} AND ncs.is_archived = 1)`));
+  }
+
+  if (!options.muted) {
+    andConditions.push(db.Sequelize.literal(`NOT EXISTS (SELECT 1 FROM notification_center_user_state ncs WHERE ncs.notification_center_id = notification_center.notification_center_id AND ncs.user_id = ${Number(userId)} AND ncs.is_muted = 1)`));
   }
 
   if (options.unreadOnly) {
@@ -428,8 +661,11 @@ module.exports = {
   notifyCpRegistrationApprovalRequired,
   notifyQuoteChangeApprovalRequired,
   listNotifications,
+  getNotificationDetail,
   getUnreadCount,
   markAsRead,
+  markAsUnread,
   markAllAsRead,
   archiveNotification,
+  muteSimilarNotifications,
 };

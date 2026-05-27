@@ -2282,8 +2282,18 @@ GET {{URL}}notifications/unread-count HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
+### Notification Center - detail
+GET {{URL}}notifications/1 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
 ### Notification Center - mark single notification read
 PATCH {{URL}}notifications/1/read HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Notification Center - mark single notification unread
+PATCH {{URL}}notifications/2/unread HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -2294,5 +2304,10 @@ Authorization: {{TOKEN}}
 
 ### Notification Center - archive single notification
 PATCH {{URL}}notifications/1/archive HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Notification Center - mute similar notifications
+PATCH {{URL}}notifications/3/mute-similar HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}

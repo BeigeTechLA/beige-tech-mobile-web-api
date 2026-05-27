@@ -50,6 +50,38 @@ exports.getUnreadCount = async (req, res) => {
   }
 };
 
+exports.getNotificationDetail = async (req, res) => {
+  try {
+    const notificationId = Number(req.params.notificationId);
+    if (!Number.isInteger(notificationId) || notificationId <= 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Invalid notification_id',
+      });
+    }
+
+    const data = await notificationCenterService.getNotificationDetail(notificationId, req.userId);
+    if (!data) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Notification not found',
+      });
+    }
+
+    return res.status(constants.OK.code).json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    console.error('Get notification detail error:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to fetch notification detail',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
 exports.markAsRead = async (req, res) => {
   try {
     const notificationId = Number(req.params.notificationId || req.body.notification_id);
@@ -77,6 +109,38 @@ exports.markAsRead = async (req, res) => {
     return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
       success: false,
       message: 'Failed to mark notification as read',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+exports.markAsUnread = async (req, res) => {
+  try {
+    const notificationId = Number(req.params.notificationId || req.body.notification_id);
+    if (!Number.isInteger(notificationId) || notificationId <= 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Invalid notification_id',
+      });
+    }
+
+    const updated = await notificationCenterService.markAsUnread(notificationId, req.userId);
+    if (!updated) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Notification not found',
+      });
+    }
+
+    return res.status(constants.OK.code).json({
+      success: true,
+      message: 'Notification marked as unread',
+    });
+  } catch (error) {
+    console.error('Mark notification unread error:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to mark notification as unread',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }
@@ -127,6 +191,39 @@ exports.archiveNotification = async (req, res) => {
     return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
       success: false,
       message: 'Failed to archive notification',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+exports.muteSimilarNotifications = async (req, res) => {
+  try {
+    const notificationId = Number(req.params.notificationId || req.body.notification_id);
+    if (!Number.isInteger(notificationId) || notificationId <= 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Invalid notification_id',
+      });
+    }
+
+    const data = await notificationCenterService.muteSimilarNotifications(notificationId, req.userId);
+    if (!data) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: 'Notification not found',
+      });
+    }
+
+    return res.status(constants.OK.code).json({
+      success: true,
+      message: 'Similar notifications muted',
+      data,
+    });
+  } catch (error) {
+    console.error('Mute similar notifications error:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      success: false,
+      message: 'Failed to mute similar notifications',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }
