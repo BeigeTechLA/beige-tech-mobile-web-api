@@ -1655,3 +1655,53 @@ CREATE TABLE IF NOT EXISTS booking_manual_payments (
   INDEX idx_booking_manual_payments_sales_quote_id (sales_quote_id),
   INDEX idx_booking_manual_payments_created_at (created_at)
 );
+
+-- 27-05-26
+
+CREATE TABLE IF NOT EXISTS `project_notes` (
+  `note_id` int(11) NOT NULL AUTO_INCREMENT,
+  `booking_id` int(11) NOT NULL COMMENT 'FK to stream_project_booking - shoot shown on admin board',
+  `parent_note_id` int(11) DEFAULT NULL COMMENT 'Self reference for threaded replies',
+  `created_by_user_id` int(11) NOT NULL COMMENT 'Internal/admin user who wrote the note',
+  `message` text NOT NULL,
+  `is_active` tinyint(1) NOT NULL DEFAULT 1,
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`note_id`),
+  KEY `idx_project_notes_booking` (`booking_id`),
+  KEY `idx_project_notes_parent` (`parent_note_id`),
+  KEY `idx_project_notes_created_by` (`created_by_user_id`),
+  KEY `idx_project_notes_created_at` (`created_at`),
+  CONSTRAINT `project_notes_ibfk_1`
+    FOREIGN KEY (`booking_id`)
+    REFERENCES `stream_project_booking` (`stream_project_booking_id`)
+    ON DELETE CASCADE,
+  CONSTRAINT `project_notes_ibfk_2`
+    FOREIGN KEY (`parent_note_id`)
+    REFERENCES `project_notes` (`note_id`)
+    ON DELETE CASCADE,
+  CONSTRAINT `project_notes_ibfk_3`
+    FOREIGN KEY (`created_by_user_id`)
+    REFERENCES `users` (`id`)
+    ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+CREATE TABLE IF NOT EXISTS `project_note_reactions` (
+  `reaction_id` int(11) NOT NULL AUTO_INCREMENT,
+  `note_id` int(11) NOT NULL COMMENT 'FK to project_notes',
+  `user_id` int(11) NOT NULL COMMENT 'User who reacted',
+  `reaction_type` varchar(30) NOT NULL DEFAULT 'like',
+  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`reaction_id`),
+  UNIQUE KEY `uniq_project_note_reaction_user` (`note_id`, `user_id`, `reaction_type`),
+  KEY `idx_project_note_reactions_note` (`note_id`),
+  KEY `idx_project_note_reactions_user` (`user_id`),
+  CONSTRAINT `project_note_reactions_ibfk_1`
+    FOREIGN KEY (`note_id`)
+    REFERENCES `project_notes` (`note_id`)
+    ON DELETE CASCADE,
+  CONSTRAINT `project_note_reactions_ibfk_2`
+    FOREIGN KEY (`user_id`)
+    REFERENCES `users` (`id`)
+    ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;

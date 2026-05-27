@@ -9776,4 +9776,383 @@ exports.getAllAssignedRequests = async (req, res) => {
   }
 };
 
+const getAuthenticatedUserId = (req) => {
+  const userId = Number(req.user?.userId || req.user?.id || req.body?.user_id);
+  return Number.isInteger(userId) && userId > 0 ? userId : null;
+};
+
+const getNoteBody = (body = {}) => {
+  const value = body.note ?? body.message ?? body.body ?? '';
+  return String(value).trim();
+};
+
+const getSafeReactionType = (value) => {
+  const normalized = String(value || 'like').trim().toLowerCase();
+  return normalized || 'like';
+};
+
+const formatNoteAuthor = (user = null) => {
+  if (!user) return null;
+  const plain = typeof user.get === 'function' ? user.get({ plain: true }) : user;
+  return {
+    user_id: plain.id,
+    name: plain.name || plain.email || `User ${plain.id}`,
+    email: plain.email || null,
+    role_id: plain.user_type || null,
+    role_name: plain.userType?.user_role || plain.role || null
+  };
+};
+
+const formatProjectNote = (note, currentUserId, repliesByParentId) => {
+  const plain = typeof note.get === 'function' ? note.get({ plain: true }) : note;
+  const reactions = Array.isArray(plain.reactions) ? plain.reactions : [];
+  const children = repliesByParentId.get(Number(plain.note_id)) || [];
+
+  return {
+    note_id: plain.note_id,
+    booking_id: plain.booking_id,
+    parent_note_id: plain.parent_note_id,
+    message: plain.message,
+    created_at: plain.created_at,
+    updated_at: plain.updated_at,
+    created_by: formatNoteAuthor(plain.created_by),
+    like_count: reactions.filter((reaction) => reaction.reaction_type === 'like').length,
+    reaction_count: reactions.length,
+    reacted_by_me: reactions.some((reaction) => Number(reaction.user_id) === Number(currentUserId)),
+    my_reactions: reactions
+      .filter((reaction) => Number(reaction.user_id) === Number(currentUserId))
+      .map((reaction) => reaction.reaction_type),
+    replies: children.map((reply) => formatProjectNote(reply, currentUserId, repliesByParentId))
+  };
+};
+
+const loadShootNotes = async (bookingId, currentUserId) => {
+  const notes = await db.project_notes.findAll({
+    where: {
+      booking_id: bookingId,
+      is_active: 1
+    },
+    include: [
+      {
+        model: db.users,
+        as: 'created_by',
+        required: false,
+        attributes: ['id', 'name', 'email', 'user_type', 'role'],
+        include: [
+          {
+            model: db.user_type,
+            as: 'userType',
+            required: false,
+            attributes: ['user_type_id', 'user_role']
+          }
+        ]
+      },
+      {
+        model: db.project_note_reactions,
+        as: 'reactions',
+        required: false,
+        attributes: ['reaction_id', 'user_id', 'reaction_type', 'created_at']
+      }
+    ],
+    order: [
+      ['created_at', 'ASC'],
+      ['note_id', 'ASC']
+    ]
+  });
+
+  const repliesByParentId = new Map();
+  const rootNotes = [];
+
+  notes.forEach((note) => {
+    const parentId = Number(note.parent_note_id || 0);
+    if (parentId > 0) {
+      if (!repliesByParentId.has(parentId)) repliesByParentId.set(parentId, []);
+      repliesByParentId.get(parentId).push(note);
+    } else {
+      rootNotes.push(note);
+    }
+  });
+
+  return rootNotes.map((note) => formatProjectNote(note, currentUserId, repliesByParentId));
+};
+
+const findActiveShoot = async (bookingId) => stream_project_booking.findOne({
+  where: {
+    stream_project_booking_id: bookingId,
+    is_active: 1
+  }
+});
+
+const findActiveShootNote = async (bookingId, noteId) => db.project_notes.findOne({
+  where: {
+    note_id: noteId,
+    booking_id: bookingId,
+    is_active: 1
+  }
+});
+
+const isAdminShootNotesRole = (role) => (
+  ['admin', 'production_manager'].includes(String(role || '').toLowerCase().replace(/\s+/g, '_'))
+);
+
+const ensureShootNotesAccess = async (bookingId, req, res) => {
+  const userId = getAuthenticatedUserId(req);
+  if (!userId) {
+    res.status(401).json({ success: false, message: 'Authenticated user is required' });
+    return null;
+  }
+
+  const booking = await findActiveShoot(bookingId);
+  if (!booking) {
+    res.status(404).json({ success: false, message: 'Shoot not found' });
+    return null;
+  }
+
+  return booking;
+};
+
+exports.getShootNotes = async (req, res) => {
+  try {
+    const bookingId = Number(req.params.bookingId);
+    const currentUserId = getAuthenticatedUserId(req);
+
+    if (!Number.isInteger(bookingId) || bookingId <= 0) {
+      return res.status(400).json({ success: false, message: 'Valid bookingId is required' });
+    }
+
+    if (!currentUserId) {
+      return res.status(401).json({ success: false, message: 'Authenticated user is required' });
+    }
+
+    const booking = await ensureShootNotesAccess(bookingId, req, res);
+    if (!booking) return null;
+
+    const notes = await loadShootNotes(bookingId, currentUserId);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Shoot notes fetched successfully',
+      data: notes
+    });
+  } catch (error) {
+    console.error('Get shoot notes error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+exports.addShootNote = async (req, res) => {
+  try {
+    const bookingId = Number(req.params.bookingId);
+    const currentUserId = getAuthenticatedUserId(req);
+    const message = getNoteBody(req.body);
+
+    if (!Number.isInteger(bookingId) || bookingId <= 0) {
+      return res.status(400).json({ success: false, message: 'Valid bookingId is required' });
+    }
+
+    if (!currentUserId) {
+      return res.status(401).json({ success: false, message: 'Authenticated user is required' });
+    }
+
+    if (!message) {
+      return res.status(400).json({ success: false, message: 'Note message is required' });
+    }
+
+    const booking = await ensureShootNotesAccess(bookingId, req, res);
+    if (!booking) return null;
+
+    const user = await db.users.findOne({ where: { id: currentUserId }, attributes: ['id'] });
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const note = await db.project_notes.create({
+      booking_id: bookingId,
+      created_by_user_id: currentUserId,
+      message
+    });
+
+    const notes = await loadShootNotes(bookingId, currentUserId);
+    const createdNote = notes.find((item) => Number(item.note_id) === Number(note.note_id));
+
+    return res.status(201).json({
+      success: true,
+      message: 'Shoot note added successfully',
+      data: createdNote || note
+    });
+  } catch (error) {
+    console.error('Add shoot note error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+exports.replyToShootNote = async (req, res) => {
+  try {
+    const bookingId = Number(req.params.bookingId);
+    const noteId = Number(req.params.noteId);
+    const currentUserId = getAuthenticatedUserId(req);
+    const message = getNoteBody(req.body);
+
+    if (!Number.isInteger(bookingId) || bookingId <= 0 || !Number.isInteger(noteId) || noteId <= 0) {
+      return res.status(400).json({ success: false, message: 'Valid bookingId and noteId are required' });
+    }
+
+    if (!currentUserId) {
+      return res.status(401).json({ success: false, message: 'Authenticated user is required' });
+    }
+
+    if (!message) {
+      return res.status(400).json({ success: false, message: 'Reply message is required' });
+    }
+
+    const booking = await ensureShootNotesAccess(bookingId, req, res);
+    if (!booking) return null;
+
+    const parentNote = await findActiveShootNote(bookingId, noteId);
+    if (!parentNote) {
+      return res.status(404).json({ success: false, message: 'Parent note not found for this shoot' });
+    }
+
+    const reply = await db.project_notes.create({
+      booking_id: bookingId,
+      parent_note_id: noteId,
+      created_by_user_id: currentUserId,
+      message
+    });
+
+    const notes = await loadShootNotes(bookingId, currentUserId);
+    const parent = notes.find((item) => Number(item.note_id) === Number(noteId));
+    const createdReply = parent?.replies?.find((item) => Number(item.note_id) === Number(reply.note_id));
+
+    return res.status(201).json({
+      success: true,
+      message: 'Shoot note reply added successfully',
+      data: createdReply || reply
+    });
+  } catch (error) {
+    console.error('Reply to shoot note error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+exports.toggleShootNoteReaction = async (req, res) => {
+  try {
+    const bookingId = Number(req.params.bookingId);
+    const noteId = Number(req.params.noteId);
+    const currentUserId = getAuthenticatedUserId(req);
+    const reactionType = getSafeReactionType(req.body?.reaction || req.body?.reaction_type);
+
+    if (!Number.isInteger(bookingId) || bookingId <= 0 || !Number.isInteger(noteId) || noteId <= 0) {
+      return res.status(400).json({ success: false, message: 'Valid bookingId and noteId are required' });
+    }
+
+    if (!currentUserId) {
+      return res.status(401).json({ success: false, message: 'Authenticated user is required' });
+    }
+
+    const booking = await ensureShootNotesAccess(bookingId, req, res);
+    if (!booking) return null;
+
+    const note = await findActiveShootNote(bookingId, noteId);
+    if (!note) {
+      return res.status(404).json({ success: false, message: 'Note not found for this shoot' });
+    }
+
+    const existingReaction = await db.project_note_reactions.findOne({
+      where: {
+        note_id: noteId,
+        user_id: currentUserId,
+        reaction_type: reactionType
+      }
+    });
+
+    let reactedByMe = false;
+
+    if (existingReaction) {
+      await existingReaction.destroy();
+    } else {
+      await db.project_note_reactions.create({
+        note_id: noteId,
+        user_id: currentUserId,
+        reaction_type: reactionType
+      });
+      reactedByMe = true;
+    }
+
+    const [likeCount, reactionCount] = await Promise.all([
+      db.project_note_reactions.count({ where: { note_id: noteId, reaction_type: 'like' } }),
+      db.project_note_reactions.count({ where: { note_id: noteId } })
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      message: reactedByMe ? 'Reaction added successfully' : 'Reaction removed successfully',
+      data: {
+        note_id: noteId,
+        reaction: reactionType,
+        reacted_by_me: reactedByMe,
+        like_count: likeCount,
+        reaction_count: reactionCount
+      }
+    });
+  } catch (error) {
+    console.error('Toggle shoot note reaction error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+exports.deleteShootNote = async (req, res) => {
+  try {
+    const bookingId = Number(req.params.bookingId);
+    const noteId = Number(req.params.noteId);
+    const currentUserId = getAuthenticatedUserId(req);
+    const userRole = String(req.user?.userRole || '').toLowerCase().replace(/\s+/g, '_');
+
+    if (!Number.isInteger(bookingId) || bookingId <= 0 || !Number.isInteger(noteId) || noteId <= 0) {
+      return res.status(400).json({ success: false, message: 'Valid bookingId and noteId are required' });
+    }
+
+    if (!currentUserId) {
+      return res.status(401).json({ success: false, message: 'Authenticated user is required' });
+    }
+
+    const booking = await ensureShootNotesAccess(bookingId, req, res);
+    if (!booking) return null;
+
+    const note = await findActiveShootNote(bookingId, noteId);
+    if (!note) {
+      return res.status(404).json({ success: false, message: 'Note not found for this shoot' });
+    }
+
+    const canDelete = (
+      Number(note.created_by_user_id) === Number(currentUserId) ||
+      isAdminShootNotesRole(userRole)
+    );
+
+    if (!canDelete) {
+      return res.status(403).json({ success: false, message: 'You do not have permission to delete this note' });
+    }
+
+    await db.project_notes.update(
+      { is_active: 0 },
+      {
+        where: {
+          [Op.or]: [
+            { note_id: noteId },
+            { parent_note_id: noteId }
+          ]
+        }
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'Shoot note deleted successfully'
+    });
+  } catch (error) {
+    console.error('Delete shoot note error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
 

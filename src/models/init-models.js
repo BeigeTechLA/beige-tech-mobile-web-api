@@ -71,6 +71,8 @@ var _project_state_history = require("./project_state_history");
 var _project_feedback = require("./project_feedback");
 var _project_assignments = require("./project_assignments");
 var _project_meetings = require("./project_meetings");
+var _project_notes = require("./project_notes");
+var _project_note_reactions = require("./project_note_reactions");
 var _notifications = require("./notifications");
 var _notification_preferences = require("./notification_preferences");
 
@@ -164,6 +166,8 @@ function initModels(sequelize) {
   var project_feedback = _project_feedback(sequelize, DataTypes);
   var project_assignments = _project_assignments(sequelize, DataTypes);
   var project_meetings = _project_meetings(sequelize, DataTypes);
+  var project_notes = _project_notes(sequelize, DataTypes);
+  var project_note_reactions = _project_note_reactions(sequelize, DataTypes);
   var notifications = _notifications(sequelize, DataTypes);
   var notification_preferences = _notification_preferences(sequelize, DataTypes);
 
@@ -523,6 +527,22 @@ crew_members.belongsTo(crew_roles, { as: 'role', foreignKey: 'primary_role' });
   project_meetings.belongsTo(users, { as: "creator", foreignKey: "created_by_user_id" });
   users.hasMany(project_meetings, { as: "created_meetings", foreignKey: "created_by_user_id" });
 
+  // Admin shoot notes relationships
+  project_notes.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id" });
+  stream_project_booking.hasMany(project_notes, { as: "notes", foreignKey: "booking_id" });
+
+  project_notes.belongsTo(project_notes, { as: "parent_note", foreignKey: "parent_note_id" });
+  project_notes.hasMany(project_notes, { as: "replies", foreignKey: "parent_note_id" });
+
+  project_notes.belongsTo(users, { as: "created_by", foreignKey: "created_by_user_id" });
+  users.hasMany(project_notes, { as: "project_notes", foreignKey: "created_by_user_id" });
+
+  project_note_reactions.belongsTo(project_notes, { as: "note", foreignKey: "note_id" });
+  project_notes.hasMany(project_note_reactions, { as: "reactions", foreignKey: "note_id" });
+
+  project_note_reactions.belongsTo(users, { as: "user", foreignKey: "user_id" });
+  users.hasMany(project_note_reactions, { as: "project_note_reactions", foreignKey: "user_id" });
+
   // Notifications -> Users relationship
   notifications.belongsTo(users, { as: "user", foreignKey: "user_id" });
   users.hasMany(notifications, { as: "notifications", foreignKey: "user_id" });
@@ -733,6 +753,8 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
     project_feedback,
     project_assignments,
     project_meetings,
+    project_notes,
+    project_note_reactions,
     notifications,
     notification_preferences,
     // Sales System Models

@@ -91,4 +91,10 @@ router.get('/get-project-form/:project_id',authMiddleware, admin.getProjectFormB
 router.post('/get-assigned-project-crew', admin.getAllAssignedRequests);
 router.post('/crew-member-assigned-projects', admin.getAllAssignedRequests);
 
+router.get('/shoots/:bookingId/notes', authMiddleware, admin.getShootNotes);
+router.post('/shoots/:bookingId/notes', authMiddleware, admin.addShootNote);
+router.post('/shoots/:bookingId/notes/:noteId/replies', authMiddleware, admin.replyToShootNote);
+router.post('/shoots/:bookingId/notes/:noteId/reactions', authMiddleware, admin.toggleShootNoteReaction);
+router.delete('/shoots/:bookingId/notes/:noteId', authMiddleware, admin.deleteShootNote);
+
 module.exports = router;

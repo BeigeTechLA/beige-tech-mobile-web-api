@@ -2,9 +2,9 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer 
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3Nzk4NjY0MTYsImV4cCI6MTc4MDQ3MTIxNn0.2Mr17MMKiGzbKCegx4pB8Nmkj3rGzVU3t17m_yxZNHs
 
-@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI0NSwidXNlclJvbGUiOiJDbGllbnQiLCJpYXQiOjE3Nzg4NDc1OTEsImV4cCI6MTc3OTQ1MjM5MX0.QbY4oalixhyzuuiFPE-uUuWN451stVYHUxibOLIDwus
+@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI0MywidXNlclJvbGUiOiJDcmVhdG9yIiwiaWF0IjoxNzc5ODY2NjUyLCJleHAiOjE3ODA0NzE0NTJ9.HqW7gAw_dGMs0XG0fHuYfw_DON3cn_oBLRhs2KIJxgc
 
 ###
 POST {{URL}}creator/dashboard-count HTTP/1.1
@@ -54,8 +54,8 @@ POST {{URL}}auth/login HTTP/1.1
 Content-Type: application/json
 
 {
-  "email": "admin@beigecorporation.io",
-  "password": "Admin@2026!"
+  "email": "craftdivine780@gmail.com",
+  "password": "12345678"
 }
 
 ###
@@ -136,7 +136,7 @@ GET {{URL}}admin/get-projects HTTP/1.1
 Content-Type: application/json
 
 ###
-GET {{URL}}admin/get-project/932 HTTP/1.1
+GET {{URL}}admin/get-project/1197 HTTP/1.1
 Content-Type: application/json
 
 ###
@@ -2225,13 +2225,13 @@ POST {{URL}}finance/admin/disputes/1/escalate HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
-{
-  "priority": "urgent",
+11{
+  11"priority": "urgent",
   "reason": "High-value dispute requiring senior admin review.",
   "assigned_team": "Finance Resolution Team",
   "notes": "Escalated due to payout and refund complexity."
 }
-
+11
 ### FILTER EXAMPLES
 GET {{URL}}finance/admin/disputes?status=in_review HTTP/1.1
 Authorization: {{TOKEN}}
@@ -2239,8 +2239,8 @@ Authorization: {{TOKEN}}
 ###
 GET {{URL}}finance/admin/disputes?raised_by_type=client HTTP/1.1
 Authorization: {{TOKEN}}
-
-###
+11
+11###
 GET {{URL}}finance/admin/disputes?category=refund HTTP/1.1
 Authorization: {{TOKEN}}
 
@@ -2250,4 +2250,41 @@ Authorization: {{TOKEN}}
 
 ###
 GET {{URL}}client/credit/dashboard HTTP/1.1
+Authorization: {{TOKEN2}}
+
+### Get Shoot Notes - 1197 = stream_project_booking_id
+GET {{URL}}admin/shoots/1197/notes HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Add Shoot Note
+POST {{URL}}admin/shoots/1197/notes HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "note": "Client requested extra close-up shots for the second setup."
+}
+
+### Reply To Note - 1197 = stream_project_booking_id, 1 = note_id
+POST {{URL}}admin/shoots/1197/notes/1/replies HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+{
+  "note": "Added this to the shot list."
+}
+
+### Like / Unlike Note
+POST {{URL}}admin/shoots/1197/notes/1/reactions HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+{
+  "reaction": "like"
+}
+
+### Delete Note
+DELETE {{URL}}admin/shoots/1197/notes/2 HTTP/1.1
+Content-Type: application/json
 Authorization: {{TOKEN2}}
