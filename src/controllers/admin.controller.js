@@ -454,6 +454,36 @@ const buildManualPaymentSummaryFromActivities = (activities = [], totalAmount = 
   };
 };
 
+const countActiveShootNotesByBookingIds = async (bookingIds = []) => {
+  const ids = Array.from(new Set(
+    bookingIds
+      .map((id) => Number(id))
+      .filter((id) => Number.isInteger(id) && id > 0)
+  ));
+
+  if (!ids.length) return new Map();
+
+  const rows = await db.project_notes.findAll({
+    where: {
+      booking_id: { [Sequelize.Op.in]: ids },
+      is_active: 1
+    },
+    attributes: [
+      'booking_id',
+      [Sequelize.fn('COUNT', Sequelize.col('note_id')), 'notes_count']
+    ],
+    group: ['booking_id'],
+    raw: true
+  });
+
+  return new Map(
+    rows.map((row) => [
+      Number(row.booking_id),
+      Number(row.notes_count || 0)
+    ])
+  );
+};
+
 // Initialize geocoder
 // const geocoder = NodeGeocoder({ provider: 'openstreetmap' });
 
@@ -1554,13 +1584,15 @@ exports.getProjectDetails = async (req, res) => {
       : [];
 
     // 3. Fetch Transaction Total (from payment_transactions table)
-    const [paymentData] = await Promise.all([
+    const [paymentData, shootNotesCountMap] = await Promise.all([
       payment_transactions.findOne({
         where: { payment_id: projectJson.payment_id },
         attributes: ['total_amount'],
         raw: true
-      })
+      }),
+      countActiveShootNotesByBookingIds([projectJson.stream_project_booking_id])
     ]);
+    const shootNotesCount = shootNotesCountMap.get(Number(projectJson.stream_project_booking_id)) || 0;
 
     const displayAmount = await resolveProjectDisplayAmount({
       project: projectJson,
@@ -1689,6 +1721,7 @@ exports.getProjectDetails = async (req, res) => {
           ...projectJson,
           total_paid_amount: displayAmount,
           total_value_amount: totalValueAmount,
+          notes_count: shootNotesCount,
           event_type_labels: eventTypeLabels.join(', '),
           timeline_status: timelineStatus,
           timeline_label: timelineLabel,
@@ -2616,7 +2649,12 @@ exports.getAllProjectDetails = async (req, res) => {
       ],
     });
 
+    const shootNotesCountMap = await countActiveShootNotesByBookingIds(
+      projectRows.map((project) => project.stream_project_booking_id)
+    );
+
     let projectDetails = await Promise.all(projectRows.map(async (project) => {
+      const shootNotesCount = shootNotesCountMap.get(Number(project.stream_project_booking_id)) || 0;
       const [assignedCrewData, assignedEquipData, assignedPostProdData, paymentData] = await Promise.all([
         assigned_crew.findAll({
           where: { project_id: project.stream_project_booking_id, is_active: 1 },
@@ -2661,6 +2699,7 @@ exports.getAllProjectDetails = async (req, res) => {
           ...project.toJSON(),
           total_paid_amount: displayAmount,
           total_value_amount: totalValueAmount,
+          notes_count: shootNotesCount,
           event_type_labels: formattedTypes.join(', '),
           timeline_status: timelineStatus,
           timeline_label: timelineLabel,
