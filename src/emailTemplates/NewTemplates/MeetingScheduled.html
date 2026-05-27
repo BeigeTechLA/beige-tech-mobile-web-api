@@ -1,387 +1,396 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
 
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="color-scheme" content="light only">
-  <meta name="supported-color-schemes" content="light only">
+  <meta name="color-scheme" content="light">
+  <meta name="supported-color-schemes" content="light">
   <title>Meeting Scheduled</title>
+  <style>
+    /* Forces the light background and dark text even if the device is in Dark Mode */
+    :root {
+      color-scheme: light;
+      supported-color-schemes: light;
+    }
+
+    body,
+    table,
+    td,
+    p,
+    a,
+    h1,
+    h2,
+    h3,
+    div,
+    ol,
+    li {
+      font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
+    }
+
+    @media (prefers-color-scheme: dark) {
+
+      body,
+      .body-bg {
+        background-color: #F7F7F7 !important;
+        color: #484848 !important;
+      }
+
+      .main-card-container {
+        background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%) !important;
+      }
+
+      .white-card-container,
+      .white-card-container td {
+        background-color: #FFFFFF !important;
+      }
+
+      .scallop-fallback-bg {
+        background-color: #FFFCF6 !important;
+      }
+
+      .logo-pill,
+      .badge-footer {
+        background-color: #FFFFFF !important;
+      }
+
+      .text-default {
+        color: #484848 !important;
+      }
+
+      .text-black {
+        color: #000000 !important;
+      }
+
+      .text-muted {
+        color: #525252 !important;
+      }
+
+      .text-opacity-70 {
+        color: rgba(0, 0, 0, 0.70) !important;
+      }
+
+      .text-brand-gold {
+        color: #E8D1AB !important;
+      }
+    }
+
+    /* Specific overrides for Outlook Web and Gmail app dark mode */
+    [data-ogsc] body,
+    [data-ogsc] .body-bg {
+      background-color: #F7F7F7 !important;
+      color: #484848 !important;
+    }
+
+    [data-ogsc] .main-card-container {
+      background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%) !important;
+    }
+
+    [data-ogsc] .white-card-container,
+    [data-ogsc] .white-card-container td {
+      background-color: #FFFFFF !important;
+    }
+
+    [data-ogsc] .scallop-fallback-bg {
+      background-color: #FFFCF6 !important;
+    }
+
+    [data-ogsc] .text-black {
+      color: #000000 !important;
+    }
+
+    [data-ogsc] .text-muted {
+      color: #525252 !important;
+    }
+
+    [data-ogsc] .text-brand-gold {
+      color: #E8D1AB !important;
+    }
+  </style>
 </head>
 
-<body
-  style="margin:0; padding:0; background-color:#f3f3f3; color:#4f4a45; font-family:'Instrument Sans','Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
-    style="width:100%; border-collapse:collapse; border-spacing:0; background-color:#f3f3f3; padding:0;">
+<body class="body-bg"
+  style="margin: 0; padding: 0; font-family:'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #F7F7F7; color: #484848; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">
+  <table class="body-bg" width="100%" cellpadding="0" cellspacing="0"
+    style="background-color: #F7F7F7; padding: 40px 20px;">
     <tr>
       <td align="center">
-
-        <table role="presentation" width="404" cellpadding="0" cellspacing="0"
-          style="width:100%; max-width:404px; border-collapse:collapse; border-spacing:0; background:#fffaf1; border-radius:0 0 24px 24px; overflow:hidden; box-shadow:0 10px 28px rgba(63,44,16,0.05);">
-
-          <!-- TOP SECTION -->
+        <table class="main-card-container" width="600"
+          style="background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%); border: 1px solid rgba(232, 209, 171, 0.3); border-radius: 24px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.04); width: 100%; max-width: 600px;">
+          <!-- Beige Logo -->
           <tr>
-            <td
-              background="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/RibbonBackground.png"
-              style="
-                padding:0;
-                background-color:#fffaf1;
-                background-image:
-                  url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/RibbonBackground.png'),
-                  radial-gradient(circle at 4% 38%, rgba(224,185,121,0.25) 0%, rgba(224,185,121,0.10) 28%, rgba(255,250,241,0) 55%),
-                  radial-gradient(circle at 98% 45%, rgba(224,185,121,0.28) 0%, rgba(224,185,121,0.10) 30%, rgba(255,250,241,0) 56%),
-                  linear-gradient(180deg,#fffdfa 0%,#fff8ee 64%,#fff5e8 100%);
-                background-repeat:no-repeat,no-repeat,no-repeat,no-repeat;
-                background-position:center 70px,left 120px,right 145px,center top;
-                background-size:404px auto,210px 310px,230px 340px,100% 100%;
-              ">
-
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
-                style="width:100%; border-collapse:collapse; border-spacing:0;">
-
-                <!-- LOGO -->
-                <tr>
-                  <td align="center" style="padding:30px 22px 22px;">
-                    <div
-                      style="display:inline-block; padding:11px 28px; background-color:#ffffff; border-radius:999px; box-shadow:0 10px 24px rgba(47,38,26,0.12);">
-                      <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
-                        alt="Beige" width="82" style="display:block; border:0; max-width:100%; height:auto;">
-                    </div>
-                  </td>
-                </tr>
-
-                <!-- TOP DIVIDER -->
-                <tr>
-                  <td style="padding:0 22px 14px;">
-                    <div style="height:1px; background-color:#e6dccd; font-size:0; line-height:0;">&nbsp;</div>
-                  </td>
-                </tr>
-
-                <!-- TITLE -->
-                <tr>
-                  <td style="padding:0 22px 18px;">
-                    <h1
-                      style="margin:0; font-size:27px; line-height:1.05; font-weight:800; letter-spacing:-1.4px; color:#000000; text-align:center; font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-                      Meeting Scheduled
-                    </h1>
-                  </td>
-                </tr>
-
-                <!-- INTRO TEXT -->
-                <tr>
-                  <td align="center" style="padding:0 28px 18px;">
-                    <p style="margin:0 0 4px; font-size:11px; line-height:1.55; color:#5d564f; text-align:center;">
-                      Hello {{recipient_name}}
-                    </p>
-                    <p style="margin:0; font-size:11px; line-height:1.55; color:#5d564f; text-align:center;">
-                      A meeting has been scheduled for
-                    </p>
-                    <p style="margin:0; font-size:11px; line-height:1.55; color:#5d564f; text-align:center;">
-                      your project <strong style="color:#000000; font-weight:800;">[#{{project_id}}]</strong>.
-                    </p>
-                  </td>
-                </tr>
-
-                <!-- MEETING DETAILS WRAPPER -->
-                <tr>
-                  <td style="padding:0 24px 0;">
-                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="
-                      width:100%;
-                      border-collapse:separate;
-                      border-spacing:0;
-                      background-color:#fdf0d8;
-                      background-image:url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/ScallopTopReceiptBg.png');
-                      background-repeat:no-repeat;
-                      background-position:top center;
-                      background-size:100% 100%;
-                      border-radius:0 0 28px 28px;
-                      overflow:hidden;
-                    ">
-
-                      <tr>
-                        <td style="padding:30px 16px 26px;">
-
-                          <p
-                            style="margin:0 0 18px; text-align:center; font-size:20px; line-height:1.2; color:#000000; font-weight:800;">
-                            Meetings Details
-                          </p>
-
-                          <!-- WHITE DETAILS CARD -->
-                          <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
-                            style="width:100%; border-collapse:collapse; border-spacing:0; background-color:#ffffff; border-radius:24px; box-shadow:0 10px 26px rgba(36,30,21,0.08); overflow:hidden;">
-
-                            <!-- TITLE -->
-                            <tr>
-                              <td style="padding:18px 18px 12px;">
-                                <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
-                                  style="width:100%; border-collapse:collapse; border-spacing:0;">
-                                  <tr>
-                                    <td width="64" valign="middle"
-                                      style="width:64px; vertical-align:middle; padding-right:12px;">
-                                      <div
-                                        style="width:54px; height:54px; background-image:url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png'); background-size:cover; background-repeat:no-repeat; background-position:center; text-align:center;">
-                                        <img
-                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/User.svg"
-                                          alt="Title" width="18"
-                                          style="display:inline-block; border:0; max-width:100%; margin-top:15px; margin-right:5px;">
-                                      </div>
-                                    </td>
-                                    <td valign="middle" style="vertical-align:middle;">
-                                      <p
-                                        style="margin:0 0 4px; font-size:11px; line-height:1.3; color:#5f5a54; font-weight:400;">
-                                        Title
-                                      </p>
-                                      <p
-                                        style="margin:0; font-size:11px; line-height:1.45; color:#000000; font-weight:800;">
-                                        {{meeting_title}}
-                                      </p>
-                                    </td>
-                                  </tr>
-                                </table>
-                              </td>
-                            </tr>
-
-                            <tr>
-                              <td style="padding:0 24px;">
-                                <div style="height:1px; background-color:#ece4d8; font-size:0; line-height:0;">&nbsp;
-                                </div>
-                              </td>
-                            </tr>
-
-                            <!-- DATE -->
-                            <tr>
-                              <td style="padding:12px 18px;">
-                                <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
-                                  style="width:100%; border-collapse:collapse; border-spacing:0;">
-                                  <tr>
-                                    <td width="64" valign="middle"
-                                      style="width:64px; vertical-align:middle; padding-right:12px;">
-                                      <div
-                                        style="width:54px; height:54px; background-image:url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png'); background-size:cover; background-repeat:no-repeat; background-position:center; text-align:center;">
-                                        <img
-                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/Calendar.png"
-                                          alt="Meeting Date" width="18"
-                                          style="display:inline-block; border:0; max-width:100%; margin-top:15px; margin-right:5px;">
-                                      </div>
-                                    </td>
-                                    <td valign="middle" style="vertical-align:middle;">
-                                      <p
-                                        style="margin:0 0 4px; font-size:11px; line-height:1.3; color:#5f5a54; font-weight:400;">
-                                        Meeting Date
-                                      </p>
-                                      <p
-                                        style="margin:0; font-size:11px; line-height:1.45; color:#000000; font-weight:800;">
-                                        {{meeting_date}}
-                                      </p>
-                                    </td>
-                                  </tr>
-                                </table>
-                              </td>
-                            </tr>
-
-                            <tr>
-                              <td style="padding:0 24px;">
-                                <div style="height:1px; background-color:#ece4d8; font-size:0; line-height:0;">&nbsp;
-                                </div>
-                              </td>
-                            </tr>
-
-                            <!-- TIME -->
-                            <tr>
-                              <td style="padding:12px 18px;">
-                                <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
-                                  style="width:100%; border-collapse:collapse; border-spacing:0;">
-                                  <tr>
-                                    <td width="64" valign="middle"
-                                      style="width:64px; vertical-align:middle; padding-right:12px;">
-                                      <div
-                                        style="width:54px; height:54px; background-image:url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png'); background-size:cover; background-repeat:no-repeat; background-position:center; text-align:center;">
-                                        <img
-                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/ClockCircle.png"
-                                          alt="Meeting Time" width="18"
-                                          style="display:inline-block; border:0; max-width:100%; margin-top:15px; margin-right:5px;">
-                                      </div>
-                                    </td>
-                                    <td valign="middle" style="vertical-align:middle;">
-                                      <p
-                                        style="margin:0 0 4px; font-size:11px; line-height:1.3; color:#5f5a54; font-weight:400;">
-                                        Meeting Time
-                                      </p>
-                                      <p
-                                        style="margin:0; font-size:11px; line-height:1.45; color:#000000; font-weight:800;">
-                                        {{meeting_time}}
-                                      </p>
-                                    </td>
-                                  </tr>
-                                </table>
-                              </td>
-                            </tr>
-
-                            <tr>
-                              <td style="padding:0 24px;">
-                                <div style="height:1px; background-color:#ece4d8; font-size:0; line-height:0;">&nbsp;
-                                </div>
-                              </td>
-                            </tr>
-
-                            <!-- AGENDA -->
-                            <tr>
-                              <td style="padding:12px 18px;">
-                                <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
-                                  style="width:100%; border-collapse:collapse; border-spacing:0;">
-                                  <tr>
-                                    <td width="64" valign="middle"
-                                      style="width:64px; vertical-align:middle; padding-right:12px;">
-                                      <div
-                                        style="width:54px; height:54px; background-image:url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png'); background-size:cover; background-repeat:no-repeat; background-position:center; text-align:center;">
-                                        <img
-                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/EditPencil.png"
-                                          alt="Agenda" width="18"
-                                          style="display:inline-block; border:0; max-width:100%; margin-top:15px; margin-right:5px;">
-                                      </div>
-                                    </td>
-                                    <td valign="middle" style="vertical-align:middle;">
-                                      <p
-                                        style="margin:0 0 4px; font-size:11px; line-height:1.3; color:#5f5a54; font-weight:400;">
-                                        Agenda
-                                      </p>
-                                      <p
-                                        style="margin:0; font-size:11px; line-height:1.45; color:#000000; font-weight:800;">
-                                        {{meeting_agenda}}
-                                      </p>
-                                    </td>
-                                  </tr>
-                                </table>
-                              </td>
-                            </tr>
-
-                            <tr>
-                              <td style="padding:0 24px;">
-                                <div style="height:1px; background-color:#ece4d8; font-size:0; line-height:0;">&nbsp;
-                                </div>
-                              </td>
-                            </tr>
-
-                            <!-- MEET LINK -->
-                            <tr>
-                              <td style="padding:12px 18px 18px;">
-                                <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
-                                  style="width:100%; border-collapse:collapse; border-spacing:0;">
-                                  <tr>
-                                    <td width="64" valign="middle"
-                                      style="width:64px; vertical-align:middle; padding-right:12px;">
-                                      <div
-                                        style="width:54px; height:54px; background-image:url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png'); background-size:cover; background-repeat:no-repeat; background-position:center; text-align:center;">
-                                        <img
-                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/Checklist.svg"
-                                          alt="Meet Link" width="18"
-                                          style="display:inline-block; border:0; max-width:100%; margin-top:15px; margin-right:5px;">
-                                      </div>
-                                    </td>
-                                    <td valign="middle" style="vertical-align:middle;">
-                                      <p
-                                        style="margin:0 0 4px; font-size:11px; line-height:1.3; color:#5f5a54; font-weight:400;">
-                                        Meet Link
-                                      </p>
-                                      <a href="{{meeting_link}}" target="_blank"
-                                        style="margin:0; font-size:11px; line-height:1.45; color:#000000; font-weight:800; text-decoration:underline; word-break:break-word;">
-                                        {{meeting_link}}
-                                      </a>
-                                    </td>
-                                  </tr>
-                                </table>
-                              </td>
-                            </tr>
-
-                          </table>
-
-                          <!-- VIEW DETAILS BUTTON -->
-                          <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
-                            style="width:100%; border-collapse:collapse; border-spacing:0; margin-top:30px;">
-                            <tr>
-                              <td width="16%" style="width:16%; vertical-align:middle;">
-                                <div style="height:1px; background-color:#8f887e; font-size:0; line-height:0;">&nbsp;
-                                </div>
-                              </td>
-
-                              <td width="68%" align="center" style="width:68%; text-align:center; padding:0 8px;">
-                                <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center"
-                                  style="margin:0 auto; border-collapse:separate; border-spacing:0;">
-                                  <tr>
-                                    <td align="center" bgcolor="#000000"
-                                      style="background-color:#000000; border-radius:999px; box-shadow:0 12px 22px rgba(0,0,0,0.18);">
-                                      <a href="{{view_details_url}}" target="_blank"
-                                        style="display:inline-block; padding:15px 74px; font-size:14px; line-height:1; font-weight:800; color:#ead2a8; text-decoration:none; white-space:nowrap;">
-                                        View Details
-                                      </a>
-                                    </td>
-                                  </tr>
-                                </table>
-                              </td>
-
-                              <td width="16%" style="width:16%; vertical-align:middle;">
-                                <div style="height:1px; background-color:#8f887e; font-size:0; line-height:0;">&nbsp;
-                                </div>
-                              </td>
-                            </tr>
-                          </table>
-
-                          <!-- NOTE -->
-                          <p
-                            style="margin:24px 0 0; text-align:center; font-size:12px; line-height:1.45; color:#000000; font-style:italic; font-weight:800;">
-                            Please be available at the scheduled time.
-                          </p>
-
-                        </td>
-                      </tr>
-                    </table>
-                  </td>
-                </tr>
-              </table>
+            <td align="center" style="padding: 40px 0 36px;">
+              <div class="logo-pill"
+                style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF; box-shadow: 0 8px 24px 0 rgba(149, 157, 165, 0.20);">
+                <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
+                  alt="Beige" width="110" style="display: block; border: 0;">
+              </div>
+              <div style="padding: 36px 40px 0;">
+                <img
+                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                  alt="Line Separator" width="100%" style="display: block; border: 0;">
+              </div>
             </td>
           </tr>
 
-          <!-- IMAGE SECTION - NO CONNECTOR LINES -->
+          <!-- Header -->
           <tr>
-            <td style="padding:30px 0 0; background:#fffaf1;">
-              <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/NewShootLead.png"
-                alt="Beige platform preview" width="404"
-                style="display:block; width:100%; max-width:404px; border:0; height:auto;">
-            </td>
-          </tr>
-
-          <!-- THANKS + TEAM - FIGMA MATCH WITH LESS TOP GAP -->
-          <tr>
-            <td align="center" style="padding:12px 0 0; background:#fff7ed;">
-              <p style="margin:0 0 14px; font-size:12px; line-height:1.3; color:#5d564f; font-weight:400;">
-                Thanks
+            <td style="padding: 0 40px; text-align: center;">
+              <h1 class="text-black" style="margin: 0 0 36px; color: #000000; font-size: 52px;">Meeting Scheduled</h1>
+              <p class="text-default"
+                style="margin: 18px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+                Hello {{recipient_name}}
               </p>
+              <p class="text-default"
+                style="margin: 18px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+                A meeting has been scheduled for
+                your project  <strong style="color:#000000; font-weight:800;">[#{{project_id}}]</strong>.
+              </p>
+            </td>
+          </tr>
 
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
-                style="width:100%; border-collapse:collapse; border-spacing:0;">
+          <!-- Delivery Message -->
+          <tr>
+            <td class="scallop-fallback-bg"
+              style="padding: 52px 40px 0; position: relative; background-color: #FFFCF6; overflow: visible;">
+              <div
+                style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/RibbonWave.png'); background-repeat: no-repeat; background-position: top; background-size: 100% 100%; filter: blur(4px); -webkit-filter: blur(4px); transform: scale(1); z-index: 1;">
+              </div>
+
+              <div style="position: relative; z-index: 10; padding-top: 0;">
+                <table border="0" cellpadding="0" cellspacing="0" width="100%"
+                  background="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/LargeBeigeScallopTop.png"
+                  style="background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/LargeBeigeScallopTop.png'); background-repeat: no-repeat; background-position: top center; background-size: cover; border-radius: 0 0 40px 40px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); padding: 0;">
+                  <tr>
+                    <td align="center" style="padding: 70px 30px 0;">
+                      <h2 class="text-black"
+                        style="margin:0 0 20px; text-align: center; font-size: 30px; line-height: 1; font-weight: 600; color: #000000;">
+                        Meetings Details</h2>
+                      <table class="white-card-container" border="0" cellpadding="0" cellspacing="0" width="100%"
+                        style="background-color: #FFFFFF; padding: 30px; border-radius: 36px;">
+
+                        <tr>
+                          <td style="padding: 15px 0 0;">
+                            <table width="100%" cellpadding="0" cellspacing="0">
+                              <tr>
+                                <td width="100" style="padding-bottom: 0;">
+                                  <div
+                                    style="width: 111px; height: 111px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png'); background-size: cover; background-repeat: no-repeat; background-position: center; text-align: center;">
+                                    <img
+                                      src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/User.svg"
+                                      width="40" height="40"
+                                      style="margin-top: 25px; margin-right: 18px; display: inline-block;">
+                                  </div>
+                                </td>
+                                <td style="padding-bottom: 15px; text-align: left;">
+                                  <div class="text-muted"
+                                    style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
+                                    Title</div>
+                                  <div class="text-black"
+                                    style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px;">
+                                    {{meeting_title}}</div>
+                                </td>
+                              </tr>
+                            </table>
+                            <div>
+                              <img
+                                src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                alt="Line Separator" width="100%" style="display: block; border: 0;">
+                            </div>
+                          </td>
+                        </tr>
+
+                        <tr>
+                          <td style="padding: 15px 0 0;">
+                            <table width="100%" cellpadding="0" cellspacing="0">
+                              <tr>
+                                <td width="100" style="padding-bottom: 0;">
+                                  <div
+                                    style="width: 111px; height: 111px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png'); background-size: cover; background-repeat: no-repeat; background-position: center; text-align: center;">
+                                    <img
+                                      src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/Calendar.png"
+                                      width="40" height="40"
+                                      style="margin-top: 25px; margin-right: 18px; display: inline-block;">
+                                  </div>
+                                </td>
+                                <td style="padding-bottom: 15px; text-align: left;">
+                                  <div class="text-muted"
+                                    style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
+                                    Meeting Date</div>
+                                  <div class="text-black"
+                                    style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px;">
+                                    {{meeting_date}} </div>
+                                </td>
+                              </tr>
+                            </table>
+                            <div>
+                              <img
+                                src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                alt="Line Separator" width="100%" style="display: block; border: 0;">
+                            </div>
+                          </td>
+                        </tr>
+
+                        <tr>
+                          <td style="padding: 15px 0 0;">
+                            <table width="100%" cellpadding="0" cellspacing="0">
+                              <tr>
+                                <td width="100" style="padding-bottom: 0;">
+                                  <div
+                                    style="width: 111px; height: 111px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png'); background-size: cover; background-repeat: no-repeat; background-position: center; text-align: center;">
+                                    <img
+                                      src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/ClockCircle.png"
+                                      width="40" height="40"
+                                      style="margin-top: 25px; margin-right: 18px; display: inline-block;">
+                                  </div>
+                                </td>
+                                <td style="padding-bottom: 15px; text-align: left;">
+                                  <div class="text-muted"
+                                    style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
+                                    Meeting Time</div>
+                                  <div class="text-black"
+                                    style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px;">
+                                    {{meeting_time}} </div>
+                                </td>
+                              </tr>
+                            </table>
+                            <div>
+                              <img
+                                src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                alt="Line Separator" width="100%" style="display: block; border: 0;">
+                            </div>
+                          </td>
+                        </tr>
+
+                        <tr>
+                          <td style="padding: 15px 0 0;">
+                            <table width="100%" cellpadding="0" cellspacing="0">
+                              <tr>
+                                <td width="100" style="padding-bottom: 0;">
+                                  <div
+                                    style="width: 111px; height: 111px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png'); background-size: cover; background-repeat: no-repeat; background-position: center; text-align: center;">
+                                    <img
+                                      src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/DocumentAdd.svg"
+                                      width="40" height="40"
+                                      style="margin-top: 25px; margin-right: 18px; display: inline-block;">
+                                  </div>
+                                </td>
+                                <td style="padding-bottom: 15px; text-align: left;">
+                                  <div class="text-muted"
+                                    style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
+                                    Agenda
+                                  </div>
+                                  <div class="text-black"
+                                    style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px;">
+                                    {{meeting_agenda}}
+                                  </div>
+
+                                </td>
+                              </tr>
+                            </table>
+                            <div>
+                              <img
+                                src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                alt="Line Separator" width="100%" style="display: block; border: 0;" />
+                            </div>
+                          </td>
+                        </tr>
+
+                        <tr>
+                          <td style="padding: 15px 0 0;">
+                            <table width="100%" cellpadding="0" cellspacing="0">
+                              <tr>
+                                <td width="100">
+                                  <div
+                                    style="width: 111px; height: 111px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png'); background-size: cover; background-repeat: no-repeat; background-position: center; text-align: center;">
+                                    <img
+                                      src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/location.svg"
+                                      width="40" height="40"
+                                      style="margin-top: 25px; margin-right: 18px; display: inline-block;">
+                                  </div>
+                                </td>
+                                <td style="text-align: left;">
+                                  <div class="text-muted"
+                                    style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
+                                    Meet Link</div>
+                                  <a href="{{meeting_link}}" target="_blank"
+                                    style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px;">
+                                    {{meeting_link}}</a>
+                                </td>
+                              </tr>
+                            </table>
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+
+                  <tr>
+                    <td>
+                      <table width="100%" cellpadding="0" cellspacing="0" style="padding: 32px 0;">
+                        <tr>
+                          <td>
+                            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+                              style="border-collapse: collapse; margin: 0;">
+                              <tr>
+                                <td align="center" valign="middle" height="100"
+                                  style="height: 100px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/BlackLineThroughTab.png') !important; background-repeat: no-repeat !important; background-position: center !important; background-size: contain !important;">
+                                  <a href="{{view_details_url}}" target="_blank"
+                                    style="font-size: 35px; font-weight: 600; color: #E8D1AB !important; letter-spacing: 1px; line-height: 1; margin: 0; text-decoration: none;">
+                                     View Details
+                                   </a>
+                                </td>
+                              </tr>
+                            </table>
+                          </td>
+                        </tr>
+                        <tr>
+                          <td class="text-black"
+                            style="padding: 0 0 12px; font-size: 20px; line-height: 1.5; font-weight: 600; color: #000000 !important; text-align: center;">
+                            Please be available at the scheduled time.
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                </table>
+              </div>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:52px 0; background-color: none;">
+              <table width="100%" cellpadding="0" cellspacing="0" border="0">
                 <tr>
-                  <td width="22%" style="width:22%; vertical-align:middle;">
-                    <div style="height:1px; background-color:#8e8272; font-size:0; line-height:0;">
-                      &nbsp;
-                    </div>
+                  <td>
+                    <img
+                      src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/LaptopChair.png"
+                      alt="Proposal Preview" width="100%" style="display: block; border: 0; max-width: 100%;">
                   </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
 
-                  <td width="56%" align="center" style="width:56%; text-align:center; padding:0;">
-                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center"
-                      style="margin:0 auto; border-collapse:separate; border-spacing:0;">
-                      <tr>
-                        <td
-                          style="background-color:#000000; border-radius:999px; color:#ead2a8; font-size:14px; line-height:1; font-style:italic; font-weight:800; text-align:center; padding:14px 54px; white-space:nowrap; box-shadow:0 8px 16px rgba(0,0,0,0.16);">
-                          The Beige Team
-                        </td>
-                      </tr>
-                    </table>
+
+          <!-- Signoff  -->
+          <tr>
+            <td align="center">
+              <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="width: 100%;">
+                <tr>
+                  <td align="center" valign="middle">
+                    <p class="text-black" style="margin: 0 0 20px; color: #000000; font-size: 20px;">
+                      Thanks</p>
                   </td>
-
-                  <td width="22%" style="width:22%; vertical-align:middle;">
-                    <div style="height:1px; background-color:#8e8272; font-size:0; line-height:0;">
-                      &nbsp;
+                </tr>
+                <tr>
+                  <td align="center" valign="middle" height="100"
+                    style="background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/BlackLineThroughTab.png'); background-size: contain; background-repeat: no-repeat; background-position: center; height: 100px;">
+                    <div>
+                      <p class="text-brand-gold"
+                        style="margin: 0; color: #E8D1AB; font-size: 32px; font-weight: 700; font-style: italic; letter-spacing: 1.5px; line-height: 100px;">
+                        The Beige Team
+                      </p>
                     </div>
                   </td>
                 </tr>
@@ -389,67 +398,52 @@
             </td>
           </tr>
 
-          <!-- FOOTER TOP DIVIDER -->
+          <!-- Help message  -->
           <tr>
-            <td align="center" style="padding:24px 32px 0; background:linear-gradient(180deg,#fff7ed 0%,#fbf0df 100%);">
-              <div style="height:1px; background-color:#eadfce; font-size:0; line-height:0; margin:0;">&nbsp;</div>
-            </td>
-          </tr>
-
-          <!-- FOOTER HELP TEXT -->
-          <tr>
-            <td align="center"
-              style="padding:20px 22px 14px; text-align:center; background:linear-gradient(180deg,#fff7ed 0%,#fbf0df 100%);">
-              <p style="margin:0 0 16px; font-size:9px; line-height:1.6; color:#5f5952;">
+            <td align="center" style="padding: 52px 40px 0;">
+              <div style="padding-bottom: 48px;">
+                <img
+                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                  alt="Line Separator" width="100%" style="display: block; border: 0;">
+              </div>
+              <p
+                style="margin: 0 0 20px; font-size: 16px; font-style: normal; font-weight: 400; line-height: normal; color: #3C3B3B;">
                 This is an automated email from BeigeAI. Please do not reply to this email.
               </p>
-
-              <p style="margin:0 0 4px; font-size:16px; line-height:1.25; color:#000000; font-weight:800;">
-                Need Help?
-              </p>
-
-              <a href="mailto:sales@beigecorporation.io" target="_blank"
-                style="color:#000000; font-size:15px; line-height:1.4; font-weight:800; text-decoration:underline;">
+              <p class="text-black" style="margin: 0 0 10px; color: #000000; font-size: 26px; font-weight: 600;">Need
+                Help?</p>
+              <a class="text-black" href="mailto:sales@beigecorporation.io" target="_blank"
+                style="display: block; margin: 0; color: #000000; font-size: 26px; font-weight: 600; text-decoration: none;">
                 sales@beigecorporation.io
               </a>
             </td>
           </tr>
 
-          <!-- FOOTER SECOND DIVIDER -->
+          <!-- Footer -->
           <tr>
-            <td align="center" style="padding:14px 32px 0; background:linear-gradient(180deg,#fbf0df 0%,#fff9ef 100%);">
-              <div style="height:1px; background-color:#eadfce; font-size:0; line-height:0; margin:0;">&nbsp;</div>
-            </td>
-          </tr>
-
-          <!-- FOOTER LINKS + LOGO -->
-          <tr>
-            <td align="center"
-              style="padding:32px 22px 28px; text-align:center; background:linear-gradient(180deg,#fbf0df 0%,#fff9ef 100%);">
-              <p style="margin:0 0 10px; font-size:10px; line-height:1.5; color:#7c7368;">
-                Help Center &nbsp; <span style="color:#c89f5d;">&bull;</span> &nbsp;
-                Term of Services &nbsp; <span style="color:#c89f5d;">&bull;</span> &nbsp;
-                Privacy Policy
+            <td align="center" style="padding: 40px 40px 60px;">
+              <div style="padding-bottom: 48px;">
+                <img
+                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                  alt="Line Separator" width="100%" style="display: block; border: 0;">
+              </div>
+              <p style="margin: 0 0 20px; font-size: 16px; color: #3C3B3B;">
+                Help Center &nbsp; • &nbsp; Terms of Service &nbsp; • &nbsp; Privacy Policy
               </p>
-
-              <p style="margin:0 0 45px; font-size:18px; line-height:1.2; color:#000000; font-weight:800;">
+              <p class="text-black" style="margin: 0 0 60px; color: #000000; font-size: 26px; font-weight: 600;">
                 Beige AI
               </p>
-
-              <div
-                style="display:inline-block; padding:12px 32px; background-color:#ffffff; border-radius:999px; box-shadow:0 10px 24px rgba(47,38,26,0.10);">
+              <div class="badge-footer"
+                style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF;">
                 <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
-                  alt="Beige" width="86" style="display:block; border:0; max-width:100%; height:auto;">
+                  alt="Beige" width="110" style="display: block; border: 0;">
               </div>
             </td>
           </tr>
-
         </table>
-
       </td>
     </tr>
   </table>
-
 </body>
 
 </html>

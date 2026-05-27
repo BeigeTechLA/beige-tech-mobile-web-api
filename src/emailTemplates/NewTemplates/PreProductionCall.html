@@ -1,27 +1,165 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
 
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="color-scheme" content="light dark">
-  <meta name="supported-color-schemes" content="light dark">
+  <!-- Enforce light mode at the meta level -->
+  <meta name="color-scheme" content="light">
+  <meta name="supported-color-schemes" content="light">
 
   <title>Pre-Production Call Schedule</title>
+
+  <style>
+    /* Enforce light theme styles for supporting email apps */
+    :root {
+      color-scheme: light;
+      supported-color-schemes: light;
+    }
+
+    /* Force background, layout, and text colors in strict dark mode environments */
+    @media (prefers-color-scheme: dark) {
+
+      body,
+      .body-table {
+        background-color: #F7F7F7 !important;
+        color: #484848 !important;
+      }
+
+      .main-card {
+        background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%) !important;
+      }
+
+      .frosted-glass-card {
+        background-color: #FFFFFF !important;
+        /* Fallback to clean white for readable contrast */
+      }
+
+      .inner-white-wrapper {
+        background-color: #FFFFFF !important;
+      }
+
+      .agenda-stripe {
+        background: linear-gradient(90deg, #F9EAD0 0%, rgba(240, 221, 190, 0.15) 69.4%, rgba(232, 209, 171, 0.0) 100%) !important;
+      }
+
+      .agenda-bullet-dot {
+        background: #EDE8E1 !important;
+      }
+
+      .schedule-btn {
+        background-color: #000000 !important;
+        color: #E8D1AB !important;
+      }
+
+      .hanging-anchor-line {
+        background-color: #000000 !important;
+      }
+
+      h1,
+      h2,
+      h3,
+      .dark-text,
+      .link-text {
+        color: #000000 !important;
+      }
+
+      p,
+      .muted-text {
+        color: rgba(0, 0, 0, 0.70) !important;
+      }
+
+      .footer-text {
+        color: #3C3B3B !important;
+      }
+
+      .team-badge {
+        background-color: #000000 !important;
+        color: #E8D1AB !important;
+      }
+
+      .badge-line {
+        border-bottom: 1.5px solid #000000 !important;
+      }
+    }
+
+    /* Target Outlook Web/App specific dark mode overrides */
+    [data-ogsc] body,
+    [data-ogsc] .body-table {
+      background-color: #F7F7F7 !important;
+      color: #484848 !important;
+    }
+
+    [data-ogsc] .main-card {
+      background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%) !important;
+    }
+
+    [data-ogsc] .frosted-glass-card {
+      background-color: #FFFFFF !important;
+    }
+
+    [data-ogsc] .inner-white-wrapper {
+      background-color: #FFFFFF !important;
+    }
+
+    [data-ogsc] .agenda-stripe {
+      background: linear-gradient(90deg, #F9EAD0 0%, rgba(240, 221, 190, 0.15) 69.4%, rgba(232, 209, 171, 0.0) 100%) !important;
+    }
+
+    [data-ogsc] .agenda-bullet-dot {
+      background: #EDE8E1 !important;
+    }
+
+    [data-ogsc] .schedule-btn {
+      background-color: #000000 !important;
+      color: #E8D1AB !important;
+    }
+
+    [data-ogsc] .hanging-anchor-line {
+      background-color: #000000 !important;
+    }
+
+    [data-ogsc] h1,
+    [data-ogsc] h2,
+    [data-ogsc] h3,
+    [data-ogsc] .dark-text,
+    [data-ogsc] .link-text {
+      color: #000000 !important;
+    }
+
+    [data-ogsc] p,
+    [data-ogsc] .muted-text {
+      color: rgba(0, 0, 0, 0.70) !important;
+    }
+
+    [data-ogsc] .footer-text {
+      color: #3C3B3B !important;
+    }
+
+    [data-ogsc] .team-badge {
+      background-color: #000000 !important;
+      color: #E8D1AB !important;
+    }
+
+    [data-ogsc] .badge-line {
+      border-bottom: 1.5px solid #000000 !important;
+    }
+  </style>
 </head>
 
-<body
+<body class="body-table"
   style="margin: 0; padding: 0; font-family:'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #F7F7F7; color: #484848;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #F7F7F7; padding: 40px 20px;">
+  <table width="100%" cellpadding="0" cellspacing="0" class="body-table"
+    style="background-color: #F7F7F7; padding: 40px 20px;">
     <tr>
       <td align="center">
-        <table width="600"
+        <table width="600" class="main-card"
           style="background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%); border: 1px solid rgba(232, 209, 171, 0.3); border-radius: 24px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.04);">
 
           <!-- Beige Logo -->
           <tr>
             <td align="center" style="padding: 40px 0 36px;">
-              <div
+              <div class="inner-white-wrapper"
                 style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF; box-shadow: 0 8px 24px 0 rgba(149, 157, 165, 0.20);">
                 <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
                   alt="Beige" width="110" style="display: block; border: 0;">
@@ -37,48 +175,49 @@
           <!-- Header -->
           <tr>
             <td style="padding: 0 40px 30px; text-align: center;">
-              <h1 style="margin: 0; color: #000; font-size: 54px;line-height: 1.3;">Pre-Production Call Schedule</h1>
+              <h1 class="dark-text" style="margin: 0; color: #000000; font-size: 54px; line-height: 1.3;">Pre-Production
+                Call Schedule</h1>
             </td>
           </tr>
 
           <!-- Delivery Message -->
           <tr>
             <td style="padding: 0 40px; position: relative; z-index: 10;">
-              <div
-                style="background-color: rgba(255, 255, 255, 0.70); filter: drop-shadow(0 7.901px 32.733px rgba(100, 100, 111, 0.20)); padding: 32px; border-radius: 32px;  border: solid 1px #0000001A;">
-                <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: auto;">
+              <div class="frosted-glass-card"
+                style="background-color: rgba(255, 255, 255, 0.70); filter: drop-shadow(0 7.901px 32.733px rgba(100, 100, 111, 0.20)); padding: 32px; border-radius: 32px;  border: solid 1px rgba(0, 0, 0, 0.1);">
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: auto; width: 100%;">
                   <tr>
                     <td align="center" style="border-radius: 100px;">
                       <table border="0" cellpadding="0" cellspacing="0" style="margin: auto; margin-bottom: 25px;">
                         <tr>
                           <td>
-                            <div
-                              style="width: 35px; height: 35px; background: #EDE8E1;  border-radius: 100%; margin: 0 20px;">
+                            <div class="agenda-bullet-dot"
+                              style="width: 35px; height: 35px; background: #EDE8E1; border-radius: 100%; margin: 0 10px;">
                             </div>
                           </td>
                           <td>
-                            <div
-                              style="width: 35px; height: 35px; background: #EDE8E1;  border-radius: 100%; margin: 0 20px;">
+                            <div class="agenda-bullet-dot"
+                              style="width: 35px; height: 35px; background: #EDE8E1; border-radius: 100%; margin: 0 10px;">
                             </div>
                           </td>
                           <td>
-                            <div
-                              style="width: 35px; height: 35px; background: #EDE8E1;  border-radius: 100%; margin: 0 20px;">
+                            <div class="agenda-bullet-dot"
+                              style="width: 35px; height: 35px; background: #EDE8E1; border-radius: 100%; margin: 0 10px;">
                             </div>
                           </td>
                           <td>
-                            <div
-                              style="width: 35px; height: 35px; background: #EDE8E1;  border-radius: 100%; margin: 0 20px;">
+                            <div class="agenda-bullet-dot"
+                              style="width: 35px; height: 35px; background: #EDE8E1; border-radius: 100%; margin: 0 10px;">
                             </div>
                           </td>
                           <td>
-                            <div
-                              style="width: 35px; height: 35px; background: #EDE8E1;  border-radius: 100%; margin: 0 20px;">
+                            <div class="agenda-bullet-dot"
+                              style="width: 35px; height: 35px; background: #EDE8E1; border-radius: 100%; margin: 0 10px;">
                             </div>
                           </td>
                           <td>
-                            <div
-                              style="width: 35px; height: 35px; background: #EDE8E1;  border-radius: 100%; margin: 0 20px;">
+                            <div class="agenda-bullet-dot"
+                              style="width: 35px; height: 35px; background: #EDE8E1; border-radius: 100%; margin: 0 10px;">
                             </div>
                           </td>
                         </tr>
@@ -86,33 +225,32 @@
                     </td>
                   </tr>
 
-                  <!-- Message -->
+                  <!-- Message Body -->
                   <tr>
-                    <td style="text-align: center;padding: 20px 0 0;">
-                      <h3
-                        style="margin: 0 0 26px; color: #000000 ; font-size: 30px; font-weight: 600;line-height: 40px;">
+                    <td style="text-align: center; padding: 20px 0 0;">
+                      <h3 class="dark-text"
+                        style="margin: 0 0 26px; color: #000000; font-size: 30px; font-weight: 600; line-height: 40px;">
                         Hello, {{userData.name}}
                       </h3>
                       <!-- Accept Message -->
-                      <p
-                        style="margin: 0; font-size: 20px;font-style: normal;font-weight: 400;line-height: 35px; color: rgba(0, 0, 0, 0.70); margin: 0;">
+                      <p class="muted-text"
+                        style="margin: 0; font-size: 20px;font-style: normal;font-weight: 400;line-height: 35px; color: rgba(0, 0, 0, 0.70);">
                         Now that your shoot is booked, it is time to align on the creative details.
                       </p>
                       <br />
-                      <p
-                        style="margin: 0; font-size: 20px;font-style: normal;font-weight: 400;line-height: 35px; color: rgba(0, 0, 0, 0.70); margin: 0;">
+                      <p class="muted-text"
+                        style="margin: 0; font-size: 20px;font-style: normal;font-weight: 400;line-height: 35px; color: rgba(0, 0, 0, 0.70);">
                         Your Beige producer acts as the bridge between your vision and the creative partner's execution.
                         We need to set up a brief pre-production call to ensure the shoot runs seamlessly.
                       </p>
                     </td>
                   </tr>
-
                 </table>
               </div>
             </td>
           </tr>
 
-          <!-- Hanging Banner -->
+          <!-- Hanging Call To Action Banner -->
           <tr>
             <td>
               <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%"
@@ -122,12 +260,12 @@
                     <table border="0" cellpadding="0" cellspacing="0" align="center">
                       <tr>
                         <td align="center" style="line-height: 0;">
-                          <div
+                          <div class="hanging-anchor-line"
                             style="width: 6px; height: 40px; background-color: #000000; margin-bottom: -5px; margin-right: 60px;">
                           </div>
                         </td>
                         <td align="center" style="line-height: 0;">
-                          <div
+                          <div class="hanging-anchor-line"
                             style="width: 6px; height: 40px; background-color: #000000; margin-bottom: -5px; margin-left: 60px;">
                           </div>
                         </td>
@@ -138,8 +276,8 @@
                       style="position: relative; z-index: 10; margin-bottom: -30px;">
                       <tr>
                         <td align="center" style="padding: 0;">
-                          <a href="{{frontend_url}}" target="_blank"
-                            style="font-size: 18px; font-weight: 600; color: #E8D1AB; text-transform: uppercase; white-space: nowrap; letter-spacing: 1.5px; text-decoration: none; border-radius: 100px; padding: 18px 45px; background-color: #000;box-shadow: 0 10px 20px rgba(0,0,0,0.15); display: inline-block;">
+                          <a href="{{frontend_url}}" target="_blank" class="schedule-btn"
+                            style="font-size: 18px; font-weight: 600; color: #E8D1AB; text-transform: uppercase; white-space: nowrap; letter-spacing: 1.5px; text-decoration: none; border-radius: 100px; padding: 18px 45px; background-color: #000000; box-shadow: 0 10px 20px rgba(0,0,0,0.15); display: inline-block;">
                             Schedule Your Call Here &rarr;
                           </a>
                         </td>
@@ -151,7 +289,7 @@
             </td>
           </tr>
 
-          <!-- Image -->
+          <!-- Context Hero Asset Graphic Image -->
           <tr>
             <td style="padding: 52px 0 0;">
               <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/PreProdCall.png"
@@ -159,65 +297,62 @@
             </td>
           </tr>
 
-          <!-- Instructions -->
+          <!-- Call Agenda Content Section -->
           <tr>
             <td>
               <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%">
                 <tr>
                   <td>
-                    <p
-                      style="background: linear-gradient(90deg, #F9EAD0 0%, rgba(240, 221, 190, 0.00) 69.4%, rgba(232, 209, 171, 0.00) 100%); margin: 0; padding: 36px; font-size: 26px; font-weight: 600; font-style: italic; color: #000; line-height: 1.2;">
+                    <p class="agenda-stripe dark-text"
+                      style="background: linear-gradient(90deg, #F9EAD0 0%, rgba(240, 221, 190, 0.00) 69.4%, rgba(232, 209, 171, 0.00) 100%); margin: 0; padding: 36px; font-size: 26px; font-weight: 600; font-style: italic; color: #000000; line-height: 1.2;">
                       Call Agenda
                     </p>
                   </td>
                 </tr>
                 <tr>
                   <td style="padding: 40px;">
-                    <p
-                      style="font-size: 20px;font-style: normal;font-weight: 400;line-height: 29px; color: rgba(0, 0, 0, 0.70); margin: 0;">
+                    <p class="muted-text"
+                      style="font-size: 20px; font-style: normal; font-weight: 400; line-height: 29px; color: rgba(0, 0, 0, 0.70); margin: 0;">
                       ✓ Confirming shoot logistics (location access, parking, etc.)
                     </p>
                     <br />
-                    <p
-                      style="font-size: 20px;font-style: normal;font-weight: 400;line-height: 29px; color: rgba(0, 0, 0, 0.70); margin: 0;">
+                    <p class="muted-text"
+                      style="font-size: 20px; font-style: normal; font-weight: 400; line-height: 29px; color: rgba(0, 0, 0, 0.70); margin: 0;">
                       ✓ Reviewing the shot list and creative direction.
                     </p>
                     <br />
-                    <p
-                      style="font-size: 20px;font-style: normal;font-weight: 400;line-height: 29px; color: rgba(0, 0, 0, 0.70); margin: 0;">
+                    <p class="muted-text"
+                      style="font-size: 20px; font-style: normal; font-weight: 400; line-height: 29px; color: rgba(0, 0, 0, 0.70); margin: 0;">
                       ✓ Answering any final questions.
                     </p>
                   </td>
                 </tr>
                 <tr>
                   <td>
-                    <p
-                      style="background: linear-gradient(90deg, #F9EAD0 0%, rgba(240, 221, 190, 0.00) 69.4%, rgba(232, 209, 171, 0.00) 100%); margin: 0; padding: 36px; font-size: 20px; font-weight: 600; font-style: italic; color: #000; line-height: 1.5;">
+                    <p class="agenda-stripe dark-text"
+                      style="background: linear-gradient(90deg, #F9EAD0 0%, rgba(240, 221, 190, 0.00) 69.4%, rgba(232, 209, 171, 0.00) 100%); margin: 0; padding: 36px; font-size: 20px; font-weight: 600; font-style: italic; color: #000000; line-height: 1.5;">
                       Please book a time at your earliest convenience to keep your production timeline on track.
                     </p>
                   </td>
                 </tr>
-
               </table>
             </td>
           </tr>
 
-
-          <!-- Signoff  -->
+          <!-- Team Sign-off Signature Section -->
           <tr>
             <td style="padding: 20px 0 40px;">
-
-              <div
-                style="border-bottom: 1.5px solid #000; line-height: 0; font-size: 0; text-align: center; margin-top: 40px;">
-                <div
-                  style="display: inline-block; background-color: #000000; color: #E8D1AB; padding: 24px 50px; border-radius: 100px; font-size: 32px; font-weight: 700; letter-spacing: 1.5px; line-height: 1.2; margin-bottom: -90px; /* Adjusted to center the line vertically */box-shadow: 0 4px 10px rgba(0,0,0,0.1); font-style: italic;">
+              <div class="badge-line"
+                style="border-bottom: 1.5px solid #000000; line-height: 0; font-size: 0; text-align: center; margin-top: 40px;">
+                <div class="team-badge"
+                  style="display: inline-block; background-color: #000000; color: #E8D1AB; padding: 24px 50px; border-radius: 100px; font-size: 32px; font-weight: 700; letter-spacing: 1.5px; line-height: 1.2; margin-bottom: -90px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); font-style: italic;">
                   The Beige Team
                 </div>
               </div>
             </td>
           </tr>
 
-          <!-- Help message  -->
+          <!-- Support & Communication Actions -->
           <tr>
             <td align="center" style="padding: 52px 40px 0;">
               <div style="padding-bottom: 48px;">
@@ -225,13 +360,14 @@
                   src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
                   alt="Line Separator" width="100%" style="display: block; border: 0;">
               </div>
-              <p
-                style="margin: 0 0 20px; font-size: 16px; font-style: normal;font-weight: 400;line-height: normal; color: #3C3B3B;">
+              <p class="footer-text"
+                style="margin: 0 0 20px; font-size: 16px; font-style: normal; font-weight: 400; line-height: normal; color: #3C3B3B;">
                 This is an automated email from BeigeAI. Please do not reply to this email.
               </p>
-              <p style="margin: 0 0 10px; color: #000000; font-size: 26px;font-weight: 600;">Need Help?</p>
-              <a href="mailto:sales@beigecorporation.io" target="_blank"
-                style="display:block; margin: 0; color: #000000; font-size: 26px;font-weight: 600;">
+              <p class="dark-text" style="margin: 0 0 10px; color: #000000; font-size: 26px; font-weight: 600;">Need
+                Help?</p>
+              <a href="mailto:sales@beigecorporation.io" target="_blank" class="link-text"
+                style="display: block; margin: 0; color: #000000; font-size: 26px; font-weight: 600;">
                 sales@beigecorporation.io
               </a>
             </td>
@@ -245,13 +381,13 @@
                   src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
                   alt="Line Separator" width="100%" style="display: block; border: 0;">
               </div>
-              <p style="margin: 0 0 20px; font-size: 16px; color: #3C3B3B;">
-                Help Center &nbsp; • &nbsp; Term of Services &nbsp; • &nbsp; Privacy Policy
+              <p class="footer-text" style="margin: 0 0 20px; font-size: 16px; color: #3C3B3B;">
+                Help Center &nbsp; • &nbsp; Terms of Service &nbsp; • &nbsp; Privacy Policy
               </p>
-              <p style="margin: 0 0 60px; color: #000000; font-size: 26px;font-weight: 600;">
+              <p class="dark-text" style="margin: 0 0 60px; color: #000000; font-size: 26px; font-weight: 600;">
                 Beige AI
               </p>
-              <div
+              <div class="inner-white-wrapper"
                 style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF;">
                 <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
                   alt="Beige" width="110" style="display: block; border: 0;">
