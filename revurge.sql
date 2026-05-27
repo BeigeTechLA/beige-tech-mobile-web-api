@@ -1732,9 +1732,6 @@ CREATE TABLE IF NOT EXISTS finance_dispute_payout_holds (
 -- 15-05-26
 
 ALTER TABLE payment_transactions
-  DROP CONSTRAINT chk_hours_positive;
-
-ALTER TABLE payment_transactions
   ADD COLUMN payment_source ENUM('booking_checkout', 'quote_invoice', 'additional_invoice')
     NOT NULL DEFAULT 'booking_checkout'
     COMMENT 'Origin of the payment transaction'
@@ -1745,9 +1742,7 @@ ALTER TABLE payment_transactions
 
 ALTER TABLE payment_transactions
   ADD CONSTRAINT chk_hours_positive CHECK (
-    (payment_source = 'quote_invoice' AND (hours IS NULL OR hours >= 0))
-    OR (payment_source = 'additional_invoice' AND (hours IS NULL OR hours >= 0))
-    OR (payment_source = 'booking_checkout' AND hours > 0)
+    hours IS NULL OR hours >= 0
   );
 
 CREATE TABLE IF NOT EXISTS sales_quote_preview_links (

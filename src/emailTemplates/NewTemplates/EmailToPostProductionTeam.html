@@ -1,26 +1,125 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
 
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="color-scheme" content="light dark">
-  <meta name="supported-color-schemes" content="light dark">
+  <!-- Force supporting clients to honor light mode layouts first -->
+  <meta name="color-scheme" content="light">
+  <meta name="supported-color-schemes" content="light">
   <title>New Project Assigned</title>
+  <style>
+    :root {
+      color-scheme: light !important;
+      supported-color-schemes: light !important;
+    }
+
+    body,
+    table,
+    td,
+    a {
+      -webkit-text-size-adjust: 100%;
+      -ms-text-size-adjust: 100%;
+    }
+
+    table,
+    td {
+      mso-table-lspace: 0pt;
+      mso-table-rspace: 0pt;
+    }
+
+    img {
+      -ms-interpolation-mode: bicubic;
+    }
+
+    /* Prevent aggressive color inversions across dark mode email clients */
+    @media (prefers-color-scheme: dark) {
+
+      body,
+      table,
+      td,
+      h1,
+      h2,
+      p,
+      a,
+      div,
+      span {
+        color-scheme: light !important;
+      }
+
+      .force-light-bg {
+        background-color: #F7F7F7 !important;
+        background: #F7F7F7 !important;
+      }
+
+      .force-card-gradient {
+        background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%) !important;
+      }
+
+      .force-white-bg {
+        background-color: #FFFFFF !important;
+        background: #FFFFFF !important;
+      }
+
+      .force-cream-bg {
+        background-color: #FEF0D8 !important;
+        background: #FEF0D8 !important;
+      }
+
+      .force-scallop-bg {
+        background-color: #FFFCF6 !important;
+        background: #FFFCF6 !important;
+      }
+
+      .force-black-bg {
+        background-color: #000000 !important;
+        background: #000000 !important;
+      }
+
+      .force-black-text {
+        color: #000000 !important;
+      }
+
+      .force-muted-text {
+        color: rgba(0, 0, 0, 0.70) !important;
+      }
+
+      .force-signoff-muted {
+        color: rgba(0, 0, 0, 0.71) !important;
+      }
+
+      .force-gray-text {
+        color: #525252 !important;
+      }
+
+      .force-dark-gray-text {
+        color: #3C3B3B !important;
+      }
+
+      .force-body-text {
+        color: #403E3E !important;
+      }
+
+      .force-accent-text {
+        color: #E8D1AB !important;
+      }
+    }
+  </style>
 </head>
 
-<body
-  style="margin: 0; padding: 0; font-family:'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #F7F7F7; color: #484848;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #F7F7F7; padding: 40px 20px;">
+<body class="force-light-bg"
+  style="margin: 0; padding: 0; font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #F7F7F7; color: #484848; color-scheme: light;">
+  <table class="force-light-bg" width="100%" cellpadding="0" cellspacing="0"
+    style="background-color: #F7F7F7; padding: 40px 20px;">
     <tr>
-      <td align="center">
-        <table width="600"
+      <td align="center" class="force-light-bg">
+        <table class="force-card-gradient" width="600"
           style="background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%); border: 1px solid rgba(232, 209, 171, 0.3); border-radius: 24px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.04); width: 100%; max-width: 600px;"
           cellpadding="0" cellspacing="0">
 
           <tr>
             <td align="center" style="padding: 40px 0 36px;">
-              <div
+              <div class="force-white-bg"
                 style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF; box-shadow: 0 8px 24px 0 rgba(149, 157, 165, 0.20);">
                 <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
                   alt="Beige" width="110" style="display: block; border: 0;">
@@ -35,15 +134,18 @@
 
           <tr>
             <td style="padding: 0 40px;">
-              <h1 style="margin: 0; color: #000000; font-size: 54px; font-weight: 500; line-height: 1;">New Project
-                Assigned</h1>
-              <p style="margin: 16px 0 0; font-size: 26px; color: #403E3E; line-height: 1.6;">
+              <h1 class="force-black-text"
+                style="margin: 0; color: #000000; font-size: 54px; font-weight: 500; line-height: 1;">
+                New Project Assigned
+              </h1>
+              <p class="force-body-text" style="margin: 16px 0 0; font-size: 26px; color: #403E3E; line-height: 1.6;">
                 Hello {{client_name}}
               </p>
-              <p style="margin: 16px 0 0; font-size: 26px; color: #403E3E; line-height: 1.6; font-weight: 400;">
+              <p class="force-body-text"
+                style="margin: 16px 0 0; font-size: 26px; color: #403E3E; line-height: 1.6; font-weight: 400;">
                 You&apos;ve just been assigned to a live project on Beige.
               </p>
-              <p style="margin: 16px 0 0; font-size: 26px; color: #403E3E; line-height: 1.6;">
+              <p class="force-body-text" style="margin: 16px 0 0; font-size: 26px; color: #403E3E; line-height: 1.6;">
                 Please review the shoot details and project requirements at the earliest to ensure smooth coordination
                 and execution.
               </p>
@@ -55,7 +157,7 @@
               <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%"
                 style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; margin-top: 52px;">
                 <tr>
-                  <td align="center"
+                  <td align="center" class="force-scallop-bg"
                     style="padding: 0 40px; position: relative; background-color: #FFFCF6; overflow: visible;">
                     <div
                       style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/RibbonWave.png'); background-repeat: no-repeat; background-position: top; background-size: 100% 100%; filter: blur(4px); -webkit-filter: blur(4px); transform: scale(1); z-index: 1;">
@@ -65,12 +167,15 @@
                         style="background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/LargeBeigeScallopTop.png'); background-repeat: no-repeat; background-position: top center; background-size: cover; border-radius: 0 0 40px 40px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); padding: 30px 30px 0;">
                         <tr>
                           <td align="center" style="padding: 20px 0 0;">
-                            <h2
+                            <h2 class="force-black-text"
                               style="margin:0 0 24px; text-align: center; font-size: 30px; line-height: 1; font-weight: 600; color: #000;">
-                              Project Details</h2>
-                            <table border="0" cellpadding="0" cellspacing="0" width="100%"
+                              Project Details
+                            </h2>
+
+                            <table class="force-white-bg" border="0" cellpadding="0" cellspacing="0" width="100%"
                               style="background-color: #ffffff; padding: 30px; border-radius: 36px;">
 
+                              <!-- Booking ID -->
                               <tr>
                                 <td style="padding: 15px 0 0;">
                                   <table width="100%" cellpadding="0" cellspacing="0">
@@ -85,11 +190,14 @@
                                         </div>
                                       </td>
                                       <td style="padding-bottom: 15px;">
-                                        <div
+                                        <div class="force-gray-text"
                                           style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
-                                          Booking ID</div>
-                                        <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
-                                          {{booking_id}}</div>
+                                          Booking ID
+                                        </div>
+                                        <div class="force-black-text"
+                                          style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
+                                          {{booking_id}}
+                                        </div>
                                       </td>
                                     </tr>
                                   </table>
@@ -101,6 +209,7 @@
                                 </td>
                               </tr>
 
+                              <!-- Client -->
                               <tr>
                                 <td style="padding: 15px 0 0;">
                                   <table width="100%" cellpadding="0" cellspacing="0">
@@ -115,11 +224,14 @@
                                         </div>
                                       </td>
                                       <td style="padding-bottom: 15px;">
-                                        <div
+                                        <div class="force-gray-text"
                                           style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
-                                          Client </div>
-                                        <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
-                                          {{client}} </div>
+                                          Client
+                                        </div>
+                                        <div class="force-black-text"
+                                          style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
+                                          {{client}}
+                                        </div>
                                       </td>
                                     </tr>
                                   </table>
@@ -131,7 +243,7 @@
                                 </td>
                               </tr>
 
-
+                              <!-- Shoot Type -->
                               <tr>
                                 <td style="padding: 15px 0 0;">
                                   <table width="100%" cellpadding="0" cellspacing="0">
@@ -146,11 +258,14 @@
                                         </div>
                                       </td>
                                       <td style="padding-bottom: 15px;">
-                                        <div
+                                        <div class="force-gray-text"
                                           style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
-                                          Shoot Type</div>
-                                        <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
-                                          {{shoot_type}}</div>
+                                          Shoot Type
+                                        </div>
+                                        <div class="force-black-text"
+                                          style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
+                                          {{shoot_type}}
+                                        </div>
                                       </td>
                                     </tr>
                                   </table>
@@ -162,6 +277,7 @@
                                 </td>
                               </tr>
 
+                              <!-- Shoot Date -->
                               <tr>
                                 <td style="padding: 15px 0 0;">
                                   <table width="100%" cellpadding="0" cellspacing="0">
@@ -176,11 +292,14 @@
                                         </div>
                                       </td>
                                       <td style="padding-bottom: 15px;">
-                                        <div
+                                        <div class="force-gray-text"
                                           style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
-                                          Shoot Date</div>
-                                        <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
-                                          {{shoot_date}}</div>
+                                          Shoot Date
+                                        </div>
+                                        <div class="force-black-text"
+                                          style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
+                                          {{shoot_date}}
+                                        </div>
                                       </td>
                                     </tr>
                                   </table>
@@ -192,6 +311,7 @@
                                 </td>
                               </tr>
 
+                              <!-- Shoot Time -->
                               <tr>
                                 <td style="padding: 15px 0 0;">
                                   <table width="100%" cellpadding="0" cellspacing="0">
@@ -206,11 +326,14 @@
                                         </div>
                                       </td>
                                       <td style="padding-bottom: 15px;">
-                                        <div
+                                        <div class="force-gray-text"
                                           style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
-                                          Shoot Time</div>
-                                        <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
-                                          {{start_time}} - {{end_time}}</div>
+                                          Shoot Time
+                                        </div>
+                                        <div class="force-black-text"
+                                          style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
+                                          {{start_time}} - {{end_time}}
+                                        </div>
                                       </td>
                                     </tr>
                                   </table>
@@ -221,6 +344,8 @@
                                   </div>
                                 </td>
                               </tr>
+
+                              <!-- Shoot Amount -->
                               <tr>
                                 <td style="padding: 15px 0 0;">
                                   <table width="100%" cellpadding="0" cellspacing="0">
@@ -235,11 +360,14 @@
                                         </div>
                                       </td>
                                       <td style="padding-bottom: 15px;">
-                                        <div
+                                        <div class="force-gray-text"
                                           style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
-                                          Shoot Amount</div>
-                                        <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
-                                          {{shoot_amount}}</div>
+                                          Shoot Amount
+                                        </div>
+                                        <div class="force-black-text"
+                                          style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
+                                          {{shoot_amount}}
+                                        </div>
                                       </td>
                                     </tr>
                                   </table>
@@ -251,6 +379,7 @@
                                 </td>
                               </tr>
 
+                              <!-- Location -->
                               <tr>
                                 <td style="padding: 15px 0 0;">
                                   <table width="100%" cellpadding="0" cellspacing="0">
@@ -265,11 +394,14 @@
                                         </div>
                                       </td>
                                       <td style="padding-bottom: 15px;">
-                                        <div
+                                        <div class="force-gray-text"
                                           style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
-                                          Location</div>
-                                        <div style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
-                                          {{location}}</div>
+                                          Location
+                                        </div>
+                                        <div class="force-black-text"
+                                          style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
+                                          {{location}}
+                                        </div>
                                       </td>
                                     </tr>
                                   </table>
@@ -277,17 +409,18 @@
                               </tr>
                             </table>
 
-                            <p
+                            <p class="force-black-text"
                               style="color: #000;text-align: center;font-size: 20px;font-style: italic;font-weight: 600;line-height: 26px; padding: 40px 30px 35px; margin: 0;">
                               All briefs, files, updates, and communication will be available on your dashboard.
                             </p>
 
+                            <!-- CTA Button -->
                             <table border="0" cellpadding="0" cellspacing="0" align="center"
                               style="position: relative; z-index: 10;">
                               <tr>
-                                <td align="center" bgcolor="#000000"
+                                <td align="center" bgcolor="#000000" class="force-black-bg"
                                   style="border-radius: 100px; padding: 22px 65px; box-shadow: 0 10px 20px rgba(0,0,0,0.15); margin-top: 40px;">
-                                  <a href="{{dashboard_link}}" target="_blank"
+                                  <a class="force-accent-text" href="{{dashboard_link}}" target="_blank"
                                     style="font-size: 20px; font-weight: 600; color: #E8D1AB; text-decoration: none; text-transform: uppercase; letter-spacing: 1.5px; white-space: nowrap;">
                                     Access Project Dashboard &rarr;
                                   </a>
@@ -295,23 +428,47 @@
                               </tr>
                             </table>
 
-                            <div style="line-height: 0; font-size: 0;">
-                              <div
-                                style="display: inline-block; width: 6px; height: 40px; background-color: #000000; margin: 0 50px;">
-                              </div>
-                              <div
-                                style="display: inline-block; width: 6px; height: 40px; background-color: #000000; margin: 0 50px;">
-                              </div>
-                            </div>
+                            <!-- Connecting pillars -->
+                            <table border="0" cellpadding="0" cellspacing="0" width="100%" align="center">
+                              <tr>
+                                <td align="center" style="padding: 0; height: 40px; line-height: 0; font-size: 0;">
+                                  <table border="0" cellpadding="0" cellspacing="0" width="220" align="center"
+                                    style="margin: 0 auto;">
+                                    <tr>
+                                      <td align="center" width="50%" style="padding: 0;">
+                                        <table border="0" cellpadding="0" cellspacing="0" align="center">
+                                          <tr>
+                                            <td width="6" height="40" bgcolor="#000000" class="force-black-bg"
+                                              style="width: 6px; height: 40px; background-color: #000000; line-height: 40px; font-size: 0;">
+                                              &nbsp;
+                                            </td>
+                                          </tr>
+                                        </table>
+                                      </td>
+                                      <td align="center" width="50%" style="padding: 0;">
+                                        <table border="0" cellpadding="0" cellspacing="0" align="center">
+                                          <tr>
+                                            <td width="6" height="40" bgcolor="#000000" class="force-black-bg"
+                                              style="width: 6px; height: 40px; background-color: #000000; line-height: 40px; font-size: 0;">
+                                              &nbsp;
+                                            </td>
+                                          </tr>
+                                        </table>
+                                      </td>
+                                    </tr>
+                                  </table>
+                                </td>
+                              </tr>
+                            </table>
+
                           </td>
                         </tr>
                       </table>
                     </div>
 
-                    <p
+                    <p class="force-muted-text"
                       style="margin: 52px auto;color: rgba(0, 0, 0, 0.70);text-align: center;font-size: 20px;font-weight: 500;line-height: 27px; ">
-                      Timely review and coordination are important
-                      to keep the project on track.
+                      Timely review and coordination are important to keep the project on track.
                     </p>
 
                   </td>
@@ -320,7 +477,7 @@
             </td>
           </tr>
 
-          <!-- Image -->
+          <!-- Banner Image Container -->
           <tr>
             <td style="padding: 0 ; background-color: #FEF0D8;">
               <table width="100%" cellpadding="0" cellspacing="0" border="0">
@@ -338,7 +495,7 @@
           <!-- Sign Off  -->
           <tr>
             <td style="padding: 0 0 40px;">
-              <p
+              <p class="force-signoff-muted"
                 style="color: #000000B2; font-size: 20px;font-weight: 400;line-height: 29px; margin: 52px auto 20px; text-align: center;">
                 Thanks</p>
               <div
@@ -352,6 +509,7 @@
           </tr>
 
 
+          <!-- Footer links and identities -->
           <tr>
             <td align="center" style="padding: 40px 40px 60px;">
               <div style="padding-bottom: 48px;">
@@ -359,13 +517,13 @@
                   src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
                   alt="Line Separator" width="100%" style="display: block; border: 0;">
               </div>
-              <p style="margin: 0 0 20px; font-size: 16px; color: #3C3B3B;">
+              <p class="force-dark-gray-text" style="margin: 0 0 20px; font-size: 16px; color: #3C3B3B;">
                 Help Center &nbsp; • &nbsp; Term of Services &nbsp; • &nbsp; Privacy Policy
               </p>
-              <p style="margin: 0 0 60px; color: #000000; font-size: 26px; font-weight: 600;">
+              <p class="force-black-text" style="margin: 0 0 60px; color: #000000; font-size: 26px; font-weight: 600;">
                 Beige AI
               </p>
-              <div
+              <div class="force-white-bg"
                 style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF;">
                 <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
                   alt="Beige" width="110" style="display: block; border: 0;">

@@ -69,30 +69,66 @@
         font-size: 42px !important;
       }
     }
+
+    /* Force Light Theme Controls for Dark Mode Email Clients */
+    @media (prefers-color-scheme: dark) {
+      body, 
+      .body-bg-table {
+        background-color: #F7F7F7 !important;
+      }
+      
+      .main-card {
+        background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%) !important;
+      }
+
+      .white-bg-element {
+        background-color: #FFFFFF !important;
+      }
+
+      .grid-text-cell {
+        background-color: #FFFFFF !important;
+        border: 1px solid #F0F0F0 !important;
+      }
+
+      h1, h2, h3, p, span, td {
+        color: #000000 !important;
+      }
+
+      .text-muted {
+        color: #000000CC !important;
+      }
+
+      .text-footer-muted {
+        color: #3C3B3B !important;
+      }
+
+      .cta-btn {
+        background-color: #000000 !important;
+        color: #E8D1AB !important;
+      }
+
+      .quote-container {
+        background: #FFFFFF !important;
+        color: #000000 !important;
+      }
+    }
   </style>
 </head>
 
-<body
-  style=" font-family:'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #F7F7F7; margin: 0; padding: 0;">
-  <table width="100%" cellpadding="0" cellspacing="0" border="0"
-    style="background-color: #F7F7F7; table-layout: fixed;">
+<body style="font-family:'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #F7F7F7; margin: 0; padding: 0;">
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" class="body-bg-table" style="background-color: #F7F7F7; table-layout: fixed;">
     <tr>
       <td align="center" style="padding: 40px 10px;">
-        <table width="600" cellpadding="0" cellspacing="0" border="0" class="full-width"
-          style="margin: 0 auto; background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%); border-radius: 40px; overflow: hidden; box-shadow: 0px 10px 40px rgba(0,0,0,0.03);">
+        <table width="600" cellpadding="0" cellspacing="0" border="0" class="full-width main-card" style="margin: 0 auto; background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%); border-radius: 40px; overflow: hidden; box-shadow: 0px 10px 40px rgba(0,0,0,0.03);">
 
           <!-- Beige Logo -->
           <tr>
             <td align="center" style="padding: 40px 20px 36px;">
-              <div
-                style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF;">
-                <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
-                  alt="Beige" width="110" style="display: block;">
+              <div class="white-bg-element" style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF;">
+                <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png" alt="Beige" width="110" style="display: block;">
               </div>
               <div style="padding: 36px 20px 0;">
-                <img
-                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
-                  alt="Separator" width="100%" style="display: block;">
+                <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png" alt="Separator" width="100%" style="display: block;">
               </div>
             </td>
           </tr>
@@ -110,23 +146,20 @@
           <tr>
             <td style="padding: 40px 30px;">
               <!-- Welcome Message -->
-              <table border="0" cellpadding="0" cellspacing="0" width="100%"
-                style="background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/ScallopTopReceiptBg.png'); background-repeat: no-repeat; background-position: top center; background-size: 100% auto; border-radius: 0 0 40px 40px; margin-top: 50px;">
+              <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/ScallopTopReceiptBg.png'); background-repeat: no-repeat; background-position: top center; background-size: 100% auto; border-radius: 0 0 40px 40px; margin-top: 50px;">
                 <tr>
                   <td style="padding: 60px 30px;">
-                    <h2
-                      style="margin: 0 0 25px 0; font-size: 35px; font-weight: 700; color: #000000; line-height: 42px;">
+                    <h2 style="margin: 0 0 25px 0; font-size: 35px; font-weight: 700; color: #000000; line-height: 42px;">
                       We’re excited to have you with us.</h2>
-                    <p style="color: #000000CC;font-size: 20px; line-height: 35px; margin: 0 0 25px">
+                    <p class="text-muted" style="color: #000000CC; font-size: 20px; line-height: 35px; margin: 0 0 25px">
                       We’re excited to have you join a platform designed to support modern creative production.
                     </p>
-                    <p style="color: #000000CC;font-size: 20px; line-height: 35px; margin: 0 0 25px">
+                    <p class="text-muted" style="color: #000000CC; font-size: 20px; line-height: 35px; margin: 0 0 25px">
                       BEIGE is built for Creative Professionals who value clarity, collaboration, and craft. From
                       managing shoots to working seamlessly with clients and teams, everything you need now lives
                       in one place.
                     </p>
-                    <div
-                      style="display: inline-block; padding: 30px 54px; border-radius: 53px; background: #FFF; box-shadow: 1px 1px 1px 0 #FFF inset, -1px -1px 0 0 rgba(0, 0, 0, 0.10) inset, 0.445px 0.445px 0.629px -0.75px rgba(0, 0, 0, 0.26), 1.211px 1.211px 1.712px -1.5px rgba(0, 0, 0, 0.25), 2.658px 2.658px 3.759px -2.25px rgba(0, 0, 0, 0.23), 5.901px 5.901px 8.345px -3px rgba(0, 0, 0, 0.19), 10px 10px 21.213px -3.75px rgba(0, 0, 0, 0.05); color: #000; font-size: 20px; font-style: italic; font-weight: 500; line-height: 35px; text-align: center;">
+                    <div class="quote-container" style="display: inline-block; padding: 30px 54px; border-radius: 53px; background: #FFFFFF; box-shadow: 1px 1px 1px 0 #FFF inset, -1px -1px 0 0 rgba(0, 0, 0, 0.10) inset, 0.445px 0.445px 0.629px -0.75px rgba(0, 0, 0, 0.26), 1.211px 1.211px 1.712px -1.5px rgba(0, 0, 0, 0.25), 2.658px 2.658px 3.759px -2.25px rgba(0, 0, 0, 0.23), 5.901px 5.901px 8.345px -3px rgba(0, 0, 0, 0.19), 10px 10px 21.213px -3.75px rgba(0, 0, 0, 0.05); color: #000000; font-size: 20px; font-style: italic; font-weight: 500; line-height: 35px; text-align: center;">
                       Where intention meets execution.
                     </div>
                   </td>
@@ -138,115 +171,77 @@
           <!-- Hero Image -->
           <tr>
             <td style="line-height: 0;">
-              <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/CPWelcomHero.png"
-                width="600" class="full-width" style="width: 100%; display: block;" alt="Hero">
+              <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/CPWelcomHero.png" width="600" class="full-width" style="width: 100%; display: block;" alt="Hero">
             </td>
           </tr>
 
           <!-- Why join beige -->
           <tr>
-            <td align="center" style="padding: 50px 0 0; background-color: #FFF;">
-              <div
-                style="background-color: #000000; display: inline-block; padding: 23px 70px; border-radius: 100px; color: #FFF; text-align: center; font-size: 30px; font-style: normal; font-weight: 600; line-height: 42px; position: relative; margin-bottom: 40px;">
+            <td align="center" class="white-bg-element" style="padding: 50px 0 0; background-color: #FFFFFF;">
+              <div style="background-color: #000000; display: inline-block; padding: 23px 70px; border-radius: 100px; color: #FFFFFF; text-align: center; font-size: 30px; font-style: normal; font-weight: 600; line-height: 42px; position: relative; margin-bottom: 40px;">
                 Why Join Beige</div>
-              <table width="598" cellpadding="0" cellspacing="0" border="0"
-                style="width: 598px; table-layout: fixed; border-collapse: collapse; border: 1px solid #F0F0F0; background-color: #FFFFFF;">
+              <table width="598" cellpadding="0" cellspacing="0" border="0" style="width: 598px; table-layout: fixed; border-collapse: collapse; border: 1px solid #F0F0F0; background-color: #FFFFFF;">
                 <tr>
-                  <td class="stack" width="300" height="267"
-                    background="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/UseCase_Web/Photos/Behind-the-Scenes/Photo%20Dec%2023%202025%2C%202%2040%2003%20PM.jpg"
-                    style="width: 299px; height: 267px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/UseCase_Web/Photos/Behind-the-Scenes/Photo%20Dec%2023%202025%2C%202%2040%2003%20PM.jpg'); background-repeat: no-repeat; background-position: center; background-size: cover;">
+                  <td class="stack" width="300" height="267" background="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/UseCase_Web/Photos/Behind-the-Scenes/Photo%20Dec%2023%202025%2C%202%2040%2003%20PM.jpg" style="width: 299px; height: 267px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/UseCase_Web/Photos/Behind-the-Scenes/Photo%20Dec%2023%202025%2C%202%2040%2003%20PM.jpg'); background-repeat: no-repeat; background-position: center; background-size: cover;">
                     &nbsp;
                   </td>
 
-                  <td class="stack" width="300" height="267" bgcolor="#FFFFFF"
-                    style="border: 1px solid #F0F0F0; vertical-align: middle; padding: 30px; box-sizing: border-box;">
-                    <div
-                      style="width: 111px; height: 111px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png'); background-size: cover; background-repeat: no-repeat; background-position: center; text-align: center;">
-                      <img
-                        src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/MoneyBag.svg"
-                        width="40" height="40"
-                        style="margin-top: 25px; margin-right: 18px; display: inline-block; border: 0;">
+                  <td class="stack grid-text-cell" width="300" height="267" bgcolor="#FFFFFF" style="border: 1px solid #F0F0F0; vertical-align: middle; padding: 30px; box-sizing: border-box;">
+                    <div style="width: 111px; height: 111px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png'); background-size: cover; background-repeat: no-repeat; background-position: center; text-align: center;">
+                      <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/MoneyBag.svg" width="40" height="40" style="margin-top: 25px; margin-right: 18px; display: inline-block; border: 0;">
                     </div>
-
-                    <p
-                      style="margin: 0 0 0 10px; font-size: 20px; font-style: normal; font-weight: 500; line-height: 24px; color: #000000;">
+                    <p style="margin: 0 0 0 10px; font-size: 20px; font-style: normal; font-weight: 500; line-height: 24px; color: #000000;">
                       Earn commissions effortlessly
                     </p>
                   </td>
                 </tr>
 
                 <tr>
-                  <td class="stack" width="300" height="267" bgcolor="#FFFFFF"
-                    style="border: 1px solid #F0F0F0; vertical-align: middle; padding: 30px; box-sizing: border-box;">
-                    <div
-                      style="width: 111px; height: 111px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png'); background-size: cover; background-repeat: no-repeat; background-position: center; text-align: center;">
-                      <img
-                        src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/BillCheck.svg"
-                        width="40" height="40"
-                        style="margin-top: 25px; margin-right: 18px; display: inline-block; border: 0;">
+                  <td class="stack grid-text-cell" width="300" height="267" bgcolor="#FFFFFF" style="border: 1px solid #F0F0F0; vertical-align: middle; padding: 30px; box-sizing: border-box;">
+                    <div style="width: 111px; height: 111px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png'); background-size: cover; background-repeat: no-repeat; background-position: center; text-align: center;">
+                      <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/BillCheck.svg" width="40" height="40" style="margin-top: 25px; margin-right: 18px; display: inline-block; border: 0;">
                     </div>
-
-                    <p
-                      style="margin: 0 0 0 10px; font-size: 20px; font-style: normal; font-weight: 500; line-height: 24px; color: #000000;">
+                    <p style="margin: 0 0 0 10px; font-size: 20px; font-style: normal; font-weight: 500; line-height: 24px; color: #000000;">
                       No extra sales work—we handle everything
                     </p>
                   </td>
-                  <td class="stack" width="300" height="267"
-                    background="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/CPWelcomeImg2.png"
-                    style="width: 299px; height: 267px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/CPWelcomeImg2.png'); background-repeat: no-repeat; background-position: center; background-size: cover;">
+                  <td class="stack" width="300" height="267" background="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/CPWelcomeImg2.png" style="width: 299px; height: 267px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/CPWelcomeImg2.png'); background-repeat: no-repeat; background-position: center; background-size: cover;">
                     &nbsp;
                   </td>
                 </tr>
 
                 <tr>
-                  <td class="stack" width="300" height="267"
-                    background="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/UseCase_Web/Photos/Behind-the-Scenes/Photo%20Dec%2023%202025%2C%2011%2058%2058%20AM.jpg"
-                    style="width: 299px; height: 267px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/UseCase_Web/Photos/Behind-the-Scenes/Photo%20Dec%2023%202025%2C%2011%2058%2058%20AM.jpg'); background-repeat: no-repeat; background-position: center; background-size: cover;">
+                  <td class="stack" width="300" height="267" background="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/UseCase_Web/Photos/Behind-the-Scenes/Photo%20Dec%2023%202025%2C%2011%2058%2058%20AM.jpg" style="width: 299px; height: 267px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/UseCase_Web/Photos/Behind-the-Scenes/Photo%20Dec%2023%202025%2C%2011%2058%2058%20AM.jpg'); background-repeat: no-repeat; background-position: center; background-size: cover;">
                     &nbsp;
                   </td>
 
-                  <td class="stack" width="300" height="267" bgcolor="#FFFFFF"
-                    style="border: 1px solid #F0F0F0; vertical-align: middle; padding: 30px; box-sizing: border-box;">
-                    <div
-                      style="width: 111px; height: 111px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png'); background-size: cover; background-repeat: no-repeat; background-position: center; text-align: center;">
-                      <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/diamond.svg"
-                        width="40" height="40"
-                        style="margin-top: 25px; margin-right: 18px; display: inline-block; border: 0;">
+                  <td class="stack grid-text-cell" width="300" height="267" bgcolor="#FFFFFF" style="border: 1px solid #F0F0F0; vertical-align: middle; padding: 30px; box-sizing: border-box;">
+                    <div style="width: 111px; height: 111px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png'); background-size: cover; background-repeat: no-repeat; background-position: center; text-align: center;">
+                      <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/diamond.svg" width="40" height="40" style="margin-top: 25px; margin-right: 18px; display: inline-block; border: 0;">
                     </div>
-                    <p
-                      style="margin: 0 0 0 10px; font-size: 20px; font-style: normal; font-weight: 500; line-height: 24px; color: #000000;">
+                    <p style="margin: 0 0 0 10px; font-size: 20px; font-style: normal; font-weight: 500; line-height: 24px; color: #000000;">
                       Unlock priority bookings & premium gigs
                     </p>
                   </td>
                 </tr>
 
                 <tr>
-                  <td class="stack" width="300" height="267" bgcolor="#FFFFFF"
-                    style="border: 1px solid #F0F0F0; vertical-align: middle; padding: 30px; box-sizing: border-box;">
-                    <div
-                      style="width: 111px; height: 111px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png'); background-size: cover; background-repeat: no-repeat; background-position: center; text-align: center;">
-                      <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/GraphUp.svg"
-                        width="40" height="40"
-                        style="margin-top: 25px; margin-right: 18px; display: inline-block; border: 0;">
+                  <td class="stack grid-text-cell" width="300" height="267" bgcolor="#FFFFFF" style="border: 1px solid #F0F0F0; vertical-align: middle; padding: 30px; box-sizing: border-box;">
+                    <div style="width: 111px; height: 111px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png'); background-size: cover; background-repeat: no-repeat; background-position: center; text-align: center;">
+                      <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/GraphUp.svg" width="40" height="40" style="margin-top: 25px; margin-right: 18px; display: inline-block; border: 0;">
                     </div>
-
-                    <p
-                      style="margin: 0 0 0 10px; font-size: 20px; font-style: normal; font-weight: 500; line-height: 24px; color: #000000;">
+                    <p style="margin: 0 0 0 10px; font-size: 20px; font-style: normal; font-weight: 500; line-height: 24px; color: #000000;">
                       Professional Growth Work with leading brands.
                     </p>
                   </td>
-                  <td class="stack" width="300" height="267"
-                    background="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/UseCase_Web/Photos/Behind-the-Scenes/Photo+Dec+03+2025%2C+4+23+13+PM.jpg"
-                    style="width: 299px; height: 267px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/UseCase_Web/Photos/Behind-the-Scenes/Photo+Dec+03+2025%2C+4+23+13+PM.jpg'); background-repeat: no-repeat; background-position: center; background-size: cover;">
+                  <td class="stack" width="300" height="267" background="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/UseCase_Web/Photos/Behind-the-Scenes/Photo+Dec+03+2025%2C+4+23+13+PM.jpg" style="width: 299px; height: 267px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/UseCase_Web/Photos/Behind-the-Scenes/Photo+Dec+03+2025%2C+4+23+13+PM.jpg'); background-repeat: no-repeat; background-position: center; background-size: cover;">
                     &nbsp;
                   </td>
                 </tr>
               </table>
 
               <div style="padding: 50px 10px 0;">
-                <img
-                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/BlackLaptopMockup.png"
-                  alt="Beige" width="100%" style="display: block; border: 0;" />
+                <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/BlackLaptopMockup.png" alt="Beige" width="100%" style="display: block; border: 0;" />
               </div>
             </td>
           </tr>
@@ -254,34 +249,26 @@
           <!-- Beige Access -->
           <tr>
             <td align="center" style="padding: 50px 40px 40px;">
-              <h3
-                style="margin: 0 0 50px; font-size: 35px; font-style: normal; font-weight: 700; line-height: 42px; color: #000000; max-width: 350px;">
+              <h3 style="margin: 0 0 50px; font-size: 35px; font-style: normal; font-weight: 700; line-height: 42px; color: #000000; max-width: 350px;">
                 Your creative workspace is ready.</h3>
 
-              <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" width="100%"
-                style="max-width: 600px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" width="100%" style="max-width: 600px;">
                 <tr>
                   <td align="center" style="padding: 0 0 0 0;">
                     <!-- cap -->
-                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" width="160"
-                      style="margin-bottom: -20px; position: relative; z-index: 2;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" width="160" style="margin-bottom: -20px; position: relative; z-index: 2;">
                       <tr>
-                        <td align="center"
-                          style="background-color: #FFF; width: 160px; height: 100px; border-radius: 80px 80px 0 0; border-top: solid 1px #F4F3F3;">
-                          <img
-                            src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/checkmark-badge-02.svg"
-                            width="80" style="display: block; border: 0; margin: 20px auto 0;">
+                        <td align="center" class="white-bg-element" style="background-color: #FFFFFF; width: 160px; height: 100px; border-radius: 80px 80px 0 0; border-top: solid 1px #F4F3F3;">
+                          <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/checkmark-badge-02.svg" width="80" style="display: block; border: 0; margin: 20px auto 0;">
                         </td>
                       </tr>
                     </table>
 
                     <!-- card (touches cap, looks like one piece) -->
-                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" width="100%"
-                      style="background-color: #FFF; border: solid 1px #F4F3F3; padding: 0; border-radius: 60px; box-shadow: 0 10px 30px rgba(0,0,0,0.02); margin-top: 0;">
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" width="100%" class="white-bg-element" style="background-color: #FFFFFF; border: solid 1px #F4F3F3; padding: 0; border-radius: 60px; box-shadow: 0 10px 30px rgba(0,0,0,0.02); margin-top: 0;">
                       <tr>
                         <td align="center" style="padding: 60px 40px 40px;">
-                          <p
-                            style="margin: 0 0 40px; font-size: 20px; font-style: normal; font-weight: 400; line-height: 35px; color: #000000CC;">
+                          <p class="text-muted" style="margin: 0 0 40px; font-size: 20px; font-style: normal; font-weight: 400; line-height: 35px; color: #000000CC;">
                             Take a few minutes to complete your profile and availability so you're ready to receive
                             and manage
                             upcoming shoots effortlessly.
@@ -291,8 +278,7 @@
                             step of the way.
                           </p>
 
-                          <a href="{{frontendUrl}}"
-                            style="background-color: #000000; color: #E8D1AB; padding: 22px 60px; border-radius: 100px; text-decoration: none; font-size: 18px; font-weight: 600; line-height: 31.421px; display: inline-block;">
+                          <a href="{{frontendUrl}}" class="cta-btn" style="background-color: #000000; color: #E8D1AB; padding: 22px 60px; border-radius: 100px; text-decoration: none; font-size: 18px; font-weight: 600; line-height: 31.421px; display: inline-block;">
                             ENTER YOUR DASHBOARD &rarr;
                           </a>
                         </td>
@@ -308,14 +294,12 @@
           <tr>
             <td align="center" style="padding: 30px 40px 60px;">
               <div style="padding-bottom: 48px;">
-                <img
-                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
-                  alt="Line Separator" width="100%" style="display: block; border: 0;">
+                <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png" alt="Line Separator" width="100%" style="display: block; border: 0;">
               </div>
-              <p style="margin: 0 0 20px; font-size: 16px; color: #3C3B3B;">
+              <p class="text-footer-muted" style="margin: 0 0 20px; font-size: 16px; color: #3C3B3B;">
                 Help Center &nbsp; • &nbsp; Term of Services &nbsp; • &nbsp; Privacy Policy
               </p>
-              <p style="margin: 0 ; color: #000000; font-size: 26px;font-weight: 600;">
+              <p style="margin: 0 ; color: #000000; font-size: 26px; font-weight: 600;">
                 Beige AI
               </p>
             </td>
