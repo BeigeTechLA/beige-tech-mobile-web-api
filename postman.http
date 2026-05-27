@@ -2089,7 +2089,7 @@ Authorization: {{TOKEN}}
 
 {
   "user_type": "client",
-  "guest_email": "vishnupanchal2309@gmail.com",
+  "guest_email": "harsh@gmail.com",
   "amount": 100,
   "credit_type": "promo",
   "expires_at": "2026-05-28",
