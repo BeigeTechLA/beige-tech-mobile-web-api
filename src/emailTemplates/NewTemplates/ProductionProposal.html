@@ -1,18 +1,73 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
 
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light only">
+  <meta name="supported-color-schemes" content="light only">
   <title>Your Production Proposal</title>
+
+  <!--[if gte mso 9]>
+  <xml>
+    <o:OfficeDocumentSettings>
+      <o:AllowPNG/>
+      <o:PixelsPerInch>96</o:PixelsPerInch>
+    </o:OfficeDocumentSettings>
+  </xml>
+  <![endif]-->
+
+  <style>
+    /* Force Light Mode Overrides for Email Clients */
+    :root {
+      color-scheme: light only;
+      supported-color-schemes: light only;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      body, .body-wrapper {
+        background-color: #F7F7F7 !important;
+        color: #484848 !important;
+      }
+      .main-card {
+        background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%) !important;
+      }
+      .white-inner-card {
+        background-color: #ffffff !important;
+      }
+      .accent-badge {
+        background-color: #E8D1AB !important;
+        color: #000000B2 !important;
+      }
+      .footer-bg {
+        background-color: #FFF3DE !important;
+      }
+      h1, h2, h3, p, li, span, a:not(.cta-btn) {
+        color: inherit !important;
+      }
+      .text-black {
+        color: #000000 !important;
+      }
+      .text-dark-gray {
+        color: #403E3E !important;
+      }
+    }
+
+    /* Target specific data attributes used by Gmail and others */
+    [data-ogsc] body, [data-ogsc] .body-wrapper { background-color: #F7F7F7 !important; color: #484848 !important; }
+    [data-ogsc] .main-card { background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%) !important; }
+    [data-ogsc] .white-inner-card { background-color: #ffffff !important; }
+    [data-ogsc] .accent-badge { background-color: #E8D1AB !important; color: #000000B2 !important; }
+    [data-ogsc] .footer-bg { background-color: #FFF3DE !important; }
+  </style>
 </head>
 
-<body
-  style="margin: 0; padding: 0; font-family:'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #F7F7F7; color: #484848;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #F7F7F7; padding: 40px 20px;">
+<body class="body-wrapper"
+  style="margin: 0; padding: 0; font-family:'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #F7F7F7; color: #484848; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">
+  <table class="body-wrapper" width="100%" cellpadding="0" cellspacing="0" style="background-color: #F7F7F7; padding: 40px 20px;">
     <tr>
       <td align="center">
-        <table width="600"
+        <table class="main-card" width="600"
           style="width: 100%; max-width: 600px; table-layout: fixed; background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%); border: 1px solid rgba(232, 209, 171, 0.3); border-radius: 24px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.04);">
 
           <!-- Beige Logo -->
@@ -34,18 +89,18 @@
           <!-- Header -->
           <tr>
             <td style="padding: 0 40px;">
-              <h1 style="margin: 0; color: #000000; font-size: 54px; font-weight: 500; line-height: 1;">
+              <h1 class="text-black" style="margin: 0; color: #000000; font-size: 54px; font-weight: 500; line-height: 1;">
                 Your Production Proposal</h1>
-              <p style="margin: 16px 0 0; font-size: 26px; color: #403E3E; line-height: 1.3;">
+              <p class="text-dark-gray" style="margin: 16px 0 0; font-size: 26px; color: #403E3E; line-height: 1.3;">
                 Hello {{client_name}}
               </p>
-              <p style="margin: 16px 0 0; font-size: 26px; color: #403E3E; line-height: 1.3; font-weight: 400;">
-                Thank you for choosing Beige for your upcoming <span
+              <p class="text-dark-gray" style="margin: 16px 0 0; font-size: 26px; color: #403E3E; line-height: 1.3; font-weight: 400;">
+                Thank you for choosing Beige for your upcoming <span class="text-black"
                   style="color: #000000; font-weight: 500;">{{shoot_summary}}</span>
               </p>
-              <p style="margin: 16px 0 0; font-size: 26px; color: #403E3E; line-height: 1.3;">
+              <p class="text-dark-gray" style="margin: 16px 0 0; font-size: 26px; color: #403E3E; line-height: 1.3;">
                 Your proposal is ready for confirmation.<br />
-                Once confirmed, we can begin <span style="color: #000000; font-weight: 500;">production</span>
+                Once confirmed, we can begin <span class="text-black" style="color: #000000; font-weight: 500;">production</span>
               </p>
             </td>
           </tr>
@@ -71,13 +126,13 @@
                                   style="border-collapse: collapse; width: 100%; max-width: 500px;">
                                   <tr>
                                     <td>
-                                      <h2
+                                      <h2 class="text-black"
                                         style="margin: 0 0 25px 0; font-size: 30px; font-weight: 600; color: #000000; text-align: center;">
                                         Production Details
                                       </h2>
 
-                                      <!-- white card -->
-                                      <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%"
+                                      <!-- white card wrapper -->
+                                      <table class="white-inner-card" role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%"
                                         style="width: 100%; max-width: 100%; background-color: #ffffff; border-radius: 40px; box-shadow: 0 10px 30px rgba(0,0,0,0.05);">
                                         <tr>
                                           <td style="padding: 20px 30px 0;">
@@ -96,7 +151,7 @@
                                                   <div
                                                     style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
                                                     Project</div>
-                                                  <div
+                                                  <div class="text-black"
                                                     style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
                                                     {{project_name}}</div>
                                                 </td>
@@ -128,7 +183,7 @@
                                                   <div
                                                     style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
                                                     Services</div>
-                                                  <div
+                                                  <div class="text-black"
                                                     style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
                                                     {{contentType}}</div>
                                                 </td>
@@ -160,7 +215,7 @@
                                                   <div
                                                     style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
                                                     Schedule</div>
-                                                  <div
+                                                  <div class="text-black"
                                                     style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
                                                     {{eventDate}}<br />
                                                     {{startTime}} &ndash; {{endTime}}</div>
@@ -193,7 +248,7 @@
                                                   <div
                                                     style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
                                                     Editing</div>
-                                                  <div
+                                                  <div class="text-black"
                                                     style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
                                                     {{editsNeeded}}</div>
                                                 </td>
@@ -209,10 +264,9 @@
                             </tr>
                           </table>
 
-                          <!-- Proposed Amount (no left/right padding) -->
+                          <!-- Proposed Amount -->
                           <div style="padding: 40px 0 0;">
-                            <h2 style="margin: 0 0 31px 0; font-size: 27px; font-weight: 600; color: #000000;">Proposed
-                              Amount</h2>
+                            <h2 class="text-black" style="margin: 0 0 31px 0; font-size: 27px; font-weight: 600; color: #000000;">Proposed Amount</h2>
 
                             <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
                               style="border-collapse: collapse; margin: 0;">
@@ -240,21 +294,21 @@
           <!-- Confirm Button -->
           <tr>
             <td align="center" style="padding: 52px;">
-              <p style="margin: 0 0 24px; font-size: 20px; color: #000000; line-height: 1.4; font-weight: 500;">
+              <p class="text-black" style="margin: 0 0 24px; font-size: 20px; color: #000000; line-height: 1.4; font-weight: 500;">
                 Secure your production by confirming your booking below.
               </p>
-              <a href="{{payment_link}}" target="_blank"
-                style="border-radius: 100px; padding: 18px 40px; font-size: 18px; font-weight: 600; color: #E8D1AB; text-decoration: none; text-transform: capitalize; letter-spacing: 1px; line-height: 1.7; background-color: #000;">
+              <a class="cta-btn" href="{{payment_link}}" target="_blank"
+                style="border-radius: 100px; padding: 18px 40px; font-size: 18px; font-weight: 600; color: #E8D1AB; text-decoration: none; text-transform: capitalize; letter-spacing: 1px; line-height: 1.7; background-color: #000; display: inline-block;">
                 Confirm Your Booking &rarr;
               </a>
             </td>
           </tr>
 
           <tr>
-            <td style="padding: 0;" bgcolor="#FFF3DE">
+            <td class="footer-bg" style="padding: 0;" bgcolor="#FFF3DE">
               <!-- Message -->
               <div style="padding: 40px 40px 20px;">
-                <p
+                <p class="text-black"
                   style="font-size: 28px;font-style: normal;font-weight: 500;line-height: normal;color: #000; margin: 0 0 27px;">
                   After confirming your booking:
                 </p>
@@ -275,21 +329,22 @@
                 height="450px" />
 
               <div style="padding: 40px 40px;">
-                <p style="background-color: #E8D1AB; font-size: 20px;font-style: normal;font-weight: 500;line-height: normal;letter-spacing: 0.415px; color: #000000B2; 
-                padding: 20px 24px; border-radius: 32px; width: fit-content;">
+                <p class="accent-badge" style="background-color: #E8D1AB; font-size: 20px;font-style: normal;font-weight: 500;line-height: normal;letter-spacing: 0.415px; color: #000000B2; 
+                padding: 20px 24px; border-radius: 32px; width: fit-content; margin-top: 0; margin-bottom: 12px;">
                   ✔ Vetted Creative Partners
                 </p>
-                <p style="background-color: #E8D1AB; font-size: 20px;font-style: normal;font-weight: 500;line-height: normal;letter-spacing: 0.415px; color: #000000B2; 
-                padding: 20px 24px; border-radius: 32px;width: fit-content;">
+                <p class="accent-badge" style="background-color: #E8D1AB; font-size: 20px;font-style: normal;font-weight: 500;line-height: normal;letter-spacing: 0.415px; color: #000000B2; 
+                padding: 20px 24px; border-radius: 32px; width: fit-content; margin-top: 0; margin-bottom: 12px;">
                   ✔ Professional Production Standards
                 </p>
-                <p style="background-color: #E8D1AB; font-size: 20px;font-style: normal;font-weight: 500;line-height: normal;letter-spacing: 0.415px; color: #000000B2; 
-                padding: 20px 24px; border-radius: 32px;width: fit-content;">
+                <p class="accent-badge" style="background-color: #E8D1AB; font-size: 20px;font-style: normal;font-weight: 500;line-height: normal;letter-spacing: 0.415px; color: #000000B2; 
+                padding: 20px 24px; border-radius: 32px; width: fit-content; margin-top: 0; margin-bottom: 12px;">
                   ✔ Beige Quality Guarantee
                 </p>
-                <p style="font-size: 28px;font-style: normal;font-weight: 600; color: #000; margin: 30px 0 0;">Beige AI
-                  Platform -<br />
-                  Production Marketplace</p>
+                <h3 class="text-black" style="font-size: 28px; font-style: normal; font-weight: 600; color: #000; margin: 30px 0 0; line-height: 1.3;">
+                  Beige AI Platform -<br />
+                  Production Marketplace
+                </h3>
               </div>
             </td>
           </tr>
@@ -302,12 +357,11 @@
                   src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
                   alt="Line Separator" width="100%" style="display: block; border: 0; max-width: 100%;">
               </div>
-              <p
-                style="margin: 0 0 20px; font-size: 16px;font-style: normal;font-weight: 400;line-height: normal; color: #3C3B3B;">
+              <p style="margin: 0 0 20px; font-size: 16px; font-style: normal; font-weight: 400; line-height: normal; color: #3C3B3B;">
                 Need help with your booking?
               </p>
-              <a href="mailto:sales@beigecorporation.io" target="_blank"
-                style="display:block; margin: 0 0 60px; color: #000000; font-size: 26px;font-weight: 600;">
+              <a class="text-black" href="mailto:sales@beigecorporation.io" target="_blank"
+                style="display:block; margin: 0 0 60px; color: #000000; font-size: 26px; font-weight: 600; text-decoration: none;">
                 sales@beigecorporation.io
               </a>
               <div
