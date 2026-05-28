@@ -2152,9 +2152,9 @@ exports.getStripeInvoicePdf = async (req, res) => {
         paymentHistory: manualHistory.length > 0
           ? manualHistory
           : [{
-              method: 'Manual',
-              date: formatInvoiceDate(new Date()),
-              amount: totalAmount
+              method: hasPaymentSummary ? 'Online Payment' : 'Manual',
+              date: formatInvoiceDate(paymentSummary?.updated_at || new Date()),
+              amount: normalizedPaidAmount
             }]
       });
 
