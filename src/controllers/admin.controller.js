@@ -4,7 +4,7 @@ const multer = require('multer');
 const path = require('path');
 const common_model = require('../utils/common_model');
 const { Op } = require('sequelize');
-const { S3UploadFiles } = require('../utils/common.js');
+const { S3UploadFiles, toAbsoluteBeigeAssetUrl } = require('../utils/common.js');
 const moment = require('moment');
 const { sendTaskAssignmentEmail, sendCPNewBookingRequestEmail, sendPostProductionAssignmentEmail } = require('../utils/emailService');
 const { stream_project_booking, crew_members, crew_member_files, tasks, equipment, crew_roles,
@@ -612,6 +612,34 @@ const upload = multer({
     cb(null, true);
   },
 });
+
+const shootNotesAttachmentUpload = multer({
+  storage: storage,
+  limits: { fileSize: 25 * 1024 * 1024, files: 10 },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = [
+      'image/jpeg',
+      'image/png',
+      'image/webp',
+      'image/jfif',
+      'image/jpg',
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'text/plain',
+      'application/zip',
+      'application/x-zip-compressed'
+    ];
+    if (!allowedTypes.includes(file.mimetype)) {
+      return cb(new Error('Invalid file type for attachment.'));
+    }
+    cb(null, true);
+  }
+});
+
+exports.uploadShootNoteAttachments = shootNotesAttachmentUpload.array('attachments', 10);
 
 function uploadFiles(files) {
   const filePaths = [];
@@ -10163,7 +10191,8 @@ const getNoteBody = (body = {}) => {
 
 const getSafeReactionType = (value) => {
   const normalized = String(value || 'like').trim().toLowerCase();
-  return normalized || 'like';
+  const allowed = new Set(['like', 'love', 'laugh', 'wow', 'sad']);
+  return allowed.has(normalized) ? normalized : 'like';
 };
 
 const formatNoteAuthor = (user = null) => {
@@ -10181,6 +10210,44 @@ const formatNoteAuthor = (user = null) => {
 const formatProjectNote = (note, currentUserId, repliesByParentId) => {
   const plain = typeof note.get === 'function' ? note.get({ plain: true }) : note;
   const reactions = Array.isArray(plain.reactions) ? plain.reactions : [];
+  const reactionUsersByType = {};
+  const myReactionsSet = new Set();
+
+  reactions.forEach((reaction) => {
+    const key = String(reaction?.reaction_type || '').toLowerCase().trim();
+    if (!key) return;
+    if (!reactionUsersByType[key]) reactionUsersByType[key] = [];
+
+    const userId = Number(reaction?.user_id || reaction?.user?.id || 0);
+    const userName =
+      reaction?.user?.name ||
+      reaction?.user?.email ||
+      (userId > 0 ? `User ${userId}` : 'Unknown User');
+
+    if (!reactionUsersByType[key].some((user) => Number(user.user_id) === userId)) {
+      reactionUsersByType[key].push({
+        user_id: userId,
+        name: userName,
+      });
+    }
+
+    if (userId > 0 && Number(userId) === Number(currentUserId)) {
+      myReactionsSet.add(key);
+    }
+  });
+
+  const myReactions = Array.from(myReactionsSet);
+  const attachments = (Array.isArray(plain.attachments) ? plain.attachments : [])
+    .filter((attachment) => Number(attachment.is_active) === 1 || attachment.is_active === undefined)
+    .map((attachment) => ({
+      attachment_id: attachment.attachment_id,
+      file_name: attachment.file_name,
+      file_path: toAbsoluteBeigeAssetUrl(attachment.file_path),
+      mime_type: attachment.mime_type || null,
+      file_size_bytes: attachment.file_size_bytes !== undefined ? Number(attachment.file_size_bytes) : null,
+      uploaded_by_user_id: attachment.uploaded_by_user_id,
+      created_at: attachment.created_at
+    }));
   const children = repliesByParentId.get(Number(plain.note_id)) || [];
 
   return {
@@ -10191,12 +10258,12 @@ const formatProjectNote = (note, currentUserId, repliesByParentId) => {
     created_at: plain.created_at,
     updated_at: plain.updated_at,
     created_by: formatNoteAuthor(plain.created_by),
+    attachments,
     like_count: reactions.filter((reaction) => reaction.reaction_type === 'like').length,
     reaction_count: reactions.length,
     reacted_by_me: reactions.some((reaction) => Number(reaction.user_id) === Number(currentUserId)),
-    my_reactions: reactions
-      .filter((reaction) => Number(reaction.user_id) === Number(currentUserId))
-      .map((reaction) => reaction.reaction_type),
+    my_reactions: myReactions,
+    reaction_users_by_type: reactionUsersByType,
     replies: children.map((reply) => formatProjectNote(reply, currentUserId, repliesByParentId))
   };
 };
@@ -10223,10 +10290,35 @@ const loadShootNotes = async (bookingId, currentUserId) => {
         ]
       },
       {
+        model: db.project_note_attachments,
+        as: 'attachments',
+        required: false,
+        where: { is_active: 1 },
+        attributes: [
+          'attachment_id',
+          'note_id',
+          'uploaded_by_user_id',
+          'file_name',
+          'file_path',
+          'mime_type',
+          'file_size_bytes',
+          'is_active',
+          'created_at'
+        ]
+      },
+      {
         model: db.project_note_reactions,
         as: 'reactions',
         required: false,
-        attributes: ['reaction_id', 'user_id', 'reaction_type', 'created_at']
+        attributes: ['reaction_id', 'user_id', 'reaction_type', 'created_at'],
+        include: [
+          {
+            model: db.users,
+            as: 'user',
+            required: false,
+            attributes: ['id', 'name', 'email']
+          }
+        ]
       }
     ],
     order: [
@@ -10249,6 +10341,17 @@ const loadShootNotes = async (bookingId, currentUserId) => {
   });
 
   return rootNotes.map((note) => formatProjectNote(note, currentUserId, repliesByParentId));
+};
+
+const uploadShootNoteAttachmentsToS3 = async (files = []) => {
+  if (!Array.isArray(files) || files.length === 0) return [];
+  const uploaded = await S3UploadFiles({ attachments: files });
+  return uploaded.map((item, index) => ({
+    file_path: item.file_path,
+    file_name: files[index]?.originalname || files[index]?.filename || 'attachment',
+    mime_type: files[index]?.mimetype || null,
+    file_size_bytes: files[index]?.size || null
+  }));
 };
 
 const findActiveShoot = async (bookingId) => stream_project_booking.findOne({
@@ -10347,6 +10450,20 @@ exports.addShootNote = async (req, res) => {
       message
     });
 
+    const uploadedAttachments = await uploadShootNoteAttachmentsToS3(req.files);
+    if (uploadedAttachments.length > 0) {
+      await db.project_note_attachments.bulkCreate(
+        uploadedAttachments.map((file) => ({
+          note_id: note.note_id,
+          uploaded_by_user_id: currentUserId,
+          file_name: file.file_name,
+          file_path: file.file_path,
+          mime_type: file.mime_type,
+          file_size_bytes: file.file_size_bytes
+        }))
+      );
+    }
+
     const notes = await loadShootNotes(bookingId, currentUserId);
     const createdNote = notes.find((item) => Number(item.note_id) === Number(note.note_id));
 
@@ -10395,6 +10512,20 @@ exports.replyToShootNote = async (req, res) => {
       message
     });
 
+    const uploadedAttachments = await uploadShootNoteAttachmentsToS3(req.files);
+    if (uploadedAttachments.length > 0) {
+      await db.project_note_attachments.bulkCreate(
+        uploadedAttachments.map((file) => ({
+          note_id: reply.note_id,
+          uploaded_by_user_id: currentUserId,
+          file_name: file.file_name,
+          file_path: file.file_path,
+          mime_type: file.mime_type,
+          file_size_bytes: file.file_size_bytes
+        }))
+      );
+    }
+
     const notes = await loadShootNotes(bookingId, currentUserId);
     const parent = notes.find((item) => Number(item.note_id) === Number(noteId));
     const createdReply = parent?.replies?.find((item) => Number(item.note_id) === Number(reply.note_id));
@@ -10433,19 +10564,36 @@ exports.toggleShootNoteReaction = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Note not found for this shoot' });
     }
 
-    const existingReaction = await db.project_note_reactions.findOne({
+    const existingUserReactions = await db.project_note_reactions.findAll({
       where: {
         note_id: noteId,
         user_id: currentUserId,
-        reaction_type: reactionType
       }
     });
 
+    const existingSameReaction = existingUserReactions.find(
+      (item) => String(item.reaction_type || '').toLowerCase() === reactionType
+    );
+
     let reactedByMe = false;
 
-    if (existingReaction) {
-      await existingReaction.destroy();
+    if (existingSameReaction) {
+      // Toggle off when tapping the same reaction again.
+      await db.project_note_reactions.destroy({
+        where: {
+          note_id: noteId,
+          user_id: currentUserId,
+        }
+      });
     } else {
+      // Keep one reaction per user per note (replace old reaction with new one).
+      await db.project_note_reactions.destroy({
+        where: {
+          note_id: noteId,
+          user_id: currentUserId,
+        }
+      });
+
       await db.project_note_reactions.create({
         note_id: noteId,
         user_id: currentUserId,
@@ -10520,6 +10668,26 @@ exports.deleteShootNote = async (req, res) => {
       }
     );
 
+    await db.project_note_attachments.update(
+      { is_active: 0 },
+      {
+        where: {
+          note_id: {
+            [Op.in]: [
+              noteId,
+              ...(
+                await db.project_notes.findAll({
+                  where: { parent_note_id: noteId, booking_id: bookingId },
+                  attributes: ['note_id'],
+                  raw: true
+                })
+              ).map((item) => Number(item.note_id))
+            ]
+          }
+        }
+      }
+    );
+
     return res.status(200).json({
       success: true,
       message: 'Shoot note deleted successfully'
@@ -10529,5 +10697,3 @@ exports.deleteShootNote = async (req, res) => {
     return res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
-
-
