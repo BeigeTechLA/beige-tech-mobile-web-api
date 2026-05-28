@@ -11,6 +11,7 @@ router.post('/create-crew-member', admin.createCrewMember);
 router.post('/matchEquipments', admin.matchEquipment);
 router.post('/assignMatchEquipment', admin.saveMatchedEquipment);
 router.get('/get-project/:project_id', admin.getProjectDetails);
+router.put('/shoots/update-date-location/:project_id', admin.updateProjectDateLocation);
 router.get('/get-active-projects', admin.getActiveProjects);
 router.get('/recent-activity', admin.getRecentActivity);
 router.get('/get-projects', admin.getAllProjectDetails);

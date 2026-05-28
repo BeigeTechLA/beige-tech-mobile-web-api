@@ -42,6 +42,55 @@ const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API
 const EXTERNAL_MEETINGS_API_BASE_URL = process.env.EXTERNAL_MEETINGS_API_BASE_URL || 'http://localhost:5002/v1/external-meetings';
 const EXTERNAL_FILE_MANAGER_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
 
+const hasValue = (value) => {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') return value.trim() !== '';
+  if (Array.isArray(value)) return value.length > 0;
+  return true;
+};
+
+const buildShootNeedsAttention = (project = {}, formSubmission = null) => {
+  const missingFields = [];
+  const bookingDays = Array.isArray(project.booking_days) ? project.booking_days : [];
+  const hasDate = hasValue(project.event_date) || bookingDays.some((day) => hasValue(day.event_date));
+  const hasLocation = hasValue(project.event_location);
+  const hasOnboardingForm = !!formSubmission;
+
+  if (!hasDate) missingFields.push('date');
+  if (!hasLocation) missingFields.push('location');
+  if (!hasOnboardingForm) missingFields.push('onboarding_form');
+
+  return {
+    required: missingFields.length > 0,
+    missing_fields: missingFields,
+  };
+};
+
+const normalizeLocationForStorage = (location) => {
+  if (location === undefined) return undefined;
+  if (location === null) return null;
+  if (typeof location === 'string') return location.trim() || null;
+  if (typeof location === 'object') return JSON.stringify(location);
+  return String(location);
+};
+
+const isValidDateOnly = (date) => moment(String(date), 'YYYY-MM-DD', true).isValid();
+
+const normalizeScheduleTime = (time) => {
+  if (time === null || time === undefined || time === '') return null;
+  const parsed = moment(String(time), ['HH:mm:ss', 'HH:mm'], true);
+  return parsed.isValid() ? parsed.format('HH:mm:ss') : null;
+};
+
+const calculateDurationHours = (startTime, endTime) => {
+  if (!startTime || !endTime) return null;
+  const start = moment(startTime, 'HH:mm:ss', true);
+  const end = moment(endTime, 'HH:mm:ss', true);
+  if (!start.isValid() || !end.isValid()) return null;
+  const diff = end.diff(start, 'minutes');
+  return diff > 0 ? Math.round((diff / 60) * 100) / 100 : null;
+};
+
 const getCPNewBookingEmailFields = (booking = {}, fallbackClientName = '', fallbackShootAmount = null) => ({
   client_name:
     fallbackClientName ||
@@ -1584,10 +1633,16 @@ exports.getProjectDetails = async (req, res) => {
       : [];
 
     // 3. Fetch Transaction Total (from payment_transactions table)
-    const [paymentData, shootNotesCountMap] = await Promise.all([
+    const [paymentData, formSubmission, shootNotesCountMap] = await Promise.all([
       payment_transactions.findOne({
         where: { payment_id: projectJson.payment_id },
         attributes: ['total_amount'],
+        raw: true
+      }),
+      project_form_submissions.findOne({
+        where: { project_id: projectJson.stream_project_booking_id, is_active: 1 },
+        attributes: ['id'],
+        order: [['created_at', 'DESC']],
         raw: true
       }),
       countActiveShootNotesByBookingIds([projectJson.stream_project_booking_id])
@@ -1725,6 +1780,7 @@ exports.getProjectDetails = async (req, res) => {
           event_type_labels: eventTypeLabels.join(', '),
           timeline_status: timelineStatus,
           timeline_label: timelineLabel,
+          needs_attention: buildShootNeedsAttention(projectJson, formSubmission),
           sales_leads: undefined // Remove from main object to avoid redundancy
         },
         timeline_status: timelineStatus,
@@ -1743,6 +1799,270 @@ exports.getProjectDetails = async (req, res) => {
 
   } catch (error) {
     console.error('Error fetching project details:', error);
+    return res.status(500).json({ error: true, message: 'Internal server error', details: error.message });
+  }
+};
+
+exports.updateProjectDateLocation = async (req, res) => {
+  let transaction = null;
+  try {
+    const { project_id } = req.params;
+    const {
+      event_date,
+      date,
+      start_date,
+      event_location,
+      location,
+      booking_type,
+      booking_days,
+      start_time,
+      end_time,
+      duration_hours,
+      time_zone
+    } = req.body || {};
+
+    if (!project_id) {
+      return res.status(400).json({ error: true, message: 'Project ID is required' });
+    }
+
+    const requestedBookingType = booking_type ? String(booking_type).toLowerCase().trim() : null;
+    const nextDate = event_date ?? date ?? start_date;
+    const nextLocation = event_location !== undefined ? event_location : location;
+    const hasBookingDaysPayload = Array.isArray(booking_days);
+    const hasScheduleUpdate =
+      nextDate !== undefined ||
+      start_time !== undefined ||
+      end_time !== undefined ||
+      duration_hours !== undefined ||
+      time_zone !== undefined ||
+      hasBookingDaysPayload ||
+      requestedBookingType === 'single_day' ||
+      requestedBookingType === 'multi_day';
+    const hasLocationUpdate = nextLocation !== undefined;
+
+    if (!hasScheduleUpdate && !hasLocationUpdate) {
+      return res.status(400).json({
+        error: true,
+        message: 'Please provide schedule fields or event_location/location to update.'
+      });
+    }
+
+    const normalizedBookingDays = hasBookingDaysPayload
+      ? booking_days
+          .filter((day) => day)
+          .map((day) => {
+            const dayDate = day.date || day.event_date || day.start_date;
+            const startTime = normalizeScheduleTime(day.start_time || day.startTime);
+            const endTime = normalizeScheduleTime(day.end_time || day.endTime);
+            return {
+              event_date: dayDate,
+              start_time: startTime,
+              end_time: endTime,
+              duration_hours: day.duration_hours != null
+                ? Number(day.duration_hours)
+                : calculateDurationHours(startTime, endTime),
+              time_zone: day.time_zone || day.timeZone || time_zone || null
+            };
+          })
+      : [];
+
+    const resolvedBookingType =
+      requestedBookingType ||
+      (normalizedBookingDays.length > 0 ? 'multi_day' : null);
+
+    if (resolvedBookingType && !['single_day', 'multi_day'].includes(resolvedBookingType)) {
+      return res.status(400).json({
+        error: true,
+        message: 'booking_type must be single_day or multi_day.'
+      });
+    }
+
+    if (resolvedBookingType === 'multi_day' && normalizedBookingDays.length === 0) {
+      return res.status(400).json({
+        error: true,
+        message: 'booking_days is required for multi_day booking_type.'
+      });
+    }
+
+    const invalidBookingDay = normalizedBookingDays.find((day) => !hasValue(day.event_date) || !isValidDateOnly(day.event_date));
+    if (invalidBookingDay) {
+      return res.status(400).json({
+        error: true,
+        message: 'Each booking_days item must include date in YYYY-MM-DD format.'
+      });
+    }
+
+    if (nextDate !== undefined && (!hasValue(nextDate) || !isValidDateOnly(nextDate))) {
+      return res.status(400).json({
+        error: true,
+        message: 'start_date/event_date must be in YYYY-MM-DD format for single_day booking_type.'
+      });
+    }
+
+    const normalizedLocation = normalizeLocationForStorage(nextLocation);
+    if (hasLocationUpdate && !hasValue(normalizedLocation)) {
+      return res.status(400).json({
+        error: true,
+        message: 'event_location cannot be empty.'
+      });
+    }
+
+    const normalizedStartTime = normalizeScheduleTime(start_time);
+    const normalizedEndTime = normalizeScheduleTime(end_time);
+    if (start_time && !normalizedStartTime) {
+      return res.status(400).json({ error: true, message: 'start_time must be in HH:mm or HH:mm:ss format.' });
+    }
+    if (end_time && !normalizedEndTime) {
+      return res.status(400).json({ error: true, message: 'end_time must be in HH:mm or HH:mm:ss format.' });
+    }
+
+    const project = await stream_project_booking.findOne({
+      where: { stream_project_booking_id: project_id }
+    });
+
+    if (!project) {
+      return res.status(404).json({ error: true, message: 'Project not found' });
+    }
+
+    transaction = await db.sequelize.transaction();
+
+    const sortedBookingDays = [...normalizedBookingDays].sort(
+      (a, b) => new Date(a.event_date) - new Date(b.event_date)
+    );
+
+    const primaryBookingDay =
+      resolvedBookingType === 'multi_day'
+        ? sortedBookingDays[0]
+        : null;
+
+    const primaryScheduleDate =
+      resolvedBookingType === 'multi_day'
+        ? primaryBookingDay?.event_date || null
+        : nextDate;
+
+    const primaryStartTime =
+      resolvedBookingType === 'multi_day'
+        ? primaryBookingDay?.start_time || null
+        : normalizedStartTime;
+
+    const primaryEndTime =
+      resolvedBookingType === 'multi_day'
+        ? primaryBookingDay?.end_time || null
+        : normalizedEndTime;
+
+    const primaryTimeZone =
+      resolvedBookingType === 'multi_day'
+        ? primaryBookingDay?.time_zone || null
+        : time_zone;
+
+    let totalDurationHours =
+      resolvedBookingType === 'multi_day'
+        ? sortedBookingDays.reduce((sum, day) => {
+          return sum + (Number(day.duration_hours) || 0);
+        }, 0)
+        : duration_hours != null
+          ? Number(duration_hours)
+          : calculateDurationHours(normalizedStartTime, normalizedEndTime);
+
+    if (totalDurationHours > 0) {
+      totalDurationHours = Math.round(totalDurationHours * 100) / 100;
+    } else {
+      totalDurationHours = null;
+    }
+
+    const updatePayload = {};
+    if (primaryScheduleDate !== undefined && primaryScheduleDate !== null) updatePayload.event_date = primaryScheduleDate;
+    if (start_time !== undefined || resolvedBookingType === 'multi_day') updatePayload.start_time = primaryStartTime || null;
+    if (end_time !== undefined || resolvedBookingType === 'multi_day') updatePayload.end_time = primaryEndTime || null;
+    if (time_zone !== undefined || resolvedBookingType === 'multi_day') updatePayload.time_zone = primaryTimeZone || null;
+    if (duration_hours !== undefined || totalDurationHours !== null || resolvedBookingType === 'multi_day') {
+      updatePayload.duration_hours = totalDurationHours;
+    }
+
+    if (hasLocationUpdate) {
+      const latitude = req.body.latitude ?? null;
+      const longitude = req.body.longitude ?? null;
+      updatePayload.event_location = normalizedLocation;
+      updatePayload.event_latitude = latitude;
+      updatePayload.event_longitude = longitude;
+    }
+
+    if (Object.keys(updatePayload).length > 0) {
+      await project.update(updatePayload, { transaction });
+    }
+
+    if (resolvedBookingType === 'multi_day') {
+      await db.stream_project_booking_days.destroy({
+        where: { stream_project_booking_id: project.stream_project_booking_id },
+        transaction
+      });
+
+      await db.stream_project_booking_days.bulkCreate(
+        sortedBookingDays.map((day) => ({
+          stream_project_booking_id: project.stream_project_booking_id,
+          event_date: day.event_date,
+          start_time: day.start_time,
+          end_time: day.end_time,
+          duration_hours: day.duration_hours,
+          time_zone: day.time_zone,
+          updated_at: new Date()
+        })),
+        { transaction }
+      );
+    }
+
+    if (resolvedBookingType === 'single_day') {
+      await db.stream_project_booking_days.destroy({
+        where: { stream_project_booking_id: project.stream_project_booking_id },
+        transaction
+      });
+    }
+
+    const [bookingDays, formSubmission] = await Promise.all([
+      db.stream_project_booking_days.findAll({
+        where: { stream_project_booking_id: project.stream_project_booking_id },
+        attributes: ['event_date', 'start_time', 'end_time', 'duration_hours', 'time_zone'],
+        order: [['event_date', 'ASC']],
+        transaction,
+        raw: true
+      }),
+      project_form_submissions.findOne({
+        where: { project_id: project.stream_project_booking_id, is_active: 1 },
+        attributes: ['id'],
+        order: [['created_at', 'DESC']],
+        transaction,
+        raw: true
+      })
+    ]);
+
+    const refreshedProject = project.toJSON();
+    refreshedProject.booking_days = bookingDays;
+
+    await transaction.commit();
+
+    return res.status(200).json({
+      error: false,
+      message: 'Project date/location updated successfully',
+      data: {
+        project_id: refreshedProject.stream_project_booking_id,
+        booking_type: resolvedBookingType,
+        event_date: refreshedProject.event_date,
+        start_time: refreshedProject.start_time,
+        end_time: refreshedProject.end_time,
+        duration_hours: refreshedProject.duration_hours,
+        time_zone: refreshedProject.time_zone,
+        event_location: refreshedProject.event_location,
+        event_latitude: refreshedProject.event_latitude,
+        event_longitude: refreshedProject.event_longitude,
+        booking_days: bookingDays,
+        needs_attention: buildShootNeedsAttention(refreshedProject, formSubmission)
+      }
+    });
+  } catch (error) {
+    if (transaction) {
+      try { await transaction.rollback(); } catch (_) {}
+    }
+    console.error('Error updating project attention fields:', error);
     return res.status(500).json({ error: true, message: 'Internal server error', details: error.message });
   }
 };
@@ -2655,7 +2975,7 @@ exports.getAllProjectDetails = async (req, res) => {
 
     let projectDetails = await Promise.all(projectRows.map(async (project) => {
       const shootNotesCount = shootNotesCountMap.get(Number(project.stream_project_booking_id)) || 0;
-      const [assignedCrewData, assignedEquipData, assignedPostProdData, paymentData] = await Promise.all([
+      const [assignedCrewData, assignedEquipData, assignedPostProdData, paymentData, formSubmission, bookingDaysData] = await Promise.all([
         assigned_crew.findAll({
           where: { project_id: project.stream_project_booking_id, is_active: 1 },
           include: [{ model: crew_members, as: 'crew_member', attributes: ['crew_member_id', 'first_name', 'last_name', 'primary_role'] }],
@@ -2671,6 +2991,17 @@ exports.getAllProjectDetails = async (req, res) => {
         payment_transactions.findOne({
           where: { payment_id: project.payment_id },
           attributes: ['total_amount']
+        }),
+        project_form_submissions.findOne({
+          where: { project_id: project.stream_project_booking_id, is_active: 1 },
+          attributes: ['id'],
+          order: [['created_at', 'DESC']],
+          raw: true
+        }),
+        db.stream_project_booking_days.findAll({
+          where: { stream_project_booking_id: project.stream_project_booking_id },
+          attributes: ['event_date'],
+          raw: true
         }),
       ]);
 
@@ -2693,16 +3024,21 @@ exports.getAllProjectDetails = async (req, res) => {
 
       const timelineStatus = bookingTimelineService.getTimelineStage(project);
       const timelineLabel = bookingTimelineService.getTimelineLabel(timelineStatus);
+      const projectJson = {
+        ...project.toJSON(),
+        booking_days: bookingDaysData
+      };
 
       return {
         project: {
-          ...project.toJSON(),
+          ...projectJson,
           total_paid_amount: displayAmount,
           total_value_amount: totalValueAmount,
           notes_count: shootNotesCount,
           event_type_labels: formattedTypes.join(', '),
           timeline_status: timelineStatus,
           timeline_label: timelineLabel,
+          needs_attention: buildShootNeedsAttention(projectJson, formSubmission),
           event_location: (() => {
             const loc = project.event_location;
             if (!loc) return null;
