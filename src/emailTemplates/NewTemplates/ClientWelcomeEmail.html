@@ -1,20 +1,124 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
 
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="x-apple-disable-message-reformatting">
+  <meta name="color-scheme" content="light">
+  <meta name="supported-color-schemes" content="light">
   <title>Welcome to Beige</title>
+  <style>
+    :root {
+      color-scheme: light;
+      supported-color-schemes: light;
+    }
+
+    html,
+    body {
+      margin: 0 auto !important;
+      padding: 0 !important;
+      height: 100% !important;
+      width: 100% !important;
+      background-color: #F7F7F7 !important;
+    }
+
+    /* System Font Stack Balance */
+    body,
+    table,
+    td,
+    p,
+    a,
+    h1,
+    h2,
+    h3,
+    span {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
+    }
+
+    * {
+      -ms-text-size-adjust: 100%;
+      -webkit-text-size-adjust: 100%;
+    }
+
+    table,
+    td {
+      mso-table-lspace: 0pt !important;
+      mso-table-rspace: 0pt !important;
+    }
+
+    img {
+      -ms-interpolation-mode: bicubic;
+      border: 0;
+      outline: none;
+      text-decoration: none;
+    }
+
+    @media only screen and (max-width: 600px) {
+      .full-width {
+        width: 100% !important;
+        height: auto !important;
+      }
+
+      .container-padding {
+        padding: 24px 16px !important;
+      }
+    }
+
+    /* Force Light Theme Controls for Dark Mode Email Clients */
+    @media (prefers-color-scheme: dark) {
+
+      body,
+      .body-bg-table {
+        background-color: #F7F7F7 !important;
+      }
+
+      .main-card {
+        background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%) !important;
+      }
+
+      .white-bg-badge {
+        background-color: #FFFFFF !important;
+      }
+
+      .description-card {
+        background-color: #FFFFFF !important;
+      }
+
+      h1,
+      h2,
+      h3,
+      p,
+      span,
+      td,
+      a {
+        color: #000000 !important;
+      }
+
+      .text-muted {
+        color: #00000099 !important;
+      }
+
+      .text-footer-muted {
+        color: #3C3B3B !important;
+      }
+
+      .cta-btn {
+        background-color: #000000 !important;
+        color: #E8D1AB !important;
+      }
+    }
+  </style>
 </head>
 
-<body
-  style="margin: 0; padding: 0; font-family:'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #F7F7F7; color: #484848;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #F7F7F7; padding: 40px 20px;">
+<body style="margin: 0; padding: 0; background-color: #F7F7F7;">
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" class="body-bg-table"
+    style="background-color: #F7F7F7; table-layout: fixed;">
     <tr>
-      <td align="center">
-        <table width="600"
-          style="background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%); border: 1px solid rgba(232, 209, 171, 0.3); border-radius: 24px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.04);">
-
+      <td align="center" style="padding: 40px 10px;">
+        <table width="600" cellpadding="0" cellspacing="0" border="0" class="full-width main-card"
+          style="margin: 0 auto; background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%); border: 1px solid rgba(232, 209, 171, 0.3); border-radius: 24px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.04);">
+          <!-- Header and Hero Background Container -->
           <tr>
             <td background="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/WavyBg.png"
               bgcolor="#FFFCF6" width="600" height="774" valign="top"
@@ -24,7 +128,7 @@
                   <!-- Beige Logo -->
                   <tr>
                     <td align="center" style="padding: 40px 0 36px;">
-                      <div
+                      <div class="white-bg-badge"
                         style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF; box-shadow: 0 8px 24px 0 rgba(149, 157, 165, 0.20);">
                         <img
                           src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
@@ -51,9 +155,9 @@
                   </tr>
                   <!-- Beige description -->
                   <tr>
-                    <td style="padding: 42px 40px; text-align: center; ">
-                      <p
-                        style="margin: 0 0 16px; font-size: 18px; color: #00000099; line-height: 1.4; border-radius: 36px;background: #FFF;box-shadow: 0 7px 29px 0 rgba(100, 100, 111, 0.20); padding: 38px 25px;">
+                    <td class="container-padding" style="padding: 42px 40px; text-align: center;">
+                      <p class="description-card"
+                        style="margin: 0 0 16px; font-size: 18px; color: #00000099; line-height: 1.4; border-radius: 36px;background-color: #FFF;box-shadow: 0 7px 29px 0 rgba(100, 100, 111, 0.20); padding: 38px 25px;">
                         Beige is a unified platform for booking professional videography, photography, locations, and
                         post-production, designed to remove friction from the content creation process.
                       </p>
@@ -66,7 +170,8 @@
 
           <!-- What Sets Beige Apart -->
           <tr>
-            <td style="padding:0; background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%);">
+            <td class="container-padding"
+              style="padding:0; background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%);">
               <div style="padding: 40px;">
                 <h3 style="margin: 0 0 20px; color: #434546; font-size: 35px; font-weight: 700;">
                   What Sets Beige Apart:
@@ -118,7 +223,7 @@
               <div style="padding: 0 10px;">
                 <img
                   src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/BlackLaptopMockup.png"
-                  alt="Beige" width="100%" style="display: block; border: 0;" />
+                  alt="Beige" width="100%" style="display: block; border: 0;" class="full-width" />
               </div>
             </td>
           </tr>
@@ -130,8 +235,8 @@
               <!-- <h3
                 style="margin: 0 0 20px; font-size: 35px; font-style: normal; font-weight: 700; line-height: 42px; color: #000000; max-width: 350px;">
                 Your creative workspace is ready.</h3> -->
-              <div style="margin-top: 30px; background-color: transparent;">
-                <p
+              <div class="container-padding" style="margin-top: 30px; background-color: transparent;">
+                <p class="text-muted"
                   style="margin: 0 0 40px; font-size: 20px; font-style: normal; font-weight: 400; line-height: 35px; color: #000000CC;">
                   Whether you are producing content for a brand, event, or personal project, Beige simplifies execution
                   so you can focus on the outcome.
@@ -140,7 +245,7 @@
                 style="margin: 20px 0 40px; font-size: 28px; font-style: italic; font-weight: 600; line-height: 36px; color: #000000; max-width: 350px;">
                 Book your shoot in minutes.<br /> Shift your vision to reality.</h3> -->
 
-                <a href="{{frontendUrl}}"
+                <a href="{{frontendUrl}}" class="cta-btn"
                   style="background-color: #000000; color: #E8D1AB; padding: 18px 48px; border-radius: 100px; text-decoration: none; font-size: 18px; font-weight: 500; line-height: 31.421px; display: inline-block;">
                   BOOK YOUR SHOOT IN MINUTES. SHIFT YOUR VISION TO REALITY. &rarr;
                 </a>
@@ -151,13 +256,13 @@
 
           <!-- Help message  -->
           <tr>
-            <td align="center" style="padding: 20px 40px 0;">
+            <td class="container-padding" align="center" style="padding: 20px 40px 0;">
               <div style="padding-bottom: 48px;">
                 <img
                   src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
                   alt="Line Separator" width="100%" style="display: block; border: 0;">
               </div>
-              <p
+              <p class="text-footer-muted"
                 style="margin: 0 0 20px; font-size: 16px; font-style: normal;font-weight: 400;line-height: normal; color: #3C3B3B;">
                 This is an automated email from BeigeAI. Please do not reply to this email.
               </p>
@@ -171,19 +276,19 @@
 
           <!-- Footer -->
           <tr>
-            <td align="center" style="padding: 40px 40px 60px;">
+            <td class="container-padding" align="center" style="padding: 20px 40px 60px;">
               <div style="padding-bottom: 48px;">
                 <img
                   src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
                   alt="Line Separator" width="100%" style="display: block; border: 0;">
               </div>
-              <p style="margin: 0 0 20px; font-size: 16px; color: #3C3B3B;">
+              <p class="text-footer-muted" style="margin: 0 0 20px; font-size: 16px; color: #3C3B3B;">
                 Help Center &nbsp; • &nbsp; Term of Services &nbsp; • &nbsp; Privacy Policy
               </p>
               <p style="margin: 0 0 60px; color: #000000; font-size: 26px;font-weight: 600;">
                 Beige AI
               </p>
-              <div
+              <div class="white-bg-badge"
                 style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF;">
                 <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
                   alt="Beige" width="110" style="display: block; border: 0;">

@@ -11,6 +11,7 @@ const pricingController = require('../controllers/pricing.controller');
 const externalFileManagerController = require('../controllers/external-file-manager.controller');
 const paymentService = require('../services/payment-links.service');
 const accountCreditService = require('../services/account-credit.service');
+const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
 const quoteService = require('../services/sales-quote.service');
 const emailService = require('../utils/emailService');
 const { sendCPNewBookingRequestEmail } = require('../utils/emailService');
@@ -323,6 +324,12 @@ const hasExternalWorkspaceFiles = async (bookingId, phase) => {
 async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
   if (!quoteId) return null;
 
+  const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+    bookingId,
+    salesQuoteId: quoteId
+  });
+  const paymentSummary = paymentState.paymentSummary;
+
   let settledByFollowupTransaction = false;
   if (bookingId) {
     const bookingRecord = await db.stream_project_booking.findByPk(bookingId, {
@@ -400,16 +407,45 @@ async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null
     bookingId
   });
 
-  const additionalPayment = refreshActivity ? {
+  const summaryChangeType = String(paymentState.lastQuoteChangeType || '').toLowerCase();
+  const summaryChangeAmount = parseFloat(paymentState.lastQuoteChangeAmount || 0);
+  const summaryDueAmount = paymentState.dueAmount;
+  const summaryPaymentStatus = String(paymentState.paymentStatus || '').toLowerCase();
+  const summaryApprovalStatus = String(paymentSummary?.last_quote_change_status || '').toLowerCase();
+  const summaryAdditionalPayment = paymentSummary &&
+    summaryChangeType === 'increase' &&
+    (summaryChangeAmount > 0 || summaryDueAmount > 0)
+      ? {
+          additional_amount: summaryDueAmount,
+          original_increase_amount: summaryChangeAmount || summaryDueAmount,
+          previously_paid_amount: paymentState.paidAmount,
+          revised_total: paymentState.quoteTotal,
+          outstanding_amount: summaryDueAmount,
+          payment_status: summaryPaymentStatus || null,
+          approval_status: summaryApprovalStatus || null,
+          last_sent_at: refreshInvoiceHistory?.sent_at || null,
+          invoice_number: refreshInvoiceHistory?.invoice_number || null,
+          invoice_url: refreshInvoiceHistory?.invoice_url || null
+        }
+      : null;
+
+  const activityAdditionalPayment = refreshActivity ? {
     additional_amount: additionalAmount,
     previously_paid_amount: previouslyPaidAmount,
     revised_total: revisedTotal,
     outstanding_amount: (additionalPaymentStatus === 'paid' || isRefreshInvoiceSettled) ? 0 : additionalAmount,
     payment_status: additionalPaymentStatus,
+    approval_status: refreshActivity.metadata?.approval_status || null,
     last_sent_at: refreshInvoiceHistory?.sent_at || null,
     invoice_number: refreshInvoiceHistory?.invoice_number || null,
     invoice_url: refreshInvoiceHistory?.invoice_url || null
   } : null;
+  const additionalPayment = paymentSummary
+    ? summaryAdditionalPayment
+    : activityAdditionalPayment;
+  const currentInvoiceHistory = additionalPayment
+    ? refreshInvoiceHistory
+    : latestInvoiceHistory;
 
   const reducedPayment = refreshActivity && reducedAmount > 0 ? {
     reduced_amount: reducedAmount,
@@ -423,18 +459,19 @@ async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null
   } : null;
 
   return {
-    latest_invoice: latestInvoiceHistory ? {
-      invoice_send_history_id: latestInvoiceHistory.invoice_send_history_id,
-      invoice_number: latestInvoiceHistory.invoice_number || null,
-      invoice_url: latestInvoiceHistory.invoice_url || null,
-      invoice_pdf: latestInvoiceHistory.invoice_pdf || null,
-      payment_status: latestInvoiceHistory.payment_status || null,
-      sent_at: latestInvoiceHistory.sent_at || null
+    latest_invoice: currentInvoiceHistory ? {
+      invoice_send_history_id: currentInvoiceHistory.invoice_send_history_id,
+      invoice_number: currentInvoiceHistory.invoice_number || null,
+      invoice_url: currentInvoiceHistory.invoice_url || null,
+      invoice_pdf: currentInvoiceHistory.invoice_pdf || null,
+      payment_status: currentInvoiceHistory.payment_status || null,
+      sent_at: currentInvoiceHistory.sent_at || null
     } : null,
     additional_payment: additionalPayment,
     partial_payment: additionalPayment,
     reduced_payment: reducedPayment,
-    credit_summary: creditSummary
+    credit_summary: creditSummary,
+    payment_summary: paymentSummary
   };
 }
 
@@ -449,6 +486,11 @@ function hasOutstandingAdditionalPayment(customQuoteFinancials = null) {
 }
 
 function resolveLeadPaymentStatus({ booking = null, activePaymentLink = null, customQuoteFinancials = null }) {
+  const summaryStatus = String(customQuoteFinancials?.payment_summary?.payment_status || '').toLowerCase();
+  if (summaryStatus) {
+    return summaryStatus;
+  }
+
   if (hasOutstandingAdditionalPayment(customQuoteFinancials)) {
     return 'partial_paid';
   }
@@ -2864,8 +2906,12 @@ exports.getLeadById = async (req, res) => {
     const totalBeforeCredit = parseFloat((subtotal - pricing_breakdown.discount).toFixed(2));
     let creditApplied = 0;
     let totalPaid = null;
+    const paymentSummary = customQuoteFinancials?.payment_summary || null;
 
-    if (leadJson.booking?.payment_id) {
+    if (paymentSummary) {
+      creditApplied = parseFloat(paymentSummary.credit_used_amount || 0);
+      totalPaid = parseFloat(paymentSummary.paid_amount || 0);
+    } else if (leadJson.booking?.payment_id) {
       const paymentData = await db.payment_transactions.findByPk(leadJson.booking.payment_id);
       if (paymentData) {
         totalPaid = parseFloat(paymentData.total_amount || 0);
@@ -4030,8 +4076,18 @@ const syncExternalWorkspaceAfterManualPayment = async (bookingRecord) => {
   }
 };
 
-const buildManualPaymentMeta = async ({ leadModel, leadActivityModel, leadId, req, res, leadLabel }) => {
-  const { payment_type, amount, payment_mode, other_payment_mode, proof_url, notes } = req.body || {};
+const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }) => {
+  const {
+    payment_type,
+    amount,
+    payment_mode,
+    other_payment_mode,
+    proof_url,
+    proof_file_path,
+    proof_file_name,
+    notes,
+    sales_quote_id
+  } = req.body || {};
   const performedBy = req.userId;
 
   if (!['full', 'partial'].includes(String(payment_type || '').trim().toLowerCase())) {
@@ -4086,29 +4142,24 @@ const buildManualPaymentMeta = async ({ leadModel, leadActivityModel, leadId, re
     });
   }
 
-  const totalAmount = resolveLeadTotalAmount(lead, lead.booking);
-  const previousManualEntries = await leadActivityModel.findAll({
-    where: {
-      lead_id: Number(leadId),
-      activity_type: 'payment_completed'
-    },
-    order: [['created_at', 'ASC']]
-  });
+  const bookingId = Number(lead?.booking?.stream_project_booking_id || lead?.booking_id || 0);
+  if (!Number.isFinite(bookingId) || bookingId <= 0) {
+    return res.status(constants.BAD_REQUEST.code).json({
+      success: false,
+      message: 'Booking is required to record manual payment',
+    });
+  }
 
-  const manualHistory = previousManualEntries
-    .map((entry) => {
-      const payload = parseJsonIfNeeded(entry.activity_data);
-      if (!payload || payload.payment_method !== 'manual') return null;
-      return payload;
-    })
-    .filter(Boolean);
-
-  const alreadyFullyPaid = manualHistory.some((entry) => entry.payment_type === 'full');
-  const previouslyPaidPartial = manualHistory.reduce((sum, entry) => {
-    if (entry.payment_type !== 'partial') return sum;
-    const numeric = Number(entry.amount || 0);
-    return sum + (Number.isFinite(numeric) ? numeric : 0);
-  }, 0);
+  const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId);
+  const summaryQuoteTotal = Number(existingSummary?.quote_total || 0);
+  const totalAmount = Math.max(resolveLeadTotalAmount(lead, lead.booking), summaryQuoteTotal, 0);
+  const previouslyPaidAmount = Number(existingSummary?.paid_amount || 0);
+  const creditUsedAmount = Number(existingSummary?.credit_used_amount || 0);
+  const dueFromSummary = Number(existingSummary?.due_amount);
+  const remainingBefore = Number.isFinite(dueFromSummary)
+    ? Math.max(dueFromSummary, 0)
+    : Math.max(totalAmount - previouslyPaidAmount - creditUsedAmount, 0);
+  const alreadyFullyPaid = remainingBefore <= 0 && previouslyPaidAmount > 0;
 
   if (alreadyFullyPaid) {
     return res.status(constants.BAD_REQUEST.code).json({
@@ -4117,7 +4168,6 @@ const buildManualPaymentMeta = async ({ leadModel, leadActivityModel, leadId, re
     });
   }
 
-  const remainingBefore = Math.max(totalAmount - previouslyPaidPartial, 0);
   const numericAmount = amount === undefined || amount === null || amount === ''
     ? null
     : Number(amount);
@@ -4145,27 +4195,125 @@ const buildManualPaymentMeta = async ({ leadModel, leadActivityModel, leadId, re
     });
   }
 
-  await leadActivityModel.create({
+  const amountToApply = normalizedPaymentType === 'partial'
+    ? Number(numericAmount || 0)
+    : remainingBefore;
+  const paidAmountAfter = Math.max(previouslyPaidAmount + amountToApply, 0);
+
+  const normalizedSalesQuoteId = Number(sales_quote_id || 0);
+  const latestLeadSalesQuote = Number.isFinite(normalizedSalesQuoteId) && normalizedSalesQuoteId > 0
+    ? null
+    : await sales_quotes.findOne({
+        where: { lead_id: Number(leadId) },
+        attributes: ['sales_quote_id'],
+        order: [['updated_at', 'DESC'], ['sales_quote_id', 'DESC']]
+      });
+  const resolvedSalesQuoteId = Number.isFinite(normalizedSalesQuoteId) && normalizedSalesQuoteId > 0
+    ? normalizedSalesQuoteId
+    : (existingSummary?.sales_quote_id || latestLeadSalesQuote?.sales_quote_id || null);
+  const normalizedOtherPaymentMode = normalizedPaymentMode === 'other' ? String(other_payment_mode).trim() : null;
+  const normalizedProofFilePath = String(proof_file_path || '').trim() || null;
+  const normalizedProofFileName = String(proof_file_name || '').trim() || null;
+  const normalizedNotes = String(notes || '').trim() || null;
+
+  await db.sequelize.query(
+    `
+      INSERT INTO booking_manual_payments (
+        booking_id,
+        lead_id,
+        sales_quote_id,
+        payment_type,
+        amount,
+        payment_mode,
+        other_payment_mode,
+        proof_url,
+        proof_file_path,
+        proof_file_name,
+        notes,
+        performed_by_user_id
+      ) VALUES (
+        :bookingId,
+        :leadId,
+        :salesQuoteId,
+        :paymentType,
+        :amount,
+        :paymentMode,
+        :otherPaymentMode,
+        :proofUrl,
+        :proofFilePath,
+        :proofFileName,
+        :notes,
+        :performedBy
+      )
+    `,
+    {
+      replacements: {
+        bookingId,
+        leadId: Number(leadId),
+        salesQuoteId: resolvedSalesQuoteId,
+        paymentType: normalizedPaymentType,
+        amount: Number(amountToApply || 0),
+        paymentMode: normalizedPaymentMode,
+        otherPaymentMode: normalizedOtherPaymentMode,
+        proofUrl: normalizedProofUrl,
+        proofFilePath: normalizedProofFilePath,
+        proofFileName: normalizedProofFileName,
+        notes: normalizedNotes,
+        performedBy: performedBy || null,
+      },
+      type: Sequelize.QueryTypes.INSERT,
+    }
+  );
+
+  await bookingPaymentSummaryService.upsertBookingPaymentSummary({
+    bookingId,
+    leadId: Number(leadId),
+    salesQuoteId: resolvedSalesQuoteId,
+    quoteTotal: totalAmount,
+    paidAmount: paidAmountAfter,
+    creditUsedAmount,
+    creditCreatedAmount: Number(existingSummary?.credit_created_amount || 0),
+    manualPaymentMode: normalizedPaymentMode,
+    manualPaymentOtherMode: normalizedOtherPaymentMode,
+    manualPaymentProofUrl: normalizedProofUrl,
+    manualPaymentProofFilePath: normalizedProofFilePath,
+    manualPaymentProofFileName: normalizedProofFileName,
+    manualPaymentNotes: normalizedNotes,
+    manualPaymentUpdatedByUserId: performedBy || null,
+    manualPaymentUpdatedAt: new Date(),
+    lastQuoteChangeType: existingSummary?.last_quote_change_type || 'none',
+    lastQuoteChangeAmount: Number(existingSummary?.last_quote_change_amount || 0),
+    lastQuoteChangeStatus: existingSummary?.last_quote_change_status || 'none',
+  });
+
+  const activityModel = leadModel === client_leads
+    ? client_lead_activities
+    : sales_lead_activities;
+  await activityModel.create({
     lead_id: Number(leadId),
     activity_type: 'payment_completed',
     activity_data: {
+      source: 'manual_payment',
       payment_method: 'manual',
       payment_type: normalizedPaymentType,
       payment_mode: normalizedPaymentMode,
-      other_payment_mode: normalizedPaymentMode === 'other' ? String(other_payment_mode).trim() : null,
-      amount: normalizedPaymentType === 'partial' ? Number(numericAmount) : null,
-      total_amount: totalAmount > 0 ? Number(totalAmount) : null,
-      previously_paid_amount: previouslyPaidPartial,
+      other_payment_mode: normalizedOtherPaymentMode,
+      amount: Number(amountToApply || 0),
+      total_amount: totalAmount,
+      paid_amount_before: previouslyPaidAmount,
+      paid_amount_after: paidAmountAfter,
       remaining_before_payment: remainingBefore,
-      remaining_after_payment:
-        normalizedPaymentType === 'partial'
-          ? Math.max(remainingBefore - Number(numericAmount || 0), 0)
-          : 0,
+      remaining_after_payment: Math.max(remainingBefore - amountToApply, 0),
       proof_url: normalizedProofUrl,
-      notes: String(notes || '').trim() || null,
+      proof_file_path: normalizedProofFilePath,
+      proof_file_name: normalizedProofFileName,
+      notes: normalizedNotes,
       updated_by: performedBy || null,
+      previously_paid_amount: previouslyPaidAmount,
+      booking_id: bookingId,
+      sales_quote_id: resolvedSalesQuoteId
     },
-    performed_by_user_id: performedBy,
+    performed_by_user_id: performedBy || null
   });
 
   const leadUpdate = { last_activity_at: new Date() };
@@ -4189,7 +4337,7 @@ const buildManualPaymentMeta = async ({ leadModel, leadActivityModel, leadId, re
       total_amount: totalAmount > 0 ? Number(totalAmount) : null,
       paid_amount_total:
         normalizedPaymentType === 'partial'
-          ? Number(previouslyPaidPartial + Number(numericAmount || 0))
+          ? Number(previouslyPaidAmount + Number(numericAmount || 0))
           : totalAmount > 0
             ? Number(totalAmount)
             : null,
@@ -4210,7 +4358,6 @@ exports.recordManualPayment = async (req, res) => {
     const { id } = req.params;
     return await buildManualPaymentMeta({
       leadModel: sales_leads,
-      leadActivityModel: sales_lead_activities,
       leadId: id,
       req,
       res,
@@ -4231,7 +4378,6 @@ exports.recordClientManualPayment = async (req, res) => {
     const { id } = req.params;
     return await buildManualPaymentMeta({
       leadModel: client_leads,
-      leadActivityModel: client_lead_activities,
       leadId: id,
       req,
       res,
@@ -4408,6 +4554,11 @@ exports.getClientLeadById = async (req, res) => {
     leadJson.payment_links = bookingId
       ? await payment_links.findAll({ where: { booking_id: bookingId } })
       : [];
+    const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+      bookingId,
+      quoteTotal: leadJson.booking?.primary_quote?.total || leadJson.booking?.primary_quote?.price_after_discount || 0
+    });
+    const paymentSummary = paymentState.paymentSummary;
 
     let final_phone = leadJson.phone || leadJson.phone_number;
     if (!final_phone && leadJson.booking?.description) {
@@ -4451,7 +4602,8 @@ exports.getClientLeadById = async (req, res) => {
       }
     }
 
-    let payment_status = lead.booking?.payment_id ? 'paid' : 'unpaid';
+    let payment_status = String(paymentState.hasSummary ? paymentState.paymentStatus : '').toLowerCase() ||
+      (lead.booking?.payment_id ? 'paid' : 'unpaid');
     if (payment_status === 'unpaid' && active_payment_link) {
       payment_status = active_payment_link.is_expired ? 'link_expired' : 'link_sent';
     }
@@ -4507,7 +4659,10 @@ exports.getClientLeadById = async (req, res) => {
     let creditApplied = 0;
     let totalPaid = null;
 
-    if (leadJson.booking?.payment_id) {
+    if (paymentState.hasSummary) {
+      creditApplied = paymentState.creditUsedAmount;
+      totalPaid = paymentState.paidAmount;
+    } else if (leadJson.booking?.payment_id) {
       const paymentData = await db.payment_transactions.findByPk(leadJson.booking.payment_id);
       if (paymentData) {
         totalPaid = parseFloat(paymentData.total_amount || 0);
@@ -4526,7 +4681,12 @@ exports.getClientLeadById = async (req, res) => {
 
     const selectedCrewIds = lead.booking?.assigned_crews?.map(c => c.crew_member_id).filter(Boolean) || [];
     const intent = lead.intent ?? leadAssignmentService.getClientIntent({ lead, booking: lead.booking });
-    const booking_status = leadAssignmentService.getClientBookingStatus(lead, lead.booking);
+    let booking_status = leadAssignmentService.getClientBookingStatus(lead, lead.booking);
+    if (['partially_paid', 'approval_pending'].includes(payment_status)) {
+      booking_status = 'Partially Paid';
+    } else if (payment_status === 'paid') {
+      booking_status = 'Paid';
+    }
     const booking_step = leadAssignmentService.getLeadBookingStep(lead, lead.booking, lead.activities);
     const can_edit_booking = canEditBooking(lead, lead.booking);
 
@@ -4621,6 +4781,13 @@ exports.getClientLeadById = async (req, res) => {
         intent_source: lead.intent ? 'manual' : 'system',
         booking_status,
         payment_status,
+        collected_amount: paymentState.hasSummary
+          ? paymentState.paidAmount
+          : (Number.isFinite(totalPaid) ? totalPaid : null),
+        outstanding_amount: paymentState.hasSummary
+          ? paymentState.dueAmount
+          : null,
+        payment_summary: paymentSummary,
         active_payment_link,
         booking_step,
         can_edit_booking,

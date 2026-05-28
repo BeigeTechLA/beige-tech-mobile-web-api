@@ -8,6 +8,7 @@ router.post('/room', authenticate, externalChatController.createChatRoom);
 router.get('/room/:bookingId', authenticate, externalChatController.getChatRoom);
 router.post('/room/:roomId/participants', authenticate, externalChatController.addChatParticipants);
 router.delete('/room/:roomId/participants/:userId', authenticate, externalChatController.removeChatParticipant);
+router.patch('/room/:roomId/mark-read', authenticate, externalChatController.markChatRoomRead);
 router.post('/messages/:roomId', authenticate, externalChatController.sendChatMessage);
 router.get('/messages/:roomId', authenticate, externalChatController.getChatMessages);
 router.post('/messages/:messageId/edit', authenticate, externalChatController.editChatMessage);

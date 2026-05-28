@@ -1,6 +1,7 @@
 const db = require('../models');
 const { Op } = require('sequelize');
 const notificationService = require('./notification.service');
+const { sendBeigeCreditsReceivedEmail } = require('../utils/emailService');
 
 function roundCurrency(value) {
   const numeric = Number(value || 0);
@@ -1081,6 +1082,50 @@ async function notifyManualCreditIssued(ledgerEntry, targetUser = null) {
   }
 }
 
+async function sendManualCreditEmail(ledgerEntry, targetUser = null) {
+  const recipientEmail = normalizeGuestEmail(targetUser?.email || ledgerEntry?.guest_email);
+  if (!recipientEmail) {
+    return { status: 'skipped', result: { success: false, error: 'Recipient email is required' } };
+  }
+
+  try {
+    const [balance, createdBy] = await Promise.all([
+      getAccountCreditBalance({
+        userId: ledgerEntry.user_id || null,
+        guestEmail: ledgerEntry.guest_email || targetUser?.email || null
+      }),
+      ledgerEntry.created_by_user_id
+        ? db.users.findByPk(ledgerEntry.created_by_user_id, {
+            attributes: ['id', 'name', 'email']
+          })
+        : null
+    ]);
+
+    const createdByPlain = toPlain(createdBy);
+    const emailResult = await sendBeigeCreditsReceivedEmail({
+      to_email: recipientEmail,
+      first_name: targetUser?.name || recipientEmail.split('@')[0],
+      name: targetUser?.name || recipientEmail.split('@')[0],
+      amount: ledgerEntry.amount,
+      wallet_balance: balance?.available_credit_amount || ledgerEntry.amount,
+      expires_at: ledgerEntry.expires_at || null,
+      reason: ledgerEntry.notes || 'Manual account credit issued by admin',
+      added_by: createdByPlain?.name || createdByPlain?.email || 'Beige Admin'
+    });
+
+    return {
+      status: emailResult?.success ? 'sent' : 'failed',
+      result: emailResult
+    };
+  } catch (error) {
+    console.error('Manual credit email error:', error?.response?.body || error.message);
+    return {
+      status: 'failed',
+      result: { success: false, error: error.message }
+    };
+  }
+}
+
 async function createManualCredit({
   userId = null,
   guestEmail = null,
@@ -1169,11 +1214,11 @@ async function createManualCredit({
     ? await run(transaction)
     : await db.sequelize.transaction(run);
 
-  // if (result.shouldNotify) {
-  //   const notificationStatus = await notifyManualCreditIssued(result.ledgerEntry, result.targetUser);
-  //   await result.ledgerEntry.update({ notification_status: notificationStatus });
-  //   result.ledgerEntry.notification_status = notificationStatus;
-  // }
+  if (result.shouldNotify) {
+    const emailNotification = await sendManualCreditEmail(result.ledgerEntry, result.targetUser);
+    await result.ledgerEntry.update({ notification_status: emailNotification.status });
+    result.ledgerEntry.notification_status = emailNotification.status;
+  }
 
   return result.ledgerEntry;
 }

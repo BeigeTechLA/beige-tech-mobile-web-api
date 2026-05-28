@@ -1,27 +1,131 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
 
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="color-scheme" content="light dark">
-  <meta name="supported-color-schemes" content="light dark">
+  <!-- Force light mode rendering context -->
+  <meta name="color-scheme" content="light">
+  <meta name="supported-color-schemes" content="light">
 
   <title>Revised Content Delivered</title>
+  <style>
+    /* Global fixes to lock light mode theme across clients */
+    :root {
+      color-scheme: light !important;
+      supported-color-schemes: light !important;
+    }
+
+    /* Force light background and dark text colors in strict dark mode clients */
+    @media (prefers-color-scheme: dark) {
+
+      body,
+      .body-table {
+        background-color: #F7F7F7 !important;
+        color: #484848 !important;
+      }
+
+      .main-card {
+        background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%) !important;
+      }
+
+      .inner-message-card {
+        background-color: rgba(255, 255, 255, 0.70) !important;
+      }
+
+      .circle-dot {
+        background-color: #EDE8E1 !important;
+      }
+
+      .signoff-section {
+        background-color: #FEF1DD !important;
+      }
+
+      h1,
+      h3,
+      .dark-text,
+      .signoff-title {
+        color: #000000 !important;
+      }
+
+      .muted-text {
+        color: rgba(0, 0, 0, 0.70) !important;
+      }
+
+      .signoff-text {
+        color: rgba(0, 0, 0, 0.70) !important;
+      }
+
+      .footer-text {
+        color: #3C3B3B !important;
+      }
+
+      .logo-container {
+        background-color: #FFFFFF !important;
+      }
+    }
+
+    /* Outlook specific dark mode app overrides */
+    [data-ogsc] body,
+    [data-ogsc] .body-table {
+      background-color: #F7F7F7 !important;
+      color: #484848 !important;
+    }
+
+    [data-ogsc] .main-card {
+      background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%) !important;
+    }
+
+    [data-ogsc] .inner-message-card {
+      background-color: rgba(255, 255, 255, 0.70) !important;
+    }
+
+    [data-ogsc] .circle-dot {
+      background-color: #EDE8E1 !important;
+    }
+
+    [data-ogsc] .signoff-section {
+      background-color: #FEF1DD !important;
+    }
+
+    [data-ogsc] h1,
+    [data-ogsc] h3,
+    [data-ogsc] .dark-text,
+    [data-ogsc] .signoff-title {
+      color: #000000 !important;
+    }
+
+    [data-ogsc] .muted-text {
+      color: rgba(0, 0, 0, 0.70) !important;
+    }
+
+    [data-ogsc] .signoff-text {
+      color: rgba(0, 0, 0, 0.70) !important;
+    }
+
+    [data-ogsc] .footer-text {
+      color: #3C3B3B !important;
+    }
+
+    [data-ogsc] .logo-container {
+      background-color: #FFFFFF !important;
+    }
+  </style>
 </head>
 
 <body
-  style="margin: 0; padding: 0; font-family:'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #F7F7F7; color: #484848;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #F7F7F7; padding: 40px 20px;">
+  style="margin: 0; padding: 0; font-family:'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #F7F7F7; color: #484848; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">
+  <table class="body-table" width="100%" cellpadding="0" cellspacing="0"
+    style="background-color: #F7F7F7; padding: 40px 20px;">
     <tr>
       <td align="center">
-        <table width="600"
+        <table class="main-card" width="600" cellpadding="0" cellspacing="0"
           style="background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%); border: 1px solid rgba(232, 209, 171, 0.3); border-radius: 24px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.04);">
 
           <!-- Beige Logo -->
           <tr>
             <td align="center" style="padding: 40px 0 36px;">
-              <div
+              <div class="logo-container"
                 style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF; box-shadow: 0 8px 24px 0 rgba(149, 157, 165, 0.20);">
                 <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
                   alt="Beige" width="110" style="display: block; border: 0;">
@@ -37,48 +141,50 @@
           <!-- Header -->
           <tr>
             <td style="padding: 0 40px 30px; text-align: center;">
-              <h1 style="margin: 0; color: #000; font-size: 54px;line-height: 1.3;">Revised Content Delivered</h1>
+              <h1 class="dark-text" style="margin: 0; color: #000000; font-size: 54px; line-height: 1.3;">Revised
+                Content Delivered</h1>
             </td>
           </tr>
 
           <!-- Delivery Message -->
           <tr>
-            <td style="padding: 0 40px; position: relative; z-index: 10;">
-              <div
-                style="background-color: rgba(255, 255, 255, 0.70); filter: drop-shadow(0 7.901px 32.733px rgba(100, 100, 111, 0.20)); padding: 32px; border-radius: 32px;  border: solid 1px #0000001A; margin-bottom: -80px;">
-                <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: auto;">
+            <td style="padding: 0 40px 40px; position: relative; z-index: 10;">
+              <div class="inner-message-card"
+                style="background-color: rgba(255, 255, 255, 0.70); filter: drop-shadow(0 7.901px 32.733px rgba(100, 100, 111, 0.20)); padding: 32px; border-radius: 32px;  border: solid 1px #0000001A; position: relative;">
+                <table role="presentation" cellspacing="0" cellpadding="0" border="0"
+                  style="margin: auto; width: 100%;">
                   <tr>
                     <td align="center" style="border-radius: 100px;">
                       <table border="0" cellpadding="0" cellspacing="0" style="margin: auto; margin-bottom: 25px;">
                         <tr>
                           <td>
-                            <div
-                              style="width: 35px; height: 35px; background: #EDE8E1;  border-radius: 100%; margin: 0 20px;">
+                            <div class="circle-dot"
+                              style="width: 35px; height: 35px; background: #EDE8E1; border-radius: 100%; margin: 0 20px;">
                             </div>
                           </td>
                           <td>
-                            <div
-                              style="width: 35px; height: 35px; background: #EDE8E1;  border-radius: 100%; margin: 0 20px;">
+                            <div class="circle-dot"
+                              style="width: 35px; height: 35px; background: #EDE8E1; border-radius: 100%; margin: 0 20px;">
                             </div>
                           </td>
                           <td>
-                            <div
-                              style="width: 35px; height: 35px; background: #EDE8E1;  border-radius: 100%; margin: 0 20px;">
+                            <div class="circle-dot"
+                              style="width: 35px; height: 35px; background: #EDE8E1; border-radius: 100%; margin: 0 20px;">
                             </div>
                           </td>
                           <td>
-                            <div
-                              style="width: 35px; height: 35px; background: #EDE8E1;  border-radius: 100%; margin: 0 20px;">
+                            <div class="circle-dot"
+                              style="width: 35px; height: 35px; background: #EDE8E1; border-radius: 100%; margin: 0 20px;">
                             </div>
                           </td>
                           <td>
-                            <div
-                              style="width: 35px; height: 35px; background: #EDE8E1;  border-radius: 100%; margin: 0 20px;">
+                            <div class="circle-dot"
+                              style="width: 35px; height: 35px; background: #EDE8E1; border-radius: 100%; margin: 0 20px;">
                             </div>
                           </td>
                           <td>
-                            <div
-                              style="width: 35px; height: 35px; background: #EDE8E1;  border-radius: 100%; margin: 0 20px;">
+                            <div class="circle-dot"
+                              style="width: 35px; height: 35px; background: #EDE8E1; border-radius: 100%; margin: 0 20px;">
                             </div>
                           </td>
                         </tr>
@@ -86,28 +192,28 @@
                     </td>
                   </tr>
 
-                  <!-- Message -->
+                  <!-- Message Text -->
                   <tr>
-                    <td style="text-align: center;padding: 40px 0;">
-                      <h3
-                        style="margin: 0 0 26px; color: #000000 ; font-size: 30px; font-weight: 600;line-height: 40px;">
+                    <td style="text-align: center; padding: 40px 0;">
+                      <h3 class="dark-text"
+                        style="margin: 0 0 26px; color: #000000; font-size: 30px; font-weight: 600; line-height: 40px;">
                         Hello, {{first_name}}
                       </h3>
-                      <!-- Accept Message -->
-                      <p
-                        style="margin: 0; font-size: 20px;font-style: normal;font-weight: 400;line-height: 35px; color: rgba(0, 0, 0, 0.70); margin: 0;">
-                        Your updated deliverables for Booking <span
-                          style="color: #000; font-weight: 500;">{{booking_id}}</span> are now available.
+                      <p class="muted-text"
+                        style="margin: 0; font-size: 20px; font-style: normal; font-weight: 400; line-height: 35px; color: rgba(0, 0, 0, 0.70);">
+                        Your updated deliverables for Booking <span class="dark-text"
+                          style="color: #000000; font-weight: 500;">{{booking_id}}</span> are now available.
                       </p>
                       <br />
-                      <p
-                        style="margin: 0; font-size: 20px;font-style: normal;font-weight: 400;line-height: 35px; color: rgba(0, 0, 0, 0.70); margin: 0;">
+                      <p class="muted-text"
+                        style="margin: 0; font-size: 20px; font-style: normal; font-weight: 400; line-height: 35px; color: rgba(0, 0, 0, 0.70);">
                         We&apos;ve implemented the requested revisions, and the latest version can be viewed and
                         downloaded directly from your Beige dashboard:
                       </p>
                     </td>
                   </tr>
 
+                  <!-- Action Button Line Split -->
                   <tr>
                     <td>
                       <img
@@ -162,16 +268,13 @@
                   <!-- 4 Image Grid -->
                   <tr>
                     <td>
-                      <table align="center" border="0" cellpadding="0" cellspacing="10" width="100%"
-                        style="padding: 20px 0 0;">
+                      <table align="center" border="0" cellpadding="0" cellspacing="10" width="100%" style="padding: 20px 0 0;">
                         <tr>
                           <td width="50%" align="center" valign="bottom"
                             background="https://d2jhn32fsulyac.cloudfront.net/assets/Top_CP_images/Nathan+Grant.jpg"
                             style="background-image: url('https://d2jhn32fsulyac.cloudfront.net/assets/Top_CP_images/Nathan+Grant.jpg'); background-size: cover; background-position: center; border-radius: 24px; padding: 0; height: 172px;">
                           </td>
-
                           <td width="20" style="font-size: 0; line-height: 0;">&nbsp;</td>
-
                           <td width="50%" align="center" valign="bottom"
                             background="https://d2jhn32fsulyac.cloudfront.net/assets/Top_CP_images/Gary+Ahmed.jpeg"
                             style="background-image: url('https://d2jhn32fsulyac.cloudfront.net/assets/Top_CP_images/Gary+Ahmed.jpeg'); background-size: cover; background-position: center; border-radius: 24px; padding: 0; height: 172px;">
@@ -182,9 +285,7 @@
                             background="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/UseCase_Web/Photos/Wedding+/DSC09147.jpg"
                             style="background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/UseCase_Web/Photos/Wedding+/DSC09147.jpg'); background-size: cover; background-position: center; border-radius: 24px; padding: 0; height: 172px;">
                           </td>
-
                           <td width="20" style="font-size: 0; line-height: 0;">&nbsp;</td>
-
                           <td width="50%" align="center" valign="bottom"
                             background="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/UseCase_Web/Photos/Wedding+/C7405925_editedv1.jpg"
                             style="background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/UseCase_Web/Photos/Wedding+/C7405925_editedv1.jpg'); background-size: cover; background-position: center; border-radius: 24px; padding: 0; height: 172px;">
@@ -200,26 +301,26 @@
 
           <!-- Signoff  -->
           <tr>
-            <td style="background-color: #FEF1DD;padding: 100px 40px 40px;">
+            <td class="signoff-section" style="background-color: #FEF1DD;padding: 40px;">
               <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="width: 100%;">
                 <tr>
                   <td>
-                      <p style="font-size: 20px;font-style: normal;line-height: 29px;color: #000000B2; ">
-                        ✓ Please review at your convenience.
-                      </p>
-                      <p style="font-size: 20px;font-style: normal;line-height: 29px;color: #000000B2; ">
-                        ✓ If everything looks great, no further action is needed and we’ll consider the project
-                        finalized.
-                      </p>
-                      <p style="font-size: 20px;font-style: normal;line-height: 29px;color: #000000B2; ">
-                        ✓ If you have any additional feedback, please submit your
-                        comments within the dashboard so our team can review
-                        them efficiently.
-                      </p>
-                      <p style="font-size: 20px;font-style: normal;line-height: 29px;color: #000000B2; ">
-                        ✓ We appreciate the opportunity to refine your content
-                        and look forward to supporting your next production.
-                      </p>
+                    <p class="signoff-text" style="font-size: 20px;font-style: normal;line-height: 29px;color: #000000B2; margin-top: 0;">
+                      ✓ Please review at your convenience.
+                    </p>
+                    <p class="signoff-text" style="font-size: 20px;font-style: normal;line-height: 29px;color: #000000B2; ">
+                      ✓ If everything looks great, no further action is needed and we’ll consider the project
+                      finalized.
+                    </p>
+                    <p class="signoff-text" style="font-size: 20px;font-style: normal;line-height: 29px;color: #000000B2; ">
+                      ✓ If you have any additional feedback, please submit your
+                      comments within the dashboard so our team can review
+                      them efficiently.
+                    </p>
+                    <p class="signoff-text" style="font-size: 20px;font-style: normal;line-height: 29px;color: #000000B2; ">
+                      ✓ We appreciate the opportunity to refine your content
+                      and look forward to supporting your next production.
+                    </p>
                   </td>
                 </tr>
                 <tr>
@@ -228,16 +329,12 @@
                       style="max-width: 600px;">
                       <tr>
                         <td style="white-space: nowrap; padding-right: 15px;">
-                          <span
-                            style="font-family: sans-serif; font-size: 28px; font-weight: 800; font-style: italic; color: #000000; line-height: 1;">
+                          <span class="signoff-title" style="font-family: sans-serif; font-size: 28px; font-weight: 800; font-style: italic; color: #000000; line-height: 1;">
                             The Beige Team
                           </span>
                         </td>
-
                         <td width="100%" style="vertical-align: middle;">
-                          <div
-                            style="border-top: 1px solid #BDBDBD; font-size: 0; line-height: 0; width: 100%; height: 0;">
-                            &nbsp;</div>
+                          <div style="border-top: 1px solid #BDBDBD; font-size: 0; line-height: 0; width: 100%; height: 0;">&nbsp;</div>
                         </td>
                         <td width="20">&nbsp;</td>
                       </tr>
@@ -248,7 +345,7 @@
             </td>
           </tr>
 
-          <!-- Help message  -->
+          <!-- Help Message  -->
           <tr>
             <td align="center" style="padding: 52px 40px 0;">
               <div style="padding-bottom: 48px;">
@@ -256,13 +353,13 @@
                   src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
                   alt="Line Separator" width="100%" style="display: block; border: 0;">
               </div>
-              <p
-                style="margin: 0 0 20px; font-size: 16px; font-style: normal;font-weight: 400;line-height: normal; color: #3C3B3B;">
+              <p class="footer-text"
+                style="margin: 0 0 20px; font-size: 16px; font-style: normal; font-weight: 400; line-height: normal; color: #3C3B3B;">
                 This is an automated email from BeigeAI. Please do not reply to this email.
               </p>
-              <p style="margin: 0 0 10px; color: #000000; font-size: 26px;font-weight: 600;">Need Help?</p>
-              <a href="mailto:sales@beigecorporation.io" target="_blank"
-                style="display:block; margin: 0; color: #000000; font-size: 26px;font-weight: 600;">
+              <p class="dark-text" style="margin: 0 0 10px; color: #000000; font-size: 26px; font-weight: 600;">Need Help?</p>
+              <a class="dark-text" href="mailto:sales@beigecorporation.io" target="_blank"
+                style="display: block; margin: 0; color: #000000; font-size: 26px; font-weight: 600;">
                 sales@beigecorporation.io
               </a>
             </td>
@@ -276,13 +373,13 @@
                   src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
                   alt="Line Separator" width="100%" style="display: block; border: 0;">
               </div>
-              <p style="margin: 0 0 20px; font-size: 16px; color: #3C3B3B;">
-                Help Center &nbsp; • &nbsp; Term of Services &nbsp; • &nbsp; Privacy Policy
+              <p class="footer-text" style="margin: 0 0 20px; font-size: 16px; color: #3C3B3B;">
+                Help Center &nbsp; • &nbsp; Terms of Service &nbsp; • &nbsp; Privacy Policy
               </p>
-              <p style="margin: 0 0 60px; color: #000000; font-size: 26px;font-weight: 600;">
+              <p class="dark-text" style="margin: 0 0 60px; color: #000000; font-size: 26px; font-weight: 600;">
                 Beige AI
               </p>
-              <div
+              <div class="logo-container"
                 style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF;">
                 <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
                   alt="Beige" width="110" style="display: block; border: 0;">
