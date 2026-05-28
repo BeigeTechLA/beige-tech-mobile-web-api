@@ -5120,7 +5120,11 @@ async function listQuotes(query, user) {
   const page = Math.max(1, Number(query.page || 1));
   const limit = Math.min(100, Math.max(1, Number(query.limit || 20)));
   const offset = (page - 1) * limit;
-  const where = { ...buildQuoteAccessWhere(user) };
+  // Quote listing is shared across admin/sales views where reps are expected
+  // to browse all quotes. Keep strict restriction only for client role.
+  const where = isClientRole(user?.role)
+    ? { ...buildQuoteAccessWhere(user) }
+    : {};
 
   const statusFilter = normalizeQuoteFilterStatus(query.status);
   if (statusFilter?.length) {
@@ -5279,7 +5283,11 @@ async function listQuotes(query, user) {
 async function getQuoteDashboard(query, user) {
   await expireQuotesPastValidUntil();
 
-  const where = { ...buildQuoteAccessWhere(user) };
+  // Match listQuotes access: dashboard is global for sales/admin views,
+  // while clients remain restricted to their own records.
+  const where = isClientRole(user?.role)
+    ? { ...buildQuoteAccessWhere(user) }
+    : {};
 
   const statusFilter = normalizeQuoteFilterStatus(query.status);
   if (statusFilter?.length) {
