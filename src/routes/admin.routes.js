@@ -11,6 +11,7 @@ router.post('/create-crew-member', admin.createCrewMember);
 router.post('/matchEquipments', admin.matchEquipment);
 router.post('/assignMatchEquipment', admin.saveMatchedEquipment);
 router.get('/get-project/:project_id', admin.getProjectDetails);
+router.put('/shoots/update-date-location/:project_id', admin.updateProjectDateLocation);
 router.get('/get-active-projects', admin.getActiveProjects);
 router.get('/recent-activity', admin.getRecentActivity);
 router.get('/get-projects', admin.getAllProjectDetails);
@@ -90,5 +91,11 @@ router.post('/remove-project-crew',authMiddleware, admin.removeProjectAssignedCr
 router.get('/get-project-form/:project_id',authMiddleware, admin.getProjectFormByProjectId);
 router.post('/get-assigned-project-crew', admin.getAllAssignedRequests);
 router.post('/crew-member-assigned-projects', admin.getAllAssignedRequests);
+
+router.get('/shoots/:bookingId/notes', authMiddleware, admin.getShootNotes);
+router.post('/shoots/:bookingId/notes', authMiddleware, admin.uploadShootNoteAttachments, admin.addShootNote);
+router.post('/shoots/:bookingId/notes/:noteId/replies', authMiddleware, admin.uploadShootNoteAttachments, admin.replyToShootNote);
+router.post('/shoots/:bookingId/notes/:noteId/reactions', authMiddleware, admin.toggleShootNoteReaction);
+router.delete('/shoots/:bookingId/notes/:noteId', authMiddleware, admin.deleteShootNote);
 
 module.exports = router;
