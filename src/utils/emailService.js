@@ -78,7 +78,8 @@ const {
   POST_PRODUCTION_UPLOAD_TEMPLATE_ID,
   EMAIL_TO_POST_PRODUCTION_TEAM_TEMPLATE_ID,
   OTP_VERIFICATION_FILE_SHARE_TEMPLATE_ID,
-  FILE_SHARE_INVITATION_TEMPLATE_ID
+  FILE_SHARE_INVITATION_TEMPLATE_ID,
+  BEIGE_CREDIT_RECEIVED_TEMPLATE_ID
 } = require('../config/sendgridTemplates');
 
 const formatDate = (value) => {
@@ -216,6 +217,12 @@ const formatShootTypes = (value) => {
 };
 
 const formatAmount = (value) => Number(value || 0).toFixed(2);
+
+const formatCreditAmount = (value) => {
+  const numeric = Number(value || 0);
+  if (!Number.isFinite(numeric)) return '0';
+  return Number.isInteger(numeric) ? String(numeric) : numeric.toFixed(2);
+};
 
 const parseLocationParts = (location) => {
   if (!location) {
@@ -2538,6 +2545,7 @@ const sendCustomQuoteProposalEmail = async (data) => {
         proposal_amount_label: data?.proposal_amount_label || 'Estimate Proposal Amount',
         is_additional_payment: Boolean(data?.is_additional_payment),
         is_reduced_payment: Boolean(data?.is_reduced_payment),
+        is_partial_payment: Boolean(data?.is_partial_payment),
         previously_paid_amount: formatOptionalAmount(data?.previously_paid_amount),
         revised_total: formatOptionalAmount(data?.revised_total),
         additional_amount: formatOptionalAmount(data?.additional_amount),
@@ -2595,6 +2603,7 @@ const sendQuoteAcceptedClientEmail = async (data) => {
       accepted_amount_label: data?.accepted_amount_label || 'Accepted Amount',
       is_additional_payment: Boolean(data?.is_additional_payment),
       is_reduced_payment: Boolean(data?.is_reduced_payment),
+      is_partial_payment: Boolean(data?.is_partial_payment),
       previously_paid_amount: formatOptionalAmount(data?.previously_paid_amount),
       revised_total: formatOptionalAmount(data?.revised_total),
       additional_amount: formatOptionalAmount(data?.additional_amount),
@@ -2635,12 +2644,41 @@ const sendQuoteAcceptedSalesNotificationEmail = async (data) => {
       accepted_amount_label: data?.accepted_amount_label || 'Accepted Amount',
       is_additional_payment: Boolean(data?.is_additional_payment),
       is_reduced_payment: Boolean(data?.is_reduced_payment),
+      is_partial_payment: Boolean(data?.is_partial_payment),
       previously_paid_amount: formatOptionalAmount(data?.previously_paid_amount),
       revised_total: formatOptionalAmount(data?.revised_total),
       additional_amount: formatOptionalAmount(data?.additional_amount),
       reduced_amount: formatOptionalAmount(data?.reduced_amount),
       payment_note: data?.payment_note || '',
       accepted_at: data?.accepted_at || formatDate(new Date())
+    }
+  });
+};
+
+const sendBeigeCreditsReceivedEmail = async (data = {}) => {
+  if (!BEIGE_CREDIT_RECEIVED_TEMPLATE_ID) {
+    return { success: false, error: 'BEIGE_CREDIT_RECEIVED_TEMPLATE_ID is not configured' };
+  }
+
+  const to = data?.to_email || data?.email;
+  const amount = formatCreditAmount(data?.amount || data?.credited_amount || 0);
+  const walletBalance = formatCreditAmount(data?.wallet_balance || 0);
+  const firstName = getFirstName(data?.client_name || data?.name || '', data?.first_name || 'there');
+
+  return sendEmail({
+    to,
+    subject: 'Beige Credits Added to Your Wallet',
+    templateId: BEIGE_CREDIT_RECEIVED_TEMPLATE_ID,
+    dynamicTemplateData: {
+      first_name: firstName,
+      credited_amount: `${amount} Beige Credits`,
+      added_by: data?.added_by || 'Beige Admin',
+      amount_added: `${amount} Beige Credits`,
+      expiry_date: data?.expires_at ? formatDate(data.expires_at) : 'No expiry',
+      reason: data?.reason || 'Account credit issued by Beige',
+      wallet_balance: walletBalance,
+      frontend_url: data?.frontend_url || process.env.FRONTEND_URL || '',
+      year: new Date().getFullYear()
     }
   });
 };
@@ -3057,6 +3095,7 @@ module.exports = {
   sendCustomQuoteProposalEmail,
   sendQuoteAcceptedClientEmail,
   sendQuoteAcceptedSalesNotificationEmail,
+  sendBeigeCreditsReceivedEmail,
   sendMeetingScheduledTemplateEmail,
   sendMessagingInitiatedTemplateEmail,
   sendPreProductionUploadedTemplateEmail,

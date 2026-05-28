@@ -6,22 +6,115 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="x-apple-disable-message-reformatting">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <!-- Enforce light palette scheme mode target context across modern rendering clients -->
   <meta name="color-scheme" content="light">
   <meta name="supported-color-schemes" content="light">
   <title>Your Shoot, Crafted - Proposal Inside</title>
+  
+  <style>
+    :root {
+      color-scheme: light;
+      supported-color-schemes: light;
+    }
+
+    body, table, td, p, a, h1, h2, h3, span, div, li {
+      font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      body, .body-bg {
+        background-color: #F7F7F7 !important;
+        color: #484848 !important;
+      }
+
+      .main-gradient-container {
+        background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%) !important;
+      }
+
+      .white-pill-element {
+        background-color: #FFFFFF !important;
+      }
+
+      .white-box-container {
+        background-color: #ffffff !important;
+      }
+
+      .alert-box-container {
+        background-color: #FFF3DE !important;
+      }
+
+      .bg-tan-forced {
+        background-color: #FFF3DE !important;
+      }
+
+      .bg-gold-pill-forced {
+        background-color: #E8D1AB !important;
+      }
+
+      .bg-black-forced {
+        background-color: #000000 !important;
+      }
+
+      .text-black-forced {
+        color: #000000 !important;
+      }
+
+      .text-black-alpha-forced {
+        color: rgba(0, 0, 0, 0.7) !important;
+      }
+
+      .text-dark-gray {
+        color: #403E3E !important;
+      }
+
+      .text-muted-gray {
+        color: #525252 !important;
+      }
+
+      .text-help-gray {
+        color: #3C3B3B !important;
+      }
+
+      .text-gold-forced {
+        color: #E8D1AB !important;
+      }
+
+      .gradient-list-item {
+        background: linear-gradient(90deg, #FFFFFF 0%, rgba(255, 255, 255, 0.00) 100%) !important;
+      }
+    }
+
+    /* Outlook Web and Gmail app dark mode parsing fixes */
+    [data-ogsc] body, [data-ogsc] .body-bg { background-color: #F7F7F7 !important; color: #484848 !important; }
+    [data-ogsc] .main-gradient-container { background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%) !important; }
+    [data-ogsc] .white-pill-element { background-color: #FFFFFF !important; }
+    [data-ogsc] .white-box-container { background-color: #ffffff !important; }
+    [data-ogsc] .alert-box-container { background-color: #FFF3DE !important; }
+    [data-ogsc] .bg-tan-forced { background-color: #FFF3DE !important; }
+    [data-ogsc] .bg-gold-pill-forced { background-color: #E8D1AB !important; }
+    [data-ogsc] .bg-black-forced { background-color: #000000 !important; }
+    [data-ogsc] .text-black-forced { color: #000000 !important; }
+    [data-ogsc] .text-black-alpha-forced { color: rgba(0, 0, 0, 0.7) !important; }
+    [data-ogsc] .text-dark-gray { color: #403E3E !important; }
+    [data-ogsc] .text-muted-gray { color: #525252 !important; }
+    [data-ogsc] .text-help-gray { color: #3C3B3B !important; }
+    [data-ogsc] .text-gold-forced { color: #E8D1AB !important; }
+    [data-ogsc] .gradient-list-item { background: linear-gradient(90deg, #FFFFFF 0%, rgba(255, 255, 255, 0.00) 100%) !important; }
+  </style>
 </head>
 
-<body
-  style="margin: 0; padding: 0; font-family:'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #F7F7F7 !important; color: #484848 !important;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #F7F7F7 !important; padding: 40px 20px;">
+<body class="body-bg"
+  style="margin: 0; padding: 0; font-family:'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #F7F7F7 !important; color: #484848 !important; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">
+  <table class="body-bg" width="100%" cellpadding="0" cellspacing="0" style="background-color: #F7F7F7 !important; padding: 40px 20px;">
     <tr>
       <td align="center">
-        <table width="600" cellpadding="0" cellspacing="0"
+        <table class="main-gradient-container" width="600" cellpadding="0" cellspacing="0"
           style="width: 100% !important; max-width: 600px !important; background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%) !important; border: 1px solid rgba(232, 209, 171, 0.3); border-radius: 24px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.04);">
 
+          <!-- Part 1: Header & Greeting -->
           <tr>
             <td align="center" style="padding: 40px 0 36px;">
-              <div
+              <div class="white-pill-element"
                 style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF !important; box-shadow: 0 8px 24px 0 rgba(149, 157, 165, 0.20);">
                 <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
                   alt="Beige" width="110" style="display: block; border: 0;">
@@ -37,75 +130,75 @@
           <tr>
             <td style="padding: 0 40px;">
               {{#if isPaid}}
-              <h1 style="margin: 0; color: #000000 !important; font-size: 52px; font-weight: 600; line-height: 1.05;">
+              <h1 class="text-black-forced" style="margin: 0; color: #000000 !important; font-size: 52px; font-weight: 600; line-height: 1.05;">
                 Your Payment is Confirmed
               </h1>
-              <p style="margin: 18px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+              <p class="text-dark-gray" style="margin: 18px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
                 Hello {{first_name}},
               </p>
-              <p style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
-                Your payment has been successfully received. We will begin <span
+              <p class="text-dark-gray" style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+                Your payment has been successfully received. We will begin <span class="text-black-forced"
                   style="color: #000000 !important; font-weight: 600;">production</span> shortly.
               </p>
               {{else}}
               {{#if isAdditionalPayment}}
-              <h1 style="margin: 0; color: #000000 !important; font-size: 52px; font-weight: 600; line-height: 1.05;">
+              <h1 class="text-black-forced" style="margin: 0; color: #000000 !important; font-size: 52px; font-weight: 600; line-height: 1.05;">
                 Additional Payment Required
               </h1>
-              <p style="margin: 18px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+              <p class="text-dark-gray" style="margin: 18px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
                 Hello {{first_name}},
               </p>
-              <p style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
-                Your quote for [<span style="color: #000000 !important; font-weight: 600;">{{shoot_type}} +
+              <p class="text-dark-gray" style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+                Your quote for [<span class="text-black-forced" style="color: #000000 !important; font-weight: 600;">{{shoot_type}} +
                   {{shoot_category}}</span>] was updated after payment.
               </p>
-              <p style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
-                Please complete the additional payment below so we can continue <span
+              <p class="text-dark-gray" style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+                Please complete the additional payment below so we can continue <span class="text-black-forced"
                   style="color: #000000 !important; font-weight: 600;">production</span> with the revised scope.
               </p>
               {{else}}
               {{#if isReducedAmount}}
-              <h1 style="margin: 0; color: #000000 !important; font-size: 52px; font-weight: 600; line-height: 1.05;">
+              <h1 class="text-black-forced" style="margin: 0; color: #000000 !important; font-size: 52px; font-weight: 600; line-height: 1.05;">
                 Updated Receipt
               </h1>
-              <p style="margin: 18px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+              <p class="text-dark-gray" style="margin: 18px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
                 Hello {{first_name}},
               </p>
-              <p style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
-                Your quote for [<span style="color: #000000 !important; font-weight: 600;">{{shoot_type}} +
+              <p class="text-dark-gray" style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+                Your quote for [<span class="text-black-forced" style="color: #000000 !important; font-weight: 600;">{{shoot_type}} +
                   {{shoot_category}}</span>] was updated after payment and the total has been reduced.
               </p>
               {{#if has_available_credit}}
-              <p style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+              <p class="text-dark-gray" style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
                 The difference has been added to your Beige account as credit and can be used on your next booking.
               </p>
-              <div
+              <div class="alert-box-container"
                 style="margin: 24px 0 0; padding: 20px 22px; border-radius: 20px; background-color: #FFF3DE !important; border: 1px solid rgba(232, 209, 171, 0.8);">
-                <p
+                <p class="text-black-forced"
                   style="margin: 0; font-size: 18px; line-height: 1.6; color: #000000 !important; font-weight: 600;">
                   You have $ {{available_credit_amount}} credit available to use on your next booking.
                 </p>
               </div>
               {{else}}
-              <p style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+              <p class="text-dark-gray" style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
                 The revised amount is reflected below. If you have any questions about your updated quote, our team is
                 happy to help.
               </p>
               {{/if}}
               {{else}}
-              <h1 style="margin: 0; color: #000000 !important; font-size: 52px; font-weight: 600; line-height: 1.05;">
+              <h1 class="text-black-forced" style="margin: 0; color: #000000 !important; font-size: 52px; font-weight: 600; line-height: 1.05;">
                 Your Invoice is Ready
               </h1>
-              <p style="margin: 18px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+              <p class="text-dark-gray" style="margin: 18px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
                 Hello {{first_name}},
               </p>
-              <p style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+              <p class="text-dark-gray" style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
                 Thank you for choosing Beige for your
-                upcoming [<span style="color: #000000 !important; font-weight: 600;">{{shoot_type}} +
+                upcoming [<span class="text-black-forced" style="color: #000000 !important; font-weight: 600;">{{shoot_type}} +
                   {{shoot_category}}</span>]
               </p>
-              <p style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
-                Once payment is done, we can begin <span
+              <p class="text-dark-gray" style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+                Once payment is done, we can begin <span class="text-black-forced"
                   style="color: #000000 !important; font-weight: 600;">production</span>.
               </p>
               {{/if}}
@@ -114,7 +207,7 @@
             </td>
           </tr>
 
-          <!-- Proposal Details -->
+          <!-- Part 2: Proposal Details Card & Financial Synthetics -->
           <tr>
             <td>
               <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%"
@@ -129,12 +222,12 @@
                             style="border-collapse: collapse; width: 100% !important; max-width: 500px !important;">
                             <tr>
                               <td align="center" style="padding: 0 30px;">
-                                <h2
+                                <h2 class="text-black-forced"
                                   style="margin: 0 0 22px 0; font-size: 30px; font-weight: 600; color: #000000 !important;">
                                   Shoot Details
                                 </h2>
 
-                                <table border="0" cellpadding="0" cellspacing="0" width="100%"
+                                <table class="white-box-container" border="0" cellpadding="0" cellspacing="0" width="100%"
                                   style="background-color: #ffffff !important; border-radius: 40px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); padding: 30px;">
                                   <tr>
                                     <td style="padding: 15px 0 0;">
@@ -149,12 +242,12 @@
                                                 style="margin-top: 25px; margin-right: 18px; display: inline-block; border: 0; max-width: 100% !important;">
                                             </div>
                                           </td>
-                                          <td style="padding-bottom: 15px;">
-                                            <div
-                                              style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
+                                          <td style="padding-bottom: 15px; text-align: left; valign: middle;">
+                                            <div class="text-muted-gray"
+                                              style="font-size: 18px; color: #525252 !important; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
                                               Project</div>
-                                            <div
-                                              style="font-size: 18px; font-weight: 600; color: #000; line-height: 20px;">
+                                            <div class="text-black-forced"
+                                              style="font-size: 18px; font-weight: 600; color: #000000 !important; line-height: 20px;">
                                               {{project}}</div>
                                           </td>
                                         </tr>
@@ -176,15 +269,15 @@
                                               style="width: 111px; height: 111px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png') !important; background-size: cover !important; background-repeat: no-repeat !important; background-position: center !important; text-align: center;">
                                               <img
                                                 src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/Camera.png"
-                                                width="40" height="40" alt="Time"
+                                                width="40" height="40" alt="Camera"
                                                 style="margin-top: 25px; margin-right: 18px; display: inline-block; border: 0; max-width: 100%;">
                                             </div>
                                           </td>
                                           <td style="padding-bottom: 20px;">
-                                            <div
+                                            <div class="text-muted-gray"
                                               style="font-size: 18px; color: #525252 !important; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
                                               Services</div>
-                                            <div
+                                            <div class="text-black-forced"
                                               style="font-size: 18px; font-weight: 600; color: #000000 !important; line-height: 20px;">
                                               {{services}}</div>
                                           </td>
@@ -212,10 +305,10 @@
                                             </div>
                                           </td>
                                           <td style="padding-bottom: 20px;">
-                                            <div
+                                            <div class="text-muted-gray"
                                               style="font-size: 18px; color: #525252 !important; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
                                               Schedule</div>
-                                            <div
+                                            <div class="text-black-forced"
                                               style="font-size: 18px; font-weight: 600; color: #000000 !important; line-height: 20px;">
                                               {{schedule}}</div>
                                           </td>
@@ -243,10 +336,10 @@
                                             </div>
                                           </td>
                                           <td style="padding-bottom: 0;">
-                                            <div
+                                            <div class="text-muted-gray"
                                               style="font-size: 18px; color: #525252 !important; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
                                               Editing</div>
-                                            <div
+                                            <div class="text-black-forced"
                                               style="font-size: 18px; font-weight: 600; color: #000000 !important; line-height: 26px;">
                                               {{editing}}</div>
                                           </td>
@@ -273,10 +366,10 @@
                                             </div>
                                           </td>
                                           <td style="padding-bottom: 20px;">
-                                            <div
+                                            <div class="text-muted-gray"
                                               style="font-size: 18px; color: #525252 !important; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
                                               Location</div>
-                                            <div
+                                            <div class="text-black-forced"
                                               style="font-size: 18px; font-weight: 600; color: #000000 !important; line-height: 20px;">
                                               {{location}}</div>
                                           </td>
@@ -291,7 +384,7 @@
 
                           <table width="100%" cellpadding="0" cellspacing="0" style="padding-top: 26px;">
                             <tr>
-                              <td
+                              <td class="text-black-forced"
                                 style="padding: 0 0 12px; font-size: 24px; line-height: 1.3; font-weight: 600; color: #000000 !important; text-align: center;">
                                 {{#if isAdditionalPayment}}
                                 {{#if isPaid}}
@@ -315,7 +408,7 @@
                                   <tr>
                                     <td align="center" valign="middle" height="100"
                                       style="height: 100px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/BlackLineThroughTab.png') !important; background-repeat: no-repeat !important; background-position: center !important; background-size: contain !important;">
-                                      <div
+                                      <div class="text-gold-forced"
                                         style="font-size: 35px; font-weight: 600; color: #E8D1AB !important; letter-spacing: 1px; line-height: 1; margin: 0;">
                                         $ {{invoice_amount}}
                                       </div>
@@ -323,51 +416,51 @@
                                   </tr>
                                 </table>
                                 {{#if isAdditionalPayment}}
-                                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+                                <table class="white-box-container" role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
                                   style="border-collapse: collapse; margin: 18px 0 0; background-color: #ffffff !important; border-radius: 22px; padding: 18px;">
                                   <tr>
-                                    <td style="padding: 8px 18px; color: #525252 !important; font-size: 16px; line-height: 22px;">
+                                    <td class="text-muted-gray" style="padding: 8px 18px; color: #525252 !important; font-size: 16px; line-height: 22px; text-align: left;">
                                       Previously Paid
                                     </td>
-                                    <td align="right" style="padding: 8px 18px; color: #000000 !important; font-size: 16px; line-height: 22px; font-weight: 600;">
+                                    <td class="text-black-forced" align="right" style="padding: 8px 18px; color: #000000 !important; font-size: 16px; line-height: 22px; font-weight: 600;">
                                       $ {{previously_paid_amount}}
                                     </td>
                                   </tr>
                                   <tr>
-                                    <td style="padding: 8px 18px; color: #525252 !important; font-size: 16px; line-height: 22px;">
+                                    <td class="text-muted-gray" style="padding: 8px 18px; color: #525252 !important; font-size: 16px; line-height: 22px; text-align: left;">
                                       Revised Total
                                     </td>
-                                    <td align="right" style="padding: 8px 18px; color: #000000 !important; font-size: 16px; line-height: 22px; font-weight: 600;">
+                                    <td class="text-black-forced" align="right" style="padding: 8px 18px; color: #000000 !important; font-size: 16px; line-height: 22px; font-weight: 600;">
                                       $ {{revised_total}}
                                     </td>
                                   </tr>
                                 </table>
                                 {{else}}
                                 {{#if isReducedAmount}}
-                                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+                                <table class="white-box-container" role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
                                   style="border-collapse: collapse; margin: 18px 0 0; background-color: #ffffff !important; border-radius: 22px; padding: 18px;">
                                   <tr>
-                                    <td style="padding: 8px 18px; color: #525252 !important; font-size: 16px; line-height: 22px;">
+                                    <td class="text-muted-gray" style="padding: 8px 18px; color: #525252 !important; font-size: 16px; line-height: 22px; text-align: left;">
                                       Previously Paid
                                     </td>
-                                    <td align="right" style="padding: 8px 18px; color: #000000 !important; font-size: 16px; line-height: 22px; font-weight: 600;">
+                                    <td class="text-black-forced" align="right" style="padding: 8px 18px; color: #000000 !important; font-size: 16px; line-height: 22px; font-weight: 600;">
                                       $ {{previously_paid_amount}}
                                     </td>
                                   </tr>
                                   <tr>
-                                    <td style="padding: 8px 18px; color: #525252 !important; font-size: 16px; line-height: 22px;">
+                                    <td class="text-muted-gray" style="padding: 8px 18px; color: #525252 !important; font-size: 16px; line-height: 22px; text-align: left;">
                                       Revised Total
                                     </td>
-                                    <td align="right" style="padding: 8px 18px; color: #000000 !important; font-size: 16px; line-height: 22px; font-weight: 600;">
+                                    <td class="text-black-forced" align="right" style="padding: 8px 18px; color: #000000 !important; font-size: 16px; line-height: 22px; font-weight: 600;">
                                       $ {{revised_total}}
                                     </td>
                                   </tr>
                                   {{#if has_available_credit}}
                                   <tr>
-                                    <td style="padding: 8px 18px; color: #525252 !important; font-size: 16px; line-height: 22px;">
+                                    <td class="text-muted-gray" style="padding: 8px 18px; color: #525252 !important; font-size: 16px; line-height: 22px; text-align: left;">
                                       Available Credit
                                     </td>
-                                    <td align="right" style="padding: 8px 18px; color: #000000 !important; font-size: 16px; line-height: 22px; font-weight: 600;">
+                                    <td class="text-black-forced" align="right" style="padding: 8px 18px; color: #000000 !important; font-size: 16px; line-height: 22px; font-weight: 600;">
                                       $ {{available_credit_amount}}
                                     </td>
                                   </tr>
@@ -388,17 +481,17 @@
             </td>
           </tr>
 
-          <!-- Pay Button & Download Link -->
+          <!-- Part 3: Pay Button, Next Steps & Help Footer -->
           <tr>
             <td align="center" style="padding: 52px;">
               {{#if isPaid}}
-              <a href="{{payment_link}}" target="_blank"
-                style="display:block; border-radius: 100px; padding: 18px 40px; font-size: 18px; font-weight: 600; color: #E8D1AB; text-decoration: none; text-transform: capitalize; letter-spacing: 1px; line-height: 1.7; background-color: #000; width: fit-content;">
+              <a class="bg-black-forced text-gold-forced" href="{{payment_link}}" target="_blank"
+                style="display:block; border-radius: 100px; padding: 18px 40px; font-size: 18px; font-weight: 600; color: #E8D1AB !important; text-decoration: none; text-transform: capitalize; letter-spacing: 1px; line-height: 1.7; background-color: #000000 !important; width: fit-content; margin: 0 auto;">
                 View Invoice &rarr;
               </a>
               {{else}}
-              <a href="{{payment_link}}" target="_blank"
-                style="display:block; border-radius: 100px; padding: 18px 40px; font-size: 18px; font-weight: 600; color: #E8D1AB; text-decoration: none; text-transform: capitalize; letter-spacing: 1px; line-height: 1.7; background-color: #000; width: fit-content;">
+              <a class="bg-black-forced text-gold-forced" href="{{payment_link}}" target="_blank"
+                style="display:block; border-radius: 100px; padding: 18px 40px; font-size: 18px; font-weight: 600; color: #E8D1AB !important; text-decoration: none; text-transform: capitalize; letter-spacing: 1px; line-height: 1.7; background-color: #000000 !important; width: fit-content; margin: 0 auto;">
                 {{#if isAdditionalPayment}}
                 Pay Additional Amount &rarr;
                 {{else}}
@@ -411,8 +504,8 @@
               </a>
               {{/if}}
 
-              <a href="{{invoice_pdf}}" target="_blank"
-                style="display:block; margin: 0 0 24px; font-size: 25px; color: #000000; line-height: 1.4; font-weight: 600; margin-top: 32px;">
+              <a class="text-black-forced" href="{{invoice_pdf}}" target="_blank"
+                style="display:block; margin: 0 0 24px; font-size: 25px; color: #000000 !important; line-height: 1.4; font-weight: 600; margin-top: 32px; text-decoration: underline;">
                 Download PDF Version
               </a>
             </td>
@@ -420,11 +513,11 @@
 
           <!-- Next steps -->
           <tr>
-            <td style="padding: 0;" bgcolor="#FFF3DE">
+            <td class="bg-tan-forced" style="padding: 0; text-align: left;" bgcolor="#FFF3DE">
               <!-- Message -->
               <div style="padding: 40px 40px 20px;">
-                <p
-                  style="font-size: 28px;font-style: normal;font-weight: 500;line-height: normal;color: #000; margin: 0 0 27px;">
+                <p class="text-black-forced"
+                  style="font-size: 28px; font-style: normal; font-weight: 500; line-height: normal; color: #000000 !important; margin: 0 0 27px;">
                   {{#if isAdditionalPayment}}
                   {{#if isPaid}}
                   Your additional payment is confirmed:
@@ -440,12 +533,12 @@
                   {{/if}}
                 </p>
 
-                <div
+                <div class="gradient-list-item"
                   style="border-radius: 18px; background: linear-gradient(90deg, #FFF 0%, rgba(255, 255, 255, 0.00) 100%); padding: 20px; color: #000000B2; font-size: 20px; font-weight: 500;">
-                  <ul style="margin: 0;">
+                  <ul class="text-black-alpha-forced" style="margin: 0;">
                     <li style="margin-bottom: 15px;">Your production team will be assigned</li>
                     <li style="margin-bottom: 15px;">Your shoot timeline will be finalized</li>
-                    <li>Your creative brief will be reviewed</li>
+                    <li style="margin-bottom: 0;">Your creative brief will be reviewed</li>
                   </ul>
                 </div>
               </div>
@@ -453,24 +546,22 @@
               <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/ProdProposalImg.png"
                 alt="Laptop Image" width="100%"
                 style="display: block; border: 0; object-fit: cover; object-position: top; border-radius: 18px; max-width: 100%;"
-                height="450px" />
+                height="450" />
 
               <div style="padding: 40px 40px;">
-                <p style="background-color: #E8D1AB; font-size: 20px;font-style: normal;font-weight: 500;line-height: normal;letter-spacing: 0.415px; color: #000000B2; 
-                padding: 20px 24px; border-radius: 32px; width: fit-content;">
+                <p class="bg-gold-pill-forced text-black-alpha-forced" style="background-color: #E8D1AB !important; font-size: 20px; font-style: normal; font-weight: 500; line-height: normal; letter-spacing: 0.415px; color: rgba(0, 0, 0, 0.7) !important; padding: 20px 24px; border-radius: 32px; width: fit-content;">
                   ✔ Vetted Creative Partners
                 </p>
-                <p style="background-color: #E8D1AB; font-size: 20px;font-style: normal;font-weight: 500;line-height: normal;letter-spacing: 0.415px; color: #000000B2; 
-                padding: 20px 24px; border-radius: 32px;width: fit-content;">
+                <p class="bg-gold-pill-forced text-black-alpha-forced" style="background-color: #E8D1AB !important; font-size: 20px; font-style: normal; font-weight: 500; line-height: normal; letter-spacing: 0.415px; color: rgba(0, 0, 0, 0.7) !important; padding: 20px 24px; border-radius: 32px; width: fit-content;">
                   ✔ Professional Production Standards
                 </p>
-                <p style="background-color: #E8D1AB; font-size: 20px;font-style: normal;font-weight: 500;line-height: normal;letter-spacing: 0.415px; color: #000000B2; 
-                padding: 20px 24px; border-radius: 32px;width: fit-content;">
+                <p class="bg-gold-pill-forced text-black-alpha-forced" style="background-color: #E8D1AB !important; font-size: 20px; font-style: normal; font-weight: 500; line-height: normal; letter-spacing: 0.415px; color: rgba(0, 0, 0, 0.7) !important; padding: 20px 24px; border-radius: 32px; width: fit-content;">
                   ✔ Beige Quality Guarantee
                 </p>
-                <p style="font-size: 28px;font-style: normal;font-weight: 600; color: #000; margin: 30px 0 0;">Beige AI
-                  Platform -<br />
-                  Production Marketplace</p>
+                <p class="text-black-forced" style="font-size: 28px; font-style: normal; font-weight: 600; color: #000000 !important; margin: 30px 0 0 0;">
+                  Beige AI Platform -<br />
+                  Production Marketplace
+                </p>
               </div>
             </td>
           </tr>
@@ -483,12 +574,12 @@
                   src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
                   alt="Line Separator" width="100%" style="display: block; border: 0;">
               </div>
-              <p
-                style="margin: 0 0 20px; font-size: 16px; font-style: normal;font-weight: 400;line-height: normal; color: #3C3B3B;">
+              <p class="text-help-gray"
+                style="margin: 0 0 20px 0; font-size: 16px; font-style: normal; font-weight: 400; line-height: normal; color: #3C3B3B !important;">
                 Need help with your booking?
               </p>
-              <a href="mailto:sales@beigecorporation.io" target="_blank"
-                style="display:block; margin: 0; color: #000000; font-size: 26px;font-weight: 600;">
+              <a class="text-black-forced" href="mailto:sales@beigecorporation.io" target="_blank"
+                style="display:block; margin: 0; color: #000000 !important; font-size: 26px; font-weight: 600; text-decoration: none;">
                 sales@beigecorporation.io
               </a>
             </td>
@@ -497,19 +588,8 @@
           <!-- Footer -->
           <tr>
             <td align="center" style="padding: 40px 40px 60px;">
-              <!-- <div style="padding-bottom: 48px;">
-                <img
-                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
-                  alt="Line Separator" width="100%" style="display: block; border: 0;">
-              </div>
-              <p style="margin: 0 0 20px; font-size: 16px; color: #3C3B3B;">
-                Help Center &nbsp; • &nbsp; Term of Services &nbsp; • &nbsp; Privacy Policy
-              </p>
-              <p style="margin: 0 0 60px; color: #000000; font-size: 26px;font-weight: 600;">
-                Beige AI
-              </p> -->
-              <div
-                style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF;">
+              <div class="white-pill-element"
+                style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF !important; box-shadow: 0 8px 24px 0 rgba(149, 157, 165, 0.20);">
                 <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
                   alt="Beige" width="110" style="display: block; border: 0;">
               </div>

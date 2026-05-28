@@ -1541,9 +1541,6 @@ CREATE TABLE IF NOT EXISTS finance_dispute_payout_holds (
 -- 15-05-26
 
 ALTER TABLE payment_transactions
-  DROP CONSTRAINT chk_hours_positive;
-
-ALTER TABLE payment_transactions
   ADD COLUMN payment_source ENUM('booking_checkout', 'quote_invoice', 'additional_invoice')
     NOT NULL DEFAULT 'booking_checkout'
     COMMENT 'Origin of the payment transaction'
@@ -1554,7 +1551,107 @@ ALTER TABLE payment_transactions
 
 ALTER TABLE payment_transactions
   ADD CONSTRAINT chk_hours_positive CHECK (
-    (payment_source = 'quote_invoice' AND (hours IS NULL OR hours >= 0))
-    OR (payment_source = 'additional_invoice' AND (hours IS NULL OR hours >= 0))
-    OR (payment_source = 'booking_checkout' AND hours > 0)
+    hours IS NULL OR hours >= 0
   );
+
+CREATE TABLE IF NOT EXISTS sales_quote_preview_links (
+  sales_quote_preview_link_id INT AUTO_INCREMENT PRIMARY KEY,
+  sales_quote_id INT NOT NULL,
+  quote_key VARCHAR(128) NOT NULL,
+  expires_at DATETIME NOT NULL,
+  created_by_user_id INT NULL,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_sales_quote_preview_links_quote_key (quote_key),
+  KEY idx_sales_quote_preview_links_quote_id (sales_quote_id),
+  KEY idx_sales_quote_preview_links_expires_at (expires_at),
+  CONSTRAINT fk_sales_quote_preview_links_quote
+    FOREIGN KEY (sales_quote_id) REFERENCES sales_quotes(sales_quote_id)
+    ON DELETE CASCADE
+    ON UPDATE CASCADE,
+  CONSTRAINT fk_sales_quote_preview_links_created_by
+    FOREIGN KEY (created_by_user_id) REFERENCES users(id)
+    ON DELETE SET NULL
+    ON UPDATE CASCADE
+);
+
+CREATE TABLE booking_payment_summary (
+  booking_payment_summary_id INT AUTO_INCREMENT PRIMARY KEY,
+  booking_id INT NOT NULL,
+  sales_quote_id INT NULL,
+  quote_total DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+  paid_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+  credit_used_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+  credit_created_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+  due_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+  payment_status ENUM(
+    'pending',
+    'partially_paid',
+    'paid',
+    'approval_pending',
+    'no_payment_due'
+  ) NOT NULL DEFAULT 'pending',
+  manual_payment_mode VARCHAR(32) NULL,
+  manual_payment_other_mode VARCHAR(100) NULL,
+  manual_payment_proof_url TEXT NULL,
+  manual_payment_proof_file_path VARCHAR(1024) NULL,
+  manual_payment_proof_file_name VARCHAR(255) NULL,
+  manual_payment_notes TEXT NULL,
+  manual_payment_updated_by_user_id INT NULL,
+  manual_payment_updated_at DATETIME NULL,
+  last_quote_change_type ENUM('none', 'increase', 'decrease') NOT NULL DEFAULT 'none',
+  last_quote_change_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+  last_quote_change_status ENUM('none', 'pending', 'approved', 'rejected') NOT NULL DEFAULT 'none',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_booking_payment_summary_booking_id (booking_id),
+  INDEX idx_booking_payment_summary_sales_quote_id (sales_quote_id),
+  INDEX idx_booking_payment_summary_payment_status (payment_status)
+);
+
+-- 21-05-26
+
+ALTER TABLE booking_payment_summary
+  ADD COLUMN lead_id INT NULL AFTER booking_id,
+  ADD INDEX idx_booking_payment_summary_lead_id (lead_id);
+
+UPDATE booking_payment_summary bps
+JOIN sales_leads sl ON sl.booking_id = bps.booking_id
+SET bps.lead_id = sl.lead_id
+WHERE bps.lead_id IS NULL;
+
+
+-- 22-05-26
+
+ALTER TABLE booking_payment_summary
+  ADD COLUMN manual_payment_mode VARCHAR(32) NULL AFTER payment_status,
+  ADD COLUMN manual_payment_other_mode VARCHAR(100) NULL AFTER manual_payment_mode,
+  ADD COLUMN manual_payment_proof_url TEXT NULL AFTER manual_payment_other_mode,
+  ADD COLUMN manual_payment_proof_file_path VARCHAR(1024) NULL AFTER manual_payment_proof_url,
+  ADD COLUMN manual_payment_proof_file_name VARCHAR(255) NULL AFTER manual_payment_proof_file_path,
+  ADD COLUMN manual_payment_notes TEXT NULL AFTER manual_payment_proof_file_name,
+  ADD COLUMN manual_payment_updated_by_user_id INT NULL AFTER manual_payment_notes,
+  ADD COLUMN manual_payment_updated_at DATETIME NULL AFTER manual_payment_updated_by_user_id;
+
+CREATE TABLE IF NOT EXISTS booking_manual_payments (
+  booking_manual_payment_id INT AUTO_INCREMENT PRIMARY KEY,
+  booking_id INT NOT NULL,
+  lead_id INT NULL,
+  sales_quote_id INT NULL,
+  payment_type ENUM('full', 'partial') NOT NULL,
+  amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+  payment_mode VARCHAR(32) NOT NULL,
+  other_payment_mode VARCHAR(100) NULL,
+  proof_url TEXT NULL,
+  proof_file_path VARCHAR(1024) NULL,
+  proof_file_name VARCHAR(255) NULL,
+  notes TEXT NULL,
+  performed_by_user_id INT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_booking_manual_payments_booking_id (booking_id),
+  INDEX idx_booking_manual_payments_lead_id (lead_id),
+  INDEX idx_booking_manual_payments_sales_quote_id (sales_quote_id),
+  INDEX idx_booking_manual_payments_created_at (created_at)
+);
