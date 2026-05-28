@@ -4966,43 +4966,19 @@ async function createQuotePreviewLink(salesQuoteId, user) {
     throw new Error('Set quote valid date before generating preview link');
   }
 
-  const [existingRows] = await db.sequelize.query(
+  await db.sequelize.query(
     `
-      SELECT quote_key, expires_at
-      FROM sales_quote_preview_links
+      UPDATE sales_quote_preview_links
+      SET is_active = 0,
+          updated_at = NOW()
       WHERE sales_quote_id = :salesQuoteId
         AND is_active = 1
-      ORDER BY sales_quote_preview_link_id DESC
-      LIMIT 1
     `,
     {
       replacements: { salesQuoteId },
-      type: db.Sequelize.QueryTypes.SELECT
+      type: db.Sequelize.QueryTypes.UPDATE
     }
   );
-
-  if (existingRows?.quote_key) {
-    await db.sequelize.query(
-      `
-        UPDATE sales_quote_preview_links
-        SET expires_at = :expiresAt,
-            updated_at = NOW()
-        WHERE quote_key = :quoteKey
-      `,
-      {
-        replacements: {
-          quoteKey: existingRows.quote_key,
-          expiresAt
-        },
-        type: db.Sequelize.QueryTypes.UPDATE
-      }
-    );
-
-    return {
-      quote_key: existingRows.quote_key,
-      expires_at: expiresAt.toISOString()
-    };
-  }
 
   const quoteKey = crypto.randomBytes(32).toString('hex');
 
@@ -5044,6 +5020,7 @@ async function getPublicQuoteByKey(quoteKey) {
       SELECT
         l.sales_quote_id,
         l.expires_at,
+        l.created_at,
         q.valid_until
       FROM sales_quote_preview_links l
       INNER JOIN sales_quotes q ON q.sales_quote_id = l.sales_quote_id
@@ -5080,10 +5057,14 @@ async function getPublicQuoteByKey(quoteKey) {
 
   const linkExpiresAt = linkRow.expires_at ? new Date(linkRow.expires_at) : null;
   const quoteValidUntilExpiry = getQuotePreviewExpiryFromValidUntil(linkRow.valid_until);
+  const linkCreatedAt = linkRow.created_at ? new Date(linkRow.created_at) : null;
+  const latestVersion = await getLatestQuoteVersionRecord(Number(linkRow.sales_quote_id));
+  const latestVersionCreatedAt = latestVersion?.created_at ? new Date(latestVersion.created_at) : null;
 
   if (
     (linkExpiresAt && now > linkExpiresAt) ||
-    (quoteValidUntilExpiry && now > quoteValidUntilExpiry)
+    (quoteValidUntilExpiry && now > quoteValidUntilExpiry) ||
+    (linkCreatedAt && latestVersionCreatedAt && linkCreatedAt < latestVersionCreatedAt)
   ) {
     throw new Error('Quote preview link is invalid or expired');
   }
