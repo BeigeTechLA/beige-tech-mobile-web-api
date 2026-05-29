@@ -1655,3 +1655,9 @@ CREATE TABLE IF NOT EXISTS booking_manual_payments (
   INDEX idx_booking_manual_payments_sales_quote_id (sales_quote_id),
   INDEX idx_booking_manual_payments_created_at (created_at)
 );
+
+-- 29-5-26
+
+ALTER TABLE `sales_quotes`
+  ADD COLUMN IF NOT EXISTS `location_latitude` DECIMAL(10,7) NULL AFTER `client_address`,
+  ADD COLUMN IF NOT EXISTS `location_longitude` DECIMAL(10,7) NULL AFTER `location_latitude`;
