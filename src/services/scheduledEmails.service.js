@@ -444,7 +444,7 @@ const sendOnboardingCriticalIfMissing = async ({ booking, lead, targetDate }) =>
     shoot_id: bookingId,
     user_name: firstName,
     first_name: firstName,
-    form_link: `${process.env.FRONTEND_URL}/affiliate/dashboard`,
+    form_link: `${process.env.FRONTEND_URL}/project-form/${bookingId}`,
     dashboard_link: `${process.env.FRONTEND_URL}/affiliate/dashboard`
   });
 

@@ -1051,7 +1051,7 @@ const sendOnboardingFormCriticalEmail = async (data) => {
         user_name: data.user_name || data.first_name || 'there',
         shoot_id: shootId,
         booking_id: data.booking_id || shootId,
-        form_link: `${process.env.FRONTEND_URL}/affiliate/dashboard`,
+        form_link: `${process.env.FRONTEND_URL}/project-form/${shootId}`,
         dashboard_link: `${process.env.FRONTEND_URL}/affiliate/dashboard`
       }
     };
