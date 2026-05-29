@@ -180,6 +180,34 @@ Authorization: {{TOKEN}}
   ]
 }
 
+### update shoot onboarding form
+POST {{URL}}admin/shoots/update-onboarding-form HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "project_id": 1192,
+  "onsite_contact_info": "Zara - +919173965231",
+  "project_types": ["Commercial Shoot (Product Photography, Social Media Content, Promotional Video)"],
+  "project_type_other": "",
+  "brief_overview": "My birthday is going to take place at the Nobu restaurant LA from 5pm to 9pm..",
+  "num_people_attending": "5",
+  "event_agenda": "TBD",
+  "location_address": "2451 Meadowvale Avenue, Los Angeles, California 90031, United States",
+  "location_specification": ["Both"],
+  "location_scouting_refs": "[]",
+  "shot_list": "TBD",
+  "visual_references": "TBD",
+  "specific_instructions": "",
+  "creative_dress_code": "None",
+  "post_production_ideas": "",
+  "preferred_songs": "",
+  "additional_info": "",
+  "wants_to_learn_more": 1,
+  "form_user_friendliness_rating": 5,
+  "user_id": ""
+}
+
 ###
 GET {{URL}}admin/get-active-projects HTTP/1.1
 Content-Type: application/json

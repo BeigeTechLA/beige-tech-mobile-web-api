@@ -5,6 +5,7 @@ const { expireQuotesPastValidUntil } = require('./sales-quote-expiration.service
 
 const JOB_INTERVAL_MINUTES = parseInt(process.env.SHOOT_REMINDER_JOB_INTERVAL_MINUTES || '30', 10);
 const REMINDER_MARKER = 'shoot_reminder_5_days';
+const ONBOARDING_CRITICAL_MARKER = 'onboarding_form_critical';
 const REMINDER_2H_MARKER = 'shoot_reminder_2_hours';
 const SHOOT_COMPLETION_MARKER = 'shoot_completion_next_day';
 const FINAL_NUDGE_7D_MARKER = 'shoot_final_nudge_7_days';
@@ -235,6 +236,32 @@ const alreadySentReminder = async (leadId, targetDate) => {
   });
 };
 
+const hasOnboardingCriticalMarker = async (activityModel, leadId, targetDate) => {
+  if (!activityModel || !leadId) return false;
+
+  const activities = await activityModel.findAll({
+    where: {
+      lead_id: leadId,
+      activity_type: 'status_changed'
+    },
+    attributes: ['activity_data']
+  });
+
+  return activities.some((row) => {
+    const data = parseActivityData(row.activity_data);
+    return data.email_event === ONBOARDING_CRITICAL_MARKER && data.target_date === targetDate;
+  });
+};
+
+const alreadySentOnboardingCritical = async ({ salesLeadId, clientLeadId, targetDate }) => {
+  const [salesMarker, clientMarker] = await Promise.all([
+    hasOnboardingCriticalMarker(db.sales_lead_activities, salesLeadId, targetDate),
+    hasOnboardingCriticalMarker(db.client_lead_activities, clientLeadId, targetDate)
+  ]);
+
+  return salesMarker || clientMarker;
+};
+
 const alreadySentReminder2h = async (leadId, bookingStartIso) => {
   if (!leadId) return false;
 
@@ -300,6 +327,36 @@ const markReminderSent = async (leadId, bookingId, targetDate, performedBy = nul
   });
 };
 
+const markOnboardingCriticalSent = async (leadId, bookingId, targetDate, performedBy = null) => {
+  if (!leadId) return false;
+  await db.sales_lead_activities.create({
+    lead_id: leadId,
+    activity_type: 'status_changed',
+    activity_data: {
+      email_event: ONBOARDING_CRITICAL_MARKER,
+      booking_id: bookingId,
+      target_date: targetDate
+    },
+    performed_by_user_id: performedBy
+  });
+  return true;
+};
+
+const markClientOnboardingCriticalSent = async (leadId, bookingId, targetDate, performedBy = null) => {
+  if (!leadId) return false;
+  await db.client_lead_activities.create({
+    lead_id: leadId,
+    activity_type: 'status_changed',
+    activity_data: {
+      email_event: ONBOARDING_CRITICAL_MARKER,
+      booking_id: bookingId,
+      target_date: targetDate
+    },
+    performed_by_user_id: performedBy
+  });
+  return true;
+};
+
 const markReminder2hSent = async (leadId, bookingId, bookingStartIso, performedBy = null) => {
   if (!leadId) return;
   await db.sales_lead_activities.create({
@@ -340,6 +397,69 @@ const markFinalNudge7dSent = async (leadId, bookingId, targetDate, performedBy =
     },
     performed_by_user_id: performedBy
   });
+};
+
+const sendOnboardingCriticalIfMissing = async ({ booking, lead, targetDate }) => {
+  const bookingId = booking.stream_project_booking_id;
+  const [formSubmission, clientLead] = await Promise.all([
+    db.project_form_submissions.findOne({
+      where: {
+        project_id: bookingId,
+        is_active: 1
+      },
+      attributes: ['id'],
+      raw: true
+    }),
+    db.client_leads.findOne({
+      where: { booking_id: bookingId },
+      attributes: ['lead_id', 'client_name', 'guest_email'],
+      raw: true
+    })
+  ]);
+
+  if (formSubmission) return;
+
+  const hasAlreadySent = await alreadySentOnboardingCritical({
+    salesLeadId: lead?.lead_id,
+    clientLeadId: clientLead?.lead_id,
+    targetDate
+  });
+  if (hasAlreadySent) return;
+
+  if (!lead?.lead_id && !clientLead?.lead_id) {
+    console.warn(`[Email Job] onboarding critical skipped booking ${bookingId}: no linked lead to track send marker`);
+    return;
+  }
+
+  const toEmail = booking.user?.email || booking.guest_email || lead?.guest_email || clientLead?.guest_email;
+  if (!toEmail) {
+    console.warn(`[Email Job] onboarding critical skipped booking ${bookingId}: missing recipient email`);
+    return;
+  }
+
+  const firstName = deriveFirstName(booking.user?.name, lead?.client_name || clientLead?.client_name, toEmail);
+  const emailResult = await emailService.sendOnboardingFormCriticalEmail({
+    to_email: toEmail,
+    booking_id: bookingId,
+    shoot_id: bookingId,
+    user_name: firstName,
+    first_name: firstName,
+    form_link: `${process.env.FRONTEND_URL}/project-form/${bookingId}`,
+    dashboard_link: `${process.env.FRONTEND_URL}/affiliate/dashboard`
+  });
+
+  if (!emailResult?.success) {
+    console.error(
+      `[Email Job] onboarding critical failed for booking ${bookingId}:`,
+      emailResult?.error || 'unknown error'
+    );
+    return;
+  }
+
+  const markedSalesLead = await markOnboardingCriticalSent(lead?.lead_id, bookingId, targetDate);
+  if (!markedSalesLead) {
+    await markClientOnboardingCriticalSent(clientLead?.lead_id, bookingId, targetDate);
+  }
 };
 
 const runShootReminder5DaysJob = async () => {
@@ -391,6 +511,8 @@ const runShootReminder5DaysJob = async () => {
           where: { booking_id: booking.stream_project_booking_id },
           attributes: ['lead_id', 'client_name', 'guest_email']
         });
+
+        await sendOnboardingCriticalIfMissing({ booking, lead, targetDate });
 
         const hasAlreadySent = await alreadySentReminder(lead?.lead_id, targetDate);
         if (hasAlreadySent) {

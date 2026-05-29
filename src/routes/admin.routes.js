@@ -12,6 +12,7 @@ router.post('/matchEquipments', admin.matchEquipment);
 router.post('/assignMatchEquipment', admin.saveMatchedEquipment);
 router.get('/get-project/:project_id', admin.getProjectDetails);
 router.put('/shoots/update-date-location/:project_id', admin.updateProjectDateLocation);
+router.post('/shoots/update-onboarding-form', authMiddleware, admin.submitProjectFormByAdmin);
 router.get('/get-active-projects', admin.getActiveProjects);
 router.get('/recent-activity', admin.getRecentActivity);
 router.get('/get-projects', admin.getAllProjectDetails);
