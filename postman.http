@@ -2411,3 +2411,8 @@ Content-Disposition: form-data; name="attachment_type" // evidence, invoice, del
 
 evidence
 ------WebKitFormBoundary7MA4YWxkTrZu0gW--
+
+### 
+POST {{URL}}admin/shoots/remind-onboarding-form/1207
+Authorization: {{TOKEN}}
+Content-Type: application/json

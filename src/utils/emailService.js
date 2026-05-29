@@ -1016,8 +1016,8 @@ const sendShootReminder2HoursEmail = async (data) => {
 };
 
 /**
- * Send critical onboarding form reminder before shoot date.
- * Trigger: scheduled job when shoot is near and form is missing.
+ * Send onboarding form reminder.
+ * Trigger: admin action when the client needs a manual reminder.
  * @param {Object} data - onboarding reminder payload
  */
 const sendOnboardingFormCriticalEmail = async (data) => {
@@ -1040,6 +1040,7 @@ const sendOnboardingFormCriticalEmail = async (data) => {
     }
 
     const shootId = data.shoot_id || data.booking_id || '';
+    const frontendUrl = (process.env.FRONTEND_URL || 'https://beige.app').replace(/\/+$/, '');
     const payload = {
       to: data.to_email,
       from: {
@@ -1051,8 +1052,8 @@ const sendOnboardingFormCriticalEmail = async (data) => {
         user_name: data.user_name || data.first_name || 'there',
         shoot_id: shootId,
         booking_id: data.booking_id || shootId,
-        form_link: `${process.env.FRONTEND_URL}/project-form/${shootId}`,
-        dashboard_link: `${process.env.FRONTEND_URL}/affiliate/dashboard`
+        form_link: data.form_link || `${frontendUrl}/project-form/${shootId}`,
+        dashboard_link: data.dashboard_link || `${frontendUrl}/affiliate/dashboard`
       }
     };
 

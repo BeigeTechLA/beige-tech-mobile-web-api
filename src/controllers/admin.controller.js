@@ -6,7 +6,12 @@ const common_model = require('../utils/common_model');
 const { Op } = require('sequelize');
 const { S3UploadFiles, toAbsoluteBeigeAssetUrl } = require('../utils/common.js');
 const moment = require('moment');
-const { sendTaskAssignmentEmail, sendCPNewBookingRequestEmail, sendPostProductionAssignmentEmail } = require('../utils/emailService');
+const {
+  sendTaskAssignmentEmail,
+  sendCPNewBookingRequestEmail,
+  sendPostProductionAssignmentEmail,
+  sendOnboardingFormCriticalEmail
+} = require('../utils/emailService');
 const { stream_project_booking, crew_members, crew_member_files, tasks, equipment, crew_roles,
   equipment_accessories,
   equipment_category,
@@ -234,6 +239,19 @@ const resolveAdminBookingClientContact = async (booking = null) => {
       linkedClientLead?.phone ||
       null
   };
+};
+
+const getFirstNameForEmail = (name, email) => {
+  const normalizedName = String(name || '').trim();
+  if (normalizedName) return normalizedName.split(/\s+/)[0];
+
+  if (email && String(email).includes('@')) {
+    const localPart = String(email).split('@')[0] || '';
+    const derived = localPart.replace(/[._-]+/g, ' ').trim();
+    if (derived) return derived.split(/\s+/)[0];
+  }
+
+  return 'there';
 };
 
 const resolveAdminBookingShootAmount = async (booking = null, fallbackShootAmount = null) => {
@@ -10122,6 +10140,148 @@ exports.getProjectFormByProjectId = async (req, res) => {
             error: true, 
             message: "Internal server error", 
             details: error.message 
+        });
+    }
+};
+
+exports.sendOnboardingFormReminder = async (req, res) => {
+    try {
+        const project_id = req.params?.project_id || req.body?.project_id;
+        const admin_user_id = req.user?.userId || null;
+
+        if (!project_id) {
+            return res.status(400).json({
+                success: false,
+                message: "Project ID is required."
+            });
+        }
+
+        const booking = await stream_project_booking.findOne({
+            where: { stream_project_booking_id: project_id, is_active: 1 },
+            include: [{
+                model: users,
+                as: 'user',
+                required: false,
+                attributes: ['id', 'name', 'email', 'phone_number']
+            }]
+        });
+
+        if (!booking) {
+            return res.status(404).json({
+                success: false,
+                message: "Project/Booking not found."
+            });
+        }
+
+        const formSubmission = await project_form_submissions.findOne({
+            where: { project_id, is_active: 1 },
+            attributes: ['id'],
+            raw: true
+        });
+
+        if (formSubmission) {
+            return res.status(400).json({
+                success: false,
+                message: "Onboarding form is already submitted for this project."
+            });
+        }
+
+        const [clientDetails, lead, clientLead] = await Promise.all([
+            resolveAdminBookingClientContact(booking),
+            sales_leads.findOne({
+                where: { booking_id: project_id, is_active: 1 },
+                attributes: ['lead_id', 'client_name', 'guest_email'],
+                raw: true
+            }),
+            client_leads.findOne({
+                where: { booking_id: project_id, is_active: 1 },
+                attributes: ['lead_id', 'client_name', 'guest_email'],
+                raw: true
+            })
+        ]);
+
+        const toEmail =
+            clientDetails.email ||
+            booking.user?.email ||
+            booking.guest_email ||
+            lead?.guest_email ||
+            clientLead?.guest_email ||
+            null;
+
+        if (!toEmail) {
+            return res.status(400).json({
+                success: false,
+                message: "Client email is missing for this project."
+            });
+        }
+
+        const displayName =
+            clientDetails.full_name ||
+            lead?.client_name ||
+            clientLead?.client_name ||
+            booking.user?.name ||
+            null;
+        const firstName = getFirstNameForEmail(displayName, toEmail);
+        const frontendUrl = (process.env.FRONTEND_URL || 'https://beige.app').replace(/\/+$/, '');
+
+        const emailResult = await sendOnboardingFormCriticalEmail({
+            to_email: toEmail,
+            booking_id: project_id,
+            shoot_id: project_id,
+            user_name: firstName,
+            first_name: firstName,
+            form_link: `${frontendUrl}/project-form/${project_id}`,
+            dashboard_link: `${frontendUrl}/affiliate/dashboard`
+        });
+
+        if (!emailResult?.success) {
+            return res.status(502).json({
+                success: false,
+                message: "Failed to send onboarding reminder email.",
+                error: emailResult?.error || 'Unknown email error'
+            });
+        }
+
+        const activityData = {
+            email_event: 'onboarding_form_manual_reminder',
+            booking_id: Number(project_id),
+            recipient_email: toEmail,
+            message_id: emailResult.messageId || null
+        };
+
+        if (lead?.lead_id) {
+            await sales_lead_activities.create({
+                lead_id: lead.lead_id,
+                activity_type: 'status_changed',
+                activity_data: activityData,
+                performed_by_user_id: admin_user_id,
+                created_at: new Date()
+            });
+        } else if (clientLead?.lead_id) {
+            await client_lead_activities.create({
+                lead_id: clientLead.lead_id,
+                activity_type: 'status_changed',
+                activity_data: activityData,
+                performed_by_user_id: admin_user_id,
+                created_at: new Date()
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "Onboarding reminder email sent successfully.",
+            data: {
+                project_id: Number(project_id),
+                to_email: toEmail,
+                message_id: emailResult.messageId || null
+            }
+        });
+    } catch (error) {
+        console.error('SendOnboardingFormReminder Error:', error);
+        return res.status(500).json({
+            success: false,
+            message: "Internal Server Error",
+            error: error.message
         });
     }
 };
