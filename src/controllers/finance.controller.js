@@ -93,6 +93,116 @@ exports.getShootFinance = async (req, res) => {
   }
 };
 
+exports.getClientPaymentManagement = async (req, res) => {
+  try {
+    const data = await financeService.getClientPaymentManagement(req.query, {
+      userId: req.userId || req.user?.userId || null
+    });
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error('Get client payment management error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch client payments'
+    });
+  }
+};
+
+exports.getClientPaymentDetails = async (req, res) => {
+  try {
+    const bookingId = parseInt(req.params.bookingId, 10);
+    if (!bookingId) {
+      return res.status(400).json({ success: false, message: 'Valid booking ID is required' });
+    }
+
+    const data = await financeService.getClientPaymentDetails(bookingId, {
+      userId: req.userId || req.user?.userId || null
+    });
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error('Get client payment details error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch client payment details'
+    });
+  }
+};
+
+exports.listClientDisputes = async (req, res) => {
+  try {
+    const data = await financeDisputeService.listClientDisputes(req.query, {
+      userId: req.userId || req.user?.userId || null
+    });
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error('List client disputes error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch client disputes'
+    });
+  }
+};
+
+exports.getClientDisputeDetails = async (req, res) => {
+  try {
+    const data = await financeDisputeService.getClientDisputeDetails(req.params.disputeId, {
+      userId: req.userId || req.user?.userId || null
+    });
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error('Get client dispute details error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch client dispute details'
+    });
+  }
+};
+
+exports.createClientDispute = async (req, res) => {
+  try {
+    const data = await financeDisputeService.createClientDispute(req.body, req.files, {
+      userId: req.userId || req.user?.userId || null
+    });
+    return res.status(201).json({ success: true, message: 'Dispute submitted successfully', data });
+  } catch (error) {
+    console.error('Create client dispute error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to submit dispute'
+    });
+  }
+};
+
+exports.addClientDisputeComment = async (req, res) => {
+  try {
+    const data = await financeDisputeService.addClientDisputeComment(req.params.disputeId, req.body, {
+      userId: req.userId || req.user?.userId || null
+    });
+    return res.status(201).json({ success: true, message: 'Comment added successfully', data });
+  } catch (error) {
+    console.error('Add client dispute comment error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to add dispute comment'
+    });
+  }
+};
+
+exports.addClientDisputeAttachment = async (req, res) => {
+  try {
+    const data = await financeDisputeService.addClientDisputeAttachment(req.params.disputeId, req.body, req.files, {
+      userId: req.userId || req.user?.userId || null
+    });
+    return res.status(201).json({ success: true, message: 'Attachment added successfully', data });
+  } catch (error) {
+    console.error('Add client dispute attachment error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to add dispute attachment'
+    });
+  }
+};
+
 exports.getCreatorWallet = async (req, res) => {
   try {
     const creatorId = parseInt(req.params.creatorId || req.query.creator_id, 10);

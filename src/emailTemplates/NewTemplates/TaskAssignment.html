@@ -1,136 +1,363 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Task Assignment</title>
+  <meta name="x-apple-disable-message-reformatting">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <!-- Force light mode rendering context -->
+  <meta name="color-scheme" content="light">
+  <meta name="supported-color-schemes" content="light">
+
+  <title>New Task Assigned</title>
+
+  <style>
+    /* Global fixes to lock light mode theme across clients */
+    :root {
+      color-scheme: light !important;
+      supported-color-schemes: light !important;
+    }
+
+    /* Force light background and dark text colors in strict dark mode clients */
+    @media (prefers-color-scheme: dark) {
+
+      body,
+      .body-table {
+        background-color: #F7F7F7 !important;
+        color: #484848 !important;
+      }
+
+      .main-card {
+        background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%) !important;
+      }
+
+      .inner-white-card {
+        background-color: #FFFFFF !important;
+      }
+
+      .speed-notice-banner {
+        background-color: #FEEFD8 !important;
+      }
+
+      .speed-notice-icon {
+        background-color: #EFC37D !important;
+      }
+
+      .info-block-gray {
+        background-color: #F8F8F8 !important;
+      }
+
+      .suggested-step-card {
+        background: linear-gradient(117deg, #FFFCF6 -4.45%, #FFF 137.38%) !important;
+      }
+
+      h1,
+      h2,
+      .dark-text,
+      .lead-header-label {
+        color: #000000 !important;
+      }
+
+      .muted-label {
+        color: #525252 !important;
+      }
+
+      .sub-heading-text {
+        color: #707070 !important;
+      }
+
+      .footer-text {
+        color: #3C3B3B !important;
+      }
+
+      .logo-container {
+        background-color: #FFFFFF !important;
+      }
+    }
+
+    /* Outlook specific dark mode app overrides */
+    [data-ogsc] body,
+    [data-ogsc] .body-table {
+      background-color: #F7F7F7 !important;
+      color: #484848 !important;
+    }
+
+    [data-ogsc] .main-card {
+      background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%) !important;
+    }
+
+    [data-ogsc] .inner-white-card {
+      background-color: #FFFFFF !important;
+    }
+
+    [data-ogsc] .speed-notice-banner {
+      background-color: #FEEFD8 !important;
+    }
+
+    [data-ogsc] .speed-notice-icon {
+      background-color: #EFC37D !important;
+    }
+
+    [data-ogsc] .info-block-gray {
+      background-color: #F8F8F8 !important;
+    }
+
+    [data-ogsc] .suggested-step-card {
+      background: linear-gradient(117deg, #FFFCF6 -4.45%, #FFF 137.38%) !important;
+    }
+
+    [data-ogsc] h1,
+    [data-ogsc] h2,
+    [data-ogsc] .dark-text,
+    [data-ogsc] .lead-header-label {
+      color: #000000 !important;
+    }
+
+    [data-ogsc] .muted-label {
+      color: #525252 !important;
+    }
+
+    [data-ogsc] .sub-heading-text {
+      color: #707070 !important;
+    }
+
+    [data-ogsc] .footer-text {
+      color: #3C3B3B !important;
+    }
+
+    [data-ogsc] .logo-container {
+      background-color: #FFFFFF !important;
+    }
+  </style>
 </head>
 
-<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f3f4f6;">
-
-  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #f3f4f6; padding: 40px 20px;">
+<body
+  style="margin: 0; padding: 0; font-family:'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #F7F7F7; color: #484848; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">
+  <table class="body-table" width="100%" cellpadding="0" cellspacing="0"
+    style="background-color: #F7F7F7; padding: 40px 20px;">
     <tr>
       <td align="center">
+        <table class="main-card" width="600" cellpadding="0" cellspacing="0"
+          style="background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%); border: 1px solid rgba(232, 209, 171, 0.3); border-radius: 24px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.04);">
 
-        <!-- Main Container -->
-        <table width="600" cellpadding="0" cellspacing="0"
-          style="background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
-
-          <!-- Header -->
+          <!-- Beige Logo Container -->
           <tr>
-            <td style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px 30px; text-align: center;">
-              <h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 700;">
-                New Task Assigned
-              </h1>
-              <p style="margin: 10px 0 0; color: #e0e7ff; font-size: 14px;">
-                You have been assigned a new task
+            <td align="center" style="padding: 40px 0 36px;">
+              <div class="logo-container"
+                style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF; box-shadow: 0 8px 24px 0 rgba(149, 157, 165, 0.20);">
+                <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
+                  alt="Beige" width="110" style="display: block; border: 0;">
+              </div>
+              <div style="padding: 36px 40px 0;">
+                <img
+                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                  alt="Line Separator" width="100%" style="display: block; border: 0;">
+              </div>
+            </td>
+          </tr>
+
+          <!-- Header Group -->
+          <tr>
+            <td style="padding: 0 40px; text-align: center;">
+              <h1 class="dark-text"
+                style="margin: 0; color: #000000; font-size: 44px; font-weight: 400; text-transform: uppercase; letter-spacing: -2px;">
+                New Task Assigned</h1>
+              <p class="sub-heading-text" style="margin: 16px 0 0; font-size: 26px; color: #707070; line-height: 1.5;">
+                Hello {{first_name}} {{last_name}},<br/> you have been assigned a new task on the BeigeAI platform.
               </p>
             </td>
           </tr>
 
-          <!-- Greeting -->
+          <!-- Primary Details Frame -->
           <tr>
-            <td style="padding: 30px 30px 20px;">
-              <p style="margin: 0; font-size: 16px; color: #374151; line-height: 1.6;">
-                Hi <strong>{{first_name}} {{last_name}}</strong>,
-              </p>
-              <p style="margin: 15px 0 0; font-size: 16px; color: #374151; line-height: 1.6;">
-                A new task has been assigned to you on the BeigeAI platform.
-              </p>
-            </td>
-          </tr>
+            <td style="padding: 30px 20px;">
+              <table class="inner-white-card" align="center" border="0" cellpadding="0" cellspacing="0" width="100%"
+                style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #FDEED7; border-radius: 36px; box-shadow: 0 7px 29px 0 rgba(100, 100, 111, 0.20); padding: 20px;">
 
-          <!-- Task Details Card -->
-          <tr>
-            <td style="padding: 0 30px 30px;">
-              <table width="100%" cellpadding="0" cellspacing="0"
-                style="background-color: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb;">
+                <!-- High-Priority Conversion Badge / Title Banner -->
                 <tr>
-                  <td style="padding: 20px;">
-
-                    <!-- Task Title -->
-                    <h2 style="margin: 0 0 15px; font-size: 20px; color: #111827; font-weight: 600;">
-                      {{task_title}}
-                    </h2>
-
-                    <!-- Priority Badge -->
-                    <div style="margin-bottom: 15px;">
-                      <span style="display: inline-block; padding: 6px 12px; background-color: {{priority_color}}; color: #ffffff; font-size: 12px; font-weight: 600; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.5px;">
-                        {{priority}} Priority
-                      </span>
-                    </div>
-
-                    <!-- Description -->
-                    {{#if description}}
-                    <div style="margin-bottom: 15px;">
-                      <p style="margin: 0; font-size: 14px; color: #6b7280; line-height: 1.6;">
-                        {{description}}
-                      </p>
-                    </div>
-                    {{/if}}
-
-                    <!-- Task Metadata -->
-                    <table width="100%" cellpadding="0" cellspacing="0"
-                      style="margin-top: 15px; border-top: 1px solid #e5e7eb; padding-top: 15px;">
-                      
+                  <td class="speed-notice-banner"
+                    style="background-color: #FFFCF6; border-radius: 18px; border: solid 1px #A9A9A9;">
+                    <table style="padding: 20px; width: 100%;">
                       <tr>
-                        <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">
-                          <strong style="color: #374151;">Due Date:</strong>
+                        <td style="vertical-align: text-top; width: 44px;">
+                          <div class="speed-notice-icon"
+                            style="background-color: #E8D1AB; border-radius: 100px; padding: 10px; width: 24px; height: 24px; text-align: center;">
+                            <img
+                              src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/Thunder.png"
+                              alt="Task Icon" width="24" style="display: inline-block; border: 0; vertical-align: middle;">
+                          </div>
                         </td>
-                        <td style="padding: 8px 0; font-size: 14px; color: #374151; text-align: right;">
-                          {{due_date}}
+                        <td>
+                          <h2 class="dark-text" style="margin: 0 0 8px 20px; font-size: 22px; font-weight: 600; color: #000000;">
+                            {{task_title}}
+                          </h2>
+                          <div style="margin-left: 20px;">
+                            <span style="display: inline-block; padding: 6px 16px; background-color: {{priority_color}}; color: #ffffff; font-size: 12px; font-weight: 600; border-radius: 100px; text-transform: uppercase; letter-spacing: 0.5px;">
+                              {{priority}} Priority
+                            </span>
+                          </div>
                         </td>
                       </tr>
-
-                      {{#if estimated_duration}}
-                      <tr>
-                        <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">
-                          <strong style="color: #374151;">Estimated Duration:</strong>
-                        </td>
-                        <td style="padding: 8px 0; font-size: 14px; color: #374151; text-align: right;">
-                          {{estimated_duration}} hours
-                        </td>
-                      </tr>
-                      {{/if}}
-
-                      <tr>
-                        <td style="padding: 8px 0; font-size: 14px; color: #6b7280;">
-                          <strong style="color: #374151;">Status:</strong>
-                        </td>
-                        <td style="padding: 8px 0; font-size: 14px; color: #374151; text-align: right;">
-                          {{status}}
-                        </td>
-                      </tr>
-
                     </table>
+                  </td>
+                </tr>
 
+                <tr>
+                  <td align="center" style="padding:30px 40px 20px;">
+                    <h2 class="dark-text" style="margin: 0; font-size: 30px; font-weight: 600; color: #000000;">Task Details</h2>
+                  </td>
+                </tr>
+
+                <!-- Structured Dynamic Breakdown Block -->
+                <tr>
+                  <td style="padding: 0;">
+                    <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%"
+                      style="max-width: 500px; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;">
+                      <tr>
+                        <td align="center" style="padding: 0;">
+                          <table class="info-block-gray" border="0" cellpadding="0" cellspacing="0" width="100%"
+                            style="background-color: #F8F8F8; border-radius: 36px; box-shadow: 0 7px 29px 0 rgba(100, 100, 111, 0.20);">
+                            <tr>
+                              <td align="center" style="padding: 0 40px 20px 40px;">
+                                <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse: separate;">
+
+                                  <!-- Description Field (Conditional) -->
+                                  {{#if description}}
+                                  <tr>
+                                    <td style="padding: 40px 0 0;">
+                                      <table width="100%" cellpadding="0" cellspacing="0">
+                                        <tr>
+                                          <td style="padding-bottom: 15px; vertical-align: top; width: 120px;">
+                                            <div class="muted-label"
+                                              style="font-size: 18px; color: #525252; line-height: 24px; font-weight: 300;">
+                                              Description</div>
+                                          </td>
+                                          <td style="padding-bottom: 15px; vertical-align: top;">
+                                            <div class="dark-text"
+                                              style="font-size: 18px; font-weight: 400; color: #000000; line-height: 24px; text-align: right;">
+                                              {{description}}</div>
+                                          </td>
+                                        </tr>
+                                      </table>
+                                      <div>
+                                        <img
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                          alt="Line Separator" width="100%" style="display: block; border: 0;">
+                                      </div>
+                                    </td>
+                                  </tr>
+                                  {{/if}}
+
+                                  <!-- Due Date Field -->
+                                  <tr>
+                                     <td style="padding: 15px 0 0;">
+                                      <table width="100%" cellpadding="0" cellspacing="0">
+                                        <tr>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="muted-label"
+                                              style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300;">
+                                              Due Date</div>
+                                          </td>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="dark-text"
+                                              style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px; text-align: right;">
+                                              {{due_date}}</div>
+                                          </td>
+                                        </tr>
+                                      </table>
+                                      <div>
+                                        <img
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                          alt="Line Separator" width="100%" style="display: block; border: 0;">
+                                      </div>
+                                    </td>
+                                  </tr>
+
+                                  <!-- Estimated Duration Field (Conditional) -->
+                                  {{#if estimated_duration}}
+                                  <tr>
+                                    <td style="padding: 15px 0 0;">
+                                      <table width="100%" cellpadding="0" cellspacing="0">
+                                        <tr>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="muted-label"
+                                              style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300;">
+                                              Estimated Time</div>
+                                          </td>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="dark-text"
+                                              style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px; text-align: right;">
+                                              {{estimated_duration}} hours</div>
+                                          </td>
+                                        </tr>
+                                      </table>
+                                      <div>
+                                        <img
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                          alt="Line Separator" width="100%" style="display: block; border: 0;">
+                                      </div>
+                                    </td>
+                                  </tr>
+                                  {{/if}}
+
+                                  <!-- Status Field -->
+                                  <tr>
+                                    <td style="padding: 15px 0 0;">
+                                      <table width="100%" cellpadding="0" cellspacing="0">
+                                        <tr>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="muted-label"
+                                              style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300;">
+                                              Status</div>
+                                          </td>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="dark-text"
+                                              style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px; text-align: right;">
+                                              {{status}}</div>
+                                          </td>
+                                        </tr>
+                                      </table>
+                                    </td>
+                                  </tr>
+                                </table>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                    </table>
                   </td>
                 </tr>
               </table>
             </td>
           </tr>
 
-          <!-- CTA Button -->
+          <!-- Action Button Section -->
           <tr>
-            <td style="padding: 0 30px 30px; text-align: center;">
-              <a href="{{task_link}}"
-                style="display: inline-block; padding: 14px 32px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #ffffff; text-decoration: none; border-radius: 8px; font-size: 16px; font-weight: 600; box-shadow: 0 4px 6px rgba(102, 126, 234, 0.3);">
-                View Task Details
-              </a>
+            <td style="padding: 10px 30px 30px; text-align: center;">
+              <table align="center" cellpadding="0" cellspacing="0" style="margin: 0 auto;">
+                <tr>
+                  <td align="center" style="background-color: #000000; border-radius: 100px; box-shadow: 0 8px 24px rgba(0,0,0,0.15);">
+                    <a href="{{task_link}}" target="_blank"
+                      style="display: inline-block; padding: 18px 40px; font-size: 18px; font-weight: 600; color: #E8D1AB; text-decoration: none; border-radius: 100px; text-transform: uppercase; letter-spacing: 1px;">
+                      View Task Details
+                    </a>
+                  </td>
+                </tr>
+              </table>
             </td>
           </tr>
 
-          <!-- Additional Notes -->
+          <!-- Contextual Next-Step Recommendation Box / Additional Notes -->
           {{#if additional_notes}}
           <tr>
-            <td style="padding: 0 30px 30px;">
-              <div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 15px; border-radius: 4px;">
-                <p style="margin: 0; font-size: 13px; color: #78350f; font-weight: 600;">
-                  Additional Notes:
-                </p>
-                <p style="margin: 8px 0 0; font-size: 14px; color: #92400e; line-height: 1.5;">
-                  {{additional_notes}}
-                </p>
+            <td style="padding: 10px 30px 20px;">
+              <div class="suggested-step-card"
+                style="border: solid 1px #C0BCBC; padding: 20px; font-size: 18px; font-style: italic; line-height: 24px; letter-spacing: 0.415px; border-radius: 18px; background: linear-gradient(117deg, #FFFCF6 -4.45%, #FFF 137.38%);">
+                <p class="lead-header-label" style="margin: 0 0 10px; color: #000000; font-weight: 600; font-style: normal;">Additional Notes</p>
+                <p class="muted-label" style="margin: 0; color: #525252; font-style: normal;">{{additional_notes}}</p>
               </div>
             </td>
           </tr>
@@ -138,20 +365,29 @@
 
           <!-- Footer -->
           <tr>
-            <td style="background-color: #f9fafb; padding: 25px 30px; border-top: 1px solid #e5e7eb; text-align: center;">
-              <p style="margin: 0; font-size: 13px; color: #6b7280;">
-                This is an automated notification from the BeigeAI Platform.
+            <td align="center" style="padding: 20px 34px 44px;">
+              <div style="padding-bottom: 24px;">
+                <img
+                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                  alt="Line Separator" width="100%" style="display: block; border: 0;">
+              </div>
+              <p class="footer-text" style="margin: 0; font-size: 14px; color: #6C6C6C; line-height: 1.7;">
+                This is an automated operational notification from BeigeAI. Please do not reply to this email.
               </p>
-              <p style="margin: 10px 0 0; font-size: 13px; color: #9ca3af;">
-                © {{year}} BeigeAI. All rights reserved.
+              <p class="footer-text" style="margin: 10px 0 0; font-size: 13px; color: #9CA3AF;">
+                &copy; {{year}} BeigeAI. All rights reserved.
               </p>
+              <div class="logo-container"
+                style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF; margin-top: 30px;">
+                <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
+                  alt="Beige" width="110" style="display: block; border: 0;">
+              </div>
             </td>
           </tr>
-
         </table>
       </td>
     </tr>
   </table>
-
 </body>
+
 </html>

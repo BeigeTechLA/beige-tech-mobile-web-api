@@ -402,6 +402,178 @@ async function listAdminDisputes(filters = {}) {
   };
 }
 
+function hasUploadedFiles(files) {
+  if (!files) return false;
+  if (Array.isArray(files)) return files.length > 0;
+  if (typeof files === 'object') {
+    return Object.values(files).some((value) => Array.isArray(value) ? value.length > 0 : Boolean(value));
+  }
+  return false;
+}
+
+async function getClientContext(userContext = {}) {
+  const userId = toPositiveInt(userContext.userId);
+  if (!userId) {
+    const error = new Error('Authentication required');
+    error.statusCode = 401;
+    throw error;
+  }
+
+  const user = await db.users.findByPk(userId, { attributes: ['id', 'name', 'email'] });
+  if (!user) {
+    const error = new Error('User not found');
+    error.statusCode = 401;
+    throw error;
+  }
+
+  return user.get({ plain: true });
+}
+
+function buildClientDisputeWhere(filters = {}, client = {}) {
+  const Op = db.Sequelize.Op;
+  const where = buildWhere(filters);
+  const clientScope = [{ client_user_id: client.id }, { raised_by_user_id: client.id }];
+  if (client.email) {
+    where[Op.and] = [
+      ...(where[Op.and] || []),
+      {
+        [Op.or]: [
+          ...clientScope,
+          { '$booking.guest_email$': client.email },
+          { '$invoice.client_email$': client.email }
+        ]
+      }
+    ];
+  } else {
+    where[Op.and] = [
+      ...(where[Op.and] || []),
+      { [Op.or]: clientScope }
+    ];
+  }
+  return where;
+}
+
+async function assertClientCanAccessBooking(bookingId, client, transaction = null) {
+  const id = toPositiveInt(bookingId);
+  if (!id) {
+    const error = new Error('booking_id is required');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const Op = db.Sequelize.Op;
+  const booking = await db.stream_project_booking.findOne({
+    where: {
+      stream_project_booking_id: id,
+      [Op.or]: [
+        { user_id: client.id },
+        ...(client.email ? [{ guest_email: client.email }] : [])
+      ]
+    },
+    transaction
+  });
+
+  if (!booking) {
+    const error = new Error('Booking not found for this client');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  return booking;
+}
+
+async function listClientDisputes(filters = {}, userContext = {}) {
+  const client = await getClientContext(userContext);
+  const page = Math.max(parseInt(filters.page, 10) || 1, 1);
+  const limit = Math.min(Math.max(parseInt(filters.limit, 10) || 20, 1), 100);
+  const offset = (page - 1) * limit;
+
+  const result = await db.finance_disputes.findAndCountAll({
+    where: buildClientDisputeWhere(filters, client),
+    distinct: true,
+    limit,
+    offset,
+    order: getSort(filters),
+    include: includeForList(),
+    subQuery: false
+  });
+
+  return {
+    rows: result.rows.map(formatDisputeRow),
+    pagination: {
+      page,
+      limit,
+      total: result.count,
+      total_pages: Math.ceil(result.count / limit)
+    },
+    filters: {
+      statuses: DISPUTE_STATUSES,
+      categories: DISPUTE_CATEGORIES
+    }
+  };
+}
+
+async function getClientDisputeDetails(disputeId, userContext = {}) {
+  const client = await getClientContext(userContext);
+  const dispute = await db.finance_disputes.findOne({
+    where: {
+      finance_dispute_id: toPositiveInt(disputeId),
+      ...buildClientDisputeWhere({}, client)
+    },
+    include: includeForDetails(),
+    subQuery: false
+  });
+
+  if (!dispute) {
+    const error = new Error('Dispute not found');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const details = await getAdminDisputeDetails(dispute.finance_dispute_id);
+  return {
+    ...details,
+    internal_comments: (details.internal_comments || []).filter((comment) => ['client', 'all'].includes(comment.visibility))
+  };
+}
+
+async function createClientDispute(payload = {}, files = null, userContext = {}) {
+  const client = await getClientContext(userContext);
+  await assertClientCanAccessBooking(payload.booking_id || payload.shoot_id, client);
+
+  const subject = String(payload.subject || payload.dispute_type || payload.category || payload.issue_type || 'Booking dispute').trim();
+  const dispute = await createAdminDispute({
+    ...payload,
+    subject,
+    raised_by_type: 'client',
+    raised_by_user_id: client.id,
+    client_user_id: client.id,
+    status: 'open'
+  }, { userId: client.id });
+
+  if (hasUploadedFiles(files) || payload.attachments || payload.file_path) {
+    await addDisputeAttachment(dispute.dispute_id, payload, files, { userId: client.id });
+  }
+
+  return getClientDisputeDetails(dispute.dispute_id, { userId: client.id });
+}
+
+async function addClientDisputeComment(disputeId, payload = {}, userContext = {}) {
+  const client = await getClientContext(userContext);
+  await getClientDisputeDetails(disputeId, { userId: client.id });
+  return addDisputeComment(disputeId, {
+    ...payload,
+    visibility: 'all',
+    comment_type: 'status_update'
+  }, { userId: client.id });
+}
+
+async function addClientDisputeAttachment(disputeId, payload = {}, files = null, userContext = {}) {
+  const client = await getClientContext(userContext);
+  await getClientDisputeDetails(disputeId, { userId: client.id });
+  return addDisputeAttachment(disputeId, payload, files, { userId: client.id });
+}
+
 async function getAdminDisputeDetails(disputeId) {
   const dispute = await getDisputeOrThrow(disputeId, { include: includeForDetails() });
   const plain = dispute.get({ plain: true });
@@ -875,6 +1047,11 @@ async function escalateDispute(disputeId, payload = {}, options = {}) {
 }
 
 module.exports = {
+  listClientDisputes,
+  getClientDisputeDetails,
+  createClientDispute,
+  addClientDisputeComment,
+  addClientDisputeAttachment,
   getAdminDisputesDashboard,
   listAdminDisputes,
   getAdminDisputeDetails,

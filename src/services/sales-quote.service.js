@@ -3895,6 +3895,7 @@ async function createQuote(payload, user) {
   const transaction = await db.sequelize.transaction();
   try {
     const clientSnapshot = await resolveClientSnapshot(payload);
+    const { latitude, longitude } = extractCoordinatesFromPayload(payload, payload.client_address || payload.location);
     const lineItemsPayload = await buildLineItemsPayload(payload.line_items || []);
     const totals = calculateTotals(lineItemsPayload, payload);
     const validity = resolveValidity({
@@ -3937,6 +3938,8 @@ async function createQuote(payload, user) {
       client_email: clientSnapshot.client_email,
       client_phone: clientSnapshot.client_phone,
       client_address: clientSnapshot.client_address,
+      location_latitude: latitude,
+      location_longitude: longitude,
       project_description: payload.project_description || null,
       video_shoot_type: payload.video_shoot_type || null,
       quote_validity_days: validity.quote_validity_days,
@@ -4021,6 +4024,8 @@ async function duplicateQuote(salesQuoteId, user) {
       client_email: sourceQuote.client_email || null,
       client_phone: sourceQuote.client_phone || null,
       client_address: sourceQuote.client_address || null,
+      location_latitude: sourceQuote.location_latitude ?? null,
+      location_longitude: sourceQuote.location_longitude ?? null,
       project_description: sourceQuote.project_description || null,
       video_shoot_type: sourceQuote.video_shoot_type || null,
       quote_validity_days: sourceQuote.quote_validity_days || null,
@@ -4130,6 +4135,8 @@ async function updateQuote(salesQuoteId, payload, user) {
       client_email: quote.client_email,
       client_phone: quote.client_phone,
       client_address: quote.client_address,
+      location_latitude: quote.location_latitude,
+      location_longitude: quote.location_longitude,
       status: quote.status,
       discount_type: quote.discount_type,
       discount_value: quote.discount_value,
@@ -4179,7 +4186,9 @@ async function updateQuote(salesQuoteId, payload, user) {
     const newTotal = roundCurrency(totals.total);
     const collectedAmount = roundCurrency(billingState.collected_amount);
     const extraAmount = roundCurrency(Math.max(newTotal - collectedAmount, 0));
-    const reducedAmount = roundCurrency(Math.max(collectedAmount - newTotal, 0));
+    const overpaidAmount = roundCurrency(Math.max(collectedAmount - newTotal, 0));
+    const actualReductionAmount = roundCurrency(Math.max(previousTotal - newTotal, 0));
+    const reducedAmount = roundCurrency(Math.min(actualReductionAmount, overpaidAmount));
     const quoteChangeType = newTotal > previousTotal
       ? 'increase'
       : newTotal < previousTotal
@@ -4203,6 +4212,34 @@ async function updateQuote(salesQuoteId, payload, user) {
       client_email: clientSnapshot.client_email,
       client_phone: clientSnapshot.client_phone,
       client_address: clientSnapshot.client_address,
+      location_latitude:
+        payload.location_latitude !== undefined ||
+        payload.location_longitude !== undefined ||
+        payload.latitude !== undefined ||
+        payload.longitude !== undefined ||
+        payload.lat !== undefined ||
+        payload.lng !== undefined ||
+        payload.client_address !== undefined ||
+        payload.location !== undefined
+          ? extractCoordinatesFromPayload(
+              payload,
+              payload.client_address !== undefined ? payload.client_address : clientSnapshot.client_address
+            ).latitude
+          : quote.location_latitude,
+      location_longitude:
+        payload.location_latitude !== undefined ||
+        payload.location_longitude !== undefined ||
+        payload.latitude !== undefined ||
+        payload.longitude !== undefined ||
+        payload.lat !== undefined ||
+        payload.lng !== undefined ||
+        payload.client_address !== undefined ||
+        payload.location !== undefined
+          ? extractCoordinatesFromPayload(
+              payload,
+              payload.client_address !== undefined ? payload.client_address : clientSnapshot.client_address
+            ).longitude
+          : quote.location_longitude,
       project_description: payload.project_description !== undefined ? payload.project_description : quote.project_description,
       video_shoot_type: payload.video_shoot_type !== undefined ? payload.video_shoot_type : quote.video_shoot_type,
       quote_validity_days: validity.quote_validity_days,
@@ -4521,8 +4558,8 @@ async function convertQuoteToBooking(salesQuoteId, payload = {}, user) {
     full_name: quoteDetails.client_name || null,
     phone: quoteDetails.client_phone || null,
     location: quoteDetails.client_address || null,
-    location_latitude: null,
-    location_longitude: null,
+    location_latitude: quoteDetails.location_latitude ?? quoteDetails.latitude ?? null,
+    location_longitude: quoteDetails.location_longitude ?? quoteDetails.longitude ?? null,
     content_type: roleData.content_type,
     shoot_type: mapQuoteShootTypeToBookingShootType(quoteDetails.video_shoot_type),
     quote_shoot_type_label: quoteDetails.video_shoot_type || null,
@@ -4598,8 +4635,8 @@ async function buildPaymentBookingPrefillDataFromQuote(quoteDetails, payload = {
     full_name: quoteDetails.client_name || null,
     phone: quoteDetails.client_phone || null,
     location: quoteDetails.client_address || null,
-    location_latitude: null,
-    location_longitude: null,
+    location_latitude: quoteDetails.location_latitude ?? quoteDetails.latitude ?? null,
+    location_longitude: quoteDetails.location_longitude ?? quoteDetails.longitude ?? null,
     content_type: roleData.content_type,
     shoot_type: mapQuoteShootTypeToBookingShootType(quoteDetails.video_shoot_type),
     quote_shoot_type_label: quoteDetails.video_shoot_type || null,
@@ -4964,43 +5001,19 @@ async function createQuotePreviewLink(salesQuoteId, user) {
     throw new Error('Set quote valid date before generating preview link');
   }
 
-  const [existingRows] = await db.sequelize.query(
+  await db.sequelize.query(
     `
-      SELECT quote_key, expires_at
-      FROM sales_quote_preview_links
+      UPDATE sales_quote_preview_links
+      SET is_active = 0,
+          updated_at = NOW()
       WHERE sales_quote_id = :salesQuoteId
         AND is_active = 1
-      ORDER BY sales_quote_preview_link_id DESC
-      LIMIT 1
     `,
     {
       replacements: { salesQuoteId },
-      type: db.Sequelize.QueryTypes.SELECT
+      type: db.Sequelize.QueryTypes.UPDATE
     }
   );
-
-  if (existingRows?.quote_key) {
-    await db.sequelize.query(
-      `
-        UPDATE sales_quote_preview_links
-        SET expires_at = :expiresAt,
-            updated_at = NOW()
-        WHERE quote_key = :quoteKey
-      `,
-      {
-        replacements: {
-          quoteKey: existingRows.quote_key,
-          expiresAt
-        },
-        type: db.Sequelize.QueryTypes.UPDATE
-      }
-    );
-
-    return {
-      quote_key: existingRows.quote_key,
-      expires_at: expiresAt.toISOString()
-    };
-  }
 
   const quoteKey = crypto.randomBytes(32).toString('hex');
 
@@ -5042,6 +5055,7 @@ async function getPublicQuoteByKey(quoteKey) {
       SELECT
         l.sales_quote_id,
         l.expires_at,
+        l.created_at,
         q.valid_until
       FROM sales_quote_preview_links l
       INNER JOIN sales_quotes q ON q.sales_quote_id = l.sales_quote_id
@@ -5078,10 +5092,14 @@ async function getPublicQuoteByKey(quoteKey) {
 
   const linkExpiresAt = linkRow.expires_at ? new Date(linkRow.expires_at) : null;
   const quoteValidUntilExpiry = getQuotePreviewExpiryFromValidUntil(linkRow.valid_until);
+  const linkCreatedAt = linkRow.created_at ? new Date(linkRow.created_at) : null;
+  const latestVersion = await getLatestQuoteVersionRecord(Number(linkRow.sales_quote_id));
+  const latestVersionCreatedAt = latestVersion?.created_at ? new Date(latestVersion.created_at) : null;
 
   if (
     (linkExpiresAt && now > linkExpiresAt) ||
-    (quoteValidUntilExpiry && now > quoteValidUntilExpiry)
+    (quoteValidUntilExpiry && now > quoteValidUntilExpiry) ||
+    (linkCreatedAt && latestVersionCreatedAt && linkCreatedAt < latestVersionCreatedAt)
   ) {
     throw new Error('Quote preview link is invalid or expired');
   }
@@ -5137,7 +5155,11 @@ async function listQuotes(query, user) {
   const page = Math.max(1, Number(query.page || 1));
   const limit = Math.min(100, Math.max(1, Number(query.limit || 20)));
   const offset = (page - 1) * limit;
-  const where = { ...buildQuoteAccessWhere(user) };
+  // Quote listing is shared across admin/sales views where reps are expected
+  // to browse all quotes. Keep strict restriction only for client role.
+  const where = isClientRole(user?.role)
+    ? { ...buildQuoteAccessWhere(user) }
+    : {};
 
   const statusFilter = normalizeQuoteFilterStatus(query.status);
   if (statusFilter?.length) {
@@ -5296,7 +5318,11 @@ async function listQuotes(query, user) {
 async function getQuoteDashboard(query, user) {
   await expireQuotesPastValidUntil();
 
-  const where = { ...buildQuoteAccessWhere(user) };
+  // Match listQuotes access: dashboard is global for sales/admin views,
+  // while clients remain restricted to their own records.
+  const where = isClientRole(user?.role)
+    ? { ...buildQuoteAccessWhere(user) }
+    : {};
 
   const statusFilter = normalizeQuoteFilterStatus(query.status);
   if (statusFilter?.length) {

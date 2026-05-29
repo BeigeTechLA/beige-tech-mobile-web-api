@@ -6,134 +6,639 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="x-apple-disable-message-reformatting">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <!-- Force light mode rendering context -->
   <meta name="color-scheme" content="light">
   <meta name="supported-color-schemes" content="light">
+
   <title>Quote Accepted Notification</title>
+
+  <style>
+    /* Global fixes to lock light mode theme across clients */
+    :root {
+      color-scheme: light !important;
+      supported-color-schemes: light !important;
+    }
+
+    /* Force light background and dark text colors in strict dark mode clients */
+    @media (prefers-color-scheme: dark) {
+
+      body,
+      .body-table {
+        background-color: #F7F7F7 !important;
+        color: #484848 !important;
+      }
+
+      .main-card {
+        background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%) !important;
+      }
+
+      .inner-white-card {
+        background-color: #FFFFFF !important;
+      }
+
+      .speed-notice-banner {
+        background-color: #FEEFD8 !important;
+      }
+
+      .speed-notice-icon {
+        background-color: #EFC37D !important;
+      }
+
+      .info-block-gray {
+        background-color: #F8F8F8 !important;
+      }
+
+      .suggested-step-card {
+        background: linear-gradient(117deg, #FFFCF6 -4.45%, #FFF 137.38%) !important;
+      }
+
+      h1,
+      h2,
+      .dark-text,
+      .lead-header-label {
+        color: #000000 !important;
+      }
+
+      .muted-label {
+        color: #525252 !important;
+      }
+
+      .sub-heading-text {
+        color: #707070 !important;
+      }
+
+      .footer-text {
+        color: #3C3B3B !important;
+      }
+
+      .logo-container {
+        background-color: #FFFFFF !important;
+      }
+    }
+
+    /* Outlook specific dark mode app overrides */
+    [data-ogsc] body,
+    [data-ogsc] .body-table {
+      background-color: #F7F7F7 !important;
+      color: #484848 !important;
+    }
+
+    [data-ogsc] .main-card {
+      background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%) !important;
+    }
+
+    [data-ogsc] .inner-white-card {
+      background-color: #FFFFFF !important;
+    }
+
+    [data-ogsc] .speed-notice-banner {
+      background-color: #FEEFD8 !important;
+    }
+
+    [data-ogsc] .speed-notice-icon {
+      background-color: #EFC37D !important;
+    }
+
+    [data-ogsc] .info-block-gray {
+      background-color: #F8F8F8 !important;
+    }
+
+    [data-ogsc] .suggested-step-card {
+      background: linear-gradient(117deg, #FFFCF6 -4.45%, #FFF 137.38%) !important;
+    }
+
+    [data-ogsc] h1,
+    [data-ogsc] h2,
+    [data-ogsc] .dark-text,
+    [data-ogsc] .lead-header-label {
+      color: #000000 !important;
+    }
+
+    [data-ogsc] .muted-label {
+      color: #525252 !important;
+    }
+
+    [data-ogsc] .sub-heading-text {
+      color: #707070 !important;
+    }
+
+    [data-ogsc] .footer-text {
+      color: #3C3B3B !important;
+    }
+
+    [data-ogsc] .logo-container {
+      background-color: #FFFFFF !important;
+    }
+  </style>
 </head>
 
-<body style="margin: 0; padding: 0; font-family:'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #F7F7F7 !important; color: #484848 !important;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #F7F7F7 !important; padding: 40px 20px;">
+<body
+  style="margin: 0; padding: 0; font-family:'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #F7F7F7; color: #484848; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">
+  <table class="body-table" width="100%" cellpadding="0" cellspacing="0"
+    style="background-color: #F7F7F7; padding: 40px 20px;">
     <tr>
       <td align="center">
-        <table width="620" cellpadding="0" cellspacing="0"
-          style="width: 100% !important; max-width: 620px !important; background: #FFFFFF !important; border: 1px solid #E6E2D8; border-radius: 24px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.04);">
+        <table class="main-card" width="600" cellpadding="0" cellspacing="0"
+          style="background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%); border: 1px solid rgba(232, 209, 171, 0.3); border-radius: 24px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.04);">
 
+          <!-- Beige Logo Container -->
           <tr>
-            <td style="background: linear-gradient(90deg, #121212 0%, #2A2A2A 100%); padding: 30px 34px;">
-              <div style="font-size: 14px; letter-spacing: 1.6px; text-transform: uppercase; color: #E8D1AB; padding-bottom: 10px;">
-                Sales Notification
+            <td align="center" style="padding: 40px 0 36px;">
+              <div class="logo-container"
+                style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF; box-shadow: 0 8px 24px 0 rgba(149, 157, 165, 0.20);">
+                <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
+                  alt="Beige" width="110" style="display: block; border: 0;">
               </div>
-              <h1 style="margin: 0; font-size: 34px; line-height: 1.15; color: #FFFFFF; font-weight: 600;">
+              <div style="padding: 36px 40px 0;">
+                <img
+                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                  alt="Line Separator" width="100%" style="display: block; border: 0;">
+              </div>
+            </td>
+          </tr>
+
+          <!-- Header Group -->
+          <tr>
+            <td style="padding: 0 40px; text-align: center;">
+              <h1 class="dark-text"
+                style="margin: 0; color: #000000; font-size: 44px; font-weight: 400; text-transform: uppercase; letter-spacing: -2px;">
+                Quote Accepted</h1>
+              <p class="sub-heading-text" style="margin: 16px 0 0; font-size: 26px; color: #707070; line-height: 1.5;">
                 A client accepted their quote
-              </h1>
+              </p>
             </td>
           </tr>
 
+          <!-- Primary Details Frame -->
           <tr>
-            <td style="padding: 32px 34px 18px;">
-              <table width="100%" cellpadding="0" cellspacing="0" style="background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%) !important; border: 1px solid rgba(232, 209, 171, 0.35); border-radius: 24px;">
-                <tr>
-                  <td style="padding: 28px 26px;">
-                    <div style="font-size: 15px; color: #6A655D; line-height: 1.7; padding-bottom: 8px;">
-                      Quote
-                    </div>
-                    <div style="font-size: 28px; color: #000000; line-height: 1.2; font-weight: 600; padding-bottom: 18px;">
-                      {{quote_number}}
-                    </div>
-                    <div style="font-size: 18px; color: #403E3E; line-height: 1.7;">
-                      <strong>{{client_name}}</strong> has accepted the proposal for
-                      <strong>{{project_description}}</strong>.
-                    </div>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
+            <td style="padding: 30px 20px;">
+              <table class="inner-white-card" align="center" border="0" cellpadding="0" cellspacing="0" width="100%"
+                style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #FDEED7; border-radius: 36px; box-shadow: 0 7px 29px 0 rgba(100, 100, 111, 0.20); padding: 20px;">
 
-          <tr>
-            <td style="padding: 0 34px 34px;">
-              <table width="100%" cellpadding="0" cellspacing="0" style="background-color: #FAFAF8; border: 1px solid #ECE9E2; border-radius: 24px;">
+                <!-- High-Priority Conversion Badge -->
                 <tr>
-                  <td style="padding: 26px 26px 12px; font-size: 24px; font-weight: 600; color: #000000;">
-                    Quote Details
+                  <td class="speed-notice-banner"
+                    style="background-color: #FFFCF6; border-radius: 18px; border: solid 1px #A9A9A9;">
+                    <table style="padding: 20px;">
+                      <tr>
+                        <td style="vertical-align: text-top;">
+                          <div class="speed-notice-icon"
+                            style="background-color: #E8D1AB; border-radius: 100px; padding: 10px;">
+                            <img
+                              src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/Thunder.png"
+                              alt="Thunder Icon" width="100%" style="display: block; border: 0;">
+                          </div>
+                        </td>
+                        <td>
+                          <p class="muted-label"
+                            style="margin: 0 0 0 20px; color: #525252; font-size: 18px; font-style: normal; line-height: 22px;">
+                            <strong>{{client_name}}</strong> accepted quote <strong>{{quote_number}}</strong> for
+                            {{project_description}}.
+                          </p>
+                        </td>
+                      </tr>
+                    </table>
                   </td>
                 </tr>
                 <tr>
-                  <td style="padding: 0 26px 26px;">
-                    <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse: collapse;">
+                  <td align="center" style="padding:20px 40px;">
+                    <h2 class="dark-text" style="margin: 0; font-size: 30px; font-weight: 600; color: #000000;">Quote
+                      Details</h2>
+                  </td>
+                </tr>
+
+                <!-- Structured Dynamic Breakdown Block -->
+                <tr>
+                  <td style="padding: 0;">
+                    <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%"
+                      style="max-width: 500px; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;">
                       <tr>
-                        <td style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">Client Name</td>
-                        <td align="right" style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">{{client_name}}</td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">Client Email</td>
-                        <td align="right" style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">{{client_email}}</td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">Client Phone</td>
-                        <td align="right" style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">{{client_phone}}</td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">Shoot Type</td>
-                        <td align="right" style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">{{shoot_type}}</td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">Project Description</td>
-                        <td align="right" style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">{{project_description}}</td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">Location</td>
-                        <td align="right" style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">{{location}}</td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">{{accepted_amount_label}}</td>
-                        <td align="right" style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">$ {{proposal_amount}}</td>
-                      </tr>
-                      {{#if is_additional_payment}}
-                      <tr>
-                        <td style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">Previously Paid</td>
-                        <td align="right" style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">$ {{previously_paid_amount}}</td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">Revised Quote Total</td>
-                        <td align="right" style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">$ {{revised_total}}</td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">Additional Amount Accepted</td>
-                        <td align="right" style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">$ {{additional_amount}}</td>
-                      </tr>
-                      {{/if}}
-                      {{#if is_partial_payment}}
-                      <tr>
-                        <td style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">Previously Paid</td>
-                        <td align="right" style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">$ {{previously_paid_amount}}</td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">Quote Total</td>
-                        <td align="right" style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">$ {{revised_total}}</td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">Remaining Amount Accepted</td>
-                        <td align="right" style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">$ {{proposal_amount}}</td>
-                      </tr>
-                      {{/if}}
-                      {{#if is_reduced_payment}}
-                      <tr>
-                        <td style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">Previously Paid</td>
-                        <td align="right" style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">$ {{previously_paid_amount}}</td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">Revised Quote Total</td>
-                        <td align="right" style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">$ {{revised_total}}</td>
-                      </tr>
-                      <tr>
-                        <td style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 14px; color: #6A655D;">Reduction Recorded</td>
-                        <td align="right" style="padding: 14px 0; border-bottom: 1px solid #E5E1D8; font-size: 15px; color: #000000; font-weight: 600;">$ {{reduced_amount}}</td>
-                      </tr>
-                      {{/if}}
-                      <tr>
-                        <td style="padding: 14px 0 0; font-size: 14px; color: #6A655D;">Accepted At</td>
-                        <td align="right" style="padding: 14px 0 0; font-size: 15px; color: #000000; font-weight: 600;">{{accepted_at}}</td>
+                        <td align="center" style="padding: 0;">
+                          <table class="info-block-gray" border="0" cellpadding="0" cellspacing="0" width="100%"
+                            style="background-color: #F8F8F8; border-radius: 36px; box-shadow: 0 7px 29px 0 rgba(100, 100, 111, 0.20);">
+                            <tr>
+                              <td align="center" style="padding: 0 40px 20px 40px;">
+                                <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse: separate;">
+
+                                  <!-- Field Row: Client Name -->
+                                  <tr>
+                                    <td style="padding: 40px 0 0;">
+                                      <table width="100%" cellpadding="0" cellspacing="0">
+                                        <tr>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="muted-label"
+                                              style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300;">
+                                              Client Name</div>
+                                          </td>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="dark-text"
+                                              style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px; text-align: right;">
+                                              {{client_name}}</div>
+                                          </td>
+                                        </tr>
+                                      </table>
+                                      <div>
+                                        <img
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                          alt="Line Separator" width="100%" style="display: block; border: 0;">
+                                      </div>
+                                    </td>
+                                  </tr>
+
+                                  <!-- Field Row: Client Email -->
+                                  <tr>
+                                    <td style="padding: 15px 0 0;">
+                                      <table width="100%" cellpadding="0" cellspacing="0">
+                                        <tr>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="muted-label"
+                                              style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300;">
+                                              Client Email</div>
+                                          </td>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="dark-text"
+                                              style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px; text-align: right;">
+                                              {{client_email}}</div>
+                                          </td>
+                                        </tr>
+                                      </table>
+                                      <div>
+                                        <img
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                          alt="Line Separator" width="100%" style="display: block; border: 0;">
+                                      </div>
+                                    </td>
+                                  </tr>
+
+                                  <!-- Field Row: Client Phone -->
+                                  <tr>
+                                    <td style="padding: 15px 0 0;">
+                                      <table width="100%" cellpadding="0" cellspacing="0">
+                                        <tr>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="muted-label"
+                                              style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300;">
+                                              Client Phone</div>
+                                          </td>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="dark-text"
+                                              style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px; text-align: right;">
+                                              {{client_phone}}</div>
+                                          </td>
+                                        </tr>
+                                      </table>
+                                      <div>
+                                        <img
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                          alt="Line Separator" width="100%" style="display: block; border: 0;">
+                                      </div>
+                                    </td>
+                                  </tr>
+
+                                  <!-- Field Row: Shoot Type -->
+                                  <tr>
+                                    <td style="padding: 15px 0 0;">
+                                      <table width="100%" cellpadding="0" cellspacing="0">
+                                        <tr>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="muted-label"
+                                              style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300;">
+                                              Shoot Type</div>
+                                          </td>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="dark-text"
+                                              style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px; text-align: right;">
+                                              {{shoot_type}}</div>
+                                          </td>
+                                        </tr>
+                                      </table>
+                                      <div>
+                                        <img
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                          alt="Line Separator" width="100%" style="display: block; border: 0;">
+                                      </div>
+                                    </td>
+                                  </tr>
+
+                                  <!-- Field Row: Project Description -->
+                                  <tr>
+                                    <td style="padding: 15px 0 0;">
+                                      <table width="100%" cellpadding="0" cellspacing="0">
+                                        <tr>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="muted-label"
+                                              style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300;">
+                                              Project Description</div>
+                                          </td>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="dark-text"
+                                              style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px; text-align: right;">
+                                              {{project_description}}</div>
+                                          </td>
+                                        </tr>
+                                      </table>
+                                      <div>
+                                        <img
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                          alt="Line Separator" width="100%" style="display: block; border: 0;">
+                                      </div>
+                                    </td>
+                                  </tr>
+
+                                  <!-- Field Row: Location -->
+                                  <tr>
+                                    <td style="padding: 15px 0 0;">
+                                      <table width="100%" cellpadding="0" cellspacing="0">
+                                        <tr>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="muted-label"
+                                              style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300;">
+                                              Location</div>
+                                          </td>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="dark-text"
+                                              style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px; text-align: right;">
+                                              {{location}}</div>
+                                          </td>
+                                        </tr>
+                                      </table>
+                                      <div>
+                                        <img
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                          alt="Line Separator" width="100%" style="display: block; border: 0;">
+                                      </div>
+                                    </td>
+                                  </tr>
+
+                                  <!-- Field Row: Primary Amount -->
+                                  <tr>
+                                    <td style="padding: 15px 0 0;">
+                                      <table width="100%" cellpadding="0" cellspacing="0">
+                                        <tr>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="muted-label"
+                                              style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300;">
+                                              {{accepted_amount_label}}</div>
+                                          </td>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="dark-text"
+                                              style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px; text-align: right;">
+                                              $ {{proposal_amount}}</div>
+                                          </td>
+                                        </tr>
+                                      </table>
+                                      <div>
+                                        <img
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                          alt="Line Separator" width="100%" style="display: block; border: 0;">
+                                      </div>
+                                    </td>
+                                  </tr>
+
+                                  <!-- Dynamic Conditional Block: Additional Payment Profile -->
+                                  {{#if is_additional_payment}}
+                                  <tr>
+                                    <td style="padding: 15px 0 0;">
+                                      <table width="100%" cellpadding="0" cellspacing="0">
+                                        <tr>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="muted-label"
+                                              style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300;">
+                                              Previously Paid</div>
+                                          </td>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="dark-text"
+                                              style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px; text-align: right;">
+                                              $ {{previously_paid_amount}}</div>
+                                          </td>
+                                        </tr>
+                                      </table>
+                                      <div>
+                                        <img
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                          alt="Line Separator" width="100%" style="display: block; border: 0;">
+                                      </div>
+                                    </td>
+                                  </tr>
+                                  <tr>
+                                    <td style="padding: 15px 0 0;">
+                                      <table width="100%" cellpadding="0" cellspacing="0">
+                                        <tr>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="muted-label"
+                                              style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300;">
+                                              Revised Quote Total</div>
+                                          </td>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="dark-text"
+                                              style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px; text-align: right;">
+                                              $ {{revised_total}}</div>
+                                          </td>
+                                        </tr>
+                                      </table>
+                                      <div>
+                                        <img
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                          alt="Line Separator" width="100%" style="display: block; border: 0;">
+                                      </div>
+                                    </td>
+                                  </tr>
+                                  <tr>
+                                    <td style="padding: 15px 0 0;">
+                                      <table width="100%" cellpadding="0" cellspacing="0">
+                                        <tr>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="muted-label"
+                                              style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300;">
+                                              Additional Amount Accepted</div>
+                                          </td>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="dark-text"
+                                              style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px; text-align: right;">
+                                              $ {{additional_amount}}</div>
+                                          </td>
+                                        </tr>
+                                      </table>
+                                      <div>
+                                        <img
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                          alt="Line Separator" width="100%" style="display: block; border: 0;">
+                                      </div>
+                                    </td>
+                                  </tr>
+                                  {{/if}}
+
+                                  <!-- Dynamic Conditional Block: Partial Payment Profile -->
+                                  {{#if is_partial_payment}}
+                                  <tr>
+                                    <td style="padding: 15px 0 0;">
+                                      <table width="100%" cellpadding="0" cellspacing="0">
+                                        <tr>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="muted-label"
+                                              style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300;">
+                                              Previously Paid</div>
+                                          </td>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="dark-text"
+                                              style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px; text-align: right;">
+                                              $ {{previously_paid_amount}}</div>
+                                          </td>
+                                        </tr>
+                                      </table>
+                                      <div>
+                                        <img
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                          alt="Line Separator" width="100%" style="display: block; border: 0;">
+                                      </div>
+                                    </td>
+                                  </tr>
+                                  <tr>
+                                    <td style="padding: 15px 0 0;">
+                                      <table width="100%" cellpadding="0" cellspacing="0">
+                                        <tr>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="muted-label"
+                                              style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300;">
+                                              Quote Total</div>
+                                          </td>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="dark-text"
+                                              style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px; text-align: right;">
+                                              $ {{revised_total}}</div>
+                                          </td>
+                                        </tr>
+                                      </table>
+                                      <div>
+                                        <img
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                          alt="Line Separator" width="100%" style="display: block; border: 0;">
+                                      </div>
+                                    </td>
+                                  </tr>
+                                  <tr>
+                                    <td style="padding: 15px 0 0;">
+                                      <table width="100%" cellpadding="0" cellspacing="0">
+                                        <tr>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="muted-label"
+                                              style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300;">
+                                              Remaining Amount Accepted</div>
+                                          </td>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="dark-text"
+                                              style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px; text-align: right;">
+                                              $ {{proposal_amount}}</div>
+                                          </td>
+                                        </tr>
+                                      </table>
+                                      <div>
+                                        <img
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                          alt="Line Separator" width="100%" style="display: block; border: 0;">
+                                      </div>
+                                    </td>
+                                  </tr>
+                                  {{/if}}
+
+                                  <!-- Dynamic Conditional Block: Reduced Payment Profile -->
+                                  {{#if is_reduced_payment}}
+                                  <tr>
+                                    <td style="padding: 15px 0 0;">
+                                      <table width="100%" cellpadding="0" cellspacing="0">
+                                        <tr>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="muted-label"
+                                              style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300;">
+                                              Previously Paid</div>
+                                          </td>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="dark-text"
+                                              style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px; text-align: right;">
+                                              $ {{previously_paid_amount}}</div>
+                                          </td>
+                                        </tr>
+                                      </table>
+                                      <div>
+                                        <img
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                          alt="Line Separator" width="100%" style="display: block; border: 0;">
+                                      </div>
+                                    </td>
+                                  </tr>
+                                  <tr>
+                                    <td style="padding: 15px 0 0;">
+                                      <table width="100%" cellpadding="0" cellspacing="0">
+                                        <tr>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="muted-label"
+                                              style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300;">
+                                              Revised Quote Total</div>
+                                          </td>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="dark-text"
+                                              style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px; text-align: right;">
+                                              $ {{revised_total}}</div>
+                                          </td>
+                                        </tr>
+                                      </table>
+                                      <div>
+                                        <img
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                          alt="Line Separator" width="100%" style="display: block; border: 0;">
+                                      </div>
+                                    </td>
+                                  </tr>
+                                  <tr>
+                                    <td style="padding: 15px 0 0;">
+                                      <table width="100%" cellpadding="0" cellspacing="0">
+                                        <tr>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="muted-label"
+                                              style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300;">
+                                              Reduction Recorded</div>
+                                          </td>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="dark-text"
+                                              style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px; text-align: right;">
+                                              $ {{reduced_amount}}</div>
+                                          </td>
+                                        </tr>
+                                      </table>
+                                      <div>
+                                        <img
+                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                          alt="Line Separator" width="100%" style="display: block; border: 0;">
+                                      </div>
+                                    </td>
+                                  </tr>
+                                  {{/if}}
+
+                                  <!-- Field Row: Timestamp -->
+                                  <tr>
+                                    <td style="padding: 15px 0 0;">
+                                      <table width="100%" cellpadding="0" cellspacing="0">
+                                        <tr>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="muted-label"
+                                              style="font-size: 18px; color: #525252; line-height: 20px; font-weight: 300;">
+                                              Accepted At</div>
+                                          </td>
+                                          <td style="padding-bottom: 15px;">
+                                            <div class="dark-text"
+                                              style="font-size: 18px; font-weight: 600; color: #000000; line-height: 20px; text-align: right;">
+                                              {{accepted_at}}</div>
+                                          </td>
+                                        </tr>
+                                      </table>
+                                    </td>
+                                  </tr>
+
+                                </table>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
                       </tr>
                     </table>
                   </td>
@@ -142,31 +647,35 @@
             </td>
           </tr>
 
+          <!-- Contextual Next-Step Recommendation Box -->
           <tr>
-            <td style="padding: 0 34px 34px;">
-              <table width="100%" cellpadding="0" cellspacing="0" style="background: #111111; border-radius: 22px;">
-                <tr>
-                  <td style="padding: 22px 24px;">
-                    <div style="font-size: 14px; letter-spacing: 1.3px; text-transform: uppercase; color: #E8D1AB; padding-bottom: 8px;">
-                      Next Action
-                    </div>
-                    <div style="font-size: 18px; line-height: 1.6; color: #FFFFFF;">
-                      Prepare and send the invoice to the client so the deal can move into the next stage.
-                    </div>
-                  </td>
-                </tr>
-              </table>
+            <td style="padding: 0 30px;">
+              <div class="suggested-step-card"
+                style="border: solid 1px #C0BCBC; padding: 20px; font-size: 18px; font-style: italic; line-height: 22px; letter-spacing: 0.415px; border-radius: 18px; background: #FFFCF6; background: linear-gradient(117deg, #FFFCF6 -4.45%, #FFF 137.38%);">
+                <p class="lead-header-label" style="margin: 0 0 10px; color: #000000; font-weight: 600;">Next Action
+                </p>
+                <p class="muted-label" style="margin: 0; color: #525252; font-style: normal;">Prepare and send the
+                  invoice to the client so the deal can move into the next stage.</p>
+              </div>
             </td>
           </tr>
 
+          <!-- Footer -->
           <tr>
-            <td align="center" style="padding: 0 34px 44px;">
+            <td align="center" style="padding: 44px 34px ;">
               <div style="padding-bottom: 24px;">
-                <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png" alt="Line Separator" width="100%" style="display: block; border: 0;">
+                <img
+                  src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                  alt="Line Separator" width="100%" style="display: block; border: 0;">
               </div>
               <p style="margin: 0; font-size: 14px; color: #6C6C6C; line-height: 1.7;">
                 This is an automated sales notification from Beige AI.
               </p>
+              <div class="logo-container"
+                style="display: inline-block; border: 1px solid rgba(232, 209, 171, 0.4); padding: 12px 32px; border-radius: 100px; background-color: #FFFFFF; margin-top: 30px;">
+                <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/logos/beige_logo_vb.png"
+                  alt="Beige" width="110" style="display: block; border: 0;">
+              </div>
             </td>
           </tr>
         </table>

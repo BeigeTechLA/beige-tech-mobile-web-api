@@ -4,6 +4,7 @@ const affiliateController = require('./affiliate.controller');
 const { ensureProjectForBooking } = require('./projects.controller');
 const externalFileManagerController = require('./external-file-manager.controller');
 const accountCreditService = require('../services/account-credit.service');
+const financeService = require('../services/finance.service');
 const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
 const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 const googleSheetService = require('../utils/googleSheetsService');
@@ -1987,9 +1988,23 @@ exports.confirmPayment = async (req, res) => {
         );
         console.log(`Booking ${booking_id} marked as payment completed`);
 
+        // await financeService.syncBookingFinance(booking_id, {
+        //   transaction,
+        //   userId: resolvedUserId || null
+        // });
+
+      } catch (bookingUpdateError) {
+        console.error('Failed to update booking status:', bookingUpdateError);
+        // Don't fail the payment if booking update fails
+      }
+    }
+
+    await transaction.commit();
+
+    if (booking_id) {
+      try {
         projectSync = await ensureProjectAfterPayment({
           bookingId: booking_id,
-          transaction,
           initiatedByUserId: resolvedUserId || null,
           ipAddress: req.ip || req.connection?.remoteAddress,
           userAgent: req.headers['user-agent'],
@@ -1998,13 +2013,13 @@ exports.confirmPayment = async (req, res) => {
           stream_project_booking_id: booking_id,
           project_name: notes || shoot_type || `Booking_${booking_id}`,
         });
-      } catch (bookingUpdateError) {
-        console.error('Failed to update booking status:', bookingUpdateError);
-        // Don't fail the payment if booking update fails
+        await financeService.syncBookingFinance(booking_id, {
+          userId: resolvedUserId || null
+        });
+      } catch (postPaymentError) {
+        console.error('Post-payment sync failed:', postPaymentError.message);
       }
     }
-
-    await transaction.commit();
 
     // if (booking_id) {
     //   const paymentMethod =
@@ -2587,17 +2602,25 @@ exports.confirmPaymentMulti = async (req, res) => {
       transaction
     });
 
-    const projectSync = await ensureProjectAfterPayment({
+    let projectSync = await ensureProjectAfterPayment({
       bookingId: booking_id,
       transaction,
       initiatedByUserId: req.user?.userId || booking.user_id || null,
       ipAddress: req.ip || req.connection?.remoteAddress,
       userAgent: req.headers['user-agent'],
     });
-    const externalWorkspaceSync = await syncExternalWorkspaceAfterPayment(booking);
+    let externalWorkspaceSync = await syncExternalWorkspaceAfterPayment(booking);
 
 
     await transaction.commit();
+
+    try {
+      await financeService.syncBookingFinance(booking_id, {
+        userId: req.user?.userId || booking.user_id || null
+      });
+    } catch (postPaymentError) {
+      console.error('Post-payment sync failed:', postPaymentError.message);
+    }
 
     const lead = await db.sales_leads.findOne({
       where: { booking_id }
@@ -3109,6 +3132,21 @@ exports.handleStripeWebhook = async (req, res) => {
 
       await transaction.commit();
       console.log(`Webhook: booking ${booking_id} marked as paid`);
+
+      try {
+        await ensureProjectAfterPayment({
+          bookingId: booking_id,
+          initiatedByUserId: booking.user_id || null,
+          ipAddress: req.ip || req.connection?.remoteAddress,
+          userAgent: req.headers['user-agent'],
+        });
+        await syncExternalWorkspaceAfterPayment(booking);
+        await financeService.syncBookingFinance(booking_id, {
+          userId: booking.user_id || null
+        });
+      } catch (postPaymentError) {
+        console.error('Webhook post-payment sync failed:', postPaymentError.message);
+      }
       
       const lead = await db.sales_leads.findOne({
         where: { booking_id }
