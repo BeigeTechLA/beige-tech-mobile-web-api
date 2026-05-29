@@ -2725,7 +2725,7 @@ const sendBeigeCreditsReceivedEmail = async (data = {}) => {
   const to = data?.to_email || data?.email;
   const amount = formatCreditAmount(data?.amount || data?.credited_amount || 0);
   const walletBalance = formatCreditAmount(data?.wallet_balance || 0);
-  const firstName = getFirstName(data?.client_name || data?.name || '', data?.first_name || 'there');
+  const firstName = getFirstName(data?.first_name || data?.client_name || data?.name || '', '') || 'there';
 
   return sendEmail({
     to,
@@ -2733,7 +2733,7 @@ const sendBeigeCreditsReceivedEmail = async (data = {}) => {
     templateId: BEIGE_CREDIT_RECEIVED_TEMPLATE_ID,
     dynamicTemplateData: {
       first_name: firstName,
-      credited_amount: `${amount} Beige Credits`,
+      credited_amount: `${amount}`,
       added_by: data?.added_by || 'Beige Admin',
       amount_added: `${amount} Beige Credits`,
       expiry_date: data?.expires_at ? formatDate(data.expires_at) : 'No expiry',
