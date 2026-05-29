@@ -3895,6 +3895,7 @@ async function createQuote(payload, user) {
   const transaction = await db.sequelize.transaction();
   try {
     const clientSnapshot = await resolveClientSnapshot(payload);
+    const { latitude, longitude } = extractCoordinatesFromPayload(payload, payload.client_address || payload.location);
     const lineItemsPayload = await buildLineItemsPayload(payload.line_items || []);
     const totals = calculateTotals(lineItemsPayload, payload);
     const validity = resolveValidity({
@@ -3937,6 +3938,8 @@ async function createQuote(payload, user) {
       client_email: clientSnapshot.client_email,
       client_phone: clientSnapshot.client_phone,
       client_address: clientSnapshot.client_address,
+      location_latitude: latitude,
+      location_longitude: longitude,
       project_description: payload.project_description || null,
       video_shoot_type: payload.video_shoot_type || null,
       quote_validity_days: validity.quote_validity_days,
@@ -4021,6 +4024,8 @@ async function duplicateQuote(salesQuoteId, user) {
       client_email: sourceQuote.client_email || null,
       client_phone: sourceQuote.client_phone || null,
       client_address: sourceQuote.client_address || null,
+      location_latitude: sourceQuote.location_latitude ?? null,
+      location_longitude: sourceQuote.location_longitude ?? null,
       project_description: sourceQuote.project_description || null,
       video_shoot_type: sourceQuote.video_shoot_type || null,
       quote_validity_days: sourceQuote.quote_validity_days || null,
@@ -4130,6 +4135,8 @@ async function updateQuote(salesQuoteId, payload, user) {
       client_email: quote.client_email,
       client_phone: quote.client_phone,
       client_address: quote.client_address,
+      location_latitude: quote.location_latitude,
+      location_longitude: quote.location_longitude,
       status: quote.status,
       discount_type: quote.discount_type,
       discount_value: quote.discount_value,
@@ -4205,6 +4212,34 @@ async function updateQuote(salesQuoteId, payload, user) {
       client_email: clientSnapshot.client_email,
       client_phone: clientSnapshot.client_phone,
       client_address: clientSnapshot.client_address,
+      location_latitude:
+        payload.location_latitude !== undefined ||
+        payload.location_longitude !== undefined ||
+        payload.latitude !== undefined ||
+        payload.longitude !== undefined ||
+        payload.lat !== undefined ||
+        payload.lng !== undefined ||
+        payload.client_address !== undefined ||
+        payload.location !== undefined
+          ? extractCoordinatesFromPayload(
+              payload,
+              payload.client_address !== undefined ? payload.client_address : clientSnapshot.client_address
+            ).latitude
+          : quote.location_latitude,
+      location_longitude:
+        payload.location_latitude !== undefined ||
+        payload.location_longitude !== undefined ||
+        payload.latitude !== undefined ||
+        payload.longitude !== undefined ||
+        payload.lat !== undefined ||
+        payload.lng !== undefined ||
+        payload.client_address !== undefined ||
+        payload.location !== undefined
+          ? extractCoordinatesFromPayload(
+              payload,
+              payload.client_address !== undefined ? payload.client_address : clientSnapshot.client_address
+            ).longitude
+          : quote.location_longitude,
       project_description: payload.project_description !== undefined ? payload.project_description : quote.project_description,
       video_shoot_type: payload.video_shoot_type !== undefined ? payload.video_shoot_type : quote.video_shoot_type,
       quote_validity_days: validity.quote_validity_days,
@@ -4523,8 +4558,8 @@ async function convertQuoteToBooking(salesQuoteId, payload = {}, user) {
     full_name: quoteDetails.client_name || null,
     phone: quoteDetails.client_phone || null,
     location: quoteDetails.client_address || null,
-    location_latitude: null,
-    location_longitude: null,
+    location_latitude: quoteDetails.location_latitude ?? quoteDetails.latitude ?? null,
+    location_longitude: quoteDetails.location_longitude ?? quoteDetails.longitude ?? null,
     content_type: roleData.content_type,
     shoot_type: mapQuoteShootTypeToBookingShootType(quoteDetails.video_shoot_type),
     quote_shoot_type_label: quoteDetails.video_shoot_type || null,
@@ -4600,8 +4635,8 @@ async function buildPaymentBookingPrefillDataFromQuote(quoteDetails, payload = {
     full_name: quoteDetails.client_name || null,
     phone: quoteDetails.client_phone || null,
     location: quoteDetails.client_address || null,
-    location_latitude: null,
-    location_longitude: null,
+    location_latitude: quoteDetails.location_latitude ?? quoteDetails.latitude ?? null,
+    location_longitude: quoteDetails.location_longitude ?? quoteDetails.longitude ?? null,
     content_type: roleData.content_type,
     shoot_type: mapQuoteShootTypeToBookingShootType(quoteDetails.video_shoot_type),
     quote_shoot_type_label: quoteDetails.video_shoot_type || null,
