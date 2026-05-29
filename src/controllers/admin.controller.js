@@ -165,6 +165,77 @@ const resolveAdminBookingClientName = async (booking = null, fallbackClientName 
   return null;
 };
 
+const resolveAdminBookingClientContact = async (booking = null) => {
+  if (!booking) {
+    return { full_name: null, email: null, phone_number: null };
+  }
+
+  const bookingJson = typeof booking.toJSON === 'function' ? booking.toJSON() : booking;
+  const bookingId = bookingJson.stream_project_booking_id;
+  const userId = bookingJson.user_id;
+
+  const [bookingUser, linkedClient, linkedLead, linkedClientLead] = await Promise.all([
+    userId
+      ? users.findOne({
+          where: { id: userId },
+          attributes: ['name', 'email', 'phone_number'],
+          raw: true
+        })
+      : Promise.resolve(null),
+    userId
+      ? clients.findOne({
+          where: { user_id: userId, is_active: 1 },
+          attributes: ['name', 'email', 'phone_number'],
+          raw: true
+        })
+      : Promise.resolve(null),
+    bookingId
+      ? sales_leads.findOne({
+          where: { booking_id: bookingId, is_active: 1 },
+          attributes: ['client_name', 'guest_email', 'phone'],
+          raw: true
+        })
+      : Promise.resolve(null),
+    bookingId
+      ? client_leads.findOne({
+          where: { booking_id: bookingId, is_active: 1 },
+          attributes: ['client_name', 'guest_email', 'phone'],
+          raw: true
+        })
+      : Promise.resolve(null)
+  ]);
+
+  const email =
+    bookingUser?.email ||
+    linkedClient?.email ||
+    linkedLead?.guest_email ||
+    linkedClientLead?.guest_email ||
+    bookingJson.guest_email ||
+    null;
+
+  let fullName =
+    bookingUser?.name ||
+    linkedClient?.name ||
+    linkedLead?.client_name ||
+    linkedClientLead?.client_name ||
+    null;
+
+  if (!fullName && email) {
+    fullName = String(email).split('@')[0].replace(/[._-]+/g, ' ').trim() || null;
+  }
+
+  return {
+    full_name: fullName,
+    email,
+    phone_number:
+      bookingUser?.phone_number ||
+      linkedClient?.phone_number ||
+      linkedLead?.phone ||
+      linkedClientLead?.phone ||
+      null
+  };
+};
+
 const resolveAdminBookingShootAmount = async (booking = null, fallbackShootAmount = null) => {
   if (fallbackShootAmount !== undefined && fallbackShootAmount !== null) {
     return fallbackShootAmount;
@@ -10051,6 +10122,138 @@ exports.getProjectFormByProjectId = async (req, res) => {
             error: true, 
             message: "Internal server error", 
             details: error.message 
+        });
+    }
+};
+
+exports.submitProjectFormByAdmin = async (req, res) => {
+    try {
+        const admin_user_id = req.user?.userId || null;
+        const {
+            onsite_contact_info,
+            project_types,
+            project_type_other,
+            brief_overview,
+            num_people_attending,
+            event_agenda,
+            location_address,
+            location_specification,
+            location_scouting_refs,
+            shot_list,
+            visual_references,
+            specific_instructions,
+            creative_dress_code,
+            post_production_ideas,
+            preferred_songs,
+            additional_info,
+            wants_to_learn_more,
+            form_user_friendliness_rating
+        } = req.body || {};
+        const project_id = req.body?.project_id;
+
+        if (!project_id || !brief_overview) {
+            return res.status(400).json({
+                success: false,
+                message: "Project ID and brief overview are required."
+            });
+        }
+
+        const booking = await stream_project_booking.findByPk(project_id);
+        if (!booking) {
+            return res.status(404).json({
+                success: false,
+                message: "Project/Booking not found."
+            });
+        }
+        const clientDetails = await resolveAdminBookingClientContact(booking);
+
+        const formPayload = {
+            project_id,
+            onsite_contact_info: onsite_contact_info || 'N/A',
+            project_types,
+            project_type_other,
+            brief_overview,
+            num_people_attending,
+            event_agenda: event_agenda || 'TBD',
+            location_address,
+            location_specification: location_specification || 'Indoors',
+            location_scouting_refs,
+            shot_list: shot_list || 'TBD',
+            visual_references: visual_references || 'TBD',
+            specific_instructions,
+            creative_dress_code: creative_dress_code || 'None',
+            post_production_ideas,
+            preferred_songs,
+            additional_info,
+            wants_to_learn_more: wants_to_learn_more ? 1 : 0,
+            form_user_friendliness_rating,
+            created_by: admin_user_id
+        };
+
+        const existingSubmission = await project_form_submissions.findOne({
+            where: { project_id, is_active: 1 },
+            order: [['created_at', 'DESC']]
+        });
+
+        let submission = existingSubmission;
+        const isUpdate = !!existingSubmission;
+
+        if (existingSubmission) {
+            await existingSubmission.update(formPayload);
+        } else {
+            submission = await project_form_submissions.create({
+                ...formPayload,
+                created_at: new Date()
+            });
+        }
+
+        const lead = await sales_leads.findOne({
+            where: { booking_id: project_id },
+            attributes: ['lead_id']
+        });
+
+        if (lead) {
+            await sales_lead_activities.create({
+                lead_id: lead.lead_id,
+                activity_type: 'form_submitted',
+                notes: isUpdate
+                    ? 'Admin updated the detailed Project Form.'
+                    : 'Admin submitted the detailed Project Form.',
+                performed_by_user_id: admin_user_id,
+                created_at: new Date()
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: isUpdate
+                ? "Project form updated successfully."
+                : "Project form submitted and saved successfully.",
+            is_submitted: true,
+            client_details: clientDetails,
+            data: {
+                submission_id: submission.id,
+                project_id: submission.project_id,
+                needs_attention: buildShootNeedsAttention(
+                    {
+                        ...booking.toJSON(),
+                        booking_days: await db.stream_project_booking_days.findAll({
+                            where: { stream_project_booking_id: booking.stream_project_booking_id },
+                            attributes: ['event_date'],
+                            raw: true
+                        })
+                    },
+                    submission
+                )
+            }
+        });
+
+    } catch (error) {
+        console.error('SubmitProjectFormByAdmin Error:', error);
+        return res.status(500).json({
+            success: false,
+            message: "Internal Server Error",
+            error: error.message
         });
     }
 };
