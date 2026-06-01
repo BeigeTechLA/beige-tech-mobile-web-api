@@ -1768,7 +1768,7 @@ exports.getProjectDetails = async (req, res) => {
     const shootNotesCount = shootNotesCountMap.get(Number(projectJson.stream_project_booking_id)) || 0;
 
     const normalizedGuestEmail = String(projectJson.guest_email || '').trim().toLowerCase() || null;
-    const [emailUserRecord, emailClientRecord] = await Promise.all([
+    const [emailUserRecord] = await Promise.all([
       normalizedGuestEmail
         ? users.findOne({
             where: Sequelize.where(
@@ -1776,6 +1776,17 @@ exports.getProjectDetails = async (req, res) => {
               normalizedGuestEmail
             ),
             attributes: ['id', 'email'],
+            raw: true
+          })
+        : Promise.resolve(null),
+    ]);
+
+    const matchedUserId = projectJson.user_id || emailUserRecord?.id || null;
+    const [clientByUser, clientByEmail] = await Promise.all([
+      matchedUserId
+        ? clients.findOne({
+            where: { user_id: matchedUserId, is_active: 1 },
+            attributes: ['client_id', 'user_id', 'email'],
             raw: true
           })
         : Promise.resolve(null),
@@ -1793,11 +1804,13 @@ exports.getProjectDetails = async (req, res) => {
             attributes: ['client_id', 'user_id', 'email'],
             raw: true
           })
-        : Promise.resolve(null)
+        : Promise.resolve(null),
     ]);
 
-    const isRegisteredUser = Boolean(projectJson.user_id || emailUserRecord?.id);
-    const isClientOnly = !isRegisteredUser && Boolean(emailClientRecord?.client_id);
+    const resolvedClientRecord = clientByUser || clientByEmail || null;
+    const isRegisteredUser = Boolean(matchedUserId);
+    const isClient = Boolean(resolvedClientRecord?.client_id);
+    const isClientOnly = !isRegisteredUser && isClient;
     const contactRegistrationType = isRegisteredUser
       ? 'registered_user'
       : isClientOnly
@@ -1955,10 +1968,12 @@ exports.getProjectDetails = async (req, res) => {
           notes_count: shootNotesCount,
           contact_registration_type: contactRegistrationType,
           is_registered_user: isRegisteredUser,
+          is_client: isClient,
           is_client_only: isClientOnly,
           is_unregistered_contact: !isRegisteredUser && !isClientOnly,
-          client_record_id: emailClientRecord?.client_id || null,
-          matched_user_id: projectJson.user_id || emailUserRecord?.id || null,
+          client_record_id: resolvedClientRecord?.client_id || null,
+          client_id: resolvedClientRecord?.client_id || null,
+          matched_user_id: matchedUserId,
           is_quote_converted_booking: isQuoteConvertedBooking,
           converted_sales_quote_id: convertedSalesQuoteId,
           converted_sales_quote_number: convertedSalesQuote?.quote_number || null,
@@ -1973,8 +1988,10 @@ exports.getProjectDetails = async (req, res) => {
         lead_details: lead, // Sales rep, activities, etc.
         contact_registration_type: contactRegistrationType,
         is_registered_user: isRegisteredUser,
+        is_client: isClient,
         is_client_only: isClientOnly,
         is_unregistered_contact: !isRegisteredUser && !isClientOnly,
+        client_id: resolvedClientRecord?.client_id || null,
         converted_sales_quote_id: convertedSalesQuoteId,
         converted_sales_quote_number: convertedSalesQuote?.quote_number || null,
         is_quote_converted_booking: isQuoteConvertedBooking,

@@ -119,6 +119,30 @@ function uploadFiles(files) {
   return filePaths;
 }
 
+const hasValue = (value) => {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') return value.trim() !== '';
+  if (Array.isArray(value)) return value.length > 0;
+  return true;
+};
+
+const buildShootNeedsAttention = (project = {}, formSubmission = null) => {
+  const missingFields = [];
+  const bookingDays = Array.isArray(project.booking_days) ? project.booking_days : [];
+  const hasDate = hasValue(project.event_date) || bookingDays.some((day) => hasValue(day.event_date));
+  const hasLocation = hasValue(project.event_location);
+  const hasOnboardingForm = !!formSubmission;
+
+  if (!hasDate) missingFields.push('date');
+  if (!hasLocation) missingFields.push('location');
+  if (!hasOnboardingForm) missingFields.push('onboarding_form');
+
+  return {
+    required: missingFields.length > 0,
+    missing_fields: missingFields,
+  };
+};
+
 function buildDateFilter(req) {
   const { range, start_date, end_date } = req.query;
 
@@ -846,7 +870,7 @@ exports.getAllProjectDetailsForUser = async (req, res) => {
 
     // ----------- FETCH ASSOCIATED DETAILS -----------
     const projectDetailsPromises = projects.map(async (project) => {
-      const [assignedCrew, assignedEquipment, assignedPostProd, quote] = await Promise.all([
+      const [assignedCrew, assignedEquipment, assignedPostProd, quote, formSubmission] = await Promise.all([
         assigned_crew.findAll({
           where: { project_id: project.stream_project_booking_id, is_active: 1 },
           include: [{ model: crew_members, as: 'crew_member', attributes: ['crew_member_id', 'first_name', 'last_name', 'primary_role'] }],
@@ -864,7 +888,13 @@ exports.getAllProjectDetailsForUser = async (req, res) => {
             where: { quote_id: project.quote_id },
             attributes: ['quote_id', 'subtotal', 'total', 'status']
           })
-          : Promise.resolve(null)
+          : Promise.resolve(null),
+        project_form_submissions.findOne({
+          where: { project_id: project.stream_project_booking_id, is_active: 1 },
+          attributes: ['id'],
+          order: [['created_at', 'DESC']],
+          raw: true
+        })
       ]);
 
       // --- ADDED: LABEL FORMATTING LOGIC ---
@@ -885,6 +915,7 @@ exports.getAllProjectDetailsForUser = async (req, res) => {
           quote_total: quote ? parseFloat(quote.total) : null,
           quote_subtotal: quote ? parseFloat(quote.subtotal) : null,
           quote_status: quote ? quote.status : null,
+          needs_attention: buildShootNeedsAttention(project.toJSON(), formSubmission),
           event_location: (() => {
             const loc = project.event_location;
             if (!loc) return null;
