@@ -2427,16 +2427,9 @@ exports.createInternalCredential = async (req, res) => {
       });
     }
 
-    const { name, email, password, phone_number, user_type, role } = req.body;
-    const normalizedUserType = Number(user_type);
-    const allowedUserTypes = [1, 5, 6, 7];
-    const allowedAdminRoles = [
-      'Production Team',
-      'Video Editors',
-      'Photo Editors',
-      'Sales',
-      'Sales Admin'
-    ];
+    const { name, email, password, phone_number, user_type, userType, role } = req.body;
+    const requestedUserType = user_type ?? userType;
+    const normalizedUserType = Number(requestedUserType);
     const normalizedRole = typeof role === 'string' ? role.trim() : '';
 
     if (!name || !email || !password || !normalizedUserType) {
@@ -2446,17 +2439,18 @@ exports.createInternalCredential = async (req, res) => {
       });
     }
 
-    if (!allowedUserTypes.includes(normalizedUserType)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid user_type. Allowed values: 1, 5, 6, 7'
-      });
-    }
+    const userTypeRecord = await UserType.findOne({
+      where: {
+        user_type_id: normalizedUserType,
+        is_active: 1
+      },
+      attributes: ['user_type_id', 'user_role']
+    });
 
-    if (normalizedUserType === 1 && normalizedRole && !allowedAdminRoles.includes(normalizedRole)) {
+    if (!userTypeRecord) {
       return res.status(400).json({
         success: false,
-        message: `Invalid role. Allowed values: ${allowedAdminRoles.join(', ')}`
+        message: 'Invalid or inactive user_type'
       });
     }
 
@@ -2479,7 +2473,7 @@ exports.createInternalCredential = async (req, res) => {
       phone_number: phone_number || null,
       password_hash: hashedPassword,
       user_type: normalizedUserType,
-      role: normalizedUserType === 1 ? (normalizedRole || null) : null,
+      role: normalizedRole || userTypeRecord.user_role || null,
       is_active: 1,
       email_verified: 1,
       created_from: 1,
@@ -2494,7 +2488,7 @@ exports.createInternalCredential = async (req, res) => {
         name: createdUser.name,
         email: createdUser.email,
         user_type: createdUser.user_type,
-        role: createdUser.role
+        role: createdUser.role || userTypeRecord.user_role
       }
     });
   } catch (error) {

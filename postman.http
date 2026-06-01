@@ -2,9 +2,11 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjIzNiwidXNlclJvbGUiOiJzYWxlc19yZXAiLCJpYXQiOjE3ODAwNTEyMzgsImV4cCI6MTc4MDY1NjAzOH0.n0O7qCVIUjFpZvLsfskMJikhPh26kiSQKNTgv289EIM
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3ODAzMjA2MDcsImV4cCI6MTc4MDkyNTQwN30.G6ZeGd64v9Y6cXAlOgIjKrYyGZVHSmgSD6S4SZ-_e7U
 
-@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI0MywidXNlclJvbGUiOiJDcmVhdG9yIiwiaWF0IjoxNzc5ODY2NjUyLCJleHAiOjE3ODA0NzE0NTJ9.HqW7gAw_dGMs0XG0fHuYfw_DON3cn_oBLRhs2KIJxgc
+@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI2OCwidXNlclJvbGUiOiJQcm9kdWN0aW9uIFRlYW0iLCJpYXQiOjE3ODAzMjA2ODIsImV4cCI6MTc4MDkyNTQ4Mn0.YAHg0ZUaHBqtuZ7qzxrj-ohz1g5siJHKmVvDH8ohNQ0
+
+@CP_TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI0MywidXNlclJvbGUiOiJDcmVhdG9yIiwiaWF0IjoxNzgwMzIxMDMxLCJleHAiOjE3ODA5MjU4MzF9.pqXoqBUmezwTs_YWKvBu5vQqyJsPKxqrpZsaPj9qgSI
 
 ###
 POST {{URL}}creator/dashboard-count HTTP/1.1
@@ -111,8 +113,8 @@ POST {{URL}}auth/login HTTP/1.1
 Content-Type: application/json
 
 {
-  "email": "harsh@test.com",
-  "password": "123456"
+  "email": "harsh.panchal@gmail.com",
+  "password": "password123"
 }
 
 ###
@@ -134,6 +136,7 @@ Content-Type: application/json
 ###
 GET {{URL}}admin/get-projects?range=all HTTP/1.1
 Content-Type: application/json
+Authorization: {{TOKEN2}}
 
 ###
 GET {{URL}}admin/get-project/1193 HTTP/1.1
@@ -215,6 +218,7 @@ Content-Type: application/json
 ###
 GET {{URL}}admin/recent-activity?range=month HTTP/1.1
 Content-Type: application/json
+Authorization: {{TOKEN}}
 
 ###
 GET {{URL}}admin/get-project-status HTTP/1.1
@@ -330,19 +334,19 @@ Authorization: {{TOKEN}}
 # Dashboard: No Of CPs
 GET {{URL}}admin/dashboard/cp/count HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN}}
+Authorization: {{TOKEN2}}
 
 ###
 # Dashboard: Category Wise CPs
 GET {{URL}}admin/dashboard/category-wise-cp/count HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN}}
+Authorization: {{TOKEN2}}
 
 ###
 # Shoot status: successful, pending, rejected, cancelled (month/all filter)
 GET {{URL}}admin/dashboard/shoot-status?range=month HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN}}
+Authorization: {{TOKEN2}}
 
 ###
 # Top creative partners (month/all filter)
@@ -375,9 +379,11 @@ Authorization: {{TOKEN}}
 GET {{URL}}external-meetings/user/1?sortBy=meeting_date_time:desc&limit=100&page=1 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
+
+###
 GET {{URL}}admin/dashboard/top-creative-partners?range=month HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN}}
+Authorization: {{TOKEN2}}
 
 ###
 POST {{URL}}admin/verify-crew-member HTTP/1.1
@@ -391,6 +397,7 @@ Content-Type: application/json
 ###
 GET {{URL}}admin/shoot-category-count?tab=photography HTTP/1.1
 Content-Type: application/json
+Authorization: {{TOKEN}}
 
 ###
 GET {{URL}}admin/get-post-production-members HTTP/1.1
@@ -463,6 +470,11 @@ Content-Type: application/json
 ###
 DELETE {{URL}}admin/delete-client/2 HTTP/1.1
 Content-Type: application/json
+
+###
+GET {{URL}}sales/leads HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
 
 ###
 GET {{URL}}sales/leads/400 HTTP/1.1
@@ -590,6 +602,7 @@ Content-Type: application/json
 ### 
 GET {{URL}}admin/dashboard-chart-data HTTP/1.1
 Content-Type: application/json
+Authorization: {{TOKEN2}}
 
 ### 
 GET {{URL}}admin/dashboard-chart-data?range=custom&date_on=2026-02-11 HTTP/1.1
@@ -2330,11 +2343,14 @@ Authorization: {{TOKEN}}
 
 {
   "name": "Production Team",
-  "description": "Can manage shoots and file manager",
+  "description": "Can access dashboard and shoots",
   "permissions": {
     "dashboard": ["view"],
-    "shoots": ["view", "create", "edit"],
-    "file_manager": ["view"]
+    "shoots": ["view", "edit"],
+    "file_manager": ["view"],
+    "meetings": ["view", "create", "edit"],
+    "messages": ["view", "create", "edit"],
+    "sales": ["view"]
   }
 }
 

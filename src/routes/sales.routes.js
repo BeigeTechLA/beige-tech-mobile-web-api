@@ -7,6 +7,17 @@ const salesDashboardController = require('../controllers/sales-dashboard.control
 const salesQuotesController = require('../controllers/sales-quotes.controller');
 const salesAvailabilityController = require('../controllers/sales-availability.controller');
 const { authenticate, requireSalesRepOrAdmin, requireSalesRep, requireAdmin } = require('../middleware/auth.middleware');
+const { requireAnyPermission } = require('../middleware/permission.middleware');
+
+const dashboardOrSalesView = requireAnyPermission(['dashboard.view', 'sales.view'], {
+  allowRoles: ['sales_rep', 'sales_admin']
+});
+const salesView = requireAnyPermission(['sales.view'], {
+  allowRoles: ['sales_rep', 'sales_admin']
+});
+const shootsEditOrSalesEdit = requireAnyPermission(['shoots.edit', 'sales.edit'], {
+  allowRoles: ['sales_rep', 'sales_admin']
+});
 
 /**
  * Sales Routes
@@ -56,7 +67,7 @@ router.post('/leads/contact-sales', salesLeadsController.createSalesAssistedLead
  * @query   page, limit, status, lead_type, assigned_to, search
  * @access  Sales Rep / Admin
  */
-router.get('/leads', authenticate, requireSalesRepOrAdmin, salesLeadsController.getLeads);
+router.get('/leads', authenticate, dashboardOrSalesView, salesLeadsController.getLeads);
 router.get('/leads/board', authenticate, requireSalesRepOrAdmin, salesLeadsController.getLeadsBoard);
 router.get('/client-leads', authenticate, requireSalesRepOrAdmin, salesLeadsController.getClientLeads);
 
@@ -355,12 +366,12 @@ router.patch(
 
 router.post('/leads/intent', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateLeadIntent);
 router.post('/client-leads/intent', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateClientLeadIntent);
-router.put('/leads/:id/booking', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeGuestBooking);
+router.put('/leads/:id/booking', authenticate, shootsEditOrSalesEdit, salesLeadsController.finalizeGuestBooking);
 router.put('/client/:id/booking', authenticate, salesLeadsController.finalizeGuestBooking);
 router.put('/leads/:id/booking-schedule', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateLeadBookingSchedule);
 router.put('/client-leads/:id/booking', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeClientLeadBooking);
 router.put('/client-leads/:id/booking-schedule', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateClientLeadBookingSchedule);
 router.post('/deals/finalize', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeCreateDeal);
-router.get('/sales-reps', authenticate, requireSalesRepOrAdmin, salesDashboardController.getSalesRepsList);
+router.get('/sales-reps', authenticate, salesView, salesDashboardController.getSalesRepsList);
 
 module.exports = router;

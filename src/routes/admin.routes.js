@@ -3,19 +3,28 @@ const router = express.Router();
 
 const admin = require('../controllers/admin.controller');
 const { authenticateAdmin, authMiddleware } = require('../middleware/auth');
+const { requirePermission, requireAnyPermission } = require('../middleware/permission.middleware');
 
-router.post('/create-project', admin.createProject);
+const dashboardView = requirePermission('dashboard', 'view');
+const dashboardOrShootsView = requireAnyPermission(['dashboard.view', 'shoots.view']);
+const shootsView = requirePermission('shoots', 'view');
+const shootsCreate = requirePermission('shoots', 'create');
+const shootsEdit = requirePermission('shoots', 'edit');
+const shootsDelete = requirePermission('shoots', 'delete');
+const shootsViewOrEdit = requireAnyPermission(['shoots.view', 'shoots.edit']);
+
+router.post('/create-project', authMiddleware, shootsCreate, admin.createProject);
 router.post('/match-crew', admin.matchCrew);
 router.post('/assignMatchCrew', admin.assignCrew);
 router.post('/create-crew-member', admin.createCrewMember);
 router.post('/matchEquipments', admin.matchEquipment);
 router.post('/assignMatchEquipment', admin.saveMatchedEquipment);
-router.get('/get-project/:project_id', admin.getProjectDetails);
-router.put('/shoots/update-date-location/:project_id', admin.updateProjectDateLocation);
+router.get('/get-project/:project_id', authMiddleware, shootsView, admin.getProjectDetails);
+router.put('/shoots/update-date-location/:project_id', authMiddleware, shootsEdit, admin.updateProjectDateLocation);
 router.post('/shoots/update-onboarding-form', authMiddleware, admin.submitProjectFormByAdmin);
 router.get('/get-active-projects', admin.getActiveProjects);
-router.get('/recent-activity', admin.getRecentActivity);
-router.get('/get-projects', admin.getAllProjectDetails);
+router.get('/recent-activity', authMiddleware, dashboardView, admin.getRecentActivity);
+router.get('/get-projects', authMiddleware, dashboardOrShootsView, admin.getAllProjectDetails);
 router.get('/get-upcoming-projects', admin.getUpcomingEvents);
 router.get('/get-project-status', admin.getProjectStats);
 router.post('/final-project-brief', admin.createProjectBrief);
@@ -37,7 +46,7 @@ router.post('/return-equipment', admin.returnEquipment)
 router.get('/equipment-categories', admin.getEquipmentCategories);
 router.get('/checklist-templates', admin.getChecklistTemplates);
 router.get('/crew-roles', admin.getCrewRoles);
-router.get('/skills', admin.getSkills); 
+router.get('/skills', authMiddleware, shootsView, admin.getSkills); 
 router.get('/certifications', admin.getCertifications);
 router.get('/equipment-by-location', admin.getEquipmentByLocation);
 router.get('/equipment-autocomplete', admin.getEquipmentNameSuggestions);
@@ -48,34 +57,34 @@ router.get('/get-pending-cp', admin.getAllPendingCrewMembers);
 router.get('/:bookingId/get-booking-summary', admin.getBookingSummaryById);
 
 // Dashboard statistics routes
-router.get('/get-dashboard-summary', admin.getDashboardSummary);
-router.get('/dashboard-chart-data', admin.getDashboardChartData);
-router.get('/dashboard/revenue/total', admin.getTotalRevenue);
-router.get('/dashboard/revenue/monthly', admin.getMonthlyRevenue);
-router.get('/dashboard/revenue/weekly', admin.getWeeklyRevenue);
+router.get('/get-dashboard-summary', authMiddleware, dashboardView, admin.getDashboardSummary);
+router.get('/dashboard-chart-data', authMiddleware, dashboardView, admin.getDashboardChartData);
+router.get('/dashboard/revenue/total', authMiddleware, dashboardView, admin.getTotalRevenue);
+router.get('/dashboard/revenue/monthly', authMiddleware, dashboardView, admin.getMonthlyRevenue);
+router.get('/dashboard/revenue/weekly', authMiddleware, dashboardView, admin.getWeeklyRevenue);
 // router.get('/shoot-category-count', admin.getShootCategoryCount); // TODO: Implement this function
 
 // router.post('/login', auth.login);
-router.get('/get-dashboard-summary', admin.getDashboardSummary)
-router.get('/dashboard/revenue/total', authenticateAdmin, admin.getTotalRevenue)
-router.get('/dashboard/revenue/monthly', authenticateAdmin, admin.getMonthlyRevenue)
-router.get('/dashboard/revenue/weekly', authenticateAdmin, admin.getWeeklyRevenue)
-router.get('/dashboard/payout/total', authenticateAdmin, admin.getTotalPayout);
-router.get('/dashboard/payout/weekly-graph', authenticateAdmin, admin.getWeeklyPayoutGraph);
-router.get('/dashboard/payout/pending', authenticateAdmin, admin.getPendingPayout);
-router.get('/dashboard/cp/count', authenticateAdmin, admin.getTotalCPCount);
-router.get('/dashboard/category-wise-cp/count', authenticateAdmin, admin.getCategoryWiseCPs);
-router.get('/dashboard/shoot-status', authenticateAdmin, admin.getShootStatus)
-router.get('/dashboard/top-creative-partners', authenticateAdmin, admin.getTopCreativePartners)
-router.post('/dashboard-detail', authenticateAdmin, admin.getDashboardDetails);
+router.get('/get-dashboard-summary', authMiddleware, dashboardView, admin.getDashboardSummary)
+router.get('/dashboard/revenue/total', authMiddleware, dashboardView, admin.getTotalRevenue)
+router.get('/dashboard/revenue/monthly', authMiddleware, dashboardView, admin.getMonthlyRevenue)
+router.get('/dashboard/revenue/weekly', authMiddleware, dashboardView, admin.getWeeklyRevenue)
+router.get('/dashboard/payout/total', authMiddleware, dashboardView, admin.getTotalPayout);
+router.get('/dashboard/payout/weekly-graph', authMiddleware, dashboardView, admin.getWeeklyPayoutGraph);
+router.get('/dashboard/payout/pending', authMiddleware, dashboardView, admin.getPendingPayout);
+router.get('/dashboard/cp/count', authMiddleware, dashboardView, admin.getTotalCPCount);
+router.get('/dashboard/category-wise-cp/count', authMiddleware, dashboardView, admin.getCategoryWiseCPs);
+router.get('/dashboard/shoot-status', authMiddleware, dashboardView, admin.getShootStatus)
+router.get('/dashboard/top-creative-partners', authMiddleware, dashboardView, admin.getTopCreativePartners)
+router.post('/dashboard-detail', authMiddleware, dashboardView, admin.getDashboardDetails);
 router.post('/verify-crew-member', admin.verifyCrewMember);
-router.get('/shoot-category-count', admin.getShootByCategory);
+router.get('/shoot-category-count', authMiddleware, dashboardOrShootsView, admin.getShootByCategory);
 router.get('/get-post-production-members', admin.getPostProductionMembers);
-router.post('/assign-post-production-member', admin.assignPostProductionMember);
+router.post('/assign-post-production-member', authMiddleware, shootsEdit, admin.assignPostProductionMember);
 router.get('/get-clients', admin.getClients);
 router.put('/edit-client/:client_id', admin.editClient);
 router.delete('/delete-client/:client_id', admin.deleteClient);
-router.delete('/delete-project/:project_id', admin.deleteProject);
+router.delete('/delete-project/:project_id', authMiddleware, shootsDelete, admin.deleteProject);
 router.post('/upload-profile-photo', admin.uploadProfilePhoto);
 router.get('/get-client-by-id/:id', admin.getClientById);
 router.get('/get-clients-shoots/:clientId', admin.getClientsShoots);
@@ -85,9 +94,9 @@ router.post('/remove-assigned-crew',authMiddleware, admin.removeAssignedCrew);
 router.get('/get-client-details-with-shoots/:userId', admin.getClientFullDetailsByUserId);
 router.get('/check-cp-delete-status', admin.checkDeleteStatus);
 router.post('/delete-cp', admin.executeDeleteCrewMember);
-router.post('/get-project-fullfillment-stats/:project_id', admin.getProjectFulfillmentStatus);
-router.get('/get-crew-for-shoot', admin.searchCrewForProject);
-router.post('/assign-crew-from-shoot',authMiddleware, admin.assignProjectCrewBulk);
+router.post('/get-project-fullfillment-stats/:project_id', authMiddleware, shootsView, admin.getProjectFulfillmentStatus);
+router.get('/get-crew-for-shoot', authMiddleware, shootsViewOrEdit, admin.searchCrewForProject);
+router.post('/assign-crew-from-shoot', authMiddleware, shootsEdit, admin.assignProjectCrewBulk);
 router.post('/remove-project-crew',authMiddleware, admin.removeProjectAssignedCrew);
 router.get('/get-project-form/:project_id',authMiddleware, admin.getProjectFormByProjectId);
 router.post('/shoots/remind-onboarding-form/:project_id', authMiddleware, admin.sendOnboardingFormReminder);
