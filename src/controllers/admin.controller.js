@@ -1750,7 +1750,7 @@ exports.getProjectDetails = async (req, res) => {
       : [];
 
     // 3. Fetch Transaction Total (from payment_transactions table)
-    const [paymentData, formSubmission, shootNotesCountMap] = await Promise.all([
+    const [paymentData, formSubmission, shootNotesCountMap, bookingPaymentSummary] = await Promise.all([
       payment_transactions.findOne({
         where: { payment_id: projectJson.payment_id },
         attributes: ['total_amount'],
@@ -1762,9 +1762,68 @@ exports.getProjectDetails = async (req, res) => {
         order: [['created_at', 'DESC']],
         raw: true
       }),
-      countActiveShootNotesByBookingIds([projectJson.stream_project_booking_id])
+      countActiveShootNotesByBookingIds([projectJson.stream_project_booking_id]),
+      bookingPaymentSummaryService.getBookingPaymentSummary(projectJson.stream_project_booking_id)
     ]);
     const shootNotesCount = shootNotesCountMap.get(Number(projectJson.stream_project_booking_id)) || 0;
+
+    const normalizedGuestEmail = String(projectJson.guest_email || '').trim().toLowerCase() || null;
+    const [emailUserRecord, emailClientRecord] = await Promise.all([
+      normalizedGuestEmail
+        ? users.findOne({
+            where: Sequelize.where(
+              Sequelize.fn('LOWER', Sequelize.col('email')),
+              normalizedGuestEmail
+            ),
+            attributes: ['id', 'email'],
+            raw: true
+          })
+        : Promise.resolve(null),
+      normalizedGuestEmail
+        ? clients.findOne({
+            where: {
+              is_active: 1,
+              [Op.and]: [
+                Sequelize.where(
+                  Sequelize.fn('LOWER', Sequelize.col('email')),
+                  normalizedGuestEmail
+                )
+              ]
+            },
+            attributes: ['client_id', 'user_id', 'email'],
+            raw: true
+          })
+        : Promise.resolve(null)
+    ]);
+
+    const isRegisteredUser = Boolean(projectJson.user_id || emailUserRecord?.id);
+    const isClientOnly = !isRegisteredUser && Boolean(emailClientRecord?.client_id);
+    const contactRegistrationType = isRegisteredUser
+      ? 'registered_user'
+      : isClientOnly
+        ? 'client_only'
+        : 'unregistered_contact';
+
+    let convertedSalesQuote = null;
+    if (bookingPaymentSummary?.sales_quote_id) {
+      convertedSalesQuote = await db.sales_quotes.findOne({
+        where: { sales_quote_id: bookingPaymentSummary.sales_quote_id },
+        attributes: ['sales_quote_id', 'quote_number', 'status'],
+        raw: true
+      });
+    } else if (lead?.lead_id) {
+      convertedSalesQuote = await db.sales_quotes.findOne({
+        where: { lead_id: lead.lead_id },
+        attributes: ['sales_quote_id', 'quote_number', 'status'],
+        order: [['sales_quote_id', 'DESC']],
+        raw: true
+      });
+    }
+
+    const convertedSalesQuoteId = convertedSalesQuote?.sales_quote_id || bookingPaymentSummary?.sales_quote_id || null;
+    const isQuoteConvertedBooking = Boolean(
+      convertedSalesQuoteId || String(lead?.lead_source || '').toLowerCase() === 'converted bookings'
+    );
 
     const displayAmount = await resolveProjectDisplayAmount({
       project: projectJson,
@@ -1894,6 +1953,15 @@ exports.getProjectDetails = async (req, res) => {
           total_paid_amount: displayAmount,
           total_value_amount: totalValueAmount,
           notes_count: shootNotesCount,
+          contact_registration_type: contactRegistrationType,
+          is_registered_user: isRegisteredUser,
+          is_client_only: isClientOnly,
+          is_unregistered_contact: !isRegisteredUser && !isClientOnly,
+          client_record_id: emailClientRecord?.client_id || null,
+          matched_user_id: projectJson.user_id || emailUserRecord?.id || null,
+          is_quote_converted_booking: isQuoteConvertedBooking,
+          converted_sales_quote_id: convertedSalesQuoteId,
+          converted_sales_quote_number: convertedSalesQuote?.quote_number || null,
           event_type_labels: eventTypeLabels.join(', '),
           timeline_status: timelineStatus,
           timeline_label: timelineLabel,
@@ -1903,6 +1971,13 @@ exports.getProjectDetails = async (req, res) => {
         timeline_status: timelineStatus,
         timeline_label: timelineLabel,
         lead_details: lead, // Sales rep, activities, etc.
+        contact_registration_type: contactRegistrationType,
+        is_registered_user: isRegisteredUser,
+        is_client_only: isClientOnly,
+        is_unregistered_contact: !isRegisteredUser && !isClientOnly,
+        converted_sales_quote_id: convertedSalesQuoteId,
+        converted_sales_quote_number: convertedSalesQuote?.quote_number || null,
+        is_quote_converted_booking: isQuoteConvertedBooking,
         manual_payment_summary: manualPaymentSummary,
         pricing_breakdown,
         payment_status: resolvedPaymentStatus,
