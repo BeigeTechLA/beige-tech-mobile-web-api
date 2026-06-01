@@ -3641,7 +3641,7 @@ exports.updateClientLeadStatus = async (req, res) => {
   }
 };
 
-const MANUAL_PAYMENT_MODES = ['cash', 'wire', 'ach', 'zelle', 'venmo', 'cashapp', 'applepay', 'other'];
+const MANUAL_PAYMENT_MODES = ['cash', 'wire', 'ach', 'zelle', 'venmo', 'cashapp', 'applepay', 'other', 'net30'];
 
 const parseJsonIfNeeded = (value) => {
   if (!value) return null;
@@ -4103,7 +4103,7 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
   if (!MANUAL_PAYMENT_MODES.includes(normalizedPaymentMode)) {
     return res.status(constants.BAD_REQUEST.code).json({
       success: false,
-      message: 'payment_mode must be one of cash, wire, ach, zelle, venmo, cashapp, applepay, or other',
+      message: 'payment_mode must be one of cash, wire, ach, zelle, venmo, cashapp, applepay, other, or net30',
     });
   }
 
@@ -4172,7 +4172,9 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
     ? null
     : Number(amount);
 
-  if (normalizedPaymentType === 'partial') {
+  const isNet30Mode = normalizedPaymentMode === 'net30';
+
+  if (normalizedPaymentType === 'partial' && !isNet30Mode) {
     if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
       return res.status(constants.BAD_REQUEST.code).json({
         success: false,
@@ -4188,14 +4190,16 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
     }
   }
 
-  if (normalizedPaymentType === 'full' && remainingBefore <= 0 && totalAmount > 0) {
+  if (normalizedPaymentType === 'full' && remainingBefore <= 0 && totalAmount > 0 && !isNet30Mode) {
     return res.status(constants.BAD_REQUEST.code).json({
       success: false,
       message: 'No remaining amount to settle',
     });
   }
 
-  const amountToApply = normalizedPaymentType === 'partial'
+  const amountToApply = isNet30Mode
+    ? 0
+    : normalizedPaymentType === 'partial'
     ? Number(numericAmount || 0)
     : remainingBefore;
   const paidAmountAfter = Math.max(previouslyPaidAmount + amountToApply, 0);
@@ -4295,7 +4299,7 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
     activity_data: {
       source: 'manual_payment',
       payment_method: 'manual',
-      payment_type: normalizedPaymentType,
+      payment_type: isNet30Mode ? 'net30' : normalizedPaymentType,
       payment_mode: normalizedPaymentMode,
       other_payment_mode: normalizedOtherPaymentMode,
       amount: Number(amountToApply || 0),
@@ -4317,7 +4321,9 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
   });
 
   const leadUpdate = { last_activity_at: new Date() };
-  if (normalizedPaymentType === 'full') {
+  if (isNet30Mode) {
+    leadUpdate.lead_status = 'payment_pending';
+  } else if (normalizedPaymentType === 'full') {
     leadUpdate.lead_status = 'booked';
   }
   await lead.update(leadUpdate);
@@ -4326,12 +4332,14 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
 
   return res.json({
     success: true,
-    message: normalizedPaymentType === 'full'
+    message: isNet30Mode
+      ? 'Net30 manual payment recorded and lead marked as payment pending'
+      : normalizedPaymentType === 'full'
       ? 'Manual full payment recorded and lead marked as booked'
       : 'Manual partial payment recorded',
     data: {
       lead_id: Number(leadId),
-      payment_type: normalizedPaymentType,
+      payment_type: isNet30Mode ? 'net30' : normalizedPaymentType,
       payment_mode: normalizedPaymentMode,
       amount: normalizedPaymentType === 'partial' ? Number(numericAmount) : null,
       total_amount: totalAmount > 0 ? Number(totalAmount) : null,
@@ -4346,7 +4354,9 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
           ? Math.max(remainingBefore - Number(numericAmount || 0), 0)
           : 0,
       proof_url: normalizedProofUrl,
-      lead_status: normalizedPaymentType === 'full' ? 'booked' : lead.lead_status,
+      lead_status: isNet30Mode
+        ? 'payment_pending'
+        : (normalizedPaymentType === 'full' ? 'booked' : lead.lead_status),
       external_workspace_synced: !!externalWorkspaceSync.success,
       external_workspace_message: externalWorkspaceSync.message || null,
     }

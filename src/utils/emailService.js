@@ -79,7 +79,8 @@ const {
   EMAIL_TO_POST_PRODUCTION_TEAM_TEMPLATE_ID,
   OTP_VERIFICATION_FILE_SHARE_TEMPLATE_ID,
   FILE_SHARE_INVITATION_TEMPLATE_ID,
-  BEIGE_CREDIT_RECEIVED_TEMPLATE_ID
+  BEIGE_CREDIT_RECEIVED_TEMPLATE_ID,
+  ONBOARDING_FORM_CRITICAL_NOTIF_TEMPLATE_ID
 } = require('../config/sendgridTemplates');
 
 const formatDate = (value) => {
@@ -1008,6 +1009,68 @@ const sendShootReminder2HoursEmail = async (data) => {
   } catch (error) {
     console.error(
       'Error sending shoot reminder (2h) email via SendGrid:',
+      error?.response?.body || error.message
+    );
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Send onboarding form reminder.
+ * Trigger: admin action when the client needs a manual reminder.
+ * @param {Object} data - onboarding reminder payload
+ */
+const sendOnboardingFormCriticalEmail = async (data) => {
+  try {
+    if (!process.env.SENDGRID_API_KEY) {
+      return { success: false, error: 'SENDGRID_API_KEY is not configured' };
+    }
+
+    if (!ONBOARDING_FORM_CRITICAL_NOTIF_TEMPLATE_ID) {
+      return { success: false, error: 'ONBOARDING_FORM_CRITICAL_NOTIF_TEMPLATE_ID is not configured' };
+    }
+
+    if (!data?.to_email) {
+      return { success: false, error: 'Recipient email is required' };
+    }
+
+    const fromEmail = getSendgridFromAddress();
+    if (!fromEmail) {
+      return { success: false, error: 'Sender email not configured' };
+    }
+
+    const shootId = data.shoot_id || data.booking_id || '';
+    const frontendUrl = (process.env.FRONTEND_URL || 'https://beige.app').replace(/\/+$/, '');
+    const payload = {
+      to: data.to_email,
+      from: {
+        email: fromEmail,
+        name: getSendgridFromName()
+      },
+      templateId: ONBOARDING_FORM_CRITICAL_NOTIF_TEMPLATE_ID,
+      dynamicTemplateData: {
+        user_name: data.user_name || data.first_name || 'there',
+        shoot_id: shootId,
+        booking_id: data.booking_id || shootId,
+        form_link: data.form_link || `${frontendUrl}/project-form/${shootId}`,
+        dashboard_link: data.dashboard_link || `${frontendUrl}/affiliate/dashboard`
+      }
+    };
+
+    const [response] = await sgMail.send(payload);
+    const messageId =
+      response?.headers?.['x-message-id'] ||
+      response?.headers?.['X-Message-Id'] ||
+      null;
+
+    console.log(
+      `Onboarding critical email accepted by SendGrid for ${data.to_email} (booking: ${data.booking_id || 'n/a'}), template=${ONBOARDING_FORM_CRITICAL_NOTIF_TEMPLATE_ID}, status=${response?.statusCode || 'n/a'}, message_id=${messageId || 'n/a'}`
+    );
+
+    return { success: true, messageId, statusCode: response?.statusCode };
+  } catch (error) {
+    console.error(
+      'Error sending onboarding critical email via SendGrid:',
       error?.response?.body || error.message
     );
     return { success: false, error: error.message };
@@ -2663,7 +2726,7 @@ const sendBeigeCreditsReceivedEmail = async (data = {}) => {
   const to = data?.to_email || data?.email;
   const amount = formatCreditAmount(data?.amount || data?.credited_amount || 0);
   const walletBalance = formatCreditAmount(data?.wallet_balance || 0);
-  const firstName = getFirstName(data?.client_name || data?.name || '', data?.first_name || 'there');
+  const firstName = getFirstName(data?.first_name || data?.client_name || data?.name || '', '') || 'there';
 
   return sendEmail({
     to,
@@ -2671,7 +2734,7 @@ const sendBeigeCreditsReceivedEmail = async (data = {}) => {
     templateId: BEIGE_CREDIT_RECEIVED_TEMPLATE_ID,
     dynamicTemplateData: {
       first_name: firstName,
-      credited_amount: `${amount} Beige Credits`,
+      credited_amount: `${amount}`,
       added_by: data?.added_by || 'Beige Admin',
       amount_added: `${amount} Beige Credits`,
       expiry_date: data?.expires_at ? formatDate(data.expires_at) : 'No expiry',
@@ -3076,6 +3139,7 @@ module.exports = {
   sendBookingConfirmationEmail,
   sendShootReminder5DaysEmail,
   sendShootReminder2HoursEmail,
+  sendOnboardingFormCriticalEmail,
   sendShootCompletionEmail,
   sendFinalNudge7DaysEmail,
   sendPostProductionStatusUpdateEmail,
