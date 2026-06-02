@@ -7,11 +7,18 @@ const messagesView = requirePermission('messages', 'view', { allowBaseRoles: tru
 const messagesCreate = requirePermission('messages', 'create', { allowBaseRoles: true });
 const messagesEdit = requirePermission('messages', 'edit', { allowBaseRoles: true });
 const shootMessagesView = requireAnyPermission(['shoots.view', 'messages.view'], { allowBaseRoles: true });
+const directoryView = requireAnyPermission([
+  'shoots.view',
+  'messages.view',
+  'meetings.view',
+  'meetings.create',
+  'meetings.edit'
+], { allowBaseRoles: true });
 const shootMessagesCreate = requireAnyPermission(['shoots.edit', 'messages.create'], { allowBaseRoles: true });
 const shootMessagesEdit = requireAnyPermission(['shoots.edit', 'messages.edit'], { allowBaseRoles: true });
 
 router.get('/rooms', authenticate, messagesView, externalChatController.listChatRooms);
-router.get('/directory', authenticate, shootMessagesView, externalChatController.getChatDirectory);
+router.get('/directory', authenticate, directoryView, externalChatController.getChatDirectory);
 router.post('/room', authenticate, shootMessagesCreate, externalChatController.createChatRoom);
 router.get('/room/:bookingId', authenticate, shootMessagesView, externalChatController.getChatRoom);
 router.post('/room/:roomId/participants', authenticate, shootMessagesEdit, externalChatController.addChatParticipants);

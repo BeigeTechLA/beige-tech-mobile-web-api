@@ -6,7 +6,7 @@ const { requirePermission, requireAnyPermission } = require('../middleware/permi
 const fileManagerView = requirePermission('file_manager', 'view', { allowBaseRoles: true });
 const fileManagerCreate = requirePermission('file_manager', 'create', { allowBaseRoles: true });
 const fileManagerDelete = requirePermission('file_manager', 'delete', { allowBaseRoles: true });
-const shootOrFileManagerView = requireAnyPermission(['shoots.view', 'file_manager.view'], { allowBaseRoles: true });
+const shootOrFileManagerView = requireAnyPermission(['shoots.view', 'meetings.view', 'file_manager.view'], { allowBaseRoles: true });
 
 router.get('/workspaces', authenticate, fileManagerView, externalFileManagerController.listWorkspaces);
 router.get('/common-events', authenticate, fileManagerView, externalFileManagerController.listCommonEvents);

@@ -6,6 +6,9 @@ const router = express.Router();
 const creator = require('../controllers/creator.contoller');
 const { checkCreatorVerification } = require('../middleware/creatorVerification');
 const { authenticate } = require('../middleware/auth.middleware');
+const { requirePermission } = require('../middleware/permission.middleware');
+
+const availabilityView = requirePermission('availability', 'view');
 
 // router.use(checkCreatorVerification);
 
@@ -18,7 +21,7 @@ router.post('/project-details', creator.getProjectDetails);
 router.post('/accept-project', creator.updateRequestStatus);
 router.post('/upcoming-accepted-project', creator.getAcceptedAndUpcomingProjects);
 router.post('/accepted-shoots', creator.getAcceptedShootsByCrew);
-router.post('/availability', creator.getCrewAvailability);
+router.post('/availability', authenticate, availabilityView, creator.getCrewAvailability);
 router.post('/add-availability', creator.setCrewAvailability);
 router.post('/status-count', creator.getDashboardRequestCounts);
 router.post('/get-crew-equipment', creator.getEquipmentOwnedByCrewMember);
