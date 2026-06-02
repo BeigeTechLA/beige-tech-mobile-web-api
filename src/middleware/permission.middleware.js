@@ -82,7 +82,7 @@ const getUserAccessContext = async (req) => {
   };
 };
 
-const hasAnyPermission = async ({ userId, roleId }, permissionKeys) => {
+const getAllowedPermissionIds = async ({ userId, roleId }, permissionKeys) => {
   const permissions = await db.permissions.findAll({
     where: {
       permission_key: {
@@ -93,7 +93,12 @@ const hasAnyPermission = async ({ userId, roleId }, permissionKeys) => {
     attributes: ['permission_id', 'permission_key']
   });
 
-  if (!permissions.length) return false;
+  if (!permissions.length) {
+    return {
+      permissions: [],
+      allowedPermissionIds: new Set()
+    };
+  }
 
   const permissionIds = permissions.map((permission) => permission.permission_id);
 
@@ -127,10 +132,28 @@ const hasAnyPermission = async ({ userId, roleId }, permissionKeys) => {
     }
   });
 
+  return {
+    permissions,
+    allowedPermissionIds
+  };
+};
+
+const hasAnyPermission = async (context, permissionKeys) => {
+  const { permissions, allowedPermissionIds } = await getAllowedPermissionIds(context, permissionKeys);
+
   return permissions.some((permission) => allowedPermissionIds.has(Number(permission.permission_id)));
 };
 
-const requireAnyPermission = (permissions, options = {}) => {
+const hasAllPermissions = async (context, permissionKeys) => {
+  const uniquePermissionKeys = Array.from(new Set(permissionKeys));
+  const { permissions, allowedPermissionIds } = await getAllowedPermissionIds(context, uniquePermissionKeys);
+
+  if (permissions.length !== uniquePermissionKeys.length) return false;
+
+  return permissions.every((permission) => allowedPermissionIds.has(Number(permission.permission_id)));
+};
+
+const createPermissionMiddleware = (permissions, options = {}, checkPermissions) => {
   const permissionKeys = permissions
     .map(normalizePermission)
     .filter(Boolean);
@@ -162,7 +185,7 @@ const requireAnyPermission = (permissions, options = {}) => {
       }
 
       const isAllowed = permissionKeys.length
-        ? await hasAnyPermission(context, permissionKeys)
+        ? await checkPermissions(context, permissionKeys)
         : false;
 
       if (!isAllowed) {
@@ -183,11 +206,20 @@ const requireAnyPermission = (permissions, options = {}) => {
   };
 };
 
+const requireAnyPermission = (permissions, options = {}) => (
+  createPermissionMiddleware(permissions, options, hasAnyPermission)
+);
+
+const requireAllPermissions = (permissions, options = {}) => (
+  createPermissionMiddleware(permissions, options, hasAllPermissions)
+);
+
 const requirePermission = (module, action, options = {}) => (
   requireAnyPermission([`${module}.${action}`], options)
 );
 
 module.exports = {
   requirePermission,
-  requireAnyPermission
+  requireAnyPermission,
+  requireAllPermissions
 };

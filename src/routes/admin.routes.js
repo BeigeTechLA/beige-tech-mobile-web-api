@@ -57,14 +57,7 @@ router.get('/get-pending-cp', admin.getAllPendingCrewMembers);
 router.get('/:bookingId/get-booking-summary', admin.getBookingSummaryById);
 
 // Dashboard statistics routes
-router.get('/get-dashboard-summary', authMiddleware, dashboardView, admin.getDashboardSummary);
 router.get('/dashboard-chart-data', authMiddleware, dashboardView, admin.getDashboardChartData);
-router.get('/dashboard/revenue/total', authMiddleware, dashboardView, admin.getTotalRevenue);
-router.get('/dashboard/revenue/monthly', authMiddleware, dashboardView, admin.getMonthlyRevenue);
-router.get('/dashboard/revenue/weekly', authMiddleware, dashboardView, admin.getWeeklyRevenue);
-// router.get('/shoot-category-count', admin.getShootCategoryCount); // TODO: Implement this function
-
-// router.post('/login', auth.login);
 router.get('/get-dashboard-summary', authMiddleware, dashboardView, admin.getDashboardSummary)
 router.get('/dashboard/revenue/total', authMiddleware, dashboardView, admin.getTotalRevenue)
 router.get('/dashboard/revenue/monthly', authMiddleware, dashboardView, admin.getMonthlyRevenue)

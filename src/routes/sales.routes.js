@@ -12,10 +12,13 @@ const { requireAnyPermission } = require('../middleware/permission.middleware');
 const dashboardOrSalesView = requireAnyPermission(['dashboard.view', 'sales.view'], {
   allowRoles: ['sales_rep', 'sales_admin']
 });
-const salesView = requireAnyPermission(['sales.view'], {
+const shootOrSalesView = requireAnyPermission(['shoots.view', 'sales.view'], {
   allowRoles: ['sales_rep', 'sales_admin']
 });
 const shootsEditOrSalesEdit = requireAnyPermission(['shoots.edit', 'sales.edit'], {
+  allowRoles: ['sales_rep', 'sales_admin']
+});
+const shootOrInvoiceView = requireAnyPermission(['shoots.view', 'invoices.view'], {
   allowRoles: ['sales_rep', 'sales_admin']
 });
 
@@ -227,7 +230,7 @@ router.get('/discount-codes/:id/usage', authenticate, requireSalesRepOrAdmin, di
  */
 router.post('/payment-links', authenticate, requireSalesRepOrAdmin, paymentLinksController.generatePaymentLink);
 router.post('/client-payment-links', authenticate, requireSalesRepOrAdmin, paymentLinksController.generateClientPaymentLink);
-router.post('/preview-invoice', paymentLinksController.previewStripeInvoice);
+router.post('/preview-invoice', authenticate, shootOrInvoiceView, paymentLinksController.previewStripeInvoice);
 router.get('/invoice-pdf/:booking_id', paymentLinksController.getStripeInvoicePdf);
 router.post('/send-invoice', paymentLinksController.sendStripeInvoice);
 router.post('/payment-links/notify', paymentLinksController.sendPaymentLinkEmail);
@@ -372,6 +375,6 @@ router.put('/leads/:id/booking-schedule', authenticate, requireSalesRepOrAdmin, 
 router.put('/client-leads/:id/booking', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeClientLeadBooking);
 router.put('/client-leads/:id/booking-schedule', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateClientLeadBookingSchedule);
 router.post('/deals/finalize', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeCreateDeal);
-router.get('/sales-reps', authenticate, salesView, salesDashboardController.getSalesRepsList);
+router.get('/sales-reps', authenticate, shootOrSalesView, salesDashboardController.getSalesRepsList);
 
 module.exports = router;
