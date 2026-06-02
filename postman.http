@@ -2591,3 +2591,7 @@ evidence
 POST {{URL}}admin/shoots/remind-onboarding-form/1207
 Authorization: {{TOKEN}}
 Content-Type: application/json
+
+### 
+GET {{URL}}external-file-manager/workspaces HTTP/1.1
+Authorization: {{TOKEN}}

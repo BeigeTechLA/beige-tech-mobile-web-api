@@ -5,9 +5,8 @@ const { requirePermission, requireAnyPermission } = require('../middleware/permi
 
 const fileManagerView = requirePermission('file_manager', 'view', { allowBaseRoles: true });
 const fileManagerCreate = requirePermission('file_manager', 'create', { allowBaseRoles: true });
-const fileManagerEdit = requirePermission('file_manager', 'edit', { allowBaseRoles: true });
 const fileManagerDelete = requirePermission('file_manager', 'delete', { allowBaseRoles: true });
-const shootFileManagerView = requireAnyPermission(['shoots.view', 'file_manager.view'], { allowBaseRoles: true });
+const shootOrFileManagerView = requireAnyPermission(['shoots.view', 'file_manager.view'], { allowBaseRoles: true });
 
 router.get('/workspaces', authenticate, fileManagerView, externalFileManagerController.listWorkspaces);
 router.get('/common-events', authenticate, fileManagerView, externalFileManagerController.listCommonEvents);
@@ -15,10 +14,10 @@ router.post('/common-events', authenticate, fileManagerCreate, externalFileManag
 router.post('/common-events/:eventExternalId/creator-folder', authenticate, fileManagerCreate, externalFileManagerController.createCreatorEventFolder);
 router.post('/face-scan/search', authenticate, fileManagerView, externalFileManagerController.searchFaceMatches);
 router.get('/face-scan/index-status/:externalId', authenticate, fileManagerView, externalFileManagerController.getFaceScanIndexStatus);
-router.post('/face-scan/reindex', authenticate, fileManagerEdit, externalFileManagerController.reindexFaceEmbeddings);
+router.post('/face-scan/reindex', authenticate, fileManagerCreate, externalFileManagerController.reindexFaceEmbeddings);
 router.post('/workspace', authenticate, fileManagerCreate, externalFileManagerController.createWorkspace);
-router.get('/workspace/:bookingId', authenticate, shootFileManagerView, externalFileManagerController.getWorkspace);
-router.get('/workspace/:bookingId/files', authenticate, shootFileManagerView, externalFileManagerController.getWorkspaceFiles);
+router.get('/workspace/:bookingId', authenticate, shootOrFileManagerView, externalFileManagerController.getWorkspace);
+router.get('/workspace/:bookingId/files', authenticate, shootOrFileManagerView, externalFileManagerController.getWorkspaceFiles);
 router.post('/folder', authenticate, fileManagerCreate, externalFileManagerController.createFolder);
 router.post('/upload-policy', authenticate, fileManagerCreate, externalFileManagerController.getUploadPolicy);
 router.post('/upload-policies/batch', authenticate, fileManagerCreate, externalFileManagerController.getUploadPoliciesBatch);
