@@ -59,8 +59,18 @@ function normalizeCreditType(creditType, fallback = 'other') {
 }
 
 function normalizeUsageContext(context, fallback = 'general') {
-  const value = String(context || fallback).trim().toLowerCase();
-  return ['general', 'shoot_payment', 'studio_rental'].includes(value) ? value : fallback;
+  const value = String(context || fallback).trim().toLowerCase().replace(/\s+/g, '_');
+  const aliases = {
+    booking_payment: 'shoot_payment',
+    payment: 'shoot_payment',
+    shoot: 'shoot_payment',
+    shoot_payment_credit_used: 'shoot_payment',
+    manual_credits_usage: 'shoot_payment',
+    manual_credit_usage: 'shoot_payment',
+    manual_credits: 'shoot_payment'
+  };
+  const normalizedValue = aliases[value] || value;
+  return ['general', 'shoot_payment', 'studio_rental'].includes(normalizedValue) ? normalizedValue : fallback;
 }
 
 function parseJsonObject(value, fieldName = 'value') {
