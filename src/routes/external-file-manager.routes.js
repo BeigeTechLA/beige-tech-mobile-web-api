@@ -19,7 +19,8 @@ const shootOrFileManagerView = requireAnyPermission([
   'admin_meetings.view',
   'admin_file_manager.view',
   'sales_rep_shoots.view',
-  'sales_rep_file_manager.view'
+  'sales_rep_file_manager.view',
+  'sales_rep_meetings.view'
 ], { allowRoles: ['sales_rep', 'sales_admin'] });
 
 router.get('/workspaces', authenticate, fileManagerView, externalFileManagerController.listWorkspaces);
