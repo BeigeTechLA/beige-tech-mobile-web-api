@@ -12,24 +12,31 @@ const dashboardOrShootsView = requireAnyPermission([
 ]);
 const shootsView = requireAnyPermission(['admin_shoots.view']);
 const shootsCreate = requireAnyPermission(['admin_shoots.create']);
-const shootsEdit = requireAnyPermission(['admin_shoots.edit']);
+const allowSalesRepRoles = { allowRoles: ['sales_rep', 'sales_admin'] };
+const shootsEdit = requireAnyPermission([
+  'admin_shoots.edit',
+  'sales_rep_shoots.edit'
+], allowSalesRepRoles);
 const shootsDelete = requireAnyPermission(['admin_shoots.delete']);
 const projectDetailView = requireAnyPermission([
   'admin_shoots.view',
   'admin_meetings.view',
-  'admin_meetings.create'
-]);
+  'admin_meetings.create',
+  'sales_rep_shoots.view'
+], allowSalesRepRoles);
 const projectListView = requireAnyPermission([
   'admin_dashboard.view',
   'admin_shoots.view',
   'admin_meetings.view',
-  'admin_meetings.create'
-]);
+  'admin_meetings.create',
+  'sales_rep_shoots.view'
+], allowSalesRepRoles);
 const skillsView = requireAnyPermission([
   'admin_shoots.view',
   'admin_meetings.view',
-  'admin_availability.view'
-]);
+  'admin_availability.view',
+  'sales_rep_shoots.view'
+], allowSalesRepRoles);
 const crewAvailabilityView = requireAnyPermission([
   'admin_availability.view',
   'admin_shoots.view',
@@ -45,7 +52,8 @@ const adminSalesRepresentativeAvailabilityView = requireAnyPermission([
   'admin_availability.view',
   'admin_shoots.view',
   'admin_shoots.edit',
-  'admin_meetings.view'
+  'admin_meetings.view',
+  'sales_rep_shoots.view'
 ]);
 const adminUsersView = requireAnyPermission(['admin_users.view']);
 const adminUsersEdit = requireAnyPermission(['admin_users.edit']);
@@ -62,8 +70,10 @@ const adminSalesRepresentativeOrSalesRepSalesView = requireAnyPermission([
 });
 const shootsViewOrEdit = requireAnyPermission([
   'admin_shoots.view',
-  'admin_shoots.edit'
-]);
+  'admin_shoots.edit',
+  'sales_rep_shoots.view',
+  'sales_rep_shoots.edit'
+], allowSalesRepRoles);
 
 router.post('/create-project', authMiddleware, shootsCreate, admin.createProject);
 router.post('/match-crew', admin.matchCrew);

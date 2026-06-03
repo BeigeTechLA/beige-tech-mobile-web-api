@@ -17,8 +17,9 @@ const meetingsDelete = requireAnyPermission([
 ]);
 const shootMeetingsView = requireAnyPermission([
   'admin_shoots.view',
-  'admin_meetings.view'
-]);
+  'admin_meetings.view',
+  'sales_rep_shoots.view'
+], { allowRoles: ['sales_rep', 'sales_admin'] });
 const shootMeetingsCreate = requireAnyPermission([
   'admin_shoots.edit',
   'admin_meetings.create'

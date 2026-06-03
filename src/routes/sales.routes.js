@@ -21,8 +21,9 @@ const shootOrSalesView = requireAnyPermission([
   'sales_rep_sales.view'
 ], allowSalesRepRoles);
 const shootsEditOrSalesEdit = requireAnyPermission([
-  'admin_shoots.edit'
-]);
+  'admin_shoots.edit',
+  'sales_rep_shoots.edit'
+], allowSalesRepRoles);
 const shootOrInvoiceView = requireAnyPermission([
   'admin_shoots.view',
   'admin_invoices.view',
