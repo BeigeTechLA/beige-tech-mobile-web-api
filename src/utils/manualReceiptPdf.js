@@ -29,6 +29,13 @@ function toDateForHeader(value) {
   return date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
 }
 
+function addDays(value, days) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  date.setDate(date.getDate() + Number(days || 0));
+  return date;
+}
+
 function toTitleCase(value) {
   return String(value ?? '')
     .replace(/_/g, ' ')
@@ -90,6 +97,8 @@ function buildManualReceiptHtml(data) {
 
   const invoiceDate = toDateForHeader(data.invoiceDate || new Date());
   const receiptNo = escapeHtml(String(data.receiptNumber || data.bookingRef || '').replace(/[^\w-]/g, '').slice(-8) || 'N/A');
+  const hasNet30 = history.some((entry) => String(entry?.method || '').toLowerCase().includes('net 30') || String(entry?.method || '').toLowerCase().includes('net30'));
+  const net30DueDate = hasNet30 ? toDateForHeader(addDays(data.invoiceDate || new Date(), 30)) : null;
   const paidLabel = data.isPaid ? 'Paid in Full' : 'Pending';
   const transactionRef = escapeHtml(data.transactionReference || data.confirmationNumber || '');
 
@@ -646,7 +655,10 @@ function buildManualReceiptHtml(data) {
               <h4>Terms & Conditions:</h4>
               <p>Fees and payment terms will be established in the contract or agreement prior to the commencement of the project. An initial deposit will be required before any design work begins. We reserve the right to suspend or halt work in the event of non-payment.</p>
               <div class="thank-you">
-                Thank you for your business! Total paid amount of <b>${formatCurrencyBold(totalPaidAmount)}</b> has been received and processed manually.${transactionRef ? ` <b>Transaction Reference: ${transactionRef}.</b>` : ''}
+                ${hasNet30
+                  ? `Thank you for your business! This invoice is on <b>Net 30</b> terms. Payment of <b>${formatCurrencyBold(totalAmount)}</b> is due within 30 days${net30DueDate ? ` (due by <b>${escapeHtml(net30DueDate)}</b>)` : ''}.`
+                  : `Thank you for your business! Total paid amount of <b>${formatCurrencyBold(totalPaidAmount)}</b> has been received and processed manually.${transactionRef ? ` <b>Transaction Reference: ${transactionRef}.</b>` : ''}`
+                }
               </div>
             </div>
           </div>

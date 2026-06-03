@@ -59,8 +59,18 @@ function normalizeCreditType(creditType, fallback = 'other') {
 }
 
 function normalizeUsageContext(context, fallback = 'general') {
-  const value = String(context || fallback).trim().toLowerCase();
-  return ['general', 'shoot_payment', 'studio_rental'].includes(value) ? value : fallback;
+  const value = String(context || fallback).trim().toLowerCase().replace(/\s+/g, '_');
+  const aliases = {
+    booking_payment: 'shoot_payment',
+    payment: 'shoot_payment',
+    shoot: 'shoot_payment',
+    shoot_payment_credit_used: 'shoot_payment',
+    manual_credits_usage: 'shoot_payment',
+    manual_credit_usage: 'shoot_payment',
+    manual_credits: 'shoot_payment'
+  };
+  const normalizedValue = aliases[value] || value;
+  return ['general', 'shoot_payment', 'studio_rental'].includes(normalizedValue) ? normalizedValue : fallback;
 }
 
 function parseJsonObject(value, fieldName = 'value') {
@@ -162,6 +172,102 @@ function identityKey(entry = {}) {
   if (entry.user_id) return `user:${entry.user_id}`;
   if (entry.guest_email) return `guest:${normalizeGuestEmail(entry.guest_email)}`;
   return null;
+}
+
+function collectCreditIdentityEmail(entry = {}) {
+  return normalizeGuestEmail(
+    entry.guest_email ||
+    entry.user?.email ||
+    entry.sales_quote?.client_email ||
+    entry.source_entry?.sales_quote?.client_email
+  );
+}
+
+async function buildCreditIdentityResolver(entries = [], transaction = null) {
+  const emailSet = new Set();
+  const userIdSet = new Set();
+
+  (entries || []).forEach((row) => {
+    const entry = toPlain(row) || {};
+    const email = collectCreditIdentityEmail(entry);
+    if (email) emailSet.add(email);
+    if (entry.user_id) userIdSet.add(Number(entry.user_id));
+  });
+
+  const emailToUser = new Map();
+  const userToProfile = new Map();
+
+  if (userIdSet.size && db.users) {
+    const users = await db.users.findAll({
+      where: { id: { [Op.in]: [...userIdSet] } },
+      attributes: ['id', 'name', 'email', 'user_type', 'role'],
+      transaction
+    });
+
+    users.map(toPlain).forEach((user) => {
+      if (!user?.id) return;
+      userToProfile.set(Number(user.id), user);
+      const email = normalizeGuestEmail(user.email);
+      if (email) {
+        emailSet.add(email);
+        emailToUser.set(email, Number(user.id));
+      }
+    });
+  }
+
+  if (emailSet.size && db.users) {
+    const users = await db.users.findAll({
+      where: { email: { [Op.in]: [...emailSet] } },
+      attributes: ['id', 'name', 'email', 'user_type', 'role'],
+      transaction
+    });
+
+    users.map(toPlain).forEach((user) => {
+      if (!user?.id) return;
+      userToProfile.set(Number(user.id), user);
+      const email = normalizeGuestEmail(user.email);
+      if (email) emailToUser.set(email, Number(user.id));
+    });
+  }
+
+  if (emailSet.size && db.clients) {
+    const clients = await db.clients.findAll({
+      where: {
+        email: { [Op.in]: [...emailSet] },
+        user_id: { [Op.ne]: null },
+        is_active: 1
+      },
+      attributes: ['client_id', 'user_id', 'name', 'email'],
+      transaction
+    });
+
+    clients.map(toPlain).forEach((client) => {
+      const email = normalizeGuestEmail(client?.email);
+      const linkedUserId = Number(client?.user_id || 0) || null;
+      if (!email || !linkedUserId) return;
+      emailToUser.set(email, linkedUserId);
+      if (!userToProfile.has(linkedUserId)) {
+        userToProfile.set(linkedUserId, {
+          id: linkedUserId,
+          name: client.name || null,
+          email
+        });
+      }
+    });
+  }
+
+  return function resolveCreditIdentity(entry = {}) {
+    const email = collectCreditIdentityEmail(entry);
+    const linkedUserId = (email && emailToUser.get(email)) || Number(entry.user_id || 0) || null;
+    const userProfile = linkedUserId ? userToProfile.get(Number(linkedUserId)) : null;
+
+    return {
+      key: linkedUserId ? `user:${linkedUserId}` : identityKey(entry),
+      userId: linkedUserId,
+      guestEmail: email || normalizeGuestEmail(userProfile?.email),
+      user: userProfile || entry.user || null
+    };
+  };
 }
 
 function applyEntryToTotals(totals, entry) {
@@ -408,6 +514,28 @@ async function createCreditForQuoteReduction({
 
   if (!salesQuoteActivityId || !(creditAmount > 0) || !db.account_credit_ledger) {
     return null;
+  }
+
+  const duplicateWhere = {
+    sales_quote_id: salesQuoteId || null,
+    amount: creditAmount,
+    entry_type: 'credit_created',
+    source: 'quote_reduction',
+    status: { [Op.in]: ['pending', 'available'] }
+  };
+
+  if (bookingId) {
+    duplicateWhere.booking_id = bookingId;
+  }
+
+  const duplicate = await db.account_credit_ledger.findOne({
+    where: duplicateWhere,
+    order: [['created_at', 'DESC'], ['account_credit_ledger_id', 'DESC']],
+    transaction
+  });
+
+  if (duplicate) {
+    return duplicate;
   }
 
   const existing = await db.account_credit_ledger.findOne({
@@ -993,15 +1121,40 @@ async function resolveManualCreditTarget({
   transaction = null
 }) {
   const normalizedSegment = normalizeSegment(userType || user_type || 'client');
-  const normalizedUserId = Number(targetUserId || target_user_id || userId || user_id || 0) || null;
+  let normalizedUserId = Number(targetUserId || target_user_id || userId || user_id || 0) || null;
   const normalizedGuestEmail = normalizeGuestEmail(guestEmail || guest_email);
   let targetUser = null;
 
+  if (!normalizedUserId && normalizedGuestEmail && normalizedSegment === 'client') {
+    const [matchedUser, matchedClient] = await Promise.all([
+      db.users.findOne({
+        where: { email: normalizedGuestEmail },
+        attributes: ['id', 'name', 'email', 'user_type', 'role'],
+        transaction
+      }),
+      db.clients ? db.clients.findOne({
+        where: {
+          email: normalizedGuestEmail,
+          user_id: { [Op.ne]: null },
+          is_active: 1
+        },
+        attributes: ['client_id', 'user_id'],
+        order: [['client_id', 'ASC']],
+        transaction
+      }) : null
+    ]);
+
+    normalizedUserId = Number(matchedUser?.id || matchedClient?.user_id || 0) || null;
+    targetUser = matchedUser || null;
+  }
+
   if (normalizedUserId) {
-    targetUser = await db.users.findByPk(normalizedUserId, {
-      attributes: ['id', 'name', 'email', 'user_type', 'role'],
-      transaction
-    });
+    if (!targetUser || Number(targetUser.id) !== normalizedUserId) {
+      targetUser = await db.users.findByPk(normalizedUserId, {
+        attributes: ['id', 'name', 'email', 'user_type', 'role'],
+        transaction
+      });
+    }
 
     if (!targetUser) {
       const error = new Error('Selected user was not found');
@@ -1234,8 +1387,17 @@ function buildAdminCreditWhere(filters = {}) {
   if (filters.credit_type) where.credit_type = normalizeCreditType(filters.credit_type, filters.credit_type);
   if (filters.notification_status) where.notification_status = filters.notification_status;
   if (filters.usage_context) where.usage_context = normalizeUsageContext(filters.usage_context, filters.usage_context);
-  if (filters.user_id) where.user_id = Number(filters.user_id);
-  if (filters.guest_email) where.guest_email = normalizeGuestEmail(filters.guest_email);
+  const filterUserId = Number(filters.user_id || 0) || null;
+  const filterGuestEmail = normalizeGuestEmail(filters.guest_email);
+  if (filters.identity_or && filterUserId && filterGuestEmail) {
+    where[Op.or] = [
+      { user_id: filterUserId },
+      { guest_email: filterGuestEmail }
+    ];
+  } else {
+    if (filterUserId) where.user_id = filterUserId;
+    if (filterGuestEmail) where.guest_email = filterGuestEmail;
+  }
   if (filters.booking_id) where.booking_id = Number(filters.booking_id);
   if (filters.sales_quote_id) where.sales_quote_id = Number(filters.sales_quote_id);
   if (filters.invoice_id) where.invoice_send_history_id = Number(filters.invoice_id);
@@ -1524,11 +1686,12 @@ async function getAdminCreditSummary(filters = {}) {
 
   const globalTotals = emptyCreditTotals();
   const identityTotals = new Map();
+  const resolveCreditIdentity = await buildCreditIdentityResolver(entries);
 
   entries.forEach((row) => {
     const entry = toPlain(row);
     applyEntryToTotals(globalTotals, entry);
-    const key = identityKey(entry);
+    const { key } = resolveCreditIdentity(entry);
     if (!key) return;
     if (!identityTotals.has(key)) identityTotals.set(key, emptyCreditTotals());
     applyEntryToTotals(identityTotals.get(key), entry);
@@ -1576,19 +1739,23 @@ async function getAdminCreditUsers(filters = {}) {
   });
 
   const usersMap = new Map();
+  const resolveCreditIdentity = await buildCreditIdentityResolver(entries);
   entries.forEach((row) => {
     const entry = toPlain(row);
-    const key = identityKey(entry);
+    const identity = resolveCreditIdentity(entry);
+    const key = identity.key;
     if (!key) return;
 
     if (!usersMap.has(key)) {
+      const identityUser = identity.user || entry.user || null;
+      const identityEmail = identity.guestEmail || entry.guest_email || entry.sales_quote?.client_email || null;
       usersMap.set(key, {
         identity_key: key,
         user_segment: entry.user_segment || 'client',
-        user_id: entry.user_id || null,
-        guest_email: entry.guest_email || null,
-        name: entry.user?.name || entry.sales_quote?.client_name || null,
-        email: entry.user?.email || entry.guest_email || entry.sales_quote?.client_email || null,
+        user_id: identity.userId || entry.user_id || null,
+        guest_email: identityEmail,
+        name: identityUser?.name || entry.user?.name || entry.sales_quote?.client_name || null,
+        email: identityUser?.email || identityEmail || entry.user?.email || entry.guest_email || entry.sales_quote?.client_email || null,
         totals: emptyCreditTotals(),
         last_activity_at: entry.created_at || null,
         last_activity: null
@@ -1679,11 +1846,17 @@ async function getAdminCreditDashboard(filters = {}) {
 
 async function getAdminCreditUserDetails(filters = {}) {
   const userId = Number(filters.user_id || 0) || null;
-  const guestEmail = normalizeGuestEmail(filters.guest_email);
+  let guestEmail = normalizeGuestEmail(filters.guest_email);
   if (!userId && !guestEmail) {
     const error = new Error('user_id or guest_email is required');
     error.statusCode = 400;
     throw error;
+  }
+
+  let user = null;
+  if (userId) {
+    user = await db.users.findByPk(userId, { attributes: ['id', 'name', 'email', 'user_type', 'role'] });
+    guestEmail = guestEmail || normalizeGuestEmail(user?.email);
   }
 
   const [summary, history] = await Promise.all([
@@ -1692,14 +1865,10 @@ async function getAdminCreditUserDetails(filters = {}) {
       ...filters,
       user_id: userId || undefined,
       guest_email: guestEmail || undefined,
+      identity_or: Boolean(userId && guestEmail),
       limit: filters.limit || 50
     })
   ]);
-
-  let user = null;
-  if (userId) {
-    user = await db.users.findByPk(userId, { attributes: ['id', 'name', 'email', 'user_type', 'role'] });
-  }
 
   return {
     user: user ? toPlain(user) : {

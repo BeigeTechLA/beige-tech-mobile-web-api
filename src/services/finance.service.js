@@ -58,6 +58,19 @@ function buildTransactionCode(paymentId, bookingId) {
   return `TXN-${yyyy}-${String(paymentId || bookingId).padStart(6, '0')}`;
 }
 
+function buildInternalInvoicePdfUrl(bookingId) {
+  const baseUrl = String(
+    process.env.API_BASE_URL ||
+    ''
+  ).trim().replace(/\/+$/, '');
+  const invoicePath = `/sales/invoice-pdf/${bookingId}?manual=1`;
+  return baseUrl ? `${baseUrl}${invoicePath}` : `/v1${invoicePath}`;
+}
+
+function buildInternalInvoiceNumber(bookingId) {
+  return `INVBEIGE-M-${String(bookingId).padStart(4, '0')}`;
+}
+
 function buildPayoutRequestCode(creatorId) {
   const date = new Date();
   const yyyy = date.getFullYear();
@@ -612,6 +625,40 @@ async function buildPricingSnapshotFromBooking(booking) {
 
 async function loadBookingFinanceContext(bookingId, transaction = null) {
   const booking = await db.stream_project_booking.findByPk(bookingId, {
+    attributes: [
+      'stream_project_booking_id',
+      'user_id',
+      'quote_id',
+      'guest_email',
+      'project_name',
+      'description',
+      'event_type',
+      'shoot_type',
+      'content_type',
+      'event_date',
+      'duration_hours',
+      'start_time',
+      'end_time',
+      'budget',
+      'crew_size_needed',
+      'event_location',
+      'streaming_platforms',
+      'crew_roles',
+      'skills_needed',
+      'equipments_needed',
+      'reference_links',
+      'edits_needed',
+      'video_edit_types',
+      'photo_edit_types',
+      'special_instructions',
+      'is_draft',
+      'is_completed',
+      'is_cancelled',
+      'is_active',
+      'payment_id',
+      'payment_completed_at',
+      'status'
+    ],
     include: [
       {
         model: db.quotes,
@@ -679,6 +726,69 @@ async function loadBookingFinanceContext(bookingId, transaction = null) {
     : null;
 
   return { booking, payment };
+}
+
+async function ensurePaidBookingInvoiceHistory(booking, payment, transaction = null) {
+  if (!db.invoice_send_history || !booking || !payment) return null;
+
+  const bookingId = Number(booking.stream_project_booking_id);
+  if (!bookingId) return null;
+
+  const existingPaidInvoice = await db.invoice_send_history.findOne({
+    where: { booking_id: bookingId, payment_status: 'paid' },
+    order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+    transaction
+  });
+  if (existingPaidInvoice) return existingPaidInvoice;
+
+  const existingInvoice = await db.invoice_send_history.findOne({
+    where: { booking_id: bookingId },
+    order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+    transaction
+  });
+
+  if (existingInvoice) {
+    await existingInvoice.update({
+      payment_status: 'paid',
+      invoice_number: existingInvoice.invoice_number || buildInternalInvoiceNumber(bookingId),
+      invoice_pdf: existingInvoice.invoice_pdf || buildInternalInvoicePdfUrl(bookingId),
+      sent_at: existingInvoice.sent_at || new Date()
+    }, { transaction });
+    return existingInvoice;
+  }
+
+  const [salesLead, clientLead] = await Promise.all([
+    db.sales_leads.findOne({ where: { booking_id: bookingId }, transaction }),
+    db.client_leads.findOne({ where: { booking_id: bookingId }, transaction })
+  ]);
+
+  const clientName =
+    salesLead?.client_name ||
+    clientLead?.client_name ||
+    deriveNameFromEmail(booking.guest_email || payment.guest_email) ||
+    null;
+  const clientEmail =
+    booking.guest_email ||
+    payment.guest_email ||
+    salesLead?.guest_email ||
+    clientLead?.guest_email ||
+    null;
+
+  return db.invoice_send_history.create({
+    booking_id: bookingId,
+    quote_id: null,
+    lead_id: salesLead?.lead_id || null,
+    client_lead_id: clientLead?.lead_id || null,
+    assigned_sales_rep_id: salesLead?.assigned_sales_rep_id || clientLead?.assigned_sales_rep_id || null,
+    client_name: clientName,
+    client_email: clientEmail,
+    invoice_number: buildInternalInvoiceNumber(bookingId),
+    invoice_url: null,
+    invoice_pdf: buildInternalInvoicePdfUrl(bookingId),
+    payment_status: 'paid',
+    sent_by_user_id: null,
+    sent_at: booking.payment_completed_at || payment.created_at || new Date()
+  }, { transaction });
 }
 
 function calculateCreatorRows({ booking, payment, pricingSnapshot = null, financeTransactionId = null }) {
@@ -812,15 +922,27 @@ async function syncBookingFinance(bookingId, options = {}) {
 
   try {
     const { booking, payment } = await loadBookingFinanceContext(bookingId, transaction);
+    const ensuredInvoice = await ensurePaidBookingInvoiceHistory(booking, payment, transaction);
+    if (ensuredInvoice) {
+      const invoiceRows = Array.isArray(booking.invoice_send_history) ? booking.invoice_send_history : [];
+      const ensuredInvoiceId = Number(ensuredInvoice.invoice_send_history_id);
+      booking.invoice_send_history = [
+        ensuredInvoice,
+        ...invoiceRows.filter((invoice) => Number(invoice.invoice_send_history_id) !== ensuredInvoiceId)
+      ];
+    }
     const pricingSnapshot = await buildPricingSnapshotFromBooking(booking);
     const creatorRowsPreview = calculateCreatorRows({ booking, payment, pricingSnapshot });
     const breakdownPayload = calculateBreakdown({ booking, payment, pricingSnapshot, creatorRows: creatorRowsPreview });
+    const latestInvoice = Array.isArray(booking.invoice_send_history) && booking.invoice_send_history.length
+      ? booking.invoice_send_history[0]
+      : null;
 
     const transactionPayload = {
       transaction_code: buildTransactionCode(payment?.payment_id, booking.stream_project_booking_id),
       booking_id: booking.stream_project_booking_id,
       payment_id: payment?.payment_id || null,
-      invoice_send_history_id: null,
+      invoice_send_history_id: latestInvoice?.invoice_send_history_id || null,
       client_user_id: booking.user_id || null,
       guest_email: booking.guest_email || payment?.guest_email || null,
       transaction_type: 'client_payment',
@@ -935,24 +1057,573 @@ async function syncBookingFinance(bookingId, options = {}) {
   }
 }
 
+function formatDateOnly(value) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toISOString().slice(0, 10);
+}
+
+function normalizeDisplayStatus(status, hasPayment = false) {
+  if (status === 'failed') return 'failed';
+  if (status === 'refunded') return 'refunded';
+  if (status === 'cancelled' || status === 'void') return status;
+  if (status === 'succeeded' || status === 'paid' || hasPayment) return 'paid';
+  return 'pending';
+}
+
+function formatPaymentMethod(method, source, externalReference) {
+  const raw = String(method || source || '').trim().toLowerCase();
+  if (raw === 'stripe' || String(externalReference || '').startsWith('pi_')) return 'Stripe';
+  if (raw === 'card') return 'Credit Card';
+  if (raw === 'bank_transfer') return 'Bank Transfer';
+  if (raw === 'account_credit') return 'Account Credit';
+  if (raw === 'manual') return 'Manual';
+  if (!raw) return null;
+  return raw.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function formatShootType(booking = {}, metadata = {}) {
+  const contentType = String(booking.content_type || booking.event_type || '').trim();
+  const shootType = String(booking.shoot_type || metadata.shoot_type || '').trim();
+  const normalizedContent = contentType
+    ? contentType.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase())
+    : '';
+  const normalizedShoot = shootType
+    ? shootType.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase())
+    : '';
+
+  if (normalizedShoot && normalizedContent && normalizedShoot.toLowerCase() !== normalizedContent.toLowerCase()) {
+    return `${normalizedShoot} ${normalizedContent}`;
+  }
+  return normalizedShoot || normalizedContent || booking.project_name || null;
+}
+
+function deriveNameFromEmail(email) {
+  const localPart = String(email || '').includes('@') ? String(email).split('@')[0] : '';
+  return localPart
+    .replace(/[._-]+/g, ' ')
+    .replace(/\b\d+\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase()) || null;
+}
+
+async function getLeadInfoByBookingIds(bookingIds = []) {
+  const ids = [...new Set(bookingIds.map(Number).filter(Boolean))];
+  if (ids.length === 0) return new Map();
+
+  const where = { booking_id: { [db.Sequelize.Op.in]: ids } };
+  const [salesLeads, clientLeads] = await Promise.all([
+    db.sales_leads.findAll({
+      where,
+      attributes: ['booking_id', 'client_name', 'guest_email', 'phone'],
+      raw: true
+    }),
+    db.client_leads.findAll({
+      where,
+      attributes: ['booking_id', 'client_name', 'guest_email', 'phone'],
+      raw: true
+    })
+  ]);
+
+  const map = new Map();
+  [...clientLeads, ...salesLeads].forEach((lead) => {
+    if (!lead?.booking_id) return;
+    const existing = map.get(Number(lead.booking_id)) || {};
+    map.set(Number(lead.booking_id), {
+      ...existing,
+      client_name: lead.client_name || existing.client_name || null,
+      guest_email: lead.guest_email || existing.guest_email || null,
+      phone: lead.phone || existing.phone || null
+    });
+  });
+
+  return map;
+}
+
+async function getInvoiceCountsByBookingIds(bookingIds = []) {
+  const ids = [...new Set(bookingIds.map(Number).filter(Boolean))];
+  if (ids.length === 0 || !db.invoice_send_history) return new Map();
+
+  const rows = await db.invoice_send_history.findAll({
+    where: { booking_id: { [db.Sequelize.Op.in]: ids } },
+    attributes: [
+      'booking_id',
+      [db.sequelize.fn('COUNT', db.sequelize.col('invoice_send_history_id')), 'invoice_count']
+    ],
+    group: ['booking_id'],
+    raw: true
+  });
+
+  return new Map(rows.map((row) => [Number(row.booking_id), Number(row.invoice_count || 0)]));
+}
+
+async function getLatestInvoicesByBookingIds(bookingIds = []) {
+  const ids = [...new Set(bookingIds.map(Number).filter(Boolean))];
+  if (ids.length === 0 || !db.invoice_send_history) return new Map();
+
+  const rows = await db.invoice_send_history.findAll({
+    where: { booking_id: { [db.Sequelize.Op.in]: ids } },
+    order: [['booking_id', 'ASC'], ['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+    raw: true
+  });
+
+  const map = new Map();
+  rows.forEach((invoice) => {
+    const bookingId = Number(invoice.booking_id);
+    if (!map.has(bookingId)) map.set(bookingId, invoice);
+  });
+  return map;
+}
+
+async function getSearchMatchedBookingIds(search) {
+  const term = String(search || '').trim();
+  if (!term) return [];
+
+  const Op = db.Sequelize.Op;
+  const like = `%${term}%`;
+  const directId = Number(term.replace(/^#/, ''));
+  const ids = new Set(Number.isFinite(directId) && directId > 0 ? [directId] : []);
+
+  const [salesMatches, clientMatches, userMatches] = await Promise.all([
+    db.sales_leads.findAll({
+      where: {
+        [Op.or]: [
+          { client_name: { [Op.like]: like } },
+          { guest_email: { [Op.like]: like } },
+          { phone: { [Op.like]: like } }
+        ]
+      },
+      attributes: ['booking_id'],
+      raw: true
+    }),
+    db.client_leads.findAll({
+      where: {
+        [Op.or]: [
+          { client_name: { [Op.like]: like } },
+          { guest_email: { [Op.like]: like } },
+          { phone: { [Op.like]: like } }
+        ]
+      },
+      attributes: ['booking_id'],
+      raw: true
+    }),
+    db.stream_project_booking.findAll({
+      where: {
+        [Op.or]: [
+          { project_name: { [Op.like]: like } },
+          { shoot_type: { [Op.like]: like } },
+          { event_type: { [Op.like]: like } },
+          { content_type: { [Op.like]: like } },
+          { guest_email: { [Op.like]: like } }
+        ]
+      },
+      attributes: ['stream_project_booking_id'],
+      raw: true
+    })
+  ]);
+
+  salesMatches.forEach((row) => row.booking_id && ids.add(Number(row.booking_id)));
+  clientMatches.forEach((row) => row.booking_id && ids.add(Number(row.booking_id)));
+  userMatches.forEach((row) => row.stream_project_booking_id && ids.add(Number(row.stream_project_booking_id)));
+
+  return [...ids];
+}
+
+async function syncRecentPaidBookingsMissingFinance(limit = 50) {
+  const Op = db.Sequelize.Op;
+  const paidBookings = await db.stream_project_booking.findAll({
+    where: {
+      payment_id: { [Op.ne]: null },
+      is_draft: 0
+    },
+    attributes: ['stream_project_booking_id'],
+    include: [{
+      model: db.finance_transactions,
+      as: 'finance_transactions',
+      required: false,
+      attributes: ['finance_transaction_id']
+    }],
+    order: [['stream_project_booking_id', 'DESC']],
+    limit
+  });
+
+  const missingBookingIds = paidBookings
+    .filter((booking) => !Array.isArray(booking.finance_transactions) || booking.finance_transactions.length === 0)
+    .map((booking) => Number(booking.stream_project_booking_id))
+    .filter(Boolean);
+
+  for (const bookingId of missingBookingIds) {
+    try {
+      await syncBookingFinance(bookingId);
+    } catch (error) {
+      console.error(`Finance backfill skipped for booking ${bookingId}:`, error.message);
+    }
+  }
+}
+
+function buildFinanceTransactionListRow(plain, leadInfo = {}, invoiceCount = 0, latestInvoice = null) {
+  const metadata = parseJson(plain.metadata_json, null) || {};
+  const booking = plain.booking || {};
+  const payment = plain.payment || {};
+  const client = plain.client || {};
+  const bookingId = plain.booking_id || booking.stream_project_booking_id || null;
+  const clientName =
+    client.name ||
+    leadInfo.client_name ||
+    metadata.client_name ||
+    deriveNameFromEmail(plain.guest_email || leadInfo.guest_email || client.email) ||
+    'Guest Client';
+  const clientEmail = client.email || plain.guest_email || leadInfo.guest_email || payment.guest_email || null;
+  const status = normalizeDisplayStatus(plain.status, Boolean(plain.payment_id || payment.payment_id));
+
+  return {
+    finance_transaction_id: plain.finance_transaction_id,
+    transaction_id: plain.transaction_code,
+    transaction_code: plain.transaction_code,
+    booking_id: bookingId,
+    shoot_id: bookingId,
+    payment_id: plain.payment_id || payment.payment_id || null,
+    quote_id: booking.quote_id || metadata.quote_id || null,
+    client_name: clientName,
+    client_email: clientEmail,
+    client_phone: leadInfo.phone || metadata.phone || null,
+    shoot_type: formatShootType(booking, metadata),
+    project_name: booking.project_name || metadata.project_name || null,
+    event_date: formatDateOnly(booking.event_date || payment.shoot_date || null),
+    transaction_date: plain.transaction_date,
+    total_amount: toMoney(plain.gross_amount || payment.total_amount || 0),
+    currency: plain.currency || 'USD',
+    payment_method: formatPaymentMethod(plain.payment_method, plain.source, plain.external_reference),
+    status,
+    transaction_type: plain.transaction_type,
+    source: plain.source,
+    external_reference: plain.external_reference || payment.stripe_payment_intent_id || null,
+    invoices_count: invoiceCount,
+    latest_invoice: latestInvoice ? formatClientInvoice(latestInvoice) : null,
+    metadata
+  };
+}
+
+function buildClientWhere(userContext = {}, filters = {}) {
+  const Op = db.Sequelize.Op;
+  const userId = Number(userContext.userId || filters.client_user_id || 0) || null;
+  const email = String(userContext.email || filters.guest_email || '').trim();
+  const where = {};
+  const clientOr = [];
+
+  if (userId) clientOr.push({ client_user_id: userId });
+  if (email) clientOr.push({ guest_email: email });
+  if (clientOr.length === 1) Object.assign(where, clientOr[0]);
+  if (clientOr.length > 1) where[Op.or] = clientOr;
+
+  return where;
+}
+
+function buildCostBreakdownRow(breakdown = {}) {
+  const subtotal = toMoney(breakdown.subtotal_amount);
+  const discount = toMoney(breakdown.discount_amount);
+  const tax = toMoney(breakdown.tax_amount);
+  const equipment = toMoney(breakdown.equipment_amount);
+  const total = toMoney(breakdown.total_amount);
+  const baseCost = toMoney(Math.max(subtotal - equipment, 0));
+
+  return {
+    base_cost: baseCost,
+    add_ons: equipment,
+    taxes: tax,
+    discounts: discount,
+    total_amount: total,
+    collected_amount: toMoney(breakdown.collected_amount),
+    outstanding_amount: toMoney(breakdown.outstanding_amount),
+    currency: breakdown.currency || 'USD'
+  };
+}
+
+function formatClientInvoice(invoice = {}) {
+  return {
+    invoice_send_history_id: invoice.invoice_send_history_id,
+    invoice_id: invoice.invoice_number || (invoice.invoice_send_history_id ? `INV-${invoice.invoice_send_history_id}` : null),
+    invoice_number: invoice.invoice_number || null,
+    invoice_url: invoice.invoice_url || null,
+    invoice_pdf: invoice.invoice_pdf || null,
+    payment_status: invoice.payment_status || 'pending',
+    sent_at: invoice.sent_at || invoice.created_at || null
+  };
+}
+
+function normalizeClientDisputeStatus(status) {
+  if (status === 'open') return 'dispute_open';
+  if (status === 'in_review' || status === 'escalated') return 'in_progress';
+  if (status === 'resolved') return 'resolved';
+  if (status === 'rejected') return 'rejected';
+  return null;
+}
+
+function buildClientPaymentRow(plain, invoices = [], disputes = []) {
+  const metadata = parseJson(plain.metadata_json, {}) || {};
+  const booking = plain.booking || {};
+  const latestInvoice = invoices[0] || null;
+  const openDispute = disputes.find((dispute) => !['resolved', 'rejected'].includes(dispute.status));
+  const disputeStatus = openDispute ? normalizeClientDisputeStatus(openDispute.status) : null;
+
+  return {
+    booking_id: plain.booking_id,
+    shoot_id: plain.booking_id ? `BK-${String(plain.booking_id).padStart(3, '0')}` : null,
+    shoot_type: formatShootType(booking, metadata),
+    project_name: booking.project_name || null,
+    total_amount: toMoney(plain.total_amount),
+    currency: plain.currency || 'USD',
+    invoices_count: invoices.length,
+    invoices: invoices.map(formatClientInvoice),
+    latest_invoice: latestInvoice ? formatClientInvoice(latestInvoice) : null,
+    date_time: booking.payment_completed_at || booking.event_date || plain.calculated_at || plain.created_at,
+    event_date: formatDateOnly(booking.event_date),
+    payment_method: formatPaymentMethod(
+      plain.finance_transaction?.payment_method,
+      plain.finance_transaction?.source,
+      plain.finance_transaction?.external_reference
+    ),
+    status: disputeStatus || normalizeDisplayStatus(plain.payment_status, Number(plain.collected_amount || 0) > 0),
+    payment_status: plain.payment_status,
+    cost_breakdown: buildCostBreakdownRow(plain),
+    dispute: openDispute ? {
+      dispute_id: openDispute.finance_dispute_id,
+      dispute_code: openDispute.dispute_code,
+      status: openDispute.status,
+      category: openDispute.category,
+      subject: openDispute.subject,
+      created_at: openDispute.created_at
+    } : null,
+    actions: {
+      can_view_details: true,
+      can_view_invoice: Boolean(latestInvoice?.invoice_url || latestInvoice?.invoice_pdf),
+      can_download_invoice: Boolean(latestInvoice?.invoice_pdf || latestInvoice?.invoice_url),
+      can_raise_dispute: !openDispute && normalizeDisplayStatus(plain.payment_status, Number(plain.collected_amount || 0) > 0) === 'paid'
+    }
+  };
+}
+
+async function getClientUserContext(userContext = {}) {
+  const userId = Number(userContext.userId || 0) || null;
+  if (!userId) return { userId: null, email: userContext.email || null };
+
+  const user = await db.users.findByPk(userId, { attributes: ['id', 'email', 'name'] });
+  return {
+    userId,
+    email: userContext.email || user?.email || null,
+    name: user?.name || null
+  };
+}
+
+async function getClientPaymentManagement(filters = {}, userContext = {}) {
+  const Op = db.Sequelize.Op;
+  const clientContext = await getClientUserContext(userContext);
+  const page = Math.max(parseInt(filters.page, 10) || 1, 1);
+  const limit = Math.min(Math.max(parseInt(filters.limit, 10) || 10, 1), 100);
+  const offset = (page - 1) * limit;
+  const where = buildClientWhere(clientContext, filters);
+  const bookingWhere = {};
+  const search = String(filters.search || filters.q || '').trim();
+
+  await syncRecentPaidBookingsMissingFinance(Math.max(limit * 2, 50));
+
+  if (!where[Op.or] && !where.client_user_id && !where.guest_email) {
+    const error = new Error('Client identity is required');
+    error.statusCode = 401;
+    throw error;
+  }
+
+  if (filters.status) {
+    const status = String(filters.status).trim();
+    if (status === 'paid') where.payment_status = 'paid';
+    if (status === 'pending') where.payment_status = { [Op.in]: ['unpaid', 'pending', 'partially_paid'] };
+    if (status === 'refunded') where.payment_status = 'refunded';
+    if (status === 'failed') where.payment_status = 'failed';
+  }
+
+  if (filters.month) {
+    const month = String(filters.month).trim();
+    const start = new Date(`${month}-01T00:00:00.000Z`);
+    if (!Number.isNaN(start.getTime())) {
+      const end = new Date(start);
+      end.setUTCMonth(end.getUTCMonth() + 1);
+      where.calculated_at = { [Op.gte]: start, [Op.lt]: end };
+    }
+  }
+
+  if (search) {
+    const term = `%${search}%`;
+    bookingWhere[Op.or] = [
+      { project_name: { [Op.like]: term } },
+      { shoot_type: { [Op.like]: term } },
+      { event_type: { [Op.like]: term } },
+      { content_type: { [Op.like]: term } },
+      { guest_email: { [Op.like]: term } }
+    ];
+  }
+
+  const result = await db.finance_project_breakdowns.findAndCountAll({
+    where,
+    distinct: true,
+    limit,
+    offset,
+    order: [['calculated_at', 'DESC'], ['finance_project_breakdown_id', 'DESC']],
+    include: [
+      {
+        model: db.stream_project_booking,
+        as: 'booking',
+        required: Object.keys(bookingWhere).length > 0,
+        where: bookingWhere,
+        attributes: ['stream_project_booking_id', 'project_name', 'shoot_type', 'event_type', 'content_type', 'event_date', 'guest_email', 'payment_completed_at']
+      }
+    ]
+  });
+
+  const rows = result.rows.map((row) => row.get({ plain: true }));
+  const bookingIds = rows.map((row) => Number(row.booking_id)).filter(Boolean);
+  const [invoices, disputes, transactions] = await Promise.all([
+    db.invoice_send_history.findAll({
+      where: { booking_id: { [Op.in]: bookingIds.length ? bookingIds : [0] } },
+      order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+      raw: true
+    }),
+    db.finance_disputes.findAll({
+      where: { booking_id: { [Op.in]: bookingIds.length ? bookingIds : [0] } },
+      order: [['created_at', 'DESC'], ['finance_dispute_id', 'DESC']],
+      raw: true
+    }),
+    db.finance_transactions.findAll({
+      where: { booking_id: { [Op.in]: bookingIds.length ? bookingIds : [0] }, transaction_type: 'client_payment' },
+      order: [['transaction_date', 'DESC'], ['finance_transaction_id', 'DESC']],
+      raw: true
+    })
+  ]);
+
+  const invoiceMap = new Map();
+  invoices.forEach((invoice) => {
+    const bookingId = Number(invoice.booking_id);
+    invoiceMap.set(bookingId, [...(invoiceMap.get(bookingId) || []), invoice]);
+  });
+
+  const disputeMap = new Map();
+  disputes.forEach((dispute) => {
+    const bookingId = Number(dispute.booking_id);
+    disputeMap.set(bookingId, [...(disputeMap.get(bookingId) || []), dispute]);
+  });
+
+  const transactionMap = new Map();
+  transactions.forEach((transaction) => {
+    const bookingId = Number(transaction.booking_id);
+    if (!transactionMap.has(bookingId)) transactionMap.set(bookingId, transaction);
+  });
+
+  const paymentRows = rows.map((row) => buildClientPaymentRow(
+    { ...row, finance_transaction: transactionMap.get(Number(row.booking_id)) || null },
+    invoiceMap.get(Number(row.booking_id)) || [],
+    disputeMap.get(Number(row.booking_id)) || []
+  ));
+
+  return {
+    rows: paymentRows,
+    pagination: {
+      page,
+      limit,
+      total: result.count,
+      total_pages: Math.ceil(result.count / limit)
+    },
+    filters: {
+      statuses: ['paid', 'pending', 'dispute_open', 'in_progress', 'resolved', 'refunded'],
+      dispute_types: ['quality', 'payment_delay', 'wrong_deliverables', 'refund', 'payout_issues', 'other']
+    }
+  };
+}
+
+async function getClientPaymentDetails(bookingId, userContext = {}) {
+  const clientContext = await getClientUserContext(userContext);
+  const where = {
+    booking_id: bookingId,
+    ...buildClientWhere(clientContext, {})
+  };
+
+  const breakdown = await db.finance_project_breakdowns.findOne({
+    where,
+    include: [
+      { model: db.stream_project_booking, as: 'booking', required: false },
+      {
+        model: db.creator_earnings,
+        as: 'creator_earnings',
+        required: false,
+        include: [{ model: db.crew_members, as: 'creator', required: false }]
+      }
+    ]
+  });
+
+  if (!breakdown) {
+    const error = new Error('Payment record not found');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const plain = breakdown.get({ plain: true });
+  const [invoices, disputes, transaction] = await Promise.all([
+    db.invoice_send_history.findAll({
+      where: { booking_id: bookingId },
+      order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+      raw: true
+    }),
+    db.finance_disputes.findAll({
+      where: { booking_id: bookingId },
+      order: [['created_at', 'DESC'], ['finance_dispute_id', 'DESC']],
+      raw: true
+    }),
+    db.finance_transactions.findOne({
+      where: { booking_id: bookingId, transaction_type: 'client_payment' },
+      order: [['transaction_date', 'DESC'], ['finance_transaction_id', 'DESC']],
+      raw: true
+    })
+  ]);
+
+  return {
+    ...buildClientPaymentRow({ ...plain, finance_transaction: transaction }, invoices, disputes),
+    creators: (plain.creator_earnings || []).map((earning) => ({
+      creator_earning_id: earning.creator_earning_id,
+      creator_id: earning.creator_id,
+      name: [earning.creator?.first_name, earning.creator?.last_name].filter(Boolean).join(' ').trim() || earning.creator?.email || null,
+      gross_amount: toMoney(earning.gross_amount),
+      net_earning_amount: toMoney(earning.net_earning_amount),
+      status: earning.status
+    })),
+    metadata: parseJson(plain.metadata_json, {})
+  };
+}
+
 async function listTransactions(filters = {}) {
   const Op = db.Sequelize.Op;
   const page = Math.max(parseInt(filters.page, 10) || 1, 1);
   const limit = Math.min(Math.max(parseInt(filters.limit, 10) || 20, 1), 100);
   const offset = (page - 1) * limit;
   const where = {};
+  const search = String(filters.search || filters.q || '').trim();
+
+  await syncRecentPaidBookingsMissingFinance(Math.max(limit * 2, 50));
 
   if (filters.status) where.status = filters.status;
   if (filters.transaction_type) where.transaction_type = filters.transaction_type;
   if (filters.booking_id) where.booking_id = filters.booking_id;
   if (filters.payment_id) where.payment_id = filters.payment_id;
-  if (filters.search) {
-    const term = `%${String(filters.search).trim()}%`;
+  if (search) {
+    const term = `%${search}%`;
+    const matchedBookingIds = await getSearchMatchedBookingIds(search);
     where[Op.or] = [
       { transaction_code: { [Op.like]: term } },
       { guest_email: { [Op.like]: term } },
       { external_reference: { [Op.like]: term } }
     ];
+    if (matchedBookingIds.length > 0) {
+      where[Op.or].push({ booking_id: { [Op.in]: matchedBookingIds } });
+    }
   }
   if (filters.date_from || filters.date_to) {
     where.transaction_date = {};
@@ -970,7 +1641,13 @@ async function listTransactions(filters = {}) {
         model: db.stream_project_booking,
         as: 'booking',
         required: false,
-        attributes: ['stream_project_booking_id', 'project_name', 'shoot_type', 'event_type', 'event_date']
+        attributes: ['stream_project_booking_id', 'quote_id', 'project_name', 'shoot_type', 'event_type', 'content_type', 'event_date', 'guest_email']
+      },
+      {
+        model: db.payment_transactions,
+        as: 'payment',
+        required: false,
+        attributes: ['payment_id', 'stripe_payment_intent_id', 'stripe_charge_id', 'guest_email', 'payment_source', 'total_amount', 'shoot_date', 'status']
       },
       {
         model: db.users,
@@ -981,14 +1658,21 @@ async function listTransactions(filters = {}) {
     ]
   });
 
+  const plainRows = result.rows.map((row) => row.get({ plain: true }));
+  const bookingIds = plainRows.map((row) => row.booking_id || row.booking?.stream_project_booking_id).filter(Boolean);
+  const [leadInfoByBookingId, invoiceCountsByBookingId, latestInvoicesByBookingId] = await Promise.all([
+    getLeadInfoByBookingIds(bookingIds),
+    getInvoiceCountsByBookingIds(bookingIds),
+    getLatestInvoicesByBookingIds(bookingIds)
+  ]);
+
   return {
-    rows: result.rows.map((row) => {
-      const plain = row.get({ plain: true });
-      return {
-        ...plain,
-        metadata: parseJson(plain.metadata_json, null)
-      };
-    }),
+    rows: plainRows.map((plain) => buildFinanceTransactionListRow(
+      plain,
+      leadInfoByBookingId.get(Number(plain.booking_id || plain.booking?.stream_project_booking_id)) || {},
+      invoiceCountsByBookingId.get(Number(plain.booking_id || plain.booking?.stream_project_booking_id)) || 0,
+      latestInvoicesByBookingId.get(Number(plain.booking_id || plain.booking?.stream_project_booking_id)) || null
+    )),
     pagination: {
       page,
       limit,
@@ -1893,6 +2577,8 @@ module.exports = {
   listTransactions,
   listShootBreakdowns,
   getShootFinance,
+  getClientPaymentManagement,
+  getClientPaymentDetails,
   getCreatorWallet,
   getAdminCreatorWalletOverview,
   getAdminPayoutsScreen,

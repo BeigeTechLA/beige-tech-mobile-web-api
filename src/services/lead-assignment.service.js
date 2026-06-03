@@ -531,6 +531,10 @@ async function unassignLead(leadId, performedByUserId) {
 // };
 
 const getLeadBookingStatus = (lead, booking) => {
+  if (lead.lead_status === 'payment_pending') {
+    return 'Payment Pending';
+  }
+
   // 1. Closed - Lost
   if (lead.lead_status === 'abandoned' || booking?.is_cancelled) {
     return 'Closed – Lost';

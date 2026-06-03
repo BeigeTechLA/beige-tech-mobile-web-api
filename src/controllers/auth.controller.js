@@ -48,6 +48,19 @@ async function linkGuestBookingsToUser(email, userId) {
       }
     );
 
+    if (db.account_credit_ledger) {
+      await db.account_credit_ledger.update(
+        { user_id: userId },
+        {
+          where: {
+            guest_email: email,
+            user_id: { [Op.is]: null },
+            user_segment: 'client'
+          }
+        }
+      );
+    }
+
     return updatedRows || 0;
   } catch (error) {
     console.error('Link Guest Bookings Error:', error);
