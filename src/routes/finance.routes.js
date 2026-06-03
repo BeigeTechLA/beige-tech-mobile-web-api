@@ -5,6 +5,10 @@ const multer = require('multer');
 const router = express.Router();
 const financeController = require('../controllers/finance.controller');
 const { authenticate, requireAdmin, requireSalesRepOrAdmin } = require('../middleware/auth.middleware');
+const { requireAnyPermission } = require('../middleware/permission.middleware');
+
+const adminFinancesView = requireAnyPermission(['admin_finances.view']);
+const adminFinancesCreate = requireAnyPermission(['admin_finances.create']);
 
 const disputeUploadDir = path.join(__dirname, '../../public/uploads/media');
 fs.mkdirSync(disputeUploadDir, { recursive: true });
@@ -43,10 +47,10 @@ router.post('/admin/disputes/:disputeId/hold-payout', authenticate, requireAdmin
 router.post('/admin/disputes/:disputeId/resolve', authenticate, requireAdmin, financeController.resolveDispute);
 router.post('/admin/disputes/:disputeId/reject-refund', authenticate, requireAdmin, financeController.rejectOrRefundDispute);
 router.post('/admin/disputes/:disputeId/escalate', authenticate, requireAdmin, financeController.escalateDispute);
-router.get('/admin/credit-points/dashboard', authenticate, requireAdmin, financeController.getAdminCreditPointsDashboard);
+router.get('/admin/credit-points/dashboard', authenticate, adminFinancesView, financeController.getAdminCreditPointsDashboard);
 router.get('/admin/credit-points/users', authenticate, requireAdmin, financeController.getAdminCreditPointUserDetails);
-router.get('/admin/credit-points/users/:userId', authenticate, requireAdmin, financeController.getAdminCreditPointUserDetails);
-router.post('/admin/credit-points/manual', authenticate, requireAdmin, financeController.createAdminManualCredit);
+router.get('/admin/credit-points/users/:userId', authenticate, adminFinancesView, financeController.getAdminCreditPointUserDetails);
+router.post('/admin/credit-points/manual', authenticate, adminFinancesCreate, financeController.createAdminManualCredit);
 router.get('/admin/credit-points/export', authenticate, requireAdmin, financeController.listAdminCreditPointTransactions);
 router.get('/creator-wallets/:creatorId', authenticate, requireSalesRepOrAdmin, financeController.getCreatorWallet);
 router.get('/creator-payouts', authenticate, requireSalesRepOrAdmin, financeController.listCreatorPayouts);

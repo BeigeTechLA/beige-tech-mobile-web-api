@@ -34,6 +34,10 @@ const adminSalesRepresentativeInvoiceView = requireAnyPermission([
   'admin_invoices.view',
   'admin_shoots.view',
 ], allowSalesRepRoles);
+const adminFinancesOrSalesRepresentativeView = requireAnyPermission([
+  'admin_finances.view',
+  'admin_sales_representative.view'
+], allowSalesRepRoles);
 
 /**
  * Sales Routes
@@ -331,7 +335,7 @@ router.get('/dashboard/funnel', authenticate, requireSalesRepOrAdmin, salesDashb
 // Quote Builder Routes
 // =====================================================
 
-router.get('/client-dropdown', authenticate, requireSalesRepOrAdmin, salesQuotesController.getClientDropdown);
+router.get('/client-dropdown', authenticate, adminFinancesOrSalesRepresentativeView, salesQuotesController.getClientDropdown);
 router.post('/create-client', authenticate, requireSalesRepOrAdmin, salesQuotesController.createClient);
 router.get('/quotes/catalog', authenticate, requireSalesRepOrAdmin, salesQuotesController.getCatalog);
 router.get('/quotes/ai-editing-types', authenticate, requireSalesRepOrAdmin, salesQuotesController.getAiEditingTypes);
