@@ -31,6 +31,8 @@ const shootOrInvoiceView = requireAnyPermission([
 const salesRepSalesView = requireAnyPermission(['sales_rep_sales.view'], allowSalesRepRoles);
 const salesRepSalesEdit = requireAnyPermission(['sales_rep_sales.edit'], allowSalesRepRoles);
 const salesRepSalesCreate = requireAnyPermission(['sales_rep_sales.create'], allowSalesRepRoles);
+const salesRepAvailabilityView = requireAnyPermission(['sales_rep_availability.view'], allowSalesRepRoles);
+const salesRepAvailabilityCreate = requireAnyPermission(['sales_rep_availability.create'], allowSalesRepRoles);
 const adminSalesRepresentativeView = requireAnyPermission([
   'admin_sales_representative.view',
   'sales_rep_sales.view'
@@ -159,8 +161,8 @@ router.put('/client-leads/:id/status', authenticate, requireSalesRepOrAdmin, sal
 router.post('/leads/manual-payment/upload-proof', authenticate, adminSalesRepresentativeEdit, ...salesLeadsController.uploadManualPaymentProof);
 router.post('/leads/:id/manual-payment', authenticate, adminSalesRepresentativeCreate, salesLeadsController.recordManualPayment);
 router.post('/client-leads/:id/manual-payment', authenticate, requireSalesRepOrAdmin, salesLeadsController.recordClientManualPayment);
-router.post('/availability', authenticate, requireSalesRepOrAdmin, salesAvailabilityController.getSalesRepAvailability);
-router.post('/add-availability', authenticate, requireSalesRepOrAdmin, salesAvailabilityController.setSalesRepAvailability);
+router.post('/availability', authenticate, salesRepAvailabilityView, salesAvailabilityController.getSalesRepAvailability);
+router.post('/add-availability', authenticate, salesRepAvailabilityCreate, salesAvailabilityController.setSalesRepAvailability);
 router.get('/current-status', authenticate, salesRepSalesView, salesAvailabilityController.getSalesRepCurrentStatus);
 router.post('/toggle-status', authenticate, salesRepSalesEdit, salesAvailabilityController.toggleSalesRepCurrentStatus);
 router.get('/all-statuses', authenticate, requireSalesRepOrAdmin, salesAvailabilityController.getAllSalesRepStatuses);
