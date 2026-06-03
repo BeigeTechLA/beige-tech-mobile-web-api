@@ -8,7 +8,11 @@ const { checkCreatorVerification } = require('../middleware/creatorVerification'
 const { authenticate } = require('../middleware/auth.middleware');
 const { requireAnyPermission } = require('../middleware/permission.middleware');
 
-const availabilityView = requireAnyPermission(['admin_availability.view']);
+const adminSalesRepresentativeView = requireAnyPermission(['admin_sales_representative.view']);
+const adminSalesRepresentativeAvailabilityView = requireAnyPermission([
+  'admin_sales_representative.view',
+  'admin_availability.view'
+]);
 
 // router.use(checkCreatorVerification);
 
@@ -21,9 +25,9 @@ router.post('/project-details', creator.getProjectDetails);
 router.post('/accept-project', creator.updateRequestStatus);
 router.post('/upcoming-accepted-project', creator.getAcceptedAndUpcomingProjects);
 router.post('/accepted-shoots', creator.getAcceptedShootsByCrew);
-router.post('/availability', authenticate, availabilityView, creator.getCrewAvailability);
+router.post('/availability', authenticate, adminSalesRepresentativeAvailabilityView, creator.getCrewAvailability);
 router.post('/add-availability', creator.setCrewAvailability);
-router.post('/status-count', creator.getDashboardRequestCounts);
+router.post('/status-count', authenticate, adminSalesRepresentativeView, creator.getDashboardRequestCounts);
 router.post('/get-crew-equipment', creator.getEquipmentOwnedByCrewMember);
 router.post('/get-crew-equipment-count', creator.getCrewEquipmentCounts);
 router.post('/get-profile-detail', creator.getProfile);

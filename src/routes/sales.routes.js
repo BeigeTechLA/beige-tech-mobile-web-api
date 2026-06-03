@@ -9,14 +9,15 @@ const salesAvailabilityController = require('../controllers/sales-availability.c
 const { authenticate, requireSalesRepOrAdmin, requireSalesRep, requireAdmin } = require('../middleware/auth.middleware');
 const { requireAnyPermission } = require('../middleware/permission.middleware');
 
+const allowSalesRepRoles = { allowRoles: ['sales_rep', 'sales_admin'] };
 const dashboardOrSalesView = requireAnyPermission([
   'admin_dashboard.view',
   'admin_sales_representative.view'
-]);
+], allowSalesRepRoles);
 const shootOrSalesView = requireAnyPermission([
   'admin_shoots.view',
   'admin_sales_representative.view'
-]);
+], allowSalesRepRoles);
 const shootsEditOrSalesEdit = requireAnyPermission([
   'admin_shoots.edit'
 ]);
@@ -24,6 +25,15 @@ const shootOrInvoiceView = requireAnyPermission([
   'admin_shoots.view',
   'admin_invoices.view'
 ]);
+const adminSalesRepresentativeView = requireAnyPermission(['admin_sales_representative.view'], allowSalesRepRoles);
+const adminSalesRepresentativeCreate = requireAnyPermission(['admin_sales_representative.create'], allowSalesRepRoles);
+const adminSalesRepresentativeEdit = requireAnyPermission(['admin_sales_representative.edit'], allowSalesRepRoles);
+const adminSalesRepresentativeDelete = requireAnyPermission(['admin_sales_representative.delete']);
+const adminSalesRepresentativeInvoiceView = requireAnyPermission([
+  'admin_sales_representative.view',
+  'admin_invoices.view',
+  'admin_shoots.view',
+], allowSalesRepRoles);
 
 /**
  * Sales Routes
@@ -75,15 +85,15 @@ router.post('/leads/contact-sales', salesLeadsController.createSalesAssistedLead
  */
 router.get('/leads', authenticate, dashboardOrSalesView, salesLeadsController.getLeads);
 router.get('/leads/board', authenticate, requireSalesRepOrAdmin, salesLeadsController.getLeadsBoard);
-router.get('/client-leads', authenticate, requireSalesRepOrAdmin, salesLeadsController.getClientLeads);
+router.get('/client-leads', authenticate, adminSalesRepresentativeView, salesLeadsController.getClientLeads);
 
 /**
  * @route   GET /api/sales/leads/:id
  * @desc    Get lead details by ID
  * @access  Sales Rep / Admin
  */
-router.get('/leads/:id', authenticate, requireSalesRepOrAdmin, salesLeadsController.getLeadById);
-router.get('/client-leads/:id', authenticate, requireSalesRepOrAdmin, salesLeadsController.getClientLeadById);
+router.get('/leads/:id', authenticate, adminSalesRepresentativeView, salesLeadsController.getLeadById);
+router.get('/client-leads/:id', authenticate, adminSalesRepresentativeView, salesLeadsController.getClientLeadById);
 
 /**
  * @route   PUT /api/sales/leads/:id/assign
@@ -96,7 +106,7 @@ router.put('/leads/:id/assign-self', authenticate, requireSalesRepOrAdmin, sales
 router.put('/leads/:id/change-sales-rep', authenticate, requireAdmin, salesLeadsController.changeLeadSalesRep);
 router.put('/client-leads/:id/change-sales-rep', authenticate, requireAdmin, salesLeadsController.changeClientLeadSalesRep);
 router.delete('/leads/:id', authenticate, requireAdmin, salesLeadsController.softDeleteLead);
-router.delete('/client-leads/:id', authenticate, requireAdmin, salesLeadsController.softDeleteClientLead);
+router.delete('/client-leads/:id', authenticate, adminSalesRepresentativeDelete, salesLeadsController.softDeleteClientLead);
 
 /**
  * @route   PUT /api/sales/leads/:id/status
@@ -106,8 +116,8 @@ router.delete('/client-leads/:id', authenticate, requireAdmin, salesLeadsControl
  */
 router.put('/leads/:id/status', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateLeadStatus);
 router.put('/client-leads/:id/status', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateClientLeadStatus);
-router.post('/leads/manual-payment/upload-proof', authenticate, requireSalesRepOrAdmin, ...salesLeadsController.uploadManualPaymentProof);
-router.post('/leads/:id/manual-payment', authenticate, requireSalesRepOrAdmin, salesLeadsController.recordManualPayment);
+router.post('/leads/manual-payment/upload-proof', authenticate, adminSalesRepresentativeEdit, ...salesLeadsController.uploadManualPaymentProof);
+router.post('/leads/:id/manual-payment', authenticate, adminSalesRepresentativeCreate, salesLeadsController.recordManualPayment);
 router.post('/client-leads/:id/manual-payment', authenticate, requireSalesRepOrAdmin, salesLeadsController.recordClientManualPayment);
 router.post('/availability', authenticate, requireSalesRepOrAdmin, salesAvailabilityController.getSalesRepAvailability);
 router.post('/add-availability', authenticate, requireSalesRepOrAdmin, salesAvailabilityController.setSalesRepAvailability);
@@ -174,7 +184,7 @@ router.post(
  * @body    lead_id, booking_id, discount_type, discount_value, usage_type, max_uses, expires_at
  * @access  Sales Rep / Admin
  */
-router.post('/discount-codes', authenticate, requireSalesRepOrAdmin, discountsController.generateDiscountCode);
+router.post('/discount-codes', authenticate, adminSalesRepresentativeCreate, discountsController.generateDiscountCode);
 router.post('/client-discount-codes', authenticate, requireSalesRepOrAdmin, discountsController.generateClientDiscountCode);
 
 /**
@@ -231,13 +241,13 @@ router.get('/discount-codes/:id/usage', authenticate, requireSalesRepOrAdmin, di
  * @body    lead_id, booking_id, discount_code_id, expiry_hours
  * @access  Sales Rep / Admin
  */
-router.post('/payment-links', authenticate, requireSalesRepOrAdmin, paymentLinksController.generatePaymentLink);
+router.post('/payment-links', authenticate, adminSalesRepresentativeCreate, paymentLinksController.generatePaymentLink);
 router.post('/client-payment-links', authenticate, requireSalesRepOrAdmin, paymentLinksController.generateClientPaymentLink);
-router.post('/preview-invoice', authenticate, shootOrInvoiceView, paymentLinksController.previewStripeInvoice);
+router.post('/preview-invoice', authenticate, adminSalesRepresentativeInvoiceView, paymentLinksController.previewStripeInvoice);
 router.get('/invoice-pdf/:booking_id', paymentLinksController.getStripeInvoicePdf);
-router.post('/send-invoice', paymentLinksController.sendStripeInvoice);
+router.post('/send-invoice', authenticate, adminSalesRepresentativeCreate, paymentLinksController.sendStripeInvoice);
 router.post('/payment-links/notify', paymentLinksController.sendPaymentLinkEmail);
-router.get('/get-lead-stats/:id', authenticate, requireSalesRepOrAdmin, salesLeadsController.getLeadFulfillmentStatus);
+router.get('/get-lead-stats/:id', authenticate, adminSalesRepresentativeView, salesLeadsController.getLeadFulfillmentStatus);
 router.get('/get-client-lead-stats/:id', authenticate, requireSalesRepOrAdmin, salesLeadsController.getClientLeadFulfillmentStatus);
 
 /**
@@ -280,7 +290,7 @@ router.get('/payment-links/rep/:repId', authenticate, requireSalesRepOrAdmin, pa
  * @access  Sales Rep / Admin
  */
 router.get('/dashboard/stats', authenticate, requireSalesRepOrAdmin, salesDashboardController.getDashboardStats);
-router.get('/dashboard/overview', authenticate, requireSalesRepOrAdmin, salesDashboardController.getCombinedOverviewStats);
+router.get('/dashboard/overview', authenticate, adminSalesRepresentativeView, salesDashboardController.getCombinedOverviewStats);
 
 /**
  * @route   GET /api/sales/dashboard/rep-stats/:repId
@@ -370,11 +380,11 @@ router.patch(
   salesLeadsController.updateBookingCrew,
 );
 
-router.post('/leads/intent', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateLeadIntent);
+router.post('/leads/intent', authenticate, adminSalesRepresentativeEdit, salesLeadsController.updateLeadIntent);
 router.post('/client-leads/intent', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateClientLeadIntent);
 router.put('/leads/:id/booking', authenticate, shootsEditOrSalesEdit, salesLeadsController.finalizeGuestBooking);
 router.put('/client/:id/booking', authenticate, salesLeadsController.finalizeGuestBooking);
-router.put('/leads/:id/booking-schedule', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateLeadBookingSchedule);
+router.put('/leads/:id/booking-schedule', authenticate, adminSalesRepresentativeEdit, salesLeadsController.updateLeadBookingSchedule);
 router.put('/client-leads/:id/booking', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeClientLeadBooking);
 router.put('/client-leads/:id/booking-schedule', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateClientLeadBookingSchedule);
 router.post('/deals/finalize', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeCreateDeal);
