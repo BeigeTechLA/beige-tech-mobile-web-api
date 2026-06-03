@@ -44,6 +44,13 @@ const adminSalesRepresentativeAvailabilityView = requireAnyPermission([
   'admin_shoots.edit',
   'admin_meetings.view'
 ]);
+const adminUsersView = requireAnyPermission(['admin_users.view']);
+const adminUsersEdit = requireAnyPermission(['admin_users.edit']);
+const adminUsersDelete = requireAnyPermission(['admin_users.delete']);
+const adminUsersOrSalesRepresentativeView = requireAnyPermission([
+  'admin_users.view',
+  'admin_sales_representative.view'
+]);
 const shootsViewOrEdit = requireAnyPermission([
   'admin_shoots.view',
   'admin_shoots.edit'
@@ -64,7 +71,7 @@ router.get('/get-projects', authMiddleware, projectListView, admin.getAllProject
 router.get('/get-upcoming-projects', admin.getUpcomingEvents);
 router.get('/get-project-status', admin.getProjectStats);
 router.post('/final-project-brief', admin.createProjectBrief);
-router.post('/get-crew-members', authMiddleware, adminSalesRepresentativeView, admin.getCrewMembers);
+router.post('/get-crew-members', authMiddleware, adminUsersOrSalesRepresentativeView, admin.getCrewMembers);
 router.post('/get-approved-crew-members', authMiddleware, crewAvailabilityView, admin.getApprovedCrewMembers);
 router.get('/crew-member/:crew_member_id', authMiddleware, adminSalesRepresentativeAvailabilityView, admin.getCrewMemberById);
 router.delete('/delete-crew-member/:crew_member_id', admin.deleteCrewMember);
@@ -106,23 +113,23 @@ router.get('/dashboard/category-wise-cp/count', authMiddleware, dashboardView, a
 router.get('/dashboard/shoot-status', authMiddleware, dashboardView, admin.getShootStatus)
 router.get('/dashboard/top-creative-partners', authMiddleware, dashboardView, admin.getTopCreativePartners)
 router.post('/dashboard-detail', authMiddleware, dashboardView, admin.getDashboardDetails);
-router.post('/verify-crew-member', admin.verifyCrewMember);
+router.post('/verify-crew-member', authMiddleware, adminUsersEdit, admin.verifyCrewMember);
 router.get('/shoot-category-count', authMiddleware, dashboardOrShootsView, admin.getShootByCategory);
 router.get('/get-post-production-members', admin.getPostProductionMembers);
 router.post('/assign-post-production-member', authMiddleware, shootsEdit, admin.assignPostProductionMember);
-router.get('/get-clients', admin.getClients);
+router.get('/get-clients', authMiddleware, adminUsersView, admin.getClients);
 router.put('/edit-client/:client_id', admin.editClient);
 router.delete('/delete-client/:client_id', admin.deleteClient);
 router.delete('/delete-project/:project_id', authMiddleware, shootsDelete, admin.deleteProject);
 router.post('/upload-profile-photo', admin.uploadProfilePhoto);
-router.get('/get-client-by-id/:id', admin.getClientById);
-router.get('/get-clients-shoots/:clientId', admin.getClientsShoots);
+router.get('/get-client-by-id/:id', authMiddleware, adminUsersView, admin.getClientById);
+router.get('/get-clients-shoots/:clientId', authMiddleware, adminUsersView, admin.getClientsShoots);
 router.get('/get-crew-for-lead', authMiddleware, adminSalesRepresentativeView, admin.searchCrewForLead);
 router.post('/assign-crew-from-lead', authMiddleware, adminSalesRepresentativeEdit, admin.assignCrewBulkSmart);
 router.post('/remove-assigned-crew',authMiddleware, admin.removeAssignedCrew);
 router.get('/get-client-details-with-shoots/:userId', admin.getClientFullDetailsByUserId);
-router.get('/check-cp-delete-status', admin.checkDeleteStatus);
-router.post('/delete-cp', admin.executeDeleteCrewMember);
+router.get('/check-cp-delete-status', authMiddleware, adminUsersDelete, admin.checkDeleteStatus);
+router.post('/delete-cp', authMiddleware, adminUsersDelete, admin.executeDeleteCrewMember);
 router.post('/get-project-fullfillment-stats/:project_id', authMiddleware, shootsView, admin.getProjectFulfillmentStatus);
 router.get('/get-crew-for-shoot', authMiddleware, shootsViewOrEdit, admin.searchCrewForProject);
 router.post('/assign-crew-from-shoot', authMiddleware, shootsEdit, admin.assignProjectCrewBulk);
