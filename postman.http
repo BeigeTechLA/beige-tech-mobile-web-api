@@ -494,7 +494,7 @@ Content-Type: application/json
 ###
 GET {{URL}}sales/leads HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN2}}
+Authorization: {{SALES_TOKEN}}
 
 ###
 GET {{URL}}sales/leads/400 HTTP/1.1
