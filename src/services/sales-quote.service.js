@@ -317,6 +317,12 @@ function isRejectedQuoteVersion(version) {
   );
 }
 
+function isUsableQuoteVersion(version) {
+  const approvalMetadata = getQuoteVersionApprovalMetadata(version);
+  const approvalStatus = String(approvalMetadata.approval_status || '').trim().toLowerCase();
+  return !approvalStatus || approvalStatus === 'approved';
+}
+
 function buildQuoteVersionListItem(version, currentVersionNumber = null) {
   const plain = toPlainRecord(version) || {};
   const approvalMetadata = getQuoteVersionApprovalMetadata(version);
@@ -3602,7 +3608,7 @@ async function listQuoteVersionsById(salesQuoteId, transaction = null) {
     transaction
   });
 
-  const usableRows = rows.filter((row) => !isRejectedQuoteVersion(row));
+  const usableRows = rows.filter((row) => isUsableQuoteVersion(row));
   const currentVersionNumber = usableRows.length
     ? Math.max(...usableRows.map((row) => Number(row.version_number || 0)))
     : null;
@@ -4875,9 +4881,10 @@ async function fetchQuoteById(salesQuoteId, user = null) {
         is_current: true,
         is_fallback_current_version: true
       }];
-  const usableQuoteVersions = plain.quote_versions.filter(
-    (item) => String(item.approval_status || '').trim().toLowerCase() !== 'rejected'
-  );
+  const usableQuoteVersions = plain.quote_versions.filter((item) => {
+    const approvalStatus = String(item.approval_status || '').trim().toLowerCase();
+    return !approvalStatus || approvalStatus === 'approved';
+  });
   plain.current_version_number = (usableQuoteVersions.length ? usableQuoteVersions : plain.quote_versions).reduce(
     (maxVersion, item) => Math.max(maxVersion, Number(item.version_number || 0)),
     0
@@ -5031,6 +5038,57 @@ async function getQuoteVersionByNumber(salesQuoteId, versionNumber, user) {
   };
 }
 
+async function getCurrentUsableQuoteVersionSnapshot(salesQuoteId, user = null) {
+  const normalizedQuoteId = Number(salesQuoteId || 0);
+  if (!Number.isInteger(normalizedQuoteId) || normalizedQuoteId <= 0) {
+    return null;
+  }
+
+  const quote = await db.sales_quotes.findOne({
+    where: {
+      sales_quote_id: normalizedQuoteId,
+      ...(user ? buildQuoteAccessWhere(user) : {})
+    },
+    attributes: ['sales_quote_id', 'created_at', 'updated_at'],
+    raw: true
+  });
+
+  if (!quote) {
+    return null;
+  }
+
+  const versions = await db.sales_quote_versions.findAll({
+    where: { sales_quote_id: normalizedQuoteId },
+    include: [
+      { model: db.users, as: 'created_by', attributes: ['id', 'name', 'email'], required: false },
+      { model: db.sales_quote_activities, as: 'source_activity', attributes: ['activity_id', 'metadata_json', 'created_at'], required: false }
+    ],
+    order: [['version_number', 'DESC'], ['sales_quote_version_id', 'DESC']]
+  });
+
+  const usableVersion = versions.find((version) => isUsableQuoteVersion(version)) || null;
+  if (!usableVersion) {
+    return getQuoteById(normalizedQuoteId, user || null);
+  }
+
+  const normalizedSnapshot = await normalizeQuoteVersionSnapshotForResponse(
+    parseConfig(usableVersion.quote_snapshot_json) || {}
+  );
+  const versionMeta = buildQuoteVersionListItem(usableVersion, Number(usableVersion.version_number || 0));
+
+  return {
+    ...normalizedSnapshot,
+    sales_quote_id: normalizedQuoteId,
+    quote_id: normalizedQuoteId,
+    version_number: versionMeta.version_number,
+    version: versionMeta,
+    current_version_number: versionMeta.version_number,
+    quote_versions: versions.map((version) =>
+      buildQuoteVersionListItem(version, versionMeta.version_number)
+    )
+  };
+}
+
 async function getQuoteOverallChangeSummary(salesQuoteId, user = null) {
   const quote = await fetchQuoteById(salesQuoteId, user);
   return quote?.overall_change_summary || null;
@@ -5148,7 +5206,7 @@ async function getPublicQuoteByKey(quoteKey) {
       throw new Error('Quote preview link is invalid or expired');
     }
 
-    return legacyQuote;
+    return (await getCurrentUsableQuoteVersionSnapshot(Number(legacyQuoteId))) || legacyQuote;
   }
 
   const linkExpiresAt = linkRow.expires_at ? new Date(linkRow.expires_at) : null;
@@ -5165,7 +5223,7 @@ async function getPublicQuoteByKey(quoteKey) {
     throw new Error('Quote preview link is invalid or expired');
   }
 
-  return fetchQuoteById(Number(linkRow.sales_quote_id));
+  return getCurrentUsableQuoteVersionSnapshot(Number(linkRow.sales_quote_id));
 }
 
 function getLegacyQuotePreviewSecret() {
@@ -5885,6 +5943,7 @@ module.exports = {
   getQuoteById,
   listQuoteVersions,
   getQuoteVersionByNumber,
+  getCurrentUsableQuoteVersionSnapshot,
   getQuoteOverallChangeSummary,
   getPublicQuoteById,
   createQuotePreviewLink,
