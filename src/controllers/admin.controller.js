@@ -1750,7 +1750,7 @@ exports.getProjectDetails = async (req, res) => {
       : [];
 
     // 3. Fetch Transaction Total (from payment_transactions table)
-    const [paymentData, formSubmission, shootNotesCountMap] = await Promise.all([
+    const [paymentData, formSubmission, shootNotesCountMap, bookingPaymentSummary] = await Promise.all([
       payment_transactions.findOne({
         where: { payment_id: projectJson.payment_id },
         attributes: ['total_amount'],
@@ -1762,9 +1762,81 @@ exports.getProjectDetails = async (req, res) => {
         order: [['created_at', 'DESC']],
         raw: true
       }),
-      countActiveShootNotesByBookingIds([projectJson.stream_project_booking_id])
+      countActiveShootNotesByBookingIds([projectJson.stream_project_booking_id]),
+      bookingPaymentSummaryService.getBookingPaymentSummary(projectJson.stream_project_booking_id)
     ]);
     const shootNotesCount = shootNotesCountMap.get(Number(projectJson.stream_project_booking_id)) || 0;
+
+    const normalizedGuestEmail = String(projectJson.guest_email || '').trim().toLowerCase() || null;
+    const [emailUserRecord] = await Promise.all([
+      normalizedGuestEmail
+        ? users.findOne({
+            where: Sequelize.where(
+              Sequelize.fn('LOWER', Sequelize.col('email')),
+              normalizedGuestEmail
+            ),
+            attributes: ['id', 'email'],
+            raw: true
+          })
+        : Promise.resolve(null),
+    ]);
+
+    const matchedUserId = projectJson.user_id || emailUserRecord?.id || null;
+    const [clientByUser, clientByEmail] = await Promise.all([
+      matchedUserId
+        ? clients.findOne({
+            where: { user_id: matchedUserId, is_active: 1 },
+            attributes: ['client_id', 'user_id', 'email'],
+            raw: true
+          })
+        : Promise.resolve(null),
+      normalizedGuestEmail
+        ? clients.findOne({
+            where: {
+              is_active: 1,
+              [Op.and]: [
+                Sequelize.where(
+                  Sequelize.fn('LOWER', Sequelize.col('email')),
+                  normalizedGuestEmail
+                )
+              ]
+            },
+            attributes: ['client_id', 'user_id', 'email'],
+            raw: true
+          })
+        : Promise.resolve(null),
+    ]);
+
+    const resolvedClientRecord = clientByUser || clientByEmail || null;
+    const isRegisteredUser = Boolean(matchedUserId);
+    const isClient = Boolean(resolvedClientRecord?.client_id);
+    const isClientOnly = !isRegisteredUser && isClient;
+    const contactRegistrationType = isRegisteredUser
+      ? 'registered_user'
+      : isClientOnly
+        ? 'client_only'
+        : 'unregistered_contact';
+
+    let convertedSalesQuote = null;
+    if (bookingPaymentSummary?.sales_quote_id) {
+      convertedSalesQuote = await db.sales_quotes.findOne({
+        where: { sales_quote_id: bookingPaymentSummary.sales_quote_id },
+        attributes: ['sales_quote_id', 'quote_number', 'status'],
+        raw: true
+      });
+    } else if (lead?.lead_id) {
+      convertedSalesQuote = await db.sales_quotes.findOne({
+        where: { lead_id: lead.lead_id },
+        attributes: ['sales_quote_id', 'quote_number', 'status'],
+        order: [['sales_quote_id', 'DESC']],
+        raw: true
+      });
+    }
+
+    const convertedSalesQuoteId = convertedSalesQuote?.sales_quote_id || bookingPaymentSummary?.sales_quote_id || null;
+    const isQuoteConvertedBooking = Boolean(
+      convertedSalesQuoteId || String(lead?.lead_source || '').toLowerCase() === 'converted bookings'
+    );
 
     const displayAmount = await resolveProjectDisplayAmount({
       project: projectJson,
@@ -1894,6 +1966,17 @@ exports.getProjectDetails = async (req, res) => {
           total_paid_amount: displayAmount,
           total_value_amount: totalValueAmount,
           notes_count: shootNotesCount,
+          contact_registration_type: contactRegistrationType,
+          is_registered_user: isRegisteredUser,
+          is_client: isClient,
+          is_client_only: isClientOnly,
+          is_unregistered_contact: !isRegisteredUser && !isClientOnly,
+          client_record_id: resolvedClientRecord?.client_id || null,
+          client_id: resolvedClientRecord?.client_id || null,
+          matched_user_id: matchedUserId,
+          is_quote_converted_booking: isQuoteConvertedBooking,
+          converted_sales_quote_id: convertedSalesQuoteId,
+          converted_sales_quote_number: convertedSalesQuote?.quote_number || null,
           event_type_labels: eventTypeLabels.join(', '),
           timeline_status: timelineStatus,
           timeline_label: timelineLabel,
@@ -1903,6 +1986,15 @@ exports.getProjectDetails = async (req, res) => {
         timeline_status: timelineStatus,
         timeline_label: timelineLabel,
         lead_details: lead, // Sales rep, activities, etc.
+        contact_registration_type: contactRegistrationType,
+        is_registered_user: isRegisteredUser,
+        is_client: isClient,
+        is_client_only: isClientOnly,
+        is_unregistered_contact: !isRegisteredUser && !isClientOnly,
+        client_id: resolvedClientRecord?.client_id || null,
+        converted_sales_quote_id: convertedSalesQuoteId,
+        converted_sales_quote_number: convertedSalesQuote?.quote_number || null,
+        is_quote_converted_booking: isQuoteConvertedBooking,
         manual_payment_summary: manualPaymentSummary,
         pricing_breakdown,
         payment_status: resolvedPaymentStatus,
