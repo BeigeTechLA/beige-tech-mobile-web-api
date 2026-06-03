@@ -37,6 +37,9 @@ const crewAvailabilityView = requireAnyPermission([
 ]);
 const adminSalesRepresentativeView = requireAnyPermission(['admin_sales_representative.view']);
 const adminSalesRepresentativeEdit = requireAnyPermission(['admin_sales_representative.edit']);
+const salesRepSalesView = requireAnyPermission(['sales_rep_sales.view'], {
+  allowRoles: ['sales_rep', 'sales_admin']
+});
 const adminSalesRepresentativeAvailabilityView = requireAnyPermission([
   'admin_sales_representative.view',
   'admin_availability.view',
@@ -51,6 +54,12 @@ const adminUsersOrSalesRepresentativeView = requireAnyPermission([
   'admin_users.view',
   'admin_sales_representative.view'
 ]);
+const adminSalesRepresentativeOrSalesRepSalesView = requireAnyPermission([
+  'admin_sales_representative.view',
+  'sales_rep_sales.view'
+], {
+  allowRoles: ['sales_rep', 'sales_admin']
+});
 const shootsViewOrEdit = requireAnyPermission([
   'admin_shoots.view',
   'admin_shoots.edit'
@@ -96,7 +105,7 @@ router.get('/equipment-autocomplete', admin.getEquipmentNameSuggestions);
 router.get('/get-event-types', admin.getEventTypes),
 router.get('/get-crew-member-name', admin.getCrewMembersByName)
 router.get('/get-crew-count', admin.getCrewCount);
-router.get('/get-pending-cp', admin.getAllPendingCrewMembers);
+router.get('/get-pending-cp', authMiddleware, salesRepSalesView, admin.getAllPendingCrewMembers);
 router.get('/:bookingId/get-booking-summary', admin.getBookingSummaryById);
 
 // Dashboard statistics routes
@@ -124,7 +133,7 @@ router.delete('/delete-project/:project_id', authMiddleware, shootsDelete, admin
 router.post('/upload-profile-photo', admin.uploadProfilePhoto);
 router.get('/get-client-by-id/:id', authMiddleware, adminUsersView, admin.getClientById);
 router.get('/get-clients-shoots/:clientId', authMiddleware, adminUsersView, admin.getClientsShoots);
-router.get('/get-crew-for-lead', authMiddleware, adminSalesRepresentativeView, admin.searchCrewForLead);
+router.get('/get-crew-for-lead', authMiddleware, adminSalesRepresentativeOrSalesRepSalesView, admin.searchCrewForLead);
 router.post('/assign-crew-from-lead', authMiddleware, adminSalesRepresentativeEdit, admin.assignCrewBulkSmart);
 router.post('/remove-assigned-crew',authMiddleware, admin.removeAssignedCrew);
 router.get('/get-client-details-with-shoots/:userId', admin.getClientFullDetailsByUserId);
