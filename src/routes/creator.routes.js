@@ -6,9 +6,9 @@ const router = express.Router();
 const creator = require('../controllers/creator.contoller');
 const { checkCreatorVerification } = require('../middleware/creatorVerification');
 const { authenticate } = require('../middleware/auth.middleware');
-const { requirePermission } = require('../middleware/permission.middleware');
+const { requireAnyPermission } = require('../middleware/permission.middleware');
 
-const availabilityView = requirePermission('availability', 'view');
+const availabilityView = requireAnyPermission(['admin_availability.view']);
 
 // router.use(checkCreatorVerification);
 

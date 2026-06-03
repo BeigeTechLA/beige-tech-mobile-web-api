@@ -2036,3 +2036,115 @@ CREATE TABLE IF NOT EXISTS `project_note_attachments` (
 ALTER TABLE `sales_quotes`
   ADD COLUMN IF NOT EXISTS `location_latitude` DECIMAL(10,7) NULL AFTER `client_address`,
   ADD COLUMN IF NOT EXISTS `location_longitude` DECIMAL(10,7) NULL AFTER `location_latitude`;
+
+-- 03-06-26
+
+-- Reset permissions
+
+SET FOREIGN_KEY_CHECKS = 0;
+
+TRUNCATE TABLE role_permissions;
+TRUNCATE TABLE user_permissions;
+TRUNCATE TABLE permissions;
+
+SET FOREIGN_KEY_CHECKS = 1;
+
+INSERT INTO permissions (module_key, action_key, permission_key, is_active)
+SELECT
+  scoped_modules.module_key,
+  actions.action_key,
+  CONCAT(scoped_modules.module_key, '.', actions.action_key) AS permission_key,
+  1 AS is_active
+FROM (
+  -- Admin: 11 modules
+  SELECT 'admin_dashboard' AS module_key UNION ALL
+  SELECT 'admin_shoots' UNION ALL
+  SELECT 'admin_file_manager' UNION ALL
+  SELECT 'admin_meetings' UNION ALL
+  SELECT 'admin_messages' UNION ALL
+  SELECT 'admin_availability' UNION ALL
+  SELECT 'admin_sales_representative' UNION ALL
+  SELECT 'admin_finances' UNION ALL
+  SELECT 'admin_users' UNION ALL
+  SELECT 'admin_quotes' UNION ALL
+  SELECT 'admin_invoices' UNION ALL
+
+  -- Crew Member: 10 modules
+  SELECT 'crew_dashboard' UNION ALL
+  SELECT 'crew_request_shoots' UNION ALL
+  SELECT 'crew_file_manager' UNION ALL
+  SELECT 'crew_meetings' UNION ALL
+  SELECT 'crew_messages' UNION ALL
+  SELECT 'crew_affiliate' UNION ALL
+  SELECT 'crew_availability' UNION ALL
+  SELECT 'crew_profile' UNION ALL
+  SELECT 'crew_payouts' UNION ALL
+  SELECT 'crew_settings' UNION ALL
+
+  -- Sales Representative: 7 modules
+  SELECT 'sales_rep_sales' UNION ALL
+  SELECT 'sales_rep_availability' UNION ALL
+  SELECT 'sales_rep_shoots' UNION ALL
+  SELECT 'sales_rep_file_manager' UNION ALL
+  SELECT 'sales_rep_meetings' UNION ALL
+  SELECT 'sales_rep_messages' UNION ALL
+  SELECT 'sales_rep_quotes' UNION ALL
+
+  -- Client: 11 modules
+  SELECT 'client_dashboard' UNION ALL
+  SELECT 'client_affiliate_overview' UNION ALL
+  SELECT 'client_file_manager' UNION ALL
+  SELECT 'client_find_yourself' UNION ALL
+  SELECT 'client_meetings' UNION ALL
+  SELECT 'client_messages' UNION ALL
+  SELECT 'client_shoots' UNION ALL
+  SELECT 'client_quotes' UNION ALL
+  SELECT 'client_book_a_shoot' UNION ALL
+  SELECT 'client_finances' UNION ALL
+  SELECT 'client_profile'
+) AS scoped_modules
+CROSS JOIN (
+  SELECT 'view' AS action_key UNION ALL
+  SELECT 'create' UNION ALL
+  SELECT 'edit' UNION ALL
+  SELECT 'delete'
+) AS actions;
+
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT
+  1,
+  permission_id,
+  1
+FROM permissions
+WHERE module_key LIKE 'admin_%'
+  AND is_active = 1;
+
+-- Crew Member
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT
+  2,
+  permission_id,
+  1
+FROM permissions
+WHERE module_key LIKE 'crew_%'
+  AND is_active = 1;
+
+-- Sales Representative
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT
+  5,
+  permission_id,
+  1
+FROM permissions
+WHERE module_key LIKE 'sales_rep_%'
+  AND is_active = 1;
+
+-- Client
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT
+  3,
+  permission_id,
+  1
+FROM permissions
+WHERE module_key LIKE 'client_%'
+  AND is_active = 1;

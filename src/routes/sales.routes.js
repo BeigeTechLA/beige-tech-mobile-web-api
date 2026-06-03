@@ -9,18 +9,21 @@ const salesAvailabilityController = require('../controllers/sales-availability.c
 const { authenticate, requireSalesRepOrAdmin, requireSalesRep, requireAdmin } = require('../middleware/auth.middleware');
 const { requireAnyPermission } = require('../middleware/permission.middleware');
 
-const dashboardOrSalesView = requireAnyPermission(['dashboard.view', 'sales.view'], {
-  allowRoles: ['sales_rep', 'sales_admin']
-});
-const shootOrSalesView = requireAnyPermission(['shoots.view', 'sales.view'], {
-  allowRoles: ['sales_rep', 'sales_admin']
-});
-const shootsEditOrSalesEdit = requireAnyPermission(['shoots.edit', 'sales.edit'], {
-  allowRoles: ['sales_rep', 'sales_admin']
-});
-const shootOrInvoiceView = requireAnyPermission(['shoots.view', 'invoices.view'], {
-  allowRoles: ['sales_rep', 'sales_admin']
-});
+const dashboardOrSalesView = requireAnyPermission([
+  'admin_dashboard.view',
+  'admin_sales_representative.view'
+]);
+const shootOrSalesView = requireAnyPermission([
+  'admin_shoots.view',
+  'admin_sales_representative.view'
+]);
+const shootsEditOrSalesEdit = requireAnyPermission([
+  'admin_shoots.edit'
+]);
+const shootOrInvoiceView = requireAnyPermission([
+  'admin_shoots.view',
+  'admin_invoices.view'
+]);
 
 /**
  * Sales Routes

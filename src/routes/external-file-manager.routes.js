@@ -1,12 +1,22 @@
 const router = require('express').Router();
 const externalFileManagerController = require('../controllers/external-file-manager.controller');
 const { authenticate } = require('../middleware/auth');
-const { requirePermission, requireAnyPermission } = require('../middleware/permission.middleware');
+const { requireAnyPermission } = require('../middleware/permission.middleware');
 
-const fileManagerView = requirePermission('file_manager', 'view', { allowBaseRoles: true });
-const fileManagerCreate = requirePermission('file_manager', 'create', { allowBaseRoles: true });
-const fileManagerDelete = requirePermission('file_manager', 'delete', { allowBaseRoles: true });
-const shootOrFileManagerView = requireAnyPermission(['shoots.view', 'meetings.view', 'file_manager.view'], { allowBaseRoles: true });
+const fileManagerView = requireAnyPermission([
+  'admin_file_manager.view'
+]);
+const fileManagerCreate = requireAnyPermission([
+  'admin_file_manager.create'
+]);
+const fileManagerDelete = requireAnyPermission([
+  'admin_file_manager.delete'
+]);
+const shootOrFileManagerView = requireAnyPermission([
+  'admin_shoots.view',
+  'admin_meetings.view',
+  'admin_file_manager.view'
+]);
 
 router.get('/workspaces', authenticate, fileManagerView, externalFileManagerController.listWorkspaces);
 router.get('/common-events', authenticate, fileManagerView, externalFileManagerController.listCommonEvents);

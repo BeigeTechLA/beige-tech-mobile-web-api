@@ -1,21 +1,36 @@
 const router = require('express').Router();
 const externalChatController = require('../controllers/external-chat.controller');
 const { authenticate } = require('../middleware/auth');
-const { requirePermission, requireAnyPermission } = require('../middleware/permission.middleware');
+const { requireAnyPermission } = require('../middleware/permission.middleware');
 
-const messagesView = requirePermission('messages', 'view', { allowBaseRoles: true });
-const messagesCreate = requirePermission('messages', 'create', { allowBaseRoles: true });
-const messagesEdit = requirePermission('messages', 'edit', { allowBaseRoles: true });
-const shootMessagesView = requireAnyPermission(['shoots.view', 'messages.view'], { allowBaseRoles: true });
+const messagesView = requireAnyPermission([
+  'admin_messages.view'
+]);
+const messagesCreate = requireAnyPermission([
+  'admin_messages.create'
+]);
+const messagesEdit = requireAnyPermission([
+  'admin_messages.edit'
+]);
+const shootMessagesView = requireAnyPermission([
+  'admin_shoots.view',
+  'admin_messages.view'
+]);
 const directoryView = requireAnyPermission([
-  'shoots.view',
-  'messages.view',
-  'meetings.view',
-  'meetings.create',
-  'meetings.edit'
-], { allowBaseRoles: true });
-const shootMessagesCreate = requireAnyPermission(['shoots.edit', 'messages.create'], { allowBaseRoles: true });
-const shootMessagesEdit = requireAnyPermission(['shoots.edit', 'messages.edit'], { allowBaseRoles: true });
+  'admin_shoots.view',
+  'admin_messages.view',
+  'admin_meetings.view',
+  'admin_meetings.create',
+  'admin_meetings.edit'
+]);
+const shootMessagesCreate = requireAnyPermission([
+  'admin_shoots.edit',
+  'admin_messages.create'
+]);
+const shootMessagesEdit = requireAnyPermission([
+  'admin_shoots.edit',
+  'admin_messages.edit'
+]);
 
 router.get('/rooms', authenticate, messagesView, externalChatController.listChatRooms);
 router.get('/directory', authenticate, directoryView, externalChatController.getChatDirectory);

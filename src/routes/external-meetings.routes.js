@@ -1,15 +1,32 @@
 const router = require('express').Router();
 const externalMeetingsController = require('../controllers/external-meetings.controller');
 const { authenticate } = require('../middleware/auth');
-const { requirePermission, requireAnyPermission } = require('../middleware/permission.middleware');
+const { requireAnyPermission } = require('../middleware/permission.middleware');
 
-const meetingsView = requirePermission('meetings', 'view', { allowBaseRoles: true });
-const meetingsCreate = requirePermission('meetings', 'create', { allowBaseRoles: true });
-const meetingsEdit = requirePermission('meetings', 'edit', { allowBaseRoles: true });
-const meetingsDelete = requirePermission('meetings', 'delete', { allowBaseRoles: true });
-const shootMeetingsView = requireAnyPermission(['shoots.view', 'meetings.view'], { allowBaseRoles: true });
-const shootMeetingsCreate = requireAnyPermission(['shoots.edit', 'meetings.create'], { allowBaseRoles: true });
-const shootMeetingsEdit = requireAnyPermission(['shoots.edit', 'meetings.edit'], { allowBaseRoles: true });
+const meetingsView = requireAnyPermission([
+  'admin_meetings.view'
+]);
+const meetingsCreate = requireAnyPermission([
+  'admin_meetings.create'
+]);
+const meetingsEdit = requireAnyPermission([
+  'admin_meetings.edit'
+]);
+const meetingsDelete = requireAnyPermission([
+  'admin_meetings.delete'
+]);
+const shootMeetingsView = requireAnyPermission([
+  'admin_shoots.view',
+  'admin_meetings.view'
+]);
+const shootMeetingsCreate = requireAnyPermission([
+  'admin_shoots.edit',
+  'admin_meetings.create'
+]);
+const shootMeetingsEdit = requireAnyPermission([
+  'admin_shoots.edit',
+  'admin_meetings.edit'
+]);
 
 router.get('/', authenticate, meetingsView, externalMeetingsController.getAllMeetings);
 router.get('/order/:orderId', authenticate, shootMeetingsView, externalMeetingsController.getMeetingsByOrder);

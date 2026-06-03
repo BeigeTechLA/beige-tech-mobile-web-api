@@ -5,17 +5,40 @@ const admin = require('../controllers/admin.controller');
 const { authenticateAdmin, authMiddleware } = require('../middleware/auth');
 const { requirePermission, requireAnyPermission } = require('../middleware/permission.middleware');
 
-const dashboardView = requirePermission('dashboard', 'view');
-const dashboardOrShootsView = requireAnyPermission(['dashboard.view', 'shoots.view']);
-const shootsView = requirePermission('shoots', 'view');
-const shootsCreate = requirePermission('shoots', 'create');
-const shootsEdit = requirePermission('shoots', 'edit');
-const shootsDelete = requirePermission('shoots', 'delete');
-const projectDetailView = requireAnyPermission(['shoots.view', 'meetings.view', 'meetings.create']);
-const projectListView = requireAnyPermission(['dashboard.view', 'shoots.view', 'meetings.view', 'meetings.create']);
-const skillsView = requireAnyPermission(['shoots.view', 'meetings.view', 'availability.view']);
-const crewAvailabilityView = requireAnyPermission(['availability.view', 'shoots.view', 'shoots.edit']);
-const shootsViewOrEdit = requireAnyPermission(['shoots.view', 'shoots.edit']);
+const dashboardView = requireAnyPermission(['admin_dashboard.view']);
+const dashboardOrShootsView = requireAnyPermission([
+  'admin_dashboard.view',
+  'admin_shoots.view'
+]);
+const shootsView = requireAnyPermission(['admin_shoots.view']);
+const shootsCreate = requireAnyPermission(['admin_shoots.create']);
+const shootsEdit = requireAnyPermission(['admin_shoots.edit']);
+const shootsDelete = requireAnyPermission(['admin_shoots.delete']);
+const projectDetailView = requireAnyPermission([
+  'admin_shoots.view',
+  'admin_meetings.view',
+  'admin_meetings.create'
+]);
+const projectListView = requireAnyPermission([
+  'admin_dashboard.view',
+  'admin_shoots.view',
+  'admin_meetings.view',
+  'admin_meetings.create'
+]);
+const skillsView = requireAnyPermission([
+  'admin_shoots.view',
+  'admin_meetings.view',
+  'admin_availability.view'
+]);
+const crewAvailabilityView = requireAnyPermission([
+  'admin_availability.view',
+  'admin_shoots.view',
+  'admin_shoots.edit'
+]);
+const shootsViewOrEdit = requireAnyPermission([
+  'admin_shoots.view',
+  'admin_shoots.edit'
+]);
 
 router.post('/create-project', authMiddleware, shootsCreate, admin.createProject);
 router.post('/match-crew', admin.matchCrew);

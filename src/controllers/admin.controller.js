@@ -10647,6 +10647,127 @@ const formatUserTypeAsRole = (role, totalUsers = 0) => ({
   total_users: totalUsers
 });
 
+const PERMISSION_SCOPE_CONFIG = {
+  admin: {
+    label: 'Admin',
+    module_prefix: 'admin',
+    modules: [
+      'dashboard',
+      'shoots',
+      'file_manager',
+      'meetings',
+      'messages',
+      'availability',
+      'sales_representative',
+      'finances',
+      'users',
+      'quotes',
+      'invoices'
+    ]
+  },
+  crew: {
+    label: 'Crew Member',
+    module_prefix: 'crew',
+    modules: [
+      'dashboard',
+      'request_shoots',
+      'file_manager',
+      'meetings',
+      'messages',
+      'affiliate',
+      'availability',
+      'profile',
+      'payouts',
+      'settings'
+    ]
+  },
+  sales: {
+    label: 'Sales Representative',
+    module_prefix: 'sales_rep',
+    modules: [
+      'sales',
+      'availability',
+      'shoots',
+      'file_manager',
+      'meetings',
+      'messages',
+      'quotes'
+    ]
+  },
+  client: {
+    label: 'Client',
+    module_prefix: 'client',
+    modules: [
+      'dashboard',
+      'affiliate_overview',
+      'file_manager',
+      'find_yourself',
+      'meetings',
+      'messages',
+      'shoots',
+      'quotes',
+      'book_a_shoot',
+      'finances',
+      'profile'
+    ]
+  }
+};
+
+const MODULE_DISPLAY_NAMES = {
+  affiliate: 'Affiliate',
+  affiliate_overview: 'Affiliate Overview',
+  availability: 'Availability',
+  book_a_shoot: 'Book A Shoot',
+  dashboard: 'Dashboard',
+  file_manager: 'File Manager',
+  finances: 'Finances',
+  find_yourself: 'Find Yourself',
+  invoices: 'Invoices',
+  meetings: 'Meetings',
+  messages: 'Messages',
+  payouts: 'Payouts',
+  profile: 'Profile',
+  quotes: 'Quotes',
+  request_shoots: 'Requests and Shoots',
+  sales: 'Sales',
+  sales_representative: 'Sales Representative',
+  settings: 'Settings',
+  shoots: 'Shoots',
+  users: 'Users'
+};
+
+const normalizePermissionScope = (scope) => String(scope || '').trim().toLowerCase();
+
+const getScopedModuleKey = (scope, moduleKey) => {
+  const config = PERMISSION_SCOPE_CONFIG[scope];
+  return config ? `${config.module_prefix}_${moduleKey}` : moduleKey;
+};
+
+const getScopeModuleKeys = (scope, config) => (
+  config.modules.map(moduleKey => getScopedModuleKey(scope, moduleKey))
+);
+
+const getLegacyModuleKeyFromScoped = (moduleKey) => {
+  const matchedScope = Object.entries(PERMISSION_SCOPE_CONFIG).find(([, config]) => (
+    String(moduleKey || '').startsWith(`${config.module_prefix}_`)
+  ));
+
+  if (!matchedScope) return moduleKey;
+
+  const [, config] = matchedScope;
+  return String(moduleKey).slice(`${config.module_prefix}_`.length);
+};
+
+const formatModuleDisplayName = (moduleKey) => (
+  MODULE_DISPLAY_NAMES[moduleKey] ||
+  MODULE_DISPLAY_NAMES[getLegacyModuleKeyFromScoped(moduleKey)] ||
+  String(moduleKey || '')
+    .split('_')
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+);
+
 const buildPermissionEntries = (permissions = {}, includeDenied = false) => {
   const permissionEntries = [];
 
@@ -11439,6 +11560,21 @@ exports.getUserRoleDetails = async (req, res) => {
 
 exports.getPermissionModules = async (req, res) => {
   try {
+    const requestedScope = normalizePermissionScope(req.query.scope);
+    const grouped = !['0', 'false', 'no'].includes(String(req.query.grouped || 'true').toLowerCase());
+    const requestedScopeConfig = requestedScope ? PERMISSION_SCOPE_CONFIG[requestedScope] : null;
+
+    if (requestedScope && !requestedScopeConfig) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid scope. Allowed values: ${Object.keys(PERMISSION_SCOPE_CONFIG).join(', ')}`
+      });
+    }
+
+    const allowedModules = requestedScopeConfig
+      ? new Set(getScopeModuleKeys(requestedScope, requestedScopeConfig))
+      : null;
+
     const permissions = await db.permissions.findAll({
       where: {
         is_active: 1
@@ -11461,9 +11597,15 @@ exports.getPermissionModules = async (req, res) => {
       const module = permission.module_key;
       const action = permission.action_key;
 
+      if (allowedModules && !allowedModules.has(module)) {
+        return;
+      }
+
       if (!moduleMap[module]) {
         moduleMap[module] = {
           module_key: module,
+          display_name: formatModuleDisplayName(module),
+          legacy_module_key: getLegacyModuleKeyFromScoped(module),
           actions: []
         };
       }
@@ -11477,10 +11619,51 @@ exports.getPermissionModules = async (req, res) => {
       }
     });
 
-    const formattedModules = Object.values(moduleMap);
+    const sortByScopeOrder = (modules, scopeConfig = null) => {
+      if (!scopeConfig) {
+        return modules.sort((first, second) => first.module_key.localeCompare(second.module_key));
+      }
+
+      const scopeModules = Object.entries(PERMISSION_SCOPE_CONFIG).find(([, config]) => config === scopeConfig);
+      const scope = scopeModules ? scopeModules[0] : null;
+      const orderedModuleKeys = scope
+        ? getScopeModuleKeys(scope, scopeConfig)
+        : scopeConfig.modules;
+      const orderMap = new Map(orderedModuleKeys.map((moduleKey, index) => [moduleKey, index]));
+      return modules.sort((first, second) => (
+        (orderMap.get(first.module_key) ?? 999) - (orderMap.get(second.module_key) ?? 999)
+      ));
+    };
+
+    const formattedModules = sortByScopeOrder(Object.values(moduleMap), requestedScopeConfig);
+
+    if (grouped && !requestedScope) {
+      const groupedData = Object.entries(PERMISSION_SCOPE_CONFIG).map(([scope, config]) => {
+        const scopedModuleKeys = getScopeModuleKeys(scope, config);
+        const scopeModules = sortByScopeOrder(
+          Object.values(moduleMap).filter(module => scopedModuleKeys.includes(module.module_key)),
+          config
+        );
+
+        return {
+          scope,
+          scope_label: config.label,
+          total_modules: scopeModules.length,
+          modules: scopeModules
+        };
+      });
+
+      return res.status(200).json({
+        success: true,
+        total_scopes: groupedData.length,
+        data: groupedData
+      });
+    }
 
     return res.status(200).json({
       success: true,
+      scope: requestedScope || null,
+      scope_label: requestedScopeConfig ? requestedScopeConfig.label : null,
       total_modules: formattedModules.length,
       data: formattedModules
     });
