@@ -4,9 +4,14 @@ const multer = require('multer');
 const path = require('path');
 const common_model = require('../utils/common_model');
 const { Op } = require('sequelize');
-const { S3UploadFiles } = require('../utils/common.js');
+const { S3UploadFiles, toAbsoluteBeigeAssetUrl } = require('../utils/common.js');
 const moment = require('moment');
-const { sendTaskAssignmentEmail, sendCPNewBookingRequestEmail, sendPostProductionAssignmentEmail } = require('../utils/emailService');
+const {
+  sendTaskAssignmentEmail,
+  sendCPNewBookingRequestEmail,
+  sendPostProductionAssignmentEmail,
+  sendOnboardingFormCriticalEmail
+} = require('../utils/emailService');
 const { stream_project_booking, crew_members, crew_member_files, tasks, equipment, crew_roles,
   equipment_accessories,
   equipment_category,
@@ -37,10 +42,60 @@ const db = require('../models');
 const bookingTimelineService = require('../services/bookingTimeline.service');
 const accountCreditService = require('../services/account-credit.service');
 const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
+const quoteService = require('../services/sales-quote.service');
 // const NodeGeocoder = require('node-geocoder');
 const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
 const EXTERNAL_MEETINGS_API_BASE_URL = process.env.EXTERNAL_MEETINGS_API_BASE_URL || 'http://localhost:5002/v1/external-meetings';
 const EXTERNAL_FILE_MANAGER_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
+
+const hasValue = (value) => {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') return value.trim() !== '';
+  if (Array.isArray(value)) return value.length > 0;
+  return true;
+};
+
+const buildShootNeedsAttention = (project = {}, formSubmission = null) => {
+  const missingFields = [];
+  const bookingDays = Array.isArray(project.booking_days) ? project.booking_days : [];
+  const hasDate = hasValue(project.event_date) || bookingDays.some((day) => hasValue(day.event_date));
+  const hasLocation = hasValue(project.event_location);
+  const hasOnboardingForm = !!formSubmission;
+
+  if (!hasDate) missingFields.push('date');
+  if (!hasLocation) missingFields.push('location');
+  if (!hasOnboardingForm) missingFields.push('onboarding_form');
+
+  return {
+    required: missingFields.length > 0,
+    missing_fields: missingFields,
+  };
+};
+
+const normalizeLocationForStorage = (location) => {
+  if (location === undefined) return undefined;
+  if (location === null) return null;
+  if (typeof location === 'string') return location.trim() || null;
+  if (typeof location === 'object') return JSON.stringify(location);
+  return String(location);
+};
+
+const isValidDateOnly = (date) => moment(String(date), 'YYYY-MM-DD', true).isValid();
+
+const normalizeScheduleTime = (time) => {
+  if (time === null || time === undefined || time === '') return null;
+  const parsed = moment(String(time), ['HH:mm:ss', 'HH:mm'], true);
+  return parsed.isValid() ? parsed.format('HH:mm:ss') : null;
+};
+
+const calculateDurationHours = (startTime, endTime) => {
+  if (!startTime || !endTime) return null;
+  const start = moment(startTime, 'HH:mm:ss', true);
+  const end = moment(endTime, 'HH:mm:ss', true);
+  if (!start.isValid() || !end.isValid()) return null;
+  const diff = end.diff(start, 'minutes');
+  return diff > 0 ? Math.round((diff / 60) * 100) / 100 : null;
+};
 
 const getCPNewBookingEmailFields = (booking = {}, fallbackClientName = '', fallbackShootAmount = null) => ({
   client_name:
@@ -114,6 +169,90 @@ const resolveAdminBookingClientName = async (booking = null, fallbackClientName 
   }
 
   return null;
+};
+
+const resolveAdminBookingClientContact = async (booking = null) => {
+  if (!booking) {
+    return { full_name: null, email: null, phone_number: null };
+  }
+
+  const bookingJson = typeof booking.toJSON === 'function' ? booking.toJSON() : booking;
+  const bookingId = bookingJson.stream_project_booking_id;
+  const userId = bookingJson.user_id;
+
+  const [bookingUser, linkedClient, linkedLead, linkedClientLead] = await Promise.all([
+    userId
+      ? users.findOne({
+          where: { id: userId },
+          attributes: ['name', 'email', 'phone_number'],
+          raw: true
+        })
+      : Promise.resolve(null),
+    userId
+      ? clients.findOne({
+          where: { user_id: userId, is_active: 1 },
+          attributes: ['name', 'email', 'phone_number'],
+          raw: true
+        })
+      : Promise.resolve(null),
+    bookingId
+      ? sales_leads.findOne({
+          where: { booking_id: bookingId, is_active: 1 },
+          attributes: ['client_name', 'guest_email', 'phone'],
+          raw: true
+        })
+      : Promise.resolve(null),
+    bookingId
+      ? client_leads.findOne({
+          where: { booking_id: bookingId, is_active: 1 },
+          attributes: ['client_name', 'guest_email', 'phone'],
+          raw: true
+        })
+      : Promise.resolve(null)
+  ]);
+
+  const email =
+    bookingUser?.email ||
+    linkedClient?.email ||
+    linkedLead?.guest_email ||
+    linkedClientLead?.guest_email ||
+    bookingJson.guest_email ||
+    null;
+
+  let fullName =
+    bookingUser?.name ||
+    linkedClient?.name ||
+    linkedLead?.client_name ||
+    linkedClientLead?.client_name ||
+    null;
+
+  if (!fullName && email) {
+    fullName = String(email).split('@')[0].replace(/[._-]+/g, ' ').trim() || null;
+  }
+
+  return {
+    full_name: fullName,
+    email,
+    phone_number:
+      bookingUser?.phone_number ||
+      linkedClient?.phone_number ||
+      linkedLead?.phone ||
+      linkedClientLead?.phone ||
+      null
+  };
+};
+
+const getFirstNameForEmail = (name, email) => {
+  const normalizedName = String(name || '').trim();
+  if (normalizedName) return normalizedName.split(/\s+/)[0];
+
+  if (email && String(email).includes('@')) {
+    const localPart = String(email).split('@')[0] || '';
+    const derived = localPart.replace(/[._-]+/g, ' ').trim();
+    if (derived) return derived.split(/\s+/)[0];
+  }
+
+  return 'there';
 };
 
 const resolveAdminBookingShootAmount = async (booking = null, fallbackShootAmount = null) => {
@@ -454,6 +593,36 @@ const buildManualPaymentSummaryFromActivities = (activities = [], totalAmount = 
   };
 };
 
+const countActiveShootNotesByBookingIds = async (bookingIds = []) => {
+  const ids = Array.from(new Set(
+    bookingIds
+      .map((id) => Number(id))
+      .filter((id) => Number.isInteger(id) && id > 0)
+  ));
+
+  if (!ids.length) return new Map();
+
+  const rows = await db.project_notes.findAll({
+    where: {
+      booking_id: { [Sequelize.Op.in]: ids },
+      is_active: 1
+    },
+    attributes: [
+      'booking_id',
+      [Sequelize.fn('COUNT', Sequelize.col('note_id')), 'notes_count']
+    ],
+    group: ['booking_id'],
+    raw: true
+  });
+
+  return new Map(
+    rows.map((row) => [
+      Number(row.booking_id),
+      Number(row.notes_count || 0)
+    ])
+  );
+};
+
 // Initialize geocoder
 // const geocoder = NodeGeocoder({ provider: 'openstreetmap' });
 
@@ -533,6 +702,34 @@ const upload = multer({
     cb(null, true);
   },
 });
+
+const shootNotesAttachmentUpload = multer({
+  storage: storage,
+  limits: { fileSize: 25 * 1024 * 1024, files: 10 },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = [
+      'image/jpeg',
+      'image/png',
+      'image/webp',
+      'image/jfif',
+      'image/jpg',
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'text/plain',
+      'application/zip',
+      'application/x-zip-compressed'
+    ];
+    if (!allowedTypes.includes(file.mimetype)) {
+      return cb(new Error('Invalid file type for attachment.'));
+    }
+    cb(null, true);
+  }
+});
+
+exports.uploadShootNoteAttachments = shootNotesAttachmentUpload.array('attachments', 10);
 
 function uploadFiles(files) {
   const filePaths = [];
@@ -1554,21 +1751,111 @@ exports.getProjectDetails = async (req, res) => {
       : [];
 
     // 3. Fetch Transaction Total (from payment_transactions table)
-    const [paymentData] = await Promise.all([
+    const [paymentData, formSubmission, shootNotesCountMap, bookingPaymentSummary] = await Promise.all([
       payment_transactions.findOne({
         where: { payment_id: projectJson.payment_id },
         attributes: ['total_amount'],
         raw: true
-      })
+      }),
+      project_form_submissions.findOne({
+        where: { project_id: projectJson.stream_project_booking_id, is_active: 1 },
+        attributes: ['id'],
+        order: [['created_at', 'DESC']],
+        raw: true
+      }),
+      countActiveShootNotesByBookingIds([projectJson.stream_project_booking_id]),
+      bookingPaymentSummaryService.getBookingPaymentSummary(projectJson.stream_project_booking_id)
+    ]);
+    const shootNotesCount = shootNotesCountMap.get(Number(projectJson.stream_project_booking_id)) || 0;
+
+    const normalizedGuestEmail = String(projectJson.guest_email || '').trim().toLowerCase() || null;
+    const [emailUserRecord] = await Promise.all([
+      normalizedGuestEmail
+        ? users.findOne({
+            where: Sequelize.where(
+              Sequelize.fn('LOWER', Sequelize.col('email')),
+              normalizedGuestEmail
+            ),
+            attributes: ['id', 'email'],
+            raw: true
+          })
+        : Promise.resolve(null),
     ]);
 
-    const displayAmount = await resolveProjectDisplayAmount({
+    const matchedUserId = projectJson.user_id || emailUserRecord?.id || null;
+    const [clientByUser, clientByEmail] = await Promise.all([
+      matchedUserId
+        ? clients.findOne({
+            where: { user_id: matchedUserId, is_active: 1 },
+            attributes: ['client_id', 'user_id', 'email'],
+            raw: true
+          })
+        : Promise.resolve(null),
+      normalizedGuestEmail
+        ? clients.findOne({
+            where: {
+              is_active: 1,
+              [Op.and]: [
+                Sequelize.where(
+                  Sequelize.fn('LOWER', Sequelize.col('email')),
+                  normalizedGuestEmail
+                )
+              ]
+            },
+            attributes: ['client_id', 'user_id', 'email'],
+            raw: true
+          })
+        : Promise.resolve(null),
+    ]);
+
+    const resolvedClientRecord = clientByUser || clientByEmail || null;
+    const isRegisteredUser = Boolean(matchedUserId);
+    const isClient = Boolean(resolvedClientRecord?.client_id);
+    const isClientOnly = !isRegisteredUser && isClient;
+    const contactRegistrationType = isRegisteredUser
+      ? 'registered_user'
+      : isClientOnly
+        ? 'client_only'
+        : 'unregistered_contact';
+
+    let convertedSalesQuote = null;
+    if (bookingPaymentSummary?.sales_quote_id) {
+      convertedSalesQuote = await db.sales_quotes.findOne({
+        where: { sales_quote_id: bookingPaymentSummary.sales_quote_id },
+        attributes: ['sales_quote_id', 'quote_number', 'status'],
+        raw: true
+      });
+    } else if (lead?.lead_id) {
+      convertedSalesQuote = await db.sales_quotes.findOne({
+        where: { lead_id: lead.lead_id },
+        attributes: ['sales_quote_id', 'quote_number', 'status'],
+        order: [['sales_quote_id', 'DESC']],
+        raw: true
+      });
+    }
+
+    const convertedSalesQuoteId = convertedSalesQuote?.sales_quote_id || bookingPaymentSummary?.sales_quote_id || null;
+    const currentUsableConvertedQuote = convertedSalesQuoteId
+      ? await quoteService.getCurrentUsableQuoteVersionSnapshot(convertedSalesQuoteId, null)
+      : null;
+    const isQuoteConvertedBooking = Boolean(
+      convertedSalesQuoteId || String(lead?.lead_source || '').toLowerCase() === 'converted bookings'
+    );
+
+    let displayAmount = await resolveProjectDisplayAmount({
       project: projectJson,
       paymentData,
     });
-    const totalValueAmount = await resolveProjectTotalValueAmount({
+    let totalValueAmount = await resolveProjectTotalValueAmount({
       project: projectJson,
     });
+    const currentUsableQuoteTotal = parseAmountCandidate(currentUsableConvertedQuote?.total);
+    if (currentUsableQuoteTotal !== null && currentUsableQuoteTotal > 0) {
+      totalValueAmount = currentUsableQuoteTotal;
+      if (displayAmount > currentUsableQuoteTotal) {
+        displayAmount = currentUsableQuoteTotal;
+      }
+    }
 
     // 4. Process Event Type Labels
     const rawTypes = projectJson.event_type ? projectJson.event_type.split(',') : [];
@@ -1583,7 +1870,7 @@ exports.getProjectDetails = async (req, res) => {
     // 5. Pricing Breakdown logic
     // Using calculateLeadPricing helper if available, otherwise manual calc
     const projectedQuote = typeof calculateLeadPricing === 'function' ? await calculateLeadPricing(projectJson) : null;
-    const activeQuoteSource = projectJson.primary_quote || projectedQuote;
+    const activeQuoteSource = currentUsableConvertedQuote || projectJson.primary_quote || projectedQuote;
     
     const parsedQuoteTotal = parseFloat(activeQuoteSource?.total || 0);
     let pricing_breakdown = {
@@ -1689,14 +1976,36 @@ exports.getProjectDetails = async (req, res) => {
           ...projectJson,
           total_paid_amount: displayAmount,
           total_value_amount: totalValueAmount,
+          notes_count: shootNotesCount,
+          contact_registration_type: contactRegistrationType,
+          is_registered_user: isRegisteredUser,
+          is_client: isClient,
+          is_client_only: isClientOnly,
+          is_unregistered_contact: !isRegisteredUser && !isClientOnly,
+          client_record_id: resolvedClientRecord?.client_id || null,
+          client_id: resolvedClientRecord?.client_id || null,
+          matched_user_id: matchedUserId,
+          is_quote_converted_booking: isQuoteConvertedBooking,
+          converted_sales_quote_id: convertedSalesQuoteId,
+          converted_sales_quote_number: convertedSalesQuote?.quote_number || null,
           event_type_labels: eventTypeLabels.join(', '),
           timeline_status: timelineStatus,
           timeline_label: timelineLabel,
+          needs_attention: buildShootNeedsAttention(projectJson, formSubmission),
           sales_leads: undefined // Remove from main object to avoid redundancy
         },
         timeline_status: timelineStatus,
         timeline_label: timelineLabel,
         lead_details: lead, // Sales rep, activities, etc.
+        contact_registration_type: contactRegistrationType,
+        is_registered_user: isRegisteredUser,
+        is_client: isClient,
+        is_client_only: isClientOnly,
+        is_unregistered_contact: !isRegisteredUser && !isClientOnly,
+        client_id: resolvedClientRecord?.client_id || null,
+        converted_sales_quote_id: convertedSalesQuoteId,
+        converted_sales_quote_number: convertedSalesQuote?.quote_number || null,
+        is_quote_converted_booking: isQuoteConvertedBooking,
         manual_payment_summary: manualPaymentSummary,
         pricing_breakdown,
         payment_status: resolvedPaymentStatus,
@@ -1710,6 +2019,270 @@ exports.getProjectDetails = async (req, res) => {
 
   } catch (error) {
     console.error('Error fetching project details:', error);
+    return res.status(500).json({ error: true, message: 'Internal server error', details: error.message });
+  }
+};
+
+exports.updateProjectDateLocation = async (req, res) => {
+  let transaction = null;
+  try {
+    const { project_id } = req.params;
+    const {
+      event_date,
+      date,
+      start_date,
+      event_location,
+      location,
+      booking_type,
+      booking_days,
+      start_time,
+      end_time,
+      duration_hours,
+      time_zone
+    } = req.body || {};
+
+    if (!project_id) {
+      return res.status(400).json({ error: true, message: 'Project ID is required' });
+    }
+
+    const requestedBookingType = booking_type ? String(booking_type).toLowerCase().trim() : null;
+    const nextDate = event_date ?? date ?? start_date;
+    const nextLocation = event_location !== undefined ? event_location : location;
+    const hasBookingDaysPayload = Array.isArray(booking_days);
+    const hasScheduleUpdate =
+      nextDate !== undefined ||
+      start_time !== undefined ||
+      end_time !== undefined ||
+      duration_hours !== undefined ||
+      time_zone !== undefined ||
+      hasBookingDaysPayload ||
+      requestedBookingType === 'single_day' ||
+      requestedBookingType === 'multi_day';
+    const hasLocationUpdate = nextLocation !== undefined;
+
+    if (!hasScheduleUpdate && !hasLocationUpdate) {
+      return res.status(400).json({
+        error: true,
+        message: 'Please provide schedule fields or event_location/location to update.'
+      });
+    }
+
+    const normalizedBookingDays = hasBookingDaysPayload
+      ? booking_days
+          .filter((day) => day)
+          .map((day) => {
+            const dayDate = day.date || day.event_date || day.start_date;
+            const startTime = normalizeScheduleTime(day.start_time || day.startTime);
+            const endTime = normalizeScheduleTime(day.end_time || day.endTime);
+            return {
+              event_date: dayDate,
+              start_time: startTime,
+              end_time: endTime,
+              duration_hours: day.duration_hours != null
+                ? Number(day.duration_hours)
+                : calculateDurationHours(startTime, endTime),
+              time_zone: day.time_zone || day.timeZone || time_zone || null
+            };
+          })
+      : [];
+
+    const resolvedBookingType =
+      requestedBookingType ||
+      (normalizedBookingDays.length > 0 ? 'multi_day' : null);
+
+    if (resolvedBookingType && !['single_day', 'multi_day'].includes(resolvedBookingType)) {
+      return res.status(400).json({
+        error: true,
+        message: 'booking_type must be single_day or multi_day.'
+      });
+    }
+
+    if (resolvedBookingType === 'multi_day' && normalizedBookingDays.length === 0) {
+      return res.status(400).json({
+        error: true,
+        message: 'booking_days is required for multi_day booking_type.'
+      });
+    }
+
+    const invalidBookingDay = normalizedBookingDays.find((day) => !hasValue(day.event_date) || !isValidDateOnly(day.event_date));
+    if (invalidBookingDay) {
+      return res.status(400).json({
+        error: true,
+        message: 'Each booking_days item must include date in YYYY-MM-DD format.'
+      });
+    }
+
+    if (nextDate !== undefined && (!hasValue(nextDate) || !isValidDateOnly(nextDate))) {
+      return res.status(400).json({
+        error: true,
+        message: 'start_date/event_date must be in YYYY-MM-DD format for single_day booking_type.'
+      });
+    }
+
+    const normalizedLocation = normalizeLocationForStorage(nextLocation);
+    if (hasLocationUpdate && !hasValue(normalizedLocation)) {
+      return res.status(400).json({
+        error: true,
+        message: 'event_location cannot be empty.'
+      });
+    }
+
+    const normalizedStartTime = normalizeScheduleTime(start_time);
+    const normalizedEndTime = normalizeScheduleTime(end_time);
+    if (start_time && !normalizedStartTime) {
+      return res.status(400).json({ error: true, message: 'start_time must be in HH:mm or HH:mm:ss format.' });
+    }
+    if (end_time && !normalizedEndTime) {
+      return res.status(400).json({ error: true, message: 'end_time must be in HH:mm or HH:mm:ss format.' });
+    }
+
+    const project = await stream_project_booking.findOne({
+      where: { stream_project_booking_id: project_id }
+    });
+
+    if (!project) {
+      return res.status(404).json({ error: true, message: 'Project not found' });
+    }
+
+    transaction = await db.sequelize.transaction();
+
+    const sortedBookingDays = [...normalizedBookingDays].sort(
+      (a, b) => new Date(a.event_date) - new Date(b.event_date)
+    );
+
+    const primaryBookingDay =
+      resolvedBookingType === 'multi_day'
+        ? sortedBookingDays[0]
+        : null;
+
+    const primaryScheduleDate =
+      resolvedBookingType === 'multi_day'
+        ? primaryBookingDay?.event_date || null
+        : nextDate;
+
+    const primaryStartTime =
+      resolvedBookingType === 'multi_day'
+        ? primaryBookingDay?.start_time || null
+        : normalizedStartTime;
+
+    const primaryEndTime =
+      resolvedBookingType === 'multi_day'
+        ? primaryBookingDay?.end_time || null
+        : normalizedEndTime;
+
+    const primaryTimeZone =
+      resolvedBookingType === 'multi_day'
+        ? primaryBookingDay?.time_zone || null
+        : time_zone;
+
+    let totalDurationHours =
+      resolvedBookingType === 'multi_day'
+        ? sortedBookingDays.reduce((sum, day) => {
+          return sum + (Number(day.duration_hours) || 0);
+        }, 0)
+        : duration_hours != null
+          ? Number(duration_hours)
+          : calculateDurationHours(normalizedStartTime, normalizedEndTime);
+
+    if (totalDurationHours > 0) {
+      totalDurationHours = Math.round(totalDurationHours * 100) / 100;
+    } else {
+      totalDurationHours = null;
+    }
+
+    const updatePayload = {};
+    if (primaryScheduleDate !== undefined && primaryScheduleDate !== null) updatePayload.event_date = primaryScheduleDate;
+    if (start_time !== undefined || resolvedBookingType === 'multi_day') updatePayload.start_time = primaryStartTime || null;
+    if (end_time !== undefined || resolvedBookingType === 'multi_day') updatePayload.end_time = primaryEndTime || null;
+    if (time_zone !== undefined || resolvedBookingType === 'multi_day') updatePayload.time_zone = primaryTimeZone || null;
+    if (duration_hours !== undefined || totalDurationHours !== null || resolvedBookingType === 'multi_day') {
+      updatePayload.duration_hours = totalDurationHours;
+    }
+
+    if (hasLocationUpdate) {
+      const latitude = req.body.latitude ?? null;
+      const longitude = req.body.longitude ?? null;
+      updatePayload.event_location = normalizedLocation;
+      updatePayload.event_latitude = latitude;
+      updatePayload.event_longitude = longitude;
+    }
+
+    if (Object.keys(updatePayload).length > 0) {
+      await project.update(updatePayload, { transaction });
+    }
+
+    if (resolvedBookingType === 'multi_day') {
+      await db.stream_project_booking_days.destroy({
+        where: { stream_project_booking_id: project.stream_project_booking_id },
+        transaction
+      });
+
+      await db.stream_project_booking_days.bulkCreate(
+        sortedBookingDays.map((day) => ({
+          stream_project_booking_id: project.stream_project_booking_id,
+          event_date: day.event_date,
+          start_time: day.start_time,
+          end_time: day.end_time,
+          duration_hours: day.duration_hours,
+          time_zone: day.time_zone,
+          updated_at: new Date()
+        })),
+        { transaction }
+      );
+    }
+
+    if (resolvedBookingType === 'single_day') {
+      await db.stream_project_booking_days.destroy({
+        where: { stream_project_booking_id: project.stream_project_booking_id },
+        transaction
+      });
+    }
+
+    const [bookingDays, formSubmission] = await Promise.all([
+      db.stream_project_booking_days.findAll({
+        where: { stream_project_booking_id: project.stream_project_booking_id },
+        attributes: ['event_date', 'start_time', 'end_time', 'duration_hours', 'time_zone'],
+        order: [['event_date', 'ASC']],
+        transaction,
+        raw: true
+      }),
+      project_form_submissions.findOne({
+        where: { project_id: project.stream_project_booking_id, is_active: 1 },
+        attributes: ['id'],
+        order: [['created_at', 'DESC']],
+        transaction,
+        raw: true
+      })
+    ]);
+
+    const refreshedProject = project.toJSON();
+    refreshedProject.booking_days = bookingDays;
+
+    await transaction.commit();
+
+    return res.status(200).json({
+      error: false,
+      message: 'Project date/location updated successfully',
+      data: {
+        project_id: refreshedProject.stream_project_booking_id,
+        booking_type: resolvedBookingType,
+        event_date: refreshedProject.event_date,
+        start_time: refreshedProject.start_time,
+        end_time: refreshedProject.end_time,
+        duration_hours: refreshedProject.duration_hours,
+        time_zone: refreshedProject.time_zone,
+        event_location: refreshedProject.event_location,
+        event_latitude: refreshedProject.event_latitude,
+        event_longitude: refreshedProject.event_longitude,
+        booking_days: bookingDays,
+        needs_attention: buildShootNeedsAttention(refreshedProject, formSubmission)
+      }
+    });
+  } catch (error) {
+    if (transaction) {
+      try { await transaction.rollback(); } catch (_) {}
+    }
+    console.error('Error updating project attention fields:', error);
     return res.status(500).json({ error: true, message: 'Internal server error', details: error.message });
   }
 };
@@ -2616,8 +3189,13 @@ exports.getAllProjectDetails = async (req, res) => {
       ],
     });
 
+    const shootNotesCountMap = await countActiveShootNotesByBookingIds(
+      projectRows.map((project) => project.stream_project_booking_id)
+    );
+
     let projectDetails = await Promise.all(projectRows.map(async (project) => {
-      const [assignedCrewData, assignedEquipData, assignedPostProdData, paymentData] = await Promise.all([
+      const shootNotesCount = shootNotesCountMap.get(Number(project.stream_project_booking_id)) || 0;
+      const [assignedCrewData, assignedEquipData, assignedPostProdData, paymentData, formSubmission, bookingDaysData] = await Promise.all([
         assigned_crew.findAll({
           where: { project_id: project.stream_project_booking_id, is_active: 1 },
           include: [{ model: crew_members, as: 'crew_member', attributes: ['crew_member_id', 'first_name', 'last_name', 'primary_role'] }],
@@ -2633,6 +3211,17 @@ exports.getAllProjectDetails = async (req, res) => {
         payment_transactions.findOne({
           where: { payment_id: project.payment_id },
           attributes: ['total_amount']
+        }),
+        project_form_submissions.findOne({
+          where: { project_id: project.stream_project_booking_id, is_active: 1 },
+          attributes: ['id'],
+          order: [['created_at', 'DESC']],
+          raw: true
+        }),
+        db.stream_project_booking_days.findAll({
+          where: { stream_project_booking_id: project.stream_project_booking_id },
+          attributes: ['event_date'],
+          raw: true
         }),
       ]);
 
@@ -2655,15 +3244,21 @@ exports.getAllProjectDetails = async (req, res) => {
 
       const timelineStatus = bookingTimelineService.getTimelineStage(project);
       const timelineLabel = bookingTimelineService.getTimelineLabel(timelineStatus);
+      const projectJson = {
+        ...project.toJSON(),
+        booking_days: bookingDaysData
+      };
 
       return {
         project: {
-          ...project.toJSON(),
+          ...projectJson,
           total_paid_amount: displayAmount,
           total_value_amount: totalValueAmount,
+          notes_count: shootNotesCount,
           event_type_labels: formattedTypes.join(', '),
           timeline_status: timelineStatus,
           timeline_label: timelineLabel,
+          needs_attention: buildShootNeedsAttention(projectJson, formSubmission),
           event_location: (() => {
             const loc = project.event_location;
             if (!loc) return null;
@@ -8745,7 +9340,10 @@ exports.getBookingSummaryById = async (req, res) => {
             }],
             order: [[{ model: db.sales_quote_line_items, as: 'line_items' }, 'sort_order', 'ASC']]
         });
-        const activeQuote = customQuote ? customQuote.toJSON() : primaryQuote;
+        const usableCustomQuote = customQuote?.sales_quote_id
+            ? await quoteService.getCurrentUsableQuoteVersionSnapshot(customQuote.sales_quote_id, null)
+            : null;
+        const activeQuote = usableCustomQuote || (customQuote ? customQuote.toJSON() : primaryQuote);
 
         // 6. Pricing Breakdown & Discount Logic
         
@@ -9652,6 +10250,280 @@ exports.getProjectFormByProjectId = async (req, res) => {
     }
 };
 
+exports.sendOnboardingFormReminder = async (req, res) => {
+    try {
+        const project_id = req.params?.project_id || req.body?.project_id;
+        const admin_user_id = req.user?.userId || null;
+
+        if (!project_id) {
+            return res.status(400).json({
+                success: false,
+                message: "Project ID is required."
+            });
+        }
+
+        const booking = await stream_project_booking.findOne({
+            where: { stream_project_booking_id: project_id, is_active: 1 },
+            include: [{
+                model: users,
+                as: 'user',
+                required: false,
+                attributes: ['id', 'name', 'email', 'phone_number']
+            }]
+        });
+
+        if (!booking) {
+            return res.status(404).json({
+                success: false,
+                message: "Project/Booking not found."
+            });
+        }
+
+        const formSubmission = await project_form_submissions.findOne({
+            where: { project_id, is_active: 1 },
+            attributes: ['id'],
+            raw: true
+        });
+
+        if (formSubmission) {
+            return res.status(400).json({
+                success: false,
+                message: "Onboarding form is already submitted for this project."
+            });
+        }
+
+        const [clientDetails, lead, clientLead] = await Promise.all([
+            resolveAdminBookingClientContact(booking),
+            sales_leads.findOne({
+                where: { booking_id: project_id, is_active: 1 },
+                attributes: ['lead_id', 'client_name', 'guest_email'],
+                raw: true
+            }),
+            client_leads.findOne({
+                where: { booking_id: project_id, is_active: 1 },
+                attributes: ['lead_id', 'client_name', 'guest_email'],
+                raw: true
+            })
+        ]);
+
+        const toEmail =
+            clientDetails.email ||
+            booking.user?.email ||
+            booking.guest_email ||
+            lead?.guest_email ||
+            clientLead?.guest_email ||
+            null;
+
+        if (!toEmail) {
+            return res.status(400).json({
+                success: false,
+                message: "Client email is missing for this project."
+            });
+        }
+
+        const displayName =
+            clientDetails.full_name ||
+            lead?.client_name ||
+            clientLead?.client_name ||
+            booking.user?.name ||
+            null;
+        const firstName = getFirstNameForEmail(displayName, toEmail);
+        const frontendUrl = (process.env.FRONTEND_URL || 'https://beige.app').replace(/\/+$/, '');
+
+        const emailResult = await sendOnboardingFormCriticalEmail({
+            to_email: toEmail,
+            booking_id: project_id,
+            shoot_id: project_id,
+            user_name: firstName,
+            first_name: firstName,
+            form_link: `${frontendUrl}/project-form/${project_id}`,
+            dashboard_link: `${frontendUrl}/affiliate/dashboard`
+        });
+
+        if (!emailResult?.success) {
+            return res.status(502).json({
+                success: false,
+                message: "Failed to send onboarding reminder email.",
+                error: emailResult?.error || 'Unknown email error'
+            });
+        }
+
+        const activityData = {
+            email_event: 'onboarding_form_manual_reminder',
+            booking_id: Number(project_id),
+            recipient_email: toEmail,
+            message_id: emailResult.messageId || null
+        };
+
+        if (lead?.lead_id) {
+            await sales_lead_activities.create({
+                lead_id: lead.lead_id,
+                activity_type: 'status_changed',
+                activity_data: activityData,
+                performed_by_user_id: admin_user_id,
+                created_at: new Date()
+            });
+        } else if (clientLead?.lead_id) {
+            await client_lead_activities.create({
+                lead_id: clientLead.lead_id,
+                activity_type: 'status_changed',
+                activity_data: activityData,
+                performed_by_user_id: admin_user_id,
+                created_at: new Date()
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "Onboarding reminder email sent successfully.",
+            data: {
+                project_id: Number(project_id),
+                to_email: toEmail,
+                message_id: emailResult.messageId || null
+            }
+        });
+    } catch (error) {
+        console.error('SendOnboardingFormReminder Error:', error);
+        return res.status(500).json({
+            success: false,
+            message: "Internal Server Error",
+            error: error.message
+        });
+    }
+};
+
+exports.submitProjectFormByAdmin = async (req, res) => {
+    try {
+        const admin_user_id = req.user?.userId || null;
+        const {
+            onsite_contact_info,
+            project_types,
+            project_type_other,
+            brief_overview,
+            num_people_attending,
+            event_agenda,
+            location_address,
+            location_specification,
+            location_scouting_refs,
+            shot_list,
+            visual_references,
+            specific_instructions,
+            creative_dress_code,
+            post_production_ideas,
+            preferred_songs,
+            additional_info,
+            wants_to_learn_more,
+            form_user_friendliness_rating
+        } = req.body || {};
+        const project_id = req.body?.project_id;
+
+        if (!project_id || !brief_overview) {
+            return res.status(400).json({
+                success: false,
+                message: "Project ID and brief overview are required."
+            });
+        }
+
+        const booking = await stream_project_booking.findByPk(project_id);
+        if (!booking) {
+            return res.status(404).json({
+                success: false,
+                message: "Project/Booking not found."
+            });
+        }
+        const clientDetails = await resolveAdminBookingClientContact(booking);
+
+        const formPayload = {
+            project_id,
+            onsite_contact_info: onsite_contact_info || 'N/A',
+            project_types,
+            project_type_other,
+            brief_overview,
+            num_people_attending,
+            event_agenda: event_agenda || 'TBD',
+            location_address,
+            location_specification: location_specification || 'Indoors',
+            location_scouting_refs,
+            shot_list: shot_list || 'TBD',
+            visual_references: visual_references || 'TBD',
+            specific_instructions,
+            creative_dress_code: creative_dress_code || 'None',
+            post_production_ideas,
+            preferred_songs,
+            additional_info,
+            wants_to_learn_more: wants_to_learn_more ? 1 : 0,
+            form_user_friendliness_rating,
+            created_by: admin_user_id
+        };
+
+        const existingSubmission = await project_form_submissions.findOne({
+            where: { project_id, is_active: 1 },
+            order: [['created_at', 'DESC']]
+        });
+
+        let submission = existingSubmission;
+        const isUpdate = !!existingSubmission;
+
+        if (existingSubmission) {
+            await existingSubmission.update(formPayload);
+        } else {
+            submission = await project_form_submissions.create({
+                ...formPayload,
+                created_at: new Date()
+            });
+        }
+
+        const lead = await sales_leads.findOne({
+            where: { booking_id: project_id },
+            attributes: ['lead_id']
+        });
+
+        if (lead) {
+            await sales_lead_activities.create({
+                lead_id: lead.lead_id,
+                activity_type: 'form_submitted',
+                notes: isUpdate
+                    ? 'Admin updated the detailed Project Form.'
+                    : 'Admin submitted the detailed Project Form.',
+                performed_by_user_id: admin_user_id,
+                created_at: new Date()
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: isUpdate
+                ? "Project form updated successfully."
+                : "Project form submitted and saved successfully.",
+            is_submitted: true,
+            client_details: clientDetails,
+            data: {
+                submission_id: submission.id,
+                project_id: submission.project_id,
+                needs_attention: buildShootNeedsAttention(
+                    {
+                        ...booking.toJSON(),
+                        booking_days: await db.stream_project_booking_days.findAll({
+                            where: { stream_project_booking_id: booking.stream_project_booking_id },
+                            attributes: ['event_date'],
+                            raw: true
+                        })
+                    },
+                    submission
+                )
+            }
+        });
+
+    } catch (error) {
+        console.error('SubmitProjectFormByAdmin Error:', error);
+        return res.status(500).json({
+            success: false,
+            message: "Internal Server Error",
+            error: error.message
+        });
+    }
+};
+
 exports.getAllAssignedRequests = async (req, res) => {
   try {
     const { crew_member_id } = req.body || req.query;
@@ -9776,4 +10648,521 @@ exports.getAllAssignedRequests = async (req, res) => {
   }
 };
 
+const getAuthenticatedUserId = (req) => {
+  const userId = Number(req.user?.userId || req.user?.id || req.body?.user_id);
+  return Number.isInteger(userId) && userId > 0 ? userId : null;
+};
 
+const getNoteBody = (body = {}) => {
+  const value = body.note ?? body.message ?? body.body ?? '';
+  return String(value).trim();
+};
+
+const getSafeReactionType = (value) => {
+  const normalized = String(value || 'like').trim().toLowerCase();
+  const allowed = new Set(['like', 'love', 'laugh', 'wow', 'sad']);
+  return allowed.has(normalized) ? normalized : 'like';
+};
+
+const formatNoteAuthor = (user = null) => {
+  if (!user) return null;
+  const plain = typeof user.get === 'function' ? user.get({ plain: true }) : user;
+  return {
+    user_id: plain.id,
+    name: plain.name || plain.email || `User ${plain.id}`,
+    email: plain.email || null,
+    role_id: plain.user_type || null,
+    role_name: plain.userType?.user_role || plain.role || null
+  };
+};
+
+const formatProjectNote = (note, currentUserId, repliesByParentId) => {
+  const plain = typeof note.get === 'function' ? note.get({ plain: true }) : note;
+  const reactions = Array.isArray(plain.reactions) ? plain.reactions : [];
+  const reactionUsersByType = {};
+  const myReactionsSet = new Set();
+
+  reactions.forEach((reaction) => {
+    const key = String(reaction?.reaction_type || '').toLowerCase().trim();
+    if (!key) return;
+    if (!reactionUsersByType[key]) reactionUsersByType[key] = [];
+
+    const userId = Number(reaction?.user_id || reaction?.user?.id || 0);
+    const userName =
+      reaction?.user?.name ||
+      reaction?.user?.email ||
+      (userId > 0 ? `User ${userId}` : 'Unknown User');
+
+    if (!reactionUsersByType[key].some((user) => Number(user.user_id) === userId)) {
+      reactionUsersByType[key].push({
+        user_id: userId,
+        name: userName,
+      });
+    }
+
+    if (userId > 0 && Number(userId) === Number(currentUserId)) {
+      myReactionsSet.add(key);
+    }
+  });
+
+  const myReactions = Array.from(myReactionsSet);
+  const attachments = (Array.isArray(plain.attachments) ? plain.attachments : [])
+    .filter((attachment) => Number(attachment.is_active) === 1 || attachment.is_active === undefined)
+    .map((attachment) => ({
+      attachment_id: attachment.attachment_id,
+      file_name: attachment.file_name,
+      file_path: toAbsoluteBeigeAssetUrl(attachment.file_path),
+      mime_type: attachment.mime_type || null,
+      file_size_bytes: attachment.file_size_bytes !== undefined ? Number(attachment.file_size_bytes) : null,
+      uploaded_by_user_id: attachment.uploaded_by_user_id,
+      created_at: attachment.created_at
+    }));
+  const children = repliesByParentId.get(Number(plain.note_id)) || [];
+
+  return {
+    note_id: plain.note_id,
+    booking_id: plain.booking_id,
+    parent_note_id: plain.parent_note_id,
+    message: plain.message,
+    created_at: plain.created_at,
+    updated_at: plain.updated_at,
+    created_by: formatNoteAuthor(plain.created_by),
+    attachments,
+    like_count: reactions.filter((reaction) => reaction.reaction_type === 'like').length,
+    reaction_count: reactions.length,
+    reacted_by_me: reactions.some((reaction) => Number(reaction.user_id) === Number(currentUserId)),
+    my_reactions: myReactions,
+    reaction_users_by_type: reactionUsersByType,
+    replies: children.map((reply) => formatProjectNote(reply, currentUserId, repliesByParentId))
+  };
+};
+
+const loadShootNotes = async (bookingId, currentUserId) => {
+  const notes = await db.project_notes.findAll({
+    where: {
+      booking_id: bookingId,
+      is_active: 1
+    },
+    include: [
+      {
+        model: db.users,
+        as: 'created_by',
+        required: false,
+        attributes: ['id', 'name', 'email', 'user_type', 'role'],
+        include: [
+          {
+            model: db.user_type,
+            as: 'userType',
+            required: false,
+            attributes: ['user_type_id', 'user_role']
+          }
+        ]
+      },
+      {
+        model: db.project_note_attachments,
+        as: 'attachments',
+        required: false,
+        where: { is_active: 1 },
+        attributes: [
+          'attachment_id',
+          'note_id',
+          'uploaded_by_user_id',
+          'file_name',
+          'file_path',
+          'mime_type',
+          'file_size_bytes',
+          'is_active',
+          'created_at'
+        ]
+      },
+      {
+        model: db.project_note_reactions,
+        as: 'reactions',
+        required: false,
+        attributes: ['reaction_id', 'user_id', 'reaction_type', 'created_at'],
+        include: [
+          {
+            model: db.users,
+            as: 'user',
+            required: false,
+            attributes: ['id', 'name', 'email']
+          }
+        ]
+      }
+    ],
+    order: [
+      ['created_at', 'ASC'],
+      ['note_id', 'ASC']
+    ]
+  });
+
+  const repliesByParentId = new Map();
+  const rootNotes = [];
+
+  notes.forEach((note) => {
+    const parentId = Number(note.parent_note_id || 0);
+    if (parentId > 0) {
+      if (!repliesByParentId.has(parentId)) repliesByParentId.set(parentId, []);
+      repliesByParentId.get(parentId).push(note);
+    } else {
+      rootNotes.push(note);
+    }
+  });
+
+  return rootNotes.map((note) => formatProjectNote(note, currentUserId, repliesByParentId));
+};
+
+const uploadShootNoteAttachmentsToS3 = async (files = []) => {
+  if (!Array.isArray(files) || files.length === 0) return [];
+  const uploaded = await S3UploadFiles({ attachments: files });
+  return uploaded.map((item, index) => ({
+    file_path: item.file_path,
+    file_name: files[index]?.originalname || files[index]?.filename || 'attachment',
+    mime_type: files[index]?.mimetype || null,
+    file_size_bytes: files[index]?.size || null
+  }));
+};
+
+const findActiveShoot = async (bookingId) => stream_project_booking.findOne({
+  where: {
+    stream_project_booking_id: bookingId,
+    is_active: 1
+  }
+});
+
+const findActiveShootNote = async (bookingId, noteId) => db.project_notes.findOne({
+  where: {
+    note_id: noteId,
+    booking_id: bookingId,
+    is_active: 1
+  }
+});
+
+const isAdminShootNotesRole = (role) => (
+  ['admin', 'production_manager'].includes(String(role || '').toLowerCase().replace(/\s+/g, '_'))
+);
+
+const ensureShootNotesAccess = async (bookingId, req, res) => {
+  const userId = getAuthenticatedUserId(req);
+  if (!userId) {
+    res.status(401).json({ success: false, message: 'Authenticated user is required' });
+    return null;
+  }
+
+  const booking = await findActiveShoot(bookingId);
+  if (!booking) {
+    res.status(404).json({ success: false, message: 'Shoot not found' });
+    return null;
+  }
+
+  return booking;
+};
+
+exports.getShootNotes = async (req, res) => {
+  try {
+    const bookingId = Number(req.params.bookingId);
+    const currentUserId = getAuthenticatedUserId(req);
+
+    if (!Number.isInteger(bookingId) || bookingId <= 0) {
+      return res.status(400).json({ success: false, message: 'Valid bookingId is required' });
+    }
+
+    if (!currentUserId) {
+      return res.status(401).json({ success: false, message: 'Authenticated user is required' });
+    }
+
+    const booking = await ensureShootNotesAccess(bookingId, req, res);
+    if (!booking) return null;
+
+    const notes = await loadShootNotes(bookingId, currentUserId);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Shoot notes fetched successfully',
+      data: notes
+    });
+  } catch (error) {
+    console.error('Get shoot notes error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+exports.addShootNote = async (req, res) => {
+  try {
+    const bookingId = Number(req.params.bookingId);
+    const currentUserId = getAuthenticatedUserId(req);
+    const message = getNoteBody(req.body);
+
+    if (!Number.isInteger(bookingId) || bookingId <= 0) {
+      return res.status(400).json({ success: false, message: 'Valid bookingId is required' });
+    }
+
+    if (!currentUserId) {
+      return res.status(401).json({ success: false, message: 'Authenticated user is required' });
+    }
+
+    if (!message) {
+      return res.status(400).json({ success: false, message: 'Note message is required' });
+    }
+
+    const booking = await ensureShootNotesAccess(bookingId, req, res);
+    if (!booking) return null;
+
+    const user = await db.users.findOne({ where: { id: currentUserId }, attributes: ['id'] });
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const note = await db.project_notes.create({
+      booking_id: bookingId,
+      created_by_user_id: currentUserId,
+      message
+    });
+
+    const uploadedAttachments = await uploadShootNoteAttachmentsToS3(req.files);
+    if (uploadedAttachments.length > 0) {
+      await db.project_note_attachments.bulkCreate(
+        uploadedAttachments.map((file) => ({
+          note_id: note.note_id,
+          uploaded_by_user_id: currentUserId,
+          file_name: file.file_name,
+          file_path: file.file_path,
+          mime_type: file.mime_type,
+          file_size_bytes: file.file_size_bytes
+        }))
+      );
+    }
+
+    const notes = await loadShootNotes(bookingId, currentUserId);
+    const createdNote = notes.find((item) => Number(item.note_id) === Number(note.note_id));
+
+    return res.status(201).json({
+      success: true,
+      message: 'Shoot note added successfully',
+      data: createdNote || note
+    });
+  } catch (error) {
+    console.error('Add shoot note error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+exports.replyToShootNote = async (req, res) => {
+  try {
+    const bookingId = Number(req.params.bookingId);
+    const noteId = Number(req.params.noteId);
+    const currentUserId = getAuthenticatedUserId(req);
+    const message = getNoteBody(req.body);
+
+    if (!Number.isInteger(bookingId) || bookingId <= 0 || !Number.isInteger(noteId) || noteId <= 0) {
+      return res.status(400).json({ success: false, message: 'Valid bookingId and noteId are required' });
+    }
+
+    if (!currentUserId) {
+      return res.status(401).json({ success: false, message: 'Authenticated user is required' });
+    }
+
+    if (!message) {
+      return res.status(400).json({ success: false, message: 'Reply message is required' });
+    }
+
+    const booking = await ensureShootNotesAccess(bookingId, req, res);
+    if (!booking) return null;
+
+    const parentNote = await findActiveShootNote(bookingId, noteId);
+    if (!parentNote) {
+      return res.status(404).json({ success: false, message: 'Parent note not found for this shoot' });
+    }
+
+    const reply = await db.project_notes.create({
+      booking_id: bookingId,
+      parent_note_id: noteId,
+      created_by_user_id: currentUserId,
+      message
+    });
+
+    const uploadedAttachments = await uploadShootNoteAttachmentsToS3(req.files);
+    if (uploadedAttachments.length > 0) {
+      await db.project_note_attachments.bulkCreate(
+        uploadedAttachments.map((file) => ({
+          note_id: reply.note_id,
+          uploaded_by_user_id: currentUserId,
+          file_name: file.file_name,
+          file_path: file.file_path,
+          mime_type: file.mime_type,
+          file_size_bytes: file.file_size_bytes
+        }))
+      );
+    }
+
+    const notes = await loadShootNotes(bookingId, currentUserId);
+    const parent = notes.find((item) => Number(item.note_id) === Number(noteId));
+    const createdReply = parent?.replies?.find((item) => Number(item.note_id) === Number(reply.note_id));
+
+    return res.status(201).json({
+      success: true,
+      message: 'Shoot note reply added successfully',
+      data: createdReply || reply
+    });
+  } catch (error) {
+    console.error('Reply to shoot note error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+exports.toggleShootNoteReaction = async (req, res) => {
+  try {
+    const bookingId = Number(req.params.bookingId);
+    const noteId = Number(req.params.noteId);
+    const currentUserId = getAuthenticatedUserId(req);
+    const reactionType = getSafeReactionType(req.body?.reaction || req.body?.reaction_type);
+
+    if (!Number.isInteger(bookingId) || bookingId <= 0 || !Number.isInteger(noteId) || noteId <= 0) {
+      return res.status(400).json({ success: false, message: 'Valid bookingId and noteId are required' });
+    }
+
+    if (!currentUserId) {
+      return res.status(401).json({ success: false, message: 'Authenticated user is required' });
+    }
+
+    const booking = await ensureShootNotesAccess(bookingId, req, res);
+    if (!booking) return null;
+
+    const note = await findActiveShootNote(bookingId, noteId);
+    if (!note) {
+      return res.status(404).json({ success: false, message: 'Note not found for this shoot' });
+    }
+
+    const existingUserReactions = await db.project_note_reactions.findAll({
+      where: {
+        note_id: noteId,
+        user_id: currentUserId,
+      }
+    });
+
+    const existingSameReaction = existingUserReactions.find(
+      (item) => String(item.reaction_type || '').toLowerCase() === reactionType
+    );
+
+    let reactedByMe = false;
+
+    if (existingSameReaction) {
+      // Toggle off when tapping the same reaction again.
+      await db.project_note_reactions.destroy({
+        where: {
+          note_id: noteId,
+          user_id: currentUserId,
+        }
+      });
+    } else {
+      // Keep one reaction per user per note (replace old reaction with new one).
+      await db.project_note_reactions.destroy({
+        where: {
+          note_id: noteId,
+          user_id: currentUserId,
+        }
+      });
+
+      await db.project_note_reactions.create({
+        note_id: noteId,
+        user_id: currentUserId,
+        reaction_type: reactionType
+      });
+      reactedByMe = true;
+    }
+
+    const [likeCount, reactionCount] = await Promise.all([
+      db.project_note_reactions.count({ where: { note_id: noteId, reaction_type: 'like' } }),
+      db.project_note_reactions.count({ where: { note_id: noteId } })
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      message: reactedByMe ? 'Reaction added successfully' : 'Reaction removed successfully',
+      data: {
+        note_id: noteId,
+        reaction: reactionType,
+        reacted_by_me: reactedByMe,
+        like_count: likeCount,
+        reaction_count: reactionCount
+      }
+    });
+  } catch (error) {
+    console.error('Toggle shoot note reaction error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+exports.deleteShootNote = async (req, res) => {
+  try {
+    const bookingId = Number(req.params.bookingId);
+    const noteId = Number(req.params.noteId);
+    const currentUserId = getAuthenticatedUserId(req);
+    const userRole = String(req.user?.userRole || '').toLowerCase().replace(/\s+/g, '_');
+
+    if (!Number.isInteger(bookingId) || bookingId <= 0 || !Number.isInteger(noteId) || noteId <= 0) {
+      return res.status(400).json({ success: false, message: 'Valid bookingId and noteId are required' });
+    }
+
+    if (!currentUserId) {
+      return res.status(401).json({ success: false, message: 'Authenticated user is required' });
+    }
+
+    const booking = await ensureShootNotesAccess(bookingId, req, res);
+    if (!booking) return null;
+
+    const note = await findActiveShootNote(bookingId, noteId);
+    if (!note) {
+      return res.status(404).json({ success: false, message: 'Note not found for this shoot' });
+    }
+
+    const canDelete = (
+      Number(note.created_by_user_id) === Number(currentUserId) ||
+      isAdminShootNotesRole(userRole)
+    );
+
+    if (!canDelete) {
+      return res.status(403).json({ success: false, message: 'You do not have permission to delete this note' });
+    }
+
+    await db.project_notes.update(
+      { is_active: 0 },
+      {
+        where: {
+          [Op.or]: [
+            { note_id: noteId },
+            { parent_note_id: noteId }
+          ]
+        }
+      }
+    );
+
+    await db.project_note_attachments.update(
+      { is_active: 0 },
+      {
+        where: {
+          note_id: {
+            [Op.in]: [
+              noteId,
+              ...(
+                await db.project_notes.findAll({
+                  where: { parent_note_id: noteId, booking_id: bookingId },
+                  attributes: ['note_id'],
+                  raw: true
+                })
+              ).map((item) => Number(item.note_id))
+            ]
+          }
+        }
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'Shoot note deleted successfully'
+    });
+  } catch (error) {
+    console.error('Delete shoot note error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};

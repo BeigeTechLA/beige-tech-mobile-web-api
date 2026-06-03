@@ -2,9 +2,9 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer 
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3Nzk4NjY0MTYsImV4cCI6MTc4MDQ3MTIxNn0.2Mr17MMKiGzbKCegx4pB8Nmkj3rGzVU3t17m_yxZNHs
 
-@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI0NSwidXNlclJvbGUiOiJDbGllbnQiLCJpYXQiOjE3Nzg4NDc1OTEsImV4cCI6MTc3OTQ1MjM5MX0.QbY4oalixhyzuuiFPE-uUuWN451stVYHUxibOLIDwus
+@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI0MywidXNlclJvbGUiOiJDcmVhdG9yIiwiaWF0IjoxNzc5ODY2NjUyLCJleHAiOjE3ODA0NzE0NTJ9.HqW7gAw_dGMs0XG0fHuYfw_DON3cn_oBLRhs2KIJxgc
 
 ###
 POST {{URL}}creator/dashboard-count HTTP/1.1
@@ -54,8 +54,8 @@ POST {{URL}}auth/login HTTP/1.1
 Content-Type: application/json
 
 {
-  "email": "admin@beigecorporation.io",
-  "password": "Admin@2026!"
+  "email": "craftdivine780@gmail.com",
+  "password": "12345678"
 }
 
 ###
@@ -132,12 +132,81 @@ GET {{URL}}admin/certifications HTTP/1.1
 Content-Type: application/json
 
 ###
-GET {{URL}}admin/get-projects HTTP/1.1
+GET {{URL}}admin/get-projects?range=all HTTP/1.1
 Content-Type: application/json
 
 ###
-GET {{URL}}admin/get-project/932 HTTP/1.1
+GET {{URL}}admin/get-project/1193 HTTP/1.1
 Content-Type: application/json
+
+### update shoot schedule/location - single day
+PUT {{URL}}admin/shoots/update-date-location/1193 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "location": "552 Crocker Street, Los Angeles, California 90013, United States",
+  "latitude": 34.04174320,
+  "longitude": -118.23311230,
+  "booking_type": "single_day",
+  "time_zone": "Asia/Calcutta",
+  "start_date": "2026-06-30",
+  "start_time": "09:00:00",
+  "end_time": "12:00:00"
+}
+
+### update shoot schedule/location - multi day
+PUT {{URL}}admin/shoots/update-date-location/1190 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "location": "552 Crocker Street, Los Angeles, California 90013, United States",
+  "latitude": 34.04174320,
+  "longitude": -118.23311230,
+  "booking_type": "multi_day",
+  "time_zone": "Asia/Calcutta",
+  "booking_days": [
+    {
+      "date": "2026-06-22",
+      "start_time": "12:00:00",
+      "end_time": "02:00:00"
+    },
+    {
+      "date": "2026-06-23",
+      "start_time": "12:00:00",
+      "end_time": "02:00:00"
+    }
+  ]
+}
+
+### update shoot onboarding form
+POST {{URL}}admin/shoots/update-onboarding-form HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "project_id": 1192,
+  "onsite_contact_info": "Zara - +919173965231",
+  "project_types": ["Commercial Shoot (Product Photography, Social Media Content, Promotional Video)"],
+  "project_type_other": "",
+  "brief_overview": "My birthday is going to take place at the Nobu restaurant LA from 5pm to 9pm..",
+  "num_people_attending": "5",
+  "event_agenda": "TBD",
+  "location_address": "2451 Meadowvale Avenue, Los Angeles, California 90031, United States",
+  "location_specification": ["Both"],
+  "location_scouting_refs": "[]",
+  "shot_list": "TBD",
+  "visual_references": "TBD",
+  "specific_instructions": "",
+  "creative_dress_code": "None",
+  "post_production_ideas": "",
+  "preferred_songs": "",
+  "additional_info": "",
+  "wants_to_learn_more": 1,
+  "form_user_friendliness_rating": 5,
+  "user_id": ""
+}
 
 ###
 GET {{URL}}admin/get-active-projects HTTP/1.1
@@ -1212,7 +1281,7 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "booking_id": 1179
+  "booking_id": 1174
 }
 
 ### download sales quote pdf
@@ -2013,7 +2082,7 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### 
-GET {{URL}}finance/shoots/1098 HTTP/1.1
+GET {{URL}}finance/shoots/1167 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -2225,13 +2294,13 @@ POST {{URL}}finance/admin/disputes/1/escalate HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
-{
-  "priority": "urgent",
+11{
+  11"priority": "urgent",
   "reason": "High-value dispute requiring senior admin review.",
   "assigned_team": "Finance Resolution Team",
   "notes": "Escalated due to payout and refund complexity."
 }
-
+11
 ### FILTER EXAMPLES
 GET {{URL}}finance/admin/disputes?status=in_review HTTP/1.1
 Authorization: {{TOKEN}}
@@ -2239,8 +2308,8 @@ Authorization: {{TOKEN}}
 ###
 GET {{URL}}finance/admin/disputes?raised_by_type=client HTTP/1.1
 Authorization: {{TOKEN}}
-
-###
+11
+11###
 GET {{URL}}finance/admin/disputes?category=refund HTTP/1.1
 Authorization: {{TOKEN}}
 
@@ -2251,3 +2320,99 @@ Authorization: {{TOKEN}}
 ###
 GET {{URL}}client/credit/dashboard HTTP/1.1
 Authorization: {{TOKEN2}}
+
+### Get Shoot Notes - 1197 = stream_project_booking_id
+GET {{URL}}admin/shoots/1197/notes HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Add Shoot Note
+POST {{URL}}admin/shoots/1197/notes HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "note": "Client requested extra close-up shots for the second setup."
+}
+
+### Reply To Note - 1197 = stream_project_booking_id, 1 = note_id
+POST {{URL}}admin/shoots/1197/notes/1/replies HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+{
+  "note": "Added this to the shot list."
+}
+
+### Like / Unlike Note
+POST {{URL}}admin/shoots/1197/notes/1/reactions HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+{
+  "reaction": "like"
+}
+
+### Delete Note
+DELETE {{URL}}admin/shoots/1197/notes/2 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+
+### Client payment list for logged-in client
+GET {{URL}}finance/client/payments HTTP/1.1
+Authorization: {{TOKEN2}}
+
+### Client payment details by booking ID
+GET {{URL}}finance/client/payments/1109 HTTP/1.1
+Authorization: {{TOKEN2}}
+
+### CREATE CLIENT DISPUTE
+POST {{URL}}finance/client/disputes HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+{
+  "booking_id": 1109,
+  "category": "quality", // quality, payment_delay, wrong_deliverables, refund, payout_issues, other
+  "subject": "Final video quality issue",
+  "description": "The final video does not match the agreed quality and some requested edits are missing."
+}
+
+### GET CLIENT DISPUTES LIST
+GET {{URL}}finance/client/disputes?page=1&limit=10 HTTP/1.1
+Authorization: {{TOKEN2}}
+
+### GET CLIENT DISPUTE DETAILS
+GET {{URL}}finance/client/disputes/1 HTTP/1.1
+Authorization: {{TOKEN2}}
+
+### ADD CLIENT DISPUTE COMMENT
+POST {{URL}}finance/client/disputes/1/comments HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+{
+  "body": "Please review this dispute. I have attached the reference file and final delivery issue details."
+}
+
+### ADD CLIENT DISPUTE ATTACHMENT - FILE UPLOAD
+POST {{URL}}finance/client/disputes/1/attachments HTTP/1.1
+Authorization: {{TOKEN2}}
+Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW
+
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="attachment"; filename="5.jpeg"
+Content-Type: image/jpeg
+
+(data)
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="attachment_type" // evidence, invoice, deliverable, refund_proof, payout_proof, other
+
+evidence
+------WebKitFormBoundary7MA4YWxkTrZu0gW--
+
+### 
+POST {{URL}}admin/shoots/remind-onboarding-form/1207
+Authorization: {{TOKEN}}
+Content-Type: application/json

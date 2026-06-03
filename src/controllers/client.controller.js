@@ -119,6 +119,30 @@ function uploadFiles(files) {
   return filePaths;
 }
 
+const hasValue = (value) => {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') return value.trim() !== '';
+  if (Array.isArray(value)) return value.length > 0;
+  return true;
+};
+
+const buildShootNeedsAttention = (project = {}, formSubmission = null) => {
+  const missingFields = [];
+  const bookingDays = Array.isArray(project.booking_days) ? project.booking_days : [];
+  const hasDate = hasValue(project.event_date) || bookingDays.some((day) => hasValue(day.event_date));
+  const hasLocation = hasValue(project.event_location);
+  const hasOnboardingForm = !!formSubmission;
+
+  if (!hasDate) missingFields.push('date');
+  if (!hasLocation) missingFields.push('location');
+  if (!hasOnboardingForm) missingFields.push('onboarding_form');
+
+  return {
+    required: missingFields.length > 0,
+    missing_fields: missingFields,
+  };
+};
+
 function buildDateFilter(req) {
   const { range, start_date, end_date } = req.query;
 
@@ -431,6 +455,64 @@ exports.getBookingDetailsById = async (req, res) => {
     console.error("Get Booking Details By Id Error:", error);
     return res.status(500).json({
       error: true,
+      message: "Internal server error"
+    });
+  }
+};
+
+exports.getProjectFormStatusByBookingId = async (req, res) => {
+  try {
+    const { booking_id } = req.params;
+
+    if (!booking_id) {
+      return res.status(400).json({
+        success: false,
+        message: "booking_id is required"
+      });
+    }
+
+    const booking = await stream_project_booking.findByPk(booking_id, {
+      attributes: ['stream_project_booking_id', 'project_name', 'guest_email', 'payment_id', 'is_active', 'is_cancelled'],
+      raw: true
+    });
+
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: "Project/Booking not found."
+      });
+    }
+
+    const existingSubmission = await project_form_submissions.findOne({
+      where: {
+        project_id: booking_id,
+        is_active: 1
+      },
+      order: [['id', 'DESC']],
+      raw: true
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: existingSubmission
+        ? "Project form already submitted."
+        : "Project form not submitted yet.",
+      data: {
+        booking_id: booking.stream_project_booking_id,
+        project_name: booking.project_name,
+        guest_email: booking.guest_email,
+        has_payment: Boolean(booking.payment_id),
+        is_active: Boolean(booking.is_active),
+        is_cancelled: Boolean(booking.is_cancelled),
+        is_submitted: Boolean(existingSubmission),
+        submitted_at: existingSubmission?.created_at || null,
+        submission_id: existingSubmission?.id || null
+      }
+    });
+  } catch (error) {
+    console.error("Get Project Form Status Error:", error);
+    return res.status(500).json({
+      success: false,
       message: "Internal server error"
     });
   }
@@ -788,7 +870,7 @@ exports.getAllProjectDetailsForUser = async (req, res) => {
 
     // ----------- FETCH ASSOCIATED DETAILS -----------
     const projectDetailsPromises = projects.map(async (project) => {
-      const [assignedCrew, assignedEquipment, assignedPostProd, quote] = await Promise.all([
+      const [assignedCrew, assignedEquipment, assignedPostProd, quote, formSubmission] = await Promise.all([
         assigned_crew.findAll({
           where: { project_id: project.stream_project_booking_id, is_active: 1 },
           include: [{ model: crew_members, as: 'crew_member', attributes: ['crew_member_id', 'first_name', 'last_name', 'primary_role'] }],
@@ -806,7 +888,13 @@ exports.getAllProjectDetailsForUser = async (req, res) => {
             where: { quote_id: project.quote_id },
             attributes: ['quote_id', 'subtotal', 'total', 'status']
           })
-          : Promise.resolve(null)
+          : Promise.resolve(null),
+        project_form_submissions.findOne({
+          where: { project_id: project.stream_project_booking_id, is_active: 1 },
+          attributes: ['id'],
+          order: [['created_at', 'DESC']],
+          raw: true
+        })
       ]);
 
       // --- ADDED: LABEL FORMATTING LOGIC ---
@@ -827,6 +915,7 @@ exports.getAllProjectDetailsForUser = async (req, res) => {
           quote_total: quote ? parseFloat(quote.total) : null,
           quote_subtotal: quote ? parseFloat(quote.subtotal) : null,
           quote_status: quote ? quote.status : null,
+          needs_attention: buildShootNeedsAttention(project.toJSON(), formSubmission),
           event_location: (() => {
             const loc = project.event_location;
             if (!loc) return null;
@@ -1086,6 +1175,26 @@ exports.submitProjectForm = async (req, res) => {
             });
         }
 
+        const existingSubmission = await project_form_submissions.findOne({
+            where: {
+                project_id,
+                is_active: 1
+            },
+            order: [['id', 'DESC']],
+            raw: true
+        });
+
+        if (existingSubmission) {
+            return res.status(409).json({
+                success: false,
+                message: "Project form already submitted for this booking.",
+                data: {
+                    submission_id: existingSubmission.id,
+                    project_id: Number(project_id)
+                }
+            });
+        }
+
         const submission = await project_form_submissions.create({
             project_id,
             onsite_contact_info: onsite_contact_info || 'N/A',
@@ -1116,13 +1225,18 @@ exports.submitProjectForm = async (req, res) => {
         });
 
         if (lead) {
-            await sales_lead_activities.create({
-                lead_id: lead.lead_id,
-                activity_type: 'form_submitted',
-                notes: `Client submitted the detailed Project Form via software.`,
-                performed_by_user_id: user_id || null,
-                created_at: new Date()
-            });
+            try {
+                await sales_lead_activities.create({
+                    lead_id: lead.lead_id,
+                    // Use a known enum value to avoid DB truncation errors.
+                    activity_type: 'booking_updated',
+                    notes: `Client submitted the detailed Project Form via software.`,
+                    performed_by_user_id: user_id || null,
+                    created_at: new Date()
+                });
+            } catch (activityError) {
+                console.error('Project form submitted but failed to log lead activity:', activityError?.message || activityError);
+            }
         }
 
         res.json({
@@ -1257,6 +1371,26 @@ exports.submitProjectFormGuest = async (req, res) => {
             });
         }
 
+        const existingSubmission = await project_form_submissions.findOne({
+            where: {
+                project_id,
+                is_active: 1
+            },
+            order: [['id', 'DESC']],
+            raw: true
+        });
+
+        if (existingSubmission) {
+            return res.status(409).json({
+                success: false,
+                message: "Project form already submitted for this booking.",
+                data: {
+                    submission_id: existingSubmission.id,
+                    project_id: Number(project_id)
+                }
+            });
+        }
+
         const submission = await project_form_submissions.create({
             project_id,
             onsite_contact_info: onsite_contact_info || 'N/A',
@@ -1287,13 +1421,18 @@ exports.submitProjectFormGuest = async (req, res) => {
         });
 
         if (lead) {
-            await sales_lead_activities.create({
-                lead_id: lead.lead_id,
-                activity_type: 'form_submitted',
-                notes: `Client submitted the detailed Project Form via software.`,
-                performed_by_user_id: user_id || null,
-                created_at: new Date()
-            });
+            try {
+                await sales_lead_activities.create({
+                    lead_id: lead.lead_id,
+                    // Use a known enum value to avoid DB truncation errors.
+                    activity_type: 'booking_updated',
+                    notes: `Client submitted the detailed Project Form via software.`,
+                    performed_by_user_id: user_id || null,
+                    created_at: new Date()
+                });
+            } catch (activityError) {
+                console.error('Project form submitted but failed to log lead activity:', activityError?.message || activityError);
+            }
         }
 
         res.json({

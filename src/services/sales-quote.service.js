@@ -277,13 +277,67 @@ function buildQuoteVersionSnapshot(quoteRecord, lineItems = []) {
   };
 }
 
-function buildQuoteVersionListItem(version, highestVersionNumber = null) {
+function getQuoteVersionApprovalMetadata(version) {
   const plain = toPlainRecord(version) || {};
+  const sourceActivity = plain.source_activity || null;
+  const sourceMetadata = parseConfig(sourceActivity?.metadata_json) || {};
+  const snapshot = parseConfig(plain.quote_snapshot_json) || {};
+
+  return {
+    approval_status:
+      sourceMetadata.approval_status ||
+      snapshot.approval_status ||
+      null,
+    change_request_status:
+      sourceMetadata.approval_status ||
+      snapshot.change_request_status ||
+      null,
+    review_status:
+      sourceMetadata.approval_status ||
+      snapshot.review_status ||
+      null,
+    requested_at:
+      sourceMetadata.approval_requested_at ||
+      sourceActivity?.created_at ||
+      null,
+    reviewed_at:
+      sourceMetadata.reviewed_at ||
+      sourceMetadata.approved_at ||
+      sourceMetadata.rejected_at ||
+      null,
+    review_notes: sourceMetadata.review_notes || null,
+    source_activity_id: plain.source_activity_id || sourceActivity?.activity_id || null
+  };
+}
+
+function isRejectedQuoteVersion(version) {
+  const approvalMetadata = getQuoteVersionApprovalMetadata(version);
+  return ['rejected', 'declined', 'denied'].includes(
+    String(approvalMetadata.approval_status || '').trim().toLowerCase()
+  );
+}
+
+function isUsableQuoteVersion(version) {
+  const approvalMetadata = getQuoteVersionApprovalMetadata(version);
+  const approvalStatus = String(approvalMetadata.approval_status || '').trim().toLowerCase();
+  return !approvalStatus || approvalStatus === 'approved';
+}
+
+function buildQuoteVersionListItem(version, currentVersionNumber = null) {
+  const plain = toPlainRecord(version) || {};
+  const approvalMetadata = getQuoteVersionApprovalMetadata(version);
   return {
     sales_quote_version_id: plain.sales_quote_version_id || null,
     version_number: Number(plain.version_number || 0),
     version_label: `Quote Version ${plain.version_number || 0}`,
     change_reason: plain.change_reason || null,
+    source_activity_id: approvalMetadata.source_activity_id,
+    approval_status: approvalMetadata.approval_status,
+    change_request_status: approvalMetadata.change_request_status,
+    review_status: approvalMetadata.review_status,
+    approval_requested_at: approvalMetadata.requested_at,
+    reviewed_at: approvalMetadata.reviewed_at,
+    review_notes: approvalMetadata.review_notes,
     created_at: plain.created_at || null,
     created_by_user_id: plain.created_by_user_id || null,
     created_by: plain.created_by
@@ -293,7 +347,7 @@ function buildQuoteVersionListItem(version, highestVersionNumber = null) {
           email: plain.created_by.email
         }
       : null,
-    is_current: highestVersionNumber !== null ? Number(plain.version_number || 0) === Number(highestVersionNumber) : null
+    is_current: currentVersionNumber !== null ? Number(plain.version_number || 0) === Number(currentVersionNumber) : null
   };
 }
 
@@ -3547,17 +3601,19 @@ async function listQuoteVersionsById(salesQuoteId, transaction = null) {
   const rows = await db.sales_quote_versions.findAll({
     where: { sales_quote_id: salesQuoteId },
     include: [
-      { model: db.users, as: 'created_by', attributes: ['id', 'name', 'email'], required: false }
+      { model: db.users, as: 'created_by', attributes: ['id', 'name', 'email'], required: false },
+      { model: db.sales_quote_activities, as: 'source_activity', attributes: ['activity_id', 'metadata_json', 'created_at'], required: false }
     ],
     order: [['version_number', 'DESC'], ['sales_quote_version_id', 'DESC']],
     transaction
   });
 
-  const highestVersionNumber = rows.length
-    ? Math.max(...rows.map((row) => Number(row.version_number || 0)))
+  const usableRows = rows.filter((row) => isUsableQuoteVersion(row));
+  const currentVersionNumber = usableRows.length
+    ? Math.max(...usableRows.map((row) => Number(row.version_number || 0)))
     : null;
 
-  return rows.map((row) => buildQuoteVersionListItem(row, highestVersionNumber));
+  return rows.map((row) => buildQuoteVersionListItem(row, currentVersionNumber));
 }
 
 async function resolveQuoteBillingState(quote, transaction) {
@@ -3895,6 +3951,7 @@ async function createQuote(payload, user) {
   const transaction = await db.sequelize.transaction();
   try {
     const clientSnapshot = await resolveClientSnapshot(payload);
+    const { latitude, longitude } = extractCoordinatesFromPayload(payload, payload.client_address || payload.location);
     const lineItemsPayload = await buildLineItemsPayload(payload.line_items || []);
     const totals = calculateTotals(lineItemsPayload, payload);
     const validity = resolveValidity({
@@ -3937,6 +3994,8 @@ async function createQuote(payload, user) {
       client_email: clientSnapshot.client_email,
       client_phone: clientSnapshot.client_phone,
       client_address: clientSnapshot.client_address,
+      location_latitude: latitude,
+      location_longitude: longitude,
       project_description: payload.project_description || null,
       video_shoot_type: payload.video_shoot_type || null,
       quote_validity_days: validity.quote_validity_days,
@@ -4021,6 +4080,8 @@ async function duplicateQuote(salesQuoteId, user) {
       client_email: sourceQuote.client_email || null,
       client_phone: sourceQuote.client_phone || null,
       client_address: sourceQuote.client_address || null,
+      location_latitude: sourceQuote.location_latitude ?? null,
+      location_longitude: sourceQuote.location_longitude ?? null,
       project_description: sourceQuote.project_description || null,
       video_shoot_type: sourceQuote.video_shoot_type || null,
       quote_validity_days: sourceQuote.quote_validity_days || null,
@@ -4130,6 +4191,8 @@ async function updateQuote(salesQuoteId, payload, user) {
       client_email: quote.client_email,
       client_phone: quote.client_phone,
       client_address: quote.client_address,
+      location_latitude: quote.location_latitude,
+      location_longitude: quote.location_longitude,
       status: quote.status,
       discount_type: quote.discount_type,
       discount_value: quote.discount_value,
@@ -4179,7 +4242,9 @@ async function updateQuote(salesQuoteId, payload, user) {
     const newTotal = roundCurrency(totals.total);
     const collectedAmount = roundCurrency(billingState.collected_amount);
     const extraAmount = roundCurrency(Math.max(newTotal - collectedAmount, 0));
-    const reducedAmount = roundCurrency(Math.max(collectedAmount - newTotal, 0));
+    const overpaidAmount = roundCurrency(Math.max(collectedAmount - newTotal, 0));
+    const actualReductionAmount = roundCurrency(Math.max(previousTotal - newTotal, 0));
+    const reducedAmount = roundCurrency(Math.min(actualReductionAmount, overpaidAmount));
     const quoteChangeType = newTotal > previousTotal
       ? 'increase'
       : newTotal < previousTotal
@@ -4203,6 +4268,34 @@ async function updateQuote(salesQuoteId, payload, user) {
       client_email: clientSnapshot.client_email,
       client_phone: clientSnapshot.client_phone,
       client_address: clientSnapshot.client_address,
+      location_latitude:
+        payload.location_latitude !== undefined ||
+        payload.location_longitude !== undefined ||
+        payload.latitude !== undefined ||
+        payload.longitude !== undefined ||
+        payload.lat !== undefined ||
+        payload.lng !== undefined ||
+        payload.client_address !== undefined ||
+        payload.location !== undefined
+          ? extractCoordinatesFromPayload(
+              payload,
+              payload.client_address !== undefined ? payload.client_address : clientSnapshot.client_address
+            ).latitude
+          : quote.location_latitude,
+      location_longitude:
+        payload.location_latitude !== undefined ||
+        payload.location_longitude !== undefined ||
+        payload.latitude !== undefined ||
+        payload.longitude !== undefined ||
+        payload.lat !== undefined ||
+        payload.lng !== undefined ||
+        payload.client_address !== undefined ||
+        payload.location !== undefined
+          ? extractCoordinatesFromPayload(
+              payload,
+              payload.client_address !== undefined ? payload.client_address : clientSnapshot.client_address
+            ).longitude
+          : quote.location_longitude,
       project_description: payload.project_description !== undefined ? payload.project_description : quote.project_description,
       video_shoot_type: payload.video_shoot_type !== undefined ? payload.video_shoot_type : quote.video_shoot_type,
       quote_validity_days: validity.quote_validity_days,
@@ -4375,24 +4468,6 @@ async function updateQuote(salesQuoteId, payload, user) {
     });
 
     const versionChangeReason = payload.edit_reason ? String(payload.edit_reason).trim() : 'Quote updated';
-    if (previousQuoteSnapshot.status === 'draft') {
-      await updateLatestQuoteVersionSnapshot({
-        transaction,
-        quoteRecord: quote,
-        userId: user.userId,
-        sourceActivityId: updatedActivity.activity_id,
-        changeReason: versionChangeReason
-      });
-    } else {
-      await createQuoteVersion({
-        transaction,
-        quoteRecord: quote,
-        userId: user.userId,
-        sourceActivityId: updatedActivity.activity_id,
-        changeReason: versionChangeReason
-      });
-    }
-
     const currentPaymentSummary = billingState.booking?.stream_project_booking_id
       ? await bookingPaymentSummaryService.getBookingPaymentSummary(
           billingState.booking.stream_project_booking_id,
@@ -4412,8 +4487,14 @@ async function updateQuote(salesQuoteId, payload, user) {
       quoteChangeType !== 'unchanged' &&
       (billingState.is_collected || hasPaymentSummary)
     );
+    const shouldCreateApprovalRequestVersion = Boolean(
+      billingState.booking?.stream_project_booking_id &&
+      (extraAmount > 0 || reducedAmount > 0) &&
+      billingState.is_collected
+    );
+    let approvalRequestActivity = null;
 
-    if (billingState.booking?.stream_project_booking_id && (extraAmount > 0 || reducedAmount > 0) && billingState.is_collected) {
+    if (shouldCreateApprovalRequestVersion) {
       const refreshActivity = await markQuoteInvoiceRefreshRequired({
         transaction,
         salesQuoteId,
@@ -4427,6 +4508,7 @@ async function updateQuote(salesQuoteId, payload, user) {
         paymentStatus,
         changeSummary
       });
+      approvalRequestActivity = refreshActivity;
 
       await bookingPaymentSummaryService.upsertBookingPaymentSummary({
         bookingId: billingState.booking.stream_project_booking_id,
@@ -4489,6 +4571,24 @@ async function updateQuote(salesQuoteId, payload, user) {
       });
     }
 
+    if (previousQuoteSnapshot.status === 'draft') {
+      await updateLatestQuoteVersionSnapshot({
+        transaction,
+        quoteRecord: quote,
+        userId: user.userId,
+        sourceActivityId: approvalRequestActivity?.activity_id || updatedActivity.activity_id,
+        changeReason: versionChangeReason
+      });
+    } else {
+      await createQuoteVersion({
+        transaction,
+        quoteRecord: quote,
+        userId: user.userId,
+        sourceActivityId: approvalRequestActivity?.activity_id || updatedActivity.activity_id,
+        changeReason: versionChangeReason
+      });
+    }
+
     await transaction.commit();
     return getQuoteById(salesQuoteId, user);
   } catch (error) {
@@ -4521,8 +4621,8 @@ async function convertQuoteToBooking(salesQuoteId, payload = {}, user) {
     full_name: quoteDetails.client_name || null,
     phone: quoteDetails.client_phone || null,
     location: quoteDetails.client_address || null,
-    location_latitude: null,
-    location_longitude: null,
+    location_latitude: quoteDetails.location_latitude ?? quoteDetails.latitude ?? null,
+    location_longitude: quoteDetails.location_longitude ?? quoteDetails.longitude ?? null,
     content_type: roleData.content_type,
     shoot_type: mapQuoteShootTypeToBookingShootType(quoteDetails.video_shoot_type),
     quote_shoot_type_label: quoteDetails.video_shoot_type || null,
@@ -4598,8 +4698,8 @@ async function buildPaymentBookingPrefillDataFromQuote(quoteDetails, payload = {
     full_name: quoteDetails.client_name || null,
     phone: quoteDetails.client_phone || null,
     location: quoteDetails.client_address || null,
-    location_latitude: null,
-    location_longitude: null,
+    location_latitude: quoteDetails.location_latitude ?? quoteDetails.latitude ?? null,
+    location_longitude: quoteDetails.location_longitude ?? quoteDetails.longitude ?? null,
     content_type: roleData.content_type,
     shoot_type: mapQuoteShootTypeToBookingShootType(quoteDetails.video_shoot_type),
     quote_shoot_type_label: quoteDetails.video_shoot_type || null,
@@ -4781,7 +4881,11 @@ async function fetchQuoteById(salesQuoteId, user = null) {
         is_current: true,
         is_fallback_current_version: true
       }];
-  plain.current_version_number = plain.quote_versions.reduce(
+  const usableQuoteVersions = plain.quote_versions.filter((item) => {
+    const approvalStatus = String(item.approval_status || '').trim().toLowerCase();
+    return !approvalStatus || approvalStatus === 'approved';
+  });
+  plain.current_version_number = (usableQuoteVersions.length ? usableQuoteVersions : plain.quote_versions).reduce(
     (maxVersion, item) => Math.max(maxVersion, Number(item.version_number || 0)),
     0
   );
@@ -4877,7 +4981,8 @@ async function getQuoteVersionByNumber(salesQuoteId, versionNumber, user) {
       version_number: parsedVersionNumber
     },
     include: [
-      { model: db.users, as: 'created_by', attributes: ['id', 'name', 'email'], required: false }
+      { model: db.users, as: 'created_by', attributes: ['id', 'name', 'email'], required: false },
+      { model: db.sales_quote_activities, as: 'source_activity', attributes: ['activity_id', 'metadata_json', 'created_at'], required: false }
     ]
   });
 
@@ -4928,8 +5033,59 @@ async function getQuoteVersionByNumber(salesQuoteId, versionNumber, user) {
     : normalizedVersionQuote;
 
   return {
-    version: buildQuoteVersionListItem(version, Number(version.version_number || 0)),
+    version: buildQuoteVersionListItem(version, currentVersion || Number(version.version_number || 0)),
     quote: versionQuoteWithPaymentContext
+  };
+}
+
+async function getCurrentUsableQuoteVersionSnapshot(salesQuoteId, user = null) {
+  const normalizedQuoteId = Number(salesQuoteId || 0);
+  if (!Number.isInteger(normalizedQuoteId) || normalizedQuoteId <= 0) {
+    return null;
+  }
+
+  const quote = await db.sales_quotes.findOne({
+    where: {
+      sales_quote_id: normalizedQuoteId,
+      ...(user ? buildQuoteAccessWhere(user) : {})
+    },
+    attributes: ['sales_quote_id', 'created_at', 'updated_at'],
+    raw: true
+  });
+
+  if (!quote) {
+    return null;
+  }
+
+  const versions = await db.sales_quote_versions.findAll({
+    where: { sales_quote_id: normalizedQuoteId },
+    include: [
+      { model: db.users, as: 'created_by', attributes: ['id', 'name', 'email'], required: false },
+      { model: db.sales_quote_activities, as: 'source_activity', attributes: ['activity_id', 'metadata_json', 'created_at'], required: false }
+    ],
+    order: [['version_number', 'DESC'], ['sales_quote_version_id', 'DESC']]
+  });
+
+  const usableVersion = versions.find((version) => isUsableQuoteVersion(version)) || null;
+  if (!usableVersion) {
+    return getQuoteById(normalizedQuoteId, user || null);
+  }
+
+  const normalizedSnapshot = await normalizeQuoteVersionSnapshotForResponse(
+    parseConfig(usableVersion.quote_snapshot_json) || {}
+  );
+  const versionMeta = buildQuoteVersionListItem(usableVersion, Number(usableVersion.version_number || 0));
+
+  return {
+    ...normalizedSnapshot,
+    sales_quote_id: normalizedQuoteId,
+    quote_id: normalizedQuoteId,
+    version_number: versionMeta.version_number,
+    version: versionMeta,
+    current_version_number: versionMeta.version_number,
+    quote_versions: versions.map((version) =>
+      buildQuoteVersionListItem(version, versionMeta.version_number)
+    )
   };
 }
 
@@ -4964,43 +5120,19 @@ async function createQuotePreviewLink(salesQuoteId, user) {
     throw new Error('Set quote valid date before generating preview link');
   }
 
-  const [existingRows] = await db.sequelize.query(
+  await db.sequelize.query(
     `
-      SELECT quote_key, expires_at
-      FROM sales_quote_preview_links
+      UPDATE sales_quote_preview_links
+      SET is_active = 0,
+          updated_at = NOW()
       WHERE sales_quote_id = :salesQuoteId
         AND is_active = 1
-      ORDER BY sales_quote_preview_link_id DESC
-      LIMIT 1
     `,
     {
       replacements: { salesQuoteId },
-      type: db.Sequelize.QueryTypes.SELECT
+      type: db.Sequelize.QueryTypes.UPDATE
     }
   );
-
-  if (existingRows?.quote_key) {
-    await db.sequelize.query(
-      `
-        UPDATE sales_quote_preview_links
-        SET expires_at = :expiresAt,
-            updated_at = NOW()
-        WHERE quote_key = :quoteKey
-      `,
-      {
-        replacements: {
-          quoteKey: existingRows.quote_key,
-          expiresAt
-        },
-        type: db.Sequelize.QueryTypes.UPDATE
-      }
-    );
-
-    return {
-      quote_key: existingRows.quote_key,
-      expires_at: expiresAt.toISOString()
-    };
-  }
 
   const quoteKey = crypto.randomBytes(32).toString('hex');
 
@@ -5042,6 +5174,7 @@ async function getPublicQuoteByKey(quoteKey) {
       SELECT
         l.sales_quote_id,
         l.expires_at,
+        l.created_at,
         q.valid_until
       FROM sales_quote_preview_links l
       INNER JOIN sales_quotes q ON q.sales_quote_id = l.sales_quote_id
@@ -5073,20 +5206,24 @@ async function getPublicQuoteByKey(quoteKey) {
       throw new Error('Quote preview link is invalid or expired');
     }
 
-    return legacyQuote;
+    return (await getCurrentUsableQuoteVersionSnapshot(Number(legacyQuoteId))) || legacyQuote;
   }
 
   const linkExpiresAt = linkRow.expires_at ? new Date(linkRow.expires_at) : null;
   const quoteValidUntilExpiry = getQuotePreviewExpiryFromValidUntil(linkRow.valid_until);
+  const linkCreatedAt = linkRow.created_at ? new Date(linkRow.created_at) : null;
+  const latestVersion = await getLatestQuoteVersionRecord(Number(linkRow.sales_quote_id));
+  const latestVersionCreatedAt = latestVersion?.created_at ? new Date(latestVersion.created_at) : null;
 
   if (
     (linkExpiresAt && now > linkExpiresAt) ||
-    (quoteValidUntilExpiry && now > quoteValidUntilExpiry)
+    (quoteValidUntilExpiry && now > quoteValidUntilExpiry) ||
+    (linkCreatedAt && latestVersionCreatedAt && linkCreatedAt < latestVersionCreatedAt)
   ) {
     throw new Error('Quote preview link is invalid or expired');
   }
 
-  return fetchQuoteById(Number(linkRow.sales_quote_id));
+  return getCurrentUsableQuoteVersionSnapshot(Number(linkRow.sales_quote_id));
 }
 
 function getLegacyQuotePreviewSecret() {
@@ -5137,7 +5274,11 @@ async function listQuotes(query, user) {
   const page = Math.max(1, Number(query.page || 1));
   const limit = Math.min(100, Math.max(1, Number(query.limit || 20)));
   const offset = (page - 1) * limit;
-  const where = { ...buildQuoteAccessWhere(user) };
+  // Quote listing is shared across admin/sales views where reps are expected
+  // to browse all quotes. Keep strict restriction only for client role.
+  const where = isClientRole(user?.role)
+    ? { ...buildQuoteAccessWhere(user) }
+    : {};
 
   const statusFilter = normalizeQuoteFilterStatus(query.status);
   if (statusFilter?.length) {
@@ -5296,7 +5437,11 @@ async function listQuotes(query, user) {
 async function getQuoteDashboard(query, user) {
   await expireQuotesPastValidUntil();
 
-  const where = { ...buildQuoteAccessWhere(user) };
+  // Match listQuotes access: dashboard is global for sales/admin views,
+  // while clients remain restricted to their own records.
+  const where = isClientRole(user?.role)
+    ? { ...buildQuoteAccessWhere(user) }
+    : {};
 
   const statusFilter = normalizeQuoteFilterStatus(query.status);
   if (statusFilter?.length) {
@@ -5798,6 +5943,7 @@ module.exports = {
   getQuoteById,
   listQuoteVersions,
   getQuoteVersionByNumber,
+  getCurrentUsableQuoteVersionSnapshot,
   getQuoteOverallChangeSummary,
   getPublicQuoteById,
   createQuotePreviewLink,

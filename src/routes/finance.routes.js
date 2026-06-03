@@ -23,6 +23,13 @@ const disputeUpload = multer({
 router.get('/transactions', authenticate, requireSalesRepOrAdmin, financeController.listTransactions);
 router.get('/shoots', authenticate, requireSalesRepOrAdmin, financeController.listShootBreakdowns);
 router.get('/shoots/:bookingId', authenticate, requireSalesRepOrAdmin, financeController.getShootFinance);
+router.get('/client/payments', authenticate, financeController.getClientPaymentManagement);
+router.get('/client/payments/:bookingId', authenticate, financeController.getClientPaymentDetails);
+router.get('/client/disputes', authenticate, financeController.listClientDisputes);
+router.post('/client/disputes', authenticate, disputeUpload.fields([{ name: 'attachment', maxCount: 5 }, { name: 'attachments', maxCount: 10 }, { name: 'file', maxCount: 5 }]), financeController.createClientDispute);
+router.get('/client/disputes/:disputeId', authenticate, financeController.getClientDisputeDetails);
+router.post('/client/disputes/:disputeId/comments', authenticate, financeController.addClientDisputeComment);
+router.post('/client/disputes/:disputeId/attachments', authenticate, disputeUpload.fields([{ name: 'attachment', maxCount: 5 }, { name: 'attachments', maxCount: 10 }, { name: 'file', maxCount: 5 }]), financeController.addClientDisputeAttachment);
 router.get('/admin/payouts-screen', authenticate, requireAdmin, financeController.getAdminPayoutsScreen);
 router.get('/admin/creator-wallet-overview', authenticate, requireAdmin, financeController.getAdminCreatorWalletOverview);
 router.get('/admin/disputes/dashboard', authenticate, requireAdmin, financeController.getAdminDisputesDashboard);
