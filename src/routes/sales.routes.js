@@ -38,6 +38,23 @@ const adminFinancesOrSalesRepresentativeView = requireAnyPermission([
   'admin_finances.view',
   'admin_sales_representative.view'
 ], allowSalesRepRoles);
+const adminQuotesView = requireAnyPermission(['admin_quotes.view'], allowSalesRepRoles);
+const adminQuotesCreate = requireAnyPermission(['admin_quotes.create'], allowSalesRepRoles);
+const adminQuotesEdit = requireAnyPermission(['admin_quotes.edit'], allowSalesRepRoles);
+const adminQuotesDelete = requireAnyPermission(['admin_quotes.delete'], allowSalesRepRoles);
+const adminQuotesOrSalesRepresentativeView = requireAnyPermission([
+  'admin_quotes.view',
+  'admin_sales_representative.view'
+], allowSalesRepRoles);
+const adminQuotesOrFinancesOrSalesRepresentativeView = requireAnyPermission([
+  'admin_quotes.view',
+  'admin_finances.view',
+  'admin_sales_representative.view'
+], allowSalesRepRoles);
+const adminQuotesOrInvoicesView = requireAnyPermission([
+  'admin_quotes.view',
+  'admin_invoices.view'
+], allowSalesRepRoles);
 
 /**
  * Sales Routes
@@ -96,7 +113,7 @@ router.get('/client-leads', authenticate, adminSalesRepresentativeView, salesLea
  * @desc    Get lead details by ID
  * @access  Sales Rep / Admin
  */
-router.get('/leads/:id', authenticate, adminSalesRepresentativeView, salesLeadsController.getLeadById);
+router.get('/leads/:id', authenticate, adminQuotesOrSalesRepresentativeView, salesLeadsController.getLeadById);
 router.get('/client-leads/:id', authenticate, adminSalesRepresentativeView, salesLeadsController.getClientLeadById);
 
 /**
@@ -318,8 +335,8 @@ router.get('/dashboard/sales-reps', authenticate, requireAdmin, salesDashboardCo
  * @access  Sales Rep / Admin
  */
 router.get('/dashboard/recent-activities', authenticate, requireSalesRepOrAdmin, salesDashboardController.getRecentActivities);
-router.get('/dashboard/invoice-history', authenticate, requireSalesRepOrAdmin, salesDashboardController.getInvoiceHistory);
-router.get('/dashboard/quote-change-requests', authenticate, requireAdmin, salesDashboardController.getQuoteChangeRequests);
+router.get('/dashboard/invoice-history', authenticate, adminQuotesOrInvoicesView, salesDashboardController.getInvoiceHistory);
+router.get('/dashboard/quote-change-requests', authenticate, adminQuotesView, salesDashboardController.getQuoteChangeRequests);
 router.post('/dashboard/quote-change-requests/approve', authenticate, requireAdmin, salesDashboardController.approveQuoteChangeRequest);
 router.post('/dashboard/quote-change-requests/reject', authenticate, requireAdmin, salesDashboardController.rejectQuoteChangeRequest);
 
@@ -335,10 +352,10 @@ router.get('/dashboard/funnel', authenticate, requireSalesRepOrAdmin, salesDashb
 // Quote Builder Routes
 // =====================================================
 
-router.get('/client-dropdown', authenticate, adminFinancesOrSalesRepresentativeView, salesQuotesController.getClientDropdown);
+router.get('/client-dropdown', authenticate, adminQuotesOrFinancesOrSalesRepresentativeView, salesQuotesController.getClientDropdown);
 router.post('/create-client', authenticate, requireSalesRepOrAdmin, salesQuotesController.createClient);
-router.get('/quotes/catalog', authenticate, requireSalesRepOrAdmin, salesQuotesController.getCatalog);
-router.get('/quotes/ai-editing-types', authenticate, requireSalesRepOrAdmin, salesQuotesController.getAiEditingTypes);
+router.get('/quotes/catalog', authenticate, adminQuotesView, salesQuotesController.getCatalog);
+router.get('/quotes/ai-editing-types', authenticate, adminQuotesView, salesQuotesController.getAiEditingTypes);
 router.post('/quotes/ai-editing-types', authenticate, requireSalesRepOrAdmin, salesQuotesController.createAiEditingType);
 router.put('/quotes/ai-editing-types/:aiEditingTypeId', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateAiEditingType);
 router.delete('/quotes/ai-editing-types/:aiEditingTypeId', authenticate, requireSalesRepOrAdmin, salesQuotesController.deleteAiEditingType);
@@ -346,31 +363,31 @@ router.get('/quotes/shoot-types/:content_type', authenticate, requireSalesRepOrA
 router.post('/quotes/shoot-types', authenticate, requireSalesRepOrAdmin, salesQuotesController.createShootType);
 router.put('/quotes/shoot-types/:shootTypeId', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateShootType);
 router.delete('/quotes/shoot-types/:shootTypeId', authenticate, requireSalesRepOrAdmin, salesQuotesController.deleteShootType);
-router.post('/quotes/catalog', authenticate, requireSalesRepOrAdmin, salesQuotesController.createCatalogItem);
-router.put('/quotes/catalog/:catalogItemId', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateCatalogItem);
-router.delete('/quotes/catalog/:catalogItemId', authenticate, requireSalesRepOrAdmin, salesQuotesController.deleteCatalogItem);
+router.post('/quotes/catalog', authenticate, adminQuotesCreate, salesQuotesController.createCatalogItem);
+router.put('/quotes/catalog/:catalogItemId', authenticate, adminQuotesEdit, salesQuotesController.updateCatalogItem);
+router.delete('/quotes/catalog/:catalogItemId', authenticate, adminQuotesDelete, salesQuotesController.deleteCatalogItem);
 
-router.get('/quotes/dashboard', authenticate, requireSalesRepOrAdmin, salesQuotesController.getQuoteDashboard);
-router.get('/quotes', authenticate, salesQuotesController.listQuotes);
+router.get('/quotes/dashboard', authenticate, adminQuotesView, salesQuotesController.getQuoteDashboard);
+router.get('/quotes', authenticate, adminQuotesView, salesQuotesController.listQuotes);
 router.get('/quotes/accept', salesQuotesController.acceptQuoteProposal);
 router.post('/quotes/accept', salesQuotesController.acceptQuoteProposal);
 router.get('/quotes/reject/:quoteId', authenticate, salesQuotesController.rejectQuoteProposal);
 router.get('/quotes/public/:quoteId', salesQuotesController.getPublicQuoteById);
 router.get('/quotes/public/by-key/:quoteKey', salesQuotesController.getPublicQuoteByKey);
 router.post('/quotes/public/:quoteId/convert-to-booking', salesQuotesController.convertPublicQuoteToBooking);
-router.get('/quotes/:quoteId/versions', authenticate, salesQuotesController.listQuoteVersions);
-router.get('/quotes/:quoteId/versions/:versionNumber', authenticate, salesQuotesController.getQuoteVersionByNumber);
-router.get('/quotes/:quoteId', authenticate, salesQuotesController.getQuoteById);
+router.get('/quotes/:quoteId/versions', authenticate, adminQuotesView, salesQuotesController.listQuoteVersions);
+router.get('/quotes/:quoteId/versions/:versionNumber', authenticate, adminQuotesView, salesQuotesController.getQuoteVersionByNumber);
+router.get('/quotes/:quoteId', authenticate, adminQuotesView, salesQuotesController.getQuoteById);
 router.get('/quotes/:quoteId/pdf', authenticate, salesQuotesController.downloadQuotePdf);
-router.post('/quotes', authenticate, requireSalesRepOrAdmin, salesQuotesController.createQuote);
-router.post('/quotes/:quoteId/duplicate', authenticate, requireSalesRepOrAdmin, salesQuotesController.duplicateQuote);
-router.put('/quotes/:quoteId', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateQuote);
+router.post('/quotes', authenticate, adminQuotesCreate, salesQuotesController.createQuote);
+router.post('/quotes/:quoteId/duplicate', authenticate, adminQuotesCreate, salesQuotesController.duplicateQuote);
+router.put('/quotes/:quoteId', authenticate, adminQuotesEdit, salesQuotesController.updateQuote);
 router.post('/quotes/:quoteId/convert-to-booking', authenticate, requireSalesRepOrAdmin, salesQuotesController.convertQuoteToBooking);
-router.post('/quotes/:quoteId/send', authenticate, requireSalesRepOrAdmin, salesQuotesController.sendQuoteProposal);
+router.post('/quotes/:quoteId/send', authenticate, adminQuotesEdit, salesQuotesController.sendQuoteProposal);
 router.post('/quotes/:quoteId/preview-link', authenticate, requireSalesRepOrAdmin, salesQuotesController.createQuotePreviewLink);
-router.post('/quotes/:quoteId/preview-invoice', authenticate, requireSalesRepOrAdmin, paymentLinksController.previewQuoteInvoice);
+router.post('/quotes/:quoteId/preview-invoice', authenticate, adminQuotesOrInvoicesView, paymentLinksController.previewQuoteInvoice);
 router.post('/quotes/:quoteId/send-invoice', authenticate, requireSalesRepOrAdmin, paymentLinksController.sendQuoteInvoice);
-router.patch('/quotes/:quoteId/status', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateQuoteStatus);
+router.patch('/quotes/:quoteId/status', authenticate, adminQuotesEdit, salesQuotesController.updateQuoteStatus);
 
 /**
  * @route   PATCH /api/bookings/:bookingId/crew
