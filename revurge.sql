@@ -1538,7 +1538,7 @@ CREATE TABLE IF NOT EXISTS finance_dispute_payout_holds (
 
 
 
--- 15-05-26
+-- 15-05-26  -- NOT RUN THIS SQL 
 
 ALTER TABLE payment_transactions
   DROP CONSTRAINT chk_hours_positive;

@@ -21,6 +21,9 @@ router.post('/file-view-url', authenticate, externalFileManagerController.getFil
 router.post('/file-download-url', authenticate, externalFileManagerController.getFileDownloadUrl);
 router.post('/folder-download-url', authenticate, externalFileManagerController.getFolderDownloadUrl);
 router.post('/delete', authenticate, externalFileManagerController.deleteEntry);
+router.post('/send-for-edits', authenticate, externalFileManagerController.sendForEdits);
+router.post('/approve-files', authenticate, externalFileManagerController.approveFiles);
+router.post('/approve-all-files', authenticate, externalFileManagerController.approveAllFiles);
 router.post('/share', authenticate, externalFileManagerController.createShare);
 router.get('/share', authenticate, externalFileManagerController.listShares);
 router.get('/share/access-logs', authenticate, externalFileManagerController.listShareAccessLogs);

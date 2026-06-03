@@ -3255,3 +3255,132 @@ exports.getSharedViewUrl = async (req, res) => {
     return res.status(statusCode).json({ success: false, message: error.message || 'Invalid or expired share access token' });
   }
 };
+
+
+exports.sendForEdits = async (req, res) => {
+  try {
+    const filePaths = Array.isArray(req.body.filePaths) ? req.body.filePaths : [];
+    const externalId = String(req.body.externalId || '').trim();
+
+    if (!filePaths.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'filePaths array is required and must not be empty',
+      });
+    }
+
+    if (!externalId) {
+      return res.status(400).json({
+        success: false,
+        message: 'externalId is required',
+      });
+    }
+
+    // Access check - ensure user has access to this workspace
+    await ensureCreatorWorkspaceAccess(req, externalId);
+
+    // Proxy to web-api-2
+    const result = await proxyRequest('/send-for-edits', {
+      method: 'POST',
+      body: JSON.stringify({
+        filePaths,
+        externalId,
+      }),
+    });
+
+    return res.status(200).json(result);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to send files for edits',
+    });
+  }
+};
+
+
+
+exports.approveFiles = async (req, res) => {
+  try {
+    const approvedFilePaths = Array.isArray(req.body.approvedFilePaths) ? req.body.approvedFilePaths : [];
+    const allFilePaths = Array.isArray(req.body.allFilePaths) ? req.body.allFilePaths : [];
+    const externalId = String(req.body.externalId || '').trim();
+
+    if (!approvedFilePaths.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'approvedFilePaths array is required and must not be empty',
+      });
+    }
+
+    if (!allFilePaths.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'allFilePaths array is required (all files in current revision)',
+      });
+    }
+
+    if (!externalId) {
+      return res.status(400).json({
+        success: false,
+        message: 'externalId is required',
+      });
+    }
+
+    await ensureCreatorWorkspaceAccess(req, externalId);
+
+    const result = await proxyRequest('/approve-files', {
+      method: 'POST',
+      body: JSON.stringify({
+        approvedFilePaths,
+        allFilePaths,
+        externalId,
+      }),
+    });
+
+    return res.status(200).json(result);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to approve files',
+    });
+  }
+};
+
+exports.approveAllFiles = async (req, res) => {
+  try {
+    const filePaths = Array.isArray(req.body.filePaths) ? req.body.filePaths : [];
+    const externalId = String(req.body.externalId || '').trim();
+
+    if (!filePaths.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'filePaths array is required and must not be empty',
+      });
+    }
+
+    if (!externalId) {
+      return res.status(400).json({
+        success: false,
+        message: 'externalId is required',
+      });
+    }
+
+    await ensureCreatorWorkspaceAccess(req, externalId);
+
+    const result = await proxyRequest('/approve-all-files', {
+      method: 'POST',
+      body: JSON.stringify({
+        filePaths,
+        externalId,
+      }),
+    });
+
+    return res.status(200).json(result);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to approve all files',
+    });
+  }
+};
+
