@@ -277,13 +277,61 @@ function buildQuoteVersionSnapshot(quoteRecord, lineItems = []) {
   };
 }
 
-function buildQuoteVersionListItem(version, highestVersionNumber = null) {
+function getQuoteVersionApprovalMetadata(version) {
   const plain = toPlainRecord(version) || {};
+  const sourceActivity = plain.source_activity || null;
+  const sourceMetadata = parseConfig(sourceActivity?.metadata_json) || {};
+  const snapshot = parseConfig(plain.quote_snapshot_json) || {};
+
+  return {
+    approval_status:
+      sourceMetadata.approval_status ||
+      snapshot.approval_status ||
+      null,
+    change_request_status:
+      sourceMetadata.approval_status ||
+      snapshot.change_request_status ||
+      null,
+    review_status:
+      sourceMetadata.approval_status ||
+      snapshot.review_status ||
+      null,
+    requested_at:
+      sourceMetadata.approval_requested_at ||
+      sourceActivity?.created_at ||
+      null,
+    reviewed_at:
+      sourceMetadata.reviewed_at ||
+      sourceMetadata.approved_at ||
+      sourceMetadata.rejected_at ||
+      null,
+    review_notes: sourceMetadata.review_notes || null,
+    source_activity_id: plain.source_activity_id || sourceActivity?.activity_id || null
+  };
+}
+
+function isRejectedQuoteVersion(version) {
+  const approvalMetadata = getQuoteVersionApprovalMetadata(version);
+  return ['rejected', 'declined', 'denied'].includes(
+    String(approvalMetadata.approval_status || '').trim().toLowerCase()
+  );
+}
+
+function buildQuoteVersionListItem(version, currentVersionNumber = null) {
+  const plain = toPlainRecord(version) || {};
+  const approvalMetadata = getQuoteVersionApprovalMetadata(version);
   return {
     sales_quote_version_id: plain.sales_quote_version_id || null,
     version_number: Number(plain.version_number || 0),
     version_label: `Quote Version ${plain.version_number || 0}`,
     change_reason: plain.change_reason || null,
+    source_activity_id: approvalMetadata.source_activity_id,
+    approval_status: approvalMetadata.approval_status,
+    change_request_status: approvalMetadata.change_request_status,
+    review_status: approvalMetadata.review_status,
+    approval_requested_at: approvalMetadata.requested_at,
+    reviewed_at: approvalMetadata.reviewed_at,
+    review_notes: approvalMetadata.review_notes,
     created_at: plain.created_at || null,
     created_by_user_id: plain.created_by_user_id || null,
     created_by: plain.created_by
@@ -293,7 +341,7 @@ function buildQuoteVersionListItem(version, highestVersionNumber = null) {
           email: plain.created_by.email
         }
       : null,
-    is_current: highestVersionNumber !== null ? Number(plain.version_number || 0) === Number(highestVersionNumber) : null
+    is_current: currentVersionNumber !== null ? Number(plain.version_number || 0) === Number(currentVersionNumber) : null
   };
 }
 
@@ -3547,17 +3595,19 @@ async function listQuoteVersionsById(salesQuoteId, transaction = null) {
   const rows = await db.sales_quote_versions.findAll({
     where: { sales_quote_id: salesQuoteId },
     include: [
-      { model: db.users, as: 'created_by', attributes: ['id', 'name', 'email'], required: false }
+      { model: db.users, as: 'created_by', attributes: ['id', 'name', 'email'], required: false },
+      { model: db.sales_quote_activities, as: 'source_activity', attributes: ['activity_id', 'metadata_json', 'created_at'], required: false }
     ],
     order: [['version_number', 'DESC'], ['sales_quote_version_id', 'DESC']],
     transaction
   });
 
-  const highestVersionNumber = rows.length
-    ? Math.max(...rows.map((row) => Number(row.version_number || 0)))
+  const usableRows = rows.filter((row) => !isRejectedQuoteVersion(row));
+  const currentVersionNumber = usableRows.length
+    ? Math.max(...usableRows.map((row) => Number(row.version_number || 0)))
     : null;
 
-  return rows.map((row) => buildQuoteVersionListItem(row, highestVersionNumber));
+  return rows.map((row) => buildQuoteVersionListItem(row, currentVersionNumber));
 }
 
 async function resolveQuoteBillingState(quote, transaction) {
@@ -4412,24 +4462,6 @@ async function updateQuote(salesQuoteId, payload, user) {
     });
 
     const versionChangeReason = payload.edit_reason ? String(payload.edit_reason).trim() : 'Quote updated';
-    if (previousQuoteSnapshot.status === 'draft') {
-      await updateLatestQuoteVersionSnapshot({
-        transaction,
-        quoteRecord: quote,
-        userId: user.userId,
-        sourceActivityId: updatedActivity.activity_id,
-        changeReason: versionChangeReason
-      });
-    } else {
-      await createQuoteVersion({
-        transaction,
-        quoteRecord: quote,
-        userId: user.userId,
-        sourceActivityId: updatedActivity.activity_id,
-        changeReason: versionChangeReason
-      });
-    }
-
     const currentPaymentSummary = billingState.booking?.stream_project_booking_id
       ? await bookingPaymentSummaryService.getBookingPaymentSummary(
           billingState.booking.stream_project_booking_id,
@@ -4449,8 +4481,14 @@ async function updateQuote(salesQuoteId, payload, user) {
       quoteChangeType !== 'unchanged' &&
       (billingState.is_collected || hasPaymentSummary)
     );
+    const shouldCreateApprovalRequestVersion = Boolean(
+      billingState.booking?.stream_project_booking_id &&
+      (extraAmount > 0 || reducedAmount > 0) &&
+      billingState.is_collected
+    );
+    let approvalRequestActivity = null;
 
-    if (billingState.booking?.stream_project_booking_id && (extraAmount > 0 || reducedAmount > 0) && billingState.is_collected) {
+    if (shouldCreateApprovalRequestVersion) {
       const refreshActivity = await markQuoteInvoiceRefreshRequired({
         transaction,
         salesQuoteId,
@@ -4464,6 +4502,7 @@ async function updateQuote(salesQuoteId, payload, user) {
         paymentStatus,
         changeSummary
       });
+      approvalRequestActivity = refreshActivity;
 
       await bookingPaymentSummaryService.upsertBookingPaymentSummary({
         bookingId: billingState.booking.stream_project_booking_id,
@@ -4523,6 +4562,24 @@ async function updateQuote(salesQuoteId, payload, user) {
         lastQuoteChangeAmount: summaryChangeAmount,
         lastQuoteChangeStatus: summaryChangeStatus,
         transaction
+      });
+    }
+
+    if (previousQuoteSnapshot.status === 'draft') {
+      await updateLatestQuoteVersionSnapshot({
+        transaction,
+        quoteRecord: quote,
+        userId: user.userId,
+        sourceActivityId: approvalRequestActivity?.activity_id || updatedActivity.activity_id,
+        changeReason: versionChangeReason
+      });
+    } else {
+      await createQuoteVersion({
+        transaction,
+        quoteRecord: quote,
+        userId: user.userId,
+        sourceActivityId: approvalRequestActivity?.activity_id || updatedActivity.activity_id,
+        changeReason: versionChangeReason
       });
     }
 
@@ -4818,7 +4875,10 @@ async function fetchQuoteById(salesQuoteId, user = null) {
         is_current: true,
         is_fallback_current_version: true
       }];
-  plain.current_version_number = plain.quote_versions.reduce(
+  const usableQuoteVersions = plain.quote_versions.filter(
+    (item) => String(item.approval_status || '').trim().toLowerCase() !== 'rejected'
+  );
+  plain.current_version_number = (usableQuoteVersions.length ? usableQuoteVersions : plain.quote_versions).reduce(
     (maxVersion, item) => Math.max(maxVersion, Number(item.version_number || 0)),
     0
   );
@@ -4914,7 +4974,8 @@ async function getQuoteVersionByNumber(salesQuoteId, versionNumber, user) {
       version_number: parsedVersionNumber
     },
     include: [
-      { model: db.users, as: 'created_by', attributes: ['id', 'name', 'email'], required: false }
+      { model: db.users, as: 'created_by', attributes: ['id', 'name', 'email'], required: false },
+      { model: db.sales_quote_activities, as: 'source_activity', attributes: ['activity_id', 'metadata_json', 'created_at'], required: false }
     ]
   });
 
@@ -4965,7 +5026,7 @@ async function getQuoteVersionByNumber(salesQuoteId, versionNumber, user) {
     : normalizedVersionQuote;
 
   return {
-    version: buildQuoteVersionListItem(version, Number(version.version_number || 0)),
+    version: buildQuoteVersionListItem(version, currentVersion || Number(version.version_number || 0)),
     quote: versionQuoteWithPaymentContext
   };
 }
