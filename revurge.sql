@@ -2270,3 +2270,35 @@ AND NOT EXISTS (
   WHERE rp.role_id = 6
     AND rp.permission_id = permissions.permission_id
 );
+
+TRUNCATE TABLE role_permissions;
+
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT 1, permission_id, 1
+FROM permissions
+WHERE module_key LIKE 'admin_%' AND is_active = 1;
+
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT 2, permission_id, 1
+FROM permissions
+WHERE module_key LIKE 'crew_%' AND is_active = 1;
+
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT 3, permission_id, 1
+FROM permissions
+WHERE module_key LIKE 'client_%' AND is_active = 1;
+
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT 5, permission_id, 1
+FROM permissions
+WHERE module_key LIKE 'sales_rep_%' AND is_active = 1;
+
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT 6, permission_id, 1
+FROM permissions
+WHERE module_key LIKE 'production_manager_%' AND is_active = 1;
+
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT 7, permission_id, 1
+FROM permissions
+WHERE module_key LIKE 'sales_admin_%' AND is_active = 1;
