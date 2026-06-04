@@ -7,8 +7,10 @@ const fileManagerView = requireAnyPermission([
   'admin_file_manager.view',
   'sales_rep_file_manager.view',
   'sales_admin_file_manager.view',
-  'crew_file_manager.view'
-], { allowRoles: ['sales_rep', 'sales_admin', 'creative'] });
+  'crew_file_manager.view',
+  'client_file_manager.view',
+  'client_find_yourself.view'
+], { allowRoles: ['sales_rep', 'sales_admin', 'creative', 'client'] });
 const fileManagerCreate = requireAnyPermission([
   'admin_file_manager.create',
   'sales_rep_file_manager.create',
@@ -28,8 +30,10 @@ const shootOrFileManagerView = requireAnyPermission([
   'sales_admin_file_manager.view',
   'sales_admin_meetings.view',
   'crew_request_shoots.view',
-  'crew_file_manager.view'
-], { allowRoles: ['sales_rep', 'sales_admin', 'creative'] });
+  'crew_file_manager.view',
+  'client_file_manager.view',
+  'client_find_yourself.view'
+], { allowRoles: ['sales_rep', 'sales_admin', 'creative', 'client'] });
 
 router.get('/workspaces', authenticate, fileManagerView, externalFileManagerController.listWorkspaces);
 router.get('/common-events', authenticate, fileManagerView, externalFileManagerController.listCommonEvents);

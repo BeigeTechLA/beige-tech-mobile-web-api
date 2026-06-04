@@ -4,7 +4,7 @@
 
 @TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3ODAzMjA2MDcsImV4cCI6MTc4MDkyNTQwN30.G6ZeGd64v9Y6cXAlOgIjKrYyGZVHSmgSD6S4SZ-_e7U
 
-@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI3MSwidXNlclJvbGUiOiJQcm9kdWN0aW9uIFRlYW0gTWFuYWdlciIsImlhdCI6MTc4MDQ4NDY0OSwiZXhwIjoxNzgxMDg5NDQ5fQ.iuOCK-rkIic0jKNUE29rIb66ts2l33KfME1kO_DD1-8
+@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI0NywidXNlclJvbGUiOiJDbGllbnQiLCJpYXQiOjE3ODA1NzQ4OTIsImV4cCI6MTc4MTE3OTY5Mn0.-0Vhr2JtETZSPCkXj4CZQR4GEkE35_ncbRQBeM2Hyz8
 
 @CP_TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI0MywidXNlclJvbGUiOiJDcmVhdGl2ZSIsImlhdCI6MTc4MDU3MTMxNSwiZXhwIjoxNzgxMTc2MTE1fQ.IRC7B6afO2oY9SMBqkeMRHMndJFhVkEBxIVq3to8PRo
 
@@ -166,12 +166,12 @@ Content-Type: application/json
 ###
 GET {{URL}}admin/get-projects?range=all HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN}}
+Authorization: {{TOKEN2}}
 
 ###
 GET {{URL}}admin/get-project/1193 HTTP/1.1
 Content-Type: application/json
-Authorization: {{SALES_ADMIN_TOKEN}}
+Authorization: {{TOKEN2}}
 
 ### update shoot schedule/location - single day
 PUT {{URL}}admin/shoots/update-date-location/1193 HTTP/1.1

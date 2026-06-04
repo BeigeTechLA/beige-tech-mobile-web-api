@@ -7,12 +7,14 @@ const meetingsView = requireAnyPermission([
   'admin_meetings.view',
   'sales_rep_meetings.view',
   'sales_admin_meetings.view',
-  'crew_meetings.view'
-], { allowRoles: ['sales_rep', 'sales_admin', 'creative'] });
+  'crew_meetings.view',
+  'client_meetings.view'
+], { allowRoles: ['sales_rep', 'sales_admin', 'creative', 'client'] });
 const meetingsCreate = requireAnyPermission([
   'admin_meetings.create',
-  'sales_admin_shoots.create'
-], { allowRoles: ['sales_admin'] });
+  'sales_admin_shoots.create',
+  'client_meetings.create'
+], { allowRoles: ['sales_admin', 'client'] });
 const meetingsEdit = requireAnyPermission([
   'admin_meetings.edit'
 ]);

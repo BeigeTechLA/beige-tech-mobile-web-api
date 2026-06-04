@@ -28,16 +28,19 @@ const projectDetailView = requireAnyPermission([
   'sales_admin_shoots.view',
   'sales_admin_meetings.view',
   'crew_request_shoots.view',
-  'crew_file_manager.view'
-], { allowRoles: ['sales_rep', 'sales_admin', 'creative'] });
+  'crew_file_manager.view',
+  'client_dashboard.view',
+  'client_meetings.view'
+], { allowRoles: ['sales_rep', 'sales_admin', 'creative', 'client'] });
 const projectListView = requireAnyPermission([
   'admin_dashboard.view',
   'admin_shoots.view',
   'admin_meetings.view',
   'admin_meetings.create',
   'sales_rep_shoots.view',
-  'sales_admin_shoots.view'
-], allowSalesRepRoles);
+  'sales_admin_shoots.view',
+  'client_meetings.view'
+], { allowRoles: ['sales_rep', 'sales_admin', 'client'] });
 const skillsView = requireAnyPermission([
   'admin_shoots.view',
   'admin_meetings.view',
