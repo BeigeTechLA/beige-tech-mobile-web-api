@@ -26,8 +26,10 @@ const projectDetailView = requireAnyPermission([
   'sales_rep_shoots.view',
   'sales_rep_meetings.view',
   'sales_admin_shoots.view',
-  'sales_admin_meetings.view'
-], allowSalesRepRoles);
+  'sales_admin_meetings.view',
+  'crew_request_shoots.view',
+  'crew_file_manager.view'
+], { allowRoles: ['sales_rep', 'sales_admin', 'creative'] });
 const projectListView = requireAnyPermission([
   'admin_dashboard.view',
   'admin_shoots.view',

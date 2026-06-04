@@ -6,8 +6,9 @@ const { requireAnyPermission } = require('../middleware/permission.middleware');
 const meetingsView = requireAnyPermission([
   'admin_meetings.view',
   'sales_rep_meetings.view',
-  'sales_admin_meetings.view'
-], { allowRoles: ['sales_rep', 'sales_admin'] });
+  'sales_admin_meetings.view',
+  'crew_meetings.view'
+], { allowRoles: ['sales_rep', 'sales_admin', 'creative'] });
 const meetingsCreate = requireAnyPermission([
   'admin_meetings.create',
   'sales_admin_shoots.create'
@@ -24,8 +25,9 @@ const shootMeetingsView = requireAnyPermission([
   'sales_rep_shoots.view',
   'sales_rep_meetings.view',
   'sales_admin_shoots.view',
-  'sales_admin_meetings.view'
-], { allowRoles: ['sales_rep', 'sales_admin'] });
+  'sales_admin_meetings.view',
+  'crew_request_shoots.view'
+], { allowRoles: ['sales_rep', 'sales_admin', 'creative'] });
 const shootMeetingsCreate = requireAnyPermission([
   'admin_shoots.edit',
   'admin_meetings.create'

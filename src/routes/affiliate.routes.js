@@ -2,6 +2,9 @@ const express = require('express');
 const router = express.Router();
 const affiliateController = require('../controllers/affiliate.controller');
 const { authenticate } = require('../middleware/auth.middleware');
+const { requireAnyPermission } = require('../middleware/permission.middleware');
+
+const crewAffiliateView = requireAnyPermission(['crew_affiliate.view'], { allowRoles: ['creative'] });
 
 /**
  * Affiliate Routes
@@ -35,7 +38,7 @@ router.get('/me', authenticate, affiliateController.getMyAffiliate);
  * @desc    Get affiliate dashboard stats
  * @access  Private (requires authentication)
  */
-router.get('/dashboard', authenticate, affiliateController.getDashboardStats);
+router.get('/dashboard', authenticate, crewAffiliateView, affiliateController.getDashboardStats);
 
 /**
  * @route   PUT /api/affiliates/payout-details
@@ -50,7 +53,7 @@ router.put('/payout-details', authenticate, affiliateController.updatePayoutDeta
  * @query   page, limit, status
  * @access  Private (requires authentication)
  */
-router.get('/referrals', authenticate, affiliateController.getReferralHistory);
+router.get('/referrals', authenticate, crewAffiliateView, affiliateController.getReferralHistory);
 
 // ============================================================================
 // ADMIN ENDPOINTS

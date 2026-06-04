@@ -18,8 +18,10 @@ const shootMessagesView = requireAnyPermission([
   'admin_shoots.view',
   'admin_messages.view',
   'sales_rep_messages.view',
-  'sales_admin_messages.view'
-], { allowRoles: ['sales_rep', 'sales_admin'] });
+  'sales_admin_messages.view',
+  'crew_request_shoots.view',
+  'crew_messages.view'
+], { allowRoles: ['sales_rep', 'sales_admin', 'creative'] });
 const directoryView = requireAnyPermission([
   'admin_shoots.view',
   'admin_messages.view',
