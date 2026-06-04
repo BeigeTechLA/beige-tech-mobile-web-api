@@ -1286,7 +1286,7 @@ Authorization: {{TOKEN}}
 ### list sales quotes
 GET {{URL}}sales/quotes HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN}}
+Authorization: {{TOKEN2}}
 
 ### list sales quotes by sales rep
 GET {{URL}}sales/quotes?assigned_sales_rep_id=180 HTTP/1.1

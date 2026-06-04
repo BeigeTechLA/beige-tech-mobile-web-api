@@ -21,7 +21,8 @@ const shootMessagesView = requireAnyPermission([
   'sales_admin_messages.view',
   'crew_request_shoots.view',
   'crew_messages.view',
-  'client_messages.view'
+  'client_messages.view',
+  'client_shoots.view'
 ], { allowRoles: ['sales_rep', 'sales_admin', 'creative', 'client'] });
 const directoryView = requireAnyPermission([
   'admin_shoots.view',
@@ -31,7 +32,8 @@ const directoryView = requireAnyPermission([
   'admin_meetings.edit',
   'sales_rep_messages.view',
   'sales_admin_messages.view',
-  'client_meetings.view'
+  'client_meetings.view',
+  'client_shoots.view'
 ], { allowRoles: ['sales_rep', 'sales_admin', 'client'] });
 const shootMessagesCreate = requireAnyPermission([
   'admin_shoots.edit',

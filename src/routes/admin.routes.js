@@ -30,6 +30,7 @@ const projectDetailView = requireAnyPermission([
   'crew_request_shoots.view',
   'crew_file_manager.view',
   'client_dashboard.view',
+  'client_shoots.view',
   'client_meetings.view'
 ], { allowRoles: ['sales_rep', 'sales_admin', 'creative', 'client'] });
 const projectListView = requireAnyPermission([
@@ -39,7 +40,14 @@ const projectListView = requireAnyPermission([
   'admin_meetings.create',
   'sales_rep_shoots.view',
   'sales_admin_shoots.view',
+  'client_shoots.view',
   'client_meetings.view'
+], { allowRoles: ['sales_rep', 'sales_admin', 'client'] });
+const projectFormView = requireAnyPermission([
+  'admin_shoots.view',
+  'sales_rep_shoots.view',
+  'sales_admin_shoots.view',
+  'client_shoots.view'
 ], { allowRoles: ['sales_rep', 'sales_admin', 'client'] });
 const skillsView = requireAnyPermission([
   'admin_shoots.view',
@@ -78,8 +86,9 @@ const adminSalesRepresentativeAvailabilityView = requireAnyPermission([
   'sales_rep_meetings.view',
   'sales_admin_dashboard.view',
   'sales_admin_shoots.view',
-  'sales_admin_meetings.view'
-], allowSalesRepRoles);
+  'sales_admin_meetings.view',
+  'client_shoots.view'
+], { allowRoles: ['sales_rep', 'sales_admin', 'client'] });
 const adminUsersView = requireAnyPermission(['admin_users.view']);
 const adminUsersEdit = requireAnyPermission(['admin_users.edit']);
 const adminUsersDelete = requireAnyPermission(['admin_users.delete']);
@@ -181,7 +190,7 @@ router.post('/get-project-fullfillment-stats/:project_id', authMiddleware, shoot
 router.get('/get-crew-for-shoot', authMiddleware, shootsViewOrEdit, admin.searchCrewForProject);
 router.post('/assign-crew-from-shoot', authMiddleware, shootsEdit, admin.assignProjectCrewBulk);
 router.post('/remove-project-crew',authMiddleware, admin.removeProjectAssignedCrew);
-router.get('/get-project-form/:project_id',authMiddleware, admin.getProjectFormByProjectId);
+router.get('/get-project-form/:project_id', authMiddleware, projectFormView, admin.getProjectFormByProjectId);
 router.post('/shoots/remind-onboarding-form/:project_id', authMiddleware, admin.sendOnboardingFormReminder);
 router.post('/get-assigned-project-crew', admin.getAllAssignedRequests);
 router.post('/crew-member-assigned-projects', authMiddleware, adminSalesRepresentativeView, admin.getAllAssignedRequests);

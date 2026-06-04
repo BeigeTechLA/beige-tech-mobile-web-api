@@ -10,6 +10,7 @@ const { authenticate, requireSalesRepOrAdmin, requireSalesRep, requireAdmin } = 
 const { requireAnyPermission } = require('../middleware/permission.middleware');
 
 const allowSalesRepRoles = { allowRoles: ['sales_rep', 'sales_admin'] };
+const allowSalesRepAndClientRoles = { allowRoles: ['sales_rep', 'sales_admin', 'client'] };
 const dashboardOrSalesView = requireAnyPermission([
   'admin_dashboard.view',
   'admin_sales_representative.view',
@@ -78,8 +79,9 @@ const adminFinancesOrSalesRepresentativeView = requireAnyPermission([
 const adminQuotesView = requireAnyPermission([
   'admin_quotes.view',
   'sales_rep_quotes.view',
-  'sales_admin_quotes.view'
-], allowSalesRepRoles);
+  'sales_admin_quotes.view',
+  'client_quotes.view'
+], allowSalesRepAndClientRoles);
 const adminQuotesCreate = requireAnyPermission([
   'admin_quotes.create',
   'sales_rep_quotes.create',
