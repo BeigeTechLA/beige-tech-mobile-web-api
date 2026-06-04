@@ -1307,15 +1307,31 @@ exports.assignCrew = async (req, res) => {
 
     const uniqueCrewIds = [...new Set(crewIds.map(Number).filter(Boolean))];
 
-    for (const crewId of uniqueCrewIds) {
-      await assigned_crew.create({
-        project_id,
-        crew_member_id: crewId,
-        assigned_date: new Date(),
-        status: 'assigned',
-        is_active: 1,
-      });
-    }
+  for (const crewId of uniqueCrewIds) {
+  await assigned_crew.create({
+    project_id,
+    crew_member_id: crewId,
+    assigned_date: new Date(),
+    status: 'assigned',
+    is_active: 1,
+  });
+
+  const existingEarning = await db.creator_earnings.findOne({
+    where: { booking_id: project_id, creator_id: crewId }
+  });
+
+  if (!existingEarning) {
+    await db.creator_earnings.create({
+      booking_id: project_id,
+      creator_id: crewId,
+      gross_amount: 0,
+      net_earning_amount: 0,
+      status: 'pending',
+      created_at: new Date(),
+      updated_at: new Date()
+    });
+  }
+}
 
     // Non-blocking email trigger
     try {
