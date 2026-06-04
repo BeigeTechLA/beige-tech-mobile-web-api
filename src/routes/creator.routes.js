@@ -8,11 +8,15 @@ const { checkCreatorVerification } = require('../middleware/creatorVerification'
 const { authenticate } = require('../middleware/auth.middleware');
 const { requireAnyPermission } = require('../middleware/permission.middleware');
 
-const adminSalesRepresentativeView = requireAnyPermission(['admin_sales_representative.view']);
+const adminSalesRepresentativeView = requireAnyPermission([
+  'admin_sales_representative.view',
+  'sales_admin_dashboard.view'
+], { allowRoles: ['sales_admin'] });
 const adminSalesRepresentativeAvailabilityView = requireAnyPermission([
   'admin_sales_representative.view',
-  'admin_availability.view'
-]);
+  'admin_availability.view',
+  'sales_admin_dashboard.view'
+], { allowRoles: ['sales_admin'] });
 
 // router.use(checkCreatorVerification);
 

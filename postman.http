@@ -10,6 +10,8 @@
 
 @SALES_TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjIzNiwidXNlclJvbGUiOiJzYWxlc19yZXAiLCJpYXQiOjE3ODA0ODY5NDEsImV4cCI6MTc4MTA5MTc0MX0.nFGQNfD9fbWuVdfJeP2yEVXeTXb5uaigBGMXmFqBRAk
 
+@SALES_ADMIN_TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI3NCwidXNlclJvbGUiOiJzYWxlc19hZG1pbiIsImlhdCI6MTc4MDU1OTE3MywiZXhwIjoxNzgxMTYzOTczfQ.v8ESD5JII6eYhrWlhHapSNH93KHWTf9XlHNgB5ads1g
+
 ###
 POST {{URL}}creator/dashboard-count HTTP/1.1
 Content-Type: application/json
@@ -42,8 +44,8 @@ POST {{URL}}auth/login HTTP/1.1
 Content-Type: application/json
 
 {
-  "email": "prod@beigecorporation.io",
-  "password": "Prod@2026!"
+  "email": "salesadmin@gmail.com",
+  "password": "password123"
 }
 
 ###
@@ -144,7 +146,7 @@ Content-Type: application/json
 ###
 GET {{URL}}admin/skills HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN2}}
+Authorization: {{SALES_ADMIN_TOKEN}}
 
 ###
 GET {{URL}}admin/certifications HTTP/1.1
@@ -293,7 +295,7 @@ Authorization: {{TOKEN}}
 ###
 POST {{URL}}admin/crew-member-assigned-projects HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN}}
+Authorization: {{SALES_TOKEN}}
 
 {
   "crew_member_id": "2010"
@@ -1815,14 +1817,14 @@ Authorization: {{TOKEN2}}
 
 ###
 # Sales Rep Register
-POST https://staging.beige.app/v1/auth/register-sales-admin HTTP/1.1
+POST {{URL}}auth/register-sales-admin HTTP/1.1
 Content-Type: application/json
 
 {
   "name": "Sales Admin",
-  "email": "sales.admin.stage@gmail.com",
-  "phone_number": "5551826801",
-  "password": "SalesA@2026!"
+  "email": "salesadmin@gmail.com",
+  "phone_number": "7133867787",
+  "password": "password123"
 }
 
 ### Register Crew Member Step 3

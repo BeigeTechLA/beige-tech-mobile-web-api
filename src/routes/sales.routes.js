@@ -14,12 +14,18 @@ const dashboardOrSalesView = requireAnyPermission([
   'admin_dashboard.view',
   'admin_sales_representative.view',
   'sales_rep_sales.view',
-  'sales_rep_file_manager.view'
+  'sales_rep_file_manager.view',
+  'sales_admin_dashboard.view'
 ], allowSalesRepRoles);
 const shootOrSalesView = requireAnyPermission([
   'admin_shoots.view',
   'admin_sales_representative.view',
-  'sales_rep_sales.view'
+  'sales_rep_sales.view',
+  'sales_admin_dashboard.view',
+  'sales_admin_sales_people.view'
+], allowSalesRepRoles);
+const salesAdminSalesPeopleView = requireAnyPermission([
+  'sales_admin_sales_people.view'
 ], allowSalesRepRoles);
 const shootsEditOrSalesEdit = requireAnyPermission([
   'admin_shoots.edit',
@@ -33,19 +39,26 @@ const shootOrInvoiceView = requireAnyPermission([
 const salesRepSalesView = requireAnyPermission(['sales_rep_sales.view'], allowSalesRepRoles);
 const salesRepSalesEdit = requireAnyPermission(['sales_rep_sales.edit'], allowSalesRepRoles);
 const salesRepSalesCreate = requireAnyPermission(['sales_rep_sales.create'], allowSalesRepRoles);
+const salesRepOrSalesAdminDashboardCreate = requireAnyPermission([
+  'sales_rep_sales.create',
+  'sales_admin_dashboard.create'
+], allowSalesRepRoles);
 const salesRepAvailabilityView = requireAnyPermission(['sales_rep_availability.view'], allowSalesRepRoles);
 const salesRepAvailabilityCreate = requireAnyPermission(['sales_rep_availability.create'], allowSalesRepRoles);
 const adminSalesRepresentativeView = requireAnyPermission([
   'admin_sales_representative.view',
-  'sales_rep_sales.view'
+  'sales_rep_sales.view',
+  'sales_admin_dashboard.view'
 ], allowSalesRepRoles);
 const adminSalesRepresentativeCreate = requireAnyPermission([
   'admin_sales_representative.create',
-  'sales_rep_sales.create'
+  'sales_rep_sales.create',
+  'sales_admin_dashboard.create'
 ], allowSalesRepRoles);
 const adminSalesRepresentativeEdit = requireAnyPermission([
   'admin_sales_representative.edit',
-  'sales_rep_sales.edit'
+  'sales_rep_sales.edit',
+  'sales_admin_dashboard.edit'
 ], allowSalesRepRoles);
 const adminSalesRepresentativeDelete = requireAnyPermission(['admin_sales_representative.delete']);
 const adminSalesRepresentativeInvoiceView = requireAnyPermission([
@@ -79,14 +92,16 @@ const adminQuotesOrSalesRepresentativeView = requireAnyPermission([
   'admin_quotes.view',
   'sales_rep_quotes.view',
   'admin_sales_representative.view',
-  'sales_rep_sales.view'
+  'sales_rep_sales.view',
+  'sales_admin_dashboard.view'
 ], allowSalesRepRoles);
 const adminQuotesOrFinancesOrSalesRepresentativeView = requireAnyPermission([
   'admin_quotes.view',
   'sales_rep_quotes.view',
   'admin_finances.view',
   'admin_sales_representative.view',
-  'sales_rep_sales.view'
+  'sales_rep_sales.view',
+  'sales_admin_dashboard.view'
 ], allowSalesRepRoles);
 const adminQuotesOrInvoicesView = requireAnyPermission([
   'admin_quotes.view',
@@ -97,13 +112,15 @@ const quoteOrSalesPaymentCreate = requireAnyPermission([
   'admin_quotes.create',
   'sales_rep_quotes.create',
   'admin_sales_representative.create',
-  'sales_rep_sales.create'
+  'sales_rep_sales.create',
+  'sales_admin_dashboard.create'
 ], allowSalesRepRoles);
 const quoteOrSalesPaymentEdit = requireAnyPermission([
   'admin_quotes.edit',
   'sales_rep_quotes.edit',
   'admin_sales_representative.edit',
-  'sales_rep_sales.edit'
+  'sales_rep_sales.edit',
+  'sales_admin_dashboard.edit'
 ], allowSalesRepRoles);
 
 /**
@@ -195,7 +212,7 @@ router.post('/add-availability', authenticate, salesRepAvailabilityCreate, sales
 router.get('/current-status', authenticate, salesRepSalesView, salesAvailabilityController.getSalesRepCurrentStatus);
 router.post('/toggle-status', authenticate, salesRepSalesEdit, salesAvailabilityController.toggleSalesRepCurrentStatus);
 router.get('/all-statuses', authenticate, requireSalesRepOrAdmin, salesAvailabilityController.getAllSalesRepStatuses);
-router.get('/status-details', authenticate, requireSalesRepOrAdmin, salesAvailabilityController.getSalesRepStatusDetails);
+router.get('/status-details', authenticate, salesAdminSalesPeopleView, salesAvailabilityController.getSalesRepStatusDetails);
 router.post(
   '/leads/:id/post-production-status-update',
   authenticate,
@@ -458,7 +475,7 @@ router.put('/client/:id/booking', authenticate, salesLeadsController.finalizeGue
 router.put('/leads/:id/booking-schedule', authenticate, adminSalesRepresentativeEdit, salesLeadsController.updateLeadBookingSchedule);
 router.put('/client-leads/:id/booking', authenticate, requireSalesRepOrAdmin, salesLeadsController.finalizeClientLeadBooking);
 router.put('/client-leads/:id/booking-schedule', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateClientLeadBookingSchedule);
-router.post('/deals/finalize', authenticate, salesRepSalesCreate, salesLeadsController.finalizeCreateDeal);
+router.post('/deals/finalize', authenticate, salesRepOrSalesAdminDashboardCreate, salesLeadsController.finalizeCreateDeal);
 router.get('/sales-reps', authenticate, shootOrSalesView, salesDashboardController.getSalesRepsList);
 
 module.exports = router;

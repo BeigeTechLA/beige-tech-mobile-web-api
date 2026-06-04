@@ -2148,3 +2148,46 @@ SELECT
 FROM permissions
 WHERE module_key LIKE 'client_%'
   AND is_active = 1;
+
+-- 04-06-26
+
+INSERT INTO permissions (module_key, action_key, permission_key, role_id, is_active) VALUES
+('sales_admin_dashboard', 'view', 'sales_admin_dashboard.view', NULL, 1),
+('sales_admin_dashboard', 'create', 'sales_admin_dashboard.create', NULL, 1),
+('sales_admin_dashboard', 'edit', 'sales_admin_dashboard.edit', NULL, 1),
+('sales_admin_dashboard', 'delete', 'sales_admin_dashboard.delete', NULL, 1),
+
+('sales_admin_sales_people', 'view', 'sales_admin_sales_people.view', NULL, 1),
+('sales_admin_sales_people', 'create', 'sales_admin_sales_people.create', NULL, 1),
+('sales_admin_sales_people', 'edit', 'sales_admin_sales_people.edit', NULL, 1),
+('sales_admin_sales_people', 'delete', 'sales_admin_sales_people.delete', NULL, 1),
+
+('sales_admin_shoots', 'view', 'sales_admin_shoots.view', NULL, 1),
+('sales_admin_shoots', 'create', 'sales_admin_shoots.create', NULL, 1),
+('sales_admin_shoots', 'edit', 'sales_admin_shoots.edit', NULL, 1),
+('sales_admin_shoots', 'delete', 'sales_admin_shoots.delete', NULL, 1),
+
+('sales_admin_file_manager', 'view', 'sales_admin_file_manager.view', NULL, 1),
+('sales_admin_file_manager', 'create', 'sales_admin_file_manager.create', NULL, 1),
+('sales_admin_file_manager', 'edit', 'sales_admin_file_manager.edit', NULL, 1),
+('sales_admin_file_manager', 'delete', 'sales_admin_file_manager.delete', NULL, 1),
+
+('sales_admin_meetings', 'view', 'sales_admin_meetings.view', NULL, 1),
+('sales_admin_meetings', 'create', 'sales_admin_meetings.create', NULL, 1),
+('sales_admin_meetings', 'edit', 'sales_admin_meetings.edit', NULL, 1),
+('sales_admin_meetings', 'delete', 'sales_admin_meetings.delete', NULL, 1),
+
+('sales_admin_messages', 'view', 'sales_admin_messages.view', NULL, 1),
+('sales_admin_messages', 'create', 'sales_admin_messages.create', NULL, 1),
+('sales_admin_messages', 'edit', 'sales_admin_messages.edit', NULL, 1),
+('sales_admin_messages', 'delete', 'sales_admin_messages.delete', NULL, 1),
+
+('sales_admin_quotes', 'view', 'sales_admin_quotes.view', NULL, 1),
+('sales_admin_quotes', 'create', 'sales_admin_quotes.create', NULL, 1),
+('sales_admin_quotes', 'edit', 'sales_admin_quotes.edit', NULL, 1),
+('sales_admin_quotes', 'delete', 'sales_admin_quotes.delete', NULL, 1),
+
+('sales_admin_invoices', 'view', 'sales_admin_invoices.view', NULL, 1),
+('sales_admin_invoices', 'create', 'sales_admin_invoices.create', NULL, 1),
+('sales_admin_invoices', 'edit', 'sales_admin_invoices.edit', NULL, 1),
+('sales_admin_invoices', 'delete', 'sales_admin_invoices.delete', NULL, 1);

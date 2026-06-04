@@ -44,9 +44,18 @@ const crewAvailabilityView = requireAnyPermission([
   'admin_shoots.view',
   'admin_shoots.edit'
 ]);
-const adminSalesRepresentativeView = requireAnyPermission(['admin_sales_representative.view']);
-const adminSalesRepresentativeEdit = requireAnyPermission(['admin_sales_representative.edit']);
-const salesRepSalesView = requireAnyPermission(['sales_rep_sales.view'], {
+const adminSalesRepresentativeView = requireAnyPermission([
+  'admin_sales_representative.view',
+  'sales_admin_dashboard.view'
+], { allowRoles: ['sales_admin'] });
+const adminSalesRepresentativeEdit = requireAnyPermission([
+  'admin_sales_representative.edit',
+  'sales_admin_dashboard.edit'
+], { allowRoles: ['sales_admin'] });
+const salesRepSalesView = requireAnyPermission([
+  'sales_rep_sales.view',
+  'sales_admin_dashboard.view'
+], {
   allowRoles: ['sales_rep', 'sales_admin']
 });
 const adminSalesRepresentativeAvailabilityView = requireAnyPermission([
@@ -56,7 +65,8 @@ const adminSalesRepresentativeAvailabilityView = requireAnyPermission([
   'admin_shoots.edit',
   'admin_meetings.view',
   'sales_rep_shoots.view',
-  'sales_rep_meetings.view'
+  'sales_rep_meetings.view',
+  'sales_admin_dashboard.view'
 ], allowSalesRepRoles);
 const adminUsersView = requireAnyPermission(['admin_users.view']);
 const adminUsersEdit = requireAnyPermission(['admin_users.edit']);
@@ -67,7 +77,8 @@ const adminUsersOrSalesRepresentativeView = requireAnyPermission([
 ]);
 const adminSalesRepresentativeOrSalesRepSalesView = requireAnyPermission([
   'admin_sales_representative.view',
-  'sales_rep_sales.view'
+  'sales_rep_sales.view',
+  'sales_admin_dashboard.view'
 ], {
   allowRoles: ['sales_rep', 'sales_admin']
 });
