@@ -77,23 +77,28 @@ const adminFinancesOrSalesRepresentativeView = requireAnyPermission([
 ], allowSalesRepRoles);
 const adminQuotesView = requireAnyPermission([
   'admin_quotes.view',
-  'sales_rep_quotes.view'
+  'sales_rep_quotes.view',
+  'sales_admin_quotes.view'
 ], allowSalesRepRoles);
 const adminQuotesCreate = requireAnyPermission([
   'admin_quotes.create',
-  'sales_rep_quotes.create'
+  'sales_rep_quotes.create',
+  'sales_admin_quotes.create'
 ], allowSalesRepRoles);
 const adminQuotesEdit = requireAnyPermission([
   'admin_quotes.edit',
-  'sales_rep_quotes.edit'
+  'sales_rep_quotes.edit',
+  'sales_admin_quotes.edit'
 ], allowSalesRepRoles);
 const adminQuotesDelete = requireAnyPermission([
   'admin_quotes.delete',
-  'sales_rep_quotes.delete'
+  'sales_rep_quotes.delete',
+  'sales_admin_quotes.delete'
 ], allowSalesRepRoles);
 const adminQuotesOrSalesRepresentativeView = requireAnyPermission([
   'admin_quotes.view',
   'sales_rep_quotes.view',
+  'sales_admin_quotes.view',
   'admin_sales_representative.view',
   'sales_rep_sales.view',
   'sales_admin_dashboard.view'
@@ -101,6 +106,7 @@ const adminQuotesOrSalesRepresentativeView = requireAnyPermission([
 const adminQuotesOrFinancesOrSalesRepresentativeView = requireAnyPermission([
   'admin_quotes.view',
   'sales_rep_quotes.view',
+  'sales_admin_quotes.view',
   'admin_finances.view',
   'admin_sales_representative.view',
   'sales_rep_sales.view',
@@ -109,11 +115,14 @@ const adminQuotesOrFinancesOrSalesRepresentativeView = requireAnyPermission([
 const adminQuotesOrInvoicesView = requireAnyPermission([
   'admin_quotes.view',
   'sales_rep_quotes.view',
-  'admin_invoices.view'
+  'sales_admin_quotes.view',
+  'admin_invoices.view',
+  'sales_admin_invoices.view'
 ], allowSalesRepRoles);
 const quoteOrSalesPaymentCreate = requireAnyPermission([
   'admin_quotes.create',
   'sales_rep_quotes.create',
+  'sales_admin_quotes.create',
   'admin_sales_representative.create',
   'sales_rep_sales.create',
   'sales_admin_dashboard.create'
@@ -121,6 +130,7 @@ const quoteOrSalesPaymentCreate = requireAnyPermission([
 const quoteOrSalesPaymentEdit = requireAnyPermission([
   'admin_quotes.edit',
   'sales_rep_quotes.edit',
+  'sales_admin_quotes.edit',
   'admin_sales_representative.edit',
   'sales_rep_sales.edit',
   'sales_admin_dashboard.edit'
@@ -454,7 +464,7 @@ router.post('/quotes/:quoteId/duplicate', authenticate, adminQuotesCreate, sales
 router.put('/quotes/:quoteId', authenticate, adminQuotesEdit, salesQuotesController.updateQuote);
 router.post('/quotes/:quoteId/convert-to-booking', authenticate, requireSalesRepOrAdmin, salesQuotesController.convertQuoteToBooking);
 router.post('/quotes/:quoteId/send', authenticate, adminQuotesEdit, salesQuotesController.sendQuoteProposal);
-router.post('/quotes/:quoteId/preview-link', authenticate, requireSalesRepOrAdmin, salesQuotesController.createQuotePreviewLink);
+router.post('/quotes/:quoteId/preview-link', authenticate, adminQuotesEdit, salesQuotesController.createQuotePreviewLink);
 router.post('/quotes/:quoteId/preview-invoice', authenticate, adminQuotesOrInvoicesView, paymentLinksController.previewQuoteInvoice);
 router.post('/quotes/:quoteId/send-invoice', authenticate, adminQuotesEdit, paymentLinksController.sendQuoteInvoice);
 router.patch('/quotes/:quoteId/status', authenticate, adminQuotesEdit, salesQuotesController.updateQuoteStatus);
