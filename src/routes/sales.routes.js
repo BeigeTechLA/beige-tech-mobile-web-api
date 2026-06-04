@@ -59,24 +59,51 @@ const adminFinancesOrSalesRepresentativeView = requireAnyPermission([
   'admin_sales_representative.view',
   'sales_rep_sales.view'
 ], allowSalesRepRoles);
-const adminQuotesView = requireAnyPermission(['admin_quotes.view'], allowSalesRepRoles);
-const adminQuotesCreate = requireAnyPermission(['admin_quotes.create'], allowSalesRepRoles);
-const adminQuotesEdit = requireAnyPermission(['admin_quotes.edit'], allowSalesRepRoles);
-const adminQuotesDelete = requireAnyPermission(['admin_quotes.delete'], allowSalesRepRoles);
+const adminQuotesView = requireAnyPermission([
+  'admin_quotes.view',
+  'sales_rep_quotes.view'
+], allowSalesRepRoles);
+const adminQuotesCreate = requireAnyPermission([
+  'admin_quotes.create',
+  'sales_rep_quotes.create'
+], allowSalesRepRoles);
+const adminQuotesEdit = requireAnyPermission([
+  'admin_quotes.edit',
+  'sales_rep_quotes.edit'
+], allowSalesRepRoles);
+const adminQuotesDelete = requireAnyPermission([
+  'admin_quotes.delete',
+  'sales_rep_quotes.delete'
+], allowSalesRepRoles);
 const adminQuotesOrSalesRepresentativeView = requireAnyPermission([
   'admin_quotes.view',
+  'sales_rep_quotes.view',
   'admin_sales_representative.view',
   'sales_rep_sales.view'
 ], allowSalesRepRoles);
 const adminQuotesOrFinancesOrSalesRepresentativeView = requireAnyPermission([
   'admin_quotes.view',
+  'sales_rep_quotes.view',
   'admin_finances.view',
   'admin_sales_representative.view',
   'sales_rep_sales.view'
 ], allowSalesRepRoles);
 const adminQuotesOrInvoicesView = requireAnyPermission([
   'admin_quotes.view',
+  'sales_rep_quotes.view',
   'admin_invoices.view'
+], allowSalesRepRoles);
+const quoteOrSalesPaymentCreate = requireAnyPermission([
+  'admin_quotes.create',
+  'sales_rep_quotes.create',
+  'admin_sales_representative.create',
+  'sales_rep_sales.create'
+], allowSalesRepRoles);
+const quoteOrSalesPaymentEdit = requireAnyPermission([
+  'admin_quotes.edit',
+  'sales_rep_quotes.edit',
+  'admin_sales_representative.edit',
+  'sales_rep_sales.edit'
 ], allowSalesRepRoles);
 
 /**
@@ -160,8 +187,8 @@ router.delete('/client-leads/:id', authenticate, adminSalesRepresentativeDelete,
  */
 router.put('/leads/:id/status', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateLeadStatus);
 router.put('/client-leads/:id/status', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateClientLeadStatus);
-router.post('/leads/manual-payment/upload-proof', authenticate, adminSalesRepresentativeEdit, ...salesLeadsController.uploadManualPaymentProof);
-router.post('/leads/:id/manual-payment', authenticate, adminSalesRepresentativeCreate, salesLeadsController.recordManualPayment);
+router.post('/leads/manual-payment/upload-proof', authenticate, quoteOrSalesPaymentEdit, ...salesLeadsController.uploadManualPaymentProof);
+router.post('/leads/:id/manual-payment', authenticate, quoteOrSalesPaymentCreate, salesLeadsController.recordManualPayment);
 router.post('/client-leads/:id/manual-payment', authenticate, requireSalesRepOrAdmin, salesLeadsController.recordClientManualPayment);
 router.post('/availability', authenticate, salesRepAvailabilityView, salesAvailabilityController.getSalesRepAvailability);
 router.post('/add-availability', authenticate, salesRepAvailabilityCreate, salesAvailabilityController.setSalesRepAvailability);
@@ -379,9 +406,9 @@ router.get('/client-dropdown', authenticate, adminQuotesOrFinancesOrSalesReprese
 router.post('/create-client', authenticate, requireSalesRepOrAdmin, salesQuotesController.createClient);
 router.get('/quotes/catalog', authenticate, adminQuotesView, salesQuotesController.getCatalog);
 router.get('/quotes/ai-editing-types', authenticate, adminQuotesView, salesQuotesController.getAiEditingTypes);
-router.post('/quotes/ai-editing-types', authenticate, requireSalesRepOrAdmin, salesQuotesController.createAiEditingType);
-router.put('/quotes/ai-editing-types/:aiEditingTypeId', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateAiEditingType);
-router.delete('/quotes/ai-editing-types/:aiEditingTypeId', authenticate, requireSalesRepOrAdmin, salesQuotesController.deleteAiEditingType);
+router.post('/quotes/ai-editing-types', authenticate, adminQuotesCreate, salesQuotesController.createAiEditingType);
+router.put('/quotes/ai-editing-types/:aiEditingTypeId', authenticate, adminQuotesEdit, salesQuotesController.updateAiEditingType);
+router.delete('/quotes/ai-editing-types/:aiEditingTypeId', authenticate, adminQuotesDelete, salesQuotesController.deleteAiEditingType);
 router.get('/quotes/shoot-types/:content_type', authenticate, requireSalesRepOrAdmin, salesQuotesController.getShootTypes);
 router.post('/quotes/shoot-types', authenticate, requireSalesRepOrAdmin, salesQuotesController.createShootType);
 router.put('/quotes/shoot-types/:shootTypeId', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateShootType);
@@ -409,7 +436,7 @@ router.post('/quotes/:quoteId/convert-to-booking', authenticate, requireSalesRep
 router.post('/quotes/:quoteId/send', authenticate, adminQuotesEdit, salesQuotesController.sendQuoteProposal);
 router.post('/quotes/:quoteId/preview-link', authenticate, requireSalesRepOrAdmin, salesQuotesController.createQuotePreviewLink);
 router.post('/quotes/:quoteId/preview-invoice', authenticate, adminQuotesOrInvoicesView, paymentLinksController.previewQuoteInvoice);
-router.post('/quotes/:quoteId/send-invoice', authenticate, requireSalesRepOrAdmin, paymentLinksController.sendQuoteInvoice);
+router.post('/quotes/:quoteId/send-invoice', authenticate, adminQuotesEdit, paymentLinksController.sendQuoteInvoice);
 router.patch('/quotes/:quoteId/status', authenticate, adminQuotesEdit, salesQuotesController.updateQuoteStatus);
 
 /**

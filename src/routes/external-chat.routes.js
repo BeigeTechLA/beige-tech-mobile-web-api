@@ -4,8 +4,9 @@ const { authenticate } = require('../middleware/auth');
 const { requireAnyPermission } = require('../middleware/permission.middleware');
 
 const messagesView = requireAnyPermission([
-  'admin_messages.view'
-]);
+  'admin_messages.view',
+  'sales_rep_messages.view'
+], { allowRoles: ['sales_rep', 'sales_admin'] });
 const messagesCreate = requireAnyPermission([
   'admin_messages.create'
 ]);
@@ -14,19 +15,22 @@ const messagesEdit = requireAnyPermission([
 ]);
 const shootMessagesView = requireAnyPermission([
   'admin_shoots.view',
-  'admin_messages.view'
-]);
+  'admin_messages.view',
+  'sales_rep_messages.view'
+], { allowRoles: ['sales_rep', 'sales_admin'] });
 const directoryView = requireAnyPermission([
   'admin_shoots.view',
   'admin_messages.view',
   'admin_meetings.view',
   'admin_meetings.create',
-  'admin_meetings.edit'
-]);
+  'admin_meetings.edit',
+  'sales_rep_messages.view'
+], { allowRoles: ['sales_rep', 'sales_admin'] });
 const shootMessagesCreate = requireAnyPermission([
   'admin_shoots.edit',
-  'admin_messages.create'
-]);
+  'admin_messages.create',
+  'sales_rep_messages.create'
+], { allowRoles: ['sales_rep', 'sales_admin'] });
 const shootMessagesEdit = requireAnyPermission([
   'admin_shoots.edit',
   'admin_messages.edit'
