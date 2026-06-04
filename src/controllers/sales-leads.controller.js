@@ -375,6 +375,8 @@ async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null
     .find(({ metadata }) => {
       if (!metadata?.invoice_refresh_required) return false;
       if (bookingId && metadata.booking_id && Number(metadata.booking_id) !== Number(bookingId)) return false;
+      const approvalStatus = String(metadata.approval_status || '').toLowerCase();
+      if (approvalStatus && approvalStatus !== 'approved') return false;
       return parseFloat(metadata.extra_amount || 0) > 0 || parseFloat(metadata.reduced_amount || 0) > 0;
     });
 
@@ -412,7 +414,9 @@ async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null
   const summaryDueAmount = paymentState.dueAmount;
   const summaryPaymentStatus = String(paymentState.paymentStatus || '').toLowerCase();
   const summaryApprovalStatus = String(paymentSummary?.last_quote_change_status || '').toLowerCase();
+  const canExposeSummaryChange = !summaryApprovalStatus || summaryApprovalStatus === 'approved';
   const summaryAdditionalPayment = paymentSummary &&
+    canExposeSummaryChange &&
     summaryChangeType === 'increase' &&
     (summaryChangeAmount > 0 || summaryDueAmount > 0)
       ? {
@@ -487,7 +491,8 @@ function hasOutstandingAdditionalPayment(customQuoteFinancials = null) {
 
 function resolveLeadPaymentStatus({ booking = null, activePaymentLink = null, customQuoteFinancials = null }) {
   const summaryStatus = String(customQuoteFinancials?.payment_summary?.payment_status || '').toLowerCase();
-  if (summaryStatus) {
+  const summaryApprovalStatus = String(customQuoteFinancials?.payment_summary?.last_quote_change_status || '').toLowerCase();
+  if (summaryStatus && (!summaryApprovalStatus || summaryApprovalStatus === 'approved')) {
     return summaryStatus;
   }
 
@@ -2787,6 +2792,9 @@ exports.getLeadById = async (req, res) => {
       quoteId: linkedSalesQuote?.sales_quote_id || null,
       bookingId: leadJson.booking?.stream_project_booking_id || null
     });
+    const usableLinkedSalesQuote = linkedSalesQuote?.sales_quote_id
+      ? await quoteService.getCurrentUsableQuoteVersionSnapshot(linkedSalesQuote.sales_quote_id, null)
+      : null;
 
     if (leadJson.booking && !Array.isArray(leadJson.booking.booking_days)) {
       const days = await stream_project_booking_days.findAll({
@@ -2849,13 +2857,13 @@ exports.getLeadById = async (req, res) => {
       customQuoteFinancials
     });
     const quoteAmounts = resolveLeadQuoteAmounts({
-      linkedSalesQuote,
+      linkedSalesQuote: usableLinkedSalesQuote || linkedSalesQuote,
       booking: lead.booking,
       customQuoteFinancials
     });
 
     const projectedQuote = await calculateLeadPricing(lead.booking);
-    const activeQuoteSource = leadJson.booking?.primary_quote || projectedQuote;
+    const activeQuoteSource = usableLinkedSalesQuote || leadJson.booking?.primary_quote || projectedQuote;
 
     let pricing_breakdown = {
         shoot_cost: 0,
@@ -2907,8 +2915,10 @@ exports.getLeadById = async (req, res) => {
     let creditApplied = 0;
     let totalPaid = null;
     const paymentSummary = customQuoteFinancials?.payment_summary || null;
+    const paymentSummaryChangeStatus = String(paymentSummary?.last_quote_change_status || '').toLowerCase();
+    const canUsePaymentSummaryChange = !paymentSummaryChangeStatus || paymentSummaryChangeStatus === 'approved';
 
-    if (paymentSummary) {
+    if (paymentSummary && canUsePaymentSummaryChange) {
       creditApplied = parseFloat(paymentSummary.credit_used_amount || 0);
       totalPaid = parseFloat(paymentSummary.paid_amount || 0);
     } else if (leadJson.booking?.payment_id) {
@@ -3044,9 +3054,10 @@ exports.getLeadById = async (req, res) => {
           sales_quote_id: linkedSalesQuote.sales_quote_id,
           quote_number: linkedSalesQuote.quote_number,
           status: linkedSalesQuote.status,
-          subtotal: parseFloat(linkedSalesQuote.subtotal || 0),
-          discount_amount: parseFloat(linkedSalesQuote.discount_amount || 0),
-          total: parseFloat(linkedSalesQuote.total || 0),
+          subtotal: parseFloat(usableLinkedSalesQuote?.subtotal ?? linkedSalesQuote.subtotal ?? 0),
+          discount_amount: parseFloat(usableLinkedSalesQuote?.discount_amount ?? linkedSalesQuote.discount_amount ?? 0),
+          total: parseFloat(usableLinkedSalesQuote?.total ?? linkedSalesQuote.total ?? 0),
+          version_number: usableLinkedSalesQuote?.version_number || null,
           ...customQuoteFinancials
         } : null,
         custom_quote_id: linkedSalesQuote?.sales_quote_id || null,

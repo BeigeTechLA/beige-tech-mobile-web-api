@@ -42,6 +42,7 @@ const db = require('../models');
 const bookingTimelineService = require('../services/bookingTimeline.service');
 const accountCreditService = require('../services/account-credit.service');
 const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
+const quoteService = require('../services/sales-quote.service');
 // const NodeGeocoder = require('node-geocoder');
 const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
 const EXTERNAL_MEETINGS_API_BASE_URL = process.env.EXTERNAL_MEETINGS_API_BASE_URL || 'http://localhost:5002/v1/external-meetings';
@@ -1834,17 +1835,27 @@ exports.getProjectDetails = async (req, res) => {
     }
 
     const convertedSalesQuoteId = convertedSalesQuote?.sales_quote_id || bookingPaymentSummary?.sales_quote_id || null;
+    const currentUsableConvertedQuote = convertedSalesQuoteId
+      ? await quoteService.getCurrentUsableQuoteVersionSnapshot(convertedSalesQuoteId, null)
+      : null;
     const isQuoteConvertedBooking = Boolean(
       convertedSalesQuoteId || String(lead?.lead_source || '').toLowerCase() === 'converted bookings'
     );
 
-    const displayAmount = await resolveProjectDisplayAmount({
+    let displayAmount = await resolveProjectDisplayAmount({
       project: projectJson,
       paymentData,
     });
-    const totalValueAmount = await resolveProjectTotalValueAmount({
+    let totalValueAmount = await resolveProjectTotalValueAmount({
       project: projectJson,
     });
+    const currentUsableQuoteTotal = parseAmountCandidate(currentUsableConvertedQuote?.total);
+    if (currentUsableQuoteTotal !== null && currentUsableQuoteTotal > 0) {
+      totalValueAmount = currentUsableQuoteTotal;
+      if (displayAmount > currentUsableQuoteTotal) {
+        displayAmount = currentUsableQuoteTotal;
+      }
+    }
 
     // 4. Process Event Type Labels
     const rawTypes = projectJson.event_type ? projectJson.event_type.split(',') : [];
@@ -1859,7 +1870,7 @@ exports.getProjectDetails = async (req, res) => {
     // 5. Pricing Breakdown logic
     // Using calculateLeadPricing helper if available, otherwise manual calc
     const projectedQuote = typeof calculateLeadPricing === 'function' ? await calculateLeadPricing(projectJson) : null;
-    const activeQuoteSource = projectJson.primary_quote || projectedQuote;
+    const activeQuoteSource = currentUsableConvertedQuote || projectJson.primary_quote || projectedQuote;
     
     const parsedQuoteTotal = parseFloat(activeQuoteSource?.total || 0);
     let pricing_breakdown = {
@@ -9329,7 +9340,10 @@ exports.getBookingSummaryById = async (req, res) => {
             }],
             order: [[{ model: db.sales_quote_line_items, as: 'line_items' }, 'sort_order', 'ASC']]
         });
-        const activeQuote = customQuote ? customQuote.toJSON() : primaryQuote;
+        const usableCustomQuote = customQuote?.sales_quote_id
+            ? await quoteService.getCurrentUsableQuoteVersionSnapshot(customQuote.sales_quote_id, null)
+            : null;
+        const activeQuote = usableCustomQuote || (customQuote ? customQuote.toJSON() : primaryQuote);
 
         // 6. Pricing Breakdown & Discount Logic
         
