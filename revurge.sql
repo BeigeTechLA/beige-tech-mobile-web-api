@@ -2228,3 +2228,45 @@ INSERT INTO `permissions` (`module_key`, `action_key`, `permission_key`, `role_i
 ('production_manager_availability', 'edit', 'production_manager_availability.edit', NULL, 1),
 ('production_manager_availability', 'delete', 'production_manager_availability.delete', NULL, 1);
 
+-- Sales Admin permissions
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT 7, permission_id, 1
+FROM permissions
+WHERE module_key IN (
+  'sales_admin_dashboard',
+  'sales_admin_sales_people',
+  'sales_admin_shoots',
+  'sales_admin_file_manager',
+  'sales_admin_meetings',
+  'sales_admin_messages',
+  'sales_admin_quotes',
+  'sales_admin_invoices'
+)
+AND is_active = 1
+AND NOT EXISTS (
+  SELECT 1
+  FROM role_permissions rp
+  WHERE rp.role_id = 7
+    AND rp.permission_id = permissions.permission_id
+);
+
+-- Production Manager permissions
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT 6, permission_id, 1
+FROM permissions
+WHERE module_key IN (
+  'production_manager_dashboard',
+  'production_manager_creative_partner',
+  'production_manager_shoots',
+  'production_manager_file_manager',
+  'production_manager_meetings',
+  'production_manager_messages',
+  'production_manager_availability'
+)
+AND is_active = 1
+AND NOT EXISTS (
+  SELECT 1
+  FROM role_permissions rp
+  WHERE rp.role_id = 6
+    AND rp.permission_id = permissions.permission_id
+);
