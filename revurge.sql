@@ -2191,3 +2191,40 @@ INSERT INTO permissions (module_key, action_key, permission_key, role_id, is_act
 ('sales_admin_invoices', 'create', 'sales_admin_invoices.create', NULL, 1),
 ('sales_admin_invoices', 'edit', 'sales_admin_invoices.edit', NULL, 1),
 ('sales_admin_invoices', 'delete', 'sales_admin_invoices.delete', NULL, 1);
+
+INSERT INTO `permissions` (`module_key`, `action_key`, `permission_key`, `role_id`, `is_active`) VALUES
+('production_manager_dashboard', 'view', 'production_manager_dashboard.view', NULL, 1),
+('production_manager_dashboard', 'create', 'production_manager_dashboard.create', NULL, 1),
+('production_manager_dashboard', 'edit', 'production_manager_dashboard.edit', NULL, 1),
+('production_manager_dashboard', 'delete', 'production_manager_dashboard.delete', NULL, 1),
+
+('production_manager_creative_partner', 'view', 'production_manager_creative_partner.view', NULL, 1),
+('production_manager_creative_partner', 'create', 'production_manager_creative_partner.create', NULL, 1),
+('production_manager_creative_partner', 'edit', 'production_manager_creative_partner.edit', NULL, 1),
+('production_manager_creative_partner', 'delete', 'production_manager_creative_partner.delete', NULL, 1),
+
+('production_manager_shoots', 'view', 'production_manager_shoots.view', NULL, 1),
+('production_manager_shoots', 'create', 'production_manager_shoots.create', NULL, 1),
+('production_manager_shoots', 'edit', 'production_manager_shoots.edit', NULL, 1),
+('production_manager_shoots', 'delete', 'production_manager_shoots.delete', NULL, 1),
+
+('production_manager_file_manager', 'view', 'production_manager_file_manager.view', NULL, 1),
+('production_manager_file_manager', 'create', 'production_manager_file_manager.create', NULL, 1),
+('production_manager_file_manager', 'edit', 'production_manager_file_manager.edit', NULL, 1),
+('production_manager_file_manager', 'delete', 'production_manager_file_manager.delete', NULL, 1),
+
+('production_manager_meetings', 'view', 'production_manager_meetings.view', NULL, 1),
+('production_manager_meetings', 'create', 'production_manager_meetings.create', NULL, 1),
+('production_manager_meetings', 'edit', 'production_manager_meetings.edit', NULL, 1),
+('production_manager_meetings', 'delete', 'production_manager_meetings.delete', NULL, 1),
+
+('production_manager_messages', 'view', 'production_manager_messages.view', NULL, 1),
+('production_manager_messages', 'create', 'production_manager_messages.create', NULL, 1),
+('production_manager_messages', 'edit', 'production_manager_messages.edit', NULL, 1),
+('production_manager_messages', 'delete', 'production_manager_messages.delete', NULL, 1),
+
+('production_manager_availability', 'view', 'production_manager_availability.view', NULL, 1),
+('production_manager_availability', 'create', 'production_manager_availability.create', NULL, 1),
+('production_manager_availability', 'edit', 'production_manager_availability.edit', NULL, 1),
+('production_manager_availability', 'delete', 'production_manager_availability.delete', NULL, 1);
+

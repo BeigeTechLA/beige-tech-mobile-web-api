@@ -6,8 +6,9 @@ const { requireAnyPermission } = require('../middleware/permission.middleware');
 const messagesView = requireAnyPermission([
   'admin_messages.view',
   'sales_rep_messages.view',
-  'sales_admin_messages.view'
-], { allowRoles: ['sales_rep', 'sales_admin'] });
+  'sales_admin_messages.view',
+  'production_manager_messages.view'
+], { allowRoles: ['sales_rep', 'sales_admin', 'production_manager'] });
 const messagesCreate = requireAnyPermission([
   'admin_messages.create'
 ]);

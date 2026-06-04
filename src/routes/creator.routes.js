@@ -11,15 +11,18 @@ const { requireAnyPermission } = require('../middleware/permission.middleware');
 const adminSalesRepresentativeView = requireAnyPermission([
   'admin_sales_representative.view',
   'sales_admin_dashboard.view',
-  'crew_request_shoots.view'
-], { allowRoles: ['sales_admin', 'creative'] });
+  'crew_request_shoots.view',
+  'production_manager_creative_partner.view'
+], { allowRoles: ['sales_admin', 'creative', 'production_manager'] });
 const adminSalesRepresentativeAvailabilityView = requireAnyPermission([
   'admin_sales_representative.view',
   'admin_availability.view',
   'sales_admin_dashboard.view',
   'crew_dashboard.view',
-  'crew_availability.view'
-], { allowRoles: ['sales_admin', 'creative'] });
+  'crew_availability.view',
+  'production_manager_creative_partner.view',
+  'production_manager_availability.view'
+], { allowRoles: ['sales_admin', 'creative', 'production_manager'] });
 const crewDashboardView = requireAnyPermission(['crew_dashboard.view'], { allowRoles: ['creative'] });
 const crewDashboardOrRequestShootsView = requireAnyPermission([
   'crew_dashboard.view',

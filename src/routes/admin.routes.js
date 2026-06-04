@@ -5,20 +5,45 @@ const admin = require('../controllers/admin.controller');
 const { authenticateAdmin, authMiddleware } = require('../middleware/auth');
 const { requirePermission, requireAnyPermission } = require('../middleware/permission.middleware');
 
-const dashboardView = requireAnyPermission(['admin_dashboard.view']);
+const dashboardView = requireAnyPermission([
+  'admin_dashboard.view',
+  'production_manager_dashboard.view',
+  'production_manager_creative_partner.view'
+], { allowRoles: ['production_manager'] });
 const dashboardOrShootsView = requireAnyPermission([
   'admin_dashboard.view',
-  'admin_shoots.view'
-]);
+  'admin_shoots.view',
+  'production_manager_dashboard.view'
+], { allowRoles: ['production_manager'] });
 const shootsView = requireAnyPermission(['admin_shoots.view']);
 const shootsCreate = requireAnyPermission(['admin_shoots.create']);
 const allowSalesRepRoles = { allowRoles: ['sales_rep', 'sales_admin'] };
 const shootsEdit = requireAnyPermission([
   'admin_shoots.edit',
   'sales_rep_shoots.edit',
-  'sales_admin_shoots.edit'
-], allowSalesRepRoles);
-const shootsDelete = requireAnyPermission(['admin_shoots.delete']);
+  'sales_admin_shoots.edit',
+  'production_manager_shoots.edit'
+], { allowRoles: ['sales_rep', 'sales_admin', 'production_manager'] });
+const shootsDelete = requireAnyPermission([
+  'admin_shoots.delete',
+  'production_manager_shoots.delete'
+], { allowRoles: ['production_manager'] });
+const shootNotesView = requireAnyPermission([
+  'admin_shoots.view',
+  'production_manager_shoots.view'
+], { allowRoles: ['production_manager'] });
+const shootNotesCreate = requireAnyPermission([
+  'admin_shoots.create',
+  'production_manager_shoots.create'
+], { allowRoles: ['production_manager'] });
+const shootNotesEdit = requireAnyPermission([
+  'admin_shoots.edit',
+  'production_manager_shoots.edit'
+], { allowRoles: ['production_manager'] });
+const shootNotesDelete = requireAnyPermission([
+  'admin_shoots.delete',
+  'production_manager_shoots.delete'
+], { allowRoles: ['production_manager'] });
 const projectDetailView = requireAnyPermission([
   'admin_shoots.view',
   'admin_meetings.view',
@@ -41,8 +66,10 @@ const projectListView = requireAnyPermission([
   'sales_rep_shoots.view',
   'sales_admin_shoots.view',
   'client_shoots.view',
-  'client_meetings.view'
-], { allowRoles: ['sales_rep', 'sales_admin', 'client'] });
+  'client_meetings.view',
+  'production_manager_dashboard.view',
+  'production_manager_shoots.view'
+], { allowRoles: ['sales_rep', 'sales_admin', 'client', 'production_manager'] });
 const projectFormView = requireAnyPermission([
   'admin_shoots.view',
   'sales_rep_shoots.view',
@@ -60,8 +87,9 @@ const skillsView = requireAnyPermission([
 const crewAvailabilityView = requireAnyPermission([
   'admin_availability.view',
   'admin_shoots.view',
-  'admin_shoots.edit'
-]);
+  'admin_shoots.edit',
+  'production_manager_availability.view'
+], { allowRoles: ['production_manager'] });
 const adminSalesRepresentativeView = requireAnyPermission([
   'admin_sales_representative.view',
   'sales_admin_dashboard.view'
@@ -87,15 +115,24 @@ const adminSalesRepresentativeAvailabilityView = requireAnyPermission([
   'sales_admin_dashboard.view',
   'sales_admin_shoots.view',
   'sales_admin_meetings.view',
-  'client_shoots.view'
-], { allowRoles: ['sales_rep', 'sales_admin', 'client'] });
+  'client_shoots.view',
+  'production_manager_creative_partner.view',
+  'production_manager_availability.view'
+], { allowRoles: ['sales_rep', 'sales_admin', 'client', 'production_manager'] });
 const adminUsersView = requireAnyPermission(['admin_users.view']);
-const adminUsersEdit = requireAnyPermission(['admin_users.edit']);
-const adminUsersDelete = requireAnyPermission(['admin_users.delete']);
+const adminUsersEdit = requireAnyPermission([
+  'admin_users.edit',
+  'production_manager_creative_partner.edit'
+], { allowRoles: ['production_manager'] });
+const adminUsersDelete = requireAnyPermission([
+  'admin_users.delete',
+  'production_manager_creative_partner.delete'
+], { allowRoles: ['production_manager'] });
 const adminUsersOrSalesRepresentativeView = requireAnyPermission([
   'admin_users.view',
-  'admin_sales_representative.view'
-]);
+  'admin_sales_representative.view',
+  'production_manager_creative_partner.view'
+], { allowRoles: ['production_manager'] });
 const adminSalesRepresentativeOrSalesRepSalesView = requireAnyPermission([
   'admin_sales_representative.view',
   'sales_rep_sales.view',
@@ -210,10 +247,10 @@ router.get('/users/:user_id/permissions', authMiddleware, admin.getUserPermissio
 router.delete('/users/:user_id/permissions/:module_key/:action_key', authMiddleware, admin.deleteUserPermission);
 router.delete('/users/:user_id/permissions/:permission_id', authMiddleware, admin.deleteUserPermission);
 
-router.get('/shoots/:bookingId/notes', authMiddleware, admin.getShootNotes);
-router.post('/shoots/:bookingId/notes', authMiddleware, admin.uploadShootNoteAttachments, admin.addShootNote);
-router.post('/shoots/:bookingId/notes/:noteId/replies', authMiddleware, admin.uploadShootNoteAttachments, admin.replyToShootNote);
-router.post('/shoots/:bookingId/notes/:noteId/reactions', authMiddleware, admin.toggleShootNoteReaction);
-router.delete('/shoots/:bookingId/notes/:noteId', authMiddleware, admin.deleteShootNote);
+router.get('/shoots/:bookingId/notes', authMiddleware, shootNotesView, admin.getShootNotes);
+router.post('/shoots/:bookingId/notes', authMiddleware, shootNotesCreate, admin.uploadShootNoteAttachments, admin.addShootNote);
+router.post('/shoots/:bookingId/notes/:noteId/replies', authMiddleware, shootNotesCreate, admin.uploadShootNoteAttachments, admin.replyToShootNote);
+router.post('/shoots/:bookingId/notes/:noteId/reactions', authMiddleware, shootNotesEdit, admin.toggleShootNoteReaction);
+router.delete('/shoots/:bookingId/notes/:noteId', authMiddleware, shootNotesDelete, admin.deleteShootNote);
 
 module.exports = router;
