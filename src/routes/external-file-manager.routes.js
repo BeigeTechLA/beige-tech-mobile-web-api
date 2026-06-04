@@ -17,6 +17,8 @@ router.post('/upload-policy', authenticate, externalFileManagerController.getUpl
 router.post('/upload-policies/batch', authenticate, externalFileManagerController.getUploadPoliciesBatch);
 router.post('/file-uploaded', authenticate, externalFileManagerController.notifyFileUploaded);
 router.post('/files-uploaded/batch', authenticate, externalFileManagerController.notifyFilesUploadedBatch);
+router.post('/copy-files', authenticate, externalFileManagerController.copyFiles);
+router.post('/revision-file/review', authenticate, externalFileManagerController.reviewRevisionFile);
 router.post('/file-view-url', authenticate, externalFileManagerController.getFileViewUrl);
 router.post('/file-download-url', authenticate, externalFileManagerController.getFileDownloadUrl);
 router.post('/folder-download-url', authenticate, externalFileManagerController.getFolderDownloadUrl);

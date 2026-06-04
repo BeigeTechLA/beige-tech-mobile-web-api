@@ -2432,6 +2432,84 @@ exports.notifyFilesUploadedBatch = async (req, res) => {
   }
 };
 
+exports.copyFiles = async (req, res) => {
+  try {
+    const externalId = String(req.body.externalId || req.body.bookingId || '').trim();
+    const phase = normalizeWorkspacePhase(req.body.phase || req.body.state || req.body.stage, null);
+    const targetPath = sanitizeRelativeFolderPath(req.body.targetPath || req.body.path);
+    const sourcePaths = Array.isArray(req.body.sourcePaths)
+      ? req.body.sourcePaths.map((item) => String(item || '').trim()).filter(Boolean)
+      : [];
+
+    if (!externalId || !phase || !targetPath || !sourcePaths.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'externalId, phase, targetPath and sourcePaths are required',
+      });
+    }
+
+    await ensureCreatorWorkspaceAccess(req, externalId);
+    for (const sourcePath of sourcePaths) {
+      await ensureCreatorFileAccess(req, sourcePath);
+    }
+
+    const result = await proxyRequest('/copy-files', {
+      method: 'POST',
+      body: JSON.stringify({
+        externalId,
+        phase,
+        targetPath,
+        sourcePaths,
+        userId: getRequestUserId(req),
+        authorName: await getUserDisplayName(getRequestUserId(req)).catch(() => 'Beige User'),
+      }),
+    });
+
+    return res.status(200).json(result);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.reviewRevisionFile = async (req, res) => {
+  try {
+    const externalId = String(req.body.externalId || req.body.bookingId || '').trim();
+    const filepath = String(req.body.filepath || req.body.path || '').trim();
+    const action = String(req.body.action || '').trim().toLowerCase();
+
+    if (!externalId || !filepath || !['approve', 'request_revision'].includes(action)) {
+      return res.status(400).json({
+        success: false,
+        message: 'externalId, filepath and action are required',
+      });
+    }
+
+    await ensureCreatorWorkspaceAccess(req, externalId);
+    await ensureCreatorFileAccess(req, filepath);
+
+    const result = await proxyRequest('/revision-file/review', {
+      method: 'POST',
+      body: JSON.stringify({
+        externalId,
+        filepath,
+        action,
+        userId: getRequestUserId(req),
+        authorName: await getUserDisplayName(getRequestUserId(req)).catch(() => 'Beige User'),
+      }),
+    });
+
+    return res.status(200).json(result);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
 exports.reindexFaceEmbeddings = async (req, res) => {
   try {
     const externalId = String(req.body.externalId || req.body.eventExternalId || '').trim().toLowerCase();
