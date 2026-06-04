@@ -22,14 +22,16 @@ const shootOrSalesView = requireAnyPermission([
   'admin_sales_representative.view',
   'sales_rep_sales.view',
   'sales_admin_dashboard.view',
-  'sales_admin_sales_people.view'
+  'sales_admin_sales_people.view',
+  'sales_admin_shoots.view'
 ], allowSalesRepRoles);
 const salesAdminSalesPeopleView = requireAnyPermission([
   'sales_admin_sales_people.view'
 ], allowSalesRepRoles);
 const shootsEditOrSalesEdit = requireAnyPermission([
   'admin_shoots.edit',
-  'sales_rep_shoots.edit'
+  'sales_rep_shoots.edit',
+  'sales_admin_shoots.edit'
 ], allowSalesRepRoles);
 const shootOrInvoiceView = requireAnyPermission([
   'admin_shoots.view',

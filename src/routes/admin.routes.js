@@ -15,7 +15,8 @@ const shootsCreate = requireAnyPermission(['admin_shoots.create']);
 const allowSalesRepRoles = { allowRoles: ['sales_rep', 'sales_admin'] };
 const shootsEdit = requireAnyPermission([
   'admin_shoots.edit',
-  'sales_rep_shoots.edit'
+  'sales_rep_shoots.edit',
+  'sales_admin_shoots.edit'
 ], allowSalesRepRoles);
 const shootsDelete = requireAnyPermission(['admin_shoots.delete']);
 const projectDetailView = requireAnyPermission([
@@ -23,21 +24,24 @@ const projectDetailView = requireAnyPermission([
   'admin_meetings.view',
   'admin_meetings.create',
   'sales_rep_shoots.view',
-  'sales_rep_meetings.view'
+  'sales_rep_meetings.view',
+  'sales_admin_shoots.view'
 ], allowSalesRepRoles);
 const projectListView = requireAnyPermission([
   'admin_dashboard.view',
   'admin_shoots.view',
   'admin_meetings.view',
   'admin_meetings.create',
-  'sales_rep_shoots.view'
+  'sales_rep_shoots.view',
+  'sales_admin_shoots.view'
 ], allowSalesRepRoles);
 const skillsView = requireAnyPermission([
   'admin_shoots.view',
   'admin_meetings.view',
   'admin_availability.view',
   'sales_rep_shoots.view',
-  'sales_rep_meetings.view'
+  'sales_rep_meetings.view',
+  'sales_admin_shoots.view'
 ], allowSalesRepRoles);
 const crewAvailabilityView = requireAnyPermission([
   'admin_availability.view',
@@ -66,7 +70,8 @@ const adminSalesRepresentativeAvailabilityView = requireAnyPermission([
   'admin_meetings.view',
   'sales_rep_shoots.view',
   'sales_rep_meetings.view',
-  'sales_admin_dashboard.view'
+  'sales_admin_dashboard.view',
+  'sales_admin_shoots.view'
 ], allowSalesRepRoles);
 const adminUsersView = requireAnyPermission(['admin_users.view']);
 const adminUsersEdit = requireAnyPermission(['admin_users.edit']);
@@ -86,7 +91,9 @@ const shootsViewOrEdit = requireAnyPermission([
   'admin_shoots.view',
   'admin_shoots.edit',
   'sales_rep_shoots.view',
-  'sales_rep_shoots.edit'
+  'sales_rep_shoots.edit',
+  'sales_admin_shoots.view',
+  'sales_admin_shoots.edit'
 ], allowSalesRepRoles);
 
 router.post('/create-project', authMiddleware, shootsCreate, admin.createProject);
