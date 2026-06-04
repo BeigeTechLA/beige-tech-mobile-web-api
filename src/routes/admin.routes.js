@@ -25,7 +25,8 @@ const projectDetailView = requireAnyPermission([
   'admin_meetings.create',
   'sales_rep_shoots.view',
   'sales_rep_meetings.view',
-  'sales_admin_shoots.view'
+  'sales_admin_shoots.view',
+  'sales_admin_meetings.view'
 ], allowSalesRepRoles);
 const projectListView = requireAnyPermission([
   'admin_dashboard.view',
@@ -71,7 +72,8 @@ const adminSalesRepresentativeAvailabilityView = requireAnyPermission([
   'sales_rep_shoots.view',
   'sales_rep_meetings.view',
   'sales_admin_dashboard.view',
-  'sales_admin_shoots.view'
+  'sales_admin_shoots.view',
+  'sales_admin_meetings.view'
 ], allowSalesRepRoles);
 const adminUsersView = requireAnyPermission(['admin_users.view']);
 const adminUsersEdit = requireAnyPermission(['admin_users.edit']);

@@ -15,7 +15,8 @@ const dashboardOrSalesView = requireAnyPermission([
   'admin_sales_representative.view',
   'sales_rep_sales.view',
   'sales_rep_file_manager.view',
-  'sales_admin_dashboard.view'
+  'sales_admin_dashboard.view',
+  'sales_admin_file_manager.view'
 ], allowSalesRepRoles);
 const shootOrSalesView = requireAnyPermission([
   'admin_shoots.view',

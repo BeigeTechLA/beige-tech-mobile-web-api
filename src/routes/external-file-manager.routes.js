@@ -5,11 +5,13 @@ const { requireAnyPermission } = require('../middleware/permission.middleware');
 
 const fileManagerView = requireAnyPermission([
   'admin_file_manager.view',
-  'sales_rep_file_manager.view'
+  'sales_rep_file_manager.view',
+  'sales_admin_file_manager.view'
 ], { allowRoles: ['sales_rep', 'sales_admin'] });
 const fileManagerCreate = requireAnyPermission([
   'admin_file_manager.create',
-  'sales_rep_file_manager.create'
+  'sales_rep_file_manager.create',
+  'sales_admin_file_manager.create'
 ], { allowRoles: ['sales_rep', 'sales_admin'] });
 const fileManagerDelete = requireAnyPermission([
   'admin_file_manager.delete'
@@ -21,7 +23,9 @@ const shootOrFileManagerView = requireAnyPermission([
   'sales_rep_shoots.view',
   'sales_rep_file_manager.view',
   'sales_rep_meetings.view',
-  'sales_admin_shoots.view'
+  'sales_admin_shoots.view',
+  'sales_admin_file_manager.view',
+  'sales_admin_meetings.view'
 ], { allowRoles: ['sales_rep', 'sales_admin'] });
 
 router.get('/workspaces', authenticate, fileManagerView, externalFileManagerController.listWorkspaces);
