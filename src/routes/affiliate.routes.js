@@ -2,6 +2,21 @@ const express = require('express');
 const router = express.Router();
 const affiliateController = require('../controllers/affiliate.controller');
 const { authenticate } = require('../middleware/auth.middleware');
+const { requireAnyPermission } = require('../middleware/permission.middleware');
+
+const crewAffiliateView = requireAnyPermission(['crew_affiliate.view'], { allowRoles: ['creative'] });
+const affiliateDashboardView = requireAnyPermission([
+  'client_affiliate_overview.view',
+  'crew_affiliate.view'
+], { allowRoles: ['client', 'creative'] });
+const affiliateReferralsView = requireAnyPermission([
+  'client_affiliate_overview.view',
+  'crew_affiliate.view'
+], { allowRoles: ['client', 'creative'] });
+const affiliateIdentityView = requireAnyPermission([
+  'client_dashboard.view',
+  'crew_affiliate.view'
+], { allowRoles: ['client', 'creative'] });
 
 /**
  * Affiliate Routes
@@ -28,14 +43,14 @@ router.get('/validate/:code', affiliateController.validateReferralCode);
  * @desc    Get current user's affiliate info
  * @access  Private (requires authentication)
  */
-router.get('/me', authenticate, affiliateController.getMyAffiliate);
+router.get('/me', authenticate, affiliateIdentityView, affiliateController.getMyAffiliate);
 
 /**
  * @route   GET /api/affiliates/dashboard
  * @desc    Get affiliate dashboard stats
  * @access  Private (requires authentication)
  */
-router.get('/dashboard', authenticate, affiliateController.getDashboardStats);
+router.get('/dashboard', authenticate, affiliateDashboardView, affiliateController.getDashboardStats);
 
 /**
  * @route   PUT /api/affiliates/payout-details
@@ -50,7 +65,7 @@ router.put('/payout-details', authenticate, affiliateController.updatePayoutDeta
  * @query   page, limit, status
  * @access  Private (requires authentication)
  */
-router.get('/referrals', authenticate, affiliateController.getReferralHistory);
+router.get('/referrals', authenticate, affiliateReferralsView, affiliateController.getReferralHistory);
 
 // ============================================================================
 // ADMIN ENDPOINTS

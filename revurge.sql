@@ -2036,3 +2036,269 @@ CREATE TABLE IF NOT EXISTS `project_note_attachments` (
 ALTER TABLE `sales_quotes`
   ADD COLUMN IF NOT EXISTS `location_latitude` DECIMAL(10,7) NULL AFTER `client_address`,
   ADD COLUMN IF NOT EXISTS `location_longitude` DECIMAL(10,7) NULL AFTER `location_latitude`;
+
+-- 03-06-26
+
+-- Reset permissions
+
+SET FOREIGN_KEY_CHECKS = 0;
+
+TRUNCATE TABLE role_permissions;
+TRUNCATE TABLE user_permissions;
+TRUNCATE TABLE permissions;
+
+SET FOREIGN_KEY_CHECKS = 1;
+
+INSERT INTO permissions (module_key, action_key, permission_key, is_active)
+SELECT
+  scoped_modules.module_key,
+  actions.action_key,
+  CONCAT(scoped_modules.module_key, '.', actions.action_key) AS permission_key,
+  1 AS is_active
+FROM (
+  -- Admin: 11 modules
+  SELECT 'admin_dashboard' AS module_key UNION ALL
+  SELECT 'admin_shoots' UNION ALL
+  SELECT 'admin_file_manager' UNION ALL
+  SELECT 'admin_meetings' UNION ALL
+  SELECT 'admin_messages' UNION ALL
+  SELECT 'admin_availability' UNION ALL
+  SELECT 'admin_sales_representative' UNION ALL
+  SELECT 'admin_finances' UNION ALL
+  SELECT 'admin_users' UNION ALL
+  SELECT 'admin_quotes' UNION ALL
+  SELECT 'admin_invoices' UNION ALL
+
+  -- Crew Member: 10 modules
+  SELECT 'crew_dashboard' UNION ALL
+  SELECT 'crew_request_shoots' UNION ALL
+  SELECT 'crew_file_manager' UNION ALL
+  SELECT 'crew_meetings' UNION ALL
+  SELECT 'crew_messages' UNION ALL
+  SELECT 'crew_affiliate' UNION ALL
+  SELECT 'crew_availability' UNION ALL
+  SELECT 'crew_profile' UNION ALL
+  SELECT 'crew_payouts' UNION ALL
+  SELECT 'crew_settings' UNION ALL
+
+  -- Sales Representative: 7 modules
+  SELECT 'sales_rep_sales' UNION ALL
+  SELECT 'sales_rep_availability' UNION ALL
+  SELECT 'sales_rep_shoots' UNION ALL
+  SELECT 'sales_rep_file_manager' UNION ALL
+  SELECT 'sales_rep_meetings' UNION ALL
+  SELECT 'sales_rep_messages' UNION ALL
+  SELECT 'sales_rep_quotes' UNION ALL
+
+  -- Client: 11 modules
+  SELECT 'client_dashboard' UNION ALL
+  SELECT 'client_affiliate_overview' UNION ALL
+  SELECT 'client_file_manager' UNION ALL
+  SELECT 'client_find_yourself' UNION ALL
+  SELECT 'client_meetings' UNION ALL
+  SELECT 'client_messages' UNION ALL
+  SELECT 'client_shoots' UNION ALL
+  SELECT 'client_quotes' UNION ALL
+  SELECT 'client_book_a_shoot' UNION ALL
+  SELECT 'client_finances' UNION ALL
+  SELECT 'client_profile'
+) AS scoped_modules
+CROSS JOIN (
+  SELECT 'view' AS action_key UNION ALL
+  SELECT 'create' UNION ALL
+  SELECT 'edit' UNION ALL
+  SELECT 'delete'
+) AS actions;
+
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT
+  1,
+  permission_id,
+  1
+FROM permissions
+WHERE module_key LIKE 'admin_%'
+  AND is_active = 1;
+
+-- Crew Member
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT
+  2,
+  permission_id,
+  1
+FROM permissions
+WHERE module_key LIKE 'crew_%'
+  AND is_active = 1;
+
+-- Sales Representative
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT
+  5,
+  permission_id,
+  1
+FROM permissions
+WHERE module_key LIKE 'sales_rep_%'
+  AND is_active = 1;
+
+-- Client
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT
+  3,
+  permission_id,
+  1
+FROM permissions
+WHERE module_key LIKE 'client_%'
+  AND is_active = 1;
+
+-- 04-06-26
+
+INSERT INTO permissions (module_key, action_key, permission_key, role_id, is_active) VALUES
+('sales_admin_dashboard', 'view', 'sales_admin_dashboard.view', NULL, 1),
+('sales_admin_dashboard', 'create', 'sales_admin_dashboard.create', NULL, 1),
+('sales_admin_dashboard', 'edit', 'sales_admin_dashboard.edit', NULL, 1),
+('sales_admin_dashboard', 'delete', 'sales_admin_dashboard.delete', NULL, 1),
+
+('sales_admin_sales_people', 'view', 'sales_admin_sales_people.view', NULL, 1),
+('sales_admin_sales_people', 'create', 'sales_admin_sales_people.create', NULL, 1),
+('sales_admin_sales_people', 'edit', 'sales_admin_sales_people.edit', NULL, 1),
+('sales_admin_sales_people', 'delete', 'sales_admin_sales_people.delete', NULL, 1),
+
+('sales_admin_shoots', 'view', 'sales_admin_shoots.view', NULL, 1),
+('sales_admin_shoots', 'create', 'sales_admin_shoots.create', NULL, 1),
+('sales_admin_shoots', 'edit', 'sales_admin_shoots.edit', NULL, 1),
+('sales_admin_shoots', 'delete', 'sales_admin_shoots.delete', NULL, 1),
+
+('sales_admin_file_manager', 'view', 'sales_admin_file_manager.view', NULL, 1),
+('sales_admin_file_manager', 'create', 'sales_admin_file_manager.create', NULL, 1),
+('sales_admin_file_manager', 'edit', 'sales_admin_file_manager.edit', NULL, 1),
+('sales_admin_file_manager', 'delete', 'sales_admin_file_manager.delete', NULL, 1),
+
+('sales_admin_meetings', 'view', 'sales_admin_meetings.view', NULL, 1),
+('sales_admin_meetings', 'create', 'sales_admin_meetings.create', NULL, 1),
+('sales_admin_meetings', 'edit', 'sales_admin_meetings.edit', NULL, 1),
+('sales_admin_meetings', 'delete', 'sales_admin_meetings.delete', NULL, 1),
+
+('sales_admin_messages', 'view', 'sales_admin_messages.view', NULL, 1),
+('sales_admin_messages', 'create', 'sales_admin_messages.create', NULL, 1),
+('sales_admin_messages', 'edit', 'sales_admin_messages.edit', NULL, 1),
+('sales_admin_messages', 'delete', 'sales_admin_messages.delete', NULL, 1),
+
+('sales_admin_quotes', 'view', 'sales_admin_quotes.view', NULL, 1),
+('sales_admin_quotes', 'create', 'sales_admin_quotes.create', NULL, 1),
+('sales_admin_quotes', 'edit', 'sales_admin_quotes.edit', NULL, 1),
+('sales_admin_quotes', 'delete', 'sales_admin_quotes.delete', NULL, 1),
+
+('sales_admin_invoices', 'view', 'sales_admin_invoices.view', NULL, 1),
+('sales_admin_invoices', 'create', 'sales_admin_invoices.create', NULL, 1),
+('sales_admin_invoices', 'edit', 'sales_admin_invoices.edit', NULL, 1),
+('sales_admin_invoices', 'delete', 'sales_admin_invoices.delete', NULL, 1);
+
+INSERT INTO `permissions` (`module_key`, `action_key`, `permission_key`, `role_id`, `is_active`) VALUES
+('production_manager_dashboard', 'view', 'production_manager_dashboard.view', NULL, 1),
+('production_manager_dashboard', 'create', 'production_manager_dashboard.create', NULL, 1),
+('production_manager_dashboard', 'edit', 'production_manager_dashboard.edit', NULL, 1),
+('production_manager_dashboard', 'delete', 'production_manager_dashboard.delete', NULL, 1),
+
+('production_manager_creative_partner', 'view', 'production_manager_creative_partner.view', NULL, 1),
+('production_manager_creative_partner', 'create', 'production_manager_creative_partner.create', NULL, 1),
+('production_manager_creative_partner', 'edit', 'production_manager_creative_partner.edit', NULL, 1),
+('production_manager_creative_partner', 'delete', 'production_manager_creative_partner.delete', NULL, 1),
+
+('production_manager_shoots', 'view', 'production_manager_shoots.view', NULL, 1),
+('production_manager_shoots', 'create', 'production_manager_shoots.create', NULL, 1),
+('production_manager_shoots', 'edit', 'production_manager_shoots.edit', NULL, 1),
+('production_manager_shoots', 'delete', 'production_manager_shoots.delete', NULL, 1),
+
+('production_manager_file_manager', 'view', 'production_manager_file_manager.view', NULL, 1),
+('production_manager_file_manager', 'create', 'production_manager_file_manager.create', NULL, 1),
+('production_manager_file_manager', 'edit', 'production_manager_file_manager.edit', NULL, 1),
+('production_manager_file_manager', 'delete', 'production_manager_file_manager.delete', NULL, 1),
+
+('production_manager_meetings', 'view', 'production_manager_meetings.view', NULL, 1),
+('production_manager_meetings', 'create', 'production_manager_meetings.create', NULL, 1),
+('production_manager_meetings', 'edit', 'production_manager_meetings.edit', NULL, 1),
+('production_manager_meetings', 'delete', 'production_manager_meetings.delete', NULL, 1),
+
+('production_manager_messages', 'view', 'production_manager_messages.view', NULL, 1),
+('production_manager_messages', 'create', 'production_manager_messages.create', NULL, 1),
+('production_manager_messages', 'edit', 'production_manager_messages.edit', NULL, 1),
+('production_manager_messages', 'delete', 'production_manager_messages.delete', NULL, 1),
+
+('production_manager_availability', 'view', 'production_manager_availability.view', NULL, 1),
+('production_manager_availability', 'create', 'production_manager_availability.create', NULL, 1),
+('production_manager_availability', 'edit', 'production_manager_availability.edit', NULL, 1),
+('production_manager_availability', 'delete', 'production_manager_availability.delete', NULL, 1);
+
+-- Sales Admin permissions
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT 7, permission_id, 1
+FROM permissions
+WHERE module_key IN (
+  'sales_admin_dashboard',
+  'sales_admin_sales_people',
+  'sales_admin_shoots',
+  'sales_admin_file_manager',
+  'sales_admin_meetings',
+  'sales_admin_messages',
+  'sales_admin_quotes',
+  'sales_admin_invoices'
+)
+AND is_active = 1
+AND NOT EXISTS (
+  SELECT 1
+  FROM role_permissions rp
+  WHERE rp.role_id = 7
+    AND rp.permission_id = permissions.permission_id
+);
+
+-- Production Manager permissions
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT 6, permission_id, 1
+FROM permissions
+WHERE module_key IN (
+  'production_manager_dashboard',
+  'production_manager_creative_partner',
+  'production_manager_shoots',
+  'production_manager_file_manager',
+  'production_manager_meetings',
+  'production_manager_messages',
+  'production_manager_availability'
+)
+AND is_active = 1
+AND NOT EXISTS (
+  SELECT 1
+  FROM role_permissions rp
+  WHERE rp.role_id = 6
+    AND rp.permission_id = permissions.permission_id
+);
+
+TRUNCATE TABLE role_permissions;
+
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT 1, permission_id, 1
+FROM permissions
+WHERE module_key LIKE 'admin_%' AND is_active = 1;
+
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT 2, permission_id, 1
+FROM permissions
+WHERE module_key LIKE 'crew_%' AND is_active = 1;
+
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT 3, permission_id, 1
+FROM permissions
+WHERE module_key LIKE 'client_%' AND is_active = 1;
+
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT 5, permission_id, 1
+FROM permissions
+WHERE module_key LIKE 'sales_rep_%' AND is_active = 1;
+
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT 6, permission_id, 1
+FROM permissions
+WHERE module_key LIKE 'production_manager_%' AND is_active = 1;
+
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT 7, permission_id, 1
+FROM permissions
+WHERE module_key LIKE 'sales_admin_%' AND is_active = 1;

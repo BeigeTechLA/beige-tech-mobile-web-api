@@ -9,6 +9,11 @@ const router = require('express').Router();
 const projectsController = require('../controllers/projects.controller');
 const filesController = require('../controllers/project-files.controller');
 const { authenticate } = require('../middleware/auth');
+const { requireAnyPermission } = require('../middleware/permission.middleware');
+
+const productionManagerFileManagerView = requireAnyPermission([
+  'production_manager_file_manager.view'
+], { allowBaseRoles: true, allowRoles: ['production_manager'] });
 
 // ============================================================================
 // ROLE-BASED MIDDLEWARE
@@ -66,7 +71,7 @@ router.post('/create', authenticate, projectsController.createProject);
  * @access  Authenticated
  * @query   page, limit, status, state, search, sort_by, sort_order, date_from, date_to
  */
-router.get('/user', authenticate, projectsController.getProjectsByUser);
+router.get('/user', authenticate, productionManagerFileManagerView, projectsController.getProjectsByUser);
 
 /**
  * @route   GET /v1/projects/requiring-action
