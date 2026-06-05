@@ -8915,8 +8915,9 @@ exports.assignCrewBulkSmart = async (req, res) => {
             await assigned_crew.bulkCreate(assignmentsToCreate);
             await activityModel.create({
                 lead_id: resolvedLeadId,
-                activity_type: 'bulk_crew_assigned',
+                activity_type: 'assigned',
                 activity_data: {
+                  action: 'bulk_crew_assigned',
                   notes: `Sales rep assigned ${assignmentsToCreate.length} crew members.`,
                   assigned_count: assignmentsToCreate.length
                 },
@@ -9034,8 +9035,12 @@ exports.removeAssignedCrew = async (req, res) => {
 
         await LeadActivityModel.create({
             lead_id: lead_id || client_lead_id,
-            activity_type: 'crew_removed',
-            activity_data: `Sales rep removed ${crewName} from the project.`,
+            activity_type: 'status_changed',
+            activity_data: {
+                action: 'crew_removed',
+                notes: `Sales rep removed ${crewName} from the project.`,
+                crew_member_id
+            },
             performed_by_user_id: assigned_by_user_id,
             created_at: new Date()
         });
@@ -10113,8 +10118,12 @@ exports.assignProjectCrewBulk = async (req, res) => {
             if (leadId) {
                 await sales_lead_activities.create({
                     lead_id: leadId,
-                    activity_type: 'bulk_crew_assigned',
-                    notes: `Assigned ${assignmentsToCreate.length} crew members to project via Project ID.`,
+                    activity_type: 'assigned',
+                    activity_data: {
+                        action: 'bulk_crew_assigned',
+                        notes: `Assigned ${assignmentsToCreate.length} crew members to project via Project ID.`,
+                        assigned_count: assignmentsToCreate.length
+                    },
                     performed_by_user_id: assigned_by_user_id
                 });
             }
@@ -10210,8 +10219,12 @@ exports.removeProjectAssignedCrew = async (req, res) => {
 
             await sales_lead_activities.create({
                 lead_id: lead.lead_id,
-                activity_type: 'crew_removed',
-                notes: `Removed ${crewName} from the project via Project ID.`,
+                activity_type: 'status_changed',
+                activity_data: {
+                    action: 'crew_removed',
+                    notes: `Removed ${crewName} from the project via Project ID.`,
+                    crew_member_id
+                },
                 performed_by_user_id: assigned_by_user_id,
                 created_at: new Date()
             });
