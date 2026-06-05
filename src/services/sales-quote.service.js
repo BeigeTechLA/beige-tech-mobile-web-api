@@ -5160,6 +5160,14 @@ async function createQuotePreviewLink(salesQuoteId, user) {
   };
 }
 
+function createQuotePreviewLinkError(reasonCode) {
+  const error = new Error('Quote preview link is invalid or expired');
+  if (reasonCode) {
+    error.details = { reason_code: reasonCode };
+  }
+  return error;
+}
+
 async function getPublicQuoteByKey(quoteKey) {
   await expireQuotesPastValidUntil();
 
@@ -5215,12 +5223,12 @@ async function getPublicQuoteByKey(quoteKey) {
   const latestVersion = await getLatestQuoteVersionRecord(Number(linkRow.sales_quote_id));
   const latestVersionCreatedAt = latestVersion?.created_at ? new Date(latestVersion.created_at) : null;
 
-  if (
-    (linkExpiresAt && now > linkExpiresAt) ||
-    (quoteValidUntilExpiry && now > quoteValidUntilExpiry) ||
-    (linkCreatedAt && latestVersionCreatedAt && linkCreatedAt < latestVersionCreatedAt)
-  ) {
-    throw new Error('Quote preview link is invalid or expired');
+  if (linkCreatedAt && latestVersionCreatedAt && linkCreatedAt < latestVersionCreatedAt) {
+    throw createQuotePreviewLinkError('QUOTE_PREVIEW_SUPERSEDED');
+  }
+
+  if ((linkExpiresAt && now > linkExpiresAt) || (quoteValidUntilExpiry && now > quoteValidUntilExpiry)) {
+    throw createQuotePreviewLinkError('QUOTE_PREVIEW_EXPIRED');
   }
 
   return getCurrentUsableQuoteVersionSnapshot(Number(linkRow.sales_quote_id));

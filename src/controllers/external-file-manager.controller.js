@@ -2946,6 +2946,12 @@ exports.requestShareOtp = async (req, res) => {
     const otp = otpService.generateOTP();
     const otpExpiry = otpService.generateOTPExpiry(otpExpiryMinutes);
     await db.sequelize.query(
+      `UPDATE file_manager_share_otp
+       SET otp_expires_at = NOW()
+       WHERE share_id = :shareId AND email = :email AND verified_at IS NULL`,
+      { replacements: { shareId: share.share_id, email } }
+    );
+    await db.sequelize.query(
       `INSERT INTO file_manager_share_otp (share_id, email, otp_code, otp_expires_at) VALUES (:shareId, :email, :otpCode, :otpExpiry)`,
       { replacements: { shareId: share.share_id, email, otpCode: otp, otpExpiry } }
     );
