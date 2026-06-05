@@ -8369,6 +8369,8 @@ exports.searchCrewForLead = async (req, res) => {
         } = req.query;
 
         const requestedRadius = Number(max_distance ?? radius ?? 50);
+        const normalizedSearchQuery = typeof search_query === 'string' ? search_query.trim() : '';
+        const hasGlobalCrewSearch = normalizedSearchQuery.length > 0;
 
         let projectDate;
         let currentBookingId = null;
@@ -8395,13 +8397,13 @@ exports.searchCrewForLead = async (req, res) => {
             centerLatitude = Number(lead.booking.event_latitude);
             centerLongitude = Number(lead.booking.event_longitude);
         } else {
-            if (!date) {
+            if (!date && !hasGlobalCrewSearch) {
                 return res.status(400).json({
                     success: false,
                     message: 'Date is required when lead_id is not provided'
                 });
             }
-            projectDate = date;
+            projectDate = date || null;
         }
 
         if (latitude !== undefined && longitude !== undefined) {
@@ -8415,18 +8417,20 @@ exports.searchCrewForLead = async (req, res) => {
 
         const hasSearchCenter = Number.isFinite(centerLatitude) && Number.isFinite(centerLongitude);
 
-        const busyCrewRecords = await assigned_crew.findAll({
-            where: {
-                crew_accept: 1,
-                is_active: 1
-            },
-            include: [{
-                model: stream_project_booking,
-                as: 'project',
-                where: { event_date: projectDate }
-            }],
-            attributes: ['crew_member_id']
-        });
+        const busyCrewRecords = projectDate && !hasGlobalCrewSearch
+            ? await assigned_crew.findAll({
+                where: {
+                    crew_accept: 1,
+                    is_active: 1
+                },
+                include: [{
+                    model: stream_project_booking,
+                    as: 'project',
+                    where: { event_date: projectDate }
+                }],
+                attributes: ['crew_member_id']
+            })
+            : [];
 
         let alreadyAssignedToThisLead = [];
         if (currentBookingId) {
@@ -8465,23 +8469,32 @@ exports.searchCrewForLead = async (req, res) => {
 
         const crewWhere = {
             is_active: true,
-            is_available: true,
             is_crew_verified: 1,
             crew_member_id: { [Op.notIn]: excludeIds.length ? excludeIds : [0] }
         };
 
-        if (targetRoleIds.length > 0) {
+        if (!hasGlobalCrewSearch) {
+            crewWhere.is_available = true;
+        }
+
+        if (targetRoleIds.length > 0 && !hasGlobalCrewSearch) {
             crewWhere[Op.or] = targetRoleIds.map(id => ({
                 primary_role: { [Op.like]: `%${id}%` }
             }));
         }
 
-        if (search_query) {
+        if (hasGlobalCrewSearch) {
             crewWhere[Op.and] = [{
                 [Op.or]: [
-                    { first_name: { [Op.like]: `%${search_query}%` } },
-                    { last_name: { [Op.like]: `%${search_query}%` } },
-                    { email: { [Op.like]: `%${search_query}%` } }
+                    { first_name: { [Op.like]: `%${normalizedSearchQuery}%` } },
+                    { last_name: { [Op.like]: `%${normalizedSearchQuery}%` } },
+                    Sequelize.where(
+                        Sequelize.fn('CONCAT', Sequelize.col('first_name'), ' ', Sequelize.col('last_name')),
+                        { [Op.like]: `%${normalizedSearchQuery}%` }
+                    ),
+                    { email: { [Op.like]: `%${normalizedSearchQuery}%` } },
+                    { phone_number: { [Op.like]: `%${normalizedSearchQuery}%` } },
+                    { location: { [Op.like]: `%${normalizedSearchQuery}%` } }
                 ]
             }];
         }
@@ -8551,11 +8564,16 @@ exports.searchCrewForLead = async (req, res) => {
             };
         });
 
-        const filteredCrew = hasSearchCenter
+        const filteredCrew = hasSearchCenter && !hasGlobalCrewSearch
             ? crewWithRoles
                 .filter(crew => crew.distance !== null && crew.distance <= requestedRadius)
                 .sort((a, b) => a.distance - b.distance)
-            : crewWithRoles;
+            : crewWithRoles.sort((a, b) => {
+                if (a.distance === null && b.distance === null) return 0;
+                if (a.distance === null) return 1;
+                if (b.distance === null) return -1;
+                return a.distance - b.distance;
+            });
 
         res.json({
             success: true,
@@ -8563,6 +8581,8 @@ exports.searchCrewForLead = async (req, res) => {
             available_count: filteredCrew.length,
             search_center: hasSearchCenter ? { latitude: centerLatitude, longitude: centerLongitude } : null,
             radius: Number.isFinite(requestedRadius) ? requestedRadius : null,
+            search_query: hasGlobalCrewSearch ? normalizedSearchQuery : null,
+            search_scope: hasGlobalCrewSearch ? 'all_crew' : 'radius',
             data: filteredCrew
         });
 
@@ -9762,6 +9782,8 @@ exports.searchCrewForProject = async (req, res) => {
         } = req.query;
 
         const requestedRadius = Number(max_distance ?? radius ?? 50);
+        const normalizedSearchQuery = typeof search_query === 'string' ? search_query.trim() : '';
+        const hasGlobalCrewSearch = normalizedSearchQuery.length > 0;
 
         let projectDate;
         let currentBookingId = null;
@@ -9787,13 +9809,13 @@ exports.searchCrewForProject = async (req, res) => {
             centerLatitude = Number(booking.event_latitude);
             centerLongitude = Number(booking.event_longitude);
         } else {
-            if (!date) {
+            if (!date && !hasGlobalCrewSearch) {
                 return res.status(400).json({
                     success: false,
                     message: 'Date is required when project_id is not provided'
                 });
             }
-            projectDate = date;
+            projectDate = date || null;
         }
 
         if (latitude !== undefined && longitude !== undefined) {
@@ -9807,18 +9829,20 @@ exports.searchCrewForProject = async (req, res) => {
 
         const hasSearchCenter = Number.isFinite(centerLatitude) && Number.isFinite(centerLongitude);
 
-        const busyCrewRecords = await assigned_crew.findAll({
-            where: {
-                crew_accept: 1,
-                is_active: 1
-            },
-            include: [{
-                model: stream_project_booking,
-                as: 'project',
-                where: { event_date: projectDate }
-            }],
-            attributes: ['crew_member_id']
-        });
+        const busyCrewRecords = projectDate && !hasGlobalCrewSearch
+            ? await assigned_crew.findAll({
+                where: {
+                    crew_accept: 1,
+                    is_active: 1
+                },
+                include: [{
+                    model: stream_project_booking,
+                    as: 'project',
+                    where: { event_date: projectDate }
+                }],
+                attributes: ['crew_member_id']
+            })
+            : [];
 
         let alreadyAssignedToThisProject = [];
         if (currentBookingId) {
@@ -9857,23 +9881,32 @@ exports.searchCrewForProject = async (req, res) => {
 
         const crewWhere = {
             is_active: true,
-            is_available: true,
             is_crew_verified: 1,
             crew_member_id: { [Op.notIn]: excludeIds.length ? excludeIds : [0] }
         };
 
-        if (targetRoleIds.length > 0) {
+        if (!hasGlobalCrewSearch) {
+            crewWhere.is_available = true;
+        }
+
+        if (targetRoleIds.length > 0 && !hasGlobalCrewSearch) {
             crewWhere[Op.or] = targetRoleIds.map(id => ({
                 primary_role: { [Op.like]: `%${id}%` }
             }));
         }
 
-        if (search_query) {
+        if (hasGlobalCrewSearch) {
             crewWhere[Op.and] = [{
                 [Op.or]: [
-                    { first_name: { [Op.like]: `%${search_query}%` } },
-                    { last_name: { [Op.like]: `%${search_query}%` } },
-                    { email: { [Op.like]: `%${search_query}%` } }
+                    { first_name: { [Op.like]: `%${normalizedSearchQuery}%` } },
+                    { last_name: { [Op.like]: `%${normalizedSearchQuery}%` } },
+                    Sequelize.where(
+                        Sequelize.fn('CONCAT', Sequelize.col('first_name'), ' ', Sequelize.col('last_name')),
+                        { [Op.like]: `%${normalizedSearchQuery}%` }
+                    ),
+                    { email: { [Op.like]: `%${normalizedSearchQuery}%` } },
+                    { phone_number: { [Op.like]: `%${normalizedSearchQuery}%` } },
+                    { location: { [Op.like]: `%${normalizedSearchQuery}%` } }
                 ]
             }];
         }
@@ -9931,11 +9964,16 @@ exports.searchCrewForProject = async (req, res) => {
             };
         });
 
-        const filteredCrew = hasSearchCenter
+        const filteredCrew = hasSearchCenter && !hasGlobalCrewSearch
             ? crewWithRoles
                 .filter(crew => crew.distance !== null && crew.distance <= requestedRadius)
                 .sort((a, b) => a.distance - b.distance)
-            : crewWithRoles;
+            : crewWithRoles.sort((a, b) => {
+                if (a.distance === null && b.distance === null) return 0;
+                if (a.distance === null) return 1;
+                if (b.distance === null) return -1;
+                return a.distance - b.distance;
+            });
 
         res.json({
             success: true,
@@ -9944,6 +9982,8 @@ exports.searchCrewForProject = async (req, res) => {
             available_count: filteredCrew.length,
             search_center: hasSearchCenter ? { latitude: centerLatitude, longitude: centerLongitude } : null,
             radius: Number.isFinite(requestedRadius) ? requestedRadius : null,
+            search_query: hasGlobalCrewSearch ? normalizedSearchQuery : null,
+            search_scope: hasGlobalCrewSearch ? 'all_crew' : 'radius',
             data: filteredCrew
         });
 
