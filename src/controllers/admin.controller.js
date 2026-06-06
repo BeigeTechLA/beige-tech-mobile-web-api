@@ -300,11 +300,16 @@ const resolveProjectDisplayAmount = async ({ project, paymentData }) => {
     return paymentAmount;
   }
 
+  const budgetAmount = parseAmountCandidate(project?.budget);
+
   const quoteAmountFromLinkedQuote = project?.quote_id
     ? await quotes.findByPk(project.quote_id, {
         attributes: ['total', 'price_after_discount', 'subtotal'],
       }).then((quote) => {
         if (!quote) return null;
+        if (budgetAmount !== null && budgetAmount > 0) {
+          return budgetAmount;
+        }
         return (
           parseAmountCandidate(quote.total) ??
           parseAmountCandidate(quote.price_after_discount) ??
@@ -323,6 +328,9 @@ const resolveProjectDisplayAmount = async ({ project, paymentData }) => {
     order: [['quote_id', 'DESC']],
   }).then((quote) => {
     if (!quote) return null;
+    if (budgetAmount !== null && budgetAmount > 0) {
+      return budgetAmount;
+    }
     return (
       parseAmountCandidate(quote.total) ??
       parseAmountCandidate(quote.price_after_discount) ??
@@ -334,19 +342,28 @@ const resolveProjectDisplayAmount = async ({ project, paymentData }) => {
     return quoteAmountFromBooking;
   }
 
+  if (budgetAmount !== null && budgetAmount > 0) {
+    return budgetAmount;
+  }
+
   return 0;
 };
 
 const resolveProjectTotalValueAmount = async ({ project }) => {
+  const budgetAmount = parseAmountCandidate(project?.budget);
+
   const quoteAmountFromLinkedQuote = project?.quote_id
     ? await quotes.findByPk(project.quote_id, {
         attributes: ['subtotal', 'total', 'price_after_discount'],
       }).then((quote) => {
         if (!quote) return null;
+        if (budgetAmount !== null && budgetAmount > 0) {
+          return budgetAmount;
+        }
         return (
-          parseAmountCandidate(quote.subtotal) ??
           parseAmountCandidate(quote.total) ??
-          parseAmountCandidate(quote.price_after_discount)
+          parseAmountCandidate(quote.price_after_discount) ??
+          parseAmountCandidate(quote.subtotal)
         );
       })
     : null;
@@ -361,10 +378,13 @@ const resolveProjectTotalValueAmount = async ({ project }) => {
     order: [['quote_id', 'DESC']],
   }).then((quote) => {
     if (!quote) return null;
+    if (budgetAmount !== null && budgetAmount > 0) {
+      return budgetAmount;
+    }
     return (
-      parseAmountCandidate(quote.subtotal) ??
       parseAmountCandidate(quote.total) ??
-      parseAmountCandidate(quote.price_after_discount)
+      parseAmountCandidate(quote.price_after_discount) ??
+      parseAmountCandidate(quote.subtotal)
     );
   });
 
@@ -372,7 +392,6 @@ const resolveProjectTotalValueAmount = async ({ project }) => {
     return quoteAmountFromBooking;
   }
 
-  const budgetAmount = parseAmountCandidate(project?.budget);
   if (budgetAmount !== null && budgetAmount > 0) {
     return budgetAmount;
   }

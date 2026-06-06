@@ -1174,10 +1174,6 @@ async function buildQuoteAcceptancePaymentDetails({ bookingId, quoteDetails }) {
     return null;
   }
 
-  if (!(Number(quoteDetails?.total || 0) > 0)) {
-    return null;
-  }
-
   const booking = await db.stream_project_booking.findOne({
     where: { stream_project_booking_id: parsedBookingId },
     include: [
@@ -1196,6 +1192,21 @@ async function buildQuoteAcceptancePaymentDetails({ bookingId, quoteDetails }) {
   }
 
   assertQuotePaymentChangeApproved(quoteDetails);
+
+  const proposalPaymentSummary = buildQuoteProposalPaymentSummary(quoteDetails);
+  const finalPayableAmount = roundCurrency(proposalPaymentSummary?.amount_due || 0);
+
+  if (finalPayableAmount <= 0) {
+    return {
+      booking_id: parsedBookingId,
+      invoice_id: null,
+      invoice_number: null,
+      payment_url: null,
+      invoice_pdf: null,
+      requires_payment: false,
+      amount_due: 0
+    };
+  }
 
   const additionalPayment = getApprovedAdditionalPaymentDue(quoteDetails);
   if (additionalPayment) {
@@ -1356,6 +1367,98 @@ async function buildQuoteAcceptancePaymentDetails({ bookingId, quoteDetails }) {
       revised_total: summaryBalance.revised_total,
       remaining_amount: summaryBalance.amount_due
     } : {})
+  };
+}
+
+async function markZeroPayableQuoteBookingPaid({
+  bookingId,
+  salesQuoteId,
+  quoteDetails,
+  leadId = null,
+  transaction
+}) {
+  const parsedBookingId = Number(bookingId);
+  if (!Number.isInteger(parsedBookingId) || parsedBookingId <= 0) {
+    return null;
+  }
+
+  const proposalPaymentSummary = buildQuoteProposalPaymentSummary(quoteDetails);
+  const finalPayableAmount = roundCurrency(proposalPaymentSummary?.amount_due || 0);
+
+  if (finalPayableAmount > 0) {
+    return null;
+  }
+
+  const now = new Date();
+  const existingPaymentSummary = quoteDetails?.payment_summary || null;
+  const quoteTotal = roundCurrency(
+    existingPaymentSummary?.quote_total ||
+    proposalPaymentSummary?.revised_total ||
+    quoteDetails?.total ||
+    0
+  );
+  const paidAmount = roundCurrency(
+    existingPaymentSummary?.paid_amount ||
+    proposalPaymentSummary?.previously_paid_amount ||
+    0
+  );
+  const creditUsedAmount = roundCurrency(existingPaymentSummary?.credit_used_amount || 0);
+  const creditCreatedAmount = roundCurrency(existingPaymentSummary?.credit_created_amount || 0);
+
+  await db.stream_project_booking.update(
+    {
+      is_completed: 1,
+      is_draft: 0,
+      payment_completed_at: now
+    },
+    {
+      where: { stream_project_booking_id: parsedBookingId },
+      transaction
+    }
+  );
+
+  await db.sales_quotes.update(
+    {
+      status: 'paid',
+      accepted_at: quoteDetails?.accepted_at || now,
+      updated_at: now
+    },
+    {
+      where: { sales_quote_id: salesQuoteId },
+      transaction
+    }
+  );
+
+  if (leadId) {
+    await db.sales_leads.update(
+      { lead_status: 'booked', last_activity_at: now },
+      { where: { lead_id: leadId }, transaction }
+    );
+  } else {
+    await db.sales_leads.update(
+      { lead_status: 'booked', last_activity_at: now },
+      { where: { booking_id: parsedBookingId }, transaction }
+    );
+  }
+
+  const paymentSummary = await bookingPaymentSummaryService.upsertBookingPaymentSummary({
+    bookingId: parsedBookingId,
+    leadId,
+    salesQuoteId,
+    quoteTotal,
+    paidAmount,
+    creditUsedAmount,
+    creditCreatedAmount,
+    lastQuoteChangeType: 'none',
+    lastQuoteChangeAmount: 0,
+    lastQuoteChangeStatus: 'approved',
+    transaction
+  });
+
+  return {
+    booking_id: parsedBookingId,
+    final_payable_amount: finalPayableAmount,
+    payment_summary: paymentSummary
   };
 }
 
@@ -5697,6 +5800,19 @@ async function acceptQuoteById(salesQuoteId, options = {}) {
         legacy_quote_id: conversionResult.legacyQuote?.quote_id || null,
         already_converted: conversionResult.wasAlreadyConverted
       };
+
+      const zeroPayablePayment = await markZeroPayableQuoteBookingPaid({
+        bookingId: bookingConversion.booking_id,
+        salesQuoteId,
+        quoteDetails,
+        leadId: bookingConversion.lead_id,
+        transaction
+      });
+
+      if (zeroPayablePayment) {
+        bookingConversion.payment_status = zeroPayablePayment.payment_summary?.payment_status || 'no_payment_due';
+        bookingConversion.final_payable_amount = zeroPayablePayment.final_payable_amount;
+      }
     } else if (!alreadyAccepted) {
       const acceptedAt = new Date();
       await quote.update({
