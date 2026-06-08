@@ -213,6 +213,12 @@ const buildProjectFilesUrl = (bookingId) => {
   return `${frontendUrl}/affiliate/dashboard`;
 };
 
+const buildAdminDashboardUrl = () => {
+  const frontendUrl = String(process.env.FRONTEND_URL || '').trim().replace(/\/+$/, '');
+  if (!frontendUrl) return '';
+  return `${frontendUrl}/admin/dashboard`;
+};
+
 const isRawFootageUploadPath = (filepath) =>
   String(filepath || '')
     .trim()
@@ -542,6 +548,100 @@ const sendRawFootageReadyEmailForUploadedFiles = async ({ filepaths = [] }) => {
     }
   } catch (error) {
     console.error('Raw footage ready email trigger failed:', error?.message || error);
+  }
+};
+
+const sendRawFilesUploadedEmailsForUploadedItems = async ({
+  items = [],
+  uploadedByName = 'Beige User',
+  uploadedById = '',
+}) => {
+  try {
+    const rawFootageItemsByBooking = new Map();
+
+    for (const item of items) {
+      const filepath = item?.filepath;
+      if (!isRawFootageUploadPath(filepath)) continue;
+
+      const bookingId = parseBookingIdFromFilepath(filepath);
+      if (!bookingId) continue;
+
+      const bookingKey = String(bookingId);
+      const existingItems = rawFootageItemsByBooking.get(bookingKey) || [];
+      existingItems.push(item);
+      rawFootageItemsByBooking.set(bookingKey, existingItems);
+    }
+
+    for (const [bookingId, bookingItems] of rawFootageItemsByBooking.entries()) {
+      const booking = await getBookingForUploadEmail(bookingId);
+      if (!booking) continue;
+
+      const plainBooking = typeof booking.get === 'function' ? booking.get({ plain: true }) : booking;
+      const toEmail = normalizeEmailAddress(plainBooking?.user?.email || plainBooking?.guest_email);
+      const recipientName = String(
+        plainBooking?.user?.name ||
+        plainBooking?.client_name ||
+        plainBooking?.project_name ||
+        plainBooking?.guest_email ||
+        ''
+      ).trim();
+      const bookingReference = String(plainBooking?.stream_project_booking_id || bookingId);
+      const projectName = String(plainBooking?.project_name || plainBooking?.client_name || `Project #${bookingId}`);
+      const dashboardLink = buildProjectFilesUrl(bookingReference);
+      const adminDashboardLink = buildAdminDashboardUrl();
+      const uploadedAt = new Date().toISOString();
+      const totalFiles = bookingItems.length || 1;
+
+      if (toEmail) {
+        const clientEmailResult = await emailService.sendRawFilesUploadedClientEmail({
+          recipients: [toEmail],
+          data: {
+            first_name: getFirstName(recipientName, 'there'),
+            client_name: getFirstName(recipientName, 'there'),
+            shoot_name: projectName,
+            project_name: projectName,
+            booking_id: bookingReference,
+            order_id: bookingReference,
+            total_files: totalFiles,
+            frontend_url: dashboardLink,
+            dashboard_link: dashboardLink,
+            uploaded_at: uploadedAt,
+          },
+        });
+
+        if (!clientEmailResult?.success) {
+          console.error(
+            'Raw files uploaded client email failed:',
+            clientEmailResult?.error || clientEmailResult?.failedRecipients || 'Unknown email error'
+          );
+        }
+      }
+
+      const adminEmailResult = await emailService.sendRawFilesUploadedAdminEmail({
+        recipient_name: 'Admin',
+        shoot_name: projectName,
+        project_name: projectName,
+        booking_id: bookingReference,
+        order_id: bookingReference,
+        Team_member_name: String(uploadedByName || 'Beige User'),
+        team_member_name: String(uploadedByName || 'Beige User'),
+        uploaded_by: String(uploadedByName || 'Beige User'),
+        uploaded_by_id: String(uploadedById || ''),
+        total_files: totalFiles,
+        upload_time: uploadedAt,
+        uploaded_at: uploadedAt,
+        dashboard_link: adminDashboardLink,
+      });
+
+      if (!adminEmailResult?.success) {
+        console.error(
+          'Raw files uploaded admin email failed:',
+          adminEmailResult?.error || adminEmailResult?.failedRecipients || 'Unknown email error'
+        );
+      }
+    }
+  } catch (error) {
+    console.error('Raw files uploaded email trigger failed:', error?.message || error);
   }
 };
 
@@ -2430,6 +2530,14 @@ exports.notifyFileUploaded = async (req, res) => {
         uploadedByName: uploaderName || 'Beige User',
         uploadedById: getRequestUserId(req),
       });
+      await sendRawFilesUploadedEmailsForUploadedItems({
+        items: [{
+          filepath: req.body.filepath,
+          fileName: req.body.fileName,
+        }],
+        uploadedByName: uploaderName || 'Beige User',
+        uploadedById: getRequestUserId(req),
+      });
       await sendRawFootageReadyEmailForUploadedFiles({
         filepaths: [req.body.filepath],
       });
@@ -2507,6 +2615,12 @@ exports.notifyFilesUploadedBatch = async (req, res) => {
         notifiedFolderKeys.add(folderKey);
       }
     }
+
+    await sendRawFilesUploadedEmailsForUploadedItems({
+      items: succeededItems,
+      uploadedByName: uploaderName || 'Beige User',
+      uploadedById: getRequestUserId(req),
+    });
 
     await sendRawFootageReadyEmailForUploadedFiles({
       filepaths: succeededItems.map((item) => item?.filepath).filter(Boolean),
