@@ -5554,7 +5554,10 @@ function getQuotePreviewExpiryFromValidUntil(validUntil) {
 
 async function createQuotePreviewLink(salesQuoteId, user) {
   const quote = await db.sales_quotes.findOne({
-    where: { sales_quote_id: salesQuoteId, ...buildQuoteAccessWhere(user) },
+    where: {
+      sales_quote_id: salesQuoteId,
+      ...(user ? buildQuoteAccessWhere(user) : {})
+    },
     attributes: ['sales_quote_id', 'valid_until']
   });
 
@@ -5604,6 +5607,69 @@ async function createQuotePreviewLink(salesQuoteId, user) {
   return {
     quote_key: quoteKey,
     expires_at: expiresAt.toISOString()
+  };
+}
+
+async function getLatestPublicQuotePreviewLink(quoteKey) {
+  await expireQuotesPastValidUntil();
+
+  const normalizedKey = String(quoteKey || '').trim();
+  if (!normalizedKey) {
+    throw new Error('Quote key is required');
+  }
+
+  const rows = await db.sequelize.query(
+    `
+      SELECT
+        l.sales_quote_id,
+        q.valid_until
+      FROM sales_quote_preview_links l
+      INNER JOIN sales_quotes q ON q.sales_quote_id = l.sales_quote_id
+      WHERE l.quote_key = :quoteKey
+      ORDER BY l.is_active DESC, l.created_at DESC
+      LIMIT 1
+    `,
+    {
+      replacements: { quoteKey: normalizedKey },
+      type: db.Sequelize.QueryTypes.SELECT
+    }
+  );
+
+  const linkRow = rows?.[0];
+  if (!linkRow?.sales_quote_id) {
+    throw createQuotePreviewLinkError('QUOTE_PREVIEW_INVALID');
+  }
+
+  const latestVersion = await db.sales_quote_versions.findOne({
+    where: { sales_quote_id: Number(linkRow.sales_quote_id) },
+    include: [
+      {
+        model: db.sales_quote_activities,
+        as: 'source_activity',
+        attributes: ['activity_id', 'metadata_json', 'created_at'],
+        required: false
+      }
+    ],
+    order: [['version_number', 'DESC'], ['sales_quote_version_id', 'DESC']]
+  });
+
+  if (latestVersion && !isUsableQuoteVersion(latestVersion)) {
+    const approvalMetadata = getQuoteVersionApprovalMetadata(latestVersion);
+    const error = createQuotePreviewLinkError('QUOTE_PREVIEW_APPROVAL_PENDING');
+    error.message = 'Admin approval is pending for the latest quote version';
+    error.details = {
+      ...error.details,
+      approval_status: approvalMetadata.approval_status || 'pending',
+      version_number: Number(latestVersion.version_number || 0)
+    };
+    throw error;
+  }
+
+  const data = await createQuotePreviewLink(Number(linkRow.sales_quote_id), null);
+  return {
+    ...data,
+    sales_quote_id: Number(linkRow.sales_quote_id),
+    version_number: latestVersion ? Number(latestVersion.version_number || 0) : 1
   };
 }
 
@@ -6464,6 +6530,7 @@ module.exports = {
   getQuoteOverallChangeSummary,
   getPublicQuoteById,
   createQuotePreviewLink,
+  getLatestPublicQuotePreviewLink,
   getPublicQuoteByKey,
   listQuotes,
   getQuoteDashboard,
