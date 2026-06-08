@@ -219,6 +219,29 @@ const buildAdminDashboardUrl = () => {
   return `${frontendUrl}/admin/dashboard`;
 };
 
+const buildCreatorDashboardUrl = () => {
+  const frontendUrl = String(process.env.FRONTEND_URL || '').trim().replace(/\/+$/, '');
+  if (!frontendUrl) return '';
+  return `${frontendUrl}/creator/dashboard`;
+};
+
+const formatEditingSubmissionTime = (value = new Date()) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value || '');
+  return date.toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: 'Asia/Kolkata',
+  });
+};
+
+const isFilesForEditingCopy = ({ phase }) =>
+  String(phase || '').trim().toLowerCase() === 'post';
+
 const isRawFootageUploadPath = (filepath) =>
   String(filepath || '')
     .trim()
@@ -226,6 +249,30 @@ const isRawFootageUploadPath = (filepath) =>
     .toLowerCase()
     .replace(/[_\s]+/g, '-')
     .includes('/post-production/raw-footage/');
+
+const normalizePathSegmentKey = (value) =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+
+const isEditedRevisionVersionPath = (filepath) => {
+  const segments = String(filepath || '')
+    .trim()
+    .replace(/\\/g, '/')
+    .split('/')
+    .map(normalizePathSegmentKey)
+    .filter(Boolean);
+
+  const postProductionIndex = segments.indexOf('postproduction');
+  if (postProductionIndex === -1) return false;
+
+  return (
+    segments[postProductionIndex + 1] === 'edits' &&
+    segments[postProductionIndex + 2] === 'revisions' &&
+    /^version0*[1-9]\d*$/.test(segments[postProductionIndex + 3] || '')
+  );
+};
 
 const getUploadFolderName = (filepath, phase) => {
   const normalizedPath = String(filepath || '').trim().replace(/\\/g, '/');
@@ -302,6 +349,146 @@ const getBookingForUploadEmail = async (bookingId) => {
       },
     ],
   });
+};
+
+const getBookingForEditingInternalEmail = async (bookingId) => {
+  if (!bookingId) return null;
+  return stream_project_booking.findOne({
+    where: {
+      stream_project_booking_id: Number(bookingId),
+      is_active: 1,
+    },
+    include: [
+      {
+        model: db.users,
+        as: 'user',
+        required: false,
+        attributes: ['id', 'name', 'email'],
+      },
+      {
+        model: assigned_crew,
+        as: 'assigned_crews',
+        required: false,
+        where: { is_active: 1 },
+        include: [
+          {
+            model: crew_members,
+            as: 'crew_member',
+            required: false,
+            attributes: ['crew_member_id', 'first_name', 'last_name', 'email'],
+          },
+        ],
+      },
+    ],
+  });
+};
+
+const parseRecipientEnvList = (...values) =>
+  values
+    .flatMap((value) => String(value || '').split(','))
+    .map((value) => normalizeEmailAddress(value))
+    .filter(Boolean);
+
+const buildFilesForEditingInternalRecipients = (booking) => {
+  const recipients = [];
+  const seenEmails = new Set();
+  const pushRecipient = ({ email, name, data = {} }) => {
+    const normalizedEmail = normalizeEmailAddress(email);
+    if (!normalizedEmail || seenEmails.has(normalizedEmail)) return;
+    seenEmails.add(normalizedEmail);
+    recipients.push({ email: normalizedEmail, name, data });
+  };
+
+  for (const email of parseRecipientEnvList(
+    process.env.FILES_FOR_EDITING_INTERNAL_TEAM_EMAIL,
+    process.env.POST_PRODUCTION_TEAM_EMAIL,
+    process.env.ADMIN_NOTIFICATION_EMAIL,
+    process.env.SALES_NOTIFICATION_EMAIL
+  )) {
+    pushRecipient({
+      email,
+      name: 'Admin',
+      data: {
+        recipient_name: 'Admin',
+        dashboard_link: buildAdminDashboardUrl(),
+      },
+    });
+  }
+
+  const assignedCrews = Array.isArray(booking?.assigned_crews) ? booking.assigned_crews : [];
+  for (const assignment of assignedCrews) {
+    const crew = assignment?.crew_member;
+    const name = [crew?.first_name, crew?.last_name].filter(Boolean).join(' ').trim() || 'Creative Partner';
+    pushRecipient({
+      email: crew?.email,
+      name,
+      data: {
+        recipient_name: name,
+        dashboard_link: buildCreatorDashboardUrl() || buildAdminDashboardUrl(),
+      },
+    });
+  }
+
+  return recipients;
+};
+
+const getAdminNotificationRecipients = () =>
+  parseRecipientEnvList(
+    process.env.EDITS_DELIVERED_TOCLIENT_ADMIN_EMAIL,
+    process.env.FILES_FOR_EDITING_INTERNAL_TEAM_EMAIL,
+    process.env.POST_PRODUCTION_TEAM_EMAIL,
+    process.env.ADMIN_NOTIFICATION_EMAIL,
+    process.env.SALES_NOTIFICATION_EMAIL
+  );
+
+const sendFilesForEditingInternalEmailForCopy = async ({
+  externalId,
+  phase,
+  targetPath,
+  sourcePaths = [],
+  submittedByName = 'Client',
+}) => {
+  try {
+    if (!isFilesForEditingCopy({ phase, targetPath })) return;
+
+    const booking = await getBookingForEditingInternalEmail(externalId);
+    if (!booking) return;
+
+    const plainBooking = typeof booking.get === 'function' ? booking.get({ plain: true }) : booking;
+    const recipients = buildFilesForEditingInternalRecipients(plainBooking);
+    if (!recipients.length) return;
+
+    const bookingReference = String(plainBooking?.stream_project_booking_id || externalId);
+    const projectName = String(
+      plainBooking?.project_name ||
+      plainBooking?.client_name ||
+      buildWorkspaceFolderName(plainBooking) ||
+      `Booking #${bookingReference}`
+    );
+
+    const emailResult = await emailService.sendFilesForEditingInternalTeamEmail({
+      recipients,
+      data: {
+        shoot_name: projectName,
+        project_name: projectName,
+        booking_id: bookingReference,
+        order_id: bookingReference,
+        total_files: sourcePaths.length || 1,
+        submitted_by: submittedByName || 'Client',
+        submission_time: formatEditingSubmissionTime(),
+        dashboard_link: buildAdminDashboardUrl(),
+      },
+    });
+
+    if (!emailResult?.success) {
+      console.error(
+        'Files for editing internal team email failed:',
+        emailResult?.error || emailResult?.failedRecipients || 'Unknown email error'
+      );
+    }
+  } catch (error) {
+    console.error('Files for editing internal team email trigger failed:', error?.message || error);
+  }
 };
 
 const getLinkedLeadIdsFromBooking = (booking) =>
@@ -642,6 +829,143 @@ const sendRawFilesUploadedEmailsForUploadedItems = async ({
     }
   } catch (error) {
     console.error('Raw files uploaded email trigger failed:', error?.message || error);
+  }
+};
+
+const sendEditsDeliveredEmailsForUploadedItems = async ({ items = [], deliveredByName = 'Production Team' }) => {
+  try {
+    const editedRevisionItemsByBooking = new Map();
+
+    for (const item of items) {
+      const filepath = item?.filepath;
+      if (!isEditedRevisionVersionPath(filepath)) continue;
+
+      const bookingId = parseBookingIdFromFilepath(filepath);
+      if (!bookingId) continue;
+
+      const phase = resolveUploadPhase(filepath);
+      const folderPath = getUploadFolderPath(filepath, phase || 'post');
+      const bookingKey = `${bookingId}::${folderPath.toLowerCase()}`;
+      const existingItems = editedRevisionItemsByBooking.get(bookingKey) || {
+        bookingId: String(bookingId),
+        folderPath,
+        items: [],
+      };
+      existingItems.items.push(item);
+      editedRevisionItemsByBooking.set(bookingKey, existingItems);
+    }
+
+    for (const entry of editedRevisionItemsByBooking.values()) {
+      const booking = await getBookingForUploadEmail(entry.bookingId);
+      if (!booking) continue;
+
+      const plainBooking = typeof booking.get === 'function' ? booking.get({ plain: true }) : booking;
+      const linkedLeadIds = getLinkedLeadIdsFromBooking(plainBooking);
+      const bookingReference = String(plainBooking?.stream_project_booking_id || entry.bookingId);
+
+      const hasClientEmailAlreadyBeenSent =
+        await hasUploadEmailAlreadyBeenSent({
+          linkedLeadIds,
+          bookingId: bookingReference,
+          folderPath: entry.folderPath,
+          emailEvent: 'edits_delivered_client',
+        });
+
+      const toEmail = normalizeEmailAddress(plainBooking?.user?.email || plainBooking?.guest_email);
+
+      const recipientName = String(
+        plainBooking?.user?.name ||
+        plainBooking?.client_name ||
+        plainBooking?.project_name ||
+        plainBooking?.guest_email ||
+        ''
+      ).trim();
+      const projectName = String(
+        plainBooking?.project_name ||
+        plainBooking?.client_name ||
+        `Booking #${bookingReference}`
+      );
+      const reviewLink = buildProjectFilesUrl(bookingReference);
+      const deliveredAt = new Date().toISOString();
+      const deliveryTime = formatEditingSubmissionTime(deliveredAt);
+
+      if (toEmail && !hasClientEmailAlreadyBeenSent) {
+        const emailResult = await emailService.sendEditsDeliveredClientEmail({
+          to: toEmail,
+          data: {
+            first_name: getFirstName(recipientName, 'there'),
+            client_name: getFirstName(recipientName, 'there'),
+            shoot_name: projectName,
+            project_name: projectName,
+            booking_id: bookingReference,
+            order_id: bookingReference,
+            total_files: entry.items.length || 1,
+            frontend_url: reviewLink,
+            review_link: reviewLink,
+            delivered_at: deliveredAt,
+          },
+        });
+
+        if (!emailResult?.success) {
+          console.error(
+            'Edits delivered client email failed:',
+            emailResult?.error || 'Unknown email error'
+          );
+        } else {
+          await recordUploadEmailSent({
+            linkedLeadIds,
+            bookingId: bookingReference,
+            folderPath: entry.folderPath,
+            filepath: entry.items[0]?.filepath || '',
+            emailEvent: 'edits_delivered_client',
+          });
+        }
+      }
+
+      const adminRecipients = getAdminNotificationRecipients();
+      const hasAdminEmailAlreadyBeenSent =
+        await hasUploadEmailAlreadyBeenSent({
+          linkedLeadIds,
+          bookingId: bookingReference,
+          folderPath: entry.folderPath,
+          emailEvent: 'edits_delivered_to_client_admin',
+        });
+
+      if (adminRecipients.length && !hasAdminEmailAlreadyBeenSent) {
+        const adminEmailResult = await emailService.sendEditsDeliveredToClientAdminEmail({
+          recipients: adminRecipients,
+          data: {
+            recipient_name: 'Admin',
+            shoot_name: projectName,
+            project_name: projectName,
+            booking_id: bookingReference,
+            order_id: bookingReference,
+            total_files: entry.items.length || 1,
+            delivered_by: deliveredByName || 'Production Team',
+            delivery_time: deliveryTime,
+            delivered_at: deliveredAt,
+            dashboard_link: buildAdminDashboardUrl(),
+          },
+        });
+
+        if (!adminEmailResult?.success) {
+          console.error(
+            'Edits delivered to client admin email failed:',
+            adminEmailResult?.error || adminEmailResult?.failedRecipients || 'Unknown email error'
+          );
+        } else {
+          await recordUploadEmailSent({
+            linkedLeadIds,
+            bookingId: bookingReference,
+            folderPath: entry.folderPath,
+            filepath: entry.items[0]?.filepath || '',
+            emailEvent: 'edits_delivered_to_client_admin',
+          });
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Edits delivered email trigger failed:', error?.message || error);
   }
 };
 
@@ -2498,6 +2822,18 @@ exports.getUploadPoliciesBatch = async (req, res) => {
         })),
       }),
     });
+
+    if (result?.success !== false) {
+      const uploaderName = await getUserDisplayName(getRequestUserId(req)).catch(() => null);
+      await sendEditsDeliveredEmailsForUploadedItems({
+        items: items.map((item = {}) => ({
+          filepath: item.filepath,
+          fileName: item.fileName || String(item.filepath || '').split('/').pop() || '',
+        })),
+        deliveredByName: uploaderName || 'Production Team',
+      });
+    }
+
     return res.status(200).json(result);
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {
@@ -2537,6 +2873,13 @@ exports.notifyFileUploaded = async (req, res) => {
         }],
         uploadedByName: uploaderName || 'Beige User',
         uploadedById: getRequestUserId(req),
+      });
+      await sendEditsDeliveredEmailsForUploadedItems({
+        items: [{
+          filepath: req.body.filepath,
+          fileName: req.body.fileName,
+        }],
+        deliveredByName: uploaderName || 'Production Team',
       });
       await sendRawFootageReadyEmailForUploadedFiles({
         filepaths: [req.body.filepath],
@@ -2622,6 +2965,11 @@ exports.notifyFilesUploadedBatch = async (req, res) => {
       uploadedById: getRequestUserId(req),
     });
 
+    await sendEditsDeliveredEmailsForUploadedItems({
+      items: succeededItems,
+      deliveredByName: uploaderName || 'Production Team',
+    });
+
     await sendRawFootageReadyEmailForUploadedFiles({
       filepaths: succeededItems.map((item) => item?.filepath).filter(Boolean),
     });
@@ -2666,6 +3014,7 @@ exports.copyFiles = async (req, res) => {
       await ensureCreatorFileAccess(req, sourcePath);
     }
 
+    const authorName = await getUserDisplayName(getRequestUserId(req)).catch(() => 'Beige User');
     const result = await proxyRequest('/copy-files', {
       method: 'POST',
       body: JSON.stringify({
@@ -2674,9 +3023,19 @@ exports.copyFiles = async (req, res) => {
         targetPath,
         sourcePaths,
         userId: getRequestUserId(req),
-        authorName: await getUserDisplayName(getRequestUserId(req)).catch(() => 'Beige User'),
+        authorName,
       }),
     });
+
+    if (result?.success !== false) {
+      await sendFilesForEditingInternalEmailForCopy({
+        externalId,
+        phase,
+        targetPath,
+        sourcePaths,
+        submittedByName: authorName,
+      });
+    }
 
     return res.status(200).json(result);
   } catch (error) {

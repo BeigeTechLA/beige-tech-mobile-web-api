@@ -82,7 +82,10 @@ const {
   BEIGE_CREDIT_RECEIVED_TEMPLATE_ID,
   ONBOARDING_FORM_CRITICAL_NOTIF_TEMPLATE_ID,
   RAW_FILES_UPLOADED_CLIENT_TEMPLATE_ID,
-  RAW_FILES_UPLOADED_ADMIN_TEMPLATE_ID
+  RAW_FILES_UPLOADED_ADMIN_TEMPLATE_ID,
+  FILES_FOR_EDITING_INTERNAL_TEAM_TEMPLATE_ID,
+  EDITS_DELIVERED_CLIENT_TEMPLATE_ID,
+  EDITED_DELIVERED_TOCLIENT_ADMIN_TEMPLATE_ID
 } = require('../config/sendgridTemplates');
 
 const formatDate = (value) => {
@@ -3203,6 +3206,133 @@ const sendRawFilesUploadedAdminEmail = async (data = {}) => {
   });
 };
 
+const sendFilesForEditingInternalTeamEmail = async ({ recipients = [], data = {} }) => {
+  if (!FILES_FOR_EDITING_INTERNAL_TEAM_TEMPLATE_ID) {
+    return { success: false, error: 'FILES_FOR_EDITING_INTERNAL_TEAM_TEMPLATE_ID is not configured' };
+  }
+
+  const recipientList = (Array.isArray(recipients) ? recipients : String(recipients || '').split(','))
+    .map((recipient) => {
+      if (recipient && typeof recipient === 'object' && !Array.isArray(recipient)) {
+        const email = normalizeEmailAddress(recipient.email || recipient.to);
+        if (!email) return null;
+
+        return {
+          email,
+          name: recipient.name || recipient.recipient_name || recipient.data?.recipient_name || '',
+          data: recipient.data || {},
+        };
+      }
+
+      const email = normalizeEmailAddress(recipient);
+      return email ? { email } : null;
+    })
+    .filter(Boolean);
+
+  if (!recipientList.length) {
+    return { success: false, error: 'No recipient emails found' };
+  }
+
+  return sendTemplateToRecipients({
+    recipients: recipientList,
+    subject: `New files submitted for editing: ${data?.shoot_name || data?.project_name || 'Shoot'}`,
+    templateId: FILES_FOR_EDITING_INTERNAL_TEAM_TEMPLATE_ID,
+    dynamicTemplateData: {
+      recipient_name: data?.recipient_name || 'Team',
+      shoot_name: data?.shoot_name || data?.project_name || data?.order_name || '',
+      'Shoot Name': data?.shoot_name || data?.project_name || data?.order_name || '',
+      total_files: Number(data?.total_files || data?.file_count || 0) || 1,
+      submitted_by: data?.submitted_by || data?.submitted_by_name || 'Client',
+      submission_time: data?.submission_time || data?.submitted_at || new Date().toISOString(),
+      dashboard_link:
+        data?.dashboard_link ||
+        data?.dashboardLink ||
+        `${String(process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/admin/dashboard`,
+      booking_id: data?.booking_id || data?.order_id || '',
+      order_id: data?.order_id || data?.booking_id || '',
+      year: new Date().getFullYear(),
+    },
+  });
+};
+
+const sendEditsDeliveredClientEmail = async ({ to, data = {} }) => {
+  if (!EDITS_DELIVERED_CLIENT_TEMPLATE_ID) {
+    return { success: false, error: 'EDITS_DELIVERED_CLIENT_TEMPLATE_ID is not configured' };
+  }
+
+  if (!to) {
+    return { success: false, error: 'Recipient email is required' };
+  }
+
+  const shootName = data?.shoot_name || data?.project_name || data?.order_name || '';
+
+  return sendEmail({
+    to,
+    subject: `Edits delivered: ${shootName || 'Your shoot'}`,
+    templateId: EDITS_DELIVERED_CLIENT_TEMPLATE_ID,
+    dynamicTemplateData: {
+      first_name: data?.first_name || data?.client_name || 'there',
+      shoot_name: shootName,
+      project_name: shootName,
+      order_name: shootName,
+      'Shoot Name': shootName,
+      frontend_url:
+        data?.frontend_url ||
+        data?.review_link ||
+        data?.dashboard_link ||
+        `${String(process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/affiliate/dashboard`,
+      booking_id: data?.booking_id || data?.order_id || '',
+      order_id: data?.order_id || data?.booking_id || '',
+      total_files: Number(data?.total_files || data?.file_count || 0) || 1,
+      delivered_at: data?.delivered_at || new Date().toISOString(),
+      year: new Date().getFullYear(),
+    },
+  });
+};
+
+const sendEditsDeliveredToClientAdminEmail = async ({ recipients = [], data = {} }) => {
+  if (!EDITED_DELIVERED_TOCLIENT_ADMIN_TEMPLATE_ID) {
+    return { success: false, error: 'EDITED_DELIVERED_TOCLIENT_ADMIN_TEMPLATE_ID is not configured' };
+  }
+
+  const recipientList = (Array.isArray(recipients) ? recipients : String(recipients || '').split(','))
+    .map((recipient) => normalizeEmailAddress(recipient?.email || recipient?.to || recipient))
+    .filter(Boolean);
+
+  if (!recipientList.length) {
+    return { success: false, error: 'No recipient emails found' };
+  }
+
+  const shootName = data?.shoot_name || data?.project_name || data?.order_name || '';
+
+  return sendTemplateToRecipients({
+    recipients: recipientList.map((email) => ({
+      email,
+      name: data?.recipient_name || 'Admin',
+      data: { recipient_name: data?.recipient_name || 'Admin' },
+    })),
+    subject: `Edited files delivered to client: ${shootName || 'Shoot'}`,
+    templateId: EDITED_DELIVERED_TOCLIENT_ADMIN_TEMPLATE_ID,
+    dynamicTemplateData: {
+      recipient_name: data?.recipient_name || 'Admin',
+      shoot_name: shootName,
+      project_name: shootName,
+      order_name: shootName,
+      'Shoot Name': shootName,
+      total_files: Number(data?.total_files || data?.file_count || 0) || 1,
+      delivered_by: data?.delivered_by || data?.delivered_by_name || 'Production Team',
+      delivery_time: data?.delivery_time || data?.delivered_at || new Date().toISOString(),
+      booking_id: data?.booking_id || data?.order_id || '',
+      order_id: data?.order_id || data?.booking_id || '',
+      dashboard_link:
+        data?.dashboard_link ||
+        data?.dashboardLink ||
+        `${String(process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/admin/dashboard`,
+      year: new Date().getFullYear(),
+    },
+  });
+};
+
 const sendFileShareInvitationEmail = async ({ to, data = {} }) => {
   if (!FILE_SHARE_INVITATION_TEMPLATE_ID) {
     return { success: false, error: 'FILE_SHARE_INVITATION_TEMPLATE_ID is not configured' };
@@ -3281,5 +3411,8 @@ module.exports = {
   sendPostProductionUploadedTemplateEmail,
   sendRawFilesUploadedClientEmail,
   sendRawFilesUploadedAdminEmail,
+  sendFilesForEditingInternalTeamEmail,
+  sendEditsDeliveredClientEmail,
+  sendEditsDeliveredToClientAdminEmail,
   sendFileShareInvitationEmail
 };
