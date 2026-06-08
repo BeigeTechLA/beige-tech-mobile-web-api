@@ -333,9 +333,9 @@ const resolveProjectDisplayAmount = async ({ project, paymentData }) => {
       return budgetAmount;
     }
     return (
+      parseAmountCandidate(quote.subtotal) ??
       parseAmountCandidate(quote.total) ??
-      parseAmountCandidate(quote.price_after_discount) ??
-      parseAmountCandidate(quote.subtotal)
+      parseAmountCandidate(quote.price_after_discount)
     );
   });
 
@@ -362,9 +362,9 @@ const resolveProjectTotalValueAmount = async ({ project }) => {
           return budgetAmount;
         }
         return (
+          parseAmountCandidate(quote.subtotal) ??
           parseAmountCandidate(quote.total) ??
-          parseAmountCandidate(quote.price_after_discount) ??
-          parseAmountCandidate(quote.subtotal)
+          parseAmountCandidate(quote.price_after_discount)
         );
       })
     : null;
@@ -1884,12 +1884,31 @@ exports.getProjectDetails = async (req, res) => {
     let totalValueAmount = await resolveProjectTotalValueAmount({
       project: projectJson,
     });
+
+    const finalQuoteTotal = parseFloat(
+      currentUsableConvertedQuote?.total ??
+      projectJson.primary_quote?.total ??
+      0
+    );
+    if (finalQuoteTotal === 0) {
+      displayAmount = 0;
+    }
     const currentUsableQuoteTotal = parseAmountCandidate(currentUsableConvertedQuote?.total);
     if (currentUsableQuoteTotal !== null && currentUsableQuoteTotal > 0) {
       totalValueAmount = currentUsableQuoteTotal;
       if (displayAmount > currentUsableQuoteTotal) {
         displayAmount = currentUsableQuoteTotal;
       }
+    }
+    if (!totalValueAmount || totalValueAmount === 0) {
+      totalValueAmount = parseFloat(projectJson.primary_quote?.subtotal || 0);
+    }
+   
+    if (!displayAmount || displayAmount === 0) {
+      if (finalQuoteTotal > 0) {
+        displayAmount = parseFloat(projectJson.primary_quote?.subtotal || 0);
+      }
+    
     }
 
     // 4. Process Event Type Labels
@@ -1914,7 +1933,17 @@ exports.getProjectDetails = async (req, res) => {
       subtotal: 0,
       total_before_credit: 0,
       credit_applied: 0,
-      discount: parseFloat(activeQuoteSource?.discount_amount || projectJson.primary_quote?.discount_amount || 0),
+      discount: (() => {
+        const discountAmt = parseFloat(
+          activeQuoteSource?.discount_amount ||
+          projectJson.primary_quote?.discount_amount ||
+          0
+        );
+        if (discountAmt > 0) return discountAmt;
+        const sub = parseFloat(activeQuoteSource?.subtotal || projectJson.primary_quote?.subtotal || 0);
+        const tot = parseFloat(activeQuoteSource?.total || projectJson.primary_quote?.total || 0);
+        return sub > 0 && tot === 0 ? sub : Math.max(0, sub - tot);
+      })(),      
       total_after_credit: 0,
       total: 0
     };
@@ -1994,13 +2023,23 @@ exports.getProjectDetails = async (req, res) => {
         : (lead?.activities || []),
       totalValueAmount || displayAmount
     );
+    const quoteSubtotalForStatus = parseFloat(
+      activeQuoteSource?.subtotal || projectJson.primary_quote?.subtotal || 0
+    );
+    const quoteTotalForStatus = parseFloat(
+      activeQuoteSource?.total || projectJson.primary_quote?.total || 0
+    );
+    const isFullyDiscounted = quoteSubtotalForStatus > 0 && quoteTotalForStatus === 0;
+
     const resolvedPaymentStatus = projectJson.payment_id
       ? 'paid'
       : manualPaymentSummary.hasFullPayment
         ? 'paid'
         : String(leadRecord?.lead_status || lead?.lead_status || '').toLowerCase() === 'booked'
           ? 'paid'
-        : (active_payment_link ? 'link_sent' : 'unpaid');
+          : isFullyDiscounted
+            ? 'paid'
+            : (active_payment_link ? 'link_sent' : 'unpaid');
 
     // 8. Construct Response
     return res.status(200).json({
