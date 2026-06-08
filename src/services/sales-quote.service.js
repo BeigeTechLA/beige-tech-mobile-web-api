@@ -3023,6 +3023,10 @@ function buildQuoteChangeLogs(activities = []) {
               email: activity.performed_by.email
             }
           : null,
+        quote_version: metadata.quote_version || null,
+        quote_version_id: metadata.quote_version_id || metadata.quote_version?.sales_quote_version_id || null,
+        version_number: metadata.version_number || metadata.quote_version?.version_number || null,
+        version_label: metadata.version_label || metadata.quote_version?.version_label || null,
         audit: metadata.audit || null,
         change_summary: metadata.change_summary || null,
         metadata
@@ -3891,6 +3895,40 @@ async function recordActivity(transaction, salesQuoteId, activityType, userId, m
   }, { transaction });
 }
 
+async function attachQuoteVersionToActivity(transaction, activity, versionRecord) {
+  if (!activity || !versionRecord) return activity;
+
+  const versionNumber = Number(versionRecord.version_number || 0) || null;
+  const versionId = Number(versionRecord.sales_quote_version_id || 0) || null;
+  const metadata = parseConfig(activity.metadata_json) || {};
+  const nextMetadata = {
+    ...metadata,
+    quote_version: {
+      sales_quote_version_id: versionId,
+      version_number: versionNumber,
+      version_label: versionNumber ? `Quote Version ${versionNumber}` : null
+    },
+    quote_version_id: versionId,
+    version_number: versionNumber,
+    version_label: versionNumber ? `Quote Version ${versionNumber}` : null
+  };
+
+  if (nextMetadata.audit) {
+    nextMetadata.audit = {
+      ...nextMetadata.audit,
+      quote_version: nextMetadata.quote_version,
+      version_number: versionNumber,
+      version_label: nextMetadata.version_label
+    };
+  }
+
+  await activity.update({
+    metadata_json: stringifyConfig(nextMetadata)
+  }, { transaction });
+
+  return activity;
+}
+
 async function loadQuoteLineItemsForVersionSnapshot(salesQuoteId, transaction = null) {
   return db.sales_quote_line_items.findAll({
     where: {
@@ -4443,13 +4481,14 @@ async function createQuote(payload, user) {
         userId: user.userId
       })
     });
-    await createQuoteVersion({
+    const createdVersion = await createQuoteVersion({
       transaction,
       quoteRecord: quote,
       userId: user.userId,
       sourceActivityId: createdActivity.activity_id,
       changeReason: 'Quote created'
     });
+    await attachQuoteVersionToActivity(transaction, createdActivity, createdVersion);
     await transaction.commit();
     return getQuoteById(quote.sales_quote_id, user);
   } catch (error) {
@@ -4549,13 +4588,14 @@ async function duplicateQuote(salesQuoteId, user) {
       }
     );
 
-    await createQuoteVersion({
+    const duplicatedVersion = await createQuoteVersion({
       transaction,
       quoteRecord: duplicatedQuote,
       userId: user.userId,
       sourceActivityId: duplicatedActivity.activity_id,
       changeReason: `Quote duplicated from ${sourceQuote.quote_number || salesQuoteId}`
     });
+    await attachQuoteVersionToActivity(transaction, duplicatedActivity, duplicatedVersion);
 
     await transaction.commit();
     return getQuoteById(duplicatedQuote.sales_quote_id, user);
@@ -5017,8 +5057,9 @@ async function updateQuote(salesQuoteId, payload, user) {
       });
     }
 
+    let updatedVersion = null;
     if (previousQuoteSnapshot.status === 'draft') {
-      await updateLatestQuoteVersionSnapshot({
+      updatedVersion = await updateLatestQuoteVersionSnapshot({
         transaction,
         quoteRecord: quote,
         userId: user.userId,
@@ -5026,13 +5067,18 @@ async function updateQuote(salesQuoteId, payload, user) {
         changeReason: versionChangeReason
       });
     } else {
-      await createQuoteVersion({
+      updatedVersion = await createQuoteVersion({
         transaction,
         quoteRecord: quote,
         userId: user.userId,
         sourceActivityId: approvalRequestActivity?.activity_id || updatedActivity.activity_id,
         changeReason: versionChangeReason
       });
+    }
+
+    await attachQuoteVersionToActivity(transaction, updatedActivity, updatedVersion);
+    if (approvalRequestActivity) {
+      await attachQuoteVersionToActivity(transaction, approvalRequestActivity, updatedVersion);
     }
 
     await transaction.commit();
@@ -6165,7 +6211,7 @@ async function updateQuoteStatus(salesQuoteId, status, user) {
       }
     }
 
-    await recordActivity(
+    const statusActivity = await recordActivity(
       transaction,
       salesQuoteId,
       status === 'sent' ? 'sent' : status === 'viewed' ? 'viewed' : status === 'accepted' ? 'accepted' : status === 'rejected' ? 'rejected' : 'status_changed',
@@ -6187,6 +6233,8 @@ async function updateQuoteStatus(salesQuoteId, status, user) {
         })
       }
     );
+    const currentVersion = await getLatestQuoteVersionRecord(salesQuoteId, transaction);
+    await attachQuoteVersionToActivity(transaction, statusActivity, currentVersion);
     await transaction.commit();
     return getQuoteById(salesQuoteId, user);
   } catch (error) {
