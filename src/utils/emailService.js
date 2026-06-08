@@ -80,7 +80,9 @@ const {
   OTP_VERIFICATION_FILE_SHARE_TEMPLATE_ID,
   FILE_SHARE_INVITATION_TEMPLATE_ID,
   BEIGE_CREDIT_RECEIVED_TEMPLATE_ID,
-  ONBOARDING_FORM_CRITICAL_NOTIF_TEMPLATE_ID
+  ONBOARDING_FORM_CRITICAL_NOTIF_TEMPLATE_ID,
+  RAW_FILES_UPLOADED_CLIENT_TEMPLATE_ID,
+  RAW_FILES_UPLOADED_ADMIN_TEMPLATE_ID
 } = require('../config/sendgridTemplates');
 
 const formatDate = (value) => {
@@ -88,6 +90,28 @@ const formatDate = (value) => {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return String(value);
   return d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+};
+
+const getDateOnlyKey = (value) => {
+  if (!value) return '';
+  if (typeof value === 'string') {
+    const dateOnlyMatch = value.trim().match(/^(\d{4}-\d{2}-\d{2})/);
+    if (dateOnlyMatch) return dateOnlyMatch[1];
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const isSameCalendarDate = (left, right = new Date()) => {
+  const leftKey = getDateOnlyKey(left);
+  const rightKey = getDateOnlyKey(right);
+  return Boolean(leftKey && rightKey && leftKey === rightKey);
 };
 
 const formatTime = (value) => {
@@ -2425,6 +2449,7 @@ const sendCPNewBookingRequestEmail = async (data) => {
     const shootAmount = data.shoot_amount !== undefined && data.shoot_amount !== null
       ? `$${formatAmount(data.shoot_amount)}`
       : 'TBD';
+    const showFifoMessage = isSameCalendarDate(data.date || data.shoot_date || data.booking_date);
 
     const [response] = await sgMail.send({
       to: data.to_email,
@@ -2443,6 +2468,7 @@ const sendCPNewBookingRequestEmail = async (data) => {
         end_time: endTime,
         // shoot_amount: shootAmount,
         dashboard_link: `${process.env.FRONTEND_URL}/creator/dashboard`,
+        show_fifo_message: showFifoMessage,
       }
     });
 
@@ -3088,6 +3114,95 @@ const sendPostProductionUploadedTemplateEmail = async ({ recipients = [], data =
   });
 };
 
+const sendRawFilesUploadedClientEmail = async ({ recipients = [], data = {} }) => {
+  if (!RAW_FILES_UPLOADED_CLIENT_TEMPLATE_ID) {
+    return { success: false, error: 'RAW_FILES_UPLOADED_CLIENT_TEMPLATE_ID is not configured' };
+  }
+
+  return sendTemplateToRecipients({
+    recipients,
+    subject: `Raw files uploaded: ${data?.shoot_name || data?.project_name || 'Shoot'}`,
+    templateId: RAW_FILES_UPLOADED_CLIENT_TEMPLATE_ID,
+    dynamicTemplateData: {
+      first_name: data?.first_name || data?.client_name || 'there',
+      shoot_name: data?.shoot_name || data?.project_name || data?.order_name || '',
+      shoot_naame: data?.shoot_name || data?.project_name || data?.order_name || '',
+      frontend_url:
+        data?.frontend_url ||
+        data?.dashboard_link ||
+        `${String(process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/affiliate/dashboard`,
+      booking_id: data?.booking_id || data?.order_id || '',
+      order_id: data?.order_id || data?.booking_id || '',
+      total_files: Number(data?.total_files || data?.file_count || 0) || 1,
+      uploaded_at: data?.uploaded_at || new Date().toISOString(),
+      year: new Date().getFullYear(),
+    }
+  });
+};
+
+const sendRawFilesUploadedAdminEmail = async (data = {}) => {
+  if (!RAW_FILES_UPLOADED_ADMIN_TEMPLATE_ID) {
+    return { success: false, error: 'RAW_FILES_UPLOADED_ADMIN_TEMPLATE_ID is not configured' };
+  }
+
+  const recipients =
+    data?.recipients ||
+    data?.to_email ||
+    data?.email ||
+    process.env.RAW_FILES_UPLOADED_ADMIN_EMAIL ||
+    process.env.ADMIN_NOTIFICATION_EMAIL ||
+    process.env.SALES_NOTIFICATION_EMAIL;
+
+  const recipientList = (Array.isArray(recipients) ? recipients : String(recipients || '').split(','))
+    .map((recipient) => normalizeEmailAddress(recipient?.email || recipient?.to || recipient))
+    .filter(Boolean);
+
+  if (!recipientList.length) {
+    return { success: false, error: 'RAW_FILES_UPLOADED_ADMIN_EMAIL or SALES_NOTIFICATION_EMAIL is not configured' };
+  }
+
+  const uploadTime = data?.upload_time || data?.uploaded_at || new Date().toISOString();
+  const uploadTimeLabel = (() => {
+    const date = new Date(uploadTime);
+    if (Number.isNaN(date.getTime())) return String(uploadTime || '');
+    return date.toLocaleString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+      timeZone: 'Asia/Kolkata',
+    });
+  })();
+
+  return sendTemplateToRecipients({
+    recipients: recipientList,
+    subject: `Raw files uploaded: ${data?.shoot_name || data?.project_name || 'Shoot'}`,
+    templateId: RAW_FILES_UPLOADED_ADMIN_TEMPLATE_ID,
+    dynamicTemplateData: {
+      recipient_name: data?.recipient_name || 'Admin',
+      shoot_name: data?.shoot_name || data?.project_name || data?.order_name || `Booking #${data?.booking_id || ''}`,
+      Team_member_name:
+        data?.Team_member_name ||
+        data?.team_member_name ||
+        data?.uploaded_by ||
+        data?.uploaded_by_name ||
+        'Production Team',
+      total_files: Number(data?.total_files || data?.file_count || 0) || 1,
+      uploaded_by: data?.uploaded_by || data?.uploaded_by_name || data?.Team_member_name || 'Production Team',
+      upload_time: uploadTimeLabel,
+      dashboard_link:
+        data?.dashboard_link ||
+        data?.dashboardLink ||
+        `${String(process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/admin/dashboard`,
+      booking_id: data?.booking_id || data?.order_id || '',
+      order_id: data?.order_id || data?.booking_id || '',
+      year: new Date().getFullYear(),
+    }
+  });
+};
+
 const sendFileShareInvitationEmail = async ({ to, data = {} }) => {
   if (!FILE_SHARE_INVITATION_TEMPLATE_ID) {
     return { success: false, error: 'FILE_SHARE_INVITATION_TEMPLATE_ID is not configured' };
@@ -3164,5 +3279,7 @@ module.exports = {
   sendMessagingInitiatedTemplateEmail,
   sendPreProductionUploadedTemplateEmail,
   sendPostProductionUploadedTemplateEmail,
+  sendRawFilesUploadedClientEmail,
+  sendRawFilesUploadedAdminEmail,
   sendFileShareInvitationEmail
 };

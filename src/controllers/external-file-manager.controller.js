@@ -213,6 +213,12 @@ const buildProjectFilesUrl = (bookingId) => {
   return `${frontendUrl}/affiliate/dashboard`;
 };
 
+const buildAdminDashboardUrl = () => {
+  const frontendUrl = String(process.env.FRONTEND_URL || '').trim().replace(/\/+$/, '');
+  if (!frontendUrl) return '';
+  return `${frontendUrl}/admin/dashboard`;
+};
+
 const isRawFootageUploadPath = (filepath) =>
   String(filepath || '')
     .trim()
@@ -542,6 +548,100 @@ const sendRawFootageReadyEmailForUploadedFiles = async ({ filepaths = [] }) => {
     }
   } catch (error) {
     console.error('Raw footage ready email trigger failed:', error?.message || error);
+  }
+};
+
+const sendRawFilesUploadedEmailsForUploadedItems = async ({
+  items = [],
+  uploadedByName = 'Beige User',
+  uploadedById = '',
+}) => {
+  try {
+    const rawFootageItemsByBooking = new Map();
+
+    for (const item of items) {
+      const filepath = item?.filepath;
+      if (!isRawFootageUploadPath(filepath)) continue;
+
+      const bookingId = parseBookingIdFromFilepath(filepath);
+      if (!bookingId) continue;
+
+      const bookingKey = String(bookingId);
+      const existingItems = rawFootageItemsByBooking.get(bookingKey) || [];
+      existingItems.push(item);
+      rawFootageItemsByBooking.set(bookingKey, existingItems);
+    }
+
+    for (const [bookingId, bookingItems] of rawFootageItemsByBooking.entries()) {
+      const booking = await getBookingForUploadEmail(bookingId);
+      if (!booking) continue;
+
+      const plainBooking = typeof booking.get === 'function' ? booking.get({ plain: true }) : booking;
+      const toEmail = normalizeEmailAddress(plainBooking?.user?.email || plainBooking?.guest_email);
+      const recipientName = String(
+        plainBooking?.user?.name ||
+        plainBooking?.client_name ||
+        plainBooking?.project_name ||
+        plainBooking?.guest_email ||
+        ''
+      ).trim();
+      const bookingReference = String(plainBooking?.stream_project_booking_id || bookingId);
+      const projectName = String(plainBooking?.project_name || plainBooking?.client_name || `Project #${bookingId}`);
+      const dashboardLink = buildProjectFilesUrl(bookingReference);
+      const adminDashboardLink = buildAdminDashboardUrl();
+      const uploadedAt = new Date().toISOString();
+      const totalFiles = bookingItems.length || 1;
+
+      if (toEmail) {
+        const clientEmailResult = await emailService.sendRawFilesUploadedClientEmail({
+          recipients: [toEmail],
+          data: {
+            first_name: getFirstName(recipientName, 'there'),
+            client_name: getFirstName(recipientName, 'there'),
+            shoot_name: projectName,
+            project_name: projectName,
+            booking_id: bookingReference,
+            order_id: bookingReference,
+            total_files: totalFiles,
+            frontend_url: dashboardLink,
+            dashboard_link: dashboardLink,
+            uploaded_at: uploadedAt,
+          },
+        });
+
+        if (!clientEmailResult?.success) {
+          console.error(
+            'Raw files uploaded client email failed:',
+            clientEmailResult?.error || clientEmailResult?.failedRecipients || 'Unknown email error'
+          );
+        }
+      }
+
+      const adminEmailResult = await emailService.sendRawFilesUploadedAdminEmail({
+        recipient_name: 'Admin',
+        shoot_name: projectName,
+        project_name: projectName,
+        booking_id: bookingReference,
+        order_id: bookingReference,
+        Team_member_name: String(uploadedByName || 'Beige User'),
+        team_member_name: String(uploadedByName || 'Beige User'),
+        uploaded_by: String(uploadedByName || 'Beige User'),
+        uploaded_by_id: String(uploadedById || ''),
+        total_files: totalFiles,
+        upload_time: uploadedAt,
+        uploaded_at: uploadedAt,
+        dashboard_link: adminDashboardLink,
+      });
+
+      if (!adminEmailResult?.success) {
+        console.error(
+          'Raw files uploaded admin email failed:',
+          adminEmailResult?.error || adminEmailResult?.failedRecipients || 'Unknown email error'
+        );
+      }
+    }
+  } catch (error) {
+    console.error('Raw files uploaded email trigger failed:', error?.message || error);
   }
 };
 
@@ -1506,9 +1606,8 @@ const ensureCreatorWorkspaceAccess = async (req, bookingId) => {
     where: {
       project_id: normalizedBookingId,
       crew_member_id: crewMemberId,
-      crew_accept: 1,
     },
-    attributes: ['id'],
+    attributes: ['id', 'crew_accept'],
   });
 
   if (!assignment) {
@@ -1542,7 +1641,7 @@ const ensureCreatorFileAccess = async (req, filepath) => {
   await ensureCreatorWorkspaceAccess(req, bookingId);
 };
 
-const getCreatorAcceptedProjectIds = async (req) => {
+const getCreatorAssignedProjectIds = async (req) => {
   if (!isCreatorRole(req)) return null;
 
   const crewMemberId = await resolveCreatorCrewMemberId(getRequestUserId(req));
@@ -1551,7 +1650,6 @@ const getCreatorAcceptedProjectIds = async (req) => {
   const assignments = await assigned_crew.findAll({
     where: {
       crew_member_id: crewMemberId,
-      crew_accept: 1,
     },
     attributes: ['project_id'],
   });
@@ -1559,6 +1657,74 @@ const getCreatorAcceptedProjectIds = async (req) => {
   return assignments
     .map((assignment) => Number(assignment.project_id))
     .filter(Boolean);
+};
+
+const getCreatorAssignedWorkspacePlaceholders = async (req, existingExternalIds = new Set()) => {
+  if (!isCreatorRole(req)) return [];
+
+  const crewMemberId = await resolveCreatorCrewMemberId(getRequestUserId(req));
+  if (!crewMemberId) return [];
+
+  const assignments = await assigned_crew.findAll({
+    where: {
+      crew_member_id: crewMemberId,
+    },
+    attributes: ['project_id', 'crew_accept', 'created_at', 'updated_at'],
+    include: [
+      {
+        model: stream_project_booking,
+        as: 'project',
+        required: true,
+      },
+    ],
+  });
+
+  return assignments
+    .map((assignment) => {
+      const booking = assignment?.project;
+      const bookingId = Number(booking?.stream_project_booking_id || assignment?.project_id);
+      if (!bookingId) return null;
+      if (existingExternalIds.has(String(bookingId).toLowerCase())) return null;
+
+      return {
+        externalId: String(bookingId),
+        folderName: buildWorkspaceFolderName(booking),
+        rootPath: null,
+        fullPath: null,
+        consoleUrl: null,
+        fileCount: 0,
+        createdAt: assignment?.created_at || booking?.created_at || null,
+        updatedAt: assignment?.updated_at || booking?.updated_at || null,
+        assignmentStatus:
+          Number(assignment?.crew_accept) === 1
+            ? 'accepted'
+            : Number(assignment?.crew_accept) === 2
+              ? 'rejected'
+              : 'pending',
+      };
+    })
+    .filter(Boolean);
+};
+
+const syncWorkspaceForExistingBookingId = async (bookingId) => {
+  const normalizedBookingId = Number(bookingId);
+  if (!normalizedBookingId) {
+    const error = new Error('Invalid project reference');
+    error.status = 400;
+    throw error;
+  }
+
+  const booking = await stream_project_booking.findOne({
+    where: { stream_project_booking_id: normalizedBookingId },
+  });
+
+  if (!booking) {
+    const error = new Error('Project not found');
+    error.status = 404;
+    throw error;
+  }
+
+  return exports.syncWorkspaceForBookingFromRecord(booking);
 };
 
 const proxyRequest = async (path, options = {}) => {
@@ -1668,6 +1834,8 @@ exports.createWorkspace = async (req, res) => {
         message: 'bookingId and folderName are required',
       });
     }
+
+    await ensureCreatorWorkspaceAccess(req, bookingId);
 
     const result = await exports.syncWorkspaceForBooking({
       bookingId,
@@ -2091,11 +2259,23 @@ exports.listWorkspaces = async (req, res) => {
 
     let filteredWorkspaces = mergedWorkspaces;
     if (isCreatorRole(req)) {
-      const allowedProjectIds = await getCreatorAcceptedProjectIds(req);
+      const allowedProjectIds = await getCreatorAssignedProjectIds(req);
       const allowedIdSet = new Set((allowedProjectIds || []).map((id) => String(id)));
       filteredWorkspaces = mergedWorkspaces.filter((workspace) =>
         isCommonEventExternalId(workspace.externalId) || allowedIdSet.has(String(workspace.externalId))
       );
+
+      const existingCreatorWorkspaceIds = new Set(
+        filteredWorkspaces.map((workspace) => String(workspace.externalId || '').trim().toLowerCase())
+      );
+      const missingAssignedWorkspaces = await getCreatorAssignedWorkspacePlaceholders(
+        req,
+        existingCreatorWorkspaceIds
+      );
+      filteredWorkspaces = [
+        ...filteredWorkspaces,
+        ...missingAssignedWorkspaces,
+      ];
     }
 
     if (search) {
@@ -2143,7 +2323,15 @@ exports.listWorkspaces = async (req, res) => {
 exports.getWorkspace = async (req, res) => {
   try {
     await ensureCreatorWorkspaceAccess(req, req.params.bookingId);
-    const result = await proxyRequest(`/workspace/${req.params.bookingId}`);
+    let result;
+    try {
+      result = await proxyRequest(`/workspace/${req.params.bookingId}`);
+    } catch (error) {
+      if (error.status !== 404 || isCommonEventExternalId(req.params.bookingId)) {
+        throw error;
+      }
+      result = await syncWorkspaceForExistingBookingId(req.params.bookingId);
+    }
     return res.status(200).json(result);
   } catch (error) {
     if (error.status === 404) {
@@ -2190,9 +2378,20 @@ exports.getWorkspaceFiles = async (req, res) => {
     if (req.query.phase) query.set('phase', req.query.phase);
     if (req.query.path) query.set('path', req.query.path);
 
-    const result = await proxyRequest(
-      `/workspace/${req.params.bookingId}/files${query.toString() ? `?${query.toString()}` : ''}`
-    );
+    let result;
+    try {
+      result = await proxyRequest(
+        `/workspace/${req.params.bookingId}/files${query.toString() ? `?${query.toString()}` : ''}`
+      );
+    } catch (error) {
+      if (error.status !== 404 || isCommonEventExternalId(req.params.bookingId)) {
+        throw error;
+      }
+      await syncWorkspaceForExistingBookingId(req.params.bookingId);
+      result = await proxyRequest(
+        `/workspace/${req.params.bookingId}/files${query.toString() ? `?${query.toString()}` : ''}`
+      );
+    }
 
     if (isCreatorRole(req) && isCommonEventExternalId(req.params.bookingId)) {
       const phase = normalizeWorkspacePhase(req.query.phase, null);
@@ -2331,6 +2530,14 @@ exports.notifyFileUploaded = async (req, res) => {
         uploadedByName: uploaderName || 'Beige User',
         uploadedById: getRequestUserId(req),
       });
+      await sendRawFilesUploadedEmailsForUploadedItems({
+        items: [{
+          filepath: req.body.filepath,
+          fileName: req.body.fileName,
+        }],
+        uploadedByName: uploaderName || 'Beige User',
+        uploadedById: getRequestUserId(req),
+      });
       await sendRawFootageReadyEmailForUploadedFiles({
         filepaths: [req.body.filepath],
       });
@@ -2408,6 +2615,12 @@ exports.notifyFilesUploadedBatch = async (req, res) => {
         notifiedFolderKeys.add(folderKey);
       }
     }
+
+    await sendRawFilesUploadedEmailsForUploadedItems({
+      items: succeededItems,
+      uploadedByName: uploaderName || 'Beige User',
+      uploadedById: getRequestUserId(req),
+    });
 
     await sendRawFootageReadyEmailForUploadedFiles({
       filepaths: succeededItems.map((item) => item?.filepath).filter(Boolean),
@@ -2945,6 +3158,12 @@ exports.requestShareOtp = async (req, res) => {
     const otpExpiryMinutes = 10;
     const otp = otpService.generateOTP();
     const otpExpiry = otpService.generateOTPExpiry(otpExpiryMinutes);
+    await db.sequelize.query(
+      `UPDATE file_manager_share_otp
+       SET otp_expires_at = NOW()
+       WHERE share_id = :shareId AND email = :email AND verified_at IS NULL`,
+      { replacements: { shareId: share.share_id, email } }
+    );
     await db.sequelize.query(
       `INSERT INTO file_manager_share_otp (share_id, email, otp_code, otp_expires_at) VALUES (:shareId, :email, :otpCode, :otpExpiry)`,
       { replacements: { shareId: share.share_id, email, otpCode: otp, otpExpiry } }
