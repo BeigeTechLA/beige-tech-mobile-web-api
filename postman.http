@@ -2416,3 +2416,18 @@ evidence
 POST {{URL}}admin/shoots/remind-onboarding-form/1207
 Authorization: {{TOKEN}}
 Content-Type: application/json
+
+### batch revision request email
+POST {{URL}}external-file-manager/revision-file/review
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI0NywidXNlclJvbGUiOiJDbGllbnQiLCJpYXQiOjE3ODA5MDUyMTcsImV4cCI6MTc4MTUxMDAxN30.LyvFbRuNWUIfuGdbAGNlHMyd9PmbZI2XfrMgSyko5RM
+Content-Type: application/json
+
+{
+  "externalId": "1213",
+  "filepaths": [
+    "corporate_neha_#1213/Post-Production/Edits/Revisions/Version1/5.jpeg",
+    "corporate_neha_#1213/Post-Production/Edits/Revisions/Version1/Grace.webp",
+    "corporate_neha_#1213/Post-Production/Edits/Revisions/Version1/images.jpg"
+  ],
+  "action": "request_revision"
+}

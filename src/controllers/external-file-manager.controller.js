@@ -274,6 +274,22 @@ const isEditedRevisionVersionPath = (filepath) => {
   );
 };
 
+const getEditedRevisionVersionLabel = (filepath) => {
+  const segments = String(filepath || '')
+    .trim()
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter(Boolean);
+
+  const versionSegment = segments.find((segment) =>
+    /^version\s*0*[1-9]\d*$/i.test(String(segment || '').replace(/[^a-z0-9]+/gi, ''))
+  );
+  return versionSegment || '';
+};
+
+const getFileNameFromPath = (filepath) =>
+  String(filepath || '').replace(/\\/g, '/').split('/').filter(Boolean).pop() || '';
+
 const getUploadFolderName = (filepath, phase) => {
   const normalizedPath = String(filepath || '').trim().replace(/\\/g, '/');
   if (!normalizedPath) return '';
@@ -440,6 +456,30 @@ const getAdminNotificationRecipients = () =>
     process.env.ADMIN_NOTIFICATION_EMAIL,
     process.env.SALES_NOTIFICATION_EMAIL
   );
+
+const getAssignedCreativePartnerRecipients = (booking) => {
+  const seenEmails = new Set();
+  const assignedCrews = Array.isArray(booking?.assigned_crews) ? booking.assigned_crews : [];
+
+  return assignedCrews
+    .map((assignment) => {
+      const crew = assignment?.crew_member;
+      const email = normalizeEmailAddress(crew?.email);
+      if (!email || seenEmails.has(email)) return null;
+      seenEmails.add(email);
+
+      const name = [crew?.first_name, crew?.last_name].filter(Boolean).join(' ').trim() || 'Creative Partner';
+      return {
+        email,
+        name,
+        data: {
+          recipient_name: name,
+          frontend_url: buildCreatorDashboardUrl() || buildAdminDashboardUrl(),
+        },
+      };
+    })
+    .filter(Boolean);
+};
 
 const sendFilesForEditingInternalEmailForCopy = async ({
   externalId,
@@ -966,6 +1006,112 @@ const sendEditsDeliveredEmailsForUploadedItems = async ({ items = [], deliveredB
     }
   } catch (error) {
     console.error('Edits delivered email trigger failed:', error?.message || error);
+  }
+};
+
+const sendRevisionRequestedEmailsForFiles = async ({
+  externalId,
+  filepaths = [],
+  requestedByName = 'Client',
+}) => {
+  try {
+    const revisionRequestsByFolder = new Map();
+
+    for (const filepath of filepaths) {
+      if (!isEditedRevisionVersionPath(filepath)) continue;
+
+      const bookingId = parseBookingIdFromFilepath(filepath) || Number(externalId);
+      if (!bookingId) continue;
+
+      const phase = resolveUploadPhase(filepath);
+      const folderPath = getUploadFolderPath(filepath, phase || 'post');
+      const bookingKey = `${bookingId}::${folderPath.toLowerCase()}`;
+      const existing = revisionRequestsByFolder.get(bookingKey) || {
+        bookingId: String(bookingId),
+        folderPath,
+        filepaths: [],
+      };
+      existing.filepaths.push(filepath);
+      revisionRequestsByFolder.set(bookingKey, existing);
+    }
+
+    for (const entry of revisionRequestsByFolder.values()) {
+      const booking = await getBookingForEditingInternalEmail(entry.bookingId);
+      if (!booking) continue;
+
+      const plainBooking = typeof booking.get === 'function' ? booking.get({ plain: true }) : booking;
+      const bookingReference = String(plainBooking?.stream_project_booking_id || entry.bookingId);
+      const projectName = String(
+        plainBooking?.project_name ||
+        plainBooking?.client_name ||
+        `Booking #${bookingReference}`
+      );
+      const fileNames = entry.filepaths.map(getFileNameFromPath).filter(Boolean);
+      const fileNameLabel = fileNames.length > 1 ? `${fileNames.length} files selected` : fileNames[0] || '';
+      const currentVersion = getEditedRevisionVersionLabel(entry.filepaths[0]) || '';
+      const requestedAt = new Date().toISOString();
+      const requestTime = formatEditingSubmissionTime(requestedAt);
+
+      const cpRecipients = getAssignedCreativePartnerRecipients(plainBooking);
+      if (cpRecipients.length) {
+        const cpEmailResult = await emailService.sendRevisionRequestedOnEditEmail({
+          recipients: cpRecipients,
+          data: {
+            shoot_name: projectName,
+            project_name: projectName,
+            booking_id: bookingReference,
+            order_id: bookingReference,
+            file_name: fileNameLabel,
+            file_names: fileNames.join(', '),
+            total_files: fileNames.length || entry.filepaths.length || 1,
+            current_version: currentVersion,
+            requested_by: requestedByName || 'Client',
+            request_time: requestTime,
+            requested_at: requestedAt,
+            frontend_url: buildCreatorDashboardUrl() || buildAdminDashboardUrl(),
+          },
+        });
+
+        if (!cpEmailResult?.success) {
+          console.error(
+            'Revision requested on edit email failed:',
+            cpEmailResult?.error || cpEmailResult?.failedRecipients || 'Unknown email error'
+          );
+        }
+      }
+
+      const adminRecipients = getAdminNotificationRecipients();
+      if (adminRecipients.length) {
+        const adminEmailResult = await emailService.sendClientRequestedRevisionsAdminEmail({
+          recipients: adminRecipients,
+          data: {
+            recipient_name: 'Admin',
+            shoot_name: projectName,
+            project_name: projectName,
+            booking_id: bookingReference,
+            order_id: bookingReference,
+            revision_type: 'Edited File Revision',
+            file_name: fileNameLabel,
+            file_names: fileNames.join(', '),
+            total_files: fileNames.length || entry.filepaths.length || 1,
+            current_version: currentVersion,
+            requested_by: requestedByName || 'Client',
+            request_time: requestTime,
+            requested_at: requestedAt,
+            dashboard_link: buildAdminDashboardUrl(),
+          },
+        });
+
+        if (!adminEmailResult?.success) {
+          console.error(
+            'Client requested edit revisions admin email failed:',
+            adminEmailResult?.error || adminEmailResult?.failedRecipients || 'Unknown email error'
+          );
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Revision requested email trigger failed:', error?.message || error);
   }
 };
 
@@ -3049,29 +3195,71 @@ exports.copyFiles = async (req, res) => {
 exports.reviewRevisionFile = async (req, res) => {
   try {
     const externalId = String(req.body.externalId || req.body.bookingId || '').trim();
-    const filepath = String(req.body.filepath || req.body.path || '').trim();
+    const filepaths = Array.isArray(req.body.filepaths)
+      ? req.body.filepaths.map((item) => String(item || '').trim()).filter(Boolean)
+      : [String(req.body.filepath || req.body.path || '').trim()].filter(Boolean);
     const action = String(req.body.action || '').trim().toLowerCase();
 
-    if (!externalId || !filepath || !['approve', 'request_revision'].includes(action)) {
+    if (!externalId || !filepaths.length || !['approve', 'request_revision'].includes(action)) {
       return res.status(400).json({
         success: false,
-        message: 'externalId, filepath and action are required',
+        message: 'externalId, filepath/filepaths and action are required',
       });
     }
 
     await ensureCreatorWorkspaceAccess(req, externalId);
-    await ensureCreatorFileAccess(req, filepath);
+    for (const filepath of filepaths) {
+      await ensureCreatorFileAccess(req, filepath);
+    }
 
-    const result = await proxyRequest('/revision-file/review', {
-      method: 'POST',
-      body: JSON.stringify({
-        externalId,
+    const authorName = await getUserDisplayName(getRequestUserId(req)).catch(() => 'Beige User');
+    const reviewResults = [];
+
+    for (const filepath of filepaths) {
+      const reviewResult = await proxyRequest('/revision-file/review', {
+        method: 'POST',
+        body: JSON.stringify({
+          externalId,
+          filepath,
+          action,
+          userId: getRequestUserId(req),
+          authorName,
+        }),
+      });
+      reviewResults.push({
         filepath,
-        action,
-        userId: getRequestUserId(req),
-        authorName: await getUserDisplayName(getRequestUserId(req)).catch(() => 'Beige User'),
-      }),
-    });
+        success: reviewResult?.success !== false,
+        result: reviewResult,
+      });
+    }
+
+    if (action === 'request_revision') {
+      const succeededFilepaths = reviewResults
+        .filter((item) => item.success)
+        .map((item) => item.filepath)
+        .filter(Boolean);
+
+      if (succeededFilepaths.length) {
+        await sendRevisionRequestedEmailsForFiles({
+          externalId,
+          filepaths: succeededFilepaths,
+          requestedByName: authorName,
+        });
+      }
+    }
+
+    if (filepaths.length === 1) {
+      return res.status(200).json(reviewResults[0].result);
+    }
+
+    const hasFailure = reviewResults.some((item) => !item.success);
+    const result = {
+      success: !hasFailure,
+      partialSuccess: hasFailure && reviewResults.some((item) => item.success),
+      data: {
+        items: reviewResults,
+      },
+    };
 
     return res.status(200).json(result);
   } catch (error) {

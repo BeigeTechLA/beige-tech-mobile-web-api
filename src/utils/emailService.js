@@ -85,7 +85,9 @@ const {
   RAW_FILES_UPLOADED_ADMIN_TEMPLATE_ID,
   FILES_FOR_EDITING_INTERNAL_TEAM_TEMPLATE_ID,
   EDITS_DELIVERED_CLIENT_TEMPLATE_ID,
-  EDITED_DELIVERED_TOCLIENT_ADMIN_TEMPLATE_ID
+  EDITED_DELIVERED_TOCLIENT_ADMIN_TEMPLATE_ID,
+  REVISIONS_REQUESTED_ON_EDITS_TEMPLATE_ID,
+  CLIENT_REQUESTED_REVISIONS_ADMIN_TEMPLATE_ID
 } = require('../config/sendgridTemplates');
 
 const formatDate = (value) => {
@@ -3333,6 +3335,87 @@ const sendEditsDeliveredToClientAdminEmail = async ({ recipients = [], data = {}
   });
 };
 
+const sendRevisionRequestedOnEditEmail = async ({ recipients = [], data = {} }) => {
+  if (!REVISIONS_REQUESTED_ON_EDITS_TEMPLATE_ID) {
+    return { success: false, error: 'REVISIONS_REQUESTED_ON_EDITS_TEMPLATE_ID is not configured' };
+  }
+
+  const shootName = data?.shoot_name || data?.project_name || data?.order_name || '';
+
+  return sendTemplateToRecipients({
+    recipients,
+    subject: `Revision requested on edits: ${shootName || 'Shoot'}`,
+    templateId: REVISIONS_REQUESTED_ON_EDITS_TEMPLATE_ID,
+    dynamicTemplateData: {
+      recipient_name: data?.recipient_name || 'Creative Partner',
+      shoot_name: shootName,
+      project_name: shootName,
+      order_name: shootName,
+      'Shoot Name': shootName,
+      file_name: data?.file_name || data?.file_names || '',
+      file_names: data?.file_names || data?.file_name || '',
+      total_files: Number(data?.total_files || data?.file_count || 0) || 1,
+      current_version: data?.current_version || '',
+      requested_by: data?.requested_by || 'Client',
+      frontend_url:
+        data?.frontend_url ||
+        data?.dashboard_link ||
+        `${String(process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/creator/dashboard`,
+      booking_id: data?.booking_id || data?.order_id || '',
+      order_id: data?.order_id || data?.booking_id || '',
+      request_time: data?.request_time || data?.requested_at || new Date().toISOString(),
+      year: new Date().getFullYear(),
+    },
+  });
+};
+
+const sendClientRequestedRevisionsAdminEmail = async ({ recipients = [], data = {} }) => {
+  if (!CLIENT_REQUESTED_REVISIONS_ADMIN_TEMPLATE_ID) {
+    return { success: false, error: 'CLIENT_REQUESTED_REVISIONS_ADMIN_TEMPLATE_ID is not configured' };
+  }
+
+  const recipientList = (Array.isArray(recipients) ? recipients : String(recipients || '').split(','))
+    .map((recipient) => normalizeEmailAddress(recipient?.email || recipient?.to || recipient))
+    .filter(Boolean);
+
+  if (!recipientList.length) {
+    return { success: false, error: 'No recipient emails found' };
+  }
+
+  const shootName = data?.shoot_name || data?.project_name || data?.order_name || '';
+
+  return sendTemplateToRecipients({
+    recipients: recipientList.map((email) => ({
+      email,
+      name: data?.recipient_name || 'Admin',
+      data: { recipient_name: data?.recipient_name || 'Admin' },
+    })),
+    subject: `Client requested edit revisions: ${shootName || 'Shoot'}`,
+    templateId: CLIENT_REQUESTED_REVISIONS_ADMIN_TEMPLATE_ID,
+    dynamicTemplateData: {
+      recipient_name: data?.recipient_name || 'Admin',
+      shoot_name: shootName,
+      project_name: shootName,
+      order_name: shootName,
+      'Shoot Name': shootName,
+      revision_type: data?.revision_type || 'Edited File Revision',
+      total_files: Number(data?.total_files || data?.file_count || 0) || 1,
+      request_time: data?.request_time || data?.requested_at || new Date().toISOString(),
+      requested_by: data?.requested_by || 'Client',
+      file_name: data?.file_name || data?.file_names || '',
+      file_names: data?.file_names || data?.file_name || '',
+      current_version: data?.current_version || '',
+      dashboard_link:
+        data?.dashboard_link ||
+        data?.dashboardLink ||
+        `${String(process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/admin/dashboard`,
+      booking_id: data?.booking_id || data?.order_id || '',
+      order_id: data?.order_id || data?.booking_id || '',
+      year: new Date().getFullYear(),
+    },
+  });
+};
+
 const sendFileShareInvitationEmail = async ({ to, data = {} }) => {
   if (!FILE_SHARE_INVITATION_TEMPLATE_ID) {
     return { success: false, error: 'FILE_SHARE_INVITATION_TEMPLATE_ID is not configured' };
@@ -3414,5 +3497,7 @@ module.exports = {
   sendFilesForEditingInternalTeamEmail,
   sendEditsDeliveredClientEmail,
   sendEditsDeliveredToClientAdminEmail,
+  sendRevisionRequestedOnEditEmail,
+  sendClientRequestedRevisionsAdminEmail,
   sendFileShareInvitationEmail
 };
