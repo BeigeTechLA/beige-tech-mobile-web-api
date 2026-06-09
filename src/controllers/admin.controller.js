@@ -42,6 +42,7 @@ const db = require('../models');
 const bookingTimelineService = require('../services/bookingTimeline.service');
 const accountCreditService = require('../services/account-credit.service');
 const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
+const quoteService = require('../services/sales-quote.service');
 // const NodeGeocoder = require('node-geocoder');
 const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
 const EXTERNAL_MEETINGS_API_BASE_URL = process.env.EXTERNAL_MEETINGS_API_BASE_URL || 'http://localhost:5002/v1/external-meetings';
@@ -300,11 +301,16 @@ const resolveProjectDisplayAmount = async ({ project, paymentData }) => {
     return paymentAmount;
   }
 
+  const budgetAmount = parseAmountCandidate(project?.budget);
+
   const quoteAmountFromLinkedQuote = project?.quote_id
     ? await quotes.findByPk(project.quote_id, {
         attributes: ['total', 'price_after_discount', 'subtotal'],
       }).then((quote) => {
         if (!quote) return null;
+        if (budgetAmount !== null && budgetAmount > 0) {
+          return budgetAmount;
+        }
         return (
           parseAmountCandidate(quote.total) ??
           parseAmountCandidate(quote.price_after_discount) ??
@@ -323,6 +329,9 @@ const resolveProjectDisplayAmount = async ({ project, paymentData }) => {
     order: [['quote_id', 'DESC']],
   }).then((quote) => {
     if (!quote) return null;
+    if (budgetAmount !== null && budgetAmount > 0) {
+      return budgetAmount;
+    }
     return (
       parseAmountCandidate(quote.total) ??
       parseAmountCandidate(quote.price_after_discount) ??
@@ -334,19 +343,28 @@ const resolveProjectDisplayAmount = async ({ project, paymentData }) => {
     return quoteAmountFromBooking;
   }
 
+  if (budgetAmount !== null && budgetAmount > 0) {
+    return budgetAmount;
+  }
+
   return 0;
 };
 
 const resolveProjectTotalValueAmount = async ({ project }) => {
+  const budgetAmount = parseAmountCandidate(project?.budget);
+
   const quoteAmountFromLinkedQuote = project?.quote_id
     ? await quotes.findByPk(project.quote_id, {
         attributes: ['subtotal', 'total', 'price_after_discount'],
       }).then((quote) => {
         if (!quote) return null;
+        if (budgetAmount !== null && budgetAmount > 0) {
+          return budgetAmount;
+        }
         return (
-          parseAmountCandidate(quote.subtotal) ??
           parseAmountCandidate(quote.total) ??
-          parseAmountCandidate(quote.price_after_discount)
+          parseAmountCandidate(quote.price_after_discount) ??
+          parseAmountCandidate(quote.subtotal)
         );
       })
     : null;
@@ -361,10 +379,13 @@ const resolveProjectTotalValueAmount = async ({ project }) => {
     order: [['quote_id', 'DESC']],
   }).then((quote) => {
     if (!quote) return null;
+    if (budgetAmount !== null && budgetAmount > 0) {
+      return budgetAmount;
+    }
     return (
-      parseAmountCandidate(quote.subtotal) ??
       parseAmountCandidate(quote.total) ??
-      parseAmountCandidate(quote.price_after_discount)
+      parseAmountCandidate(quote.price_after_discount) ??
+      parseAmountCandidate(quote.subtotal)
     );
   });
 
@@ -372,7 +393,6 @@ const resolveProjectTotalValueAmount = async ({ project }) => {
     return quoteAmountFromBooking;
   }
 
-  const budgetAmount = parseAmountCandidate(project?.budget);
   if (budgetAmount !== null && budgetAmount > 0) {
     return budgetAmount;
   }
@@ -1307,15 +1327,31 @@ exports.assignCrew = async (req, res) => {
 
     const uniqueCrewIds = [...new Set(crewIds.map(Number).filter(Boolean))];
 
-    for (const crewId of uniqueCrewIds) {
-      await assigned_crew.create({
-        project_id,
-        crew_member_id: crewId,
-        assigned_date: new Date(),
-        status: 'assigned',
-        is_active: 1,
-      });
-    }
+  for (const crewId of uniqueCrewIds) {
+  await assigned_crew.create({
+    project_id,
+    crew_member_id: crewId,
+    assigned_date: new Date(),
+    status: 'assigned',
+    is_active: 1,
+  });
+
+  const existingEarning = await db.creator_earnings.findOne({
+    where: { booking_id: project_id, creator_id: crewId }
+  });
+
+  if (!existingEarning) {
+    await db.creator_earnings.create({
+      booking_id: project_id,
+      creator_id: crewId,
+      gross_amount: 0,
+      net_earning_amount: 0,
+      status: 'pending',
+      created_at: new Date(),
+      updated_at: new Date()
+    });
+  }
+}
 
     // Non-blocking email trigger
     try {
@@ -1834,17 +1870,27 @@ exports.getProjectDetails = async (req, res) => {
     }
 
     const convertedSalesQuoteId = convertedSalesQuote?.sales_quote_id || bookingPaymentSummary?.sales_quote_id || null;
+    const currentUsableConvertedQuote = convertedSalesQuoteId
+      ? await quoteService.getCurrentUsableQuoteVersionSnapshot(convertedSalesQuoteId, null)
+      : null;
     const isQuoteConvertedBooking = Boolean(
       convertedSalesQuoteId || String(lead?.lead_source || '').toLowerCase() === 'converted bookings'
     );
 
-    const displayAmount = await resolveProjectDisplayAmount({
+    let displayAmount = await resolveProjectDisplayAmount({
       project: projectJson,
       paymentData,
     });
-    const totalValueAmount = await resolveProjectTotalValueAmount({
+    let totalValueAmount = await resolveProjectTotalValueAmount({
       project: projectJson,
     });
+    const currentUsableQuoteTotal = parseAmountCandidate(currentUsableConvertedQuote?.total);
+    if (currentUsableQuoteTotal !== null && currentUsableQuoteTotal > 0) {
+      totalValueAmount = currentUsableQuoteTotal;
+      if (displayAmount > currentUsableQuoteTotal) {
+        displayAmount = currentUsableQuoteTotal;
+      }
+    }
 
     // 4. Process Event Type Labels
     const rawTypes = projectJson.event_type ? projectJson.event_type.split(',') : [];
@@ -1859,7 +1905,7 @@ exports.getProjectDetails = async (req, res) => {
     // 5. Pricing Breakdown logic
     // Using calculateLeadPricing helper if available, otherwise manual calc
     const projectedQuote = typeof calculateLeadPricing === 'function' ? await calculateLeadPricing(projectJson) : null;
-    const activeQuoteSource = projectJson.primary_quote || projectedQuote;
+    const activeQuoteSource = currentUsableConvertedQuote || projectJson.primary_quote || projectedQuote;
     
     const parsedQuoteTotal = parseFloat(activeQuoteSource?.total || 0);
     let pricing_breakdown = {
@@ -8358,6 +8404,8 @@ exports.searchCrewForLead = async (req, res) => {
         } = req.query;
 
         const requestedRadius = Number(max_distance ?? radius ?? 50);
+        const normalizedSearchQuery = typeof search_query === 'string' ? search_query.trim() : '';
+        const hasGlobalCrewSearch = normalizedSearchQuery.length > 0;
 
         let projectDate;
         let currentBookingId = null;
@@ -8384,13 +8432,13 @@ exports.searchCrewForLead = async (req, res) => {
             centerLatitude = Number(lead.booking.event_latitude);
             centerLongitude = Number(lead.booking.event_longitude);
         } else {
-            if (!date) {
+            if (!date && !hasGlobalCrewSearch) {
                 return res.status(400).json({
                     success: false,
                     message: 'Date is required when lead_id is not provided'
                 });
             }
-            projectDate = date;
+            projectDate = date || null;
         }
 
         if (latitude !== undefined && longitude !== undefined) {
@@ -8404,18 +8452,20 @@ exports.searchCrewForLead = async (req, res) => {
 
         const hasSearchCenter = Number.isFinite(centerLatitude) && Number.isFinite(centerLongitude);
 
-        const busyCrewRecords = await assigned_crew.findAll({
-            where: {
-                crew_accept: 1,
-                is_active: 1
-            },
-            include: [{
-                model: stream_project_booking,
-                as: 'project',
-                where: { event_date: projectDate }
-            }],
-            attributes: ['crew_member_id']
-        });
+        const busyCrewRecords = projectDate && !hasGlobalCrewSearch
+            ? await assigned_crew.findAll({
+                where: {
+                    crew_accept: 1,
+                    is_active: 1
+                },
+                include: [{
+                    model: stream_project_booking,
+                    as: 'project',
+                    where: { event_date: projectDate }
+                }],
+                attributes: ['crew_member_id']
+            })
+            : [];
 
         let alreadyAssignedToThisLead = [];
         if (currentBookingId) {
@@ -8454,23 +8504,32 @@ exports.searchCrewForLead = async (req, res) => {
 
         const crewWhere = {
             is_active: true,
-            is_available: true,
             is_crew_verified: 1,
             crew_member_id: { [Op.notIn]: excludeIds.length ? excludeIds : [0] }
         };
 
-        if (targetRoleIds.length > 0) {
+        if (!hasGlobalCrewSearch) {
+            crewWhere.is_available = true;
+        }
+
+        if (targetRoleIds.length > 0 && !hasGlobalCrewSearch) {
             crewWhere[Op.or] = targetRoleIds.map(id => ({
                 primary_role: { [Op.like]: `%${id}%` }
             }));
         }
 
-        if (search_query) {
+        if (hasGlobalCrewSearch) {
             crewWhere[Op.and] = [{
                 [Op.or]: [
-                    { first_name: { [Op.like]: `%${search_query}%` } },
-                    { last_name: { [Op.like]: `%${search_query}%` } },
-                    { email: { [Op.like]: `%${search_query}%` } }
+                    { first_name: { [Op.like]: `%${normalizedSearchQuery}%` } },
+                    { last_name: { [Op.like]: `%${normalizedSearchQuery}%` } },
+                    Sequelize.where(
+                        Sequelize.fn('CONCAT', Sequelize.col('first_name'), ' ', Sequelize.col('last_name')),
+                        { [Op.like]: `%${normalizedSearchQuery}%` }
+                    ),
+                    { email: { [Op.like]: `%${normalizedSearchQuery}%` } },
+                    { phone_number: { [Op.like]: `%${normalizedSearchQuery}%` } },
+                    { location: { [Op.like]: `%${normalizedSearchQuery}%` } }
                 ]
             }];
         }
@@ -8540,11 +8599,16 @@ exports.searchCrewForLead = async (req, res) => {
             };
         });
 
-        const filteredCrew = hasSearchCenter
+        const filteredCrew = hasSearchCenter && !hasGlobalCrewSearch
             ? crewWithRoles
                 .filter(crew => crew.distance !== null && crew.distance <= requestedRadius)
                 .sort((a, b) => a.distance - b.distance)
-            : crewWithRoles;
+            : crewWithRoles.sort((a, b) => {
+                if (a.distance === null && b.distance === null) return 0;
+                if (a.distance === null) return 1;
+                if (b.distance === null) return -1;
+                return a.distance - b.distance;
+            });
 
         res.json({
             success: true,
@@ -8552,6 +8616,8 @@ exports.searchCrewForLead = async (req, res) => {
             available_count: filteredCrew.length,
             search_center: hasSearchCenter ? { latitude: centerLatitude, longitude: centerLongitude } : null,
             radius: Number.isFinite(requestedRadius) ? requestedRadius : null,
+            search_query: hasGlobalCrewSearch ? normalizedSearchQuery : null,
+            search_scope: hasGlobalCrewSearch ? 'all_crew' : 'radius',
             data: filteredCrew
         });
 
@@ -8884,8 +8950,9 @@ exports.assignCrewBulkSmart = async (req, res) => {
             await assigned_crew.bulkCreate(assignmentsToCreate);
             await activityModel.create({
                 lead_id: resolvedLeadId,
-                activity_type: 'bulk_crew_assigned',
+                activity_type: 'assigned',
                 activity_data: {
+                  action: 'bulk_crew_assigned',
                   notes: `Sales rep assigned ${assignmentsToCreate.length} crew members.`,
                   assigned_count: assignmentsToCreate.length
                 },
@@ -9003,8 +9070,12 @@ exports.removeAssignedCrew = async (req, res) => {
 
         await LeadActivityModel.create({
             lead_id: lead_id || client_lead_id,
-            activity_type: 'crew_removed',
-            activity_data: `Sales rep removed ${crewName} from the project.`,
+            activity_type: 'status_changed',
+            activity_data: {
+                action: 'crew_removed',
+                notes: `Sales rep removed ${crewName} from the project.`,
+                crew_member_id
+            },
             performed_by_user_id: assigned_by_user_id,
             created_at: new Date()
         });
@@ -9329,7 +9400,10 @@ exports.getBookingSummaryById = async (req, res) => {
             }],
             order: [[{ model: db.sales_quote_line_items, as: 'line_items' }, 'sort_order', 'ASC']]
         });
-        const activeQuote = customQuote ? customQuote.toJSON() : primaryQuote;
+        const usableCustomQuote = customQuote?.sales_quote_id
+            ? await quoteService.getCurrentUsableQuoteVersionSnapshot(customQuote.sales_quote_id, null)
+            : null;
+        const activeQuote = usableCustomQuote || (customQuote ? customQuote.toJSON() : primaryQuote);
 
         // 6. Pricing Breakdown & Discount Logic
         
@@ -9748,6 +9822,8 @@ exports.searchCrewForProject = async (req, res) => {
         } = req.query;
 
         const requestedRadius = Number(max_distance ?? radius ?? 50);
+        const normalizedSearchQuery = typeof search_query === 'string' ? search_query.trim() : '';
+        const hasGlobalCrewSearch = normalizedSearchQuery.length > 0;
 
         let projectDate;
         let currentBookingId = null;
@@ -9773,13 +9849,13 @@ exports.searchCrewForProject = async (req, res) => {
             centerLatitude = Number(booking.event_latitude);
             centerLongitude = Number(booking.event_longitude);
         } else {
-            if (!date) {
+            if (!date && !hasGlobalCrewSearch) {
                 return res.status(400).json({
                     success: false,
                     message: 'Date is required when project_id is not provided'
                 });
             }
-            projectDate = date;
+            projectDate = date || null;
         }
 
         if (latitude !== undefined && longitude !== undefined) {
@@ -9793,18 +9869,20 @@ exports.searchCrewForProject = async (req, res) => {
 
         const hasSearchCenter = Number.isFinite(centerLatitude) && Number.isFinite(centerLongitude);
 
-        const busyCrewRecords = await assigned_crew.findAll({
-            where: {
-                crew_accept: 1,
-                is_active: 1
-            },
-            include: [{
-                model: stream_project_booking,
-                as: 'project',
-                where: { event_date: projectDate }
-            }],
-            attributes: ['crew_member_id']
-        });
+        const busyCrewRecords = projectDate && !hasGlobalCrewSearch
+            ? await assigned_crew.findAll({
+                where: {
+                    crew_accept: 1,
+                    is_active: 1
+                },
+                include: [{
+                    model: stream_project_booking,
+                    as: 'project',
+                    where: { event_date: projectDate }
+                }],
+                attributes: ['crew_member_id']
+            })
+            : [];
 
         let alreadyAssignedToThisProject = [];
         if (currentBookingId) {
@@ -9843,23 +9921,32 @@ exports.searchCrewForProject = async (req, res) => {
 
         const crewWhere = {
             is_active: true,
-            is_available: true,
             is_crew_verified: 1,
             crew_member_id: { [Op.notIn]: excludeIds.length ? excludeIds : [0] }
         };
 
-        if (targetRoleIds.length > 0) {
+        if (!hasGlobalCrewSearch) {
+            crewWhere.is_available = true;
+        }
+
+        if (targetRoleIds.length > 0 && !hasGlobalCrewSearch) {
             crewWhere[Op.or] = targetRoleIds.map(id => ({
                 primary_role: { [Op.like]: `%${id}%` }
             }));
         }
 
-        if (search_query) {
+        if (hasGlobalCrewSearch) {
             crewWhere[Op.and] = [{
                 [Op.or]: [
-                    { first_name: { [Op.like]: `%${search_query}%` } },
-                    { last_name: { [Op.like]: `%${search_query}%` } },
-                    { email: { [Op.like]: `%${search_query}%` } }
+                    { first_name: { [Op.like]: `%${normalizedSearchQuery}%` } },
+                    { last_name: { [Op.like]: `%${normalizedSearchQuery}%` } },
+                    Sequelize.where(
+                        Sequelize.fn('CONCAT', Sequelize.col('first_name'), ' ', Sequelize.col('last_name')),
+                        { [Op.like]: `%${normalizedSearchQuery}%` }
+                    ),
+                    { email: { [Op.like]: `%${normalizedSearchQuery}%` } },
+                    { phone_number: { [Op.like]: `%${normalizedSearchQuery}%` } },
+                    { location: { [Op.like]: `%${normalizedSearchQuery}%` } }
                 ]
             }];
         }
@@ -9917,11 +10004,16 @@ exports.searchCrewForProject = async (req, res) => {
             };
         });
 
-        const filteredCrew = hasSearchCenter
+        const filteredCrew = hasSearchCenter && !hasGlobalCrewSearch
             ? crewWithRoles
                 .filter(crew => crew.distance !== null && crew.distance <= requestedRadius)
                 .sort((a, b) => a.distance - b.distance)
-            : crewWithRoles;
+            : crewWithRoles.sort((a, b) => {
+                if (a.distance === null && b.distance === null) return 0;
+                if (a.distance === null) return 1;
+                if (b.distance === null) return -1;
+                return a.distance - b.distance;
+            });
 
         res.json({
             success: true,
@@ -9930,6 +10022,8 @@ exports.searchCrewForProject = async (req, res) => {
             available_count: filteredCrew.length,
             search_center: hasSearchCenter ? { latitude: centerLatitude, longitude: centerLongitude } : null,
             radius: Number.isFinite(requestedRadius) ? requestedRadius : null,
+            search_query: hasGlobalCrewSearch ? normalizedSearchQuery : null,
+            search_scope: hasGlobalCrewSearch ? 'all_crew' : 'radius',
             data: filteredCrew
         });
 
@@ -10059,8 +10153,12 @@ exports.assignProjectCrewBulk = async (req, res) => {
             if (leadId) {
                 await sales_lead_activities.create({
                     lead_id: leadId,
-                    activity_type: 'bulk_crew_assigned',
-                    notes: `Assigned ${assignmentsToCreate.length} crew members to project via Project ID.`,
+                    activity_type: 'assigned',
+                    activity_data: {
+                        action: 'bulk_crew_assigned',
+                        notes: `Assigned ${assignmentsToCreate.length} crew members to project via Project ID.`,
+                        assigned_count: assignmentsToCreate.length
+                    },
                     performed_by_user_id: assigned_by_user_id
                 });
             }
@@ -10156,8 +10254,12 @@ exports.removeProjectAssignedCrew = async (req, res) => {
 
             await sales_lead_activities.create({
                 lead_id: lead.lead_id,
-                activity_type: 'crew_removed',
-                notes: `Removed ${crewName} from the project via Project ID.`,
+                activity_type: 'status_changed',
+                activity_data: {
+                    action: 'crew_removed',
+                    notes: `Removed ${crewName} from the project via Project ID.`,
+                    crew_member_id
+                },
                 performed_by_user_id: assigned_by_user_id,
                 created_at: new Date()
             });
