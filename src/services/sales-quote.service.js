@@ -4711,15 +4711,18 @@ async function updateQuote(salesQuoteId, payload, user) {
     const previousTotal = roundCurrency(quote.total);
     const newTotal = roundCurrency(totals.total);
     const collectedAmount = roundCurrency(billingState.collected_amount);
-    const extraAmount = roundCurrency(Math.max(newTotal - collectedAmount, 0));
-    const overpaidAmount = roundCurrency(Math.max(collectedAmount - newTotal, 0));
-    const actualReductionAmount = roundCurrency(Math.max(previousTotal - newTotal, 0));
-    const reducedAmount = roundCurrency(Math.min(actualReductionAmount, overpaidAmount));
     const quoteChangeType = newTotal > previousTotal
       ? 'increase'
       : newTotal < previousTotal
         ? 'decrease'
         : 'unchanged';
+    const extraAmount = quoteChangeType === 'increase'
+      ? roundCurrency(Math.max(newTotal - collectedAmount, 0))
+      : 0;
+    const actualReductionAmount = roundCurrency(Math.max(previousTotal - newTotal, 0));
+    const reducedAmount = quoteChangeType === 'decrease' && billingState.is_collected
+      ? actualReductionAmount
+      : 0;
     const paymentStatus = extraAmount > 0
       ? (billingState.is_collected ? 'paid' : billingState.payment_status)
       : (billingState.is_collected ? 'paid' : billingState.payment_status);

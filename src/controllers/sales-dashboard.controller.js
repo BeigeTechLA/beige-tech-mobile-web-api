@@ -54,6 +54,59 @@ function formatSignedCurrency(value) {
   return `${amount > 0 ? '+' : '-'}${formatCurrency(Math.abs(amount))}`;
 }
 
+function resolveQuoteChangeRequestMetadata(metadata = {}) {
+  const previousTotal = roundCurrency(metadata.previous_total || 0);
+  const newTotal = roundCurrency(metadata.new_total || 0);
+  const metadataExtraAmount = roundCurrency(metadata.extra_amount || 0);
+  const metadataReducedAmount = roundCurrency(metadata.reduced_amount || 0);
+
+  if (previousTotal > 0 || newTotal > 0) {
+    if (newTotal > previousTotal) {
+      const extraAmount = metadataExtraAmount > 0
+        ? metadataExtraAmount
+        : roundCurrency(newTotal - previousTotal);
+      return {
+        requestType: 'increase',
+        previousTotal,
+        newTotal,
+        extraAmount,
+        reducedAmount: 0,
+        changeAmount: extraAmount
+      };
+    }
+
+    if (newTotal < previousTotal) {
+      const reducedAmount = metadataReducedAmount > 0
+        ? metadataReducedAmount
+        : roundCurrency(previousTotal - newTotal);
+      return {
+        requestType: 'decrease',
+        previousTotal,
+        newTotal,
+        extraAmount: 0,
+        reducedAmount,
+        changeAmount: reducedAmount
+      };
+    }
+  }
+
+  const requestType = metadataExtraAmount > 0
+    ? 'increase'
+    : metadataReducedAmount > 0
+      ? 'decrease'
+      : (metadata.quote_change_type || 'unknown');
+  const changeAmount = metadataExtraAmount > 0 ? metadataExtraAmount : metadataReducedAmount;
+
+  return {
+    requestType,
+    previousTotal,
+    newTotal,
+    extraAmount: metadataExtraAmount,
+    reducedAmount: metadataReducedAmount,
+    changeAmount
+  };
+}
+
 async function updatePaymentSummaryForQuoteChangeReview({
   bookingId,
   salesQuoteId,
@@ -64,16 +117,13 @@ async function updatePaymentSummaryForQuoteChangeReview({
   if (!bookingId || !salesQuoteId) return null;
 
   const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId);
-  const previousTotal = roundCurrency(metadata.previous_total);
-  const newTotal = roundCurrency(metadata.new_total || previousTotal);
-  const extraAmount = roundCurrency(metadata.extra_amount);
-  const reducedAmount = roundCurrency(metadata.reduced_amount);
-  const changeType = extraAmount > 0
-    ? 'increase'
-    : reducedAmount > 0
-      ? 'decrease'
-      : (metadata.quote_change_type || 'none');
-  const changeAmount = extraAmount > 0 ? extraAmount : reducedAmount;
+  const {
+    previousTotal,
+    newTotal,
+    requestType,
+    reducedAmount,
+    changeAmount
+  } = resolveQuoteChangeRequestMetadata(metadata);
   const approvedCreditAmount = decision === 'approve'
     ? roundCurrency(
         (creditResult?.approved_entries || []).reduce((sum, entry) => sum + Number(entry.amount || 0), 0)
@@ -98,7 +148,7 @@ async function updatePaymentSummaryForQuoteChangeReview({
     paidAmount,
     creditUsedAmount: existingSummary?.credit_used_amount || 0,
     creditCreatedAmount,
-    lastQuoteChangeType: changeType === 'increase' || changeType === 'decrease' ? changeType : 'none',
+    lastQuoteChangeType: requestType === 'increase' || requestType === 'decrease' ? requestType : 'none',
     lastQuoteChangeAmount: changeAmount,
     lastQuoteChangeStatus: decision === 'approve' ? 'approved' : 'rejected'
   });
@@ -293,7 +343,7 @@ function isQuoteChangeRequestActivity(row, metadata = {}) {
   ) && (
     Boolean(metadata.approval_requested_at) ||
     Boolean(metadata.approval_status) ||
-    message.includes('quote updated') ||
+    metadata.invoice_refresh_required === true ||
     message.includes('quote total decreased after invoice/payment state') ||
     message.includes('quote total increased after invoice/payment state')
   );
@@ -344,15 +394,13 @@ function findMatchingQuoteChangeSummary(rows = [], requestRow = null, requestMet
 }
 
 function normalizeQuoteChangeRequest(row, metadata = {}, overallChangeSummary = null) {
-  const extraAmount = Number(metadata.extra_amount || 0);
-  const reducedAmount = Number(metadata.reduced_amount || 0);
-  const previousTotal = Number(metadata.previous_total || 0);
-  const newTotal = Number(metadata.new_total || 0);
-  const requestType = extraAmount > 0
-    ? 'increase'
-    : reducedAmount > 0
-      ? 'decrease'
-      : (metadata.quote_change_type || 'unknown');
+  const {
+    requestType,
+    previousTotal,
+    newTotal,
+    extraAmount,
+    reducedAmount
+  } = resolveQuoteChangeRequestMetadata(metadata);
   const approvalStatus = metadata.approval_status || 'pending';
 
   return {
@@ -1669,8 +1717,9 @@ async function reviewQuoteChangeRequest(req, res, decision) {
 
       const salesQuoteId = activity.sales_quote_id;
       const bookingId = Number(metadata.booking_id || 0) || null;
-      const extraAmount = Number(metadata.extra_amount || 0);
-      const reducedAmount = Number(metadata.reduced_amount || 0);
+      const resolvedChange = resolveQuoteChangeRequestMetadata(metadata);
+      const extraAmount = resolvedChange.extraAmount;
+      const reducedAmount = resolvedChange.reducedAmount;
 
     let creditResult = null;
     if (reducedAmount > 0) {
@@ -1693,6 +1742,9 @@ async function reviewQuoteChangeRequest(req, res, decision) {
     const reviewedAt = new Date().toISOString();
     const nextMetadata = {
       ...metadata,
+      extra_amount: extraAmount,
+      reduced_amount: reducedAmount,
+      quote_change_type: resolvedChange.requestType,
       approval_status: decision === 'approve' ? 'approved' : 'rejected',
       review_notes: notes || null,
       reviewed_at: reviewedAt
