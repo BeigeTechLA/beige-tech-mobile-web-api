@@ -301,11 +301,16 @@ const resolveProjectDisplayAmount = async ({ project, paymentData }) => {
     return paymentAmount;
   }
 
+  const budgetAmount = parseAmountCandidate(project?.budget);
+
   const quoteAmountFromLinkedQuote = project?.quote_id
     ? await quotes.findByPk(project.quote_id, {
         attributes: ['total', 'price_after_discount', 'subtotal'],
       }).then((quote) => {
         if (!quote) return null;
+        if (budgetAmount !== null && budgetAmount > 0) {
+          return budgetAmount;
+        }
         return (
           parseAmountCandidate(quote.total) ??
           parseAmountCandidate(quote.price_after_discount) ??
@@ -324,6 +329,9 @@ const resolveProjectDisplayAmount = async ({ project, paymentData }) => {
     order: [['quote_id', 'DESC']],
   }).then((quote) => {
     if (!quote) return null;
+    if (budgetAmount !== null && budgetAmount > 0) {
+      return budgetAmount;
+    }
     return (
       parseAmountCandidate(quote.total) ??
       parseAmountCandidate(quote.price_after_discount) ??
@@ -335,19 +343,28 @@ const resolveProjectDisplayAmount = async ({ project, paymentData }) => {
     return quoteAmountFromBooking;
   }
 
+  if (budgetAmount !== null && budgetAmount > 0) {
+    return budgetAmount;
+  }
+
   return 0;
 };
 
 const resolveProjectTotalValueAmount = async ({ project }) => {
+  const budgetAmount = parseAmountCandidate(project?.budget);
+
   const quoteAmountFromLinkedQuote = project?.quote_id
     ? await quotes.findByPk(project.quote_id, {
         attributes: ['subtotal', 'total', 'price_after_discount'],
       }).then((quote) => {
         if (!quote) return null;
+        if (budgetAmount !== null && budgetAmount > 0) {
+          return budgetAmount;
+        }
         return (
-          parseAmountCandidate(quote.subtotal) ??
           parseAmountCandidate(quote.total) ??
-          parseAmountCandidate(quote.price_after_discount)
+          parseAmountCandidate(quote.price_after_discount) ??
+          parseAmountCandidate(quote.subtotal)
         );
       })
     : null;
@@ -362,10 +379,13 @@ const resolveProjectTotalValueAmount = async ({ project }) => {
     order: [['quote_id', 'DESC']],
   }).then((quote) => {
     if (!quote) return null;
+    if (budgetAmount !== null && budgetAmount > 0) {
+      return budgetAmount;
+    }
     return (
-      parseAmountCandidate(quote.subtotal) ??
       parseAmountCandidate(quote.total) ??
-      parseAmountCandidate(quote.price_after_discount)
+      parseAmountCandidate(quote.price_after_discount) ??
+      parseAmountCandidate(quote.subtotal)
     );
   });
 
@@ -373,7 +393,6 @@ const resolveProjectTotalValueAmount = async ({ project }) => {
     return quoteAmountFromBooking;
   }
 
-  const budgetAmount = parseAmountCandidate(project?.budget);
   if (budgetAmount !== null && budgetAmount > 0) {
     return budgetAmount;
   }
@@ -1308,15 +1327,31 @@ exports.assignCrew = async (req, res) => {
 
     const uniqueCrewIds = [...new Set(crewIds.map(Number).filter(Boolean))];
 
-    for (const crewId of uniqueCrewIds) {
-      await assigned_crew.create({
-        project_id,
-        crew_member_id: crewId,
-        assigned_date: new Date(),
-        status: 'assigned',
-        is_active: 1,
-      });
-    }
+  for (const crewId of uniqueCrewIds) {
+  await assigned_crew.create({
+    project_id,
+    crew_member_id: crewId,
+    assigned_date: new Date(),
+    status: 'assigned',
+    is_active: 1,
+  });
+
+  const existingEarning = await db.creator_earnings.findOne({
+    where: { booking_id: project_id, creator_id: crewId }
+  });
+
+  if (!existingEarning) {
+    await db.creator_earnings.create({
+      booking_id: project_id,
+      creator_id: crewId,
+      gross_amount: 0,
+      net_earning_amount: 0,
+      status: 'pending',
+      created_at: new Date(),
+      updated_at: new Date()
+    });
+  }
+}
 
     // Non-blocking email trigger
     try {
