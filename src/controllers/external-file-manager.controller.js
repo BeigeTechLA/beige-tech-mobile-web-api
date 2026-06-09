@@ -1115,6 +1115,116 @@ const sendRevisionRequestedEmailsForFiles = async ({
   }
 };
 
+const sendFileApprovedInternalEmailsForReviews = async ({
+  externalId,
+  reviewResults = [],
+  approvedByName = 'Client',
+}) => {
+  try {
+    const approvedItemsByFolder = new Map();
+
+    for (const item of reviewResults) {
+      const filepath = item?.filepath;
+      if (!item?.success || !isEditedRevisionVersionPath(filepath)) continue;
+
+      const bookingId = parseBookingIdFromFilepath(filepath) || Number(externalId);
+      if (!bookingId) continue;
+
+      const phase = resolveUploadPhase(filepath);
+      const folderPath = getUploadFolderPath(filepath, phase || 'post');
+      const bookingKey = `${bookingId}::${folderPath.toLowerCase()}`;
+      const existing = approvedItemsByFolder.get(bookingKey) || {
+        bookingId: String(bookingId),
+        folderPath,
+        items: [],
+      };
+      existing.items.push(item);
+      approvedItemsByFolder.set(bookingKey, existing);
+    }
+
+    for (const entry of approvedItemsByFolder.values()) {
+      const booking = await getBookingForEditingInternalEmail(entry.bookingId);
+      if (!booking) continue;
+
+      const plainBooking = typeof booking.get === 'function' ? booking.get({ plain: true }) : booking;
+      const bookingReference = String(plainBooking?.stream_project_booking_id || entry.bookingId);
+      const projectName = String(
+        plainBooking?.project_name ||
+        plainBooking?.client_name ||
+        `Booking #${bookingReference}`
+      );
+
+      const recipients = [
+        ...getAssignedCreativePartnerRecipients(plainBooking),
+        ...getAdminNotificationRecipients().map((email) => ({
+          email,
+          name: 'Admin',
+          data: {
+            recipient_name: 'Admin',
+            frontend_url: buildAdminDashboardUrl(),
+            dashboard_link: buildAdminDashboardUrl(),
+          },
+        })),
+      ];
+      const seenEmails = new Set();
+      const uniqueRecipients = recipients.filter((recipient) => {
+        const email = normalizeEmailAddress(recipient?.email);
+        if (!email || seenEmails.has(email)) return false;
+        seenEmails.add(email);
+        return true;
+      });
+      if (!uniqueRecipients.length) continue;
+
+      const approvedAt = new Date().toISOString();
+      const approvalTime = formatEditingSubmissionTime(approvedAt);
+
+      for (const item of entry.items) {
+        const responseData = item?.result?.data || {};
+        const finalDeliverable = responseData?.finalDeliverable || {};
+        const fileName =
+          finalDeliverable?.name ||
+          responseData?.name ||
+          getFileNameFromPath(item?.filepath);
+        const versionNumber = responseData?.versionNumber || getEditedRevisionVersionLabel(item?.filepath);
+        const version = versionNumber && String(versionNumber).toLowerCase().startsWith('version')
+          ? String(versionNumber)
+          : versionNumber
+            ? `Version${versionNumber}`
+            : getEditedRevisionVersionLabel(item?.filepath);
+
+        const emailResult = await emailService.sendFileApprovedInternalEmail({
+          recipients: uniqueRecipients,
+          data: {
+            shoot_name: projectName,
+            project_name: projectName,
+            booking_id: bookingReference,
+            order_id: bookingReference,
+            file_name: fileName,
+            version,
+            current_version: version,
+            approved_by: approvedByName || 'Client',
+            approval_time: approvalTime,
+            approved_at: approvedAt,
+            final_deliverable_path: finalDeliverable?.path || '',
+            final_deliverable_name: finalDeliverable?.name || fileName,
+            dashboard_link: buildAdminDashboardUrl(),
+            frontend_url: buildAdminDashboardUrl(),
+          },
+        });
+
+        if (!emailResult?.success) {
+          console.error(
+            'File approved internal email failed:',
+            emailResult?.error || emailResult?.failedRecipients || 'Unknown email error'
+          );
+        }
+      }
+    }
+  } catch (error) {
+    console.error('File approved internal email trigger failed:', error?.message || error);
+  }
+};
+
 const ensureCommonEventsTable = async () => {
   if (!commonEventsTableReadyPromise) {
     commonEventsTableReadyPromise = db.sequelize.query(`
@@ -3246,6 +3356,12 @@ exports.reviewRevisionFile = async (req, res) => {
           requestedByName: authorName,
         });
       }
+    } else if (action === 'approve') {
+      await sendFileApprovedInternalEmailsForReviews({
+        externalId,
+        reviewResults,
+        approvedByName: authorName,
+      });
     }
 
     if (filepaths.length === 1) {

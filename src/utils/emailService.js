@@ -87,7 +87,8 @@ const {
   EDITS_DELIVERED_CLIENT_TEMPLATE_ID,
   EDITED_DELIVERED_TOCLIENT_ADMIN_TEMPLATE_ID,
   REVISIONS_REQUESTED_ON_EDITS_TEMPLATE_ID,
-  CLIENT_REQUESTED_REVISIONS_ADMIN_TEMPLATE_ID
+  CLIENT_REQUESTED_REVISIONS_ADMIN_TEMPLATE_ID,
+  FILES_APPROVED_INTERNAL_TEMPLATE_ID
 } = require('../config/sendgridTemplates');
 
 const formatDate = (value) => {
@@ -3416,6 +3417,45 @@ const sendClientRequestedRevisionsAdminEmail = async ({ recipients = [], data = 
   });
 };
 
+const sendFileApprovedInternalEmail = async ({ recipients = [], data = {} }) => {
+  if (!FILES_APPROVED_INTERNAL_TEMPLATE_ID) {
+    return { success: false, error: 'FILES_APPROVED_INTERNAL_TEMPLATE_ID is not configured' };
+  }
+
+  const shootName = data?.shoot_name || data?.project_name || data?.order_name || '';
+
+  return sendTemplateToRecipients({
+    recipients,
+    subject: `File approved: ${data?.file_name || shootName || 'Final delivery'}`,
+    templateId: FILES_APPROVED_INTERNAL_TEMPLATE_ID,
+    dynamicTemplateData: {
+      recipient_name: data?.recipient_name || 'Team',
+      shoot_name: shootName,
+      project_name: shootName,
+      order_name: shootName,
+      'Shoot Name': shootName,
+      file_name: data?.file_name || '',
+      version: data?.version || data?.current_version || '',
+      current_version: data?.current_version || data?.version || '',
+      approved_by: data?.approved_by || 'Client',
+      approval_time: data?.approval_time || data?.approved_at || new Date().toISOString(),
+      final_deliverable_path: data?.final_deliverable_path || '',
+      final_deliverable_name: data?.final_deliverable_name || data?.file_name || '',
+      frontend_url:
+        data?.frontend_url ||
+        data?.dashboard_link ||
+        `${String(process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/admin/dashboard`,
+      dashboard_link:
+        data?.dashboard_link ||
+        data?.frontend_url ||
+        `${String(process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/admin/dashboard`,
+      booking_id: data?.booking_id || data?.order_id || '',
+      order_id: data?.order_id || data?.booking_id || '',
+      year: new Date().getFullYear(),
+    },
+  });
+};
+
 const sendFileShareInvitationEmail = async ({ to, data = {} }) => {
   if (!FILE_SHARE_INVITATION_TEMPLATE_ID) {
     return { success: false, error: 'FILE_SHARE_INVITATION_TEMPLATE_ID is not configured' };
@@ -3499,5 +3539,6 @@ module.exports = {
   sendEditsDeliveredToClientAdminEmail,
   sendRevisionRequestedOnEditEmail,
   sendClientRequestedRevisionsAdminEmail,
+  sendFileApprovedInternalEmail,
   sendFileShareInvitationEmail
 };
