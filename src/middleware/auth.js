@@ -7,26 +7,29 @@ const config = require('../config/config');
  */
 const authMiddleware = (req, res, next) => {
   try {
-    // Extract token from Authorization header
+    // Extract token from Authorization header or revure_token cookie
     const authHeader = req.headers.authorization;
+    let token = null;
 
-    if (!authHeader) {
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.split(' ')[1];
+    }
+
+    if (!token && req.headers.cookie) {
+      const cookieHeader = req.headers.cookie;
+      const cookiePairs = cookieHeader.split(';').map((cookie) => cookie.trim());
+      const tokenCookie = cookiePairs.find((cookie) => cookie.startsWith('revure_token='));
+      if (tokenCookie) {
+        token = tokenCookie.split('=')[1];
+      }
+    }
+
+    if (!token) {
       return res.status(401).json({
         error: true,
         message: 'No authorization token provided'
       });
     }
-
-    // Check for Bearer token format
-    const parts = authHeader.split(' ');
-    if (parts.length !== 2 || parts[0] !== 'Bearer') {
-      return res.status(401).json({
-        error: true,
-        message: 'Invalid token format. Use: Bearer <token>'
-      });
-    }
-
-    const token = parts[1];
 
     // Verify token
     const decoded = jwt.verify(token, config.jwtSecret);
@@ -98,15 +101,26 @@ const optionalAuth = (req, res, next) => {
 const authenticateAdmin = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
+    let token = null;
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.substring(7);
+    }
+
+    if (!token && req.headers.cookie) {
+      const cookiePairs = req.headers.cookie.split(';').map((cookie) => cookie.trim());
+      const tokenCookie = cookiePairs.find((cookie) => cookie.startsWith('revure_token='));
+      if (tokenCookie) {
+        token = tokenCookie.split('=')[1];
+      }
+    }
+
+    if (!token) {
       return res.status(401).json({
         error: true,
         message: 'Authorization token required'
       });
     }
-
-    const token = authHeader.substring(7);
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 

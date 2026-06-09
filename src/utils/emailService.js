@@ -90,6 +90,28 @@ const formatDate = (value) => {
   return d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
 };
 
+const getDateOnlyKey = (value) => {
+  if (!value) return '';
+  if (typeof value === 'string') {
+    const dateOnlyMatch = value.trim().match(/^(\d{4}-\d{2}-\d{2})/);
+    if (dateOnlyMatch) return dateOnlyMatch[1];
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const isSameCalendarDate = (left, right = new Date()) => {
+  const leftKey = getDateOnlyKey(left);
+  const rightKey = getDateOnlyKey(right);
+  return Boolean(leftKey && rightKey && leftKey === rightKey);
+};
+
 const formatTime = (value) => {
   if (!value) return '';
   const txt = String(value);
@@ -2425,6 +2447,7 @@ const sendCPNewBookingRequestEmail = async (data) => {
     const shootAmount = data.shoot_amount !== undefined && data.shoot_amount !== null
       ? `$${formatAmount(data.shoot_amount)}`
       : 'TBD';
+    const showFifoMessage = isSameCalendarDate(data.date || data.shoot_date || data.booking_date);
 
     const [response] = await sgMail.send({
       to: data.to_email,
@@ -2443,6 +2466,7 @@ const sendCPNewBookingRequestEmail = async (data) => {
         end_time: endTime,
         // shoot_amount: shootAmount,
         dashboard_link: `${process.env.FRONTEND_URL}/creator/dashboard`,
+        show_fifo_message: showFifoMessage,
       }
     });
 

@@ -678,8 +678,8 @@ Content-Type: application/json
 Authorization: {{TOKEN2}}
 
 {
-    "project_id": 922,
-    "crew_member_ids": [2103] 
+    "project_id": 1211,
+    "crew_member_ids": [2120] 
 }
 
 ### 
@@ -2625,3 +2625,91 @@ Content-Type: application/json
 ### 
 GET {{URL}}external-file-manager/workspaces HTTP/1.1
 Authorization: {{SALES_ADMIN_TOKEN}}
+
+### ─────────────────────────────────────────
+### CREATOR EARNINGS MODULE
+### ─────────────────────────────────────────
+
+### 1. Creator Earnings Dashboard
+GET {{URL}}creator-earnings/creator/2010/dashboard HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+### 2. Creator Earnings List 
+GET {{URL}}creator-earnings/creator/2010/earnings?page=1&limit=20 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+### 3. Creator Earning Detail 
+GET {{URL}}creator-earnings/creator/2010/earnings/1 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+### 4. Payout Timeline
+GET {{URL}}creator-earnings/creator/2010/earnings/1/timeline HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+### 5. Accept Shoot
+POST {{URL}}creator-earnings/creator/2010/bookings/480/accept HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+### 6. Decline Shoot
+POST {{URL}}creator-earnings/creator/2010/bookings/1193/decline HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+### 7. Respond to Earning (accept/decline combined)
+POST {{URL}}creator-earnings/creator/2010/bookings/1193/respond HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+{
+  "action": "accept"
+}
+
+### 8. Admin — Add Advance Payment
+POST {{URL}}creator-earnings/admin/earnings/advance HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "creator_earning_id": 1,
+  "booking_id": 480,
+  "creator_id": 2010,
+  "amount": 300,
+  "notes": "Advance before shoot"
+}
+
+### 9. Admin — Upsert Compensation Items
+PUT {{URL}}creator-earnings/admin/earnings/1/compensation HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "items": [
+    { "label": "Base Shoot Compensation", "amount": 800 },
+    { "label": "Parking Compensation", "amount": 250 },
+    { "label": "Travel Adjustment", "amount": 100 },
+    { "label": "Bonus Compensation", "amount": 50 }
+  ]
+}
+
+### Login Devanshu
+POST {{URL}}auth/login HTTP/1.1
+Content-Type: application/json
+
+{
+  "email": "devanshud@gmail.com",
+  "password": "12345678"
+}
+
+### Admin Login
+POST {{URL}}auth/login HTTP/1.1
+Content-Type: application/json
+
+{
+  "email": "harsh.panchal@gmail.com",
+  "password": "password123"
+}

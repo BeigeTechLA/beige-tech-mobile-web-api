@@ -455,6 +455,7 @@ router.get('/quotes/accept', salesQuotesController.acceptQuoteProposal);
 router.post('/quotes/accept', salesQuotesController.acceptQuoteProposal);
 router.get('/quotes/reject/:quoteId', authenticate, salesQuotesController.rejectQuoteProposal);
 router.get('/quotes/public/:quoteId', salesQuotesController.getPublicQuoteById);
+router.get('/quotes/public/by-key/:quoteKey/latest-link', salesQuotesController.getLatestPublicQuotePreviewLink);
 router.get('/quotes/public/by-key/:quoteKey', salesQuotesController.getPublicQuoteByKey);
 router.post('/quotes/public/:quoteId/convert-to-booking', salesQuotesController.convertPublicQuoteToBooking);
 router.get('/quotes/:quoteId/versions', authenticate, adminQuotesView, salesQuotesController.listQuoteVersions);

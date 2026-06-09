@@ -1228,10 +1228,6 @@ async function buildQuoteAcceptancePaymentDetails({ bookingId, quoteDetails }) {
     return null;
   }
 
-  if (!(Number(quoteDetails?.total || 0) > 0)) {
-    return null;
-  }
-
   const booking = await db.stream_project_booking.findOne({
     where: { stream_project_booking_id: parsedBookingId },
     include: [
@@ -1250,6 +1246,21 @@ async function buildQuoteAcceptancePaymentDetails({ bookingId, quoteDetails }) {
   }
 
   assertQuotePaymentChangeApproved(quoteDetails);
+
+  const proposalPaymentSummary = buildQuoteProposalPaymentSummary(quoteDetails);
+  const finalPayableAmount = roundCurrency(proposalPaymentSummary?.amount_due || 0);
+
+  if (finalPayableAmount <= 0) {
+    return {
+      booking_id: parsedBookingId,
+      invoice_id: null,
+      invoice_number: null,
+      payment_url: null,
+      invoice_pdf: null,
+      requires_payment: false,
+      amount_due: 0
+    };
+  }
 
   const additionalPayment = getApprovedAdditionalPaymentDue(quoteDetails);
   if (additionalPayment) {
@@ -1410,6 +1421,98 @@ async function buildQuoteAcceptancePaymentDetails({ bookingId, quoteDetails }) {
       revised_total: summaryBalance.revised_total,
       remaining_amount: summaryBalance.amount_due
     } : {})
+  };
+}
+
+async function markZeroPayableQuoteBookingPaid({
+  bookingId,
+  salesQuoteId,
+  quoteDetails,
+  leadId = null,
+  transaction
+}) {
+  const parsedBookingId = Number(bookingId);
+  if (!Number.isInteger(parsedBookingId) || parsedBookingId <= 0) {
+    return null;
+  }
+
+  const proposalPaymentSummary = buildQuoteProposalPaymentSummary(quoteDetails);
+  const finalPayableAmount = roundCurrency(proposalPaymentSummary?.amount_due || 0);
+
+  if (finalPayableAmount > 0) {
+    return null;
+  }
+
+  const now = new Date();
+  const existingPaymentSummary = quoteDetails?.payment_summary || null;
+  const quoteTotal = roundCurrency(
+    existingPaymentSummary?.quote_total ||
+    proposalPaymentSummary?.revised_total ||
+    quoteDetails?.total ||
+    0
+  );
+  const paidAmount = roundCurrency(
+    existingPaymentSummary?.paid_amount ||
+    proposalPaymentSummary?.previously_paid_amount ||
+    0
+  );
+  const creditUsedAmount = roundCurrency(existingPaymentSummary?.credit_used_amount || 0);
+  const creditCreatedAmount = roundCurrency(existingPaymentSummary?.credit_created_amount || 0);
+
+  await db.stream_project_booking.update(
+    {
+      is_completed: 1,
+      is_draft: 0,
+      payment_completed_at: now
+    },
+    {
+      where: { stream_project_booking_id: parsedBookingId },
+      transaction
+    }
+  );
+
+  await db.sales_quotes.update(
+    {
+      status: 'paid',
+      accepted_at: quoteDetails?.accepted_at || now,
+      updated_at: now
+    },
+    {
+      where: { sales_quote_id: salesQuoteId },
+      transaction
+    }
+  );
+
+  if (leadId) {
+    await db.sales_leads.update(
+      { lead_status: 'booked', last_activity_at: now },
+      { where: { lead_id: leadId }, transaction }
+    );
+  } else {
+    await db.sales_leads.update(
+      { lead_status: 'booked', last_activity_at: now },
+      { where: { booking_id: parsedBookingId }, transaction }
+    );
+  }
+
+  const paymentSummary = await bookingPaymentSummaryService.upsertBookingPaymentSummary({
+    bookingId: parsedBookingId,
+    leadId,
+    salesQuoteId,
+    quoteTotal,
+    paidAmount,
+    creditUsedAmount,
+    creditCreatedAmount,
+    lastQuoteChangeType: 'none',
+    lastQuoteChangeAmount: 0,
+    lastQuoteChangeStatus: 'approved',
+    transaction
+  });
+
+  return {
+    booking_id: parsedBookingId,
+    final_payable_amount: finalPayableAmount,
+    payment_summary: paymentSummary
   };
 }
 
@@ -2277,6 +2380,270 @@ function buildFieldChange(label, before, after, type = 'text') {
   };
 }
 
+const QUOTE_AUDIT_FIELDS = [
+  ['lead_id', 'Lead ID', 'number'],
+  ['client_user_id', 'Client user ID', 'number'],
+  ['client_id', 'Client ID', 'number'],
+  ['created_by_user_id', 'Created by user ID', 'number'],
+  ['assigned_sales_rep_id', 'Assigned sales rep ID', 'number'],
+  ['pricing_mode', 'Pricing mode'],
+  ['status', 'Status'],
+  ['client_name', 'Client name'],
+  ['client_email', 'Client email'],
+  ['client_phone', 'Client phone'],
+  ['client_address', 'Client address'],
+  ['location_latitude', 'Location latitude', 'number'],
+  ['location_longitude', 'Location longitude', 'number'],
+  ['project_description', 'Project description'],
+  ['video_shoot_type', 'Shoot type'],
+  ['quote_validity_days', 'Quote validity days', 'number'],
+  ['valid_until', 'Valid until'],
+  ['discount_type', 'Discount type'],
+  ['discount_value', 'Discount value', 'currency'],
+  ['discount_amount', 'Discount amount', 'currency'],
+  ['tax_type', 'Tax type'],
+  ['tax_rate', 'Tax rate', 'number'],
+  ['tax_amount', 'Tax amount', 'currency'],
+  ['subtotal', 'Subtotal', 'currency'],
+  ['total', 'Total', 'currency'],
+  ['notes', 'Notes'],
+  ['terms_conditions', 'Terms & conditions'],
+  ['sent_at', 'Sent at'],
+  ['viewed_at', 'Viewed at'],
+  ['accepted_at', 'Accepted at'],
+  ['rejected_at', 'Rejected at']
+];
+
+const LINE_ITEM_AUDIT_FIELDS = [
+  ['catalog_item_id', 'Catalog item ID', 'number'],
+  ['source_type', 'Source type'],
+  ['section_type', 'Section type'],
+  ['item_name', 'Item name'],
+  ['description', 'Description'],
+  ['rate_type', 'Rate type'],
+  ['rate_unit', 'Rate unit'],
+  ['quantity', 'Quantity', 'number'],
+  ['duration_hours', 'Duration hours', 'number'],
+  ['crew_size', 'Crew size', 'number'],
+  ['estimated_pricing', 'Estimated pricing', 'currency'],
+  ['unit_rate', 'Unit rate', 'currency'],
+  ['line_total', 'Line total', 'currency'],
+  ['configuration', 'Configuration', 'json'],
+  ['sort_order', 'Sort order', 'number']
+];
+
+function normalizeAuditValue(value, type = 'text') {
+  if (value === undefined || value === '') return null;
+  if (value === null) return null;
+
+  if (type === 'currency') {
+    return roundCurrency(value || 0);
+  }
+
+  if (type === 'number') {
+    const numeric = Number(value);
+    return Number.isNaN(numeric) ? null : numeric;
+  }
+
+  if (type === 'json') {
+    const parsed = parseConfig(value);
+    return parsed === undefined ? null : parsed;
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  return String(value).trim();
+}
+
+function formatAuditDisplayValue(value, type = 'text') {
+  if (value === null || value === undefined || value === '') return 'Empty';
+  if (type === 'currency') return formatCurrency(value || 0);
+  if (type === 'json') return stableStringify(value);
+  return String(value);
+}
+
+function buildAuditFieldChange(field, label, before, after, type = 'text') {
+  const previousValue = normalizeAuditValue(before, type);
+  const newValue = normalizeAuditValue(after, type);
+
+  if (stableStringify(previousValue) === stableStringify(newValue)) {
+    return null;
+  }
+
+  return {
+    field,
+    label,
+    previous_value: previousValue,
+    new_value: newValue,
+    display_previous: formatAuditDisplayValue(previousValue, type),
+    display_new: formatAuditDisplayValue(newValue, type)
+  };
+}
+
+function pickAuditFields(record = {}, fieldDefinitions = QUOTE_AUDIT_FIELDS) {
+  return fieldDefinitions.reduce((snapshot, [field, , type]) => {
+    snapshot[field] = normalizeAuditValue(record?.[field], type);
+    return snapshot;
+  }, {});
+}
+
+function normalizeAuditLineItem(item = {}, index = 0) {
+  const config = item.configuration !== undefined
+    ? item.configuration
+    : parseConfig(item.configuration_json);
+
+  return {
+    line_item_id: item.line_item_id || null,
+    catalog_item_id: normalizeAuditValue(item.catalog_item_id, 'number'),
+    source_type: normalizeAuditValue(item.source_type || 'catalog'),
+    section_type: normalizeAuditValue(item.section_type),
+    item_name: normalizeAuditValue(item.item_name || item.name),
+    description: normalizeAuditValue(item.description),
+    rate_type: normalizeAuditValue(item.rate_type || 'flat'),
+    rate_unit: normalizeAuditValue(item.rate_unit),
+    quantity: normalizeAuditValue(item.quantity || 1, 'number'),
+    duration_hours: normalizeAuditValue(item.duration_hours, 'number'),
+    crew_size: normalizeAuditValue(item.crew_size, 'number'),
+    estimated_pricing: normalizeAuditValue(item.estimated_pricing, 'currency'),
+    unit_rate: normalizeAuditValue(item.unit_rate || 0, 'currency'),
+    line_total: normalizeAuditValue(item.line_total || 0, 'currency'),
+    configuration: normalizeAuditValue(config, 'json'),
+    sort_order: normalizeAuditValue(item.sort_order !== undefined ? item.sort_order : index, 'number')
+  };
+}
+
+function buildAuditLineItemMatchKey(item = {}) {
+  if (item.catalog_item_id) {
+    return [
+      item.section_type || '',
+      item.catalog_item_id || '',
+      String(item.source_type || '').toLowerCase()
+    ].join('::');
+  }
+
+  return [
+    item.section_type || '',
+    String(item.source_type || '').toLowerCase(),
+    item.sort_order ?? ''
+  ].join('::');
+}
+
+function bucketAuditLineItems(items = []) {
+  const buckets = new Map();
+  items.forEach((item, index) => {
+    const normalizedItem = normalizeAuditLineItem(item, index);
+    const key = buildAuditLineItemMatchKey(normalizedItem);
+    const bucket = buckets.get(key) || [];
+    bucket.push(normalizedItem);
+    buckets.set(key, bucket);
+  });
+  return buckets;
+}
+
+function buildLineItemAuditDiff(previousLineItems = [], nextLineItems = []) {
+  const previousBuckets = bucketAuditLineItems(previousLineItems);
+  const nextBuckets = bucketAuditLineItems(nextLineItems);
+  const allKeys = new Set([...previousBuckets.keys(), ...nextBuckets.keys()]);
+  const added = [];
+  const removed = [];
+  const updated = [];
+
+  allKeys.forEach((key) => {
+    const previousBucket = previousBuckets.get(key) || [];
+    const nextBucket = nextBuckets.get(key) || [];
+    const maxLength = Math.max(previousBucket.length, nextBucket.length);
+
+    for (let index = 0; index < maxLength; index += 1) {
+      const previousItem = previousBucket[index] || null;
+      const nextItem = nextBucket[index] || null;
+
+      if (!previousItem && nextItem) {
+        added.push(nextItem);
+        continue;
+      }
+
+      if (previousItem && !nextItem) {
+        removed.push(previousItem);
+        continue;
+      }
+
+      const changes = LINE_ITEM_AUDIT_FIELDS
+        .map(([field, label, type]) => buildAuditFieldChange(field, label, previousItem[field], nextItem[field], type))
+        .filter(Boolean);
+
+      if (changes.length) {
+        updated.push({
+          identity: {
+            line_item_id: nextItem.line_item_id || previousItem.line_item_id || null,
+            section_type: nextItem.section_type || previousItem.section_type || null,
+            catalog_item_id: nextItem.catalog_item_id || previousItem.catalog_item_id || null,
+            item_name: nextItem.item_name || previousItem.item_name || null
+          },
+          previous: previousItem,
+          next: nextItem,
+          changes
+        });
+      }
+    }
+  });
+
+  return { added, updated, removed };
+}
+
+function buildQuoteAuditLog({
+  action,
+  previousQuote = null,
+  nextQuote = {},
+  previousLineItems = [],
+  nextLineItems = [],
+  userId = null
+}) {
+  const changedFields = action === 'created'
+    ? QUOTE_AUDIT_FIELDS
+        .map(([field, label, type]) => {
+          const value = normalizeAuditValue(nextQuote?.[field], type);
+          if (value === null || value === undefined) return null;
+          return {
+            field,
+            label,
+            previous_value: null,
+            new_value: value,
+            display_previous: 'Empty',
+            display_new: formatAuditDisplayValue(value, type)
+          };
+        })
+        .filter(Boolean)
+    : QUOTE_AUDIT_FIELDS
+        .map(([field, label, type]) => buildAuditFieldChange(field, label, previousQuote?.[field], nextQuote?.[field], type))
+        .filter(Boolean);
+
+  const lineItems = action === 'created'
+    ? {
+        added: (nextLineItems || []).map(normalizeAuditLineItem),
+        updated: [],
+        removed: []
+      }
+    : buildLineItemAuditDiff(previousLineItems, nextLineItems);
+
+  return {
+    action,
+    changed_by_user_id: userId || null,
+    changed_at: new Date().toISOString(),
+    changed_fields: changedFields,
+    line_items: lineItems,
+    has_changes: action === 'created' || Boolean(
+      changedFields.length ||
+      lineItems.added.length ||
+      lineItems.updated.length ||
+      lineItems.removed.length
+    ),
+    previous_snapshot: previousQuote ? pickAuditFields(previousQuote) : null,
+    next_snapshot: pickAuditFields(nextQuote)
+  };
+}
+
 function buildQuoteChangeSummary({ previousQuote = {}, nextQuote = {}, previousLineItems = [], nextLineItems = [] }) {
   const previousItems = summarizeLineItemsForDiff(previousLineItems);
   const nextItems = summarizeLineItemsForDiff(nextLineItems);
@@ -2625,6 +2992,46 @@ function buildOverallChangeSummary(activities = []) {
     summary: summaryLine,
     lines
   };
+}
+
+function buildQuoteChangeLogs(activities = []) {
+  const logActivityTypes = [
+    'created',
+    'updated',
+    'status_changed',
+    'restricted_edit_confirmed',
+    'sent',
+    'viewed',
+    'accepted',
+    'rejected'
+  ];
+
+  return (Array.isArray(activities) ? activities : [])
+    .filter((activity) => logActivityTypes.includes(activity.activity_type))
+    .map((activity) => {
+      const metadata = activity.metadata || {};
+      return {
+        activity_id: activity.activity_id || null,
+        activity_type: activity.activity_type || null,
+        message: activity.message || null,
+        changed_at: activity.created_at || null,
+        changed_by_user_id: activity.performed_by_user_id || null,
+        changed_by: activity.performed_by
+          ? {
+              id: activity.performed_by.id,
+              name: activity.performed_by.name,
+              email: activity.performed_by.email
+            }
+          : null,
+        quote_version: metadata.quote_version || null,
+        quote_version_id: metadata.quote_version_id || metadata.quote_version?.sales_quote_version_id || null,
+        version_number: metadata.version_number || metadata.quote_version?.version_number || null,
+        version_label: metadata.version_label || metadata.quote_version?.version_label || null,
+        audit: metadata.audit || null,
+        change_summary: metadata.change_summary || null,
+        metadata
+      };
+    });
 }
 
 async function getQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
@@ -3488,6 +3895,40 @@ async function recordActivity(transaction, salesQuoteId, activityType, userId, m
   }, { transaction });
 }
 
+async function attachQuoteVersionToActivity(transaction, activity, versionRecord) {
+  if (!activity || !versionRecord) return activity;
+
+  const versionNumber = Number(versionRecord.version_number || 0) || null;
+  const versionId = Number(versionRecord.sales_quote_version_id || 0) || null;
+  const metadata = parseConfig(activity.metadata_json) || {};
+  const nextMetadata = {
+    ...metadata,
+    quote_version: {
+      sales_quote_version_id: versionId,
+      version_number: versionNumber,
+      version_label: versionNumber ? `Quote Version ${versionNumber}` : null
+    },
+    quote_version_id: versionId,
+    version_number: versionNumber,
+    version_label: versionNumber ? `Quote Version ${versionNumber}` : null
+  };
+
+  if (nextMetadata.audit) {
+    nextMetadata.audit = {
+      ...nextMetadata.audit,
+      quote_version: nextMetadata.quote_version,
+      version_number: versionNumber,
+      version_label: nextMetadata.version_label
+    };
+  }
+
+  await activity.update({
+    metadata_json: stringifyConfig(nextMetadata)
+  }, { transaction });
+
+  return activity;
+}
+
 async function loadQuoteLineItemsForVersionSnapshot(salesQuoteId, transaction = null) {
   return db.sales_quote_line_items.findAll({
     where: {
@@ -4028,14 +4469,26 @@ async function createQuote(payload, user) {
       );
     }
 
-    const createdActivity = await recordActivity(transaction, quote.sales_quote_id, 'created', user.userId, 'Quote created');
-    await createQuoteVersion({
+    const createdQuoteAuditSnapshot = {
+      ...toPlainRecord(quote),
+      quote_number: stableQuoteNumber
+    };
+    const createdActivity = await recordActivity(transaction, quote.sales_quote_id, 'created', user.userId, 'Quote created', {
+      audit: buildQuoteAuditLog({
+        action: 'created',
+        nextQuote: createdQuoteAuditSnapshot,
+        nextLineItems: lineItemsPayload,
+        userId: user.userId
+      })
+    });
+    const createdVersion = await createQuoteVersion({
       transaction,
       quoteRecord: quote,
       userId: user.userId,
       sourceActivityId: createdActivity.activity_id,
       changeReason: 'Quote created'
     });
+    await attachQuoteVersionToActivity(transaction, createdActivity, createdVersion);
     await transaction.commit();
     return getQuoteById(quote.sales_quote_id, user);
   } catch (error) {
@@ -4122,17 +4575,27 @@ async function duplicateQuote(salesQuoteId, user) {
       {
         source_quote_id: salesQuoteId,
         reset_lead_linkage: true,
-        reset_client_user_linkage: true
+        reset_client_user_linkage: true,
+        audit: buildQuoteAuditLog({
+          action: 'created',
+          nextQuote: {
+            ...toPlainRecord(duplicatedQuote),
+            quote_number: stableQuoteNumber
+          },
+          nextLineItems: duplicatedLineItems,
+          userId: user.userId
+        })
       }
     );
 
-    await createQuoteVersion({
+    const duplicatedVersion = await createQuoteVersion({
       transaction,
       quoteRecord: duplicatedQuote,
       userId: user.userId,
       sourceActivityId: duplicatedActivity.activity_id,
       changeReason: `Quote duplicated from ${sourceQuote.quote_number || salesQuoteId}`
     });
+    await attachQuoteVersionToActivity(transaction, duplicatedActivity, duplicatedVersion);
 
     await transaction.commit();
     return getQuoteById(duplicatedQuote.sales_quote_id, user);
@@ -4184,7 +4647,14 @@ async function updateQuote(salesQuoteId, payload, user) {
     });
     const existingLineItemsPayload = existingLineItems.map(toPersistableLineItemPayload);
     const latestExistingVersion = await getLatestQuoteVersionRecord(salesQuoteId, transaction);
+    const previousQuoteAuditSnapshot = toPlainRecord(quote);
     const previousQuoteSnapshot = {
+      lead_id: quote.lead_id,
+      client_user_id: quote.client_user_id,
+      client_id: quote.client_id,
+      created_by_user_id: quote.created_by_user_id,
+      assigned_sales_rep_id: quote.assigned_sales_rep_id,
+      pricing_mode: quote.pricing_mode,
       project_description: quote.project_description,
       video_shoot_type: quote.video_shoot_type,
       client_name: quote.client_name,
@@ -4316,11 +4786,26 @@ async function updateQuote(salesQuoteId, payload, user) {
       ...previousQuoteSnapshot,
       ...quoteUpdatePayload
     };
+    const nextQuoteAuditSnapshot = {
+      ...previousQuoteAuditSnapshot,
+      ...quoteUpdatePayload
+    };
     const changeSummary = buildQuoteChangeSummary({
       previousQuote: previousQuoteSnapshot,
       nextQuote: nextQuoteSnapshot,
       previousLineItems: existingLineItemsPayload,
       nextLineItems: mergedLineItemsPayload
+    });
+    const auditLog = buildQuoteAuditLog({
+      action: 'updated',
+      previousQuote: previousQuoteAuditSnapshot,
+      nextQuote: nextQuoteAuditSnapshot,
+      previousLineItems: existingLineItems.map((item, index) => ({
+        ...toPlainRecord(item),
+        sort_order: item.sort_order !== undefined ? item.sort_order : index
+      })),
+      nextLineItems: mergedLineItemsPayload,
+      userId: user.userId
     });
 
     if (!latestExistingVersion) {
@@ -4457,6 +4942,7 @@ async function updateQuote(salesQuoteId, payload, user) {
       payment_status: paymentStatus,
       booking_id: billingState.booking?.stream_project_booking_id || null,
       change_summary: changeSummary,
+      audit: auditLog,
       edit_guardrails: editGuardrails,
       edit_reason: payload.edit_reason ? String(payload.edit_reason).trim() : null,
       ops_review_confirmed: payload.ops_review_confirmed === true,
@@ -4571,8 +5057,9 @@ async function updateQuote(salesQuoteId, payload, user) {
       });
     }
 
+    let updatedVersion = null;
     if (previousQuoteSnapshot.status === 'draft') {
-      await updateLatestQuoteVersionSnapshot({
+      updatedVersion = await updateLatestQuoteVersionSnapshot({
         transaction,
         quoteRecord: quote,
         userId: user.userId,
@@ -4580,13 +5067,18 @@ async function updateQuote(salesQuoteId, payload, user) {
         changeReason: versionChangeReason
       });
     } else {
-      await createQuoteVersion({
+      updatedVersion = await createQuoteVersion({
         transaction,
         quoteRecord: quote,
         userId: user.userId,
         sourceActivityId: approvalRequestActivity?.activity_id || updatedActivity.activity_id,
         changeReason: versionChangeReason
       });
+    }
+
+    await attachQuoteVersionToActivity(transaction, updatedActivity, updatedVersion);
+    if (approvalRequestActivity) {
+      await attachQuoteVersionToActivity(transaction, approvalRequestActivity, updatedVersion);
     }
 
     await transaction.commit();
@@ -4908,6 +5400,7 @@ async function fetchQuoteById(salesQuoteId, user = null) {
     delete nextItem.metadata_json;
     return nextItem;
   });
+  plain.change_logs = buildQuoteChangeLogs(plain.activities);
   plain.overall_change_summary = buildOverallChangeSummary(plain.activities);
   const quoteFinancialDetails = await getQuoteFinancialDetails({
     quoteId: plain.sales_quote_id,
@@ -5107,7 +5600,10 @@ function getQuotePreviewExpiryFromValidUntil(validUntil) {
 
 async function createQuotePreviewLink(salesQuoteId, user) {
   const quote = await db.sales_quotes.findOne({
-    where: { sales_quote_id: salesQuoteId, ...buildQuoteAccessWhere(user) },
+    where: {
+      sales_quote_id: salesQuoteId,
+      ...(user ? buildQuoteAccessWhere(user) : {})
+    },
     attributes: ['sales_quote_id', 'valid_until']
   });
 
@@ -5158,6 +5654,77 @@ async function createQuotePreviewLink(salesQuoteId, user) {
     quote_key: quoteKey,
     expires_at: expiresAt.toISOString()
   };
+}
+
+async function getLatestPublicQuotePreviewLink(quoteKey) {
+  await expireQuotesPastValidUntil();
+
+  const normalizedKey = String(quoteKey || '').trim();
+  if (!normalizedKey) {
+    throw new Error('Quote key is required');
+  }
+
+  const rows = await db.sequelize.query(
+    `
+      SELECT
+        l.sales_quote_id,
+        q.valid_until
+      FROM sales_quote_preview_links l
+      INNER JOIN sales_quotes q ON q.sales_quote_id = l.sales_quote_id
+      WHERE l.quote_key = :quoteKey
+      ORDER BY l.is_active DESC, l.created_at DESC
+      LIMIT 1
+    `,
+    {
+      replacements: { quoteKey: normalizedKey },
+      type: db.Sequelize.QueryTypes.SELECT
+    }
+  );
+
+  const linkRow = rows?.[0];
+  if (!linkRow?.sales_quote_id) {
+    throw createQuotePreviewLinkError('QUOTE_PREVIEW_INVALID');
+  }
+
+  const latestVersion = await db.sales_quote_versions.findOne({
+    where: { sales_quote_id: Number(linkRow.sales_quote_id) },
+    include: [
+      {
+        model: db.sales_quote_activities,
+        as: 'source_activity',
+        attributes: ['activity_id', 'metadata_json', 'created_at'],
+        required: false
+      }
+    ],
+    order: [['version_number', 'DESC'], ['sales_quote_version_id', 'DESC']]
+  });
+
+  if (latestVersion && !isUsableQuoteVersion(latestVersion)) {
+    const approvalMetadata = getQuoteVersionApprovalMetadata(latestVersion);
+    const error = createQuotePreviewLinkError('QUOTE_PREVIEW_APPROVAL_PENDING');
+    error.message = 'Admin approval is pending for the latest quote version';
+    error.details = {
+      ...error.details,
+      approval_status: approvalMetadata.approval_status || 'pending',
+      version_number: Number(latestVersion.version_number || 0)
+    };
+    throw error;
+  }
+
+  const data = await createQuotePreviewLink(Number(linkRow.sales_quote_id), null);
+  return {
+    ...data,
+    sales_quote_id: Number(linkRow.sales_quote_id),
+    version_number: latestVersion ? Number(latestVersion.version_number || 0) : 1
+  };
+}
+
+function createQuotePreviewLinkError(reasonCode) {
+  const error = new Error('Quote preview link is invalid or expired');
+  if (reasonCode) {
+    error.details = { reason_code: reasonCode };
+  }
+  return error;
 }
 
 async function getPublicQuoteByKey(quoteKey) {
@@ -5215,12 +5782,12 @@ async function getPublicQuoteByKey(quoteKey) {
   const latestVersion = await getLatestQuoteVersionRecord(Number(linkRow.sales_quote_id));
   const latestVersionCreatedAt = latestVersion?.created_at ? new Date(latestVersion.created_at) : null;
 
-  if (
-    (linkExpiresAt && now > linkExpiresAt) ||
-    (quoteValidUntilExpiry && now > quoteValidUntilExpiry) ||
-    (linkCreatedAt && latestVersionCreatedAt && linkCreatedAt < latestVersionCreatedAt)
-  ) {
-    throw new Error('Quote preview link is invalid or expired');
+  if (linkCreatedAt && latestVersionCreatedAt && linkCreatedAt < latestVersionCreatedAt) {
+    throw createQuotePreviewLinkError('QUOTE_PREVIEW_SUPERSEDED');
+  }
+
+  if ((linkExpiresAt && now > linkExpiresAt) || (quoteValidUntilExpiry && now > quoteValidUntilExpiry)) {
+    throw createQuotePreviewLinkError('QUOTE_PREVIEW_EXPIRED');
   }
 
   return getCurrentUsableQuoteVersionSnapshot(Number(linkRow.sales_quote_id));
@@ -5340,6 +5907,31 @@ async function listQuotes(query, user) {
         .filter((leadId) => Number.isFinite(leadId) && leadId > 0)
     )
   );
+  const quoteIds = rows
+    .map((item) => Number(item.sales_quote_id || 0))
+    .filter((quoteId) => Number.isFinite(quoteId) && quoteId > 0);
+
+  const quoteActivities = quoteIds.length
+    ? await db.sales_quote_activities.findAll({
+        where: {
+          sales_quote_id: { [Op.in]: quoteIds }
+        },
+        include: [{ model: db.users, as: 'performed_by', attributes: ['id', 'name', 'email'], required: false }],
+        order: [['created_at', 'DESC'], ['activity_id', 'DESC']]
+      })
+    : [];
+
+  const changeLogsByQuote = quoteActivities.reduce((acc, activity) => {
+    const plainActivity = activity.toJSON();
+    const quoteId = Number(plainActivity.sales_quote_id || 0);
+    if (!quoteId) return acc;
+    if (!acc[quoteId]) acc[quoteId] = [];
+    acc[quoteId].push({
+      ...plainActivity,
+      metadata: parseConfig(plainActivity.metadata_json)
+    });
+    return acc;
+  }, {});
 
   const paymentActivities = leadIds.length
     ? await db.sales_lead_activities.findAll({
@@ -5406,6 +5998,8 @@ async function listQuotes(query, user) {
     return {
       ...plain,
       ...(financialDetails || {}),
+      latest_change_log: buildQuoteChangeLogs(changeLogsByQuote[Number(plain.sales_quote_id || 0)] || [])[0] || null,
+      change_log_count: buildQuoteChangeLogs(changeLogsByQuote[Number(plain.sales_quote_id || 0)] || []).length,
       payment_status: hasSummaryManualFullPayment
         ? 'paid'
         : hasSummaryManualPartialPayment
@@ -5567,6 +6161,7 @@ async function updateQuoteStatus(salesQuoteId, status, user) {
       throw new Error('Quote not found');
     }
 
+    const previousQuoteAuditSnapshot = toPlainRecord(quote);
     const patch = {
       status,
       updated_at: new Date()
@@ -5616,7 +6211,30 @@ async function updateQuoteStatus(salesQuoteId, status, user) {
       }
     }
 
-    await recordActivity(transaction, salesQuoteId, status === 'sent' ? 'sent' : status === 'viewed' ? 'viewed' : status === 'accepted' ? 'accepted' : status === 'rejected' ? 'rejected' : 'status_changed', user.userId, `Quote marked as ${status}`, { status });
+    const statusActivity = await recordActivity(
+      transaction,
+      salesQuoteId,
+      status === 'sent' ? 'sent' : status === 'viewed' ? 'viewed' : status === 'accepted' ? 'accepted' : status === 'rejected' ? 'rejected' : 'status_changed',
+      user.userId,
+      `Quote marked as ${status}`,
+      {
+        status,
+        previous_status: previousQuoteAuditSnapshot.status || null,
+        audit: buildQuoteAuditLog({
+          action: 'updated',
+          previousQuote: previousQuoteAuditSnapshot,
+          nextQuote: {
+            ...previousQuoteAuditSnapshot,
+            ...patch
+          },
+          previousLineItems: [],
+          nextLineItems: [],
+          userId: user.userId
+        })
+      }
+    );
+    const currentVersion = await getLatestQuoteVersionRecord(salesQuoteId, transaction);
+    await attachQuoteVersionToActivity(transaction, statusActivity, currentVersion);
     await transaction.commit();
     return getQuoteById(salesQuoteId, user);
   } catch (error) {
@@ -5816,6 +6434,19 @@ async function acceptQuoteById(salesQuoteId, options = {}) {
         legacy_quote_id: conversionResult.legacyQuote?.quote_id || null,
         already_converted: conversionResult.wasAlreadyConverted
       };
+
+      const zeroPayablePayment = await markZeroPayableQuoteBookingPaid({
+        bookingId: bookingConversion.booking_id,
+        salesQuoteId,
+        quoteDetails,
+        leadId: bookingConversion.lead_id,
+        transaction
+      });
+
+      if (zeroPayablePayment) {
+        bookingConversion.payment_status = zeroPayablePayment.payment_summary?.payment_status || 'no_payment_due';
+        bookingConversion.final_payable_amount = zeroPayablePayment.final_payable_amount;
+      }
     } else if (!alreadyAccepted) {
       const acceptedAt = new Date();
       await quote.update({
@@ -5947,6 +6578,7 @@ module.exports = {
   getQuoteOverallChangeSummary,
   getPublicQuoteById,
   createQuotePreviewLink,
+  getLatestPublicQuotePreviewLink,
   getPublicQuoteByKey,
   listQuotes,
   getQuoteDashboard,
