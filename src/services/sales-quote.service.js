@@ -191,6 +191,55 @@ function toPlainRecord(record) {
   return typeof record.get === 'function' ? record.get({ plain: true }) : record;
 }
 
+function normalizeLocationAddress(value) {
+  if (value === undefined || value === null) return null;
+
+  if (typeof value === 'object') {
+    const candidate =
+      value.address ||
+      value.full_address ||
+      value.formatted_address ||
+      value.place_name ||
+      value.name ||
+      null;
+    return normalizeLocationAddress(candidate);
+  }
+
+  const trimmed = String(value).trim();
+  if (!trimmed || trimmed === 'null' || trimmed === 'undefined') return null;
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === 'object') {
+      const parsedAddress = normalizeLocationAddress(parsed);
+      if (parsedAddress) return parsedAddress;
+    }
+  } catch (_) {
+    // Plain address strings are expected.
+  }
+
+  return trimmed;
+}
+
+function resolveQuoteLocationAddress(payload = {}, fallback = {}) {
+  if (payload.client_address !== undefined) {
+    return normalizeLocationAddress(payload.client_address);
+  }
+  if (payload.location !== undefined) {
+    return normalizeLocationAddress(payload.location);
+  }
+  if (payload.event_location !== undefined) {
+    return normalizeLocationAddress(payload.event_location);
+  }
+  return normalizeLocationAddress(
+    fallback.client_address !== undefined
+      ? fallback.client_address
+      : fallback.location !== undefined
+        ? fallback.location
+        : fallback.event_location
+  );
+}
+
 function normalizeQuoteVersionLineItems(lineItems = []) {
   return (Array.isArray(lineItems) ? lineItems : []).map((item) => {
     const plain = toPlainRecord(item) || {};
@@ -2075,7 +2124,7 @@ async function resolveClientSnapshot(payload = {}, fallback = {}) {
     client_name: payload.client_name !== undefined ? payload.client_name : fallback.client_name || null,
     client_email: payload.client_email !== undefined ? payload.client_email : fallback.client_email || null,
     client_phone: payload.client_phone !== undefined ? payload.client_phone : fallback.client_phone || null,
-    client_address: payload.client_address !== undefined ? payload.client_address : fallback.client_address || null
+    client_address: resolveQuoteLocationAddress(payload, fallback)
   };
 
   let clientRecordById = null;
@@ -3492,7 +3541,16 @@ function normalizeBookingDaysPayload(bookingDays = [], defaultTimeZone = null) {
 function applyConvertBookingOverrides(prefillData, payload = {}) {
   const next = { ...prefillData };
   const timeZone = payload.time_zone || payload.timeZone || null;
+  const hasLocationOverride = payload.location !== undefined || payload.event_location !== undefined;
   const location = payload.location !== undefined ? payload.location : payload.event_location;
+  const normalizedLocation = hasLocationOverride ? normalizeLocationAddress(location) : null;
+  const hasCoordinateOverride =
+    payload.location_latitude !== undefined ||
+    payload.location_longitude !== undefined ||
+    payload.latitude !== undefined ||
+    payload.longitude !== undefined ||
+    payload.lat !== undefined ||
+    payload.lng !== undefined;
   const referenceLinks = payload.reference_links !== undefined ? payload.reference_links : payload.referenceLinks;
   const specialInstructions = payload.special_instructions !== undefined ? payload.special_instructions : payload.specialInstructions;
   const selectedCrewIds = Array.isArray(payload.selected_crew_ids) ? payload.selected_crew_ids.filter(Boolean).map(Number) : [];
@@ -3501,7 +3559,7 @@ function applyConvertBookingOverrides(prefillData, payload = {}) {
     || (normalizedBookingDays.length ? 'multi_day' : null)
     || ((payload.start_date || payload.start_time || payload.start_date_time || payload.end_time) ? 'single_day' : null);
   const bookingType = inferredBookingType;
-  const { latitude, longitude } = extractCoordinatesFromPayload(payload, location);
+  const { latitude, longitude } = extractCoordinatesFromPayload(payload, normalizedLocation || next.location);
   const singleDaySchedule = resolveEventDateAndStartTime({
     start_date: payload.start_date,
     start_time: payload.start_time,
@@ -3518,8 +3576,8 @@ function applyConvertBookingOverrides(prefillData, payload = {}) {
     payload.end_time
   );
 
-  if (location !== undefined) next.location = location || null;
-  if (location !== undefined || latitude !== null || longitude !== null) {
+  if (normalizedLocation) next.location = normalizedLocation;
+  if (hasCoordinateOverride || normalizedLocation) {
     next.location_latitude = latitude;
     next.location_longitude = longitude;
   }
@@ -4860,6 +4918,8 @@ async function updateQuote(salesQuoteId, payload, user) {
         client_email: quote.client_email,
         client_phone: quote.client_phone,
         client_address: quote.client_address,
+        location_latitude: quote.location_latitude,
+        location_longitude: quote.location_longitude,
         project_description: quote.project_description,
         video_shoot_type: quote.video_shoot_type,
         quote_validity_days: quote.quote_validity_days,
@@ -4887,7 +4947,9 @@ async function updateQuote(salesQuoteId, payload, user) {
         user_id: updatedQuoteDetails.client_user_id || null,
         full_name: updatedQuoteDetails.client_name || null,
         phone: updatedQuoteDetails.client_phone || null,
-        location: updatedQuoteDetails.client_address || null,
+        location: resolveQuoteLocationAddress(updatedQuoteDetails),
+        location_latitude: updatedQuoteDetails.location_latitude ?? null,
+        location_longitude: updatedQuoteDetails.location_longitude ?? null,
         content_type: roleData.content_type,
         shoot_type: mapQuoteShootTypeToBookingShootType(updatedQuoteDetails.video_shoot_type),
         quote_shoot_type_label: updatedQuoteDetails.video_shoot_type || null,
@@ -5112,7 +5174,7 @@ async function convertQuoteToBooking(salesQuoteId, payload = {}, user) {
     user_id: quoteDetails.client_user_id || null,
     full_name: quoteDetails.client_name || null,
     phone: quoteDetails.client_phone || null,
-    location: quoteDetails.client_address || null,
+    location: resolveQuoteLocationAddress(quoteDetails),
     location_latitude: quoteDetails.location_latitude ?? quoteDetails.latitude ?? null,
     location_longitude: quoteDetails.location_longitude ?? quoteDetails.longitude ?? null,
     content_type: roleData.content_type,
@@ -5189,7 +5251,7 @@ async function buildPaymentBookingPrefillDataFromQuote(quoteDetails, payload = {
     user_id: quoteDetails.client_user_id || null,
     full_name: quoteDetails.client_name || null,
     phone: quoteDetails.client_phone || null,
-    location: quoteDetails.client_address || null,
+    location: resolveQuoteLocationAddress(quoteDetails),
     location_latitude: quoteDetails.location_latitude ?? quoteDetails.latitude ?? null,
     location_longitude: quoteDetails.location_longitude ?? quoteDetails.longitude ?? null,
     content_type: roleData.content_type,
