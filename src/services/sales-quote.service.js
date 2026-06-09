@@ -5802,13 +5802,14 @@ async function getPublicQuoteByKey(quoteKey) {
     `
       SELECT
         l.sales_quote_id,
+        l.is_active,
         l.expires_at,
         l.created_at,
         q.valid_until
       FROM sales_quote_preview_links l
       INNER JOIN sales_quotes q ON q.sales_quote_id = l.sales_quote_id
       WHERE l.quote_key = :quoteKey
-        AND l.is_active = 1
+      ORDER BY l.is_active DESC, l.created_at DESC
       LIMIT 1
     `,
     {
@@ -5844,7 +5845,23 @@ async function getPublicQuoteByKey(quoteKey) {
   const latestVersion = await getLatestQuoteVersionRecord(Number(linkRow.sales_quote_id));
   const latestVersionCreatedAt = latestVersion?.created_at ? new Date(latestVersion.created_at) : null;
 
-  if (linkCreatedAt && latestVersionCreatedAt && linkCreatedAt < latestVersionCreatedAt) {
+  const isSupersededLink =
+    Number(linkRow.is_active) !== 1 ||
+    (linkCreatedAt && latestVersionCreatedAt && linkCreatedAt < latestVersionCreatedAt);
+
+  if (isSupersededLink && latestVersion && !isUsableQuoteVersion(latestVersion)) {
+    const approvalMetadata = getQuoteVersionApprovalMetadata(latestVersion);
+    const error = createQuotePreviewLinkError('QUOTE_PREVIEW_APPROVAL_PENDING');
+    error.message = 'Admin approval is pending for the latest quote version';
+    error.details = {
+      ...error.details,
+      approval_status: approvalMetadata.approval_status || 'pending',
+      version_number: Number(latestVersion.version_number || 0)
+    };
+    throw error;
+  }
+
+  if (isSupersededLink) {
     throw createQuotePreviewLinkError('QUOTE_PREVIEW_SUPERSEDED');
   }
 
