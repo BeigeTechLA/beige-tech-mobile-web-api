@@ -2,7 +2,7 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3ODAzMjA2MDcsImV4cCI6MTc4MDkyNTQwN30.G6ZeGd64v9Y6cXAlOgIjKrYyGZVHSmgSD6S4SZ-_e7U
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3ODA5ODc5OTUsImV4cCI6MTc4MTU5Mjc5NX0.obHCwV-unp91Jn46YOOmJE1T1-z9zqjoyELimIOSbnY
 
 @TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI3NiwidXNlclJvbGUiOiJwcm9kdWN0aW9uX21hbmFnZXIiLCJpYXQiOjE3ODA1Nzk4MTYsImV4cCI6MTc4MTE4NDYxNn0.zRMGMPJGIL34Bjh3SO1yJa5qYhfxKoknlUFwhwWW7qE
 
@@ -66,11 +66,11 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "name": "Production Team",
-  "email": "prod@beigecorporation.io",
-  "phone_number": "7133867887",
-  "password": "Prod@2026!",
-  "user_type": 6
+  "name": "harsh",
+  "email": "23@gmail.com",
+  "phone_number": "8173867887",
+  "password": "12345678",
+  "user_type": 3
 }
 
 ###

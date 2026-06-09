@@ -2431,11 +2431,21 @@ exports.createInternalCredential = async (req, res) => {
     const requestedUserType = user_type ?? userType;
     const normalizedUserType = Number(requestedUserType);
     const normalizedRole = typeof role === 'string' ? role.trim() : '';
+    const normalizedName = String(name || '').trim();
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    const normalizedPhoneNumber = phone_number ? String(phone_number).trim() : null;
 
-    if (!name || !email || !password || !normalizedUserType) {
+    if (!normalizedName || !normalizedEmail || !password || !normalizedUserType) {
       return res.status(400).json({
         success: false,
         message: 'name, email, password and user_type are required'
+      });
+    }
+
+    if (normalizedUserType === 3 && !normalizedPhoneNumber) {
+      return res.status(400).json({
+        success: false,
+        message: 'phone_number is required for client user_type'
       });
     }
 
@@ -2455,7 +2465,7 @@ exports.createInternalCredential = async (req, res) => {
     }
 
     const existingUser = await User.findOne({
-      where: { email: String(email).trim().toLowerCase() }
+      where: { email: normalizedEmail }
     });
 
     if (existingUser) {
@@ -2465,32 +2475,110 @@ exports.createInternalCredential = async (req, res) => {
       });
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    if (normalizedUserType === 2) {
+      const existingCrewMember = await crew_members.findOne({
+        where: { email: normalizedEmail }
+      });
 
-    const createdUser = await User.create({
-      name: String(name).trim(),
-      email: String(email).trim().toLowerCase(),
-      phone_number: phone_number || null,
-      password_hash: hashedPassword,
-      user_type: normalizedUserType,
-      role: normalizedRole || userTypeRecord.user_role || null,
-      is_active: 1,
-      email_verified: 1,
-      created_from: 1,
-      created_at: new Date()
-    });
-
-    return res.status(201).json({
-      success: true,
-      message: 'Internal credential created successfully',
-      data: {
-        id: createdUser.id,
-        name: createdUser.name,
-        email: createdUser.email,
-        user_type: createdUser.user_type,
-        role: createdUser.role || userTypeRecord.user_role
+      if (existingCrewMember) {
+        return res.status(409).json({
+          success: false,
+          message: 'Crew member with this email already exists'
+        });
       }
-    });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const transaction = await db.sequelize.transaction();
+
+    try {
+      const createdUser = await User.create({
+        name: normalizedName,
+        email: normalizedEmail,
+        phone_number: normalizedPhoneNumber,
+        password_hash: hashedPassword,
+        user_type: normalizedUserType,
+        role: normalizedRole || userTypeRecord.user_role || null,
+        is_active: 1,
+        email_verified: 1,
+        created_from: 1,
+        created_at: new Date()
+      }, { transaction });
+
+      let clientId = null;
+      let crewMemberId = null;
+
+      if (normalizedUserType === 2) {
+        const nameParts = normalizedName.split(/\s+/);
+        const firstName = nameParts.shift();
+        const lastName = nameParts.join(' ');
+        const createdCrewMember = await crew_members.create({
+          user_id: createdUser.id,
+          first_name: firstName,
+          last_name: lastName,
+          email: normalizedEmail,
+          phone_number: normalizedPhoneNumber,
+          is_active: 1,
+          created_from: 1
+        }, { transaction });
+
+        crewMemberId = createdCrewMember.crew_member_id;
+      }
+
+      if (normalizedUserType === 3) {
+        const existingClient = await Clients.findOne({
+          where: {
+            is_active: 1,
+            [Op.or]: [
+              { email: normalizedEmail },
+              { phone_number: normalizedPhoneNumber }
+            ]
+          },
+          order: [['client_id', 'ASC']],
+          transaction
+        });
+
+        if (existingClient) {
+          await existingClient.update({
+            user_id: createdUser.id,
+            name: normalizedName,
+            email: normalizedEmail,
+            phone_number: normalizedPhoneNumber
+          }, { transaction });
+
+          clientId = existingClient.client_id;
+        } else {
+          const createdClient = await Clients.create({
+            user_id: createdUser.id,
+            name: normalizedName,
+            email: normalizedEmail,
+            phone_number: normalizedPhoneNumber,
+            is_active: 1
+          }, { transaction });
+
+          clientId = createdClient.client_id;
+        }
+      }
+
+      await transaction.commit();
+
+      return res.status(201).json({
+        success: true,
+        message: 'Internal credential created successfully',
+        data: {
+          id: createdUser.id,
+          name: createdUser.name,
+          email: createdUser.email,
+          user_type: createdUser.user_type,
+          role: createdUser.role || userTypeRecord.user_role,
+          client_id: clientId,
+          crew_member_id: crewMemberId
+        }
+      });
+    } catch (error) {
+      await transaction.rollback();
+      throw error;
+    }
   } catch (error) {
     console.error('Create Internal Credential Error:', error);
     return res.status(500).json({
