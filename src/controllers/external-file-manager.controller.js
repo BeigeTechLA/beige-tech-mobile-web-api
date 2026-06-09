@@ -1225,6 +1225,99 @@ const sendFileApprovedInternalEmailsForReviews = async ({
   }
 };
 
+const isNewEditedRevisionVersionFolder = ({ phase, path, folderName, result }) => {
+  if (result?.success === false || result?.data?.alreadyExists === true) return false;
+
+  const resultFolder = result?.data?.folder || {};
+  const effectiveFolderName = resultFolder?.name || folderName;
+  const folderNameKey = normalizePathSegmentKey(effectiveFolderName);
+  const isVersionFolder = /^version0*[1-9]\d*$/.test(folderNameKey);
+  if (!isVersionFolder) return false;
+
+  const folderPath = resultFolder?.path || '';
+  const resultPathIsRevisionVersion = isEditedRevisionVersionPath(folderPath);
+  const normalizedPhase = normalizeWorkspacePhase(phase, null);
+  const pathSegments = String(path || '')
+    .replace(/\\/g, '/')
+    .split('/')
+    .map(normalizePathSegmentKey)
+    .filter(Boolean);
+  const requestPathIsRevisionRoot =
+    pathSegments[pathSegments.length - 2] === 'edits' &&
+    pathSegments[pathSegments.length - 1] === 'revisions';
+
+  return (
+    (normalizedPhase === 'post' || resultPathIsRevisionVersion) &&
+    (requestPathIsRevisionRoot || resultPathIsRevisionVersion)
+  );
+};
+
+const sendNewVersionUploadedClientEmailForFolder = async ({
+  externalId,
+  phase,
+  path,
+  folderName,
+  result,
+  uploadedByName = 'Production Team',
+}) => {
+  try {
+    if (!isNewEditedRevisionVersionFolder({ phase, path, folderName, result })) return;
+    if (!/^\d+$/.test(String(externalId || '').trim())) return;
+
+    const booking = await getBookingForUploadEmail(externalId);
+    if (!booking) return;
+
+    const plainBooking = typeof booking.get === 'function' ? booking.get({ plain: true }) : booking;
+    const toEmail = normalizeEmailAddress(plainBooking?.user?.email || plainBooking?.guest_email);
+    if (!toEmail) return;
+
+    const bookingReference = String(plainBooking?.stream_project_booking_id || externalId);
+    const recipientName = String(
+      plainBooking?.user?.name ||
+      plainBooking?.client_name ||
+      plainBooking?.project_name ||
+      plainBooking?.guest_email ||
+      ''
+    ).trim();
+    const projectName = String(
+      plainBooking?.project_name ||
+      plainBooking?.client_name ||
+      `Booking #${bookingReference}`
+    );
+    const version = String(result?.data?.folder?.name || folderName || '').trim();
+    const dashboardLink = buildProjectFilesUrl(bookingReference);
+
+    const emailResult = await emailService.sendNewVersionUploadedClientEmail({
+      to: toEmail,
+      data: {
+        first_name: getFirstName(recipientName, 'there'),
+        recipient_name: getFirstName(recipientName, 'there'),
+        client_name: recipientName || getFirstName(toEmail, 'there'),
+        shoot_name: projectName,
+        project_name: projectName,
+        booking_id: bookingReference,
+        order_id: bookingReference,
+        file_name: version,
+        folder_name: version,
+        version,
+        uploaded_by: uploadedByName || 'Production Team',
+        dashboard_link: dashboardLink,
+        review_link: dashboardLink,
+        frontend_url: dashboardLink,
+      },
+    });
+
+    if (!emailResult?.success) {
+      console.error(
+        'New version uploaded client email failed:',
+        emailResult?.error || emailResult?.failedRecipients || 'Unknown email error'
+      );
+    }
+  } catch (error) {
+    console.error('New version uploaded client email trigger failed:', error?.message || error);
+  }
+};
+
 const ensureCommonEventsTable = async () => {
   if (!commonEventsTableReadyPromise) {
     commonEventsTableReadyPromise = db.sequelize.query(`
@@ -3446,6 +3539,7 @@ exports.createFolder = async (req, res) => {
       isCommonEvent ? 'pre' : null
     );
     const path = sanitizeRelativeFolderPath(req.body.path);
+    const folderName = req.body.folderName || req.body.name;
 
     if (isCommonEvent && !phase) {
       return res.status(400).json({
@@ -3477,9 +3571,22 @@ exports.createFolder = async (req, res) => {
         externalId,
         phase: phase || req.body.phase,
         path: path || undefined,
-        folderName: req.body.folderName || req.body.name,
+        folderName,
       }),
     });
+
+    if (result?.success !== false) {
+      const uploaderName = await getUserDisplayName(getRequestUserId(req)).catch(() => null);
+      await sendNewVersionUploadedClientEmailForFolder({
+        externalId,
+        phase: phase || req.body.phase,
+        path,
+        folderName,
+        result,
+        uploadedByName: uploaderName || 'Production Team',
+      });
+    }
+
     return res.status(200).json(result);
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {

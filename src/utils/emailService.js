@@ -88,7 +88,9 @@ const {
   EDITED_DELIVERED_TOCLIENT_ADMIN_TEMPLATE_ID,
   REVISIONS_REQUESTED_ON_EDITS_TEMPLATE_ID,
   CLIENT_REQUESTED_REVISIONS_ADMIN_TEMPLATE_ID,
-  FILES_APPROVED_INTERNAL_TEMPLATE_ID
+  FILES_APPROVED_INTERNAL_TEMPLATE_ID,
+  REVISIONS_COMMENT_ADDED_TEMPLATE_ID,
+  NEW_VERSIONS_UPLOADED_CLIENT_TEMPLATE_ID
 } = require('../config/sendgridTemplates');
 
 const formatDate = (value) => {
@@ -3456,6 +3458,89 @@ const sendFileApprovedInternalEmail = async ({ recipients = [], data = {} }) => 
   });
 };
 
+const sendRevisionCommentAddedEmail = async ({ recipients = [], data = {} }) => {
+  if (!REVISIONS_COMMENT_ADDED_TEMPLATE_ID) {
+    return { success: false, error: 'REVISIONS_COMMENT_ADDED_TEMPLATE_ID is not configured' };
+  }
+
+  const shootName = data?.shoot_name || data?.project_name || data?.order_name || '';
+
+  return sendTemplateToRecipients({
+    recipients,
+    subject: `New revision comment: ${shootName || 'Shoot'}`,
+    templateId: REVISIONS_COMMENT_ADDED_TEMPLATE_ID,
+    dynamicTemplateData: {
+      first_name: data?.first_name || data?.recipient_name || 'there',
+      recipient_name: data?.recipient_name || data?.first_name || 'there',
+      shoot_name: shootName,
+      project_name: shootName,
+      order_name: shootName,
+      'Shoot Name': shootName,
+      file_name: data?.file_name || '',
+      current_version: data?.current_version || data?.version || '',
+      version: data?.version || data?.current_version || '',
+      comment: data?.comment || '',
+      commented_by: data?.commented_by || data?.requested_by || 'Client',
+      comment_time: data?.comment_time || data?.created_at || new Date().toISOString(),
+      frontend_url:
+        data?.frontend_url ||
+        data?.dashboard_link ||
+        `${String(process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/admin/dashboard`,
+      dashboard_link:
+        data?.dashboard_link ||
+        data?.frontend_url ||
+        `${String(process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/admin/dashboard`,
+      booking_id: data?.booking_id || data?.order_id || '',
+      order_id: data?.order_id || data?.booking_id || '',
+      year: new Date().getFullYear(),
+    },
+  });
+};
+
+const sendNewVersionUploadedClientEmail = async ({ to, data = {} }) => {
+  if (!NEW_VERSIONS_UPLOADED_CLIENT_TEMPLATE_ID) {
+    return { success: false, error: 'NEW_VERSIONS_UPLOADED_CLIENT_TEMPLATE_ID is not configured' };
+  }
+
+  if (!to) {
+    return { success: false, error: 'Recipient email is required' };
+  }
+
+  const shootName = data?.shoot_name || data?.project_name || data?.order_name || '';
+  const recipientName = data?.recipient_name || data?.first_name || data?.client_name || 'there';
+  const version = data?.version || data?.folder_name || '';
+  const dashboardLink =
+    data?.dashboard_link ||
+    data?.review_link ||
+    data?.frontend_url ||
+    `${String(process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/affiliate/dashboard`;
+
+  return sendEmail({
+    to,
+    subject: `New version uploaded: ${shootName || 'Your shoot'}`,
+    templateId: NEW_VERSIONS_UPLOADED_CLIENT_TEMPLATE_ID,
+    dynamicTemplateData: {
+      first_name: recipientName,
+      recipient_name: recipientName,
+      client_name: recipientName,
+      shoot_name: shootName,
+      project_name: shootName,
+      order_name: shootName,
+      'Shoot Name': shootName,
+      file_name: data?.file_name || version,
+      folder_name: data?.folder_name || version,
+      version,
+      uploaded_by: data?.uploaded_by || data?.uploaded_by_name || 'Production Team',
+      dashboard_link: dashboardLink,
+      review_link: dashboardLink,
+      frontend_url: dashboardLink,
+      booking_id: data?.booking_id || data?.order_id || '',
+      order_id: data?.order_id || data?.booking_id || '',
+      year: new Date().getFullYear(),
+    },
+  });
+};
+
 const sendFileShareInvitationEmail = async ({ to, data = {} }) => {
   if (!FILE_SHARE_INVITATION_TEMPLATE_ID) {
     return { success: false, error: 'FILE_SHARE_INVITATION_TEMPLATE_ID is not configured' };
@@ -3540,5 +3625,7 @@ module.exports = {
   sendRevisionRequestedOnEditEmail,
   sendClientRequestedRevisionsAdminEmail,
   sendFileApprovedInternalEmail,
+  sendRevisionCommentAddedEmail,
+  sendNewVersionUploadedClientEmail,
   sendFileShareInvitationEmail
 };
