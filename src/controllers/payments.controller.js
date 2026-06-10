@@ -672,13 +672,14 @@ async function processStripePaidWebhookEvent(event, req = {}) {
     paymentIntentId = dataObject.id;
     invoiceMetadata = dataObject.metadata || {};
 
-    if (dataObject.invoice && (!booking_id || Number.isNaN(booking_id) || !invoiceMetadata.payment_source)) {
+    if (dataObject.invoice) {
       try {
         const invoiceId = typeof dataObject.invoice === 'string'
           ? dataObject.invoice
           : dataObject.invoice.id;
         if (invoiceId) {
           const linkedInvoice = await stripe.invoices.retrieve(invoiceId);
+          stripeInvoice = linkedInvoice;
           invoiceMetadata = linkedInvoice.metadata || invoiceMetadata;
           if (!booking_id || Number.isNaN(booking_id)) {
             const invoiceBookingIdRaw = linkedInvoice.metadata?.booking_id;
@@ -948,7 +949,8 @@ async function processStripePaidWebhookEvent(event, req = {}) {
     await db.stream_project_booking.update({
       is_draft: 0,
       payment_id: payment.payment_id,
-      payment_completed_at: new Date()
+      payment_completed_at: new Date(),
+      ...(stripeInvoice?.id ? { stripe_invoice_id: stripeInvoice.id } : {})
     }, {
       where: { stream_project_booking_id: booking_id },
       transaction
@@ -2919,14 +2921,15 @@ exports.handleStripeWebhook = async (req, res) => {
       paymentIntentId = dataObject.id;
       invoiceMetadata = dataObject.metadata || {};
 
-      // Fallback/source lookup: booking_id and quote metadata are often on the related invoice.
-      if (dataObject.invoice && (!booking_id || Number.isNaN(booking_id) || !invoiceMetadata.payment_source)) {
+      // Fallback/source lookup and paid invoice capture.
+      if (dataObject.invoice) {
         try {
           const invoiceId = typeof dataObject.invoice === 'string'
             ? dataObject.invoice
             : dataObject.invoice.id;
           if (invoiceId) {
             const linkedInvoice = await stripe.invoices.retrieve(invoiceId);
+            stripeInvoice = linkedInvoice;
             invoiceMetadata = linkedInvoice.metadata || invoiceMetadata;
             if (!booking_id || Number.isNaN(booking_id)) {
               const invoiceBookingIdRaw = linkedInvoice.metadata?.booking_id;
@@ -3093,7 +3096,8 @@ exports.handleStripeWebhook = async (req, res) => {
         // is_completed: 1,
         is_draft: 0,
         payment_id: payment.payment_id,
-        payment_completed_at: new Date()
+        payment_completed_at: new Date(),
+        ...(stripeInvoice?.id ? { stripe_invoice_id: stripeInvoice.id } : {})
       }, {
         where: { stream_project_booking_id: booking_id },
         transaction
