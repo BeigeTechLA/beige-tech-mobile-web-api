@@ -1730,3 +1730,108 @@ CREATE TABLE IF NOT EXISTS `project_note_attachments` (
     FOREIGN KEY (`uploaded_by_user_id`) REFERENCES `users` (`id`)
     ON DELETE RESTRICT ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 29-5-26
+
+ALTER TABLE `sales_quotes`
+  ADD COLUMN IF NOT EXISTS `location_latitude` DECIMAL(10,7) NULL AFTER `client_address`,
+  ADD COLUMN IF NOT EXISTS `location_longitude` DECIMAL(10,7) NULL AFTER `location_latitude`;
+
++
+
+-- 03-06-26
+
+CREATE TABLE IF NOT EXISTS `creator_earning_advances` (
+  `advance_id` INT NOT NULL AUTO_INCREMENT,
+  `creator_earning_id` INT NOT NULL,
+  `booking_id` INT NOT NULL,
+  `creator_id` INT NOT NULL,
+  `amount` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  `status` ENUM('pending','processed','failed') NOT NULL DEFAULT 'pending',
+  `processed_at` DATETIME NULL,
+  `notes` TEXT NULL,
+  `created_by_user_id` INT NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`advance_id`),
+  KEY `idx_cea_earning` (`creator_earning_id`),
+  KEY `idx_cea_booking` (`booking_id`),
+  KEY `idx_cea_creator` (`creator_id`),
+  CONSTRAINT `fk_cea_earning`
+    FOREIGN KEY (`creator_earning_id`) REFERENCES `creator_earnings` (`creator_earning_id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_cea_booking`
+    FOREIGN KEY (`booking_id`) REFERENCES `stream_project_booking` (`stream_project_booking_id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_cea_creator`
+    FOREIGN KEY (`creator_id`) REFERENCES `crew_members` (`crew_member_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `creator_earning_compensation_items` (
+  `compensation_item_id` INT NOT NULL AUTO_INCREMENT,
+  `creator_earning_id` INT NOT NULL,
+  `booking_id` INT NOT NULL,
+  `creator_id` INT NOT NULL,
+  `item_label` VARCHAR(255) NOT NULL COMMENT 'e.g. Base Shoot Compensation, Parking, Travel Adjustment, Bonus',
+  `amount` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`compensation_item_id`),
+  KEY `idx_ceci_earning` (`creator_earning_id`),
+  KEY `idx_ceci_booking` (`booking_id`),
+  KEY `idx_ceci_creator` (`creator_id`),
+  CONSTRAINT `fk_ceci_earning`
+    FOREIGN KEY (`creator_earning_id`) REFERENCES `creator_earnings` (`creator_earning_id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_ceci_booking`
+    FOREIGN KEY (`booking_id`) REFERENCES `stream_project_booking` (`stream_project_booking_id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_ceci_creator`
+    FOREIGN KEY (`creator_id`) REFERENCES `crew_members` (`crew_member_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `creator_earning_timeline_events` (
+  `timeline_event_id` INT NOT NULL AUTO_INCREMENT,
+  `creator_earning_id` INT NOT NULL,
+  `booking_id` INT NOT NULL,
+  `creator_id` INT NOT NULL,
+  `event_type` ENUM(
+    'shoot_assigned',
+    'shoot_accepted',
+    'advance_payment_processed',
+    'shoot_completed',
+    'awaiting_finance_approval',
+    'final_payment_processed'
+  ) NOT NULL,
+  `label` VARCHAR(255) NOT NULL,
+  `sub_label` VARCHAR(255) NULL,
+  `amount` DECIMAL(10,2) NULL,
+  `is_completed` TINYINT(1) NOT NULL DEFAULT 0,
+  `event_date` DATETIME NULL,
+  `sort_order` INT NOT NULL DEFAULT 0,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`timeline_event_id`),
+  KEY `idx_cete_earning` (`creator_earning_id`),
+  KEY `idx_cete_booking` (`booking_id`),
+  KEY `idx_cete_creator` (`creator_id`),
+  CONSTRAINT `fk_cete_earning`
+    FOREIGN KEY (`creator_earning_id`) REFERENCES `creator_earnings` (`creator_earning_id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_cete_booking`
+    FOREIGN KEY (`booking_id`) REFERENCES `stream_project_booking` (`stream_project_booking_id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_cete_creator`
+    FOREIGN KEY (`creator_id`) REFERENCES `crew_members` (`crew_member_id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+INSERT INTO creator_earnings 
+(booking_id, creator_id, gross_amount, net_earning_amount, status, created_at, updated_at)
+VALUES 
+(1, 2010, 1200.00, 1200.00, 'pending', NOW(), NOW());
+
+
+
+INSERT INTO creator_earnings 
+(booking_id, creator_id, gross_amount, net_earning_amount, status, created_at, updated_at)
+VALUES 
+(480, 2010, 1200.00, 1200.00, 'pending', NOW(), NOW()),
+(616, 2010, 1200.00, 1200.00, 'pending', NOW(), NOW()),
+(622, 2010, 1200.00, 1200.00, 'paid', NOW(), NOW()),
+(626, 2010, 1200.00, 1200.00, 'earned', NOW(), NOW());

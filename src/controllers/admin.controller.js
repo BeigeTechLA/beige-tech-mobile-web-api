@@ -6,7 +6,12 @@ const common_model = require('../utils/common_model');
 const { Op } = require('sequelize');
 const { S3UploadFiles, toAbsoluteBeigeAssetUrl } = require('../utils/common.js');
 const moment = require('moment');
-const { sendTaskAssignmentEmail, sendCPNewBookingRequestEmail, sendPostProductionAssignmentEmail } = require('../utils/emailService');
+const {
+  sendTaskAssignmentEmail,
+  sendCPNewBookingRequestEmail,
+  sendPostProductionAssignmentEmail,
+  sendOnboardingFormCriticalEmail
+} = require('../utils/emailService');
 const { stream_project_booking, crew_members, crew_member_files, tasks, equipment, crew_roles,
   equipment_accessories,
   equipment_category,
@@ -37,6 +42,7 @@ const db = require('../models');
 const bookingTimelineService = require('../services/bookingTimeline.service');
 const accountCreditService = require('../services/account-credit.service');
 const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
+const quoteService = require('../services/sales-quote.service');
 // const NodeGeocoder = require('node-geocoder');
 const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
 const EXTERNAL_MEETINGS_API_BASE_URL = process.env.EXTERNAL_MEETINGS_API_BASE_URL || 'http://localhost:5002/v1/external-meetings';
@@ -165,6 +171,90 @@ const resolveAdminBookingClientName = async (booking = null, fallbackClientName 
   return null;
 };
 
+const resolveAdminBookingClientContact = async (booking = null) => {
+  if (!booking) {
+    return { full_name: null, email: null, phone_number: null };
+  }
+
+  const bookingJson = typeof booking.toJSON === 'function' ? booking.toJSON() : booking;
+  const bookingId = bookingJson.stream_project_booking_id;
+  const userId = bookingJson.user_id;
+
+  const [bookingUser, linkedClient, linkedLead, linkedClientLead] = await Promise.all([
+    userId
+      ? users.findOne({
+          where: { id: userId },
+          attributes: ['name', 'email', 'phone_number'],
+          raw: true
+        })
+      : Promise.resolve(null),
+    userId
+      ? clients.findOne({
+          where: { user_id: userId, is_active: 1 },
+          attributes: ['name', 'email', 'phone_number'],
+          raw: true
+        })
+      : Promise.resolve(null),
+    bookingId
+      ? sales_leads.findOne({
+          where: { booking_id: bookingId, is_active: 1 },
+          attributes: ['client_name', 'guest_email', 'phone'],
+          raw: true
+        })
+      : Promise.resolve(null),
+    bookingId
+      ? client_leads.findOne({
+          where: { booking_id: bookingId, is_active: 1 },
+          attributes: ['client_name', 'guest_email', 'phone'],
+          raw: true
+        })
+      : Promise.resolve(null)
+  ]);
+
+  const email =
+    bookingUser?.email ||
+    linkedClient?.email ||
+    linkedLead?.guest_email ||
+    linkedClientLead?.guest_email ||
+    bookingJson.guest_email ||
+    null;
+
+  let fullName =
+    bookingUser?.name ||
+    linkedClient?.name ||
+    linkedLead?.client_name ||
+    linkedClientLead?.client_name ||
+    null;
+
+  if (!fullName && email) {
+    fullName = String(email).split('@')[0].replace(/[._-]+/g, ' ').trim() || null;
+  }
+
+  return {
+    full_name: fullName,
+    email,
+    phone_number:
+      bookingUser?.phone_number ||
+      linkedClient?.phone_number ||
+      linkedLead?.phone ||
+      linkedClientLead?.phone ||
+      null
+  };
+};
+
+const getFirstNameForEmail = (name, email) => {
+  const normalizedName = String(name || '').trim();
+  if (normalizedName) return normalizedName.split(/\s+/)[0];
+
+  if (email && String(email).includes('@')) {
+    const localPart = String(email).split('@')[0] || '';
+    const derived = localPart.replace(/[._-]+/g, ' ').trim();
+    if (derived) return derived.split(/\s+/)[0];
+  }
+
+  return 'there';
+};
+
 const resolveAdminBookingShootAmount = async (booking = null, fallbackShootAmount = null) => {
   if (fallbackShootAmount !== undefined && fallbackShootAmount !== null) {
     return fallbackShootAmount;
@@ -211,11 +301,16 @@ const resolveProjectDisplayAmount = async ({ project, paymentData }) => {
     return paymentAmount;
   }
 
+  const budgetAmount = parseAmountCandidate(project?.budget);
+
   const quoteAmountFromLinkedQuote = project?.quote_id
     ? await quotes.findByPk(project.quote_id, {
         attributes: ['total', 'price_after_discount', 'subtotal'],
       }).then((quote) => {
         if (!quote) return null;
+        if (budgetAmount !== null && budgetAmount > 0) {
+          return budgetAmount;
+        }
         return (
           parseAmountCandidate(quote.total) ??
           parseAmountCandidate(quote.price_after_discount) ??
@@ -234,6 +329,9 @@ const resolveProjectDisplayAmount = async ({ project, paymentData }) => {
     order: [['quote_id', 'DESC']],
   }).then((quote) => {
     if (!quote) return null;
+    if (budgetAmount !== null && budgetAmount > 0) {
+      return budgetAmount;
+    }
     return (
       parseAmountCandidate(quote.total) ??
       parseAmountCandidate(quote.price_after_discount) ??
@@ -245,19 +343,28 @@ const resolveProjectDisplayAmount = async ({ project, paymentData }) => {
     return quoteAmountFromBooking;
   }
 
+  if (budgetAmount !== null && budgetAmount > 0) {
+    return budgetAmount;
+  }
+
   return 0;
 };
 
 const resolveProjectTotalValueAmount = async ({ project }) => {
+  const budgetAmount = parseAmountCandidate(project?.budget);
+
   const quoteAmountFromLinkedQuote = project?.quote_id
     ? await quotes.findByPk(project.quote_id, {
         attributes: ['subtotal', 'total', 'price_after_discount'],
       }).then((quote) => {
         if (!quote) return null;
+        if (budgetAmount !== null && budgetAmount > 0) {
+          return budgetAmount;
+        }
         return (
-          parseAmountCandidate(quote.subtotal) ??
           parseAmountCandidate(quote.total) ??
-          parseAmountCandidate(quote.price_after_discount)
+          parseAmountCandidate(quote.price_after_discount) ??
+          parseAmountCandidate(quote.subtotal)
         );
       })
     : null;
@@ -272,10 +379,13 @@ const resolveProjectTotalValueAmount = async ({ project }) => {
     order: [['quote_id', 'DESC']],
   }).then((quote) => {
     if (!quote) return null;
+    if (budgetAmount !== null && budgetAmount > 0) {
+      return budgetAmount;
+    }
     return (
-      parseAmountCandidate(quote.subtotal) ??
       parseAmountCandidate(quote.total) ??
-      parseAmountCandidate(quote.price_after_discount)
+      parseAmountCandidate(quote.price_after_discount) ??
+      parseAmountCandidate(quote.subtotal)
     );
   });
 
@@ -283,7 +393,6 @@ const resolveProjectTotalValueAmount = async ({ project }) => {
     return quoteAmountFromBooking;
   }
 
-  const budgetAmount = parseAmountCandidate(project?.budget);
   if (budgetAmount !== null && budgetAmount > 0) {
     return budgetAmount;
   }
@@ -1218,15 +1327,31 @@ exports.assignCrew = async (req, res) => {
 
     const uniqueCrewIds = [...new Set(crewIds.map(Number).filter(Boolean))];
 
-    for (const crewId of uniqueCrewIds) {
-      await assigned_crew.create({
-        project_id,
-        crew_member_id: crewId,
-        assigned_date: new Date(),
-        status: 'assigned',
-        is_active: 1,
-      });
-    }
+  for (const crewId of uniqueCrewIds) {
+  await assigned_crew.create({
+    project_id,
+    crew_member_id: crewId,
+    assigned_date: new Date(),
+    status: 'assigned',
+    is_active: 1,
+  });
+
+  const existingEarning = await db.creator_earnings.findOne({
+    where: { booking_id: project_id, creator_id: crewId }
+  });
+
+  if (!existingEarning) {
+    await db.creator_earnings.create({
+      booking_id: project_id,
+      creator_id: crewId,
+      gross_amount: 0,
+      net_earning_amount: 0,
+      status: 'pending',
+      created_at: new Date(),
+      updated_at: new Date()
+    });
+  }
+}
 
     // Non-blocking email trigger
     try {
@@ -1661,7 +1786,7 @@ exports.getProjectDetails = async (req, res) => {
       : [];
 
     // 3. Fetch Transaction Total (from payment_transactions table)
-    const [paymentData, formSubmission, shootNotesCountMap] = await Promise.all([
+    const [paymentData, formSubmission, shootNotesCountMap, bookingPaymentSummary] = await Promise.all([
       payment_transactions.findOne({
         where: { payment_id: projectJson.payment_id },
         attributes: ['total_amount'],
@@ -1673,17 +1798,99 @@ exports.getProjectDetails = async (req, res) => {
         order: [['created_at', 'DESC']],
         raw: true
       }),
-      countActiveShootNotesByBookingIds([projectJson.stream_project_booking_id])
+      countActiveShootNotesByBookingIds([projectJson.stream_project_booking_id]),
+      bookingPaymentSummaryService.getBookingPaymentSummary(projectJson.stream_project_booking_id)
     ]);
     const shootNotesCount = shootNotesCountMap.get(Number(projectJson.stream_project_booking_id)) || 0;
 
-    const displayAmount = await resolveProjectDisplayAmount({
+    const normalizedGuestEmail = String(projectJson.guest_email || '').trim().toLowerCase() || null;
+    const [emailUserRecord] = await Promise.all([
+      normalizedGuestEmail
+        ? users.findOne({
+            where: Sequelize.where(
+              Sequelize.fn('LOWER', Sequelize.col('email')),
+              normalizedGuestEmail
+            ),
+            attributes: ['id', 'email'],
+            raw: true
+          })
+        : Promise.resolve(null),
+    ]);
+
+    const matchedUserId = projectJson.user_id || emailUserRecord?.id || null;
+    const [clientByUser, clientByEmail] = await Promise.all([
+      matchedUserId
+        ? clients.findOne({
+            where: { user_id: matchedUserId, is_active: 1 },
+            attributes: ['client_id', 'user_id', 'email'],
+            raw: true
+          })
+        : Promise.resolve(null),
+      normalizedGuestEmail
+        ? clients.findOne({
+            where: {
+              is_active: 1,
+              [Op.and]: [
+                Sequelize.where(
+                  Sequelize.fn('LOWER', Sequelize.col('email')),
+                  normalizedGuestEmail
+                )
+              ]
+            },
+            attributes: ['client_id', 'user_id', 'email'],
+            raw: true
+          })
+        : Promise.resolve(null),
+    ]);
+
+    const resolvedClientRecord = clientByUser || clientByEmail || null;
+    const isRegisteredUser = Boolean(matchedUserId);
+    const isClient = Boolean(resolvedClientRecord?.client_id);
+    const isClientOnly = !isRegisteredUser && isClient;
+    const contactRegistrationType = isRegisteredUser
+      ? 'registered_user'
+      : isClientOnly
+        ? 'client_only'
+        : 'unregistered_contact';
+
+    let convertedSalesQuote = null;
+    if (bookingPaymentSummary?.sales_quote_id) {
+      convertedSalesQuote = await db.sales_quotes.findOne({
+        where: { sales_quote_id: bookingPaymentSummary.sales_quote_id },
+        attributes: ['sales_quote_id', 'quote_number', 'status'],
+        raw: true
+      });
+    } else if (lead?.lead_id) {
+      convertedSalesQuote = await db.sales_quotes.findOne({
+        where: { lead_id: lead.lead_id },
+        attributes: ['sales_quote_id', 'quote_number', 'status'],
+        order: [['sales_quote_id', 'DESC']],
+        raw: true
+      });
+    }
+
+    const convertedSalesQuoteId = convertedSalesQuote?.sales_quote_id || bookingPaymentSummary?.sales_quote_id || null;
+    const currentUsableConvertedQuote = convertedSalesQuoteId
+      ? await quoteService.getCurrentUsableQuoteVersionSnapshot(convertedSalesQuoteId, null)
+      : null;
+    const isQuoteConvertedBooking = Boolean(
+      convertedSalesQuoteId || String(lead?.lead_source || '').toLowerCase() === 'converted bookings'
+    );
+
+    let displayAmount = await resolveProjectDisplayAmount({
       project: projectJson,
       paymentData,
     });
-    const totalValueAmount = await resolveProjectTotalValueAmount({
+    let totalValueAmount = await resolveProjectTotalValueAmount({
       project: projectJson,
     });
+    const currentUsableQuoteTotal = parseAmountCandidate(currentUsableConvertedQuote?.total);
+    if (currentUsableQuoteTotal !== null && currentUsableQuoteTotal > 0) {
+      totalValueAmount = currentUsableQuoteTotal;
+      if (displayAmount > currentUsableQuoteTotal) {
+        displayAmount = currentUsableQuoteTotal;
+      }
+    }
 
     // 4. Process Event Type Labels
     const rawTypes = projectJson.event_type ? projectJson.event_type.split(',') : [];
@@ -1698,7 +1905,7 @@ exports.getProjectDetails = async (req, res) => {
     // 5. Pricing Breakdown logic
     // Using calculateLeadPricing helper if available, otherwise manual calc
     const projectedQuote = typeof calculateLeadPricing === 'function' ? await calculateLeadPricing(projectJson) : null;
-    const activeQuoteSource = projectJson.primary_quote || projectedQuote;
+    const activeQuoteSource = currentUsableConvertedQuote || projectJson.primary_quote || projectedQuote;
     
     const parsedQuoteTotal = parseFloat(activeQuoteSource?.total || 0);
     let pricing_breakdown = {
@@ -1805,6 +2012,17 @@ exports.getProjectDetails = async (req, res) => {
           total_paid_amount: displayAmount,
           total_value_amount: totalValueAmount,
           notes_count: shootNotesCount,
+          contact_registration_type: contactRegistrationType,
+          is_registered_user: isRegisteredUser,
+          is_client: isClient,
+          is_client_only: isClientOnly,
+          is_unregistered_contact: !isRegisteredUser && !isClientOnly,
+          client_record_id: resolvedClientRecord?.client_id || null,
+          client_id: resolvedClientRecord?.client_id || null,
+          matched_user_id: matchedUserId,
+          is_quote_converted_booking: isQuoteConvertedBooking,
+          converted_sales_quote_id: convertedSalesQuoteId,
+          converted_sales_quote_number: convertedSalesQuote?.quote_number || null,
           event_type_labels: eventTypeLabels.join(', '),
           timeline_status: timelineStatus,
           timeline_label: timelineLabel,
@@ -1814,6 +2032,15 @@ exports.getProjectDetails = async (req, res) => {
         timeline_status: timelineStatus,
         timeline_label: timelineLabel,
         lead_details: lead, // Sales rep, activities, etc.
+        contact_registration_type: contactRegistrationType,
+        is_registered_user: isRegisteredUser,
+        is_client: isClient,
+        is_client_only: isClientOnly,
+        is_unregistered_contact: !isRegisteredUser && !isClientOnly,
+        client_id: resolvedClientRecord?.client_id || null,
+        converted_sales_quote_id: convertedSalesQuoteId,
+        converted_sales_quote_number: convertedSalesQuote?.quote_number || null,
+        is_quote_converted_booking: isQuoteConvertedBooking,
         manual_payment_summary: manualPaymentSummary,
         pricing_breakdown,
         payment_status: resolvedPaymentStatus,
@@ -4275,7 +4502,43 @@ exports.getCrewMembers = async (req, res) => {
             );
         }
 
-        if (search) conditions.push({ first_name: { [Sequelize.Op.like]: `%${search}%` } });
+          if (search) {
+                    conditions.push({
+                        [Sequelize.Op.or]: [
+                            {
+                                first_name: {
+                                    [Sequelize.Op.like]: `%${search}%`
+                                }
+                            },
+                            {
+                                last_name: {
+                                    [Sequelize.Op.like]: `%${search}%`
+                                }
+                            },
+                            {
+                                email: {
+                                    [Sequelize.Op.like]: `%${search}%`
+                                }
+                            },
+                            {
+                                phone_number: {
+                                    [Sequelize.Op.like]: `%${search}%`
+                                }
+                            },
+                            Sequelize.where(
+                                Sequelize.fn(
+                                    "concat",
+                                    Sequelize.col("first_name"),
+                                    " ",
+                                    Sequelize.col("last_name")
+                                ),
+                                {
+                                    [Sequelize.Op.like]: `%${search}%`
+                                }
+                            )
+                        ]
+                    });
+                }
         if (location) conditions.push({ location: { [Sequelize.Op.like]: `%${location}%` } });
 
         const [{ count, rows: members }, allRoles] = await Promise.all([
@@ -8177,6 +8440,8 @@ exports.searchCrewForLead = async (req, res) => {
         } = req.query;
 
         const requestedRadius = Number(max_distance ?? radius ?? 50);
+        const normalizedSearchQuery = typeof search_query === 'string' ? search_query.trim() : '';
+        const hasGlobalCrewSearch = normalizedSearchQuery.length > 0;
 
         let projectDate;
         let currentBookingId = null;
@@ -8203,13 +8468,13 @@ exports.searchCrewForLead = async (req, res) => {
             centerLatitude = Number(lead.booking.event_latitude);
             centerLongitude = Number(lead.booking.event_longitude);
         } else {
-            if (!date) {
+            if (!date && !hasGlobalCrewSearch) {
                 return res.status(400).json({
                     success: false,
                     message: 'Date is required when lead_id is not provided'
                 });
             }
-            projectDate = date;
+            projectDate = date || null;
         }
 
         if (latitude !== undefined && longitude !== undefined) {
@@ -8223,18 +8488,20 @@ exports.searchCrewForLead = async (req, res) => {
 
         const hasSearchCenter = Number.isFinite(centerLatitude) && Number.isFinite(centerLongitude);
 
-        const busyCrewRecords = await assigned_crew.findAll({
-            where: {
-                crew_accept: 1,
-                is_active: 1
-            },
-            include: [{
-                model: stream_project_booking,
-                as: 'project',
-                where: { event_date: projectDate }
-            }],
-            attributes: ['crew_member_id']
-        });
+        const busyCrewRecords = projectDate && !hasGlobalCrewSearch
+            ? await assigned_crew.findAll({
+                where: {
+                    crew_accept: 1,
+                    is_active: 1
+                },
+                include: [{
+                    model: stream_project_booking,
+                    as: 'project',
+                    where: { event_date: projectDate }
+                }],
+                attributes: ['crew_member_id']
+            })
+            : [];
 
         let alreadyAssignedToThisLead = [];
         if (currentBookingId) {
@@ -8273,23 +8540,32 @@ exports.searchCrewForLead = async (req, res) => {
 
         const crewWhere = {
             is_active: true,
-            is_available: true,
             is_crew_verified: 1,
             crew_member_id: { [Op.notIn]: excludeIds.length ? excludeIds : [0] }
         };
 
-        if (targetRoleIds.length > 0) {
+        if (!hasGlobalCrewSearch) {
+            crewWhere.is_available = true;
+        }
+
+        if (targetRoleIds.length > 0 && !hasGlobalCrewSearch) {
             crewWhere[Op.or] = targetRoleIds.map(id => ({
                 primary_role: { [Op.like]: `%${id}%` }
             }));
         }
 
-        if (search_query) {
+        if (hasGlobalCrewSearch) {
             crewWhere[Op.and] = [{
                 [Op.or]: [
-                    { first_name: { [Op.like]: `%${search_query}%` } },
-                    { last_name: { [Op.like]: `%${search_query}%` } },
-                    { email: { [Op.like]: `%${search_query}%` } }
+                    { first_name: { [Op.like]: `%${normalizedSearchQuery}%` } },
+                    { last_name: { [Op.like]: `%${normalizedSearchQuery}%` } },
+                    Sequelize.where(
+                        Sequelize.fn('CONCAT', Sequelize.col('first_name'), ' ', Sequelize.col('last_name')),
+                        { [Op.like]: `%${normalizedSearchQuery}%` }
+                    ),
+                    { email: { [Op.like]: `%${normalizedSearchQuery}%` } },
+                    { phone_number: { [Op.like]: `%${normalizedSearchQuery}%` } },
+                    { location: { [Op.like]: `%${normalizedSearchQuery}%` } }
                 ]
             }];
         }
@@ -8359,11 +8635,16 @@ exports.searchCrewForLead = async (req, res) => {
             };
         });
 
-        const filteredCrew = hasSearchCenter
+        const filteredCrew = hasSearchCenter && !hasGlobalCrewSearch
             ? crewWithRoles
                 .filter(crew => crew.distance !== null && crew.distance <= requestedRadius)
                 .sort((a, b) => a.distance - b.distance)
-            : crewWithRoles;
+            : crewWithRoles.sort((a, b) => {
+                if (a.distance === null && b.distance === null) return 0;
+                if (a.distance === null) return 1;
+                if (b.distance === null) return -1;
+                return a.distance - b.distance;
+            });
 
         res.json({
             success: true,
@@ -8371,6 +8652,8 @@ exports.searchCrewForLead = async (req, res) => {
             available_count: filteredCrew.length,
             search_center: hasSearchCenter ? { latitude: centerLatitude, longitude: centerLongitude } : null,
             radius: Number.isFinite(requestedRadius) ? requestedRadius : null,
+            search_query: hasGlobalCrewSearch ? normalizedSearchQuery : null,
+            search_scope: hasGlobalCrewSearch ? 'all_crew' : 'radius',
             data: filteredCrew
         });
 
@@ -8703,8 +8986,9 @@ exports.assignCrewBulkSmart = async (req, res) => {
             await assigned_crew.bulkCreate(assignmentsToCreate);
             await activityModel.create({
                 lead_id: resolvedLeadId,
-                activity_type: 'bulk_crew_assigned',
+                activity_type: 'assigned',
                 activity_data: {
+                  action: 'bulk_crew_assigned',
                   notes: `Sales rep assigned ${assignmentsToCreate.length} crew members.`,
                   assigned_count: assignmentsToCreate.length
                 },
@@ -8822,8 +9106,12 @@ exports.removeAssignedCrew = async (req, res) => {
 
         await LeadActivityModel.create({
             lead_id: lead_id || client_lead_id,
-            activity_type: 'crew_removed',
-            activity_data: `Sales rep removed ${crewName} from the project.`,
+            activity_type: 'status_changed',
+            activity_data: {
+                action: 'crew_removed',
+                notes: `Sales rep removed ${crewName} from the project.`,
+                crew_member_id
+            },
             performed_by_user_id: assigned_by_user_id,
             created_at: new Date()
         });
@@ -9148,7 +9436,10 @@ exports.getBookingSummaryById = async (req, res) => {
             }],
             order: [[{ model: db.sales_quote_line_items, as: 'line_items' }, 'sort_order', 'ASC']]
         });
-        const activeQuote = customQuote ? customQuote.toJSON() : primaryQuote;
+        const usableCustomQuote = customQuote?.sales_quote_id
+            ? await quoteService.getCurrentUsableQuoteVersionSnapshot(customQuote.sales_quote_id, null)
+            : null;
+        const activeQuote = usableCustomQuote || (customQuote ? customQuote.toJSON() : primaryQuote);
 
         // 6. Pricing Breakdown & Discount Logic
         
@@ -9567,6 +9858,8 @@ exports.searchCrewForProject = async (req, res) => {
         } = req.query;
 
         const requestedRadius = Number(max_distance ?? radius ?? 50);
+        const normalizedSearchQuery = typeof search_query === 'string' ? search_query.trim() : '';
+        const hasGlobalCrewSearch = normalizedSearchQuery.length > 0;
 
         let projectDate;
         let currentBookingId = null;
@@ -9592,13 +9885,13 @@ exports.searchCrewForProject = async (req, res) => {
             centerLatitude = Number(booking.event_latitude);
             centerLongitude = Number(booking.event_longitude);
         } else {
-            if (!date) {
+            if (!date && !hasGlobalCrewSearch) {
                 return res.status(400).json({
                     success: false,
                     message: 'Date is required when project_id is not provided'
                 });
             }
-            projectDate = date;
+            projectDate = date || null;
         }
 
         if (latitude !== undefined && longitude !== undefined) {
@@ -9612,18 +9905,20 @@ exports.searchCrewForProject = async (req, res) => {
 
         const hasSearchCenter = Number.isFinite(centerLatitude) && Number.isFinite(centerLongitude);
 
-        const busyCrewRecords = await assigned_crew.findAll({
-            where: {
-                crew_accept: 1,
-                is_active: 1
-            },
-            include: [{
-                model: stream_project_booking,
-                as: 'project',
-                where: { event_date: projectDate }
-            }],
-            attributes: ['crew_member_id']
-        });
+        const busyCrewRecords = projectDate && !hasGlobalCrewSearch
+            ? await assigned_crew.findAll({
+                where: {
+                    crew_accept: 1,
+                    is_active: 1
+                },
+                include: [{
+                    model: stream_project_booking,
+                    as: 'project',
+                    where: { event_date: projectDate }
+                }],
+                attributes: ['crew_member_id']
+            })
+            : [];
 
         let alreadyAssignedToThisProject = [];
         if (currentBookingId) {
@@ -9662,23 +9957,32 @@ exports.searchCrewForProject = async (req, res) => {
 
         const crewWhere = {
             is_active: true,
-            is_available: true,
             is_crew_verified: 1,
             crew_member_id: { [Op.notIn]: excludeIds.length ? excludeIds : [0] }
         };
 
-        if (targetRoleIds.length > 0) {
+        if (!hasGlobalCrewSearch) {
+            crewWhere.is_available = true;
+        }
+
+        if (targetRoleIds.length > 0 && !hasGlobalCrewSearch) {
             crewWhere[Op.or] = targetRoleIds.map(id => ({
                 primary_role: { [Op.like]: `%${id}%` }
             }));
         }
 
-        if (search_query) {
+        if (hasGlobalCrewSearch) {
             crewWhere[Op.and] = [{
                 [Op.or]: [
-                    { first_name: { [Op.like]: `%${search_query}%` } },
-                    { last_name: { [Op.like]: `%${search_query}%` } },
-                    { email: { [Op.like]: `%${search_query}%` } }
+                    { first_name: { [Op.like]: `%${normalizedSearchQuery}%` } },
+                    { last_name: { [Op.like]: `%${normalizedSearchQuery}%` } },
+                    Sequelize.where(
+                        Sequelize.fn('CONCAT', Sequelize.col('first_name'), ' ', Sequelize.col('last_name')),
+                        { [Op.like]: `%${normalizedSearchQuery}%` }
+                    ),
+                    { email: { [Op.like]: `%${normalizedSearchQuery}%` } },
+                    { phone_number: { [Op.like]: `%${normalizedSearchQuery}%` } },
+                    { location: { [Op.like]: `%${normalizedSearchQuery}%` } }
                 ]
             }];
         }
@@ -9736,11 +10040,16 @@ exports.searchCrewForProject = async (req, res) => {
             };
         });
 
-        const filteredCrew = hasSearchCenter
+        const filteredCrew = hasSearchCenter && !hasGlobalCrewSearch
             ? crewWithRoles
                 .filter(crew => crew.distance !== null && crew.distance <= requestedRadius)
                 .sort((a, b) => a.distance - b.distance)
-            : crewWithRoles;
+            : crewWithRoles.sort((a, b) => {
+                if (a.distance === null && b.distance === null) return 0;
+                if (a.distance === null) return 1;
+                if (b.distance === null) return -1;
+                return a.distance - b.distance;
+            });
 
         res.json({
             success: true,
@@ -9749,6 +10058,8 @@ exports.searchCrewForProject = async (req, res) => {
             available_count: filteredCrew.length,
             search_center: hasSearchCenter ? { latitude: centerLatitude, longitude: centerLongitude } : null,
             radius: Number.isFinite(requestedRadius) ? requestedRadius : null,
+            search_query: hasGlobalCrewSearch ? normalizedSearchQuery : null,
+            search_scope: hasGlobalCrewSearch ? 'all_crew' : 'radius',
             data: filteredCrew
         });
 
@@ -9878,8 +10189,12 @@ exports.assignProjectCrewBulk = async (req, res) => {
             if (leadId) {
                 await sales_lead_activities.create({
                     lead_id: leadId,
-                    activity_type: 'bulk_crew_assigned',
-                    notes: `Assigned ${assignmentsToCreate.length} crew members to project via Project ID.`,
+                    activity_type: 'assigned',
+                    activity_data: {
+                        action: 'bulk_crew_assigned',
+                        notes: `Assigned ${assignmentsToCreate.length} crew members to project via Project ID.`,
+                        assigned_count: assignmentsToCreate.length
+                    },
                     performed_by_user_id: assigned_by_user_id
                 });
             }
@@ -9975,8 +10290,12 @@ exports.removeProjectAssignedCrew = async (req, res) => {
 
             await sales_lead_activities.create({
                 lead_id: lead.lead_id,
-                activity_type: 'crew_removed',
-                notes: `Removed ${crewName} from the project via Project ID.`,
+                activity_type: 'status_changed',
+                activity_data: {
+                    action: 'crew_removed',
+                    notes: `Removed ${crewName} from the project via Project ID.`,
+                    crew_member_id
+                },
                 performed_by_user_id: assigned_by_user_id,
                 created_at: new Date()
             });
@@ -10051,6 +10370,280 @@ exports.getProjectFormByProjectId = async (req, res) => {
             error: true, 
             message: "Internal server error", 
             details: error.message 
+        });
+    }
+};
+
+exports.sendOnboardingFormReminder = async (req, res) => {
+    try {
+        const project_id = req.params?.project_id || req.body?.project_id;
+        const admin_user_id = req.user?.userId || null;
+
+        if (!project_id) {
+            return res.status(400).json({
+                success: false,
+                message: "Project ID is required."
+            });
+        }
+
+        const booking = await stream_project_booking.findOne({
+            where: { stream_project_booking_id: project_id, is_active: 1 },
+            include: [{
+                model: users,
+                as: 'user',
+                required: false,
+                attributes: ['id', 'name', 'email', 'phone_number']
+            }]
+        });
+
+        if (!booking) {
+            return res.status(404).json({
+                success: false,
+                message: "Project/Booking not found."
+            });
+        }
+
+        const formSubmission = await project_form_submissions.findOne({
+            where: { project_id, is_active: 1 },
+            attributes: ['id'],
+            raw: true
+        });
+
+        if (formSubmission) {
+            return res.status(400).json({
+                success: false,
+                message: "Onboarding form is already submitted for this project."
+            });
+        }
+
+        const [clientDetails, lead, clientLead] = await Promise.all([
+            resolveAdminBookingClientContact(booking),
+            sales_leads.findOne({
+                where: { booking_id: project_id, is_active: 1 },
+                attributes: ['lead_id', 'client_name', 'guest_email'],
+                raw: true
+            }),
+            client_leads.findOne({
+                where: { booking_id: project_id, is_active: 1 },
+                attributes: ['lead_id', 'client_name', 'guest_email'],
+                raw: true
+            })
+        ]);
+
+        const toEmail =
+            clientDetails.email ||
+            booking.user?.email ||
+            booking.guest_email ||
+            lead?.guest_email ||
+            clientLead?.guest_email ||
+            null;
+
+        if (!toEmail) {
+            return res.status(400).json({
+                success: false,
+                message: "Client email is missing for this project."
+            });
+        }
+
+        const displayName =
+            clientDetails.full_name ||
+            lead?.client_name ||
+            clientLead?.client_name ||
+            booking.user?.name ||
+            null;
+        const firstName = getFirstNameForEmail(displayName, toEmail);
+        const frontendUrl = (process.env.FRONTEND_URL || 'https://beige.app').replace(/\/+$/, '');
+
+        const emailResult = await sendOnboardingFormCriticalEmail({
+            to_email: toEmail,
+            booking_id: project_id,
+            shoot_id: project_id,
+            user_name: firstName,
+            first_name: firstName,
+            form_link: `${frontendUrl}/project-form/${project_id}`,
+            dashboard_link: `${frontendUrl}/affiliate/dashboard`
+        });
+
+        if (!emailResult?.success) {
+            return res.status(502).json({
+                success: false,
+                message: "Failed to send onboarding reminder email.",
+                error: emailResult?.error || 'Unknown email error'
+            });
+        }
+
+        const activityData = {
+            email_event: 'onboarding_form_manual_reminder',
+            booking_id: Number(project_id),
+            recipient_email: toEmail,
+            message_id: emailResult.messageId || null
+        };
+
+        if (lead?.lead_id) {
+            await sales_lead_activities.create({
+                lead_id: lead.lead_id,
+                activity_type: 'status_changed',
+                activity_data: activityData,
+                performed_by_user_id: admin_user_id,
+                created_at: new Date()
+            });
+        } else if (clientLead?.lead_id) {
+            await client_lead_activities.create({
+                lead_id: clientLead.lead_id,
+                activity_type: 'status_changed',
+                activity_data: activityData,
+                performed_by_user_id: admin_user_id,
+                created_at: new Date()
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "Onboarding reminder email sent successfully.",
+            data: {
+                project_id: Number(project_id),
+                to_email: toEmail,
+                message_id: emailResult.messageId || null
+            }
+        });
+    } catch (error) {
+        console.error('SendOnboardingFormReminder Error:', error);
+        return res.status(500).json({
+            success: false,
+            message: "Internal Server Error",
+            error: error.message
+        });
+    }
+};
+
+exports.submitProjectFormByAdmin = async (req, res) => {
+    try {
+        const admin_user_id = req.user?.userId || null;
+        const {
+            onsite_contact_info,
+            project_types,
+            project_type_other,
+            brief_overview,
+            num_people_attending,
+            event_agenda,
+            location_address,
+            location_specification,
+            location_scouting_refs,
+            shot_list,
+            visual_references,
+            specific_instructions,
+            creative_dress_code,
+            post_production_ideas,
+            preferred_songs,
+            additional_info,
+            wants_to_learn_more,
+            form_user_friendliness_rating
+        } = req.body || {};
+        const project_id = req.body?.project_id;
+
+        if (!project_id || !brief_overview) {
+            return res.status(400).json({
+                success: false,
+                message: "Project ID and brief overview are required."
+            });
+        }
+
+        const booking = await stream_project_booking.findByPk(project_id);
+        if (!booking) {
+            return res.status(404).json({
+                success: false,
+                message: "Project/Booking not found."
+            });
+        }
+        const clientDetails = await resolveAdminBookingClientContact(booking);
+
+        const formPayload = {
+            project_id,
+            onsite_contact_info: onsite_contact_info || 'N/A',
+            project_types,
+            project_type_other,
+            brief_overview,
+            num_people_attending,
+            event_agenda: event_agenda || 'TBD',
+            location_address,
+            location_specification: location_specification || 'Indoors',
+            location_scouting_refs,
+            shot_list: shot_list || 'TBD',
+            visual_references: visual_references || 'TBD',
+            specific_instructions,
+            creative_dress_code: creative_dress_code || 'None',
+            post_production_ideas,
+            preferred_songs,
+            additional_info,
+            wants_to_learn_more: wants_to_learn_more ? 1 : 0,
+            form_user_friendliness_rating,
+            created_by: admin_user_id
+        };
+
+        const existingSubmission = await project_form_submissions.findOne({
+            where: { project_id, is_active: 1 },
+            order: [['created_at', 'DESC']]
+        });
+
+        let submission = existingSubmission;
+        const isUpdate = !!existingSubmission;
+
+        if (existingSubmission) {
+            await existingSubmission.update(formPayload);
+        } else {
+            submission = await project_form_submissions.create({
+                ...formPayload,
+                created_at: new Date()
+            });
+        }
+
+        const lead = await sales_leads.findOne({
+            where: { booking_id: project_id },
+            attributes: ['lead_id']
+        });
+
+        if (lead) {
+            await sales_lead_activities.create({
+                lead_id: lead.lead_id,
+                activity_type: 'form_submitted',
+                notes: isUpdate
+                    ? 'Admin updated the detailed Project Form.'
+                    : 'Admin submitted the detailed Project Form.',
+                performed_by_user_id: admin_user_id,
+                created_at: new Date()
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: isUpdate
+                ? "Project form updated successfully."
+                : "Project form submitted and saved successfully.",
+            is_submitted: true,
+            client_details: clientDetails,
+            data: {
+                submission_id: submission.id,
+                project_id: submission.project_id,
+                needs_attention: buildShootNeedsAttention(
+                    {
+                        ...booking.toJSON(),
+                        booking_days: await db.stream_project_booking_days.findAll({
+                            where: { stream_project_booking_id: booking.stream_project_booking_id },
+                            attributes: ['event_date'],
+                            raw: true
+                        })
+                    },
+                    submission
+                )
+            }
+        });
+
+    } catch (error) {
+        console.error('SubmitProjectFormByAdmin Error:', error);
+        return res.status(500).json({
+            success: false,
+            message: "Internal Server Error",
+            error: error.message
         });
     }
 };

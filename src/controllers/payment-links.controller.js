@@ -526,12 +526,16 @@ const persistInvoiceSendHistory = async ({
 };
 
 const sendInvoiceForBooking = async ({ bookingId, quoteId = null, performedByUserId = null, recipientOverride = null, requestBaseUrl = null }) => {
+  const manualContext = await getBookingManualPaymentContext(bookingId);
+  const useManualReceipt = await shouldUseManualInvoiceReceipt(bookingId, manualContext);
   const {
     parsedBookingId,
     recipientName,
     recipientEmail,
     invoiceDetails
-  } = await prepareInvoiceDetailsForBooking(bookingId, performedByUserId, recipientOverride, quoteId, requestBaseUrl);
+  } = useManualReceipt
+    ? await prepareManualInvoiceDetailsForBooking(bookingId, null, recipientOverride)
+    : await prepareInvoiceDetailsForBooking(bookingId, performedByUserId, recipientOverride, quoteId, requestBaseUrl);
 
   const userData = { name: recipientName, email: recipientEmail };
   const emailResult = await emailService.sendInvoiceEmail(userData, invoiceDetails);
@@ -630,6 +634,9 @@ const getBookingManualPaymentContext = async (bookingId) => {
 
 const shouldUseManualInvoiceReceipt = async (bookingId, manualContext) => {
   if (!manualContext?.isManual) return false;
+  if (String(manualContext?.latestManualPayment?.data?.payment_mode || '').toLowerCase() === 'net30') {
+    return true;
+  }
 
   const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({ bookingId });
   if (paymentState.hasSummary) {
@@ -2004,10 +2011,10 @@ exports.getStripeInvoicePdf = async (req, res) => {
     const { booking_id } = req.params;
     const forceDownload = String(req.query.download || '').toLowerCase() === '1' || String(req.query.download || '').toLowerCase() === 'true';
     const isManualRequested = String(req.query.manual || '').toLowerCase() === '1' || String(req.query.manual || '').toLowerCase() === 'true';
+    const manualContext = await getBookingManualPaymentContext(booking_id);
+    const useManualReceipt = isManualRequested || await shouldUseManualInvoiceReceipt(booking_id, manualContext);
 
-    if (isManualRequested) {
-      const manualContext = await getBookingManualPaymentContext(booking_id);
-
+    if (useManualReceipt) {
       const parsedBookingId = Number(booking_id);
       const booking = await db.stream_project_booking.findOne({
         where: { stream_project_booking_id: parsedBookingId },
@@ -2062,13 +2069,22 @@ exports.getStripeInvoicePdf = async (req, res) => {
         .forEach((activity) => {
           const meta = parseActivityMetadata(activity.activity_data);
           if (!meta || meta.payment_method !== 'manual') return;
+          const normalizedPaymentMode = String(meta.payment_mode || '').toLowerCase();
           const parsedAmount = Number(meta.amount);
           const fallbackFullAmount = Number(meta.remaining_before_payment || meta.total_amount || 0);
-          const resolvedAmount = Number.isFinite(parsedAmount) && parsedAmount > 0
+          const resolvedAmount = normalizedPaymentMode === 'net30'
+            ? 0
+            : Number.isFinite(parsedAmount) && parsedAmount > 0
             ? parsedAmount
             : fallbackFullAmount;
+          const normalizedMode = meta.payment_mode ? String(meta.payment_mode).replace(/_/g, ' ') : 'manual';
+          const resolvedMethod = normalizedPaymentMode === 'other' && String(meta.other_payment_mode || '').trim()
+            ? String(meta.other_payment_mode).trim()
+            : normalizedPaymentMode === 'net30'
+              ? 'Net 30'
+              : normalizedMode;
           manualHistory.push({
-            method: meta.payment_mode ? String(meta.payment_mode).replace(/_/g, ' ') : 'manual',
+            method: resolvedMethod,
             date: formatInvoiceDate(activity.created_at),
             amount: resolvedAmount
           });
@@ -2388,11 +2404,22 @@ exports.previewQuoteInvoice = async (req, res) => {
       bookingId = ensuredBooking.booking_id;
     }
 
-    const requestBaseUrl = `${req.protocol}://${req.get('host')}/v1`;
-    const { invoiceDetails } = await prepareInvoiceDetailsForBooking(bookingId, req.userId || null, {
+    const recipientOverride = {
       email: salesQuote.client_email || null,
       name: salesQuote.client_name || null
-    }, salesQuote.sales_quote_id, requestBaseUrl);
+    };
+    const manualContext = await getBookingManualPaymentContext(bookingId);
+    const useManualReceipt = await shouldUseManualInvoiceReceipt(bookingId, manualContext);
+    const requestBaseUrl = `${req.protocol}://${req.get('host')}/v1`;
+    const { invoiceDetails } = useManualReceipt
+      ? await prepareManualInvoiceDetailsForBooking(bookingId, req, recipientOverride)
+      : await prepareInvoiceDetailsForBooking(
+          bookingId,
+          req.userId || null,
+          recipientOverride,
+          salesQuote.sales_quote_id,
+          requestBaseUrl
+        );
 
     return res.status(200).json({
       success: true,
