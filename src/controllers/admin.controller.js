@@ -4502,7 +4502,43 @@ exports.getCrewMembers = async (req, res) => {
             );
         }
 
-        if (search) conditions.push({ first_name: { [Sequelize.Op.like]: `%${search}%` } });
+          if (search) {
+                    conditions.push({
+                        [Sequelize.Op.or]: [
+                            {
+                                first_name: {
+                                    [Sequelize.Op.like]: `%${search}%`
+                                }
+                            },
+                            {
+                                last_name: {
+                                    [Sequelize.Op.like]: `%${search}%`
+                                }
+                            },
+                            {
+                                email: {
+                                    [Sequelize.Op.like]: `%${search}%`
+                                }
+                            },
+                            {
+                                phone_number: {
+                                    [Sequelize.Op.like]: `%${search}%`
+                                }
+                            },
+                            Sequelize.where(
+                                Sequelize.fn(
+                                    "concat",
+                                    Sequelize.col("first_name"),
+                                    " ",
+                                    Sequelize.col("last_name")
+                                ),
+                                {
+                                    [Sequelize.Op.like]: `%${search}%`
+                                }
+                            )
+                        ]
+                    });
+                }
         if (location) conditions.push({ location: { [Sequelize.Op.like]: `%${location}%` } });
 
         const [{ count, rows: members }, allRoles] = await Promise.all([
