@@ -1774,42 +1774,12 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
 
     // --- CASE 1: ALREADY PAID ---
     if (pricingData && (pricingData.is_paid || bookingMarkedPaid)) {
-      let invoiceUrl, invoicePdf, invoiceNumber;
-      let stripeTotalAmount = 0;
-      let needsNewInvoice = recipientIdentityChanged;
-
-      // Check existing invoice for amount mismatch
-      if (booking.stripe_invoice_id) {
-        try {
-          const inv = await stripe.invoices.retrieve(booking.stripe_invoice_id);
-          stripeTotalAmount = (inv.total || 0) / 100;
-          const expectedTotal = parseFloat(pricingData.total);
-
-          // If Stripe total ($20,700) != Expected ($9,315), force a new one
-          if (Math.abs(stripeTotalAmount - expectedTotal) > 0.01) {
-            needsNewInvoice = true;
-          } else {
-            invoiceUrl = inv.hosted_invoice_url;
-            invoicePdf = inv.invoice_pdf;
-            invoiceNumber = inv.number;
-          }
-        } catch (e) { needsNewInvoice = true; }
-      }
-
-      if (!invoicePdf || needsNewInvoice) {
-        const retrospectiveInvoice = await paymentLinksService.createPaidStripeInvoice(booking, pricingData, { recipientOverride });
-        invoiceUrl = retrospectiveInvoice.hosted_invoice_url;
-        invoicePdf = retrospectiveInvoice.invoice_pdf;
-        invoiceNumber = retrospectiveInvoice.number;
-        stripeTotalAmount = (retrospectiveInvoice.total || 0) / 100;
-      }
-
+      const invoicePdfUrl = buildManualInvoiceFrontendUrl(parsedBookingId);
       invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
-        invoiceUrl,
-        invoicePdf,
-        stripeInvoiceNumber: invoiceNumber,
-        invoiceNumber,
-        totalAmount: stripeTotalAmount,
+        invoiceUrl: invoicePdfUrl,
+        invoicePdf: invoicePdfUrl,
+        invoiceNumber: `INVBEIGE-M-${String(parsedBookingId).padStart(4, '0')}`,
+        totalAmount,
         isPaid: true,
         isAdditionalPayment: false
       });
