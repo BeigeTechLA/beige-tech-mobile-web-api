@@ -1,14 +1,13 @@
 name: Deploy Backend Dev
 
 on:
-  push:
-    branches:
-      - development
-    paths-ignore:
-      - ".github/workflows/deploy-dev.yml"
-      - ".github/workflows/deploy-staging.yml"
-      - ".github/workflows/deploy-prod.yml"
   workflow_dispatch:
+    inputs:
+      deploy_branch:
+        description: "Branch to deploy to dev. Do not use main or staging."
+        required: true
+        default: "development"
+        type: string
 
 concurrency:
   group: deploy-backend-dev
@@ -20,8 +19,25 @@ jobs:
     timeout-minutes: 30
 
     steps:
+      - name: Validate deploy branch
+        run: |
+          WORKFLOW_BRANCH="${{ github.ref_name }}"
+          DEPLOY_BRANCH="${{ github.event.inputs.deploy_branch }}"
+
+          if [ "$WORKFLOW_BRANCH" = "main" ] || [ "$WORKFLOW_BRANCH" = "staging" ]; then
+            echo "Running this dev deploy workflow from '$WORKFLOW_BRANCH' is not allowed."
+            exit 1
+          fi
+
+          if [ "$DEPLOY_BRANCH" = "main" ] || [ "$DEPLOY_BRANCH" = "staging" ]; then
+            echo "Deploying '$DEPLOY_BRANCH' to dev is not allowed."
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.deploy_branch || github.ref_name }}
 
       - name: Setup SSH key
         env:

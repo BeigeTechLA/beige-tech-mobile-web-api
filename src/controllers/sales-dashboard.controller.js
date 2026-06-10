@@ -64,6 +64,19 @@ async function updatePaymentSummaryForQuoteChangeReview({
   if (!bookingId || !salesQuoteId) return null;
 
   const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId);
+  const booking = await stream_project_booking.findByPk(bookingId, {
+    attributes: ['stream_project_booking_id', 'payment_id']
+  });
+  const paidInvoiceHistory = invoice_send_history
+    ? await invoice_send_history.findOne({
+        where: {
+          quote_id: salesQuoteId,
+          booking_id: bookingId,
+          payment_status: 'paid'
+        },
+        order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']]
+      })
+    : null;
   const previousTotal = roundCurrency(metadata.previous_total);
   const newTotal = roundCurrency(metadata.new_total || previousTotal);
   const extraAmount = roundCurrency(metadata.extra_amount);
@@ -83,7 +96,10 @@ async function updatePaymentSummaryForQuoteChangeReview({
   const quoteTotal = decision === 'approve'
     ? newTotal
     : roundCurrency(existingSummary?.quote_total || previousTotal);
-  const existingPaidAmount = roundCurrency(existingSummary?.paid_amount || metadata.collected_amount || previousTotal || 0);
+  const existingPaidAmount = roundCurrency(
+    existingSummary?.paid_amount ||
+    (paidInvoiceHistory || booking?.payment_id ? previousTotal : 0)
+  );
   const paidAmount = decision === 'approve' && reducedAmount > 0
     ? Math.min(existingPaidAmount, newTotal)
     : existingPaidAmount;
@@ -285,18 +301,51 @@ function isQuoteChangeRequestActivity(row, metadata = {}) {
   const message = String(row?.message || '').toLowerCase();
   const hasPaymentChangeAmount = roundCurrency(metadata.extra_amount || 0) > 0 ||
     roundCurrency(metadata.reduced_amount || 0) > 0;
-  const hasBookingContext = Number(metadata.booking_id || 0) > 0;
 
   return (
-    metadata.invoice_refresh_required === true ||
-    (hasBookingContext && hasPaymentChangeAmount)
+    metadata.invoice_refresh_required === true &&
+    hasPaymentChangeAmount
   ) && (
     Boolean(metadata.approval_requested_at) ||
     Boolean(metadata.approval_status) ||
-    message.includes('quote updated') ||
     message.includes('quote total decreased after invoice/payment state') ||
     message.includes('quote total increased after invoice/payment state')
   );
+}
+
+async function hasVerifiedPaymentForQuoteChange({ bookingId, salesQuoteId }) {
+  if (!bookingId || !salesQuoteId) return false;
+
+  const booking = await stream_project_booking.findByPk(bookingId, {
+    attributes: ['stream_project_booking_id', 'payment_id']
+  });
+  if (booking?.payment_id) return true;
+
+  const paidInvoiceHistory = invoice_send_history
+    ? await invoice_send_history.findOne({
+        where: {
+          quote_id: salesQuoteId,
+          booking_id: bookingId,
+          payment_status: 'paid'
+        },
+        attributes: ['invoice_send_history_id'],
+        order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']]
+      })
+    : null;
+  if (paidInvoiceHistory) return true;
+
+  const paymentSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId);
+  const summaryPaidAmount =
+    Number(paymentSummary?.paid_amount || 0) +
+    Number(paymentSummary?.credit_used_amount || 0);
+  const hasManualPaymentEvidence = Boolean(
+    paymentSummary?.manual_payment_mode ||
+    paymentSummary?.manual_payment_proof_url ||
+    paymentSummary?.manual_payment_proof_file_path ||
+    paymentSummary?.manual_payment_updated_at
+  );
+
+  return summaryPaidAmount > 0 && hasManualPaymentEvidence;
 }
 
 function findMatchingQuoteChangeSummary(rows = [], requestRow = null, requestMetadata = {}) {
@@ -1542,10 +1591,17 @@ exports.getQuoteChangeRequests = async (req, res) => {
       order: [['created_at', 'DESC'], ['activity_id', 'DESC']]
     });
 
-    let items = rows
-      .map((row) => {
+    let items = (await Promise.all(rows
+      .map(async (row) => {
         const metadata = parseQuoteRequestMetadata(row?.metadata_json) || {};
         if (!isQuoteChangeRequestActivity(row, metadata)) {
+          return null;
+        }
+
+        const bookingId = Number(metadata.booking_id || 0) || null;
+        const salesQuoteId = Number(row?.sales_quote_id || row?.quote?.sales_quote_id || 0) || null;
+        const hasVerifiedPayment = await hasVerifiedPaymentForQuoteChange({ bookingId, salesQuoteId });
+        if (!hasVerifiedPayment) {
           return null;
         }
 
@@ -1563,7 +1619,7 @@ exports.getQuoteChangeRequests = async (req, res) => {
             buildRequestOverallChangeSummary(mergedMetadata)
           )
         };
-      })
+      })))
       .filter(Boolean);
 
     if (approvalStatus && approvalStatus !== 'all') {
@@ -1660,6 +1716,16 @@ async function reviewQuoteChangeRequest(req, res, decision) {
       });
     }
 
+    const salesQuoteId = activity.sales_quote_id;
+    const bookingId = Number(metadata.booking_id || 0) || null;
+    const hasVerifiedPayment = await hasVerifiedPaymentForQuoteChange({ bookingId, salesQuoteId });
+    if (!hasVerifiedPayment) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'This unpaid quote change does not require admin approval'
+      });
+    }
+
     if (metadata.approval_status && metadata.approval_status !== 'pending') {
       return res.status(constants.BAD_REQUEST.code).json({
         success: false,
@@ -1667,8 +1733,6 @@ async function reviewQuoteChangeRequest(req, res, decision) {
       });
     }
 
-      const salesQuoteId = activity.sales_quote_id;
-      const bookingId = Number(metadata.booking_id || 0) || null;
       const extraAmount = Number(metadata.extra_amount || 0);
       const reducedAmount = Number(metadata.reduced_amount || 0);
 
@@ -1711,8 +1775,30 @@ async function reviewQuoteChangeRequest(req, res, decision) {
       });
 
       if (extraAmount > 0 && activity.quote) {
+        const paymentSummary = bookingId
+          ? await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId)
+          : null;
+        const booking = bookingId
+          ? await stream_project_booking.findByPk(bookingId, {
+              attributes: ['stream_project_booking_id', 'payment_id']
+            })
+          : null;
+        const paidInvoiceHistory = bookingId && invoice_send_history
+          ? await invoice_send_history.findOne({
+              where: {
+                quote_id: salesQuoteId,
+                booking_id: bookingId,
+                payment_status: 'paid'
+              },
+              order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']]
+            })
+          : null;
+        const paidAmount =
+          Number(paymentSummary?.paid_amount || 0) +
+          Number(paymentSummary?.credit_used_amount || 0) +
+          (paidInvoiceHistory || booking?.payment_id ? Number(metadata.previous_total || 0) : 0);
         if (decision === 'approve') {
-          await activity.quote.update({ status: 'partially_paid' });
+          await activity.quote.update({ status: paidAmount > 0 ? 'partially_paid' : 'accepted' });
         } else if (String(activity.quote.status || '').toLowerCase() === 'partially_paid') {
           await activity.quote.update({ status: 'paid' });
         }
