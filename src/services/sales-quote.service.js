@@ -4021,6 +4021,51 @@ async function createQuoteVersion({
   }, { transaction });
 }
 
+async function invalidateQuoteSignatureForNewVersion({
+  transaction,
+  quoteRecord,
+  salesQuoteId,
+  userId = null,
+  reason = 'Quote version changed'
+}) {
+  const quote = quoteRecord || await db.sales_quotes.findByPk(salesQuoteId, { transaction });
+  if (!quote) {
+    return {
+      signatures_deleted: 0,
+      acceptance_reset: false
+    };
+  }
+
+  const resolvedSalesQuoteId = salesQuoteId || quote.sales_quote_id;
+  const deletedSignatureCount = await db.signatures.destroy({
+    where: { quote_id: resolvedSalesQuoteId },
+    transaction
+  });
+
+  const quoteStatus = String(quote.status || '').toLowerCase();
+  const shouldResetAcceptance = quote.accepted_at || quoteStatus === 'accepted';
+
+  if (shouldResetAcceptance) {
+    const resetPatch = {
+      accepted_at: null,
+      updated_at: new Date()
+    };
+
+    if (quoteStatus !== 'paid') {
+      resetPatch.status = quote.sent_at ? 'sent' : 'pending';
+    }
+
+    await quote.update(resetPatch, { transaction });
+  }
+
+  return {
+    signatures_deleted: deletedSignatureCount,
+    acceptance_reset: Boolean(shouldResetAcceptance),
+    reason,
+    user_id: userId || null
+  };
+}
+
 async function ensureInitialQuoteVersion({
   transaction,
   quoteRecord,
@@ -4850,6 +4895,7 @@ async function updateQuote(salesQuoteId, payload, user) {
       nextLineItems: mergedLineItemsPayload,
       userId: user.userId
     });
+    const versionChangeReason = payload.edit_reason ? String(payload.edit_reason).trim() : 'Quote updated';
 
     if (!latestExistingVersion) {
       await ensureInitialQuoteVersion({
@@ -4887,6 +4933,17 @@ async function updateQuote(salesQuoteId, payload, user) {
           { transaction }
         );
       }
+    }
+
+    let signatureInvalidation = null;
+    if (String(previousQuoteSnapshot.status || '').toLowerCase() !== 'draft') {
+      signatureInvalidation = await invalidateQuoteSignatureForNewVersion({
+        transaction,
+        quoteRecord: quote,
+        salesQuoteId,
+        userId: user.userId,
+        reason: versionChangeReason
+      });
     }
 
     if (quote.lead_id) {
@@ -4993,6 +5050,7 @@ async function updateQuote(salesQuoteId, payload, user) {
       edit_guardrails: editGuardrails,
       edit_reason: payload.edit_reason ? String(payload.edit_reason).trim() : null,
       ops_review_confirmed: payload.ops_review_confirmed === true,
+      signature_invalidation: signatureInvalidation,
       invoice_refresh_required: Boolean(
         billingState.booking?.stream_project_booking_id &&
         (extraAmount > 0 || reducedAmount > 0) &&
@@ -5000,7 +5058,6 @@ async function updateQuote(salesQuoteId, payload, user) {
       )
     });
 
-    const versionChangeReason = payload.edit_reason ? String(payload.edit_reason).trim() : 'Quote updated';
     const currentPaymentSummary = billingState.booking?.stream_project_booking_id
       ? await bookingPaymentSummaryService.getBookingPaymentSummary(
           billingState.booking.stream_project_booking_id,
