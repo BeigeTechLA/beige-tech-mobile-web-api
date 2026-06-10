@@ -902,24 +902,9 @@ function getQuoteAcceptTokenSecret() {
   return process.env.JWT_SECRET || 'quote-accept-secret';
 }
 
-function buildQuoteAcceptUrl(token) {
-  const apiBaseUrl = (process.env.API_BASE_URL || '').trim();
-  if (apiBaseUrl) {
-    return `${apiBaseUrl.replace(/\/$/, '')}/sales/quotes/accept?token=${encodeURIComponent(token)}`;
-  }
-
-  return `http://localhost:${process.env.PORT || 5001}/v1/sales/quotes/accept?token=${encodeURIComponent(token)}`;
-}
-
-function createQuoteAcceptToken(quoteDetails) {
-  return jwt.sign({
-    action: 'accept_quote',
-    sales_quote_id: quoteDetails.sales_quote_id,
-    quote_number: quoteDetails.quote_number,
-    client_email: quoteDetails.client_email || null
-  }, getQuoteAcceptTokenSecret(), {
-    expiresIn: '30d'
-  });
+function buildQuotePreviewUrl(quoteKey) {
+  const frontendBaseUrl = String(process.env.FRONTEND_URL || 'http://localhost:3000').trim().replace(/\/+$/, '');
+  return `${frontendBaseUrl}/quotes/preview?quoteKey=${encodeURIComponent(quoteKey)}`;
 }
 
 function verifyQuoteAcceptToken(token) {
@@ -5656,7 +5641,13 @@ async function getPublicQuoteById(salesQuoteId) {
 
 function getQuotePreviewExpiryFromValidUntil(validUntil) {
   if (!validUntil) return null;
-  const expiry = new Date(`${String(validUntil).trim()}T23:59:59.999Z`);
+
+  const datePart = validUntil instanceof Date
+    ? validUntil.toISOString().slice(0, 10)
+    : String(validUntil).trim().match(/^\d{4}-\d{2}-\d{2}/)?.[0];
+  if (!datePart) return null;
+
+  const expiry = new Date(`${datePart}T23:59:59.999Z`);
   return Number.isNaN(expiry.getTime()) ? null : expiry;
 }
 
@@ -5715,6 +5706,37 @@ async function createQuotePreviewLink(salesQuoteId, user) {
   return {
     quote_key: quoteKey,
     expires_at: expiresAt.toISOString()
+  };
+}
+
+async function getActiveQuotePreviewLinkForQuote(salesQuoteId, transaction = null) {
+  const activeRows = await db.sequelize.query(
+    `
+      SELECT quote_key, expires_at
+      FROM sales_quote_preview_links
+      WHERE sales_quote_id = :salesQuoteId
+        AND is_active = 1
+        AND expires_at > NOW()
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,
+    {
+      replacements: { salesQuoteId },
+      type: db.Sequelize.QueryTypes.SELECT,
+      transaction
+    }
+  );
+
+  const activeLink = activeRows?.[0];
+  if (!activeLink?.quote_key) {
+    throw new Error('Create a quote preview link before sending the quote proposal');
+  }
+
+  return {
+    quote_key: activeLink.quote_key,
+    expires_at: activeLink.expires_at instanceof Date
+      ? activeLink.expires_at.toISOString()
+      : activeLink.expires_at
   };
 }
 
@@ -6352,11 +6374,7 @@ async function sendQuoteProposal(salesQuoteId, payload, user) {
 
     assertQuotePaymentChangeApproved(quoteDetails);
 
-    const acceptQuoteToken = createQuoteAcceptToken({
-      sales_quote_id: quoteDetails.sales_quote_id,
-      quote_number: quoteDetails.quote_number,
-      client_email: toEmail
-    });
+    const previewLink = await getActiveQuotePreviewLinkForQuote(salesQuoteId, transaction);
 
     const paymentSummary = buildQuoteProposalPaymentSummary(quoteDetails);
     const quoteDetailsForPdf = paymentSummary.is_additional_payment || paymentSummary.is_reduced_payment || paymentSummary.is_partial_payment
@@ -6385,7 +6403,7 @@ async function sendQuoteProposal(salesQuoteId, payload, user) {
       additional_amount: paymentSummary.additional_amount,
       reduced_amount: paymentSummary.reduced_amount,
       payment_note: paymentSummary.payment_note,
-      accept_quote_url: buildQuoteAcceptUrl(acceptQuoteToken),
+      accept_quote_url: buildQuotePreviewUrl(previewLink.quote_key),
       attachment_content: payload?.attachment_content || payload?.pdf_base64 || (generatedPdfBuffer ? Buffer.from(generatedPdfBuffer).toString('base64') : null),
       attachment_filename: payload?.attachment_filename || `${quoteDetails.quote_number || 'custom-quote'}.pdf`,
       attachment_type: payload?.attachment_type || 'application/pdf'
