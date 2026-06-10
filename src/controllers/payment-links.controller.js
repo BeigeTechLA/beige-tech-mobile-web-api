@@ -526,12 +526,16 @@ const persistInvoiceSendHistory = async ({
 };
 
 const sendInvoiceForBooking = async ({ bookingId, quoteId = null, performedByUserId = null, recipientOverride = null, requestBaseUrl = null }) => {
+  const manualContext = await getBookingManualPaymentContext(bookingId);
+  const useManualReceipt = await shouldUseManualInvoiceReceipt(bookingId, manualContext);
   const {
     parsedBookingId,
     recipientName,
     recipientEmail,
     invoiceDetails
-  } = await prepareInvoiceDetailsForBooking(bookingId, performedByUserId, recipientOverride, quoteId, requestBaseUrl);
+  } = useManualReceipt
+    ? await prepareManualInvoiceDetailsForBooking(bookingId, null, recipientOverride)
+    : await prepareInvoiceDetailsForBooking(bookingId, performedByUserId, recipientOverride, quoteId, requestBaseUrl);
 
   const userData = { name: recipientName, email: recipientEmail };
   const emailResult = await emailService.sendInvoiceEmail(userData, invoiceDetails);
@@ -2400,11 +2404,22 @@ exports.previewQuoteInvoice = async (req, res) => {
       bookingId = ensuredBooking.booking_id;
     }
 
-    const requestBaseUrl = `${req.protocol}://${req.get('host')}/v1`;
-    const { invoiceDetails } = await prepareInvoiceDetailsForBooking(bookingId, req.userId || null, {
+    const recipientOverride = {
       email: salesQuote.client_email || null,
       name: salesQuote.client_name || null
-    }, salesQuote.sales_quote_id, requestBaseUrl);
+    };
+    const manualContext = await getBookingManualPaymentContext(bookingId);
+    const useManualReceipt = await shouldUseManualInvoiceReceipt(bookingId, manualContext);
+    const requestBaseUrl = `${req.protocol}://${req.get('host')}/v1`;
+    const { invoiceDetails } = useManualReceipt
+      ? await prepareManualInvoiceDetailsForBooking(bookingId, req, recipientOverride)
+      : await prepareInvoiceDetailsForBooking(
+          bookingId,
+          req.userId || null,
+          recipientOverride,
+          salesQuote.sales_quote_id,
+          requestBaseUrl
+        );
 
     return res.status(200).json({
       success: true,

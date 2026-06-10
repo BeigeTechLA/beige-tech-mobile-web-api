@@ -485,6 +485,38 @@ exports.getPublicQuoteByKey = async (req, res) => {
   }
 };
 
+exports.getLatestPublicQuotePreviewLink = async (req, res) => {
+  try {
+    const quoteKey = String(req.params.quoteKey || '').trim();
+    if (!quoteKey) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Quote key is required'
+      });
+    }
+
+    const data = await quoteService.getLatestPublicQuotePreviewLink(quoteKey);
+    return res.json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    console.error('Error generating latest public quote preview link:', error);
+    const reasonCode = error?.details?.reason_code;
+    const statusCode = reasonCode === 'QUOTE_PREVIEW_APPROVAL_PENDING'
+      ? constants.BAD_REQUEST.code
+      : reasonCode === 'QUOTE_PREVIEW_INVALID'
+        ? constants.NOT_FOUND.code
+        : constants.BAD_REQUEST.code;
+    return sendError(
+      res,
+      error,
+      error.message || 'Failed to generate latest quote preview link',
+      statusCode
+    );
+  }
+};
+
 exports.updateQuoteStatus = async (req, res) => {
   try {
     const { status } = req.body;
@@ -980,4 +1012,3 @@ exports.createClient = async (req, res) => {
     });
   }
 };
-
