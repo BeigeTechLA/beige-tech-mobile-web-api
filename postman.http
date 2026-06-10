@@ -2,11 +2,9 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3Nzk4NjY0MTYsImV4cCI6MTc4MDQ3MTIxNn0.2Mr17MMKiGzbKCegx4pB8Nmkj3rGzVU3t17m_yxZNHs
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3ODA0NzE3MjksImV4cCI6MTc4MTA3NjUyOX0.7quVudCPiFaKPUpk4XtCg5KdrgDUTuZCOizrbVoYykI
 
-@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI0MywidXNlclJvbGUiOiJDcmVhdG9yIiwiaWF0IjoxNzc5ODY2NjUyLCJleHAiOjE3ODA0NzE0NTJ9.HqW7gAw_dGMs0XG0fHuYfw_DON3cn_oBLRhs2KIJxgc
-
-###
+@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEwOCwidXNlclJvbGUiOiJDcmVhdG9yIiwiaWF0IjoxNzgwNDcxOTE0LCJleHAiOjE3ODEwNzY3MTR9.1D4L1pI2ijW-60xBeUaz2ZIyg1YJbGl1A891SI7Ly6w
 POST {{URL}}creator/dashboard-count HTTP/1.1
 Content-Type: application/json
 
@@ -629,8 +627,8 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-    "project_id": 922,
-    "crew_member_ids": [2103] 
+    "project_id": 1211,
+    "crew_member_ids": [2120] 
 }
 
 ### 
@@ -2294,13 +2292,13 @@ POST {{URL}}finance/admin/disputes/1/escalate HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
-11{
-  11"priority": "urgent",
+{
+  "priority": "urgent",
   "reason": "High-value dispute requiring senior admin review.",
   "assigned_team": "Finance Resolution Team",
   "notes": "Escalated due to payout and refund complexity."
 }
-11
+
 ### FILTER EXAMPLES
 GET {{URL}}finance/admin/disputes?status=in_review HTTP/1.1
 Authorization: {{TOKEN}}
@@ -2416,3 +2414,92 @@ evidence
 POST {{URL}}admin/shoots/remind-onboarding-form/1207
 Authorization: {{TOKEN}}
 Content-Type: application/json
+
+
+### ─────────────────────────────────────────
+### CREATOR EARNINGS MODULE
+### ─────────────────────────────────────────
+
+### 1. Creator Earnings Dashboard
+GET {{URL}}creator-earnings/creator/2010/dashboard HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+### 2. Creator Earnings List 
+GET {{URL}}creator-earnings/creator/2010/earnings?page=1&limit=20 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+### 3. Creator Earning Detail 
+GET {{URL}}creator-earnings/creator/2010/earnings/1 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+### 4. Payout Timeline
+GET {{URL}}creator-earnings/creator/2010/earnings/1/timeline HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+### 5. Accept Shoot
+POST {{URL}}creator-earnings/creator/2010/bookings/480/accept HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+### 6. Decline Shoot
+POST {{URL}}creator-earnings/creator/2010/bookings/1193/decline HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+### 7. Respond to Earning (accept/decline combined)
+POST {{URL}}creator-earnings/creator/2010/bookings/1193/respond HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+{
+  "action": "accept"
+}
+
+### 8. Admin — Add Advance Payment
+POST {{URL}}creator-earnings/admin/earnings/advance HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "creator_earning_id": 1,
+  "booking_id": 480,
+  "creator_id": 2010,
+  "amount": 300,
+  "notes": "Advance before shoot"
+}
+
+### 9. Admin — Upsert Compensation Items
+PUT {{URL}}creator-earnings/admin/earnings/1/compensation HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "items": [
+    { "label": "Base Shoot Compensation", "amount": 800 },
+    { "label": "Parking Compensation", "amount": 250 },
+    { "label": "Travel Adjustment", "amount": 100 },
+    { "label": "Bonus Compensation", "amount": 50 }
+  ]
+}
+
+### Login Devanshu
+POST {{URL}}auth/login HTTP/1.1
+Content-Type: application/json
+
+{
+  "email": "devanshud@gmail.com",
+  "password": "12345678"
+}
+
+### Admin Login
+POST {{URL}}auth/login HTTP/1.1
+Content-Type: application/json
+
+{
+  "email": "harsh.panchal@gmail.com",
+  "password": "password123"
+}
