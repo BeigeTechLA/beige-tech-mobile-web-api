@@ -4186,9 +4186,7 @@ async function resolveQuoteBillingState(quote, transaction) {
       })
     : null;
 
-  const bookingMarkedCollected = Boolean(
-    booking && (booking.payment_id || Number(booking.is_completed) === 1)
-  );
+  const bookingMarkedCollected = Boolean(booking?.payment_id);
   const historyMarkedCollected = latestInvoiceHistory?.payment_status === 'paid';
   const refreshActivity = db.sales_quote_activities
     ? await db.sales_quote_activities.findOne({
@@ -4225,16 +4223,23 @@ async function resolveQuoteBillingState(quote, transaction) {
     quoteTotal: quote.total,
     transaction
   });
+  const paymentSummary = paymentState.paymentSummary || null;
   const summaryCollectedAmount = roundCurrency(
     Number(paymentState.paidAmount || 0) + Number(paymentState.creditUsedAmount || 0)
   );
   const summaryPaymentStatus = String(paymentState.paymentStatus || '').toLowerCase();
+  const summaryHasManualPaymentEvidence = Boolean(
+    paymentSummary?.manual_payment_mode ||
+    paymentSummary?.manual_payment_proof_url ||
+    paymentSummary?.manual_payment_proof_file_path ||
+    paymentSummary?.manual_payment_updated_at
+  );
   const summaryMarkedCollected = summaryCollectedAmount > 0 && [
     'paid',
     'no_payment_due',
     'partially_paid',
     'approval_pending'
-  ].includes(summaryPaymentStatus);
+  ].includes(summaryPaymentStatus) && summaryHasManualPaymentEvidence;
   const refreshOutstanding = Boolean(
     refreshMetadata?.invoice_refresh_required &&
     refreshBelongsToBooking &&
@@ -5071,11 +5076,10 @@ async function updateQuote(salesQuoteId, payload, user) {
     const summaryPaidAmount = roundCurrency(
       Number(paidAmountForSummary || 0) + Number(currentPaymentSummary?.credit_used_amount || 0)
     );
-    const hasPaymentSummary = Boolean(currentPaymentSummary);
     const shouldUpdatePaymentSummaryForPaidQuote = Boolean(
       billingState.booking?.stream_project_booking_id &&
       quoteChangeType !== 'unchanged' &&
-      (billingState.is_collected || hasPaymentSummary)
+      billingState.is_collected
     );
     const shouldCreateApprovalRequestVersion = Boolean(
       billingState.booking?.stream_project_booking_id &&
