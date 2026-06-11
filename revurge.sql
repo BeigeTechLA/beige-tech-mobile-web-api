@@ -2410,3 +2410,24 @@ SET
   permission_key = REPLACE(permission_key, 'crew_', 'creative_partner_')
 WHERE module_key LIKE 'crew_%'
   OR permission_key LIKE 'crew_%';
+
+ALTER TABLE permissions
+ADD COLUMN role_key VARCHAR(100) NULL AFTER permission_id;
+
+UPDATE permissions SET role_key = 'admin'
+WHERE module_key LIKE 'admin_%';
+
+UPDATE permissions SET role_key = 'creative_partner'
+WHERE module_key LIKE 'creative_partner_%';
+
+UPDATE permissions SET role_key = 'sales_rep'
+WHERE module_key LIKE 'sales_rep_%';
+
+UPDATE permissions SET role_key = 'sales_admin'
+WHERE module_key LIKE 'sales_admin_%';
+
+UPDATE permissions SET role_key = 'production_manager'
+WHERE module_key LIKE 'production_manager_%';
+
+UPDATE permissions SET role_key = 'client'
+WHERE module_key LIKE 'client_%';
