@@ -2282,6 +2282,7 @@ exports.listWorkspaces = async (req, res) => {
     const search = String(req.query.search || '').trim().toLowerCase();
     const workspaceType = String(req.query.workspaceType || req.query.type || '').trim().toLowerCase();
     const commonEventsOnly = ['common', 'common-event', 'common-events', 'common_event', 'common_events'].includes(workspaceType);
+    const expiredCommonEventsOnly = ['visibility-expired', 'expired', 'expired-common-events'].includes(workspaceType);
     const result = await proxyRequest('/workspaces');
     const eventRows = await listCommonEventRows().catch(() => []);
     const eventRowByExternalId = new Map(
@@ -2370,10 +2371,17 @@ exports.listWorkspaces = async (req, res) => {
       ];
     }
 
-    if (commonEventsOnly) {
+    if (commonEventsOnly || expiredCommonEventsOnly) {
       filteredWorkspaces = filteredWorkspaces.filter((workspace) =>
         Boolean(workspace?.isCommonEvent) || isCommonEventExternalId(workspace?.externalId)
       );
+    }
+
+    if (expiredCommonEventsOnly) {
+      filteredWorkspaces = filteredWorkspaces.filter((workspace) => {
+        const eventRow = eventRowByExternalId.get(String(workspace?.externalId || '').trim().toLowerCase());
+        return eventRow ? !isCommonEventVisibleForRole(eventRow) : false;
+      });
     }
 
     if (search) {
