@@ -293,6 +293,28 @@ async function replaceMismatchedInvoice(invoice, bookingId) {
   }
 }
 
+async function retireOpenInvoiceForPaidReceipt(booking) {
+  if (!booking?.stripe_invoice_id) return;
+
+  try {
+    const existing = await stripe.invoices.retrieve(booking.stripe_invoice_id);
+    if (!existing || existing.status === 'paid') return;
+
+    if (existing.status === 'draft') {
+      await stripe.invoices.del(existing.id);
+      return;
+    }
+
+    if (existing.status === 'open') {
+      await stripe.invoices.voidInvoice(existing.id, {}, {
+        idempotencyKey: `paid-receipt-void-${booking.stream_project_booking_id}-${existing.id}`
+      });
+    }
+  } catch (error) {
+    console.warn(`Could not retire existing Stripe invoice before paid receipt: ${error.message}`);
+  }
+}
+
 /**
  * Create a Stripe Invoice for an unpaid booking
  */
@@ -513,14 +535,21 @@ async function createPaidStripeInvoice(booking, pricingData, options = {}) {
     return Number.isFinite(parsed) ? parsed : 0;
   };
 
-  // Format the total for the footer text
-  const totalAmountFormatted = safeNumber(pricingData?.total).toLocaleString('en-US', { 
+  const totalCollectedAmount = Math.max(
+    safeNumber(pricingData?.total) - safeNumber(pricingData?.credit_applied),
+    0
+  );
+
+  // Format the collected amount for the footer text
+  const totalAmountFormatted = totalCollectedAmount.toLocaleString('en-US', { 
     style: 'currency', 
     currency: 'USD' 
   });
 
   // 1. CREATE THE INVOICE OBJECT
   // We add Footer and Custom Fields to clarify the "Out of band" status professionally
+  await retireOpenInvoiceForPaidReceipt(booking);
+
   const invoice = await stripe.invoices.create({
     customer: customer.id,
     auto_advance: false, 

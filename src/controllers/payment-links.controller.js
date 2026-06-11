@@ -661,35 +661,12 @@ const shouldUseManualInvoiceReceipt = async (bookingId, manualContext) => {
     (Number.isFinite(remainingAfterPayment) && remainingAfterPayment <= 0);
 };
 
-const isManualInvoiceUrl = (value) => {
-  const normalized = String(value || '').toLowerCase();
-  return normalized.includes('/beige_invoice/') ||
-    (normalized.includes('/sales/invoice-pdf/') && normalized.includes('manual=1'));
-};
+const isPaidStripeInvoiceReady = (invoice) => {
+  if (!invoice || invoice.status !== 'paid') return false;
+  if (!invoice.invoice_pdf && !invoice.hosted_invoice_url) return false;
 
-const findLatestStripeInvoiceHistory = async (bookingId, quoteId = null) => {
-  if (!db.invoice_send_history) return null;
-
-  const where = {
-    booking_id: bookingId,
-    payment_status: 'paid',
-    [Op.or]: [
-      { invoice_pdf: { [Op.ne]: null } },
-      { invoice_url: { [Op.ne]: null } }
-    ]
-  };
-  if (quoteId) where.quote_id = quoteId;
-
-  const histories = await db.invoice_send_history.findAll({
-    where,
-    order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
-    limit: quoteId ? 5 : 10
-  });
-
-  return (histories || []).find((history) => (
-    !isManualInvoiceUrl(history.invoice_pdf) &&
-    !isManualInvoiceUrl(history.invoice_url)
-  )) || null;
+  const amountRemaining = Number(invoice.amount_remaining ?? 0);
+  return !Number.isFinite(amountRemaining) || amountRemaining <= 0;
 };
 
 const resolveStripePaidInvoiceDetails = async ({
@@ -712,26 +689,11 @@ const resolveStripePaidInvoiceDetails = async ({
   if (booking.stripe_invoice_id) {
     try {
       const existingInvoice = await stripe.invoices.retrieve(booking.stripe_invoice_id);
-      if (existingInvoice?.status === 'paid' && (existingInvoice.invoice_pdf || existingInvoice.hosted_invoice_url)) {
+      if (isPaidStripeInvoiceReady(existingInvoice)) {
         stripeInvoice = existingInvoice;
       }
     } catch (_) {
       stripeInvoice = null;
-    }
-  }
-
-  if (!stripeInvoice) {
-    const latestHistory = await findLatestStripeInvoiceHistory(parsedBookingId, quoteId);
-    if (latestHistory?.invoice_pdf || latestHistory?.invoice_url) {
-      return buildInvoiceTemplateDetails(booking, pricingData, {
-        invoiceUrl: latestHistory.invoice_url || latestHistory.invoice_pdf,
-        invoicePdf: latestHistory.invoice_pdf || latestHistory.invoice_url,
-        stripeInvoiceNumber: latestHistory.invoice_number || null,
-        invoiceNumber: latestHistory.invoice_number || null,
-        totalAmount: Number(pricingData.total || 0),
-        isPaid: true,
-        isAdditionalPayment: false
-      });
     }
   }
 
@@ -759,7 +721,9 @@ const resolveStripePaidInvoiceDetails = async ({
     invoiceNumber: stripeInvoice.number,
     totalAmount: Number(pricingData.total || 0),
     isPaid: true,
-    isAdditionalPayment: false
+    isAdditionalPayment: false,
+    invoiceSource: 'stripe',
+    paymentMethod: 'stripe'
   });
 };
 
