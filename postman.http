@@ -2446,6 +2446,11 @@ GET {{URL}}admin/permissions/modules HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
+### get permissions module
+GET {{URL}}admin/permissions/modules?scope=creative_partner HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
 ### delete user
 DELETE {{URL}}admin/delete-user/239 HTTP/1.1
 Content-Type: application/json
