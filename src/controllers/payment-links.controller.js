@@ -526,12 +526,16 @@ const persistInvoiceSendHistory = async ({
 };
 
 const sendInvoiceForBooking = async ({ bookingId, quoteId = null, performedByUserId = null, recipientOverride = null, requestBaseUrl = null }) => {
+  const manualContext = await getBookingManualPaymentContext(bookingId);
+  const useManualReceipt = await shouldUseManualInvoiceReceipt(bookingId, manualContext);
   const {
     parsedBookingId,
     recipientName,
     recipientEmail,
     invoiceDetails
-  } = await prepareInvoiceDetailsForBooking(bookingId, performedByUserId, recipientOverride, quoteId, requestBaseUrl);
+  } = useManualReceipt
+    ? await prepareManualInvoiceDetailsForBooking(bookingId, null, recipientOverride)
+    : await prepareInvoiceDetailsForBooking(bookingId, performedByUserId, recipientOverride, quoteId, requestBaseUrl);
 
   const userData = { name: recipientName, email: recipientEmail };
   const emailResult = await emailService.sendInvoiceEmail(userData, invoiceDetails);
@@ -1770,42 +1774,12 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
 
     // --- CASE 1: ALREADY PAID ---
     if (pricingData && (pricingData.is_paid || bookingMarkedPaid)) {
-      let invoiceUrl, invoicePdf, invoiceNumber;
-      let stripeTotalAmount = 0;
-      let needsNewInvoice = recipientIdentityChanged;
-
-      // Check existing invoice for amount mismatch
-      if (booking.stripe_invoice_id) {
-        try {
-          const inv = await stripe.invoices.retrieve(booking.stripe_invoice_id);
-          stripeTotalAmount = (inv.total || 0) / 100;
-          const expectedTotal = parseFloat(pricingData.total);
-
-          // If Stripe total ($20,700) != Expected ($9,315), force a new one
-          if (Math.abs(stripeTotalAmount - expectedTotal) > 0.01) {
-            needsNewInvoice = true;
-          } else {
-            invoiceUrl = inv.hosted_invoice_url;
-            invoicePdf = inv.invoice_pdf;
-            invoiceNumber = inv.number;
-          }
-        } catch (e) { needsNewInvoice = true; }
-      }
-
-      if (!invoicePdf || needsNewInvoice) {
-        const retrospectiveInvoice = await paymentLinksService.createPaidStripeInvoice(booking, pricingData, { recipientOverride });
-        invoiceUrl = retrospectiveInvoice.hosted_invoice_url;
-        invoicePdf = retrospectiveInvoice.invoice_pdf;
-        invoiceNumber = retrospectiveInvoice.number;
-        stripeTotalAmount = (retrospectiveInvoice.total || 0) / 100;
-      }
-
+      const invoicePdfUrl = buildManualInvoiceFrontendUrl(parsedBookingId);
       invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
-        invoiceUrl,
-        invoicePdf,
-        stripeInvoiceNumber: invoiceNumber,
-        invoiceNumber,
-        totalAmount: stripeTotalAmount,
+        invoiceUrl: invoicePdfUrl,
+        invoicePdf: invoicePdfUrl,
+        invoiceNumber: `INVBEIGE-M-${String(parsedBookingId).padStart(4, '0')}`,
+        totalAmount,
         isPaid: true,
         isAdditionalPayment: false
       });
@@ -2400,11 +2374,22 @@ exports.previewQuoteInvoice = async (req, res) => {
       bookingId = ensuredBooking.booking_id;
     }
 
-    const requestBaseUrl = `${req.protocol}://${req.get('host')}/v1`;
-    const { invoiceDetails } = await prepareInvoiceDetailsForBooking(bookingId, req.userId || null, {
+    const recipientOverride = {
       email: salesQuote.client_email || null,
       name: salesQuote.client_name || null
-    }, salesQuote.sales_quote_id, requestBaseUrl);
+    };
+    const manualContext = await getBookingManualPaymentContext(bookingId);
+    const useManualReceipt = await shouldUseManualInvoiceReceipt(bookingId, manualContext);
+    const requestBaseUrl = `${req.protocol}://${req.get('host')}/v1`;
+    const { invoiceDetails } = useManualReceipt
+      ? await prepareManualInvoiceDetailsForBooking(bookingId, req, recipientOverride)
+      : await prepareInvoiceDetailsForBooking(
+          bookingId,
+          req.userId || null,
+          recipientOverride,
+          salesQuote.sales_quote_id,
+          requestBaseUrl
+        );
 
     return res.status(200).json({
       success: true,

@@ -902,24 +902,9 @@ function getQuoteAcceptTokenSecret() {
   return process.env.JWT_SECRET || 'quote-accept-secret';
 }
 
-function buildQuoteAcceptUrl(token) {
-  const apiBaseUrl = (process.env.API_BASE_URL || '').trim();
-  if (apiBaseUrl) {
-    return `${apiBaseUrl.replace(/\/$/, '')}/sales/quotes/accept?token=${encodeURIComponent(token)}`;
-  }
-
-  return `http://localhost:${process.env.PORT || 5001}/v1/sales/quotes/accept?token=${encodeURIComponent(token)}`;
-}
-
-function createQuoteAcceptToken(quoteDetails) {
-  return jwt.sign({
-    action: 'accept_quote',
-    sales_quote_id: quoteDetails.sales_quote_id,
-    quote_number: quoteDetails.quote_number,
-    client_email: quoteDetails.client_email || null
-  }, getQuoteAcceptTokenSecret(), {
-    expiresIn: '30d'
-  });
+function buildQuotePreviewUrl(quoteKey) {
+  const frontendBaseUrl = String(process.env.FRONTEND_URL || 'http://localhost:3000').trim().replace(/\/+$/, '');
+  return `${frontendBaseUrl}/quotes/preview?quoteKey=${encodeURIComponent(quoteKey)}`;
 }
 
 function verifyQuoteAcceptToken(token) {
@@ -4036,6 +4021,51 @@ async function createQuoteVersion({
   }, { transaction });
 }
 
+async function invalidateQuoteSignatureForNewVersion({
+  transaction,
+  quoteRecord,
+  salesQuoteId,
+  userId = null,
+  reason = 'Quote version changed'
+}) {
+  const quote = quoteRecord || await db.sales_quotes.findByPk(salesQuoteId, { transaction });
+  if (!quote) {
+    return {
+      signatures_deleted: 0,
+      acceptance_reset: false
+    };
+  }
+
+  const resolvedSalesQuoteId = salesQuoteId || quote.sales_quote_id;
+  const deletedSignatureCount = await db.signatures.destroy({
+    where: { quote_id: resolvedSalesQuoteId },
+    transaction
+  });
+
+  const quoteStatus = String(quote.status || '').toLowerCase();
+  const shouldResetAcceptance = quote.accepted_at || quoteStatus === 'accepted';
+
+  if (shouldResetAcceptance) {
+    const resetPatch = {
+      accepted_at: null,
+      updated_at: new Date()
+    };
+
+    if (quoteStatus !== 'paid') {
+      resetPatch.status = quote.sent_at ? 'sent' : 'pending';
+    }
+
+    await quote.update(resetPatch, { transaction });
+  }
+
+  return {
+    signatures_deleted: deletedSignatureCount,
+    acceptance_reset: Boolean(shouldResetAcceptance),
+    reason,
+    user_id: userId || null
+  };
+}
+
 async function ensureInitialQuoteVersion({
   transaction,
   quoteRecord,
@@ -4156,9 +4186,7 @@ async function resolveQuoteBillingState(quote, transaction) {
       })
     : null;
 
-  const bookingMarkedCollected = Boolean(
-    booking && (booking.payment_id || Number(booking.is_completed) === 1)
-  );
+  const bookingMarkedCollected = Boolean(booking?.payment_id);
   const historyMarkedCollected = latestInvoiceHistory?.payment_status === 'paid';
   const refreshActivity = db.sales_quote_activities
     ? await db.sales_quote_activities.findOne({
@@ -4195,16 +4223,23 @@ async function resolveQuoteBillingState(quote, transaction) {
     quoteTotal: quote.total,
     transaction
   });
+  const paymentSummary = paymentState.paymentSummary || null;
   const summaryCollectedAmount = roundCurrency(
     Number(paymentState.paidAmount || 0) + Number(paymentState.creditUsedAmount || 0)
   );
   const summaryPaymentStatus = String(paymentState.paymentStatus || '').toLowerCase();
+  const summaryHasManualPaymentEvidence = Boolean(
+    paymentSummary?.manual_payment_mode ||
+    paymentSummary?.manual_payment_proof_url ||
+    paymentSummary?.manual_payment_proof_file_path ||
+    paymentSummary?.manual_payment_updated_at
+  );
   const summaryMarkedCollected = summaryCollectedAmount > 0 && [
     'paid',
     'no_payment_due',
     'partially_paid',
     'approval_pending'
-  ].includes(summaryPaymentStatus);
+  ].includes(summaryPaymentStatus) && summaryHasManualPaymentEvidence;
   const refreshOutstanding = Boolean(
     refreshMetadata?.invoice_refresh_required &&
     refreshBelongsToBooking &&
@@ -4865,6 +4900,7 @@ async function updateQuote(salesQuoteId, payload, user) {
       nextLineItems: mergedLineItemsPayload,
       userId: user.userId
     });
+    const versionChangeReason = payload.edit_reason ? String(payload.edit_reason).trim() : 'Quote updated';
 
     if (!latestExistingVersion) {
       await ensureInitialQuoteVersion({
@@ -4902,6 +4938,17 @@ async function updateQuote(salesQuoteId, payload, user) {
           { transaction }
         );
       }
+    }
+
+    let signatureInvalidation = null;
+    if (String(previousQuoteSnapshot.status || '').toLowerCase() !== 'draft') {
+      signatureInvalidation = await invalidateQuoteSignatureForNewVersion({
+        transaction,
+        quoteRecord: quote,
+        salesQuoteId,
+        userId: user.userId,
+        reason: versionChangeReason
+      });
     }
 
     if (quote.lead_id) {
@@ -5008,6 +5055,7 @@ async function updateQuote(salesQuoteId, payload, user) {
       edit_guardrails: editGuardrails,
       edit_reason: payload.edit_reason ? String(payload.edit_reason).trim() : null,
       ops_review_confirmed: payload.ops_review_confirmed === true,
+      signature_invalidation: signatureInvalidation,
       invoice_refresh_required: Boolean(
         billingState.booking?.stream_project_booking_id &&
         (extraAmount > 0 || reducedAmount > 0) &&
@@ -5015,7 +5063,6 @@ async function updateQuote(salesQuoteId, payload, user) {
       )
     });
 
-    const versionChangeReason = payload.edit_reason ? String(payload.edit_reason).trim() : 'Quote updated';
     const currentPaymentSummary = billingState.booking?.stream_project_booking_id
       ? await bookingPaymentSummaryService.getBookingPaymentSummary(
           billingState.booking.stream_project_booking_id,
@@ -5029,11 +5076,10 @@ async function updateQuote(salesQuoteId, payload, user) {
     const summaryPaidAmount = roundCurrency(
       Number(paidAmountForSummary || 0) + Number(currentPaymentSummary?.credit_used_amount || 0)
     );
-    const hasPaymentSummary = Boolean(currentPaymentSummary);
     const shouldUpdatePaymentSummaryForPaidQuote = Boolean(
       billingState.booking?.stream_project_booking_id &&
       quoteChangeType !== 'unchanged' &&
-      (billingState.is_collected || hasPaymentSummary)
+      billingState.is_collected
     );
     const shouldCreateApprovalRequestVersion = Boolean(
       billingState.booking?.stream_project_booking_id &&
@@ -5656,7 +5702,13 @@ async function getPublicQuoteById(salesQuoteId) {
 
 function getQuotePreviewExpiryFromValidUntil(validUntil) {
   if (!validUntil) return null;
-  const expiry = new Date(`${String(validUntil).trim()}T23:59:59.999Z`);
+
+  const datePart = validUntil instanceof Date
+    ? validUntil.toISOString().slice(0, 10)
+    : String(validUntil).trim().match(/^\d{4}-\d{2}-\d{2}/)?.[0];
+  if (!datePart) return null;
+
+  const expiry = new Date(`${datePart}T23:59:59.999Z`);
   return Number.isNaN(expiry.getTime()) ? null : expiry;
 }
 
@@ -5715,6 +5767,37 @@ async function createQuotePreviewLink(salesQuoteId, user) {
   return {
     quote_key: quoteKey,
     expires_at: expiresAt.toISOString()
+  };
+}
+
+async function getActiveQuotePreviewLinkForQuote(salesQuoteId, transaction = null) {
+  const activeRows = await db.sequelize.query(
+    `
+      SELECT quote_key, expires_at
+      FROM sales_quote_preview_links
+      WHERE sales_quote_id = :salesQuoteId
+        AND is_active = 1
+        AND expires_at > NOW()
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,
+    {
+      replacements: { salesQuoteId },
+      type: db.Sequelize.QueryTypes.SELECT,
+      transaction
+    }
+  );
+
+  const activeLink = activeRows?.[0];
+  if (!activeLink?.quote_key) {
+    throw new Error('Create a quote preview link before sending the quote proposal');
+  }
+
+  return {
+    quote_key: activeLink.quote_key,
+    expires_at: activeLink.expires_at instanceof Date
+      ? activeLink.expires_at.toISOString()
+      : activeLink.expires_at
   };
 }
 
@@ -6352,11 +6435,7 @@ async function sendQuoteProposal(salesQuoteId, payload, user) {
 
     assertQuotePaymentChangeApproved(quoteDetails);
 
-    const acceptQuoteToken = createQuoteAcceptToken({
-      sales_quote_id: quoteDetails.sales_quote_id,
-      quote_number: quoteDetails.quote_number,
-      client_email: toEmail
-    });
+    const previewLink = await getActiveQuotePreviewLinkForQuote(salesQuoteId, transaction);
 
     const paymentSummary = buildQuoteProposalPaymentSummary(quoteDetails);
     const quoteDetailsForPdf = paymentSummary.is_additional_payment || paymentSummary.is_reduced_payment || paymentSummary.is_partial_payment
@@ -6385,7 +6464,7 @@ async function sendQuoteProposal(salesQuoteId, payload, user) {
       additional_amount: paymentSummary.additional_amount,
       reduced_amount: paymentSummary.reduced_amount,
       payment_note: paymentSummary.payment_note,
-      accept_quote_url: buildQuoteAcceptUrl(acceptQuoteToken),
+      accept_quote_url: buildQuotePreviewUrl(previewLink.quote_key),
       attachment_content: payload?.attachment_content || payload?.pdf_base64 || (generatedPdfBuffer ? Buffer.from(generatedPdfBuffer).toString('base64') : null),
       attachment_filename: payload?.attachment_filename || `${quoteDetails.quote_number || 'custom-quote'}.pdf`,
       attachment_type: payload?.attachment_type || 'application/pdf'
