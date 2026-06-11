@@ -22,6 +22,13 @@ const buildManualInvoiceFrontendUrl = (bookingId) => {
   return `${frontendBaseUrl}/beige_invoice/${encodeURIComponent(String(bookingId))}?manual=1`;
 };
 
+const buildInternalReceiptPdfUrl = (bookingId, requestBaseUrl = null) => {
+  const apiBaseUrl = String(requestBaseUrl || process.env.API_BASE_URL || 'http://localhost:5001/v1')
+    .trim()
+    .replace(/\/+$/, '');
+  return `${apiBaseUrl}/sales/invoice-pdf/${encodeURIComponent(String(bookingId))}?manual=1`;
+};
+
 const resolveInvoiceDisplayNumber = (booking, stripeInvoiceNumber = null) =>
   paymentLinksService.buildBeigeInvoiceReference(booking) || stripeInvoiceNumber || null;
 
@@ -673,7 +680,8 @@ const resolveStripePaidInvoiceDetails = async ({
   booking,
   pricingData,
   quoteId = null,
-  recipientOverride = null
+  recipientOverride = null,
+  requestBaseUrl = null
 }) => {
   const parsedBookingId = booking.stream_project_booking_id;
   const payment = booking.payment_id
@@ -716,7 +724,7 @@ const resolveStripePaidInvoiceDetails = async ({
 
   return buildInvoiceTemplateDetails(booking, pricingData, {
     invoiceUrl: stripeInvoice.hosted_invoice_url,
-    invoicePdf: stripeInvoice.invoice_pdf || stripeInvoice.hosted_invoice_url,
+    invoicePdf: buildInternalReceiptPdfUrl(parsedBookingId, requestBaseUrl),
     stripeInvoiceNumber: stripeInvoice.number,
     invoiceNumber: stripeInvoice.number,
     totalAmount: Number(pricingData.total || 0),
@@ -1857,7 +1865,8 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
         booking,
         pricingData,
         quoteId,
-        recipientOverride
+        recipientOverride,
+        requestBaseUrl
       });
 
       if (!invoiceDetails) {
