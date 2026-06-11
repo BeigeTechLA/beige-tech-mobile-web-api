@@ -3,7 +3,6 @@ const router = express.Router();
 
 const admin = require('../controllers/admin.controller');
 const { authenticateAdmin, authMiddleware } = require('../middleware/auth');
-router.use('/studios', require('./studio-management.routes'));
 
 router.post('/create-project', admin.createProject);
 router.post('/match-crew', admin.matchCrew);
