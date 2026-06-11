@@ -634,6 +634,19 @@ const getBookingManualPaymentContext = async (bookingId) => {
 
 const shouldUseManualInvoiceReceipt = async (bookingId, manualContext) => {
   if (!manualContext?.isManual) return false;
+
+  const bookingPayment = await db.stream_project_booking.findByPk(bookingId, {
+    attributes: ['payment_id']
+  });
+  if (bookingPayment?.payment_id) {
+    const payment = await db.payment_transactions.findByPk(bookingPayment.payment_id, {
+      attributes: ['stripe_payment_intent_id', 'stripe_charge_id']
+    });
+    if (payment?.stripe_payment_intent_id || payment?.stripe_charge_id) {
+      return false;
+    }
+  }
+
   if (String(manualContext?.latestManualPayment?.data?.payment_mode || '').toLowerCase() === 'net30') {
     return true;
   }
@@ -646,6 +659,108 @@ const shouldUseManualInvoiceReceipt = async (bookingId, manualContext) => {
   const remainingAfterPayment = Number(manualContext.latestManualPayment?.data?.remaining_after_payment ?? NaN);
   return manualContext.latestManualPayment?.data?.payment_type === 'full' ||
     (Number.isFinite(remainingAfterPayment) && remainingAfterPayment <= 0);
+};
+
+const isManualInvoiceUrl = (value) => {
+  const normalized = String(value || '').toLowerCase();
+  return normalized.includes('/beige_invoice/') ||
+    (normalized.includes('/sales/invoice-pdf/') && normalized.includes('manual=1'));
+};
+
+const findLatestStripeInvoiceHistory = async (bookingId, quoteId = null) => {
+  if (!db.invoice_send_history) return null;
+
+  const where = {
+    booking_id: bookingId,
+    payment_status: 'paid',
+    [Op.or]: [
+      { invoice_pdf: { [Op.ne]: null } },
+      { invoice_url: { [Op.ne]: null } }
+    ]
+  };
+  if (quoteId) where.quote_id = quoteId;
+
+  const histories = await db.invoice_send_history.findAll({
+    where,
+    order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+    limit: quoteId ? 5 : 10
+  });
+
+  return (histories || []).find((history) => (
+    !isManualInvoiceUrl(history.invoice_pdf) &&
+    !isManualInvoiceUrl(history.invoice_url)
+  )) || null;
+};
+
+const resolveStripePaidInvoiceDetails = async ({
+  booking,
+  pricingData,
+  quoteId = null,
+  recipientOverride = null
+}) => {
+  const parsedBookingId = booking.stream_project_booking_id;
+  const payment = booking.payment_id
+    ? await db.payment_transactions.findByPk(booking.payment_id, {
+        attributes: ['payment_id', 'stripe_payment_intent_id', 'stripe_charge_id']
+      })
+    : null;
+  const isStripePayment = Boolean(payment?.stripe_payment_intent_id || payment?.stripe_charge_id);
+
+  if (!isStripePayment) return null;
+
+  let stripeInvoice = null;
+  if (booking.stripe_invoice_id) {
+    try {
+      const existingInvoice = await stripe.invoices.retrieve(booking.stripe_invoice_id);
+      if (existingInvoice?.status === 'paid' && (existingInvoice.invoice_pdf || existingInvoice.hosted_invoice_url)) {
+        stripeInvoice = existingInvoice;
+      }
+    } catch (_) {
+      stripeInvoice = null;
+    }
+  }
+
+  if (!stripeInvoice) {
+    const latestHistory = await findLatestStripeInvoiceHistory(parsedBookingId, quoteId);
+    if (latestHistory?.invoice_pdf || latestHistory?.invoice_url) {
+      return buildInvoiceTemplateDetails(booking, pricingData, {
+        invoiceUrl: latestHistory.invoice_url || latestHistory.invoice_pdf,
+        invoicePdf: latestHistory.invoice_pdf || latestHistory.invoice_url,
+        stripeInvoiceNumber: latestHistory.invoice_number || null,
+        invoiceNumber: latestHistory.invoice_number || null,
+        totalAmount: Number(pricingData.total || 0),
+        isPaid: true,
+        isAdditionalPayment: false
+      });
+    }
+  }
+
+  if (!stripeInvoice) {
+    const totalAmountFormatted = Number(pricingData.total || 0).toLocaleString('en-US', {
+      style: 'currency',
+      currency: 'USD'
+    });
+    stripeInvoice = await paymentLinksService.createPaidStripeInvoice(booking, pricingData, {
+      recipientOverride,
+      paymentMethodLabel: 'Stripe / Card',
+      footerOverride: `Thank you for your business! This payment of ${totalAmountFormatted} was received through Stripe. Transaction Reference: ${payment.stripe_payment_intent_id || payment.stripe_charge_id || booking.payment_id || 'N/A'}.`,
+      metadata: {
+        payment_method: 'stripe',
+        ...(payment.stripe_payment_intent_id ? { payment_intent_id: payment.stripe_payment_intent_id } : {}),
+        ...(quoteId ? { sales_quote_id: String(quoteId) } : {})
+      }
+    });
+  }
+
+  return buildInvoiceTemplateDetails(booking, pricingData, {
+    invoiceUrl: stripeInvoice.hosted_invoice_url,
+    invoicePdf: stripeInvoice.invoice_pdf || stripeInvoice.hosted_invoice_url,
+    stripeInvoiceNumber: stripeInvoice.number,
+    invoiceNumber: stripeInvoice.number,
+    totalAmount: Number(pricingData.total || 0),
+    isPaid: true,
+    isAdditionalPayment: false
+  });
 };
 
 const prepareManualInvoiceDetailsForBooking = async (bookingId, req, recipientOverride = null) => {
@@ -1774,15 +1889,24 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
 
     // --- CASE 1: ALREADY PAID ---
     if (pricingData && (pricingData.is_paid || bookingMarkedPaid)) {
-      const invoicePdfUrl = buildManualInvoiceFrontendUrl(parsedBookingId);
-      invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
-        invoiceUrl: invoicePdfUrl,
-        invoicePdf: invoicePdfUrl,
-        invoiceNumber: `INVBEIGE-M-${String(parsedBookingId).padStart(4, '0')}`,
-        totalAmount,
-        isPaid: true,
-        isAdditionalPayment: false
+      invoiceDetails = await resolveStripePaidInvoiceDetails({
+        booking,
+        pricingData,
+        quoteId,
+        recipientOverride
       });
+
+      if (!invoiceDetails) {
+        const invoicePdfUrl = buildManualInvoiceFrontendUrl(parsedBookingId);
+        invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
+          invoiceUrl: invoicePdfUrl,
+          invoicePdf: invoicePdfUrl,
+          invoiceNumber: `INVBEIGE-M-${String(parsedBookingId).padStart(4, '0')}`,
+          totalAmount,
+          isPaid: true,
+          isAdditionalPayment: false
+        });
+      }
 
     } else {
       // --- CASE 2: NOT PAID YET ---

@@ -484,7 +484,13 @@ async function createStripeInvoice(booking, pricingData, options = {}) {
  * Improved to provide better context for manual/out-of-band payments.
  */
 async function createPaidStripeInvoice(booking, pricingData, options = {}) {
-  const { transaction, recipientOverride = null } = options;
+  const {
+    transaction,
+    recipientOverride = null,
+    paymentMethodLabel = 'External / Bank Transfer',
+    footerOverride = null,
+    metadata = {}
+  } = options;
   const email = recipientOverride?.email || booking.user?.email || booking.guest_email;
   const recipientName = recipientOverride?.name || booking.user?.name || (booking.project_name ? booking.project_name.split(' - ')[1] : 'Valued Guest');
   const invoiceReference = buildBeigeInvoiceReference(booking);
@@ -523,17 +529,18 @@ async function createPaidStripeInvoice(booking, pricingData, options = {}) {
     // Professional header for a finalized payment
     description: `Payment Receipt: ${booking.project_name || 'Service Project'}`,
     // This adds a professional note at the bottom of the PDF
-    footer: `Thank you for your business! This payment of ${totalAmountFormatted} was received and processed manually. Transaction Reference: ${booking.payment_id || 'N/A'}.`,
+    footer: footerOverride || `Thank you for your business! This payment of ${totalAmountFormatted} was received and processed manually. Transaction Reference: ${booking.payment_id || 'N/A'}.`,
     // Custom Fields appear as a table on the receipt, clarifying the status
     custom_fields: [
       { name: "Booking Ref", value: invoiceReference },
       { name: "Payment Status", value: "Paid in Full" },
-      { name: "Payment Method", value: "External / Bank Transfer" }
+      { name: "Payment Method", value: paymentMethodLabel }
     ],
     metadata: { 
       booking_id: booking.stream_project_booking_id.toString(), 
       invoice_reference: invoiceReference,
-      status: 'paid_receipt' 
+      status: 'paid_receipt',
+      ...metadata
     }
   });
 
