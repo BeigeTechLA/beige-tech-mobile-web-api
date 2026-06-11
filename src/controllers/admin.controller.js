@@ -10832,6 +10832,33 @@ const PERMISSION_SCOPE_CONFIG = {
       'quotes'
     ]
   },
+  sales_admin: {
+    label: 'Sales Admin',
+    module_prefix: 'sales_admin',
+    modules: [
+      'dashboard',
+      'sales_people',
+      'shoots',
+      'file_manager',
+      'meetings',
+      'messages',
+      'quotes',
+      'invoices'
+    ]
+  },
+  production_manager: {
+    label: 'Production Manager',
+    module_prefix: 'production_manager',
+    modules: [
+      'dashboard',
+      'creative_partner',
+      'shoots',
+      'file_manager',
+      'meetings',
+      'messages',
+      'availability'
+    ]
+  },
   client: {
     label: 'Client',
     module_prefix: 'client',
@@ -10856,6 +10883,7 @@ const MODULE_DISPLAY_NAMES = {
   affiliate_overview: 'Affiliate Overview',
   availability: 'Availability',
   book_a_shoot: 'Book A Shoot',
+  creative_partner: 'Creative Partner',
   dashboard: 'Dashboard',
   file_manager: 'File Manager',
   finances: 'Finances',
@@ -10868,6 +10896,7 @@ const MODULE_DISPLAY_NAMES = {
   quotes: 'Quotes',
   request_shoots: 'Requests and Shoots',
   sales: 'Sales',
+  sales_people: 'Sales People',
   sales_representative: 'Sales Representative',
   settings: 'Settings',
   shoots: 'Shoots',
