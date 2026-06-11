@@ -2379,12 +2379,7 @@ Authorization: {{TOKEN}}
 
 {
   "name": "Production Team Manager",
-  "description": "Can access dashboard and shoots",
-  "permissions": {
-    "admin_dashboard": ["view"],
-    "admin_shoots": ["view", "edit"],
-    "admin_file_manager": ["view"]
-  }
+  "description": "Can access dashboard and shoots"
 }
 
 ### get roles

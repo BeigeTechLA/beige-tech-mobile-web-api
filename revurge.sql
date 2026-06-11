@@ -2400,3 +2400,13 @@ VALUES
 (616, 2010, 1200.00, 1200.00, 'pending', NOW(), NOW()),
 (622, 2010, 1200.00, 1200.00, 'paid', NOW(), NOW()),
 (626, 2010, 1200.00, 1200.00, 'earned', NOW(), NOW());
+
+-- 11-06-26
+-- Rename Creative Partner permission keys from old crew_* keys.
+-- Keeps existing permission_id values, so role_permissions and user_permissions remain linked.
+UPDATE permissions
+SET
+  module_key = REPLACE(module_key, 'crew_', 'creative_partner_'),
+  permission_key = REPLACE(permission_key, 'crew_', 'creative_partner_')
+WHERE module_key LIKE 'crew_%'
+  OR permission_key LIKE 'crew_%';

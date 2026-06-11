@@ -7,7 +7,7 @@ const fileManagerView = requireAnyPermission([
   'admin_file_manager.view',
   'sales_rep_file_manager.view',
   'sales_admin_file_manager.view',
-  'crew_file_manager.view',
+  'creative_partner_file_manager.view',
   'client_file_manager.view',
   'client_find_yourself.view'
 ], { allowRoles: ['sales_rep', 'sales_admin', 'creative', 'client'] });
@@ -29,8 +29,8 @@ const shootOrFileManagerView = requireAnyPermission([
   'sales_admin_shoots.view',
   'sales_admin_file_manager.view',
   'sales_admin_meetings.view',
-  'crew_request_shoots.view',
-  'crew_file_manager.view',
+  'creative_partner_request_shoots.view',
+  'creative_partner_file_manager.view',
   'client_file_manager.view',
   'client_find_yourself.view',
   'client_shoots.view'

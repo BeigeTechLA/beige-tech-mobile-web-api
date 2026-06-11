@@ -4,18 +4,18 @@ const affiliateController = require('../controllers/affiliate.controller');
 const { authenticate } = require('../middleware/auth.middleware');
 const { requireAnyPermission } = require('../middleware/permission.middleware');
 
-const crewAffiliateView = requireAnyPermission(['crew_affiliate.view'], { allowRoles: ['creative'] });
+const crewAffiliateView = requireAnyPermission(['creative_partner_affiliate.view'], { allowRoles: ['creative'] });
 const affiliateDashboardView = requireAnyPermission([
   'client_affiliate_overview.view',
-  'crew_affiliate.view'
+  'creative_partner_affiliate.view'
 ], { allowRoles: ['client', 'creative'] });
 const affiliateReferralsView = requireAnyPermission([
   'client_affiliate_overview.view',
-  'crew_affiliate.view'
+  'creative_partner_affiliate.view'
 ], { allowRoles: ['client', 'creative'] });
 const affiliateIdentityView = requireAnyPermission([
   'client_dashboard.view',
-  'crew_affiliate.view'
+  'creative_partner_affiliate.view'
 ], { allowRoles: ['client', 'creative'] });
 
 /**

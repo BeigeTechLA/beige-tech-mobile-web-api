@@ -52,8 +52,8 @@ const projectDetailView = requireAnyPermission([
   'sales_rep_meetings.view',
   'sales_admin_shoots.view',
   'sales_admin_meetings.view',
-  'crew_request_shoots.view',
-  'crew_file_manager.view',
+  'creative_partner_request_shoots.view',
+  'creative_partner_file_manager.view',
   'client_dashboard.view',
   'client_shoots.view',
   'client_meetings.view'

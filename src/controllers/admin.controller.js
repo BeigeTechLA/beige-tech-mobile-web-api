@@ -10803,9 +10803,9 @@ const PERMISSION_SCOPE_CONFIG = {
       'invoices'
     ]
   },
-  crew: {
-    label: 'Crew Member',
-    module_prefix: 'crew',
+  creative_partner: {
+    label: 'Creative Partner',
+    module_prefix: 'creative_partner',
     modules: [
       'dashboard',
       'request_shoots',
@@ -11118,7 +11118,7 @@ const getCombinedUserPermissions = async (userId, roleId) => {
 
 exports.createRole = async (req, res) => {
   try {
-    const { name, description, permissions } = req.body;
+    const { name, description } = req.body;
 
     if (!name) {
       return res.status(400).json({
@@ -11146,8 +11146,6 @@ exports.createRole = async (req, res) => {
       description,
       is_active: 1
     });
-
-    await syncRolePermissions(newRole.user_type_id, permissions);
 
     return res.status(201).json({
       success: true,

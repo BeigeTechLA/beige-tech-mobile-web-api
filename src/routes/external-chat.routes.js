@@ -20,8 +20,8 @@ const shootMessagesView = requireAnyPermission([
   'admin_messages.view',
   'sales_rep_messages.view',
   'sales_admin_messages.view',
-  'crew_request_shoots.view',
-  'crew_messages.view',
+  'creative_partner_request_shoots.view',
+  'creative_partner_messages.view',
   'client_messages.view',
   'client_shoots.view'
 ], { allowRoles: ['sales_rep', 'sales_admin', 'creative', 'client'] });

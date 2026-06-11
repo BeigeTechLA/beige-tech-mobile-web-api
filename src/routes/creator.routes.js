@@ -11,33 +11,33 @@ const { requireAnyPermission } = require('../middleware/permission.middleware');
 const adminSalesRepresentativeView = requireAnyPermission([
   'admin_sales_representative.view',
   'sales_admin_dashboard.view',
-  'crew_request_shoots.view',
+  'creative_partner_request_shoots.view',
   'production_manager_creative_partner.view'
 ], { allowRoles: ['sales_admin', 'creative', 'production_manager'] });
 const adminSalesRepresentativeAvailabilityView = requireAnyPermission([
   'admin_sales_representative.view',
   'admin_availability.view',
   'sales_admin_dashboard.view',
-  'crew_dashboard.view',
-  'crew_availability.view',
+  'creative_partner_dashboard.view',
+  'creative_partner_availability.view',
   'production_manager_creative_partner.view',
   'production_manager_availability.view'
 ], { allowRoles: ['sales_admin', 'creative', 'production_manager'] });
-const crewDashboardView = requireAnyPermission(['crew_dashboard.view'], { allowRoles: ['creative'] });
+const crewDashboardView = requireAnyPermission(['creative_partner_dashboard.view'], { allowRoles: ['creative'] });
 const crewDashboardOrRequestShootsView = requireAnyPermission([
-  'crew_dashboard.view',
-  'crew_request_shoots.view'
+  'creative_partner_dashboard.view',
+  'creative_partner_request_shoots.view'
 ], { allowRoles: ['creative'] });
-const crewRequestShootsView = requireAnyPermission(['crew_request_shoots.view'], { allowRoles: ['creative'] });
-const crewRequestShootsEdit = requireAnyPermission(['crew_request_shoots.edit'], { allowRoles: ['creative'] });
-const crewAvailabilityCreate = requireAnyPermission(['crew_availability.create'], { allowRoles: ['creative'] });
+const crewRequestShootsView = requireAnyPermission(['creative_partner_request_shoots.view'], { allowRoles: ['creative'] });
+const crewRequestShootsEdit = requireAnyPermission(['creative_partner_request_shoots.edit'], { allowRoles: ['creative'] });
+const crewAvailabilityCreate = requireAnyPermission(['creative_partner_availability.create'], { allowRoles: ['creative'] });
 const crewAvailabilityOrRequestShootsView = requireAnyPermission([
-  'crew_availability.view',
-  'crew_request_shoots.view'
+  'creative_partner_availability.view',
+  'creative_partner_request_shoots.view'
 ], { allowRoles: ['creative'] });
-const crewProfileView = requireAnyPermission(['crew_profile.view'], { allowRoles: ['creative'] });
-const crewProfileCreate = requireAnyPermission(['crew_profile.create'], { allowRoles: ['creative'] });
-const crewProfileEdit = requireAnyPermission(['crew_profile.edit'], { allowRoles: ['creative'] });
+const crewProfileView = requireAnyPermission(['creative_partner_profile.view'], { allowRoles: ['creative'] });
+const crewProfileCreate = requireAnyPermission(['creative_partner_profile.create'], { allowRoles: ['creative'] });
+const crewProfileEdit = requireAnyPermission(['creative_partner_profile.edit'], { allowRoles: ['creative'] });
 
 // router.use(checkCreatorVerification);
 
