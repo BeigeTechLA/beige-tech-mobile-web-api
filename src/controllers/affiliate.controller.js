@@ -259,10 +259,16 @@ exports.getMyAffiliate = async (req, res) => {
       });
     }
 
+    const client = await db.clients.findOne({
+      where: { user_id: userId },
+      attributes: ['client_id', 'user_id', 'name', 'email', 'phone_number']
+    });
+
     return res.status(200).json({
       success: true,
       data: {
         affiliate_id: affiliate.affiliate_id,
+        client_id: client?.client_id || null,
         referral_code: affiliate.referral_code,
         status: affiliate.status,
         total_referrals: affiliate.total_referrals,
@@ -273,6 +279,7 @@ exports.getMyAffiliate = async (req, res) => {
         payout_method: affiliate.payout_method,
         payout_details: affiliate.payout_details,
         user: affiliate.user,
+        client,
         created_at: affiliate.created_at
       }
     });
