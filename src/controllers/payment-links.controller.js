@@ -22,6 +22,71 @@ const buildManualInvoiceFrontendUrl = (bookingId) => {
   return `${frontendBaseUrl}/beige_invoice/${encodeURIComponent(String(bookingId))}?manual=1`;
 };
 
+const findStripeInvoiceForPaidBooking = async (booking, bookingId) => {
+  if (booking?.stripe_invoice_id) {
+    try {
+      const invoice = await stripe.invoices.retrieve(booking.stripe_invoice_id);
+      if (invoice?.hosted_invoice_url) {
+        return invoice;
+      }
+    } catch (error) {
+      console.warn(`Could not retrieve Stripe invoice ${booking.stripe_invoice_id}: ${error.message}`);
+    }
+  }
+
+  if (!booking?.stripe_customer_id) {
+    return null;
+  }
+
+  try {
+    const invoices = await stripe.invoices.list({
+      customer: booking.stripe_customer_id,
+      limit: 100
+    });
+
+    const matches = (invoices.data || []).filter(
+      (invoice) => invoice.metadata?.booking_id === String(bookingId) && invoice.hosted_invoice_url
+    );
+
+    return (
+      matches.find((invoice) => invoice.status === 'paid') ||
+      matches.find((invoice) => invoice.status === 'open') ||
+      matches[0] ||
+      null
+    );
+  } catch (error) {
+    console.warn(`Could not list Stripe invoices for booking ${bookingId}: ${error.message}`);
+    return null;
+  }
+};
+
+const getStripeReceiptUrlFromPaymentIntent = async (paymentIntentId) => {
+  if (!paymentIntentId) return null;
+
+  try {
+    const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId, {
+      expand: ['latest_charge', 'charges.data']
+    });
+    const expandedCharge =
+      paymentIntent.latest_charge && typeof paymentIntent.latest_charge === 'object'
+        ? paymentIntent.latest_charge
+        : paymentIntent.charges?.data?.[0] || null;
+
+    if (expandedCharge?.receipt_url) {
+      return expandedCharge.receipt_url;
+    }
+
+    if (typeof paymentIntent.latest_charge === 'string') {
+      const charge = await stripe.charges.retrieve(paymentIntent.latest_charge);
+      return charge?.receipt_url || null;
+    }
+  } catch (error) {
+    console.warn(`Could not retrieve Stripe receipt for payment intent ${paymentIntentId}: ${error.message}`);
+  }
+
+  return null;
+};
+
 const resolveInvoiceDisplayNumber = (booking, stripeInvoiceNumber = null) =>
   paymentLinksService.buildBeigeInvoiceReference(booking) || stripeInvoiceNumber || null;
 
@@ -1774,15 +1839,37 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
 
     // --- CASE 1: ALREADY PAID ---
     if (pricingData && (pricingData.is_paid || bookingMarkedPaid)) {
-      const invoicePdfUrl = buildManualInvoiceFrontendUrl(parsedBookingId);
-      invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
-        invoiceUrl: invoicePdfUrl,
-        invoicePdf: invoicePdfUrl,
-        invoiceNumber: `INVBEIGE-M-${String(parsedBookingId).padStart(4, '0')}`,
-        totalAmount,
-        isPaid: true,
-        isAdditionalPayment: false
-      });
+      const stripePaymentIntentId = pricingData.stripe_payment_intent_id || null;
+      const paidStripeInvoice = stripePaymentIntentId
+        ? await findStripeInvoiceForPaidBooking(booking, parsedBookingId)
+        : null;
+      const stripeReceiptUrl =
+        !paidStripeInvoice && stripePaymentIntentId
+          ? await getStripeReceiptUrlFromPaymentIntent(stripePaymentIntentId)
+          : null;
+
+      if (paidStripeInvoice?.hosted_invoice_url || stripeReceiptUrl) {
+        const stripeDocumentUrl = paidStripeInvoice?.hosted_invoice_url || stripeReceiptUrl;
+        invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
+          invoiceUrl: stripeDocumentUrl,
+          invoicePdf: paidStripeInvoice?.invoice_pdf || stripeDocumentUrl,
+          stripeInvoiceNumber: paidStripeInvoice?.number || null,
+          invoiceNumber: paidStripeInvoice?.number || paymentLinksService.buildBeigeInvoiceReference(booking),
+          totalAmount,
+          isPaid: true,
+          isAdditionalPayment: false
+        });
+      } else {
+        const invoicePdfUrl = buildManualInvoiceFrontendUrl(parsedBookingId);
+        invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
+          invoiceUrl: invoicePdfUrl,
+          invoicePdf: invoicePdfUrl,
+          invoiceNumber: `INVBEIGE-M-${String(parsedBookingId).padStart(4, '0')}`,
+          totalAmount,
+          isPaid: true,
+          isAdditionalPayment: false
+        });
+      }
 
     } else {
       // --- CASE 2: NOT PAID YET ---
