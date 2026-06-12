@@ -10959,6 +10959,56 @@ const syncUserPermissions = async (userId, permissions = {}) => {
   }
 };
 
+const syncUserPermissionsFromRole = async (userId, roleId, transaction = null) => {
+  const queryOptions = transaction ? { transaction } : {};
+
+  await db.user_permissions.update(
+    {
+      is_active: 0,
+      is_allowed: 0
+    },
+    {
+      where: { user_id: userId },
+      ...queryOptions
+    }
+  );
+
+  const rolePermissions = await db.role_permissions.findAll({
+    where: {
+      role_id: roleId,
+      is_active: 1
+    },
+    attributes: ['permission_id'],
+    ...queryOptions
+  });
+
+  const permissionIds = [
+    ...new Set(
+      rolePermissions
+        .map(item => Number(item.permission_id))
+        .filter(permissionId => Number.isInteger(permissionId) && permissionId > 0)
+    )
+  ];
+
+  if (!permissionIds.length) {
+    return 0;
+  }
+
+  const userPermissionData = permissionIds.map(permissionId => ({
+    user_id: userId,
+    permission_id: permissionId,
+    is_allowed: 1,
+    is_active: 1
+  }));
+
+  await db.user_permissions.bulkCreate(userPermissionData, {
+    updateOnDuplicate: ['is_active', 'is_allowed'],
+    ...queryOptions
+  });
+
+  return userPermissionData.length;
+};
+
 const formatUserPermissions = async (userId) => {
   const userPermissions = await db.user_permissions.findAll({
     where: {
@@ -11147,19 +11197,23 @@ exports.getRoles = async (req, res) => {
 };
 
 exports.assignRoleToUser = async (req, res) => {
-  try {
-    const { user_id, role_id } = req.body;
+  let transaction;
 
-    if (!user_id || !role_id) {
+  try {
+    const userId = Number(req.body.user_id);
+    const roleId = Number(req.body.role_id);
+
+    if (!Number.isInteger(userId) || userId <= 0 || !Number.isInteger(roleId) || roleId <= 0) {
       return res.status(400).json({
         success: false,
-        message: 'User ID and Role ID are required'
+        message: 'Valid User ID and Role ID are required'
       });
     }
 
     const user = await db.users.findOne({
       where: {
-        id: user_id
+        id: userId,
+        is_active: 1
       }
     });
 
@@ -11172,7 +11226,7 @@ exports.assignRoleToUser = async (req, res) => {
 
     const role = await db.user_type.findOne({
       where: {
-        user_type_id: role_id,
+        user_type_id: roleId,
         is_active: 1
       }
     });
@@ -11184,28 +11238,54 @@ exports.assignRoleToUser = async (req, res) => {
       });
     }
 
+    transaction = await db.sequelize.transaction();
+
     await db.user_roles.update(
       { is_active: 0 },
-      { where: { user_id }}
+      {
+        where: { user_id: userId },
+        transaction
+      }
     );
 
     await db.user_roles.create({
-      user_id,
-      role_id,
+      user_id: userId,
+      role_id: roleId,
       is_active: 1
+    }, {
+      transaction
     });
 
     await db.users.update(
-      { user_type: role_id },
-      { where: { id: user_id } }
+      {
+        user_type: roleId,
+        role: role.user_role
+      },
+      {
+        where: { id: userId },
+        transaction
+      }
     );
+
+    const assignedPermissionsCount = await syncUserPermissionsFromRole(userId, roleId, transaction);
+
+    await transaction.commit();
 
     return res.status(200).json({
       success: true,
-      message: 'Role assigned successfully'
+      message: 'Role assigned successfully',
+      data: {
+        user_id: userId,
+        role_id: roleId,
+        permissions_assigned: assignedPermissionsCount
+      }
     });
 
   } catch (error) {
+    if (transaction && !transaction.finished) {
+      await transaction.rollback();
+    }
+
     console.error('Assign Role Error:', error);
     return res.status(500).json({
       success: false,
