@@ -786,6 +786,7 @@ const prepareManualInvoiceDetailsForBooking = async (bookingId, req, recipientOv
   const invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
     invoiceUrl: invoicePdfUrl,
     invoicePdf: invoicePdfUrl,
+    receiptUrl: invoicePdfUrl,
     invoiceNumber: `INVBEIGE-M-${String(parsedBookingId).padStart(4, '0')}`,
     totalAmount,
     isPaid: isPaidManual,
@@ -1715,6 +1716,7 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
       invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
         invoiceUrl: invoicePdfUrl,
         invoicePdf: invoicePdfUrl,
+        receiptUrl: invoicePdfUrl,
         invoiceNumber: `INVBEIGE-M-${String(parsedBookingId).padStart(4, '0')}`,
         totalAmount: 0,
         isPaid: true,
@@ -1866,7 +1868,7 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
         ? null
         : await findStripeInvoiceHistoryForPaidBooking(parsedBookingId);
       const stripeReceiptUrl =
-        !paidStripeInvoice && !paidStripeInvoiceHistory && stripePaymentIntentId
+        stripePaymentIntentId
           ? await getStripeReceiptUrlFromPaymentIntent(stripePaymentIntentId)
           : null;
 
@@ -1878,6 +1880,11 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
         invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
           invoiceUrl: stripeDocumentUrl,
           invoicePdf: paidStripeInvoice?.invoice_pdf || paidStripeInvoiceHistory?.invoice_pdf || stripeDocumentUrl,
+          receiptUrl:
+            stripeReceiptUrl ||
+            paidStripeInvoice?.invoice_pdf ||
+            paidStripeInvoiceHistory?.invoice_pdf ||
+            stripeDocumentUrl,
           stripeInvoiceNumber: paidStripeInvoice?.number || paidStripeInvoiceHistory?.invoice_number || null,
           invoiceNumber:
             paidStripeInvoice?.number ||
@@ -1892,6 +1899,7 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
         invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
           invoiceUrl: invoicePdfUrl,
           invoicePdf: invoicePdfUrl,
+          receiptUrl: invoicePdfUrl,
           invoiceNumber: `INVBEIGE-M-${String(parsedBookingId).padStart(4, '0')}`,
           totalAmount,
           isPaid: true,
