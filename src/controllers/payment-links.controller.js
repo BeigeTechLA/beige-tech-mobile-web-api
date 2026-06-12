@@ -60,6 +60,27 @@ const findStripeInvoiceForPaidBooking = async (booking, bookingId) => {
   }
 };
 
+const findStripeInvoiceHistoryForPaidBooking = async (bookingId) => {
+  if (!db.invoice_send_history) {
+    return null;
+  }
+
+  const rows = await db.invoice_send_history.findAll({
+    where: {
+      booking_id: bookingId
+    },
+    attributes: ['invoice_number', 'invoice_url', 'invoice_pdf', 'payment_status'],
+    order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+    limit: 10
+  });
+
+  return (rows || []).find((row) => {
+    const invoiceUrl = String(row.invoice_url || '');
+    const invoicePdf = String(row.invoice_pdf || '');
+    return /stripe\.com/i.test(invoiceUrl) || /stripe\.com/i.test(invoicePdf);
+  }) || null;
+};
+
 const getStripeReceiptUrlFromPaymentIntent = async (paymentIntentId) => {
   if (!paymentIntentId) return null;
 
@@ -1840,21 +1861,28 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
     // --- CASE 1: ALREADY PAID ---
     if (pricingData && (pricingData.is_paid || bookingMarkedPaid)) {
       const stripePaymentIntentId = pricingData.stripe_payment_intent_id || null;
-      const paidStripeInvoice = stripePaymentIntentId
-        ? await findStripeInvoiceForPaidBooking(booking, parsedBookingId)
-        : null;
+      const paidStripeInvoice = await findStripeInvoiceForPaidBooking(booking, parsedBookingId);
+      const paidStripeInvoiceHistory = paidStripeInvoice
+        ? null
+        : await findStripeInvoiceHistoryForPaidBooking(parsedBookingId);
       const stripeReceiptUrl =
-        !paidStripeInvoice && stripePaymentIntentId
+        !paidStripeInvoice && !paidStripeInvoiceHistory && stripePaymentIntentId
           ? await getStripeReceiptUrlFromPaymentIntent(stripePaymentIntentId)
           : null;
 
-      if (paidStripeInvoice?.hosted_invoice_url || stripeReceiptUrl) {
-        const stripeDocumentUrl = paidStripeInvoice?.hosted_invoice_url || stripeReceiptUrl;
+      if (paidStripeInvoice?.hosted_invoice_url || paidStripeInvoiceHistory?.invoice_url || stripeReceiptUrl) {
+        const stripeDocumentUrl =
+          paidStripeInvoice?.hosted_invoice_url ||
+          paidStripeInvoiceHistory?.invoice_url ||
+          stripeReceiptUrl;
         invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
           invoiceUrl: stripeDocumentUrl,
-          invoicePdf: paidStripeInvoice?.invoice_pdf || stripeDocumentUrl,
-          stripeInvoiceNumber: paidStripeInvoice?.number || null,
-          invoiceNumber: paidStripeInvoice?.number || paymentLinksService.buildBeigeInvoiceReference(booking),
+          invoicePdf: paidStripeInvoice?.invoice_pdf || paidStripeInvoiceHistory?.invoice_pdf || stripeDocumentUrl,
+          stripeInvoiceNumber: paidStripeInvoice?.number || paidStripeInvoiceHistory?.invoice_number || null,
+          invoiceNumber:
+            paidStripeInvoice?.number ||
+            paidStripeInvoiceHistory?.invoice_number ||
+            paymentLinksService.buildBeigeInvoiceReference(booking),
           totalAmount,
           isPaid: true,
           isAdditionalPayment: false
