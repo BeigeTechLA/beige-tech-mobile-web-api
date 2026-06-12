@@ -2430,19 +2430,32 @@ exports.getWorkspace = async (req, res) => {
   try {
     await ensureCreatorWorkspaceAccess(req, req.params.bookingId);
     await assertCommonEventVisibleForRequest(req, req.params.bookingId);
+    const isCommonEventWorkspace = isCommonEventExternalId(req.params.bookingId);
     let result;
     try {
       result = await proxyRequest(`/workspace/${req.params.bookingId}`);
     } catch (error) {
-      if (error.status !== 404 || isCommonEventExternalId(req.params.bookingId)) {
+      if (error.status !== 404 || isCommonEventWorkspace) {
         throw error;
       }
       result = await syncWorkspaceForExistingBookingId(req.params.bookingId);
     }
 
-    if (isCommonEventExternalId(req.params.bookingId)) {
+    if (isCommonEventWorkspace) {
+      await ensureCommonEventsTable();
+      const normalizedExternalId = String(req.params.bookingId || '').trim().toLowerCase();
+      const [eventRows] = await db.sequelize.query(
+        `
+        SELECT event_id, event_name, visible_until
+        FROM file_manager_common_events
+        WHERE workspace_external_id = ?
+        LIMIT 1
+        `,
+        { replacements: [normalizedExternalId] }
+      );
+      const eventRow = Array.isArray(eventRows) ? eventRows[0] : null;
       const rootFolders = (result?.data?.folders || []).filter(
-        (folder) => !isWorkspacePhaseRootName(folder?.name)
+        (folder) => !isWorkspacePhaseRootName(folder?.name) || Number(folder?.fileCount || 0) > 0
       );
 
       if (isCreatorRole(req)) {
@@ -2455,6 +2468,13 @@ exports.getWorkspace = async (req, res) => {
           ...result,
           data: {
             ...(result.data || {}),
+            workspace: {
+              ...(result.data?.workspace || {}),
+              isCommonEvent: true,
+              eventId: eventRow?.event_id,
+              eventName: eventRow?.event_name,
+              visibleUntil: eventRow?.visible_until || null,
+            },
             folders: rootFolders.filter((folder) => {
               const entryPath = getRelativePathForEntry(folder);
               return entryPath && allowedRoots.some((rootPath) => isPathWithin(rootPath, entryPath) || isPathWithin(entryPath, rootPath));
@@ -2466,6 +2486,13 @@ exports.getWorkspace = async (req, res) => {
           ...result,
           data: {
             ...(result.data || {}),
+            workspace: {
+              ...(result.data?.workspace || {}),
+              isCommonEvent: true,
+              eventId: eventRow?.event_id,
+              eventName: eventRow?.event_name,
+              visibleUntil: eventRow?.visible_until || null,
+            },
             folders: rootFolders,
           },
         };
