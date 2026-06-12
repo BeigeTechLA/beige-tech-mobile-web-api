@@ -2104,8 +2104,9 @@ exports.getStripeInvoicePdf = async (req, res) => {
     const { booking_id } = req.params;
     const forceDownload = String(req.query.download || '').toLowerCase() === '1' || String(req.query.download || '').toLowerCase() === 'true';
     const isManualRequested = String(req.query.manual || '').toLowerCase() === '1' || String(req.query.manual || '').toLowerCase() === 'true';
+    const isReceiptRequested = String(req.query.receipt || '').toLowerCase() === '1' || String(req.query.receipt || '').toLowerCase() === 'true';
     const manualContext = await getBookingManualPaymentContext(booking_id);
-    const useManualReceipt = isManualRequested || await shouldUseManualInvoiceReceipt(booking_id, manualContext);
+    const useManualReceipt = isManualRequested || isReceiptRequested || await shouldUseManualInvoiceReceipt(booking_id, manualContext);
 
     if (useManualReceipt) {
       const parsedBookingId = Number(booking_id);
@@ -2137,7 +2138,7 @@ exports.getStripeInvoicePdf = async (req, res) => {
       }
       const pricingTotalAmount = Number(pricingData.total || 0);
       const totalAmount = paymentState.quoteTotal > 0 ? paymentState.quoteTotal : pricingTotalAmount;
-      const allowManualForZeroTotal = totalAmount <= 0 || isPaidFromSummary;
+      const allowManualForZeroTotal = totalAmount <= 0 || isPaidFromSummary || (isReceiptRequested && pricingData?.is_paid);
       if (!manualContext.isManual && !allowManualForZeroTotal) {
         return res.status(400).json({
           success: false,
@@ -2227,7 +2228,19 @@ exports.getStripeInvoicePdf = async (req, res) => {
           amount: nonManualPaidAmount
         });
       }
-      const receiptIsPaid = isPaidFromSummary || isPaidManual || (hasPaymentSummary && paymentState.dueAmount <= 0 && normalizedPaidAmount >= totalAmount);
+      const isPaidRequestedReceipt = isReceiptRequested && pricingData?.is_paid;
+      if (isPaidRequestedReceipt && manualHistory.length === 0) {
+        manualHistory.push({
+          method: 'Online Payment',
+          date: formatInvoiceDate(paymentSummary?.updated_at || new Date()),
+          amount: totalAmount
+        });
+      }
+      const receiptIsPaid =
+        isPaidFromSummary ||
+        isPaidManual ||
+        isPaidRequestedReceipt ||
+        (hasPaymentSummary && paymentState.dueAmount <= 0 && normalizedPaidAmount >= totalAmount);
 
       const pdfBuffer = await generateManualReceiptPdfBuffer({
         invoiceNumber: `INVBEIGE-M-${String(parsedBookingId).padStart(4, '0')}`,
