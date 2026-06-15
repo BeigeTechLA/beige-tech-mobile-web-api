@@ -11524,6 +11524,10 @@ exports.getUsersWithRoles = async (req, res) => {
     // Role filter
     if (role_id) {
       userWhereCondition.user_type = role_id;
+    } else {
+      userWhereCondition.user_type = {
+        [Op.in]: [1, 5, 7]
+      };
     }
 
     const users = await db.users.findAll({
