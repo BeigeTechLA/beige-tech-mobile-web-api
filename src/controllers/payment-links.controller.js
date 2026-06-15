@@ -22,6 +22,92 @@ const buildManualInvoiceFrontendUrl = (bookingId) => {
   return `${frontendBaseUrl}/beige_invoice/${encodeURIComponent(String(bookingId))}?manual=1`;
 };
 
+const findStripeInvoiceForPaidBooking = async (booking, bookingId) => {
+  if (booking?.stripe_invoice_id) {
+    try {
+      const invoice = await stripe.invoices.retrieve(booking.stripe_invoice_id);
+      if (invoice?.hosted_invoice_url) {
+        return invoice;
+      }
+    } catch (error) {
+      console.warn(`Could not retrieve Stripe invoice ${booking.stripe_invoice_id}: ${error.message}`);
+    }
+  }
+
+  if (!booking?.stripe_customer_id) {
+    return null;
+  }
+
+  try {
+    const invoices = await stripe.invoices.list({
+      customer: booking.stripe_customer_id,
+      limit: 100
+    });
+
+    const matches = (invoices.data || []).filter(
+      (invoice) => invoice.metadata?.booking_id === String(bookingId) && invoice.hosted_invoice_url
+    );
+
+    return (
+      matches.find((invoice) => invoice.status === 'paid') ||
+      matches.find((invoice) => invoice.status === 'open') ||
+      matches[0] ||
+      null
+    );
+  } catch (error) {
+    console.warn(`Could not list Stripe invoices for booking ${bookingId}: ${error.message}`);
+    return null;
+  }
+};
+
+const findStripeInvoiceHistoryForPaidBooking = async (bookingId) => {
+  if (!db.invoice_send_history) {
+    return null;
+  }
+
+  const rows = await db.invoice_send_history.findAll({
+    where: {
+      booking_id: bookingId
+    },
+    attributes: ['invoice_number', 'invoice_url', 'invoice_pdf', 'payment_status'],
+    order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+    limit: 10
+  });
+
+  return (rows || []).find((row) => {
+    const invoiceUrl = String(row.invoice_url || '');
+    const invoicePdf = String(row.invoice_pdf || '');
+    return /stripe\.com/i.test(invoiceUrl) || /stripe\.com/i.test(invoicePdf);
+  }) || null;
+};
+
+const getStripeReceiptUrlFromPaymentIntent = async (paymentIntentId) => {
+  if (!paymentIntentId) return null;
+
+  try {
+    const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId, {
+      expand: ['latest_charge', 'charges.data']
+    });
+    const expandedCharge =
+      paymentIntent.latest_charge && typeof paymentIntent.latest_charge === 'object'
+        ? paymentIntent.latest_charge
+        : paymentIntent.charges?.data?.[0] || null;
+
+    if (expandedCharge?.receipt_url) {
+      return expandedCharge.receipt_url;
+    }
+
+    if (typeof paymentIntent.latest_charge === 'string') {
+      const charge = await stripe.charges.retrieve(paymentIntent.latest_charge);
+      return charge?.receipt_url || null;
+    }
+  } catch (error) {
+    console.warn(`Could not retrieve Stripe receipt for payment intent ${paymentIntentId}: ${error.message}`);
+  }
+
+  return null;
+};
+
 const resolveInvoiceDisplayNumber = (booking, stripeInvoiceNumber = null) =>
   paymentLinksService.buildBeigeInvoiceReference(booking) || stripeInvoiceNumber || null;
 
@@ -700,6 +786,7 @@ const prepareManualInvoiceDetailsForBooking = async (bookingId, req, recipientOv
   const invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
     invoiceUrl: invoicePdfUrl,
     invoicePdf: invoicePdfUrl,
+    receiptUrl: invoicePdfUrl,
     invoiceNumber: `INVBEIGE-M-${String(parsedBookingId).padStart(4, '0')}`,
     totalAmount,
     isPaid: isPaidManual,
@@ -1629,6 +1716,7 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
       invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
         invoiceUrl: invoicePdfUrl,
         invoicePdf: invoicePdfUrl,
+        receiptUrl: invoicePdfUrl,
         invoiceNumber: `INVBEIGE-M-${String(parsedBookingId).padStart(4, '0')}`,
         totalAmount: 0,
         isPaid: true,
@@ -1774,15 +1862,50 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
 
     // --- CASE 1: ALREADY PAID ---
     if (pricingData && (pricingData.is_paid || bookingMarkedPaid)) {
-      const invoicePdfUrl = buildManualInvoiceFrontendUrl(parsedBookingId);
-      invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
-        invoiceUrl: invoicePdfUrl,
-        invoicePdf: invoicePdfUrl,
-        invoiceNumber: `INVBEIGE-M-${String(parsedBookingId).padStart(4, '0')}`,
-        totalAmount,
-        isPaid: true,
-        isAdditionalPayment: false
-      });
+      const stripePaymentIntentId = pricingData.stripe_payment_intent_id || null;
+      const paidStripeInvoice = await findStripeInvoiceForPaidBooking(booking, parsedBookingId);
+      const paidStripeInvoiceHistory = paidStripeInvoice
+        ? null
+        : await findStripeInvoiceHistoryForPaidBooking(parsedBookingId);
+      const stripeReceiptUrl =
+        stripePaymentIntentId
+          ? await getStripeReceiptUrlFromPaymentIntent(stripePaymentIntentId)
+          : null;
+
+      if (paidStripeInvoice?.hosted_invoice_url || paidStripeInvoiceHistory?.invoice_url || stripeReceiptUrl) {
+        const stripeDocumentUrl =
+          paidStripeInvoice?.hosted_invoice_url ||
+          paidStripeInvoiceHistory?.invoice_url ||
+          stripeReceiptUrl;
+        invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
+          invoiceUrl: stripeDocumentUrl,
+          invoicePdf: paidStripeInvoice?.invoice_pdf || paidStripeInvoiceHistory?.invoice_pdf || stripeDocumentUrl,
+          receiptUrl:
+            stripeReceiptUrl ||
+            paidStripeInvoice?.invoice_pdf ||
+            paidStripeInvoiceHistory?.invoice_pdf ||
+            stripeDocumentUrl,
+          stripeInvoiceNumber: paidStripeInvoice?.number || paidStripeInvoiceHistory?.invoice_number || null,
+          invoiceNumber:
+            paidStripeInvoice?.number ||
+            paidStripeInvoiceHistory?.invoice_number ||
+            paymentLinksService.buildBeigeInvoiceReference(booking),
+          totalAmount,
+          isPaid: true,
+          isAdditionalPayment: false
+        });
+      } else {
+        const invoicePdfUrl = buildManualInvoiceFrontendUrl(parsedBookingId);
+        invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
+          invoiceUrl: invoicePdfUrl,
+          invoicePdf: invoicePdfUrl,
+          receiptUrl: invoicePdfUrl,
+          invoiceNumber: `INVBEIGE-M-${String(parsedBookingId).padStart(4, '0')}`,
+          totalAmount,
+          isPaid: true,
+          isAdditionalPayment: false
+        });
+      }
 
     } else {
       // --- CASE 2: NOT PAID YET ---
@@ -1981,8 +2104,9 @@ exports.getStripeInvoicePdf = async (req, res) => {
     const { booking_id } = req.params;
     const forceDownload = String(req.query.download || '').toLowerCase() === '1' || String(req.query.download || '').toLowerCase() === 'true';
     const isManualRequested = String(req.query.manual || '').toLowerCase() === '1' || String(req.query.manual || '').toLowerCase() === 'true';
+    const isReceiptRequested = String(req.query.receipt || '').toLowerCase() === '1' || String(req.query.receipt || '').toLowerCase() === 'true';
     const manualContext = await getBookingManualPaymentContext(booking_id);
-    const useManualReceipt = isManualRequested || await shouldUseManualInvoiceReceipt(booking_id, manualContext);
+    const useManualReceipt = isManualRequested || isReceiptRequested || await shouldUseManualInvoiceReceipt(booking_id, manualContext);
 
     if (useManualReceipt) {
       const parsedBookingId = Number(booking_id);
@@ -2014,7 +2138,7 @@ exports.getStripeInvoicePdf = async (req, res) => {
       }
       const pricingTotalAmount = Number(pricingData.total || 0);
       const totalAmount = paymentState.quoteTotal > 0 ? paymentState.quoteTotal : pricingTotalAmount;
-      const allowManualForZeroTotal = totalAmount <= 0 || isPaidFromSummary;
+      const allowManualForZeroTotal = totalAmount <= 0 || isPaidFromSummary || (isReceiptRequested && pricingData?.is_paid);
       if (!manualContext.isManual && !allowManualForZeroTotal) {
         return res.status(400).json({
           success: false,
@@ -2104,7 +2228,19 @@ exports.getStripeInvoicePdf = async (req, res) => {
           amount: nonManualPaidAmount
         });
       }
-      const receiptIsPaid = isPaidFromSummary || isPaidManual || (hasPaymentSummary && paymentState.dueAmount <= 0 && normalizedPaidAmount >= totalAmount);
+      const isPaidRequestedReceipt = isReceiptRequested && pricingData?.is_paid;
+      if (isPaidRequestedReceipt && manualHistory.length === 0) {
+        manualHistory.push({
+          method: 'Online Payment',
+          date: formatInvoiceDate(paymentSummary?.updated_at || new Date()),
+          amount: totalAmount
+        });
+      }
+      const receiptIsPaid =
+        isPaidFromSummary ||
+        isPaidManual ||
+        isPaidRequestedReceipt ||
+        (hasPaymentSummary && paymentState.dueAmount <= 0 && normalizedPaidAmount >= totalAmount);
 
       const pdfBuffer = await generateManualReceiptPdfBuffer({
         invoiceNumber: `INVBEIGE-M-${String(parsedBookingId).padStart(4, '0')}`,
