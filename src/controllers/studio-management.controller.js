@@ -109,6 +109,7 @@ const buildStudioPayload = (body, userId) => {
         preferred_age: nullable(body.preferred_age || body.preferredAge),
 
         parking_options: body.parking_options || body.parkingOptions || null,
+        parking_description: body.parking_description || null,
         access_features: body.access_features || body.accessFeatures || null,
         facility_features: body.facility_features || body.facilityFeatures || null,
         supported_shoot_types: body.supported_shoot_types || body.supportedShootTypes || null,

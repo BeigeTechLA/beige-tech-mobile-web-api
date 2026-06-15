@@ -168,6 +168,10 @@ module.exports = function(sequelize, DataTypes) {
     parking_options: {
       type: DataTypes.JSON,
       allowNull: true
+    },    
+    parking_description: {
+      type: DataTypes.TEXT,
+      allowNull: true
     },
     access_features: {
       type: DataTypes.JSON,

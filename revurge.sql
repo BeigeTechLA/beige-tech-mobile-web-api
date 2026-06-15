@@ -2025,3 +2025,5 @@ CREATE TABLE IF NOT EXISTS studio_bookings (
     REFERENCES users(id)
     ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+ALTER TABLE `studios` ADD `parking_description` TEXT NULL AFTER `parking_options`;
