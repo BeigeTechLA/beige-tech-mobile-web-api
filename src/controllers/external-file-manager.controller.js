@@ -109,6 +109,7 @@ const isCreatorRole = (req) => {
   const role = getNormalizedRequestUserRole(req);
   return ['creator', 'creative', 'Creative'].includes(role);
 };
+const isCommonEventVisibilityLimitedRole = (req) => ['client', 'creator', 'creative'].includes(getNormalizedRequestUserRole(req));
 const isCommonEventExternalId = (value) =>
   String(value || '').trim().toLowerCase().startsWith(COMMON_EVENT_ID_PREFIX);
 
@@ -554,6 +555,7 @@ const ensureCommonEventsTable = async () => {
         event_slug VARCHAR(255) NOT NULL,
         workspace_external_id VARCHAR(128) NOT NULL,
         root_path VARCHAR(1024) DEFAULT NULL,
+        visible_until DATETIME DEFAULT NULL,
         created_by_user_id BIGINT UNSIGNED DEFAULT NULL,
         created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -566,6 +568,10 @@ const ensureCommonEventsTable = async () => {
   }
 
   await commonEventsTableReadyPromise;
+  await db.sequelize.query(`
+    ALTER TABLE file_manager_common_events
+    ADD COLUMN IF NOT EXISTS visible_until DATETIME DEFAULT NULL AFTER root_path
+  `).catch(() => null);
 };
 
 const ensureFileShareTable = async () => {
@@ -708,6 +714,49 @@ const buildCommonEventExternalId = (eventName) => {
   return `${COMMON_EVENT_ID_PREFIX}${slug}_${Date.now()}`.slice(0, 120);
 };
 
+const normalizeCommonEventVisibleUntil = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    return `${raw} 23:59:59`;
+  }
+
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    const error = new Error('visibleUntil must be a valid date');
+    error.status = 400;
+    throw error;
+  }
+
+  return parsed.toISOString().slice(0, 19).replace('T', ' ');
+};
+
+const isCommonEventVisibleForRole = (row) => {
+  if (!row?.visible_until) return true;
+  const visibleUntil = new Date(row.visible_until).getTime();
+  if (Number.isNaN(visibleUntil)) return true;
+  return visibleUntil >= Date.now();
+};
+
+const assertCommonEventVisibleForRequest = async (req, externalId) => {
+  if (!isCommonEventVisibilityLimitedRole(req)) return;
+  const normalizedExternalId = String(externalId || '').trim().toLowerCase();
+  if (!isCommonEventExternalId(normalizedExternalId)) return;
+
+  await ensureCommonEventsTable();
+  const [rows] = await db.sequelize.query(
+    `SELECT visible_until FROM file_manager_common_events WHERE workspace_external_id = ? LIMIT 1`,
+    { replacements: [normalizedExternalId] }
+  );
+  const row = Array.isArray(rows) ? rows[0] : null;
+  if (!row || isCommonEventVisibleForRole(row)) return;
+
+  const error = new Error('This common event folder is no longer visible');
+  error.status = 403;
+  throw error;
+};
+
 const listCommonEventRows = async () => {
   await ensureCommonEventsTable();
 
@@ -718,6 +767,7 @@ const listCommonEventRows = async () => {
       event_slug,
       workspace_external_id,
       root_path,
+      visible_until,
       created_by_user_id,
       created_at,
       updated_at
@@ -815,6 +865,14 @@ const normalizeWorkspacePhase = (value, fallback = null) => {
   return fallback;
 };
 
+const isWorkspacePhaseRootName = (value) => {
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, '-');
+  return ['pre-production', 'preproduction', 'post-production', 'postproduction'].includes(normalized);
+};
+
 const extractPhaseAndRelativePath = (value, fallbackPhase = null) => {
   const normalizedPath = normalizePathForAccess(value);
   if (!normalizedPath) {
@@ -847,6 +905,46 @@ const extractPhaseAndRelativePath = (value, fallbackPhase = null) => {
   };
 };
 
+const getCommonEventRootCandidates = (row = {}) => {
+  const candidates = [
+    row.root_path,
+    row.event_name ? `Event - ${row.event_name}` : '',
+  ]
+    .map((value) => normalizePathForAccess(value))
+    .filter(Boolean);
+
+  return Array.from(new Set(candidates)).sort((a, b) => b.length - a.length);
+};
+
+const stripCommonEventRootFromPath = (value, row = {}) => {
+  const normalizedPath = normalizePathForAccess(value);
+  if (!normalizedPath) return '';
+
+  const normalizedPathLower = normalizedPath.toLowerCase();
+  const rootPath = getCommonEventRootCandidates(row).find((candidate) => {
+    const candidateLower = candidate.toLowerCase();
+    return normalizedPathLower === candidateLower || normalizedPathLower.startsWith(`${candidateLower}/`);
+  });
+
+  if (!rootPath) return normalizedPath;
+  if (normalizedPathLower === rootPath.toLowerCase()) return '';
+  return normalizePathForAccess(normalizedPath.slice(rootPath.length + 1));
+};
+
+const getCreatorCommonEventAllowedRoots = (creatorFolders = []) =>
+  Array.from(
+    new Set(
+      creatorFolders.flatMap((row) => {
+        const folderPath = normalizePathForAccess(row.folder_path);
+        const relativePath = stripCommonEventRootFromPath(folderPath, row);
+        const prefixedPaths = getCommonEventRootCandidates(row)
+          .map((rootPath) => (relativePath ? `${rootPath}/${relativePath}` : ''))
+          .filter(Boolean);
+        return [folderPath, relativePath, ...prefixedPaths].filter(Boolean);
+      })
+    )
+  );
+
 const isPathWithin = (basePath, candidatePath) => {
   const base = normalizePathForAccess(basePath);
   const candidate = normalizePathForAccess(candidatePath);
@@ -860,14 +958,22 @@ const listCreatorCommonEventFolders = async ({ eventExternalId, userId, phase = 
   await ensureCommonEventCreatorFoldersTable();
   const replacements = [String(eventExternalId).trim().toLowerCase(), Number(userId)];
   let sql = `
-    SELECT workspace_external_id, phase, folder_path, created_by_user_id
-    FROM file_manager_common_event_creator_folders
-    WHERE workspace_external_id = ?
-      AND created_by_user_id = ?
+    SELECT
+      cf.workspace_external_id,
+      cf.phase,
+      cf.folder_path,
+      cf.created_by_user_id,
+      ce.event_name,
+      ce.root_path
+    FROM file_manager_common_event_creator_folders cf
+    LEFT JOIN file_manager_common_events ce
+      ON ce.workspace_external_id = cf.workspace_external_id
+    WHERE cf.workspace_external_id = ?
+      AND cf.created_by_user_id = ?
   `;
 
   if (phase) {
-    sql += ' AND phase = ?';
+    sql += ' AND cf.phase = ?';
     replacements.push(String(phase).trim().toLowerCase());
   }
 
@@ -887,6 +993,7 @@ const ensureCreatorCommonEventRelativePathAccess = async ({
 
   const normalizedEventExternalId = String(eventExternalId || '').trim().toLowerCase();
   if (!isCommonEventExternalId(normalizedEventExternalId)) return;
+  await assertCommonEventVisibleForRequest(req, normalizedEventExternalId);
 
   const userId = getRequestUserId(req);
   if (!userId) {
@@ -902,13 +1009,11 @@ const ensureCreatorCommonEventRelativePathAccess = async ({
     userId,
     phase: normalizedPhase || null,
   });
-  const allowedRoots = creatorFolders.map((row) => normalizePathForAccess(row.folder_path)).filter(Boolean);
+  const allowedRoots = getCreatorCommonEventAllowedRoots(creatorFolders);
 
   if (!allowedRoots.length) {
-    const phaseLabel = normalizedPhase === 'post' ? 'Post-Production' : 'Pre-Production';
-    const error = new Error(
-      `Please create your own folder first, then access ${phaseLabel} in this common event`
-    );
+    const phaseLabel = normalizedPhase === 'post' ? 'Post-Production' : normalizedPhase === 'pre' ? 'Pre-Production' : 'this common event';
+    const error = new Error(`Please create your own folder first, then access ${phaseLabel}`);
     error.status = 403;
     throw error;
   }
@@ -1449,7 +1554,11 @@ const ensureCreatorPostProductionUploadWindow = async (req, filepath) => {
 const validateUploadAccessForPath = async (req, filepath) => {
   await ensureCreatorFileAccess(req, filepath);
 
-  if (getNormalizedRequestUserRole(req) === 'creator' && !isCreatorAllowedUploadPath(filepath)) {
+  const commonEventExternalId = extractCommonEventExternalIdFromPath(filepath);
+  const commonEventByPath = commonEventExternalId ? null : await findCommonEventByFilepath(filepath);
+  const isCommonEventPath = Boolean(commonEventExternalId || commonEventByPath);
+
+  if (getNormalizedRequestUserRole(req) === 'creator' && !isCommonEventPath && !isCreatorAllowedUploadPath(filepath)) {
     const error = new Error('Creators can upload files only in Pre-Production or Post-Production');
     error.status = 403;
     throw error;
@@ -1457,7 +1566,7 @@ const validateUploadAccessForPath = async (req, filepath) => {
 
   await ensureCreatorPostProductionUploadWindow(req, filepath);
 
-  if (isPreProductionOnlyRole(req) && !isPreProductionPath(filepath)) {
+  if (isPreProductionOnlyRole(req) && !isCommonEventPath && !isPreProductionPath(filepath)) {
     const error = new Error('Uploads are allowed only in Pre-Production');
     error.status = 403;
     throw error;
@@ -1506,9 +1615,8 @@ const ensureCreatorWorkspaceAccess = async (req, bookingId) => {
     where: {
       project_id: normalizedBookingId,
       crew_member_id: crewMemberId,
-      crew_accept: 1,
     },
-    attributes: ['id'],
+    attributes: ['id', 'crew_accept'],
   });
 
   if (!assignment) {
@@ -1542,7 +1650,7 @@ const ensureCreatorFileAccess = async (req, filepath) => {
   await ensureCreatorWorkspaceAccess(req, bookingId);
 };
 
-const getCreatorAcceptedProjectIds = async (req) => {
+const getCreatorAssignedProjectIds = async (req) => {
   if (!isCreatorRole(req)) return null;
 
   const crewMemberId = await resolveCreatorCrewMemberId(getRequestUserId(req));
@@ -1551,7 +1659,6 @@ const getCreatorAcceptedProjectIds = async (req) => {
   const assignments = await assigned_crew.findAll({
     where: {
       crew_member_id: crewMemberId,
-      crew_accept: 1,
     },
     attributes: ['project_id'],
   });
@@ -1559,6 +1666,74 @@ const getCreatorAcceptedProjectIds = async (req) => {
   return assignments
     .map((assignment) => Number(assignment.project_id))
     .filter(Boolean);
+};
+
+const getCreatorAssignedWorkspacePlaceholders = async (req, existingExternalIds = new Set()) => {
+  if (!isCreatorRole(req)) return [];
+
+  const crewMemberId = await resolveCreatorCrewMemberId(getRequestUserId(req));
+  if (!crewMemberId) return [];
+
+  const assignments = await assigned_crew.findAll({
+    where: {
+      crew_member_id: crewMemberId,
+    },
+    attributes: ['project_id', 'crew_accept', 'created_at', 'updated_at'],
+    include: [
+      {
+        model: stream_project_booking,
+        as: 'project',
+        required: true,
+      },
+    ],
+  });
+
+  return assignments
+    .map((assignment) => {
+      const booking = assignment?.project;
+      const bookingId = Number(booking?.stream_project_booking_id || assignment?.project_id);
+      if (!bookingId) return null;
+      if (existingExternalIds.has(String(bookingId).toLowerCase())) return null;
+
+      return {
+        externalId: String(bookingId),
+        folderName: buildWorkspaceFolderName(booking),
+        rootPath: null,
+        fullPath: null,
+        consoleUrl: null,
+        fileCount: 0,
+        createdAt: assignment?.created_at || booking?.created_at || null,
+        updatedAt: assignment?.updated_at || booking?.updated_at || null,
+        assignmentStatus:
+          Number(assignment?.crew_accept) === 1
+            ? 'accepted'
+            : Number(assignment?.crew_accept) === 2
+              ? 'rejected'
+              : 'pending',
+      };
+    })
+    .filter(Boolean);
+};
+
+const syncWorkspaceForExistingBookingId = async (bookingId) => {
+  const normalizedBookingId = Number(bookingId);
+  if (!normalizedBookingId) {
+    const error = new Error('Invalid project reference');
+    error.status = 400;
+    throw error;
+  }
+
+  const booking = await stream_project_booking.findOne({
+    where: { stream_project_booking_id: normalizedBookingId },
+  });
+
+  if (!booking) {
+    const error = new Error('Project not found');
+    error.status = 404;
+    throw error;
+  }
+
+  return exports.syncWorkspaceForBookingFromRecord(booking);
 };
 
 const proxyRequest = async (path, options = {}) => {
@@ -1669,6 +1844,8 @@ exports.createWorkspace = async (req, res) => {
       });
     }
 
+    await ensureCreatorWorkspaceAccess(req, bookingId);
+
     const result = await exports.syncWorkspaceForBooking({
       bookingId,
       folderName,
@@ -1694,6 +1871,7 @@ exports.listCommonEvents = async (req, res) => {
         eventSlug: row.event_slug,
         externalId: row.workspace_external_id,
         rootPath: row.root_path,
+        visibleUntil: row.visible_until,
         createdByUserId: row.created_by_user_id,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
@@ -1729,6 +1907,7 @@ exports.createCommonEvent = async (req, res) => {
     const eventSlug = toEventSlug(eventName) || `event_${Date.now()}`;
     const workspaceExternalId = String(req.body.externalId || buildCommonEventExternalId(eventName)).trim().toLowerCase();
     const workspaceFolderName = `Event - ${eventName}`;
+    const visibleUntil = normalizeCommonEventVisibleUntil(req.body.visibleUntil || req.body.visible_until);
 
     const workspaceResult = await proxyRequest('/workspace', {
       method: 'POST',
@@ -1738,33 +1917,21 @@ exports.createCommonEvent = async (req, res) => {
       }),
     });
 
-    try {
-      await proxyRequest('/folder', {
-        method: 'POST',
-        body: JSON.stringify({
-          externalId: workspaceExternalId,
-          phase: 'pre',
-          folderName: 'Creative Partners',
-        }),
-      });
-    } catch (error) {
-      // Non-blocking helper folder creation.
-    }
-
     const rootPath = workspaceResult?.data?.workspace?.rootPath || null;
     await db.sequelize.query(
       `
       INSERT INTO file_manager_common_events
-      (event_name, event_slug, workspace_external_id, root_path, created_by_user_id)
-      VALUES (?, ?, ?, ?, ?)
+      (event_name, event_slug, workspace_external_id, root_path, visible_until, created_by_user_id)
+      VALUES (?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
         event_name = VALUES(event_name),
         event_slug = VALUES(event_slug),
         root_path = VALUES(root_path),
+        visible_until = VALUES(visible_until),
         updated_at = CURRENT_TIMESTAMP
       `,
       {
-        replacements: [eventName, eventSlug, workspaceExternalId, rootPath, getRequestUserId(req) || null],
+        replacements: [eventName, eventSlug, workspaceExternalId, rootPath, visibleUntil, getRequestUserId(req) || null],
       }
     );
 
@@ -1775,6 +1942,7 @@ exports.createCommonEvent = async (req, res) => {
         eventName,
         eventSlug,
         externalId: workspaceExternalId,
+        visibleUntil,
         workspace: workspaceResult?.data?.workspace || null,
       },
     });
@@ -1782,6 +1950,61 @@ exports.createCommonEvent = async (req, res) => {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
       message: error.message || 'Failed to create common event folder',
+    });
+  }
+};
+
+exports.updateCommonEvent = async (req, res) => {
+  try {
+    if (!isAdminRole(req)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only admin can update common event visibility',
+      });
+    }
+
+    const eventExternalId = String(req.params.eventExternalId || req.body.externalId || '').trim().toLowerCase();
+    if (!isCommonEventExternalId(eventExternalId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid common event externalId is required',
+      });
+    }
+
+    await ensureCommonEventsTable();
+    const visibleUntil = normalizeCommonEventVisibleUntil(req.body.visibleUntil || req.body.visible_until);
+    const [existingRows] = await db.sequelize.query(
+      `SELECT event_id FROM file_manager_common_events WHERE workspace_external_id = ? LIMIT 1`,
+      { replacements: [eventExternalId] }
+    );
+    if (!existingRows?.length) {
+      return res.status(404).json({
+        success: false,
+        message: 'Common event folder not found',
+      });
+    }
+
+    await db.sequelize.query(
+      `
+      UPDATE file_manager_common_events
+      SET visible_until = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE workspace_external_id = ?
+      `,
+      { replacements: [visibleUntil, eventExternalId] }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'Common event visibility updated',
+      data: {
+        externalId: eventExternalId,
+        visibleUntil,
+      },
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to update common event visibility',
     });
   }
 };
@@ -1795,6 +2018,7 @@ exports.createCreatorEventFolder = async (req, res) => {
         message: 'Valid common event externalId is required',
       });
     }
+    await assertCommonEventVisibleForRequest(req, eventExternalId);
 
     if (!isCreatorRole(req) && !isAdminRole(req)) {
       return res.status(403).json({
@@ -1805,7 +2029,7 @@ exports.createCreatorEventFolder = async (req, res) => {
 
     await ensureCommonEventsTable();
     const [rows] = await db.sequelize.query(
-      `SELECT event_id FROM file_manager_common_events WHERE workspace_external_id = ? LIMIT 1`,
+      `SELECT event_id, event_name, root_path FROM file_manager_common_events WHERE workspace_external_id = ? LIMIT 1`,
       { replacements: [eventExternalId] }
     );
 
@@ -1820,24 +2044,31 @@ exports.createCreatorEventFolder = async (req, res) => {
     const profileName = await getUserDisplayName(userId);
     const requestedName = sanitizeFolderName(req.body.folderName, '');
     const folderName = requestedName || sanitizeFolderName(profileName ? `${profileName}` : `CP ${userId || ''}`, 'Creative Partner');
-    const phase = normalizeWorkspacePhase(req.body.phase || req.body.state || req.body.stage, 'pre');
+    const phase = normalizeWorkspacePhase(req.body.phase || req.body.state || req.body.stage, null);
     const folderPath = sanitizeRelativeFolderPath(req.body.path);
+
+    const folderPayload = {
+      externalId: eventExternalId,
+      path: folderPath || undefined,
+      folderName,
+    };
+    if (phase) {
+      folderPayload.phase = phase;
+    }
 
     const result = await proxyRequest('/folder', {
       method: 'POST',
-      body: JSON.stringify({
-        externalId: eventExternalId,
-        phase,
-        path: folderPath || undefined,
-        folderName,
-      }),
+      body: JSON.stringify(folderPayload),
     });
 
     if (isCreatorRole(req)) {
       const createdFolderPathFromProvider = result?.data?.folder?.path || result?.data?.folderPath || '';
-      const normalizedPhase = normalizeWorkspacePhase(phase, 'pre');
+      const normalizedPhase = normalizeWorkspacePhase(phase, null) || 'root';
       const createdFolderPath = sanitizeRelativeFolderPath(
-        extractPhaseAndRelativePath(createdFolderPathFromProvider, normalizedPhase).relativePath
+        stripCommonEventRootFromPath(
+          extractPhaseAndRelativePath(createdFolderPathFromProvider, normalizedPhase === 'root' ? null : normalizedPhase).relativePath,
+          rows[0]
+        )
           || [folderPath, folderName].filter(Boolean).join('/')
       );
 
@@ -1863,7 +2094,7 @@ exports.createCreatorEventFolder = async (req, res) => {
       message: 'Creative partner folder created',
       data: {
         externalId: eventExternalId,
-        phase,
+        phase: phase || null,
         path: folderPath || null,
         folderName,
         folder: result?.data?.folder || null,
@@ -2049,8 +2280,14 @@ exports.listWorkspaces = async (req, res) => {
     const page = Math.max(1, Number.parseInt(String(req.query.page || '1'), 10) || 1);
     const limit = Math.min(200, Math.max(1, Number.parseInt(String(req.query.limit || '24'), 10) || 24));
     const search = String(req.query.search || '').trim().toLowerCase();
+    const workspaceType = String(req.query.workspaceType || req.query.type || '').trim().toLowerCase();
+    const commonEventsOnly = ['common', 'common-event', 'common-events', 'common_event', 'common_events'].includes(workspaceType);
+    const expiredCommonEventsOnly = ['visibility-expired', 'expired', 'expired-common-events'].includes(workspaceType);
     const result = await proxyRequest('/workspaces');
     const eventRows = await listCommonEventRows().catch(() => []);
+    const eventRowByExternalId = new Map(
+      eventRows.map((row) => [String(row.workspace_external_id || '').trim().toLowerCase(), row])
+    );
     const eventWorkspaces = eventRows.map((row) => ({
       externalId: row.workspace_external_id,
       folderName: `Event - ${row.event_name}`,
@@ -2061,6 +2298,7 @@ exports.listWorkspaces = async (req, res) => {
       isCommonEvent: true,
       eventId: row.event_id,
       eventName: row.event_name,
+      visibleUntil: row.visible_until,
     }));
 
     const existingByExternalId = new Set(
@@ -2087,15 +2325,63 @@ exports.listWorkspaces = async (req, res) => {
     const mergedWorkspaces = [
       ...(result.data?.workspaces || []),
       ...verifiedMissingEventWorkspaces,
-    ];
+    ].map((workspace) => {
+      const externalId = String(workspace.externalId || '').trim().toLowerCase();
+      const eventRow = eventRowByExternalId.get(externalId);
+      if (!eventRow) return workspace;
+      return {
+        ...workspace,
+        isCommonEvent: true,
+        eventId: eventRow.event_id,
+        eventName: eventRow.event_name,
+        visibleUntil: eventRow.visible_until,
+      };
+    });
 
     let filteredWorkspaces = mergedWorkspaces;
+    if (isCommonEventVisibilityLimitedRole(req)) {
+      const visibleEventIds = new Set(
+        eventRows
+          .filter((row) => isCommonEventVisibleForRole(row))
+          .map((row) => String(row.workspace_external_id || '').trim().toLowerCase())
+      );
+      filteredWorkspaces = filteredWorkspaces.filter((workspace) => {
+        const externalId = String(workspace.externalId || '').trim().toLowerCase();
+        return !isCommonEventExternalId(externalId) || visibleEventIds.has(externalId);
+      });
+    }
+
     if (isCreatorRole(req)) {
-      const allowedProjectIds = await getCreatorAcceptedProjectIds(req);
+      const allowedProjectIds = await getCreatorAssignedProjectIds(req);
       const allowedIdSet = new Set((allowedProjectIds || []).map((id) => String(id)));
       filteredWorkspaces = mergedWorkspaces.filter((workspace) =>
         isCommonEventExternalId(workspace.externalId) || allowedIdSet.has(String(workspace.externalId))
       );
+
+      const existingCreatorWorkspaceIds = new Set(
+        filteredWorkspaces.map((workspace) => String(workspace.externalId || '').trim().toLowerCase())
+      );
+      const missingAssignedWorkspaces = await getCreatorAssignedWorkspacePlaceholders(
+        req,
+        existingCreatorWorkspaceIds
+      );
+      filteredWorkspaces = [
+        ...filteredWorkspaces,
+        ...missingAssignedWorkspaces,
+      ];
+    }
+
+    if (commonEventsOnly || expiredCommonEventsOnly) {
+      filteredWorkspaces = filteredWorkspaces.filter((workspace) =>
+        Boolean(workspace?.isCommonEvent) || isCommonEventExternalId(workspace?.externalId)
+      );
+    }
+
+    if (expiredCommonEventsOnly) {
+      filteredWorkspaces = filteredWorkspaces.filter((workspace) => {
+        const eventRow = eventRowByExternalId.get(String(workspace?.externalId || '').trim().toLowerCase());
+        return eventRow ? !isCommonEventVisibleForRole(eventRow) : false;
+      });
     }
 
     if (search) {
@@ -2143,7 +2429,76 @@ exports.listWorkspaces = async (req, res) => {
 exports.getWorkspace = async (req, res) => {
   try {
     await ensureCreatorWorkspaceAccess(req, req.params.bookingId);
-    const result = await proxyRequest(`/workspace/${req.params.bookingId}`);
+    await assertCommonEventVisibleForRequest(req, req.params.bookingId);
+    const isCommonEventWorkspace = isCommonEventExternalId(req.params.bookingId);
+    let result;
+    try {
+      result = await proxyRequest(`/workspace/${req.params.bookingId}`);
+    } catch (error) {
+      if (error.status !== 404 || isCommonEventWorkspace) {
+        throw error;
+      }
+      result = await syncWorkspaceForExistingBookingId(req.params.bookingId);
+    }
+
+    if (isCommonEventWorkspace) {
+      await ensureCommonEventsTable();
+      const normalizedExternalId = String(req.params.bookingId || '').trim().toLowerCase();
+      const [eventRows] = await db.sequelize.query(
+        `
+        SELECT event_id, event_name, visible_until
+        FROM file_manager_common_events
+        WHERE workspace_external_id = ?
+        LIMIT 1
+        `,
+        { replacements: [normalizedExternalId] }
+      );
+      const eventRow = Array.isArray(eventRows) ? eventRows[0] : null;
+      const rootFolders = (result?.data?.folders || []).filter(
+        (folder) => !isWorkspacePhaseRootName(folder?.name) || Number(folder?.fileCount || 0) > 0
+      );
+
+      if (isCreatorRole(req)) {
+        const creatorFolders = await listCreatorCommonEventFolders({
+          eventExternalId: req.params.bookingId,
+          userId: getRequestUserId(req),
+        });
+        const allowedRoots = getCreatorCommonEventAllowedRoots(creatorFolders);
+        result = {
+          ...result,
+          data: {
+            ...(result.data || {}),
+            workspace: {
+              ...(result.data?.workspace || {}),
+              isCommonEvent: true,
+              eventId: eventRow?.event_id,
+              eventName: eventRow?.event_name,
+              visibleUntil: eventRow?.visible_until || null,
+            },
+            folders: rootFolders.filter((folder) => {
+              const entryPath = getRelativePathForEntry(folder);
+              return entryPath && allowedRoots.some((rootPath) => isPathWithin(rootPath, entryPath) || isPathWithin(entryPath, rootPath));
+            }),
+          },
+        };
+      } else {
+        result = {
+          ...result,
+          data: {
+            ...(result.data || {}),
+            workspace: {
+              ...(result.data?.workspace || {}),
+              isCommonEvent: true,
+              eventId: eventRow?.event_id,
+              eventName: eventRow?.event_name,
+              visibleUntil: eventRow?.visible_until || null,
+            },
+            folders: rootFolders,
+          },
+        };
+      }
+    }
+
     return res.status(200).json(result);
   } catch (error) {
     if (error.status === 404) {
@@ -2186,13 +2541,25 @@ exports.getWorkspaceByBookingId = async (bookingId) => {
 exports.getWorkspaceFiles = async (req, res) => {
   try {
     await ensureCreatorWorkspaceAccess(req, req.params.bookingId);
+    await assertCommonEventVisibleForRequest(req, req.params.bookingId);
     const query = new URLSearchParams();
     if (req.query.phase) query.set('phase', req.query.phase);
     if (req.query.path) query.set('path', req.query.path);
 
-    const result = await proxyRequest(
-      `/workspace/${req.params.bookingId}/files${query.toString() ? `?${query.toString()}` : ''}`
-    );
+    let result;
+    try {
+      result = await proxyRequest(
+        `/workspace/${req.params.bookingId}/files${query.toString() ? `?${query.toString()}` : ''}`
+      );
+    } catch (error) {
+      if (error.status !== 404 || isCommonEventExternalId(req.params.bookingId)) {
+        throw error;
+      }
+      await syncWorkspaceForExistingBookingId(req.params.bookingId);
+      result = await proxyRequest(
+        `/workspace/${req.params.bookingId}/files${query.toString() ? `?${query.toString()}` : ''}`
+      );
+    }
 
     if (isCreatorRole(req) && isCommonEventExternalId(req.params.bookingId)) {
       const phase = normalizeWorkspacePhase(req.query.phase, null);
@@ -2211,7 +2578,7 @@ exports.getWorkspaceFiles = async (req, res) => {
         userId: getRequestUserId(req),
         phase: phase || null,
       });
-      const allowedRoots = creatorFolders.map((row) => normalizePathForAccess(row.folder_path)).filter(Boolean);
+      const allowedRoots = getCreatorCommonEventAllowedRoots(creatorFolders);
       const isAllowed = (entryPath) =>
         allowedRoots.some((rootPath) => isPathWithin(rootPath, entryPath) || isPathWithin(entryPath, rootPath));
 
@@ -2567,16 +2934,9 @@ exports.createFolder = async (req, res) => {
     const isCommonEvent = isCommonEventExternalId(externalId);
     const phase = normalizeWorkspacePhase(
       req.body.phase || req.body.state || req.body.stage,
-      isCommonEvent ? 'pre' : null
+      null
     );
     const path = sanitizeRelativeFolderPath(req.body.path);
-
-    if (isCommonEvent && !phase) {
-      return res.status(400).json({
-        success: false,
-        message: 'phase is required. Allowed values: pre, post, pre-production, post-production',
-      });
-    }
 
     if (isCommonEvent && isCreatorRole(req)) {
       if (!path) {
@@ -2595,14 +2955,18 @@ exports.createFolder = async (req, res) => {
       });
     }
 
+    const folderPayload = {
+      externalId,
+      path: path || undefined,
+      folderName: req.body.folderName || req.body.name,
+    };
+    if (phase || req.body.phase) {
+      folderPayload.phase = phase || req.body.phase;
+    }
+
     const result = await proxyRequest('/folder', {
       method: 'POST',
-      body: JSON.stringify({
-        externalId,
-        phase: phase || req.body.phase,
-        path: path || undefined,
-        folderName: req.body.folderName || req.body.name,
-      }),
+      body: JSON.stringify(folderPayload),
     });
     return res.status(200).json(result);
   } catch (error) {
