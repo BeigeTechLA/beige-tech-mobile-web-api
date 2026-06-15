@@ -80,7 +80,17 @@ const {
   OTP_VERIFICATION_FILE_SHARE_TEMPLATE_ID,
   FILE_SHARE_INVITATION_TEMPLATE_ID,
   BEIGE_CREDIT_RECEIVED_TEMPLATE_ID,
-  ONBOARDING_FORM_CRITICAL_NOTIF_TEMPLATE_ID
+  ONBOARDING_FORM_CRITICAL_NOTIF_TEMPLATE_ID,
+  RAW_FILES_UPLOADED_CLIENT_TEMPLATE_ID,
+  RAW_FILES_UPLOADED_ADMIN_TEMPLATE_ID,
+  FILES_FOR_EDITING_INTERNAL_TEAM_TEMPLATE_ID,
+  EDITS_DELIVERED_CLIENT_TEMPLATE_ID,
+  EDITED_DELIVERED_TOCLIENT_ADMIN_TEMPLATE_ID,
+  REVISIONS_REQUESTED_ON_EDITS_TEMPLATE_ID,
+  CLIENT_REQUESTED_REVISIONS_ADMIN_TEMPLATE_ID,
+  FILES_APPROVED_INTERNAL_TEMPLATE_ID,
+  REVISIONS_COMMENT_ADDED_TEMPLATE_ID,
+  NEW_VERSIONS_UPLOADED_CLIENT_TEMPLATE_ID
 } = require('../config/sendgridTemplates');
 
 const formatDate = (value) => {
@@ -3112,6 +3122,425 @@ const sendPostProductionUploadedTemplateEmail = async ({ recipients = [], data =
   });
 };
 
+const sendRawFilesUploadedClientEmail = async ({ recipients = [], data = {} }) => {
+  if (!RAW_FILES_UPLOADED_CLIENT_TEMPLATE_ID) {
+    return { success: false, error: 'RAW_FILES_UPLOADED_CLIENT_TEMPLATE_ID is not configured' };
+  }
+
+  return sendTemplateToRecipients({
+    recipients,
+    subject: `Raw files uploaded: ${data?.shoot_name || data?.project_name || 'Shoot'}`,
+    templateId: RAW_FILES_UPLOADED_CLIENT_TEMPLATE_ID,
+    dynamicTemplateData: {
+      first_name: data?.first_name || data?.client_name || 'there',
+      shoot_name: data?.shoot_name || data?.project_name || data?.order_name || '',
+      shoot_naame: data?.shoot_name || data?.project_name || data?.order_name || '',
+      frontend_url:
+        data?.frontend_url ||
+        data?.dashboard_link ||
+        `${String(process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/affiliate/dashboard`,
+      booking_id: data?.booking_id || data?.order_id || '',
+      order_id: data?.order_id || data?.booking_id || '',
+      total_files: Number(data?.total_files || data?.file_count || 0) || 1,
+      uploaded_at: data?.uploaded_at || new Date().toISOString(),
+      year: new Date().getFullYear(),
+    }
+  });
+};
+
+const sendRawFilesUploadedAdminEmail = async (data = {}) => {
+  if (!RAW_FILES_UPLOADED_ADMIN_TEMPLATE_ID) {
+    return { success: false, error: 'RAW_FILES_UPLOADED_ADMIN_TEMPLATE_ID is not configured' };
+  }
+
+  const recipients =
+    data?.recipients ||
+    data?.to_email ||
+    data?.email ||
+    process.env.RAW_FILES_UPLOADED_ADMIN_EMAIL ||
+    process.env.ADMIN_NOTIFICATION_EMAIL ||
+    process.env.SALES_NOTIFICATION_EMAIL;
+
+  const recipientList = (Array.isArray(recipients) ? recipients : String(recipients || '').split(','))
+    .map((recipient) => normalizeEmailAddress(recipient?.email || recipient?.to || recipient))
+    .filter(Boolean);
+
+  if (!recipientList.length) {
+    return { success: false, error: 'RAW_FILES_UPLOADED_ADMIN_EMAIL or SALES_NOTIFICATION_EMAIL is not configured' };
+  }
+
+  const uploadTime = data?.upload_time || data?.uploaded_at || new Date().toISOString();
+  const uploadTimeLabel = (() => {
+    const date = new Date(uploadTime);
+    if (Number.isNaN(date.getTime())) return String(uploadTime || '');
+    return date.toLocaleString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+      timeZone: 'Asia/Kolkata',
+    });
+  })();
+
+  return sendTemplateToRecipients({
+    recipients: recipientList,
+    subject: `Raw files uploaded: ${data?.shoot_name || data?.project_name || 'Shoot'}`,
+    templateId: RAW_FILES_UPLOADED_ADMIN_TEMPLATE_ID,
+    dynamicTemplateData: {
+      recipient_name: data?.recipient_name || 'Admin',
+      shoot_name: data?.shoot_name || data?.project_name || data?.order_name || `Booking #${data?.booking_id || ''}`,
+      Team_member_name:
+        data?.Team_member_name ||
+        data?.team_member_name ||
+        data?.uploaded_by ||
+        data?.uploaded_by_name ||
+        'Production Team',
+      total_files: Number(data?.total_files || data?.file_count || 0) || 1,
+      uploaded_by: data?.uploaded_by || data?.uploaded_by_name || data?.Team_member_name || 'Production Team',
+      upload_time: uploadTimeLabel,
+      dashboard_link:
+        data?.dashboard_link ||
+        data?.dashboardLink ||
+        `${String(process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/admin/dashboard`,
+      booking_id: data?.booking_id || data?.order_id || '',
+      order_id: data?.order_id || data?.booking_id || '',
+      year: new Date().getFullYear(),
+    }
+  });
+};
+
+const sendFilesForEditingInternalTeamEmail = async ({ recipients = [], data = {} }) => {
+  if (!FILES_FOR_EDITING_INTERNAL_TEAM_TEMPLATE_ID) {
+    return { success: false, error: 'FILES_FOR_EDITING_INTERNAL_TEAM_TEMPLATE_ID is not configured' };
+  }
+
+  const recipientList = (Array.isArray(recipients) ? recipients : String(recipients || '').split(','))
+    .map((recipient) => {
+      if (recipient && typeof recipient === 'object' && !Array.isArray(recipient)) {
+        const email = normalizeEmailAddress(recipient.email || recipient.to);
+        if (!email) return null;
+
+        return {
+          email,
+          name: recipient.name || recipient.recipient_name || recipient.data?.recipient_name || '',
+          data: recipient.data || {},
+        };
+      }
+
+      const email = normalizeEmailAddress(recipient);
+      return email ? { email } : null;
+    })
+    .filter(Boolean);
+
+  if (!recipientList.length) {
+    return { success: false, error: 'No recipient emails found' };
+  }
+
+  return sendTemplateToRecipients({
+    recipients: recipientList,
+    subject: `New files submitted for editing: ${data?.shoot_name || data?.project_name || 'Shoot'}`,
+    templateId: FILES_FOR_EDITING_INTERNAL_TEAM_TEMPLATE_ID,
+    dynamicTemplateData: {
+      recipient_name: data?.recipient_name || 'Team',
+      shoot_name: data?.shoot_name || data?.project_name || data?.order_name || '',
+      'Shoot Name': data?.shoot_name || data?.project_name || data?.order_name || '',
+      total_files: Number(data?.total_files || data?.file_count || 0) || 1,
+      submitted_by: data?.submitted_by || data?.submitted_by_name || 'Client',
+      submission_time: data?.submission_time || data?.submitted_at || new Date().toISOString(),
+      dashboard_link:
+        data?.dashboard_link ||
+        data?.dashboardLink ||
+        `${String(process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/admin/dashboard`,
+      booking_id: data?.booking_id || data?.order_id || '',
+      order_id: data?.order_id || data?.booking_id || '',
+      year: new Date().getFullYear(),
+    },
+  });
+};
+
+const sendEditsDeliveredClientEmail = async ({ to, data = {} }) => {
+  if (!EDITS_DELIVERED_CLIENT_TEMPLATE_ID) {
+    return { success: false, error: 'EDITS_DELIVERED_CLIENT_TEMPLATE_ID is not configured' };
+  }
+
+  if (!to) {
+    return { success: false, error: 'Recipient email is required' };
+  }
+
+  const shootName = data?.shoot_name || data?.project_name || data?.order_name || '';
+
+  return sendEmail({
+    to,
+    subject: `Edits delivered: ${shootName || 'Your shoot'}`,
+    templateId: EDITS_DELIVERED_CLIENT_TEMPLATE_ID,
+    dynamicTemplateData: {
+      first_name: data?.first_name || data?.client_name || 'there',
+      shoot_name: shootName,
+      project_name: shootName,
+      order_name: shootName,
+      'Shoot Name': shootName,
+      frontend_url:
+        data?.frontend_url ||
+        data?.review_link ||
+        data?.dashboard_link ||
+        `${String(process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/affiliate/dashboard`,
+      booking_id: data?.booking_id || data?.order_id || '',
+      order_id: data?.order_id || data?.booking_id || '',
+      total_files: Number(data?.total_files || data?.file_count || 0) || 1,
+      delivered_at: data?.delivered_at || new Date().toISOString(),
+      year: new Date().getFullYear(),
+    },
+  });
+};
+
+const sendEditsDeliveredToClientAdminEmail = async ({ recipients = [], data = {} }) => {
+  if (!EDITED_DELIVERED_TOCLIENT_ADMIN_TEMPLATE_ID) {
+    return { success: false, error: 'EDITED_DELIVERED_TOCLIENT_ADMIN_TEMPLATE_ID is not configured' };
+  }
+
+  const recipientList = (Array.isArray(recipients) ? recipients : String(recipients || '').split(','))
+    .map((recipient) => normalizeEmailAddress(recipient?.email || recipient?.to || recipient))
+    .filter(Boolean);
+
+  if (!recipientList.length) {
+    return { success: false, error: 'No recipient emails found' };
+  }
+
+  const shootName = data?.shoot_name || data?.project_name || data?.order_name || '';
+
+  return sendTemplateToRecipients({
+    recipients: recipientList.map((email) => ({
+      email,
+      name: data?.recipient_name || 'Admin',
+      data: { recipient_name: data?.recipient_name || 'Admin' },
+    })),
+    subject: `Edited files delivered to client: ${shootName || 'Shoot'}`,
+    templateId: EDITED_DELIVERED_TOCLIENT_ADMIN_TEMPLATE_ID,
+    dynamicTemplateData: {
+      recipient_name: data?.recipient_name || 'Admin',
+      shoot_name: shootName,
+      project_name: shootName,
+      order_name: shootName,
+      'Shoot Name': shootName,
+      total_files: Number(data?.total_files || data?.file_count || 0) || 1,
+      delivered_by: data?.delivered_by || data?.delivered_by_name || 'Production Team',
+      delivery_time: data?.delivery_time || data?.delivered_at || new Date().toISOString(),
+      booking_id: data?.booking_id || data?.order_id || '',
+      order_id: data?.order_id || data?.booking_id || '',
+      dashboard_link:
+        data?.dashboard_link ||
+        data?.dashboardLink ||
+        `${String(process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/admin/dashboard`,
+      year: new Date().getFullYear(),
+    },
+  });
+};
+
+const sendRevisionRequestedOnEditEmail = async ({ recipients = [], data = {} }) => {
+  if (!REVISIONS_REQUESTED_ON_EDITS_TEMPLATE_ID) {
+    return { success: false, error: 'REVISIONS_REQUESTED_ON_EDITS_TEMPLATE_ID is not configured' };
+  }
+
+  const shootName = data?.shoot_name || data?.project_name || data?.order_name || '';
+
+  return sendTemplateToRecipients({
+    recipients,
+    subject: `Revision requested on edits: ${shootName || 'Shoot'}`,
+    templateId: REVISIONS_REQUESTED_ON_EDITS_TEMPLATE_ID,
+    dynamicTemplateData: {
+      recipient_name: data?.recipient_name || 'Creative Partner',
+      shoot_name: shootName,
+      project_name: shootName,
+      order_name: shootName,
+      'Shoot Name': shootName,
+      file_name: data?.file_name || data?.file_names || '',
+      file_names: data?.file_names || data?.file_name || '',
+      total_files: Number(data?.total_files || data?.file_count || 0) || 1,
+      current_version: data?.current_version || '',
+      requested_by: data?.requested_by || 'Client',
+      frontend_url:
+        data?.frontend_url ||
+        data?.dashboard_link ||
+        `${String(process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/creator/dashboard`,
+      booking_id: data?.booking_id || data?.order_id || '',
+      order_id: data?.order_id || data?.booking_id || '',
+      request_time: data?.request_time || data?.requested_at || new Date().toISOString(),
+      year: new Date().getFullYear(),
+    },
+  });
+};
+
+const sendClientRequestedRevisionsAdminEmail = async ({ recipients = [], data = {} }) => {
+  if (!CLIENT_REQUESTED_REVISIONS_ADMIN_TEMPLATE_ID) {
+    return { success: false, error: 'CLIENT_REQUESTED_REVISIONS_ADMIN_TEMPLATE_ID is not configured' };
+  }
+
+  const recipientList = (Array.isArray(recipients) ? recipients : String(recipients || '').split(','))
+    .map((recipient) => normalizeEmailAddress(recipient?.email || recipient?.to || recipient))
+    .filter(Boolean);
+
+  if (!recipientList.length) {
+    return { success: false, error: 'No recipient emails found' };
+  }
+
+  const shootName = data?.shoot_name || data?.project_name || data?.order_name || '';
+
+  return sendTemplateToRecipients({
+    recipients: recipientList.map((email) => ({
+      email,
+      name: data?.recipient_name || 'Admin',
+      data: { recipient_name: data?.recipient_name || 'Admin' },
+    })),
+    subject: `Client requested edit revisions: ${shootName || 'Shoot'}`,
+    templateId: CLIENT_REQUESTED_REVISIONS_ADMIN_TEMPLATE_ID,
+    dynamicTemplateData: {
+      recipient_name: data?.recipient_name || 'Admin',
+      shoot_name: shootName,
+      project_name: shootName,
+      order_name: shootName,
+      'Shoot Name': shootName,
+      revision_type: data?.revision_type || 'Edited File Revision',
+      total_files: Number(data?.total_files || data?.file_count || 0) || 1,
+      request_time: data?.request_time || data?.requested_at || new Date().toISOString(),
+      requested_by: data?.requested_by || 'Client',
+      file_name: data?.file_name || data?.file_names || '',
+      file_names: data?.file_names || data?.file_name || '',
+      current_version: data?.current_version || '',
+      dashboard_link:
+        data?.dashboard_link ||
+        data?.dashboardLink ||
+        `${String(process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/admin/dashboard`,
+      booking_id: data?.booking_id || data?.order_id || '',
+      order_id: data?.order_id || data?.booking_id || '',
+      year: new Date().getFullYear(),
+    },
+  });
+};
+
+const sendFileApprovedInternalEmail = async ({ recipients = [], data = {} }) => {
+  if (!FILES_APPROVED_INTERNAL_TEMPLATE_ID) {
+    return { success: false, error: 'FILES_APPROVED_INTERNAL_TEMPLATE_ID is not configured' };
+  }
+
+  const shootName = data?.shoot_name || data?.project_name || data?.order_name || '';
+
+  return sendTemplateToRecipients({
+    recipients,
+    subject: `File approved: ${data?.file_name || shootName || 'Final delivery'}`,
+    templateId: FILES_APPROVED_INTERNAL_TEMPLATE_ID,
+    dynamicTemplateData: {
+      recipient_name: data?.recipient_name || 'Team',
+      shoot_name: shootName,
+      project_name: shootName,
+      order_name: shootName,
+      'Shoot Name': shootName,
+      file_name: data?.file_name || '',
+      version: data?.version || data?.current_version || '',
+      current_version: data?.current_version || data?.version || '',
+      approved_by: data?.approved_by || 'Client',
+      approval_time: data?.approval_time || data?.approved_at || new Date().toISOString(),
+      final_deliverable_path: data?.final_deliverable_path || '',
+      final_deliverable_name: data?.final_deliverable_name || data?.file_name || '',
+      frontend_url:
+        data?.frontend_url ||
+        data?.dashboard_link ||
+        `${String(process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/admin/dashboard`,
+      dashboard_link:
+        data?.dashboard_link ||
+        data?.frontend_url ||
+        `${String(process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/admin/dashboard`,
+      booking_id: data?.booking_id || data?.order_id || '',
+      order_id: data?.order_id || data?.booking_id || '',
+      year: new Date().getFullYear(),
+    },
+  });
+};
+
+const sendRevisionCommentAddedEmail = async ({ recipients = [], data = {} }) => {
+  if (!REVISIONS_COMMENT_ADDED_TEMPLATE_ID) {
+    return { success: false, error: 'REVISIONS_COMMENT_ADDED_TEMPLATE_ID is not configured' };
+  }
+
+  const shootName = data?.shoot_name || data?.project_name || data?.order_name || '';
+
+  return sendTemplateToRecipients({
+    recipients,
+    subject: `New revision comment: ${shootName || 'Shoot'}`,
+    templateId: REVISIONS_COMMENT_ADDED_TEMPLATE_ID,
+    dynamicTemplateData: {
+      first_name: data?.first_name || data?.recipient_name || 'there',
+      recipient_name: data?.recipient_name || data?.first_name || 'there',
+      shoot_name: shootName,
+      project_name: shootName,
+      order_name: shootName,
+      'Shoot Name': shootName,
+      file_name: data?.file_name || '',
+      current_version: data?.current_version || data?.version || '',
+      version: data?.version || data?.current_version || '',
+      comment: data?.comment || '',
+      commented_by: data?.commented_by || data?.requested_by || 'Client',
+      comment_time: data?.comment_time || data?.created_at || new Date().toISOString(),
+      frontend_url:
+        data?.frontend_url ||
+        data?.dashboard_link ||
+        `${String(process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/admin/dashboard`,
+      dashboard_link:
+        data?.dashboard_link ||
+        data?.frontend_url ||
+        `${String(process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/admin/dashboard`,
+      booking_id: data?.booking_id || data?.order_id || '',
+      order_id: data?.order_id || data?.booking_id || '',
+      year: new Date().getFullYear(),
+    },
+  });
+};
+
+const sendNewVersionUploadedClientEmail = async ({ to, data = {} }) => {
+  if (!NEW_VERSIONS_UPLOADED_CLIENT_TEMPLATE_ID) {
+    return { success: false, error: 'NEW_VERSIONS_UPLOADED_CLIENT_TEMPLATE_ID is not configured' };
+  }
+
+  if (!to) {
+    return { success: false, error: 'Recipient email is required' };
+  }
+
+  const shootName = data?.shoot_name || data?.project_name || data?.order_name || '';
+  const recipientName = data?.recipient_name || data?.first_name || data?.client_name || 'there';
+  const version = data?.version || data?.folder_name || '';
+  const dashboardLink =
+    data?.dashboard_link ||
+    data?.review_link ||
+    data?.frontend_url ||
+    `${String(process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/affiliate/dashboard`;
+
+  return sendEmail({
+    to,
+    subject: `New version uploaded: ${shootName || 'Your shoot'}`,
+    templateId: NEW_VERSIONS_UPLOADED_CLIENT_TEMPLATE_ID,
+    dynamicTemplateData: {
+      first_name: recipientName,
+      recipient_name: recipientName,
+      client_name: recipientName,
+      shoot_name: shootName,
+      project_name: shootName,
+      order_name: shootName,
+      'Shoot Name': shootName,
+      file_name: data?.file_name || version,
+      folder_name: data?.folder_name || version,
+      version,
+      uploaded_by: data?.uploaded_by || data?.uploaded_by_name || 'Production Team',
+      dashboard_link: dashboardLink,
+      review_link: dashboardLink,
+      frontend_url: dashboardLink,
+      booking_id: data?.booking_id || data?.order_id || '',
+      order_id: data?.order_id || data?.booking_id || '',
+      year: new Date().getFullYear(),
+    },
+  });
+};
+
 const sendFileShareInvitationEmail = async ({ to, data = {} }) => {
   if (!FILE_SHARE_INVITATION_TEMPLATE_ID) {
     return { success: false, error: 'FILE_SHARE_INVITATION_TEMPLATE_ID is not configured' };
@@ -3188,5 +3617,15 @@ module.exports = {
   sendMessagingInitiatedTemplateEmail,
   sendPreProductionUploadedTemplateEmail,
   sendPostProductionUploadedTemplateEmail,
+  sendRawFilesUploadedClientEmail,
+  sendRawFilesUploadedAdminEmail,
+  sendFilesForEditingInternalTeamEmail,
+  sendEditsDeliveredClientEmail,
+  sendEditsDeliveredToClientAdminEmail,
+  sendRevisionRequestedOnEditEmail,
+  sendClientRequestedRevisionsAdminEmail,
+  sendFileApprovedInternalEmail,
+  sendRevisionCommentAddedEmail,
+  sendNewVersionUploadedClientEmail,
   sendFileShareInvitationEmail
 };
