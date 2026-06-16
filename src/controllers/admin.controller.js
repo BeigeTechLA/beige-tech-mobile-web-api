@@ -11137,7 +11137,10 @@ exports.getRoles = async (req, res) => {
     const sortOrder = order.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
 
     const whereCondition = {
-      is_active: 1
+      is_active: 1,
+      user_type_id: {
+        [Op.notIn]: [2, 3]
+      }
     };
 
     // Search filter
