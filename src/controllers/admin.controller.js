@@ -11526,7 +11526,7 @@ exports.getUsersWithRoles = async (req, res) => {
       userWhereCondition.user_type = role_id;
     } else {
       userWhereCondition.user_type = {
-        [Op.in]: [1, 5, 7]
+        [Op.notIn]: [2, 3]
       };
     }
 
