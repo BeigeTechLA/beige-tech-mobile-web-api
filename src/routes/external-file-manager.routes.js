@@ -1,12 +1,16 @@
 const router = require('express').Router();
 const externalFileManagerController = require('../controllers/external-file-manager.controller');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, authenticateAdmin } = require('../middleware/auth');
 
 router.get('/workspaces', authenticate, externalFileManagerController.listWorkspaces);
 router.get('/common-events', authenticate, externalFileManagerController.listCommonEvents);
 router.post('/common-events', authenticate, externalFileManagerController.createCommonEvent);
 router.patch('/common-events/:eventExternalId', authenticate, externalFileManagerController.updateCommonEvent);
 router.post('/common-events/:eventExternalId/creator-folder', authenticate, externalFileManagerController.createCreatorEventFolder);
+router.post('/face-scan/query-upload-policy', authenticate, externalFileManagerController.getFaceScanQueryUploadPolicy);
+router.get('/face-scan/queue-status', authenticateAdmin, externalFileManagerController.getFaceScanQueueStatus);
+router.post('/face-scan/jobs', authenticate, externalFileManagerController.createFaceScanJob);
+router.get('/face-scan/jobs/:jobId', authenticate, externalFileManagerController.getFaceScanJob);
 router.post('/face-scan/search', authenticate, externalFileManagerController.searchFaceMatches);
 router.get('/face-scan/index-status/:externalId', authenticate, externalFileManagerController.getFaceScanIndexStatus);
 router.post('/face-scan/reindex', authenticate, externalFileManagerController.reindexFaceEmbeddings);
