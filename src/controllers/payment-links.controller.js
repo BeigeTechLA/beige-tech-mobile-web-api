@@ -10,7 +10,7 @@ const emailService = require('../utils/emailService');
 const { generateManualReceiptPdfBuffer } = require('../utils/manualReceiptPdf');
 const discountService = require('../services/discount.service');
 const pricingService = require('../services/pricing.service');
-const { Op } = require('sequelize');
+const { Op, QueryTypes } = require('sequelize');
 const http = require('http');
 const https = require('https');
 
@@ -106,6 +106,50 @@ const getStripeReceiptUrlFromPaymentIntent = async (paymentIntentId) => {
   }
 
   return null;
+};
+
+const fetchManualPaymentReceiptRow = async ({ bookingId, manualPaymentId }) => {
+  const parsedBookingId = Number(bookingId);
+  const parsedManualPaymentId = Number(manualPaymentId);
+
+  if (!Number.isFinite(parsedBookingId) || parsedBookingId <= 0 || !Number.isFinite(parsedManualPaymentId) || parsedManualPaymentId <= 0) {
+    return null;
+  }
+
+  try {
+    const rows = await db.sequelize.query(
+      `
+        SELECT
+          booking_manual_payment_id,
+          booking_id,
+          payment_type,
+          amount,
+          payment_mode,
+          other_payment_mode,
+          created_at
+        FROM booking_manual_payments
+        WHERE booking_manual_payment_id = :manualPaymentId
+          AND booking_id = :bookingId
+        LIMIT 1
+      `,
+      {
+        replacements: {
+          bookingId: parsedBookingId,
+          manualPaymentId: parsedManualPaymentId
+        },
+        type: QueryTypes.SELECT
+      }
+    );
+
+    return rows?.[0] || null;
+  } catch (error) {
+    const code = error?.original?.code || error?.parent?.code || error?.code;
+    if (code === 'ER_NO_SUCH_TABLE' || code === 'ER_BAD_TABLE_ERROR') {
+      return null;
+    }
+
+    throw error;
+  }
 };
 
 const resolveInvoiceDisplayNumber = (booking, stripeInvoiceNumber = null) =>
@@ -2105,11 +2149,51 @@ exports.getStripeInvoicePdf = async (req, res) => {
     const forceDownload = String(req.query.download || '').toLowerCase() === '1' || String(req.query.download || '').toLowerCase() === 'true';
     const isManualRequested = String(req.query.manual || '').toLowerCase() === '1' || String(req.query.manual || '').toLowerCase() === 'true';
     const isReceiptRequested = String(req.query.receipt || '').toLowerCase() === '1' || String(req.query.receipt || '').toLowerCase() === 'true';
+    const isStripeReceiptRequested = String(req.query.stripe || '').toLowerCase() === '1' || String(req.query.stripe || '').toLowerCase() === 'true';
+
+    if (isStripeReceiptRequested) {
+      const paymentId = Number(req.query.payment_id || 0);
+      const paymentIntentIdFromQuery = String(req.query.payment_intent_id || '').trim();
+      const paymentRecord = paymentId > 0
+        ? await db.payment_transactions.findByPk(paymentId, {
+            attributes: ['payment_id', 'stripe_payment_intent_id']
+          })
+        : null;
+      const paymentIntentId = paymentRecord?.stripe_payment_intent_id || paymentIntentIdFromQuery || null;
+      const stripeReceiptUrl = paymentIntentId
+        ? await getStripeReceiptUrlFromPaymentIntent(paymentIntentId)
+        : null;
+
+      if (stripeReceiptUrl) {
+        return res.redirect(302, stripeReceiptUrl);
+      }
+
+      const bookingForStripeFallback = await db.stream_project_booking.findByPk(Number(booking_id), {
+        attributes: ['stream_project_booking_id', 'stripe_invoice_id', 'stripe_customer_id']
+      });
+      const stripeInvoice = bookingForStripeFallback
+        ? await findStripeInvoiceForPaidBooking(bookingForStripeFallback, booking_id)
+        : null;
+
+      if (stripeInvoice?.invoice_pdf || stripeInvoice?.hosted_invoice_url) {
+        return res.redirect(302, stripeInvoice.invoice_pdf || stripeInvoice.hosted_invoice_url);
+      }
+
+      return res.status(404).json({
+        success: false,
+        message: 'Stripe receipt is not available for this payment'
+      });
+    }
+
     const manualContext = await getBookingManualPaymentContext(booking_id);
     const useManualReceipt = isManualRequested || isReceiptRequested || await shouldUseManualInvoiceReceipt(booking_id, manualContext);
 
     if (useManualReceipt) {
       const parsedBookingId = Number(booking_id);
+      const selectedManualPayment = await fetchManualPaymentReceiptRow({
+        bookingId: parsedBookingId,
+        manualPaymentId: req.query.manual_payment_id
+      });
       const booking = await db.stream_project_booking.findOne({
         where: { stream_project_booking_id: parsedBookingId },
         include: bookingInvoiceIncludes
@@ -2236,16 +2320,39 @@ exports.getStripeInvoicePdf = async (req, res) => {
           amount: totalAmount
         });
       }
+      const selectedManualHistory = selectedManualPayment
+        ? [{
+            method: String(selectedManualPayment.payment_mode || '').toLowerCase() === 'other' && String(selectedManualPayment.other_payment_mode || '').trim()
+              ? String(selectedManualPayment.other_payment_mode).trim()
+              : String(selectedManualPayment.payment_mode || 'manual').replace(/_/g, ' '),
+            date: formatInvoiceDate(selectedManualPayment.created_at || new Date()),
+            amount: Number(selectedManualPayment.amount || 0)
+          }]
+        : null;
+      const selectedManualAmount = selectedManualHistory
+        ? Number(selectedManualHistory[0].amount || 0)
+        : null;
       const receiptIsPaid =
-        isPaidFromSummary ||
-        isPaidManual ||
-        isPaidRequestedReceipt ||
-        (hasPaymentSummary && paymentState.dueAmount <= 0 && normalizedPaidAmount >= totalAmount);
+        selectedManualHistory
+          ? selectedManualAmount >= totalAmount
+          : (
+              isPaidFromSummary ||
+              isPaidManual ||
+              isPaidRequestedReceipt ||
+              (hasPaymentSummary && paymentState.dueAmount <= 0 && normalizedPaidAmount >= totalAmount)
+            );
+      const receiptPaymentHistory = selectedManualHistory || manualHistory;
+      const receiptPaidAmount = selectedManualHistory
+        ? Math.max(selectedManualAmount || 0, 0)
+        : normalizedPaidAmount;
+      const receiptSuffix = selectedManualPayment
+        ? `-${String(selectedManualPayment.booking_manual_payment_id).padStart(3, '0')}`
+        : '';
 
       const pdfBuffer = await generateManualReceiptPdfBuffer({
-        invoiceNumber: `INVBEIGE-M-${String(parsedBookingId).padStart(4, '0')}`,
-        invoiceDate: formatInvoiceDate(new Date()),
-        receiptNumber: `RCPT-${String(parsedBookingId).padStart(6, '0')}`,
+        invoiceNumber: `INVBEIGE-M-${String(parsedBookingId).padStart(4, '0')}${receiptSuffix}`,
+        invoiceDate: formatInvoiceDate(selectedManualPayment?.created_at || new Date()),
+        receiptNumber: `RCPT-${String(parsedBookingId).padStart(6, '0')}${receiptSuffix}`,
         bookingRef: booking.project_name || `BOOKING-${parsedBookingId}`,
         projectTitle: formatProposalProjectName(booking?.project_name || ''),
         location: formatInvoiceLocation(booking?.event_location),
@@ -2270,17 +2377,17 @@ exports.getStripeInvoicePdf = async (req, res) => {
         discountType: quoteDiscountType,
         discountValue: quoteDiscountValue,
         total: totalAmount,
-        paidAmount: normalizedPaidAmount,
-        paymentHistory: manualHistory.length > 0
-          ? manualHistory
+        paidAmount: receiptPaidAmount,
+        paymentHistory: receiptPaymentHistory.length > 0
+          ? receiptPaymentHistory
           : [{
               method: hasPaymentSummary ? 'Online Payment' : 'Manual',
               date: formatInvoiceDate(paymentSummary?.updated_at || new Date()),
-              amount: normalizedPaidAmount
+              amount: receiptPaidAmount
             }]
       });
 
-      const safeName = `manual-receipt-${parsedBookingId}.pdf`;
+      const safeName = `manual-receipt-${parsedBookingId}${receiptSuffix}.pdf`;
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `${forceDownload ? 'attachment' : 'inline'}; filename="${safeName}"`);
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');

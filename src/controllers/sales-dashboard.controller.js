@@ -1759,7 +1759,9 @@ exports.getInvoiceHistory = async (req, res) => {
           if (salesRepId && Number(assignedSalesRepId) !== Number(salesRepId)) return null;
 
           const sendDate = booking.payment_completed_at || stripePayment?.created_at || booking.created_at || effectiveLead?.created_at || new Date();
-          const invoicePdf = `${apiBase}/sales/invoice-pdf/${bookingId}${isManualInvoice ? '?manual=1' : ''}`;
+          const invoicePdf = hasStripePayment && paymentId
+            ? `${apiBase}/sales/invoice-pdf/${bookingId}?stripe=1&payment_id=${paymentId}`
+            : `${apiBase}/sales/invoice-pdf/${bookingId}${isManualInvoice ? '?manual=1' : ''}`;
           const paymentAmount = stripePayment ? Number(stripePayment.total_amount || 0) : null;
 
           return {
