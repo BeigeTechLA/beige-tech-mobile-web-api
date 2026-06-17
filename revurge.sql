@@ -2431,3 +2431,7 @@ WHERE module_key LIKE 'production_manager_%';
 
 UPDATE permissions SET role_key = 'client'
 WHERE module_key LIKE 'client_%';
+
+-- 17-06-26
+
+ALTER TABLE users ADD COLUMN permissions_version INT DEFAULT 1;

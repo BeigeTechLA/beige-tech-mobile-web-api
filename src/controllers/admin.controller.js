@@ -11262,13 +11262,35 @@ exports.assignRoleToUser = async (req, res) => {
     await db.users.update(
       {
         user_type: roleId,
-        role: role.user_role
+        role: role.user_role,
+        permissions_version: Sequelize.literal(
+          'permissions_version + 1'
+        )
       },
       {
         where: { id: userId },
         transaction
       }
     );
+
+    // await db.users.increment(
+    //   { permissions_version: 1 },
+    //   {
+    //     where: { id: userId },
+    //     transaction
+    //   }
+    // );
+
+    // await db.users.update(
+    //   {
+    //     user_type: roleId,
+    //     role: role.user_role
+    //   },
+    //   {
+    //     where: { id: userId },
+    //     transaction
+    //   }
+    // );
 
     const assignedPermissionsCount = await syncUserPermissionsFromRole(userId, roleId, transaction);
 
@@ -12172,7 +12194,9 @@ exports.deleteUserPermission = async (req, res) => {
       message: 'Server error while deleting permission'
     });
   }
-};const getAuthenticatedUserId = (req) => {
+};
+
+const getAuthenticatedUserId = (req) => {
   const userId = Number(req.user?.userId || req.user?.id || req.body?.user_id);
   return Number.isInteger(userId) && userId > 0 ? userId : null;
 };

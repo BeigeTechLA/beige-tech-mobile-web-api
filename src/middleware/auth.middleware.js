@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const auth = require('./auth');
 
 /**
  * Verify JWT token and attach user info to request
@@ -20,6 +21,8 @@ exports.authenticate = async (req, res, next) => {
     // Verify token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
+    await auth.validatePermissionVersion(decoded);
+
     // Attach user info to request
     req.userId = decoded.userId;
     req.userRole = decoded.userRole;
@@ -38,6 +41,17 @@ exports.authenticate = async (req, res, next) => {
       return res.status(401).json({
         success: false,
         message: 'Token expired'
+      });
+    }
+
+    if (
+      error.message === 'PERMISSION_CHANGED' ||
+      error.message === 'USER_NOT_FOUND'
+    ) {
+      return res.status(401).json({
+        success: false,
+        force_logout: true,
+        message: 'Please login again.'
       });
     }
 

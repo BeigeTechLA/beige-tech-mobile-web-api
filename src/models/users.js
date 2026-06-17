@@ -100,6 +100,11 @@ module.exports = function(sequelize, DataTypes) {
     longitude: {
       type: DataTypes.DECIMAL(11,8),
       allowNull: true
+    },
+    permissions_version: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 1
     }
   }, {
     sequelize,
