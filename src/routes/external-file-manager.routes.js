@@ -64,7 +64,6 @@ router.get('/share', authenticate, fileManagerView, externalFileManagerControlle
 router.get('/share/access-logs', authenticate, fileManagerView, externalFileManagerController.listShareAccessLogs);
 router.delete('/share', authenticate, fileManagerDelete, externalFileManagerController.revokeShare);
 router.patch('/common-events/:eventExternalId', authenticate, externalFileManagerController.updateCommonEvent);
-
 router.post('/share/request-otp', externalFileManagerController.requestShareOtp);
 router.post('/share/verify-otp', externalFileManagerController.verifyShareOtp);
 router.get('/share/:shareToken/content', externalFileManagerController.getSharedContent);

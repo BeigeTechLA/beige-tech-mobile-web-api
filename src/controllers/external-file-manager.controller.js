@@ -2120,10 +2120,11 @@ exports.searchFaceMatches = async (req, res) => {
 
     const scanImageBase64 = String(req.body.scanImageBase64 || '').trim();
     const scanImageUrl = String(req.body.scanImageUrl || '').trim();
-    if (!scanImageBase64 && !scanImageUrl) {
+    const scanImagePath = String(req.body.scanImagePath || '').trim();
+    if (!scanImageBase64 && !scanImageUrl && !scanImagePath) {
       return res.status(400).json({
         success: false,
-        message: 'scanImageBase64 or scanImageUrl is required',
+        message: 'scanImageBase64, scanImageUrl or scanImagePath is required',
       });
     }
 
@@ -2132,8 +2133,9 @@ exports.searchFaceMatches = async (req, res) => {
       method: 'POST',
       body: JSON.stringify({
         externalId,
-        scanImageBase64: scanImageBase64 || undefined,
+        scanImageBase64: scanImagePath ? undefined : scanImageBase64 || undefined,
         scanImageUrl: scanImageUrl || undefined,
+        scanImagePath: scanImagePath || undefined,
         threshold: req.body.threshold,
         minScore: req.body.minScore,
         maxResults: req.body.maxResults,
@@ -2151,6 +2153,113 @@ exports.searchFaceMatches = async (req, res) => {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
       message: error.message || 'Face scan search failed',
+    });
+  }
+};
+
+exports.getFaceScanQueryUploadPolicy = async (req, res) => {
+  try {
+    const proxyResult = await proxyRequest('/face-scan/query-upload-policy', {
+      method: 'POST',
+      body: JSON.stringify({
+        externalId: req.body.externalId || req.body.eventExternalId,
+        fileContentType: req.body.fileContentType,
+        fileSize: req.body.fileSize,
+        userId: getRequestUserId(req),
+      }),
+    });
+
+    return res.status(200).json(proxyResult);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to create face scan upload policy',
+    });
+  }
+};
+
+exports.createFaceScanJob = async (req, res) => {
+  try {
+    const externalId = String(req.body.externalId || req.body.eventExternalId || '').trim().toLowerCase();
+    if (!externalId) {
+      return res.status(400).json({
+        success: false,
+        message: 'externalId is required',
+      });
+    }
+
+    const scanImageBase64 = String(req.body.scanImageBase64 || '').trim();
+    const scanImageUrl = String(req.body.scanImageUrl || '').trim();
+    const scanImagePath = String(req.body.scanImagePath || '').trim();
+    if (!scanImageBase64 && !scanImageUrl && !scanImagePath) {
+      return res.status(400).json({
+        success: false,
+        message: 'scanImageBase64, scanImageUrl or scanImagePath is required',
+      });
+    }
+
+    await ensureCreatorWorkspaceAccess(req, externalId);
+    const proxyResult = await proxyRequest('/face-scan/jobs', {
+      method: 'POST',
+      body: JSON.stringify({
+        externalId,
+        scanImageBase64: scanImagePath ? undefined : scanImageBase64 || undefined,
+        scanImageUrl: scanImageUrl || undefined,
+        scanImagePath: scanImagePath || undefined,
+        threshold: req.body.threshold,
+        minScore: req.body.minScore,
+        maxResults: req.body.maxResults,
+        candidateLimit: req.body.candidateLimit,
+        fallbackCandidateLimit: req.body.fallbackCandidateLimit,
+        backgroundReindex: req.body.backgroundReindex,
+        backgroundBatchLimit: req.body.backgroundBatchLimit,
+        backgroundConcurrency: req.body.backgroundConcurrency,
+        includeLiveFallback: req.body.includeLiveFallback,
+        providerTimeoutMs: req.body.providerTimeoutMs,
+      }),
+    });
+
+    return res.status(202).json(proxyResult);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Face scan job queue failed',
+    });
+  }
+};
+
+exports.getFaceScanJob = async (req, res) => {
+  try {
+    const externalId = String(req.query.externalId || '').trim().toLowerCase();
+    if (!externalId) {
+      return res.status(400).json({
+        success: false,
+        message: 'externalId is required',
+      });
+    }
+
+    await ensureCreatorWorkspaceAccess(req, externalId);
+    const proxyResult = await proxyRequest(
+      `/face-scan/jobs/${encodeURIComponent(String(req.params.jobId || ''))}`
+    );
+
+    return res.status(200).json(proxyResult);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to fetch face scan job',
+    });
+  }
+};
+
+exports.getFaceScanQueueStatus = async (req, res) => {
+  try {
+    const proxyResult = await proxyRequest('/face-scan/queue-status');
+    return res.status(200).json(proxyResult);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to fetch face scan queue status',
     });
   }
 };
