@@ -1994,6 +1994,12 @@ exports.getProjectDetails = async (req, res) => {
         : (lead?.activities || []),
       totalValueAmount || displayAmount
     );
+
+    const summaryPaidAmount = bookingPaymentSummary
+      ? parseAmountCandidate(bookingPaymentSummary.paid_amount)
+      : null;
+    const totalPaidAmount = summaryPaidAmount !== null ? summaryPaidAmount : displayAmount;
+
     const resolvedPaymentStatus = projectJson.payment_id
       ? 'paid'
       : manualPaymentSummary.hasFullPayment
@@ -2009,7 +2015,7 @@ exports.getProjectDetails = async (req, res) => {
       data: {
         project: {
           ...projectJson,
-          total_paid_amount: displayAmount,
+          total_paid_amount: totalPaidAmount,
           total_value_amount: totalValueAmount,
           notes_count: shootNotesCount,
           contact_registration_type: contactRegistrationType,
