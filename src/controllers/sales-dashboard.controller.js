@@ -96,6 +96,76 @@ async function fetchManualPaymentReceiptRows() {
   }
 }
 
+async function fetchBookingPaymentSummaryRows(bookingIds = []) {
+  const normalizedBookingIds = Array.from(new Set(
+    bookingIds
+      .map((bookingId) => Number(bookingId))
+      .filter((bookingId) => Number.isFinite(bookingId) && bookingId > 0)
+  ));
+
+  if (normalizedBookingIds.length === 0) {
+    return [];
+  }
+
+  try {
+    return await sequelize.query(
+      `
+        SELECT
+          booking_id,
+          payment_status,
+          paid_amount,
+          credit_used_amount,
+          due_amount
+        FROM booking_payment_summary
+        WHERE booking_id IN (:bookingIds)
+      `,
+      {
+        replacements: { bookingIds: normalizedBookingIds },
+        type: QueryTypes.SELECT
+      }
+    );
+  } catch (error) {
+    if (isOptionalTableMissingError(error)) {
+      return [];
+    }
+    throw error;
+  }
+}
+
+function resolveInvoicePaymentStatus(item, booking, paymentSummary) {
+  const currentStatus = String(item?.payment_status || '').trim().toLowerCase();
+  if (currentStatus === 'paid') {
+    return 'paid';
+  }
+
+  const summaryStatus = String(paymentSummary?.payment_status || '').trim().toLowerCase();
+  const paidAmount = Number(paymentSummary?.paid_amount || 0);
+  const creditUsedAmount = Number(paymentSummary?.credit_used_amount || 0);
+  const dueAmount = Number(paymentSummary?.due_amount);
+
+  if (summaryStatus === 'paid' || summaryStatus === 'no_payment_due') {
+    return 'paid';
+  }
+
+  if (summaryStatus === 'partially_paid' || summaryStatus === 'approval_pending') {
+    return summaryStatus;
+  }
+
+  if (paidAmount > 0 || creditUsedAmount > 0) {
+    if (Number.isFinite(dueAmount) && dueAmount <= 0) {
+      return 'paid';
+    }
+
+    return 'partially_paid';
+  }
+
+  if (booking?.payment_id || booking?.payment_completed_at) {
+    return 'paid';
+  }
+
+  return item?.payment_status || 'pending';
+}
+
 function roundCurrency(value) {
   const numeric = Number(value || 0);
   return Number(numeric.toFixed(2));
@@ -1317,9 +1387,6 @@ exports.getInvoiceHistory = async (req, res) => {
     if (salesRepId) {
       whereClause.assigned_sales_rep_id = salesRepId;
     }
-    if (status === 'paid' || status === 'pending') {
-      whereClause.payment_status = status;
-    }
 
     const historyRows = await invoice_send_history.findAll({
       where: whereClause,
@@ -1726,6 +1793,52 @@ exports.getInvoiceHistory = async (req, res) => {
         .filter(Boolean);
 
       items = [...items, ...syntheticItems];
+    }
+
+    const itemBookingIds = Array.from(new Set(
+      items
+        .map((item) => Number(item.booking_id))
+        .filter((bookingId) => Number.isFinite(bookingId) && bookingId > 0)
+    ));
+
+    if (itemBookingIds.length > 0) {
+      const [statusBookings, bookingPaymentSummaries] = await Promise.all([
+        stream_project_booking.findAll({
+          where: { stream_project_booking_id: { [Op.in]: itemBookingIds } },
+          attributes: ['stream_project_booking_id', 'payment_id', 'payment_completed_at']
+        }),
+        fetchBookingPaymentSummaryRows(itemBookingIds)
+      ]);
+
+      const statusBookingById = new Map();
+      statusBookings.forEach((booking) => {
+        const bookingId = Number(booking.stream_project_booking_id);
+        if (!Number.isFinite(bookingId) || bookingId <= 0) return;
+        statusBookingById.set(bookingId, booking);
+      });
+
+      const paymentSummaryByBookingId = new Map();
+      bookingPaymentSummaries.forEach((paymentSummary) => {
+        const bookingId = Number(paymentSummary.booking_id);
+        if (!Number.isFinite(bookingId) || bookingId <= 0) return;
+        paymentSummaryByBookingId.set(bookingId, paymentSummary);
+      });
+
+      items = items.map((item) => {
+        const bookingId = Number(item.booking_id);
+        if (!Number.isFinite(bookingId) || bookingId <= 0) {
+          return item;
+        }
+
+        return {
+          ...item,
+          payment_status: resolveInvoicePaymentStatus(
+            item,
+            statusBookingById.get(bookingId),
+            paymentSummaryByBookingId.get(bookingId)
+          )
+        };
+      });
     }
 
     if (status === 'paid' || status === 'pending') {
