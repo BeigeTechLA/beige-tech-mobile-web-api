@@ -2,7 +2,7 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI3NCwidXNlclJvbGUiOiJzYWxlc19hZG1pbiIsInBlcm1pc3Npb25zVmVyc2lvbiI6MSwiaWF0IjoxNzgxNjgwNTQ3LCJleHAiOjE3ODIyODUzNDd9.FBcz4nmKEXFig9J_O6emGDtKBwDAdXw_R526TixGtZw
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjEsImlhdCI6MTc4MTY5Njg1NCwiZXhwIjoxNzgyMzAxNjU0fQ.2i06gFdnaIEZCarMqwlMPxm5kNSGJoFHMt-x974N-tY
 
 @TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI3NiwidXNlclJvbGUiOiJwcm9kdWN0aW9uX21hbmFnZXIiLCJpYXQiOjE3ODA1Nzk4MTYsImV4cCI6MTc4MTE4NDYxNn0.zRMGMPJGIL34Bjh3SO1yJa5qYhfxKoknlUFwhwWW7qE
 
@@ -2399,7 +2399,7 @@ Authorization: {{TOKEN}}
 
 {
   "user_id": 274,
-  "role_id": 1
+  "role_id": 7
 }
 
 ### update role
@@ -2706,12 +2706,12 @@ Content-Type: application/json
 }
 
 ### Admin Login
-POST {{DEV_URL}}auth/login HTTP/1.1
+POST {{URL}}auth/login HTTP/1.1
 Content-Type: application/json
 
 {
-  "email": "harshpanchal858585@gmail.com",
-  "password": "12345678"
+  "email": "harsh.panchal@gmail.com",
+  "password": "password123"
 }
 
 ### rooms

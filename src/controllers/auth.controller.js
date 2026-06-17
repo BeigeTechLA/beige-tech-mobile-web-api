@@ -993,7 +993,8 @@ exports.login = async (req, res) => {
           crew_member_id,
            affiliate_id,
           is_crew_verified,
-          temp_event_popup
+          temp_event_popup,
+          permissions_version: user.permissions_version
         },
         token,
         refreshToken,
@@ -1124,7 +1125,8 @@ affiliate_id = affiliate ? affiliate.affiliate_id : null;
           crew_member_id,
           affiliate_id,
           is_crew_verified,
-          temp_event_popup
+          temp_event_popup,
+          permissions_version: user.permissions_version
         },
 
         token,
