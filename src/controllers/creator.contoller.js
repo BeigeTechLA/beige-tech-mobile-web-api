@@ -1629,6 +1629,16 @@ exports.getProfile = async (req, res) => {
     let result = member.toJSON();
     result.skills = skillList;
 
+    try {
+      if (result.primary_role) {
+        result.primary_role = JSON.parse(result.primary_role);
+      } else {
+        result.primary_role = [];
+      }
+    } catch (e) {
+      result.primary_role = result.primary_role ? [result.primary_role] : [];
+    }
+ 
     return res.status(constants.OK.code).json({
       error: false,
       code: constants.OK.code,
