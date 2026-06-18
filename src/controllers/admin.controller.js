@@ -3,7 +3,7 @@ const { Sequelize, users, affiliates } = require('../models')
 const multer = require('multer');
 const path = require('path');
 const common_model = require('../utils/common_model');
-const { Op } = require('sequelize');
+const { Op, QueryTypes } = require('sequelize');
 const { S3UploadFiles, toAbsoluteBeigeAssetUrl } = require('../utils/common.js');
 const moment = require('moment');
 const {
@@ -47,6 +47,18 @@ const quoteService = require('../services/sales-quote.service');
 const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
 const EXTERNAL_MEETINGS_API_BASE_URL = process.env.EXTERNAL_MEETINGS_API_BASE_URL || 'http://localhost:5002/v1/external-meetings';
 const EXTERNAL_FILE_MANAGER_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
+
+const getFrontendBaseUrl = () =>
+  String(process.env.FRONTEND_URL || 'http://localhost:3000').trim().replace(/\/+$/, '');
+
+const buildShootReceiptUrl = ({ bookingId, manualPaymentId = null, paymentId = null, download = false }) => {
+  const url = new URL(`${getFrontendBaseUrl()}/beige_invoice/${encodeURIComponent(String(bookingId))}`);
+  url.searchParams.set('receipt', '1');
+  if (manualPaymentId) url.searchParams.set('manual_payment_id', String(manualPaymentId));
+  if (paymentId) url.searchParams.set('payment_id', String(paymentId));
+  if (download) url.searchParams.set('download', '1');
+  return url.toString();
+};
 
 const hasValue = (value) => {
   if (value === null || value === undefined) return false;
@@ -1786,10 +1798,10 @@ exports.getProjectDetails = async (req, res) => {
       : [];
 
     // 3. Fetch Transaction Total (from payment_transactions table)
-    const [paymentData, formSubmission, shootNotesCountMap, bookingPaymentSummary] = await Promise.all([
+    const [paymentData, formSubmission, shootNotesCountMap, bookingPaymentSummary, manualPaymentRows] = await Promise.all([
       payment_transactions.findOne({
         where: { payment_id: projectJson.payment_id },
-        attributes: ['total_amount'],
+        attributes: ['payment_id', 'total_amount', 'status', 'created_at'],
         raw: true
       }),
       project_form_submissions.findOne({
@@ -1799,7 +1811,29 @@ exports.getProjectDetails = async (req, res) => {
         raw: true
       }),
       countActiveShootNotesByBookingIds([projectJson.stream_project_booking_id]),
-      bookingPaymentSummaryService.getBookingPaymentSummary(projectJson.stream_project_booking_id)
+      bookingPaymentSummaryService.getBookingPaymentSummary(projectJson.stream_project_booking_id),
+      db.sequelize.query(
+        `
+          SELECT
+            booking_manual_payment_id,
+            payment_type,
+            amount,
+            payment_mode,
+            other_payment_mode,
+            created_at
+          FROM booking_manual_payments
+          WHERE booking_id = :bookingId
+          ORDER BY created_at ASC, booking_manual_payment_id ASC
+        `,
+        {
+          replacements: { bookingId: projectJson.stream_project_booking_id },
+          type: QueryTypes.SELECT
+        }
+      ).catch((error) => {
+        const code = error?.original?.code || error?.parent?.code || error?.code;
+        if (code === 'ER_NO_SUCH_TABLE' || code === 'ER_BAD_TABLE_ERROR') return [];
+        throw error;
+      })
     ]);
     const shootNotesCount = shootNotesCountMap.get(Number(projectJson.stream_project_booking_id)) || 0;
 
@@ -1994,6 +2028,64 @@ exports.getProjectDetails = async (req, res) => {
         : (lead?.activities || []),
       totalValueAmount || displayAmount
     );
+    const paymentHistory = [];
+    (manualPaymentRows || []).forEach((manualPayment) => {
+      const manualPaymentId = Number(manualPayment.booking_manual_payment_id || 0);
+      if (!Number.isFinite(manualPaymentId) || manualPaymentId <= 0) return;
+      const normalizedMode = String(manualPayment.payment_mode || '').toLowerCase();
+      const method = normalizedMode === 'other' && String(manualPayment.other_payment_mode || '').trim()
+        ? String(manualPayment.other_payment_mode).trim()
+        : normalizedMode === 'net30'
+          ? 'Net 30'
+          : String(manualPayment.payment_mode || 'manual').replace(/_/g, ' ');
+
+      paymentHistory.push({
+        id: `manual-${manualPaymentId}`,
+        type: 'manual',
+        receipt_number: `RCPT-${String(projectJson.stream_project_booking_id).padStart(6, '0')}-${String(manualPaymentId).padStart(3, '0')}`,
+        invoice_number: `INVBEIGE-M-${String(projectJson.stream_project_booking_id).padStart(4, '0')}-${String(manualPaymentId).padStart(3, '0')}`,
+        method,
+        amount: Number(manualPayment.amount || 0),
+        status: 'paid',
+        paid_at: manualPayment.created_at || null,
+        receipt_url: buildShootReceiptUrl({
+          bookingId: projectJson.stream_project_booking_id,
+          manualPaymentId
+        }),
+        receipt_download_url: buildShootReceiptUrl({
+          bookingId: projectJson.stream_project_booking_id,
+          manualPaymentId,
+          download: true
+        })
+      });
+    });
+
+    if (paymentData?.payment_id && Number(paymentData.total_amount || 0) > 0) {
+      const normalizedStripeStatus = String(paymentData.status || '').trim().toLowerCase();
+      paymentHistory.push({
+        id: `stripe-${paymentData.payment_id}`,
+        type: 'stripe',
+        receipt_number: `RCPT-${String(projectJson.stream_project_booking_id).padStart(6, '0')}-S${String(paymentData.payment_id).padStart(3, '0')}`,
+        invoice_number: `INVBEIGE-S-${String(projectJson.stream_project_booking_id).padStart(4, '0')}-${String(paymentData.payment_id).padStart(3, '0')}`,
+        method: 'Online Payment',
+        amount: Number(paymentData.total_amount || 0),
+        status: ['succeeded', 'success', 'completed', 'complete', 'paid'].includes(normalizedStripeStatus)
+          ? 'paid'
+          : (paymentData.status || 'paid'),
+        paid_at: paymentData.created_at || projectJson.payment_completed_at || null,
+        receipt_url: buildShootReceiptUrl({
+          bookingId: projectJson.stream_project_booking_id,
+          paymentId: paymentData.payment_id
+        }),
+        receipt_download_url: buildShootReceiptUrl({
+          bookingId: projectJson.stream_project_booking_id,
+          paymentId: paymentData.payment_id,
+          download: true
+        })
+      });
+    }
+    paymentHistory.sort((left, right) => new Date(left.paid_at || 0).getTime() - new Date(right.paid_at || 0).getTime());
+
     const summaryPaidAmount = bookingPaymentSummary
       ? parseAmountCandidate(bookingPaymentSummary.paid_amount)
       : null;
@@ -2046,6 +2138,7 @@ exports.getProjectDetails = async (req, res) => {
         converted_sales_quote_number: convertedSalesQuote?.quote_number || null,
         is_quote_converted_booking: isQuoteConvertedBooking,
         manual_payment_summary: manualPaymentSummary,
+        payment_history: paymentHistory,
         pricing_breakdown,
         payment_status: resolvedPaymentStatus,
         active_payment_link,

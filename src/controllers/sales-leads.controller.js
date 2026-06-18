@@ -4231,7 +4231,7 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
   const normalizedProofFileName = String(proof_file_name || '').trim() || null;
   const normalizedNotes = String(notes || '').trim() || null;
 
-  await db.sequelize.query(
+  const insertResult = await db.sequelize.query(
     `
       INSERT INTO booking_manual_payments (
         booking_id,
@@ -4279,6 +4279,9 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
       type: Sequelize.QueryTypes.INSERT,
     }
   );
+  const manualPaymentId = Array.isArray(insertResult)
+    ? Number(insertResult[0] || insertResult[1] || 0)
+    : Number(insertResult || 0);
 
   await bookingPaymentSummaryService.upsertBookingPaymentSummary({
     bookingId,
@@ -4326,7 +4329,8 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
       updated_by: performedBy || null,
       previously_paid_amount: previouslyPaidAmount,
       booking_id: bookingId,
-      sales_quote_id: resolvedSalesQuoteId
+      sales_quote_id: resolvedSalesQuoteId,
+      booking_manual_payment_id: Number.isFinite(manualPaymentId) && manualPaymentId > 0 ? manualPaymentId : null
     },
     performed_by_user_id: performedBy || null
   });
@@ -4350,6 +4354,7 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
       : 'Manual partial payment recorded',
     data: {
       lead_id: Number(leadId),
+      booking_manual_payment_id: Number.isFinite(manualPaymentId) && manualPaymentId > 0 ? manualPaymentId : null,
       payment_type: isNet30Mode ? 'net30' : normalizedPaymentType,
       payment_mode: normalizedPaymentMode,
       amount: normalizedPaymentType === 'partial' ? Number(numericAmount) : null,

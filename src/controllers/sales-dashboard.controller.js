@@ -1789,7 +1789,7 @@ exports.getInvoiceHistory = async (req, res) => {
 
           const sendDate = booking.payment_completed_at || stripePayment?.created_at || booking.created_at || effectiveLead?.created_at || new Date();
           const invoicePdf = hasStripePayment && paymentId
-            ? `${apiBase}/sales/invoice-pdf/${bookingId}?stripe=1&payment_id=${paymentId}`
+            ? `${apiBase}/sales/invoice-pdf/${bookingId}?receipt=1&payment_id=${paymentId}`
             : `${apiBase}/sales/invoice-pdf/${bookingId}${isManualInvoice ? '?manual=1' : ''}`;
           const paymentAmount = stripePayment ? Number(stripePayment.total_amount || 0) : null;
 
