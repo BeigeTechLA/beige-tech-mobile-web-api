@@ -32,6 +32,14 @@ const buildReceiptFrontendUrl = ({ bookingId, manualPaymentId = null, paymentId 
   return url.toString();
 };
 
+const buildReceiptFrontendOpenUrl = ({ bookingId, manualPaymentId = null, paymentId = null }) => {
+  const frontendBaseUrl = getFrontendBaseUrl();
+  const url = new URL(`${frontendBaseUrl}/receipt-open/${encodeURIComponent(String(bookingId))}`);
+  if (manualPaymentId) url.searchParams.set('manual_payment_id', String(manualPaymentId));
+  if (paymentId) url.searchParams.set('payment_id', String(paymentId));
+  return url.toString();
+};
+
 const findStripeInvoiceForPaidBooking = async (booking, bookingId) => {
   if (booking?.stripe_invoice_id) {
     try {
@@ -2357,7 +2365,7 @@ exports.getStripeInvoicePdf = async (req, res) => {
             method: resolvedMethod,
             date: formatInvoiceDate(manualPayment.created_at),
             amount: Number(manualPayment.amount || 0),
-            receiptUrl: buildReceiptFrontendUrl({
+            receiptUrl: buildReceiptFrontendOpenUrl({
               bookingId: parsedBookingId,
               manualPaymentId: manualPayment.booking_manual_payment_id
             }),
@@ -2393,7 +2401,7 @@ exports.getStripeInvoicePdf = async (req, res) => {
               date: formatInvoiceDate(activity.created_at),
               amount: resolvedAmount,
               receiptUrl: meta.booking_manual_payment_id
-                ? buildReceiptFrontendUrl({
+                ? buildReceiptFrontendOpenUrl({
                     bookingId: parsedBookingId,
                     manualPaymentId: meta.booking_manual_payment_id
                   })
@@ -2452,7 +2460,7 @@ exports.getStripeInvoicePdf = async (req, res) => {
           date: formatInvoiceDate(paymentSummary?.updated_at || new Date()),
           amount: nonManualPaidAmount,
           receiptUrl: booking.payment_id
-            ? buildReceiptFrontendUrl({
+            ? buildReceiptFrontendOpenUrl({
                 bookingId: parsedBookingId,
                 paymentId: booking.payment_id
               })
@@ -2473,7 +2481,7 @@ exports.getStripeInvoicePdf = async (req, res) => {
           date: formatInvoiceDate(paymentSummary?.updated_at || new Date()),
           amount: totalAmount,
           receiptUrl: booking.payment_id
-            ? buildReceiptFrontendUrl({
+            ? buildReceiptFrontendOpenUrl({
                 bookingId: parsedBookingId,
                 paymentId: booking.payment_id
               })
@@ -2494,7 +2502,7 @@ exports.getStripeInvoicePdf = async (req, res) => {
               : String(selectedManualPayment.payment_mode || 'manual').replace(/_/g, ' '),
             date: formatInvoiceDate(selectedManualPayment.created_at || new Date()),
             amount: Number(selectedManualPayment.amount || 0),
-            receiptUrl: buildReceiptFrontendUrl({
+            receiptUrl: buildReceiptFrontendOpenUrl({
               bookingId: parsedBookingId,
               manualPaymentId: selectedManualPayment.booking_manual_payment_id
             }),
@@ -2513,7 +2521,7 @@ exports.getStripeInvoicePdf = async (req, res) => {
             method: 'Online Payment',
             date: formatInvoiceDate(selectedStripePayment.created_at || new Date()),
             amount: Number(selectedStripePayment.total_amount || 0),
-            receiptUrl: buildReceiptFrontendUrl({
+            receiptUrl: buildReceiptFrontendOpenUrl({
               bookingId: parsedBookingId,
               paymentId: selectedStripePayment.payment_id
             }),

@@ -74,7 +74,7 @@ function buildManualReceiptHtml(data) {
   const pendingAmount = Math.max(totalAmount - totalPaidAmount, 0);
   const hasPositivePaidAmount = totalPaidAmount > 0.009;
   const isFullyPaid = Boolean(data.isPaid) && hasPositivePaidAmount && pendingAmount <= 0.009;
-  const showPaidStamp = hasPositivePaidAmount;
+  const showPaidStamp = isFullyPaid;
   const discountAmount = Math.max(0, Number(data.discountAmount || 0));
   const discountCode = data.discountCode ? String(data.discountCode) : '';
   const discountMeta = formatDiscountMeta(data.discountType, data.discountValue);
