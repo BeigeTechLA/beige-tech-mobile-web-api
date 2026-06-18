@@ -8958,10 +8958,10 @@ exports.assignCrewBulkSmart = async (req, res) => {
 
             if (roleDetected) {
               const acceptedCount = currentCounts[roleDetected];
-              const limit = requestedLimits[roleDetected] || 0;
+              const limit = requestedLimits[roleDetected];
 
-              if (acceptedCount >= limit) {
-                errors.push(`Cannot add ${crew.first_name} (${roleDetected}). Required crew already accepted.`);
+              if (limit !== undefined && acceptedCount >= limit) {
+                errors.push(`Cannot add ${crew.first_name} (${roleDetected}).Limit of ${limit} reached.`);
               } else {
                 assignmentsToCreate.push({
                   project_id: booking.stream_project_booking_id,
@@ -8974,8 +8974,16 @@ exports.assignCrewBulkSmart = async (req, res) => {
                 });
               }
             } else {
-                errors.push(`Crew member ${crew.first_name} has an unknown role and cannot be assigned.`);
-            }
+              assignmentsToCreate.push({
+                  project_id: booking.stream_project_booking_id,
+                  crew_member_id: crew.crew_member_id,
+                  assigned_date: new Date(),
+                  status: 'selected',
+                  crew_accept: 0,
+                  is_active: 1,
+                  organization_type: 1
+              });
+          }
         });
 
         if (errors.length > 0 && assignmentsToCreate.length === 0) {
