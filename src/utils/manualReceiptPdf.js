@@ -66,7 +66,15 @@ function buildManualReceiptHtml(data) {
     totalAmount,
     Math.max(totalPaidFromHistory > 0 ? totalPaidFromHistory : fallbackPaidAmount, 0)
   );
+  const visibleHistory = history.filter((entry) => {
+    const amount = Number(entry?.amount || 0);
+    const method = String(entry?.method || '').toLowerCase();
+    return (Number.isFinite(amount) && amount > 0.009) || method.includes('net 30') || method.includes('net30');
+  });
   const pendingAmount = Math.max(totalAmount - totalPaidAmount, 0);
+  const hasPositivePaidAmount = totalPaidAmount > 0.009;
+  const isFullyPaid = Boolean(data.isPaid) && hasPositivePaidAmount && pendingAmount <= 0.009;
+  const showPaidStamp = hasPositivePaidAmount;
   const discountAmount = Math.max(0, Number(data.discountAmount || 0));
   const discountCode = data.discountCode ? String(data.discountCode) : '';
   const discountMeta = formatDiscountMeta(data.discountType, data.discountValue);
@@ -85,8 +93,9 @@ function buildManualReceiptHtml(data) {
     `)
     .join('');
 
-  const hasReceiptActions = history.some((item) => item?.receiptUrl || item?.receiptDownloadUrl);
-  const historyRows = history
+  const hasReceiptActions = visibleHistory.some((item) => item?.receiptUrl || item?.receiptDownloadUrl);
+  const historyRows = visibleHistory.length > 0
+    ? visibleHistory
     .map((entry) => `
       <tr>
         <td>${escapeHtml(toTitleCase(entry.method || 'Manual'))}</td>
@@ -108,13 +117,18 @@ function buildManualReceiptHtml(data) {
         ` : ''}
       </tr>
     `)
-    .join('');
+    .join('')
+    : `
+      <tr>
+        <td colspan="${hasReceiptActions ? 4 : 3}" class="empty-history">No payments recorded yet</td>
+      </tr>
+    `;
 
   const invoiceDate = toDateForHeader(data.invoiceDate || new Date());
   const receiptNo = escapeHtml(String(data.receiptNumber || data.bookingRef || '').replace(/[^\w-]/g, '').slice(-8) || 'N/A');
   const hasNet30 = history.some((entry) => String(entry?.method || '').toLowerCase().includes('net 30') || String(entry?.method || '').toLowerCase().includes('net30'));
   const net30DueDate = hasNet30 ? toDateForHeader(addDays(data.invoiceDate || new Date(), 30)) : null;
-  const paidLabel = data.isPaid ? 'Paid in Full' : 'Pending';
+  const paidLabel = isFullyPaid ? 'Paid in Full' : 'Pending';
   const transactionRef = escapeHtml(data.transactionReference || data.confirmationNumber || '');
   const documentTitle = escapeHtml(data.documentTitle || 'INVOICE');
   const paymentUrl = String(data.paymentUrl || '').trim();
@@ -267,6 +281,7 @@ function buildManualReceiptHtml(data) {
         .inv-meta-row {
           display: flex;
           align-items: center;
+          gap: 6px;
         }
 
         .inv-meta b {
@@ -278,11 +293,14 @@ function buildManualReceiptHtml(data) {
 
         .inv-meta span {
           color: #e2e8f0;
+          min-width: 0;
+          overflow-wrap: anywhere;
+          word-break: break-word;
         }
 
         /* ─── BOOKING STRIP ─── */
         .booking-strip {
-          height: 38px;
+          min-height: 38px;
           background: #e7d7bc;
           display: flex;
           align-items: center;
@@ -291,11 +309,16 @@ function buildManualReceiptHtml(data) {
           color: #2f2f2f;
           letter-spacing: 1px;
           border-bottom: 1px solid #d7c19d;
+          line-height: 1.25;
+          overflow-wrap: anywhere;
+          word-break: break-word;
         }
 
         .booking-strip b {
           margin-left: 6px;
           letter-spacing: 1.5px;
+          overflow-wrap: anywhere;
+          word-break: break-word;
         }
 
         /* ─── CONTENT ─── */
@@ -328,17 +351,26 @@ function buildManualReceiptHtml(data) {
           overflow: hidden;
         }
 
+        .bill-card.has-stamp {
+          padding-right: 78px;
+        }
+
         .bill-title {
           font-size: 14px;
           font-weight: 700;
           margin-bottom: 8px;
           color: #111827;
+          line-height: 1.25;
+          overflow-wrap: anywhere;
+          word-break: break-word;
         }
 
         .bill-line {
           font-size: 11px;
           color: #4b5563;
           line-height: 1.45;
+          overflow-wrap: anywhere;
+          word-break: break-word;
         }
 
         .bill-line.receipt-label {
@@ -412,6 +444,8 @@ function buildManualReceiptHtml(data) {
 
         .items .desc {
           font-weight: 500;
+          overflow-wrap: anywhere;
+          word-break: break-word;
         }
 
         .items .qty {
@@ -514,6 +548,12 @@ function buildManualReceiptHtml(data) {
           font-size: 12px;
           color: #111827;
           font-weight: 600;
+        }
+
+        .history .empty-history {
+          color: #6b7280;
+          font-weight: 500;
+          text-align: center;
         }
 
         .receipt-link {
@@ -662,8 +702,8 @@ function buildManualReceiptHtml(data) {
             </div>
             <div>
               <div class="bill-label">Bill to:</div>
-              <div class="bill-card">
-                ${data.isPaid ? '<div class="stamp">Received Paid</div>' : ''}
+              <div class="bill-card${showPaidStamp ? ' has-stamp' : ''}">
+                ${showPaidStamp ? '<div class="stamp">Received Paid</div>' : ''}
                 <div class="bill-title">${escapeHtml(data.clientName || 'Client')}</div>
                 <div class="bill-line receipt-label">Payment Receipt: <b>${escapeHtml(data.projectTitle || 'Project')}</b></div>
                 <div class="bill-line">${escapeHtml(data.location || 'Location not available')}</div>
