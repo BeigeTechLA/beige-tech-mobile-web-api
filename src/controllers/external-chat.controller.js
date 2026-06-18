@@ -634,6 +634,7 @@ const sendChatNotificationTemplate = async ({
       '';
     const booking = resolvedBookingId ? await getBookingRecord(resolvedBookingId) : null;
     const projectId = String(booking?.stream_project_booking_id || resolvedBookingId || '').trim();
+    const shootName = String(booking?.project_name || '').trim();
     if (projectId) {
       await saveChatRoomMapping({
         roomId,
@@ -671,6 +672,7 @@ const sendChatNotificationTemplate = async ({
         order_id: projectId,
         project_name: chatName,
         project_id: projectId,
+        shoot_name: shootName,
         sender_id: sender?.id != null ? String(sender.id) : '',
         sender_name: sender?.name || sender?.email || '',
         message_preview: String(messagePreview || ''),
