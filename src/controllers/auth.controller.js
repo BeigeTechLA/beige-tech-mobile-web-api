@@ -211,15 +211,15 @@ const PERMISSIONS_MAP = {
 /**
  * Generate JWT tokens
  */
-const generateTokens = (userId, userRole) => {
+const generateTokens = (userId, userRole, userTypeId) => {
   const token = jwt.sign(
-    { userId, userRole },
+    { userId, userRole, userTypeId },
     process.env.JWT_SECRET,
     { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
   );
 
   const refreshToken = jwt.sign(
-    { userId, userRole, type: 'refresh' },
+    { userId, userRole, userTypeId, type: 'refresh' },
     process.env.JWT_SECRET,
     { expiresIn: '30d' }
   );
@@ -889,7 +889,7 @@ exports.login = async (req, res) => {
       affiliate_id = affiliate ? affiliate.affiliate_id : null;
 
       // Generate tokens
-      const { token, refreshToken } = generateTokens(user.id, role);
+      const { token, refreshToken } = generateTokens(user.id, role, user_type_id);
       const permissions = getPermissionsForRole(role);
 
       return res.status(200).json({
