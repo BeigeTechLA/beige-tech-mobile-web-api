@@ -3042,6 +3042,7 @@ const sendMessagingInitiatedTemplateEmail = async ({ recipients = [], data = {} 
       project_id: data?.project_id || data?.order_id || data?.booking_id || '',
       projectId: data?.project_id || data?.order_id || data?.booking_id || '',
       project_name: data?.project_name || data?.chat_name || '',
+      shoot_name: data?.shoot_name || '',
       sender_id: data?.sender_id || '',
       sender_name: data?.sender_name || '',
       message_preview: data?.message_preview || '',
