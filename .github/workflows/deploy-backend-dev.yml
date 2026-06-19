@@ -100,17 +100,18 @@ jobs:
           ARCHIVE_NAME: backend-build-${{ github.run_id }}-${{ github.run_attempt }}.tar.gz
         run: |
           PORT="${BACKEND_DEV_PORT:-22}"
-          tar czf "$ARCHIVE_NAME" \
+          ARCHIVE_PATH="${{ runner.temp }}/$ARCHIVE_NAME"
+
+          tar czf "$ARCHIVE_PATH" \
             --exclude=node_modules \
             --exclude=.git \
             --exclude=deploy \
             --exclude=.env \
             --exclude=*.log \
             --exclude=logs \
-            --exclude="$ARCHIVE_NAME" \
             .
 
-          scp -P "$PORT" -i ~/.ssh/backend-dev.pem "$ARCHIVE_NAME" \
+          scp -P "$PORT" -i ~/.ssh/backend-dev.pem "$ARCHIVE_PATH" \
             "$BACKEND_DEV_USER@$BACKEND_DEV_HOST:/tmp/"
 
       - name: Install dependencies and restart PM2
