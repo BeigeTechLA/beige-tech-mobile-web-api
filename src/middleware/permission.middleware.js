@@ -82,6 +82,50 @@ const getUserAccessContext = async (req) => {
   };
 };
 
+const hasDeniedPermission = async (userId, permissionKeys) => {
+  if (!permissionKeys.length) return false;
+
+  const permissions = await db.permissions.findAll({
+    where: {
+      permission_key: {
+        [Op.in]: permissionKeys
+      },
+      is_active: 1
+    },
+    attributes: ['permission_id']
+  });
+
+  if (!permissions.length) return false;
+
+  const deniedPermission = await db.user_permissions.findOne({
+    where: {
+      user_id: userId,
+      permission_id: permissions.map((permission) => permission.permission_id),
+      is_allowed: 0,
+      is_active: 1
+    },
+    attributes: ['user_permission_id']
+  });
+
+  return Boolean(deniedPermission);
+};
+
+const hasConfiguredPermissions = async (permissionKeys) => {
+  if (!permissionKeys.length) return false;
+
+  const permission = await db.permissions.findOne({
+    where: {
+      permission_key: {
+        [Op.in]: permissionKeys
+      },
+      is_active: 1
+    },
+    attributes: ['permission_id']
+  });
+
+  return Boolean(permission);
+};
+
 const getAllowedPermissionIds = async ({ userId, roleId }, permissionKeys) => {
   const permissions = await db.permissions.findAll({
     where: {
@@ -176,26 +220,35 @@ const createPermissionMiddleware = (permissions, options = {}, checkPermissions)
         return next();
       }
 
-      if (allowBaseRoles && BASE_ROLES.has(context.role)) {
-        return next();
-      }
-
-      if (allowRoles.has(context.role)) {
-        return next();
-      }
-
-      const isAllowed = permissionKeys.length
-        ? await checkPermissions(context, permissionKeys)
-        : false;
-
-      if (!isAllowed) {
+      if (await hasDeniedPermission(context.userId, permissionKeys)) {
         return res.status(403).json({
           success: false,
           message: 'Insufficient permissions'
         });
       }
 
-      return next();
+      const isAllowed = permissionKeys.length
+        ? await checkPermissions(context, permissionKeys)
+        : false;
+
+      if (isAllowed) {
+        return next();
+      }
+
+      const hasPermissionConfig = await hasConfiguredPermissions(permissionKeys);
+
+      if (!hasPermissionConfig && allowBaseRoles && BASE_ROLES.has(context.role)) {
+        return next();
+      }
+
+      if (!hasPermissionConfig && allowRoles.has(context.role)) {
+        return next();
+      }
+
+      return res.status(403).json({
+        success: false,
+        message: 'Insufficient permissions'
+      });
     } catch (error) {
       console.error('Permission authorization error:', error);
       return res.status(500).json({
