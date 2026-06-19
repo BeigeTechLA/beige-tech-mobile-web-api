@@ -11471,6 +11471,19 @@ exports.updateRole = async (req, res) => {
 
     if (Object.prototype.hasOwnProperty.call(req.body, 'permissions')) {
       await syncRolePermissions(role_id, permissions);
+
+      // Enable this when role permission updates should force logout for all users on the role.
+      // await db.users.update(
+      //   {
+      //     permissions_version: Sequelize.literal('permissions_version + 1')
+      //   },
+      //   {
+      //     where: {
+      //       user_type: role_id,
+      //       is_active: 1
+      //     }
+      //   }
+      // );
     }
 
     return res.status(200).json({
@@ -12107,6 +12120,15 @@ exports.assignPermissionsToUser = async (req, res) => {
 
     await syncUserPermissions(user_id, permissions);
 
+    await db.users.update(
+      {
+        permissions_version: Sequelize.literal('permissions_version + 1')
+      },
+      {
+        where: { id: user_id }
+      }
+    );
+
     return res.status(200).json({
       success: true,
       message: 'User permissions assigned successfully'
@@ -12148,6 +12170,15 @@ exports.updateUserPermissions = async (req, res) => {
     }
 
     await syncUserPermissions(user_id, permissions);
+
+    await db.users.update(
+      {
+        permissions_version: Sequelize.literal('permissions_version + 1')
+      },
+      {
+        where: { id: user_id }
+      }
+    );
 
     return res.status(200).json({
       success: true,
@@ -12285,6 +12316,15 @@ exports.deleteUserPermission = async (req, res) => {
         }
       );
     }
+
+    await db.users.update(
+      {
+        permissions_version: Sequelize.literal('permissions_version + 1')
+      },
+      {
+        where: { id: user_id }
+      }
+    );
 
     return res.status(200).json({
       success: true,
