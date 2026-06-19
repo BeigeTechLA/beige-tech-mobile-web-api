@@ -211,15 +211,15 @@ const PERMISSIONS_MAP = {
 /**
  * Generate JWT tokens
  */
-const generateTokens = (userId, userRole, permissionsVersion) => {
+const generateTokens = (userId, userRole, permissionsVersion, userTypeId) => {
   const token = jwt.sign(
-    { userId, userRole, permissionsVersion },
+    { userId, userRole, permissionsVersion, userTypeId },
     process.env.JWT_SECRET,
     { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
   );
 
   const refreshToken = jwt.sign(
-    { userId, userRole, permissionsVersion, type: 'refresh' },
+    { userId, userRole, permissionsVersion, userTypeId, type: 'refresh' },
     process.env.JWT_SECRET,
     { expiresIn: '30d' }
   );
@@ -969,7 +969,7 @@ exports.login = async (req, res) => {
       affiliate_id = affiliate ? affiliate.affiliate_id : null;
 
       // Generate tokens
-      const { token, refreshToken } = generateTokens(user.id, role, user.permissions_version);
+      const { token, refreshToken } = generateTokens(user.id, role, user.permissions_version, user_type_id);
 
       const permissions = await getCombinedUserPermissions(
         user.id,

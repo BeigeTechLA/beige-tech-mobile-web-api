@@ -302,6 +302,109 @@ const getPlatformUserById = async (userId) => {
   return user || null;
 };
 
+const isCreatorRequestUser = (user = {}) => {
+  const userTypeId = Number(user?.userTypeId || user?.user_type_id || user?.user_type);
+  if (userTypeId === 2) return true;
+
+  const role = String(user?.userRole || user?.role || '').trim().toLowerCase();
+  return ['creator', 'cp', 'creative_partner', 'creative partner'].includes(role);
+};
+
+const isClientRequestUser = (user = {}) => {
+  const userTypeId = Number(user?.userTypeId || user?.user_type_id || user?.user_type);
+  if (userTypeId === 3) return true;
+
+  const role = String(user?.userRole || user?.role || '').trim().toLowerCase();
+  return ['client', 'affiliate'].includes(role);
+};
+
+const uniqueTruthyStrings = (values = []) => [
+  ...new Set(
+    values
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)
+  ),
+];
+
+const getChatParticipantIdsForCreatorUser = async (user = {}) => {
+  const normalizedUserId = Number(user?.userId || user?.id);
+  const platformUser = Number.isFinite(normalizedUserId) ? await getPlatformUserById(normalizedUserId) : null;
+  const email = String(platformUser?.email || user?.email || '').trim().toLowerCase();
+  const orConditions = [];
+
+  if (Number.isFinite(normalizedUserId)) {
+    orConditions.push({ user_id: normalizedUserId });
+  }
+  if (email) {
+    orConditions.push({ email });
+  }
+
+  const findCrewMembers = (activeOnly) => db.crew_members.findAll({
+    where: activeOnly
+      ? { is_active: 1, [db.Sequelize.Op.or]: orConditions }
+      : { [db.Sequelize.Op.or]: orConditions },
+    attributes: ['crew_member_id'],
+    raw: true,
+  });
+
+  const activeCrewMembers = orConditions.length ? await findCrewMembers(true) : [];
+  const crewMembers = activeCrewMembers.length ? activeCrewMembers : orConditions.length ? await findCrewMembers(false) : [];
+  const crewMemberIds = uniqueTruthyStrings(crewMembers.map((crewMember) => crewMember.crew_member_id));
+
+  if (crewMemberIds.length) {
+    return crewMemberIds;
+  }
+
+  return uniqueTruthyStrings([
+    Number.isFinite(normalizedUserId) ? normalizedUserId : '',
+    email,
+  ]);
+};
+
+const getChatParticipantIdsForClientUser = async (user = {}) => {
+  const normalizedUserId = Number(user?.userId || user?.id);
+  const platformUser = Number.isFinite(normalizedUserId) ? await getPlatformUserById(normalizedUserId) : null;
+  const email = String(platformUser?.email || user?.email || '').trim().toLowerCase();
+  const orConditions = [];
+
+  if (Number.isFinite(normalizedUserId)) {
+    orConditions.push({ user_id: normalizedUserId });
+  }
+  if (email) {
+    orConditions.push({ email });
+  }
+
+  const activeClientRecords = orConditions.length
+    ? await db.clients.findAll({
+        where: {
+          is_active: 1,
+          [db.Sequelize.Op.or]: orConditions,
+        },
+        attributes: ['client_id', 'user_id', 'email'],
+        raw: true,
+      })
+    : [];
+  const clientRecords = activeClientRecords.length
+    ? activeClientRecords
+    : orConditions.length
+      ? await db.clients.findAll({
+          where: {
+            [db.Sequelize.Op.or]: orConditions,
+          },
+          attributes: ['client_id', 'user_id', 'email'],
+          raw: true,
+        })
+      : [];
+
+  return uniqueTruthyStrings([
+    ...clientRecords.map((client) => client.client_id),
+    ...clientRecords.map((client) => client.user_id),
+    Number.isFinite(normalizedUserId) ? normalizedUserId : '',
+    ...clientRecords.map((client) => client.email),
+    email,
+  ]);
+};
+
 const getRoleFromUserType = (userType) => {
   if (Number(userType) === 1) return 'admin';
   if (Number(userType) === 5) return 'sales_rep';
@@ -634,6 +737,7 @@ const sendChatNotificationTemplate = async ({
       '';
     const booking = resolvedBookingId ? await getBookingRecord(resolvedBookingId) : null;
     const projectId = String(booking?.stream_project_booking_id || resolvedBookingId || '').trim();
+    const shootName = String(booking?.project_name || '').trim();
     if (projectId) {
       await saveChatRoomMapping({
         roomId,
@@ -671,6 +775,7 @@ const sendChatNotificationTemplate = async ({
         order_id: projectId,
         project_name: chatName,
         project_id: projectId,
+        shoot_name: shootName,
         sender_id: sender?.id != null ? String(sender.id) : '',
         sender_name: sender?.name || sender?.email || '',
         message_preview: String(messagePreview || ''),
@@ -1335,10 +1440,74 @@ exports.getChatRoom = async (req, res) => {
 exports.listChatRooms = async (req, res) => {
   try {
     const query = new URLSearchParams();
-    if (req.query.page) query.set('page', req.query.page);
-    if (req.query.limit) query.set('limit', req.query.limit);
-    if (req.query.sortBy) query.set('sortBy', req.query.sortBy);
-    if (req.query.search) query.set('search', req.query.search);
+    const isCreatorUser = isCreatorRequestUser(req.user);
+    const isClientUser = isClientRequestUser(req.user);
+
+    [
+      'page',
+      'limit',
+      'sortBy',
+      'search',
+      'cp_id',
+      'cp_ids',
+      'client_id',
+      'client_ids',
+      'manager_id',
+      'pm_id',
+      'production_id',
+      'order_id',
+      'populate',
+    ].forEach((key) => {
+      const value = req.query[key];
+      if (value == null || String(value).trim() === '') return;
+      query.set(key, String(value).trim());
+    });
+
+    if (isCreatorUser) {
+      const participantIds = await getChatParticipantIdsForCreatorUser(req.user);
+
+      if (!participantIds.length) {
+        return res.status(200).json({
+          success: true,
+          data: {
+            results: [],
+            page: Number(req.query.page) || 1,
+            limit: Number(req.query.limit) || 100,
+            totalPages: 0,
+            totalResults: 0,
+          },
+        });
+      }
+
+      query.set('cp_id', participantIds[0]);
+      if (participantIds.length > 1) {
+        query.set('cp_ids', participantIds.join(','));
+      } else {
+        query.delete('cp_ids');
+      }
+    } else if (isClientUser) {
+      const participantIds = await getChatParticipantIdsForClientUser(req.user);
+
+      if (!participantIds.length) {
+        return res.status(200).json({
+          success: true,
+          data: {
+            results: [],
+            page: Number(req.query.page) || 1,
+            limit: Number(req.query.limit) || 100,
+            totalPages: 0,
+            totalResults: 0,
+          },
+        });
+      }
+
+      query.set('client_id', participantIds[0]);
+      if (participantIds.length > 1) {
+        query.set('client_ids', participantIds.join(','));
+      } else {
+        query.delete('client_ids');
+      }
+    }
 
     const result = await proxyRequest(`/rooms${query.toString() ? `?${query.toString()}` : ''}`);
     const rooms = result?.data?.results || result?.data?.rooms || result?.results || [];

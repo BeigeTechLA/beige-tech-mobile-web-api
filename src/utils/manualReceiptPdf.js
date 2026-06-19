@@ -66,7 +66,15 @@ function buildManualReceiptHtml(data) {
     totalAmount,
     Math.max(totalPaidFromHistory > 0 ? totalPaidFromHistory : fallbackPaidAmount, 0)
   );
+  const visibleHistory = history.filter((entry) => {
+    const amount = Number(entry?.amount || 0);
+    const method = String(entry?.method || '').toLowerCase();
+    return (Number.isFinite(amount) && amount > 0.009) || method.includes('net 30') || method.includes('net30');
+  });
   const pendingAmount = Math.max(totalAmount - totalPaidAmount, 0);
+  const hasPositivePaidAmount = totalPaidAmount > 0.009;
+  const isFullyPaid = Boolean(data.isPaid) && hasPositivePaidAmount && pendingAmount <= 0.009;
+  const showPaidStamp = isFullyPaid;
   const discountAmount = Math.max(0, Number(data.discountAmount || 0));
   const discountCode = data.discountCode ? String(data.discountCode) : '';
   const discountMeta = formatDiscountMeta(data.discountType, data.discountValue);
@@ -85,22 +93,46 @@ function buildManualReceiptHtml(data) {
     `)
     .join('');
 
-  const historyRows = history
+  const hasReceiptActions = visibleHistory.some((item) => item?.receiptUrl || item?.receiptDownloadUrl);
+  const historyRows = visibleHistory.length > 0
+    ? visibleHistory
     .map((entry) => `
       <tr>
         <td>${escapeHtml(toTitleCase(entry.method || 'Manual'))}</td>
         <td>${escapeHtml(entry.date || 'N/A')}</td>
         <td>${formatCurrency(entry.amount || 0)}</td>
+        ${hasReceiptActions ? `
+          <td>
+            <span class="receipt-actions">
+              ${entry.receiptUrl ? `<a class="receipt-link" href="${escapeHtml(entry.receiptUrl)}" target="_blank">View Receipt</a>` : ''}
+              ${entry.receiptDownloadUrl ? `
+                <a class="receipt-download" href="${escapeHtml(entry.receiptDownloadUrl)}" target="_blank" title="Download Receipt" aria-label="Download Receipt">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 3v10m0 0 4-4m-4 4-4-4M5 17v2h14v-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </a>
+              ` : ''}
+            </span>
+          </td>
+        ` : ''}
       </tr>
     `)
-    .join('');
+    .join('')
+    : `
+      <tr>
+        <td colspan="${hasReceiptActions ? 4 : 3}" class="empty-history">No payments recorded yet</td>
+      </tr>
+    `;
 
   const invoiceDate = toDateForHeader(data.invoiceDate || new Date());
   const receiptNo = escapeHtml(String(data.receiptNumber || data.bookingRef || '').replace(/[^\w-]/g, '').slice(-8) || 'N/A');
   const hasNet30 = history.some((entry) => String(entry?.method || '').toLowerCase().includes('net 30') || String(entry?.method || '').toLowerCase().includes('net30'));
   const net30DueDate = hasNet30 ? toDateForHeader(addDays(data.invoiceDate || new Date(), 30)) : null;
-  const paidLabel = data.isPaid ? 'Paid in Full' : 'Pending';
+  const paidLabel = isFullyPaid ? 'Paid in Full' : 'Pending';
   const transactionRef = escapeHtml(data.transactionReference || data.confirmationNumber || '');
+  const documentTitle = escapeHtml(data.documentTitle || 'INVOICE');
+  const paymentUrl = String(data.paymentUrl || '').trim();
+  const showPaymentButton = paymentUrl && pendingAmount > 0.009;
 
   return `
   <!doctype html>
@@ -249,6 +281,7 @@ function buildManualReceiptHtml(data) {
         .inv-meta-row {
           display: flex;
           align-items: center;
+          gap: 6px;
         }
 
         .inv-meta b {
@@ -260,11 +293,14 @@ function buildManualReceiptHtml(data) {
 
         .inv-meta span {
           color: #e2e8f0;
+          min-width: 0;
+          overflow-wrap: anywhere;
+          word-break: break-word;
         }
 
         /* ─── BOOKING STRIP ─── */
         .booking-strip {
-          height: 38px;
+          min-height: 38px;
           background: #e7d7bc;
           display: flex;
           align-items: center;
@@ -273,11 +309,16 @@ function buildManualReceiptHtml(data) {
           color: #2f2f2f;
           letter-spacing: 1px;
           border-bottom: 1px solid #d7c19d;
+          line-height: 1.25;
+          overflow-wrap: anywhere;
+          word-break: break-word;
         }
 
         .booking-strip b {
           margin-left: 6px;
           letter-spacing: 1.5px;
+          overflow-wrap: anywhere;
+          word-break: break-word;
         }
 
         /* ─── CONTENT ─── */
@@ -310,17 +351,26 @@ function buildManualReceiptHtml(data) {
           overflow: hidden;
         }
 
+        .bill-card.has-stamp {
+          padding-right: 78px;
+        }
+
         .bill-title {
           font-size: 14px;
           font-weight: 700;
           margin-bottom: 8px;
           color: #111827;
+          line-height: 1.25;
+          overflow-wrap: anywhere;
+          word-break: break-word;
         }
 
         .bill-line {
           font-size: 11px;
           color: #4b5563;
           line-height: 1.45;
+          overflow-wrap: anywhere;
+          word-break: break-word;
         }
 
         .bill-line.receipt-label {
@@ -394,6 +444,8 @@ function buildManualReceiptHtml(data) {
 
         .items .desc {
           font-weight: 500;
+          overflow-wrap: anywhere;
+          word-break: break-word;
         }
 
         .items .qty {
@@ -449,6 +501,20 @@ function buildManualReceiptHtml(data) {
           font-weight: 600;
         }
 
+        .pay-online {
+          display: block;
+          margin-top: 10px;
+          background: #111827;
+          color: #e6d1aa;
+          text-decoration: none;
+          text-align: center;
+          border-radius: 8px;
+          padding: 10px 12px;
+          font-size: 12px;
+          font-weight: 700;
+          letter-spacing: 0.6px;
+        }
+
         /* ─── PAYMENT HISTORY ─── */
         .section-title {
           font-size: 11px;
@@ -482,6 +548,42 @@ function buildManualReceiptHtml(data) {
           font-size: 12px;
           color: #111827;
           font-weight: 600;
+        }
+
+        .history .empty-history {
+          color: #6b7280;
+          font-weight: 500;
+          text-align: center;
+        }
+
+        .receipt-link {
+          color: #8a6a3d;
+          font-size: 11px;
+          font-weight: 700;
+          text-decoration: underline;
+        }
+
+        .receipt-actions {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          white-space: nowrap;
+        }
+
+        .receipt-download {
+          display: inline-flex;
+          width: 16px;
+          height: 16px;
+          align-items: center;
+          justify-content: center;
+          color: #8a6a3d;
+          text-decoration: none;
+          vertical-align: middle;
+        }
+
+        .receipt-download svg {
+          width: 15px;
+          height: 15px;
         }
 
         /* ─── FOOTER ─── */
@@ -571,7 +673,7 @@ function buildManualReceiptHtml(data) {
             </div>
           </div>
           <div class="inv-head">
-            <div class="inv-title">INVOICE</div>
+              <div class="inv-title">${documentTitle}</div>
             <div class="inv-meta">
               <div class="inv-meta-row"><b>Invoice:</b> <span>${escapeHtml(data.invoiceNumber || 'N/A')}</span></div>
               <div class="inv-meta-row"><b>Receipt No:</b> <span>${receiptNo}</span></div>
@@ -600,8 +702,8 @@ function buildManualReceiptHtml(data) {
             </div>
             <div>
               <div class="bill-label">Bill to:</div>
-              <div class="bill-card">
-                ${data.isPaid ? '<div class="stamp">Received Paid</div>' : ''}
+              <div class="bill-card${showPaidStamp ? ' has-stamp' : ''}">
+                ${showPaidStamp ? '<div class="stamp">Received Paid</div>' : ''}
                 <div class="bill-title">${escapeHtml(data.clientName || 'Client')}</div>
                 <div class="bill-line receipt-label">Payment Receipt: <b>${escapeHtml(data.projectTitle || 'Project')}</b></div>
                 <div class="bill-line">${escapeHtml(data.location || 'Location not available')}</div>
@@ -632,6 +734,15 @@ function buildManualReceiptHtml(data) {
             <div class="tot-row"><span><b>Total</b></span><span><b>${formatCurrency(totalAmount)}</b></span></div>
             <div class="tot-row amount-paid"><span>Amount Paid</span><b>${formatCurrencyBold(totalPaidAmount)}</b></div>
             <div class="tot-row"><span>Pending Amount</span><span><b>${formatCurrency(pendingAmount)}</b></span></div>
+            ${showPaymentButton ? `
+              <a
+                href="${escapeHtml(paymentUrl)}"
+                target="_blank"
+                class="pay-online"
+              >
+                Pay Online
+              </a>
+            ` : ''}
           </div>
 
           <h3 class="section-title">PAYMENT HISTORY</h3>
@@ -642,6 +753,7 @@ function buildManualReceiptHtml(data) {
                   <th>Payment Method</th>
                   <th>Date</th>
                   <th>Amount</th>
+                  ${hasReceiptActions ? '<th>Receipt</th>' : ''}
                 </tr>
               </thead>
               <tbody>
@@ -656,9 +768,9 @@ function buildManualReceiptHtml(data) {
               <p>Fees and payment terms will be established in the contract or agreement prior to the commencement of the project. An initial deposit will be required before any design work begins. We reserve the right to suspend or halt work in the event of non-payment.</p>
               <div class="thank-you">
                 ${hasNet30
-                  ? `Thank you for your business! This invoice is on <b>Net 30</b> terms. Payment of <b>${formatCurrencyBold(totalAmount)}</b> is due within 30 days${net30DueDate ? ` (due by <b>${escapeHtml(net30DueDate)}</b>)` : ''}.`
-                  : `Thank you for your business! Total paid amount of <b>${formatCurrencyBold(totalPaidAmount)}</b> has been received and processed manually.${transactionRef ? ` <b>Transaction Reference: ${transactionRef}.</b>` : ''}`
-                }
+      ? `Thank you for your business! This invoice is on <b>Net 30</b> terms. Payment of <b>${formatCurrencyBold(totalAmount)}</b> is due within 30 days${net30DueDate ? ` (due by <b>${escapeHtml(net30DueDate)}</b>)` : ''}.`
+      : `Thank you for your business! Total paid amount of <b>${formatCurrencyBold(totalPaidAmount)}</b> has been received and processed manually.${transactionRef ? ` <b>Transaction Reference: ${transactionRef}.</b>` : ''}`
+    }
               </div>
             </div>
           </div>
