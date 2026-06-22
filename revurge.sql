@@ -2435,3 +2435,13 @@ WHERE module_key LIKE 'client_%';
 -- 17-06-26
 
 ALTER TABLE users ADD COLUMN permissions_version INT DEFAULT 1;
+
+-- 22-06-26
+
+ALTER TABLE `sales_quotes`
+  ADD COLUMN `booking_type` ENUM('single_day','multi_day') NULL AFTER `video_shoot_type`,
+  ADD COLUMN `time_zone` VARCHAR(64) NULL AFTER `booking_type`,
+  ADD COLUMN `start_date` DATE NULL AFTER `time_zone`,
+  ADD COLUMN `start_time` TIME NULL AFTER `start_date`,
+  ADD COLUMN `end_time` TIME NULL AFTER `start_time`,
+  ADD COLUMN `booking_days` TEXT NULL AFTER `end_time`;
