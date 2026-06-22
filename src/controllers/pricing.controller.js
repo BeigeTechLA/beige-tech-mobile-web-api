@@ -548,11 +548,19 @@ exports.calculateFromCreators = async (req, res) => {
     const {
       creator_ids = [],
       role_counts = {},        
+      crew_roles = null,
       content_type,
+      serviceType,
+      service_type,
+      bookingFlow,
+      booking_flow,
       shoot_hours,
+      shootHours,
       event_type,
       shoot_start_date,
       studio_total = 0,
+      studio_details = null,
+      videography_details = null,
       add_on_items = [],
       video_edit_types = [], // Added
       photo_edit_types = [], 
@@ -567,6 +575,31 @@ exports.calculateFromCreators = async (req, res) => {
         .toLowerCase()
         .replace(/[_-]+/g, ' ')
         .replace(/\s+/g, ' ');
+
+    const normalizeFlow = (value) => {
+      const normalized = String(value || 'photography').trim().toLowerCase().replace(/[\s-]+/g, '_');
+      if (normalized === 'studio') return 'studios';
+      if (normalized === 'video') return 'videography';
+      if (normalized === 'videography_studio') return 'videography_studios';
+      return normalized;
+    };
+
+    const serviceFlow = normalizeFlow(serviceType || service_type || bookingFlow || booking_flow || 'photography');
+    const allowedFlows = new Set(['photography', 'videography', 'studios', 'videography_studios']);
+    if (!allowedFlows.has(serviceFlow)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid serviceType. Allowed values: photography, videography, studios, videography_studios',
+      });
+    }
+
+    if ((serviceFlow === 'videography' || serviceFlow === 'videography_studios') && !videography_details && !crew_roles?.videographer && !role_counts?.videographer && !creator_ids.length) {
+      return res.status(400).json({ success: false, message: 'videography_details or videographer selection is required for this serviceType' });
+    }
+
+    if ((serviceFlow === 'studios' || serviceFlow === 'videography_studios') && !studio_details) {
+      return res.status(400).json({ success: false, message: 'studio_details is required for this serviceType' });
+    }
 
     const requestedContentTypes = String(content_type || '')
       .split(',')
@@ -583,7 +616,7 @@ exports.calculateFromCreators = async (req, res) => {
       (Array.isArray(photo_edit_types) && photo_edit_types.length > 0) ||
       (!!photo_edit_types && !Array.isArray(photo_edit_types) && Object.keys(photo_edit_types).length > 0);
 
-    const numericShootHours = Number(shoot_hours);
+    const numericShootHours = Number(shoot_hours ?? shootHours ?? studio_details?.duration ?? videography_details?.duration);
     const resolvedShootHours = Number.isFinite(numericShootHours) && numericShootHours > 0
       ? numericShootHours
       : 0;
@@ -645,10 +678,11 @@ exports.calculateFromCreators = async (req, res) => {
           const rolesArr = Array.isArray(roles) ? roles : [roles];
 
           rolesArr.forEach((r) => {
+            const roleId = Number(r);
             const roleKey =
-              r === 11 ? 'videographer' :
-              r === 10 ? 'photographer' :
-              r === 12 ? 'cinematographer' :
+              [1, 9, 11].includes(roleId) ? 'videographer' :
+              [2, 10].includes(roleId) ? 'photographer' :
+              roleId === 12 ? 'cinematographer' :
               null;
 
             if (roleKey) {
@@ -669,8 +703,10 @@ exports.calculateFromCreators = async (req, res) => {
     /* --------------------------------------------
      * CASE 2: No creators → fallback to role_counts
      * ------------------------------------------ */
-    if (!isAiEditingFlow && pricingItems.length === 0 && role_counts) {
-      Object.entries(role_counts).forEach(([role, count]) => {
+    const resolvedRoleCounts = crew_roles && typeof crew_roles === 'object' ? crew_roles : role_counts;
+
+    if (!isAiEditingFlow && pricingItems.length === 0 && resolvedRoleCounts) {
+      Object.entries(resolvedRoleCounts).forEach(([role, count]) => {
         const itemId = ROLE_TO_ITEM_MAP[role];
         if (itemId && count > 0) {
           pricingItems.push({ item_id: itemId, quantity: count });
@@ -678,7 +714,32 @@ exports.calculateFromCreators = async (req, res) => {
       });
     }
 
-    if (pricingItems.length === 0 && add_on_items.length === 0 && !hasEditSelections) {
+    const resolvedStudioTotal = Number(
+      studio_details?.price ??
+      studio_details?.total ??
+      req.body.studioPrice ??
+      studio_total
+    ) || 0;
+
+    const explicitVideographyPrice = Number(
+      videography_details?.price ??
+      videography_details?.total ??
+      req.body.videographyPrice
+    ) || 0;
+
+    if (explicitVideographyPrice > 0 && pricingItems.length === 0) {
+      pricingItems.push({
+        item_id: null,
+        quantity: 1,
+        name: videography_details?.package || 'Videographer service',
+        rate: explicitVideographyPrice,
+        rate_type: 'flat',
+        category_name: 'Videography',
+        category_slug: 'videography',
+      });
+    }
+
+    if (pricingItems.length === 0 && add_on_items.length === 0 && !hasEditSelections && resolvedStudioTotal <= 0) {
       return res.status(400).json({
         success: false,
         message: 'No pricing items or edit types resolved',
@@ -692,7 +753,8 @@ exports.calculateFromCreators = async (req, res) => {
       shootHours: resolvedShootHours,
       eventType: event_type,
       shootStartDate: shoot_start_date,
-      studioTotal: parseFloat(studio_total) || 0,
+      studioTotal: resolvedStudioTotal,
+      studioDetails: studio_details,
       skipDiscount: skip_discount,
       skipMargin: skip_margin,
       videoEditTypes: video_edit_types, // Sent to service

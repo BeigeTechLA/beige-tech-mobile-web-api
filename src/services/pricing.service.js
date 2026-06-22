@@ -519,6 +519,7 @@ async function calculateQuote({
   eventType = null, 
   shootStartDate = null, 
   studioTotal = 0,
+  studioDetails = null,
   videoEditTypes = [], 
   photoEditTypes = [],
   marginPercent = null, 
@@ -533,7 +534,7 @@ async function calculateQuote({
 
     // 1. Fetch all relevant items from DB in one go
     // We fetch by ID (for crew) and by SLUG (for edits)
-    const creatorItemIds = items.map(i => i.item_id).filter(id => id !== null);
+    const creatorItemIds = items.map(i => i.item_id).filter(id => id !== null && id !== undefined);
     const editCounts = new Map();
     mergeEditTypeCounts(editCounts, normalizeEditTypeCounts(videoEditTypes));
     mergeEditTypeCounts(editCounts, normalizeEditTypeCounts(photoEditTypes));
@@ -563,6 +564,26 @@ async function calculateQuote({
 
     // 2. Process Crew / Base Items
     for (const selectedItem of items) {
+      if (selectedItem.item_id === null || selectedItem.item_id === undefined) {
+        const quantity = selectedItem.quantity || 1;
+        const unitPrice = parseFloat(selectedItem.rate || selectedItem.price || 0);
+        if (!Number.isFinite(unitPrice) || unitPrice <= 0) continue;
+        const lineTotal = selectedItem.rate_type === 'per_hour' ? unitPrice * shootHours * quantity : unitPrice * quantity;
+
+        subtotal += lineTotal;
+        lineItems.push({
+          item_id: null,
+          item_name: selectedItem.name || 'Custom service',
+          category_name: selectedItem.category_name || 'Services',
+          category_slug: selectedItem.category_slug || 'services',
+          quantity,
+          unit_price: unitPrice,
+          line_total: parseFloat(lineTotal.toFixed(2)),
+          is_mandatory: false
+        });
+        continue;
+      }
+
       if (isPodcast && selectedItem.item_id === 50) continue; 
       const dbItem = itemMap.get(selectedItem.item_id);
       if (!dbItem) continue;
@@ -653,6 +674,17 @@ async function calculateQuote({
     const parsedStudioTotal = Number(studioTotal) || 0;
     if (parsedStudioTotal > 0) {
       subtotal += parsedStudioTotal;
+      lineItems.push({
+        item_id: null,
+        item_name: studioDetails?.package || studioDetails?.studio_name || "Studio rental/package",
+        category_name: "Studios",
+        category_slug: "studios",
+        quantity: 1,
+        unit_price: parsedStudioTotal,
+        line_total: parseFloat(parsedStudioTotal.toFixed(2)),
+        is_mandatory: false,
+        metadata: studioDetails || null
+      });
     }
 
     // Final Math

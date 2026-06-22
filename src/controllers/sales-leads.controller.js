@@ -58,6 +58,72 @@ const normalizeDateOnlyInput = (value) => {
   return date || null;
 };
 
+const BOOK_A_SHOOT_SERVICE_TYPES = new Set([
+  'photography',
+  'videography',
+  'studios',
+  'videography_studios',
+]);
+
+const normalizeBookAShootServiceType = (value) => {
+  const normalized = String(value || 'photography')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+
+  if (normalized === 'studio') return 'studios';
+  if (normalized === 'video') return 'videography';
+  if (normalized === 'videography_studio') return 'videography_studios';
+  return normalized;
+};
+
+const buildBookAShootMetadata = (body, serviceType) => ({
+  serviceType,
+  bookingFlow: serviceType,
+  studio_details: body.studio_details || body.studioDetails || null,
+  videography_details: body.videography_details || body.videographyDetails || null,
+  pricing: body.pricing || body.price_details || body.priceDetails || null,
+  selected_package: body.selected_package || body.selectedPackage || body.package || null,
+  location: body.location || null,
+  latitude: body.latitude ?? body.lat ?? body.location_latitude ?? null,
+  longitude: body.longitude ?? body.lng ?? body.location_longitude ?? null,
+  shootDate: body.shootDate || body.start_date || body.startDate || null,
+  shootTime: body.shootTime || body.start_time || null,
+  notes: body.notes || body.message || body.specialInstructions || null,
+});
+
+const getBookAShootSelectedPackage = (body) =>
+  body.selected_package ||
+  body.selectedPackage ||
+  body.package ||
+  body.studio_details?.package ||
+  body.studioDetails?.package ||
+  body.videography_details?.package ||
+  body.videographyDetails?.package ||
+  null;
+
+const normalizeBookAShootCrewRoles = (crewRoles = {}) => {
+  const allowedRoles = new Set(['photographer', 'videographer', 'studio']);
+  return Object.entries(crewRoles).reduce((acc, [role, count]) => {
+    const key = String(role || '').trim().toLowerCase();
+    const numericCount = Number(count);
+    if (allowedRoles.has(key) && Number.isFinite(numericCount) && numericCount > 0) {
+      acc[key] = numericCount;
+    }
+    return acc;
+  }, {});
+};
+
+const validateBookAShootFlowDetails = ({ serviceType, studioDetails, videographyDetails }) => {
+  if ((serviceType === 'videography' || serviceType === 'videography_studios') && !videographyDetails) {
+    return 'videography_details is required for this serviceType';
+  }
+  if ((serviceType === 'studios' || serviceType === 'videography_studios') && !studioDetails) {
+    return 'studio_details is required for this serviceType';
+  }
+  return null;
+};
+
 const parseQuoteActivityMetadata = (value) => {
   if (!value) return null;
   if (typeof value === 'object') return value;
@@ -1410,14 +1476,18 @@ exports.trackEarlyBookingInterest = async (req, res) => {
         const { 
             booking_id, 
             guest_email, 
+            email,
             user_id, 
             content_type, 
             shoot_type, 
             client_name,
+            name,
             startDate, 
             endDate,
             start_date,
+            shootDate,
             start_time,
+            shootTime,
             end_time,
             estimated_delivery_date,
             time_zone,
@@ -1425,17 +1495,49 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             booking_days,
             location,
             specialInstructions,
+            message,
             reference_links,
             video_edit_types, 
             photo_edit_types, 
             edits_needed 
         } = req.body;
 
-        if (!guest_email) {
+        const serviceType = normalizeBookAShootServiceType(
+            req.body.serviceType || req.body.service_type || req.body.bookingFlow || req.body.booking_flow
+        );
+
+        if (!BOOK_A_SHOOT_SERVICE_TYPES.has(serviceType)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid serviceType. Allowed values: photography, videography, studios, videography_studios'
+            });
+        }
+
+        const studioDetails = req.body.studio_details || req.body.studioDetails || null;
+        const videographyDetails = req.body.videography_details || req.body.videographyDetails || null;
+        const pricingDetails = req.body.pricing || req.body.price_details || req.body.priceDetails || null;
+        const selectedPackage = getBookAShootSelectedPackage(req.body);
+        const flowValidationError = validateBookAShootFlowDetails({
+            serviceType,
+            studioDetails,
+            videographyDetails
+        });
+
+        if (flowValidationError) {
+            return res.status(400).json({ success: false, message: flowValidationError });
+        }
+
+        const resolvedGuestEmailInput = guest_email || email;
+        const resolvedClientName = client_name || name;
+        const resolvedStartDate = start_date || shootDate;
+        const resolvedStartTime = start_time || shootTime;
+        const resolvedInstructions = specialInstructions || message;
+
+        if (!resolvedGuestEmailInput) {
             return res.status(400).json({ success: false, message: 'Email is required' });
         }
 
-        const normalizedGuestEmail = String(guest_email).trim().toLowerCase();
+        const normalizedGuestEmail = String(resolvedGuestEmailInput).trim().toLowerCase();
         const resolvedUserId = await resolveUserId(user_id, normalizedGuestEmail);
         const normalizedEstimatedDeliveryDate = normalizeDateOnlyInput(estimated_delivery_date);
 
@@ -1474,8 +1576,8 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             }));
 
         const resolvedSingleDay = resolveEventDateAndStartTime({
-            start_date,
-            start_time,
+            start_date: resolvedStartDate,
+            start_time: resolvedStartTime,
             start_date_time: startDate
         });
         let event_date = resolvedSingleDay.event_date;
@@ -1504,10 +1606,12 @@ exports.trackEarlyBookingInterest = async (req, res) => {
         const bookingData = {
             user_id: resolvedUserId,
             guest_email: normalizedGuestEmail,
-            project_name: `${shoot_type?.toUpperCase() || 'NEW'} Shoot - ${client_name || normalizedGuestEmail}`,
-            event_type: content_type || 'general',
-            shoot_type: shoot_type,
-            content_type: content_type,
+            project_name: `${(shoot_type || serviceType)?.toUpperCase() || 'NEW'} Shoot - ${resolvedClientName || normalizedGuestEmail}`,
+            event_type: content_type || serviceType,
+            shoot_type: shoot_type || serviceType,
+            content_type: content_type || serviceType,
+            service_type: serviceType,
+            booking_flow: serviceType,
             streaming_platforms: JSON.stringify([]),
             crew_roles: JSON.stringify([]),
             event_date: event_date,
@@ -1519,8 +1623,15 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             event_location: location || null,
             event_latitude: latitude,
             event_longitude: longitude,
-            description: specialInstructions || null,
-            reference_links: reference_links || null,
+            description: resolvedInstructions || null,
+            reference_links: JSON.stringify({
+                original_reference_links: reference_links || null,
+                book_a_shoot: buildBookAShootMetadata(req.body, serviceType)
+            }),
+            studio_details: studioDetails,
+            videography_details: videographyDetails,
+            pricing_details: pricingDetails,
+            selected_package: selectedPackage,
             edits_needed: edits_needed ? 1 : 0,
             video_edit_types: video_edit_types || [], 
             photo_edit_types: photo_edit_types || [],
@@ -1585,7 +1696,15 @@ exports.trackEarlyBookingInterest = async (req, res) => {
                 booking_id: booking.stream_project_booking_id,
                 user_id: resolvedUserId,
                 guest_email: normalizedGuestEmail,
-                client_name: client_name || null,
+                client_name: resolvedClientName || null,
+                phone: req.body.phone || null,
+                lead_source: req.body.source || null,
+                service_type: serviceType,
+                booking_flow: serviceType,
+                studio_details: studioDetails,
+                videography_details: videographyDetails,
+                pricing_details: pricingDetails,
+                selected_package: selectedPackage,
                 lead_type: 'self_serve',
                 lead_status: 'book_a_shoot_lead_created',
                 created_from: 1 // 1 = web
@@ -1594,7 +1713,15 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             await sales_lead_activities.create({
                 lead_id: lead.lead_id,
                 activity_type: 'created',
-                activity_data: { source: 'step_1_capture', user_id: resolvedUserId, guest_email: normalizedGuestEmail }
+                activity_data: {
+                    source: 'step_1_capture',
+                    user_id: resolvedUserId,
+                    guest_email: normalizedGuestEmail,
+                    serviceType,
+                    studio_details: studioDetails,
+                    videography_details: videographyDetails,
+                    pricing: req.body.pricing || null
+                }
             });
 
             // Force assignment to default sales inbox owner for this branch flow.
@@ -1635,7 +1762,18 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             sales_rep_email: assignedRep?.email || null
           }).catch(err => console.error('Production Email Error:', err));
         } else {
-          await lead.update({ last_activity_at: new Date() });
+          await lead.update({
+            last_activity_at: new Date(),
+            client_name: resolvedClientName || lead.client_name,
+            phone: req.body.phone || lead.phone,
+            lead_source: req.body.source || lead.lead_source,
+            service_type: serviceType,
+            booking_flow: serviceType,
+            studio_details: studioDetails,
+            videography_details: videographyDetails,
+            pricing_details: pricingDetails,
+            selected_package: selectedPackage
+          });
         }
 
         const sheetRowData = [
@@ -5971,6 +6109,49 @@ exports.updateBookingCrew = async (req, res) => {
       });
     }
 
+    const serviceType = normalizeBookAShootServiceType(
+      req.body.serviceType || req.body.service_type || req.body.bookingFlow || req.body.booking_flow
+    );
+
+    if (!BOOK_A_SHOOT_SERVICE_TYPES.has(serviceType)) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Invalid serviceType. Allowed values: photography, videography, studios, videography_studios'
+      });
+    }
+
+    const normalizedCrewRoles = normalizeBookAShootCrewRoles(crew_roles);
+    if (!Object.keys(normalizedCrewRoles).length) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'crew_roles must include photographer, videographer, or studio'
+      });
+    }
+
+    const studioDetails = req.body.studio_details || req.body.studioDetails || null;
+    const videographyDetails = req.body.videography_details || req.body.videographyDetails || null;
+    const pricingDetails = req.body.pricing || req.body.price_details || req.body.priceDetails || null;
+    const selectedPackage = getBookAShootSelectedPackage(req.body);
+    const inferredServiceType = req.body.serviceType || req.body.service_type || req.body.bookingFlow || req.body.booking_flow
+      ? serviceType
+      : (normalizedCrewRoles.videographer && normalizedCrewRoles.studio
+          ? 'videography_studios'
+          : normalizedCrewRoles.videographer
+            ? 'videography'
+            : normalizedCrewRoles.studio
+              ? 'studios'
+              : 'photography');
+
+    const flowValidationError = validateBookAShootFlowDetails({
+      serviceType: inferredServiceType,
+      studioDetails,
+      videographyDetails
+    });
+
+    if (flowValidationError) {
+      return res.status(constants.BAD_REQUEST.code).json({ success: false, message: flowValidationError });
+    }
+
     const booking = await stream_project_booking.findOne({
       where: {
         stream_project_booking_id: bookingId,
@@ -5986,7 +6167,16 @@ exports.updateBookingCrew = async (req, res) => {
     }
 
     const updateData = {
-      crew_roles: JSON.stringify(crew_roles)
+      crew_roles: JSON.stringify(normalizedCrewRoles),
+      event_type: inferredServiceType,
+      shoot_type: inferredServiceType,
+      content_type: inferredServiceType,
+      service_type: inferredServiceType,
+      booking_flow: inferredServiceType,
+      studio_details: studioDetails,
+      videography_details: videographyDetails,
+      pricing_details: pricingDetails,
+      selected_package: selectedPackage
     };
 
     if (location !== undefined || latitude !== null || longitude !== null) {
@@ -5998,13 +6188,28 @@ exports.updateBookingCrew = async (req, res) => {
       updateData.special_instructions = description;
     }
     if (reference_links !== undefined) {
-      updateData.reference_links = JSON.stringify(reference_links);
+      updateData.reference_links = JSON.stringify({
+        original_reference_links: reference_links,
+        book_a_shoot: buildBookAShootMetadata(req.body, inferredServiceType)
+      });
+    } else if (studioDetails || videographyDetails || pricingDetails) {
+      updateData.reference_links = JSON.stringify({
+        book_a_shoot: buildBookAShootMetadata(req.body, inferredServiceType)
+      });
     }
 
     await booking.update(updateData);
 
     await sales_leads.update(
-      { lead_status: 'booking_in_progress' },
+      {
+        lead_status: 'booking_in_progress',
+        service_type: inferredServiceType,
+        booking_flow: inferredServiceType,
+        studio_details: studioDetails,
+        videography_details: videographyDetails,
+        pricing_details: pricingDetails,
+        selected_package: selectedPackage
+      },
       {
         where: { booking_id: parseInt(bookingId, 10) },
         limit: 1
@@ -6023,9 +6228,12 @@ exports.updateBookingCrew = async (req, res) => {
       message: 'Crew roles and project details saved',
       data: {
         booking_id: bookingId,
-        crew_roles,
+        crew_roles: normalizedCrewRoles,
         location,
-        description
+        description,
+        serviceType: inferredServiceType,
+        studio_details: studioDetails,
+        videography_details: videographyDetails
       }
     });
 

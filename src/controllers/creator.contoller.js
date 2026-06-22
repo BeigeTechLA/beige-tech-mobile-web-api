@@ -3124,11 +3124,60 @@ exports.getCrewShootStats = async (req, res) => {
 
 exports.getRandomCrewMembers = async (req, res) => {
   try {
+    const { content_types, content_type } = req.query;
+    const rawRoleInput = content_types || content_type;
+    const whereClause = {
+      is_active: 1,
+      is_crew_verified: 1,
+    };
+
+    if (rawRoleInput) {
+      const rolesArray = String(rawRoleInput)
+        .split(',')
+        .map((role) => role.trim().toLowerCase())
+        .filter(Boolean);
+
+      const roleNameToId = {
+        videographer: [1, 9],
+        photographer: [2, 10],
+        photographers: [2, 10],
+        cinematographer: [1],
+      };
+
+      if (rolesArray.includes('studio') || rolesArray.includes('studios')) {
+        const studioRoles = await crew_roles.findAll({
+          where: {
+            role_name: { [Sequelize.Op.like]: '%studio%' },
+            is_active: 1,
+          },
+          attributes: ['role_id'],
+          raw: true,
+        });
+        roleNameToId.studio = studioRoles.map((role) => Number(role.role_id)).filter(Boolean);
+        roleNameToId.studios = roleNameToId.studio;
+      }
+
+      const roleIds = [...new Set(rolesArray.flatMap((role) => {
+        if (!Number.isNaN(Number(role))) return [Number(role)];
+        return roleNameToId[role] || [];
+      }))];
+
+      if (roleIds.length === 0) {
+        whereClause.primary_role = -999999;
+      } else {
+        whereClause[Sequelize.Op.or] = roleIds.flatMap((id) => ([
+          { primary_role: id },
+          { primary_role: { [Sequelize.Op.like]: `[${id}]` } },
+          { primary_role: { [Sequelize.Op.like]: `[${id},%` } },
+          { primary_role: { [Sequelize.Op.like]: `%,${id}]` } },
+          { primary_role: { [Sequelize.Op.like]: `%,${id},%` } },
+          { primary_role: { [Sequelize.Op.like]: `%\"${id}\"%` } },
+        ]));
+      }
+    }
+
     const members = await crew_members.findAll({
-      where: {
-        is_active: 1,
-        is_crew_verified: 1,
-      },
+      where: whereClause,
       include: [
         {
           model: crew_member_files,

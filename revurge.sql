@@ -1835,3 +1835,22 @@ VALUES
 (616, 2010, 1200.00, 1200.00, 'pending', NOW(), NOW()),
 (622, 2010, 1200.00, 1200.00, 'paid', NOW(), NOW()),
 (626, 2010, 1200.00, 1200.00, 'earned', NOW(), NOW());
+
+--17-06-26
+-- Book a Shoot flow columns
+-- Supports: photography, videography, studios, videography_studios
+ALTER TABLE `stream_project_booking`
+  ADD COLUMN `service_type` VARCHAR(50) NULL DEFAULT 'photography' AFTER `content_type`,
+  ADD COLUMN `booking_flow` VARCHAR(50) NULL DEFAULT 'photography' AFTER `service_type`,
+  ADD COLUMN `studio_details` JSON NULL AFTER `reference_links`,
+  ADD COLUMN `videography_details` JSON NULL AFTER `studio_details`,
+  ADD COLUMN `pricing_details` JSON NULL AFTER `videography_details`,
+  ADD COLUMN `selected_package` VARCHAR(255) NULL AFTER `pricing_details`;
+
+ALTER TABLE `sales_leads`
+  ADD COLUMN `service_type` VARCHAR(50) NULL DEFAULT 'photography' AFTER `lead_source`,
+  ADD COLUMN `booking_flow` VARCHAR(50) NULL DEFAULT 'photography' AFTER `service_type`,
+  ADD COLUMN `studio_details` JSON NULL AFTER `booking_flow`,
+  ADD COLUMN `videography_details` JSON NULL AFTER `studio_details`,
+  ADD COLUMN `pricing_details` JSON NULL AFTER `videography_details`,
+  ADD COLUMN `selected_package` VARCHAR(255) NULL AFTER `pricing_details`;

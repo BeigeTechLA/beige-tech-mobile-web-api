@@ -343,6 +343,24 @@ exports.searchCreators = async (req, res) => {
         'editor': [3, 11], 
       };
 
+      const wantsStudio = rolesArray.some((role) => {
+        const key = String(role).toLowerCase();
+        return key === 'studio' || key === 'studios';
+      });
+
+      if (wantsStudio) {
+        const studioRoles = await crew_roles.findAll({
+          where: {
+            role_name: { [Op.like]: '%studio%' },
+            is_active: 1
+          },
+          attributes: ['role_id'],
+          raw: true
+        });
+        roleNameToId.studio = studioRoles.map((role) => Number(role.role_id)).filter(Boolean);
+        roleNameToId.studios = roleNameToId.studio;
+      }
+
       let roleIds = [];
       rolesArray.forEach(role => {
         const roleLower = role.toLowerCase();
@@ -360,7 +378,12 @@ exports.searchCreators = async (req, res) => {
         mapped_ids: roleIds
       });
 
-      if (roleIds.length > 0) {
+      if (wantsStudio && roleIds.length === 0) {
+        whereClause[Op.and] = [
+          ...(whereClause[Op.and] || []),
+          { primary_role: -999999 }
+        ];
+      } else if (roleIds.length > 0) {
         const roleConditions = [];
 
         roleIds.forEach(id => {

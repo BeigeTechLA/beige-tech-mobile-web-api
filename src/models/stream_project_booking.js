@@ -47,6 +47,16 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.STRING(255),
       allowNull: true
     },
+    service_type: {
+      type: DataTypes.STRING(50),
+      allowNull: true,
+      defaultValue: 'photography'
+    },
+    booking_flow: {
+      type: DataTypes.STRING(50),
+      allowNull: true,
+      defaultValue: 'photography'
+    },
     event_date: {
       type: DataTypes.DATEONLY,
       allowNull: true
@@ -117,6 +127,22 @@ module.exports = function(sequelize, DataTypes) {
     },
     reference_links: {
       type: DataTypes.TEXT,
+      allowNull: true
+    },
+    studio_details: {
+      type: DataTypes.JSON,
+      allowNull: true
+    },
+    videography_details: {
+      type: DataTypes.JSON,
+      allowNull: true
+    },
+    pricing_details: {
+      type: DataTypes.JSON,
+      allowNull: true
+    },
+    selected_package: {
+      type: DataTypes.STRING(255),
       allowNull: true
     },
     edits_needed: {
