@@ -88,6 +88,22 @@ app.use('/v1', routes);
 app.use('/v1/signatures', signatureRoutes); 
 // app.use('/api/creator', creatorRoutes);
 
+app.post('/v1/internal/notify', async (req, res) => {
+  try {
+    const key = req.headers['x-internal-key'];
+    if (!key || key !== process.env.INTERNAL_BRIDGE_KEY) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+    const { title, notification_type, category, priority, message, entity_type, entity_id, action_url, action_label, actor_name, metadata } = req.body;
+    if (!title) return res.status(400).json({ success: false, message: 'title is required' });
+    const notificationCenterService = require('./services/notification-center.service');
+    const result = await notificationCenterService.notifyAdmins({ notification_type, category, priority, title, message, entity_type, entity_id, action_url, action_label, actor_name, metadata });
+    return res.status(201).json({ success: true, data: result });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 
 
 

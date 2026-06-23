@@ -2342,3 +2342,18 @@ Authorization: {{TOKEN}}
 DELETE {{URL}}notifications/muted-rules/1 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
+
+
+### Test Internal Bridge Notify
+POST {{URL}}internal/notify HTTP/1.1
+Content-Type: application/json
+x-internal-key: beige-internal-dev-key
+
+{
+  "notify_admins": true,
+  "notification_type": "GENERAL",
+  "category": "messages",
+  "priority": "medium",
+  "title": "Test notification",
+  "message": "Test message from bridge"
+}
