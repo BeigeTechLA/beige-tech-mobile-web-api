@@ -1059,7 +1059,6 @@ const calculateLeadPricing = async (booking) => {
             const totalFromPayment = parseFloat(paymentTransaction?.total_amount || 0);
             const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
                 bookingId: booking.stream_project_booking_id,
-                salesQuoteId: q.quote_id,
                 quoteTotal: totalFromQuote > 0 ? totalFromQuote : totalAfterDiscount,
                 paidAmount: totalFromPayment,
                 paymentStatus: bookingMarkedPaid ? 'paid' : 'pending'
