@@ -318,9 +318,11 @@ async function resolveBookingPaymentState({
 
   if (bookingId) {
     paymentSummary = await getBookingPaymentSummary(bookingId, transaction);
-  }
-
-  if (!paymentSummary && salesQuoteId) {
+  } else if (salesQuoteId) {
+    // A booking summary belongs to exactly one booking (booking_id is unique).
+    // Never fall back from a missing booking summary to a quote-only lookup:
+    // quotes.quote_id and sales_quotes.sales_quote_id are separate ID domains,
+    // and even a genuine sales quote may be associated with another booking.
     paymentSummary = await getBookingPaymentSummaryBySalesQuoteId(salesQuoteId, transaction);
   }
 

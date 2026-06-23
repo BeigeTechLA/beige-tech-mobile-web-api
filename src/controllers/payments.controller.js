@@ -279,7 +279,6 @@ async function inferCreditAmountForPayment({
 
   const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
     bookingId,
-    salesQuoteId: booking.quote_id,
     quoteTotal: booking.budget || booking.total || null,
     transaction
   });
@@ -2117,7 +2116,6 @@ exports.createPaymentIntentMulti = async (req, res) => {
     }
     const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
       bookingId: booking_id,
-      salesQuoteId: booking.quote_id,
       quoteTotal: amount,
       transaction: null
     });
@@ -2129,6 +2127,17 @@ exports.createPaymentIntentMulti = async (req, res) => {
           : round2(Math.max(paymentState.payableAmount - requestedCreditAmount, 0))
       )
       : requestedAmount;
+
+    // A positive client request must never be converted into a free checkout.
+    // If the authoritative booking summary says there is no balance, stop and
+    // let the caller refresh instead of returning a non-Stripe placeholder.
+    if (requestedAmount > 0 && amountToCharge <= 0) {
+      return res.status(409).json({
+        success: false,
+        message: 'No payment balance is due for this booking. Please refresh the payment details.',
+        code: 'NO_PAYMENT_BALANCE_DUE'
+      });
+    }
 
     // 3. Handle 100% Discount ($0.00) Case
     // Stripe does not allow creating intents for $0.00
@@ -2233,7 +2242,6 @@ exports.confirmPaymentMulti = async (req, res) => {
     const bookingAlreadyPaid = Boolean(booking.payment_id || booking.is_completed === 1);
     const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
       bookingId: booking_id,
-      salesQuoteId: booking.primary_quote?.quote_id,
       quoteTotal,
       transaction
     });
