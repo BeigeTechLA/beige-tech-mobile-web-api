@@ -4071,6 +4071,28 @@ const getShareByToken = async (shareToken) => {
   return Array.isArray(rows) && rows.length ? rows[0] : null;
 };
 
+const isMissingSharedResourceError = (error) => {
+  const status = Number(error?.status);
+  if (status === 404 || status === 410) return true;
+
+  const message = String(error?.payload?.message || error?.message || '').trim().toLowerCase();
+  return (
+    message.includes('file not found') ||
+    message.includes('not available') ||
+    message.includes('no longer available') ||
+    message.includes('does not exist') ||
+    message.includes('missing') ||
+    message.includes('enoent') ||
+    message.includes('deleted')
+  );
+};
+
+const sendSharedResourceUnavailable = (res) =>
+  res.status(404).json({
+    success: false,
+    message: 'The shared file is no longer available.',
+  });
+
 const extractBearerToken = (req) => {
   const authHeader = String(req.headers?.authorization || '').trim();
   if (!authHeader.toLowerCase().startsWith('bearer ')) return '';
@@ -4402,18 +4424,25 @@ exports.getSharedContent = async (req, res) => {
     await recordShareAccessLog(req, share, claims.email, 'content_view', accessToken);
 
     if (share.resource_type === 'file') {
-      const viewResult = await proxyRequest('/file-view-url', {
-        method: 'POST',
-        body: JSON.stringify({ filepath: share.filepath }),
-      });
-      return res.status(200).json({
-        success: true,
-        data: {
-          type: 'file',
-          file: { path: share.filepath, name: String(share.filepath || '').split('/').pop() || '' },
-          view: withPublicUrl(viewResult, req)?.data || null,
-        },
-      });
+      try {
+        const viewResult = await proxyRequest('/file-view-url', {
+          method: 'POST',
+          body: JSON.stringify({ filepath: share.filepath }),
+        });
+        return res.status(200).json({
+          success: true,
+          data: {
+            type: 'file',
+            file: { path: share.filepath, name: String(share.filepath || '').split('/').pop() || '' },
+            view: withPublicUrl(viewResult, req)?.data || null,
+          },
+        });
+      } catch (error) {
+        if (isMissingSharedResourceError(error)) {
+          return sendSharedResourceUnavailable(res);
+        }
+        throw error;
+      }
     }
 
     const requestedPhase = String(req.query.phase || '').trim() || null;
@@ -4621,11 +4650,18 @@ exports.getSharedDownloadUrl = async (req, res) => {
     await recordShareAccessLog(req, share, claims.email, 'download', accessToken);
 
     if (share.resource_type === 'file') {
-      const result = await proxyRequest('/file-download-url', {
-        method: 'POST',
-        body: JSON.stringify({ filepath: share.filepath }),
-      });
-      return res.status(200).json(withPublicUrl(result, req));
+      try {
+        const result = await proxyRequest('/file-download-url', {
+          method: 'POST',
+          body: JSON.stringify({ filepath: share.filepath }),
+        });
+        return res.status(200).json(withPublicUrl(result, req));
+      } catch (error) {
+        if (isMissingSharedResourceError(error)) {
+          return sendSharedResourceUnavailable(res);
+        }
+        throw error;
+      }
     }
 
     if (!filepath) {
@@ -4674,11 +4710,18 @@ exports.getSharedViewUrl = async (req, res) => {
     }
 
     if (share.resource_type === 'file') {
-      const result = await proxyRequest('/file-view-url', {
-        method: 'POST',
-        body: JSON.stringify({ filepath: share.filepath }),
-      });
-      return res.status(200).json(withPublicUrl(result, req));
+      try {
+        const result = await proxyRequest('/file-view-url', {
+          method: 'POST',
+          body: JSON.stringify({ filepath: share.filepath }),
+        });
+        return res.status(200).json(withPublicUrl(result, req));
+      } catch (error) {
+        if (isMissingSharedResourceError(error)) {
+          return sendSharedResourceUnavailable(res);
+        }
+        throw error;
+      }
     }
 
     if (!filepath) {
