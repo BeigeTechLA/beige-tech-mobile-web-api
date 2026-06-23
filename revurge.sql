@@ -2151,6 +2151,8 @@ WHERE module_key LIKE 'client_%'
 
 -- 04-06-26
 
+ALTER TABLE permissions ADD COLUMN role_id INT NULL AFTER permission_key;
+
 INSERT INTO permissions (module_key, action_key, permission_key, role_id, is_active) VALUES
 ('sales_admin_dashboard', 'view', 'sales_admin_dashboard.view', NULL, 1),
 ('sales_admin_dashboard', 'create', 'sales_admin_dashboard.create', NULL, 1),
@@ -2435,3 +2437,10 @@ WHERE module_key LIKE 'client_%';
 -- 17-06-26
 
 ALTER TABLE users ADD COLUMN permissions_version INT DEFAULT 1;
+
+-- 23-06-26
+
+ALTER TABLE `permissions` DROP INDEX `idx_permissions_role_id`;
+ALTER TABLE `permissions` DROP INDEX `unique_role_permission_key`;
+ALTER TABLE revurge.permissions DROP FOREIGN KEY fk_permissions_role_id;
+ALTER TABLE `permissions` DROP `role_id`;

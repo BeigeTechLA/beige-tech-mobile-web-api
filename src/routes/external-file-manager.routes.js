@@ -18,7 +18,11 @@ const fileManagerCreate = requireAnyPermission([
   'creative_partner_file_manager.create'
 ], { allowRoles: ['sales_rep', 'sales_admin'] });
 const fileManagerDelete = requireAnyPermission([
-  'admin_file_manager.delete'
+  'admin_file_manager.delete',
+  'sales_rep_file_manager.delete',
+  'sales_admin_file_manager.delete',
+  'creative_partner_file_manager.delete',
+  'client_file_manager.delete'
 ], { allowRoles: ['sales_rep', 'sales_admin', 'creative', 'client'] });
 const shootOrFileManagerView = requireAnyPermission([
   'admin_shoots.view',
