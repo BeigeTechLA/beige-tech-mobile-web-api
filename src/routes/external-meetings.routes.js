@@ -20,7 +20,7 @@ const meetingsCreate = requireAnyPermission([
 const meetingsEdit = requireAnyPermission([
   'admin_meetings.edit',
   'production_manager_meetings.edit'
-], { allowRoles: ['production_manager'] });
+], { allowRoles: ['production_manager', 'creative'] });
 const meetingsDelete = requireAnyPermission([
   'admin_meetings.delete'
 ]);
