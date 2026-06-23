@@ -2,6 +2,9 @@ const express = require('express');
 const router = express.Router();
 const authController = require('../controllers/auth.controller');
 const { authenticate } = require('../middleware/auth');
+const { requireAnyPermission } = require('../middleware/permission.middleware');
+
+const clientFinancesEdit = requireAnyPermission(['client_finances.edit'], { allowRoles: ['client'] });
 
 /**
  * ====================
@@ -48,7 +51,7 @@ router.get('/me', authenticate, authController.getCurrentUser);
 router.post('/cp-event-location/confirm', authenticate, authController.confirmCpEventLocation);
 router.post('/admin/create-internal-credential', authenticate, authController.createInternalCredential);
 
-router.post('/change-password-client', authController.changePasswordclient);
+router.post('/change-password-client', authenticate, clientFinancesEdit, authController.changePasswordclient);
 router.post('/change-password-crew', authController.changePasswordCrewMember);
 
 module.exports = router;

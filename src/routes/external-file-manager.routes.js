@@ -1,37 +1,72 @@
 const router = require('express').Router();
 const externalFileManagerController = require('../controllers/external-file-manager.controller');
 const { authenticate, authenticateAdmin } = require('../middleware/auth');
+const { requireAnyPermission } = require('../middleware/permission.middleware');
 
-router.get('/workspaces', authenticate, externalFileManagerController.listWorkspaces);
-router.get('/common-events', authenticate, externalFileManagerController.listCommonEvents);
-router.post('/common-events', authenticate, externalFileManagerController.createCommonEvent);
-router.patch('/common-events/:eventExternalId', authenticate, externalFileManagerController.updateCommonEvent);
-router.post('/common-events/:eventExternalId/creator-folder', authenticate, externalFileManagerController.createCreatorEventFolder);
+const fileManagerView = requireAnyPermission([
+  'admin_file_manager.view',
+  'sales_rep_file_manager.view',
+  'sales_admin_file_manager.view',
+  'creative_partner_file_manager.view',
+  'client_file_manager.view',
+  'client_find_yourself.view'
+], { allowRoles: ['sales_rep', 'sales_admin', 'creative', 'client'] });
+const fileManagerCreate = requireAnyPermission([
+  'admin_file_manager.create',
+  'sales_rep_file_manager.create',
+  'sales_admin_file_manager.create',
+  'creative_partner_file_manager.create'
+], { allowRoles: ['sales_rep', 'sales_admin'] });
+const fileManagerDelete = requireAnyPermission([
+  'admin_file_manager.delete'
+], { allowRoles: ['sales_rep', 'sales_admin', 'creative', 'client'] });
+const shootOrFileManagerView = requireAnyPermission([
+  'admin_shoots.view',
+  'admin_meetings.view',
+  'admin_file_manager.view',
+  'sales_rep_shoots.view',
+  'sales_rep_file_manager.view',
+  'sales_rep_meetings.view',
+  'sales_admin_shoots.view',
+  'sales_admin_file_manager.view',
+  'sales_admin_meetings.view',
+  'creative_partner_request_shoots.view',
+  'creative_partner_file_manager.view',
+  'client_file_manager.view',
+  'client_find_yourself.view',
+  'client_shoots.view'
+], { allowRoles: ['sales_rep', 'sales_admin', 'creative', 'client'] });
+
+router.get('/workspaces', authenticate, fileManagerView, externalFileManagerController.listWorkspaces);
+router.get('/common-events', authenticate, fileManagerView, externalFileManagerController.listCommonEvents);
+router.post('/common-events', authenticate, fileManagerCreate, externalFileManagerController.createCommonEvent);
+router.post('/common-events/:eventExternalId/creator-folder', authenticate, fileManagerCreate, externalFileManagerController.createCreatorEventFolder);
 router.post('/face-scan/query-upload-policy', authenticate, externalFileManagerController.getFaceScanQueryUploadPolicy);
 router.get('/face-scan/queue-status', authenticateAdmin, externalFileManagerController.getFaceScanQueueStatus);
 router.post('/face-scan/jobs', authenticate, externalFileManagerController.createFaceScanJob);
 router.get('/face-scan/jobs/:jobId', authenticate, externalFileManagerController.getFaceScanJob);
-router.post('/face-scan/search', authenticate, externalFileManagerController.searchFaceMatches);
-router.get('/face-scan/index-status/:externalId', authenticate, externalFileManagerController.getFaceScanIndexStatus);
-router.post('/face-scan/reindex', authenticate, externalFileManagerController.reindexFaceEmbeddings);
-router.post('/workspace', authenticate, externalFileManagerController.createWorkspace);
-router.get('/workspace/:bookingId', authenticate, externalFileManagerController.getWorkspace);
-router.get('/workspace/:bookingId/files', authenticate, externalFileManagerController.getWorkspaceFiles);
-router.post('/folder', authenticate, externalFileManagerController.createFolder);
-router.post('/upload-policy', authenticate, externalFileManagerController.getUploadPolicy);
-router.post('/upload-policies/batch', authenticate, externalFileManagerController.getUploadPoliciesBatch);
-router.post('/file-uploaded', authenticate, externalFileManagerController.notifyFileUploaded);
-router.post('/files-uploaded/batch', authenticate, externalFileManagerController.notifyFilesUploadedBatch);
+router.post('/face-scan/search', authenticate, fileManagerView, externalFileManagerController.searchFaceMatches);
+router.get('/face-scan/index-status/:externalId', authenticate, fileManagerView, externalFileManagerController.getFaceScanIndexStatus);
+router.post('/face-scan/reindex', authenticate, fileManagerCreate, externalFileManagerController.reindexFaceEmbeddings);
+router.post('/workspace', authenticate, fileManagerCreate, externalFileManagerController.createWorkspace);
+router.get('/workspace/:bookingId', authenticate, shootOrFileManagerView, externalFileManagerController.getWorkspace);
+router.get('/workspace/:bookingId/files', authenticate, shootOrFileManagerView, externalFileManagerController.getWorkspaceFiles);
+router.post('/folder', authenticate, fileManagerCreate, externalFileManagerController.createFolder);
+router.post('/upload-policy', authenticate, fileManagerCreate, externalFileManagerController.getUploadPolicy);
+router.post('/upload-policies/batch', authenticate, fileManagerCreate, externalFileManagerController.getUploadPoliciesBatch);
+router.post('/file-uploaded', authenticate, fileManagerCreate, externalFileManagerController.notifyFileUploaded);
+router.post('/files-uploaded/batch', authenticate, fileManagerCreate, externalFileManagerController.notifyFilesUploadedBatch);
 router.post('/copy-files', authenticate, externalFileManagerController.copyFiles);
 router.post('/revision-file/review', authenticate, externalFileManagerController.reviewRevisionFile);
-router.post('/file-view-url', authenticate, externalFileManagerController.getFileViewUrl);
-router.post('/file-download-url', authenticate, externalFileManagerController.getFileDownloadUrl);
-router.post('/folder-download-url', authenticate, externalFileManagerController.getFolderDownloadUrl);
-router.post('/delete', authenticate, externalFileManagerController.deleteEntry);
-router.post('/share', authenticate, externalFileManagerController.createShare);
-router.get('/share', authenticate, externalFileManagerController.listShares);
-router.get('/share/access-logs', authenticate, externalFileManagerController.listShareAccessLogs);
-router.delete('/share', authenticate, externalFileManagerController.revokeShare);
+router.post('/file-view-url', authenticate, fileManagerView, externalFileManagerController.getFileViewUrl);
+router.post('/file-download-url', authenticate, fileManagerView, externalFileManagerController.getFileDownloadUrl);
+router.post('/folder-download-url', authenticate, fileManagerView, externalFileManagerController.getFolderDownloadUrl);
+router.post('/delete', authenticate, fileManagerDelete, externalFileManagerController.deleteEntry);
+router.post('/share', authenticate, fileManagerCreate, externalFileManagerController.createShare);
+router.get('/share', authenticate, fileManagerView, externalFileManagerController.listShares);
+router.get('/share/access-logs', authenticate, fileManagerView, externalFileManagerController.listShareAccessLogs);
+router.delete('/share', authenticate, fileManagerDelete, externalFileManagerController.revokeShare);
+router.patch('/common-events/:eventExternalId', authenticate, externalFileManagerController.updateCommonEvent);
 router.post('/share/request-otp', externalFileManagerController.requestShareOtp);
 router.post('/share/verify-otp', externalFileManagerController.verifyShareOtp);
 router.get('/share/:shareToken/content', externalFileManagerController.getSharedContent);

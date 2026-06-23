@@ -96,6 +96,10 @@ var _sales_quote_activities = require("./sales_quote_activities");
 var _sales_quote_versions = require("./sales_quote_versions");
 var _sales_shoot_types = require("./sales_shoot_types");
 var _shoot_types = require("./shoot_types");
+var _permissions = require("./permissions");
+var _role_permissions = require("./role_permissions");
+var _user_roles = require("./user_roles");
+var _user_permissions = require("./user_permissions");
 
 function initModels(sequelize) {
   var account_credit_ledger = _account_credit_ledger(sequelize, DataTypes);
@@ -198,6 +202,10 @@ function initModels(sequelize) {
   var sales_shoot_types = _sales_shoot_types(sequelize, DataTypes);
   
   var shoot_types = _shoot_types(sequelize, DataTypes);
+  var permissions = _permissions(sequelize, DataTypes);
+  var role_permissions = _role_permissions(sequelize, DataTypes);
+  var user_roles = _user_roles(sequelize, DataTypes);
+  var user_permissions = _user_permissions(sequelize, DataTypes);
 
   account_credit_ledger.belongsTo(users, { as: "user", foreignKey: "user_id" });
   users.hasMany(account_credit_ledger, { as: "account_credit_entries", foreignKey: "user_id" });
@@ -732,6 +740,70 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
   sales_quote_versions.belongsTo(sales_quote_activities, { as: "source_activity", foreignKey: "source_activity_id" });
   sales_quote_activities.hasMany(sales_quote_versions, { as: "created_versions", foreignKey: "source_activity_id" });
 
+  user_roles.belongsTo(user_type, {
+    as: "role",
+    foreignKey: "role_id"
+  });
+
+  user_type.hasMany(user_roles, {
+    as: "user_roles",
+    foreignKey: "role_id",
+    sourceKey: "user_type_id"
+  });
+
+  user_roles.belongsTo(users, {
+    as: "user",
+    foreignKey: "user_id"
+  });
+
+  users.hasMany(user_roles, {
+    as: "user_roles",
+    foreignKey: "user_id"
+  });
+
+  role_permissions.belongsTo(user_type, {
+    as: "role",
+    foreignKey: "role_id"
+  });
+
+  user_type.hasMany(role_permissions, {
+    as: "role_permissions",
+    foreignKey: "role_id",
+    sourceKey: "user_type_id"
+  });
+
+  role_permissions.belongsTo(permissions, {
+    as: "permission",
+    foreignKey: "permission_id"
+  });
+
+  permissions.hasMany(role_permissions, {
+    as: "role_permissions",
+    foreignKey: "permission_id"
+  });
+
+  // User -> user_permissions
+  user_permissions.belongsTo(users, {
+    as: "user",
+    foreignKey: "user_id"
+  });
+
+  users.hasMany(user_permissions, {
+    as: "user_permissions",
+    foreignKey: "user_id"
+  });
+
+  // Permission -> user_permissions
+  user_permissions.belongsTo(permissions, {
+    as: "permission",
+    foreignKey: "permission_id"
+  });
+
+  permissions.hasMany(user_permissions, {
+    as: "user_permissions",
+    foreignKey: "permission_id"
+  });
+
   return {
     account_credit_ledger,
     activity_logs,
@@ -827,6 +899,10 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
     sales_quote_versions,
     sales_shoot_types,
     shoot_types,
+    permissions,
+    role_permissions,
+    user_roles,
+    user_permissions,
     creator_earning_advances,
     creator_earning_compensation_items,
     creator_earning_timeline_events,

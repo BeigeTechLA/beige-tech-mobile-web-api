@@ -2,11 +2,20 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJpYXQiOjE3ODA0NzE3MjksImV4cCI6MTc4MTA3NjUyOX0.7quVudCPiFaKPUpk4XtCg5KdrgDUTuZCOizrbVoYykI
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjEsImlhdCI6MTc4MTY5Njg1NCwiZXhwIjoxNzgyMzAxNjU0fQ.2i06gFdnaIEZCarMqwlMPxm5kNSGJoFHMt-x974N-tY
 
-@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEwOCwidXNlclJvbGUiOiJDcmVhdG9yIiwiaWF0IjoxNzgwNDcxOTE0LCJleHAiOjE3ODEwNzY3MTR9.1D4L1pI2ijW-60xBeUaz2ZIyg1YJbGl1A891SI7Ly6w
+@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI3NiwidXNlclJvbGUiOiJwcm9kdWN0aW9uX21hbmFnZXIiLCJpYXQiOjE3ODA1Nzk4MTYsImV4cCI6MTc4MTE4NDYxNn0.zRMGMPJGIL34Bjh3SO1yJa5qYhfxKoknlUFwhwWW7qE
+
+@CP_TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI0MywidXNlclJvbGUiOiJDcmVhdGl2ZSIsImlhdCI6MTc4MTYwNTU4NSwiZXhwIjoxNzgyMjEwMzg1fQ.XUvZzGx-8Bif3oYAxbMvIfosI2W04KTVo-vvlwytTSk
+
+@SALES_TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjIzNiwidXNlclJvbGUiOiJzYWxlc19yZXAiLCJpYXQiOjE3ODA0ODY5NDEsImV4cCI6MTc4MTA5MTc0MX0.nFGQNfD9fbWuVdfJeP2yEVXeTXb5uaigBGMXmFqBRAk
+
+@SALES_ADMIN_TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI3NCwidXNlclJvbGUiOiJzYWxlc19hZG1pbiIsInBlcm1pc3Npb25zVmVyc2lvbiI6MSwiaWF0IjoxNzgxNjgwNTQ3LCJleHAiOjE3ODIyODUzNDd9.FBcz4nmKEXFig9J_O6emGDtKBwDAdXw_R526TixGtZw
+
+###
 POST {{URL}}creator/dashboard-count HTTP/1.1
 Content-Type: application/json
+Authorization: {{CP_TOKEN}}
 
 {
   "crew_member_id": 2048
@@ -36,8 +45,32 @@ POST {{URL}}auth/login HTTP/1.1
 Content-Type: application/json
 
 {
-  "email": "harsh.panchal@gmail.com",
+  "email": "salesadmin@gmail.com",
   "password": "password123"
+}
+
+###
+###
+POST {{URL}}auth/login HTTP/1.1
+Content-Type: application/json
+
+{
+  "email": "prod@beigecorporation.io",
+  "password": "Prod@2026!"
+}
+
+###
+###
+POST {{URL}}auth/admin/create-internal-credential HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "name": "harsh",
+  "email": "23@gmail.com",
+  "phone_number": "8173867887",
+  "password": "12345678",
+  "user_type": 3
 }
 
 ###
@@ -109,8 +142,8 @@ POST {{URL}}auth/login HTTP/1.1
 Content-Type: application/json
 
 {
-  "email": "bhumi29882@gmail.com",
-  "password": "12345678"
+  "email": "harsh.panchal@gmail.com",
+  "password": "password123"
 }
 
 ###
@@ -124,6 +157,7 @@ Content-Type: application/json
 ###
 GET {{URL}}admin/skills HTTP/1.1
 Content-Type: application/json
+Authorization: {{SALES_ADMIN_TOKEN}}
 
 ###
 GET {{URL}}admin/certifications HTTP/1.1
@@ -132,10 +166,12 @@ Content-Type: application/json
 ###
 GET {{URL}}admin/get-projects?range=all HTTP/1.1
 Content-Type: application/json
+Authorization: {{SALES_ADMIN_TOKEN}}
 
 ###
 GET {{URL}}admin/get-project/1251 HTTP/1.1
 Content-Type: application/json
+Authorization: {{TOKEN2}}
 
 ### update shoot schedule/location - single day
 PUT {{URL}}admin/shoots/update-date-location/1193 HTTP/1.1
@@ -213,6 +249,7 @@ Content-Type: application/json
 ###
 GET {{URL}}admin/recent-activity?range=month HTTP/1.1
 Content-Type: application/json
+Authorization: {{TOKEN}}
 
 ###
 GET {{URL}}admin/get-project-status HTTP/1.1
@@ -237,18 +274,21 @@ Content-Type: application/json
 ###
 GET {{URL}}admin/crew-member/2047 HTTP/1.1
 Content-Type: application/json
+Authorization: {{TOKEN2}}
 
 ###
-POST {{URL}}creator/get-profile-detail HTTP/1.1
+POST {{DEV_URL}}creator/get-profile-detail HTTP/1.1
 Content-Type: application/json
+Authorization: {{TOKEN}}
 
 {
-  "crew_member_id": "2100"
+  "crew_member_id": "294"
 }
 
 ###
 POST {{URL}}creator/availability HTTP/1.1
 Content-Type: application/json
+Authorization: {{TOKEN2}}
 
 {
   "year": "2026",
@@ -268,7 +308,7 @@ Authorization: {{TOKEN}}
 ###
 POST {{URL}}admin/crew-member-assigned-projects HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN}}
+Authorization: {{SALES_TOKEN}}
 
 {
   "crew_member_id": "2010"
@@ -328,19 +368,19 @@ Authorization: {{TOKEN}}
 # Dashboard: No Of CPs
 GET {{URL}}admin/dashboard/cp/count HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN}}
+Authorization: {{TOKEN2}}
 
 ###
 # Dashboard: Category Wise CPs
 GET {{URL}}admin/dashboard/category-wise-cp/count HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN}}
+Authorization: {{TOKEN2}}
 
 ###
 # Shoot status: successful, pending, rejected, cancelled (month/all filter)
 GET {{URL}}admin/dashboard/shoot-status?range=month HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN}}
+Authorization: {{TOKEN2}}
 
 ###
 # Top creative partners (month/all filter)
@@ -373,9 +413,11 @@ Authorization: {{TOKEN}}
 GET {{URL}}external-meetings/user/1?sortBy=meeting_date_time:desc&limit=100&page=1 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
+
+###
 GET {{URL}}admin/dashboard/top-creative-partners?range=month HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN}}
+Authorization: {{TOKEN2}}
 
 ###
 POST {{URL}}admin/verify-crew-member HTTP/1.1
@@ -389,6 +431,7 @@ Content-Type: application/json
 ###
 GET {{URL}}admin/shoot-category-count?tab=photography HTTP/1.1
 Content-Type: application/json
+Authorization: {{TOKEN}}
 
 ###
 GET {{URL}}admin/get-post-production-members HTTP/1.1
@@ -447,6 +490,7 @@ Authorization: {{TOKEN}}
 ###
 GET {{URL}}admin/get-clients HTTP/1.1
 Content-Type: application/json
+Authorization: {{TOKEN}}
 
 ###
 PUT {{URL}}admin/edit-client/1 HTTP/1.1
@@ -461,6 +505,11 @@ Content-Type: application/json
 ###
 DELETE {{URL}}admin/delete-client/2 HTTP/1.1
 Content-Type: application/json
+
+###
+GET {{URL}}sales/leads HTTP/1.1
+Content-Type: application/json
+Authorization: {{SALES_ADMIN_TOKEN}}
 
 ###
 GET {{URL}}sales/leads/400 HTTP/1.1
@@ -580,6 +629,7 @@ Content-Type: application/json
 ###
 DELETE {{URL}}admin/delete-project/590 HTTP/1.1
 Content-Type: application/json
+Authorization: {{TOKEN2}}
 
 ### get lead by id (3 is lead_id)
 GET {{URL}}creator/get-random-crew HTTP/1.1
@@ -588,6 +638,7 @@ Content-Type: application/json
 ### 
 GET {{URL}}admin/dashboard-chart-data HTTP/1.1
 Content-Type: application/json
+Authorization: {{TOKEN2}}
 
 ### 
 GET {{URL}}admin/dashboard-chart-data?range=custom&date_on=2026-02-11 HTTP/1.1
@@ -624,7 +675,7 @@ Content-Type: application/json
 ### 
 POST {{URL}}admin/assign-crew-from-shoot HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN}}
+Authorization: {{TOKEN2}}
 
 {
     "project_id": 1211,
@@ -634,7 +685,7 @@ Authorization: {{TOKEN}}
 ### 
 GET {{URL}}creator/check-cp-status HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN}}
+Authorization: {{CP_TOKEN}}
 
 ### generate discount: multi-use
 POST {{URL}}sales/payment-links HTTP/1.1
@@ -649,7 +700,7 @@ Authorization: {{TOKEN}}
 ### Get sales representatives
 GET {{URL}}sales/sales-reps HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN}}
+Authorization: {{TOKEN2}}
 
 ### Edit Lead Booking
 PUT {{URL}}sales/leads/939/booking HTTP/1.1
@@ -1031,7 +1082,7 @@ Content-Type: application/json
 ### 
 POST {{URL}}admin/get-project-fullfillment-stats/729 HTTP/1.1
 Content-Type: application/json
-# Authorization: {{TOKEN}}
+Authorization: {{TOKEN2}}
 
 ### 
 POST {{URL}}admin/remove-project-crew HTTP/1.1
@@ -1118,14 +1169,14 @@ Authorization: {{TOKEN}}
 }
 
 ### get client lead detail 
-GET {{URL}}sales/client-leads/2 HTTP/1.1
+GET {{URL}}sales/client-leads/9 HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN}}
+Authorization: {{SALES_TOKEN}}
 
 ### soft delete client lead
-DELETE {{URL}}sales/client-leads/2 HTTP/1.1
+DELETE {{URL}}sales/client-leads/9 HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN}}
+Authorization: {{SALES_TOKEN}}
 
 ### generate client lead discount
 POST {{URL}}sales/client-discount-codes HTTP/1.1
@@ -1155,7 +1206,7 @@ Authorization: {{TOKEN}}
 ### get client leads
 GET {{URL}}sales/client-leads HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN}}
+Authorization: {{TOKEN2}}
 
 ### get client leads
 GET {{URL}}sales/client-leads/10 HTTP/1.1
@@ -1236,7 +1287,7 @@ Authorization: {{TOKEN}}
 ### list sales quotes
 GET {{URL}}sales/quotes HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN}}
+Authorization: {{TOKEN2}}
 
 ### list sales quotes by sales rep
 GET {{URL}}sales/quotes?assigned_sales_rep_id=180 HTTP/1.1
@@ -1317,12 +1368,12 @@ Authorization: {{TOKEN}}
 ### sales quote ai editing types
 GET {{URL}}sales/quotes/ai-editing-types HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN}}
+Authorization: {{SALES_TOKEN}}
 
 ### create custom ai editing type
 POST {{URL}}sales/quotes/ai-editing-types HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN2}}
+Authorization: {{SALES_TOKEN}}
 
 {
   "category": "video",
@@ -1715,7 +1766,7 @@ Authorization: {{TOKEN}}
 ### Availability
 POST {{URL}}sales/add-availability HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN}}
+Authorization: {{SALES_TOKEN}}
 
 {
   "date": "2026-04-18",
@@ -1727,7 +1778,7 @@ Authorization: {{TOKEN}}
 ### Get Availability
 POST {{URL}}sales/availability HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN}}
+Authorization: {{SALES_TOKEN}}
 
 {
   "sales_rep_id": 236,
@@ -1766,7 +1817,7 @@ Authorization: {{TOKEN2}}
 
 ### 
 GET {{URL}}sales/status-details?sales_rep_id=180&search=22722222222
-Authorization: {{TOKEN2}}
+Authorization: {{SALES_TOKEN}}
 
 ### date wise
 GET {{URL}}sales/status-details?sales_rep_id=236&date=2026-04-18
@@ -1779,14 +1830,14 @@ Authorization: {{TOKEN2}}
 
 ###
 # Sales Rep Register
-POST https://staging.beige.app/v1/auth/register-sales-admin HTTP/1.1
+POST {{URL}}auth/register-sales-admin HTTP/1.1
 Content-Type: application/json
 
 {
   "name": "Sales Admin",
-  "email": "sales.admin.stage@gmail.com",
-  "phone_number": "5551826801",
-  "password": "SalesA@2026!"
+  "email": "salesadmin@gmail.com",
+  "phone_number": "7133867787",
+  "password": "password123"
 }
 
 ### Register Crew Member Step 3
@@ -2306,8 +2357,8 @@ Authorization: {{TOKEN}}
 ###
 GET {{URL}}finance/admin/disputes?raised_by_type=client HTTP/1.1
 Authorization: {{TOKEN}}
-11
-11###
+
+###
 GET {{URL}}finance/admin/disputes?category=refund HTTP/1.1
 Authorization: {{TOKEN}}
 
@@ -2318,6 +2369,162 @@ Authorization: {{TOKEN}}
 ###
 GET {{URL}}client/credit/dashboard HTTP/1.1
 Authorization: {{TOKEN2}}
+
+
+
+### create role
+POST {{URL}}admin/roles/create HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "name": "Production Team Manager",
+  "description": "Can access dashboard and shoots"
+}
+
+### get roles
+GET {{URL}}admin/roles HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### get roles
+GET {{URL}}admin/roles?search=client&sort_by=created_at&order=desc HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### assign role
+POST {{URL}}admin/users/assign-role HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "user_id": 274,
+  "role_id": 7
+}
+
+### update role
+PUT {{URL}}admin/roles/update HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "role_id": 5,
+  "permissions": {
+    "admin_dashboard": ["view", "create", "edit", "delete"],
+    "admin_shoots": ["view", "create", "edit", "delete"],
+    "admin_file_manager": ["view", "create", "edit"]
+  }
+}
+
+### delete role
+DELETE {{URL}}admin/roles/delete/10 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### get role
+GET {{URL}}admin/roles/5 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### get users with roles
+GET {{URL}}admin/users/roles?sort_by=created_at&order=asc HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### get users with roles
+GET {{URL}}admin/users/roles?search=harsh&status=1&month=4 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### get user role details
+GET {{URL}}admin/users/236/role-details HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### get permissions module
+GET {{URL}}admin/permissions/modules HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### get permissions module
+GET {{URL}}admin/permissions/modules?scope=creative_partner HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### delete user
+DELETE {{URL}}admin/delete-user/239 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### assign user custom permissions
+POST {{URL}}admin/users/permissions/assign HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "user_id": 236,
+  "permissions": {
+    "dashboard": {
+      "view": true,
+      "create": true,
+      "edit": false,
+      "delete": false
+    },
+    "users": {
+      "view": true,
+      "create": false,
+      "edit": true,
+      "delete": false
+    },
+    "quotes": {
+      "view": true,
+      "create": true,
+      "edit": true,
+      "delete": false
+    }
+  }
+}
+
+### update user custom permissions
+PUT {{URL}}admin/users/permissions/update HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "user_id": 236,
+  "permissions": {
+    "dashboard": {
+      "view": true,
+      "create": true,
+      "edit": true,
+      "delete": false
+    },
+    "users": {
+      "view": true,
+      "create": true,
+      "edit": true,
+      "delete": true
+    },
+    "shoots": {
+      "view": true,
+      "create": false,
+      "edit": false,
+      "delete": false
+    }
+  }
+}
+
+### get full user permissions 
+GET {{URL}}admin/users/236/permissions HTTP/1.1
+Authorization: {{TOKEN}}
+
+### delete one permission for a user
+### 236- user_id
+### users - module_key: permission module name from permissions.module_key
+### create - action_key: permission action from permissions.action_key
+DELETE {{URL}}admin/users/236/permissions/users/create
+Authorization: {{TOKEN}}
+
 
 ### Get Shoot Notes - 1197 = stream_project_booking_id
 GET {{URL}}admin/shoots/1197/notes HTTP/1.1
@@ -2415,6 +2622,9 @@ POST {{URL}}admin/shoots/remind-onboarding-form/1207
 Authorization: {{TOKEN}}
 Content-Type: application/json
 
+### 
+GET {{URL}}external-file-manager/workspaces HTTP/1.1
+Authorization: {{SALES_ADMIN_TOKEN}}
 ### batch revision request email
 POST {{URL}}external-file-manager/revision-file/review
 Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI0NywidXNlclJvbGUiOiJDbGllbnQiLCJpYXQiOjE3ODA5MDUyMTcsImV4cCI6MTc4MTUxMDAxN30.LyvFbRuNWUIfuGdbAGNlHMyd9PmbZI2XfrMgSyko5RM
@@ -2516,4 +2726,200 @@ Content-Type: application/json
 {
   "email": "harsh.panchal@gmail.com",
   "password": "password123"
+}
+
+### rooms
+GET {{DEV_URL}}external-chat/rooms?page=1&limit=50
+Content-Type: application/json
+Authorization: {{CP_TOKEN}}
+
+
+### 
+### Login Creative
+POST {{URL}}auth/login
+Content-Type: application/json; charset=utf-8
+
+{
+    "email": "craftdivine780@gmail.com",
+    "password": "12345678"
+}
+
+
+### get projects folders
+GET {{URL}}external-file-manager/workspaces?page=1&limit=24
+Authorization: {{CP_TOKEN}}
+
+### get project folder by id
+GET {{URL}}external-file-manager/workspace/934
+Authorization: {{CP_TOKEN}}
+
+### Open post production folder
+GET {{URL}}external-file-manager/workspace/934/files?phase=post
+Authorization: {{CP_TOKEN}}
+
+### Open pre production folder
+GET {{URL}}external-file-manager/workspace/934/files?phase=pre
+Authorization: {{CP_TOKEN}}
+
+### Open edited footage folder under post production
+GET {{URL}}external-file-manager/workspace/934/files?phase=post&path=Edited+Footage
+Authorization: {{CP_TOKEN}}
+
+### Open final deliverables folder under post production
+GET {{URL}}external-file-manager/workspace/934/files?phase=post&path=Final+Deliverables
+Authorization: {{TOKEN}}
+
+### Open Raw footage folder under post production
+GET {{URL}}external-file-manager/workspace/934/files?phase=post&path=Raw+Footage
+Authorization: {{TOKEN}}
+
+### Download Project Folder
+POST {{URL}}external-file-manager/folder-download-url
+Authorization: {{TOKEN}}
+
+{
+    "externalId":"event_pranav_test_event_1776835150560"
+}
+
+### Download Post Production Folder
+POST {{URL}}external-file-manager/folder-download-url
+Authorization: {{TOKEN}}
+
+{
+    "externalId":"event_pranav_test_event_1776835150560",
+    "phase":"post"
+}
+
+### Download Pre Production Folder
+POST {{URL}}external-file-manager/folder-download-url
+Authorization: {{TOKEN}}
+
+{
+    "externalId":"event_pranav_test_event_1776835150560",
+    "phase":"pre"
+}
+
+### Download edited footage folder under post production
+POST {{URL}}external-file-manager/folder-download-url
+Authorization: {{TOKEN}}
+
+{
+    "externalId":"event_pranav_test_event_1776835150560",
+    "phase":"post",
+    "path":"Edited Footage"
+}
+
+### Download raw footage folder under post production
+POST {{URL}}external-file-manager/folder-download-url
+Authorization: {{TOKEN}}
+
+{
+    "externalId":"event_pranav_test_event_1776835150560",
+    "phase":"post",
+    "path":"Raw Footage"
+}
+
+### Download final deliverables folder under post production
+POST {{URL}}external-file-manager/folder-download-url
+Authorization: {{TOKEN}}
+
+{
+    "externalId":"event_pranav_test_event_1776835150560",
+    "phase":"post",
+    "path":"Final Deliverables"
+}
+
+### delete folder (consider rootPath field value from workspaces)
+POST {{URL}}external-file-manager/delete
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{ 
+    "filepath": "Event - testing/"
+}
+
+### View file uploaded (consider value from opened folder files path)
+POST {{URL}}external-file-manager/file-view-url
+Content-Type: application/json
+Authorization: {{CP_TOKEN}}
+
+{
+  "filepath": "corporate_neha_#934/Post-Production/Edited Footage/goa.jpeg"
+}
+
+### Download file uploaded
+POST {{URL}}external-file-manager/file-download-url
+Content-Type: application/json
+Authorization: {{CP_TOKEN}}
+
+{
+  "filepath": "corporate_neha_#934/Post-Production/Edited Footage/goa.jpeg"
+}
+
+### create folder under post production
+POST {{URL}}external-file-manager/folder
+Content-Type: application/json
+Authorization: {{CP_TOKEN}}
+
+{
+  "bookingId": 934,
+  "phase": "post",
+  "path": "",
+  "folderName": "David"
+}
+
+### create folder under pre production
+POST {{URL}}external-file-manager/folder
+Content-Type: application/json
+Authorization: {{CP_TOKEN}}
+
+{
+  "bookingId": 934,
+  "phase": "pre",
+  "path": "",
+  "folderName": "David"
+}
+
+### create folder under pre production/David
+POST {{URL}}external-file-manager/folder
+Content-Type: application/json
+Authorization: {{CP_TOKEN}}
+
+{
+  "bookingId": 934,
+  "phase": "pre",
+  "path": "David",
+  "folderName": "Test"
+}
+
+### create folder under post production/David
+POST {{URL}}external-file-manager/folder
+Content-Type: application/json
+Authorization: {{CP_TOKEN}}
+
+{
+  "bookingId": 934,
+  "phase": "post",
+  "path": "David",
+  "folderName": "New"
+}
+
+### upload files in post production
+POST {{URL}}external-file-manager/upload-policies/batch
+Content-Type: application/json
+Authorization: {{CP_TOKEN}}
+
+{
+  "items": [
+    {
+      "filepath": "music_harsh_#965/Post-Production/Edited Footage/goa.jpeg",
+      "fileContentType": "image/jpeg",
+      "fileSize": 12315
+    },
+    {
+      "filepath": "music_harsh_#965/Post-Production/Edited Footage/kerala.jpg",
+      "fileContentType": "image/jpeg",
+      "fileSize": 17343
+    }
+  ]
 }

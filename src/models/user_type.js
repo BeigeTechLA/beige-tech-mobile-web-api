@@ -11,10 +11,24 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.STRING(255),
       allowNull: true
     },
+    description: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
     is_active: {
       type: DataTypes.INTEGER,
       allowNull: false,
       defaultValue: 1
+    },
+    created_at: {
+      type: DataTypes.DATE,
+      allowNull: false,
+      defaultValue: Sequelize.Sequelize.fn('current_timestamp')
+    },
+    updated_at: {
+      type: DataTypes.DATE,
+      allowNull: false,
+      defaultValue: Sequelize.Sequelize.fn('current_timestamp')
     }
   }, {
     sequelize,

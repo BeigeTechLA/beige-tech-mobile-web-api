@@ -1151,6 +1151,197 @@ ADD COLUMN assign_lead TINYINT(1) NOT NULL DEFAULT 1;
 ALTER TABLE `users`
 ADD COLUMN `role` VARCHAR(100) NULL DEFAULT NULL AFTER `assign_lead`;
 
+-- 08-05-26
+
+CREATE TABLE `roles` (
+  `role_id` INT NOT NULL AUTO_INCREMENT,
+  `name` VARCHAR(150) NOT NULL,
+  `description` TEXT DEFAULT NULL,
+  `is_system` TINYINT(1) NOT NULL DEFAULT 0,
+  `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+  `created_by` INT DEFAULT NULL,
+  `updated_by` INT DEFAULT NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`role_id`),
+  UNIQUE KEY `unique_role_name` (`name`)
+);
+
+CREATE TABLE `permissions` (
+  `permission_id` INT NOT NULL AUTO_INCREMENT,
+  `module_key` VARCHAR(100) NOT NULL,
+  `action_key` VARCHAR(50) NOT NULL,
+  `permission_key` VARCHAR(150) NOT NULL,
+  `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+  PRIMARY KEY (`permission_id`),
+  UNIQUE KEY `unique_permission_key` (`permission_key`)
+);
+
+CREATE TABLE `role_permissions` (
+  `role_permission_id` INT NOT NULL AUTO_INCREMENT,
+  `role_id` INT NOT NULL,
+  `permission_id` INT NOT NULL,
+  `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+  PRIMARY KEY (`role_permission_id`),
+  KEY `fk_role_permissions_role_id` (`role_id`),
+  KEY `fk_role_permissions_permission_id` (`permission_id`),
+  CONSTRAINT `fk_role_permissions_role_id`
+    FOREIGN KEY (`role_id`) REFERENCES `roles` (`role_id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_role_permissions_permission_id`
+    FOREIGN KEY (`permission_id`) REFERENCES `permissions` (`permission_id`) ON DELETE CASCADE
+);
+
+CREATE TABLE `user_roles` (
+  `user_role_id` INT NOT NULL AUTO_INCREMENT,
+  `user_id` INT NOT NULL,
+  `role_id` INT NOT NULL,
+  `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+  PRIMARY KEY (`user_role_id`),
+  KEY `fk_user_roles_user_id` (`user_id`),
+  KEY `fk_user_roles_role_id` (`role_id`),
+  CONSTRAINT `fk_user_roles_user_id`
+    FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_user_roles_role_id`
+    FOREIGN KEY (`role_id`) REFERENCES `roles` (`role_id`) ON DELETE CASCADE
+);
+
+INSERT INTO permissions (module_key, action_key, permission_key) VALUES
+('dashboard', 'view', 'dashboard.view'),
+('dashboard', 'create', 'dashboard.create'),
+('dashboard', 'edit', 'dashboard.edit'),
+('dashboard', 'delete', 'dashboard.delete'),
+
+('users', 'view', 'users.view'),
+('users', 'create', 'users.create'),
+('users', 'edit', 'users.edit'),
+('users', 'delete', 'users.delete'),
+
+('shoots', 'view', 'shoots.view'),
+('shoots', 'create', 'shoots.create'),
+('shoots', 'edit', 'shoots.edit'),
+('shoots', 'delete', 'shoots.delete'),
+
+('quotes', 'view', 'quotes.view'),
+('quotes', 'create', 'quotes.create'),
+('quotes', 'edit', 'quotes.edit'),
+('quotes', 'delete', 'quotes.delete');
+
+ALTER TABLE `role_permissions`
+DROP FOREIGN KEY `fk_role_permissions_role_id`;
+
+ALTER TABLE `user_roles`
+DROP FOREIGN KEY `fk_user_roles_role_id`;
+
+DROP TABLE IF EXISTS `roles`;
+
+ALTER TABLE `role_permissions`
+ADD CONSTRAINT `fk_role_permissions_user_type_id`
+FOREIGN KEY (`role_id`) REFERENCES `user_type` (`user_type_id`) ON DELETE CASCADE;
+
+ALTER TABLE `user_roles`
+ADD CONSTRAINT `fk_user_roles_user_type_id`
+FOREIGN KEY (`role_id`) REFERENCES `user_type` (`user_type_id`) ON DELETE CASCADE;
+
+ALTER TABLE `user_type`
+ADD COLUMN `description` TEXT DEFAULT NULL AFTER `user_role`;
+
+ALTER TABLE user_type
+ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP;
+
+-- 13-05-26
+
+ALTER TABLE `client_lead_activities` ADD `is_active` BOOLEAN NOT NULL DEFAULT TRUE AFTER `created_at`;
+ALTER TABLE `affiliates` ADD `is_active` BOOLEAN NOT NULL DEFAULT TRUE AFTER `updated_at`;
+
+-- 14-05-26
+
+CREATE TABLE `user_permissions` (
+  `user_permission_id` INT NOT NULL AUTO_INCREMENT,
+  `user_id` INT NOT NULL,
+  `permission_id` INT NOT NULL,
+  `is_allowed` TINYINT(1) NOT NULL DEFAULT 1,
+  `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`user_permission_id`),
+  UNIQUE KEY `unique_user_permission` (`user_id`, `permission_id`),
+  KEY `fk_user_permissions_user_id` (`user_id`),
+  KEY `fk_user_permissions_permission_id` (`permission_id`),
+  CONSTRAINT `fk_user_permissions_user_id`
+    FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_user_permissions_permission_id`
+    FOREIGN KEY (`permission_id`) REFERENCES `permissions` (`permission_id`) ON DELETE CASCADE
+);
+
+-- 15-05-26
+
+INSERT INTO `permissions` (`module_key`, `action_key`, `permission_key`, `is_active`) VALUES
+('sales', 'view', 'sales.view', 1),
+('sales', 'create', 'sales.create', 1),
+('sales', 'edit', 'sales.edit', 1),
+('sales', 'delete', 'sales.delete', 1),
+('affiliate', 'view', 'affiliate.view', 1),
+('affiliate', 'create', 'affiliate.create', 1),
+('affiliate', 'edit', 'affiliate.edit', 1),
+('affiliate', 'delete', 'affiliate.delete', 1),
+('profile', 'view', 'profile.view', 1),
+('profile', 'create', 'profile.create', 1),
+('profile', 'edit', 'profile.edit', 1),
+('profile', 'delete', 'profile.delete', 1),
+('payouts', 'view', 'payouts.view', 1),
+('payouts', 'create', 'payouts.create', 1),
+('payouts', 'edit', 'payouts.edit', 1),
+('payouts', 'delete', 'payouts.delete', 1),
+('settings', 'view', 'settings.view', 1),
+('settings', 'create', 'settings.create', 1),
+('settings', 'edit', 'settings.edit', 1),
+('settings', 'delete', 'settings.delete', 1),
+('request_shoots', 'view', 'request_shoots.view', 1),
+('request_shoots', 'create', 'request_shoots.create', 1),
+('request_shoots', 'edit', 'request_shoots.edit', 1),
+('request_shoots', 'delete', 'request_shoots.delete', 1),
+('file_manager', 'view', 'file_manager.view', 1),
+('file_manager', 'create', 'file_manager.create', 1),
+('file_manager', 'edit', 'file_manager.edit', 1),
+('file_manager', 'delete', 'file_manager.delete', 1),
+('meetings', 'view', 'meetings.view', 1),
+('meetings', 'create', 'meetings.create', 1),
+('meetings', 'edit', 'meetings.edit', 1),
+('meetings', 'delete', 'meetings.delete', 1),
+('messages', 'view', 'messages.view', 1),
+('messages', 'create', 'messages.create', 1),
+('messages', 'edit', 'messages.edit', 1),
+('messages', 'delete', 'messages.delete', 1),
+('availability', 'view', 'availability.view', 1),
+('availability', 'create', 'availability.create', 1),
+('availability', 'edit', 'availability.edit', 1),
+('availability', 'delete', 'availability.delete', 1),
+('sales_representative', 'view', 'sales_representative.view', 1),
+('sales_representative', 'create', 'sales_representative.create', 1),
+('sales_representative', 'edit', 'sales_representative.edit', 1),
+('sales_representative', 'delete', 'sales_representative.delete', 1),
+('invoices', 'view', 'invoices.view', 1),
+('invoices', 'create', 'invoices.create', 1),
+('invoices', 'edit', 'invoices.edit', 1),
+('invoices', 'delete', 'invoices.delete', 1),
+('affiliate_overview', 'view', 'affiliate_overview.view', 1),
+('affiliate_overview', 'create', 'affiliate_overview.create', 1),
+('affiliate_overview', 'edit', 'affiliate_overview.edit', 1),
+('affiliate_overview', 'delete', 'affiliate_overview.delete', 1),
+('find_yourself', 'view', 'find_yourself.view', 1),
+('find_yourself', 'create', 'find_yourself.create', 1),
+('find_yourself', 'edit', 'find_yourself.edit', 1),
+('find_yourself', 'delete', 'find_yourself.delete', 1),
+('book_a_shoot', 'view', 'book_a_shoot.view', 1),
+('book_a_shoot', 'create', 'book_a_shoot.create', 1),
+('book_a_shoot', 'edit', 'book_a_shoot.edit', 1),
+('book_a_shoot', 'delete', 'book_a_shoot.delete', 1),
+('finances', 'view', 'finances.view', 1),
+('finances', 'create', 'finances.create', 1),
+('finances', 'edit', 'finances.edit', 1),
+('finances', 'delete', 'finances.delete', 1);
+
 -- 13-05-26
 
 CREATE TABLE IF NOT EXISTS finance_transactions (
@@ -1656,6 +1847,115 @@ CREATE TABLE IF NOT EXISTS booking_manual_payments (
   INDEX idx_booking_manual_payments_created_at (created_at)
 );
 
+CREATE TABLE IF NOT EXISTS sales_quote_preview_links (
+  sales_quote_preview_link_id INT AUTO_INCREMENT PRIMARY KEY,
+  sales_quote_id INT NOT NULL,
+  quote_key VARCHAR(128) NOT NULL,
+  expires_at DATETIME NOT NULL,
+  created_by_user_id INT NULL,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_sales_quote_preview_links_quote_key (quote_key),
+  KEY idx_sales_quote_preview_links_quote_id (sales_quote_id),
+  KEY idx_sales_quote_preview_links_expires_at (expires_at),
+  CONSTRAINT fk_sales_quote_preview_links_quote
+    FOREIGN KEY (sales_quote_id) REFERENCES sales_quotes(sales_quote_id)
+    ON DELETE CASCADE
+    ON UPDATE CASCADE,
+  CONSTRAINT fk_sales_quote_preview_links_created_by
+    FOREIGN KEY (created_by_user_id) REFERENCES users(id)
+    ON DELETE SET NULL
+    ON UPDATE CASCADE
+);
+
+CREATE TABLE booking_payment_summary (
+  booking_payment_summary_id INT AUTO_INCREMENT PRIMARY KEY,
+  booking_id INT NOT NULL,
+  sales_quote_id INT NULL,
+  quote_total DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+  paid_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+  credit_used_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+  credit_created_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+  due_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+  payment_status ENUM(
+    'pending',
+    'partially_paid',
+    'paid',
+    'approval_pending',
+    'no_payment_due'
+  ) NOT NULL DEFAULT 'pending',
+  manual_payment_mode VARCHAR(32) NULL,
+  manual_payment_other_mode VARCHAR(100) NULL,
+  manual_payment_proof_url TEXT NULL,
+  manual_payment_proof_file_path VARCHAR(1024) NULL,
+  manual_payment_proof_file_name VARCHAR(255) NULL,
+  manual_payment_notes TEXT NULL,
+  manual_payment_updated_by_user_id INT NULL,
+  manual_payment_updated_at DATETIME NULL,
+  last_quote_change_type ENUM('none', 'increase', 'decrease') NOT NULL DEFAULT 'none',
+  last_quote_change_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+  last_quote_change_status ENUM('none', 'pending', 'approved', 'rejected') NOT NULL DEFAULT 'none',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_booking_payment_summary_booking_id (booking_id),
+  INDEX idx_booking_payment_summary_sales_quote_id (sales_quote_id),
+  INDEX idx_booking_payment_summary_payment_status (payment_status)
+);
+
+-- 21-05-26
+
+ALTER TABLE booking_payment_summary
+  ADD COLUMN lead_id INT NULL AFTER booking_id,
+  ADD INDEX idx_booking_payment_summary_lead_id (lead_id);
+
+UPDATE booking_payment_summary bps
+JOIN sales_leads sl ON sl.booking_id = bps.booking_id
+SET bps.lead_id = sl.lead_id
+WHERE bps.lead_id IS NULL;
+
+
+-- 22-05-26
+
+ALTER TABLE booking_payment_summary
+  ADD COLUMN manual_payment_mode VARCHAR(32) NULL AFTER payment_status,
+  ADD COLUMN manual_payment_other_mode VARCHAR(100) NULL AFTER manual_payment_mode,
+  ADD COLUMN manual_payment_proof_url TEXT NULL AFTER manual_payment_other_mode,
+  ADD COLUMN manual_payment_proof_file_path VARCHAR(1024) NULL AFTER manual_payment_proof_url,
+  ADD COLUMN manual_payment_proof_file_name VARCHAR(255) NULL AFTER manual_payment_proof_file_path,
+  ADD COLUMN manual_payment_notes TEXT NULL AFTER manual_payment_proof_file_name,
+  ADD COLUMN manual_payment_updated_by_user_id INT NULL AFTER manual_payment_notes,
+  ADD COLUMN manual_payment_updated_at DATETIME NULL AFTER manual_payment_updated_by_user_id;
+
+CREATE TABLE IF NOT EXISTS booking_manual_payments (
+  booking_manual_payment_id INT AUTO_INCREMENT PRIMARY KEY,
+  booking_id INT NOT NULL,
+  lead_id INT NULL,
+  sales_quote_id INT NULL,
+  payment_type ENUM('full', 'partial') NOT NULL,
+  amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+  payment_mode VARCHAR(32) NOT NULL,
+  other_payment_mode VARCHAR(100) NULL,
+  proof_url TEXT NULL,
+  proof_file_path VARCHAR(1024) NULL,
+  proof_file_name VARCHAR(255) NULL,
+  notes TEXT NULL,
+  performed_by_user_id INT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_booking_manual_payments_booking_id (booking_id),
+  INDEX idx_booking_manual_payments_lead_id (lead_id),
+  INDEX idx_booking_manual_payments_sales_quote_id (sales_quote_id),
+  INDEX idx_booking_manual_payments_created_at (created_at)
+);
+
+
+-- 22-05-26
+
+ALTER TABLE `users` ADD COLUMN `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER `created_at`;
+UPDATE `users` SET `updated_at` = `created_at`;
+
+
 -- 27-05-26
 
 CREATE TABLE IF NOT EXISTS `project_notes` (
@@ -1737,7 +2037,272 @@ ALTER TABLE `sales_quotes`
   ADD COLUMN IF NOT EXISTS `location_latitude` DECIMAL(10,7) NULL AFTER `client_address`,
   ADD COLUMN IF NOT EXISTS `location_longitude` DECIMAL(10,7) NULL AFTER `location_latitude`;
 
-+
+-- 03-06-26
+
+-- Reset permissions
+
+SET FOREIGN_KEY_CHECKS = 0;
+
+TRUNCATE TABLE role_permissions;
+TRUNCATE TABLE user_permissions;
+TRUNCATE TABLE permissions;
+
+SET FOREIGN_KEY_CHECKS = 1;
+
+INSERT INTO permissions (module_key, action_key, permission_key, is_active)
+SELECT
+  scoped_modules.module_key,
+  actions.action_key,
+  CONCAT(scoped_modules.module_key, '.', actions.action_key) AS permission_key,
+  1 AS is_active
+FROM (
+  -- Admin: 11 modules
+  SELECT 'admin_dashboard' AS module_key UNION ALL
+  SELECT 'admin_shoots' UNION ALL
+  SELECT 'admin_file_manager' UNION ALL
+  SELECT 'admin_meetings' UNION ALL
+  SELECT 'admin_messages' UNION ALL
+  SELECT 'admin_availability' UNION ALL
+  SELECT 'admin_sales_representative' UNION ALL
+  SELECT 'admin_finances' UNION ALL
+  SELECT 'admin_users' UNION ALL
+  SELECT 'admin_quotes' UNION ALL
+  SELECT 'admin_invoices' UNION ALL
+
+  -- Crew Member: 10 modules
+  SELECT 'crew_dashboard' UNION ALL
+  SELECT 'crew_request_shoots' UNION ALL
+  SELECT 'crew_file_manager' UNION ALL
+  SELECT 'crew_meetings' UNION ALL
+  SELECT 'crew_messages' UNION ALL
+  SELECT 'crew_affiliate' UNION ALL
+  SELECT 'crew_availability' UNION ALL
+  SELECT 'crew_profile' UNION ALL
+  SELECT 'crew_payouts' UNION ALL
+  SELECT 'crew_settings' UNION ALL
+
+  -- Sales Representative: 7 modules
+  SELECT 'sales_rep_sales' UNION ALL
+  SELECT 'sales_rep_availability' UNION ALL
+  SELECT 'sales_rep_shoots' UNION ALL
+  SELECT 'sales_rep_file_manager' UNION ALL
+  SELECT 'sales_rep_meetings' UNION ALL
+  SELECT 'sales_rep_messages' UNION ALL
+  SELECT 'sales_rep_quotes' UNION ALL
+
+  -- Client: 11 modules
+  SELECT 'client_dashboard' UNION ALL
+  SELECT 'client_affiliate_overview' UNION ALL
+  SELECT 'client_file_manager' UNION ALL
+  SELECT 'client_find_yourself' UNION ALL
+  SELECT 'client_meetings' UNION ALL
+  SELECT 'client_messages' UNION ALL
+  SELECT 'client_shoots' UNION ALL
+  SELECT 'client_quotes' UNION ALL
+  SELECT 'client_book_a_shoot' UNION ALL
+  SELECT 'client_finances' UNION ALL
+  SELECT 'client_profile'
+) AS scoped_modules
+CROSS JOIN (
+  SELECT 'view' AS action_key UNION ALL
+  SELECT 'create' UNION ALL
+  SELECT 'edit' UNION ALL
+  SELECT 'delete'
+) AS actions;
+
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT
+  1,
+  permission_id,
+  1
+FROM permissions
+WHERE module_key LIKE 'admin_%'
+  AND is_active = 1;
+
+-- Crew Member
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT
+  2,
+  permission_id,
+  1
+FROM permissions
+WHERE module_key LIKE 'crew_%'
+  AND is_active = 1;
+
+-- Sales Representative
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT
+  5,
+  permission_id,
+  1
+FROM permissions
+WHERE module_key LIKE 'sales_rep_%'
+  AND is_active = 1;
+
+-- Client
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT
+  3,
+  permission_id,
+  1
+FROM permissions
+WHERE module_key LIKE 'client_%'
+  AND is_active = 1;
+
+-- 04-06-26
+
+INSERT INTO permissions (module_key, action_key, permission_key, role_id, is_active) VALUES
+('sales_admin_dashboard', 'view', 'sales_admin_dashboard.view', NULL, 1),
+('sales_admin_dashboard', 'create', 'sales_admin_dashboard.create', NULL, 1),
+('sales_admin_dashboard', 'edit', 'sales_admin_dashboard.edit', NULL, 1),
+('sales_admin_dashboard', 'delete', 'sales_admin_dashboard.delete', NULL, 1),
+
+('sales_admin_sales_people', 'view', 'sales_admin_sales_people.view', NULL, 1),
+('sales_admin_sales_people', 'create', 'sales_admin_sales_people.create', NULL, 1),
+('sales_admin_sales_people', 'edit', 'sales_admin_sales_people.edit', NULL, 1),
+('sales_admin_sales_people', 'delete', 'sales_admin_sales_people.delete', NULL, 1),
+
+('sales_admin_shoots', 'view', 'sales_admin_shoots.view', NULL, 1),
+('sales_admin_shoots', 'create', 'sales_admin_shoots.create', NULL, 1),
+('sales_admin_shoots', 'edit', 'sales_admin_shoots.edit', NULL, 1),
+('sales_admin_shoots', 'delete', 'sales_admin_shoots.delete', NULL, 1),
+
+('sales_admin_file_manager', 'view', 'sales_admin_file_manager.view', NULL, 1),
+('sales_admin_file_manager', 'create', 'sales_admin_file_manager.create', NULL, 1),
+('sales_admin_file_manager', 'edit', 'sales_admin_file_manager.edit', NULL, 1),
+('sales_admin_file_manager', 'delete', 'sales_admin_file_manager.delete', NULL, 1),
+
+('sales_admin_meetings', 'view', 'sales_admin_meetings.view', NULL, 1),
+('sales_admin_meetings', 'create', 'sales_admin_meetings.create', NULL, 1),
+('sales_admin_meetings', 'edit', 'sales_admin_meetings.edit', NULL, 1),
+('sales_admin_meetings', 'delete', 'sales_admin_meetings.delete', NULL, 1),
+
+('sales_admin_messages', 'view', 'sales_admin_messages.view', NULL, 1),
+('sales_admin_messages', 'create', 'sales_admin_messages.create', NULL, 1),
+('sales_admin_messages', 'edit', 'sales_admin_messages.edit', NULL, 1),
+('sales_admin_messages', 'delete', 'sales_admin_messages.delete', NULL, 1),
+
+('sales_admin_quotes', 'view', 'sales_admin_quotes.view', NULL, 1),
+('sales_admin_quotes', 'create', 'sales_admin_quotes.create', NULL, 1),
+('sales_admin_quotes', 'edit', 'sales_admin_quotes.edit', NULL, 1),
+('sales_admin_quotes', 'delete', 'sales_admin_quotes.delete', NULL, 1),
+
+('sales_admin_invoices', 'view', 'sales_admin_invoices.view', NULL, 1),
+('sales_admin_invoices', 'create', 'sales_admin_invoices.create', NULL, 1),
+('sales_admin_invoices', 'edit', 'sales_admin_invoices.edit', NULL, 1),
+('sales_admin_invoices', 'delete', 'sales_admin_invoices.delete', NULL, 1);
+
+INSERT INTO `permissions` (`module_key`, `action_key`, `permission_key`, `role_id`, `is_active`) VALUES
+('production_manager_dashboard', 'view', 'production_manager_dashboard.view', NULL, 1),
+('production_manager_dashboard', 'create', 'production_manager_dashboard.create', NULL, 1),
+('production_manager_dashboard', 'edit', 'production_manager_dashboard.edit', NULL, 1),
+('production_manager_dashboard', 'delete', 'production_manager_dashboard.delete', NULL, 1),
+
+('production_manager_creative_partner', 'view', 'production_manager_creative_partner.view', NULL, 1),
+('production_manager_creative_partner', 'create', 'production_manager_creative_partner.create', NULL, 1),
+('production_manager_creative_partner', 'edit', 'production_manager_creative_partner.edit', NULL, 1),
+('production_manager_creative_partner', 'delete', 'production_manager_creative_partner.delete', NULL, 1),
+
+('production_manager_shoots', 'view', 'production_manager_shoots.view', NULL, 1),
+('production_manager_shoots', 'create', 'production_manager_shoots.create', NULL, 1),
+('production_manager_shoots', 'edit', 'production_manager_shoots.edit', NULL, 1),
+('production_manager_shoots', 'delete', 'production_manager_shoots.delete', NULL, 1),
+
+('production_manager_file_manager', 'view', 'production_manager_file_manager.view', NULL, 1),
+('production_manager_file_manager', 'create', 'production_manager_file_manager.create', NULL, 1),
+('production_manager_file_manager', 'edit', 'production_manager_file_manager.edit', NULL, 1),
+('production_manager_file_manager', 'delete', 'production_manager_file_manager.delete', NULL, 1),
+
+('production_manager_meetings', 'view', 'production_manager_meetings.view', NULL, 1),
+('production_manager_meetings', 'create', 'production_manager_meetings.create', NULL, 1),
+('production_manager_meetings', 'edit', 'production_manager_meetings.edit', NULL, 1),
+('production_manager_meetings', 'delete', 'production_manager_meetings.delete', NULL, 1),
+
+('production_manager_messages', 'view', 'production_manager_messages.view', NULL, 1),
+('production_manager_messages', 'create', 'production_manager_messages.create', NULL, 1),
+('production_manager_messages', 'edit', 'production_manager_messages.edit', NULL, 1),
+('production_manager_messages', 'delete', 'production_manager_messages.delete', NULL, 1),
+
+('production_manager_availability', 'view', 'production_manager_availability.view', NULL, 1),
+('production_manager_availability', 'create', 'production_manager_availability.create', NULL, 1),
+('production_manager_availability', 'edit', 'production_manager_availability.edit', NULL, 1),
+('production_manager_availability', 'delete', 'production_manager_availability.delete', NULL, 1);
+
+-- Sales Admin permissions
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT 7, permission_id, 1
+FROM permissions
+WHERE module_key IN (
+  'sales_admin_dashboard',
+  'sales_admin_sales_people',
+  'sales_admin_shoots',
+  'sales_admin_file_manager',
+  'sales_admin_meetings',
+  'sales_admin_messages',
+  'sales_admin_quotes',
+  'sales_admin_invoices'
+)
+AND is_active = 1
+AND NOT EXISTS (
+  SELECT 1
+  FROM role_permissions rp
+  WHERE rp.role_id = 7
+    AND rp.permission_id = permissions.permission_id
+);
+
+-- Production Manager permissions
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT 6, permission_id, 1
+FROM permissions
+WHERE module_key IN (
+  'production_manager_dashboard',
+  'production_manager_creative_partner',
+  'production_manager_shoots',
+  'production_manager_file_manager',
+  'production_manager_meetings',
+  'production_manager_messages',
+  'production_manager_availability'
+)
+AND is_active = 1
+AND NOT EXISTS (
+  SELECT 1
+  FROM role_permissions rp
+  WHERE rp.role_id = 6
+    AND rp.permission_id = permissions.permission_id
+);
+
+TRUNCATE TABLE role_permissions;
+
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT 1, permission_id, 1
+FROM permissions
+WHERE module_key LIKE 'admin_%' AND is_active = 1;
+
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT 2, permission_id, 1
+FROM permissions
+WHERE module_key LIKE 'crew_%' AND is_active = 1;
+
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT 3, permission_id, 1
+FROM permissions
+WHERE module_key LIKE 'client_%' AND is_active = 1;
+
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT 5, permission_id, 1
+FROM permissions
+WHERE module_key LIKE 'sales_rep_%' AND is_active = 1;
+
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT 6, permission_id, 1
+FROM permissions
+WHERE module_key LIKE 'production_manager_%' AND is_active = 1;
+
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT 7, permission_id, 1
+FROM permissions
+WHERE module_key LIKE 'sales_admin_%' AND is_active = 1;
+
 
 -- 03-06-26
 
@@ -1835,3 +2400,38 @@ VALUES
 (616, 2010, 1200.00, 1200.00, 'pending', NOW(), NOW()),
 (622, 2010, 1200.00, 1200.00, 'paid', NOW(), NOW()),
 (626, 2010, 1200.00, 1200.00, 'earned', NOW(), NOW());
+
+-- 11-06-26
+-- Rename Creative Partner permission keys from old crew_* keys.
+-- Keeps existing permission_id values, so role_permissions and user_permissions remain linked.
+UPDATE permissions
+SET
+  module_key = REPLACE(module_key, 'crew_', 'creative_partner_'),
+  permission_key = REPLACE(permission_key, 'crew_', 'creative_partner_')
+WHERE module_key LIKE 'crew_%'
+  OR permission_key LIKE 'crew_%';
+
+ALTER TABLE permissions
+ADD COLUMN role_key VARCHAR(100) NULL AFTER permission_id;
+
+UPDATE permissions SET role_key = 'admin'
+WHERE module_key LIKE 'admin_%';
+
+UPDATE permissions SET role_key = 'creative_partner'
+WHERE module_key LIKE 'creative_partner_%';
+
+UPDATE permissions SET role_key = 'sales_rep'
+WHERE module_key LIKE 'sales_rep_%';
+
+UPDATE permissions SET role_key = 'sales_admin'
+WHERE module_key LIKE 'sales_admin_%';
+
+UPDATE permissions SET role_key = 'production_manager'
+WHERE module_key LIKE 'production_manager_%';
+
+UPDATE permissions SET role_key = 'client'
+WHERE module_key LIKE 'client_%';
+
+-- 17-06-26
+
+ALTER TABLE users ADD COLUMN permissions_version INT DEFAULT 1;

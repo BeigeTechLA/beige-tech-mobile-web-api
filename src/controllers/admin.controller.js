@@ -10877,6 +10877,1430 @@ exports.getAllAssignedRequests = async (req, res) => {
   }
 };
 
+const formatUserTypeAsRole = (role, totalUsers = 0) => ({
+  role_id: role.user_type_id,
+  name: role.user_role,
+  description: role.description || null,
+  is_system: 0,
+  is_active: role.is_active,
+  created_by: role.created_by || null,
+  updated_by: role.updated_by || null,
+  created_at: role.created_at || null,
+  updated_at: role.updated_at || null,
+  total_users: totalUsers
+});
+
+const normalizePermissionScope = (scope) => String(scope || '').trim().toLowerCase();
+
+const formatPermissionLabel = (key) => String(key || '')
+  .split('_')
+  .filter(Boolean)
+  .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+  .join(' ');
+
+const getPermissionScopeKey = (permission = {}) => {
+  if (permission.role_key) return permission.role_key;
+  return 'other';
+};
+
+const getLegacyModuleKey = (moduleKey, scopeKey) => {
+  const prefix = String(scopeKey || '');
+  if (prefix && prefix !== 'other' && String(moduleKey || '').startsWith(`${prefix}_`)) {
+    return String(moduleKey).slice(`${prefix}_`.length);
+  }
+
+  return moduleKey;
+};
+
+const formatModuleDisplayName = (moduleKey, scopeKey) => formatPermissionLabel(getLegacyModuleKey(moduleKey, scopeKey));
+
+const buildPermissionEntries = (permissions = {}, includeDenied = false) => {
+  const permissionEntries = [];
+
+  Object.keys(permissions || {}).forEach(module => {
+    const actions = permissions[module];
+
+    if (Array.isArray(actions)) {
+      actions.forEach(action => {
+        permissionEntries.push({
+          permission_key: `${module}.${action}`,
+          is_allowed: 1
+        });
+      });
+      return;
+    }
+
+    if (actions && typeof actions === 'object') {
+      Object.keys(actions).forEach(action => {
+        const isAllowed = Boolean(actions[action]);
+        if (isAllowed || includeDenied) {
+          permissionEntries.push({
+            permission_key: `${module}.${action}`,
+            is_allowed: isAllowed ? 1 : 0
+          });
+        }
+      });
+    }
+  });
+
+  return permissionEntries;
+};
+
+const buildPermissionKeys = (permissions = {}) => {
+  return buildPermissionEntries(permissions).map(entry => entry.permission_key);
+};
+
+const syncRolePermissions = async (roleId, permissions = {}) => {
+  const permissionKeys = buildPermissionKeys(permissions);
+
+  await db.role_permissions.update(
+    { is_active: 0 },
+    { where: { role_id: roleId } }
+  );
+
+  if (!permissionKeys.length) {
+    return;
+  }
+
+  const permissionRecords = await db.permissions.findAll({
+    where: {
+      permission_key: {
+        [Op.in]: permissionKeys
+      },
+      is_active: 1
+    }
+  });
+
+  const rolePermissionData = permissionRecords.map(permission => ({
+    role_id: roleId,
+    permission_id: permission.permission_id,
+    is_active: 1
+  }));
+
+  if (rolePermissionData.length) {
+    await db.role_permissions.bulkCreate(rolePermissionData);
+  }
+};
+
+const formatRolePermissions = async (roleId) => {
+  const rolePermissions = await db.role_permissions.findAll({
+    where: {
+      role_id: roleId,
+      is_active: 1
+    },
+    include: [
+      {
+        model: db.permissions,
+        as: 'permission',
+        required: false
+      }
+    ]
+  });
+
+  const formattedPermissions = {};
+
+  rolePermissions.forEach(item => {
+    const permission = item.permission;
+
+    if (!permission) {
+      return;
+    }
+
+    const module = permission.module_key;
+    const action = permission.action_key;
+
+    if (!formattedPermissions[module]) {
+      formattedPermissions[module] = {
+        view: false,
+        create: false,
+        edit: false,
+        delete: false
+      };
+    }
+
+    formattedPermissions[module][action] = true;
+  });
+
+  return formattedPermissions;
+};
+
+const syncUserPermissions = async (userId, permissions = {}) => {
+  const permissionEntries = buildPermissionEntries(permissions, true);
+  const permissionKeys = permissionEntries.map(entry => entry.permission_key);
+  const permissionEntryMap = permissionEntries.reduce((map, entry) => {
+    map[entry.permission_key] = entry.is_allowed;
+    return map;
+  }, {});
+
+  await db.user_permissions.update(
+    { is_active: 0 },
+    {
+      where: { user_id: userId }
+    }
+  );
+
+  if (!permissionKeys.length) return;
+
+  const permissionRecords = await db.permissions.findAll({
+    where: {
+      permission_key: {
+        [Op.in]: permissionKeys
+      },
+      is_active: 1
+    }
+  });
+
+  const userPermissionData = permissionRecords.map(permission => ({
+    user_id: userId,
+    permission_id: permission.permission_id,
+    is_allowed: permissionEntryMap[permission.permission_key] === 1 ? 1 : 0,
+    is_active: 1
+  }));
+
+  if (userPermissionData.length) {
+    await db.user_permissions.bulkCreate(userPermissionData, {
+      updateOnDuplicate: ['is_active', 'is_allowed']
+    });
+  }
+};
+
+const syncUserPermissionsFromRole = async (userId, roleId, transaction = null) => {
+  const queryOptions = transaction ? { transaction } : {};
+
+  await db.user_permissions.update(
+    {
+      is_active: 0,
+      is_allowed: 0
+    },
+    {
+      where: { user_id: userId },
+      ...queryOptions
+    }
+  );
+
+  const rolePermissions = await db.role_permissions.findAll({
+    where: {
+      role_id: roleId,
+      is_active: 1
+    },
+    attributes: ['permission_id'],
+    ...queryOptions
+  });
+
+  const permissionIds = [
+    ...new Set(
+      rolePermissions
+        .map(item => Number(item.permission_id))
+        .filter(permissionId => Number.isInteger(permissionId) && permissionId > 0)
+    )
+  ];
+
+  if (!permissionIds.length) {
+    return 0;
+  }
+
+  const userPermissionData = permissionIds.map(permissionId => ({
+    user_id: userId,
+    permission_id: permissionId,
+    is_allowed: 1,
+    is_active: 1
+  }));
+
+  await db.user_permissions.bulkCreate(userPermissionData, {
+    updateOnDuplicate: ['is_active', 'is_allowed'],
+    ...queryOptions
+  });
+
+  return userPermissionData.length;
+};
+
+const formatUserPermissions = async (userId) => {
+  const userPermissions = await db.user_permissions.findAll({
+    where: {
+      user_id: userId,
+      is_active: 1
+    },
+    include: [
+      {
+        model: db.permissions,
+        as: 'permission'
+      }
+    ]
+  });
+
+  const formattedPermissions = {};
+
+  userPermissions.forEach(item => {
+    const permission = item.permission;
+    if (!permission) return;
+
+    const module = permission.module_key;
+    const action = permission.action_key;
+
+    if (!formattedPermissions[module]) {
+      formattedPermissions[module] = {
+        view: false,
+        create: false,
+        edit: false,
+        delete: false
+      };
+    }
+
+    formattedPermissions[module][action] = item.is_allowed === 1;
+  });
+
+  return formattedPermissions;
+};
+
+const getCombinedUserPermissions = async (userId, roleId) => {
+  const rolePermissions = await formatRolePermissions(roleId);
+  const userPermissions = await formatUserPermissions(userId);
+
+  Object.keys(userPermissions).forEach(module => {
+    if (!rolePermissions[module]) {
+      rolePermissions[module] = {
+        view: false,
+        create: false,
+        edit: false,
+        delete: false
+      };
+    }
+
+    Object.keys(userPermissions[module]).forEach(action => {
+      rolePermissions[module][action] = userPermissions[module][action];
+    });
+  });
+
+  return rolePermissions;
+};
+
+exports.createRole = async (req, res) => {
+  try {
+    const { name, description } = req.body;
+
+    if (!name) {
+      return res.status(400).json({
+        success: false,
+        message: 'Role name is required'
+      });
+    }
+
+    const existingRole = await db.user_type.findOne({
+      where: {
+        user_role: name,
+        is_active: 1
+      }
+    });
+
+    if (existingRole) {
+      return res.status(409).json({
+        success: false,
+        message: 'Role already exists'
+      });
+    }
+
+    const newRole = await db.user_type.create({
+      user_role: name,
+      description,
+      is_active: 1
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: 'Role created successfully',
+      data: formatUserTypeAsRole(newRole)
+    });
+
+  } catch (error) {
+    console.error('Create Role Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while creating role',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.getRoles = async (req, res) => {
+  try {
+    const {
+      search = '',
+      month = '', // 1-12
+      year = '', // optional
+      sort_by = 'role_id',
+      order = 'DESC'
+    } = req.query;
+
+    const sortMap = {
+      role_id: 'user_type_id',
+      name: 'user_role',
+      is_active: 'is_active',
+      created_at: 'created_at'
+    };
+
+    const sortField = sortMap[sort_by] || 'user_type_id';
+    const sortOrder = order.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+
+    const whereCondition = {
+      is_active: 1,
+      user_type_id: {
+        [Op.notIn]: [2, 3]
+      }
+    };
+
+    // Search filter
+    if (search) {
+      whereCondition.user_role = {
+        [Op.like]: `%${search}%`
+      };
+    }
+
+    // Month + Year filter for "Sort by Date"
+    if (month) {
+      const selectedYear = year || new Date().getFullYear();
+
+      const startDate = new Date(selectedYear, month - 1, 1);
+      const endDate = new Date(selectedYear, month, 1);
+
+      whereCondition.created_at = {
+        [Op.gte]: startDate,
+        [Op.lt]: endDate
+      };
+    }
+
+    const roles = await db.user_type.findAll({
+      where: whereCondition,
+      order: [[sortField, sortOrder]]
+    });
+
+    const formattedRoles = await Promise.all(
+      roles.map(async (role) => {
+        const totalUsers = await db.users.count({
+          where: {
+            user_type: role.user_type_id
+          }
+        });
+
+        return formatUserTypeAsRole(role, totalUsers);
+      })
+    );
+
+    return res.status(200).json({
+      success: true,
+      total_roles: formattedRoles.length,
+      data: formattedRoles
+    });
+
+  } catch (error) {
+    console.error('Get Roles Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while fetching roles',
+      error:
+        process.env.NODE_ENV === 'development'
+          ? error.message
+          : undefined
+    });
+  }
+};
+
+exports.assignRoleToUser = async (req, res) => {
+  let transaction;
+
+  try {
+    const userId = Number(req.body.user_id);
+    const roleId = Number(req.body.role_id);
+
+    if (!Number.isInteger(userId) || userId <= 0 || !Number.isInteger(roleId) || roleId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid User ID and Role ID are required'
+      });
+    }
+
+    const user = await db.users.findOne({
+      where: {
+        id: userId,
+        is_active: 1
+      }
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const role = await db.user_type.findOne({
+      where: {
+        user_type_id: roleId,
+        is_active: 1
+      }
+    });
+
+    if (!role) {
+      return res.status(404).json({
+        success: false,
+        message: 'Role not found or inactive'
+      });
+    }
+
+    transaction = await db.sequelize.transaction();
+
+    await db.user_roles.update(
+      { is_active: 0 },
+      {
+        where: { user_id: userId },
+        transaction
+      }
+    );
+
+    await db.user_roles.create({
+      user_id: userId,
+      role_id: roleId,
+      is_active: 1
+    }, {
+      transaction
+    });
+
+    await db.users.update(
+      {
+        user_type: roleId,
+        role: role.user_role,
+        permissions_version: Sequelize.literal(
+          'permissions_version + 1'
+        )
+      },
+      {
+        where: { id: userId },
+        transaction
+      }
+    );
+
+    // await db.users.increment(
+    //   { permissions_version: 1 },
+    //   {
+    //     where: { id: userId },
+    //     transaction
+    //   }
+    // );
+
+    // await db.users.update(
+    //   {
+    //     user_type: roleId,
+    //     role: role.user_role
+    //   },
+    //   {
+    //     where: { id: userId },
+    //     transaction
+    //   }
+    // );
+
+    const assignedPermissionsCount = await syncUserPermissionsFromRole(userId, roleId, transaction);
+
+    await transaction.commit();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Role assigned successfully',
+      data: {
+        user_id: userId,
+        role_id: roleId,
+        permissions_assigned: assignedPermissionsCount
+      }
+    });
+
+  } catch (error) {
+    if (transaction && !transaction.finished) {
+      await transaction.rollback();
+    }
+
+    console.error('Assign Role Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while assigning role',
+      error:
+        process.env.NODE_ENV === 'development'
+          ? error.message
+          : undefined
+    });
+  }
+};
+
+exports.updateRole = async (req, res) => {
+  try {
+    const { role_id, name, description, permissions } = req.body;
+
+    if (!role_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Role ID is required'
+      });
+    }
+
+    const existingRole = await db.user_type.findOne({
+      where: {
+        user_type_id: role_id,
+        is_active: 1
+      }
+    });
+
+    if (!existingRole) {
+      return res.status(404).json({
+        success: false,
+        message: 'Role not found'
+      });
+    }
+
+    const roleUpdateData = {};
+
+    if (name !== undefined) {
+      roleUpdateData.user_role = name;
+    }
+
+    if (description !== undefined) {
+      roleUpdateData.description = description;
+    }
+
+    if (Object.keys(roleUpdateData).length) {
+      await db.user_type.update(roleUpdateData, {
+        where: { user_type_id: role_id }
+      });
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body, 'permissions')) {
+      await syncRolePermissions(role_id, permissions);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Role updated successfully'
+    });
+
+  } catch (error) {
+    console.error('Update Role Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while updating role'
+    });
+  }
+};
+
+exports.deleteRole = async (req, res) => {
+  try {
+    const { role_id } = req.params;
+
+    if (!role_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Role ID is required'
+      });
+    }
+
+    const role = await db.user_type.findOne({
+      where: {
+        user_type_id: role_id,
+        is_active: 1
+      }
+    });
+
+    if (!role) {
+      return res.status(404).json({
+        success: false,
+        message: 'Role not found'
+      });
+    }
+
+    const assignedUsers = await db.users.count({
+      where: {
+        user_type: role_id
+      }
+    });
+
+    if (assignedUsers > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Role is assigned to users and cannot be deleted'
+      });
+    }
+
+    await db.user_type.update({
+      is_active: 0
+    }, {
+      where: { user_type_id: role_id }
+    });
+
+    await db.role_permissions.update({
+      is_active: 0
+    }, {
+      where: { role_id }
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Role deleted successfully'
+    });
+
+  } catch (error) {
+    console.error('Delete Role Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while deleting role'
+    });
+  }
+};
+
+exports.getRoleById = async (req, res) => {
+  try {
+    const { role_id } = req.params;
+
+    const role = await db.user_type.findOne({
+      where: {
+        user_type_id: role_id,
+        is_active: 1
+      }
+    });
+
+    if (!role) {
+      return res.status(404).json({
+        success: false,
+        message: 'Role not found'
+      });
+    }
+
+    const totalUsers = await db.users.count({
+      where: {
+        user_type: role_id
+      }
+    });
+
+    const formattedPermissions = await formatRolePermissions(role_id);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        role: formatUserTypeAsRole(role, totalUsers),
+        permissions: formattedPermissions
+      }
+    });
+
+  } catch (error) {
+    console.error('Get Role By ID Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while fetching role details',
+      error:
+        process.env.NODE_ENV === 'development'
+          ? error.message
+          : undefined
+    });
+  }
+};
+
+exports.getUsersWithRoles = async (req, res) => {
+  try {
+    const {
+      search = '',
+      status = '',
+      role_id = '',
+      month = '',
+      year = '',
+      sort_by = 'id',
+      order = 'DESC'
+    } = req.query;
+
+    const validSortFields = ['id', 'name', 'created_at', 'updated_at'];
+    const sortField = validSortFields.includes(sort_by) ? sort_by : 'id';
+    const sortOrder = order.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+
+    const userWhereCondition = {};
+
+    // Status filter
+    if (status !== '') {
+      userWhereCondition.is_active = status;
+    }
+
+    // Search filter
+    if (search) {
+      userWhereCondition[Op.or] = [
+        {
+          name: {
+            [Op.like]: `%${search}%`
+          }
+        },
+        {
+          email: {
+            [Op.like]: `%${search}%`
+          }
+        }
+      ];
+    }
+
+    // Month + Year filter
+    if (month) {
+      const selectedYear = year || new Date().getFullYear();
+
+      const startDate = new Date(selectedYear, month - 1, 1);
+      const endDate = new Date(selectedYear, month, 1);
+
+      userWhereCondition.created_at = {
+        [Op.gte]: startDate,
+        [Op.lt]: endDate
+      };
+    }
+
+    // Role filter
+    if (role_id) {
+      userWhereCondition.user_type = role_id;
+    } else {
+      userWhereCondition.user_type = {
+        [Op.notIn]: [2, 3]
+      };
+    }
+
+    const users = await db.users.findAll({
+      where: userWhereCondition,
+      attributes: [
+        'id',
+        'name',
+        'email',
+        'user_type',
+        'created_at',
+        'updated_at',
+        'is_active'
+      ],
+      order: [[sortField, sortOrder]]
+    });
+
+    const userTypes = await db.user_type.findAll({
+      where: {
+        is_active: 1
+      }
+    });
+
+    const userTypeMap = {};
+
+    userTypes.forEach(type => {
+      userTypeMap[type.user_type_id] = type.user_role;
+    });
+
+    const formattedUsers = users.map(user => ({
+      user_id: user.id,
+      name: user.name,
+      email: user.email,
+      role_id: user.user_type,
+      role_name: userTypeMap[user.user_type] || null,
+      created_at: user.created_at,
+      updated_at: user.updated_at,
+      is_active: user.is_active,
+      status_label: user.is_active ? 'Active' : 'In-Active'
+    }));
+
+    return res.status(200).json({
+      success: true,
+      total_users: formattedUsers.length,
+      data: formattedUsers
+    });
+
+  } catch (error) {
+    console.error('Get Users With Roles Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while fetching users with roles',
+      error:
+        process.env.NODE_ENV === 'development'
+          ? error.message
+          : undefined
+    });
+  }
+};
+
+exports.getUserRoleDetails = async (req, res) => {
+  try {
+    const { user_id } = req.params;
+
+    if (!user_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'User ID is required'
+      });
+    }
+
+    const user = await db.users.findOne({
+      where: {
+        id: user_id
+      },
+      attributes: [
+        'id',
+        'name',
+        'email',
+        'user_type',
+        'created_at',
+        'is_active'
+      ]
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const role = await db.user_type.findOne({
+      where: {
+        user_type_id: user.user_type,
+        is_active: 1
+      }
+    });
+
+    let formattedPermissions = {};
+
+    if (role) {
+      formattedPermissions = await getCombinedUserPermissions(
+        user.id,
+        role.user_type_id
+      );
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        user: {
+          user_id: user.id,
+          name: user.name,
+          email: user.email,
+          user_type: user.user_type,
+          user_type_name: role ? role.user_role : null,
+          is_active: user.is_active,
+          status_label: user.is_active ? 'Active' : 'In-Active',
+          created_at: user.created_at
+        },
+
+        role: role
+          ? {
+              role_id: role.user_type_id,
+              name: role.user_role,
+              description: role.description || null,
+              is_active: role.is_active,
+              created_at: role.created_at,
+              updated_at: role.updated_at
+            }
+          : null,
+
+        display_role: role ? role.user_role : null,
+
+        permissions: formattedPermissions
+      }
+    });
+
+  } catch (error) {
+    console.error('Get User Role Details Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while fetching user role details',
+      error:
+        process.env.NODE_ENV === 'development'
+          ? error.message
+          : undefined
+    });
+  }
+};
+
+exports.getPermissionModules = async (req, res) => {
+  try {
+    const requestedScope = normalizePermissionScope(req.query.scope);
+    const grouped = !['0', 'false', 'no'].includes(String(req.query.grouped || 'true').toLowerCase());
+    const requestedScopeKey = requestedScope || null;
+
+    const permissions = await db.permissions.findAll({
+      where: {
+        is_active: 1
+      },
+      attributes: [
+        'permission_id',
+        'role_key',
+        'module_key',
+        'action_key',
+        'permission_key'
+      ],
+      order: [
+        ['role_key', 'ASC'],
+        ['module_key', 'ASC'],
+        ['action_key', 'ASC']
+      ]
+    });
+
+    const scopeMap = {};
+
+    permissions.forEach(permission => {
+      const scopeKey = getPermissionScopeKey(permission);
+      const module = permission.module_key;
+      const action = permission.action_key;
+
+      if (requestedScopeKey && scopeKey !== requestedScopeKey) {
+        return;
+      }
+
+      if (!scopeMap[scopeKey]) {
+        scopeMap[scopeKey] = {
+          scope: scopeKey,
+          scope_label: formatPermissionLabel(scopeKey),
+          modules: {}
+        };
+      }
+
+      if (!scopeMap[scopeKey].modules[module]) {
+        const legacyModuleKey = getLegacyModuleKey(module, scopeKey);
+        scopeMap[scopeKey].modules[module] = {
+          module_key: module,
+          display_name: formatModuleDisplayName(module, scopeKey),
+          legacy_module_key: legacyModuleKey,
+          actions: []
+        };
+      }
+
+      if (!scopeMap[scopeKey].modules[module].actions.some(item => item.action_key === action)) {
+        scopeMap[scopeKey].modules[module].actions.push({
+          permission_id: permission.permission_id,
+          action_key: action,
+          permission_key: permission.permission_key
+        });
+      }
+    });
+
+    const sortModules = (modules) => (
+      modules.sort((first, second) => first.module_key.localeCompare(second.module_key))
+    );
+
+    const formatScope = (scopeData) => {
+      const modules = sortModules(Object.values(scopeData.modules));
+      return {
+        scope: scopeData.scope,
+        scope_label: scopeData.scope_label,
+        total_modules: modules.length,
+        modules
+      };
+    };
+
+    if (grouped && !requestedScope) {
+      const groupedData = Object.values(scopeMap)
+        .map(formatScope)
+        .sort((first, second) => first.scope.localeCompare(second.scope));
+
+      return res.status(200).json({
+        success: true,
+        total_scopes: groupedData.length,
+        data: groupedData
+      });
+    }
+
+    const requestedScopeData = requestedScopeKey ? scopeMap[requestedScopeKey] : null;
+    const formattedModules = requestedScopeData
+      ? sortModules(Object.values(requestedScopeData.modules))
+      : [];
+
+    return res.status(200).json({
+      success: true,
+      scope: requestedScopeKey || null,
+      scope_label: requestedScopeData?.scope_label || (requestedScopeKey ? formatPermissionLabel(requestedScopeKey) : null),
+      total_modules: formattedModules.length,
+      data: formattedModules
+    });
+
+  } catch (error) {
+    console.error('Get Permission Modules Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while fetching permission modules',
+      error:
+        process.env.NODE_ENV === 'development'
+          ? error.message
+          : undefined
+    });
+  }
+};
+
+exports.deleteUser = async (req, res) => {
+  const user_id = Number(req.params.user_id);
+
+  if (!Number.isInteger(user_id) || user_id <= 0) {
+    return res.status(400).json({
+      error: true,
+      message: 'Valid user_id is required'
+    });
+  }
+
+  const transaction = await db.sequelize.transaction();
+
+  try {
+    const user = await users.findOne({
+      where: {
+        id: user_id,
+        is_active: 1
+      },
+      transaction
+    });
+
+    if (!user) {
+      await transaction.rollback();
+      return res.status(404).json({
+        error: true,
+        message: 'User not found or inactive'
+      });
+    }
+
+    // ================= CLIENT DELETE =================
+    if (user.user_type == 3) {
+      const client = await clients.findOne({
+        where: {
+          user_id,
+          is_active: 1
+        },
+        transaction
+      });
+
+      if (client) {
+        await client.update(
+          { is_active: 0 },
+          { transaction }
+        );
+
+        const clientLeadRows = await db.client_leads.findAll({
+          where: { user_id },
+          attributes: ['lead_id', 'booking_id'],
+          transaction
+        });
+
+        const unbookedLeadIdList = clientLeadRows
+          .filter(lead => !lead.booking_id)
+          .map(lead => lead.lead_id);
+
+        if (unbookedLeadIdList.length > 0) {
+          await db.client_leads.update(
+            { is_active: 0 },
+            {
+              where: {
+                lead_id: { [Op.in]: unbookedLeadIdList }
+              },
+              transaction
+            }
+          );
+
+          await db.client_lead_activities.update(
+            { is_active: 0 },
+            {
+              where: {
+                lead_id: { [Op.in]: unbookedLeadIdList }
+              },
+              transaction
+            }
+          );
+        }
+      }
+    }
+
+    // ================= CREW MEMBER DELETE =================
+    else if (user.user_type == 2 || user.user_type == 4) {
+      const crew_member = await crew_members.findOne({
+        where: {
+          user_id,
+          is_active: 1
+        },
+        transaction
+      });
+
+      if (crew_member) {
+        // Deactivate crew member
+        await crew_member.update(
+          { is_active: 0 },
+          { transaction }
+        );
+
+        await crew_member_files.update(
+          { is_active: 0 },
+          {
+            where: {
+              crew_member_id: crew_member.crew_member_id
+            },
+            transaction
+          }
+        );
+      }
+    }
+
+    // ================= AFFILIATE DELETE =================
+    await db.affiliates.update(
+      { is_active: 0 },
+      {
+        where: {
+          user_id
+        },
+        transaction
+      }
+    );
+
+    // ================= USER ROLE DELETE =================
+    await db.user_roles.update(
+      { is_active: 0 },
+      {
+        where: {
+          user_id
+        },
+        transaction
+      }
+    );
+
+    // ================= USER DELETE =================
+    await user.update(
+      { is_active: 0 },
+      { transaction }
+    );
+
+    await transaction.commit();
+
+    return res.status(200).json({
+      error: false,
+      message: 'User deactivated successfully'
+    });
+
+  } catch (error) {
+    await transaction.rollback();
+
+    console.error('Error deleting user:', error);
+
+    return res.status(500).json({
+      error: true,
+      message: 'Internal server error'
+    });
+  }
+};
+
+exports.assignPermissionsToUser = async (req, res) => {
+  try {
+    const { user_id, permissions } = req.body;
+
+    if (!user_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'User ID is required'
+      });
+    }
+
+    const user = await db.users.findOne({
+      where: {
+        id: user_id,
+        is_active: 1
+      }
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    await syncUserPermissions(user_id, permissions);
+
+    return res.status(200).json({
+      success: true,
+      message: 'User permissions assigned successfully'
+    });
+
+  } catch (error) {
+    console.error('Assign User Permissions Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while assigning permissions'
+    });
+  }
+};
+
+exports.updateUserPermissions = async (req, res) => {
+  try {
+    const { user_id, permissions } = req.body;
+
+    if (!user_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'User ID is required'
+      });
+    }
+
+    const user = await db.users.findOne({
+      where: {
+        id: user_id,
+        is_active: 1
+      }
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    await syncUserPermissions(user_id, permissions);
+
+    return res.status(200).json({
+      success: true,
+      message: 'User permissions updated successfully'
+    });
+
+  } catch (error) {
+    console.error('Update User Permissions Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while updating permissions'
+    });
+  }
+};
+
+exports.getUserPermissions = async (req, res) => {
+  try {
+    const { user_id } = req.params;
+
+    const user = await db.users.findOne({
+      where: {
+        id: user_id,
+        is_active: 1
+      }
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const permissions = await getCombinedUserPermissions(
+      user.id,
+      user.user_type
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        user_id: user.id,
+        permissions
+      }
+    });
+
+  } catch (error) {
+    console.error('Get User Permissions Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while fetching permissions'
+    });
+  }
+};
+
+exports.deleteUserPermission = async (req, res) => {
+  try {
+    const { user_id, permission_id, module_key, action_key } = req.params;
+
+    const user = await db.users.findOne({
+      where: {
+        id: user_id,
+        is_active: 1
+      }
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const permissionWhere = {
+      is_active: 1
+    };
+
+    if (module_key && action_key) {
+      permissionWhere.module_key = module_key;
+      permissionWhere.action_key = action_key;
+    } else if (permission_id && /^\d+$/.test(String(permission_id))) {
+      permissionWhere.permission_id = permission_id;
+    } else if (permission_id) {
+      permissionWhere.permission_key = permission_id;
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: 'Permission identifier is required'
+      });
+    }
+
+    const permission = await db.permissions.findOne({
+      where: permissionWhere
+    });
+
+    if (!permission) {
+      return res.status(404).json({
+        success: false,
+        message: 'Permission not found'
+      });
+    }
+
+    const rolePermission = await db.role_permissions.findOne({
+      where: {
+        role_id: user.user_type,
+        permission_id: permission.permission_id,
+        is_active: 1
+      }
+    });
+
+    if (rolePermission) {
+      await db.user_permissions.bulkCreate(
+        [{
+          user_id,
+          permission_id: permission.permission_id,
+          is_allowed: 0,
+          is_active: 1
+        }],
+        {
+          updateOnDuplicate: ['is_active', 'is_allowed']
+        }
+      );
+    } else {
+      await db.user_permissions.update(
+        {
+          is_active: 0
+        },
+        {
+          where: {
+            user_id,
+            permission_id: permission.permission_id
+          }
+        }
+      );
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Permission removed successfully'
+    });
+
+  } catch (error) {
+    console.error('Delete User Permission Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while deleting permission'
+    });
+  }
+};
+
 const getAuthenticatedUserId = (req) => {
   const userId = Number(req.user?.userId || req.user?.id || req.body?.user_id);
   return Number.isInteger(userId) && userId > 0 ? userId : null;

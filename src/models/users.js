@@ -53,6 +53,11 @@ module.exports = function(sequelize, DataTypes) {
       allowNull: false,
       defaultValue: Sequelize.Sequelize.fn('current_timestamp')
     },
+    updated_at: {
+      type: DataTypes.DATE,
+      allowNull: false,
+      defaultValue: Sequelize.Sequelize.fn('current_timestamp')
+    },
     is_active: {
       type: DataTypes.BOOLEAN,
       allowNull: false,
@@ -95,6 +100,11 @@ module.exports = function(sequelize, DataTypes) {
     longitude: {
       type: DataTypes.DECIMAL(11,8),
       allowNull: true
+    },
+    permissions_version: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 1
     }
   }, {
     sequelize,
