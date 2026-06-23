@@ -309,7 +309,15 @@ const normalizeChatRoomMembers = (room, currentAdmin = null) => {
     : {};
   const unreadCounts = participants.reduce((counts, participant) => {
     const id = String(participant?.id || participant?._id || '').trim();
-    if (id) counts[id] = Number(existingUnreadCounts[id] || 0);
+    const legacyIds = [participant?.crew_member_id, participant?.client_id]
+      .map((value) => String(value || '').trim())
+      .filter(Boolean);
+    if (id) {
+      counts[id] = Math.max(
+        Number(existingUnreadCounts[id] || 0),
+        ...legacyIds.map((legacyId) => Number(existingUnreadCounts[legacyId] || 0))
+      );
+    }
     return counts;
   }, {});
 
@@ -333,7 +341,7 @@ const getAssignedCpsForBooking = async (bookingId) => {
       {
         model: db.crew_members,
         as: 'crew_member',
-        attributes: ['crew_member_id', 'first_name', 'last_name', 'email'],
+        attributes: ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email'],
         required: false,
       },
     ],
@@ -394,14 +402,14 @@ const resolveChatSender = async (requestUser = {}) => {
     const crewMember = conditions.length
       ? await db.crew_members.findOne({
           where: { [db.Sequelize.Op.or]: conditions },
-          attributes: ['crew_member_id', 'first_name', 'last_name', 'email'],
+          attributes: ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email'],
           raw: true,
         })
       : null;
 
     if (crewMember) {
       return {
-        id: String(crewMember.crew_member_id),
+        id: String(crewMember.user_id || crewMember.crew_member_id),
         name: `${crewMember.first_name || ''} ${crewMember.last_name || ''}`.trim() || crewMember.email || 'Creative Partner',
         email: crewMember.email || email || null,
       };
@@ -415,14 +423,14 @@ const resolveChatSender = async (requestUser = {}) => {
     const client = conditions.length
       ? await db.clients.findOne({
           where: { [db.Sequelize.Op.or]: conditions },
-          attributes: ['client_id', 'name', 'email'],
+          attributes: ['client_id', 'user_id', 'name', 'email'],
           raw: true,
         })
       : null;
 
     if (client) {
       return {
-        id: String(client.client_id),
+        id: String(client.user_id || client.client_id),
         name: client.name || client.email || 'Client',
         email: client.email || email || null,
       };
@@ -461,13 +469,16 @@ const getChatParticipantIdsForCreatorUser = async (user = {}) => {
     where: activeOnly
       ? { is_active: 1, [db.Sequelize.Op.or]: orConditions }
       : { [db.Sequelize.Op.or]: orConditions },
-    attributes: ['crew_member_id'],
+    attributes: ['crew_member_id', 'user_id'],
     raw: true,
   });
 
   const activeCrewMembers = orConditions.length ? await findCrewMembers(true) : [];
   const crewMembers = activeCrewMembers.length ? activeCrewMembers : orConditions.length ? await findCrewMembers(false) : [];
-  const crewMemberIds = uniqueTruthyStrings(crewMembers.map((crewMember) => crewMember.crew_member_id));
+  const crewMemberIds = uniqueTruthyStrings([
+    ...crewMembers.map((crewMember) => crewMember.user_id),
+    ...crewMembers.map((crewMember) => crewMember.crew_member_id),
+  ]);
 
   if (crewMemberIds.length) {
     return crewMemberIds;
@@ -574,15 +585,25 @@ const enrichParticipantCollection = async (items = [], fallbackRole = 'member') 
       : [],
     uniqueIds.length
       ? db.clients.findAll({
-          where: { client_id: uniqueIds },
-          attributes: ['client_id', 'name', 'email'],
+          where: {
+            [db.Sequelize.Op.or]: [
+              { client_id: uniqueIds },
+              { user_id: uniqueIds },
+            ],
+          },
+          attributes: ['client_id', 'user_id', 'name', 'email'],
           raw: true,
         })
       : [],
     uniqueIds.length
       ? db.crew_members.findAll({
-          where: { crew_member_id: uniqueIds },
-          attributes: ['crew_member_id', 'first_name', 'last_name', 'email', 'primary_role'],
+          where: {
+            [db.Sequelize.Op.or]: [
+              { crew_member_id: uniqueIds },
+              { user_id: uniqueIds },
+            ],
+          },
+          attributes: ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email', 'primary_role'],
           include: [
             {
               model: db.crew_member_files,
@@ -597,13 +618,17 @@ const enrichParticipantCollection = async (items = [], fallbackRole = 'member') 
   ]);
 
   const staffMap = new Map(staff.map((user) => [String(user.id), user]));
-  const clientMap = new Map(clients.map((client) => [String(client.client_id), client]));
-  const cpMap = new Map(
-    cps.map((cpRecord) => {
-      const plain = cpRecord.get({ plain: true });
-      return [String(plain.crew_member_id), plain];
-    })
-  );
+  const clientMap = new Map();
+  clients.forEach((client) => {
+    clientMap.set(String(client.client_id), client);
+    if (client.user_id != null) clientMap.set(String(client.user_id), client);
+  });
+  const cpMap = new Map();
+  cps.forEach((cpRecord) => {
+    const plain = cpRecord.get({ plain: true });
+    cpMap.set(String(plain.crew_member_id), plain);
+    if (plain.user_id != null) cpMap.set(String(plain.user_id), plain);
+  });
 
   return normalizedItems.map((item) => {
     const id = String(item?.id ?? item ?? '');
@@ -611,6 +636,22 @@ const enrichParticipantCollection = async (items = [], fallbackRole = 'member') 
     const client = clientMap.get(id);
     const cp = cpMap.get(id);
     const profilePhoto = Array.isArray(cp?.crew_member_files) ? cp.crew_member_files[0] : null;
+
+    if (cp && String(item?.role || fallbackRole).toLowerCase() === 'cp') {
+      const canonicalId = String(cp.user_id || cp.crew_member_id || id);
+      return {
+        ...item,
+        id: canonicalId,
+        crew_member_id: String(cp.crew_member_id),
+        name: shouldUseProvidedName(item?.name, id)
+          ? item.name
+          : `${cp.first_name || ''} ${cp.last_name || ''}`.trim() || cp.email || canonicalId,
+        email: shouldUseProvidedEmail(item?.email) ? item.email : cp.email || null,
+        role: 'cp',
+        subtitle: item?.subtitle || cp.primary_role || 'Creative Partner',
+        profileImage: item?.profileImage || profilePhoto?.file_path || null,
+      };
+    }
 
     if (staffUser) {
       return {
@@ -623,22 +664,26 @@ const enrichParticipantCollection = async (items = [], fallbackRole = 'member') 
     }
 
     if (client) {
+      const canonicalId = String(client.user_id || client.client_id || id);
       return {
         ...item,
-        id,
-        name: shouldUseProvidedName(item?.name, id) ? item.name : client.name || client.email || id,
+        id: canonicalId,
+        client_id: String(client.client_id),
+        name: shouldUseProvidedName(item?.name, id) ? item.name : client.name || client.email || canonicalId,
         email: shouldUseProvidedEmail(item?.email) ? item.email : client.email || null,
         role: 'client',
       };
     }
 
     if (cp) {
+      const canonicalId = String(cp.user_id || cp.crew_member_id || id);
       return {
         ...item,
-        id,
+        id: canonicalId,
+        crew_member_id: String(cp.crew_member_id),
         name: shouldUseProvidedName(item?.name, id)
           ? item.name
-          : `${cp.first_name || ''} ${cp.last_name || ''}`.trim() || cp.email || id,
+          : `${cp.first_name || ''} ${cp.last_name || ''}`.trim() || cp.email || canonicalId,
         email: shouldUseProvidedEmail(item?.email) ? item.email : cp.email || null,
         role: 'cp',
         subtitle: item?.subtitle || cp.primary_role || 'Creative Partner',
@@ -1016,7 +1061,7 @@ const getClientDirectory = async (search = '') => {
   return clients
     .map((client) => client.get({ plain: true }))
     .map((client) => ({
-      id: String(client.client_id || client.user_id),
+      id: String(client.user_id || client.client_id),
       client_id: client.client_id != null ? String(client.client_id) : null,
       user_id: client.user_id != null ? String(client.user_id) : null,
       name: client.name || client.email || `Client ${client.client_id || client.user_id}`,
@@ -1043,7 +1088,7 @@ const getCreativePartnerDirectory = async (search = '') => {
 
   const cps = await db.crew_members.findAll({
     where,
-    attributes: ['crew_member_id', 'first_name', 'last_name', 'email', 'primary_role'],
+    attributes: ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email', 'primary_role'],
     include: [
       {
         model: db.crew_member_files,
@@ -1063,7 +1108,7 @@ const getCreativePartnerDirectory = async (search = '') => {
     const plain = cp.get({ plain: true });
     const profilePhoto = Array.isArray(plain.crew_member_files) ? plain.crew_member_files[0] : null;
     return {
-      id: String(plain.crew_member_id),
+      id: String(plain.user_id || plain.crew_member_id),
       name: `${plain.first_name || ''} ${plain.last_name || ''}`.trim() || plain.email || `CP ${plain.crew_member_id}`,
       email: plain.email || null,
       role: 'cp',
@@ -1171,7 +1216,7 @@ const resolveClientParticipant = async (participant) => {
   }
 
   return {
-    id: String(clientRecord?.client_id || userRecord?.id || normalized.id),
+    id: String(clientRecord?.user_id || userRecord?.id || clientRecord?.client_id || normalized.id),
     name: clientRecord?.name || userRecord?.name || normalized.name || normalized.email || 'Client',
     email: clientRecord?.email || userRecord?.email || normalized.email || null,
     role: 'client',
@@ -1350,17 +1395,18 @@ exports.createChatRoom = async (req, res) => {
     let selectedCpIds = [];
 
     if (bookingId) {
-      const validAssignedCpIds = new Set(
-        assignedCps
-          .map((assignment) => Number(assignment.crew_member_id || assignment.crew_member?.crew_member_id))
-          .filter(Number.isFinite)
-      );
-
-      selectedCpIds = requestedCpIds.filter((id) => validAssignedCpIds.has(id));
-      const selectedCps = assignedCps
-        .filter((assignment) => selectedCpIds.includes(Number(assignment.crew_member_id || assignment.crew_member?.crew_member_id)))
+      const requestedCpIdSet = new Set(requestedCpIds);
+      const selectedAssignments = assignedCps.filter((assignment) => {
+        const crewMemberId = Number(assignment.crew_member_id || assignment.crew_member?.crew_member_id);
+        const userId = Number(assignment.crew_member?.user_id);
+        return requestedCpIdSet.has(crewMemberId) || requestedCpIdSet.has(userId);
+      });
+      selectedCpIds = selectedAssignments
+        .map((assignment) => Number(assignment.crew_member?.user_id || assignment.crew_member_id || assignment.crew_member?.crew_member_id))
+        .filter(Number.isFinite);
+      const selectedCps = selectedAssignments
         .map((assignment) => ({
-          id: assignment.crew_member_id || assignment.crew_member?.crew_member_id,
+          id: assignment.crew_member?.user_id || assignment.crew_member_id || assignment.crew_member?.crew_member_id,
           email: assignment.crew_member?.email || null,
           name: `${assignment.crew_member?.first_name || ''} ${assignment.crew_member?.last_name || ''}`.trim() || null,
           role: 'cp',
@@ -1557,8 +1603,51 @@ exports.removeChatParticipant = async (req, res) => {
       });
     }
 
+    let storedParticipantId = String(req.params.userId);
+    const numericParticipantId = Number(req.params.userId);
+    if (Number.isFinite(numericParticipantId) && role === 'cp') {
+      const cp = await db.crew_members.findOne({
+        where: {
+          [db.Sequelize.Op.or]: [
+            { user_id: numericParticipantId },
+            { crew_member_id: numericParticipantId },
+          ],
+        },
+        attributes: ['crew_member_id', 'user_id'],
+        raw: true,
+      });
+      if (cp) {
+        const participantPayload = await proxyRequest(`/participants/${req.params.roomId}`).catch(() => null);
+        const { envelope } = extractParticipantEnvelope(participantPayload || {});
+        const storedIds = new Set((envelope?.cps || []).map((participant) => String(participant?.id || participant)));
+        storedParticipantId = [cp.user_id, cp.crew_member_id]
+          .map((id) => String(id || ''))
+          .find((id) => id && storedIds.has(id)) || storedParticipantId;
+      }
+    }
+    if (Number.isFinite(numericParticipantId) && role === 'client') {
+      const client = await db.clients.findOne({
+        where: {
+          [db.Sequelize.Op.or]: [
+            { user_id: numericParticipantId },
+            { client_id: numericParticipantId },
+          ],
+        },
+        attributes: ['client_id', 'user_id'],
+        raw: true,
+      });
+      if (client) {
+        const participantPayload = await proxyRequest(`/participants/${req.params.roomId}`).catch(() => null);
+        const { envelope } = extractParticipantEnvelope(participantPayload || {});
+        const storedClientId = String(envelope?.client?.id || envelope?.client || '');
+        storedParticipantId = [client.user_id, client.client_id]
+          .map((id) => String(id || ''))
+          .find((id) => id && id === storedClientId) || storedParticipantId;
+      }
+    }
+
     const adminUser = await getPlatformUserById(req.user?.userId || null);
-    const result = await proxyRequest(`/participants/${req.params.roomId}/${req.params.userId}`, {
+    const result = await proxyRequest(`/participants/${req.params.roomId}/${storedParticipantId}`, {
       method: 'DELETE',
       body: JSON.stringify({
         role,
