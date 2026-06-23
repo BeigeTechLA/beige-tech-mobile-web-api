@@ -318,6 +318,68 @@ const isClientRequestUser = (user = {}) => {
   return ['client', 'affiliate'].includes(role);
 };
 
+const isAdminRequestUser = (user = {}) => {
+  const userTypeId = Number(user?.userTypeId || user?.user_type_id || user?.user_type);
+  if ([1, 7].includes(userTypeId)) return true;
+
+  const role = String(user?.userRole || user?.role || '').trim().toLowerCase();
+  return ['admin', 'administrator', 'sales_admin'].includes(role);
+};
+
+const resolveChatSender = async (requestUser = {}) => {
+  const userId = Number(requestUser?.userId || requestUser?.id);
+  const platformUser = Number.isFinite(userId) ? await getPlatformUserById(userId) : null;
+  const email = String(platformUser?.email || requestUser?.email || '').trim().toLowerCase();
+
+  if (isCreatorRequestUser(requestUser)) {
+    const conditions = [];
+    if (Number.isFinite(userId)) conditions.push({ user_id: userId });
+    if (email) conditions.push({ email });
+    const crewMember = conditions.length
+      ? await db.crew_members.findOne({
+          where: { [db.Sequelize.Op.or]: conditions },
+          attributes: ['crew_member_id', 'first_name', 'last_name', 'email'],
+          raw: true,
+        })
+      : null;
+
+    if (crewMember) {
+      return {
+        id: String(crewMember.crew_member_id),
+        name: `${crewMember.first_name || ''} ${crewMember.last_name || ''}`.trim() || crewMember.email || 'Creative Partner',
+        email: crewMember.email || email || null,
+      };
+    }
+  }
+
+  if (isClientRequestUser(requestUser)) {
+    const conditions = [];
+    if (Number.isFinite(userId)) conditions.push({ user_id: userId });
+    if (email) conditions.push({ email });
+    const client = conditions.length
+      ? await db.clients.findOne({
+          where: { [db.Sequelize.Op.or]: conditions },
+          attributes: ['client_id', 'name', 'email'],
+          raw: true,
+        })
+      : null;
+
+    if (client) {
+      return {
+        id: String(client.client_id),
+        name: client.name || client.email || 'Client',
+        email: client.email || email || null,
+      };
+    }
+  }
+
+  return platformUser || {
+    id: String(requestUser?.userId || requestUser?.id || ''),
+    email: email || null,
+    name: requestUser?.name || email || `User ${requestUser?.userId || requestUser?.id || ''}`.trim(),
+  };
+};
+
 const uniqueTruthyStrings = (values = []) => [
   ...new Set(
     values
@@ -571,6 +633,52 @@ const extractParticipantEnvelope = (payload = {}) => {
   }
 
   return { envelope: null, wrapped: false };
+};
+
+const flattenChatParticipants = (payload = {}) => [
+  payload?.client,
+  ...(payload?.cps || []),
+  payload?.pm,
+  ...(payload?.production || []),
+  ...(payload?.managers || []),
+].filter(Boolean);
+
+const normalizeMessageParticipantIds = (payload, participants = []) => {
+  const byEmail = new Map(
+    participants
+      .map((participant) => [normalizeEmailAddress(participant?.email), participant])
+      .filter(([email]) => email)
+  );
+
+  const normalizeSender = (sender) => {
+    if (!sender || typeof sender !== 'object') return sender;
+    const participant = byEmail.get(normalizeEmailAddress(sender.email));
+    return participant?.id != null
+      ? { ...sender, id: String(participant.id), role: participant.role || sender.role || null }
+      : sender;
+  };
+
+  const normalizeMessage = (message) => {
+    if (!message || typeof message !== 'object') return message;
+    const normalized = { ...message, sent_by: normalizeSender(message.sent_by) };
+    if (normalized.reply_to && typeof normalized.reply_to === 'object') {
+      normalized.reply_to = {
+        ...normalized.reply_to,
+        sent_by: normalizeSender(normalized.reply_to.sent_by),
+      };
+    }
+    return normalized;
+  };
+
+  const results = payload?.data?.results || payload?.results;
+  if (!Array.isArray(results)) return payload;
+
+  if (Array.isArray(payload?.data?.results)) {
+    payload.data.results = results.map(normalizeMessage);
+  } else {
+    payload.results = results.map(normalizeMessage);
+  }
+  return payload;
 };
 
 const normalizeEmailAddress = (value) => String(value || '').trim().toLowerCase();
@@ -1537,10 +1645,15 @@ exports.getChatMessages = async (req, res) => {
     if (req.query.limit) query.set('limit', req.query.limit);
     if (req.query.sortBy) query.set('sortBy', req.query.sortBy);
 
-    const result = await proxyRequest(
-      `/messages/${req.params.roomId}${query.toString() ? `?${query.toString()}` : ''}`
-    );
-    return res.status(200).json(result);
+    const [result, participantResult] = await Promise.all([
+      proxyRequest(`/messages/${req.params.roomId}${query.toString() ? `?${query.toString()}` : ''}`),
+      proxyRequest(`/participants/${req.params.roomId}`).catch(() => null),
+    ]);
+    const { envelope } = extractParticipantEnvelope(participantResult || {});
+    const participants = envelope
+      ? flattenChatParticipants(await enrichParticipantPayload(envelope))
+      : [];
+    return res.status(200).json(normalizeMessageParticipantIds(result, participants));
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
@@ -1551,8 +1664,45 @@ exports.getChatMessages = async (req, res) => {
 
 exports.getChatParticipants = async (req, res) => {
   try {
-    const result = await proxyRequest(`/participants/${req.params.roomId}`);
-    const { envelope, wrapped } = extractParticipantEnvelope(result);
+    let result = await proxyRequest(`/participants/${req.params.roomId}`);
+    let { envelope, wrapped } = extractParticipantEnvelope(result);
+
+    if (envelope && isAdminRequestUser(req.user)) {
+      const adminUser = await getPlatformUserById(req.user?.userId || null);
+      const currentParticipants = flattenChatParticipants(envelope);
+      const adminEmail = normalizeEmailAddress(adminUser?.email || req.user?.email);
+      const adminId = String(adminUser?.id || req.user?.userId || '').trim();
+      const adminExists = currentParticipants.some((participant) =>
+        (adminEmail && normalizeEmailAddress(participant?.email) === adminEmail) ||
+        (adminId && String(participant?.id || '').trim() === adminId)
+      );
+
+      if (!adminExists && adminId) {
+        await proxyRequest(`/participants/${req.params.roomId}`, {
+          method: 'POST',
+          body: JSON.stringify({
+            role: 'admin',
+            participants: [{
+              id: adminId,
+              email: adminUser?.email || req.user?.email || null,
+              name: adminUser?.name || req.user?.name || 'Admin',
+              role: 'admin',
+            }],
+            adminId,
+            adminUser: {
+              id: adminId,
+              email: adminUser?.email || req.user?.email || null,
+              name: adminUser?.name || req.user?.name || 'Admin',
+              role: 'admin',
+            },
+            silent: true,
+          }),
+        });
+        result = await proxyRequest(`/participants/${req.params.roomId}`);
+        ({ envelope, wrapped } = extractParticipantEnvelope(result));
+      }
+    }
+
     if (envelope) {
       const enriched = await enrichParticipantPayload(envelope);
       if (wrapped) {
@@ -1572,12 +1722,7 @@ exports.getChatParticipants = async (req, res) => {
 
 exports.sendChatMessage = async (req, res) => {
   try {
-    const platformUser = await getPlatformUserById(req.user?.userId || null);
-    const sender = platformUser || {
-      id: String(req.user?.userId || ''),
-      email: null,
-      name: `User ${req.user?.userId || ''}`.trim(),
-    };
+    const sender = await resolveChatSender(req.user);
 
     const result = await proxyRequest(`/messages/${req.params.roomId}`, {
       method: 'POST',
@@ -1603,12 +1748,7 @@ exports.sendChatMessage = async (req, res) => {
 
 exports.editChatMessage = async (req, res) => {
   try {
-    const platformUser = await getPlatformUserById(req.user?.userId || null);
-    const sender = platformUser || {
-      id: String(req.user?.userId || ''),
-      email: null,
-      name: `User ${req.user?.userId || ''}`.trim(),
-    };
+    const sender = await resolveChatSender(req.user);
 
     const result = await proxyRequest(`/messages/${req.params.messageId}/edit`, {
       method: 'POST',
@@ -1634,12 +1774,7 @@ exports.editChatMessage = async (req, res) => {
 
 exports.deleteChatMessage = async (req, res) => {
   try {
-    const platformUser = await getPlatformUserById(req.user?.userId || null);
-    const sender = platformUser || {
-      id: String(req.user?.userId || ''),
-      email: null,
-      name: `User ${req.user?.userId || ''}`.trim(),
-    };
+    const sender = await resolveChatSender(req.user);
 
     const result = await proxyRequest(`/messages/${req.params.messageId}/delete`, {
       method: 'POST',
@@ -1664,12 +1799,7 @@ exports.deleteChatMessage = async (req, res) => {
 
 exports.reactToChatMessage = async (req, res) => {
   try {
-    const platformUser = await getPlatformUserById(req.user?.userId || null);
-    const sender = platformUser || {
-      id: String(req.user?.userId || ''),
-      email: null,
-      name: `User ${req.user?.userId || ''}`.trim(),
-    };
+    const sender = await resolveChatSender(req.user);
 
     const result = await proxyRequest(`/messages/${req.params.messageId}/reaction`, {
       method: 'POST',
@@ -1695,12 +1825,7 @@ exports.reactToChatMessage = async (req, res) => {
 
 exports.markChatRoomRead = async (req, res) => {
   try {
-    const platformUser = await getPlatformUserById(req.user?.userId || null);
-    const sender = platformUser || {
-      id: String(req.user?.userId || ''),
-      email: null,
-      name: `User ${req.user?.userId || ''}`.trim(),
-    };
+    const sender = await resolveChatSender(req.user);
 
     const result = await proxyRequest(`/rooms/${req.params.roomId}/mark-read`, {
       method: 'PATCH',
