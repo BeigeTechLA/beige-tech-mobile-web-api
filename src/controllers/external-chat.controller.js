@@ -265,6 +265,62 @@ const decorateChatRoom = async (room) => {
   });
 };
 
+const normalizeChatRoomMembers = (room, currentAdmin = null) => {
+  if (!room) return room;
+
+  const managers = [...(room.manager_ids || [])];
+  const adminEmail = normalizeEmailAddress(currentAdmin?.email);
+  const adminId = String(currentAdmin?.id || '').trim();
+  const hasCurrentAdmin = managers.some((participant) =>
+    (adminEmail && normalizeEmailAddress(participant?.email) === adminEmail) ||
+    (adminId && String(participant?.id || '').trim() === adminId)
+  );
+
+  if (currentAdmin && adminId && !hasCurrentAdmin) {
+    managers.push({
+      id: adminId,
+      name: currentAdmin.name || currentAdmin.email || 'Admin',
+      email: currentAdmin.email || null,
+      role: 'admin',
+      added_at: new Date().toISOString(),
+      added_by: adminId,
+    });
+  }
+
+  const members = [
+    room.client_snapshot || room.client_id,
+    ...(room.cp_ids || []),
+    room.pm_id,
+    ...(room.production_ids || []),
+    ...managers,
+  ].filter(Boolean);
+  const seen = new Set();
+  const participants = members.filter((participant) => {
+    const email = normalizeEmailAddress(participant?.email);
+    const id = String(participant?.id || participant?._id || participant || '').trim();
+    const key = email ? `email:${email}` : id ? `id:${id}` : '';
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  const existingUnreadCounts = room.unread_counts && typeof room.unread_counts === 'object'
+    ? room.unread_counts
+    : {};
+  const unreadCounts = participants.reduce((counts, participant) => {
+    const id = String(participant?.id || participant?._id || '').trim();
+    if (id) counts[id] = Number(existingUnreadCounts[id] || 0);
+    return counts;
+  }, {});
+
+  return {
+    ...room,
+    manager_ids: managers,
+    participants,
+    unread_counts: unreadCounts,
+  };
+};
+
 const getAssignedCpsForBooking = async (bookingId) => {
   if (!bookingId) return [];
 
@@ -1620,7 +1676,44 @@ exports.listChatRooms = async (req, res) => {
     const result = await proxyRequest(`/rooms${query.toString() ? `?${query.toString()}` : ''}`);
     const rooms = result?.data?.results || result?.data?.rooms || result?.results || [];
     if (Array.isArray(rooms) && rooms.length) {
-      const decoratedRooms = await Promise.all(rooms.map((room) => decorateChatRoom(room)));
+      const currentAdmin = isAdminRequestUser(req.user)
+        ? await getPlatformUserById(req.user?.userId || null)
+        : null;
+      const decoratedRooms = await Promise.all(rooms.map(async (room) => {
+        const decorated = await decorateChatRoom(room);
+        const normalized = normalizeChatRoomMembers(decorated, currentAdmin);
+
+        if (currentAdmin) {
+          const existingManagers = decorated?.manager_ids || [];
+          const adminEmail = normalizeEmailAddress(currentAdmin.email);
+          const adminId = String(currentAdmin.id);
+          const adminExists = existingManagers.some((participant) =>
+            (adminEmail && normalizeEmailAddress(participant?.email) === adminEmail) ||
+            String(participant?.id || '').trim() === adminId
+          );
+          const roomId = extractChatRoomId(decorated);
+
+          if (!adminExists && roomId) {
+            await proxyRequest(`/participants/${roomId}`, {
+              method: 'POST',
+              body: JSON.stringify({
+                role: 'admin',
+                participants: [{
+                  id: adminId,
+                  email: currentAdmin.email || null,
+                  name: currentAdmin.name || currentAdmin.email || 'Admin',
+                  role: 'admin',
+                }],
+                adminId,
+                adminUser: { ...currentAdmin, id: adminId, role: 'admin' },
+                silent: true,
+              }),
+            }).catch(() => null);
+          }
+        }
+
+        return normalized;
+      }));
       if (Array.isArray(result?.data?.results)) {
         result.data.results = decoratedRooms;
       } else if (Array.isArray(result?.data?.rooms)) {
