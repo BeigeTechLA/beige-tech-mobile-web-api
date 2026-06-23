@@ -265,6 +265,70 @@ const decorateChatRoom = async (room) => {
   });
 };
 
+const normalizeChatRoomMembers = (room, currentAdmin = null) => {
+  if (!room) return room;
+
+  const managers = [...(room.manager_ids || [])];
+  const adminEmail = normalizeEmailAddress(currentAdmin?.email);
+  const adminId = String(currentAdmin?.id || '').trim();
+  const hasCurrentAdmin = managers.some((participant) =>
+    (adminEmail && normalizeEmailAddress(participant?.email) === adminEmail) ||
+    (adminId && String(participant?.id || '').trim() === adminId)
+  );
+
+  if (currentAdmin && adminId && !hasCurrentAdmin) {
+    managers.push({
+      id: adminId,
+      name: currentAdmin.name || currentAdmin.email || 'Admin',
+      email: currentAdmin.email || null,
+      role: 'admin',
+      added_at: new Date().toISOString(),
+      added_by: adminId,
+    });
+  }
+
+  const members = [
+    room.client_snapshot || room.client_id,
+    ...(room.cp_ids || []),
+    room.pm_id,
+    ...(room.production_ids || []),
+    ...managers,
+  ].filter(Boolean);
+  const seen = new Set();
+  const participants = members.filter((participant) => {
+    const email = normalizeEmailAddress(participant?.email);
+    const id = String(participant?.id || participant?._id || participant || '').trim();
+    const key = email ? `email:${email}` : id ? `id:${id}` : '';
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  const existingUnreadCounts = room.unread_counts && typeof room.unread_counts === 'object'
+    ? room.unread_counts
+    : {};
+  const unreadCounts = participants.reduce((counts, participant) => {
+    const id = String(participant?.id || participant?._id || '').trim();
+    const legacyIds = [participant?.crew_member_id, participant?.client_id]
+      .map((value) => String(value || '').trim())
+      .filter(Boolean);
+    if (id) {
+      counts[id] = Math.max(
+        Number(existingUnreadCounts[id] || 0),
+        ...legacyIds.map((legacyId) => Number(existingUnreadCounts[legacyId] || 0))
+      );
+    }
+    return counts;
+  }, {});
+
+  return {
+    ...room,
+    manager_ids: managers,
+    participants,
+    unread_counts: unreadCounts,
+  };
+};
+
 const getAssignedCpsForBooking = async (bookingId) => {
   if (!bookingId) return [];
 
@@ -277,7 +341,7 @@ const getAssignedCpsForBooking = async (bookingId) => {
       {
         model: db.crew_members,
         as: 'crew_member',
-        attributes: ['crew_member_id', 'first_name', 'last_name', 'email'],
+        attributes: ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email'],
         required: false,
       },
     ],
@@ -318,6 +382,68 @@ const isClientRequestUser = (user = {}) => {
   return ['client', 'affiliate'].includes(role);
 };
 
+const isAdminRequestUser = (user = {}) => {
+  const userTypeId = Number(user?.userTypeId || user?.user_type_id || user?.user_type);
+  if ([1, 7].includes(userTypeId)) return true;
+
+  const role = String(user?.userRole || user?.role || '').trim().toLowerCase();
+  return ['admin', 'administrator', 'sales_admin'].includes(role);
+};
+
+const resolveChatSender = async (requestUser = {}) => {
+  const userId = Number(requestUser?.userId || requestUser?.id);
+  const platformUser = Number.isFinite(userId) ? await getPlatformUserById(userId) : null;
+  const email = String(platformUser?.email || requestUser?.email || '').trim().toLowerCase();
+
+  if (isCreatorRequestUser(requestUser)) {
+    const conditions = [];
+    if (Number.isFinite(userId)) conditions.push({ user_id: userId });
+    if (email) conditions.push({ email });
+    const crewMember = conditions.length
+      ? await db.crew_members.findOne({
+          where: { [db.Sequelize.Op.or]: conditions },
+          attributes: ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email'],
+          raw: true,
+        })
+      : null;
+
+    if (crewMember) {
+      return {
+        id: String(crewMember.user_id || crewMember.crew_member_id),
+        name: `${crewMember.first_name || ''} ${crewMember.last_name || ''}`.trim() || crewMember.email || 'Creative Partner',
+        email: crewMember.email || email || null,
+      };
+    }
+  }
+
+  if (isClientRequestUser(requestUser)) {
+    const conditions = [];
+    if (Number.isFinite(userId)) conditions.push({ user_id: userId });
+    if (email) conditions.push({ email });
+    const client = conditions.length
+      ? await db.clients.findOne({
+          where: { [db.Sequelize.Op.or]: conditions },
+          attributes: ['client_id', 'user_id', 'name', 'email'],
+          raw: true,
+        })
+      : null;
+
+    if (client) {
+      return {
+        id: String(client.user_id || client.client_id),
+        name: client.name || client.email || 'Client',
+        email: client.email || email || null,
+      };
+    }
+  }
+
+  return platformUser || {
+    id: String(requestUser?.userId || requestUser?.id || ''),
+    email: email || null,
+    name: requestUser?.name || email || `User ${requestUser?.userId || requestUser?.id || ''}`.trim(),
+  };
+};
+
 const uniqueTruthyStrings = (values = []) => [
   ...new Set(
     values
@@ -343,13 +469,16 @@ const getChatParticipantIdsForCreatorUser = async (user = {}) => {
     where: activeOnly
       ? { is_active: 1, [db.Sequelize.Op.or]: orConditions }
       : { [db.Sequelize.Op.or]: orConditions },
-    attributes: ['crew_member_id'],
+    attributes: ['crew_member_id', 'user_id'],
     raw: true,
   });
 
   const activeCrewMembers = orConditions.length ? await findCrewMembers(true) : [];
   const crewMembers = activeCrewMembers.length ? activeCrewMembers : orConditions.length ? await findCrewMembers(false) : [];
-  const crewMemberIds = uniqueTruthyStrings(crewMembers.map((crewMember) => crewMember.crew_member_id));
+  const crewMemberIds = uniqueTruthyStrings([
+    ...crewMembers.map((crewMember) => crewMember.user_id),
+    ...crewMembers.map((crewMember) => crewMember.crew_member_id),
+  ]);
 
   if (crewMemberIds.length) {
     return crewMemberIds;
@@ -456,15 +585,25 @@ const enrichParticipantCollection = async (items = [], fallbackRole = 'member') 
       : [],
     uniqueIds.length
       ? db.clients.findAll({
-          where: { client_id: uniqueIds },
-          attributes: ['client_id', 'name', 'email'],
+          where: {
+            [db.Sequelize.Op.or]: [
+              { client_id: uniqueIds },
+              { user_id: uniqueIds },
+            ],
+          },
+          attributes: ['client_id', 'user_id', 'name', 'email'],
           raw: true,
         })
       : [],
     uniqueIds.length
       ? db.crew_members.findAll({
-          where: { crew_member_id: uniqueIds },
-          attributes: ['crew_member_id', 'first_name', 'last_name', 'email', 'primary_role'],
+          where: {
+            [db.Sequelize.Op.or]: [
+              { crew_member_id: uniqueIds },
+              { user_id: uniqueIds },
+            ],
+          },
+          attributes: ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email', 'primary_role'],
           include: [
             {
               model: db.crew_member_files,
@@ -479,13 +618,17 @@ const enrichParticipantCollection = async (items = [], fallbackRole = 'member') 
   ]);
 
   const staffMap = new Map(staff.map((user) => [String(user.id), user]));
-  const clientMap = new Map(clients.map((client) => [String(client.client_id), client]));
-  const cpMap = new Map(
-    cps.map((cpRecord) => {
-      const plain = cpRecord.get({ plain: true });
-      return [String(plain.crew_member_id), plain];
-    })
-  );
+  const clientMap = new Map();
+  clients.forEach((client) => {
+    clientMap.set(String(client.client_id), client);
+    if (client.user_id != null) clientMap.set(String(client.user_id), client);
+  });
+  const cpMap = new Map();
+  cps.forEach((cpRecord) => {
+    const plain = cpRecord.get({ plain: true });
+    cpMap.set(String(plain.crew_member_id), plain);
+    if (plain.user_id != null) cpMap.set(String(plain.user_id), plain);
+  });
 
   return normalizedItems.map((item) => {
     const id = String(item?.id ?? item ?? '');
@@ -493,6 +636,22 @@ const enrichParticipantCollection = async (items = [], fallbackRole = 'member') 
     const client = clientMap.get(id);
     const cp = cpMap.get(id);
     const profilePhoto = Array.isArray(cp?.crew_member_files) ? cp.crew_member_files[0] : null;
+
+    if (cp && String(item?.role || fallbackRole).toLowerCase() === 'cp') {
+      const canonicalId = String(cp.user_id || cp.crew_member_id || id);
+      return {
+        ...item,
+        id: canonicalId,
+        crew_member_id: String(cp.crew_member_id),
+        name: shouldUseProvidedName(item?.name, id)
+          ? item.name
+          : `${cp.first_name || ''} ${cp.last_name || ''}`.trim() || cp.email || canonicalId,
+        email: shouldUseProvidedEmail(item?.email) ? item.email : cp.email || null,
+        role: 'cp',
+        subtitle: item?.subtitle || cp.primary_role || 'Creative Partner',
+        profileImage: item?.profileImage || profilePhoto?.file_path || null,
+      };
+    }
 
     if (staffUser) {
       return {
@@ -505,22 +664,26 @@ const enrichParticipantCollection = async (items = [], fallbackRole = 'member') 
     }
 
     if (client) {
+      const canonicalId = String(client.user_id || client.client_id || id);
       return {
         ...item,
-        id,
-        name: shouldUseProvidedName(item?.name, id) ? item.name : client.name || client.email || id,
+        id: canonicalId,
+        client_id: String(client.client_id),
+        name: shouldUseProvidedName(item?.name, id) ? item.name : client.name || client.email || canonicalId,
         email: shouldUseProvidedEmail(item?.email) ? item.email : client.email || null,
         role: 'client',
       };
     }
 
     if (cp) {
+      const canonicalId = String(cp.user_id || cp.crew_member_id || id);
       return {
         ...item,
-        id,
+        id: canonicalId,
+        crew_member_id: String(cp.crew_member_id),
         name: shouldUseProvidedName(item?.name, id)
           ? item.name
-          : `${cp.first_name || ''} ${cp.last_name || ''}`.trim() || cp.email || id,
+          : `${cp.first_name || ''} ${cp.last_name || ''}`.trim() || cp.email || canonicalId,
         email: shouldUseProvidedEmail(item?.email) ? item.email : cp.email || null,
         role: 'cp',
         subtitle: item?.subtitle || cp.primary_role || 'Creative Partner',
@@ -571,6 +734,52 @@ const extractParticipantEnvelope = (payload = {}) => {
   }
 
   return { envelope: null, wrapped: false };
+};
+
+const flattenChatParticipants = (payload = {}) => [
+  payload?.client,
+  ...(payload?.cps || []),
+  payload?.pm,
+  ...(payload?.production || []),
+  ...(payload?.managers || []),
+].filter(Boolean);
+
+const normalizeMessageParticipantIds = (payload, participants = []) => {
+  const byEmail = new Map(
+    participants
+      .map((participant) => [normalizeEmailAddress(participant?.email), participant])
+      .filter(([email]) => email)
+  );
+
+  const normalizeSender = (sender) => {
+    if (!sender || typeof sender !== 'object') return sender;
+    const participant = byEmail.get(normalizeEmailAddress(sender.email));
+    return participant?.id != null
+      ? { ...sender, id: String(participant.id), role: participant.role || sender.role || null }
+      : sender;
+  };
+
+  const normalizeMessage = (message) => {
+    if (!message || typeof message !== 'object') return message;
+    const normalized = { ...message, sent_by: normalizeSender(message.sent_by) };
+    if (normalized.reply_to && typeof normalized.reply_to === 'object') {
+      normalized.reply_to = {
+        ...normalized.reply_to,
+        sent_by: normalizeSender(normalized.reply_to.sent_by),
+      };
+    }
+    return normalized;
+  };
+
+  const results = payload?.data?.results || payload?.results;
+  if (!Array.isArray(results)) return payload;
+
+  if (Array.isArray(payload?.data?.results)) {
+    payload.data.results = results.map(normalizeMessage);
+  } else {
+    payload.results = results.map(normalizeMessage);
+  }
+  return payload;
 };
 
 const normalizeEmailAddress = (value) => String(value || '').trim().toLowerCase();
@@ -852,7 +1061,7 @@ const getClientDirectory = async (search = '') => {
   return clients
     .map((client) => client.get({ plain: true }))
     .map((client) => ({
-      id: String(client.client_id || client.user_id),
+      id: String(client.user_id || client.client_id),
       client_id: client.client_id != null ? String(client.client_id) : null,
       user_id: client.user_id != null ? String(client.user_id) : null,
       name: client.name || client.email || `Client ${client.client_id || client.user_id}`,
@@ -879,7 +1088,7 @@ const getCreativePartnerDirectory = async (search = '') => {
 
   const cps = await db.crew_members.findAll({
     where,
-    attributes: ['crew_member_id', 'first_name', 'last_name', 'email', 'primary_role'],
+    attributes: ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email', 'primary_role'],
     include: [
       {
         model: db.crew_member_files,
@@ -899,7 +1108,7 @@ const getCreativePartnerDirectory = async (search = '') => {
     const plain = cp.get({ plain: true });
     const profilePhoto = Array.isArray(plain.crew_member_files) ? plain.crew_member_files[0] : null;
     return {
-      id: String(plain.crew_member_id),
+      id: String(plain.user_id || plain.crew_member_id),
       name: `${plain.first_name || ''} ${plain.last_name || ''}`.trim() || plain.email || `CP ${plain.crew_member_id}`,
       email: plain.email || null,
       role: 'cp',
@@ -1007,7 +1216,7 @@ const resolveClientParticipant = async (participant) => {
   }
 
   return {
-    id: String(clientRecord?.client_id || userRecord?.id || normalized.id),
+    id: String(clientRecord?.user_id || userRecord?.id || clientRecord?.client_id || normalized.id),
     name: clientRecord?.name || userRecord?.name || normalized.name || normalized.email || 'Client',
     email: clientRecord?.email || userRecord?.email || normalized.email || null,
     role: 'client',
@@ -1186,17 +1395,18 @@ exports.createChatRoom = async (req, res) => {
     let selectedCpIds = [];
 
     if (bookingId) {
-      const validAssignedCpIds = new Set(
-        assignedCps
-          .map((assignment) => Number(assignment.crew_member_id || assignment.crew_member?.crew_member_id))
-          .filter(Number.isFinite)
-      );
-
-      selectedCpIds = requestedCpIds.filter((id) => validAssignedCpIds.has(id));
-      const selectedCps = assignedCps
-        .filter((assignment) => selectedCpIds.includes(Number(assignment.crew_member_id || assignment.crew_member?.crew_member_id)))
+      const requestedCpIdSet = new Set(requestedCpIds);
+      const selectedAssignments = assignedCps.filter((assignment) => {
+        const crewMemberId = Number(assignment.crew_member_id || assignment.crew_member?.crew_member_id);
+        const userId = Number(assignment.crew_member?.user_id);
+        return requestedCpIdSet.has(crewMemberId) || requestedCpIdSet.has(userId);
+      });
+      selectedCpIds = selectedAssignments
+        .map((assignment) => Number(assignment.crew_member?.user_id || assignment.crew_member_id || assignment.crew_member?.crew_member_id))
+        .filter(Number.isFinite);
+      const selectedCps = selectedAssignments
         .map((assignment) => ({
-          id: assignment.crew_member_id || assignment.crew_member?.crew_member_id,
+          id: assignment.crew_member?.user_id || assignment.crew_member_id || assignment.crew_member?.crew_member_id,
           email: assignment.crew_member?.email || null,
           name: `${assignment.crew_member?.first_name || ''} ${assignment.crew_member?.last_name || ''}`.trim() || null,
           role: 'cp',
@@ -1393,8 +1603,51 @@ exports.removeChatParticipant = async (req, res) => {
       });
     }
 
+    let storedParticipantId = String(req.params.userId);
+    const numericParticipantId = Number(req.params.userId);
+    if (Number.isFinite(numericParticipantId) && role === 'cp') {
+      const cp = await db.crew_members.findOne({
+        where: {
+          [db.Sequelize.Op.or]: [
+            { user_id: numericParticipantId },
+            { crew_member_id: numericParticipantId },
+          ],
+        },
+        attributes: ['crew_member_id', 'user_id'],
+        raw: true,
+      });
+      if (cp) {
+        const participantPayload = await proxyRequest(`/participants/${req.params.roomId}`).catch(() => null);
+        const { envelope } = extractParticipantEnvelope(participantPayload || {});
+        const storedIds = new Set((envelope?.cps || []).map((participant) => String(participant?.id || participant)));
+        storedParticipantId = [cp.user_id, cp.crew_member_id]
+          .map((id) => String(id || ''))
+          .find((id) => id && storedIds.has(id)) || storedParticipantId;
+      }
+    }
+    if (Number.isFinite(numericParticipantId) && role === 'client') {
+      const client = await db.clients.findOne({
+        where: {
+          [db.Sequelize.Op.or]: [
+            { user_id: numericParticipantId },
+            { client_id: numericParticipantId },
+          ],
+        },
+        attributes: ['client_id', 'user_id'],
+        raw: true,
+      });
+      if (client) {
+        const participantPayload = await proxyRequest(`/participants/${req.params.roomId}`).catch(() => null);
+        const { envelope } = extractParticipantEnvelope(participantPayload || {});
+        const storedClientId = String(envelope?.client?.id || envelope?.client || '');
+        storedParticipantId = [client.user_id, client.client_id]
+          .map((id) => String(id || ''))
+          .find((id) => id && id === storedClientId) || storedParticipantId;
+      }
+    }
+
     const adminUser = await getPlatformUserById(req.user?.userId || null);
-    const result = await proxyRequest(`/participants/${req.params.roomId}/${req.params.userId}`, {
+    const result = await proxyRequest(`/participants/${req.params.roomId}/${storedParticipantId}`, {
       method: 'DELETE',
       body: JSON.stringify({
         role,
@@ -1512,7 +1765,44 @@ exports.listChatRooms = async (req, res) => {
     const result = await proxyRequest(`/rooms${query.toString() ? `?${query.toString()}` : ''}`);
     const rooms = result?.data?.results || result?.data?.rooms || result?.results || [];
     if (Array.isArray(rooms) && rooms.length) {
-      const decoratedRooms = await Promise.all(rooms.map((room) => decorateChatRoom(room)));
+      const currentAdmin = isAdminRequestUser(req.user)
+        ? await getPlatformUserById(req.user?.userId || null)
+        : null;
+      const decoratedRooms = await Promise.all(rooms.map(async (room) => {
+        const decorated = await decorateChatRoom(room);
+        const normalized = normalizeChatRoomMembers(decorated, currentAdmin);
+
+        if (currentAdmin) {
+          const existingManagers = decorated?.manager_ids || [];
+          const adminEmail = normalizeEmailAddress(currentAdmin.email);
+          const adminId = String(currentAdmin.id);
+          const adminExists = existingManagers.some((participant) =>
+            (adminEmail && normalizeEmailAddress(participant?.email) === adminEmail) ||
+            String(participant?.id || '').trim() === adminId
+          );
+          const roomId = extractChatRoomId(decorated);
+
+          if (!adminExists && roomId) {
+            await proxyRequest(`/participants/${roomId}`, {
+              method: 'POST',
+              body: JSON.stringify({
+                role: 'admin',
+                participants: [{
+                  id: adminId,
+                  email: currentAdmin.email || null,
+                  name: currentAdmin.name || currentAdmin.email || 'Admin',
+                  role: 'admin',
+                }],
+                adminId,
+                adminUser: { ...currentAdmin, id: adminId, role: 'admin' },
+                silent: true,
+              }),
+            }).catch(() => null);
+          }
+        }
+
+        return normalized;
+      }));
       if (Array.isArray(result?.data?.results)) {
         result.data.results = decoratedRooms;
       } else if (Array.isArray(result?.data?.rooms)) {
@@ -1537,10 +1827,15 @@ exports.getChatMessages = async (req, res) => {
     if (req.query.limit) query.set('limit', req.query.limit);
     if (req.query.sortBy) query.set('sortBy', req.query.sortBy);
 
-    const result = await proxyRequest(
-      `/messages/${req.params.roomId}${query.toString() ? `?${query.toString()}` : ''}`
-    );
-    return res.status(200).json(result);
+    const [result, participantResult] = await Promise.all([
+      proxyRequest(`/messages/${req.params.roomId}${query.toString() ? `?${query.toString()}` : ''}`),
+      proxyRequest(`/participants/${req.params.roomId}`).catch(() => null),
+    ]);
+    const { envelope } = extractParticipantEnvelope(participantResult || {});
+    const participants = envelope
+      ? flattenChatParticipants(await enrichParticipantPayload(envelope))
+      : [];
+    return res.status(200).json(normalizeMessageParticipantIds(result, participants));
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
@@ -1551,8 +1846,45 @@ exports.getChatMessages = async (req, res) => {
 
 exports.getChatParticipants = async (req, res) => {
   try {
-    const result = await proxyRequest(`/participants/${req.params.roomId}`);
-    const { envelope, wrapped } = extractParticipantEnvelope(result);
+    let result = await proxyRequest(`/participants/${req.params.roomId}`);
+    let { envelope, wrapped } = extractParticipantEnvelope(result);
+
+    if (envelope && isAdminRequestUser(req.user)) {
+      const adminUser = await getPlatformUserById(req.user?.userId || null);
+      const currentParticipants = flattenChatParticipants(envelope);
+      const adminEmail = normalizeEmailAddress(adminUser?.email || req.user?.email);
+      const adminId = String(adminUser?.id || req.user?.userId || '').trim();
+      const adminExists = currentParticipants.some((participant) =>
+        (adminEmail && normalizeEmailAddress(participant?.email) === adminEmail) ||
+        (adminId && String(participant?.id || '').trim() === adminId)
+      );
+
+      if (!adminExists && adminId) {
+        await proxyRequest(`/participants/${req.params.roomId}`, {
+          method: 'POST',
+          body: JSON.stringify({
+            role: 'admin',
+            participants: [{
+              id: adminId,
+              email: adminUser?.email || req.user?.email || null,
+              name: adminUser?.name || req.user?.name || 'Admin',
+              role: 'admin',
+            }],
+            adminId,
+            adminUser: {
+              id: adminId,
+              email: adminUser?.email || req.user?.email || null,
+              name: adminUser?.name || req.user?.name || 'Admin',
+              role: 'admin',
+            },
+            silent: true,
+          }),
+        });
+        result = await proxyRequest(`/participants/${req.params.roomId}`);
+        ({ envelope, wrapped } = extractParticipantEnvelope(result));
+      }
+    }
+
     if (envelope) {
       const enriched = await enrichParticipantPayload(envelope);
       if (wrapped) {
@@ -1572,12 +1904,7 @@ exports.getChatParticipants = async (req, res) => {
 
 exports.sendChatMessage = async (req, res) => {
   try {
-    const platformUser = await getPlatformUserById(req.user?.userId || null);
-    const sender = platformUser || {
-      id: String(req.user?.userId || ''),
-      email: null,
-      name: `User ${req.user?.userId || ''}`.trim(),
-    };
+    const sender = await resolveChatSender(req.user);
 
     const result = await proxyRequest(`/messages/${req.params.roomId}`, {
       method: 'POST',
@@ -1603,12 +1930,7 @@ exports.sendChatMessage = async (req, res) => {
 
 exports.editChatMessage = async (req, res) => {
   try {
-    const platformUser = await getPlatformUserById(req.user?.userId || null);
-    const sender = platformUser || {
-      id: String(req.user?.userId || ''),
-      email: null,
-      name: `User ${req.user?.userId || ''}`.trim(),
-    };
+    const sender = await resolveChatSender(req.user);
 
     const result = await proxyRequest(`/messages/${req.params.messageId}/edit`, {
       method: 'POST',
@@ -1634,12 +1956,7 @@ exports.editChatMessage = async (req, res) => {
 
 exports.deleteChatMessage = async (req, res) => {
   try {
-    const platformUser = await getPlatformUserById(req.user?.userId || null);
-    const sender = platformUser || {
-      id: String(req.user?.userId || ''),
-      email: null,
-      name: `User ${req.user?.userId || ''}`.trim(),
-    };
+    const sender = await resolveChatSender(req.user);
 
     const result = await proxyRequest(`/messages/${req.params.messageId}/delete`, {
       method: 'POST',
@@ -1664,12 +1981,7 @@ exports.deleteChatMessage = async (req, res) => {
 
 exports.reactToChatMessage = async (req, res) => {
   try {
-    const platformUser = await getPlatformUserById(req.user?.userId || null);
-    const sender = platformUser || {
-      id: String(req.user?.userId || ''),
-      email: null,
-      name: `User ${req.user?.userId || ''}`.trim(),
-    };
+    const sender = await resolveChatSender(req.user);
 
     const result = await proxyRequest(`/messages/${req.params.messageId}/reaction`, {
       method: 'POST',
@@ -1695,12 +2007,7 @@ exports.reactToChatMessage = async (req, res) => {
 
 exports.markChatRoomRead = async (req, res) => {
   try {
-    const platformUser = await getPlatformUserById(req.user?.userId || null);
-    const sender = platformUser || {
-      id: String(req.user?.userId || ''),
-      email: null,
-      name: `User ${req.user?.userId || ''}`.trim(),
-    };
+    const sender = await resolveChatSender(req.user);
 
     const result = await proxyRequest(`/rooms/${req.params.roomId}/mark-read`, {
       method: 'PATCH',
