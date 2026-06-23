@@ -419,6 +419,34 @@ const buildDefaultParticipants = (booking) => {
   };
 };
 
+const buildAllMeetingParticipants = (participantData, createdBy = null) => {
+  const participants = [
+    participantData?.client,
+    participantData?.admin,
+    ...(participantData?.cps || []),
+    ...(participantData?.participants || []),
+    createdBy,
+  ].filter(Boolean);
+
+  const seen = new Set();
+  return participants.filter((participant) => {
+    const email = normalizeEmail(participant?.email);
+    const id = String(participant?.id || '').trim();
+    const name = String(participant?.name || '').trim().toLowerCase();
+    const key = email
+      ? `email:${email}`
+      : id
+        ? `id:${id}`
+        : name
+          ? `name:${name}`
+          : '';
+
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
 const formatMeeting = (meeting, booking, storedParticipants) => {
   const plainMeeting = typeof meeting.get === 'function' ? meeting.get({ plain: true }) : meeting;
   const plainBooking = typeof booking.get === 'function' ? booking.get({ plain: true }) : booking;
@@ -449,7 +477,7 @@ const formatMeeting = (meeting, booking, storedParticipants) => {
     client: participantData.client,
     admin: participantData.admin,
     cps: participantData.cps,
-    participants: participantData.participants,
+    participants: buildAllMeetingParticipants(participantData, createdBy),
     created_by: createdBy,
     participant_responses: participantData.participant_responses,
     change_request: participantData.change_request,
