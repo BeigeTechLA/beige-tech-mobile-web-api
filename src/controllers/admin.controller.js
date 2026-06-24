@@ -3068,7 +3068,7 @@ exports.updateProjectDateLocation = async (req, res) => {
 
 exports.getAllProjectDetails = async (req, res) => {
   try {
-    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment, production_filter } = req.query;
+    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment, production_filter, summary_only } = req.query;
     const today = new Date();
     const noPagination = !limit && !page;
 
@@ -3320,6 +3320,26 @@ exports.getAllProjectDetails = async (req, res) => {
         [Sequelize.literal(`CASE WHEN DATE(event_date) < CURDATE() THEN event_date END`), 'DESC']
       ],
     });
+
+    if (String(summary_only || '').toLowerCase() === 'true' || String(summary_only) === '1') {
+      const projects = projectRows.map((project) => ({
+        project: typeof project.toJSON === 'function' ? project.toJSON() : project,
+      }));
+
+      return res.status(200).json({
+        error: false,
+        message: 'Project summaries retrieved successfully',
+        data: {
+          stats: { total_active, total_cancelled, total_completed, total_upcoming, total_draft },
+          projects,
+          pagination: noPagination ? null : {
+            page: pageNumber,
+            limit: pageSize,
+            totalRecords: projects.length,
+          },
+        },
+      });
+    }
 
     const shootNotesCountMap = await countActiveShootNotesByBookingIds(
       projectRows.map((project) => project.stream_project_booking_id)
