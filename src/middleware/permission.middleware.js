@@ -1,7 +1,7 @@
 const db = require('../models');
 const { Op } = db.Sequelize;
 
-const ADMIN_ROLES = new Set(['admin']);
+const ADMIN_ROLES = new Set(['admin', 'super_admin', 'superadmin']);
 const BASE_ROLES = new Set([
   'admin',
   'client',
