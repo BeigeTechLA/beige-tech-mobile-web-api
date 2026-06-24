@@ -211,15 +211,15 @@ const PERMISSIONS_MAP = {
 /**
  * Generate JWT tokens
  */
-const generateTokens = (userId, userRole) => {
+const generateTokens = (userId, userRole, permissionsVersion, userTypeId) => {
   const token = jwt.sign(
-    { userId, userRole },
+    { userId, userRole, permissionsVersion, userTypeId },
     process.env.JWT_SECRET,
     { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
   );
 
   const refreshToken = jwt.sign(
-    { userId, userRole, type: 'refresh' },
+    { userId, userRole, permissionsVersion, userTypeId, type: 'refresh' },
     process.env.JWT_SECRET,
     { expiresIn: '30d' }
   );
@@ -801,6 +801,86 @@ exports.verifyEmail = async (req, res) => {
 
 // ==================== LOGIN ====================
 
+const getCombinedUserPermissions = async (userId, roleId) => {
+  // Get role permissions
+  const rolePermissions = await db.role_permissions.findAll({
+    where: {
+      role_id: roleId,
+      is_active: 1
+    },
+    include: [
+      {
+        model: db.permissions,
+        as: 'permission'
+      }
+    ]
+  });
+
+  // Get user custom permissions
+  const userPermissions = await db.user_permissions.findAll({
+    where: {
+      user_id: userId,
+      is_active: 1
+    },
+    include: [
+      {
+        model: db.permissions,
+        as: 'permission'
+      }
+    ]
+  });
+
+  const formattedPermissions = {};
+
+  // =========================================
+  // ROLE DEFAULT PERMISSIONS
+  // =========================================
+  rolePermissions.forEach(item => {
+    const permission = item.permission;
+
+    if (!permission) return;
+
+    const module = permission.module_key;
+    const action = permission.action_key;
+
+    if (!formattedPermissions[module]) {
+      formattedPermissions[module] = {
+        view: false,
+        create: false,
+        edit: false,
+        delete: false
+      };
+    }
+
+    formattedPermissions[module][action] = true;
+  });
+
+  // =========================================
+  // USER CUSTOM OVERRIDE PERMISSIONS
+  // =========================================
+  userPermissions.forEach(item => {
+    const permission = item.permission;
+
+    if (!permission) return;
+
+    const module = permission.module_key;
+    const action = permission.action_key;
+
+    if (!formattedPermissions[module]) {
+      formattedPermissions[module] = {
+        view: false,
+        create: false,
+        edit: false,
+        delete: false
+      };
+    }
+
+    formattedPermissions[module][action] = item.is_allowed === 1;
+  });
+
+  return formattedPermissions;
+};
+
 /**
  * Login user with email/password or phone/OTP
  * POST /auth/login
@@ -889,8 +969,14 @@ exports.login = async (req, res) => {
       affiliate_id = affiliate ? affiliate.affiliate_id : null;
 
       // Generate tokens
-      const { token, refreshToken } = generateTokens(user.id, role);
-      const permissions = getPermissionsForRole(role);
+      const { token, refreshToken } = generateTokens(user.id, role, user.permissions_version, user_type_id);
+
+      const permissions = await getCombinedUserPermissions(
+        user.id,
+        user.user_type
+      );
+
+      // const permissions = getPermissionsForRole(role);
 
       return res.status(200).json({
         success: true,
@@ -907,7 +993,8 @@ exports.login = async (req, res) => {
           crew_member_id,
            affiliate_id,
           is_crew_verified,
-          temp_event_popup
+          temp_event_popup,
+          permissions_version: user.permissions_version
         },
         token,
         refreshToken,
@@ -1016,8 +1103,12 @@ const affiliate = await Affiliate.findOne({
 });
 affiliate_id = affiliate ? affiliate.affiliate_id : null;
 
-      const { token, refreshToken } = generateTokens(user.id, role);
-      const permissions = getPermissionsForRole(role);
+      const { token, refreshToken } = generateTokens(user.id, role, user.permissions_version);
+      
+      const permissions = await getCombinedUserPermissions(
+        user.id,
+        user.user_type
+      );
 
       return res.json({
         success: true,
@@ -1034,7 +1125,8 @@ affiliate_id = affiliate ? affiliate.affiliate_id : null;
           crew_member_id,
           affiliate_id,
           is_crew_verified,
-          temp_event_popup
+          temp_event_popup,
+          permissions_version: user.permissions_version
         },
 
         token,
@@ -2337,41 +2429,45 @@ exports.createInternalCredential = async (req, res) => {
       });
     }
 
-    const { name, email, password, phone_number, user_type, role } = req.body;
-    const normalizedUserType = Number(user_type);
-    const allowedUserTypes = [1, 5, 6, 7];
-    const allowedAdminRoles = [
-      'Production Team',
-      'Video Editors',
-      'Photo Editors',
-      'Sales',
-      'Sales Admin'
-    ];
+    const { name, email, password, phone_number, user_type, userType, role } = req.body;
+    const requestedUserType = user_type ?? userType;
+    const normalizedUserType = Number(requestedUserType);
     const normalizedRole = typeof role === 'string' ? role.trim() : '';
+    const normalizedName = String(name || '').trim();
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    const normalizedPhoneNumber = phone_number ? String(phone_number).trim() : null;
 
-    if (!name || !email || !password || !normalizedUserType) {
+    if (!normalizedName || !normalizedEmail || !password || !normalizedUserType) {
       return res.status(400).json({
         success: false,
         message: 'name, email, password and user_type are required'
       });
     }
 
-    if (!allowedUserTypes.includes(normalizedUserType)) {
+    if (normalizedUserType === 3 && !normalizedPhoneNumber) {
       return res.status(400).json({
         success: false,
-        message: 'Invalid user_type. Allowed values: 1, 5, 6, 7'
+        message: 'phone_number is required for client user_type'
       });
     }
 
-    if (normalizedUserType === 1 && normalizedRole && !allowedAdminRoles.includes(normalizedRole)) {
+    const userTypeRecord = await UserType.findOne({
+      where: {
+        user_type_id: normalizedUserType,
+        is_active: 1
+      },
+      attributes: ['user_type_id', 'user_role']
+    });
+
+    if (!userTypeRecord) {
       return res.status(400).json({
         success: false,
-        message: `Invalid role. Allowed values: ${allowedAdminRoles.join(', ')}`
+        message: 'Invalid or inactive user_type'
       });
     }
 
     const existingUser = await User.findOne({
-      where: { email: String(email).trim().toLowerCase() }
+      where: { email: normalizedEmail }
     });
 
     if (existingUser) {
@@ -2381,32 +2477,110 @@ exports.createInternalCredential = async (req, res) => {
       });
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    if (normalizedUserType === 2) {
+      const existingCrewMember = await crew_members.findOne({
+        where: { email: normalizedEmail }
+      });
 
-    const createdUser = await User.create({
-      name: String(name).trim(),
-      email: String(email).trim().toLowerCase(),
-      phone_number: phone_number || null,
-      password_hash: hashedPassword,
-      user_type: normalizedUserType,
-      role: normalizedUserType === 1 ? (normalizedRole || null) : null,
-      is_active: 1,
-      email_verified: 1,
-      created_from: 1,
-      created_at: new Date()
-    });
-
-    return res.status(201).json({
-      success: true,
-      message: 'Internal credential created successfully',
-      data: {
-        id: createdUser.id,
-        name: createdUser.name,
-        email: createdUser.email,
-        user_type: createdUser.user_type,
-        role: createdUser.role
+      if (existingCrewMember) {
+        return res.status(409).json({
+          success: false,
+          message: 'Crew member with this email already exists'
+        });
       }
-    });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const transaction = await db.sequelize.transaction();
+
+    try {
+      const createdUser = await User.create({
+        name: normalizedName,
+        email: normalizedEmail,
+        phone_number: normalizedPhoneNumber,
+        password_hash: hashedPassword,
+        user_type: normalizedUserType,
+        role: normalizedRole || userTypeRecord.user_role || null,
+        is_active: 1,
+        email_verified: 1,
+        created_from: 1,
+        created_at: new Date()
+      }, { transaction });
+
+      let clientId = null;
+      let crewMemberId = null;
+
+      if (normalizedUserType === 2) {
+        const nameParts = normalizedName.split(/\s+/);
+        const firstName = nameParts.shift();
+        const lastName = nameParts.join(' ');
+        const createdCrewMember = await crew_members.create({
+          user_id: createdUser.id,
+          first_name: firstName,
+          last_name: lastName,
+          email: normalizedEmail,
+          phone_number: normalizedPhoneNumber,
+          is_active: 1,
+          created_from: 1
+        }, { transaction });
+
+        crewMemberId = createdCrewMember.crew_member_id;
+      }
+
+      if (normalizedUserType === 3) {
+        const existingClient = await Clients.findOne({
+          where: {
+            is_active: 1,
+            [Op.or]: [
+              { email: normalizedEmail },
+              { phone_number: normalizedPhoneNumber }
+            ]
+          },
+          order: [['client_id', 'ASC']],
+          transaction
+        });
+
+        if (existingClient) {
+          await existingClient.update({
+            user_id: createdUser.id,
+            name: normalizedName,
+            email: normalizedEmail,
+            phone_number: normalizedPhoneNumber
+          }, { transaction });
+
+          clientId = existingClient.client_id;
+        } else {
+          const createdClient = await Clients.create({
+            user_id: createdUser.id,
+            name: normalizedName,
+            email: normalizedEmail,
+            phone_number: normalizedPhoneNumber,
+            is_active: 1
+          }, { transaction });
+
+          clientId = createdClient.client_id;
+        }
+      }
+
+      await transaction.commit();
+
+      return res.status(201).json({
+        success: true,
+        message: 'Internal credential created successfully',
+        data: {
+          id: createdUser.id,
+          name: createdUser.name,
+          email: createdUser.email,
+          user_type: createdUser.user_type,
+          role: createdUser.role || userTypeRecord.user_role,
+          client_id: clientId,
+          crew_member_id: crewMemberId
+        }
+      });
+    } catch (error) {
+      await transaction.rollback();
+      throw error;
+    }
   } catch (error) {
     console.error('Create Internal Credential Error:', error);
     return res.status(500).json({

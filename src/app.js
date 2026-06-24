@@ -7,6 +7,7 @@ const errorHandler = require('./middleware/errorHandler');
 const creatorRoutes = require('./routes/creator.routes');
 const paymentsController = require('./controllers/payments.controller');
 const signatureRoutes = require('./routes/signature.routes');
+const creatorEarningsRoutes = require('./routes/creator-earnings.routes');
 
 const app = express();
 
@@ -86,6 +87,7 @@ app.get('/health', (req, res) => {
 
 app.use('/v1', routes);
 app.use('/v1/signatures', signatureRoutes); 
+app.use('/v1/creator-earnings', creatorEarningsRoutes);
 // app.use('/api/creator', creatorRoutes);
 
 

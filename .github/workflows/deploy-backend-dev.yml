@@ -1,14 +1,13 @@
 name: Deploy Backend Dev
 
 on:
-  push:
-    branches:
-      - development
-    paths-ignore:
-      - ".github/workflows/deploy-dev.yml"
-      - ".github/workflows/deploy-staging.yml"
-      - ".github/workflows/deploy-prod.yml"
   workflow_dispatch:
+    inputs:
+      deploy_branch:
+        description: "Branch to deploy to dev. Do not use main or staging."
+        required: true
+        default: "development"
+        type: string
 
 concurrency:
   group: deploy-backend-dev
@@ -20,8 +19,43 @@ jobs:
     timeout-minutes: 30
 
     steps:
+      - name: Validate deploy branch
+        run: |
+          WORKFLOW_BRANCH="${{ github.ref_name }}"
+          DEPLOY_BRANCH="${{ github.event.inputs.deploy_branch }}"
+
+          if [ "$WORKFLOW_BRANCH" = "main" ] || [ "$WORKFLOW_BRANCH" = "staging" ]; then
+            echo "Running this dev deploy workflow from '$WORKFLOW_BRANCH' is not allowed."
+            exit 1
+          fi
+
+          if [ "$DEPLOY_BRANCH" = "main" ] || [ "$DEPLOY_BRANCH" = "staging" ]; then
+            echo "Deploying '$DEPLOY_BRANCH' to dev is not allowed."
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: refs/heads/${{ github.event.inputs.deploy_branch }}
+          fetch-depth: 0
+
+      - name: Verify selected branch
+        run: |
+          DEPLOY_BRANCH="${{ github.event.inputs.deploy_branch }}"
+          CHECKED_OUT_BRANCH="$(git branch --show-current)"
+          CHECKED_OUT_SHA="$(git rev-parse HEAD)"
+
+          echo "Workflow branch: ${{ github.ref_name }}"
+          echo "Deploy branch input: $DEPLOY_BRANCH"
+          echo "Checked out branch: $CHECKED_OUT_BRANCH"
+          echo "Checked out commit: $CHECKED_OUT_SHA"
+          git log -1 --oneline
+
+          if [ "$CHECKED_OUT_BRANCH" != "$DEPLOY_BRANCH" ]; then
+            echo "Expected branch '$DEPLOY_BRANCH' but checked out '$CHECKED_OUT_BRANCH'."
+            exit 1
+          fi
 
       - name: Setup SSH key
         env:
@@ -63,28 +97,37 @@ jobs:
           BACKEND_DEV_HOST: ${{ secrets.BACKEND_DEV_HOST }}
           BACKEND_DEV_PORT: ${{ secrets.BACKEND_DEV_PORT }}
           BACKEND_DEV_USER: ${{ secrets.BACKEND_DEV_USER }}
+          ARCHIVE_NAME: backend-build-${{ github.run_id }}-${{ github.run_attempt }}.tar.gz
         run: |
           PORT="${BACKEND_DEV_PORT:-22}"
-          tar czf - \
+          ARCHIVE_PATH="${{ runner.temp }}/$ARCHIVE_NAME"
+
+          tar czf "$ARCHIVE_PATH" \
             --exclude=node_modules \
             --exclude=.git \
             --exclude=deploy \
             --exclude=.env \
             --exclude=*.log \
             --exclude=logs \
-            . | ssh -p "$PORT" -i ~/.ssh/backend-dev.pem "$BACKEND_DEV_USER@$BACKEND_DEV_HOST" \
-            "cd /var/www/beige-web-dev && tar xzf -"
+            .
+
+          scp -P "$PORT" -i ~/.ssh/backend-dev.pem "$ARCHIVE_PATH" \
+            "$BACKEND_DEV_USER@$BACKEND_DEV_HOST:/tmp/"
 
       - name: Install dependencies and restart PM2
         env:
           BACKEND_DEV_HOST: ${{ secrets.BACKEND_DEV_HOST }}
           BACKEND_DEV_PORT: ${{ secrets.BACKEND_DEV_PORT }}
           BACKEND_DEV_USER: ${{ secrets.BACKEND_DEV_USER }}
+          ARCHIVE_NAME: backend-build-${{ github.run_id }}-${{ github.run_attempt }}.tar.gz
         run: |
           PORT="${BACKEND_DEV_PORT:-22}"
-          ssh -p "$PORT" -i ~/.ssh/backend-dev.pem "$BACKEND_DEV_USER@$BACKEND_DEV_HOST" << 'EOF'
+          ssh -p "$PORT" -i ~/.ssh/backend-dev.pem "$BACKEND_DEV_USER@$BACKEND_DEV_HOST" \
+            "ARCHIVE_NAME='$ARCHIVE_NAME' bash -s" << 'EOF'
           set -euo pipefail
           cd /var/www/beige-web-dev
+          tar xzf "/tmp/$ARCHIVE_NAME" -C /var/www/beige-web-dev
+          rm -f "/tmp/$ARCHIVE_NAME"
           npm install --omit=dev
           pm2 delete beige-web-dev >/dev/null 2>&1 || true
           pm2 start npm --name beige-web-dev -- start

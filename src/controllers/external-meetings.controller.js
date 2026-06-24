@@ -320,7 +320,7 @@ const getBookingContext = async (bookingId) => {
             model: db.crew_members,
             as: 'crew_member',
             required: false,
-            attributes: ['crew_member_id', 'first_name', 'last_name', 'email'],
+            attributes: ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email'],
           },
         ],
       },
@@ -419,6 +419,34 @@ const buildDefaultParticipants = (booking) => {
   };
 };
 
+const buildAllMeetingParticipants = (participantData, createdBy = null) => {
+  const participants = [
+    participantData?.client,
+    participantData?.admin,
+    ...(participantData?.cps || []),
+    ...(participantData?.participants || []),
+    createdBy,
+  ].filter(Boolean);
+
+  const seen = new Set();
+  return participants.filter((participant) => {
+    const email = normalizeEmail(participant?.email);
+    const id = String(participant?.id || '').trim();
+    const name = String(participant?.name || '').trim().toLowerCase();
+    const key = email
+      ? `email:${email}`
+      : id
+        ? `id:${id}`
+        : name
+          ? `name:${name}`
+          : '';
+
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
 const formatMeeting = (meeting, booking, storedParticipants) => {
   const plainMeeting = typeof meeting.get === 'function' ? meeting.get({ plain: true }) : meeting;
   const plainBooking = typeof booking.get === 'function' ? booking.get({ plain: true }) : booking;
@@ -449,7 +477,7 @@ const formatMeeting = (meeting, booking, storedParticipants) => {
     client: participantData.client,
     admin: participantData.admin,
     cps: participantData.cps,
-    participants: participantData.participants,
+    participants: buildAllMeetingParticipants(participantData, createdBy),
     created_by: createdBy,
     participant_responses: participantData.participant_responses,
     change_request: participantData.change_request,
@@ -519,12 +547,28 @@ const getCrewRecordById = async (crewMemberId) => {
   const normalizedCrewId = toPositiveInt(crewMemberId);
   if (!normalizedCrewId) return null;
 
+  // CPs are now exposed to the web app by their users.id. Keep accepting the
+  // old crew_member_id as a fallback so existing clients and saved payloads
+  // continue to work. Prefer user_id because the two numeric ID spaces can
+  // contain the same value for different people.
+  const attributes = ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email'];
+  const byUserId = await db.crew_members.findOne({
+    where: {
+      user_id: normalizedCrewId,
+      is_active: 1,
+    },
+    attributes,
+    raw: true,
+  });
+
+  if (byUserId) return byUserId;
+
   return db.crew_members.findOne({
     where: {
       crew_member_id: normalizedCrewId,
       is_active: 1,
     },
-    attributes: ['crew_member_id', 'first_name', 'last_name', 'email'],
+    attributes,
     raw: true,
   });
 };
@@ -538,12 +582,15 @@ const getCrewRecordIdsByEmail = async (email) => {
       email: normalizedEmail,
       is_active: 1,
     },
-    attributes: ['crew_member_id'],
+    attributes: ['crew_member_id', 'user_id'],
     raw: true,
   });
 
   return (records || [])
-    .map((entry) => toPositiveInt(entry.crew_member_id))
+    .flatMap((entry) => [
+      toPositiveInt(entry.user_id),
+      toPositiveInt(entry.crew_member_id),
+    ])
     .filter(Boolean);
 };
 
@@ -564,11 +611,24 @@ const buildCpParticipants = async (userIds) => {
   return records
     .filter(Boolean)
     .map((crewMember) => ({
-      id: crewMember.crew_member_id,
-      name: [crewMember.first_name, crewMember.last_name].filter(Boolean).join(' ').trim() || crewMember.email || `CP ${crewMember.crew_member_id}`,
+      id: crewMember.user_id || crewMember.crew_member_id,
+      name: [crewMember.first_name, crewMember.last_name].filter(Boolean).join(' ').trim() || crewMember.email || `CP ${crewMember.user_id || crewMember.crew_member_id}`,
       email: crewMember.email || null,
       role: 'cp',
     }));
+};
+
+const validateResolvedParticipants = (requestedIds, resolvedParticipants, role) => {
+  const normalizedRequestedIds = (requestedIds || []).map(toPositiveInt);
+
+  if (
+    normalizedRequestedIds.some((id) => !id) ||
+    normalizedRequestedIds.length !== (resolvedParticipants || []).length
+  ) {
+    const error = new Error(`One or more ${role} user IDs are invalid or inactive`);
+    error.status = 400;
+    throw error;
+  }
 };
 
 const mergeParticipantsByKey = (existingParticipants, nextParticipants) => {
@@ -582,6 +642,21 @@ const mergeParticipantsByKey = (existingParticipants, nextParticipants) => {
   });
 
   return Array.from(merged.values());
+};
+
+const filterNewParticipants = (existingParticipants, additions) => {
+  const existingIds = new Set(
+    (existingParticipants || []).map((participant) => String(participant?.id || '').trim()).filter(Boolean)
+  );
+  const existingEmails = new Set(
+    (existingParticipants || []).map((participant) => normalizeEmail(participant?.email)).filter(Boolean)
+  );
+
+  return (additions || []).filter((participant) => {
+    const id = String(participant?.id || '').trim();
+    const email = normalizeEmail(participant?.email);
+    return !(id && existingIds.has(id)) && !(email && existingEmails.has(email));
+  });
 };
 
 const loadBookingsByIds = async (bookingIds) => {
@@ -626,7 +701,7 @@ const loadBookingsByIds = async (bookingIds) => {
             model: db.crew_members,
             as: 'crew_member',
             required: false,
-            attributes: ['crew_member_id', 'first_name', 'last_name', 'email'],
+            attributes: ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email'],
           },
         ],
       },
@@ -954,8 +1029,20 @@ exports.createMeeting = async (req, res) => {
 
     const booking = await getBookingContext(bookingId);
     const plainBooking = booking.get({ plain: true });
+    const requestedCpIds = Array.isArray(req.body.cp_ids) ? req.body.cp_ids : [];
+    const requestedManagerIds = Array.isArray(req.body.participants) ? req.body.participants : [];
+    const [requestedCps, requestedManagers] = await Promise.all([
+      buildCpParticipants(requestedCpIds),
+      buildManagerParticipants(requestedManagerIds),
+    ]);
+    validateResolvedParticipants(requestedCpIds, requestedCps, 'cp');
+    validateResolvedParticipants(requestedManagerIds, requestedManagers, 'manager');
+
+    const defaultParticipants = buildDefaultParticipants(booking);
     const participants = {
-      ...buildDefaultParticipants(booking),
+      ...defaultParticipants,
+      cps: mergeParticipantsByKey(defaultParticipants.cps, requestedCps),
+      participants: mergeParticipantsByKey(defaultParticipants.participants, requestedManagers),
       participant_responses: [],
       change_request: null,
     };
@@ -1186,18 +1273,23 @@ exports.addParticipants = async (req, res) => {
     const additions = role === 'cp'
       ? await buildCpParticipants(userIds)
       : await buildManagerParticipants(userIds);
+    validateResolvedParticipants(userIds, additions, role);
+    const newAdditions = filterNewParticipants(
+      role === 'cp' ? state.cps : state.participants,
+      additions
+    );
 
     const nextState = {
       ...state,
-      cps: role === 'cp' ? mergeParticipantsByKey(state.cps, additions) : state.cps,
-      participants: role === 'manager' ? mergeParticipantsByKey(state.participants, additions) : state.participants,
+      cps: role === 'cp' ? mergeParticipantsByKey(state.cps, newAdditions) : state.cps,
+      participants: role === 'manager' ? mergeParticipantsByKey(state.participants, newAdditions) : state.participants,
     };
 
     await meeting.update({
       participants_json: serializeMeetingState(nextState),
     });
 
-    const addedRecipients = additions
+    const addedRecipients = newAdditions
       .map((participant) => ({
         email: normalizeEmail(participant?.email),
         name: String(participant?.name || participant?.email || '').trim(),

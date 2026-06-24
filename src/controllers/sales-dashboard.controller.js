@@ -10,9 +10,10 @@ const {
   users,
   sales_rep_live_status,
   stream_project_booking,
-  sales_quotes
+  sales_quotes,
+  payment_transactions
 } = require('../models');
-const { Op } = require('sequelize');
+const { Op, QueryTypes } = require('sequelize');
 const sequelize = require('../db');
 const constants = require('../utils/constants');
 const leadAssignmentService = require('../services/lead-assignment.service');
@@ -37,6 +38,161 @@ function parseJsonSafely(value) {
   } catch (_) {
     return null;
   }
+}
+
+function isOptionalTableMissingError(error) {
+  const code = error?.original?.code || error?.parent?.code || error?.code;
+  return code === 'ER_NO_SUCH_TABLE' || code === 'ER_BAD_TABLE_ERROR';
+}
+
+function isManualInvoiceRecord(record) {
+  const invoiceUrl = String(record?.invoice_url || '');
+  const invoicePdf = String(record?.invoice_pdf || '');
+  const invoiceNumber = String(record?.invoice_number || '');
+
+  return (
+    /[?&]manual=(1|true)\b/i.test(invoiceUrl) ||
+    /[?&]manual=(1|true)\b/i.test(invoicePdf) ||
+    /^INVBEIGE-M-/i.test(invoiceNumber)
+  );
+}
+
+function toPositiveNumber(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
+}
+
+async function fetchManualPaymentReceiptRows() {
+  try {
+    return await sequelize.query(
+      `
+        SELECT
+          booking_manual_payment_id,
+          booking_id,
+          lead_id,
+          sales_quote_id,
+          payment_type,
+          amount,
+          payment_mode,
+          other_payment_mode,
+          proof_url,
+          proof_file_path,
+          proof_file_name,
+          notes,
+          performed_by_user_id,
+          created_at,
+          updated_at
+        FROM booking_manual_payments
+        WHERE amount > 0
+        ORDER BY created_at DESC, booking_manual_payment_id DESC
+      `,
+      { type: QueryTypes.SELECT }
+    );
+  } catch (error) {
+    if (isOptionalTableMissingError(error)) {
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function fetchBookingPaymentSummaryRows(bookingIds = []) {
+  const normalizedBookingIds = Array.from(new Set(
+    bookingIds
+      .map((bookingId) => Number(bookingId))
+      .filter((bookingId) => Number.isFinite(bookingId) && bookingId > 0)
+  ));
+
+  if (normalizedBookingIds.length === 0) {
+    return [];
+  }
+
+  try {
+    return await sequelize.query(
+      `
+        SELECT
+          booking_id,
+          payment_status,
+          paid_amount,
+          credit_used_amount,
+          due_amount
+        FROM booking_payment_summary
+        WHERE booking_id IN (:bookingIds)
+      `,
+      {
+        replacements: { bookingIds: normalizedBookingIds },
+        type: QueryTypes.SELECT
+      }
+    );
+  } catch (error) {
+    if (isOptionalTableMissingError(error)) {
+      return [];
+    }
+    throw error;
+  }
+}
+
+function resolveInvoicePaymentStatus(item, booking, paymentSummary) {
+  const currentStatus = String(item?.payment_status || '').trim().toLowerCase();
+  if (currentStatus === 'paid') {
+    return 'paid';
+  }
+
+  const summaryStatus = String(paymentSummary?.payment_status || '').trim().toLowerCase();
+  const paidAmount = Number(paymentSummary?.paid_amount || 0);
+  const creditUsedAmount = Number(paymentSummary?.credit_used_amount || 0);
+  const dueAmount = Number(paymentSummary?.due_amount);
+
+  if (summaryStatus === 'paid' || summaryStatus === 'no_payment_due') {
+    return 'paid';
+  }
+
+  if (summaryStatus === 'partially_paid' || summaryStatus === 'approval_pending') {
+    return summaryStatus;
+  }
+
+  if (paidAmount > 0 || creditUsedAmount > 0) {
+    if (Number.isFinite(dueAmount) && dueAmount <= 0) {
+      return 'paid';
+    }
+
+    return 'partially_paid';
+  }
+
+  if (booking?.payment_id || booking?.payment_completed_at) {
+    return 'paid';
+  }
+
+  return item?.payment_status || 'pending';
+}
+
+function resolveBookingPaymentStatus(booking, paymentSummary, fallbackStatus = null) {
+  const summaryStatus = String(paymentSummary?.payment_status || '').trim().toLowerCase();
+  const paidAmount = Number(paymentSummary?.paid_amount || 0);
+  const creditUsedAmount = Number(paymentSummary?.credit_used_amount || 0);
+  const dueAmount = Number(paymentSummary?.due_amount);
+
+  if (summaryStatus === 'paid' || summaryStatus === 'no_payment_due') {
+    return 'paid';
+  }
+
+  if (summaryStatus === 'partially_paid' || summaryStatus === 'approval_pending') {
+    return summaryStatus;
+  }
+
+  if (paidAmount > 0 || creditUsedAmount > 0) {
+    if (Number.isFinite(dueAmount) && dueAmount <= 0) {
+      return 'paid';
+    }
+
+    return 'partially_paid';
+  }
+
+  if (booking?.payment_id || booking?.payment_completed_at) {
+    return 'paid';
+  }
+
+  return fallbackStatus || 'pending';
 }
 
 function roundCurrency(value) {
@@ -64,6 +220,19 @@ async function updatePaymentSummaryForQuoteChangeReview({
   if (!bookingId || !salesQuoteId) return null;
 
   const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId);
+  const booking = await stream_project_booking.findByPk(bookingId, {
+    attributes: ['stream_project_booking_id', 'payment_id']
+  });
+  const paidInvoiceHistory = invoice_send_history
+    ? await invoice_send_history.findOne({
+        where: {
+          quote_id: salesQuoteId,
+          booking_id: bookingId,
+          payment_status: 'paid'
+        },
+        order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']]
+      })
+    : null;
   const previousTotal = roundCurrency(metadata.previous_total);
   const newTotal = roundCurrency(metadata.new_total || previousTotal);
   const extraAmount = roundCurrency(metadata.extra_amount);
@@ -83,7 +252,10 @@ async function updatePaymentSummaryForQuoteChangeReview({
   const quoteTotal = decision === 'approve'
     ? newTotal
     : roundCurrency(existingSummary?.quote_total || previousTotal);
-  const existingPaidAmount = roundCurrency(existingSummary?.paid_amount || metadata.collected_amount || previousTotal || 0);
+  const existingPaidAmount = roundCurrency(
+    existingSummary?.paid_amount ||
+    (paidInvoiceHistory || booking?.payment_id ? previousTotal : 0)
+  );
   const paidAmount = decision === 'approve' && reducedAmount > 0
     ? Math.min(existingPaidAmount, newTotal)
     : existingPaidAmount;
@@ -285,18 +457,51 @@ function isQuoteChangeRequestActivity(row, metadata = {}) {
   const message = String(row?.message || '').toLowerCase();
   const hasPaymentChangeAmount = roundCurrency(metadata.extra_amount || 0) > 0 ||
     roundCurrency(metadata.reduced_amount || 0) > 0;
-  const hasBookingContext = Number(metadata.booking_id || 0) > 0;
 
   return (
-    metadata.invoice_refresh_required === true ||
-    (hasBookingContext && hasPaymentChangeAmount)
+    metadata.invoice_refresh_required === true &&
+    hasPaymentChangeAmount
   ) && (
     Boolean(metadata.approval_requested_at) ||
     Boolean(metadata.approval_status) ||
-    message.includes('quote updated') ||
     message.includes('quote total decreased after invoice/payment state') ||
     message.includes('quote total increased after invoice/payment state')
   );
+}
+
+async function hasVerifiedPaymentForQuoteChange({ bookingId, salesQuoteId }) {
+  if (!bookingId || !salesQuoteId) return false;
+
+  const booking = await stream_project_booking.findByPk(bookingId, {
+    attributes: ['stream_project_booking_id', 'payment_id']
+  });
+  if (booking?.payment_id) return true;
+
+  const paidInvoiceHistory = invoice_send_history
+    ? await invoice_send_history.findOne({
+        where: {
+          quote_id: salesQuoteId,
+          booking_id: bookingId,
+          payment_status: 'paid'
+        },
+        attributes: ['invoice_send_history_id'],
+        order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']]
+      })
+    : null;
+  if (paidInvoiceHistory) return true;
+
+  const paymentSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId);
+  const summaryPaidAmount =
+    Number(paymentSummary?.paid_amount || 0) +
+    Number(paymentSummary?.credit_used_amount || 0);
+  const hasManualPaymentEvidence = Boolean(
+    paymentSummary?.manual_payment_mode ||
+    paymentSummary?.manual_payment_proof_url ||
+    paymentSummary?.manual_payment_proof_file_path ||
+    paymentSummary?.manual_payment_updated_at
+  );
+
+  return summaryPaidAmount > 0 && hasManualPaymentEvidence;
 }
 
 function findMatchingQuoteChangeSummary(rows = [], requestRow = null, requestMetadata = {}) {
@@ -1211,9 +1416,6 @@ exports.getInvoiceHistory = async (req, res) => {
     if (salesRepId) {
       whereClause.assigned_sales_rep_id = salesRepId;
     }
-    if (status === 'paid' || status === 'pending') {
-      whereClause.payment_status = status;
-    }
 
     const historyRows = await invoice_send_history.findAll({
       where: whereClause,
@@ -1260,6 +1462,9 @@ exports.getInvoiceHistory = async (req, res) => {
       invoice_number: row.invoice_number,
       invoice_url: row.invoice_url,
       invoice_pdf: row.invoice_pdf,
+      payment_amount: null,
+      payment_method: null,
+      receipt_type: 'invoice_history',
       sent_by: row.sent_by ? {
         id: row.sent_by.id,
         name: row.sent_by.name
@@ -1271,8 +1476,124 @@ exports.getInvoiceHistory = async (req, res) => {
       created_at: row.created_at
     }));
 
+    const apiBase = `${req.protocol}://${req.get('host')}/v1`;
+    const manualPaymentRows = await fetchManualPaymentReceiptRows();
+    const manualReceiptBookingIds = new Set(
+      manualPaymentRows
+        .map((row) => Number(row.booking_id))
+        .filter((bookingId) => Number.isFinite(bookingId) && bookingId > 0)
+    );
+
+    if (manualPaymentRows.length > 0) {
+      const manualBookingIds = Array.from(manualReceiptBookingIds);
+      const manualQuoteIds = Array.from(new Set(
+        manualPaymentRows
+          .map((row) => Number(row.sales_quote_id))
+          .filter((quoteId) => Number.isFinite(quoteId) && quoteId > 0)
+      ));
+
+      const [manualSalesLeads, manualClientLeads, manualQuotes] = await Promise.all([
+        manualBookingIds.length
+          ? sales_leads.findAll({
+              where: { booking_id: { [Op.in]: manualBookingIds } },
+              attributes: ['lead_id', 'booking_id', 'client_name', 'guest_email', 'assigned_sales_rep_id', 'created_at']
+            })
+          : [],
+        manualBookingIds.length
+          ? client_leads.findAll({
+              where: { booking_id: { [Op.in]: manualBookingIds } },
+              attributes: ['lead_id', 'booking_id', 'client_name', 'guest_email', 'assigned_sales_rep_id', 'created_at']
+            })
+          : [],
+        manualQuoteIds.length
+          ? sales_quotes.findAll({
+              where: { sales_quote_id: { [Op.in]: manualQuoteIds } },
+              attributes: ['sales_quote_id', 'quote_number', 'client_name', 'client_email', 'assigned_sales_rep_id']
+            })
+          : []
+      ]);
+
+      const manualSalesLeadByBookingId = new Map();
+      manualSalesLeads.forEach((lead) => {
+        const bookingId = Number(lead.booking_id);
+        if (!Number.isFinite(bookingId) || bookingId <= 0 || manualSalesLeadByBookingId.has(bookingId)) return;
+        manualSalesLeadByBookingId.set(bookingId, lead);
+      });
+
+      const manualClientLeadByBookingId = new Map();
+      manualClientLeads.forEach((lead) => {
+        const bookingId = Number(lead.booking_id);
+        if (!Number.isFinite(bookingId) || bookingId <= 0 || manualClientLeadByBookingId.has(bookingId)) return;
+        manualClientLeadByBookingId.set(bookingId, lead);
+      });
+
+      const manualQuoteById = new Map();
+      manualQuotes.forEach((quote) => {
+        const quoteId = Number(quote.sales_quote_id);
+        if (!Number.isFinite(quoteId) || quoteId <= 0) return;
+        manualQuoteById.set(quoteId, quote);
+      });
+
+      const manualReceiptItems = manualPaymentRows
+        .map((manualPayment) => {
+          const bookingId = Number(manualPayment.booking_id);
+          const manualPaymentId = Number(manualPayment.booking_manual_payment_id);
+          const amount = Number(manualPayment.amount || 0);
+          if (!Number.isFinite(bookingId) || bookingId <= 0 || !Number.isFinite(manualPaymentId) || manualPaymentId <= 0 || amount <= 0) {
+            return null;
+          }
+
+          const salesLead = manualSalesLeadByBookingId.get(bookingId) || null;
+          const clientLead = manualClientLeadByBookingId.get(bookingId) || null;
+          const effectiveLead = salesLead || clientLead;
+          const quoteId = toPositiveNumber(manualPayment.sales_quote_id);
+          const quote = quoteId ? manualQuoteById.get(quoteId) : null;
+          const assignedSalesRepId =
+            effectiveLead?.assigned_sales_rep_id ||
+            quote?.assigned_sales_rep_id ||
+            null;
+
+          if (salesRepId && Number(assignedSalesRepId) !== Number(salesRepId)) {
+            return null;
+          }
+
+          const createdAt = manualPayment.created_at || manualPayment.updated_at || new Date();
+          const paymentMode = manualPayment.other_payment_mode
+            ? `${manualPayment.payment_mode} (${manualPayment.other_payment_mode})`
+            : manualPayment.payment_mode;
+
+          return {
+            invoice_send_history_id: -(1000000000 + manualPaymentId),
+            lead_id: salesLead?.lead_id || null,
+            client_lead_id: clientLead?.lead_id || null,
+            booking_id: bookingId,
+            quote_id: quoteId,
+            quote_number: quote?.quote_number || null,
+            client_name: effectiveLead?.client_name || quote?.client_name || null,
+            client_email: effectiveLead?.guest_email || quote?.client_email || null,
+            send_date_time: createdAt,
+            payment_status: 'paid',
+            invoice_number: `INVBEIGE-M-${String(bookingId).padStart(4, '0')}-${String(manualPaymentId).padStart(3, '0')}`,
+            invoice_url: null,
+            invoice_pdf: `${apiBase}/sales/invoice-pdf/${bookingId}?manual=1&receipt=1&manual_payment_id=${manualPaymentId}`,
+            payment_amount: amount,
+            payment_method: paymentMode || 'manual',
+            receipt_type: 'manual_payment',
+            sent_by: null,
+            sales_rep: assignedSalesRepId
+              ? { id: assignedSalesRepId, name: null }
+              : null,
+            created_at: createdAt
+          };
+        })
+        .filter(Boolean);
+
+      items = [...items, ...manualReceiptItems];
+    }
+
     const existingBookingIds = new Set(
       items
+        .filter((item) => !isManualInvoiceRecord(item))
         .map((item) => Number(item.booking_id))
         .filter((bookingId) => Number.isFinite(bookingId) && bookingId > 0)
     );
@@ -1379,7 +1700,11 @@ exports.getInvoiceHistory = async (req, res) => {
       .filter((bookingId) => Number.isFinite(bookingId) && bookingId > 0);
 
     if (paidBookingIds.length > 0) {
-      const [salesLeadsForBookings, clientLeadsForBookings] = await Promise.all([
+      const paymentIds = paidBookings
+        .map((booking) => Number(booking.payment_id))
+        .filter((paymentId) => Number.isFinite(paymentId) && paymentId > 0);
+
+      const [salesLeadsForBookings, clientLeadsForBookings, paymentRowsForBookings] = await Promise.all([
         sales_leads.findAll({
           where: { booking_id: { [Op.in]: paidBookingIds } },
           attributes: ['lead_id', 'booking_id', 'client_name', 'guest_email', 'assigned_sales_rep_id', 'created_at']
@@ -1387,7 +1712,13 @@ exports.getInvoiceHistory = async (req, res) => {
         client_leads.findAll({
           where: { booking_id: { [Op.in]: paidBookingIds } },
           attributes: ['lead_id', 'booking_id', 'client_name', 'guest_email', 'assigned_sales_rep_id', 'created_at']
-        })
+        }),
+        paymentIds.length
+          ? payment_transactions.findAll({
+              where: { payment_id: { [Op.in]: paymentIds } },
+              attributes: ['payment_id', 'stripe_payment_intent_id', 'stripe_charge_id', 'guest_email', 'payment_source', 'total_amount', 'status', 'created_at']
+            })
+          : []
       ]);
 
       const salesLeadByBookingId = new Map();
@@ -1404,7 +1735,33 @@ exports.getInvoiceHistory = async (req, res) => {
         clientLeadByBookingId.set(bookingId, lead);
       });
 
-      const apiBase = `${req.protocol}://${req.get('host')}/v1`;
+      const paymentById = new Map();
+      paymentRowsForBookings.forEach((payment) => {
+        const paymentId = Number(payment.payment_id);
+        if (!Number.isFinite(paymentId) || paymentId <= 0) return;
+        paymentById.set(paymentId, payment);
+      });
+
+      const leadIdsForQuoteLookup = Array.from(new Set([
+        ...salesLeadsForBookings.map((lead) => Number(lead.lead_id)),
+        ...clientLeadsForBookings.map((lead) => Number(lead.lead_id))
+      ].filter((leadId) => Number.isFinite(leadId) && leadId > 0)));
+
+      const quotesForPaidLeads = leadIdsForQuoteLookup.length
+        ? await sales_quotes.findAll({
+            where: { lead_id: { [Op.in]: leadIdsForQuoteLookup } },
+            attributes: ['sales_quote_id', 'quote_number', 'lead_id', 'client_name', 'client_email', 'assigned_sales_rep_id'],
+            order: [['updated_at', 'DESC'], ['sales_quote_id', 'DESC']]
+          })
+        : [];
+
+      const quoteByLeadId = new Map();
+      quotesForPaidLeads.forEach((quote) => {
+        const leadId = Number(quote.lead_id);
+        if (!Number.isFinite(leadId) || leadId <= 0 || quoteByLeadId.has(leadId)) return;
+        quoteByLeadId.set(leadId, quote);
+      });
+
       const syntheticItems = paidBookings
         .map((booking) => {
           const bookingId = Number(booking.stream_project_booking_id);
@@ -1418,33 +1775,48 @@ exports.getInvoiceHistory = async (req, res) => {
             ? `${leadTypePrefix}:${effectiveLead.lead_id}`
             : null;
           const manualStatus = manualStatusKey ? manualLeadStatus.get(manualStatusKey) : null;
-          const isManualInvoice = Boolean(manualStatus?.isManual);
-          const isPaid = isManualInvoice ? Boolean(manualStatus?.isManualPaid) : Boolean(booking.payment_id);
+          const paymentId = Number(booking.payment_id);
+          const stripePayment = Number.isFinite(paymentId) && paymentId > 0 ? paymentById.get(paymentId) : null;
+          const hasStripePayment = Boolean(stripePayment || booking.payment_id);
+          const isManualInvoice = !hasStripePayment && Boolean(manualStatus?.isManual);
+          const isPaid = hasStripePayment || (isManualInvoice && Boolean(manualStatus?.isManualPaid));
           if (!isPaid) return null;
-          if (salesRepId && Number(effectiveLead?.assigned_sales_rep_id) !== Number(salesRepId)) return null;
+          if (isManualInvoice && manualReceiptBookingIds.has(bookingId)) return null;
 
-          const sendDate = booking.payment_completed_at || booking.created_at || effectiveLead?.created_at || new Date();
-          const invoicePdf = `${apiBase}/sales/invoice-pdf/${bookingId}${isManualInvoice ? '?manual=1' : ''}`;
+          const quote = effectiveLead?.lead_id ? quoteByLeadId.get(Number(effectiveLead.lead_id)) : null;
+          const assignedSalesRepId = effectiveLead?.assigned_sales_rep_id || quote?.assigned_sales_rep_id || null;
+          if (salesRepId && Number(assignedSalesRepId) !== Number(salesRepId)) return null;
+
+          const sendDate = booking.payment_completed_at || stripePayment?.created_at || booking.created_at || effectiveLead?.created_at || new Date();
+          const invoicePdf = hasStripePayment && paymentId
+            ? `${apiBase}/sales/invoice-pdf/${bookingId}?receipt=1&payment_id=${paymentId}`
+            : `${apiBase}/sales/invoice-pdf/${bookingId}${isManualInvoice ? '?manual=1' : ''}`;
+          const paymentAmount = stripePayment ? Number(stripePayment.total_amount || 0) : null;
 
           return {
-            invoice_send_history_id: -bookingId,
+            invoice_send_history_id: hasStripePayment && paymentId
+              ? -(2000000000 + paymentId)
+              : -bookingId,
             lead_id: salesLead?.lead_id || null,
             client_lead_id: clientLead?.lead_id || null,
             booking_id: bookingId,
-            quote_id: null,
-            quote_number: null,
-            client_name: effectiveLead?.client_name || null,
-            client_email: effectiveLead?.guest_email || null,
+            quote_id: quote?.sales_quote_id || null,
+            quote_number: quote?.quote_number || null,
+            client_name: effectiveLead?.client_name || quote?.client_name || null,
+            client_email: effectiveLead?.guest_email || quote?.client_email || stripePayment?.guest_email || null,
             send_date_time: sendDate,
             payment_status: 'paid',
             invoice_number: isManualInvoice
               ? `INVBEIGE-M-${String(bookingId).padStart(4, '0')}`
-              : null,
+              : `INVBEIGE-S-${String(bookingId).padStart(4, '0')}${paymentId ? `-${String(paymentId).padStart(3, '0')}` : ''}`,
             invoice_url: null,
             invoice_pdf: invoicePdf,
+            payment_amount: Number.isFinite(paymentAmount) && paymentAmount > 0 ? paymentAmount : null,
+            payment_method: isManualInvoice ? 'manual' : 'stripe',
+            receipt_type: isManualInvoice ? 'manual_payment_fallback' : 'stripe_payment',
             sent_by: null,
-            sales_rep: effectiveLead?.assigned_sales_rep_id
-              ? { id: effectiveLead.assigned_sales_rep_id, name: null }
+            sales_rep: assignedSalesRepId
+              ? { id: assignedSalesRepId, name: null }
               : null,
             created_at: sendDate
           };
@@ -1454,8 +1826,68 @@ exports.getInvoiceHistory = async (req, res) => {
       items = [...items, ...syntheticItems];
     }
 
-    if (status === 'paid' || status === 'pending') {
-      items = items.filter((item) => String(item.payment_status || '').toLowerCase() === status);
+    const itemBookingIds = Array.from(new Set(
+      items
+        .map((item) => Number(item.booking_id))
+        .filter((bookingId) => Number.isFinite(bookingId) && bookingId > 0)
+    ));
+
+    if (itemBookingIds.length > 0) {
+      const [statusBookings, bookingPaymentSummaries] = await Promise.all([
+        stream_project_booking.findAll({
+          where: { stream_project_booking_id: { [Op.in]: itemBookingIds } },
+          attributes: ['stream_project_booking_id', 'payment_id', 'payment_completed_at']
+        }),
+        fetchBookingPaymentSummaryRows(itemBookingIds)
+      ]);
+
+      const statusBookingById = new Map();
+      statusBookings.forEach((booking) => {
+        const bookingId = Number(booking.stream_project_booking_id);
+        if (!Number.isFinite(bookingId) || bookingId <= 0) return;
+        statusBookingById.set(bookingId, booking);
+      });
+
+      const paymentSummaryByBookingId = new Map();
+      bookingPaymentSummaries.forEach((paymentSummary) => {
+        const bookingId = Number(paymentSummary.booking_id);
+        if (!Number.isFinite(bookingId) || bookingId <= 0) return;
+        paymentSummaryByBookingId.set(bookingId, paymentSummary);
+      });
+
+      items = items.map((item) => {
+        const bookingId = Number(item.booking_id);
+        if (!Number.isFinite(bookingId) || bookingId <= 0) {
+          return {
+            ...item,
+            booking_payment_status: item.payment_status || 'pending'
+          };
+        }
+
+        const booking = statusBookingById.get(bookingId);
+        const paymentSummary = paymentSummaryByBookingId.get(bookingId);
+        const bookingPaymentStatus = resolveBookingPaymentStatus(
+          booking,
+          paymentSummary,
+          item.payment_status
+        );
+
+        return {
+          ...item,
+          booking_payment_status: bookingPaymentStatus,
+          payment_status: resolveInvoicePaymentStatus(
+            item,
+            booking,
+            paymentSummary
+          )
+        };
+      });
+    }
+
+    if (['paid', 'pending', 'partially_paid', 'approval_pending'].includes(status)) {
+      items = items.filter((item) =>
+        String(item.booking_payment_status || item.payment_status || '').toLowerCase() === status
+      );
     }
 
     if (search) {
@@ -1469,7 +1901,10 @@ exports.getInvoiceHistory = async (req, res) => {
           item.quote_number,
           item.client_name,
           item.client_email,
-          item.invoice_number
+          item.invoice_number,
+          item.payment_amount,
+          item.payment_method,
+          item.receipt_type
         ]
           .filter((value) => value !== null && value !== undefined)
           .join(' ')
@@ -1542,10 +1977,17 @@ exports.getQuoteChangeRequests = async (req, res) => {
       order: [['created_at', 'DESC'], ['activity_id', 'DESC']]
     });
 
-    let items = rows
-      .map((row) => {
+    let items = (await Promise.all(rows
+      .map(async (row) => {
         const metadata = parseQuoteRequestMetadata(row?.metadata_json) || {};
         if (!isQuoteChangeRequestActivity(row, metadata)) {
+          return null;
+        }
+
+        const bookingId = Number(metadata.booking_id || 0) || null;
+        const salesQuoteId = Number(row?.sales_quote_id || row?.quote?.sales_quote_id || 0) || null;
+        const hasVerifiedPayment = await hasVerifiedPaymentForQuoteChange({ bookingId, salesQuoteId });
+        if (!hasVerifiedPayment) {
           return null;
         }
 
@@ -1563,7 +2005,7 @@ exports.getQuoteChangeRequests = async (req, res) => {
             buildRequestOverallChangeSummary(mergedMetadata)
           )
         };
-      })
+      })))
       .filter(Boolean);
 
     if (approvalStatus && approvalStatus !== 'all') {
@@ -1660,6 +2102,16 @@ async function reviewQuoteChangeRequest(req, res, decision) {
       });
     }
 
+    const salesQuoteId = activity.sales_quote_id;
+    const bookingId = Number(metadata.booking_id || 0) || null;
+    const hasVerifiedPayment = await hasVerifiedPaymentForQuoteChange({ bookingId, salesQuoteId });
+    if (!hasVerifiedPayment) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'This unpaid quote change does not require admin approval'
+      });
+    }
+
     if (metadata.approval_status && metadata.approval_status !== 'pending') {
       return res.status(constants.BAD_REQUEST.code).json({
         success: false,
@@ -1667,8 +2119,6 @@ async function reviewQuoteChangeRequest(req, res, decision) {
       });
     }
 
-      const salesQuoteId = activity.sales_quote_id;
-      const bookingId = Number(metadata.booking_id || 0) || null;
       const extraAmount = Number(metadata.extra_amount || 0);
       const reducedAmount = Number(metadata.reduced_amount || 0);
 
@@ -1711,8 +2161,30 @@ async function reviewQuoteChangeRequest(req, res, decision) {
       });
 
       if (extraAmount > 0 && activity.quote) {
+        const paymentSummary = bookingId
+          ? await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId)
+          : null;
+        const booking = bookingId
+          ? await stream_project_booking.findByPk(bookingId, {
+              attributes: ['stream_project_booking_id', 'payment_id']
+            })
+          : null;
+        const paidInvoiceHistory = bookingId && invoice_send_history
+          ? await invoice_send_history.findOne({
+              where: {
+                quote_id: salesQuoteId,
+                booking_id: bookingId,
+                payment_status: 'paid'
+              },
+              order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']]
+            })
+          : null;
+        const paidAmount =
+          Number(paymentSummary?.paid_amount || 0) +
+          Number(paymentSummary?.credit_used_amount || 0) +
+          (paidInvoiceHistory || booking?.payment_id ? Number(metadata.previous_total || 0) : 0);
         if (decision === 'approve') {
-          await activity.quote.update({ status: 'partially_paid' });
+          await activity.quote.update({ status: paidAmount > 0 ? 'partially_paid' : 'accepted' });
         } else if (String(activity.quote.status || '').toLowerCase() === 'partially_paid') {
           await activity.quote.update({ status: 'paid' });
         }

@@ -63,6 +63,9 @@ var _finance_dispute_comments = require("./finance_dispute_comments");
 var _finance_dispute_attachments = require("./finance_dispute_attachments");
 var _finance_dispute_resolution_logs = require("./finance_dispute_resolution_logs");
 var _finance_dispute_payout_holds = require("./finance_dispute_payout_holds");
+var _creator_earning_advances = require("./creator_earning_advances");
+var _creator_earning_compensation_items = require("./creator_earning_compensation_items");
+var _creator_earning_timeline_events = require("./creator_earning_timeline_events");
 
 // CMS Approval States Models
 var _projects = require("./projects");
@@ -93,6 +96,10 @@ var _sales_quote_activities = require("./sales_quote_activities");
 var _sales_quote_versions = require("./sales_quote_versions");
 var _sales_shoot_types = require("./sales_shoot_types");
 var _shoot_types = require("./shoot_types");
+var _permissions = require("./permissions");
+var _role_permissions = require("./role_permissions");
+var _user_roles = require("./user_roles");
+var _user_permissions = require("./user_permissions");
 
 function initModels(sequelize) {
   var account_credit_ledger = _account_credit_ledger(sequelize, DataTypes);
@@ -154,6 +161,9 @@ function initModels(sequelize) {
   var creator_payout_accounts = _creator_payout_accounts(sequelize, DataTypes);
   var creator_payout_requests = _creator_payout_requests(sequelize, DataTypes);
   var creator_payout_transactions = _creator_payout_transactions(sequelize, DataTypes);
+  var creator_earning_advances = _creator_earning_advances(sequelize, DataTypes);
+  var creator_earning_compensation_items = _creator_earning_compensation_items(sequelize, DataTypes);
+  var creator_earning_timeline_events = _creator_earning_timeline_events(sequelize, DataTypes);
   var finance_disputes = _finance_disputes(sequelize, DataTypes);
   var finance_dispute_comments = _finance_dispute_comments(sequelize, DataTypes);
   var finance_dispute_attachments = _finance_dispute_attachments(sequelize, DataTypes);
@@ -192,6 +202,10 @@ function initModels(sequelize) {
   var sales_shoot_types = _sales_shoot_types(sequelize, DataTypes);
   
   var shoot_types = _shoot_types(sequelize, DataTypes);
+  var permissions = _permissions(sequelize, DataTypes);
+  var role_permissions = _role_permissions(sequelize, DataTypes);
+  var user_roles = _user_roles(sequelize, DataTypes);
+  var user_permissions = _user_permissions(sequelize, DataTypes);
 
   account_credit_ledger.belongsTo(users, { as: "user", foreignKey: "user_id" });
   users.hasMany(account_credit_ledger, { as: "account_credit_entries", foreignKey: "user_id" });
@@ -251,7 +265,25 @@ function initModels(sequelize) {
     foreignKey: "booking_id",
     sourceKey: "booking_id",
     constraints: false
+    
   });
+
+  creator_earnings.hasMany(creator_earning_advances, { foreignKey: 'creator_earning_id', as: 'advances' });
+  creator_earning_advances.belongsTo(creator_earnings, { foreignKey: 'creator_earning_id', as: 'earning' });
+  creator_earning_advances.belongsTo(stream_project_booking, { foreignKey: 'booking_id', as: 'booking' });
+  creator_earning_advances.belongsTo(crew_members, { foreignKey: 'creator_id', as: 'creator' });
+
+  // creator_earnings -> compensation_items
+  creator_earnings.hasMany(creator_earning_compensation_items, { foreignKey: 'creator_earning_id', as: 'compensation_items' });
+  creator_earning_compensation_items.belongsTo(creator_earnings, { foreignKey: 'creator_earning_id', as: 'earning' });
+  creator_earning_compensation_items.belongsTo(stream_project_booking, { foreignKey: 'booking_id', as: 'booking' });
+  creator_earning_compensation_items.belongsTo(crew_members, { foreignKey: 'creator_id', as: 'creator' });
+
+  // creator_earnings -> timeline_events
+  creator_earnings.hasMany(creator_earning_timeline_events, { foreignKey: 'creator_earning_id', as: 'timeline_events' });
+  creator_earning_timeline_events.belongsTo(creator_earnings, { foreignKey: 'creator_earning_id', as: 'earning' });
+  creator_earning_timeline_events.belongsTo(stream_project_booking, { foreignKey: 'booking_id', as: 'booking' });
+  creator_earning_timeline_events.belongsTo(crew_members, { foreignKey: 'creator_id', as: 'creator' });
 
   creator_wallets.belongsTo(crew_members, { as: "creator", foreignKey: "creator_id" });
   crew_members.hasOne(creator_wallets, { as: "creator_wallet", foreignKey: "creator_id" });
@@ -708,6 +740,70 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
   sales_quote_versions.belongsTo(sales_quote_activities, { as: "source_activity", foreignKey: "source_activity_id" });
   sales_quote_activities.hasMany(sales_quote_versions, { as: "created_versions", foreignKey: "source_activity_id" });
 
+  user_roles.belongsTo(user_type, {
+    as: "role",
+    foreignKey: "role_id"
+  });
+
+  user_type.hasMany(user_roles, {
+    as: "user_roles",
+    foreignKey: "role_id",
+    sourceKey: "user_type_id"
+  });
+
+  user_roles.belongsTo(users, {
+    as: "user",
+    foreignKey: "user_id"
+  });
+
+  users.hasMany(user_roles, {
+    as: "user_roles",
+    foreignKey: "user_id"
+  });
+
+  role_permissions.belongsTo(user_type, {
+    as: "role",
+    foreignKey: "role_id"
+  });
+
+  user_type.hasMany(role_permissions, {
+    as: "role_permissions",
+    foreignKey: "role_id",
+    sourceKey: "user_type_id"
+  });
+
+  role_permissions.belongsTo(permissions, {
+    as: "permission",
+    foreignKey: "permission_id"
+  });
+
+  permissions.hasMany(role_permissions, {
+    as: "role_permissions",
+    foreignKey: "permission_id"
+  });
+
+  // User -> user_permissions
+  user_permissions.belongsTo(users, {
+    as: "user",
+    foreignKey: "user_id"
+  });
+
+  users.hasMany(user_permissions, {
+    as: "user_permissions",
+    foreignKey: "user_id"
+  });
+
+  // Permission -> user_permissions
+  user_permissions.belongsTo(permissions, {
+    as: "permission",
+    foreignKey: "permission_id"
+  });
+
+  permissions.hasMany(user_permissions, {
+    as: "user_permissions",
+    foreignKey: "permission_id"
+  });
+
   return {
     account_credit_ledger,
     activity_logs,
@@ -802,7 +898,14 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
     sales_quote_activities,
     sales_quote_versions,
     sales_shoot_types,
-    shoot_types
+    shoot_types,
+    permissions,
+    role_permissions,
+    user_roles,
+    user_permissions,
+    creator_earning_advances,
+    creator_earning_compensation_items,
+    creator_earning_timeline_events,
   };
 }
 module.exports = initModels;

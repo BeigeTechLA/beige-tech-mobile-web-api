@@ -10,7 +10,7 @@ const emailService = require('../utils/emailService');
 const { generateManualReceiptPdfBuffer } = require('../utils/manualReceiptPdf');
 const discountService = require('../services/discount.service');
 const pricingService = require('../services/pricing.service');
-const { Op } = require('sequelize');
+const { Op, QueryTypes } = require('sequelize');
 const http = require('http');
 const https = require('https');
 
@@ -20,6 +20,207 @@ const getFrontendBaseUrl = () =>
 const buildManualInvoiceFrontendUrl = (bookingId) => {
   const frontendBaseUrl = getFrontendBaseUrl();
   return `${frontendBaseUrl}/beige_invoice/${encodeURIComponent(String(bookingId))}?manual=1`;
+};
+
+const buildReceiptFrontendUrl = ({ bookingId, manualPaymentId = null, paymentId = null, download = false }) => {
+  const frontendBaseUrl = getFrontendBaseUrl();
+  const url = new URL(`${frontendBaseUrl}/beige_invoice/${encodeURIComponent(String(bookingId))}`);
+  url.searchParams.set('receipt', '1');
+  if (manualPaymentId) url.searchParams.set('manual_payment_id', String(manualPaymentId));
+  if (paymentId) url.searchParams.set('payment_id', String(paymentId));
+  if (download) url.searchParams.set('download', '1');
+  return url.toString();
+};
+
+const buildReceiptFrontendOpenUrl = ({ bookingId, manualPaymentId = null, paymentId = null }) => {
+  const frontendBaseUrl = getFrontendBaseUrl();
+  const url = new URL(`${frontendBaseUrl}/receipt-open/${encodeURIComponent(String(bookingId))}`);
+  if (manualPaymentId) url.searchParams.set('manual_payment_id', String(manualPaymentId));
+  if (paymentId) url.searchParams.set('payment_id', String(paymentId));
+  return url.toString();
+};
+
+const findStripeInvoiceForPaidBooking = async (booking, bookingId) => {
+  if (booking?.stripe_invoice_id) {
+    try {
+      const invoice = await stripe.invoices.retrieve(booking.stripe_invoice_id);
+      if (invoice?.hosted_invoice_url) {
+        return invoice;
+      }
+    } catch (error) {
+      console.warn(`Could not retrieve Stripe invoice ${booking.stripe_invoice_id}: ${error.message}`);
+    }
+  }
+
+  if (!booking?.stripe_customer_id) {
+    return null;
+  }
+
+  try {
+    const invoices = await stripe.invoices.list({
+      customer: booking.stripe_customer_id,
+      limit: 100
+    });
+
+    const matches = (invoices.data || []).filter(
+      (invoice) => invoice.metadata?.booking_id === String(bookingId) && invoice.hosted_invoice_url
+    );
+
+    return (
+      matches.find((invoice) => invoice.status === 'paid') ||
+      matches.find((invoice) => invoice.status === 'open') ||
+      matches[0] ||
+      null
+    );
+  } catch (error) {
+    console.warn(`Could not list Stripe invoices for booking ${bookingId}: ${error.message}`);
+    return null;
+  }
+};
+
+const findStripeInvoiceHistoryForPaidBooking = async (bookingId) => {
+  if (!db.invoice_send_history) {
+    return null;
+  }
+
+  const rows = await db.invoice_send_history.findAll({
+    where: {
+      booking_id: bookingId
+    },
+    attributes: ['invoice_number', 'invoice_url', 'invoice_pdf', 'payment_status'],
+    order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+    limit: 10
+  });
+
+  return (rows || []).find((row) => {
+    const invoiceUrl = String(row.invoice_url || '');
+    const invoicePdf = String(row.invoice_pdf || '');
+    return /stripe\.com/i.test(invoiceUrl) || /stripe\.com/i.test(invoicePdf);
+  }) || null;
+};
+
+const getStripeReceiptUrlFromPaymentIntent = async (paymentIntentId) => {
+  if (!paymentIntentId) return null;
+
+  try {
+    const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId, {
+      expand: ['latest_charge', 'charges.data']
+    });
+    const expandedCharge =
+      paymentIntent.latest_charge && typeof paymentIntent.latest_charge === 'object'
+        ? paymentIntent.latest_charge
+        : paymentIntent.charges?.data?.[0] || null;
+
+    if (expandedCharge?.receipt_url) {
+      return expandedCharge.receipt_url;
+    }
+
+    if (typeof paymentIntent.latest_charge === 'string') {
+      const charge = await stripe.charges.retrieve(paymentIntent.latest_charge);
+      return charge?.receipt_url || null;
+    }
+  } catch (error) {
+    console.warn(`Could not retrieve Stripe receipt for payment intent ${paymentIntentId}: ${error.message}`);
+  }
+
+  return null;
+};
+
+const fetchManualPaymentReceiptRow = async ({ bookingId, manualPaymentId }) => {
+  const parsedBookingId = Number(bookingId);
+  const parsedManualPaymentId = Number(manualPaymentId);
+
+  if (!Number.isFinite(parsedBookingId) || parsedBookingId <= 0 || !Number.isFinite(parsedManualPaymentId) || parsedManualPaymentId <= 0) {
+    return null;
+  }
+
+  try {
+    const rows = await db.sequelize.query(
+      `
+        SELECT
+          booking_manual_payment_id,
+          booking_id,
+          payment_type,
+          amount,
+          payment_mode,
+          other_payment_mode,
+          created_at
+        FROM booking_manual_payments
+        WHERE booking_manual_payment_id = :manualPaymentId
+          AND booking_id = :bookingId
+        LIMIT 1
+      `,
+      {
+        replacements: {
+          bookingId: parsedBookingId,
+          manualPaymentId: parsedManualPaymentId
+        },
+        type: QueryTypes.SELECT
+      }
+    );
+
+    return rows?.[0] || null;
+  } catch (error) {
+    const code = error?.original?.code || error?.parent?.code || error?.code;
+    if (code === 'ER_NO_SUCH_TABLE' || code === 'ER_BAD_TABLE_ERROR') {
+      return null;
+    }
+
+    throw error;
+  }
+};
+
+const fetchStripePaymentReceiptRow = async ({ paymentId }) => {
+  const parsedPaymentId = Number(paymentId);
+  if (!Number.isFinite(parsedPaymentId) || parsedPaymentId <= 0) return null;
+
+  return db.payment_transactions.findByPk(parsedPaymentId, {
+    attributes: [
+      'payment_id',
+      'stripe_payment_intent_id',
+      'stripe_charge_id',
+      'total_amount',
+      'status',
+      'created_at'
+    ]
+  });
+};
+
+const resolveHostedPaymentUrlForInvoice = async ({
+  booking,
+  bookingId,
+  pricingData,
+  paymentState,
+  recipientOverride = null
+}) => {
+  const pendingAmount = Number(paymentState?.dueAmount ?? pricingData?.total ?? 0);
+  if (!Number.isFinite(pendingAmount) || pendingAmount <= 0.009) return null;
+
+  if (booking?.stripe_invoice_id) {
+    try {
+      const existingInvoice = await stripe.invoices.retrieve(booking.stripe_invoice_id);
+      if (existingInvoice?.hosted_invoice_url && ['draft', 'open'].includes(String(existingInvoice.status || '').toLowerCase())) {
+        return existingInvoice.hosted_invoice_url;
+      }
+    } catch (error) {
+      console.warn(`Could not retrieve hosted payment invoice for booking ${bookingId}: ${error.message}`);
+    }
+  }
+
+  try {
+    const paymentInvoice = await paymentLinksService.createStripeInvoice(booking, pricingData, {
+      recipientOverride,
+      forceNewInvoice: false,
+      metadata: {
+        payment_source: 'quote_invoice',
+        standardized_parent_invoice: 'true'
+      }
+    });
+    return paymentInvoice?.hosted_invoice_url || null;
+  } catch (error) {
+    console.warn(`Could not create hosted payment invoice for booking ${bookingId}: ${error.message}`);
+    return null;
+  }
 };
 
 const resolveInvoiceDisplayNumber = (booking, stripeInvoiceNumber = null) =>
@@ -526,12 +727,16 @@ const persistInvoiceSendHistory = async ({
 };
 
 const sendInvoiceForBooking = async ({ bookingId, quoteId = null, performedByUserId = null, recipientOverride = null, requestBaseUrl = null }) => {
+  const manualContext = await getBookingManualPaymentContext(bookingId);
+  const useManualReceipt = await shouldUseManualInvoiceReceipt(bookingId, manualContext);
   const {
     parsedBookingId,
     recipientName,
     recipientEmail,
     invoiceDetails
-  } = await prepareInvoiceDetailsForBooking(bookingId, performedByUserId, recipientOverride, quoteId, requestBaseUrl);
+  } = useManualReceipt
+    ? await prepareManualInvoiceDetailsForBooking(bookingId, null, recipientOverride)
+    : await prepareInvoiceDetailsForBooking(bookingId, performedByUserId, recipientOverride, quoteId, requestBaseUrl);
 
   const userData = { name: recipientName, email: recipientEmail };
   const emailResult = await emailService.sendInvoiceEmail(userData, invoiceDetails);
@@ -696,6 +901,7 @@ const prepareManualInvoiceDetailsForBooking = async (bookingId, req, recipientOv
   const invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
     invoiceUrl: invoicePdfUrl,
     invoicePdf: invoicePdfUrl,
+    receiptUrl: invoicePdfUrl,
     invoiceNumber: `INVBEIGE-M-${String(parsedBookingId).padStart(4, '0')}`,
     totalAmount,
     isPaid: isPaidManual,
@@ -853,7 +1059,6 @@ const calculateLeadPricing = async (booking) => {
             const totalFromPayment = parseFloat(paymentTransaction?.total_amount || 0);
             const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
                 bookingId: booking.stream_project_booking_id,
-                salesQuoteId: q.quote_id,
                 quoteTotal: totalFromQuote > 0 ? totalFromQuote : totalAfterDiscount,
                 paidAmount: totalFromPayment,
                 paymentStatus: bookingMarkedPaid ? 'paid' : 'pending'
@@ -1625,6 +1830,7 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
       invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
         invoiceUrl: invoicePdfUrl,
         invoicePdf: invoicePdfUrl,
+        receiptUrl: invoicePdfUrl,
         invoiceNumber: `INVBEIGE-M-${String(parsedBookingId).padStart(4, '0')}`,
         totalAmount: 0,
         isPaid: true,
@@ -1770,45 +1976,50 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
 
     // --- CASE 1: ALREADY PAID ---
     if (pricingData && (pricingData.is_paid || bookingMarkedPaid)) {
-      let invoiceUrl, invoicePdf, invoiceNumber;
-      let stripeTotalAmount = 0;
-      let needsNewInvoice = recipientIdentityChanged;
+      const stripePaymentIntentId = pricingData.stripe_payment_intent_id || null;
+      const paidStripeInvoice = await findStripeInvoiceForPaidBooking(booking, parsedBookingId);
+      const paidStripeInvoiceHistory = paidStripeInvoice
+        ? null
+        : await findStripeInvoiceHistoryForPaidBooking(parsedBookingId);
+      const stripeReceiptUrl =
+        stripePaymentIntentId
+          ? await getStripeReceiptUrlFromPaymentIntent(stripePaymentIntentId)
+          : null;
 
-      // Check existing invoice for amount mismatch
-      if (booking.stripe_invoice_id) {
-        try {
-          const inv = await stripe.invoices.retrieve(booking.stripe_invoice_id);
-          stripeTotalAmount = (inv.total || 0) / 100;
-          const expectedTotal = parseFloat(pricingData.total);
-
-          // If Stripe total ($20,700) != Expected ($9,315), force a new one
-          if (Math.abs(stripeTotalAmount - expectedTotal) > 0.01) {
-            needsNewInvoice = true;
-          } else {
-            invoiceUrl = inv.hosted_invoice_url;
-            invoicePdf = inv.invoice_pdf;
-            invoiceNumber = inv.number;
-          }
-        } catch (e) { needsNewInvoice = true; }
+      if (paidStripeInvoice?.hosted_invoice_url || paidStripeInvoiceHistory?.invoice_url || stripeReceiptUrl) {
+        const stripeDocumentUrl =
+          paidStripeInvoice?.hosted_invoice_url ||
+          paidStripeInvoiceHistory?.invoice_url ||
+          stripeReceiptUrl;
+        invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
+          invoiceUrl: stripeDocumentUrl,
+          invoicePdf: paidStripeInvoice?.invoice_pdf || paidStripeInvoiceHistory?.invoice_pdf || stripeDocumentUrl,
+          receiptUrl:
+            stripeReceiptUrl ||
+            paidStripeInvoice?.invoice_pdf ||
+            paidStripeInvoiceHistory?.invoice_pdf ||
+            stripeDocumentUrl,
+          stripeInvoiceNumber: paidStripeInvoice?.number || paidStripeInvoiceHistory?.invoice_number || null,
+          invoiceNumber:
+            paidStripeInvoice?.number ||
+            paidStripeInvoiceHistory?.invoice_number ||
+            paymentLinksService.buildBeigeInvoiceReference(booking),
+          totalAmount,
+          isPaid: true,
+          isAdditionalPayment: false
+        });
+      } else {
+        const invoicePdfUrl = buildManualInvoiceFrontendUrl(parsedBookingId);
+        invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
+          invoiceUrl: invoicePdfUrl,
+          invoicePdf: invoicePdfUrl,
+          receiptUrl: invoicePdfUrl,
+          invoiceNumber: `INVBEIGE-M-${String(parsedBookingId).padStart(4, '0')}`,
+          totalAmount,
+          isPaid: true,
+          isAdditionalPayment: false
+        });
       }
-
-      if (!invoicePdf || needsNewInvoice) {
-        const retrospectiveInvoice = await paymentLinksService.createPaidStripeInvoice(booking, pricingData, { recipientOverride });
-        invoiceUrl = retrospectiveInvoice.hosted_invoice_url;
-        invoicePdf = retrospectiveInvoice.invoice_pdf;
-        invoiceNumber = retrospectiveInvoice.number;
-        stripeTotalAmount = (retrospectiveInvoice.total || 0) / 100;
-      }
-
-      invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
-        invoiceUrl,
-        invoicePdf,
-        stripeInvoiceNumber: invoiceNumber,
-        invoiceNumber,
-        totalAmount: stripeTotalAmount,
-        isPaid: true,
-        isAdditionalPayment: false
-      });
 
     } else {
       // --- CASE 2: NOT PAID YET ---
@@ -1831,6 +2042,16 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
         isPaid: false,
         isAdditionalPayment: false
       });
+    }
+
+    if (invoiceDetails && !invoiceDetails.isAdditionalPayment && !invoiceDetails.isReducedAmount) {
+      const brandedInvoiceUrl = buildManualInvoiceFrontendUrl(parsedBookingId);
+      invoiceDetails = {
+        ...invoiceDetails,
+        invoiceUrl: invoiceDetails.isPaid ? brandedInvoiceUrl : invoiceDetails.invoiceUrl,
+        invoicePdf: brandedInvoiceUrl,
+        receiptUrl: invoiceDetails.isPaid ? brandedInvoiceUrl : invoiceDetails.receiptUrl
+      };
     }
 
     await booking.update({ invoice_generation_status: 'completed' });
@@ -2007,11 +2228,55 @@ exports.getStripeInvoicePdf = async (req, res) => {
     const { booking_id } = req.params;
     const forceDownload = String(req.query.download || '').toLowerCase() === '1' || String(req.query.download || '').toLowerCase() === 'true';
     const isManualRequested = String(req.query.manual || '').toLowerCase() === '1' || String(req.query.manual || '').toLowerCase() === 'true';
+    const isReceiptRequested = String(req.query.receipt || '').toLowerCase() === '1' || String(req.query.receipt || '').toLowerCase() === 'true';
+    const isStripeReceiptRequested = String(req.query.stripe || '').toLowerCase() === '1' || String(req.query.stripe || '').toLowerCase() === 'true';
+
+    if (isStripeReceiptRequested) {
+      const paymentId = Number(req.query.payment_id || 0);
+      const paymentIntentIdFromQuery = String(req.query.payment_intent_id || '').trim();
+      const paymentRecord = paymentId > 0
+        ? await db.payment_transactions.findByPk(paymentId, {
+            attributes: ['payment_id', 'stripe_payment_intent_id']
+          })
+        : null;
+      const paymentIntentId = paymentRecord?.stripe_payment_intent_id || paymentIntentIdFromQuery || null;
+      const stripeReceiptUrl = paymentIntentId
+        ? await getStripeReceiptUrlFromPaymentIntent(paymentIntentId)
+        : null;
+
+      if (stripeReceiptUrl) {
+        return res.redirect(302, stripeReceiptUrl);
+      }
+
+      const bookingForStripeFallback = await db.stream_project_booking.findByPk(Number(booking_id), {
+        attributes: ['stream_project_booking_id', 'stripe_invoice_id', 'stripe_customer_id']
+      });
+      const stripeInvoice = bookingForStripeFallback
+        ? await findStripeInvoiceForPaidBooking(bookingForStripeFallback, booking_id)
+        : null;
+
+      if (stripeInvoice?.invoice_pdf || stripeInvoice?.hosted_invoice_url) {
+        return res.redirect(302, stripeInvoice.invoice_pdf || stripeInvoice.hosted_invoice_url);
+      }
+
+      return res.status(404).json({
+        success: false,
+        message: 'Stripe receipt is not available for this payment'
+      });
+    }
+
     const manualContext = await getBookingManualPaymentContext(booking_id);
-    const useManualReceipt = isManualRequested || await shouldUseManualInvoiceReceipt(booking_id, manualContext);
+    const useManualReceipt = isManualRequested || isReceiptRequested || await shouldUseManualInvoiceReceipt(booking_id, manualContext);
 
     if (useManualReceipt) {
       const parsedBookingId = Number(booking_id);
+      const selectedManualPayment = await fetchManualPaymentReceiptRow({
+        bookingId: parsedBookingId,
+        manualPaymentId: req.query.manual_payment_id
+      });
+      const selectedStripePayment = selectedManualPayment
+        ? null
+        : await fetchStripePaymentReceiptRow({ paymentId: req.query.payment_id });
       const booking = await db.stream_project_booking.findOne({
         where: { stream_project_booking_id: parsedBookingId },
         include: bookingInvoiceIncludes
@@ -2040,7 +2305,7 @@ exports.getStripeInvoicePdf = async (req, res) => {
       }
       const pricingTotalAmount = Number(pricingData.total || 0);
       const totalAmount = paymentState.quoteTotal > 0 ? paymentState.quoteTotal : pricingTotalAmount;
-      const allowManualForZeroTotal = totalAmount <= 0 || isPaidFromSummary;
+      const allowManualForZeroTotal = totalAmount <= 0 || isPaidFromSummary || (isReceiptRequested && pricingData?.is_paid);
       if (!manualContext.isManual && !allowManualForZeroTotal) {
         return res.status(400).json({
           success: false,
@@ -2060,31 +2325,96 @@ exports.getStripeInvoicePdf = async (req, res) => {
         allActivities.push(...linkedClientLead.activities);
       }
 
-      allActivities
-        .filter((activity) => activity?.activity_type === 'payment_completed')
-        .forEach((activity) => {
-          const meta = parseActivityMetadata(activity.activity_data);
-          if (!meta || meta.payment_method !== 'manual') return;
-          const normalizedPaymentMode = String(meta.payment_mode || '').toLowerCase();
-          const parsedAmount = Number(meta.amount);
-          const fallbackFullAmount = Number(meta.remaining_before_payment || meta.total_amount || 0);
-          const resolvedAmount = normalizedPaymentMode === 'net30'
-            ? 0
-            : Number.isFinite(parsedAmount) && parsedAmount > 0
-            ? parsedAmount
-            : fallbackFullAmount;
-          const normalizedMode = meta.payment_mode ? String(meta.payment_mode).replace(/_/g, ' ') : 'manual';
-          const resolvedMethod = normalizedPaymentMode === 'other' && String(meta.other_payment_mode || '').trim()
-            ? String(meta.other_payment_mode).trim()
+      let manualPaymentHistoryRows = [];
+      try {
+        manualPaymentHistoryRows = await db.sequelize.query(
+          `
+            SELECT
+              booking_manual_payment_id,
+              payment_type,
+              amount,
+              payment_mode,
+              other_payment_mode,
+              created_at
+            FROM booking_manual_payments
+            WHERE booking_id = :bookingId
+            ORDER BY created_at ASC, booking_manual_payment_id ASC
+          `,
+          {
+            replacements: { bookingId: parsedBookingId },
+            type: QueryTypes.SELECT
+          }
+        );
+      } catch (error) {
+        const code = error?.original?.code || error?.parent?.code || error?.code;
+        if (code !== 'ER_NO_SUCH_TABLE' && code !== 'ER_BAD_TABLE_ERROR') {
+          throw error;
+        }
+      }
+
+      if (manualPaymentHistoryRows.length > 0) {
+        manualPaymentHistoryRows.forEach((manualPayment) => {
+          const normalizedPaymentMode = String(manualPayment.payment_mode || '').toLowerCase();
+          const resolvedMethod = normalizedPaymentMode === 'other' && String(manualPayment.other_payment_mode || '').trim()
+            ? String(manualPayment.other_payment_mode).trim()
             : normalizedPaymentMode === 'net30'
               ? 'Net 30'
-              : normalizedMode;
+              : String(manualPayment.payment_mode || 'manual').replace(/_/g, ' ');
           manualHistory.push({
             method: resolvedMethod,
-            date: formatInvoiceDate(activity.created_at),
-            amount: resolvedAmount
+            date: formatInvoiceDate(manualPayment.created_at),
+            amount: Number(manualPayment.amount || 0),
+            receiptUrl: buildReceiptFrontendOpenUrl({
+              bookingId: parsedBookingId,
+              manualPaymentId: manualPayment.booking_manual_payment_id
+            }),
+            receiptDownloadUrl: buildReceiptFrontendUrl({
+              bookingId: parsedBookingId,
+              manualPaymentId: manualPayment.booking_manual_payment_id,
+              download: true
+            })
           });
         });
+      } else {
+        allActivities
+          .filter((activity) => activity?.activity_type === 'payment_completed')
+          .forEach((activity) => {
+            const meta = parseActivityMetadata(activity.activity_data);
+            if (!meta || meta.payment_method !== 'manual') return;
+            const normalizedPaymentMode = String(meta.payment_mode || '').toLowerCase();
+            const parsedAmount = Number(meta.amount);
+            const fallbackFullAmount = Number(meta.remaining_before_payment || meta.total_amount || 0);
+            const resolvedAmount = normalizedPaymentMode === 'net30'
+              ? 0
+              : Number.isFinite(parsedAmount) && parsedAmount > 0
+              ? parsedAmount
+              : fallbackFullAmount;
+            const normalizedMode = meta.payment_mode ? String(meta.payment_mode).replace(/_/g, ' ') : 'manual';
+            const resolvedMethod = normalizedPaymentMode === 'other' && String(meta.other_payment_mode || '').trim()
+              ? String(meta.other_payment_mode).trim()
+              : normalizedPaymentMode === 'net30'
+                ? 'Net 30'
+                : normalizedMode;
+            manualHistory.push({
+              method: resolvedMethod,
+              date: formatInvoiceDate(activity.created_at),
+              amount: resolvedAmount,
+              receiptUrl: meta.booking_manual_payment_id
+                ? buildReceiptFrontendOpenUrl({
+                    bookingId: parsedBookingId,
+                    manualPaymentId: meta.booking_manual_payment_id
+                  })
+                : null,
+              receiptDownloadUrl: meta.booking_manual_payment_id
+                ? buildReceiptFrontendUrl({
+                    bookingId: parsedBookingId,
+                    manualPaymentId: meta.booking_manual_payment_id,
+                    download: true
+                  })
+                : null
+            });
+          });
+      }
 
       const lineItems = Array.isArray(pricingData.line_items) ? pricingData.line_items : [];
       const quoteDiscountAmount = Number(pricingData.discount_amount || 0);
@@ -2127,50 +2457,165 @@ exports.getStripeInvoicePdf = async (req, res) => {
         manualHistory.push({
           method: 'Online Payment',
           date: formatInvoiceDate(paymentSummary?.updated_at || new Date()),
-          amount: nonManualPaidAmount
+          amount: nonManualPaidAmount,
+          receiptUrl: booking.payment_id
+            ? buildReceiptFrontendOpenUrl({
+                bookingId: parsedBookingId,
+                paymentId: booking.payment_id
+              })
+            : null,
+          receiptDownloadUrl: booking.payment_id
+            ? buildReceiptFrontendUrl({
+                bookingId: parsedBookingId,
+                paymentId: booking.payment_id,
+                download: true
+              })
+            : null
         });
       }
-      const receiptIsPaid = isPaidFromSummary || isPaidManual || (hasPaymentSummary && paymentState.dueAmount <= 0 && normalizedPaidAmount >= totalAmount);
+      const isPaidRequestedReceipt = isReceiptRequested && pricingData?.is_paid;
+      if (isPaidRequestedReceipt && manualHistory.length === 0) {
+        manualHistory.push({
+          method: 'Online Payment',
+          date: formatInvoiceDate(paymentSummary?.updated_at || new Date()),
+          amount: totalAmount,
+          receiptUrl: booking.payment_id
+            ? buildReceiptFrontendOpenUrl({
+                bookingId: parsedBookingId,
+                paymentId: booking.payment_id
+              })
+            : null,
+          receiptDownloadUrl: booking.payment_id
+            ? buildReceiptFrontendUrl({
+                bookingId: parsedBookingId,
+                paymentId: booking.payment_id,
+                download: true
+              })
+            : null
+        });
+      }
+      const selectedManualHistory = selectedManualPayment
+        ? [{
+            method: String(selectedManualPayment.payment_mode || '').toLowerCase() === 'other' && String(selectedManualPayment.other_payment_mode || '').trim()
+              ? String(selectedManualPayment.other_payment_mode).trim()
+              : String(selectedManualPayment.payment_mode || 'manual').replace(/_/g, ' '),
+            date: formatInvoiceDate(selectedManualPayment.created_at || new Date()),
+            amount: Number(selectedManualPayment.amount || 0),
+            receiptUrl: buildReceiptFrontendOpenUrl({
+              bookingId: parsedBookingId,
+              manualPaymentId: selectedManualPayment.booking_manual_payment_id
+            }),
+            receiptDownloadUrl: buildReceiptFrontendUrl({
+              bookingId: parsedBookingId,
+              manualPaymentId: selectedManualPayment.booking_manual_payment_id,
+              download: true
+            })
+          }]
+        : null;
+      const selectedManualAmount = selectedManualHistory
+        ? Number(selectedManualHistory[0].amount || 0)
+        : null;
+      const selectedStripeHistory = selectedStripePayment
+        ? [{
+            method: 'Online Payment',
+            date: formatInvoiceDate(selectedStripePayment.created_at || new Date()),
+            amount: Number(selectedStripePayment.total_amount || 0),
+            receiptUrl: buildReceiptFrontendOpenUrl({
+              bookingId: parsedBookingId,
+              paymentId: selectedStripePayment.payment_id
+            }),
+            receiptDownloadUrl: buildReceiptFrontendUrl({
+              bookingId: parsedBookingId,
+              paymentId: selectedStripePayment.payment_id,
+              download: true
+            })
+          }]
+        : null;
+      const selectedStripeAmount = selectedStripeHistory
+        ? Number(selectedStripeHistory[0].amount || 0)
+        : null;
+      const receiptIsPaid =
+        selectedManualHistory || selectedStripeHistory
+          ? Number(selectedManualAmount ?? selectedStripeAmount ?? 0) > 0
+          : (
+              isPaidFromSummary ||
+              isPaidManual ||
+              isPaidRequestedReceipt ||
+              (hasPaymentSummary && paymentState.dueAmount <= 0 && normalizedPaidAmount >= totalAmount)
+            );
+      const receiptPaymentHistory = selectedManualHistory || selectedStripeHistory || manualHistory;
+      const receiptPaidAmount = selectedManualHistory || selectedStripeHistory
+        ? Math.max(Number(selectedManualAmount ?? selectedStripeAmount ?? 0), 0)
+        : normalizedPaidAmount;
+      const receiptSuffix = selectedManualPayment
+        ? `-${String(selectedManualPayment.booking_manual_payment_id).padStart(3, '0')}`
+        : selectedStripePayment
+          ? `-S${String(selectedStripePayment.payment_id).padStart(3, '0')}`
+          : '';
+      const isChildReceipt = Boolean(selectedManualPayment || selectedStripePayment);
+      const paymentUrl = isChildReceipt
+        ? null
+        : await resolveHostedPaymentUrlForInvoice({
+            booking,
+            bookingId: parsedBookingId,
+            pricingData,
+            paymentState
+          });
+      const quoteLineItems = Array.isArray(primaryQuote?.line_items) ? primaryQuote.line_items : [];
+      const parentLineItems = quoteLineItems.length > 0 ? quoteLineItems : lineItems;
+      const parentSubtotal = Number(primaryQuote?.subtotal ?? pricingData.subtotal ?? totalAmount);
+      const parentDiscountAmount = Number(primaryQuote?.discount_amount ?? quoteDiscountAmount);
+      const receiptItems = isChildReceipt
+        ? [{
+            name: `${selectedStripePayment ? 'Online' : 'Manual'} payment received`,
+            quantity: 1,
+            unitPrice: receiptPaidAmount,
+            total: receiptPaidAmount
+          }]
+        : parentLineItems.map((item) => ({
+            name: item.name || item.item_name || 'Item',
+            quantity: Number(item.quantity || 1),
+            unitPrice: (() => {
+              const qty = Number(item.quantity || 1);
+              const total = Number(item.total || item.line_total || 0);
+              const raw = Number(item.unit_price || item.rate || 0);
+              if (raw > 0) return raw;
+              return qty > 0 ? total / qty : total;
+            })(),
+            total: Number(item.total || item.line_total || 0)
+          }));
+      const documentTotal = isChildReceipt ? receiptPaidAmount : totalAmount;
 
       const pdfBuffer = await generateManualReceiptPdfBuffer({
-        invoiceNumber: `INVBEIGE-M-${String(parsedBookingId).padStart(4, '0')}`,
-        invoiceDate: formatInvoiceDate(new Date()),
-        receiptNumber: `RCPT-${String(parsedBookingId).padStart(6, '0')}`,
+        documentTitle: isChildReceipt ? 'RECEIPT' : 'INVOICE',
+        invoiceNumber: `INVBEIGE-M-${String(parsedBookingId).padStart(4, '0')}${receiptSuffix}`,
+        invoiceDate: formatInvoiceDate(selectedManualPayment?.created_at || selectedStripePayment?.created_at || new Date()),
+        receiptNumber: `RCPT-${String(parsedBookingId).padStart(6, '0')}${receiptSuffix}`,
         bookingRef: booking.project_name || `BOOKING-${parsedBookingId}`,
         projectTitle: formatProposalProjectName(booking?.project_name || ''),
         location: formatInvoiceLocation(booking?.event_location),
         isPaid: receiptIsPaid,
         clientName: linkedSalesLead?.client_name || linkedClientLead?.client_name || booking.user?.name || 'Client',
         clientEmail: linkedSalesLead?.guest_email || linkedClientLead?.guest_email || booking.user?.email || '',
-        items: lineItems.map((item) => ({
-          name: item.name || item.item_name || 'Item',
-          quantity: Number(item.quantity || 1),
-          unitPrice: (() => {
-            const qty = Number(item.quantity || 1);
-            const total = Number(item.total || item.line_total || 0);
-            const raw = Number(item.unit_price || item.rate || 0);
-            if (raw > 0) return raw;
-            return qty > 0 ? total / qty : total;
-          })(),
-          total: Number(item.total || item.line_total || 0)
-        })),
-        subtotal: Number(pricingData.subtotal || totalAmount),
-        discountAmount: quoteDiscountAmount,
+        items: receiptItems,
+        subtotal: isChildReceipt ? receiptPaidAmount : parentSubtotal,
+        discountAmount: isChildReceipt ? 0 : parentDiscountAmount,
         discountCode: quoteDiscountCode,
         discountType: quoteDiscountType,
         discountValue: quoteDiscountValue,
-        total: totalAmount,
-        paidAmount: normalizedPaidAmount,
-        paymentHistory: manualHistory.length > 0
-          ? manualHistory
+        total: documentTotal,
+        paidAmount: receiptPaidAmount,
+        paymentUrl,
+        paymentHistory: receiptPaymentHistory.length > 0
+          ? receiptPaymentHistory
           : [{
               method: hasPaymentSummary ? 'Online Payment' : 'Manual',
               date: formatInvoiceDate(paymentSummary?.updated_at || new Date()),
-              amount: normalizedPaidAmount
+              amount: receiptPaidAmount
             }]
       });
 
-      const safeName = `manual-receipt-${parsedBookingId}.pdf`;
+      const safeName = `${isChildReceipt ? 'beige-receipt' : 'beige-invoice'}-${parsedBookingId}${receiptSuffix}.pdf`;
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `${forceDownload ? 'attachment' : 'inline'}; filename="${safeName}"`);
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
@@ -2400,11 +2845,22 @@ exports.previewQuoteInvoice = async (req, res) => {
       bookingId = ensuredBooking.booking_id;
     }
 
-    const requestBaseUrl = `${req.protocol}://${req.get('host')}/v1`;
-    const { invoiceDetails } = await prepareInvoiceDetailsForBooking(bookingId, req.userId || null, {
+    const recipientOverride = {
       email: salesQuote.client_email || null,
       name: salesQuote.client_name || null
-    }, salesQuote.sales_quote_id, requestBaseUrl);
+    };
+    const manualContext = await getBookingManualPaymentContext(bookingId);
+    const useManualReceipt = await shouldUseManualInvoiceReceipt(bookingId, manualContext);
+    const requestBaseUrl = `${req.protocol}://${req.get('host')}/v1`;
+    const { invoiceDetails } = useManualReceipt
+      ? await prepareManualInvoiceDetailsForBooking(bookingId, req, recipientOverride)
+      : await prepareInvoiceDetailsForBooking(
+          bookingId,
+          req.userId || null,
+          recipientOverride,
+          salesQuote.sales_quote_id,
+          requestBaseUrl
+        );
 
     return res.status(200).json({
       success: true,

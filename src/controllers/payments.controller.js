@@ -279,7 +279,6 @@ async function inferCreditAmountForPayment({
 
   const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
     bookingId,
-    salesQuoteId: booking.quote_id,
     quoteTotal: booking.budget || booking.total || null,
     transaction
   });
@@ -672,13 +671,14 @@ async function processStripePaidWebhookEvent(event, req = {}) {
     paymentIntentId = dataObject.id;
     invoiceMetadata = dataObject.metadata || {};
 
-    if (dataObject.invoice && (!booking_id || Number.isNaN(booking_id) || !invoiceMetadata.payment_source)) {
+    if (dataObject.invoice) {
       try {
         const invoiceId = typeof dataObject.invoice === 'string'
           ? dataObject.invoice
           : dataObject.invoice.id;
         if (invoiceId) {
           const linkedInvoice = await stripe.invoices.retrieve(invoiceId);
+          stripeInvoice = linkedInvoice;
           invoiceMetadata = linkedInvoice.metadata || invoiceMetadata;
           if (!booking_id || Number.isNaN(booking_id)) {
             const invoiceBookingIdRaw = linkedInvoice.metadata?.booking_id;
@@ -948,7 +948,8 @@ async function processStripePaidWebhookEvent(event, req = {}) {
     await db.stream_project_booking.update({
       is_draft: 0,
       payment_id: payment.payment_id,
-      payment_completed_at: new Date()
+      payment_completed_at: new Date(),
+      ...(stripeInvoice?.id ? { stripe_invoice_id: stripeInvoice.id } : {})
     }, {
       where: { stream_project_booking_id: booking_id },
       transaction
@@ -2115,7 +2116,6 @@ exports.createPaymentIntentMulti = async (req, res) => {
     }
     const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
       bookingId: booking_id,
-      salesQuoteId: booking.quote_id,
       quoteTotal: amount,
       transaction: null
     });
@@ -2127,6 +2127,17 @@ exports.createPaymentIntentMulti = async (req, res) => {
           : round2(Math.max(paymentState.payableAmount - requestedCreditAmount, 0))
       )
       : requestedAmount;
+
+    // A positive client request must never be converted into a free checkout.
+    // If the authoritative booking summary says there is no balance, stop and
+    // let the caller refresh instead of returning a non-Stripe placeholder.
+    if (requestedAmount > 0 && amountToCharge <= 0) {
+      return res.status(409).json({
+        success: false,
+        message: 'No payment balance is due for this booking. Please refresh the payment details.',
+        code: 'NO_PAYMENT_BALANCE_DUE'
+      });
+    }
 
     // 3. Handle 100% Discount ($0.00) Case
     // Stripe does not allow creating intents for $0.00
@@ -2231,7 +2242,6 @@ exports.confirmPaymentMulti = async (req, res) => {
     const bookingAlreadyPaid = Boolean(booking.payment_id || booking.is_completed === 1);
     const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
       bookingId: booking_id,
-      salesQuoteId: booking.primary_quote?.quote_id,
       quoteTotal,
       transaction
     });
@@ -2919,14 +2929,15 @@ exports.handleStripeWebhook = async (req, res) => {
       paymentIntentId = dataObject.id;
       invoiceMetadata = dataObject.metadata || {};
 
-      // Fallback/source lookup: booking_id and quote metadata are often on the related invoice.
-      if (dataObject.invoice && (!booking_id || Number.isNaN(booking_id) || !invoiceMetadata.payment_source)) {
+      // Fallback/source lookup and paid invoice capture.
+      if (dataObject.invoice) {
         try {
           const invoiceId = typeof dataObject.invoice === 'string'
             ? dataObject.invoice
             : dataObject.invoice.id;
           if (invoiceId) {
             const linkedInvoice = await stripe.invoices.retrieve(invoiceId);
+            stripeInvoice = linkedInvoice;
             invoiceMetadata = linkedInvoice.metadata || invoiceMetadata;
             if (!booking_id || Number.isNaN(booking_id)) {
               const invoiceBookingIdRaw = linkedInvoice.metadata?.booking_id;
@@ -3093,7 +3104,8 @@ exports.handleStripeWebhook = async (req, res) => {
         // is_completed: 1,
         is_draft: 0,
         payment_id: payment.payment_id,
-        payment_completed_at: new Date()
+        payment_completed_at: new Date(),
+        ...(stripeInvoice?.id ? { stripe_invoice_id: stripeInvoice.id } : {})
       }, {
         where: { stream_project_booking_id: booking_id },
         transaction
