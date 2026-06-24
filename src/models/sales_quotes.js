@@ -90,6 +90,37 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.STRING(255),
       allowNull: true
     },
+    booking_type: {
+      type: DataTypes.ENUM('single_day','multi_day'),
+      allowNull: true
+    },
+    time_zone: {
+      type: DataTypes.STRING(64),
+      allowNull: true
+    },
+    start_date: {
+      type: DataTypes.DATEONLY,
+      allowNull: true
+    },
+    start_time: {
+      type: DataTypes.TIME,
+      allowNull: true
+    },
+    end_time: {
+      type: DataTypes.TIME,
+      allowNull: true
+    },
+    booking_days: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      get() {
+        const val = this.getDataValue('booking_days');
+        return val ? JSON.parse(val) : [];
+      },
+      set(val) {
+        this.setDataValue('booking_days', val ? JSON.stringify(val) : null);
+      }
+    },
     quote_validity_days: {
       type: DataTypes.INTEGER,
       allowNull: true

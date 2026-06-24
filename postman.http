@@ -1430,7 +1430,6 @@ Authorization: {{TOKEN}}
 
 {
   "pricing_mode": "general",
-  "client_id": 15,
   "client_name": "Harsh Panchal",
   "client_email": "harsh.panchal@revurge.com",
   "client_phone": "+1 555 324 568",
@@ -1438,6 +1437,20 @@ Authorization: {{TOKEN}}
   "project_description": "Corporate video production for annual conference",
   "video_shoot_type": "Private Event",
   "quote_validity_days": 7,
+  "booking_type": "multi_day",
+  "time_zone": "Asia/Calcutta",
+  "booking_days": [
+    {
+      "date": "2026-04-25",
+      "start_time": "09:00:00",
+      "end_time": "13:00:00"
+    },
+    {
+      "date": "2026-04-26",
+      "start_time": "10:00:00",
+      "end_time": "14:00:00"
+    }
+  ],
   "discount_type": "percentage",
   "discount_value": 5,
   "tax_type": "Sales Tax",
@@ -1578,7 +1591,7 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### convert quote to booking | Single day:
-POST {{URL}}sales/quotes/185/convert-to-booking HTTP/1.1
+POST {{URL}}sales/quotes/316/convert-to-booking HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -1592,27 +1605,11 @@ Authorization: {{TOKEN}}
 }
 
 ### convert quote to booking | Multi day:
-POST {{URL}}sales/quotes/137/convert-to-booking HTTP/1.1
+POST {{URL}}sales/quotes/316/convert-to-booking HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
-{
-  "booking_type": "multi_day",
-  "time_zone": "Asia/Calcutta",
-  "location": "442 Crocker Street, Los Angeles, California 90013, United States",
-  "booking_days": [
-    {
-      "date": "2026-04-25",
-      "start_time": "09:00:00",
-      "end_time": "13:00:00"
-    },
-    {
-      "date": "2026-04-26",
-      "start_time": "10:00:00",
-      "end_time": "14:00:00"
-    }
-  ]
-}
+{}
 
 ### update sales quote (partial safe)
 PUT {{URL}}sales/quotes/25 HTTP/1.1
@@ -1880,12 +1877,12 @@ Content-Type: image/jpeg
 ------WebKitFormBoundary7MA4YWxkTrZu0gW--
 
 ###
-POST {{URL}}sales/quotes/116/preview-invoice HTTP/1.1
+POST {{URL}}sales/quotes/316/preview-invoice HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
 ### send invoice for quote
-POST {{URL}}sales/quotes/179/send-invoice HTTP/1.1
+POST {{URL}}sales/quotes/316/send-invoice HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
