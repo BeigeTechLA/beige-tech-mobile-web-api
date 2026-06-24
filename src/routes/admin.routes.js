@@ -149,6 +149,21 @@ const shootsViewOrEdit = requireAnyPermission([
   'sales_admin_shoots.edit'
 ], allowSalesRepRoles);
 
+const normalizeRoleName = (role) => String(role || '').trim().toLowerCase().replace(/\s+/g, '_');
+
+const requireSuperAdmin = (req, res, next) => {
+  const role = normalizeRoleName(req.user?.userRole || req.userRole);
+
+  if (role === 'super_admin' || role === 'superadmin') {
+    return next();
+  }
+
+  return res.status(403).json({
+    success: false,
+    message: 'Super admin access required'
+  });
+};
+
 router.post('/create-project', authMiddleware, shootsCreate, admin.createProject);
 router.post('/match-crew', admin.matchCrew);
 router.post('/assignMatchCrew', admin.assignCrew);
@@ -231,21 +246,21 @@ router.get('/get-project-form/:project_id', authMiddleware, projectFormView, adm
 router.post('/shoots/remind-onboarding-form/:project_id', authMiddleware, admin.sendOnboardingFormReminder);
 router.post('/get-assigned-project-crew', admin.getAllAssignedRequests);
 router.post('/crew-member-assigned-projects', authMiddleware, adminSalesRepresentativeView, admin.getAllAssignedRequests);
-router.post('/roles/create', authMiddleware, admin.createRole);
-router.get('/roles', authMiddleware, admin.getRoles);
-router.post('/users/assign-role', authMiddleware, admin.assignRoleToUser);
-router.put('/roles/update', authMiddleware, admin.updateRole);
-router.delete('/roles/delete/:role_id', authMiddleware, admin.deleteRole);
-router.get('/roles/:role_id', authMiddleware, admin.getRoleById);
-router.get('/users/roles', authMiddleware, admin.getUsersWithRoles);
-router.get('/users/:user_id/role-details', authMiddleware, admin.getUserRoleDetails);
-router.get('/permissions/modules', authMiddleware, admin.getPermissionModules);
-router.delete('/delete-user/:user_id', authMiddleware, admin.deleteUser);
-router.post('/users/permissions/assign', authMiddleware, admin.assignPermissionsToUser);
-router.put('/users/permissions/update', authMiddleware, admin.updateUserPermissions);
-router.get('/users/:user_id/permissions', authMiddleware, admin.getUserPermissions);
-router.delete('/users/:user_id/permissions/:module_key/:action_key', authMiddleware, admin.deleteUserPermission);
-router.delete('/users/:user_id/permissions/:permission_id', authMiddleware, admin.deleteUserPermission);
+router.post('/roles/create', authMiddleware, requireSuperAdmin, admin.createRole);
+router.get('/roles', authMiddleware, requireSuperAdmin, admin.getRoles);
+router.post('/users/assign-role', authMiddleware, requireSuperAdmin, admin.assignRoleToUser);
+router.put('/roles/update', authMiddleware, requireSuperAdmin, admin.updateRole);
+router.delete('/roles/delete/:role_id', authMiddleware, requireSuperAdmin, admin.deleteRole);
+router.get('/roles/:role_id', authMiddleware, requireSuperAdmin, admin.getRoleById);
+router.get('/users/roles', authMiddleware, requireSuperAdmin, admin.getUsersWithRoles);
+router.get('/users/:user_id/role-details', authMiddleware, requireSuperAdmin, admin.getUserRoleDetails);
+router.get('/permissions/modules', authMiddleware, requireSuperAdmin, admin.getPermissionModules);
+router.delete('/delete-user/:user_id', authMiddleware, requireSuperAdmin, admin.deleteUser);
+router.post('/users/permissions/assign', authMiddleware, requireSuperAdmin, admin.assignPermissionsToUser);
+router.put('/users/permissions/update', authMiddleware, requireSuperAdmin, admin.updateUserPermissions);
+router.get('/users/:user_id/permissions', authMiddleware, requireSuperAdmin, admin.getUserPermissions);
+router.delete('/users/:user_id/permissions/:module_key/:action_key', authMiddleware, requireSuperAdmin, admin.deleteUserPermission);
+router.delete('/users/:user_id/permissions/:permission_id', authMiddleware, requireSuperAdmin, admin.deleteUserPermission);
 
 router.get('/shoots/:bookingId/notes', authMiddleware, shootNotesView, admin.getShootNotes);
 router.post('/shoots/:bookingId/notes', authMiddleware, shootNotesCreate, admin.uploadShootNoteAttachments, admin.addShootNote);

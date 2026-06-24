@@ -2455,3 +2455,48 @@ ALTER TABLE `permissions` DROP INDEX `unique_role_permission_key`;
 ALTER TABLE revurge.permissions DROP FOREIGN KEY fk_permissions_role_id;
 ALTER TABLE `permissions` DROP `role_id`;
 
+-- 24-06-26
+
+-- Add a Super Admin role for role and permission management.
+SET @super_admin_role_id = (
+  SELECT user_type_id
+  FROM user_type
+  WHERE LOWER(REPLACE(user_role, ' ', '_')) IN ('super_admin', 'superadmin')
+  LIMIT 1
+);
+
+INSERT INTO user_type (user_role, description, is_active)
+SELECT 'super_admin', 'Full system access', 1
+WHERE @super_admin_role_id IS NULL;
+
+SET @super_admin_role_id = (
+  SELECT user_type_id
+  FROM user_type
+  WHERE LOWER(REPLACE(user_role, ' ', '_')) IN ('super_admin', 'superadmin')
+  LIMIT 1
+);
+
+UPDATE user_type
+SET is_active = 1
+WHERE user_type_id = @super_admin_role_id;
+
+SET @admin_role_id = (
+  SELECT user_type_id
+  FROM user_type
+  WHERE LOWER(REPLACE(user_role, ' ', '_')) = 'admin'
+  LIMIT 1
+);
+
+INSERT INTO role_permissions (role_id, permission_id, is_active)
+SELECT @super_admin_role_id, rp.permission_id, 1
+FROM role_permissions rp
+WHERE rp.role_id = @admin_role_id
+  AND rp.is_active = 1
+  AND @super_admin_role_id IS NOT NULL
+  AND @admin_role_id IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1
+    FROM role_permissions existing
+    WHERE existing.role_id = @super_admin_role_id
+      AND existing.permission_id = rp.permission_id
+  );
