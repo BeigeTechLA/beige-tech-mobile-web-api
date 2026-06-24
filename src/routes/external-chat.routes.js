@@ -33,6 +33,7 @@ const directoryView = requireAnyPermission([
   'admin_meetings.edit',
   'sales_rep_messages.view',
   'sales_admin_messages.view',
+  'creative_partner_messages.view',
   'client_meetings.view',
   'client_shoots.view'
 ], { allowRoles: ['sales_rep', 'sales_admin', 'client', 'creative'] });
