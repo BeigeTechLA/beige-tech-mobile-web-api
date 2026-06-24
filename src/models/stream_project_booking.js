@@ -56,7 +56,7 @@ module.exports = function(sequelize, DataTypes) {
       allowNull: true
     },
     duration_hours: {
-      type: DataTypes.INTEGER,
+      type: DataTypes.DECIMAL(5, 2),
       allowNull: true
     },
     start_time: {
