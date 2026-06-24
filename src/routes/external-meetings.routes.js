@@ -19,11 +19,13 @@ const meetingsCreate = requireAnyPermission([
 ], { allowRoles: ['sales_admin', 'client'] });
 const meetingsEdit = requireAnyPermission([
   'admin_meetings.edit',
-  'production_manager_meetings.edit'
-], { allowRoles: ['production_manager', 'creative'] });
+  'production_manager_meetings.edit',
+  'client_meetings.edit'
+], { allowRoles: ['production_manager', 'creative', 'client'] });
 const meetingsDelete = requireAnyPermission([
-  'admin_meetings.delete'
-]);
+  'admin_meetings.delete',
+  'client_meetings.delete'
+], { allowRoles: ['client'] });
 const shootMeetingsView = requireAnyPermission([
   'admin_shoots.view',
   'admin_meetings.view',
@@ -32,16 +34,21 @@ const shootMeetingsView = requireAnyPermission([
   'sales_admin_shoots.view',
   'sales_admin_meetings.view',
   'creative_partner_request_shoots.view',
-  'client_shoots.view'
+  'client_shoots.view',
+  'client_meetings.view',
 ], { allowRoles: ['sales_rep', 'sales_admin', 'creative', 'client'] });
 const shootMeetingsCreate = requireAnyPermission([
   'admin_shoots.edit',
-  'admin_meetings.create'
-]);
+  'admin_meetings.create',
+  'client_shoots.create',
+  'client_meetings.create'
+], { allowRoles: ['client'] });
 const shootMeetingsEdit = requireAnyPermission([
   'admin_shoots.edit',
-  'admin_meetings.edit'
-]);
+  'admin_meetings.edit',
+  'client_shoots.edit',
+  'client_meetings.edit'
+], { allowRoles: ['client'] });
 
 router.get('/', authenticate, meetingsView, externalMeetingsController.getAllMeetings);
 router.get('/order/:orderId', authenticate, shootMeetingsView, externalMeetingsController.getMeetingsByOrder);
