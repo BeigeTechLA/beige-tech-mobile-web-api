@@ -258,7 +258,7 @@ router.get('/permissions/modules', authMiddleware, requireSuperAdmin, admin.getP
 router.delete('/delete-user/:user_id', authMiddleware, requireSuperAdmin, admin.deleteUser);
 router.post('/users/permissions/assign', authMiddleware, requireSuperAdmin, admin.assignPermissionsToUser);
 router.put('/users/permissions/update', authMiddleware, requireSuperAdmin, admin.updateUserPermissions);
-router.get('/users/:user_id/permissions', authMiddleware, requireSuperAdmin, admin.getUserPermissions);
+router.get('/users/:user_id/permissions', authMiddleware, admin.getUserPermissions);
 router.delete('/users/:user_id/permissions/:module_key/:action_key', authMiddleware, requireSuperAdmin, admin.deleteUserPermission);
 router.delete('/users/:user_id/permissions/:permission_id', authMiddleware, requireSuperAdmin, admin.deleteUserPermission);
 
