@@ -3572,6 +3572,7 @@ exports.getUploadPoliciesBatch = async (req, res) => {
 exports.notifyFileUploaded = async (req, res) => {
   try {
     await validateUploadAccessForPath(req, req.body.filepath);
+    const uploaderName = await getUserDisplayName(getRequestUserId(req)).catch(() => null);
 
     const result = await proxyRequest('/file-uploaded', {
       method: 'POST',
@@ -3581,11 +3582,11 @@ exports.notifyFileUploaded = async (req, res) => {
         fileSize: req.body.fileSize,
         fileName: req.body.fileName,
         userId: getRequestUserId(req),
+        authorName: uploaderName || 'Beige User',
       }),
     });
 
     if (result?.success !== false && req.body.filepath) {
-      const uploaderName = await getUserDisplayName(getRequestUserId(req)).catch(() => null);
       await sendUploadTemplateEmailForFile({
         filepath: req.body.filepath,
         fileName: req.body.fileName,
@@ -3642,6 +3643,7 @@ exports.notifyFilesUploadedBatch = async (req, res) => {
     for (const item of items) {
       await validateUploadAccessForPath(req, item?.filepath);
     }
+    const uploaderName = await getUserDisplayName(getRequestUserId(req)).catch(() => null);
 
     const result = await proxyRequest('/files-uploaded/batch', {
       method: 'POST',
@@ -3653,6 +3655,7 @@ exports.notifyFilesUploadedBatch = async (req, res) => {
           fileSize: item.fileSize,
           fileName: item.fileName,
           userId: getRequestUserId(req),
+          authorName: uploaderName || 'Beige User',
         })),
       }),
     });
@@ -3660,7 +3663,6 @@ exports.notifyFilesUploadedBatch = async (req, res) => {
     const succeededItems = Array.isArray(result?.data?.items)
       ? result.data.items.filter((item) => item?.success && item?.filepath)
       : [];
-    const uploaderName = await getUserDisplayName(getRequestUserId(req)).catch(() => null);
     const notifiedFolderKeys = new Set();
     for (const item of succeededItems) {
       const phase = resolveUploadPhase(item?.filepath);
@@ -3918,7 +3920,9 @@ exports.createFolder = async (req, res) => {
     const path = sanitizeRelativeFolderPath(req.body.path);
     const folderName = req.body.folderName || req.body.name;
 
-    if (isCommonEvent && !phase) {
+    // Regular workspaces must target Pre/Post Production. Common Events are
+    // intentionally phase-less and create folders directly under their path.
+    if (!isCommonEvent && !phase) {
       return res.status(400).json({
         success: false,
         message: 'phase is required. Allowed values: pre, post, pre-production, post-production',
@@ -4040,6 +4044,9 @@ exports.deleteEntry = async (req, res) => {
 
     const deletedPath = normalizePathForAccess(targetPath);
     if (deletedPath) {
+      await deactivateSharesForDeletedPath(deletedPath).catch((error) => {
+        console.error('Failed to invalidate deleted file-manager shares:', error);
+      });
       await deleteFaceEmbeddingRecordsByPath(deletedPath).catch(() => null);
 
       const rows = await listCommonEventRows().catch(() => []);
@@ -4076,6 +4083,11 @@ const isMissingSharedResourceError = (error) => {
   if (status === 404 || status === 410) return true;
 
   const message = String(error?.payload?.message || error?.message || '').trim().toLowerCase();
+  // The storage service currently returns this opaque 500 when a previously
+  // shared object has already been removed. Never expose that implementation
+  // detail on a public share page.
+  if (status === 500 && message === 'internal server error') return true;
+
   return (
     message.includes('file not found') ||
     message.includes('not available') ||
@@ -4088,10 +4100,52 @@ const isMissingSharedResourceError = (error) => {
 };
 
 const sendSharedResourceUnavailable = (res) =>
-  res.status(404).json({
+  res.status(410).json({
     success: false,
-    message: 'The shared file is no longer available.',
+    code: 'SHARED_RESOURCE_UNAVAILABLE',
+    message: 'This shared file or folder is no longer available. It may have been deleted by the owner.',
   });
+
+async function deactivateSharesForDeletedPath(deletedPath) {
+  const normalizedDeletedPath = normalizePathForAccess(deletedPath);
+  if (!normalizedDeletedPath) return;
+
+  await ensureFileShareTable();
+  const [rows] = await db.sequelize.query(
+    `SELECT share_id, resource_type, external_id, phase, path, filepath
+     FROM file_manager_shares
+     WHERE is_active = 1`
+  );
+
+  const deletedShareIds = (Array.isArray(rows) ? rows : [])
+    .filter((share) => {
+      const resourceType = String(share?.resource_type || '').toLowerCase();
+      if (resourceType === 'file') {
+        const sharedFilepath = normalizePathForAccess(share?.filepath || '');
+        return sharedFilepath && isPathWithin(normalizedDeletedPath, sharedFilepath);
+      }
+
+      const externalId = normalizePathForAccess(share?.external_id || '');
+      const relativePath = normalizePathForAccess(share?.path || '');
+      const phase = normalizeWorkspacePhase(share?.phase, null);
+      const phaseFolder = phase === 'pre' ? 'pre-production' : phase === 'post' ? 'post-production' : '';
+      const sharedResourcePath = normalizePathForAccess(
+        [externalId, phaseFolder, relativePath].filter(Boolean).join('/')
+      );
+
+      return sharedResourcePath && isPathWithin(normalizedDeletedPath, sharedResourcePath);
+    })
+    .map((share) => Number(share.share_id))
+    .filter(Boolean);
+
+  if (!deletedShareIds.length) return;
+  await db.sequelize.query(
+    `UPDATE file_manager_shares
+     SET is_active = 0, updated_at = NOW()
+     WHERE share_id IN (:shareIds)`,
+    { replacements: { shareIds: deletedShareIds } }
+  );
+}
 
 const extractBearerToken = (req) => {
   const authHeader = String(req.headers?.authorization || '').trim();
@@ -4320,7 +4374,7 @@ exports.requestShareOtp = async (req, res) => {
     }
 
     const share = await getShareByToken(shareToken);
-    if (!share) return res.status(404).json({ success: false, message: 'Share link not found' });
+    if (!share) return sendSharedResourceUnavailable(res);
     if (
       String(share.access_mode || 'email_only') !== 'anyone_with_link' &&
       normalizeEmailAddress(share.shared_with_email) !== email
@@ -4368,7 +4422,7 @@ exports.verifyShareOtp = async (req, res) => {
     }
 
     const share = await getShareByToken(shareToken);
-    if (!share) return res.status(404).json({ success: false, message: 'Share link not found' });
+    if (!share) return sendSharedResourceUnavailable(res);
     if (
       String(share.access_mode || 'email_only') !== 'anyone_with_link' &&
       normalizeEmailAddress(share.shared_with_email) !== email
@@ -4414,7 +4468,7 @@ exports.getSharedContent = async (req, res) => {
     }
 
     const share = await getShareByToken(shareToken);
-    if (!share) return res.status(404).json({ success: false, message: 'Share link not found' });
+    if (!share) return sendSharedResourceUnavailable(res);
     if (
       String(share.access_mode || 'email_only') !== 'anyone_with_link' &&
       normalizeEmailAddress(share.shared_with_email) !== normalizeEmailAddress(claims.email)
@@ -4455,7 +4509,15 @@ exports.getSharedContent = async (req, res) => {
     const query = new URLSearchParams();
     if (phaseToUse) query.set('phase', phaseToUse);
     if (pathToUse) query.set('path', pathToUse);
-    const listing = await proxyRequest(`/workspace/${encodeURIComponent(String(share.external_id))}/files${query.toString() ? `?${query.toString()}` : ''}`);
+    let listing;
+    try {
+      listing = await proxyRequest(`/workspace/${encodeURIComponent(String(share.external_id))}/files${query.toString() ? `?${query.toString()}` : ''}`);
+    } catch (error) {
+      if (isMissingSharedResourceError(error)) {
+        return sendSharedResourceUnavailable(res);
+      }
+      throw error;
+    }
     return res.status(200).json({
       success: true,
       data: {
@@ -4469,6 +4531,9 @@ exports.getSharedContent = async (req, res) => {
       },
     });
   } catch (error) {
+    if (isMissingSharedResourceError(error)) {
+      return sendSharedResourceUnavailable(res);
+    }
     const statusCode = String(error?.message || '').toLowerCase().includes('outside the shared scope') ? 403 : 401;
     return res.status(statusCode).json({ success: false, message: error.message || 'Invalid or expired share access token' });
   }
@@ -4640,7 +4705,7 @@ exports.getSharedDownloadUrl = async (req, res) => {
     }
 
     const share = await getShareByToken(shareToken);
-    if (!share) return res.status(404).json({ success: false, message: 'Share link not found' });
+    if (!share) return sendSharedResourceUnavailable(res);
     if (
       String(share.access_mode || 'email_only') !== 'anyone_with_link' &&
       normalizeEmailAddress(share.shared_with_email) !== normalizeEmailAddress(claims.email)
@@ -4682,6 +4747,9 @@ exports.getSharedDownloadUrl = async (req, res) => {
     });
     return res.status(200).json(withPublicUrl(result, req));
   } catch (error) {
+    if (isMissingSharedResourceError(error)) {
+      return sendSharedResourceUnavailable(res);
+    }
     const statusCode = String(error?.message || '').toLowerCase().includes('outside the shared scope') ? 403 : 401;
     return res.status(statusCode).json({ success: false, message: error.message || 'Invalid or expired share access token' });
   }
@@ -4701,7 +4769,7 @@ exports.getSharedViewUrl = async (req, res) => {
     }
 
     const share = await getShareByToken(shareToken);
-    if (!share) return res.status(404).json({ success: false, message: 'Share link not found' });
+    if (!share) return sendSharedResourceUnavailable(res);
     if (
       String(share.access_mode || 'email_only') !== 'anyone_with_link' &&
       normalizeEmailAddress(share.shared_with_email) !== normalizeEmailAddress(claims.email)
@@ -4742,6 +4810,9 @@ exports.getSharedViewUrl = async (req, res) => {
     });
     return res.status(200).json(withPublicUrl(result, req));
   } catch (error) {
+    if (isMissingSharedResourceError(error)) {
+      return sendSharedResourceUnavailable(res);
+    }
     const statusCode = String(error?.message || '').toLowerCase().includes('outside the shared scope') ? 403 : 401;
     return res.status(statusCode).json({ success: false, message: error.message || 'Invalid or expired share access token' });
   }
