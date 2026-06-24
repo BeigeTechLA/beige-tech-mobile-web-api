@@ -2875,6 +2875,12 @@ exports.getLeadById = async (req, res) => {
 
     const itemsToProcess = activeQuoteSource?.line_items || [];
     let subtotal = 0;
+    const isStudioBooking = ['studio'].includes(String(
+        leadJson.booking?.shoot_type ||
+        leadJson.booking?.content_type ||
+        leadJson.booking?.event_type ||
+        ''
+    ).toLowerCase());
 
     itemsToProcess.forEach(item => {
         const name = (item.item_name || item.name || '').toLowerCase();
@@ -2883,10 +2889,14 @@ exports.getLeadById = async (req, res) => {
 
         subtotal += lineTotal;
 
-        if (name.includes('videographer') || name.includes('photographer')) {
+        if (name.includes('videographer') || name.includes('photographer') || name.includes('cinematographer')) {
             const unitPrice = lineTotal / quantity;
-            pricing_breakdown.shoot_cost += unitPrice;
-            if (quantity > 1) {
+            if (isStudioBooking) {
+                pricing_breakdown.additional_creatives_cost += lineTotal;
+            } else {
+                pricing_breakdown.shoot_cost += unitPrice;
+            }
+            if (!isStudioBooking && quantity > 1) {
                 pricing_breakdown.additional_creatives_cost += (unitPrice * (quantity - 1));
             }
         } 
@@ -2897,6 +2907,24 @@ exports.getLeadById = async (req, res) => {
             pricing_breakdown.shoot_cost += lineTotal;
         }
     });
+
+    const quoteSubtotal = [
+        activeQuoteSource?.subtotal,
+        activeQuoteSource?.price_after_discount,
+        activeQuoteSource?.total
+    ]
+        .map((amount) => parseFloat(amount))
+        .find((amount) => Number.isFinite(amount) && amount > 0) || 0;
+
+    if (quoteSubtotal > 0) {
+        if (subtotal <= 0) {
+            subtotal = quoteSubtotal;
+            pricing_breakdown.shoot_cost += quoteSubtotal;
+        } else if (isStudioBooking && quoteSubtotal > subtotal) {
+            pricing_breakdown.shoot_cost += parseFloat((quoteSubtotal - subtotal).toFixed(2));
+            subtotal = quoteSubtotal;
+        }
+    }
 
     if (payment_status === 'paid') {
         pricing_breakdown.discount = parseFloat(leadJson.booking?.primary_quote?.discount_amount || 0);
@@ -4647,6 +4675,12 @@ exports.getClientLeadById = async (req, res) => {
 
     const itemsToProcess = activeQuoteSource?.line_items || [];
     let subtotal = 0;
+    const isStudioBooking = ['studio'].includes(String(
+      leadJson.booking?.shoot_type ||
+      leadJson.booking?.content_type ||
+      leadJson.booking?.event_type ||
+      ''
+    ).toLowerCase());
 
     itemsToProcess.forEach(item => {
       const name = (item.item_name || item.name || '').toLowerCase();
@@ -4655,10 +4689,14 @@ exports.getClientLeadById = async (req, res) => {
 
       subtotal += lineTotal;
 
-      if (name.includes('videographer') || name.includes('photographer')) {
+      if (name.includes('videographer') || name.includes('photographer') || name.includes('cinematographer')) {
         const unitPrice = lineTotal / quantity;
-        pricing_breakdown.shoot_cost += unitPrice;
-        if (quantity > 1) {
+        if (isStudioBooking) {
+          pricing_breakdown.additional_creatives_cost += lineTotal;
+        } else {
+          pricing_breakdown.shoot_cost += unitPrice;
+        }
+        if (!isStudioBooking && quantity > 1) {
           pricing_breakdown.additional_creatives_cost += (unitPrice * (quantity - 1));
         }
       } else if (name.includes('reel') || name.includes('edit') || name.includes('highlight')) {
@@ -4667,6 +4705,24 @@ exports.getClientLeadById = async (req, res) => {
         pricing_breakdown.shoot_cost += lineTotal;
       }
     });
+
+    const quoteSubtotal = [
+      activeQuoteSource?.subtotal,
+      activeQuoteSource?.price_after_discount,
+      activeQuoteSource?.total
+    ]
+      .map((amount) => parseFloat(amount))
+      .find((amount) => Number.isFinite(amount) && amount > 0) || 0;
+
+    if (quoteSubtotal > 0) {
+      if (subtotal <= 0) {
+        subtotal = quoteSubtotal;
+        pricing_breakdown.shoot_cost += quoteSubtotal;
+      } else if (isStudioBooking && quoteSubtotal > subtotal) {
+        pricing_breakdown.shoot_cost += parseFloat((quoteSubtotal - subtotal).toFixed(2));
+        subtotal = quoteSubtotal;
+      }
+    }
 
     if (payment_status === 'paid') {
       pricing_breakdown.discount = parseFloat(leadJson.booking?.primary_quote?.discount_amount || 0);
