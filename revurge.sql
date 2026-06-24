@@ -2438,13 +2438,6 @@ WHERE module_key LIKE 'client_%';
 
 ALTER TABLE users ADD COLUMN permissions_version INT DEFAULT 1;
 
--- 23-06-26
-
-ALTER TABLE `permissions` DROP INDEX `idx_permissions_role_id`;
-ALTER TABLE `permissions` DROP INDEX `unique_role_permission_key`;
-ALTER TABLE revurge.permissions DROP FOREIGN KEY fk_permissions_role_id;
-ALTER TABLE `permissions` DROP `role_id`;
-
 -- 22-06-26
 
 ALTER TABLE `sales_quotes`
@@ -2454,3 +2447,11 @@ ALTER TABLE `sales_quotes`
   ADD COLUMN `start_time` TIME NULL AFTER `start_date`,
   ADD COLUMN `end_time` TIME NULL AFTER `start_time`,
   ADD COLUMN `booking_days` TEXT NULL AFTER `end_time`;
+
+-- 23-06-26
+
+ALTER TABLE `permissions` DROP INDEX `idx_permissions_role_id`;
+ALTER TABLE `permissions` DROP INDEX `unique_role_permission_key`;
+ALTER TABLE revurge.permissions DROP FOREIGN KEY fk_permissions_role_id;
+ALTER TABLE `permissions` DROP `role_id`;
+
