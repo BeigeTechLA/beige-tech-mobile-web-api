@@ -2444,3 +2444,13 @@ ALTER TABLE `permissions` DROP INDEX `idx_permissions_role_id`;
 ALTER TABLE `permissions` DROP INDEX `unique_role_permission_key`;
 ALTER TABLE revurge.permissions DROP FOREIGN KEY fk_permissions_role_id;
 ALTER TABLE `permissions` DROP `role_id`;
+
+-- 22-06-26
+
+ALTER TABLE `sales_quotes`
+  ADD COLUMN `booking_type` ENUM('single_day','multi_day') NULL AFTER `video_shoot_type`,
+  ADD COLUMN `time_zone` VARCHAR(64) NULL AFTER `booking_type`,
+  ADD COLUMN `start_date` DATE NULL AFTER `time_zone`,
+  ADD COLUMN `start_time` TIME NULL AFTER `start_date`,
+  ADD COLUMN `end_time` TIME NULL AFTER `start_time`,
+  ADD COLUMN `booking_days` TEXT NULL AFTER `end_time`;

@@ -2770,7 +2770,7 @@ const sendBeigeCreditsReceivedEmail = async (data = {}) => {
       first_name: firstName,
       credited_amount: `${amount}`,
       added_by: data?.added_by || 'Beige Admin',
-      amount_added: `${amount} Beige Credits`,
+      amount_added: `${amount}`,
       expiry_date: data?.expires_at ? formatDate(data.expires_at) : 'No expiry',
       reason: data?.reason || 'Account credit issued by Beige',
       wallet_balance: walletBalance,
