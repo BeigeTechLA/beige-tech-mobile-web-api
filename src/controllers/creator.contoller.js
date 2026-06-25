@@ -180,12 +180,6 @@ exports.getDashboardCounts = async (req, res) => {
           model: stream_project_booking,
           as: "project",
           required: true,
-          where: {
-            is_active: 1,
-            is_cancelled: 0,
-            is_completed: 0,
-            payment_completed_at: { [Op.ne]: null },
-          },
         },
       ],
     });
@@ -230,11 +224,6 @@ exports.getPendingRequests = async (req, res) => {
           model: stream_project_booking,
           as: "project",
           required: true,
-          where: {
-            is_active: 1,
-            is_cancelled: 0,
-            payment_completed_at: { [Op.ne]: null },
-          },
         },
       ],
     });
