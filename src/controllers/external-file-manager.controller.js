@@ -2388,8 +2388,21 @@ const ensureCreatorWorkspaceAccess = async (req, bookingId) => {
     where: {
       project_id: normalizedBookingId,
       crew_member_id: crewMemberId,
+      is_active: 1,
     },
     attributes: ['id', 'crew_accept'],
+    include: [
+      {
+        model: stream_project_booking,
+        as: 'project',
+        required: true,
+        attributes: ['stream_project_booking_id'],
+        where: {
+          is_active: 1,
+          is_cancelled: 0,
+        },
+      },
+    ],
   });
 
   if (!assignment) {
@@ -2432,8 +2445,21 @@ const getCreatorAssignedProjectIds = async (req) => {
   const assignments = await assigned_crew.findAll({
     where: {
       crew_member_id: crewMemberId,
+      is_active: 1,
     },
     attributes: ['project_id'],
+    include: [
+      {
+        model: stream_project_booking,
+        as: 'project',
+        required: true,
+        attributes: ['stream_project_booking_id'],
+        where: {
+          is_active: 1,
+          is_cancelled: 0,
+        },
+      },
+    ],
   });
 
   return assignments
@@ -2450,6 +2476,7 @@ const getCreatorAssignedWorkspacePlaceholders = async (req, existingExternalIds 
   const assignments = await assigned_crew.findAll({
     where: {
       crew_member_id: crewMemberId,
+      is_active: 1,
     },
     attributes: ['project_id', 'crew_accept', 'created_at', 'updated_at'],
     include: [
@@ -2457,6 +2484,10 @@ const getCreatorAssignedWorkspacePlaceholders = async (req, existingExternalIds 
         model: stream_project_booking,
         as: 'project',
         required: true,
+        where: {
+          is_active: 1,
+          is_cancelled: 0,
+        },
       },
     ],
   });
