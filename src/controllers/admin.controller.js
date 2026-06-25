@@ -11405,13 +11405,6 @@ exports.assignRoleToUser = async (req, res) => {
       });
     }
 
-    if (isSuperAdminRoleName(role.user_role)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Super admin role cannot be assigned from this API'
-      });
-    }
-
     transaction = await db.sequelize.transaction();
 
     await db.user_roles.update(
