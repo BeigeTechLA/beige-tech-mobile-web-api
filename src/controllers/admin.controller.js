@@ -43,6 +43,8 @@ const bookingTimelineService = require('../services/bookingTimeline.service');
 const accountCreditService = require('../services/account-credit.service');
 const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
 const quoteService = require('../services/sales-quote.service');
+const bookingPricingService = require('../services/booking-pricing.service');
+const { getStudioPricingSnapshot, isStudioLineItem } = require('../utils/studio-pricing');
 // const NodeGeocoder = require('node-geocoder');
 const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
 const EXTERNAL_MEETINGS_API_BASE_URL = process.env.EXTERNAL_MEETINGS_API_BASE_URL || 'http://localhost:5002/v1/external-meetings';
@@ -1938,13 +1940,24 @@ exports.getProjectDetails = async (req, res) => {
 
     // 5. Pricing Breakdown logic
     // Using calculateLeadPricing helper if available, otherwise manual calc
-    const projectedQuote = typeof calculateLeadPricing === 'function' ? await calculateLeadPricing(projectJson) : null;
+    const projectedQuote = await bookingPricingService.calculateBookingPricing(projectJson);
     const activeQuoteSource = currentUsableConvertedQuote || projectJson.primary_quote || projectedQuote;
+    const projectedTotal = parseAmountCandidate(projectedQuote?.total);
+    if (
+      !currentUsableConvertedQuote &&
+      !projectJson.primary_quote &&
+      projectedTotal !== null &&
+      projectedTotal > 0
+    ) {
+      totalValueAmount = projectedTotal;
+    }
     
     const parsedQuoteTotal = parseFloat(activeQuoteSource?.total || 0);
     let pricing_breakdown = {
       shoot_cost: 0,
       editing_cost: 0,
+      studio_cost: 0,
+      studio_items: [],
       subtotal: 0,
       total_before_credit: 0,
       credit_applied: 0,
@@ -1953,14 +1966,26 @@ exports.getProjectDetails = async (req, res) => {
       total: 0
     };
     let subtotal = 0;
+    const studioSnapshot = getStudioPricingSnapshot(projectJson.description);
+    pricing_breakdown.studio_items = studioSnapshot.items;
+    let hasPersistedStudioLine = false;
 
     (activeQuoteSource?.line_items || []).forEach(item => {
         const cost = parseFloat(item.line_total || item.total || 0);
         subtotal += cost;
         const name = (item.item_name || '').toLowerCase();
-        if (name.includes('edit') || name.includes('reel') || name.includes('post')) pricing_breakdown.editing_cost += cost;
+        if (isStudioLineItem(item)) {
+          hasPersistedStudioLine = true;
+          pricing_breakdown.studio_cost += cost;
+        }
+        else if (name.includes('edit') || name.includes('reel') || name.includes('post')) pricing_breakdown.editing_cost += cost;
         else pricing_breakdown.shoot_cost += cost;
     });
+    if (!hasPersistedStudioLine && studioSnapshot.total > 0 && parsedQuoteTotal > subtotal) {
+      const legacyStudioAmount = Math.min(studioSnapshot.total, parsedQuoteTotal - subtotal);
+      pricing_breakdown.studio_cost += parseFloat(legacyStudioAmount.toFixed(2));
+      subtotal += legacyStudioAmount;
+    }
     pricing_breakdown.subtotal = subtotal;
     pricing_breakdown.total_before_credit = subtotal;
     pricing_breakdown.total_after_credit =
