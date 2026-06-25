@@ -11304,17 +11304,13 @@ exports.getRoles = async (req, res) => {
       is_active: 1,
       user_type_id: {
         [Op.notIn]: [2, 3]
-      },
-      user_role: {
-        [Op.notIn]: SUPER_ADMIN_ROLE_NAMES
       }
     };
 
     // Search filter
     if (search) {
       whereCondition.user_role = {
-        [Op.like]: `%${search}%`,
-        [Op.notIn]: SUPER_ADMIN_ROLE_NAMES
+        [Op.like]: `%${search}%`
       };
     }
 
