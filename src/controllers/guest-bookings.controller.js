@@ -7,6 +7,11 @@ const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 const { content } = require('googleapis/build/src/apis/content');
 const { sendCPNewBookingRequestEmail } = require('../utils/emailService');
 const { resolveEventDateAndStartTime, normalizeTime, splitDateTime } = require('../utils/timezone');
+const {
+  buildStudioMetaString,
+  normalizeStudioItems,
+  stripStudioMeta
+} = require('../utils/studio-pricing');
 const accountCreditService = require('../services/account-credit.service');
 const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
 const REFERRAL_DISCOUNT_PERCENT = 10;
@@ -865,7 +870,9 @@ exports.updateGuestBooking = async (req, res) => {
       selected_crew_ids,
       booking_type,
       booking_days,
-      time_zone
+      time_zone,
+      studio_items,
+      studio_total
     } = req.body;
 
     if (!id) {
@@ -990,8 +997,24 @@ exports.updateGuestBooking = async (req, res) => {
       combinedEditTypes = [...vTypes, ...pTypes].join(',');
     }
 
+    const hasStudioItemsPayload = Array.isArray(studio_items);
+    const normalizedStudioItems = hasStudioItemsPayload ? normalizeStudioItems(studio_items) : [];
+    const normalizedStudioTotal = normalizedStudioItems.reduce((sum, studio) => sum + studio.totalPrice, 0);
+    if (normalizedStudioItems.length > 0 && Number(studio_total) > 0 && Math.abs(normalizedStudioTotal - Number(studio_total)) > 0.01) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Studio pricing total does not match selected studio items'
+      });
+    }
+
     // V3: Combine description with new fields
     let combinedDescription = description || special_instructions || '';
+    if (hasStudioItemsPayload) {
+      const studioMeta = buildStudioMetaString(normalizedStudioItems);
+      combinedDescription = [stripStudioMeta(combinedDescription), studioMeta]
+        .filter((value) => String(value || '').trim())
+        .join('\n\n');
+    }
     if (full_name) combinedDescription += `\n\nContact Name: ${full_name}`;
     if (phone) combinedDescription += `\nPhone: ${phone}`;
     if (reference_links) combinedDescription += `\nReference Links: ${reference_links}`;

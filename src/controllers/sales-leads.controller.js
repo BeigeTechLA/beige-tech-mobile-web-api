@@ -19,7 +19,12 @@ const { sendCPNewBookingRequestEmail } = require('../utils/emailService');
 const { resolveEventDateAndStartTime, normalizeTime, splitDateTime } = require('../utils/timezone');
 const { extractCoordinatesFromPayload } = require('../utils/locationHelpers');
 const { S3UploadFiles } = require('../utils/common.js');
-const { getStudioPricingSnapshot, isStudioLineItem } = require('../utils/studio-pricing');
+const {
+  buildStudioMetaString,
+  getStudioPricingSnapshot,
+  isStudioLineItem,
+  normalizeStudioItems
+} = require('../utils/studio-pricing');
 
 const sequelize = require('../db');
 const db = require('../models');
@@ -1421,23 +1426,12 @@ exports.trackEarlyBookingInterest = async (req, res) => {
 
         const { latitude, longitude } = extractCoordinatesFromPayload(req.body, location);
 
-        const normalizedStudioItems = (Array.isArray(studio_items) ? studio_items : [])
-            .map((studio) => ({
-                studioId: String(studio?.studio_id || studio?.studioId || ''),
-                name: String(studio?.name || 'BEIGE Studio'),
-                pricingMode: studio?.pricing_mode === 'weekend' || studio?.pricingMode === 'weekend' ? 'weekend' : 'hourly',
-                quantity: Number(studio?.quantity) || 1,
-                unitPrice: Number(studio?.unit_price ?? studio?.unitPrice) || 0,
-                totalPrice: Number(studio?.total ?? studio?.totalPrice) || 0,
-            }))
-            .filter((studio) => studio.studioId && studio.totalPrice > 0);
+        const normalizedStudioItems = normalizeStudioItems(studio_items);
         const normalizedStudioTotal = normalizedStudioItems.reduce((sum, studio) => sum + studio.totalPrice, 0);
         if (normalizedStudioItems.length > 0 && Number(studio_total) > 0 && Math.abs(normalizedStudioTotal - Number(studio_total)) > 0.01) {
             return res.status(400).json({ success: false, message: 'Studio pricing total does not match selected studio items' });
         }
-        const studioMeta = normalizedStudioItems.length > 0
-            ? `[BEIGE_STUDIO_META]${JSON.stringify(normalizedStudioItems)}`
-            : '';
+        const studioMeta = buildStudioMetaString(normalizedStudioItems);
         const combinedDescription = [specialInstructions, studioMeta]
             .filter((value) => String(value || '').trim())
             .join('\n\n') || null;
