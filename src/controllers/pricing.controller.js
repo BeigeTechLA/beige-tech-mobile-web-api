@@ -202,6 +202,7 @@ exports.saveQuote = async (req, res) => {
       notes, 
       shoot_start_date,
       studio_total = 0,
+      studio_items = [],
       // 1. Extract these from the request body
       video_edit_types = [], 
       photo_edit_types = [] 
@@ -214,6 +215,7 @@ exports.saveQuote = async (req, res) => {
       eventType,
       shootStartDate: shoot_start_date,
       studioTotal: parseFloat(studio_total) || 0,
+      studioItems: studio_items,
       videoEditTypes: video_edit_types, // Pass video edits
       photoEditTypes: photo_edit_types, // Pass photo edits
       skipDiscount: true,
@@ -553,6 +555,7 @@ exports.calculateFromCreators = async (req, res) => {
       event_type,
       shoot_start_date,
       studio_total = 0,
+      studio_items = [],
       add_on_items = [],
       video_edit_types = [], // Added
       photo_edit_types = [], 
@@ -693,6 +696,7 @@ exports.calculateFromCreators = async (req, res) => {
       eventType: event_type,
       shootStartDate: shoot_start_date,
       studioTotal: parseFloat(studio_total) || 0,
+      studioItems: studio_items,
       skipDiscount: skip_discount,
       skipMargin: skip_margin,
       videoEditTypes: video_edit_types, // Sent to service

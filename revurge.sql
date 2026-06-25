@@ -2500,3 +2500,6 @@ WHERE rp.role_id = @admin_role_id
     WHERE existing.role_id = @super_admin_role_id
       AND existing.permission_id = rp.permission_id
   );
+
+ALTER TABLE `affiliates` ADD `is_active` INT NOT NULL DEFAULT '1' AFTER `updated_at`;
+ 
