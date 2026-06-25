@@ -226,8 +226,11 @@ router.get('/shoot-category-count', authMiddleware, dashboardOrShootsView, admin
 router.get('/get-post-production-members', admin.getPostProductionMembers);
 router.post('/assign-post-production-member', authMiddleware, shootsEdit, admin.assignPostProductionMember);
 router.get('/get-clients', authMiddleware, adminUsersView, admin.getClients);
+router.get('/archive-history', authMiddleware, adminUsersView, admin.getArchiveHistory);
 router.put('/edit-client/:client_id', admin.editClient);
-router.delete('/delete-client/:client_id', admin.deleteClient);
+router.delete('/delete-client/:client_id', authMiddleware, adminUsersDelete, admin.deleteClient);
+router.post('/restore-client/:client_id', authMiddleware, adminUsersDelete, admin.restoreClient);
+router.post('/convert-client-to-creative-partner/:client_id', authMiddleware, adminUsersEdit, admin.convertClientToCreativePartner);
 router.delete('/delete-project/:project_id', authMiddleware, shootsDelete, admin.deleteProject);
 router.post('/upload-profile-photo', admin.uploadProfilePhoto);
 router.get('/get-client-by-id/:id', authMiddleware, adminUsersView, admin.getClientById);
