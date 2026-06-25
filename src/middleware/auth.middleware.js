@@ -280,3 +280,18 @@ exports.requireAdmin = async (req, res, next) => {
     });
   }
 };
+
+const normalizeRoleName = (role) => String(role || '').trim().toLowerCase().replace(/\s+/g, '_');
+
+exports.requireSuperAdmin = (req, res, next) => {
+  const role = normalizeRoleName(req.user?.userRole || req.userRole);
+
+  if (role === 'super_admin' || role === 'superadmin') {
+    return next();
+  }
+
+  return res.status(403).json({
+    success: false,
+    message: 'Super admin access required'
+  });
+};

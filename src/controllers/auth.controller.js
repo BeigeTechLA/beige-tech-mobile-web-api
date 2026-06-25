@@ -2421,14 +2421,6 @@ exports.registerSalesAdmin = async (req, res) => {
 
 exports.createInternalCredential = async (req, res) => {
   try {
-    const requesterRole = String(req.user?.userRole || '').toLowerCase();
-    if (requesterRole !== 'admin') {
-      return res.status(403).json({
-        success: false,
-        message: 'Only admin can create internal credentials'
-      });
-    }
-
     const { name, email, password, phone_number, user_type, userType, role } = req.body;
     const requestedUserType = user_type ?? userType;
     const normalizedUserType = Number(requestedUserType);

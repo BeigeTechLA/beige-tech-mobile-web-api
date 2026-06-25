@@ -4,6 +4,7 @@ const router = express.Router();
 const admin = require('../controllers/admin.controller');
 const { authenticateAdmin, authMiddleware } = require('../middleware/auth');
 const { requirePermission, requireAnyPermission } = require('../middleware/permission.middleware');
+const { requireSuperAdmin } = require('../middleware/auth.middleware');
 
 const dashboardView = requireAnyPermission([
   'admin_dashboard.view',
@@ -148,21 +149,6 @@ const shootsViewOrEdit = requireAnyPermission([
   'sales_admin_shoots.view',
   'sales_admin_shoots.edit'
 ], allowSalesRepRoles);
-
-const normalizeRoleName = (role) => String(role || '').trim().toLowerCase().replace(/\s+/g, '_');
-
-const requireSuperAdmin = (req, res, next) => {
-  const role = normalizeRoleName(req.user?.userRole || req.userRole);
-
-  if (role === 'super_admin' || role === 'superadmin') {
-    return next();
-  }
-
-  return res.status(403).json({
-    success: false,
-    message: 'Super admin access required'
-  });
-};
 
 router.post('/create-project', authMiddleware, shootsCreate, admin.createProject);
 router.post('/match-crew', admin.matchCrew);
