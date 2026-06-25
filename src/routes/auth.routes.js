@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const authController = require('../controllers/auth.controller');
 const { authenticate } = require('../middleware/auth');
+const { requireSuperAdmin } = require('../middleware/auth.middleware');
 const { requireAnyPermission } = require('../middleware/permission.middleware');
 
 const clientFinancesEdit = requireAnyPermission(['client_finances.edit'], { allowRoles: ['client'] });
@@ -49,7 +50,7 @@ router.get('/permissions/:role', authController.getPermissions);
 // GET /auth/me - Get current user info
 router.get('/me', authenticate, authController.getCurrentUser);
 router.post('/cp-event-location/confirm', authenticate, authController.confirmCpEventLocation);
-router.post('/admin/create-internal-credential', authenticate, authController.createInternalCredential);
+router.post('/admin/create-internal-credential', authenticate, requireSuperAdmin, authController.createInternalCredential);
 
 router.post('/change-password-client', authenticate, clientFinancesEdit, authController.changePasswordclient);
 router.post('/change-password-crew', authController.changePasswordCrewMember);

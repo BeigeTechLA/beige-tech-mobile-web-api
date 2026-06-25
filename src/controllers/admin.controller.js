@@ -11304,17 +11304,13 @@ exports.getRoles = async (req, res) => {
       is_active: 1,
       user_type_id: {
         [Op.notIn]: [2, 3]
-      },
-      user_role: {
-        [Op.notIn]: SUPER_ADMIN_ROLE_NAMES
       }
     };
 
     // Search filter
     if (search) {
       whereCondition.user_role = {
-        [Op.like]: `%${search}%`,
-        [Op.notIn]: SUPER_ADMIN_ROLE_NAMES
+        [Op.like]: `%${search}%`
       };
     }
 
@@ -11406,13 +11402,6 @@ exports.assignRoleToUser = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: 'Role not found or inactive'
-      });
-    }
-
-    if (isSuperAdminRoleName(role.user_role)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Super admin role cannot be assigned from this API'
       });
     }
 
@@ -11523,13 +11512,6 @@ exports.updateRole = async (req, res) => {
       });
     }
 
-    if (isSuperAdminRoleName(existingRole.user_role) || isSuperAdminRoleName(name)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Super admin role is system managed'
-      });
-    }
-
     const roleUpdateData = {};
 
     if (name !== undefined) {
@@ -11602,13 +11584,6 @@ exports.deleteRole = async (req, res) => {
       });
     }
 
-    if (isSuperAdminRoleName(role.user_role)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Super admin role is system managed'
-      });
-    }
-
     const assignedUsers = await db.users.count({
       where: {
         user_type: role_id
@@ -11660,13 +11635,6 @@ exports.getRoleById = async (req, res) => {
     });
 
     if (!role) {
-      return res.status(404).json({
-        success: false,
-        message: 'Role not found'
-      });
-    }
-
-    if (isSuperAdminRoleName(role.user_role)) {
       return res.status(404).json({
         success: false,
         message: 'Role not found'

@@ -4,6 +4,7 @@ const router = express.Router();
 const admin = require('../controllers/admin.controller');
 const { authenticateAdmin, authMiddleware } = require('../middleware/auth');
 const { requirePermission, requireAnyPermission } = require('../middleware/permission.middleware');
+const { requireSuperAdmin } = require('../middleware/auth.middleware');
 
 const dashboardView = requireAnyPermission([
   'admin_dashboard.view',
@@ -149,21 +150,6 @@ const shootsViewOrEdit = requireAnyPermission([
   'sales_admin_shoots.edit'
 ], allowSalesRepRoles);
 
-const normalizeRoleName = (role) => String(role || '').trim().toLowerCase().replace(/\s+/g, '_');
-
-const requireSuperAdmin = (req, res, next) => {
-  const role = normalizeRoleName(req.user?.userRole || req.userRole);
-
-  if (role === 'super_admin' || role === 'superadmin') {
-    return next();
-  }
-
-  return res.status(403).json({
-    success: false,
-    message: 'Super admin access required'
-  });
-};
-
 router.post('/create-project', authMiddleware, shootsCreate, admin.createProject);
 router.post('/match-crew', admin.matchCrew);
 router.post('/assignMatchCrew', admin.assignCrew);
@@ -258,7 +244,7 @@ router.get('/permissions/modules', authMiddleware, requireSuperAdmin, admin.getP
 router.delete('/delete-user/:user_id', authMiddleware, requireSuperAdmin, admin.deleteUser);
 router.post('/users/permissions/assign', authMiddleware, requireSuperAdmin, admin.assignPermissionsToUser);
 router.put('/users/permissions/update', authMiddleware, requireSuperAdmin, admin.updateUserPermissions);
-router.get('/users/:user_id/permissions', authMiddleware, requireSuperAdmin, admin.getUserPermissions);
+router.get('/users/:user_id/permissions', authMiddleware, admin.getUserPermissions);
 router.delete('/users/:user_id/permissions/:module_key/:action_key', authMiddleware, requireSuperAdmin, admin.deleteUserPermission);
 router.delete('/users/:user_id/permissions/:permission_id', authMiddleware, requireSuperAdmin, admin.deleteUserPermission);
 
