@@ -32,6 +32,26 @@ module.exports = function(sequelize, DataTypes) {
       allowNull: true,
       defaultValue: 1
     },
+    archived_at: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    archived_by_user_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
+    archive_reason: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
+    restored_at: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    restored_by_user_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
     created_at: {
       type: DataTypes.DATE,
       allowNull: false,
