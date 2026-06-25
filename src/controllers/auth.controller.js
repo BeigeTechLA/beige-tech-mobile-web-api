@@ -24,6 +24,103 @@ const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 const otpService = require('../utils/otpService');
 const emailService = require('../utils/emailService');
 
+const findCreatorTypeId = async (transaction = null) => {
+  const creatorType = await user_type.findOne({
+    where: {
+      user_role: {
+        [Op.in]: ['creator', 'creative_partner', 'creative']
+      }
+    },
+    attributes: ['user_type_id'],
+    transaction,
+    raw: true
+  });
+
+  return creatorType?.user_type_id || 2;
+};
+
+const findArchivedClientForUser = async (user, transaction = null) => {
+  if (!user) return null;
+
+  const conditions = [];
+  if (user.id) conditions.push({ user_id: user.id });
+  if (user.email) conditions.push({ email: user.email });
+
+  if (!conditions.length) return null;
+
+  return db.clients.findOne({
+    where: {
+      is_active: 0,
+      [Op.or]: conditions
+    },
+    transaction
+  });
+};
+
+const isArchivedClientOnlyAccount = async (user) => {
+  if (!user) return false;
+
+  const conditions = [];
+  if (user.id) conditions.push({ user_id: user.id });
+  if (user.email) conditions.push({ email: user.email });
+
+  if (!conditions.length) return false;
+
+  const [archivedClient, activeClient, activeCrew] = await Promise.all([
+    db.clients.findOne({
+      where: {
+        is_active: 0,
+        [Op.or]: conditions
+      },
+      attributes: ['client_id'],
+      raw: true
+    }),
+    db.clients.findOne({
+      where: {
+        is_active: 1,
+        [Op.or]: conditions
+      },
+      attributes: ['client_id'],
+      raw: true
+    }),
+    crew_members.findOne({
+      where: {
+        is_active: 1,
+        [Op.or]: conditions
+      },
+      attributes: ['crew_member_id'],
+      raw: true
+    })
+  ]);
+
+  return Boolean(archivedClient && !activeClient && !activeCrew);
+};
+
+const writeClientArchiveSignupHistory = async ({ client, user, crewMember, action, reason, transaction = null }) => {
+  if (!db.user_archive_history || !client || !user) return;
+
+  try {
+    await db.user_archive_history.create({
+      target_type: 'client',
+      target_id: client.client_id,
+      user_id: user.id,
+      action,
+      reason,
+      performed_by_user_id: user.id,
+      performed_by_name: user.name || user.email || `User ${user.id}`,
+      performed_by_role: 'self_signup',
+      previous_status: 'archived_client',
+      new_status: 'creative_partner',
+      metadata: {
+        source_endpoint: 'POST /auth/register-crew-step1',
+        creative_partner_id: crewMember?.crew_member_id || null
+      }
+    }, { transaction });
+  } catch (error) {
+    console.error('Archive signup history error:', error);
+  }
+};
+
 async function linkGuestBookingsToUser(email, userId) {
   try {
     if (!email || !userId) return 0;
@@ -944,6 +1041,14 @@ exports.login = async (req, res) => {
         });
       }
 
+      if (await isArchivedClientOnlyAccount(user)) {
+        return res.status(403).json({
+          success: false,
+          code: 'CLIENT_ARCHIVED',
+          message: 'This client profile is archived. Please contact support.'
+        });
+      }
+
       // Get user role
       const role = user.userType?.user_role || "client";
       const user_type_id = user.userType?.user_type_id || null;
@@ -1057,6 +1162,14 @@ exports.login = async (req, res) => {
         return res.status(404).json({
           success: false,
           message: 'User not found'
+        });
+      }
+
+      if (await isArchivedClientOnlyAccount(user)) {
+        return res.status(403).json({
+          success: false,
+          code: 'CLIENT_ARCHIVED',
+          message: 'This client profile is archived. Please contact support.'
         });
       }
 
@@ -1686,6 +1799,8 @@ exports.registerCrewMemberStep1 = [
   upload.fields([{ name: 'profile_photo', maxCount: 1 }]),
 
   async (req, res) => {
+    let transaction = null;
+
     try {
       const { 
         first_name, 
@@ -1705,52 +1820,144 @@ exports.registerCrewMemberStep1 = [
         return res.status(400).json({ success: false, message: 'Required fields missing' });
       }
 
+      transaction = await db.sequelize.transaction();
+
       if (crew_member_id && user_id) {
         await crew_members.update(
           { first_name, last_name, email, phone_number, location, latitude: lat || null, longitude: lng || null, working_distance }, 
-          { where: { crew_member_id } }
+          { where: { crew_member_id }, transaction }
         );
         await User.update(
           { name: `${first_name} ${last_name}`, email, phone_number, location, latitude: lat || null, longitude: lng || null }, 
-          { where: { id: user_id } }
+          { where: { id: user_id }, transaction }
         );
+
+        await transaction.commit();
+        transaction = null;
 
         return res.status(200).json({ success: true, message: 'Step 1 updated', crew_member_id, user_id });
       }
 
-      const existingUser = await User.findOne({ where: { email } });
-      if (existingUser) return res.status(409).json({ success: false, message: 'Email already exists.' });
+      const existingUser = await User.findOne({ where: { email }, transaction });
+      const archivedClient = existingUser ? await findArchivedClientForUser(existingUser, transaction) : null;
+      const canReuseArchivedClientUser = Boolean(existingUser && archivedClient);
 
-      const existingPhoneUser = await User.findOne({ where: { phone_number } });
-      if (existingPhoneUser) return res.status(409).json({ success: false, message: 'Phone number already exists.' });
+      if (existingUser && !canReuseArchivedClientUser) {
+        await transaction.rollback();
+        transaction = null;
+        return res.status(409).json({ success: false, message: 'Email already exists.' });
+      }
 
-      const existingCrew = await crew_members.findOne({ where: { email } });
+      const existingPhoneUser = phone_number
+        ? await User.findOne({ where: { phone_number }, transaction })
+        : null;
+
+      if (existingPhoneUser && (!existingUser || Number(existingPhoneUser.id) !== Number(existingUser.id))) {
+        await transaction.rollback();
+        transaction = null;
+        return res.status(409).json({ success: false, message: 'Phone number already exists.' });
+      }
+
+      const existingCrew = await crew_members.findOne({ where: { email }, transaction });
       if (existingCrew) {
+        if (existingCrew.is_active == 0 && canReuseArchivedClientUser) {
+          const creatorTypeId = await findCreatorTypeId(transaction);
+          const hashedPassword = await bcrypt.hash(password, 10);
+
+          await existingCrew.update({
+            user_id: existingUser.id,
+            first_name,
+            last_name,
+            phone_number,
+            location,
+            latitude: lat || null,
+            longitude: lng || null,
+            working_distance,
+            is_active: 1
+          }, { transaction });
+
+          await existingUser.update({
+            name: `${first_name} ${last_name}`,
+            phone_number,
+            password_hash: hashedPassword,
+            user_type: creatorTypeId,
+            role: 'creator',
+            is_active: 1,
+            permissions_version: Number(existingUser.permissions_version || 1) + 1,
+            location,
+            latitude: lat || null,
+            longitude: lng || null
+          }, { transaction });
+
+          await writeClientArchiveSignupHistory({
+            client: archivedClient,
+            user: existingUser,
+            crewMember: existingCrew,
+            action: 'converted_to_creator',
+            reason: 'Archived client signed up as creative partner',
+            transaction
+          });
+
+          await transaction.commit();
+          transaction = null;
+
+          return res.status(200).json({
+            success: true,
+            message: 'Archived client account converted to creative partner. Please continue registration.',
+            user_id: existingUser.id,
+            crew_member_id: existingCrew.crew_member_id,
+            reused_archived_client: true
+          });
+        }
+
         if (existingCrew.is_active == 0) {
+          await transaction.rollback();
+          transaction = null;
           return res.status(409).json({ success: false, message: 'Crew member with this email was deleted. Please contact support.' });
         }
+        await transaction.rollback();
+        transaction = null;
         return res.status(409).json({ success: false, message: 'Crew member with this email already exists.' });
       }
 
       const hashedPassword = await bcrypt.hash(password, 10);
       const otp = otpService.generateOTP();
       const otpExpiry = otpService.generateOTPExpiry(10);
+      const creatorTypeId = await findCreatorTypeId(transaction);
 
-      const newUser = await User.create({
-        name: `${first_name} ${last_name}`,
-        email, 
-        phone_number,
-        password_hash: hashedPassword,
-        user_type: 2, 
-        is_active: 1, 
-        email_verified: 0,
-        verification_code: otp,
-        otp_expiry: otpExpiry,
-        created_from: 1, // 1 = web        
-        location,
-        latitude: lat, 
-        longitude: lng,
-      });
+      const newUser = canReuseArchivedClientUser
+        ? await existingUser.update({
+            name: `${first_name} ${last_name}`,
+            phone_number,
+            password_hash: hashedPassword,
+            user_type: creatorTypeId,
+            role: 'creator',
+            is_active: 1,
+            permissions_version: Number(existingUser.permissions_version || 1) + 1,
+            email_verified: existingUser.email_verified || 0,
+            verification_code: otp,
+            otp_expiry: otpExpiry,
+            created_from: existingUser.created_from || 1,
+            location,
+            latitude: lat,
+            longitude: lng
+          }, { transaction })
+        : await User.create({
+            name: `${first_name} ${last_name}`,
+            email, 
+            phone_number,
+            password_hash: hashedPassword,
+            user_type: creatorTypeId, 
+            role: 'creator',
+            is_active: 1, 
+            email_verified: 0,
+            verification_code: otp,
+            otp_expiry: otpExpiry,
+            created_from: 1, // 1 = web        
+            location,
+            latitude: lat, 
+            longitude: lng,
+          }, { transaction });
 
       const newCrewMember = await crew_members.create({
         user_id: newUser.id,
@@ -1764,7 +1971,7 @@ exports.registerCrewMemberStep1 = [
         working_distance, 
         is_active: 1,
         created_from: 1 // 1 = web
-      });
+      }, { transaction });
 
       if (req.files?.profile_photo) {
         const uploadedFiles = await S3UploadFiles(req.files);
@@ -1775,10 +1982,24 @@ exports.registerCrewMemberStep1 = [
               file_type: file.file_type,
               file_path: file.file_path,
               file_category: 'profile_photo'
-            });
+            }, { transaction });
           }
         }
       }
+
+      if (canReuseArchivedClientUser) {
+        await writeClientArchiveSignupHistory({
+          client: archivedClient,
+          user: newUser,
+          crewMember: newCrewMember,
+          action: 'converted_to_creator',
+          reason: 'Archived client signed up as creative partner',
+          transaction
+        });
+      }
+
+      await transaction.commit();
+      transaction = null;
 
       emailService.sendNewCrewSignupNotification({
         first_name, last_name, email, phone_number, location, working_distance
@@ -1807,10 +2028,14 @@ exports.registerCrewMemberStep1 = [
         message: 'Step 1 completed. Please verify your email.',
         user_id: newUser.id,
         crew_member_id: newCrewMember.crew_member_id,
-        affiliate: affiliateData
+        affiliate: affiliateData,
+        reused_archived_client: canReuseArchivedClientUser
       });
 
     } catch (error) {
+      if (transaction) {
+        await transaction.rollback();
+      }
       console.error('Step 1 Error:', error);
       
       if (error.name === 'SequelizeUniqueConstraintError') {
@@ -2421,14 +2646,6 @@ exports.registerSalesAdmin = async (req, res) => {
 
 exports.createInternalCredential = async (req, res) => {
   try {
-    const requesterRole = String(req.user?.userRole || '').toLowerCase();
-    if (requesterRole !== 'admin') {
-      return res.status(403).json({
-        success: false,
-        message: 'Only admin can create internal credentials'
-      });
-    }
-
     const { name, email, password, phone_number, user_type, userType, role } = req.body;
     const requestedUserType = user_type ?? userType;
     const normalizedUserType = Number(requestedUserType);

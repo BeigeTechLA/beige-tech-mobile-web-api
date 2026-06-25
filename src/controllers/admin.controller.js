@@ -33,7 +33,7 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   payment_transactions,
   assigned_post_production_member,
   post_production_members,
-  clients, sales_leads, client_leads, sales_lead_activities, client_lead_activities, quotes, quote_line_items, discount_codes, payment_links, project_form_submissions,
+  clients, user_archive_history, sales_leads, client_leads, sales_lead_activities, client_lead_activities, quotes, quote_line_items, discount_codes, payment_links, project_form_submissions,
   payments } = require('../models');
   const { deleteSheetRow, updateSheetRow } = require('../utils/googleSheets');
 const leadAssignmentService = require('../services/lead-assignment.service');
@@ -7584,15 +7584,162 @@ exports.assignPostProductionMember = async (req, res) => {
   }
 };
 
+const truthyQueryValues = new Set(['1', 'true', 'yes', 'y']);
+const restoreClientModes = new Set(['normal', 'restore_as_dual_profile', 'convert_back_to_client']);
+
+const isTruthyQuery = (value) => truthyQueryValues.has(String(value || '').trim().toLowerCase());
+
+const getClientArchiveStatus = (client) => Number(client?.is_active) === 1 ? 'active' : 'archived';
+
+const getRequestActor = async (req) => {
+  const actorId = Number(req.user?.userId || req.userId || 0);
+  if (!Number.isInteger(actorId) || actorId <= 0) {
+    return null;
+  }
+
+  const actor = await users.findOne({
+    where: { id: actorId },
+    attributes: ['id', 'name', 'email', 'role'],
+    raw: true
+  });
+
+  return {
+    id: actorId,
+    name: actor?.name || actor?.email || `User ${actorId}`,
+    role: req.user?.userRole || req.userRole || actor?.role || null
+  };
+};
+
+const writeArchiveHistory = async ({
+  client,
+  action,
+  reason = null,
+  actor,
+  previousStatus,
+  newStatus,
+  metadata = null,
+  transaction = null
+}) => {
+  return user_archive_history.create({
+    target_type: 'client',
+    target_id: client.client_id,
+    user_id: client.user_id || null,
+    action,
+    reason,
+    performed_by_user_id: actor.id,
+    performed_by_name: actor.name,
+    performed_by_role: actor.role,
+    previous_status: previousStatus,
+    new_status: newStatus,
+    metadata
+  }, { transaction });
+};
+
+const getArchiveHistoryForClient = async (clientId) => {
+  const rows = await user_archive_history.findAll({
+    where: {
+      target_type: 'client',
+      target_id: clientId
+    },
+    order: [['created_at', 'DESC']],
+    raw: true
+  });
+
+  return rows.map((row) => ({
+    history_id: row.history_id,
+    target_type: row.target_type,
+    target_id: row.target_id,
+    user_id: row.user_id,
+    action: row.action,
+    reason: row.reason,
+    performed_by_user_id: row.performed_by_user_id,
+    performed_by_name: row.performed_by_name,
+    performed_by_role: row.performed_by_role,
+    previous_status: row.previous_status,
+    new_status: row.new_status,
+    metadata: row.metadata,
+    created_at: row.created_at
+  }));
+};
+
+const findActiveCreativePartnerForClient = async (client, transaction = null) => {
+  if (!client) return null;
+
+  const where = {
+    is_active: 1,
+    [Op.or]: []
+  };
+
+  if (client.user_id) {
+    where[Op.or].push({ user_id: client.user_id });
+  }
+
+  if (client.email) {
+    where[Op.or].push({ email: client.email });
+  }
+
+  if (!where[Op.or].length) return null;
+
+  return crew_members.findOne({
+    where,
+    attributes: ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email', 'is_active'],
+    transaction
+  });
+};
+
+const resolveUserTypeId = async (roles, transaction = null) => {
+  const roleList = Array.isArray(roles) ? roles : [roles];
+  const roleRows = await db.user_type.findAll({
+    where: {
+      user_role: {
+        [Op.in]: roleList
+      }
+    },
+    attributes: ['user_type_id', 'user_role'],
+    transaction,
+    raw: true
+  });
+
+  return roleRows[0]?.user_type_id || null;
+};
+
+const splitClientName = (name = '') => {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) {
+    return { first_name: 'Creative', last_name: 'Partner' };
+  }
+
+  return {
+    first_name: parts[0],
+    last_name: parts.slice(1).join(' ') || parts[0]
+  };
+};
+
+const buildClientArchiveFields = (client) => ({
+  archive_status: getClientArchiveStatus(client),
+  is_archived: Number(client?.is_active) !== 1,
+  archived_at: client?.archived_at || null,
+  archive_reason: client?.archive_reason || null,
+  restored_at: client?.restored_at || null
+});
+
 exports.getClients = async (req, res) => {
   try {
-    let { page = 1, limit = 20, search, range, start_date, end_date } = req.query;
+    let { page = 1, limit = 20, search, range, start_date, end_date, include_archived, archived_only } = req.query;
 
     page = parseInt(page);
     limit = parseInt(limit);
     const offset = (page - 1) * limit;
 
-    const whereConditions = { is_active: 1 };
+    const whereConditions = {};
+    const shouldIncludeArchived = isTruthyQuery(include_archived);
+    const shouldShowArchivedOnly = isTruthyQuery(archived_only);
+
+    if (shouldShowArchivedOnly) {
+      whereConditions.is_active = 0;
+    } else if (!shouldIncludeArchived) {
+      whereConditions.is_active = 1;
+    }
 
     if (start_date && end_date) {
       whereConditions.created_at = {
@@ -7697,6 +7844,7 @@ exports.getClients = async (req, res) => {
 
       return {
         ...client.toJSON(),
+        ...buildClientArchiveFields(client),
         client_type: clientType,
         registration_type: clientType,
         is_guest: !hasLinkedUser,
@@ -7803,46 +7951,365 @@ exports.editClient = async (req, res) => {
 };
 
 exports.deleteClient = async (req, res) => {
-  try {
-    const { client_id } = req.params; // Assuming client_id is passed as a parameter
+  const transaction = await db.sequelize.transaction();
 
-    // Find the client by client_id
+  try {
+    const { client_id } = req.params;
+    const { reason = null } = req.body || {};
+    const actor = await getRequestActor(req);
+
+    if (!actor) {
+      await transaction.rollback();
+      return res.status(401).json({
+        error: true,
+        message: 'Authentication required to archive a client'
+      });
+    }
+
     const client = await clients.findOne({
-      where: { client_id, is_active: 1 } // Only proceed if the client is active
+      where: { client_id, is_active: 1 },
+      transaction
     });
 
     if (!client) {
+      await transaction.rollback();
       return res.status(404).json({
         error: true,
-        message: 'Client not found or already inactive'
+        message: 'Client not found or already archived'
       });
     }
 
-    // Find the associated user using the user_id from the client
-    const user = await users.findOne({
-      where: { id: client.user_id, is_active: 1 } // Ensure user is active
+    await client.update({
+      is_active: 0,
+      archived_at: new Date(),
+      archived_by_user_id: actor.id,
+      archive_reason: reason || 'Archived by admin',
+      restored_at: null,
+      restored_by_user_id: null
+    }, { transaction });
+
+    if (client.user_id) {
+      await users.increment('permissions_version', {
+        by: 1,
+        where: { id: client.user_id },
+        transaction
+      });
+    }
+
+    await writeArchiveHistory({
+      client,
+      action: 'archived',
+      reason: reason || 'Archived by admin',
+      actor,
+      previousStatus: 'active',
+      newStatus: 'archived',
+      metadata: {
+        source_endpoint: 'DELETE /admin/delete-client/:client_id',
+        user_kept_active: true
+      },
+      transaction
     });
 
-    if (!user) {
-      return res.status(404).json({
-        error: true,
-        message: 'Associated user not found or inactive'
-      });
-    }
-
-    // Soft delete the client by setting is_active to 0
-    await client.update({ is_active: 0 });
-
-    // Soft delete the associated user by setting is_active to 0
-    await user.update({ is_active: 0 });
+    await transaction.commit();
 
     return res.status(200).json({
       error: false,
-      message: 'Client and associated user deactivated successfully'
+      message: 'Client archived successfully',
+      data: {
+        client_id: Number(client_id),
+        archive_status: 'archived',
+        user_kept_active: true
+      }
     });
 
   } catch (error) {
+    await transaction.rollback();
     console.error("Error deleting client:", error);
+    return res.status(500).json({
+      error: true,
+      message: 'Internal server error'
+    });
+  }
+};
+
+exports.restoreClient = async (req, res) => {
+  const transaction = await db.sequelize.transaction();
+
+  try {
+    const { client_id } = req.params;
+    const { reason = null, mode = 'normal' } = req.body || {};
+    const actor = await getRequestActor(req);
+
+    if (!restoreClientModes.has(mode)) {
+      await transaction.rollback();
+      return res.status(400).json({
+        error: true,
+        code: 'INVALID_RESTORE_MODE',
+        message: 'Restore mode must be normal, restore_as_dual_profile, or convert_back_to_client'
+      });
+    }
+
+    if (!actor) {
+      await transaction.rollback();
+      return res.status(401).json({
+        error: true,
+        message: 'Authentication required to restore a client'
+      });
+    }
+
+    const client = await clients.findOne({
+      where: { client_id },
+      transaction
+    });
+
+    if (!client) {
+      await transaction.rollback();
+      return res.status(404).json({
+        error: true,
+        message: 'Client not found'
+      });
+    }
+
+    if (Number(client.is_active) === 1) {
+      await transaction.rollback();
+      return res.status(409).json({
+        error: true,
+        code: 'CLIENT_ALREADY_ACTIVE',
+        message: 'Client is already active'
+      });
+    }
+
+    const activeCreativePartner = await findActiveCreativePartnerForClient(client, transaction);
+
+    if (activeCreativePartner && mode === 'normal') {
+      await writeArchiveHistory({
+        client,
+        action: 'restore_blocked_role_conflict',
+        reason: reason || 'Restore blocked because active creative partner exists',
+        actor,
+        previousStatus: 'archived',
+        newStatus: 'archived',
+        metadata: {
+          creative_partner_id: activeCreativePartner.crew_member_id,
+          restore_mode: mode
+        },
+        transaction
+      });
+
+      await transaction.commit();
+
+      return res.status(409).json({
+        error: true,
+        code: 'ROLE_CONFLICT',
+        message: 'This account is currently an active creative partner. Choose restore_as_dual_profile or convert_back_to_client.',
+        data: {
+          client_id: client.client_id,
+          user_id: client.user_id,
+          creative_partner_id: activeCreativePartner.crew_member_id
+        }
+      });
+    }
+
+    if (activeCreativePartner && mode === 'convert_back_to_client') {
+      await activeCreativePartner.update({ is_active: 0 }, { transaction });
+
+      const clientTypeId = await resolveUserTypeId(['client'], transaction);
+      if (client.user_id && clientTypeId) {
+        await users.update(
+          { user_type: clientTypeId, role: 'client' },
+          { where: { id: client.user_id }, transaction }
+        );
+      }
+    }
+
+    await client.update({
+      is_active: 1,
+      restored_at: new Date(),
+      restored_by_user_id: actor.id
+    }, { transaction });
+
+    if (client.user_id) {
+      await users.increment('permissions_version', {
+        by: 1,
+        where: { id: client.user_id },
+        transaction
+      });
+    }
+
+    await writeArchiveHistory({
+      client,
+      action: 'restored',
+      reason: reason || 'Restored by admin',
+      actor,
+      previousStatus: 'archived',
+      newStatus: 'active',
+      metadata: {
+        restore_mode: mode,
+        creative_partner_id: activeCreativePartner?.crew_member_id || null
+      },
+      transaction
+    });
+
+    await transaction.commit();
+
+    return res.status(200).json({
+      error: false,
+      message: 'Client restored successfully',
+      data: {
+        client_id: client.client_id,
+        archive_status: 'active',
+        restore_mode: mode,
+        creative_partner_id: activeCreativePartner?.crew_member_id || null
+      }
+    });
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Error restoring client:', error);
+    return res.status(500).json({
+      error: true,
+      message: 'Internal server error'
+    });
+  }
+};
+
+exports.convertClientToCreativePartner = async (req, res) => {
+  const transaction = await db.sequelize.transaction();
+
+  try {
+    const { client_id } = req.params;
+    const { reason = null, creative_partner = {} } = req.body || {};
+    const actor = await getRequestActor(req);
+
+    if (!actor) {
+      await transaction.rollback();
+      return res.status(401).json({
+        error: true,
+        message: 'Authentication required to convert a client'
+      });
+    }
+
+    const client = await clients.findOne({
+      where: { client_id },
+      transaction
+    });
+
+    if (!client) {
+      await transaction.rollback();
+      return res.status(404).json({
+        error: true,
+        message: 'Client not found'
+      });
+    }
+
+    let clientUser = client.user_id
+      ? await users.findOne({ where: { id: client.user_id }, transaction })
+      : null;
+
+    if (!clientUser && client.email) {
+      clientUser = await users.findOne({ where: { email: client.email }, transaction });
+    }
+
+    if (!clientUser) {
+      await transaction.rollback();
+      return res.status(404).json({
+        error: true,
+        message: 'Associated user not found. Please create or link the user before converting.'
+      });
+    }
+
+    let creativePartner = await findActiveCreativePartnerForClient(client, transaction);
+    const nameParts = splitClientName(client.name);
+
+    if (!creativePartner) {
+      creativePartner = await crew_members.findOne({
+        where: { email: client.email },
+        transaction
+      });
+
+      if (creativePartner) {
+        await creativePartner.update({
+          user_id: clientUser.id,
+          is_active: 1,
+          is_available: creativePartner.is_available ?? 1,
+          primary_role: creative_partner.primary_role || creativePartner.primary_role
+        }, { transaction });
+      } else {
+        creativePartner = await crew_members.create({
+          user_id: clientUser.id,
+          first_name: creative_partner.first_name || nameParts.first_name,
+          last_name: creative_partner.last_name || nameParts.last_name,
+          email: client.email,
+          phone_number: client.phone_number || null,
+          primary_role: creative_partner.primary_role || null,
+          is_active: 1,
+          is_available: 1,
+          is_draft: creative_partner.is_draft ?? 1,
+          is_crew_verified: creative_partner.is_crew_verified ?? 0,
+          created_from: actor.id
+        }, { transaction });
+      }
+    }
+
+    const creatorTypeId = await resolveUserTypeId(['creator', 'creative_partner', 'creative'], transaction);
+    await clientUser.update({
+      user_type: creatorTypeId || clientUser.user_type,
+      role: 'creator',
+      is_active: 1,
+      permissions_version: Number(clientUser.permissions_version || 1) + 1
+    }, { transaction });
+
+    const wasActive = Number(client.is_active) === 1;
+    if (wasActive) {
+      await client.update({
+        is_active: 0,
+        archived_at: new Date(),
+        archived_by_user_id: actor.id,
+        archive_reason: reason || 'Converted to creative partner',
+        restored_at: null,
+        restored_by_user_id: null
+      }, { transaction });
+
+      await writeArchiveHistory({
+        client,
+        action: 'archived',
+        reason: reason || 'Converted to creative partner',
+        actor,
+        previousStatus: 'active',
+        newStatus: 'archived',
+        metadata: { source_endpoint: 'convert-to-creative-partner' },
+        transaction
+      });
+    }
+
+    await writeArchiveHistory({
+      client,
+      action: 'converted_to_creator',
+      reason: reason || 'Converted to creative partner',
+      actor,
+      previousStatus: wasActive ? 'active_client' : 'archived_client',
+      newStatus: 'creative_partner',
+      metadata: {
+        creative_partner_id: creativePartner.crew_member_id,
+        user_id: clientUser.id
+      },
+      transaction
+    });
+
+    await transaction.commit();
+
+    return res.status(200).json({
+      error: false,
+      message: 'Client converted to creative partner successfully',
+      data: {
+        client_id: client.client_id,
+        user_id: clientUser.id,
+        creative_partner_id: creativePartner.crew_member_id,
+        archive_status: 'archived'
+      }
+    });
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Error converting client to creative partner:', error);
     return res.status(500).json({
       error: true,
       message: 'Internal server error'
@@ -8168,12 +8635,24 @@ exports.getClientById = async (req, res) => {
       });
     }
 
-    // 1️⃣ Get Client
     const client = await clients.findOne({
       where: {
-        client_id: id,
-        is_active: 1
-      }
+        client_id: id
+      },
+      include: [
+        {
+          model: users,
+          as: 'archived_by',
+          required: false,
+          attributes: ['id', 'name', 'role']
+        },
+        {
+          model: users,
+          as: 'restored_by',
+          required: false,
+          attributes: ['id', 'name', 'role']
+        }
+      ]
     });
 
     if (!client) {
@@ -8183,24 +8662,30 @@ exports.getClientById = async (req, res) => {
       });
     }
 
-    // 2️⃣ Get User Details
     const user = await users.findOne({
       where: { id: client.user_id },
       attributes: { exclude: ['password_hash'] } // never return password
     });
 
-    // 3️⃣ Get Affiliate Details
     const affiliate = await affiliates.findOne({
       where: { user_id: client.user_id }
     });
+    const [archiveHistory, activeCreativePartner] = await Promise.all([
+      getArchiveHistoryForClient(client.client_id),
+      findActiveCreativePartnerForClient(client)
+    ]);
+
+    const archiveStatus = getClientArchiveStatus(client);
+    const canRestore = archiveStatus === 'archived' && !activeCreativePartner;
+
     const [creditSummary, creditHistoryRows] = await Promise.all([
       accountCreditService.getAccountCreditBalance({
         userId: client.user_id || null,
-        guestEmail: user?.email || null
+        guestEmail: user?.email || client.email || null
       }),
       accountCreditService.getAccountCreditHistory({
         userId: client.user_id || null,
-        guestEmail: user?.email || null,
+        guestEmail: user?.email || client.email || null,
         limit: 10,
         offset: 0
       })
@@ -8230,12 +8715,24 @@ exports.getClientById = async (req, res) => {
       data: {
         client: {
           ...client.toJSON(),
+          ...buildClientArchiveFields(client),
           client_type: user ? 'registered' : 'guest',
           registration_type: user ? 'registered' : 'guest',
           is_guest: !Boolean(user)
         },
         user: user,
         affiliate: affiliate,
+        archive_history: archiveHistory,
+        restore_options: {
+          can_restore: canRestore,
+          blocked_reason: archiveStatus === 'archived' && activeCreativePartner
+            ? 'ACTIVE_CREATIVE_PARTNER_EXISTS'
+            : null,
+          creative_partner_id: activeCreativePartner?.crew_member_id || null,
+          allowed_modes: activeCreativePartner
+            ? ['restore_as_dual_profile', 'convert_back_to_client']
+            : ['normal']
+        },
         account_credit: {
           total_credit_amount: creditSummary?.total_credit_amount || 0,
           used_credit_amount: creditSummary?.used_credit_amount || 0,
@@ -8249,6 +8746,104 @@ exports.getClientById = async (req, res) => {
 
   } catch (error) {
     console.error('Get Client By ID Error:', error);
+    return res.status(500).json({
+      error: true,
+      message: 'Internal server error'
+    });
+  }
+};
+
+exports.getArchiveHistory = async (req, res) => {
+  try {
+    let {
+      page = 1,
+      limit = 20,
+      target_type = 'client',
+      action,
+      target_id
+    } = req.query;
+
+    page = parseInt(page, 10);
+    limit = parseInt(limit, 10);
+    page = Number.isInteger(page) && page > 0 ? page : 1;
+    limit = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 100) : 20;
+    const offset = (page - 1) * limit;
+
+    const where = {};
+
+    if (target_type) {
+      where.target_type = target_type;
+    }
+
+    if (action) {
+      where.action = action;
+    }
+
+    if (target_id) {
+      where.target_id = target_id;
+    }
+
+    const { count, rows } = await user_archive_history.findAndCountAll({
+      where,
+      limit,
+      offset,
+      order: [['created_at', 'DESC']],
+      raw: true
+    });
+
+    const clientIds = rows
+      .filter((row) => row.target_type === 'client')
+      .map((row) => Number(row.target_id))
+      .filter(Boolean);
+
+    const targetClients = clientIds.length
+      ? await clients.findAll({
+          where: { client_id: { [Op.in]: clientIds } },
+          attributes: ['client_id', 'name', 'email', 'is_active', 'archived_at', 'restored_at'],
+          raw: true
+        })
+      : [];
+
+    const clientMap = new Map(targetClients.map((client) => [Number(client.client_id), client]));
+
+    const data = rows.map((row) => {
+      const targetClient = row.target_type === 'client'
+        ? clientMap.get(Number(row.target_id))
+        : null;
+
+      return {
+        history_id: row.history_id,
+        target_type: row.target_type,
+        target_id: row.target_id,
+        target_name: targetClient?.name || null,
+        target_email: targetClient?.email || null,
+        user_id: row.user_id,
+        action: row.action,
+        reason: row.reason,
+        performed_by_user_id: row.performed_by_user_id,
+        performed_by_name: row.performed_by_name,
+        performed_by_role: row.performed_by_role,
+        previous_status: row.previous_status,
+        new_status: row.new_status,
+        metadata: row.metadata,
+        created_at: row.created_at,
+        archive_status: targetClient ? getClientArchiveStatus(targetClient) : null
+      };
+    });
+
+    return res.status(200).json({
+      error: false,
+      message: 'Archive history fetched successfully',
+      data,
+      pagination: {
+        total_records: count,
+        current_page: page,
+        per_page: limit,
+        total_pages: Math.ceil(count / limit)
+      }
+    });
+  } catch (error) {
+    console.error('Get Archive History Error:', error);
     return res.status(500).json({
       error: true,
       message: 'Internal server error'
@@ -11304,17 +11899,13 @@ exports.getRoles = async (req, res) => {
       is_active: 1,
       user_type_id: {
         [Op.notIn]: [2, 3]
-      },
-      user_role: {
-        [Op.notIn]: SUPER_ADMIN_ROLE_NAMES
       }
     };
 
     // Search filter
     if (search) {
       whereCondition.user_role = {
-        [Op.like]: `%${search}%`,
-        [Op.notIn]: SUPER_ADMIN_ROLE_NAMES
+        [Op.like]: `%${search}%`
       };
     }
 
@@ -11406,13 +11997,6 @@ exports.assignRoleToUser = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: 'Role not found or inactive'
-      });
-    }
-
-    if (isSuperAdminRoleName(role.user_role)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Super admin role cannot be assigned from this API'
       });
     }
 
@@ -11523,13 +12107,6 @@ exports.updateRole = async (req, res) => {
       });
     }
 
-    if (isSuperAdminRoleName(existingRole.user_role) || isSuperAdminRoleName(name)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Super admin role is system managed'
-      });
-    }
-
     const roleUpdateData = {};
 
     if (name !== undefined) {
@@ -11602,13 +12179,6 @@ exports.deleteRole = async (req, res) => {
       });
     }
 
-    if (isSuperAdminRoleName(role.user_role)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Super admin role is system managed'
-      });
-    }
-
     const assignedUsers = await db.users.count({
       where: {
         user_type: role_id
@@ -11660,13 +12230,6 @@ exports.getRoleById = async (req, res) => {
     });
 
     if (!role) {
-      return res.status(404).json({
-        success: false,
-        message: 'Role not found'
-      });
-    }
-
-    if (isSuperAdminRoleName(role.user_role)) {
       return res.status(404).json({
         success: false,
         message: 'Role not found'
