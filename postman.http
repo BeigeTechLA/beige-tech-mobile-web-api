@@ -2,7 +2,7 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjEsImlhdCI6MTc4MTY5Njg1NCwiZXhwIjoxNzgyMzAxNjU0fQ.2i06gFdnaIEZCarMqwlMPxm5kNSGJoFHMt-x974N-tY
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjEsInVzZXJUeXBlSWQiOjEsImlhdCI6MTc4MjM2NDIyMywiZXhwIjoxNzgyOTY5MDIzfQ.iZg6NuFAMa3XXcUL5KyEsJU3RgGWhXKC-7i2_5TRIJg
 
 @TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI3NiwidXNlclJvbGUiOiJwcm9kdWN0aW9uX21hbmFnZXIiLCJpYXQiOjE3ODA1Nzk4MTYsImV4cCI6MTc4MTE4NDYxNn0.zRMGMPJGIL34Bjh3SO1yJa5qYhfxKoknlUFwhwWW7qE
 
@@ -2919,4 +2919,194 @@ Authorization: {{CP_TOKEN}}
       "fileSize": 17343
     }
   ]
+}
+
+
+### ─────────────────────────────────────────
+### COMPENSATION MODULE
+### ─────────────────────────────────────────
+
+
+### STEP 1 — GET: All CPs + compensation data
+GET {{URL}}compensation/booking/480 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+
+### STEP 2 — GET: Summary
+GET {{URL}}compensation/booking/480/summary HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+
+### STEP 3 — POST: Save Draft — Flat Rate
+POST {{URL}}compensation/booking/480/save HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "compensation_method": "equal_split",
+  "cps": [
+    {
+      "crew_member_id": 2010,
+      "rate_type": "flat",
+      "base_payout": 5000,
+      "editing_payout": 750,
+      "travel_adjustment": 500,
+      "bonus_adjustment": 0,
+      "notes": "Lead Photographer"
+    }
+  ]
+}
+
+###
+
+### STEP 4 — POST: Save Draft — Hourly Rate
+POST {{URL}}compensation/booking/480/save HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "compensation_method": "role_based",
+  "cps": [
+    {
+      "crew_member_id": 2010,
+      "rate_type": "hourly",
+      "hourly_rate": 500,
+      "hours_worked": 10,
+      "editing_payout": 750,
+      "travel_adjustment": 500,
+      "bonus_adjustment": 0
+    }
+  ]
+}
+
+###
+
+### STEP 5 — GET: Single CP detail
+GET {{URL}}compensation/booking/480/cp/2010 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+
+### STEP 6 — POST: Add Advance Payment
+POST {{URL}}compensation/booking/480/cp/2010/advance HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "advance_amount": 2000,
+  "payment_date": "2026-07-01",
+  "notes": "Advance before shoot"
+}
+
+###
+
+### STEP 7 — POST: Submit to Finance
+POST {{URL}}compensation/booking/480/submit HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "compensation_method": "equal_split",
+  "cps": [
+    {
+      "crew_member_id": 2010,
+      "rate_type": "flat",
+      "base_payout": 5000,
+      "editing_payout": 750,
+      "travel_adjustment": 500,
+      "bonus_adjustment": 0,
+      "notes": "Final submission"
+    }
+  ]
+}
+
+###
+
+### STEP 8 — PATCH: Cancel Advance
+PATCH {{URL}}compensation/booking/480/cp/2010/advance/1/cancel HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+
+### STEP 9 — GET: Audit Logs
+GET {{URL}}compensation/booking/480/logs HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+
+### ERROR TEST 1 — base_payout 0 — submit block hoga
+POST {{URL}}compensation/booking/480/submit HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "compensation_method": "equal_split",
+  "cps": [
+    {
+      "crew_member_id": 2010,
+      "rate_type": "flat",
+      "base_payout": 0,
+      "editing_payout": 0,
+      "travel_adjustment": 0,
+      "bonus_adjustment": 0
+    }
+  ]
+}
+
+###
+
+### ERROR TEST 2 — hourly mein hours_worked missing
+POST {{URL}}compensation/booking/480/save HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "compensation_method": "role_based",
+  "cps": [
+    {
+      "crew_member_id": 2010,
+      "rate_type": "hourly",
+      "hourly_rate": 500
+    }
+  ]
+}
+
+###
+
+### ERROR TEST 3 — Advance exceed remaining balance
+POST {{URL}}compensation/booking/480/cp/2010/advance HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "advance_amount": 999999,
+  "payment_date": "2026-07-01",
+  "notes": "This should fail"
+}
+### ERROR TEST 3 — Advance exceed remaining balance
+POST {{URL}}admin/users/permissions/assign
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "user_id": 1,
+  "permissions": {
+    "admin_finances": {
+      "view": true,
+      "create": true,
+      "edit": true,
+      "delete": true
+    },
+    "production_manager_shoots": {
+      "view": true,
+      "edit": true
+    }
+  }
 }

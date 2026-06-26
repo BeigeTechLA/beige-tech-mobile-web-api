@@ -2445,3 +2445,113 @@ ALTER TABLE `sales_quotes`
   ADD COLUMN `start_time` TIME NULL AFTER `start_date`,
   ADD COLUMN `end_time` TIME NULL AFTER `start_time`,
   ADD COLUMN `booking_days` TEXT NULL AFTER `end_time`;
+
+
+
+  -- ============================================================
+-- COMPENSATION MODULE - MIGRATION
+-- Date: 2026-06-24
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS `cp_compensations` (
+  `compensation_id`       INT(11)       NOT NULL AUTO_INCREMENT,
+  `booking_id`            INT(11)       NOT NULL,
+  `crew_member_id`        INT(11)       NOT NULL,
+  `compensation_method`   ENUM('equal_split','role_based','manual') NOT NULL DEFAULT 'equal_split',
+  `rate_type`             ENUM('flat','hourly') NOT NULL DEFAULT 'flat',
+  `base_payout`           DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  `editing_payout`        DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  `travel_adjustment`     DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  `bonus_adjustment`      DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  `notes`                 TEXT          NULL,
+  `hourly_rate`           DECIMAL(10,2) NULL DEFAULT NULL,
+  `hours_worked`          DECIMAL(5,2)  NULL DEFAULT NULL,
+  `total_compensation`    DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  `status`                ENUM('draft','submitted','approved','paid') NOT NULL DEFAULT 'draft',
+  `submitted_at`          DATETIME      NULL,
+  `submitted_by_user_id`  INT(11)       NULL,
+  `approved_at`           DATETIME      NULL,
+  `approved_by_user_id`   INT(11)       NULL,
+  `is_active`             TINYINT(1)    NOT NULL DEFAULT 1,
+  `created_at`            DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at`            DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`compensation_id`),
+  UNIQUE KEY `uniq_compensation_booking_crew` (`booking_id`, `crew_member_id`),
+  KEY `idx_compensation_booking`  (`booking_id`),
+  KEY `idx_compensation_crew`     (`crew_member_id`),
+  KEY `idx_compensation_status`   (`status`),
+  KEY `idx_compensation_method`   (`compensation_method`),
+  CONSTRAINT `fk_comp_booking`
+    FOREIGN KEY (`booking_id`)
+    REFERENCES `stream_project_booking` (`stream_project_booking_id`)
+    ON DELETE CASCADE,
+  CONSTRAINT `fk_comp_crew`
+    FOREIGN KEY (`crew_member_id`)
+    REFERENCES `crew_members` (`crew_member_id`)
+    ON DELETE CASCADE,
+  CONSTRAINT `fk_comp_submitted_by`
+    FOREIGN KEY (`submitted_by_user_id`)
+    REFERENCES `users` (`id`)
+    ON DELETE SET NULL,
+  CONSTRAINT `fk_comp_approved_by`
+    FOREIGN KEY (`approved_by_user_id`)
+    REFERENCES `users` (`id`)
+    ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS `cp_compensation_advances` (
+  `advance_id`            INT(11)       NOT NULL AUTO_INCREMENT,
+  `compensation_id`       INT(11)       NOT NULL,
+  `booking_id`            INT(11)       NOT NULL,
+  `crew_member_id`        INT(11)       NOT NULL,
+  `advance_amount`        DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  `remaining_balance`     DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  `payment_date`          DATE          NULL,
+  `notes`                 TEXT          NULL,
+  `status`                ENUM('pending','processed','cancelled') NOT NULL DEFAULT 'pending',
+  `created_by_user_id`    INT(11)       NULL,
+  `created_at`            DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at`            DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`advance_id`),
+  KEY `idx_adv_compensation`  (`compensation_id`),
+  KEY `idx_adv_booking`       (`booking_id`),
+  KEY `idx_adv_crew`          (`crew_member_id`),
+  KEY `idx_adv_status`        (`status`),
+  CONSTRAINT `fk_adv_compensation`
+    FOREIGN KEY (`compensation_id`)
+    REFERENCES `cp_compensations` (`compensation_id`)
+    ON DELETE CASCADE,
+  CONSTRAINT `fk_adv_booking`
+    FOREIGN KEY (`booking_id`)
+    REFERENCES `stream_project_booking` (`stream_project_booking_id`)
+    ON DELETE CASCADE,
+  CONSTRAINT `fk_adv_crew`
+    FOREIGN KEY (`crew_member_id`)
+    REFERENCES `crew_members` (`crew_member_id`)
+    ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS `cp_compensation_logs` (
+  `log_id`                INT(11)       NOT NULL AUTO_INCREMENT,
+  `compensation_id`       INT(11)       NOT NULL,
+  `booking_id`            INT(11)       NOT NULL,
+  `action`                ENUM('created','updated','submitted','approved','rejected','advance_added') NOT NULL,
+  `performed_by_user_id`  INT(11)       NULL,
+  `snapshot_json`         LONGTEXT      NULL,
+  `notes`                 TEXT          NULL,
+  `created_at`            DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`log_id`),
+  KEY `idx_log_compensation`  (`compensation_id`),
+  KEY `idx_log_booking`       (`booking_id`),
+  KEY `idx_log_action`        (`action`),
+  CONSTRAINT `fk_log_compensation`
+    FOREIGN KEY (`compensation_id`)
+    REFERENCES `cp_compensations` (`compensation_id`)
+    ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
