@@ -1146,6 +1146,10 @@ async function getValidReferralAffiliate(referralCode, referredUserId = null, tr
   });
 
   if (!affiliate) return null;
+  if (!(await affiliateController.isAffiliateEligibleForReferral(affiliate, transaction))) {
+    return null;
+  }
+
   if (referredUserId && Number(affiliate.user_id) === Number(referredUserId)) {
     return null;
   }

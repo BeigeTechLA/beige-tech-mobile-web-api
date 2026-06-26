@@ -8110,6 +8110,10 @@ exports.deleteClient = async (req, res) => {
         where: { id: client.user_id },
         transaction
       });
+      await affiliates.update(
+        { status: 'paused', is_active: 0 },
+        { where: { user_id: client.user_id }, transaction }
+      );
     }
 
     await writeArchiveHistory({
@@ -8250,6 +8254,10 @@ exports.restoreClient = async (req, res) => {
         where: { id: client.user_id },
         transaction
       });
+      await affiliates.update(
+        { status: 'active', is_active: 1 },
+        { where: { user_id: client.user_id }, transaction }
+      );
     }
 
     await writeArchiveHistory({
@@ -8373,6 +8381,11 @@ exports.convertClientToCreativePartner = async (req, res) => {
       is_active: 1,
       permissions_version: Number(clientUser.permissions_version || 1) + 1
     }, { transaction });
+
+    await affiliates.update(
+      { status: 'active', is_active: 1 },
+      { where: { user_id: clientUser.id }, transaction }
+    );
 
     const wasActive = Number(client.is_active) === 1;
     if (wasActive) {
