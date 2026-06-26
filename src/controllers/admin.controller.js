@@ -626,6 +626,20 @@ const buildManualPaymentSummaryFromActivities = (activities = [], totalAmount = 
   };
 };
 
+const fetchCollectedBookingPaymentSummaries = async () => db.sequelize.query(
+  `
+  SELECT booking_id, payment_status, paid_amount, credit_used_amount, due_amount, quote_total
+  FROM booking_payment_summary
+  WHERE payment_status IN ('paid', 'partially_paid', 'approval_pending', 'no_payment_due')
+    AND (
+      COALESCE(paid_amount, 0) > 0
+      OR COALESCE(credit_used_amount, 0) > 0
+      OR payment_status = 'no_payment_due'
+    )
+  `,
+  { type: QueryTypes.SELECT }
+);
+
 const countActiveShootNotesByBookingIds = async (bookingIds = []) => {
   const ids = Array.from(new Set(
     bookingIds
@@ -3139,6 +3153,7 @@ exports.getAllProjectDetails = async (req, res) => {
       bookedClientLeads,
       salesManualPaymentActivities,
       clientManualPaymentActivities,
+      collectedPaymentSummaryRows,
     ] = await Promise.all([
       sales_leads.findAll({
         where: {
@@ -3172,7 +3187,15 @@ exports.getAllProjectDetails = async (req, res) => {
         attributes: ['lead_id'],
         raw: true,
       }),
+      fetchCollectedBookingPaymentSummaries(),
     ]);
+
+    const collectedPaymentSummaryByBookingId = new Map();
+    collectedPaymentSummaryRows.forEach((row) => {
+      const bookingId = Number(row.booking_id);
+      if (!Number.isFinite(bookingId) || bookingId <= 0) return;
+      collectedPaymentSummaryByBookingId.set(bookingId, row);
+    });
 
     const manualSalesLeadIds = Array.from(new Set(
       salesManualPaymentActivities
@@ -3216,6 +3239,7 @@ exports.getAllProjectDetails = async (req, res) => {
       ...bookedClientLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
       ...manualPaidSalesLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
       ...manualPaidClientLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
+      ...collectedPaymentSummaryRows.map((row) => Number(row.booking_id)).filter(Number.isFinite),
     ]));
 
     const paidOnlyFilter = {
@@ -3402,6 +3426,7 @@ exports.getAllProjectDetails = async (req, res) => {
         }),
       ]);
 
+      const bookingPaymentSummary = collectedPaymentSummaryByBookingId.get(Number(project.stream_project_booking_id)) || null;
       const displayAmount = await resolveProjectDisplayAmount({
         project,
         paymentData,
@@ -3409,6 +3434,28 @@ exports.getAllProjectDetails = async (req, res) => {
       const totalValueAmount = await resolveProjectTotalValueAmount({
         project,
       });
+      const summaryPaidAmount = bookingPaymentSummary
+        ? parseAmountCandidate(bookingPaymentSummary.paid_amount)
+        : null;
+      const summaryCreditUsedAmount = bookingPaymentSummary
+        ? parseAmountCandidate(bookingPaymentSummary.credit_used_amount)
+        : null;
+      const summaryPendingAmount = bookingPaymentSummary
+        ? parseAmountCandidate(bookingPaymentSummary.due_amount)
+        : null;
+      const summaryQuoteTotal = bookingPaymentSummary
+        ? parseAmountCandidate(bookingPaymentSummary.quote_total)
+        : null;
+      const totalPaidAmount = summaryPaidAmount !== null
+        ? summaryPaidAmount
+        : (project.payment_id ? displayAmount : 0);
+      const pendingAmount = summaryPendingAmount !== null
+        ? summaryPendingAmount
+        : Math.max((summaryQuoteTotal ?? totalValueAmount) - totalPaidAmount - (summaryCreditUsedAmount || 0), 0);
+      const paymentStatus = String(
+        bookingPaymentSummary?.payment_status ||
+        (project.payment_id ? 'paid' : (totalPaidAmount > 0 ? 'partially_paid' : 'pending'))
+      ).toLowerCase();
 
       const rawTypes = project.event_type ? project.event_type.split(',') : [];
       const formattedTypes = rawTypes.map(t => {
@@ -3429,8 +3476,13 @@ exports.getAllProjectDetails = async (req, res) => {
       return {
         project: {
           ...projectJson,
-          total_paid_amount: displayAmount,
+          total_paid_amount: totalPaidAmount,
           total_value_amount: totalValueAmount,
+          paid_amount: totalPaidAmount,
+          pending_amount: pendingAmount,
+          due_amount: pendingAmount,
+          credit_used_amount: summaryCreditUsedAmount || 0,
+          payment_status: paymentStatus,
           notes_count: shootNotesCount,
           event_type_labels: formattedTypes.join(', '),
           timeline_status: timelineStatus,
@@ -7321,12 +7373,24 @@ exports.getShootByCategory = async (req, res) => {
       narrative: { label: 'Short Films & Narrative', color: '#6366F1', matches: ['narrative', 'short film'] }
     };
 
-    // 1. Fetch Paid Bookings
+    const collectedPaymentSummaryRows = await fetchCollectedBookingPaymentSummaries();
+    const collectedSummaryBookingIds = Array.from(new Set(
+      collectedPaymentSummaryRows
+        .map((row) => Number(row.booking_id))
+        .filter(Number.isFinite)
+    ));
+
+    // 1. Fetch paid or partially paid bookings
     const bookings = await stream_project_booking.findAll({
       attributes: ['project_name', 'event_type', 'skills_needed', 'stream_project_booking_id', 'payment_id'],
       where: { 
         is_active: 1,
-        payment_id: { [Sequelize.Op.ne]: null } // Paid projects only
+        [Sequelize.Op.or]: [
+          { payment_id: { [Sequelize.Op.ne]: null } },
+          ...(collectedSummaryBookingIds.length
+            ? [{ stream_project_booking_id: { [Sequelize.Op.in]: collectedSummaryBookingIds } }]
+            : [])
+        ]
       },
       raw: true
     });
