@@ -364,8 +364,24 @@ const resolveProjectDisplayAmount = async ({ project, paymentData }) => {
   return 0;
 };
 
-const resolveProjectTotalValueAmount = async ({ project }) => {
+const resolveProjectTotalValueAmount = async ({ project, salesQuoteId = null }) => {
   const budgetAmount = parseAmountCandidate(project?.budget);
+
+  const salesQuoteAmount = salesQuoteId
+    ? await db.sales_quotes.findByPk(salesQuoteId, {
+        attributes: ['total', 'subtotal'],
+      }).then((quote) => {
+        if (!quote) return null;
+        return (
+          parseAmountCandidate(quote.total) ??
+          parseAmountCandidate(quote.subtotal)
+        );
+      })
+    : null;
+
+  if (salesQuoteAmount !== null && salesQuoteAmount > 0) {
+    return salesQuoteAmount;
+  }
 
   const quoteAmountFromLinkedQuote = project?.quote_id
     ? await quotes.findByPk(project.quote_id, {
@@ -405,6 +421,32 @@ const resolveProjectTotalValueAmount = async ({ project }) => {
 
   if (quoteAmountFromBooking !== null && quoteAmountFromBooking > 0) {
     return quoteAmountFromBooking;
+  }
+
+  const bookingId = project?.stream_project_booking_id;
+  const salesQuoteAmountFromLead = bookingId
+    ? await db.sales_leads.findOne({
+        where: { booking_id: bookingId, is_active: 1 },
+        attributes: ['lead_id'],
+        order: [['lead_id', 'DESC']],
+      }).then((lead) => {
+        if (!lead?.lead_id) return null;
+        return db.sales_quotes.findOne({
+          where: { lead_id: lead.lead_id },
+          attributes: ['total', 'subtotal'],
+          order: [['updated_at', 'DESC'], ['sales_quote_id', 'DESC']],
+        });
+      }).then((quote) => {
+        if (!quote) return null;
+        return (
+          parseAmountCandidate(quote.total) ??
+          parseAmountCandidate(quote.subtotal)
+        );
+      })
+    : null;
+
+  if (salesQuoteAmountFromLead !== null && salesQuoteAmountFromLead > 0) {
+    return salesQuoteAmountFromLead;
   }
 
   if (budgetAmount !== null && budgetAmount > 0) {
@@ -628,7 +670,7 @@ const buildManualPaymentSummaryFromActivities = (activities = [], totalAmount = 
 
 const fetchCollectedBookingPaymentSummaries = async () => db.sequelize.query(
   `
-  SELECT booking_id, payment_status, paid_amount, credit_used_amount, due_amount, quote_total
+  SELECT booking_id, sales_quote_id, payment_status, paid_amount, credit_used_amount, due_amount, quote_total
   FROM booking_payment_summary
   WHERE payment_status IN ('paid', 'partially_paid', 'approval_pending', 'no_payment_due')
     AND (
@@ -1933,13 +1975,11 @@ exports.getProjectDetails = async (req, res) => {
     });
     let totalValueAmount = await resolveProjectTotalValueAmount({
       project: projectJson,
+      salesQuoteId: bookingPaymentSummary?.sales_quote_id || convertedSalesQuoteId || null,
     });
     const currentUsableQuoteTotal = parseAmountCandidate(currentUsableConvertedQuote?.total);
     if (currentUsableQuoteTotal !== null && currentUsableQuoteTotal > 0) {
-      totalValueAmount = currentUsableQuoteTotal;
-      if (displayAmount > currentUsableQuoteTotal) {
-        displayAmount = currentUsableQuoteTotal;
-      }
+      totalValueAmount = Math.max(totalValueAmount, currentUsableQuoteTotal);
     }
 
     // 4. Process Event Type Labels
@@ -2128,8 +2168,30 @@ exports.getProjectDetails = async (req, res) => {
     const summaryPaidAmount = bookingPaymentSummary
       ? parseAmountCandidate(bookingPaymentSummary.paid_amount)
       : null;
+    const summaryCreditUsedAmount = bookingPaymentSummary
+      ? parseAmountCandidate(bookingPaymentSummary.credit_used_amount)
+      : null;
+    const summaryPendingAmount = bookingPaymentSummary
+      ? parseAmountCandidate(bookingPaymentSummary.due_amount)
+      : null;
+    const summaryQuoteTotal = bookingPaymentSummary
+      ? parseAmountCandidate(bookingPaymentSummary.quote_total)
+      : null;
     const totalPaidAmount = summaryPaidAmount !== null ? summaryPaidAmount : displayAmount;
-    const resolvedPaymentStatus = projectJson.payment_id
+    totalValueAmount = Math.max(
+      totalValueAmount || 0,
+      summaryQuoteTotal || 0,
+      totalPaidAmount + (summaryCreditUsedAmount || 0) + (summaryPendingAmount || 0)
+    );
+    const creditUsedAmount = summaryCreditUsedAmount || 0;
+    const pendingAmount = Math.max(
+      summaryPendingAmount || 0,
+      totalValueAmount - totalPaidAmount - creditUsedAmount,
+      0
+    );
+    const resolvedPaymentStatus = pendingAmount > 0 && totalPaidAmount > 0
+      ? 'partially_paid'
+      : projectJson.payment_id
       ? 'paid'
       : manualPaymentSummary.hasFullPayment
         ? 'paid'
@@ -2146,6 +2208,11 @@ exports.getProjectDetails = async (req, res) => {
           ...projectJson,
           total_paid_amount: totalPaidAmount,
           total_value_amount: totalValueAmount,
+          paid_amount: totalPaidAmount,
+          pending_amount: pendingAmount,
+          due_amount: pendingAmount,
+          credit_used_amount: creditUsedAmount,
+          payment_status: resolvedPaymentStatus,
           notes_count: shootNotesCount,
           contact_registration_type: contactRegistrationType,
           is_registered_user: isRegisteredUser,
@@ -3431,9 +3498,6 @@ exports.getAllProjectDetails = async (req, res) => {
         project,
         paymentData,
       });
-      const totalValueAmount = await resolveProjectTotalValueAmount({
-        project,
-      });
       const summaryPaidAmount = bookingPaymentSummary
         ? parseAmountCandidate(bookingPaymentSummary.paid_amount)
         : null;
@@ -3446,16 +3510,31 @@ exports.getAllProjectDetails = async (req, res) => {
       const summaryQuoteTotal = bookingPaymentSummary
         ? parseAmountCandidate(bookingPaymentSummary.quote_total)
         : null;
+      const resolvedQuoteValueAmount = await resolveProjectTotalValueAmount({
+        project,
+        salesQuoteId: bookingPaymentSummary?.sales_quote_id || null,
+      });
       const totalPaidAmount = summaryPaidAmount !== null
         ? summaryPaidAmount
         : (project.payment_id ? displayAmount : 0);
-      const pendingAmount = summaryPendingAmount !== null
-        ? summaryPendingAmount
-        : Math.max((summaryQuoteTotal ?? totalValueAmount) - totalPaidAmount - (summaryCreditUsedAmount || 0), 0);
-      const paymentStatus = String(
-        bookingPaymentSummary?.payment_status ||
-        (project.payment_id ? 'paid' : (totalPaidAmount > 0 ? 'partially_paid' : 'pending'))
-      ).toLowerCase();
+      const creditUsedAmount = summaryCreditUsedAmount || 0;
+      const knownCollectedTotal = totalPaidAmount + creditUsedAmount + (summaryPendingAmount || 0);
+      const totalValueAmount = Math.max(
+        summaryQuoteTotal || 0,
+        resolvedQuoteValueAmount || 0,
+        knownCollectedTotal || 0
+      );
+      const pendingAmount = Math.max(
+        summaryPendingAmount || 0,
+        totalValueAmount - totalPaidAmount - creditUsedAmount,
+        0
+      );
+      const paymentStatus = pendingAmount > 0 && totalPaidAmount > 0
+        ? 'partially_paid'
+        : String(
+            bookingPaymentSummary?.payment_status ||
+            (project.payment_id ? 'paid' : (totalPaidAmount > 0 ? 'partially_paid' : 'pending'))
+          ).toLowerCase();
 
       const rawTypes = project.event_type ? project.event_type.split(',') : [];
       const formattedTypes = rawTypes.map(t => {
