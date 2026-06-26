@@ -245,6 +245,7 @@ router.get('/users/roles', authMiddleware, requireSuperAdmin, admin.getUsersWith
 router.get('/users/:user_id/role-details', authMiddleware, requireSuperAdmin, admin.getUserRoleDetails);
 router.get('/permissions/modules', authMiddleware, requireSuperAdmin, admin.getPermissionModules);
 router.delete('/delete-user/:user_id', authMiddleware, requireSuperAdmin, admin.deleteUser);
+router.post('/restore-user/:user_id', authMiddleware, requireSuperAdmin, admin.restoreUser);
 router.post('/users/permissions/assign', authMiddleware, requireSuperAdmin, admin.assignPermissionsToUser);
 router.put('/users/permissions/update', authMiddleware, requireSuperAdmin, admin.updateUserPermissions);
 router.get('/users/:user_id/permissions', authMiddleware, admin.getUserPermissions);

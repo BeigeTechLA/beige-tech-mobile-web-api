@@ -7726,6 +7726,58 @@ const getArchiveHistoryForClient = async (clientId) => {
   }));
 };
 
+const writeInternalUserArchiveHistory = async ({
+  user,
+  action,
+  reason = null,
+  actor,
+  previousStatus,
+  newStatus,
+  metadata = null,
+  transaction = null
+}) => {
+  return user_archive_history.create({
+    target_type: 'internal_user',
+    target_id: user.id,
+    user_id: user.id,
+    action,
+    reason,
+    performed_by_user_id: actor.id,
+    performed_by_name: actor.name,
+    performed_by_role: actor.role,
+    previous_status: previousStatus,
+    new_status: newStatus,
+    metadata
+  }, { transaction });
+};
+
+const getArchiveHistoryForInternalUser = async (userId) => {
+  const rows = await user_archive_history.findAll({
+    where: {
+      target_type: 'internal_user',
+      target_id: userId
+    },
+    order: [['created_at', 'DESC']],
+    raw: true
+  });
+
+  return rows.map((row) => ({
+    history_id: row.history_id,
+    target_type: row.target_type,
+    target_id: row.target_id,
+    user_id: row.user_id,
+    action: row.action,
+    reason: row.reason,
+    performed_by_user_id: row.performed_by_user_id,
+    performed_by_name: row.performed_by_name,
+    performed_by_role: row.performed_by_role,
+    previous_status: row.previous_status,
+    new_status: row.new_status,
+    metadata: row.metadata,
+    created_at: row.created_at
+  }));
+};
+
 const findActiveCreativePartnerForClient = async (client, transaction = null) => {
   if (!client) return null;
 
@@ -11995,7 +12047,8 @@ exports.getRoles = async (req, res) => {
       roles.map(async (role) => {
         const totalUsers = await db.users.count({
           where: {
-            user_type: role.user_type_id
+            user_type: role.user_type_id,
+            is_active: 1
           }
         });
 
@@ -12302,7 +12355,8 @@ exports.getRoleById = async (req, res) => {
 
     const totalUsers = await db.users.count({
       where: {
-        user_type: role_id
+        user_type: role_id,
+        is_active: 1
       }
     });
 
@@ -12391,7 +12445,7 @@ exports.getUsersWithRoles = async (req, res) => {
       };
     }
 
-    const users = await db.users.findAll({
+    const users = await db.users.scope('all').findAll({
       where: userWhereCondition,
       attributes: [
         'id',
@@ -12403,6 +12457,40 @@ exports.getUsersWithRoles = async (req, res) => {
         'is_active'
       ],
       order: [[sortField, sortOrder]]
+    });
+
+    const userIds = users.map((user) => Number(user.id)).filter(Boolean);
+    const archiveHistoryRows = userIds.length
+      ? await user_archive_history.findAll({
+          where: {
+            target_type: 'internal_user',
+            target_id: { [Op.in]: userIds }
+          },
+          order: [['created_at', 'DESC']],
+          raw: true
+        })
+      : [];
+
+    const archiveHistoryMap = new Map();
+    archiveHistoryRows.forEach((row) => {
+      const key = Number(row.target_id);
+      const currentRows = archiveHistoryMap.get(key) || [];
+      currentRows.push({
+        history_id: row.history_id,
+        target_type: row.target_type,
+        target_id: row.target_id,
+        user_id: row.user_id,
+        action: row.action,
+        reason: row.reason,
+        performed_by_user_id: row.performed_by_user_id,
+        performed_by_name: row.performed_by_name,
+        performed_by_role: row.performed_by_role,
+        previous_status: row.previous_status,
+        new_status: row.new_status,
+        metadata: row.metadata,
+        created_at: row.created_at
+      });
+      archiveHistoryMap.set(key, currentRows);
     });
 
     const userTypes = await db.user_type.findAll({
@@ -12417,17 +12505,28 @@ exports.getUsersWithRoles = async (req, res) => {
       userTypeMap[type.user_type_id] = type.user_role;
     });
 
-    const formattedUsers = users.map(user => ({
-      user_id: user.id,
-      name: user.name,
-      email: user.email,
-      role_id: user.user_type,
-      role_name: userTypeMap[user.user_type] || null,
-      created_at: user.created_at,
-      updated_at: user.updated_at,
-      is_active: user.is_active,
-      status_label: user.is_active ? 'Active' : 'In-Active'
-    }));
+    const formattedUsers = users.map(user => {
+      const archiveHistory = archiveHistoryMap.get(Number(user.id)) || [];
+      const latestArchiveEvent = archiveHistory[0] || null;
+
+      return {
+        user_id: user.id,
+        name: user.name,
+        email: user.email,
+        role_id: user.user_type,
+        role_name: userTypeMap[user.user_type] || null,
+        created_at: user.created_at,
+        updated_at: user.updated_at,
+        is_active: user.is_active,
+        status_label: user.is_active ? 'Active' : 'In-Active',
+        archive_history: archiveHistory,
+        last_archive_event: latestArchiveEvent,
+        deleted_by_name: latestArchiveEvent?.action === 'deleted' ? latestArchiveEvent.performed_by_name : null,
+        deleted_at: latestArchiveEvent?.action === 'deleted' ? latestArchiveEvent.created_at : null,
+        restored_by_name: latestArchiveEvent?.action === 'restored' ? latestArchiveEvent.performed_by_name : null,
+        restored_at: latestArchiveEvent?.action === 'restored' ? latestArchiveEvent.created_at : null
+      };
+    });
 
     return res.status(200).json({
       success: true,
@@ -12460,7 +12559,7 @@ exports.getUserRoleDetails = async (req, res) => {
       });
     }
 
-    const user = await db.users.findOne({
+    const user = await db.users.scope('all').findOne({
       where: {
         id: user_id
       },
@@ -12497,6 +12596,8 @@ exports.getUserRoleDetails = async (req, res) => {
       );
     }
 
+    const archiveHistory = await getArchiveHistoryForInternalUser(user.id);
+
     return res.status(200).json({
       success: true,
       data: {
@@ -12523,6 +12624,8 @@ exports.getUserRoleDetails = async (req, res) => {
           : null,
 
         display_role: role ? role.user_role : null,
+
+        archive_history: archiveHistory,
 
         permissions: formattedPermissions
       }
@@ -12658,6 +12761,7 @@ exports.getPermissionModules = async (req, res) => {
 
 exports.deleteUser = async (req, res) => {
   const user_id = Number(req.params.user_id);
+  const { reason = null } = req.body || {};
 
   if (!Number.isInteger(user_id) || user_id <= 0) {
     return res.status(400).json({
@@ -12669,7 +12773,17 @@ exports.deleteUser = async (req, res) => {
   const transaction = await db.sequelize.transaction();
 
   try {
-    const user = await users.findOne({
+    const actor = await getRequestActor(req);
+
+    if (!actor) {
+      await transaction.rollback();
+      return res.status(401).json({
+        error: true,
+        message: 'Authentication required to delete user'
+      });
+    }
+
+    const user = await users.scope('all').findOne({
       where: {
         id: user_id,
         is_active: 1
@@ -12684,6 +12798,13 @@ exports.deleteUser = async (req, res) => {
         message: 'User not found or inactive'
       });
     }
+
+    const role = await db.user_type.findOne({
+      where: { user_type_id: user.user_type },
+      attributes: ['user_type_id', 'user_role'],
+      raw: true,
+      transaction
+    });
 
     // ================= CLIENT DELETE =================
     if (user.user_type == 3) {
@@ -12792,6 +12913,21 @@ exports.deleteUser = async (req, res) => {
       { transaction }
     );
 
+    await writeInternalUserArchiveHistory({
+      user,
+      action: 'deleted',
+      reason: reason || 'Deleted from roles and permissions',
+      actor,
+      previousStatus: 'active',
+      newStatus: 'inactive',
+      metadata: {
+        source_endpoint: 'DELETE /admin/delete-user/:user_id',
+        role_id: user.user_type,
+        role_name: role?.user_role || user.role || null
+      },
+      transaction
+    });
+
     await transaction.commit();
 
     return res.status(200).json({
@@ -12803,6 +12939,142 @@ exports.deleteUser = async (req, res) => {
     await transaction.rollback();
 
     console.error('Error deleting user:', error);
+
+    return res.status(500).json({
+      error: true,
+      message: 'Internal server error'
+    });
+  }
+};
+
+exports.restoreUser = async (req, res) => {
+  const user_id = Number(req.params.user_id);
+  const { reason = null } = req.body || {};
+
+  if (!Number.isInteger(user_id) || user_id <= 0) {
+    return res.status(400).json({
+      error: true,
+      message: 'Valid user_id is required'
+    });
+  }
+
+  const transaction = await db.sequelize.transaction();
+
+  try {
+    const actor = await getRequestActor(req);
+
+    if (!actor) {
+      await transaction.rollback();
+      return res.status(401).json({
+        error: true,
+        message: 'Authentication required to restore user'
+      });
+    }
+
+    const user = await users.scope('all').findOne({
+      where: { id: user_id },
+      transaction
+    });
+
+    if (!user) {
+      await transaction.rollback();
+      return res.status(404).json({
+        error: true,
+        message: 'User not found'
+      });
+    }
+
+    if (Number(user.is_active) === 1) {
+      await transaction.rollback();
+      return res.status(409).json({
+        error: true,
+        message: 'User is already active'
+      });
+    }
+
+    const role = await db.user_type.findOne({
+      where: {
+        user_type_id: user.user_type,
+        is_active: 1
+      },
+      attributes: ['user_type_id', 'user_role'],
+      raw: true,
+      transaction
+    });
+
+    if (!role) {
+      await transaction.rollback();
+      return res.status(404).json({
+        error: true,
+        message: 'Assigned role not found or inactive'
+      });
+    }
+
+    await user.update({
+      is_active: 1,
+      permissions_version: Sequelize.literal('permissions_version + 1')
+    }, { transaction });
+
+    await db.user_roles.update(
+      { is_active: 0 },
+      {
+        where: { user_id },
+        transaction
+      }
+    );
+
+    const existingUserRole = await db.user_roles.findOne({
+      where: {
+        user_id,
+        role_id: user.user_type
+      },
+      transaction
+    });
+
+    if (existingUserRole) {
+      await existingUserRole.update({ is_active: 1 }, { transaction });
+    } else {
+      await db.user_roles.create({
+        user_id,
+        role_id: user.user_type,
+        is_active: 1
+      }, { transaction });
+    }
+
+    await writeInternalUserArchiveHistory({
+      user,
+      action: 'restored',
+      reason: reason || 'Restored from roles and permissions',
+      actor,
+      previousStatus: 'inactive',
+      newStatus: 'active',
+      metadata: {
+        source_endpoint: 'POST /admin/restore-user/:user_id',
+        role_id: user.user_type,
+        role_name: role.user_role
+      },
+      transaction
+    });
+
+    await transaction.commit();
+
+    return res.status(200).json({
+      error: false,
+      success: true,
+      message: 'User restored successfully',
+      data: {
+        user_id,
+        is_active: 1,
+        status_label: 'Active',
+        role_id: user.user_type,
+        role_name: role.user_role
+      }
+    });
+
+  } catch (error) {
+    await transaction.rollback();
+
+    console.error('Error restoring user:', error);
 
     return res.status(500).json({
       error: true,
