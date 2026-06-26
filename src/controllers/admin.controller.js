@@ -8928,7 +8928,7 @@ exports.getClientsShoots = async (req, res) => {
 
     // 1️⃣ Get client to find user_id
     const client = await clients.findOne({
-      where: { client_id: clientId, is_active: 1 }
+      where: { client_id: clientId }
     });
 
     if (!client) {
