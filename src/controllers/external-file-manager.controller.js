@@ -2388,6 +2388,7 @@ const ensureCreatorWorkspaceAccess = async (req, bookingId) => {
     where: {
       project_id: normalizedBookingId,
       crew_member_id: crewMemberId,
+      is_active: 1,
     },
     attributes: ['id', 'crew_accept'],
   });
@@ -2432,6 +2433,7 @@ const getCreatorAssignedProjectIds = async (req) => {
   const assignments = await assigned_crew.findAll({
     where: {
       crew_member_id: crewMemberId,
+      is_active: 1,
     },
     attributes: ['project_id'],
   });
@@ -2450,6 +2452,7 @@ const getCreatorAssignedWorkspacePlaceholders = async (req, existingExternalIds 
   const assignments = await assigned_crew.findAll({
     where: {
       crew_member_id: crewMemberId,
+      is_active: 1,
     },
     attributes: ['project_id', 'crew_accept', 'created_at', 'updated_at'],
     include: [
