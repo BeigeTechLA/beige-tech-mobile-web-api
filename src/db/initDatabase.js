@@ -14,7 +14,7 @@ async function initDatabase() {
     host: config.db.host,
     port: config.db.port,
     dialect: 'mysql',
-    logging: false
+    logging: true
   });
 
   try {

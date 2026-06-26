@@ -24,6 +24,10 @@ function getStudioPricingSnapshot(description) {
         selected_date: studio.selectedDate,
         start_time: studio.startTime,
         end_time: studio.endTime,
+        studio_booking_type: studio.studioBookingType,
+        booking_days: studio.bookingDays,
+        cast_and_crew_count: studio.castAndCrewCount,
+        update_studio_datetime: studio.updateStudioDatetime,
         lat: studio.lat,
         lng: studio.lng,
       }));
@@ -65,6 +69,7 @@ function normalizeStudioItem(studio = {}) {
   const quantity = toNumber(studio?.quantity, 1) || 1;
   const unitPrice = toNumber(studio?.unit_price ?? studio?.unitPrice, 0);
   const total = toNumber(studio?.total ?? studio?.totalPrice, 0);
+  const rawBookingDays = studio?.booking_days || studio?.bookingDays || [];
 
   return {
     studioId,
@@ -83,6 +88,10 @@ function normalizeStudioItem(studio = {}) {
     selectedDate: studio?.selected_date || studio?.selectedDate || null,
     startTime: studio?.start_time || studio?.startTime || null,
     endTime: studio?.end_time || studio?.endTime || null,
+    studioBookingType: normalizeStudioBookingType(studio?.studio_booking_type || studio?.studioBookingType, rawBookingDays),
+    bookingDays: normalizeStudioBookingDays(rawBookingDays),
+    castAndCrewCount: toNullableNumber(studio?.cast_and_crew_count ?? studio?.castAndCrewCount),
+    updateStudioDatetime: toNullableBoolean(studio?.update_studio_datetime ?? studio?.updateStudioDatetime),
     lat: studio?.lat ?? studio?.latitude ?? null,
     lng: studio?.lng ?? studio?.longitude ?? null,
   };
@@ -114,6 +123,40 @@ function getStudioMetaMatch(description) {
 function normalizeStudioPricingMode(value) {
   const normalized = String(value || '').trim().toLowerCase();
   return normalized === 'weekend' ? 'weekend' : 'hourly';
+}
+
+function normalizeStudioBookingType(value, bookingDays = []) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'multi_day' || normalized === 'single_day') return normalized;
+  return Array.isArray(bookingDays) && bookingDays.length > 0 ? 'multi_day' : 'single_day';
+}
+
+function normalizeStudioBookingDays(bookingDays = []) {
+  return (Array.isArray(bookingDays) ? bookingDays : [])
+    .filter((day) => day && (day.date || day.event_date))
+    .map((day) => ({
+      date: day.date || day.event_date,
+      startTime: day.start_time || day.startTime || null,
+      endTime: day.end_time || day.endTime || null,
+      durationHours: toNullableNumber(day.duration_hours ?? day.durationHours),
+      timeZone: day.time_zone || day.timeZone || null,
+    }));
+}
+
+function toNullableBoolean(value) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  const normalized = String(value).trim().toLowerCase();
+  if (['true', '1', 'yes'].includes(normalized)) return true;
+  if (['false', '0', 'no'].includes(normalized)) return false;
+  return null;
+}
+
+function toNullableNumber(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
 }
 
 function toNumber(value, fallback = 0) {

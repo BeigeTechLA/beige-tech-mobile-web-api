@@ -2990,3 +2990,273 @@ Authorization: {{CP_TOKEN}}
     }
   ]
 }
+
+### =====================================================
+### BOOK A SHOOT - STUDIO JOURNEY 1
+### Flow: base shoot -> crew/location -> studio add-on -> quote -> finalize -> payment
+### Replace booking_id, quote_id, selected_crew_ids, amount, and paymentIntentId from responses.
+### =====================================================
+
+### 1) Start base shoot draft - studio is selected later in this journey
+POST {{URL}}sales/leads/track-early-interest HTTP/1.1
+Content-Type: application/json
+
+{
+  "booking_id": null,
+  "guest_email": "nehapanchal.np07@gmail.com",
+  "content_type": "videographer",
+  "shoot_type": "podcasts_and_shows",
+  "client_name": "Neha",
+  "start_date": "2026-01-06",
+  "start_time": "10:30",
+  "end_time": "16:30",
+  "time_zone": "Asia/Calcutta",
+  "startDate": "2026-01-06T10:30:00",
+  "endDate": "2026-01-06T16:30:00",
+  "booking_type": "single_day",
+  "edits_needed": true,
+  "video_edit_types": [
+    { "slug": "social_reel_15_30", "quantity": 1 },
+    { "slug": "social_reel_30_90", "quantity": 1 }
+  ],
+  "photo_edit_types": [
+    { "slug": "edited_photos", "quantity": 1 }
+  ]
+}
+
+### 2) Save crew requirement and shoot location
+PATCH {{URL}}sales/bookings/1282/crew HTTP/1.1
+Content-Type: application/json
+
+{
+  "crew_roles": {
+    "videographer": 1
+  },
+  "location": "Woodland Hills, Woodland Hills, CA",
+  "location_latitude": 34.1654,
+  "location_longitude": -118.6089,
+  "reference_links": []
+}
+
+### 3) Search creators near selected location
+GET {{URL}}creators/search?content_types=videographer&latitude=34.1654&longitude=-118.6089&limit=12&page=1
+
+### 4) Optional fallback creators carousel
+GET {{URL}}creator/get-random-crew
+
+### 5) Pricing preview after selecting studio
+POST {{URL}}pricing/calculate-from-creators
+Content-Type: application/json
+
+{
+  "creator_ids": [],
+  "role_counts": {
+    "videographer": 1
+  },
+  "content_type": "videographer",
+  "event_type": "podcasts_and_shows",
+  "video_edit_types": [
+    { "slug": "social_reel_15_30", "quantity": 1 },
+    { "slug": "social_reel_30_90", "quantity": 1 }
+  ],
+  "photo_edit_types": [
+    { "slug": "edited_photos", "quantity": 1 }
+  ],
+  "skip_discount": true,
+  "skip_margin": true,
+  "studio_total": 600,
+  "studio_items": [
+    {
+      "studio_id": "beige-modern-resort-villa",
+      "name": "Beige Media (Modern Resort Villa with Jacuzzi)",
+      "location": "Woodland Hills, Los Angeles, CA",
+      "image": "https://d2jhn32fsulyac.cloudfront.net/assets/studio/weho-content/Weho+Studio-2.jpg",
+      "pricing_mode": "hourly",
+      "pricing_category": "productions",
+      "pricing_label": "Productions",
+      "unit_price": 150,
+      "quantity": 4,
+      "total": 600,
+      "price_label": "$150/hour",
+      "selected_date": "2026-01-06",
+      "start_time": "10:30",
+      "end_time": "16:30",
+      "studio_booking_type": "single_day",
+      "booking_days": [],
+      "cast_and_crew_count": 0,
+      "update_studio_datetime": false,
+      "lat": 34.1654,
+      "lng": -118.6089
+    }
+  ],
+  "shoot_hours": 6,
+  "shoot_start_date": "2026-01-06T10:30:00.000Z"
+}
+
+### 6) Save quote for the booking/payment flow
+POST {{URL}}pricing/quotes
+Content-Type: application/json
+
+{
+  "items": [
+    { "item_id": 11, "quantity": 1 }
+  ],
+  "shootHours": 6,
+  "eventType": "podcasts_and_shows",
+  "guestEmail": "nehapanchal.np07@gmail.com",
+  "shoot_start_date": "2026-01-06T10:30:00.000Z",
+  "video_edit_types": [
+    { "slug": "social_reel_15_30", "quantity": 1 },
+    { "slug": "social_reel_30_90", "quantity": 1 }
+  ],
+  "photo_edit_types": [
+    { "slug": "edited_photos", "quantity": 1 }
+  ],
+  "studio_total": 600,
+  "studio_items": [
+    {
+      "studio_id": "beige-modern-resort-villa",
+      "name": "Beige Media (Modern Resort Villa with Jacuzzi)",
+      "location": "Woodland Hills, Los Angeles, CA",
+      "image": "https://d2jhn32fsulyac.cloudfront.net/assets/studio/weho-content/Weho+Studio-2.jpg",
+      "pricing_mode": "hourly",
+      "pricing_category": "productions",
+      "pricing_label": "Productions",
+      "unit_price": 150,
+      "quantity": 4,
+      "total": 600,
+      "price_label": "$150/hour",
+      "selected_date": "2026-01-06",
+      "start_time": "10:30",
+      "end_time": "16:30",
+      "studio_booking_type": "single_day",
+      "booking_days": [],
+      "cast_and_crew_count": 0,
+      "update_studio_datetime": false,
+      "lat": 34.1654,
+      "lng": -118.6089
+    }
+  ]
+}
+
+### 7) Finalize booking. selected_crew_ids can be [] for "Continue with 0 Creatives".
+PUT {{URL}}guest-bookings/1282
+Content-Type: application/json
+
+{
+  "order_name": "PODCASTS_AND_SHOWS Shoot - Neha",
+  "guest_email": "nehapanchal.np07@gmail.com",
+  "content_type": "videographer",
+  "shoot_type": "podcasts_and_shows",
+  "booking_type": "single_day",
+  "start_date": "2026-01-06",
+  "start_time": "10:30",
+  "end_time": "16:30",
+  "time_zone": "Asia/Calcutta",
+  "duration_hours": 6,
+  "location": "Woodland Hills, Woodland Hills, CA",
+  "location_latitude": 34.1654,
+  "location_longitude": -118.6089,
+  "quote_id": 520,
+  "full_name": "Neha",
+  "phone": "+919173965896",
+  "edits_needed": true,
+  "video_edit_types": ["social_reel_15_30", "social_reel_30_90"],
+  "photo_edit_types": ["edited_photos"],
+  "crew_size": "1",
+  "matching_method": "ai_matchmaker",
+  "selected_crew_ids": [],
+  "special_instructions": "",
+  "reference_links": [],
+  "studio_total": 600,
+  "studio_items": [
+    {
+      "studio_id": "beige-modern-resort-villa",
+      "name": "Beige Media (Modern Resort Villa with Jacuzzi)",
+      "location": "Woodland Hills, Los Angeles, CA",
+      "image": "https://d2jhn32fsulyac.cloudfront.net/assets/studio/weho-content/Weho+Studio-2.jpg",
+      "pricing_mode": "hourly",
+      "pricing_category": "production",
+      "pricing_label": "Production",
+      "unit_price": 150,
+      "quantity": 4,
+      "total": 600,
+      "price_label": "$150/hour",
+      "selected_date": "2026-01-06",
+      "start_time": "10:00",
+      "end_time": "18:00",
+      "studio_booking_type": "single_day",
+      "booking_days": [],
+      "cast_and_crew_count": 0,
+      "update_studio_datetime": true,
+      "lat": 34.1654,
+      "lng": -118.6089
+    }
+  ],
+  "start_date_time": "2026-01-06T10:30:00",
+  "end_date_time": "2026-01-06T16:30:00",
+  "is_draft": false
+}
+
+### Studio item multi-day timing shape
+### Use this inside studio_items[] when user expands "Multiple Days" for studio timing.
+### quantity should be total billable studio hours across all days, and total should match studio_total.
+# {
+#   "studio_id": "beige-modern-resort-villa",
+#   "name": "Beige Media (Modern Resort Villa with Jacuzzi)",
+#   "pricing_mode": "hourly",
+#   "unit_price": 150,
+#   "quantity": 16,
+#   "total": 2400,
+#   "studio_booking_type": "multi_day",
+#   "booking_days": [
+#     {
+#       "date": "2026-01-06",
+#       "start_time": "10:00",
+#       "end_time": "18:00",
+#       "duration_hours": 8,
+#       "time_zone": "Asia/Calcutta"
+#     },
+#     {
+#       "date": "2026-01-07",
+#       "start_time": "10:00",
+#       "end_time": "18:00",
+#       "duration_hours": 8,
+#       "time_zone": "Asia/Calcutta"
+#     }
+#   ],
+#   "cast_and_crew_count": 0,
+#   "update_studio_datetime": true
+# }
+
+### 8) Admin summary check
+GET {{URL}}admin/1282/get-booking-summary
+Content-Type: application/json
+
+### 9) Payment details check
+GET {{URL}}guest-bookings/1282/payment-details
+Content-Type: application/json
+
+### 10) Create payment intent. Replace amount with quote total.
+POST {{URL}}payments/create-intent-multi
+Content-Type: application/json
+
+{
+  "booking_id": "1282",
+  "amount": 3900,
+  "guest_email": "nehapanchal.np07@gmail.com",
+  "use_credit": false,
+  "credit_amount_used": 0
+}
+
+### 11) Confirm after Stripe succeeds. Replace paymentIntentId from create-intent response.
+POST {{URL}}payments/confirm-multi
+Content-Type: application/json
+
+{
+  "paymentIntentId": "pi_3TmSJl54hnPNgHXU0jn217yo",
+  "booking_id": "1282",
+  "referral_code": null,
+  "use_credit": false,
+  "credit_amount_used": 0
+}
