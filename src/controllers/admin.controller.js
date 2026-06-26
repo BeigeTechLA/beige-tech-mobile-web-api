@@ -3519,11 +3519,25 @@ exports.getAllProjectDetails = async (req, res) => {
         : (project.payment_id ? displayAmount : 0);
       const creditUsedAmount = summaryCreditUsedAmount || 0;
       const knownCollectedTotal = totalPaidAmount + creditUsedAmount + (summaryPendingAmount || 0);
-      const totalValueAmount = Math.max(
+      let totalValueAmount = Math.max(
         summaryQuoteTotal || 0,
         resolvedQuoteValueAmount || 0,
         knownCollectedTotal || 0
       );
+      const shouldUseCalculatedBookingPricing =
+        totalValueAmount <= totalPaidAmount ||
+        (summaryQuoteTotal === null && (!resolvedQuoteValueAmount || resolvedQuoteValueAmount <= 0));
+
+      if (shouldUseCalculatedBookingPricing) {
+        const projectedPricing = await bookingPricingService.calculateBookingPricing({
+          ...project.toJSON(),
+          booking_days: bookingDaysData
+        });
+        const projectedTotal = parseAmountCandidate(projectedPricing?.total);
+        if (projectedTotal !== null && projectedTotal > totalValueAmount) {
+          totalValueAmount = projectedTotal;
+        }
+      }
       const pendingAmount = Math.max(
         summaryPendingAmount || 0,
         totalValueAmount - totalPaidAmount - creditUsedAmount,
