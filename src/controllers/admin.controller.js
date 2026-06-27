@@ -2053,19 +2053,7 @@ exports.getProjectDetails = async (req, res) => {
         booking_id: projectJson.stream_project_booking_id,
         approval_status: { [Op.in]: ['pending_approval', 'approved', 'rejected'] }
       },
-      include: [
-        {
-          model: db.creator_earning_advances,
-          as: 'advances',
-          required: false
-        },
-        {
-          model: db.creator_earning_compensation_items,
-          as: 'compensation_items',
-          required: false,
-          where: { is_active: 1 }
-        }
-      ],
+      attributes: ['creator_earning_id', 'creator_id', 'gross_amount', 'net_earning_amount'],
       order: [['updated_at', 'DESC'], ['creator_earning_id', 'DESC']]
     });
 
@@ -2073,41 +2061,9 @@ exports.getProjectDetails = async (req, res) => {
     creatorCompensations.forEach((row) => {
       const earning = row.toJSON();
       const totalCompensation = Number(earning.net_earning_amount || earning.gross_amount || 0);
-      const advances = Array.isArray(earning.advances) ? earning.advances : [];
-      const advancePaid = advances
-        .filter((advance) => String(advance.status || '').toLowerCase() === 'processed')
-        .reduce((sum, advance) => sum + Number(advance.amount || 0), 0);
-      const pendingAdvanceAmount = advances
-        .filter((advance) => String(advance.status || '').toLowerCase() === 'pending')
-        .reduce((sum, advance) => sum + Number(advance.amount || 0), 0);
 
       if (!compensationByCreatorId.has(Number(earning.creator_id))) {
-        compensationByCreatorId.set(Number(earning.creator_id), {
-          creator_earning_id: earning.creator_earning_id,
-          total_compensation: totalCompensation,
-          advance_paid: advancePaid,
-          pending_advance_amount: pendingAdvanceAmount,
-          remaining_balance: Math.max(totalCompensation - advancePaid, 0),
-          approval_status: earning.approval_status,
-          earning_status: earning.status,
-          compensation_source: earning.compensation_source,
-          compensation_method: earning.compensation_method,
-          submitted_at: earning.submitted_at || null,
-          approved_at: earning.approved_at || null,
-          rejected_at: earning.rejected_at || null,
-          compensation_items: (earning.compensation_items || []).map((item) => ({
-            compensation_item_id: item.compensation_item_id,
-            label: item.item_label,
-            amount: Number(item.amount || 0)
-          })),
-          advances: advances.map((advance) => ({
-            advance_id: advance.advance_id,
-            amount: Number(advance.amount || 0),
-            status: advance.status,
-            processed_at: advance.processed_at || null,
-            notes: advance.notes || null
-          }))
-        });
+        compensationByCreatorId.set(Number(earning.creator_id), totalCompensation);
       }
     });
 
@@ -2138,13 +2094,11 @@ exports.getProjectDetails = async (req, res) => {
                 }
             } catch(e){}
         }
-        const cpCompensation = compensationByCreatorId.get(Number(ac.crew_member_id)) || null;
+        const totalCompensation = compensationByCreatorId.get(Number(ac.crew_member_id)) ?? null;
         return {
             ...ac,
             acceptance_status: ac.crew_accept === 1 ? 'accepted' : ac.crew_accept === 2 ? 'rejected' : 'pending',
-            total_compensation: cpCompensation?.total_compensation ?? null,
-            cp_compensation_status: cpCompensation?.approval_status || null,
-            cp_compensation: cpCompensation,
+            total_compensation: totalCompensation,
             crew_member: { 
                 ...ac.crew_member, 
                 role_name: roleNames.join(', ') || 'N/A',
