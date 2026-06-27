@@ -2048,6 +2048,69 @@ exports.getProjectDetails = async (req, res) => {
         : Math.max(subtotal - pricing_breakdown.discount, 0);
     pricing_breakdown.total = pricing_breakdown.total_after_credit;
 
+    const creatorCompensations = await db.creator_earnings.findAll({
+      where: {
+        booking_id: projectJson.stream_project_booking_id,
+        approval_status: { [Op.in]: ['pending_approval', 'approved', 'rejected'] }
+      },
+      include: [
+        {
+          model: db.creator_earning_advances,
+          as: 'advances',
+          required: false
+        },
+        {
+          model: db.creator_earning_compensation_items,
+          as: 'compensation_items',
+          required: false,
+          where: { is_active: 1 }
+        }
+      ],
+      order: [['updated_at', 'DESC'], ['creator_earning_id', 'DESC']]
+    });
+
+    const compensationByCreatorId = new Map();
+    creatorCompensations.forEach((row) => {
+      const earning = row.toJSON();
+      const totalCompensation = Number(earning.net_earning_amount || earning.gross_amount || 0);
+      const advances = Array.isArray(earning.advances) ? earning.advances : [];
+      const advancePaid = advances
+        .filter((advance) => String(advance.status || '').toLowerCase() === 'processed')
+        .reduce((sum, advance) => sum + Number(advance.amount || 0), 0);
+      const pendingAdvanceAmount = advances
+        .filter((advance) => String(advance.status || '').toLowerCase() === 'pending')
+        .reduce((sum, advance) => sum + Number(advance.amount || 0), 0);
+
+      if (!compensationByCreatorId.has(Number(earning.creator_id))) {
+        compensationByCreatorId.set(Number(earning.creator_id), {
+          creator_earning_id: earning.creator_earning_id,
+          total_compensation: totalCompensation,
+          advance_paid: advancePaid,
+          pending_advance_amount: pendingAdvanceAmount,
+          remaining_balance: Math.max(totalCompensation - advancePaid, 0),
+          approval_status: earning.approval_status,
+          earning_status: earning.status,
+          compensation_source: earning.compensation_source,
+          compensation_method: earning.compensation_method,
+          submitted_at: earning.submitted_at || null,
+          approved_at: earning.approved_at || null,
+          rejected_at: earning.rejected_at || null,
+          compensation_items: (earning.compensation_items || []).map((item) => ({
+            compensation_item_id: item.compensation_item_id,
+            label: item.item_label,
+            amount: Number(item.amount || 0)
+          })),
+          advances: advances.map((advance) => ({
+            advance_id: advance.advance_id,
+            amount: Number(advance.amount || 0),
+            status: advance.status,
+            processed_at: advance.processed_at || null,
+            notes: advance.notes || null
+          }))
+        });
+      }
+    });
+
     // 6. Crew Processing & Fulfillment Summary
     const ROLE_GROUPS = { videographer: ['9', '1'], photographer: ['10', '2'], cinematographer: ['11', '3'] };
     const ID_TO_ROLE_MAP = {};
@@ -2075,9 +2138,13 @@ exports.getProjectDetails = async (req, res) => {
                 }
             } catch(e){}
         }
+        const cpCompensation = compensationByCreatorId.get(Number(ac.crew_member_id)) || null;
         return {
             ...ac,
             acceptance_status: ac.crew_accept === 1 ? 'accepted' : ac.crew_accept === 2 ? 'rejected' : 'pending',
+            total_compensation: cpCompensation?.total_compensation ?? null,
+            cp_compensation_status: cpCompensation?.approval_status || null,
+            cp_compensation: cpCompensation,
             crew_member: { 
                 ...ac.crew_member, 
                 role_name: roleNames.join(', ') || 'N/A',
@@ -2088,6 +2155,7 @@ exports.getProjectDetails = async (req, res) => {
     });
 
     Object.keys(fulfillmentSummary).forEach(k => { fulfillmentSummary[k].display = `${fulfillmentSummary[k].accepted}/${fulfillmentSummary[k].required}`; });
+    projectJson.assigned_crews = processedCrew;
 
     // 7. Payment Link Logic
     let active_payment_link = null;

@@ -4,6 +4,7 @@ const fs = require('fs');
 const multer = require('multer');
 const router = express.Router();
 const financeController = require('../controllers/finance.controller');
+const cpCompensationController = require('../controllers/cp-compensation.controller');
 const { authenticate, requireAdmin, requireSalesRepOrAdmin } = require('../middleware/auth.middleware');
 const { requireAnyPermission } = require('../middleware/permission.middleware');
 
@@ -52,6 +53,14 @@ router.get('/admin/credit-points/users', authenticate, requireAdmin, financeCont
 router.get('/admin/credit-points/users/:userId', authenticate, adminFinancesView, financeController.getAdminCreditPointUserDetails);
 router.post('/admin/credit-points/manual', authenticate, adminFinancesCreate, financeController.createAdminManualCredit);
 router.get('/admin/credit-points/export', authenticate, requireAdmin, financeController.listAdminCreditPointTransactions);
+router.get('/cp-compensation', authenticate, adminFinancesView, cpCompensationController.list);
+router.get('/cp-compensation/:bookingId', authenticate, adminFinancesView, cpCompensationController.getDetails);
+router.post('/cp-compensation', authenticate, adminFinancesCreate, cpCompensationController.addFromAdmin);
+router.patch('/cp-compensation/:earningId/approve', authenticate, adminFinancesCreate, cpCompensationController.approve);
+router.patch('/cp-compensation/:earningId/reject', authenticate, adminFinancesCreate, cpCompensationController.reject);
+router.patch('/cp-compensation/:earningId/modify', authenticate, adminFinancesCreate, cpCompensationController.modify);
+router.post('/cp-compensation/:earningId/advance', authenticate, adminFinancesCreate, cpCompensationController.addAdvance);
+router.post('/cp-compensation/:earningId/payment', authenticate, adminFinancesCreate, cpCompensationController.processPayment);
 router.get('/creator-wallets/:creatorId', authenticate, requireSalesRepOrAdmin, financeController.getCreatorWallet);
 router.get('/creator-payouts', authenticate, requireSalesRepOrAdmin, financeController.listCreatorPayouts);
 router.post('/creator-payout-accounts', authenticate, requireSalesRepOrAdmin, financeController.upsertCreatorPayoutAccount);

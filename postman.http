@@ -246,9 +246,9 @@ Content-Type: application/json
 Authorization: {{SALES_TOKEN}}
 
 ###
-GET {{URL}}admin/get-project/1251 HTTP/1.1
+GET {{URL}}admin/get-project/1284 HTTP/1.1
 Content-Type: application/json
-Authorization: {{TOKEN2}}
+Authorization: {{TOKEN}}
 
 ### update shoot schedule/location - single day
 PUT {{URL}}admin/shoots/update-date-location/1193 HTTP/1.1
@@ -2775,6 +2775,245 @@ Authorization: {{TOKEN}}
     { "label": "Travel Adjustment", "amount": 100 },
     { "label": "Bonus Compensation", "amount": 50 }
   ]
+}
+
+### ============================================================
+### CP COMPENSATION MODULE
+### Update these IDs from your booking and API responses.
+### ============================================================
+
+@CP_BOOKING_ID = 4702
+@CP_CREATOR_ID = 2010
+@CP_EARNING_ID = 1
+
+### 1. Sales admin - submit CP compensation for approval
+### Sales admin - submit CP compensation for approval
+POST {{URL}}sales/bookings/cp-compensation HTTP/1.1
+Content-Type: application/json
+Authorization: {{SALES_ADMIN_TOKEN}}
+
+{
+  "booking_id": 1283,
+  "compensation_method": "equal_split",
+  "creators": [
+    {
+      "creator_id": 2129,
+      "rate_type": "flat",
+      "items": [
+        {
+          "label": "Base Payout",
+          "amount": 1500
+        },
+        {
+          "label": "Editing Payout",
+          "amount": 250
+        },
+        {
+          "label": "Travel Adjustment",
+          "amount": 100
+        },
+        {
+          "label": "Bonus/Other Adjustment",
+          "amount": 0
+        }
+      ],
+      "notes": "Submitted by sales admin for finance approval"
+    },
+    {
+      "creator_id": 2130,
+      "rate_type": "flat",
+      "items": [
+        {
+          "label": "Base Payout",
+          "amount": 1500
+        },
+        {
+          "label": "Editing Payout",
+          "amount": 250
+        },
+        {
+          "label": "Travel Adjustment",
+          "amount": 100
+        },
+        {
+          "label": "Bonus/Other Adjustment",
+          "amount": 0
+        }
+      ],
+      "advance": {
+        "amount": 500,
+        "payment_date": "2026-06-27",
+        "notes": "Advance requested by sales admin"
+      },
+      "notes": "Submitted by sales admin for finance approval"
+    }
+  ]
+}
+
+### 2. Admin - add and automatically approve CP compensation
+POST {{URL}}finance/cp-compensation HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "booking_id": 1284,
+  "compensation_method": "manual",
+  "creators": [
+    {
+      "creator_id": 2130,
+      "rate_type": "flat",
+      "items": [
+        {
+          "label": "Base Payout",
+          "amount": 1000
+        },
+        {
+          "label": "Editing Payout",
+          "amount": 275
+        },
+        {
+          "label": "Travel Adjustment",
+          "amount": 100
+        },
+        {
+          "label": "Bonus/Other Adjustment",
+          "amount": 0
+        }
+      ],
+      "notes": "Added directly by admin"
+    }
+  ]
+}
+
+### 3. Admin - list CP compensation history
+GET {{URL}}finance/cp-compensation?page=1&limit=20&view=creators HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### 4. Admin - filter CP compensation history
+GET {{URL}}finance/cp-compensation?page=1&limit=20&approval_status=pending_approval&booking_id=1283 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### 5. Admin - get shoot CP compensation details
+GET {{URL}}finance/cp-compensation/1283 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### 6. Admin - approve sales admin compensation
+PATCH {{URL}}finance/cp-compensation/154/approve HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "notes": "Compensation reviewed and approved"
+}
+
+### 7. Admin - reject compensation
+PATCH {{URL}}finance/cp-compensation/153/reject HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "rejection_reason": "Compensation amount needs correction"
+}
+
+### 8. Admin - modify compensation
+PATCH {{URL}}finance/cp-compensation/153/modify HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "modification_reason": "Updated after finance review",
+  "items": [
+    {
+      "label": "Base Payout",
+      "amount": 1300
+    },
+    {
+      "label": "Editing Payout",
+      "amount": 250
+    },
+    {
+      "label": "Travel Adjustment",
+      "amount": 100
+    }
+  ]
+}
+
+### 9. Admin - add advance payment record
+### Alternative to request 10. Do not run both for the same advance.
+POST {{URL}}finance/cp-compensation/155/advance HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "amount": 1000,
+  "payment_date": "2026-06-27",
+  "notes": "Pre-shoot advance"
+}
+
+### 10. Admin - pay advance outside platform
+### Alternative to request 9. This request creates the advance and payment records.
+POST {{URL}}finance/cp-compensation/154/payment HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "payment_method": "outside_platform",
+  "payment_scope": "advance",
+  "payment_mode": "bank_transfer",
+  "amount": 2000,
+  "transaction_reference": "BANK-CP-2000",
+  "proof_url": "https://example.com/cp-payment-proof.pdf",
+  "proof_file_path": "cp-compensation/proofs/cp-payment-proof.pdf",
+  "proof_file_name": "cp-payment-proof.pdf",
+  "paid_at": "2026-06-27",
+  "notes": "Advance paid by bank transfer"
+}
+
+### 11. Admin - pay final balance outside platform
+POST {{URL}}finance/cp-compensation/155/payment HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "payment_method": "manual",
+  "payment_scope": "final",
+  "payment_mode": "bank_transfer",
+  "amount": 375,
+  "transaction_reference": "BANK-CP-4250",
+  "proof_url": "https://example.com/cp-final-payment-proof.pdf",
+  "proof_file_path": "cp-compensation/proofs/cp-final-payment-proof.pdf",
+  "proof_file_name": "cp-final-payment-proof.pdf",
+  "paid_at": "2026-06-27",
+  "notes": "Remaining balance paid"
+}
+
+### 12. Admin - pay advance through Stripe Connect
+### Requires a verified creator_payout_accounts row with stripe_account_id.
+POST {{URL}}finance/cp-compensation/155/payment HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "payment_method": "stripe",
+  "payment_scope": "advance",
+  "amount": 2000,
+  "notes": "Advance paid through Stripe Connect"
+}
+
+### 13. Admin - pay final balance through Stripe Connect
+### Amount must exactly match the remaining compensation balance.
+POST {{URL}}finance/cp-compensation/155/payment HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "payment_method": "stripe",
+  "payment_scope": "final",
+  "amount": 4250,
+  "notes": "Final balance paid through Stripe Connect"
 }
 
 ### Login Devanshu

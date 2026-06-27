@@ -6,6 +6,7 @@ const paymentLinksController = require('../controllers/payment-links.controller'
 const salesDashboardController = require('../controllers/sales-dashboard.controller');
 const salesQuotesController = require('../controllers/sales-quotes.controller');
 const salesAvailabilityController = require('../controllers/sales-availability.controller');
+const cpCompensationController = require('../controllers/cp-compensation.controller');
 const { authenticate, requireSalesRepOrAdmin, requireSalesRep, requireAdmin } = require('../middleware/auth.middleware');
 const { requireAnyPermission } = require('../middleware/permission.middleware');
 
@@ -483,6 +484,7 @@ router.patch(
   '/bookings/:bookingId/crew',
   salesLeadsController.updateBookingCrew,
 );
+router.post('/bookings/cp-compensation', authenticate, shootsEditOrSalesEdit, cpCompensationController.submitFromSalesAdmin);
 
 router.post('/leads/intent', authenticate, adminSalesRepresentativeEdit, salesLeadsController.updateLeadIntent);
 router.post('/client-leads/intent', authenticate, requireSalesRepOrAdmin, salesLeadsController.updateClientLeadIntent);

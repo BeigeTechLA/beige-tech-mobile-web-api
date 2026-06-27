@@ -2,6 +2,7 @@ const db = require('../models');
 const pricingService = require('./pricing.service');
 
 const DEFAULT_PLATFORM_FEE_PERCENT = Number(process.env.BEIGE_MARGIN_PERCENT || 25);
+const AUTO_CREATE_CREATOR_EARNINGS_ON_BOOK_A_SHOOT = false;
 const ROLE_TO_ITEM_MAP = {
   videographer: 11,
   photographer: 10,
@@ -995,18 +996,20 @@ async function syncBookingFinance(bookingId, options = {}) {
       await breakdown.update(recalculatedBreakdown, { transaction });
     }
 
-    await db.creator_earnings.destroy({
-      where: { booking_id: booking.stream_project_booking_id },
-      transaction
-    });
-    if (creatorRows.length > 0) {
-      await db.creator_earnings.bulkCreate(creatorRows, { transaction });
-      const storedCreatorRows = await db.creator_earnings.findAll({
+    if (AUTO_CREATE_CREATOR_EARNINGS_ON_BOOK_A_SHOOT) {
+      await db.creator_earnings.destroy({
         where: { booking_id: booking.stream_project_booking_id },
         transaction
       });
-      for (const earning of storedCreatorRows) {
-        await syncCreatorEarningToWallet(earning, transaction);
+      if (creatorRows.length > 0) {
+        await db.creator_earnings.bulkCreate(creatorRows, { transaction });
+        const storedCreatorRows = await db.creator_earnings.findAll({
+          where: { booking_id: booking.stream_project_booking_id },
+          transaction
+        });
+        for (const earning of storedCreatorRows) {
+          await syncCreatorEarningToWallet(earning, transaction);
+        }
       }
     }
 
@@ -1046,7 +1049,7 @@ async function syncBookingFinance(bookingId, options = {}) {
     return {
       finance_transaction: financeTransaction,
       breakdown,
-      creator_earnings_count: creatorRows.length,
+      creator_earnings_count: AUTO_CREATE_CREATOR_EARNINGS_ON_BOOK_A_SHOOT ? creatorRows.length : 0,
       invoice_payments_count: invoiceRows.length
     };
   } catch (error) {
