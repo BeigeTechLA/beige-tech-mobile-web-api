@@ -105,6 +105,7 @@ const getRequestUserId = (req) => req.userId || req.user?.userId || null;
 const getRequestUserRole = (req) => req.userRole || req.user?.userRole || null;
 const getNormalizedRequestUserRole = (req) => String(getRequestUserRole(req) || '').trim().toLowerCase();
 const isAdminRole = (req) => ['admin', 'super_admin', 'superadmin', 'sales_admin'].includes(getNormalizedRequestUserRole(req));
+const isClientRole = (req) => getNormalizedRequestUserRole(req) === 'client';
 const isCreatorRole = (req) => {
   const role = getNormalizedRequestUserRole(req);
   return ['creator', 'creative', 'Creative'].includes(role);
@@ -2326,6 +2327,7 @@ const ensureCreatorPostProductionUploadWindow = async (req, filepath) => {
 
 const validateUploadAccessForPath = async (req, filepath) => {
   await ensureCreatorFileAccess(req, filepath);
+  await ensureClientFileAccess(req, filepath);
 
   const commonEventExternalId = extractCommonEventExternalIdFromPath(filepath);
   const commonEventByPath = commonEventExternalId ? null : await findCommonEventByFilepath(filepath);
@@ -2424,6 +2426,62 @@ const ensureCreatorFileAccess = async (req, filepath) => {
   await ensureCreatorWorkspaceAccess(req, bookingId);
 };
 
+const ensureClientWorkspaceAccess = async (req, bookingId) => {
+  if (!isClientRole(req)) return;
+
+  if (isCommonEventExternalId(bookingId)) {
+    return;
+  }
+
+  const normalizedBookingId = Number(bookingId);
+  if (!normalizedBookingId) {
+    const error = new Error('Invalid project reference');
+    error.status = 400;
+    throw error;
+  }
+
+  const userId = getRequestUserId(req);
+  if (!userId) {
+    const error = new Error('User profile not found');
+    error.status = 403;
+    throw error;
+  }
+
+  const booking = await stream_project_booking.findOne({
+    where: {
+      stream_project_booking_id: normalizedBookingId,
+      user_id: userId,
+      is_active: 1,
+    },
+    attributes: ['stream_project_booking_id'],
+  });
+
+  if (!booking) {
+    const error = new Error('You do not have access to this project file manager');
+    error.status = 403;
+    throw error;
+  }
+};
+
+const ensureClientFileAccess = async (req, filepath) => {
+  if (!isClientRole(req)) return;
+
+  const commonEventExternalId = extractCommonEventExternalIdFromPath(filepath);
+  const commonEventByPath = commonEventExternalId ? null : await findCommonEventByFilepath(filepath);
+  if (commonEventExternalId || commonEventByPath) {
+    return;
+  }
+
+  const bookingId = parseBookingIdFromFilepath(filepath);
+  if (!bookingId) {
+    const error = new Error('Invalid project file path');
+    error.status = 400;
+    throw error;
+  }
+
+  await ensureClientWorkspaceAccess(req, bookingId);
+};
+
 const getCreatorAssignedProjectIds = async (req) => {
   if (!isCreatorRole(req)) return null;
 
@@ -2486,6 +2544,68 @@ const getCreatorAssignedWorkspacePlaceholders = async (req, existingExternalIds 
             : Number(assignment?.crew_accept) === 2
               ? 'rejected'
               : 'pending',
+      };
+    })
+    .filter(Boolean);
+};
+
+const getClientProjectIds = async (req) => {
+  if (!isClientRole(req)) return null;
+
+  const userId = getRequestUserId(req);
+  if (!userId) return [];
+
+  const bookings = await stream_project_booking.findAll({
+    where: {
+      user_id: userId,
+      is_active: 1,
+    },
+    attributes: ['stream_project_booking_id'],
+    raw: true,
+  });
+
+  return bookings
+    .map((booking) => Number(booking.stream_project_booking_id))
+    .filter(Boolean);
+};
+
+const getClientWorkspacePlaceholders = async (req, existingExternalIds = new Set()) => {
+  if (!isClientRole(req)) return [];
+
+  const userId = getRequestUserId(req);
+  if (!userId) return [];
+
+  const bookings = await stream_project_booking.findAll({
+    where: {
+      user_id: userId,
+      is_active: 1,
+    },
+    attributes: [
+      'stream_project_booking_id',
+      'project_name',
+      'guest_email',
+      'shoot_type',
+      'event_type',
+      'created_at',
+    ],
+    raw: true,
+  });
+
+  return bookings
+    .map((booking) => {
+      const bookingId = Number(booking?.stream_project_booking_id);
+      if (!bookingId) return null;
+      if (existingExternalIds.has(String(bookingId).toLowerCase())) return null;
+
+      return {
+        externalId: String(bookingId),
+        folderName: buildWorkspaceFolderName(booking),
+        rootPath: null,
+        fullPath: null,
+        consoleUrl: null,
+        fileCount: 0,
+        createdAt: booking?.created_at || null,
+        updatedAt: booking?.created_at || null,
       };
     })
     .filter(Boolean);
@@ -2621,6 +2741,7 @@ exports.createWorkspace = async (req, res) => {
     }
 
     await ensureCreatorWorkspaceAccess(req, bookingId);
+    await ensureClientWorkspaceAccess(req, bookingId);
 
     const result = await exports.syncWorkspaceForBooking({
       bookingId,
@@ -3256,6 +3377,26 @@ exports.listWorkspaces = async (req, res) => {
       ];
     }
 
+    if (isClientRole(req)) {
+      const allowedProjectIds = await getClientProjectIds(req);
+      const allowedIdSet = new Set((allowedProjectIds || []).map((id) => String(id)));
+      filteredWorkspaces = filteredWorkspaces.filter((workspace) =>
+        isCommonEventExternalId(workspace.externalId) || allowedIdSet.has(String(workspace.externalId))
+      );
+
+      const existingClientWorkspaceIds = new Set(
+        filteredWorkspaces.map((workspace) => String(workspace.externalId || '').trim().toLowerCase())
+      );
+      const missingClientWorkspaces = await getClientWorkspacePlaceholders(
+        req,
+        existingClientWorkspaceIds
+      );
+      filteredWorkspaces = [
+        ...filteredWorkspaces,
+        ...missingClientWorkspaces,
+      ];
+    }
+
     if (commonEventsOnly || expiredCommonEventsOnly) {
       filteredWorkspaces = filteredWorkspaces.filter((workspace) =>
         Boolean(workspace?.isCommonEvent) || isCommonEventExternalId(workspace?.externalId)
@@ -3314,6 +3455,7 @@ exports.listWorkspaces = async (req, res) => {
 exports.getWorkspace = async (req, res) => {
   try {
     await ensureCreatorWorkspaceAccess(req, req.params.bookingId);
+    await ensureClientWorkspaceAccess(req, req.params.bookingId);
     await assertCommonEventVisibleForRequest(req, req.params.bookingId);
     const isCommonEventWorkspace = isCommonEventExternalId(req.params.bookingId);
     let result;
@@ -3426,6 +3568,7 @@ exports.getWorkspaceByBookingId = async (bookingId) => {
 exports.getWorkspaceFiles = async (req, res) => {
   try {
     await ensureCreatorWorkspaceAccess(req, req.params.bookingId);
+    await ensureClientWorkspaceAccess(req, req.params.bookingId);
     await assertCommonEventVisibleForRequest(req, req.params.bookingId);
     const query = new URLSearchParams();
     if (req.query.phase) query.set('phase', req.query.phase);
@@ -3895,6 +4038,7 @@ exports.reindexFaceEmbeddings = async (req, res) => {
 exports.getFileViewUrl = async (req, res) => {
   try {
     await ensureCreatorFileAccess(req, req.body.filepath);
+    await ensureClientFileAccess(req, req.body.filepath);
     const result = await proxyRequest('/file-view-url', {
       method: 'POST',
       body: JSON.stringify({
@@ -3914,6 +4058,7 @@ exports.createFolder = async (req, res) => {
   try {
     const externalId = String(req.body.externalId || req.body.bookingId || '').trim();
     await ensureCreatorWorkspaceAccess(req, externalId);
+    await ensureClientWorkspaceAccess(req, externalId);
 
     const isCommonEvent = isCommonEventExternalId(externalId);
     const phase = normalizeWorkspacePhase(
@@ -3987,6 +4132,7 @@ exports.createFolder = async (req, res) => {
 exports.getFileDownloadUrl = async (req, res) => {
   try {
     await ensureCreatorFileAccess(req, req.body.filepath);
+    await ensureClientFileAccess(req, req.body.filepath);
     const result = await proxyRequest('/file-download-url', {
       method: 'POST',
       body: JSON.stringify({
@@ -4006,6 +4152,7 @@ exports.getFolderDownloadUrl = async (req, res) => {
   try {
     const externalId = String(req.body.externalId || req.body.bookingId || '').trim();
     await ensureCreatorWorkspaceAccess(req, externalId);
+    await ensureClientWorkspaceAccess(req, externalId);
 
     if (isCreatorRole(req) && isCommonEventExternalId(externalId)) {
       await ensureCreatorCommonEventRelativePathAccess({
@@ -4038,6 +4185,7 @@ exports.deleteEntry = async (req, res) => {
   try {
     const targetPath = req.body.filepath || req.body.path;
     await ensureCreatorFileAccess(req, targetPath);
+    await ensureClientFileAccess(req, targetPath);
     const result = await proxyRequest('/delete', {
       method: 'POST',
       body: JSON.stringify({
@@ -4312,8 +4460,10 @@ exports.createShare = async (req, res) => {
     }
 
     await ensureCreatorWorkspaceAccess(req, externalId);
+    await ensureClientWorkspaceAccess(req, externalId);
     if (resourceType === 'file' && filepath) {
       await ensureCreatorFileAccess(req, filepath);
+      await ensureClientFileAccess(req, filepath);
     }
 
     const shareToken = generateShareToken();
