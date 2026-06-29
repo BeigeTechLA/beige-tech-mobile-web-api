@@ -2501,54 +2501,6 @@ const getCreatorAssignedProjectIds = async (req) => {
     .filter(Boolean);
 };
 
-const getCreatorAssignedWorkspacePlaceholders = async (req, existingExternalIds = new Set()) => {
-  if (!isCreatorRole(req)) return [];
-
-  const crewMemberId = await resolveCreatorCrewMemberId(getRequestUserId(req));
-  if (!crewMemberId) return [];
-
-  const assignments = await assigned_crew.findAll({
-    where: {
-      crew_member_id: crewMemberId,
-      is_active: 1,
-    },
-    attributes: ['project_id', 'crew_accept', 'created_at', 'updated_at'],
-    include: [
-      {
-        model: stream_project_booking,
-        as: 'project',
-        required: true,
-      },
-    ],
-  });
-
-  return assignments
-    .map((assignment) => {
-      const booking = assignment?.project;
-      const bookingId = Number(booking?.stream_project_booking_id || assignment?.project_id);
-      if (!bookingId) return null;
-      if (existingExternalIds.has(String(bookingId).toLowerCase())) return null;
-
-      return {
-        externalId: String(bookingId),
-        folderName: buildWorkspaceFolderName(booking),
-        rootPath: null,
-        fullPath: null,
-        consoleUrl: null,
-        fileCount: 0,
-        createdAt: assignment?.created_at || booking?.created_at || null,
-        updatedAt: assignment?.updated_at || booking?.updated_at || null,
-        assignmentStatus:
-          Number(assignment?.crew_accept) === 1
-            ? 'accepted'
-            : Number(assignment?.crew_accept) === 2
-              ? 'rejected'
-              : 'pending',
-      };
-    })
-    .filter(Boolean);
-};
-
 const getClientProjectIds = async (req) => {
   if (!isClientRole(req)) return null;
 
@@ -2566,48 +2518,6 @@ const getClientProjectIds = async (req) => {
 
   return bookings
     .map((booking) => Number(booking.stream_project_booking_id))
-    .filter(Boolean);
-};
-
-const getClientWorkspacePlaceholders = async (req, existingExternalIds = new Set()) => {
-  if (!isClientRole(req)) return [];
-
-  const userId = getRequestUserId(req);
-  if (!userId) return [];
-
-  const bookings = await stream_project_booking.findAll({
-    where: {
-      user_id: userId,
-      is_active: 1,
-    },
-    attributes: [
-      'stream_project_booking_id',
-      'project_name',
-      'guest_email',
-      'shoot_type',
-      'event_type',
-      'created_at',
-    ],
-    raw: true,
-  });
-
-  return bookings
-    .map((booking) => {
-      const bookingId = Number(booking?.stream_project_booking_id);
-      if (!bookingId) return null;
-      if (existingExternalIds.has(String(bookingId).toLowerCase())) return null;
-
-      return {
-        externalId: String(bookingId),
-        folderName: buildWorkspaceFolderName(booking),
-        rootPath: null,
-        fullPath: null,
-        consoleUrl: null,
-        fileCount: 0,
-        createdAt: booking?.created_at || null,
-        updatedAt: booking?.created_at || null,
-      };
-    })
     .filter(Boolean);
 };
 
@@ -3363,18 +3273,6 @@ exports.listWorkspaces = async (req, res) => {
       filteredWorkspaces = mergedWorkspaces.filter((workspace) =>
         isCommonEventExternalId(workspace.externalId) || allowedIdSet.has(String(workspace.externalId))
       );
-
-      const existingCreatorWorkspaceIds = new Set(
-        filteredWorkspaces.map((workspace) => String(workspace.externalId || '').trim().toLowerCase())
-      );
-      const missingAssignedWorkspaces = await getCreatorAssignedWorkspacePlaceholders(
-        req,
-        existingCreatorWorkspaceIds
-      );
-      filteredWorkspaces = [
-        ...filteredWorkspaces,
-        ...missingAssignedWorkspaces,
-      ];
     }
 
     if (isClientRole(req)) {
@@ -3383,18 +3281,6 @@ exports.listWorkspaces = async (req, res) => {
       filteredWorkspaces = filteredWorkspaces.filter((workspace) =>
         isCommonEventExternalId(workspace.externalId) || allowedIdSet.has(String(workspace.externalId))
       );
-
-      const existingClientWorkspaceIds = new Set(
-        filteredWorkspaces.map((workspace) => String(workspace.externalId || '').trim().toLowerCase())
-      );
-      const missingClientWorkspaces = await getClientWorkspacePlaceholders(
-        req,
-        existingClientWorkspaceIds
-      );
-      filteredWorkspaces = [
-        ...filteredWorkspaces,
-        ...missingClientWorkspaces,
-      ];
     }
 
     if (commonEventsOnly || expiredCommonEventsOnly) {
@@ -3462,7 +3348,7 @@ exports.getWorkspace = async (req, res) => {
     try {
       result = await proxyRequest(`/workspace/${req.params.bookingId}`);
     } catch (error) {
-      if (error.status !== 404 || isCommonEventWorkspace) {
+      if (error.status !== 404 || isCommonEventWorkspace || isCreatorRole(req) || isClientRole(req)) {
         throw error;
       }
       result = await syncWorkspaceForExistingBookingId(req.params.bookingId);
@@ -3580,7 +3466,12 @@ exports.getWorkspaceFiles = async (req, res) => {
         `/workspace/${req.params.bookingId}/files${query.toString() ? `?${query.toString()}` : ''}`
       );
     } catch (error) {
-      if (error.status !== 404 || isCommonEventExternalId(req.params.bookingId)) {
+      if (
+        error.status !== 404 ||
+        isCommonEventExternalId(req.params.bookingId) ||
+        isCreatorRole(req) ||
+        isClientRole(req)
+      ) {
         throw error;
       }
       await syncWorkspaceForExistingBookingId(req.params.bookingId);
