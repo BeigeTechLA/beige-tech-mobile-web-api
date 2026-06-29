@@ -3270,7 +3270,7 @@ exports.listWorkspaces = async (req, res) => {
     if (isCreatorRole(req)) {
       const allowedProjectIds = await getCreatorAssignedProjectIds(req);
       const allowedIdSet = new Set((allowedProjectIds || []).map((id) => String(id)));
-      filteredWorkspaces = mergedWorkspaces.filter((workspace) =>
+      filteredWorkspaces = filteredWorkspaces.filter((workspace) =>
         isCommonEventExternalId(workspace.externalId) || allowedIdSet.has(String(workspace.externalId))
       );
     }
