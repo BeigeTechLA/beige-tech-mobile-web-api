@@ -2782,12 +2782,8 @@ Authorization: {{TOKEN}}
 ### Update these IDs from your booking and API responses.
 ### ============================================================
 
-@CP_BOOKING_ID = 4702
-@CP_CREATOR_ID = 2010
-@CP_EARNING_ID = 1
-
 ### 1. Sales admin - submit CP compensation for approval
-### Sales admin - submit CP compensation for approval
+### 
 POST {{URL}}sales/bookings/cp-compensation HTTP/1.1
 Content-Type: application/json
 Authorization: {{SALES_ADMIN_TOKEN}}
