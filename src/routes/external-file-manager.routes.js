@@ -41,6 +41,27 @@ const shootOrFileManagerView = requireAnyPermission([
   'client_find_yourself.view',
   'client_shoots.view'
 ], { allowRoles: ['sales_rep', 'sales_admin', 'creative', 'client'] });
+const fileManagerShareView = requireAnyPermission([
+  'admin_file_manager.view',
+  'sales_rep_file_manager.view',
+  'sales_admin_file_manager.view',
+  'creative_partner_file_manager.view',
+  'client_file_manager.view'
+], { allowRolesAlways: ['creator', 'creative', 'creative_partner', 'crew_member'] });
+const fileManagerShareCreate = requireAnyPermission([
+  'admin_file_manager.create',
+  'sales_rep_file_manager.create',
+  'sales_admin_file_manager.create',
+  'creative_partner_file_manager.create',
+  'client_file_manager.create'
+], { allowRolesAlways: ['creator', 'creative', 'creative_partner', 'crew_member'] });
+const fileManagerShareDelete = requireAnyPermission([
+  'admin_file_manager.delete',
+  'sales_rep_file_manager.delete',
+  'sales_admin_file_manager.delete',
+  'creative_partner_file_manager.delete',
+  'client_file_manager.delete'
+], { allowRolesAlways: ['creator', 'creative', 'creative_partner', 'crew_member'] });
 
 router.get('/workspaces', authenticate, fileManagerView, externalFileManagerController.listWorkspaces);
 router.get('/common-events', authenticate, fileManagerView, externalFileManagerController.listCommonEvents);
@@ -67,10 +88,10 @@ router.post('/file-view-url', authenticate, fileManagerView, externalFileManager
 router.post('/file-download-url', authenticate, fileManagerView, externalFileManagerController.getFileDownloadUrl);
 router.post('/folder-download-url', authenticate, fileManagerView, externalFileManagerController.getFolderDownloadUrl);
 router.post('/delete', authenticate, fileManagerDelete, externalFileManagerController.deleteEntry);
-router.post('/share', authenticate, fileManagerCreate, externalFileManagerController.createShare);
-router.get('/share', authenticate, fileManagerView, externalFileManagerController.listShares);
-router.get('/share/access-logs', authenticate, fileManagerView, externalFileManagerController.listShareAccessLogs);
-router.delete('/share', authenticate, fileManagerDelete, externalFileManagerController.revokeShare);
+router.post('/share', authenticate, fileManagerShareCreate, externalFileManagerController.createShare);
+router.get('/share', authenticate, fileManagerShareView, externalFileManagerController.listShares);
+router.get('/share/access-logs', authenticate, fileManagerShareView, externalFileManagerController.listShareAccessLogs);
+router.delete('/share', authenticate, fileManagerShareDelete, externalFileManagerController.revokeShare);
 router.patch('/common-events/:eventExternalId', authenticate, externalFileManagerController.updateCommonEvent);
 router.post('/share/request-otp', externalFileManagerController.requestShareOtp);
 router.post('/share/verify-otp', externalFileManagerController.verifyShareOtp);

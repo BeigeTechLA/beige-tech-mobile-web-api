@@ -103,14 +103,14 @@ const withPublicUrl = (result, req) => {
 
 const getRequestUserId = (req) => req.userId || req.user?.userId || null;
 const getRequestUserRole = (req) => req.userRole || req.user?.userRole || null;
-const getNormalizedRequestUserRole = (req) => String(getRequestUserRole(req) || '').trim().toLowerCase();
+const getNormalizedRequestUserRole = (req) => String(getRequestUserRole(req) || '').trim().toLowerCase().replace(/\s+/g, '_');
 const isAdminRole = (req) => ['admin', 'super_admin', 'superadmin', 'sales_admin'].includes(getNormalizedRequestUserRole(req));
 const isClientRole = (req) => getNormalizedRequestUserRole(req) === 'client';
 const isCreatorRole = (req) => {
   const role = getNormalizedRequestUserRole(req);
-  return ['creator', 'creative', 'Creative'].includes(role);
+  return ['creator', 'creative', 'creative_partner', 'crew_member'].includes(role);
 };
-const isCommonEventVisibilityLimitedRole = (req) => ['client', 'creator', 'creative'].includes(getNormalizedRequestUserRole(req));
+const isCommonEventVisibilityLimitedRole = (req) => ['client', 'creator', 'creative', 'creative_partner', 'crew_member'].includes(getNormalizedRequestUserRole(req));
 const isCommonEventExternalId = (value) =>
   String(value || '').trim().toLowerCase().startsWith(COMMON_EVENT_ID_PREFIX);
 
@@ -2333,7 +2333,7 @@ const validateUploadAccessForPath = async (req, filepath) => {
   const commonEventByPath = commonEventExternalId ? null : await findCommonEventByFilepath(filepath);
   const isCommonEventPath = Boolean(commonEventExternalId || commonEventByPath);
 
-  if (getNormalizedRequestUserRole(req) === 'creator' && !isCommonEventPath && !isCreatorAllowedUploadPath(filepath)) {
+  if (isCreatorRole(req) && !isCommonEventPath && !isCreatorAllowedUploadPath(filepath)) {
     const error = new Error('Creators can upload files only in Pre-Production or Post-Production');
     error.status = 403;
     throw error;
