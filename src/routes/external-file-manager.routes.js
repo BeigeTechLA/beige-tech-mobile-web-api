@@ -43,6 +43,7 @@ const shootOrFileManagerView = requireAnyPermission([
 ], { allowRoles: ['sales_rep', 'sales_admin', 'creative', 'client'] });
 
 router.get('/workspaces', authenticate, fileManagerView, externalFileManagerController.listWorkspaces);
+router.get('/shoots-without-file-manager', authenticate, fileManagerCreate, externalFileManagerController.listShootsWithoutFileManager);
 router.get('/common-events', authenticate, fileManagerView, externalFileManagerController.listCommonEvents);
 router.post('/common-events', authenticate, fileManagerCreate, externalFileManagerController.createCommonEvent);
 router.post('/common-events/:eventExternalId/creator-folder', authenticate, fileManagerCreate, externalFileManagerController.createCreatorEventFolder);

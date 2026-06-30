@@ -3338,6 +3338,107 @@ exports.listWorkspaces = async (req, res) => {
   }
 };
 
+exports.listShootsWithoutFileManager = async (req, res) => {
+  try {
+    if (!isAdminRole(req)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only admin users can list shoots without file manager workspaces',
+      });
+    }
+
+    const page = Math.max(1, Number.parseInt(String(req.query.page || '1'), 10) || 1);
+    const limit = Math.min(200, Math.max(1, Number.parseInt(String(req.query.limit || '24'), 10) || 24));
+    const search = String(req.query.search || '').trim();
+    const where = {
+      is_active: 1,
+      is_draft: 0,
+      payment_completed_at: { [db.Sequelize.Op.ne]: null },
+    };
+
+    if (search) {
+      where[db.Sequelize.Op.or] = [
+        { project_name: { [db.Sequelize.Op.like]: `%${search}%` } },
+        { '$sales_leads.client_name$': { [db.Sequelize.Op.like]: `%${search}%` } },
+      ];
+    }
+
+    const bookings = await stream_project_booking.findAll({
+      where,
+      attributes: [
+        'stream_project_booking_id',
+        'project_name',
+        'guest_email',
+        'event_date',
+        'event_type',
+        'shoot_type',
+        'payment_id',
+        'payment_completed_at',
+      ],
+      include: [
+        {
+          model: sales_leads,
+          as: 'sales_leads',
+          attributes: ['client_name'],
+          required: false,
+          where: { is_active: 1 },
+        },
+      ],
+      order: [['event_date', 'DESC'], ['stream_project_booking_id', 'DESC']],
+    });
+
+    const missingShoots = [];
+    await runWithConcurrency(bookings, 5, async (booking, index) => {
+      const plainBooking = booking.get({ plain: true });
+      const bookingId = plainBooking.stream_project_booking_id;
+
+      try {
+        await proxyRequest(`/workspace/${encodeURIComponent(String(bookingId))}`);
+      } catch (error) {
+        if (error.status !== 404) {
+          throw error;
+        }
+
+        const firstLead = Array.isArray(plainBooking.sales_leads) ? plainBooking.sales_leads[0] : null;
+        missingShoots[index] = {
+          bookingId,
+          folderName: buildWorkspaceFolderName(plainBooking),
+          projectName: plainBooking.project_name || null,
+          clientName: firstLead?.client_name || plainBooking.client_name || null,
+          eventDate: plainBooking.event_date || null,
+        };
+      }
+    });
+
+    const filteredShoots = missingShoots.filter(Boolean);
+    const total = filteredShoots.length;
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const safePage = Math.min(page, totalPages);
+    const offset = (safePage - 1) * limit;
+    const paginatedShoots = filteredShoots.slice(offset, offset + limit);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        shoots: paginatedShoots,
+        pagination: {
+          page: safePage,
+          limit,
+          total,
+          totalPages,
+          hasNextPage: safePage < totalPages,
+          hasPreviousPage: safePage > 1,
+        },
+      },
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
 exports.getWorkspace = async (req, res) => {
   try {
     await ensureCreatorWorkspaceAccess(req, req.params.bookingId);
