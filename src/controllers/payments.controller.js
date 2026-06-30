@@ -383,6 +383,7 @@ async function markConvertedSalesQuoteAsPaid({
   paymentId = null,
   paymentIntentId = null,
   paidAmount = null,
+  creditUsedAmount = 0,
   transaction
 }) {
   if (!bookingId) return null;
@@ -410,9 +411,18 @@ async function markConvertedSalesQuoteAsPaid({
 
   if (!salesQuote) return null;
 
+  const quoteTotal = round2(salesQuote.total || salesQuote.subtotal || 0);
+  const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId, transaction);
+  const totalPaidAmount = round2(Number(existingSummary?.paid_amount || 0) + Number(paidAmount || 0));
+  const totalCreditUsedAmount = round2(Number(existingSummary?.credit_used_amount || 0) + Number(creditUsedAmount || 0));
+  const dueAmount = round2(Math.max(quoteTotal - totalPaidAmount - totalCreditUsedAmount, 0));
+  const nextStatus = dueAmount <= 0
+    ? 'paid'
+    : (totalPaidAmount > 0 || totalCreditUsedAmount > 0 ? 'partially_paid' : 'pending');
+
   const now = new Date();
   await salesQuote.update({
-    status: 'paid',
+    status: nextStatus,
     accepted_at: salesQuote.accepted_at || now,
     updated_at: now
   }, { transaction });
@@ -421,13 +431,19 @@ async function markConvertedSalesQuoteAsPaid({
     sales_quote_id: salesQuote.sales_quote_id,
     activity_type: 'status_changed',
     performed_by_user_id: null,
-    message: 'Quote marked as paid after booking payment',
+    message: nextStatus === 'paid'
+      ? 'Quote marked as paid after booking payment'
+      : 'Quote payment summary updated after booking payment',
     metadata_json: JSON.stringify({
-      status: 'paid',
+      status: nextStatus,
       booking_id: bookingId,
       payment_id: paymentId,
       payment_intent_id: paymentIntentId,
-      amount_paid: paidAmount
+      amount_paid: paidAmount,
+      paid_amount_total: totalPaidAmount,
+      credit_used_amount: totalCreditUsedAmount,
+      quote_total: quoteTotal,
+      due_amount: dueAmount
     })
   }, { transaction });
 
@@ -967,6 +983,7 @@ async function processStripePaidWebhookEvent(event, req = {}) {
       paymentId: payment.payment_id,
       paymentIntentId,
       paidAmount: amountPaid,
+      creditUsedAmount: usedCreditEntry?.amount || 0,
       transaction
     });
 
