@@ -203,7 +203,6 @@ const createPermissionMiddleware = (permissions, options = {}, checkPermissions)
     .filter(Boolean);
 
   const allowRoles = new Set((options.allowRoles || []).map(normalizeRole));
-  const allowRolesAlways = new Set((options.allowRolesAlways || []).map(normalizeRole));
   const allowBaseRoles = options.allowBaseRoles === true;
 
   return async (req, res, next) => {
@@ -226,10 +225,6 @@ const createPermissionMiddleware = (permissions, options = {}, checkPermissions)
           success: false,
           message: 'Insufficient permissions'
         });
-      }
-
-      if (allowRolesAlways.has(context.role)) {
-        return next();
       }
 
       const isAllowed = permissionKeys.length
