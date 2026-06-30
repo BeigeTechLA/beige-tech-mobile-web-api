@@ -12716,7 +12716,8 @@ exports.getUserRoleDetails = async (req, res) => {
           user_type_name: role ? role.user_role : null,
           is_active: user.is_active,
           status_label: user.is_active ? 'Active' : 'In-Active',
-          created_at: user.created_at
+          created_at: user.created_at,
+          updated_at:user.updated_at
         },
 
         role: role
