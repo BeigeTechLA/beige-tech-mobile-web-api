@@ -253,6 +253,7 @@ router.delete('/users/:user_id/permissions/:module_key/:action_key', authMiddlew
 router.delete('/users/:user_id/permissions/:permission_id', authMiddleware, requireSuperAdmin, admin.deleteUserPermission);
 
 router.get('/shoots/:bookingId/notes', authMiddleware, shootNotesView, admin.getShootNotes);
+router.get('/shoots/:bookingId/activity', authMiddleware, projectDetailView, admin.getShootActivity);
 router.post('/shoots/:bookingId/notes', authMiddleware, shootNotesCreate, admin.uploadShootNoteAttachments, admin.addShootNote);
 router.post('/shoots/:bookingId/notes/:noteId/replies', authMiddleware, shootNotesCreate, admin.uploadShootNoteAttachments, admin.replyToShootNote);
 router.post('/shoots/:bookingId/notes/:noteId/reactions', authMiddleware, shootNotesEdit, admin.toggleShootNoteReaction);

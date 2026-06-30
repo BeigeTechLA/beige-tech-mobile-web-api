@@ -42,6 +42,7 @@ const db = require('../models');
 const bookingTimelineService = require('../services/bookingTimeline.service');
 const accountCreditService = require('../services/account-credit.service');
 const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
+const shootActivityService = require('../services/shoot-activity.service');
 const quoteService = require('../services/sales-quote.service');
 const bookingPricingService = require('../services/booking-pricing.service');
 const { getStudioPricingSnapshot, isStudioLineItem } = require('../utils/studio-pricing');
@@ -67,6 +68,75 @@ const hasValue = (value) => {
   if (typeof value === 'string') return value.trim() !== '';
   if (Array.isArray(value)) return value.length > 0;
   return true;
+};
+
+const EDITING_IN_PROGRESS_STATES = new Set([
+  'EDIT_APPROVAL_PENDING',
+  'EDIT_IN_PROGRESS',
+  'INTERNAL_EDIT_REVIEW_PENDING',
+  'CLIENT_PREVIEW_READY',
+  'CLIENT_FEEDBACK_RECEIVED',
+  'FEEDBACK_INTERNAL_REVIEW',
+  'REVISION_IN_PROGRESS',
+  'REVISION_QC_PENDING',
+  'FINAL_EXPORT_PENDING',
+  'READY_FOR_DELIVERY'
+]);
+
+const EDITING_COMPLETED_STATES = new Set(['DELIVERED', 'PROJECT_CLOSED']);
+
+const getLatestTimestamp = (items = [], timestampKeys = ['created_at', 'updated_at']) => {
+  return items.reduce((latest, item) => {
+    const timestamp = timestampKeys.map((key) => item?.[key]).find(Boolean) || null;
+    if (!timestamp) return latest;
+    if (!latest) return timestamp;
+    return new Date(timestamp).getTime() > new Date(latest).getTime() ? timestamp : latest;
+  }, null);
+};
+
+const buildTimelinePostProductionData = (cmsProject = null, externalPostProduction = {}) => {
+  const projectFiles = Array.isArray(cmsProject?.files) ? cmsProject.files : [];
+  const completedFiles = projectFiles.filter((file) =>
+    String(file.upload_status || '').toUpperCase() === 'COMPLETED' &&
+    Number(file.is_deleted || 0) !== 1
+  );
+  const rawFiles = completedFiles.filter((file) => ['RAW_FOOTAGE', 'RAW_AUDIO'].includes(file.file_category));
+  const rawFilesUploadedAt = getLatestTimestamp(rawFiles) || externalPostProduction.rawFilesUploadedAt || null;
+  const rawFilesUploaded = rawFiles.length > 0 || Boolean(externalPostProduction.rawFilesUploaded);
+
+  const currentState = String(cmsProject?.current_state || '').toUpperCase();
+  let editingStatus = 'not_started';
+  if (EDITING_COMPLETED_STATES.has(currentState)) {
+    editingStatus = 'completed';
+  } else if (EDITING_IN_PROGRESS_STATES.has(currentState)) {
+    editingStatus = 'in_progress';
+  }
+
+  const revisionVersionMap = new Map();
+  completedFiles
+    .filter((file) => file.file_category === 'EDIT_REVISION')
+    .forEach((file) => {
+      const versionNumber = Number(file.version_number || 1);
+      const uploadedAt = file.created_at || null;
+      const existing = revisionVersionMap.get(versionNumber);
+      if (!existing || new Date(uploadedAt || 0).getTime() > new Date(existing.uploadedAt || 0).getTime()) {
+        revisionVersionMap.set(versionNumber, { versionNumber, uploadedAt });
+      }
+    });
+
+  return {
+    postProduction: {
+      rawFilesUploaded,
+      rawFilesUploadedAt,
+      editingStatus
+    },
+    rawFilesUploaded,
+    rawFilesUploadedAt,
+    raw_files_uploaded: rawFilesUploaded,
+    raw_files_uploaded_at: rawFilesUploadedAt,
+    revisionVersions: [...revisionVersionMap.values()]
+      .sort((left, right) => Number(left.versionNumber) - Number(right.versionNumber))
+  };
 };
 
 const buildShootNeedsAttention = (project = {}, formSubmission = null) => {
@@ -597,6 +667,54 @@ const hasExternalWorkspaceFiles = async (bookingId, phase, options = {}) => {
       message: error?.message || error
     });
     return false;
+  }
+};
+
+const getExternalRawFootageUploadSummary = async (bookingId, options = {}) => {
+  if (!bookingId) {
+    return { rawFilesUploaded: false, rawFilesUploadedAt: null };
+  }
+
+  try {
+    const payload = await fetchExternalWorkspaceFiles(bookingId, 'post', options);
+    const files = Array.isArray(payload?.data?.files) ? payload.data.files : [];
+    const rawFiles = files.filter((file) => {
+      const pathCandidate = String(
+        file?.path ||
+        file?.filepath ||
+        file?.key ||
+        file?.filePath ||
+        file?.name ||
+        ''
+      ).toLowerCase();
+
+      return (
+        pathCandidate.includes('/post-production/raw-footage/') ||
+        pathCandidate.includes('post-production/raw-footage/') ||
+        pathCandidate.includes('/post-production/raw-footages/') ||
+        pathCandidate.includes('post-production/raw-footages/')
+      );
+    });
+
+    return {
+      rawFilesUploaded: rawFiles.length > 0,
+      rawFilesUploadedAt: getLatestTimestamp(rawFiles, [
+        'updatedAt',
+        'updated_at',
+        'createdAt',
+        'created_at',
+        'lastModified',
+        'last_modified'
+      ])
+    };
+  } catch (error) {
+    if (!String(error?.message || '').includes('returned 404')) {
+      console.error('[admin/get-project] external raw footage check failed:', {
+        bookingId,
+        message: error?.message || error
+      });
+    }
+    return { rawFilesUploaded: false, rawFilesUploadedAt: null };
   }
 };
 
@@ -1779,6 +1897,27 @@ exports.getProjectDetails = async (req, res) => {
           as: 'assigned_post_production_members',
           include: [{ model: post_production_members, as: 'post_production_member' }]
         },
+        {
+          model: db.projects,
+          as: 'cms_project',
+          required: false,
+          include: [
+            {
+              model: db.project_files,
+              as: 'files',
+              required: false,
+              where: {
+                upload_status: 'COMPLETED',
+                is_deleted: 0,
+                file_category: {
+                  [Op.in]: ['RAW_FOOTAGE', 'EDIT_REVISION']
+                }
+              },
+              attributes: ['file_id', 'file_category', 'upload_status', 'is_deleted', 'version_number', 'created_at']
+            }
+          ],
+          attributes: ['project_id', 'booking_id', 'current_state', 'state_changed_at']
+        },
         // Include the Lead associated with this project
         {
           model: sales_leads,
@@ -2101,6 +2240,28 @@ exports.getProjectDetails = async (req, res) => {
 
     const timelineStatus = bookingTimelineService.getTimelineStage(projectJson);
     const timelineLabel = bookingTimelineService.getTimelineLabel(timelineStatus);
+    const externalPostProduction = await getExternalRawFootageUploadSummary(
+      projectJson.stream_project_booking_id,
+      { authHeader: req.headers.authorization }
+    );
+    const {
+      postProduction,
+      revisionVersions,
+      rawFilesUploaded,
+      rawFilesUploadedAt,
+      raw_files_uploaded,
+      raw_files_uploaded_at
+    } = buildTimelinePostProductionData(projectJson.cms_project, externalPostProduction);
+    const projectTimelineEvents = rawFilesUploaded
+      ? [{
+          key: 'raw_files_uploaded',
+          type: 'raw_files_uploaded',
+          label: 'Raw Files uploaded',
+          title: 'Raw Files uploaded',
+          completed: true,
+          uploadedAt: rawFilesUploadedAt
+        }]
+      : [];
     const manualPaymentSummary = buildManualPaymentSummaryFromActivities(
       (leadPaymentActivities && leadPaymentActivities.length > 0)
         ? leadPaymentActivities
@@ -2228,6 +2389,14 @@ exports.getProjectDetails = async (req, res) => {
           event_type_labels: eventTypeLabels.join(', '),
           timeline_status: timelineStatus,
           timeline_label: timelineLabel,
+          postProduction,
+          revisionVersions,
+          rawFilesUploaded,
+          rawFilesUploadedAt,
+          raw_files_uploaded,
+          raw_files_uploaded_at,
+          projectTimelineEvents,
+          project_timeline_events: projectTimelineEvents,
           needs_attention: buildShootNeedsAttention(projectJson, formSubmission),
           sales_leads: undefined // Remove from main object to avoid redundancy
         },
@@ -2247,6 +2416,14 @@ exports.getProjectDetails = async (req, res) => {
         payment_history: paymentHistory,
         pricing_breakdown,
         payment_status: resolvedPaymentStatus,
+        postProduction,
+        revisionVersions,
+        rawFilesUploaded,
+        rawFilesUploadedAt,
+        raw_files_uploaded,
+        raw_files_uploaded_at,
+        projectTimelineEvents,
+        project_timeline_events: projectTimelineEvents,
         active_payment_link,
         fulfillmentSummary,
         assignedCrew: processedCrew,
@@ -2258,6 +2435,23 @@ exports.getProjectDetails = async (req, res) => {
   } catch (error) {
     console.error('Error fetching project details:', error);
     return res.status(500).json({ error: true, message: 'Internal server error', details: error.message });
+  }
+};
+
+exports.getShootActivity = async (req, res) => {
+  try {
+    const timeline = await shootActivityService.getShootActivityTimeline(req.params.bookingId);
+
+    return res.status(200).json({
+      success: true,
+      data: timeline,
+    });
+  } catch (error) {
+    console.error('Error fetching shoot activity:', error);
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch shoot activity',
+    });
   }
 };
 
@@ -7696,6 +7890,7 @@ exports.assignPostProductionMember = async (req, res) => {
     const assignedPostProductionMember = await assigned_post_production_member.create({
       project_id,
       post_production_member_id: postProductionMember.post_production_member_id,
+      added_by_user_id: req.user?.userId || req.userId || null,
       assigned_date: new Date(),
       status: 'assigned',
       is_active: 1,

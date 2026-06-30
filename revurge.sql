@@ -2535,3 +2535,7 @@ CREATE TABLE IF NOT EXISTS user_archive_history (
   CONSTRAINT fk_user_archive_history_performed_by
     FOREIGN KEY (performed_by_user_id) REFERENCES users(id) ON DELETE RESTRICT
 );
+
+--30-6-26
+ALTER TABLE assigned_post_production_member
+ADD COLUMN added_by_user_id INT NULL;
