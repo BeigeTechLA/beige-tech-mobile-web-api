@@ -12675,6 +12675,7 @@ exports.getUserRoleDetails = async (req, res) => {
         'email',
         'user_type',
         'created_at',
+        'updated_at',
         'is_active'
       ]
     });
