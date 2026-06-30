@@ -511,6 +511,15 @@ function resolveLeadPaymentStatus({ booking = null, activePaymentLink = null, cu
 }
 
 function resolveLeadQuoteAmounts({ linkedSalesQuote = null, booking = null, customQuoteFinancials = null }) {
+  const paymentSummary = customQuoteFinancials?.payment_summary || null;
+  const paymentSummaryStatus = String(paymentSummary?.last_quote_change_status || '').toLowerCase();
+  if (paymentSummary && (!paymentSummaryStatus || paymentSummaryStatus === 'approved')) {
+    return {
+      collected_amount: parseFloat(paymentSummary.paid_amount || 0),
+      outstanding_amount: parseFloat(paymentSummary.due_amount || 0)
+    };
+  }
+
   const additionalPayment = customQuoteFinancials?.additional_payment || customQuoteFinancials?.partial_payment || null;
   if (additionalPayment) {
     return {
@@ -2908,9 +2917,6 @@ exports.getLeadById = async (req, res) => {
       const paymentData = await db.payment_transactions.findByPk(leadJson.booking.payment_id);
       if (paymentData) {
         totalPaid = parseFloat(paymentData.total_amount || 0);
-        if (Number.isFinite(totalPaid)) {
-          creditApplied = Math.max(0, totalBeforeCredit - totalPaid);
-        }
       }
     }
 
@@ -4703,9 +4709,6 @@ exports.getClientLeadById = async (req, res) => {
       const paymentData = await db.payment_transactions.findByPk(leadJson.booking.payment_id);
       if (paymentData) {
         totalPaid = parseFloat(paymentData.total_amount || 0);
-        if (Number.isFinite(totalPaid)) {
-          creditApplied = Math.max(0, totalBeforeCredit - totalPaid);
-        }
       }
     }
 
