@@ -4282,7 +4282,20 @@ async function resolveQuoteBillingState(quote, transaction) {
       })
     : null;
 
-  const bookingMarkedCollected = Boolean(booking?.payment_id);
+  const bookingPayment = booking?.payment_id && db.payment_transactions
+    ? await db.payment_transactions.findByPk(booking.payment_id, {
+        attributes: ['payment_id', 'total_amount', 'status'],
+        transaction
+      })
+    : null;
+  const bookingPaidAmount = roundCurrency(bookingPayment?.total_amount || 0);
+  const quoteTotal = roundCurrency(quote.total || 0);
+  const bookingMarkedCollected = quoteTotal > 0
+    ? bookingPaidAmount >= quoteTotal
+    : Boolean(booking?.payment_id);
+  const bookingPaymentStatus = bookingPaidAmount > 0
+    ? (bookingMarkedCollected ? 'paid' : 'partially_paid')
+    : null;
   const historyMarkedCollected = latestInvoiceHistory?.payment_status === 'paid';
   const refreshActivity = db.sales_quote_activities
     ? await db.sales_quote_activities.findOne({
@@ -4323,7 +4336,9 @@ async function resolveQuoteBillingState(quote, transaction) {
   const summaryCollectedAmount = roundCurrency(
     Number(paymentState.paidAmount || 0) + Number(paymentState.creditUsedAmount || 0)
   );
-  const summaryPaymentStatus = String(paymentState.paymentStatus || '').toLowerCase();
+  const summaryPaymentStatus = paymentState.hasSummary
+    ? String(paymentState.paymentStatus || '').toLowerCase()
+    : '';
   const summaryHasManualPaymentEvidence = Boolean(
     paymentSummary?.manual_payment_mode ||
     paymentSummary?.manual_payment_proof_url ||
@@ -4348,12 +4363,20 @@ async function resolveQuoteBillingState(quote, transaction) {
   const isCollected = !refreshOutstanding && (bookingMarkedCollected || historyMarkedCollected || summaryMarkedCollected);
   const paymentStatus = refreshOutstanding
     ? 'partially_paid'
-    : (summaryPaymentStatus || refreshInvoiceHistory?.payment_status || latestInvoiceHistory?.payment_status || (isCollected ? 'paid' : 'pending'));
-  const fallbackCollectedAmount = isCollected ? roundCurrency(quote.total) : 0;
+    : (
+        summaryPaymentStatus ||
+        bookingPaymentStatus ||
+        refreshInvoiceHistory?.payment_status ||
+        latestInvoiceHistory?.payment_status ||
+        (isCollected ? 'paid' : 'pending')
+      );
+  const fallbackCollectedAmount = isCollected
+    ? quoteTotal
+    : bookingPaidAmount;
   const collectedAmount = refreshOutstanding
     ? Math.max(refreshPreviousTotal, summaryCollectedAmount)
     : Math.max(fallbackCollectedAmount, summaryCollectedAmount);
-  const outstandingAmount = roundCurrency(Math.max(roundCurrency(quote.total) - collectedAmount, 0));
+  const outstandingAmount = roundCurrency(Math.max(quoteTotal - collectedAmount, 0));
 
   return {
     booking,
