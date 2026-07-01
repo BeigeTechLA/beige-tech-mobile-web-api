@@ -18,15 +18,27 @@ const proxyRequest = async (path = '', options = {}) => {
     },
   });
 
-  const payload = await response.json().catch(() => ({
-    success: false,
-    message: 'Invalid JSON response from comments service',
-  }));
+  const responseText = await response.text();
+  let payload = null;
+
+  if (responseText) {
+    try {
+      payload = JSON.parse(responseText);
+    } catch (error) {
+      payload = {
+        success: false,
+        message: 'Invalid JSON response from comments service',
+      };
+    }
+  }
 
   if (!response.ok) {
-    const error = new Error(payload.message || 'Comments request failed');
+    const error = new Error(payload?.message || 'Comments request failed');
     error.status = response.status;
-    error.payload = payload;
+    error.payload = payload || {
+      success: false,
+      message: 'Comments request failed',
+    };
     throw error;
   }
 
@@ -407,7 +419,10 @@ exports.deleteComment = async (req, res) => {
       body: JSON.stringify(req.body || {}),
     });
 
-    return res.status(200).json(result);
+    return res.status(200).json(result || {
+      success: true,
+      message: 'Comment deleted successfully',
+    });
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
