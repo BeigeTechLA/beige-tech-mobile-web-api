@@ -53,6 +53,7 @@ router.get('/admin/credit-points/users', authenticate, requireAdmin, financeCont
 router.get('/admin/credit-points/users/:userId', authenticate, adminFinancesView, financeController.getAdminCreditPointUserDetails);
 router.post('/admin/credit-points/manual', authenticate, adminFinancesCreate, financeController.createAdminManualCredit);
 router.get('/admin/credit-points/export', authenticate, requireAdmin, financeController.listAdminCreditPointTransactions);
+router.get('/cp-compensation/pending-shoots', authenticate, adminFinancesView, cpCompensationController.listPendingShoots);
 router.get('/cp-compensation', authenticate, adminFinancesView, cpCompensationController.list);
 router.get('/cp-compensation/:bookingId', authenticate, adminFinancesView, cpCompensationController.getDetails);
 router.post('/cp-compensation', authenticate, adminFinancesCreate, cpCompensationController.addFromAdmin);

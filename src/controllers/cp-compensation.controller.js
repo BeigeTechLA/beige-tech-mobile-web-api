@@ -77,6 +77,22 @@ exports.list = async (req, res) => {
   }
 };
 
+exports.listPendingShoots = async (req, res) => {
+  try {
+    const data = await cpCompensationService.listPendingCompensationShoots(req.query);
+    return res.status(200).json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    console.error('List pending CP compensation shoots error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch pending compensation shoots'
+    });
+  }
+};
+
 exports.getDetails = async (req, res) => {
   try {
     const bookingId = parseInt(req.params.bookingId, 10);
