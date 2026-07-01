@@ -16,7 +16,7 @@ const dashboardOrShootsView = requireAnyPermission([
   'admin_shoots.view',
   'production_manager_dashboard.view'
 ], { allowRoles: ['production_manager'] });
-const shootsView = requireAnyPermission(['admin_shoots.view']);
+const shootsView = requireAnyPermission(['admin_shoots.view', 'sales_rep_shoots.view'], { allowRoles: ['sales_rep'] });
 const shootsCreate = requireAnyPermission(['admin_shoots.create']);
 const allowSalesRepRoles = { allowRoles: ['sales_rep', 'sales_admin'] };
 const shootsEdit = requireAnyPermission([
