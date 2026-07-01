@@ -324,7 +324,24 @@ const hasExternalWorkspaceFiles = async (bookingId, phase) => {
 };
 
 async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
-  if (!quoteId) return null;
+  if (!quoteId) {
+    if (!bookingId) return null;
+
+    const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+      bookingId
+    });
+
+    return paymentState.paymentSummary
+      ? {
+          latest_invoice: null,
+          additional_payment: null,
+          partial_payment: null,
+          reduced_payment: null,
+          credit_summary: null,
+          payment_summary: paymentState.paymentSummary
+        }
+      : null;
+  }
 
   const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
     bookingId,
@@ -2788,6 +2805,7 @@ exports.getLeadById = async (req, res) => {
           payment_link_id: latestLink.payment_link_id || latestLink.id,
           full_url: fullUrl,
           token: latestLink.link_token,
+          requested_amount: latestLink.requested_amount ? Number(latestLink.requested_amount) : null,
           expires_at: latestLink.expires_at,
           is_used: !!latestLink.is_used,
           is_expired: expiryDate ? expiryDate < now : false,
@@ -2932,7 +2950,11 @@ exports.getLeadById = async (req, res) => {
     // --- STANDARDIZED STATUS & INTENT CALLS ---
     const intent = lead.intent ?? leadAssignmentService.getLeadIntent({ lead, booking: lead.booking });
     let booking_status = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
-    if (hasOutstandingAdditionalPayment(customQuoteFinancials)) {
+    if (['partially_paid', 'partial_paid', 'approval_pending'].includes(payment_status)) {
+      booking_status = 'Partially Paid';
+    } else if (payment_status === 'paid') {
+      booking_status = 'Paid';
+    } else if (hasOutstandingAdditionalPayment(customQuoteFinancials)) {
       booking_status = 'Partially Paid';
     }
     // ------------------------------------------
@@ -3033,6 +3055,7 @@ exports.getLeadById = async (req, res) => {
         payment_status,
         collected_amount: quoteAmounts.collected_amount,
         outstanding_amount: quoteAmounts.outstanding_amount,
+        payment_summary: customQuoteFinancials?.payment_summary || null,
         active_payment_link,
         booking_step,
         can_edit_booking,
@@ -3847,10 +3870,21 @@ async function processSalesLeadForList(lead, context = {}) {
         lead,
         lead?.booking
       );
+    const paymentSummary = customQuoteFinancials?.payment_summary || null;
+    const summaryStatus = String(paymentSummary?.payment_status || '').trim().toLowerCase();
+    const summaryPaidAmount = parseFloat(paymentSummary?.paid_amount || 0);
+    const summaryDueAmount = parseFloat(paymentSummary?.due_amount || 0);
 
     if (manualProgress.hasFullPayment) {
       computedBookingStatus = 'Booked';
     } else if (manualProgress.isPartiallyPaid) {
+      computedBookingStatus = 'Partially Paid';
+    } else if (summaryStatus === 'paid') {
+      computedBookingStatus = 'Paid';
+    } else if (
+      ['partially_paid', 'partial_paid', 'approval_pending'].includes(summaryStatus) ||
+      (summaryPaidAmount > 0 && summaryDueAmount > 0)
+    ) {
       computedBookingStatus = 'Partially Paid';
     } else if (hasOutstandingAdditionalPayment(customQuoteFinancials)) {
       computedBookingStatus = 'Partially Paid';
@@ -3908,7 +3942,9 @@ async function processSalesLeadForList(lead, context = {}) {
         manualProgress || {
           hasFullPayment: false,
           isPartiallyPaid: false
-        }
+        },
+      payment_summary:
+        paymentSummary || null
     };
 
     if (Date.now() - startedAt > 3000) {
@@ -4604,6 +4640,7 @@ exports.getClientLeadById = async (req, res) => {
           payment_link_id: latestLink.payment_link_id || latestLink.id,
           full_url: fullUrl,
           token: latestLink.link_token,
+          requested_amount: latestLink.requested_amount ? Number(latestLink.requested_amount) : null,
           expires_at: latestLink.expires_at,
           is_used: !!latestLink.is_used,
           is_expired: expiryDate ? expiryDate < now : false,
