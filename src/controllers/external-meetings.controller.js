@@ -81,6 +81,14 @@ const isAdminLikeRole = (role) =>
 
 const getRequestUserId = (req) => req.user?.userId || null;
 const getRequestUserRole = (req) => normalizeRole(req.user?.userRole || '');
+const getSelectedGoogleEmail = (req) =>
+  normalizeEmail(
+    req.body?.selectedGoogleEmail ||
+    req.body?.googleEmail ||
+    req.query?.selectedGoogleEmail ||
+    req.query?.googleEmail ||
+    ''
+  );
 const getParticipantKey = (participant) =>
   String(participant?.id || participant?.email || participant?.name || '').trim();
 const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
@@ -1425,10 +1433,41 @@ exports.respondToMeetingInvitation = async (req, res) => {
 
 exports.createMeetEvent = async (req, res) => {
   try {
-    const userId = req.body?.userId || req.query?.userId || '';
-    const query = userId ? `?userId=${encodeURIComponent(String(userId))}` : '';
+    const requestUserId = getRequestUserId(req);
+    const requestUser = await getUserRecordById(requestUserId);
+    const appUserEmail = normalizeEmail(
+      req.body?.appUserEmail ||
+      req.query?.appUserEmail ||
+      requestUser?.email ||
+      ''
+    );
+    const selectedGoogleEmail = getSelectedGoogleEmail(req);
+    const calendarId = String(req.body?.calendarId || req.body?.calendar_id || req.query?.calendarId || 'primary').trim() || 'primary';
+    const queryParams = new URLSearchParams();
+
+    if (requestUserId) queryParams.set('userId', String(requestUserId));
+    if (appUserEmail) queryParams.set('appUserEmail', appUserEmail);
+    if (selectedGoogleEmail) {
+      queryParams.set('selectedGoogleEmail', selectedGoogleEmail);
+      queryParams.set('googleEmail', selectedGoogleEmail);
+    }
+
+    const query = queryParams.toString() ? `?${queryParams.toString()}` : '';
     const payload = { ...(req.body || {}) };
-    delete payload.userId;
+
+    payload.userId = requestUserId ? String(requestUserId) : payload.userId;
+    if (appUserEmail) payload.appUserEmail = appUserEmail;
+    if (selectedGoogleEmail) {
+      payload.selectedGoogleEmail = selectedGoogleEmail;
+      payload.googleEmail = selectedGoogleEmail;
+    }
+
+    console.log('[external-meetings/create-event] forwarding calendar create request', {
+      userId: requestUserId || null,
+      appUserEmail: appUserEmail || null,
+      selectedGoogleEmail: selectedGoogleEmail || null,
+      calendarId,
+    });
 
     const result = await proxyRequest(req, `/create-event${query}`, {
       method: 'POST',

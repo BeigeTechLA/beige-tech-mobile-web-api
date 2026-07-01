@@ -6,6 +6,7 @@ module.exports = {
   jwtSecret: process.env.JWT_SECRET,
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',
   frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3000',
+  mongodbUrl: process.env.MONGODB_URL || 'mongodb://localhost:27017/revurge',
   db: {
     host: process.env.DATABASE_HOST,
     port: process.env.DATABASE_PORT,
@@ -29,6 +30,11 @@ module.exports = {
     secretKey: process.env.STRIPE_SECRET_KEY,
     publishableKey: process.env.STRIPE_PUBLISHABLE_KEY,
     webhookSecret: process.env.STRIPE_WEBHOOK_SECRET
+  },
+  googleCalendar: {
+    clientId: process.env.GOOGLE_CALENDAR_CLIENT_ID,
+    clientSecret: process.env.GOOGLE_CALENDAR_CLIENT_SECRETE,
+    redirectUri: process.env.GOOGLE_REDIRECT_URI || 'http://localhost:5001/v1/create-event'
   }
 };
   
