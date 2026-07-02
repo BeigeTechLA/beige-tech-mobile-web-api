@@ -3,7 +3,7 @@ const { Sequelize, users, affiliates } = require('../models')
 const multer = require('multer');
 const path = require('path');
 const common_model = require('../utils/common_model');
-const { Op } = require('sequelize');
+const { Op, QueryTypes } = require('sequelize');
 const { S3UploadFiles, toAbsoluteBeigeAssetUrl } = require('../utils/common.js');
 const moment = require('moment');
 const {
@@ -33,7 +33,7 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   payment_transactions,
   assigned_post_production_member,
   post_production_members,
-  clients, sales_leads, client_leads, sales_lead_activities, client_lead_activities, quotes, quote_line_items, discount_codes, payment_links, project_form_submissions,
+  clients, user_archive_history, sales_leads, client_leads, sales_lead_activities, client_lead_activities, quotes, quote_line_items, discount_codes, payment_links, project_form_submissions,
   payments } = require('../models');
   const { deleteSheetRow, updateSheetRow } = require('../utils/googleSheets');
 const leadAssignmentService = require('../services/lead-assignment.service');
@@ -43,10 +43,24 @@ const bookingTimelineService = require('../services/bookingTimeline.service');
 const accountCreditService = require('../services/account-credit.service');
 const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
 const quoteService = require('../services/sales-quote.service');
+const bookingPricingService = require('../services/booking-pricing.service');
+const { getStudioPricingSnapshot, isStudioLineItem } = require('../utils/studio-pricing');
 // const NodeGeocoder = require('node-geocoder');
 const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
 const EXTERNAL_MEETINGS_API_BASE_URL = process.env.EXTERNAL_MEETINGS_API_BASE_URL || 'http://localhost:5002/v1/external-meetings';
 const EXTERNAL_FILE_MANAGER_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
+
+const getFrontendBaseUrl = () =>
+  String(process.env.FRONTEND_URL || 'http://localhost:3000').trim().replace(/\/+$/, '');
+
+const buildShootReceiptUrl = ({ bookingId, manualPaymentId = null, paymentId = null, download = false }) => {
+  const url = new URL(`${getFrontendBaseUrl()}/beige_invoice/${encodeURIComponent(String(bookingId))}`);
+  url.searchParams.set('receipt', '1');
+  if (manualPaymentId) url.searchParams.set('manual_payment_id', String(manualPaymentId));
+  if (paymentId) url.searchParams.set('payment_id', String(paymentId));
+  if (download) url.searchParams.set('download', '1');
+  return url.toString();
+};
 
 const hasValue = (value) => {
   if (value === null || value === undefined) return false;
@@ -350,8 +364,24 @@ const resolveProjectDisplayAmount = async ({ project, paymentData }) => {
   return 0;
 };
 
-const resolveProjectTotalValueAmount = async ({ project }) => {
+const resolveProjectTotalValueAmount = async ({ project, salesQuoteId = null }) => {
   const budgetAmount = parseAmountCandidate(project?.budget);
+
+  const salesQuoteAmount = salesQuoteId
+    ? await db.sales_quotes.findByPk(salesQuoteId, {
+        attributes: ['total', 'subtotal'],
+      }).then((quote) => {
+        if (!quote) return null;
+        return (
+          parseAmountCandidate(quote.total) ??
+          parseAmountCandidate(quote.subtotal)
+        );
+      })
+    : null;
+
+  if (salesQuoteAmount !== null && salesQuoteAmount > 0) {
+    return salesQuoteAmount;
+  }
 
   const quoteAmountFromLinkedQuote = project?.quote_id
     ? await quotes.findByPk(project.quote_id, {
@@ -391,6 +421,32 @@ const resolveProjectTotalValueAmount = async ({ project }) => {
 
   if (quoteAmountFromBooking !== null && quoteAmountFromBooking > 0) {
     return quoteAmountFromBooking;
+  }
+
+  const bookingId = project?.stream_project_booking_id;
+  const salesQuoteAmountFromLead = bookingId
+    ? await db.sales_leads.findOne({
+        where: { booking_id: bookingId, is_active: 1 },
+        attributes: ['lead_id'],
+        order: [['lead_id', 'DESC']],
+      }).then((lead) => {
+        if (!lead?.lead_id) return null;
+        return db.sales_quotes.findOne({
+          where: { lead_id: lead.lead_id },
+          attributes: ['total', 'subtotal'],
+          order: [['updated_at', 'DESC'], ['sales_quote_id', 'DESC']],
+        });
+      }).then((quote) => {
+        if (!quote) return null;
+        return (
+          parseAmountCandidate(quote.total) ??
+          parseAmountCandidate(quote.subtotal)
+        );
+      })
+    : null;
+
+  if (salesQuoteAmountFromLead !== null && salesQuoteAmountFromLead > 0) {
+    return salesQuoteAmountFromLead;
   }
 
   if (budgetAmount !== null && budgetAmount > 0) {
@@ -611,6 +667,20 @@ const buildManualPaymentSummaryFromActivities = (activities = [], totalAmount = 
     isPartiallyPaid: !hasFullPayment && paidAmount > 0 && pendingAmount > 0,
   };
 };
+
+const fetchCollectedBookingPaymentSummaries = async () => db.sequelize.query(
+  `
+  SELECT booking_id, sales_quote_id, payment_status, paid_amount, credit_used_amount, due_amount, quote_total
+  FROM booking_payment_summary
+  WHERE payment_status IN ('paid', 'partially_paid', 'approval_pending', 'no_payment_due')
+    AND (
+      COALESCE(paid_amount, 0) > 0
+      OR COALESCE(credit_used_amount, 0) > 0
+      OR payment_status = 'no_payment_due'
+    )
+  `,
+  { type: QueryTypes.SELECT }
+);
 
 const countActiveShootNotesByBookingIds = async (bookingIds = []) => {
   const ids = Array.from(new Set(
@@ -1786,10 +1856,10 @@ exports.getProjectDetails = async (req, res) => {
       : [];
 
     // 3. Fetch Transaction Total (from payment_transactions table)
-    const [paymentData, formSubmission, shootNotesCountMap, bookingPaymentSummary] = await Promise.all([
+    const [paymentData, formSubmission, shootNotesCountMap, bookingPaymentSummary, manualPaymentRows] = await Promise.all([
       payment_transactions.findOne({
         where: { payment_id: projectJson.payment_id },
-        attributes: ['total_amount'],
+        attributes: ['payment_id', 'total_amount', 'status', 'created_at'],
         raw: true
       }),
       project_form_submissions.findOne({
@@ -1799,7 +1869,29 @@ exports.getProjectDetails = async (req, res) => {
         raw: true
       }),
       countActiveShootNotesByBookingIds([projectJson.stream_project_booking_id]),
-      bookingPaymentSummaryService.getBookingPaymentSummary(projectJson.stream_project_booking_id)
+      bookingPaymentSummaryService.getBookingPaymentSummary(projectJson.stream_project_booking_id),
+      db.sequelize.query(
+        `
+          SELECT
+            booking_manual_payment_id,
+            payment_type,
+            amount,
+            payment_mode,
+            other_payment_mode,
+            created_at
+          FROM booking_manual_payments
+          WHERE booking_id = :bookingId
+          ORDER BY created_at ASC, booking_manual_payment_id ASC
+        `,
+        {
+          replacements: { bookingId: projectJson.stream_project_booking_id },
+          type: QueryTypes.SELECT
+        }
+      ).catch((error) => {
+        const code = error?.original?.code || error?.parent?.code || error?.code;
+        if (code === 'ER_NO_SUCH_TABLE' || code === 'ER_BAD_TABLE_ERROR') return [];
+        throw error;
+      })
     ]);
     const shootNotesCount = shootNotesCountMap.get(Number(projectJson.stream_project_booking_id)) || 0;
 
@@ -1883,13 +1975,11 @@ exports.getProjectDetails = async (req, res) => {
     });
     let totalValueAmount = await resolveProjectTotalValueAmount({
       project: projectJson,
+      salesQuoteId: bookingPaymentSummary?.sales_quote_id || convertedSalesQuoteId || null,
     });
     const currentUsableQuoteTotal = parseAmountCandidate(currentUsableConvertedQuote?.total);
     if (currentUsableQuoteTotal !== null && currentUsableQuoteTotal > 0) {
-      totalValueAmount = currentUsableQuoteTotal;
-      if (displayAmount > currentUsableQuoteTotal) {
-        displayAmount = currentUsableQuoteTotal;
-      }
+      totalValueAmount = Math.max(totalValueAmount, currentUsableQuoteTotal);
     }
 
     // 4. Process Event Type Labels
@@ -1904,13 +1994,24 @@ exports.getProjectDetails = async (req, res) => {
 
     // 5. Pricing Breakdown logic
     // Using calculateLeadPricing helper if available, otherwise manual calc
-    const projectedQuote = typeof calculateLeadPricing === 'function' ? await calculateLeadPricing(projectJson) : null;
+    const projectedQuote = await bookingPricingService.calculateBookingPricing(projectJson);
     const activeQuoteSource = currentUsableConvertedQuote || projectJson.primary_quote || projectedQuote;
+    const projectedTotal = parseAmountCandidate(projectedQuote?.total);
+    if (
+      !currentUsableConvertedQuote &&
+      !projectJson.primary_quote &&
+      projectedTotal !== null &&
+      projectedTotal > 0
+    ) {
+      totalValueAmount = projectedTotal;
+    }
     
     const parsedQuoteTotal = parseFloat(activeQuoteSource?.total || 0);
     let pricing_breakdown = {
       shoot_cost: 0,
       editing_cost: 0,
+      studio_cost: 0,
+      studio_items: [],
       subtotal: 0,
       total_before_credit: 0,
       credit_applied: 0,
@@ -1919,14 +2020,26 @@ exports.getProjectDetails = async (req, res) => {
       total: 0
     };
     let subtotal = 0;
+    const studioSnapshot = getStudioPricingSnapshot(projectJson.description);
+    pricing_breakdown.studio_items = studioSnapshot.items;
+    let hasPersistedStudioLine = false;
 
     (activeQuoteSource?.line_items || []).forEach(item => {
         const cost = parseFloat(item.line_total || item.total || 0);
         subtotal += cost;
         const name = (item.item_name || '').toLowerCase();
-        if (name.includes('edit') || name.includes('reel') || name.includes('post')) pricing_breakdown.editing_cost += cost;
+        if (isStudioLineItem(item)) {
+          hasPersistedStudioLine = true;
+          pricing_breakdown.studio_cost += cost;
+        }
+        else if (name.includes('edit') || name.includes('reel') || name.includes('post')) pricing_breakdown.editing_cost += cost;
         else pricing_breakdown.shoot_cost += cost;
     });
+    if (!hasPersistedStudioLine && studioSnapshot.total > 0 && parsedQuoteTotal > subtotal) {
+      const legacyStudioAmount = Math.min(studioSnapshot.total, parsedQuoteTotal - subtotal);
+      pricing_breakdown.studio_cost += parseFloat(legacyStudioAmount.toFixed(2));
+      subtotal += legacyStudioAmount;
+    }
     pricing_breakdown.subtotal = subtotal;
     pricing_breakdown.total_before_credit = subtotal;
     pricing_breakdown.total_after_credit =
@@ -1994,7 +2107,91 @@ exports.getProjectDetails = async (req, res) => {
         : (lead?.activities || []),
       totalValueAmount || displayAmount
     );
-    const resolvedPaymentStatus = projectJson.payment_id
+    const paymentHistory = [];
+    (manualPaymentRows || []).forEach((manualPayment) => {
+      const manualPaymentId = Number(manualPayment.booking_manual_payment_id || 0);
+      if (!Number.isFinite(manualPaymentId) || manualPaymentId <= 0) return;
+      const normalizedMode = String(manualPayment.payment_mode || '').toLowerCase();
+      const method = normalizedMode === 'other' && String(manualPayment.other_payment_mode || '').trim()
+        ? String(manualPayment.other_payment_mode).trim()
+        : normalizedMode === 'net30'
+          ? 'Net 30'
+          : String(manualPayment.payment_mode || 'manual').replace(/_/g, ' ');
+
+      paymentHistory.push({
+        id: `manual-${manualPaymentId}`,
+        type: 'manual',
+        receipt_number: `RCPT-${String(projectJson.stream_project_booking_id).padStart(6, '0')}-${String(manualPaymentId).padStart(3, '0')}`,
+        invoice_number: `INVBEIGE-M-${String(projectJson.stream_project_booking_id).padStart(4, '0')}-${String(manualPaymentId).padStart(3, '0')}`,
+        method,
+        amount: Number(manualPayment.amount || 0),
+        status: 'paid',
+        paid_at: manualPayment.created_at || null,
+        receipt_url: buildShootReceiptUrl({
+          bookingId: projectJson.stream_project_booking_id,
+          manualPaymentId
+        }),
+        receipt_download_url: buildShootReceiptUrl({
+          bookingId: projectJson.stream_project_booking_id,
+          manualPaymentId,
+          download: true
+        })
+      });
+    });
+
+    if (paymentData?.payment_id && Number(paymentData.total_amount || 0) > 0) {
+      const normalizedStripeStatus = String(paymentData.status || '').trim().toLowerCase();
+      paymentHistory.push({
+        id: `stripe-${paymentData.payment_id}`,
+        type: 'stripe',
+        receipt_number: `RCPT-${String(projectJson.stream_project_booking_id).padStart(6, '0')}-S${String(paymentData.payment_id).padStart(3, '0')}`,
+        invoice_number: `INVBEIGE-S-${String(projectJson.stream_project_booking_id).padStart(4, '0')}-${String(paymentData.payment_id).padStart(3, '0')}`,
+        method: 'Online Payment',
+        amount: Number(paymentData.total_amount || 0),
+        status: ['succeeded', 'success', 'completed', 'complete', 'paid'].includes(normalizedStripeStatus)
+          ? 'paid'
+          : (paymentData.status || 'paid'),
+        paid_at: paymentData.created_at || projectJson.payment_completed_at || null,
+        receipt_url: buildShootReceiptUrl({
+          bookingId: projectJson.stream_project_booking_id,
+          paymentId: paymentData.payment_id
+        }),
+        receipt_download_url: buildShootReceiptUrl({
+          bookingId: projectJson.stream_project_booking_id,
+          paymentId: paymentData.payment_id,
+          download: true
+        })
+      });
+    }
+    paymentHistory.sort((left, right) => new Date(left.paid_at || 0).getTime() - new Date(right.paid_at || 0).getTime());
+
+    const summaryPaidAmount = bookingPaymentSummary
+      ? parseAmountCandidate(bookingPaymentSummary.paid_amount)
+      : null;
+    const summaryCreditUsedAmount = bookingPaymentSummary
+      ? parseAmountCandidate(bookingPaymentSummary.credit_used_amount)
+      : null;
+    const summaryPendingAmount = bookingPaymentSummary
+      ? parseAmountCandidate(bookingPaymentSummary.due_amount)
+      : null;
+    const summaryQuoteTotal = bookingPaymentSummary
+      ? parseAmountCandidate(bookingPaymentSummary.quote_total)
+      : null;
+    const totalPaidAmount = summaryPaidAmount !== null ? summaryPaidAmount : displayAmount;
+    totalValueAmount = Math.max(
+      totalValueAmount || 0,
+      summaryQuoteTotal || 0,
+      totalPaidAmount + (summaryCreditUsedAmount || 0) + (summaryPendingAmount || 0)
+    );
+    const creditUsedAmount = summaryCreditUsedAmount || 0;
+    const pendingAmount = Math.max(
+      summaryPendingAmount || 0,
+      totalValueAmount - totalPaidAmount - creditUsedAmount,
+      0
+    );
+    const resolvedPaymentStatus = pendingAmount > 0 && totalPaidAmount > 0
+      ? 'partially_paid'
+      : projectJson.payment_id
       ? 'paid'
       : manualPaymentSummary.hasFullPayment
         ? 'paid'
@@ -2009,8 +2206,13 @@ exports.getProjectDetails = async (req, res) => {
       data: {
         project: {
           ...projectJson,
-          total_paid_amount: displayAmount,
+          total_paid_amount: totalPaidAmount,
           total_value_amount: totalValueAmount,
+          paid_amount: totalPaidAmount,
+          pending_amount: pendingAmount,
+          due_amount: pendingAmount,
+          credit_used_amount: creditUsedAmount,
+          payment_status: resolvedPaymentStatus,
           notes_count: shootNotesCount,
           contact_registration_type: contactRegistrationType,
           is_registered_user: isRegisteredUser,
@@ -2042,6 +2244,7 @@ exports.getProjectDetails = async (req, res) => {
         converted_sales_quote_number: convertedSalesQuote?.quote_number || null,
         is_quote_converted_booking: isQuoteConvertedBooking,
         manual_payment_summary: manualPaymentSummary,
+        payment_history: paymentHistory,
         pricing_breakdown,
         payment_status: resolvedPaymentStatus,
         active_payment_link,
@@ -2971,7 +3174,7 @@ exports.updateProjectDateLocation = async (req, res) => {
 
 exports.getAllProjectDetails = async (req, res) => {
   try {
-    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment, production_filter } = req.query;
+    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment, production_filter, summary_only } = req.query;
     const today = new Date();
     const noPagination = !limit && !page;
 
@@ -3017,6 +3220,7 @@ exports.getAllProjectDetails = async (req, res) => {
       bookedClientLeads,
       salesManualPaymentActivities,
       clientManualPaymentActivities,
+      collectedPaymentSummaryRows,
     ] = await Promise.all([
       sales_leads.findAll({
         where: {
@@ -3050,7 +3254,15 @@ exports.getAllProjectDetails = async (req, res) => {
         attributes: ['lead_id'],
         raw: true,
       }),
+      fetchCollectedBookingPaymentSummaries(),
     ]);
+
+    const collectedPaymentSummaryByBookingId = new Map();
+    collectedPaymentSummaryRows.forEach((row) => {
+      const bookingId = Number(row.booking_id);
+      if (!Number.isFinite(bookingId) || bookingId <= 0) return;
+      collectedPaymentSummaryByBookingId.set(bookingId, row);
+    });
 
     const manualSalesLeadIds = Array.from(new Set(
       salesManualPaymentActivities
@@ -3094,6 +3306,7 @@ exports.getAllProjectDetails = async (req, res) => {
       ...bookedClientLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
       ...manualPaidSalesLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
       ...manualPaidClientLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
+      ...collectedPaymentSummaryRows.map((row) => Number(row.booking_id)).filter(Number.isFinite),
     ]));
 
     const paidOnlyFilter = {
@@ -3224,6 +3437,26 @@ exports.getAllProjectDetails = async (req, res) => {
       ],
     });
 
+    if (String(summary_only || '').toLowerCase() === 'true' || String(summary_only) === '1') {
+      const projects = projectRows.map((project) => ({
+        project: typeof project.toJSON === 'function' ? project.toJSON() : project,
+      }));
+
+      return res.status(200).json({
+        error: false,
+        message: 'Project summaries retrieved successfully',
+        data: {
+          stats: { total_active, total_cancelled, total_completed, total_upcoming, total_draft },
+          projects,
+          pagination: noPagination ? null : {
+            page: pageNumber,
+            limit: pageSize,
+            totalRecords: projects.length,
+          },
+        },
+      });
+    }
+
     const shootNotesCountMap = await countActiveShootNotesByBookingIds(
       projectRows.map((project) => project.stream_project_booking_id)
     );
@@ -3260,13 +3493,62 @@ exports.getAllProjectDetails = async (req, res) => {
         }),
       ]);
 
+      const bookingPaymentSummary = collectedPaymentSummaryByBookingId.get(Number(project.stream_project_booking_id)) || null;
       const displayAmount = await resolveProjectDisplayAmount({
         project,
         paymentData,
       });
-      const totalValueAmount = await resolveProjectTotalValueAmount({
+      const summaryPaidAmount = bookingPaymentSummary
+        ? parseAmountCandidate(bookingPaymentSummary.paid_amount)
+        : null;
+      const summaryCreditUsedAmount = bookingPaymentSummary
+        ? parseAmountCandidate(bookingPaymentSummary.credit_used_amount)
+        : null;
+      const summaryPendingAmount = bookingPaymentSummary
+        ? parseAmountCandidate(bookingPaymentSummary.due_amount)
+        : null;
+      const summaryQuoteTotal = bookingPaymentSummary
+        ? parseAmountCandidate(bookingPaymentSummary.quote_total)
+        : null;
+      const resolvedQuoteValueAmount = await resolveProjectTotalValueAmount({
         project,
+        salesQuoteId: bookingPaymentSummary?.sales_quote_id || null,
       });
+      const totalPaidAmount = summaryPaidAmount !== null
+        ? summaryPaidAmount
+        : (project.payment_id ? displayAmount : 0);
+      const creditUsedAmount = summaryCreditUsedAmount || 0;
+      const knownCollectedTotal = totalPaidAmount + creditUsedAmount + (summaryPendingAmount || 0);
+      let totalValueAmount = Math.max(
+        summaryQuoteTotal || 0,
+        resolvedQuoteValueAmount || 0,
+        knownCollectedTotal || 0
+      );
+      const shouldUseCalculatedBookingPricing =
+        totalValueAmount <= totalPaidAmount ||
+        (summaryQuoteTotal === null && (!resolvedQuoteValueAmount || resolvedQuoteValueAmount <= 0));
+
+      if (shouldUseCalculatedBookingPricing) {
+        const projectedPricing = await bookingPricingService.calculateBookingPricing({
+          ...project.toJSON(),
+          booking_days: bookingDaysData
+        });
+        const projectedTotal = parseAmountCandidate(projectedPricing?.total);
+        if (projectedTotal !== null && projectedTotal > totalValueAmount) {
+          totalValueAmount = projectedTotal;
+        }
+      }
+      const pendingAmount = Math.max(
+        summaryPendingAmount || 0,
+        totalValueAmount - totalPaidAmount - creditUsedAmount,
+        0
+      );
+      const paymentStatus = pendingAmount > 0 && totalPaidAmount > 0
+        ? 'partially_paid'
+        : String(
+            bookingPaymentSummary?.payment_status ||
+            (project.payment_id ? 'paid' : (totalPaidAmount > 0 ? 'partially_paid' : 'pending'))
+          ).toLowerCase();
 
       const rawTypes = project.event_type ? project.event_type.split(',') : [];
       const formattedTypes = rawTypes.map(t => {
@@ -3287,8 +3569,13 @@ exports.getAllProjectDetails = async (req, res) => {
       return {
         project: {
           ...projectJson,
-          total_paid_amount: displayAmount,
+          total_paid_amount: totalPaidAmount,
           total_value_amount: totalValueAmount,
+          paid_amount: totalPaidAmount,
+          pending_amount: pendingAmount,
+          due_amount: pendingAmount,
+          credit_used_amount: summaryCreditUsedAmount || 0,
+          payment_status: paymentStatus,
           notes_count: shootNotesCount,
           event_type_labels: formattedTypes.join(', '),
           timeline_status: timelineStatus,
@@ -7179,12 +7466,24 @@ exports.getShootByCategory = async (req, res) => {
       narrative: { label: 'Short Films & Narrative', color: '#6366F1', matches: ['narrative', 'short film'] }
     };
 
-    // 1. Fetch Paid Bookings
+    const collectedPaymentSummaryRows = await fetchCollectedBookingPaymentSummaries();
+    const collectedSummaryBookingIds = Array.from(new Set(
+      collectedPaymentSummaryRows
+        .map((row) => Number(row.booking_id))
+        .filter(Number.isFinite)
+    ));
+
+    // 1. Fetch paid or partially paid bookings
     const bookings = await stream_project_booking.findAll({
       attributes: ['project_name', 'event_type', 'skills_needed', 'stream_project_booking_id', 'payment_id'],
       where: { 
         is_active: 1,
-        payment_id: { [Sequelize.Op.ne]: null } // Paid projects only
+        [Sequelize.Op.or]: [
+          { payment_id: { [Sequelize.Op.ne]: null } },
+          ...(collectedSummaryBookingIds.length
+            ? [{ stream_project_booking_id: { [Sequelize.Op.in]: collectedSummaryBookingIds } }]
+            : [])
+        ]
       },
       raw: true
     });
@@ -7442,15 +7741,214 @@ exports.assignPostProductionMember = async (req, res) => {
   }
 };
 
+const truthyQueryValues = new Set(['1', 'true', 'yes', 'y']);
+const restoreClientModes = new Set(['normal', 'restore_as_dual_profile', 'convert_back_to_client']);
+
+const isTruthyQuery = (value) => truthyQueryValues.has(String(value || '').trim().toLowerCase());
+
+const getClientArchiveStatus = (client) => Number(client?.is_active) === 1 ? 'active' : 'archived';
+
+const getRequestActor = async (req) => {
+  const actorId = Number(req.user?.userId || req.userId || 0);
+  if (!Number.isInteger(actorId) || actorId <= 0) {
+    return null;
+  }
+
+  const actor = await users.findOne({
+    where: { id: actorId },
+    attributes: ['id', 'name', 'email', 'role'],
+    raw: true
+  });
+
+  return {
+    id: actorId,
+    name: actor?.name || actor?.email || `User ${actorId}`,
+    role: req.user?.userRole || req.userRole || actor?.role || null
+  };
+};
+
+const writeArchiveHistory = async ({
+  client,
+  action,
+  reason = null,
+  actor,
+  previousStatus,
+  newStatus,
+  metadata = null,
+  transaction = null
+}) => {
+  return user_archive_history.create({
+    target_type: 'client',
+    target_id: client.client_id,
+    user_id: client.user_id || null,
+    action,
+    reason,
+    performed_by_user_id: actor.id,
+    performed_by_name: actor.name,
+    performed_by_role: actor.role,
+    previous_status: previousStatus,
+    new_status: newStatus,
+    metadata
+  }, { transaction });
+};
+
+const getArchiveHistoryForClient = async (clientId) => {
+  const rows = await user_archive_history.findAll({
+    where: {
+      target_type: 'client',
+      target_id: clientId
+    },
+    order: [['created_at', 'DESC']],
+    raw: true
+  });
+
+  return rows.map((row) => ({
+    history_id: row.history_id,
+    target_type: row.target_type,
+    target_id: row.target_id,
+    user_id: row.user_id,
+    action: row.action,
+    reason: row.reason,
+    performed_by_user_id: row.performed_by_user_id,
+    performed_by_name: row.performed_by_name,
+    performed_by_role: row.performed_by_role,
+    previous_status: row.previous_status,
+    new_status: row.new_status,
+    metadata: row.metadata,
+    created_at: row.created_at
+  }));
+};
+
+const writeInternalUserArchiveHistory = async ({
+  user,
+  action,
+  reason = null,
+  actor,
+  previousStatus,
+  newStatus,
+  metadata = null,
+  transaction = null
+}) => {
+  return user_archive_history.create({
+    target_type: 'internal_user',
+    target_id: user.id,
+    user_id: user.id,
+    action,
+    reason,
+    performed_by_user_id: actor.id,
+    performed_by_name: actor.name,
+    performed_by_role: actor.role,
+    previous_status: previousStatus,
+    new_status: newStatus,
+    metadata
+  }, { transaction });
+};
+
+const getArchiveHistoryForInternalUser = async (userId) => {
+  const rows = await user_archive_history.findAll({
+    where: {
+      target_type: 'internal_user',
+      target_id: userId
+    },
+    order: [['created_at', 'DESC']],
+    raw: true
+  });
+
+  return rows.map((row) => ({
+    history_id: row.history_id,
+    target_type: row.target_type,
+    target_id: row.target_id,
+    user_id: row.user_id,
+    action: row.action,
+    reason: row.reason,
+    performed_by_user_id: row.performed_by_user_id,
+    performed_by_name: row.performed_by_name,
+    performed_by_role: row.performed_by_role,
+    previous_status: row.previous_status,
+    new_status: row.new_status,
+    metadata: row.metadata,
+    created_at: row.created_at
+  }));
+};
+
+const findActiveCreativePartnerForClient = async (client, transaction = null) => {
+  if (!client) return null;
+
+  const where = {
+    is_active: 1,
+    [Op.or]: []
+  };
+
+  if (client.user_id) {
+    where[Op.or].push({ user_id: client.user_id });
+  }
+
+  if (client.email) {
+    where[Op.or].push({ email: client.email });
+  }
+
+  if (!where[Op.or].length) return null;
+
+  return crew_members.findOne({
+    where,
+    attributes: ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email', 'is_active'],
+    transaction
+  });
+};
+
+const resolveUserTypeId = async (roles, transaction = null) => {
+  const roleList = Array.isArray(roles) ? roles : [roles];
+  const roleRows = await db.user_type.findAll({
+    where: {
+      user_role: {
+        [Op.in]: roleList
+      }
+    },
+    attributes: ['user_type_id', 'user_role'],
+    transaction,
+    raw: true
+  });
+
+  return roleRows[0]?.user_type_id || null;
+};
+
+const splitClientName = (name = '') => {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) {
+    return { first_name: 'Creative', last_name: 'Partner' };
+  }
+
+  return {
+    first_name: parts[0],
+    last_name: parts.slice(1).join(' ') || parts[0]
+  };
+};
+
+const buildClientArchiveFields = (client) => ({
+  archive_status: getClientArchiveStatus(client),
+  is_archived: Number(client?.is_active) !== 1,
+  archived_at: client?.archived_at || null,
+  archive_reason: client?.archive_reason || null,
+  restored_at: client?.restored_at || null
+});
+
 exports.getClients = async (req, res) => {
   try {
-    let { page = 1, limit = 20, search, range, start_date, end_date } = req.query;
+    let { page = 1, limit = 20, search, range, start_date, end_date, include_archived, archived_only } = req.query;
 
     page = parseInt(page);
     limit = parseInt(limit);
     const offset = (page - 1) * limit;
 
-    const whereConditions = { is_active: 1 };
+    const whereConditions = {};
+    const shouldIncludeArchived = isTruthyQuery(include_archived);
+    const shouldShowArchivedOnly = isTruthyQuery(archived_only);
+
+    if (shouldShowArchivedOnly) {
+      whereConditions.is_active = 0;
+    } else if (!shouldIncludeArchived) {
+      whereConditions.is_active = 1;
+    }
 
     if (start_date && end_date) {
       whereConditions.created_at = {
@@ -7555,6 +8053,7 @@ exports.getClients = async (req, res) => {
 
       return {
         ...client.toJSON(),
+        ...buildClientArchiveFields(client),
         client_type: clientType,
         registration_type: clientType,
         is_guest: !hasLinkedUser,
@@ -7661,46 +8160,378 @@ exports.editClient = async (req, res) => {
 };
 
 exports.deleteClient = async (req, res) => {
-  try {
-    const { client_id } = req.params; // Assuming client_id is passed as a parameter
+  const transaction = await db.sequelize.transaction();
 
-    // Find the client by client_id
+  try {
+    const { client_id } = req.params;
+    const { reason = null } = req.body || {};
+    const actor = await getRequestActor(req);
+
+    if (!actor) {
+      await transaction.rollback();
+      return res.status(401).json({
+        error: true,
+        message: 'Authentication required to archive a client'
+      });
+    }
+
     const client = await clients.findOne({
-      where: { client_id, is_active: 1 } // Only proceed if the client is active
+      where: { client_id, is_active: 1 },
+      transaction
     });
 
     if (!client) {
+      await transaction.rollback();
       return res.status(404).json({
         error: true,
-        message: 'Client not found or already inactive'
+        message: 'Client not found or already archived'
       });
     }
 
-    // Find the associated user using the user_id from the client
-    const user = await users.findOne({
-      where: { id: client.user_id, is_active: 1 } // Ensure user is active
+    await client.update({
+      is_active: 0,
+      archived_at: new Date(),
+      archived_by_user_id: actor.id,
+      archive_reason: reason || 'Archived by admin',
+      restored_at: null,
+      restored_by_user_id: null
+    }, { transaction });
+
+    if (client.user_id) {
+      await users.increment('permissions_version', {
+        by: 1,
+        where: { id: client.user_id },
+        transaction
+      });
+      await affiliates.update(
+        { status: 'paused', is_active: 0 },
+        { where: { user_id: client.user_id }, transaction }
+      );
+    }
+
+    await writeArchiveHistory({
+      client,
+      action: 'archived',
+      reason: reason || 'Archived by admin',
+      actor,
+      previousStatus: 'active',
+      newStatus: 'archived',
+      metadata: {
+        source_endpoint: 'DELETE /admin/delete-client/:client_id',
+        user_kept_active: true
+      },
+      transaction
     });
 
-    if (!user) {
-      return res.status(404).json({
-        error: true,
-        message: 'Associated user not found or inactive'
-      });
-    }
-
-    // Soft delete the client by setting is_active to 0
-    await client.update({ is_active: 0 });
-
-    // Soft delete the associated user by setting is_active to 0
-    await user.update({ is_active: 0 });
+    await transaction.commit();
 
     return res.status(200).json({
       error: false,
-      message: 'Client and associated user deactivated successfully'
+      message: 'Client archived successfully',
+      data: {
+        client_id: Number(client_id),
+        archive_status: 'archived',
+        user_kept_active: true
+      }
     });
 
   } catch (error) {
+    await transaction.rollback();
     console.error("Error deleting client:", error);
+    return res.status(500).json({
+      error: true,
+      message: 'Internal server error'
+    });
+  }
+};
+
+exports.restoreClient = async (req, res) => {
+  const transaction = await db.sequelize.transaction();
+
+  try {
+    const { client_id } = req.params;
+    const { reason = null, mode = 'normal' } = req.body || {};
+    const actor = await getRequestActor(req);
+
+    if (!restoreClientModes.has(mode)) {
+      await transaction.rollback();
+      return res.status(400).json({
+        error: true,
+        code: 'INVALID_RESTORE_MODE',
+        message: 'Restore mode must be normal, restore_as_dual_profile, or convert_back_to_client'
+      });
+    }
+
+    if (!actor) {
+      await transaction.rollback();
+      return res.status(401).json({
+        error: true,
+        message: 'Authentication required to restore a client'
+      });
+    }
+
+    const client = await clients.findOne({
+      where: { client_id },
+      transaction
+    });
+
+    if (!client) {
+      await transaction.rollback();
+      return res.status(404).json({
+        error: true,
+        message: 'Client not found'
+      });
+    }
+
+    if (Number(client.is_active) === 1) {
+      await transaction.rollback();
+      return res.status(409).json({
+        error: true,
+        code: 'CLIENT_ALREADY_ACTIVE',
+        message: 'Client is already active'
+      });
+    }
+
+    const activeCreativePartner = await findActiveCreativePartnerForClient(client, transaction);
+
+    if (activeCreativePartner && mode === 'normal') {
+      await writeArchiveHistory({
+        client,
+        action: 'restore_blocked_role_conflict',
+        reason: reason || 'Restore blocked because active creative partner exists',
+        actor,
+        previousStatus: 'archived',
+        newStatus: 'archived',
+        metadata: {
+          creative_partner_id: activeCreativePartner.crew_member_id,
+          restore_mode: mode
+        },
+        transaction
+      });
+
+      await transaction.commit();
+
+      return res.status(409).json({
+        error: true,
+        code: 'ROLE_CONFLICT',
+        message: 'This account is currently an active creative partner. Choose restore_as_dual_profile or convert_back_to_client.',
+        data: {
+          client_id: client.client_id,
+          user_id: client.user_id,
+          creative_partner_id: activeCreativePartner.crew_member_id
+        }
+      });
+    }
+
+    if (activeCreativePartner && mode === 'convert_back_to_client') {
+      await activeCreativePartner.update({ is_active: 0 }, { transaction });
+
+      const clientTypeId = await resolveUserTypeId(['client'], transaction);
+      if (client.user_id && clientTypeId) {
+        await users.update(
+          { user_type: clientTypeId, role: 'client' },
+          { where: { id: client.user_id }, transaction }
+        );
+      }
+    }
+
+    await client.update({
+      is_active: 1,
+      restored_at: new Date(),
+      restored_by_user_id: actor.id
+    }, { transaction });
+
+    if (client.user_id) {
+      await users.increment('permissions_version', {
+        by: 1,
+        where: { id: client.user_id },
+        transaction
+      });
+      await affiliates.update(
+        { status: 'active', is_active: 1 },
+        { where: { user_id: client.user_id }, transaction }
+      );
+    }
+
+    await writeArchiveHistory({
+      client,
+      action: 'restored',
+      reason: reason || 'Restored by admin',
+      actor,
+      previousStatus: 'archived',
+      newStatus: 'active',
+      metadata: {
+        restore_mode: mode,
+        creative_partner_id: activeCreativePartner?.crew_member_id || null
+      },
+      transaction
+    });
+
+    await transaction.commit();
+
+    return res.status(200).json({
+      error: false,
+      message: 'Client restored successfully',
+      data: {
+        client_id: client.client_id,
+        archive_status: 'active',
+        restore_mode: mode,
+        creative_partner_id: activeCreativePartner?.crew_member_id || null
+      }
+    });
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Error restoring client:', error);
+    return res.status(500).json({
+      error: true,
+      message: 'Internal server error'
+    });
+  }
+};
+
+exports.convertClientToCreativePartner = async (req, res) => {
+  const transaction = await db.sequelize.transaction();
+
+  try {
+    const { client_id } = req.params;
+    const { reason = null, creative_partner = {} } = req.body || {};
+    const actor = await getRequestActor(req);
+
+    if (!actor) {
+      await transaction.rollback();
+      return res.status(401).json({
+        error: true,
+        message: 'Authentication required to convert a client'
+      });
+    }
+
+    const client = await clients.findOne({
+      where: { client_id },
+      transaction
+    });
+
+    if (!client) {
+      await transaction.rollback();
+      return res.status(404).json({
+        error: true,
+        message: 'Client not found'
+      });
+    }
+
+    let clientUser = client.user_id
+      ? await users.findOne({ where: { id: client.user_id }, transaction })
+      : null;
+
+    if (!clientUser && client.email) {
+      clientUser = await users.findOne({ where: { email: client.email }, transaction });
+    }
+
+    if (!clientUser) {
+      await transaction.rollback();
+      return res.status(404).json({
+        error: true,
+        message: 'Associated user not found. Please create or link the user before converting.'
+      });
+    }
+
+    let creativePartner = await findActiveCreativePartnerForClient(client, transaction);
+    const nameParts = splitClientName(client.name);
+
+    if (!creativePartner) {
+      creativePartner = await crew_members.findOne({
+        where: { email: client.email },
+        transaction
+      });
+
+      if (creativePartner) {
+        await creativePartner.update({
+          user_id: clientUser.id,
+          is_active: 1,
+          is_available: creativePartner.is_available ?? 1,
+          primary_role: creative_partner.primary_role || creativePartner.primary_role
+        }, { transaction });
+      } else {
+        creativePartner = await crew_members.create({
+          user_id: clientUser.id,
+          first_name: creative_partner.first_name || nameParts.first_name,
+          last_name: creative_partner.last_name || nameParts.last_name,
+          email: client.email,
+          phone_number: client.phone_number || null,
+          primary_role: creative_partner.primary_role || null,
+          is_active: 1,
+          is_available: 1,
+          is_draft: creative_partner.is_draft ?? 1,
+          is_crew_verified: creative_partner.is_crew_verified ?? 0,
+          created_from: actor.id
+        }, { transaction });
+      }
+    }
+
+    const creatorTypeId = await resolveUserTypeId(['creator', 'creative_partner', 'creative'], transaction);
+    await clientUser.update({
+      user_type: creatorTypeId || clientUser.user_type,
+      role: 'creator',
+      is_active: 1,
+      permissions_version: Number(clientUser.permissions_version || 1) + 1
+    }, { transaction });
+
+    await affiliates.update(
+      { status: 'active', is_active: 1 },
+      { where: { user_id: clientUser.id }, transaction }
+    );
+
+    const wasActive = Number(client.is_active) === 1;
+    if (wasActive) {
+      await client.update({
+        is_active: 0,
+        archived_at: new Date(),
+        archived_by_user_id: actor.id,
+        archive_reason: reason || 'Converted to creative partner',
+        restored_at: null,
+        restored_by_user_id: null
+      }, { transaction });
+
+      await writeArchiveHistory({
+        client,
+        action: 'archived',
+        reason: reason || 'Converted to creative partner',
+        actor,
+        previousStatus: 'active',
+        newStatus: 'archived',
+        metadata: { source_endpoint: 'convert-to-creative-partner' },
+        transaction
+      });
+    }
+
+    await writeArchiveHistory({
+      client,
+      action: 'converted_to_creator',
+      reason: reason || 'Converted to creative partner',
+      actor,
+      previousStatus: wasActive ? 'active_client' : 'archived_client',
+      newStatus: 'creative_partner',
+      metadata: {
+        creative_partner_id: creativePartner.crew_member_id,
+        user_id: clientUser.id
+      },
+      transaction
+    });
+
+    await transaction.commit();
+
+    return res.status(200).json({
+      error: false,
+      message: 'Client converted to creative partner successfully',
+      data: {
+        client_id: client.client_id,
+        user_id: clientUser.id,
+        creative_partner_id: creativePartner.crew_member_id,
+        archive_status: 'archived'
+      }
+    });
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Error converting client to creative partner:', error);
     return res.status(500).json({
       error: true,
       message: 'Internal server error'
@@ -8026,12 +8857,24 @@ exports.getClientById = async (req, res) => {
       });
     }
 
-    // 1️⃣ Get Client
     const client = await clients.findOne({
       where: {
-        client_id: id,
-        is_active: 1
-      }
+        client_id: id
+      },
+      include: [
+        {
+          model: users,
+          as: 'archived_by',
+          required: false,
+          attributes: ['id', 'name', 'role']
+        },
+        {
+          model: users,
+          as: 'restored_by',
+          required: false,
+          attributes: ['id', 'name', 'role']
+        }
+      ]
     });
 
     if (!client) {
@@ -8041,24 +8884,30 @@ exports.getClientById = async (req, res) => {
       });
     }
 
-    // 2️⃣ Get User Details
     const user = await users.findOne({
       where: { id: client.user_id },
       attributes: { exclude: ['password_hash'] } // never return password
     });
 
-    // 3️⃣ Get Affiliate Details
     const affiliate = await affiliates.findOne({
       where: { user_id: client.user_id }
     });
+    const [archiveHistory, activeCreativePartner] = await Promise.all([
+      getArchiveHistoryForClient(client.client_id),
+      findActiveCreativePartnerForClient(client)
+    ]);
+
+    const archiveStatus = getClientArchiveStatus(client);
+    const canRestore = archiveStatus === 'archived' && !activeCreativePartner;
+
     const [creditSummary, creditHistoryRows] = await Promise.all([
       accountCreditService.getAccountCreditBalance({
         userId: client.user_id || null,
-        guestEmail: user?.email || null
+        guestEmail: user?.email || client.email || null
       }),
       accountCreditService.getAccountCreditHistory({
         userId: client.user_id || null,
-        guestEmail: user?.email || null,
+        guestEmail: user?.email || client.email || null,
         limit: 10,
         offset: 0
       })
@@ -8088,12 +8937,24 @@ exports.getClientById = async (req, res) => {
       data: {
         client: {
           ...client.toJSON(),
+          ...buildClientArchiveFields(client),
           client_type: user ? 'registered' : 'guest',
           registration_type: user ? 'registered' : 'guest',
           is_guest: !Boolean(user)
         },
         user: user,
         affiliate: affiliate,
+        archive_history: archiveHistory,
+        restore_options: {
+          can_restore: canRestore,
+          blocked_reason: archiveStatus === 'archived' && activeCreativePartner
+            ? 'ACTIVE_CREATIVE_PARTNER_EXISTS'
+            : null,
+          creative_partner_id: activeCreativePartner?.crew_member_id || null,
+          allowed_modes: activeCreativePartner
+            ? ['restore_as_dual_profile', 'convert_back_to_client']
+            : ['normal']
+        },
         account_credit: {
           total_credit_amount: creditSummary?.total_credit_amount || 0,
           used_credit_amount: creditSummary?.used_credit_amount || 0,
@@ -8114,6 +8975,104 @@ exports.getClientById = async (req, res) => {
   }
 };
 
+exports.getArchiveHistory = async (req, res) => {
+  try {
+    let {
+      page = 1,
+      limit = 20,
+      target_type = 'client',
+      action,
+      target_id
+    } = req.query;
+
+    page = parseInt(page, 10);
+    limit = parseInt(limit, 10);
+    page = Number.isInteger(page) && page > 0 ? page : 1;
+    limit = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 100) : 20;
+    const offset = (page - 1) * limit;
+
+    const where = {};
+
+    if (target_type) {
+      where.target_type = target_type;
+    }
+
+    if (action) {
+      where.action = action;
+    }
+
+    if (target_id) {
+      where.target_id = target_id;
+    }
+
+    const { count, rows } = await user_archive_history.findAndCountAll({
+      where,
+      limit,
+      offset,
+      order: [['created_at', 'DESC']],
+      raw: true
+    });
+
+    const clientIds = rows
+      .filter((row) => row.target_type === 'client')
+      .map((row) => Number(row.target_id))
+      .filter(Boolean);
+
+    const targetClients = clientIds.length
+      ? await clients.findAll({
+          where: { client_id: { [Op.in]: clientIds } },
+          attributes: ['client_id', 'name', 'email', 'is_active', 'archived_at', 'restored_at'],
+          raw: true
+        })
+      : [];
+
+    const clientMap = new Map(targetClients.map((client) => [Number(client.client_id), client]));
+
+    const data = rows.map((row) => {
+      const targetClient = row.target_type === 'client'
+        ? clientMap.get(Number(row.target_id))
+        : null;
+
+      return {
+        history_id: row.history_id,
+        target_type: row.target_type,
+        target_id: row.target_id,
+        target_name: targetClient?.name || null,
+        target_email: targetClient?.email || null,
+        user_id: row.user_id,
+        action: row.action,
+        reason: row.reason,
+        performed_by_user_id: row.performed_by_user_id,
+        performed_by_name: row.performed_by_name,
+        performed_by_role: row.performed_by_role,
+        previous_status: row.previous_status,
+        new_status: row.new_status,
+        metadata: row.metadata,
+        created_at: row.created_at,
+        archive_status: targetClient ? getClientArchiveStatus(targetClient) : null
+      };
+    });
+
+    return res.status(200).json({
+      error: false,
+      message: 'Archive history fetched successfully',
+      data,
+      pagination: {
+        total_records: count,
+        current_page: page,
+        per_page: limit,
+        total_pages: Math.ceil(count / limit)
+      }
+    });
+  } catch (error) {
+    console.error('Get Archive History Error:', error);
+    return res.status(500).json({
+      error: true,
+      message: 'Internal server error'
+    });
+  }
+};
+
 exports.getClientsShoots = async (req, res) => {
   try {
     const { clientId } = req.params;
@@ -8127,7 +9086,7 @@ exports.getClientsShoots = async (req, res) => {
 
     // 1️⃣ Get client to find user_id
     const client = await clients.findOne({
-      where: { client_id: clientId, is_active: 1 }
+      where: { client_id: clientId }
     });
 
     if (!client) {
@@ -8954,10 +9913,10 @@ exports.assignCrewBulkSmart = async (req, res) => {
 
             if (roleDetected) {
               const acceptedCount = currentCounts[roleDetected];
-              const limit = requestedLimits[roleDetected] || 0;
+              const limit = requestedLimits[roleDetected];
 
-              if (acceptedCount >= limit) {
-                errors.push(`Cannot add ${crew.first_name} (${roleDetected}). Required crew already accepted.`);
+              if (limit !== undefined && acceptedCount >= limit) {
+                errors.push(`Cannot add ${crew.first_name} (${roleDetected}).Limit of ${limit} reached.`);
               } else {
                 assignmentsToCreate.push({
                   project_id: booking.stream_project_booking_id,
@@ -8970,8 +9929,16 @@ exports.assignCrewBulkSmart = async (req, res) => {
                 });
               }
             } else {
-                errors.push(`Crew member ${crew.first_name} has an unknown role and cannot be assigned.`);
-            }
+              assignmentsToCreate.push({
+                  project_id: booking.stream_project_booking_id,
+                  crew_member_id: crew.crew_member_id,
+                  assigned_date: new Date(),
+                  status: 'selected',
+                  crew_accept: 0,
+                  is_active: 1,
+                  organization_type: 1
+              });
+          }
         });
 
         if (errors.length > 0 && assignmentsToCreate.length === 0) {
@@ -10768,6 +11735,1706 @@ exports.getAllAssignedRequests = async (req, res) => {
     return res.status(500).json({
       error: true,
       message: 'Internal server error',
+    });
+  }
+};
+
+const formatUserTypeAsRole = (role, totalUsers = 0) => ({
+  role_id: role.user_type_id,
+  name: role.user_role,
+  description: role.description || null,
+  is_system: 0,
+  is_active: role.is_active,
+  created_by: role.created_by || null,
+  updated_by: role.updated_by || null,
+  created_at: role.created_at || null,
+  updated_at: role.updated_at || null,
+  total_users: totalUsers
+});
+
+const SUPER_ADMIN_ROLE_NAMES = ['super_admin', 'superadmin', 'super admin', 'Super Admin', 'Super_Admin'];
+
+const isSuperAdminRoleName = (roleName) => {
+  const normalized = String(roleName || '').trim().toLowerCase().replace(/\s+/g, '_');
+  return normalized === 'super_admin' || normalized === 'superadmin';
+};
+
+const normalizePermissionScope = (scope) => String(scope || '').trim().toLowerCase();
+
+const formatPermissionLabel = (key) => String(key || '')
+  .split('_')
+  .filter(Boolean)
+  .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+  .join(' ');
+
+const getPermissionScopeKey = (permission = {}) => {
+  if (permission.role_key) return permission.role_key;
+  return 'other';
+};
+
+const getLegacyModuleKey = (moduleKey, scopeKey) => {
+  const prefix = String(scopeKey || '');
+  if (prefix && prefix !== 'other' && String(moduleKey || '').startsWith(`${prefix}_`)) {
+    return String(moduleKey).slice(`${prefix}_`.length);
+  }
+
+  return moduleKey;
+};
+
+const formatModuleDisplayName = (moduleKey, scopeKey) => formatPermissionLabel(getLegacyModuleKey(moduleKey, scopeKey));
+
+const buildPermissionEntries = (permissions = {}, includeDenied = false) => {
+  const permissionEntries = [];
+
+  Object.keys(permissions || {}).forEach(module => {
+    const actions = permissions[module];
+
+    if (Array.isArray(actions)) {
+      actions.forEach(action => {
+        permissionEntries.push({
+          permission_key: `${module}.${action}`,
+          is_allowed: 1
+        });
+      });
+      return;
+    }
+
+    if (actions && typeof actions === 'object') {
+      Object.keys(actions).forEach(action => {
+        const isAllowed = Boolean(actions[action]);
+        if (isAllowed || includeDenied) {
+          permissionEntries.push({
+            permission_key: `${module}.${action}`,
+            is_allowed: isAllowed ? 1 : 0
+          });
+        }
+      });
+    }
+  });
+
+  return permissionEntries;
+};
+
+const buildPermissionKeys = (permissions = {}) => {
+  return buildPermissionEntries(permissions).map(entry => entry.permission_key);
+};
+
+const syncRolePermissions = async (roleId, permissions = {}) => {
+  const permissionKeys = buildPermissionKeys(permissions);
+
+  await db.role_permissions.update(
+    { is_active: 0 },
+    { where: { role_id: roleId } }
+  );
+
+  if (!permissionKeys.length) {
+    return;
+  }
+
+  const permissionRecords = await db.permissions.findAll({
+    where: {
+      permission_key: {
+        [Op.in]: permissionKeys
+      },
+      is_active: 1
+    }
+  });
+
+  const rolePermissionData = permissionRecords.map(permission => ({
+    role_id: roleId,
+    permission_id: permission.permission_id,
+    is_active: 1
+  }));
+
+  if (rolePermissionData.length) {
+    await db.role_permissions.bulkCreate(rolePermissionData);
+  }
+};
+
+const formatRolePermissions = async (roleId) => {
+  const rolePermissions = await db.role_permissions.findAll({
+    where: {
+      role_id: roleId,
+      is_active: 1
+    },
+    include: [
+      {
+        model: db.permissions,
+        as: 'permission',
+        required: false
+      }
+    ]
+  });
+
+  const formattedPermissions = {};
+
+  rolePermissions.forEach(item => {
+    const permission = item.permission;
+
+    if (!permission) {
+      return;
+    }
+
+    const module = permission.module_key;
+    const action = permission.action_key;
+
+    if (!formattedPermissions[module]) {
+      formattedPermissions[module] = {
+        view: false,
+        create: false,
+        edit: false,
+        delete: false
+      };
+    }
+
+    formattedPermissions[module][action] = true;
+  });
+
+  return formattedPermissions;
+};
+
+const syncUserPermissions = async (userId, permissions = {}) => {
+  const permissionEntries = buildPermissionEntries(permissions, true);
+  const permissionKeys = permissionEntries.map(entry => entry.permission_key);
+  const permissionEntryMap = permissionEntries.reduce((map, entry) => {
+    map[entry.permission_key] = entry.is_allowed;
+    return map;
+  }, {});
+
+  await db.user_permissions.update(
+    { is_active: 0 },
+    {
+      where: { user_id: userId }
+    }
+  );
+
+  if (!permissionKeys.length) return;
+
+  const permissionRecords = await db.permissions.findAll({
+    where: {
+      permission_key: {
+        [Op.in]: permissionKeys
+      },
+      is_active: 1
+    }
+  });
+
+  const userPermissionData = permissionRecords.map(permission => ({
+    user_id: userId,
+    permission_id: permission.permission_id,
+    is_allowed: permissionEntryMap[permission.permission_key] === 1 ? 1 : 0,
+    is_active: 1
+  }));
+
+  if (userPermissionData.length) {
+    await db.user_permissions.bulkCreate(userPermissionData, {
+      updateOnDuplicate: ['is_active', 'is_allowed']
+    });
+  }
+};
+
+const syncUserPermissionsFromRole = async (userId, roleId, transaction = null) => {
+  const queryOptions = transaction ? { transaction } : {};
+
+  await db.user_permissions.update(
+    {
+      is_active: 0,
+      is_allowed: 0
+    },
+    {
+      where: { user_id: userId },
+      ...queryOptions
+    }
+  );
+
+  const rolePermissions = await db.role_permissions.findAll({
+    where: {
+      role_id: roleId,
+      is_active: 1
+    },
+    attributes: ['permission_id'],
+    ...queryOptions
+  });
+
+  const permissionIds = [
+    ...new Set(
+      rolePermissions
+        .map(item => Number(item.permission_id))
+        .filter(permissionId => Number.isInteger(permissionId) && permissionId > 0)
+    )
+  ];
+
+  if (!permissionIds.length) {
+    return 0;
+  }
+
+  const userPermissionData = permissionIds.map(permissionId => ({
+    user_id: userId,
+    permission_id: permissionId,
+    is_allowed: 1,
+    is_active: 1
+  }));
+
+  await db.user_permissions.bulkCreate(userPermissionData, {
+    updateOnDuplicate: ['is_active', 'is_allowed'],
+    ...queryOptions
+  });
+
+  return userPermissionData.length;
+};
+
+const formatUserPermissions = async (userId) => {
+  const userPermissions = await db.user_permissions.findAll({
+    where: {
+      user_id: userId,
+      is_active: 1
+    },
+    include: [
+      {
+        model: db.permissions,
+        as: 'permission'
+      }
+    ]
+  });
+
+  const formattedPermissions = {};
+
+  userPermissions.forEach(item => {
+    const permission = item.permission;
+    if (!permission) return;
+
+    const module = permission.module_key;
+    const action = permission.action_key;
+
+    if (!formattedPermissions[module]) {
+      formattedPermissions[module] = {
+        view: false,
+        create: false,
+        edit: false,
+        delete: false
+      };
+    }
+
+    formattedPermissions[module][action] = item.is_allowed === 1;
+  });
+
+  return formattedPermissions;
+};
+
+const getCombinedUserPermissions = async (userId, roleId) => {
+  const rolePermissions = await formatRolePermissions(roleId);
+  const userPermissions = await formatUserPermissions(userId);
+
+  Object.keys(userPermissions).forEach(module => {
+    if (!rolePermissions[module]) {
+      rolePermissions[module] = {
+        view: false,
+        create: false,
+        edit: false,
+        delete: false
+      };
+    }
+
+    Object.keys(userPermissions[module]).forEach(action => {
+      rolePermissions[module][action] = userPermissions[module][action];
+    });
+  });
+
+  return rolePermissions;
+};
+
+exports.createRole = async (req, res) => {
+  try {
+    const { name, description } = req.body;
+
+    if (!name) {
+      return res.status(400).json({
+        success: false,
+        message: 'Role name is required'
+      });
+    }
+
+    const existingRole = await db.user_type.findOne({
+      where: {
+        user_role: name,
+        is_active: 1
+      }
+    });
+
+    if (existingRole) {
+      return res.status(409).json({
+        success: false,
+        message: 'Role already exists'
+      });
+    }
+
+    if (isSuperAdminRoleName(name)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Super admin role is system managed'
+      });
+    }
+
+    const newRole = await db.user_type.create({
+      user_role: name,
+      description,
+      is_active: 1
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: 'Role created successfully',
+      data: formatUserTypeAsRole(newRole)
+    });
+
+  } catch (error) {
+    console.error('Create Role Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while creating role',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.getRoles = async (req, res) => {
+  try {
+    const {
+      search = '',
+      month = '', // 1-12
+      year = '', // optional
+      sort_by = 'role_id',
+      order = 'DESC'
+    } = req.query;
+
+    const sortMap = {
+      role_id: 'user_type_id',
+      name: 'user_role',
+      is_active: 'is_active',
+      created_at: 'created_at'
+    };
+
+    const sortField = sortMap[sort_by] || 'user_type_id';
+    const sortOrder = order.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+
+    const whereCondition = {
+      is_active: 1,
+      user_type_id: {
+        [Op.notIn]: [2, 3]
+      }
+    };
+
+    // Search filter
+    if (search) {
+      whereCondition.user_role = {
+        [Op.like]: `%${search}%`
+      };
+    }
+
+    // Month + Year filter for "Sort by Date"
+    if (month) {
+      const selectedYear = year || new Date().getFullYear();
+
+      const startDate = new Date(selectedYear, month - 1, 1);
+      const endDate = new Date(selectedYear, month, 1);
+
+      whereCondition.created_at = {
+        [Op.gte]: startDate,
+        [Op.lt]: endDate
+      };
+    }
+
+    const roles = await db.user_type.findAll({
+      where: whereCondition,
+      order: [[sortField, sortOrder]]
+    });
+
+    const formattedRoles = await Promise.all(
+      roles.map(async (role) => {
+        const totalUsers = await db.users.count({
+          where: {
+            user_type: role.user_type_id,
+            is_active: 1
+          }
+        });
+
+        return formatUserTypeAsRole(role, totalUsers);
+      })
+    );
+
+    return res.status(200).json({
+      success: true,
+      total_roles: formattedRoles.length,
+      data: formattedRoles
+    });
+
+  } catch (error) {
+    console.error('Get Roles Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while fetching roles',
+      error:
+        process.env.NODE_ENV === 'development'
+          ? error.message
+          : undefined
+    });
+  }
+};
+
+exports.assignRoleToUser = async (req, res) => {
+  let transaction;
+
+  try {
+    const userId = Number(req.body.user_id);
+    const roleId = Number(req.body.role_id);
+
+    if (!Number.isInteger(userId) || userId <= 0 || !Number.isInteger(roleId) || roleId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid User ID and Role ID are required'
+      });
+    }
+
+    const user = await db.users.findOne({
+      where: {
+        id: userId,
+        is_active: 1
+      }
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const role = await db.user_type.findOne({
+      where: {
+        user_type_id: roleId,
+        is_active: 1
+      }
+    });
+
+    if (!role) {
+      return res.status(404).json({
+        success: false,
+        message: 'Role not found or inactive'
+      });
+    }
+
+    transaction = await db.sequelize.transaction();
+
+    await db.user_roles.update(
+      { is_active: 0 },
+      {
+        where: { user_id: userId },
+        transaction
+      }
+    );
+
+    await db.user_roles.create({
+      user_id: userId,
+      role_id: roleId,
+      is_active: 1
+    }, {
+      transaction
+    });
+
+    await db.users.update(
+      {
+        user_type: roleId,
+        role: role.user_role,
+        permissions_version: Sequelize.literal(
+          'permissions_version + 1'
+        )
+      },
+      {
+        where: { id: userId },
+        transaction
+      }
+    );
+
+    // await db.users.increment(
+    //   { permissions_version: 1 },
+    //   {
+    //     where: { id: userId },
+    //     transaction
+    //   }
+    // );
+
+    // await db.users.update(
+    //   {
+    //     user_type: roleId,
+    //     role: role.user_role
+    //   },
+    //   {
+    //     where: { id: userId },
+    //     transaction
+    //   }
+    // );
+
+    const assignedPermissionsCount = await syncUserPermissionsFromRole(userId, roleId, transaction);
+
+    await transaction.commit();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Role assigned successfully',
+      data: {
+        user_id: userId,
+        role_id: roleId,
+        permissions_assigned: assignedPermissionsCount
+      }
+    });
+
+  } catch (error) {
+    if (transaction && !transaction.finished) {
+      await transaction.rollback();
+    }
+
+    console.error('Assign Role Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while assigning role',
+      error:
+        process.env.NODE_ENV === 'development'
+          ? error.message
+          : undefined
+    });
+  }
+};
+
+exports.updateRole = async (req, res) => {
+  try {
+    const { role_id, name, description, permissions } = req.body;
+
+    if (!role_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Role ID is required'
+      });
+    }
+
+    const existingRole = await db.user_type.findOne({
+      where: {
+        user_type_id: role_id,
+        is_active: 1
+      }
+    });
+
+    if (!existingRole) {
+      return res.status(404).json({
+        success: false,
+        message: 'Role not found'
+      });
+    }
+
+    const roleUpdateData = {};
+
+    if (name !== undefined) {
+      roleUpdateData.user_role = name;
+    }
+
+    if (description !== undefined) {
+      roleUpdateData.description = description;
+    }
+
+    if (Object.keys(roleUpdateData).length) {
+      await db.user_type.update(roleUpdateData, {
+        where: { user_type_id: role_id }
+      });
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body, 'permissions')) {
+      await syncRolePermissions(role_id, permissions);
+
+      // Enable this when role permission updates should force logout for all users on the role.
+      // await db.users.update(
+      //   {
+      //     permissions_version: Sequelize.literal('permissions_version + 1')
+      //   },
+      //   {
+      //     where: {
+      //       user_type: role_id,
+      //       is_active: 1
+      //     }
+      //   }
+      // );
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Role updated successfully'
+    });
+
+  } catch (error) {
+    console.error('Update Role Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while updating role'
+    });
+  }
+};
+
+exports.deleteRole = async (req, res) => {
+  try {
+    const { role_id } = req.params;
+
+    if (!role_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Role ID is required'
+      });
+    }
+
+    const role = await db.user_type.findOne({
+      where: {
+        user_type_id: role_id,
+        is_active: 1
+      }
+    });
+
+    if (!role) {
+      return res.status(404).json({
+        success: false,
+        message: 'Role not found'
+      });
+    }
+
+    const assignedUsers = await db.users.count({
+      where: {
+        user_type: role_id
+      }
+    });
+
+    if (assignedUsers > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Role is assigned to users and cannot be deleted'
+      });
+    }
+
+    await db.user_type.update({
+      is_active: 0
+    }, {
+      where: { user_type_id: role_id }
+    });
+
+    await db.role_permissions.update({
+      is_active: 0
+    }, {
+      where: { role_id }
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Role deleted successfully'
+    });
+
+  } catch (error) {
+    console.error('Delete Role Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while deleting role'
+    });
+  }
+};
+
+exports.getRoleById = async (req, res) => {
+  try {
+    const { role_id } = req.params;
+
+    const role = await db.user_type.findOne({
+      where: {
+        user_type_id: role_id,
+        is_active: 1
+      }
+    });
+
+    if (!role) {
+      return res.status(404).json({
+        success: false,
+        message: 'Role not found'
+      });
+    }
+
+    const totalUsers = await db.users.count({
+      where: {
+        user_type: role_id,
+        is_active: 1
+      }
+    });
+
+    const formattedPermissions = await formatRolePermissions(role_id);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        role: formatUserTypeAsRole(role, totalUsers),
+        permissions: formattedPermissions
+      }
+    });
+
+  } catch (error) {
+    console.error('Get Role By ID Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while fetching role details',
+      error:
+        process.env.NODE_ENV === 'development'
+          ? error.message
+          : undefined
+    });
+  }
+};
+
+exports.getUsersWithRoles = async (req, res) => {
+  try {
+    const {
+      search = '',
+      status = '',
+      role_id = '',
+      month = '',
+      year = '',
+      sort_by = 'id',
+      order = 'DESC'
+    } = req.query;
+
+    const validSortFields = ['id', 'name', 'created_at', 'updated_at'];
+    const sortField = validSortFields.includes(sort_by) ? sort_by : 'id';
+    const sortOrder = order.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+
+    const userWhereCondition = {};
+
+    // Status filter
+    if (status !== '') {
+      userWhereCondition.is_active = status;
+    }
+
+    // Search filter
+    if (search) {
+      userWhereCondition[Op.or] = [
+        {
+          name: {
+            [Op.like]: `%${search}%`
+          }
+        },
+        {
+          email: {
+            [Op.like]: `%${search}%`
+          }
+        }
+      ];
+    }
+
+    // Month + Year filter
+    if (month) {
+      const selectedYear = year || new Date().getFullYear();
+
+      const startDate = new Date(selectedYear, month - 1, 1);
+      const endDate = new Date(selectedYear, month, 1);
+
+      userWhereCondition.created_at = {
+        [Op.gte]: startDate,
+        [Op.lt]: endDate
+      };
+    }
+
+    // Role filter
+    if (role_id) {
+      userWhereCondition.user_type = role_id;
+    } else {
+      userWhereCondition.user_type = {
+        [Op.notIn]: [2, 3]
+      };
+    }
+
+    const users = await db.users.scope('all').findAll({
+      where: userWhereCondition,
+      attributes: [
+        'id',
+        'name',
+        'email',
+        'user_type',
+        'created_at',
+        'updated_at',
+        'is_active'
+      ],
+      order: [[sortField, sortOrder]]
+    });
+
+    const userIds = users.map((user) => Number(user.id)).filter(Boolean);
+    const archiveHistoryRows = userIds.length
+      ? await user_archive_history.findAll({
+          where: {
+            target_type: 'internal_user',
+            target_id: { [Op.in]: userIds }
+          },
+          order: [['created_at', 'DESC']],
+          raw: true
+        })
+      : [];
+
+    const archiveHistoryMap = new Map();
+    archiveHistoryRows.forEach((row) => {
+      const key = Number(row.target_id);
+      const currentRows = archiveHistoryMap.get(key) || [];
+      currentRows.push({
+        history_id: row.history_id,
+        target_type: row.target_type,
+        target_id: row.target_id,
+        user_id: row.user_id,
+        action: row.action,
+        reason: row.reason,
+        performed_by_user_id: row.performed_by_user_id,
+        performed_by_name: row.performed_by_name,
+        performed_by_role: row.performed_by_role,
+        previous_status: row.previous_status,
+        new_status: row.new_status,
+        metadata: row.metadata,
+        created_at: row.created_at
+      });
+      archiveHistoryMap.set(key, currentRows);
+    });
+
+    const userTypes = await db.user_type.findAll({
+      where: {
+        is_active: 1
+      }
+    });
+
+    const userTypeMap = {};
+
+    userTypes.forEach(type => {
+      userTypeMap[type.user_type_id] = type.user_role;
+    });
+
+    const formattedUsers = users.map(user => {
+      const archiveHistory = archiveHistoryMap.get(Number(user.id)) || [];
+      const latestArchiveEvent = archiveHistory[0] || null;
+
+      return {
+        user_id: user.id,
+        name: user.name,
+        email: user.email,
+        role_id: user.user_type,
+        role_name: userTypeMap[user.user_type] || null,
+        created_at: user.created_at,
+        updated_at: user.updated_at,
+        is_active: user.is_active,
+        status_label: user.is_active ? 'Active' : 'In-Active',
+        archive_history: archiveHistory,
+        last_archive_event: latestArchiveEvent,
+        deleted_by_name: latestArchiveEvent?.action === 'deleted' ? latestArchiveEvent.performed_by_name : null,
+        deleted_at: latestArchiveEvent?.action === 'deleted' ? latestArchiveEvent.created_at : null,
+        restored_by_name: latestArchiveEvent?.action === 'restored' ? latestArchiveEvent.performed_by_name : null,
+        restored_at: latestArchiveEvent?.action === 'restored' ? latestArchiveEvent.created_at : null
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      total_users: formattedUsers.length,
+      data: formattedUsers
+    });
+
+  } catch (error) {
+    console.error('Get Users With Roles Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while fetching users with roles',
+      error:
+        process.env.NODE_ENV === 'development'
+          ? error.message
+          : undefined
+    });
+  }
+};
+
+exports.getUserRoleDetails = async (req, res) => {
+  try {
+    const { user_id } = req.params;
+
+    if (!user_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'User ID is required'
+      });
+    }
+
+    const user = await db.users.scope('all').findOne({
+      where: {
+        id: user_id
+      },
+      attributes: [
+        'id',
+        'name',
+        'email',
+        'user_type',
+        'created_at',
+        'updated_at',
+        'is_active'
+      ]
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const role = await db.user_type.findOne({
+      where: {
+        user_type_id: user.user_type,
+        is_active: 1
+      }
+    });
+
+    let formattedPermissions = {};
+
+    if (role) {
+      formattedPermissions = await getCombinedUserPermissions(
+        user.id,
+        role.user_type_id
+      );
+    }
+
+    const archiveHistory = await getArchiveHistoryForInternalUser(user.id);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        user: {
+          user_id: user.id,
+          name: user.name,
+          email: user.email,
+          user_type: user.user_type,
+          user_type_name: role ? role.user_role : null,
+          is_active: user.is_active,
+          status_label: user.is_active ? 'Active' : 'In-Active',
+          created_at: user.created_at,
+          updated_at:user.updated_at
+        },
+
+        role: role
+          ? {
+              role_id: role.user_type_id,
+              name: role.user_role,
+              description: role.description || null,
+              is_active: role.is_active,
+              created_at: role.created_at,
+              updated_at: role.updated_at
+            }
+          : null,
+
+        display_role: role ? role.user_role : null,
+
+        archive_history: archiveHistory,
+
+        permissions: formattedPermissions
+      }
+    });
+
+  } catch (error) {
+    console.error('Get User Role Details Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while fetching user role details',
+      error:
+        process.env.NODE_ENV === 'development'
+          ? error.message
+          : undefined
+    });
+  }
+};
+
+exports.getPermissionModules = async (req, res) => {
+  try {
+    const requestedScope = normalizePermissionScope(req.query.scope);
+    const grouped = !['0', 'false', 'no'].includes(String(req.query.grouped || 'true').toLowerCase());
+    const requestedScopeKey = requestedScope || null;
+
+    const permissions = await db.permissions.findAll({
+      where: {
+        is_active: 1
+      },
+      attributes: [
+        'permission_id',
+        'role_key',
+        'module_key',
+        'action_key',
+        'permission_key'
+      ],
+      order: [
+        ['role_key', 'ASC'],
+        ['module_key', 'ASC'],
+        ['action_key', 'ASC']
+      ]
+    });
+
+    const scopeMap = {};
+
+    permissions.forEach(permission => {
+      const scopeKey = getPermissionScopeKey(permission);
+      const module = permission.module_key;
+      const action = permission.action_key;
+
+      if (requestedScopeKey && scopeKey !== requestedScopeKey) {
+        return;
+      }
+
+      if (!scopeMap[scopeKey]) {
+        scopeMap[scopeKey] = {
+          scope: scopeKey,
+          scope_label: formatPermissionLabel(scopeKey),
+          modules: {}
+        };
+      }
+
+      if (!scopeMap[scopeKey].modules[module]) {
+        const legacyModuleKey = getLegacyModuleKey(module, scopeKey);
+        scopeMap[scopeKey].modules[module] = {
+          module_key: module,
+          display_name: formatModuleDisplayName(module, scopeKey),
+          legacy_module_key: legacyModuleKey,
+          actions: []
+        };
+      }
+
+      if (!scopeMap[scopeKey].modules[module].actions.some(item => item.action_key === action)) {
+        scopeMap[scopeKey].modules[module].actions.push({
+          permission_id: permission.permission_id,
+          action_key: action,
+          permission_key: permission.permission_key
+        });
+      }
+    });
+
+    const sortModules = (modules) => (
+      modules.sort((first, second) => first.module_key.localeCompare(second.module_key))
+    );
+
+    const formatScope = (scopeData) => {
+      const modules = sortModules(Object.values(scopeData.modules));
+      return {
+        scope: scopeData.scope,
+        scope_label: scopeData.scope_label,
+        total_modules: modules.length,
+        modules
+      };
+    };
+
+    if (grouped && !requestedScope) {
+      const groupedData = Object.values(scopeMap)
+        .map(formatScope)
+        .sort((first, second) => first.scope.localeCompare(second.scope));
+
+      return res.status(200).json({
+        success: true,
+        total_scopes: groupedData.length,
+        data: groupedData
+      });
+    }
+
+    const requestedScopeData = requestedScopeKey ? scopeMap[requestedScopeKey] : null;
+    const formattedModules = requestedScopeData
+      ? sortModules(Object.values(requestedScopeData.modules))
+      : [];
+
+    return res.status(200).json({
+      success: true,
+      scope: requestedScopeKey || null,
+      scope_label: requestedScopeData?.scope_label || (requestedScopeKey ? formatPermissionLabel(requestedScopeKey) : null),
+      total_modules: formattedModules.length,
+      data: formattedModules
+    });
+
+  } catch (error) {
+    console.error('Get Permission Modules Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while fetching permission modules',
+      error:
+        process.env.NODE_ENV === 'development'
+          ? error.message
+          : undefined
+    });
+  }
+};
+
+exports.deleteUser = async (req, res) => {
+  const user_id = Number(req.params.user_id);
+  const { reason = null } = req.body || {};
+
+  if (!Number.isInteger(user_id) || user_id <= 0) {
+    return res.status(400).json({
+      error: true,
+      message: 'Valid user_id is required'
+    });
+  }
+
+  const transaction = await db.sequelize.transaction();
+
+  try {
+    const actor = await getRequestActor(req);
+
+    if (!actor) {
+      await transaction.rollback();
+      return res.status(401).json({
+        error: true,
+        message: 'Authentication required to delete user'
+      });
+    }
+
+    const user = await users.scope('all').findOne({
+      where: {
+        id: user_id,
+        is_active: 1
+      },
+      transaction
+    });
+
+    if (!user) {
+      await transaction.rollback();
+      return res.status(404).json({
+        error: true,
+        message: 'User not found or inactive'
+      });
+    }
+
+    const role = await db.user_type.findOne({
+      where: { user_type_id: user.user_type },
+      attributes: ['user_type_id', 'user_role'],
+      raw: true,
+      transaction
+    });
+
+    // ================= CLIENT DELETE =================
+    if (user.user_type == 3) {
+      const client = await clients.findOne({
+        where: {
+          user_id,
+          is_active: 1
+        },
+        transaction
+      });
+
+      if (client) {
+        await client.update(
+          { is_active: 0 },
+          { transaction }
+        );
+
+        const clientLeadRows = await db.client_leads.findAll({
+          where: { user_id },
+          attributes: ['lead_id', 'booking_id'],
+          transaction
+        });
+
+        const unbookedLeadIdList = clientLeadRows
+          .filter(lead => !lead.booking_id)
+          .map(lead => lead.lead_id);
+
+        if (unbookedLeadIdList.length > 0) {
+          await db.client_leads.update(
+            { is_active: 0 },
+            {
+              where: {
+                lead_id: { [Op.in]: unbookedLeadIdList }
+              },
+              transaction
+            }
+          );
+
+          await db.client_lead_activities.update(
+            { is_active: 0 },
+            {
+              where: {
+                lead_id: { [Op.in]: unbookedLeadIdList }
+              },
+              transaction
+            }
+          );
+        }
+      }
+    }
+
+    // ================= CREW MEMBER DELETE =================
+    else if (user.user_type == 2 || user.user_type == 4) {
+      const crew_member = await crew_members.findOne({
+        where: {
+          user_id,
+          is_active: 1
+        },
+        transaction
+      });
+
+      if (crew_member) {
+        // Deactivate crew member
+        await crew_member.update(
+          { is_active: 0 },
+          { transaction }
+        );
+
+        await crew_member_files.update(
+          { is_active: 0 },
+          {
+            where: {
+              crew_member_id: crew_member.crew_member_id
+            },
+            transaction
+          }
+        );
+      }
+    }
+
+    // ================= AFFILIATE DELETE =================
+    await db.affiliates.update(
+      { is_active: 0 },
+      {
+        where: {
+          user_id
+        },
+        transaction
+      }
+    );
+
+    // ================= USER ROLE DELETE =================
+    await db.user_roles.update(
+      { is_active: 0 },
+      {
+        where: {
+          user_id
+        },
+        transaction
+      }
+    );
+
+    // ================= USER DELETE =================
+    await user.update(
+      { is_active: 0 },
+      { transaction }
+    );
+
+    await writeInternalUserArchiveHistory({
+      user,
+      action: 'deleted',
+      reason: reason || 'Deleted from roles and permissions',
+      actor,
+      previousStatus: 'active',
+      newStatus: 'inactive',
+      metadata: {
+        source_endpoint: 'DELETE /admin/delete-user/:user_id',
+        role_id: user.user_type,
+        role_name: role?.user_role || user.role || null
+      },
+      transaction
+    });
+
+    await transaction.commit();
+
+    return res.status(200).json({
+      error: false,
+      message: 'User deactivated successfully'
+    });
+
+  } catch (error) {
+    await transaction.rollback();
+
+    console.error('Error deleting user:', error);
+
+    return res.status(500).json({
+      error: true,
+      message: 'Internal server error'
+    });
+  }
+};
+
+exports.restoreUser = async (req, res) => {
+  const user_id = Number(req.params.user_id);
+  const { reason = null } = req.body || {};
+
+  if (!Number.isInteger(user_id) || user_id <= 0) {
+    return res.status(400).json({
+      error: true,
+      message: 'Valid user_id is required'
+    });
+  }
+
+  const transaction = await db.sequelize.transaction();
+
+  try {
+    const actor = await getRequestActor(req);
+
+    if (!actor) {
+      await transaction.rollback();
+      return res.status(401).json({
+        error: true,
+        message: 'Authentication required to restore user'
+      });
+    }
+
+    const user = await users.scope('all').findOne({
+      where: { id: user_id },
+      transaction
+    });
+
+    if (!user) {
+      await transaction.rollback();
+      return res.status(404).json({
+        error: true,
+        message: 'User not found'
+      });
+    }
+
+    if (Number(user.is_active) === 1) {
+      await transaction.rollback();
+      return res.status(409).json({
+        error: true,
+        message: 'User is already active'
+      });
+    }
+
+    const role = await db.user_type.findOne({
+      where: {
+        user_type_id: user.user_type,
+        is_active: 1
+      },
+      attributes: ['user_type_id', 'user_role'],
+      raw: true,
+      transaction
+    });
+
+    if (!role) {
+      await transaction.rollback();
+      return res.status(404).json({
+        error: true,
+        message: 'Assigned role not found or inactive'
+      });
+    }
+
+    await user.update({
+      is_active: 1,
+      permissions_version: Sequelize.literal('permissions_version + 1')
+    }, { transaction });
+
+    await db.user_roles.update(
+      { is_active: 0 },
+      {
+        where: { user_id },
+        transaction
+      }
+    );
+
+    const existingUserRole = await db.user_roles.findOne({
+      where: {
+        user_id,
+        role_id: user.user_type
+      },
+      transaction
+    });
+
+    if (existingUserRole) {
+      await existingUserRole.update({ is_active: 1 }, { transaction });
+    } else {
+      await db.user_roles.create({
+        user_id,
+        role_id: user.user_type,
+        is_active: 1
+      }, { transaction });
+    }
+
+    await writeInternalUserArchiveHistory({
+      user,
+      action: 'restored',
+      reason: reason || 'Restored from roles and permissions',
+      actor,
+      previousStatus: 'inactive',
+      newStatus: 'active',
+      metadata: {
+        source_endpoint: 'POST /admin/restore-user/:user_id',
+        role_id: user.user_type,
+        role_name: role.user_role
+      },
+      transaction
+    });
+
+    await transaction.commit();
+
+    return res.status(200).json({
+      error: false,
+      success: true,
+      message: 'User restored successfully',
+      data: {
+        user_id,
+        is_active: 1,
+        status_label: 'Active',
+        role_id: user.user_type,
+        role_name: role.user_role
+      }
+    });
+
+  } catch (error) {
+    await transaction.rollback();
+
+    console.error('Error restoring user:', error);
+
+    return res.status(500).json({
+      error: true,
+      message: 'Internal server error'
+    });
+  }
+};
+
+exports.assignPermissionsToUser = async (req, res) => {
+  try {
+    const { user_id, permissions } = req.body;
+
+    if (!user_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'User ID is required'
+      });
+    }
+
+    const user = await db.users.findOne({
+      where: {
+        id: user_id,
+        is_active: 1
+      }
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    await syncUserPermissions(user_id, permissions);
+
+    await db.users.update(
+      {
+        permissions_version: Sequelize.literal('permissions_version + 1')
+      },
+      {
+        where: { id: user_id }
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'User permissions assigned successfully'
+    });
+
+  } catch (error) {
+    console.error('Assign User Permissions Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while assigning permissions'
+    });
+  }
+};
+
+exports.updateUserPermissions = async (req, res) => {
+  try {
+    const { user_id, permissions } = req.body;
+
+    if (!user_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'User ID is required'
+      });
+    }
+
+    const user = await db.users.findOne({
+      where: {
+        id: user_id,
+        is_active: 1
+      }
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    await syncUserPermissions(user_id, permissions);
+
+    await db.users.update(
+      {
+        permissions_version: Sequelize.literal('permissions_version + 1')
+      },
+      {
+        where: { id: user_id }
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'User permissions updated successfully'
+    });
+
+  } catch (error) {
+    console.error('Update User Permissions Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while updating permissions'
+    });
+  }
+};
+
+exports.getUserPermissions = async (req, res) => {
+  try {
+    const { user_id } = req.params;
+
+    const user = await db.users.findOne({
+      where: {
+        id: user_id,
+        is_active: 1
+      }
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const permissions = await getCombinedUserPermissions(
+      user.id,
+      user.user_type
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        user_id: user.id,
+        permissions
+      }
+    });
+
+  } catch (error) {
+    console.error('Get User Permissions Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while fetching permissions'
+    });
+  }
+};
+
+exports.deleteUserPermission = async (req, res) => {
+  try {
+    const { user_id, permission_id, module_key, action_key } = req.params;
+
+    const user = await db.users.findOne({
+      where: {
+        id: user_id,
+        is_active: 1
+      }
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const permissionWhere = {
+      is_active: 1
+    };
+
+    if (module_key && action_key) {
+      permissionWhere.module_key = module_key;
+      permissionWhere.action_key = action_key;
+    } else if (permission_id && /^\d+$/.test(String(permission_id))) {
+      permissionWhere.permission_id = permission_id;
+    } else if (permission_id) {
+      permissionWhere.permission_key = permission_id;
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: 'Permission identifier is required'
+      });
+    }
+
+    const permission = await db.permissions.findOne({
+      where: permissionWhere
+    });
+
+    if (!permission) {
+      return res.status(404).json({
+        success: false,
+        message: 'Permission not found'
+      });
+    }
+
+    const rolePermission = await db.role_permissions.findOne({
+      where: {
+        role_id: user.user_type,
+        permission_id: permission.permission_id,
+        is_active: 1
+      }
+    });
+
+    if (rolePermission) {
+      await db.user_permissions.bulkCreate(
+        [{
+          user_id,
+          permission_id: permission.permission_id,
+          is_allowed: 0,
+          is_active: 1
+        }],
+        {
+          updateOnDuplicate: ['is_active', 'is_allowed']
+        }
+      );
+    } else {
+      await db.user_permissions.update(
+        {
+          is_active: 0
+        },
+        {
+          where: {
+            user_id,
+            permission_id: permission.permission_id
+          }
+        }
+      );
+    }
+
+    await db.users.update(
+      {
+        permissions_version: Sequelize.literal('permissions_version + 1')
+      },
+      {
+        where: { id: user_id }
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'Permission removed successfully'
+    });
+
+  } catch (error) {
+    console.error('Delete User Permission Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while deleting permission'
     });
   }
 };

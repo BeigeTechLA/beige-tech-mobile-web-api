@@ -145,6 +145,7 @@ exports.getDashboardCounts = async (req, res) => {
           as: "assigned_crews",
           where: {
             crew_member_id: crew_member_id,
+            is_active: 1,
           },
           required: true,
         },
@@ -161,6 +162,7 @@ exports.getDashboardCounts = async (req, res) => {
           as: "assigned_crews",
           where: {
             crew_member_id: crew_member_id,
+            is_active: 1,
           },
           required: true,
         },
@@ -171,16 +173,13 @@ exports.getDashboardCounts = async (req, res) => {
       where: {
         crew_accept: 0,
         crew_member_id: crew_member_id,
+        is_active: 1,
       },
       include: [
         {
           model: stream_project_booking,
           as: "project",
           required: true,
-          where: {
-            is_completed: 0,
-            payment_completed_at: { [Op.ne]: null },
-          },
         },
       ],
     });
@@ -215,78 +214,29 @@ exports.getPendingRequests = async (req, res) => {
       return res.status(400).json({ error: true, message: "crew_member_id is required" });
     }
 
-    const ROLE_GROUPS = {
-      videographer: ["9", "1"],
-      photographer: ["10", "2"],
-      cinematographer: ["11", "3"],
-    };
-
-    const ID_TO_ROLE_MAP = {};
-    Object.entries(ROLE_GROUPS).forEach(([roleName, ids]) => {
-      ids.forEach(id => { ID_TO_ROLE_MAP[String(id)] = roleName; });
-    });
-
     const currentCrew = await crew_members.findOne({ where: { crew_member_id } });
     if (!currentCrew) return res.status(404).json({ error: true, message: "Crew member not found" });
 
-    const myRoleIds = toIdArray(currentCrew.primary_role || "[]");
-    const myCategories = [...new Set(myRoleIds.map(id => ID_TO_ROLE_MAP[String(id)]).filter(Boolean))];
     const pendingRequests = await assigned_crew.findAll({
-      where: { crew_member_id, crew_accept: 0 },
+      where: { crew_member_id, crew_accept: 0, is_active: 1 },
       include: [
         {
           model: stream_project_booking,
           as: "project",
           required: true,
-          where: {
-            payment_completed_at: { [Op.ne]: null },
-          },
-          include: [
-            { 
-              model: assigned_crew, as: 'assigned_crews', 
-              where: { crew_accept: 1 },
-              required: false,
-              include: [{ model: crew_members, as: 'crew_member' }]
-            }
-          ]
         },
       ],
     });
 
-    const filteredDetails = pendingRequests.filter((request) => {
-      const project = request.project;
-      const requestedLimits = typeof project.crew_roles === 'string' 
-          ? JSON.parse(project.crew_roles || '{}') 
-          : (project.crew_roles || {});
-
-      let acceptedCounts = { videographer: 0, photographer: 0, cinematographer: 0 };
-      
-      if (project.assigned_crews) {
-        project.assigned_crews.forEach(ac => {
-          const acRoles = JSON.parse(ac.crew_member?.primary_role || "[]");
-          let assignedTo = acRoles.map(id => ID_TO_ROLE_MAP[String(id)]).find(cat => 
-            cat && acceptedCounts[cat] < (requestedLimits[cat] || 0)
-          );
-          if (assignedTo) acceptedCounts[assignedTo]++;
-        });
-      }
-
-      const hasAvailableSlot = myCategories.some(cat => 
-        acceptedCounts[cat] < (requestedLimits[cat] || 0)
-      );
-
-      return hasAvailableSlot;
-    });
-
-    if (filteredDetails.length === 0) {
+    if (pendingRequests.length === 0) {
       return res.status(200).json({
         error: false,
-        message: "No available pending requests found.",
+        message: "No pending requests found.",
         data: []
       });
     }
 
-    const projectDetails = filteredDetails.map((request) => ({
+    const projectDetails = pendingRequests.map((request) => ({
       project_id: request.project.stream_project_booking_id,
       project_name: request.project.project_name,
       event_date: request.project.event_date,
@@ -626,16 +576,16 @@ exports.updateRequestStatus = async (req, res) => {
         });
       }
 
-      const availableCategory = crewCategories.find(cat => 
-        currentAcceptedCounts[cat] < (requestedLimits[cat] || 0)
-      );
+      // const availableCategory = crewCategories.find(cat => 
+      //   currentAcceptedCounts[cat] < (requestedLimits[cat] || 0)
+      // );
 
-      if (!availableCategory) {
-        return res.status(200).json({
-          error: true,
-          message: `The project slots for ${crewCategories.join(' / ')} are already full.`
-        });
-      }
+      // if (!availableCategory) {
+      //   return res.status(200).json({
+      //     error: true,
+      //     message: `The project slots for ${crewCategories.join(' / ')} are already full.`
+      //   });
+      // }
 
       const updateResult = await assigned_crew.update(
         { 
@@ -756,6 +706,7 @@ exports.getAcceptedAndUpcomingProjects = async (req, res) => {
       where: {
         crew_member_id,
         crew_accept: 1,
+        is_active: 1,
       },
       include: [
         {
@@ -840,6 +791,7 @@ exports.getAcceptedShootsByCrew = async (req, res) => {
       where: {
         crew_member_id,
         crew_accept: 1,
+        is_active: 1,
       },
       include: [
         {

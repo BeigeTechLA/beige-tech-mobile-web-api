@@ -13,11 +13,13 @@ const paymentService = require('../services/payment-links.service');
 const accountCreditService = require('../services/account-credit.service');
 const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
 const quoteService = require('../services/sales-quote.service');
+const bookingPricingService = require('../services/booking-pricing.service');
 const emailService = require('../utils/emailService');
 const { sendCPNewBookingRequestEmail } = require('../utils/emailService');
 const { resolveEventDateAndStartTime, normalizeTime, splitDateTime } = require('../utils/timezone');
 const { extractCoordinatesFromPayload } = require('../utils/locationHelpers');
 const { S3UploadFiles } = require('../utils/common.js');
+const { getStudioPricingSnapshot, isStudioLineItem } = require('../utils/studio-pricing');
 
 const sequelize = require('../db');
 const db = require('../models');
@@ -322,7 +324,24 @@ const hasExternalWorkspaceFiles = async (bookingId, phase) => {
 };
 
 async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
-  if (!quoteId) return null;
+  if (!quoteId) {
+    if (!bookingId) return null;
+
+    const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+      bookingId
+    });
+
+    return paymentState.paymentSummary
+      ? {
+          latest_invoice: null,
+          additional_payment: null,
+          partial_payment: null,
+          reduced_payment: null,
+          credit_summary: null,
+          payment_summary: paymentState.paymentSummary
+        }
+      : null;
+  }
 
   const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
     bookingId,
@@ -509,6 +528,15 @@ function resolveLeadPaymentStatus({ booking = null, activePaymentLink = null, cu
 }
 
 function resolveLeadQuoteAmounts({ linkedSalesQuote = null, booking = null, customQuoteFinancials = null }) {
+  const paymentSummary = customQuoteFinancials?.payment_summary || null;
+  const paymentSummaryStatus = String(paymentSummary?.last_quote_change_status || '').toLowerCase();
+  if (paymentSummary && (!paymentSummaryStatus || paymentSummaryStatus === 'approved')) {
+    return {
+      collected_amount: parseFloat(paymentSummary.paid_amount || 0),
+      outstanding_amount: parseFloat(paymentSummary.due_amount || 0)
+    };
+  }
+
   const additionalPayment = customQuoteFinancials?.additional_payment || customQuoteFinancials?.partial_payment || null;
   if (additionalPayment) {
     return {
@@ -1027,98 +1055,8 @@ async function persistQuoteFromBreakdown({ bookingId, guest_email, shootHours, b
 }
 
 const calculateLeadPricing = async (booking) => {
-    if (!booking) return null;
-
     try {
-        const q = booking.primary_quote; 
-        
-        if (q) {
-            return {
-                source: 'database',
-                quote_id: q.quote_id,
-                total: parseFloat(q.price_after_discount || q.total || 0),
-                subtotal: parseFloat(q.subtotal || 0),
-                discount_amount: parseFloat(q.discount_amount || 0),
-                shoot_hours: q.shoot_hours,
-                line_items: (q.line_items || []).map(item => ({
-                    item_id: item.item_id,
-                    name: item.item_name,
-                    quantity: item.quantity,
-                    unit_price: parseFloat(item.unit_price),
-                    total: parseFloat(item.line_total)
-                }))
-            };
-        }
-
-        const ROLE_TO_ITEM_MAP = {
-            videographer: 11,
-            photographer: 10,
-            cinematographer: 12,
-        };
-
-        let crewRoles = {};
-        try {
-            crewRoles = typeof booking.crew_roles === 'string' 
-                ? JSON.parse(booking.crew_roles || '{}') 
-                : (booking.crew_roles || {});
-        } catch (e) { crewRoles = {}; }
-
-        const isRolesEmpty = !crewRoles || 
-                           (Array.isArray(crewRoles) && crewRoles.length === 0) || 
-                           (typeof crewRoles === 'object' && Object.keys(crewRoles).length === 0);
-
-        if (isRolesEmpty && booking.event_type) {
-            const types = booking.event_type.toLowerCase();
-            crewRoles = {};
-            if (types.includes('videographer')) crewRoles.videographer = 1;
-            if (types.includes('photographer')) crewRoles.photographer = 1;
-            if (types.includes('cinematographer')) crewRoles.cinematographer = 1;
-        }
-
-        const items = Object.entries(crewRoles).map(([role, count]) => ({
-            item_id: ROLE_TO_ITEM_MAP[role.toLowerCase()],
-            quantity: count
-        })).filter(item => item.item_id);
-
-        let hours = Number(booking.duration_hours);
-        if (!hours || hours <= 0) {
-            if (booking.start_time && booking.end_time) {
-                const [sH, sM] = booking.start_time.split(':').map(Number);
-                const [eH, eM] = booking.end_time.split(':').map(Number);
-                const start = new Date(2000, 0, 1, sH, sM);
-                const end = new Date(2000, 0, 1, eH, eM);
-                let diff = (end - start) / (1000 * 60 * 60);
-                if (diff < 0) diff += 24;
-                hours = diff; 
-            } else {
-                hours = 8; 
-            }
-        }
-
-        const parseEdits = (val) => {
-            if (!val) return [];
-            if (Array.isArray(val)) return val;
-            try { return JSON.parse(val); } catch { return []; }
-        };
-
-        const calculatedQuote = await pricingService.calculateQuote({
-            items: items,
-            shootHours: hours, 
-            eventType: booking.shoot_type || booking.event_type || 'general',
-            shootStartDate: booking.event_date,
-            videoEditTypes: parseEdits(booking.video_edit_types),
-            photoEditTypes: parseEdits(booking.photo_edit_types),
-            skipDiscount: true, 
-            skipMargin: true
-        });
-
-        return {
-            source: 'calculated',
-            total: calculatedQuote?.total || 0,
-            subtotal: calculatedQuote?.subtotal || 0,
-            line_items: calculatedQuote?.lineItems || [] 
-        };
-
+        return await bookingPricingService.calculateBookingPricing(booking);
     } catch (error) {
         console.error('Lead Pricing calculation failed:', error);
         return null;
@@ -1428,7 +1366,9 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             reference_links,
             video_edit_types, 
             photo_edit_types, 
-            edits_needed 
+            edits_needed,
+            studio_items = [],
+            studio_total = 0
         } = req.body;
 
         if (!guest_email) {
@@ -1469,7 +1409,11 @@ exports.trackEarlyBookingInterest = async (req, res) => {
                 date: d.date,
                 start_time: normalizeTime(d.start_time || d.startTime) || null,
                 end_time: normalizeTime(d.end_time || d.endTime) || null,
-                duration_hours: d.duration_hours != null ? Number(d.duration_hours) : null,
+                duration_hours: d.duration_hours != null
+                    ? Number(d.duration_hours)
+                    : d.durationHours != null
+                        ? Number(d.durationHours)
+                        : null,
                 time_zone: d.time_zone || d.timeZone || time_zone || null
             }));
 
@@ -1497,9 +1441,32 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             } else {
                 totalDurationHours = null;
             }
+        } else {
+            totalDurationHours = calculateDurationHours(start_time_final, end_time_final);
         }
 
         const { latitude, longitude } = extractCoordinatesFromPayload(req.body, location);
+
+        const normalizedStudioItems = (Array.isArray(studio_items) ? studio_items : [])
+            .map((studio) => ({
+                studioId: String(studio?.studio_id || studio?.studioId || ''),
+                name: String(studio?.name || 'BEIGE Studio'),
+                pricingMode: studio?.pricing_mode === 'weekend' || studio?.pricingMode === 'weekend' ? 'weekend' : 'hourly',
+                quantity: Number(studio?.quantity) || 1,
+                unitPrice: Number(studio?.unit_price ?? studio?.unitPrice) || 0,
+                totalPrice: Number(studio?.total ?? studio?.totalPrice) || 0,
+            }))
+            .filter((studio) => studio.studioId && studio.totalPrice > 0);
+        const normalizedStudioTotal = normalizedStudioItems.reduce((sum, studio) => sum + studio.totalPrice, 0);
+        if (normalizedStudioItems.length > 0 && Number(studio_total) > 0 && Math.abs(normalizedStudioTotal - Number(studio_total)) > 0.01) {
+            return res.status(400).json({ success: false, message: 'Studio pricing total does not match selected studio items' });
+        }
+        const studioMeta = normalizedStudioItems.length > 0
+            ? `[BEIGE_STUDIO_META]${JSON.stringify(normalizedStudioItems)}`
+            : '';
+        const combinedDescription = [specialInstructions, studioMeta]
+            .filter((value) => String(value || '').trim())
+            .join('\n\n') || null;
 
         const bookingData = {
             user_id: resolvedUserId,
@@ -1519,7 +1486,7 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             event_location: location || null,
             event_latitude: latitude,
             event_longitude: longitude,
-            description: specialInstructions || null,
+            description: combinedDescription,
             reference_links: reference_links || null,
             edits_needed: edits_needed ? 1 : 0,
             video_edit_types: video_edit_types || [], 
@@ -2838,6 +2805,7 @@ exports.getLeadById = async (req, res) => {
           payment_link_id: latestLink.payment_link_id || latestLink.id,
           full_url: fullUrl,
           token: latestLink.link_token,
+          requested_amount: latestLink.requested_amount ? Number(latestLink.requested_amount) : null,
           expires_at: latestLink.expires_at,
           is_used: !!latestLink.is_used,
           is_expired: expiryDate ? expiryDate < now : false,
@@ -2869,12 +2837,23 @@ exports.getLeadById = async (req, res) => {
         shoot_cost: 0,
         editing_cost: 0,
         additional_creatives_cost: 0,
+        studio_cost: 0,
+        studio_items: [],
         discount: 0,
         total: 0
     };
 
     const itemsToProcess = activeQuoteSource?.line_items || [];
     let subtotal = 0;
+    const isStudioBooking = ['studio'].includes(String(
+        leadJson.booking?.shoot_type ||
+        leadJson.booking?.content_type ||
+        leadJson.booking?.event_type ||
+        ''
+    ).toLowerCase());
+    const studioSnapshot = getStudioPricingSnapshot(leadJson.booking?.description);
+    pricing_breakdown.studio_items = studioSnapshot.items;
+    let hasPersistedStudioLine = false;
 
     itemsToProcess.forEach(item => {
         const name = (item.item_name || item.name || '').toLowerCase();
@@ -2883,10 +2862,18 @@ exports.getLeadById = async (req, res) => {
 
         subtotal += lineTotal;
 
-        if (name.includes('videographer') || name.includes('photographer')) {
+        if (isStudioLineItem(item)) {
+            hasPersistedStudioLine = true;
+            pricing_breakdown.studio_cost += lineTotal;
+        }
+        else if (name.includes('videographer') || name.includes('photographer') || name.includes('cinematographer')) {
             const unitPrice = lineTotal / quantity;
-            pricing_breakdown.shoot_cost += unitPrice;
-            if (quantity > 1) {
+            if (isStudioBooking) {
+                pricing_breakdown.additional_creatives_cost += lineTotal;
+            } else {
+                pricing_breakdown.shoot_cost += unitPrice;
+            }
+            if (!isStudioBooking && quantity > 1) {
                 pricing_breakdown.additional_creatives_cost += (unitPrice * (quantity - 1));
             }
         } 
@@ -2897,6 +2884,29 @@ exports.getLeadById = async (req, res) => {
             pricing_breakdown.shoot_cost += lineTotal;
         }
     });
+
+    const quoteSubtotal = [
+        activeQuoteSource?.subtotal,
+        activeQuoteSource?.price_after_discount,
+        activeQuoteSource?.total
+    ]
+        .map((amount) => parseFloat(amount))
+        .find((amount) => Number.isFinite(amount) && amount > 0) || 0;
+
+    if (quoteSubtotal > 0) {
+        if (subtotal <= 0) {
+            subtotal = quoteSubtotal;
+            pricing_breakdown.shoot_cost += quoteSubtotal;
+        } else if (isStudioBooking && quoteSubtotal > subtotal) {
+            const unclassifiedAmount = parseFloat((quoteSubtotal - subtotal).toFixed(2));
+            const legacyStudioAmount = hasPersistedStudioLine
+                ? 0
+                : Math.min(unclassifiedAmount, studioSnapshot.total);
+            pricing_breakdown.studio_cost += legacyStudioAmount;
+            pricing_breakdown.shoot_cost += parseFloat((unclassifiedAmount - legacyStudioAmount).toFixed(2));
+            subtotal = quoteSubtotal;
+        }
+    }
 
     if (payment_status === 'paid') {
         pricing_breakdown.discount = parseFloat(leadJson.booking?.primary_quote?.discount_amount || 0);
@@ -2925,9 +2935,6 @@ exports.getLeadById = async (req, res) => {
       const paymentData = await db.payment_transactions.findByPk(leadJson.booking.payment_id);
       if (paymentData) {
         totalPaid = parseFloat(paymentData.total_amount || 0);
-        if (Number.isFinite(totalPaid)) {
-          creditApplied = Math.max(0, totalBeforeCredit - totalPaid);
-        }
       }
     }
 
@@ -2943,7 +2950,11 @@ exports.getLeadById = async (req, res) => {
     // --- STANDARDIZED STATUS & INTENT CALLS ---
     const intent = lead.intent ?? leadAssignmentService.getLeadIntent({ lead, booking: lead.booking });
     let booking_status = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
-    if (hasOutstandingAdditionalPayment(customQuoteFinancials)) {
+    if (['partially_paid', 'partial_paid', 'approval_pending'].includes(payment_status)) {
+      booking_status = 'Partially Paid';
+    } else if (payment_status === 'paid') {
+      booking_status = 'Paid';
+    } else if (hasOutstandingAdditionalPayment(customQuoteFinancials)) {
       booking_status = 'Partially Paid';
     }
     // ------------------------------------------
@@ -3044,6 +3055,7 @@ exports.getLeadById = async (req, res) => {
         payment_status,
         collected_amount: quoteAmounts.collected_amount,
         outstanding_amount: quoteAmounts.outstanding_amount,
+        payment_summary: customQuoteFinancials?.payment_summary || null,
         active_payment_link,
         booking_step,
         can_edit_booking,
@@ -3858,10 +3870,21 @@ async function processSalesLeadForList(lead, context = {}) {
         lead,
         lead?.booking
       );
+    const paymentSummary = customQuoteFinancials?.payment_summary || null;
+    const summaryStatus = String(paymentSummary?.payment_status || '').trim().toLowerCase();
+    const summaryPaidAmount = parseFloat(paymentSummary?.paid_amount || 0);
+    const summaryDueAmount = parseFloat(paymentSummary?.due_amount || 0);
 
     if (manualProgress.hasFullPayment) {
       computedBookingStatus = 'Booked';
     } else if (manualProgress.isPartiallyPaid) {
+      computedBookingStatus = 'Partially Paid';
+    } else if (summaryStatus === 'paid') {
+      computedBookingStatus = 'Paid';
+    } else if (
+      ['partially_paid', 'partial_paid', 'approval_pending'].includes(summaryStatus) ||
+      (summaryPaidAmount > 0 && summaryDueAmount > 0)
+    ) {
       computedBookingStatus = 'Partially Paid';
     } else if (hasOutstandingAdditionalPayment(customQuoteFinancials)) {
       computedBookingStatus = 'Partially Paid';
@@ -3919,7 +3942,9 @@ async function processSalesLeadForList(lead, context = {}) {
         manualProgress || {
           hasFullPayment: false,
           isPartiallyPaid: false
-        }
+        },
+      payment_summary:
+        paymentSummary || null
     };
 
     if (Date.now() - startedAt > 3000) {
@@ -4231,7 +4256,7 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
   const normalizedProofFileName = String(proof_file_name || '').trim() || null;
   const normalizedNotes = String(notes || '').trim() || null;
 
-  await db.sequelize.query(
+  const insertResult = await db.sequelize.query(
     `
       INSERT INTO booking_manual_payments (
         booking_id,
@@ -4279,6 +4304,9 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
       type: Sequelize.QueryTypes.INSERT,
     }
   );
+  const manualPaymentId = Array.isArray(insertResult)
+    ? Number(insertResult[0] || insertResult[1] || 0)
+    : Number(insertResult || 0);
 
   await bookingPaymentSummaryService.upsertBookingPaymentSummary({
     bookingId,
@@ -4326,7 +4354,8 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
       updated_by: performedBy || null,
       previously_paid_amount: previouslyPaidAmount,
       booking_id: bookingId,
-      sales_quote_id: resolvedSalesQuoteId
+      sales_quote_id: resolvedSalesQuoteId,
+      booking_manual_payment_id: Number.isFinite(manualPaymentId) && manualPaymentId > 0 ? manualPaymentId : null
     },
     performed_by_user_id: performedBy || null
   });
@@ -4350,6 +4379,7 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
       : 'Manual partial payment recorded',
     data: {
       lead_id: Number(leadId),
+      booking_manual_payment_id: Number.isFinite(manualPaymentId) && manualPaymentId > 0 ? manualPaymentId : null,
       payment_type: isNet30Mode ? 'net30' : normalizedPaymentType,
       payment_mode: normalizedPaymentMode,
       amount: normalizedPaymentType === 'partial' ? Number(numericAmount) : null,
@@ -4610,6 +4640,7 @@ exports.getClientLeadById = async (req, res) => {
           payment_link_id: latestLink.payment_link_id || latestLink.id,
           full_url: fullUrl,
           token: latestLink.link_token,
+          requested_amount: latestLink.requested_amount ? Number(latestLink.requested_amount) : null,
           expires_at: latestLink.expires_at,
           is_used: !!latestLink.is_used,
           is_expired: expiryDate ? expiryDate < now : false,
@@ -4642,6 +4673,12 @@ exports.getClientLeadById = async (req, res) => {
 
     const itemsToProcess = activeQuoteSource?.line_items || [];
     let subtotal = 0;
+    const isStudioBooking = ['studio'].includes(String(
+      leadJson.booking?.shoot_type ||
+      leadJson.booking?.content_type ||
+      leadJson.booking?.event_type ||
+      ''
+    ).toLowerCase());
 
     itemsToProcess.forEach(item => {
       const name = (item.item_name || item.name || '').toLowerCase();
@@ -4650,10 +4687,14 @@ exports.getClientLeadById = async (req, res) => {
 
       subtotal += lineTotal;
 
-      if (name.includes('videographer') || name.includes('photographer')) {
+      if (name.includes('videographer') || name.includes('photographer') || name.includes('cinematographer')) {
         const unitPrice = lineTotal / quantity;
-        pricing_breakdown.shoot_cost += unitPrice;
-        if (quantity > 1) {
+        if (isStudioBooking) {
+          pricing_breakdown.additional_creatives_cost += lineTotal;
+        } else {
+          pricing_breakdown.shoot_cost += unitPrice;
+        }
+        if (!isStudioBooking && quantity > 1) {
           pricing_breakdown.additional_creatives_cost += (unitPrice * (quantity - 1));
         }
       } else if (name.includes('reel') || name.includes('edit') || name.includes('highlight')) {
@@ -4662,6 +4703,24 @@ exports.getClientLeadById = async (req, res) => {
         pricing_breakdown.shoot_cost += lineTotal;
       }
     });
+
+    const quoteSubtotal = [
+      activeQuoteSource?.subtotal,
+      activeQuoteSource?.price_after_discount,
+      activeQuoteSource?.total
+    ]
+      .map((amount) => parseFloat(amount))
+      .find((amount) => Number.isFinite(amount) && amount > 0) || 0;
+
+    if (quoteSubtotal > 0) {
+      if (subtotal <= 0) {
+        subtotal = quoteSubtotal;
+        pricing_breakdown.shoot_cost += quoteSubtotal;
+      } else if (isStudioBooking && quoteSubtotal > subtotal) {
+        pricing_breakdown.shoot_cost += parseFloat((quoteSubtotal - subtotal).toFixed(2));
+        subtotal = quoteSubtotal;
+      }
+    }
 
     if (payment_status === 'paid') {
       pricing_breakdown.discount = parseFloat(leadJson.booking?.primary_quote?.discount_amount || 0);
@@ -4687,9 +4746,6 @@ exports.getClientLeadById = async (req, res) => {
       const paymentData = await db.payment_transactions.findByPk(leadJson.booking.payment_id);
       if (paymentData) {
         totalPaid = parseFloat(paymentData.total_amount || 0);
-        if (Number.isFinite(totalPaid)) {
-          creditApplied = Math.max(0, totalBeforeCredit - totalPaid);
-        }
       }
     }
 

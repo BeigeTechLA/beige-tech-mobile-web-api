@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const auth = require('./auth');
 
 /**
  * Verify JWT token and attach user info to request
@@ -20,6 +21,8 @@ exports.authenticate = async (req, res, next) => {
     // Verify token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
+    await auth.validatePermissionVersion(decoded);
+
     // Attach user info to request
     req.userId = decoded.userId;
     req.userRole = decoded.userRole;
@@ -38,6 +41,17 @@ exports.authenticate = async (req, res, next) => {
       return res.status(401).json({
         success: false,
         message: 'Token expired'
+      });
+    }
+
+    if (
+      error.message === 'PERMISSION_CHANGED' ||
+      error.message === 'USER_NOT_FOUND'
+    ) {
+      return res.status(401).json({
+        success: false,
+        force_logout: true,
+        message: 'Please login again.'
       });
     }
 
@@ -189,7 +203,7 @@ exports.requireSalesRepOrAdmin = async (req, res, next) => {
 
     const userRole = user.userType?.user_role;
     
-    const allowedRoles = ['admin', 'Admin', 'sales_rep', 'sales_admin', 'Sales_Admin', 'Sales_admin'];
+    const allowedRoles = ['admin', 'Admin', 'sales_rep', 'sales_admin', 'Sales_Admin', 'Sales_admin','super_admin', 'Super_Admin', 'Super_admin'];
 
     if (!allowedRoles.includes(userRole)) {
       return res.status(403).json({
@@ -265,4 +279,19 @@ exports.requireAdmin = async (req, res, next) => {
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
+};
+
+const normalizeRoleName = (role) => String(role || '').trim().toLowerCase().replace(/\s+/g, '_');
+
+exports.requireSuperAdmin = (req, res, next) => {
+  const role = normalizeRoleName(req.user?.userRole || req.userRole);
+
+  if (role === 'super_admin' || role === 'superadmin') {
+    return next();
+  }
+
+  return res.status(403).json({
+    success: false,
+    message: 'Super admin access required'
+  });
 };

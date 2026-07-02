@@ -304,6 +304,12 @@ function buildQuoteVersionSnapshot(quoteRecord, lineItems = []) {
     client_address: quote.client_address || null,
     project_description: quote.project_description || null,
     video_shoot_type: quote.video_shoot_type || null,
+    booking_type: quote.booking_type || null,
+    time_zone: quote.time_zone || null,
+    start_date: quote.start_date || null,
+    start_time: normalizeTime(quote.start_time) || null,
+    end_time: normalizeTime(quote.end_time) || null,
+    booking_days: parseBookingDaysValue(quote.booking_days),
     quote_validity_days: quote.quote_validity_days || null,
     valid_until: quote.valid_until || null,
     discount_type: quote.discount_type || 'none',
@@ -3552,6 +3558,7 @@ function applyConvertBookingOverrides(prefillData, payload = {}) {
   });
   const singleDayEndTime = normalizeTime(payload.end_time || null);
   next.has_schedule_override = Boolean(
+    next.has_schedule_override ||
     bookingType ||
     timeZone ||
     normalizedBookingDays.length ||
@@ -3598,6 +3605,95 @@ function applyConvertBookingOverrides(prefillData, payload = {}) {
   }
 
   return next;
+}
+
+function parseBookingDaysValue(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = parseConfig(value);
+    return Array.isArray(parsed) ? parsed : [];
+  }
+  return [];
+}
+
+function normalizeQuoteSchedulePayload(payload = {}, fallback = {}) {
+  const hasScheduleInput = [
+    'booking_type',
+    'time_zone',
+    'timeZone',
+    'start_date',
+    'start_time',
+    'start_date_time',
+    'end_time',
+    'booking_days'
+  ].some((key) => payload[key] !== undefined);
+
+  const rawBookingType = payload.booking_type !== undefined
+    ? payload.booking_type
+    : fallback.booking_type;
+  let bookingType = rawBookingType ? String(rawBookingType).trim().toLowerCase() : null;
+  if (bookingType && !['single_day', 'multi_day'].includes(bookingType)) {
+    throw new Error('booking_type must be single_day or multi_day');
+  }
+
+  const timeZone = payload.time_zone !== undefined
+    ? payload.time_zone
+    : payload.timeZone !== undefined
+      ? payload.timeZone
+      : fallback.time_zone || null;
+  const bookingDaysSource = payload.booking_days !== undefined
+    ? payload.booking_days
+    : parseBookingDaysValue(fallback.booking_days);
+  const normalizedBookingDays = normalizeBookingDaysPayload(bookingDaysSource, timeZone);
+  const singleDaySchedule = resolveEventDateAndStartTime({
+    start_date: payload.start_date !== undefined ? payload.start_date : fallback.start_date,
+    start_time: payload.start_time !== undefined ? payload.start_time : fallback.start_time,
+    start_date_time: payload.start_date_time
+  });
+  const endTime = payload.end_time !== undefined
+    ? normalizeTime(payload.end_time)
+    : normalizeTime(fallback.end_time);
+
+  if (!bookingType && normalizedBookingDays.length) {
+    bookingType = 'multi_day';
+  } else if (!bookingType && (singleDaySchedule.event_date || singleDaySchedule.start_time || endTime)) {
+    bookingType = 'single_day';
+  }
+
+  if (!hasScheduleInput && !bookingType) {
+    return {
+      booking_type: null,
+      time_zone: null,
+      start_date: null,
+      start_time: null,
+      end_time: null,
+      booking_days: []
+    };
+  }
+
+  if (bookingType === 'multi_day') {
+    const firstDay = normalizedBookingDays.length
+      ? [...normalizedBookingDays].sort((a, b) => new Date(a.date) - new Date(b.date))[0]
+      : null;
+    return {
+      booking_type: bookingType,
+      time_zone: timeZone || null,
+      start_date: firstDay?.date || null,
+      start_time: firstDay?.start_time || null,
+      end_time: firstDay?.end_time || null,
+      booking_days: normalizedBookingDays
+    };
+  }
+
+  return {
+    booking_type: bookingType,
+    time_zone: timeZone || null,
+    start_date: singleDaySchedule.event_date || null,
+    start_time: singleDaySchedule.start_time || null,
+    end_time: endTime || null,
+    booking_days: []
+  };
 }
 
 async function syncConvertedQuoteArtifacts({
@@ -4186,7 +4282,20 @@ async function resolveQuoteBillingState(quote, transaction) {
       })
     : null;
 
-  const bookingMarkedCollected = Boolean(booking?.payment_id);
+  const bookingPayment = booking?.payment_id && db.payment_transactions
+    ? await db.payment_transactions.findByPk(booking.payment_id, {
+        attributes: ['payment_id', 'total_amount', 'status'],
+        transaction
+      })
+    : null;
+  const bookingPaidAmount = roundCurrency(bookingPayment?.total_amount || 0);
+  const quoteTotal = roundCurrency(quote.total || 0);
+  const bookingMarkedCollected = quoteTotal > 0
+    ? bookingPaidAmount >= quoteTotal
+    : Boolean(booking?.payment_id);
+  const bookingPaymentStatus = bookingPaidAmount > 0
+    ? (bookingMarkedCollected ? 'paid' : 'partially_paid')
+    : null;
   const historyMarkedCollected = latestInvoiceHistory?.payment_status === 'paid';
   const refreshActivity = db.sales_quote_activities
     ? await db.sales_quote_activities.findOne({
@@ -4227,7 +4336,9 @@ async function resolveQuoteBillingState(quote, transaction) {
   const summaryCollectedAmount = roundCurrency(
     Number(paymentState.paidAmount || 0) + Number(paymentState.creditUsedAmount || 0)
   );
-  const summaryPaymentStatus = String(paymentState.paymentStatus || '').toLowerCase();
+  const summaryPaymentStatus = paymentState.hasSummary
+    ? String(paymentState.paymentStatus || '').toLowerCase()
+    : '';
   const summaryHasManualPaymentEvidence = Boolean(
     paymentSummary?.manual_payment_mode ||
     paymentSummary?.manual_payment_proof_url ||
@@ -4252,12 +4363,20 @@ async function resolveQuoteBillingState(quote, transaction) {
   const isCollected = !refreshOutstanding && (bookingMarkedCollected || historyMarkedCollected || summaryMarkedCollected);
   const paymentStatus = refreshOutstanding
     ? 'partially_paid'
-    : (summaryPaymentStatus || refreshInvoiceHistory?.payment_status || latestInvoiceHistory?.payment_status || (isCollected ? 'paid' : 'pending'));
-  const fallbackCollectedAmount = isCollected ? roundCurrency(quote.total) : 0;
+    : (
+        summaryPaymentStatus ||
+        bookingPaymentStatus ||
+        refreshInvoiceHistory?.payment_status ||
+        latestInvoiceHistory?.payment_status ||
+        (isCollected ? 'paid' : 'pending')
+      );
+  const fallbackCollectedAmount = isCollected
+    ? quoteTotal
+    : bookingPaidAmount;
   const collectedAmount = refreshOutstanding
     ? Math.max(refreshPreviousTotal, summaryCollectedAmount)
     : Math.max(fallbackCollectedAmount, summaryCollectedAmount);
-  const outstandingAmount = roundCurrency(Math.max(roundCurrency(quote.total) - collectedAmount, 0));
+  const outstandingAmount = roundCurrency(Math.max(quoteTotal - collectedAmount, 0));
 
   return {
     booking,
@@ -4488,6 +4607,7 @@ async function createQuote(payload, user) {
     const { latitude, longitude } = extractCoordinatesFromPayload(payload, payload.client_address || payload.location);
     const lineItemsPayload = await buildLineItemsPayload(payload.line_items || []);
     const totals = calculateTotals(lineItemsPayload, payload);
+    const schedulePayload = normalizeQuoteSchedulePayload(payload);
     const validity = resolveValidity({
       validUntil: payload.valid_until,
       quoteValidityDays: payload.quote_validity_days,
@@ -4532,6 +4652,12 @@ async function createQuote(payload, user) {
       location_longitude: longitude,
       project_description: payload.project_description || null,
       video_shoot_type: payload.video_shoot_type || null,
+      booking_type: schedulePayload.booking_type,
+      time_zone: schedulePayload.time_zone,
+      start_date: schedulePayload.start_date,
+      start_time: schedulePayload.start_time,
+      end_time: schedulePayload.end_time,
+      booking_days: schedulePayload.booking_days,
       quote_validity_days: validity.quote_validity_days,
       valid_until: validity.valid_until,
       discount_type: totals.discount_type,
@@ -4630,6 +4756,12 @@ async function duplicateQuote(salesQuoteId, user) {
       location_longitude: sourceQuote.location_longitude ?? null,
       project_description: sourceQuote.project_description || null,
       video_shoot_type: sourceQuote.video_shoot_type || null,
+      booking_type: sourceQuote.booking_type || null,
+      time_zone: sourceQuote.time_zone || null,
+      start_date: sourceQuote.start_date || null,
+      start_time: normalizeTime(sourceQuote.start_time) || null,
+      end_time: normalizeTime(sourceQuote.end_time) || null,
+      booking_days: parseBookingDaysValue(sourceQuote.booking_days),
       quote_validity_days: sourceQuote.quote_validity_days || null,
       valid_until: sourceQuote.valid_until || null,
       discount_type: sourceQuote.discount_type || 'none',
@@ -4750,6 +4882,12 @@ async function updateQuote(salesQuoteId, payload, user) {
       pricing_mode: quote.pricing_mode,
       project_description: quote.project_description,
       video_shoot_type: quote.video_shoot_type,
+      booking_type: quote.booking_type,
+      time_zone: quote.time_zone,
+      start_date: quote.start_date,
+      start_time: normalizeTime(quote.start_time),
+      end_time: normalizeTime(quote.end_time),
+      booking_days: parseBookingDaysValue(quote.booking_days),
       client_name: quote.client_name,
       client_email: quote.client_email,
       client_phone: quote.client_phone,
@@ -4796,6 +4934,7 @@ async function updateQuote(salesQuoteId, payload, user) {
       validUntilProvided: payload.valid_until !== undefined,
       quoteValidityDaysProvided: payload.quote_validity_days !== undefined
     });
+    const schedulePayload = normalizeQuoteSchedulePayload(payload, quote);
 
     const nextStatus = resolveQuoteStatus(payload, quote.status);
     const assignedSalesRepId = isAdminRole(user.role)
@@ -4861,6 +5000,12 @@ async function updateQuote(salesQuoteId, payload, user) {
           : quote.location_longitude,
       project_description: payload.project_description !== undefined ? payload.project_description : quote.project_description,
       video_shoot_type: payload.video_shoot_type !== undefined ? payload.video_shoot_type : quote.video_shoot_type,
+      booking_type: schedulePayload.booking_type,
+      time_zone: schedulePayload.time_zone,
+      start_date: schedulePayload.start_date,
+      start_time: schedulePayload.start_time,
+      end_time: schedulePayload.end_time,
+      booking_days: schedulePayload.booking_days,
       quote_validity_days: validity.quote_validity_days,
       valid_until: validity.valid_until,
       discount_type: totals.discount_type,
@@ -5223,6 +5368,20 @@ async function convertQuoteToBooking(salesQuoteId, payload = {}, user) {
     location: resolveQuoteLocationAddress(quoteDetails),
     location_latitude: quoteDetails.location_latitude ?? quoteDetails.latitude ?? null,
     location_longitude: quoteDetails.location_longitude ?? quoteDetails.longitude ?? null,
+    booking_type: quoteDetails.booking_type || null,
+    time_zone: quoteDetails.time_zone || null,
+    start_date: quoteDetails.start_date || null,
+    start_time: normalizeTime(quoteDetails.start_time) || null,
+    end_time: normalizeTime(quoteDetails.end_time) || null,
+    booking_days: parseBookingDaysValue(quoteDetails.booking_days),
+    has_schedule_override: Boolean(
+      quoteDetails.booking_type ||
+      quoteDetails.time_zone ||
+      quoteDetails.start_date ||
+      quoteDetails.start_time ||
+      quoteDetails.end_time ||
+      parseBookingDaysValue(quoteDetails.booking_days).length
+    ),
     content_type: roleData.content_type,
     shoot_type: mapQuoteShootTypeToBookingShootType(quoteDetails.video_shoot_type),
     quote_shoot_type_label: quoteDetails.video_shoot_type || null,

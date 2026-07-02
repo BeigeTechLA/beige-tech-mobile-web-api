@@ -234,12 +234,20 @@ async function saveStripePaymentSummary({
   const quote = salesQuoteId && quoteTotal !== null
     ? null
     : await getSalesQuoteForBooking(bookingId, transaction);
+  const bookingQuote = !quote && quoteTotal === null
+    ? await db.quotes.findOne({
+        where: { booking_id: bookingId },
+        attributes: ['quote_id', 'total', 'subtotal', 'price_after_discount'],
+        order: [['quote_id', 'DESC']],
+        transaction
+      })
+    : null;
 
   const resolvedSalesQuoteId = salesQuoteId || quote?.sales_quote_id || null;
   const resolvedQuoteTotal = round2(
     quoteTotal !== null && quoteTotal !== undefined
       ? quoteTotal
-      : (quote?.total || quote?.subtotal || amountPaid)
+      : (quote?.total || quote?.subtotal || bookingQuote?.total || bookingQuote?.price_after_discount || bookingQuote?.subtotal || amountPaid)
   );
 
   const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId, transaction);
@@ -279,7 +287,6 @@ async function inferCreditAmountForPayment({
 
   const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
     bookingId,
-    salesQuoteId: booking.quote_id,
     quoteTotal: booking.budget || booking.total || null,
     transaction
   });
@@ -354,6 +361,90 @@ function isPaymentIntentUniqueConstraintError(error) {
   return isUniqueName && (hasStripeField || duplicateMessage);
 }
 
+async function ensureInvoicePaymentReceiptLink({
+  booking,
+  bookingId,
+  payment,
+  amount,
+  isFullyPaid = false,
+  transaction = null
+}) {
+  if (!bookingId || !payment?.payment_id || !db.invoice_send_history || !db.finance_invoice_payments) {
+    return null;
+  }
+
+  let invoice = await db.invoice_send_history.findOne({
+    where: { booking_id: bookingId },
+    order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+    transaction
+  });
+
+  if (!invoice) {
+    const [salesLead, clientLead] = await Promise.all([
+      db.sales_leads.findOne({
+        where: { booking_id: bookingId },
+        attributes: ['lead_id', 'client_name', 'guest_email', 'assigned_sales_rep_id'],
+        transaction
+      }),
+      db.client_leads.findOne({
+        where: { booking_id: bookingId },
+        attributes: ['lead_id', 'client_name', 'guest_email', 'assigned_sales_rep_id'],
+        transaction
+      })
+    ]);
+    const effectiveLead = salesLead || clientLead || null;
+
+    invoice = await db.invoice_send_history.create({
+      booking_id: bookingId,
+      quote_id: null,
+      lead_id: salesLead?.lead_id || null,
+      client_lead_id: clientLead?.lead_id || null,
+      assigned_sales_rep_id: effectiveLead?.assigned_sales_rep_id || null,
+      client_name: effectiveLead?.client_name || null,
+      client_email: effectiveLead?.guest_email || booking?.guest_email || payment.guest_email || null,
+      invoice_number: `INVBEIGE-M-${String(bookingId).padStart(4, '0')}`,
+      invoice_url: null,
+      invoice_pdf: null,
+      payment_status: isFullyPaid ? 'paid' : 'pending',
+      sent_by_user_id: null,
+      sent_at: new Date()
+    }, { transaction });
+  } else if (isFullyPaid && invoice.payment_status !== 'paid') {
+    await invoice.update({ payment_status: 'paid' }, { transaction });
+  }
+
+  const receiptPayload = {
+    invoice_send_history_id: invoice.invoice_send_history_id,
+    payment_id: payment.payment_id,
+    finance_transaction_id: null,
+    booking_id: bookingId,
+    amount: round2(amount || payment.total_amount || 0),
+    status: 'paid',
+    paid_at: payment.created_at || new Date(),
+    metadata_json: JSON.stringify({
+      source: 'stripe_payment_confirmation',
+      stripe_payment_intent_id: payment.stripe_payment_intent_id || null,
+      stripe_charge_id: payment.stripe_charge_id || null
+    }),
+    updated_at: new Date()
+  };
+
+  const [invoicePayment] = await db.finance_invoice_payments.findOrCreate({
+    where: {
+      booking_id: bookingId,
+      payment_id: payment.payment_id
+    },
+    defaults: receiptPayload,
+    transaction
+  });
+
+  if (!invoicePayment.isNewRecord) {
+    await invoicePayment.update(receiptPayload, { transaction });
+  }
+
+  return invoicePayment;
+}
+
 function applyReferralDiscount(totalAmount) {
   const total = parseFloat(totalAmount || 0);
   if (!Number.isFinite(total) || total <= 0) {
@@ -384,6 +475,7 @@ async function markConvertedSalesQuoteAsPaid({
   paymentId = null,
   paymentIntentId = null,
   paidAmount = null,
+  creditUsedAmount = 0,
   transaction
 }) {
   if (!bookingId) return null;
@@ -411,9 +503,18 @@ async function markConvertedSalesQuoteAsPaid({
 
   if (!salesQuote) return null;
 
+  const quoteTotal = round2(salesQuote.total || salesQuote.subtotal || 0);
+  const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId, transaction);
+  const totalPaidAmount = round2(Number(existingSummary?.paid_amount || 0) + Number(paidAmount || 0));
+  const totalCreditUsedAmount = round2(Number(existingSummary?.credit_used_amount || 0) + Number(creditUsedAmount || 0));
+  const dueAmount = round2(Math.max(quoteTotal - totalPaidAmount - totalCreditUsedAmount, 0));
+  const nextStatus = dueAmount <= 0
+    ? 'paid'
+    : (totalPaidAmount > 0 || totalCreditUsedAmount > 0 ? 'partially_paid' : 'pending');
+
   const now = new Date();
   await salesQuote.update({
-    status: 'paid',
+    status: nextStatus,
     accepted_at: salesQuote.accepted_at || now,
     updated_at: now
   }, { transaction });
@@ -422,13 +523,19 @@ async function markConvertedSalesQuoteAsPaid({
     sales_quote_id: salesQuote.sales_quote_id,
     activity_type: 'status_changed',
     performed_by_user_id: null,
-    message: 'Quote marked as paid after booking payment',
+    message: nextStatus === 'paid'
+      ? 'Quote marked as paid after booking payment'
+      : 'Quote payment summary updated after booking payment',
     metadata_json: JSON.stringify({
-      status: 'paid',
+      status: nextStatus,
       booking_id: bookingId,
       payment_id: paymentId,
       payment_intent_id: paymentIntentId,
-      amount_paid: paidAmount
+      amount_paid: paidAmount,
+      paid_amount_total: totalPaidAmount,
+      credit_used_amount: totalCreditUsedAmount,
+      quote_total: quoteTotal,
+      due_amount: dueAmount
     })
   }, { transaction });
 
@@ -968,6 +1075,7 @@ async function processStripePaidWebhookEvent(event, req = {}) {
       paymentId: payment.payment_id,
       paymentIntentId,
       paidAmount: amountPaid,
+      creditUsedAmount: usedCreditEntry?.amount || 0,
       transaction
     });
 
@@ -1147,6 +1255,10 @@ async function getValidReferralAffiliate(referralCode, referredUserId = null, tr
   });
 
   if (!affiliate) return null;
+  if (!(await affiliateController.isAffiliateEligibleForReferral(affiliate, transaction))) {
+    return null;
+  }
+
   if (referredUserId && Number(affiliate.user_id) === Number(referredUserId)) {
     return null;
   }
@@ -2094,7 +2206,8 @@ exports.createPaymentIntentMulti = async (req, res) => {
       guest_email,
       payment_source,
       use_credit,
-      credit_amount_used
+      credit_amount_used,
+      payment_link_token
     } = req.body;
     const shouldUseCredit = Boolean(use_credit);
     const requestedCreditAmount = round2(credit_amount_used || 0);
@@ -2115,13 +2228,42 @@ exports.createPaymentIntentMulti = async (req, res) => {
         message: 'Booking not found'
       });
     }
+    let paymentLink = null;
+    if (payment_link_token) {
+      paymentLink = await db.payment_links.findOne({
+        where: { link_token: payment_link_token }
+      });
+
+      if (!paymentLink || Number(paymentLink.booking_id) !== Number(booking_id)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid payment link for this booking.'
+        });
+      }
+
+      if (paymentLink.is_used) {
+        return res.status(409).json({
+          success: false,
+          message: 'This payment link has already been used.'
+        });
+      }
+
+      if (new Date(paymentLink.expires_at) < new Date()) {
+        return res.status(410).json({
+          success: false,
+          message: 'This payment link has expired.'
+        });
+      }
+    }
     const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
       bookingId: booking_id,
-      salesQuoteId: booking.quote_id,
       quoteTotal: amount,
       transaction: null
     });
-    const requestedAmount = round2(amount || 0);
+    const linkRequestedAmount = paymentLink?.requested_amount
+      ? round2(paymentLink.requested_amount)
+      : null;
+    const requestedAmount = linkRequestedAmount || round2(amount || 0);
     const amountToCharge = paymentState.hasSummary
       ? (
         requestedAmount > 0
@@ -2129,6 +2271,17 @@ exports.createPaymentIntentMulti = async (req, res) => {
           : round2(Math.max(paymentState.payableAmount - requestedCreditAmount, 0))
       )
       : requestedAmount;
+
+    // A positive client request must never be converted into a free checkout.
+    // If the authoritative booking summary says there is no balance, stop and
+    // let the caller refresh instead of returning a non-Stripe placeholder.
+    if (requestedAmount > 0 && amountToCharge <= 0) {
+      return res.status(409).json({
+        success: false,
+        message: 'No payment balance is due for this booking. Please refresh the payment details.',
+        code: 'NO_PAYMENT_BALANCE_DUE'
+      });
+    }
 
     // 3. Handle 100% Discount ($0.00) Case
     // Stripe does not allow creating intents for $0.00
@@ -2177,6 +2330,8 @@ exports.createPaymentIntentMulti = async (req, res) => {
         shoot_name: booking.shoot_name || '',
         use_credit: shouldUseCredit ? '1' : '0',
         credit_amount_used: shouldUseCredit ? String(requestedCreditAmount) : '0',
+        payment_link_token: payment_link_token || '',
+        payment_link_amount: linkRequestedAmount ? String(linkRequestedAmount) : '',
       }
     });
 
@@ -2208,7 +2363,7 @@ exports.confirmPaymentMulti = async (req, res) => {
   const transaction = await db.sequelize.transaction();
 
   try {
-    const { booking_id, referral_code, use_credit, credit_amount_used } = req.body;
+    const { booking_id, referral_code, use_credit, credit_amount_used, payment_link_token } = req.body;
     let { paymentIntentId } = req.body;
     const shouldUseCredit = Boolean(use_credit);
     const requestedCreditAmount = round2(credit_amount_used || 0);
@@ -2233,7 +2388,6 @@ exports.confirmPaymentMulti = async (req, res) => {
     const bookingAlreadyPaid = Boolean(booking.payment_id || booking.is_completed === 1);
     const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
       bookingId: booking_id,
-      salesQuoteId: booking.primary_quote?.quote_id,
       quoteTotal,
       transaction
     });
@@ -2265,6 +2419,7 @@ exports.confirmPaymentMulti = async (req, res) => {
     let totalAmount = 0;
     let chargeId = null;
     let paymentIntent = null;
+    let resolvedPaymentLinkToken = payment_link_token || null;
 
     // --- UPDATED LOGIC HERE ---
     // 2. Check if this is a Free Checkout mock ID
@@ -2294,6 +2449,7 @@ exports.confirmPaymentMulti = async (req, res) => {
         
         totalAmount = paymentIntent.amount / 100;
         chargeId = paymentIntent.charges?.data[0]?.id || null;
+        resolvedPaymentLinkToken = resolvedPaymentLinkToken || paymentIntent.metadata?.payment_link_token || null;
       } catch (stripeError) {
         if (transaction) await transaction.rollback();
         return res.status(400).json({ success: false, message: stripeError.message });
@@ -2339,6 +2495,19 @@ exports.confirmPaymentMulti = async (req, res) => {
           creditUsedAmount: creditApplied,
           transaction
         });
+      }
+
+      if (resolvedPaymentLinkToken) {
+        await db.payment_links.update(
+          { is_used: 1, used_at: new Date() },
+          {
+            where: {
+              link_token: resolvedPaymentLinkToken,
+              booking_id
+            },
+            transaction
+          }
+        );
       }
 
       if (normalizedReferralCode) {
@@ -2559,6 +2728,28 @@ exports.confirmPaymentMulti = async (req, res) => {
         transaction
       });
 
+      await ensureInvoicePaymentReceiptLink({
+        booking,
+        bookingId: booking_id,
+        payment,
+        amount: totalAmount,
+        isFullyPaid: true,
+        transaction
+      });
+
+      if (resolvedPaymentLinkToken) {
+        await db.payment_links.update(
+          { is_used: 1, used_at: new Date() },
+          {
+            where: {
+              link_token: resolvedPaymentLinkToken,
+              booking_id
+            },
+            transaction
+          }
+        );
+      }
+
       await transaction.commit();
 
       return res.status(201).json({
@@ -2572,22 +2763,6 @@ exports.confirmPaymentMulti = async (req, res) => {
       });
     }
 
-    // 8. Update Booking and Lead Status
-    await db.stream_project_booking.update(
-      { 
-        payment_completed_at: new Date(), 
-        payment_id: payment.payment_id,
-        is_draft: 0,
-        // is_completed: 1
-      },
-      { where: { stream_project_booking_id: booking_id }, transaction }
-    );
-
-    await db.sales_leads.update(
-      { lead_status: 'booked' },
-      { where: { booking_id: booking_id }, transaction }
-    );
-
     const salesQuoteId = await markConvertedSalesQuoteAsPaid({
       bookingId: booking_id,
       paymentId: payment.payment_id,
@@ -2599,10 +2774,77 @@ exports.confirmPaymentMulti = async (req, res) => {
     await saveStripePaymentSummary({
       bookingId: booking_id,
       salesQuoteId,
+      quoteTotal,
       amountPaid: totalAmount,
       creditUsedAmount: usedCreditEntry?.amount || 0,
       transaction
     });
+
+    const updatedPaymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+      bookingId: booking_id,
+      quoteTotal,
+      transaction
+    });
+    const isFullyPaid = updatedPaymentState.isPaid || updatedPaymentState.dueAmount <= 0.009;
+
+    await ensureInvoicePaymentReceiptLink({
+      booking,
+      bookingId: booking_id,
+      payment,
+      amount: totalAmount,
+      isFullyPaid,
+      transaction
+    });
+
+    await db.stream_project_booking.update(
+      isFullyPaid
+        ? {
+            payment_completed_at: new Date(),
+            payment_id: payment.payment_id,
+            is_draft: 0,
+            // is_completed: 1
+          }
+        : {
+            is_draft: 0
+          },
+      { where: { stream_project_booking_id: booking_id }, transaction }
+    );
+
+    await db.sales_leads.update(
+      { lead_status: isFullyPaid ? 'booked' : 'partially_paid' },
+      { where: { booking_id: booking_id }, transaction }
+    );
+
+    if (resolvedPaymentLinkToken) {
+      await db.payment_links.update(
+        { is_used: 1, used_at: new Date() },
+        {
+          where: {
+            link_token: resolvedPaymentLinkToken,
+            booking_id
+          },
+          transaction
+        }
+      );
+    }
+
+    if (!isFullyPaid) {
+      await transaction.commit();
+
+      return res.status(201).json({
+        success: true,
+        message: 'Partial payment confirmed successfully',
+        data: {
+          payment_id: payment.payment_id,
+          booking_id,
+          credit_applied: round2(usedCreditEntry?.amount || 0),
+          payment_status: updatedPaymentState.paymentStatus,
+          paid_amount: updatedPaymentState.paidAmount,
+          due_amount: updatedPaymentState.dueAmount,
+          quote_total: updatedPaymentState.quoteTotal
+        }
+      });
+    }
 
     let projectSync = await ensureProjectAfterPayment({
       bookingId: booking_id,

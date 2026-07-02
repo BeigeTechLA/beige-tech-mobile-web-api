@@ -519,6 +519,7 @@ async function calculateQuote({
   eventType = null, 
   shootStartDate = null, 
   studioTotal = 0,
+  studioItems = [],
   videoEditTypes = [], 
   photoEditTypes = [],
   marginPercent = null, 
@@ -650,9 +651,76 @@ async function calculateQuote({
       });
     }
 
-    const parsedStudioTotal = Number(studioTotal) || 0;
-    if (parsedStudioTotal > 0) {
-      subtotal += parsedStudioTotal;
+    // Studio selections are snapshot line items. This keeps confirmation,
+    // payment, lead details and project details on the exact same amounts.
+    const normalizedStudioItems = (Array.isArray(studioItems) ? studioItems : [])
+      .map((studio) => {
+        const quantity = Number(studio?.quantity) || 1;
+        const suppliedTotal = Number(studio?.total);
+        const unitPrice = Number(studio?.unit_price);
+        const lineTotal = Number.isFinite(suppliedTotal) && suppliedTotal > 0
+          ? suppliedTotal
+          : (Number.isFinite(unitPrice) ? unitPrice * quantity : 0);
+
+        return {
+          studioId: String(studio?.studio_id || '').trim(),
+          name: String(studio?.name || 'BEIGE Studio').trim(),
+          pricingMode: studio?.pricing_mode === 'weekend' ? 'weekend' : 'hourly',
+          quantity,
+          unitPrice: Number.isFinite(unitPrice) && unitPrice >= 0
+            ? unitPrice
+            : lineTotal / quantity,
+          lineTotal: parseFloat(lineTotal.toFixed(2)),
+        };
+      })
+      .filter((studio) => studio.lineTotal > 0);
+
+    const declaredStudioTotal = Number(studioTotal) || 0;
+    const studioItemsTotal = parseFloat(
+      normalizedStudioItems.reduce((sum, studio) => sum + studio.lineTotal, 0).toFixed(2)
+    );
+    if (
+      normalizedStudioItems.length > 0 &&
+      declaredStudioTotal > 0 &&
+      Math.abs(studioItemsTotal - declaredStudioTotal) > 0.01
+    ) {
+      throw new Error(
+        `Studio pricing mismatch: item total ${studioItemsTotal} does not match studio_total ${declaredStudioTotal}`
+      );
+    }
+
+    if (normalizedStudioItems.length > 0) {
+      normalizedStudioItems.forEach((studio) => {
+        subtotal += studio.lineTotal;
+        lineItems.push({
+          item_id: null,
+          item_name: studio.name,
+          category_name: 'Studio',
+          category_slug: 'studio',
+          quantity: studio.quantity,
+          unit_price: parseFloat(studio.unitPrice.toFixed(2)),
+          line_total: studio.lineTotal,
+          is_mandatory: false,
+          notes: `[STUDIO:${studio.studioId}:${studio.pricingMode}]`,
+        });
+      });
+    } else {
+      // Backward compatibility for older clients that only send an aggregate.
+      const parsedStudioTotal = declaredStudioTotal;
+      if (parsedStudioTotal > 0) {
+        subtotal += parsedStudioTotal;
+        lineItems.push({
+          item_id: null,
+          item_name: 'BEIGE Studio',
+          category_name: 'Studio',
+          category_slug: 'studio',
+          quantity: 1,
+          unit_price: parsedStudioTotal,
+          line_total: parsedStudioTotal,
+          is_mandatory: false,
+          notes: '[STUDIO:legacy:aggregate]',
+        });
+      }
     }
 
     // Final Math
@@ -686,4 +754,3 @@ module.exports = {
   getAllPricingItems,
   DEFAULT_MARGIN_PERCENT,
 };
-

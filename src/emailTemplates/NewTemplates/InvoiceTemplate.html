@@ -10,19 +10,31 @@
   <meta name="color-scheme" content="light">
   <meta name="supported-color-schemes" content="light">
   <title>Your Shoot, Crafted - Proposal Inside</title>
-  
+
   <style>
     :root {
       color-scheme: light;
       supported-color-schemes: light;
     }
 
-    body, table, td, p, a, h1, h2, h3, span, div, li {
+    body,
+    table,
+    td,
+    p,
+    a,
+    h1,
+    h2,
+    h3,
+    span,
+    div,
+    li {
       font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
     }
 
     @media (prefers-color-scheme: dark) {
-      body, .body-bg {
+
+      body,
+      .body-bg {
         background-color: #F7F7F7 !important;
         color: #484848 !important;
       }
@@ -85,27 +97,74 @@
     }
 
     /* Outlook Web and Gmail app dark mode parsing fixes */
-    [data-ogsc] body, [data-ogsc] .body-bg { background-color: #F7F7F7 !important; color: #484848 !important; }
-    [data-ogsc] .main-gradient-container { background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%) !important; }
-    [data-ogsc] .white-pill-element { background-color: #FFFFFF !important; }
-    [data-ogsc] .white-box-container { background-color: #ffffff !important; }
-    [data-ogsc] .alert-box-container { background-color: #FFF3DE !important; }
-    [data-ogsc] .bg-tan-forced { background-color: #FFF3DE !important; }
-    [data-ogsc] .bg-gold-pill-forced { background-color: #E8D1AB !important; }
-    [data-ogsc] .bg-black-forced { background-color: #000000 !important; }
-    [data-ogsc] .text-black-forced { color: #000000 !important; }
-    [data-ogsc] .text-black-alpha-forced { color: rgba(0, 0, 0, 0.7) !important; }
-    [data-ogsc] .text-dark-gray { color: #403E3E !important; }
-    [data-ogsc] .text-muted-gray { color: #525252 !important; }
-    [data-ogsc] .text-help-gray { color: #3C3B3B !important; }
-    [data-ogsc] .text-gold-forced { color: #E8D1AB !important; }
-    [data-ogsc] .gradient-list-item { background: linear-gradient(90deg, #FFFFFF 0%, rgba(255, 255, 255, 0.00) 100%) !important; }
+    [data-ogsc] body,
+    [data-ogsc] .body-bg {
+      background-color: #F7F7F7 !important;
+      color: #484848 !important;
+    }
+
+    [data-ogsc] .main-gradient-container {
+      background: linear-gradient(143deg, #FFFCF6 22.58%, #F8E5C7 188.59%) !important;
+    }
+
+    [data-ogsc] .white-pill-element {
+      background-color: #FFFFFF !important;
+    }
+
+    [data-ogsc] .white-box-container {
+      background-color: #ffffff !important;
+    }
+
+    [data-ogsc] .alert-box-container {
+      background-color: #FFF3DE !important;
+    }
+
+    [data-ogsc] .bg-tan-forced {
+      background-color: #FFF3DE !important;
+    }
+
+    [data-ogsc] .bg-gold-pill-forced {
+      background-color: #E8D1AB !important;
+    }
+
+    [data-ogsc] .bg-black-forced {
+      background-color: #000000 !important;
+    }
+
+    [data-ogsc] .text-black-forced {
+      color: #000000 !important;
+    }
+
+    [data-ogsc] .text-black-alpha-forced {
+      color: rgba(0, 0, 0, 0.7) !important;
+    }
+
+    [data-ogsc] .text-dark-gray {
+      color: #403E3E !important;
+    }
+
+    [data-ogsc] .text-muted-gray {
+      color: #525252 !important;
+    }
+
+    [data-ogsc] .text-help-gray {
+      color: #3C3B3B !important;
+    }
+
+    [data-ogsc] .text-gold-forced {
+      color: #E8D1AB !important;
+    }
+
+    [data-ogsc] .gradient-list-item {
+      background: linear-gradient(90deg, #FFFFFF 0%, rgba(255, 255, 255, 0.00) 100%) !important;
+    }
   </style>
 </head>
 
 <body class="body-bg"
   style="margin: 0; padding: 0; font-family:'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #F7F7F7 !important; color: #484848 !important; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%;">
-  <table class="body-bg" width="100%" cellpadding="0" cellspacing="0" style="background-color: #F7F7F7 !important; padding: 40px 20px;">
+  <table class="body-bg" width="100%" cellpadding="0" cellspacing="0"
+    style="background-color: #F7F7F7 !important; padding: 40px 20px;">
     <tr>
       <td align="center">
         <table class="main-gradient-container" width="600" cellpadding="0" cellspacing="0"
@@ -130,46 +189,59 @@
           <tr>
             <td style="padding: 0 40px;">
               {{#if isPaid}}
-              <h1 class="text-black-forced" style="margin: 0; color: #000000 !important; font-size: 52px; font-weight: 600; line-height: 1.05;">
+              <h1 class="text-black-forced"
+                style="margin: 0; color: #000000 !important; font-size: 52px; font-weight: 600; line-height: 1.05;">
                 Your Payment is Confirmed
               </h1>
-              <p class="text-dark-gray" style="margin: 18px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+              <p class="text-dark-gray"
+                style="margin: 18px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
                 Hello {{first_name}},
               </p>
-              <p class="text-dark-gray" style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+              <p class="text-dark-gray"
+                style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
                 Your payment has been successfully received. We will begin <span class="text-black-forced"
                   style="color: #000000 !important; font-weight: 600;">production</span> shortly.
               </p>
               {{else}}
               {{#if isAdditionalPayment}}
-              <h1 class="text-black-forced" style="margin: 0; color: #000000 !important; font-size: 52px; font-weight: 600; line-height: 1.05;">
+              <h1 class="text-black-forced"
+                style="margin: 0; color: #000000 !important; font-size: 52px; font-weight: 600; line-height: 1.05;">
                 Additional Payment Required
               </h1>
-              <p class="text-dark-gray" style="margin: 18px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+              <p class="text-dark-gray"
+                style="margin: 18px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
                 Hello {{first_name}},
               </p>
-              <p class="text-dark-gray" style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
-                Your quote for [<span class="text-black-forced" style="color: #000000 !important; font-weight: 600;">{{shoot_type}} +
+              <p class="text-dark-gray"
+                style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+                Your quote for [<span class="text-black-forced"
+                  style="color: #000000 !important; font-weight: 600;">{{shoot_type}} +
                   {{shoot_category}}</span>] was updated after payment.
               </p>
-              <p class="text-dark-gray" style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+              <p class="text-dark-gray"
+                style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
                 Please complete the additional payment below so we can continue <span class="text-black-forced"
                   style="color: #000000 !important; font-weight: 600;">production</span> with the revised scope.
               </p>
               {{else}}
               {{#if isReducedAmount}}
-              <h1 class="text-black-forced" style="margin: 0; color: #000000 !important; font-size: 52px; font-weight: 600; line-height: 1.05;">
+              <h1 class="text-black-forced"
+                style="margin: 0; color: #000000 !important; font-size: 52px; font-weight: 600; line-height: 1.05;">
                 Updated Receipt
               </h1>
-              <p class="text-dark-gray" style="margin: 18px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+              <p class="text-dark-gray"
+                style="margin: 18px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
                 Hello {{first_name}},
               </p>
-              <p class="text-dark-gray" style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
-                Your quote for [<span class="text-black-forced" style="color: #000000 !important; font-weight: 600;">{{shoot_type}} +
+              <p class="text-dark-gray"
+                style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+                Your quote for [<span class="text-black-forced"
+                  style="color: #000000 !important; font-weight: 600;">{{shoot_type}} +
                   {{shoot_category}}</span>] was updated after payment and the total has been reduced.
               </p>
               {{#if has_available_credit}}
-              <p class="text-dark-gray" style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+              <p class="text-dark-gray"
+                style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
                 The difference has been added to your Beige account as credit and can be used on your next booking.
               </p>
               <div class="alert-box-container"
@@ -180,24 +252,30 @@
                 </p>
               </div>
               {{else}}
-              <p class="text-dark-gray" style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+              <p class="text-dark-gray"
+                style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
                 The revised amount is reflected below. If you have any questions about your updated quote, our team is
                 happy to help.
               </p>
               {{/if}}
               {{else}}
-              <h1 class="text-black-forced" style="margin: 0; color: #000000 !important; font-size: 52px; font-weight: 600; line-height: 1.05;">
+              <h1 class="text-black-forced"
+                style="margin: 0; color: #000000 !important; font-size: 52px; font-weight: 600; line-height: 1.05;">
                 Your Invoice is Ready
               </h1>
-              <p class="text-dark-gray" style="margin: 18px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+              <p class="text-dark-gray"
+                style="margin: 18px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
                 Hello {{first_name}},
               </p>
-              <p class="text-dark-gray" style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+              <p class="text-dark-gray"
+                style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
                 Thank you for choosing Beige for your
-                upcoming [<span class="text-black-forced" style="color: #000000 !important; font-weight: 600;">{{shoot_type}} +
+                upcoming [<span class="text-black-forced"
+                  style="color: #000000 !important; font-weight: 600;">{{shoot_type}} +
                   {{shoot_category}}</span>]
               </p>
-              <p class="text-dark-gray" style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+              <p class="text-dark-gray"
+                style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
                 Once payment is done, we can begin <span class="text-black-forced"
                   style="color: #000000 !important; font-weight: 600;">production</span>.
               </p>
@@ -209,275 +287,315 @@
 
           <!-- Part 2: Proposal Details Card & Financial Synthetics -->
           <tr>
-            <td>
-              <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%"
-                style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;">
-                <tr>
-                  <td align="center" style="padding: 36px 40px;">
-                    <table border="0" cellpadding="0" cellspacing="0" width="100%"
-                      style="background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/ScallopTopReceiptBg.png') !important; background-repeat: no-repeat !important; background-position: top center !important; background-size: 100% 100% !important; border-radius: 0 0 40px 40px;">
-                      <tr>
-                        <td align="center" style="padding: 34px 0 28px;">
-                          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
-                            style="border-collapse: collapse; width: 100% !important; max-width: 500px !important;">
-                            <tr>
-                              <td align="center" style="padding: 0 30px;">
-                                <h2 class="text-black-forced"
-                                  style="margin: 0 0 22px 0; font-size: 30px; font-weight: 600; color: #000000 !important;">
-                                  Shoot Details
-                                </h2>
+            <td style="padding: 0 40px;">
+              <div>
+                <table border="0" cellpadding="0" cellspacing="0" width="100%" style="line-height: 0; font-size: 0;">
+                  <tr>
+                    <td align="center" style="padding: 0;">
+                      <div style="height: 25px; overflow: visible; white-space: nowrap;">
+                        <div class="scallop-pattern"
+                          style="display: inline-block; width: 45px; height: 45px; background-color: #FFFCF6; border-radius: 50%; margin: 0 12px; border-bottom: solid 1px #e5e5e5;">
+                        </div>
+                        <div class="scallop-pattern"
+                          style="display: inline-block; width: 45px; height: 45px; background-color: #FFFCF6; border-radius: 50%; margin: 0 12px; border-bottom: solid 1px #e5e5e5;">
+                        </div>
+                        <div class="scallop-pattern"
+                          style="display: inline-block; width: 45px; height: 45px; background-color: #FFFCF6; border-radius: 50%; margin: 0 12px; border-bottom: solid 1px #e5e5e5;">
+                        </div>
+                        <div class="scallop-pattern"
+                          style="display: inline-block; width: 45px; height: 45px; background-color: #FFFCF6; border-radius: 50%; margin: 0 12px; border-bottom: solid 1px #e5e5e5;">
+                        </div>
+                        <div class="scallop-pattern"
+                          style="display: inline-block; width: 45px; height: 45px; background-color: #FFFCF6; border-radius: 50%; margin: 0 12px; border-bottom: solid 1px #e5e5e5;">
+                        </div>
+                        <div class="scallop-pattern"
+                          style="display: inline-block; width: 45px; height: 45px; background-color: #FFFCF6; border-radius: 50%; margin: 0 12px; border-bottom: solid 1px #e5e5e5;">
+                        </div>
+                        <div class="scallop-pattern"
+                          style="display: inline-block; width: 45px; height: 45px; background-color: #FFFCF6; border-radius: 50%; margin: 0 12px; border-bottom: solid 1px #e5e5e5;">
+                        </div>
+                        <div class="scallop-pattern"
+                          style="display: inline-block; width: 45px; height: 45px; background-color: #FFFCF6; border-radius: 50%; margin: 0 12px; border-bottom: solid 1px #e5e5e5;">
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+                <table class="white-bg-section" role="presentation" cellspacing="0" cellpadding="0" border="0"
+                  width="100%"
+                  style="background-color: #FEF0D8; border-bottom-left-radius: 40px; border-bottom-right-radius: 40px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); padding: 50px 30px ; border: solid 1px #e5e5e5;">
+                  <tr>
+                    <td align="center" style="padding: 0 0 28px;">
+                      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+                        style="border-collapse: collapse; width: 100% !important; max-width: 500px !important;">
+                        <tr>
+                          <td align="center" style="padding: 0 30px;">
+                            <h2 class="text-black-forced"
+                              style="margin: 0 0 22px 0; font-size: 30px; font-weight: 600; color: #000000 !important;">
+                              Shoot Details
+                            </h2>
 
-                                <table class="white-box-container" border="0" cellpadding="0" cellspacing="0" width="100%"
-                                  style="background-color: #ffffff !important; border-radius: 40px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); padding: 30px;">
-                                  <tr>
-                                    <td style="padding: 15px 0 0;">
-                                      <table width="100%" cellpadding="0" cellspacing="0">
-                                        <tr>
-                                          <td width="100" style="padding-bottom: 15px;">
-                                            <div
-                                              style="width: 111px; height: 111px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png') !important; background-size: cover !important; background-repeat: no-repeat !important; background-position: center !important; text-align: center;">
-                                              <img
-                                                src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/User.svg"
-                                                width="40" height="40"
-                                                style="margin-top: 25px; margin-right: 18px; display: inline-block; border: 0; max-width: 100% !important;">
-                                            </div>
-                                          </td>
-                                          <td style="padding-bottom: 15px; text-align: left; valign: middle;">
-                                            <div class="text-muted-gray"
-                                              style="font-size: 18px; color: #525252 !important; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
-                                              Project</div>
-                                            <div class="text-black-forced"
-                                              style="font-size: 18px; font-weight: 600; color: #000000 !important; line-height: 20px;">
-                                              {{project}}</div>
-                                          </td>
-                                        </tr>
-                                      </table>
-                                      <div>
-                                        <img
-                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
-                                          alt="Line Separator" width="100%" style="display: block; border: 0;">
-                                      </div>
-                                    </td>
-                                  </tr>
+                            <table class="white-box-container" border="0" cellpadding="0" cellspacing="0" width="100%"
+                              style="background-color: #ffffff !important; border-radius: 40px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); padding: 30px;">
+                              <tr>
+                                <td style="padding: 15px 0 0;">
+                                  <table width="100%" cellpadding="0" cellspacing="0">
+                                    <tr>
+                                      <td width="100" style="padding-bottom: 15px;">
+                                        <div
+                                          style="width: 111px; height: 111px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png') !important; background-size: cover !important; background-repeat: no-repeat !important; background-position: center !important; text-align: center;">
+                                          <img
+                                            src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/User.svg"
+                                            width="40" height="40"
+                                            style="margin-top: 25px; margin-right: 18px; display: inline-block; border: 0; max-width: 100% !important;">
+                                        </div>
+                                      </td>
+                                      <td style="padding-bottom: 15px; text-align: left; valign: middle;">
+                                        <div class="text-muted-gray"
+                                          style="font-size: 18px; color: #525252 !important; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
+                                          Project</div>
+                                        <div class="text-black-forced"
+                                          style="font-size: 18px; font-weight: 600; color: #000000 !important; line-height: 20px;">
+                                          {{project}}</div>
+                                      </td>
+                                    </tr>
+                                  </table>
+                                  <div>
+                                    <img
+                                      src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                      alt="Line Separator" width="100%" style="display: block; border: 0;">
+                                  </div>
+                                </td>
+                              </tr>
 
-                                  <tr>
-                                    <td style="padding: 20px 0 0;">
-                                      <table width="100%" cellpadding="0" cellspacing="0">
-                                        <tr>
-                                          <td width="96">
-                                            <div
-                                              style="width: 111px; height: 111px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png') !important; background-size: cover !important; background-repeat: no-repeat !important; background-position: center !important; text-align: center;">
-                                              <img
-                                                src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/Camera.png"
-                                                width="40" height="40" alt="Camera"
-                                                style="margin-top: 25px; margin-right: 18px; display: inline-block; border: 0; max-width: 100%;">
-                                            </div>
-                                          </td>
-                                          <td style="padding-bottom: 20px;">
-                                            <div class="text-muted-gray"
-                                              style="font-size: 18px; color: #525252 !important; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
-                                              Services</div>
-                                            <div class="text-black-forced"
-                                              style="font-size: 18px; font-weight: 600; color: #000000 !important; line-height: 20px;">
-                                              {{services}}</div>
-                                          </td>
-                                        </tr>
-                                      </table>
-                                      <div>
-                                        <img
-                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
-                                          alt="Line Separator" width="100%" style="display: block; border: 0;">
-                                      </div>
-                                    </td>
-                                  </tr>
+                              <tr>
+                                <td style="padding: 20px 0 0;">
+                                  <table width="100%" cellpadding="0" cellspacing="0">
+                                    <tr>
+                                      <td width="96">
+                                        <div
+                                          style="width: 111px; height: 111px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png') !important; background-size: cover !important; background-repeat: no-repeat !important; background-position: center !important; text-align: center;">
+                                          <img
+                                            src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/Camera.png"
+                                            width="40" height="40" alt="Camera"
+                                            style="margin-top: 25px; margin-right: 18px; display: inline-block; border: 0; max-width: 100%;">
+                                        </div>
+                                      </td>
+                                      <td style="padding-bottom: 20px;">
+                                        <div class="text-muted-gray"
+                                          style="font-size: 18px; color: #525252 !important; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
+                                          Services</div>
+                                        <div class="text-black-forced"
+                                          style="font-size: 18px; font-weight: 600; color: #000000 !important; line-height: 20px;">
+                                          {{services}}</div>
+                                      </td>
+                                    </tr>
+                                  </table>
+                                  <div>
+                                    <img
+                                      src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                      alt="Line Separator" width="100%" style="display: block; border: 0;">
+                                  </div>
+                                </td>
+                              </tr>
 
-                                  <tr>
-                                    <td style="padding: 20px 0 0;">
-                                      <table width="100%" cellpadding="0" cellspacing="0">
-                                        <tr>
-                                          <td width="96">
-                                            <div
-                                              style="width: 111px; height: 111px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png') !important; background-size: cover !important; background-repeat: no-repeat !important; background-position: center !important; text-align: center;">
-                                              <img
-                                                src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/ClockCircle.png"
-                                                width="40" height="40" alt="Time"
-                                                style="margin-top: 25px; margin-right: 18px; display: inline-block; border: 0; max-width: 100%;">
-                                            </div>
-                                          </td>
-                                          <td style="padding-bottom: 20px;">
-                                            <div class="text-muted-gray"
-                                              style="font-size: 18px; color: #525252 !important; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
-                                              Schedule</div>
-                                            <div class="text-black-forced"
-                                              style="font-size: 18px; font-weight: 600; color: #000000 !important; line-height: 20px;">
-                                              {{schedule}}</div>
-                                          </td>
-                                        </tr>
-                                      </table>
-                                      <div>
-                                        <img
-                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
-                                          alt="Line Separator" width="100%" style="display: block; border: 0;">
-                                      </div>
-                                    </td>
-                                  </tr>
+                              <tr>
+                                <td style="padding: 20px 0 0;">
+                                  <table width="100%" cellpadding="0" cellspacing="0">
+                                    <tr>
+                                      <td width="96">
+                                        <div
+                                          style="width: 111px; height: 111px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png') !important; background-size: cover !important; background-repeat: no-repeat !important; background-position: center !important; text-align: center;">
+                                          <img
+                                            src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/ClockCircle.png"
+                                            width="40" height="40" alt="Time"
+                                            style="margin-top: 25px; margin-right: 18px; display: inline-block; border: 0; max-width: 100%;">
+                                        </div>
+                                      </td>
+                                      <td style="padding-bottom: 20px;">
+                                        <div class="text-muted-gray"
+                                          style="font-size: 18px; color: #525252 !important; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
+                                          Schedule</div>
+                                        <div class="text-black-forced"
+                                          style="font-size: 18px; font-weight: 600; color: #000000 !important; line-height: 20px;">
+                                          {{schedule}}</div>
+                                      </td>
+                                    </tr>
+                                  </table>
+                                  <div>
+                                    <img
+                                      src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                      alt="Line Separator" width="100%" style="display: block; border: 0;">
+                                  </div>
+                                </td>
+                              </tr>
 
-                                  <tr>
-                                    <td style="padding: 20px 0 0;">
-                                      <table width="100%" cellpadding="0" cellspacing="0">
-                                        <tr>
-                                          <td width="96" style="padding-bottom: 0;">
-                                            <div
-                                              style="width: 111px; height: 111px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png') !important; background-size: cover !important; background-repeat: no-repeat !important; background-position: center !important; text-align: center;">
-                                              <img
-                                                src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/EditPencil.png"
-                                                width="40" height="40" alt="Add-ons"
-                                                style="margin-top: 25px; margin-right: 18px; display: inline-block; border: 0; max-width: 100%;">
-                                            </div>
-                                          </td>
-                                          <td style="padding-bottom: 0;">
-                                            <div class="text-muted-gray"
-                                              style="font-size: 18px; color: #525252 !important; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
-                                              Editing</div>
-                                            <div class="text-black-forced"
-                                              style="font-size: 18px; font-weight: 600; color: #000000 !important; line-height: 26px;">
-                                              {{editing}}</div>
-                                          </td>
-                                        </tr>
-                                      </table>
-                                      <div>
-                                        <img
-                                          src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
-                                          alt="Line Separator" width="100%" style="display: block; border: 0;">
-                                      </div>
-                                    </td>
-                                  </tr>
-                                  <tr>
-                                    <td style="padding: 20px 0 0;">
-                                      <table width="100%" cellpadding="0" cellspacing="0">
-                                        <tr>
-                                          <td width="96" style="padding-bottom: 0;">
-                                            <div
-                                              style="width: 111px; height: 111px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png') !important; background-size: cover !important; background-repeat: no-repeat !important; background-position: center !important; text-align: center;">
-                                              <img
-                                                src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/location.svg"
-                                                width="40" height="40" alt="Date"
-                                                style="margin-top: 25px; margin-right: 18px; display: inline-block; border: 0; max-width: 100% !important;">
-                                            </div>
-                                          </td>
-                                          <td style="padding-bottom: 20px;">
-                                            <div class="text-muted-gray"
-                                              style="font-size: 18px; color: #525252 !important; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
-                                              Location</div>
-                                            <div class="text-black-forced"
-                                              style="font-size: 18px; font-weight: 600; color: #000000 !important; line-height: 20px;">
-                                              {{location}}</div>
-                                          </td>
-                                        </tr>
-                                      </table>
-                                    </td>
-                                  </tr>
-                                </table>
-                              </td>
-                            </tr>
-                          </table>
+                              <tr>
+                                <td style="padding: 20px 0 0;">
+                                  <table width="100%" cellpadding="0" cellspacing="0">
+                                    <tr>
+                                      <td width="96" style="padding-bottom: 0;">
+                                        <div
+                                          style="width: 111px; height: 111px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png') !important; background-size: cover !important; background-repeat: no-repeat !important; background-position: center !important; text-align: center;">
+                                          <img
+                                            src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/EditPencil.png"
+                                            width="40" height="40" alt="Add-ons"
+                                            style="margin-top: 25px; margin-right: 18px; display: inline-block; border: 0; max-width: 100%;">
+                                        </div>
+                                      </td>
+                                      <td style="padding-bottom: 0;">
+                                        <div class="text-muted-gray"
+                                          style="font-size: 18px; color: #525252 !important; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
+                                          Editing</div>
+                                        <div class="text-black-forced"
+                                          style="font-size: 18px; font-weight: 600; color: #000000 !important; line-height: 26px;">
+                                          {{editing}}</div>
+                                      </td>
+                                    </tr>
+                                  </table>
+                                  <div>
+                                    <img
+                                      src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/HorizontalSeparator.png"
+                                      alt="Line Separator" width="100%" style="display: block; border: 0;">
+                                  </div>
+                                </td>
+                              </tr>
+                              <tr>
+                                <td style="padding: 20px 0 0;">
+                                  <table width="100%" cellpadding="0" cellspacing="0">
+                                    <tr>
+                                      <td width="96" style="padding-bottom: 0;">
+                                        <div
+                                          style="width: 111px; height: 111px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/IconBg.png') !important; background-size: cover !important; background-repeat: no-repeat !important; background-position: center !important; text-align: center;">
+                                          <img
+                                            src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/location.svg"
+                                            width="40" height="40" alt="Date"
+                                            style="margin-top: 25px; margin-right: 18px; display: inline-block; border: 0; max-width: 100% !important;">
+                                        </div>
+                                      </td>
+                                      <td style="padding-bottom: 20px;">
+                                        <div class="text-muted-gray"
+                                          style="font-size: 18px; color: #525252 !important; line-height: 20px; font-weight: 300; padding-bottom: 5px;">
+                                          Location</div>
+                                        <div class="text-black-forced"
+                                          style="font-size: 18px; font-weight: 600; color: #000000 !important; line-height: 20px;">
+                                          {{location}}</div>
+                                      </td>
+                                    </tr>
+                                  </table>
+                                </td>
+                              </tr>
+                            </table>
+                          </td>
+                        </tr>
+                      </table>
 
-                          <table width="100%" cellpadding="0" cellspacing="0" style="padding-top: 26px;">
-                            <tr>
-                              <td class="text-black-forced"
-                                style="padding: 0 0 12px; font-size: 24px; line-height: 1.3; font-weight: 600; color: #000000 !important; text-align: center;">
-                                {{#if isAdditionalPayment}}
-                                {{#if isPaid}}
-                                Additional Amount Paid
-                                {{else}}
-                                Additional Amount Due
-                                {{/if}}
-                                {{else}}
-                                {{#if isReducedAmount}}
-                                Updated Amount Summary
-                                {{else}}
-                                Invoice Amount
-                                {{/if}}
-                                {{/if}}
-                              </td>
-                            </tr>
-                            <tr>
-                              <td>
-                                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
-                                  style="border-collapse: collapse; margin: 0;">
-                                  <tr>
-                                    <td align="center" valign="middle" height="100"
-                                      style="height: 100px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/BlackLineThroughTab.png') !important; background-repeat: no-repeat !important; background-position: center !important; background-size: contain !important;">
-                                      <div class="text-gold-forced"
-                                        style="font-size: 35px; font-weight: 600; color: #E8D1AB !important; letter-spacing: 1px; line-height: 1; margin: 0;">
-                                        $ {{invoice_amount}}
-                                      </div>
-                                    </td>
-                                  </tr>
-                                </table>
-                                {{#if isAdditionalPayment}}
-                                <table class="white-box-container" role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
-                                  style="border-collapse: collapse; margin: 18px 0 0; background-color: #ffffff !important; border-radius: 22px; padding: 18px;">
-                                  <tr>
-                                    <td class="text-muted-gray" style="padding: 8px 18px; color: #525252 !important; font-size: 16px; line-height: 22px; text-align: left;">
-                                      Previously Paid
-                                    </td>
-                                    <td class="text-black-forced" align="right" style="padding: 8px 18px; color: #000000 !important; font-size: 16px; line-height: 22px; font-weight: 600;">
-                                      $ {{previously_paid_amount}}
-                                    </td>
-                                  </tr>
-                                  <tr>
-                                    <td class="text-muted-gray" style="padding: 8px 18px; color: #525252 !important; font-size: 16px; line-height: 22px; text-align: left;">
-                                      Revised Total
-                                    </td>
-                                    <td class="text-black-forced" align="right" style="padding: 8px 18px; color: #000000 !important; font-size: 16px; line-height: 22px; font-weight: 600;">
-                                      $ {{revised_total}}
-                                    </td>
-                                  </tr>
-                                </table>
-                                {{else}}
-                                {{#if isReducedAmount}}
-                                <table class="white-box-container" role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
-                                  style="border-collapse: collapse; margin: 18px 0 0; background-color: #ffffff !important; border-radius: 22px; padding: 18px;">
-                                  <tr>
-                                    <td class="text-muted-gray" style="padding: 8px 18px; color: #525252 !important; font-size: 16px; line-height: 22px; text-align: left;">
-                                      Previously Paid
-                                    </td>
-                                    <td class="text-black-forced" align="right" style="padding: 8px 18px; color: #000000 !important; font-size: 16px; line-height: 22px; font-weight: 600;">
-                                      $ {{previously_paid_amount}}
-                                    </td>
-                                  </tr>
-                                  <tr>
-                                    <td class="text-muted-gray" style="padding: 8px 18px; color: #525252 !important; font-size: 16px; line-height: 22px; text-align: left;">
-                                      Revised Total
-                                    </td>
-                                    <td class="text-black-forced" align="right" style="padding: 8px 18px; color: #000000 !important; font-size: 16px; line-height: 22px; font-weight: 600;">
-                                      $ {{revised_total}}
-                                    </td>
-                                  </tr>
-                                  {{#if has_available_credit}}
-                                  <tr>
-                                    <td class="text-muted-gray" style="padding: 8px 18px; color: #525252 !important; font-size: 16px; line-height: 22px; text-align: left;">
-                                      Available Credit
-                                    </td>
-                                    <td class="text-black-forced" align="right" style="padding: 8px 18px; color: #000000 !important; font-size: 16px; line-height: 22px; font-weight: 600;">
-                                      $ {{available_credit_amount}}
-                                    </td>
-                                  </tr>
-                                  {{/if}}
-                                </table>
-                                {{/if}}
-                                {{/if}}
-                              </td>
-                            </tr>
-                          </table>
+                      <table width="100%" cellpadding="0" cellspacing="0" style="padding-top: 26px;">
+                        <tr>
+                          <td class="text-black-forced"
+                            style="padding: 0 0 12px; font-size: 24px; line-height: 1.3; font-weight: 600; color: #000000 !important; text-align: center;">
+                            {{#if isAdditionalPayment}}
+                            {{#if isPaid}}
+                            Additional Amount Paid
+                            {{else}}
+                            Additional Amount Due
+                            {{/if}}
+                            {{else}}
+                            {{#if isReducedAmount}}
+                            Updated Amount Summary
+                            {{else}}
+                            Invoice Amount
+                            {{/if}}
+                            {{/if}}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td>
+                            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+                              style="border-collapse: collapse; margin: 0;">
+                              <tr>
+                                <td align="center" valign="middle" height="100"
+                                  style="height: 100px; background-image: url('https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/BlackLineThroughTab.png') !important; background-repeat: no-repeat !important; background-position: center !important; background-size: contain !important;">
+                                  <div class="text-gold-forced"
+                                    style="font-size: 35px; font-weight: 600; color: #E8D1AB !important; letter-spacing: 1px; line-height: 1; margin: 0;">
+                                    $ {{invoice_amount}}
+                                  </div>
+                                </td>
+                              </tr>
+                            </table>
+                            {{#if isAdditionalPayment}}
+                            <table class="white-box-container" role="presentation" width="100%" cellpadding="0"
+                              cellspacing="0" border="0"
+                              style="border-collapse: collapse; margin: 18px 0 0; background-color: #ffffff !important; border-radius: 22px; padding: 18px;">
+                              <tr>
+                                <td class="text-muted-gray"
+                                  style="padding: 8px 18px; color: #525252 !important; font-size: 16px; line-height: 22px; text-align: left;">
+                                  Previously Paid
+                                </td>
+                                <td class="text-black-forced" align="right"
+                                  style="padding: 8px 18px; color: #000000 !important; font-size: 16px; line-height: 22px; font-weight: 600;">
+                                  $ {{previously_paid_amount}}
+                                </td>
+                              </tr>
+                              <tr>
+                                <td class="text-muted-gray"
+                                  style="padding: 8px 18px; color: #525252 !important; font-size: 16px; line-height: 22px; text-align: left;">
+                                  Revised Total
+                                </td>
+                                <td class="text-black-forced" align="right"
+                                  style="padding: 8px 18px; color: #000000 !important; font-size: 16px; line-height: 22px; font-weight: 600;">
+                                  $ {{revised_total}}
+                                </td>
+                              </tr>
+                            </table>
+                            {{else}}
+                            {{#if isReducedAmount}}
+                            <table class="white-box-container" role="presentation" width="100%" cellpadding="0"
+                              cellspacing="0" border="0"
+                              style="border-collapse: collapse; margin: 18px 0 0; background-color: #ffffff !important; border-radius: 22px; padding: 18px;">
+                              <tr>
+                                <td class="text-muted-gray"
+                                  style="padding: 8px 18px; color: #525252 !important; font-size: 16px; line-height: 22px; text-align: left;">
+                                  Previously Paid
+                                </td>
+                                <td class="text-black-forced" align="right"
+                                  style="padding: 8px 18px; color: #000000 !important; font-size: 16px; line-height: 22px; font-weight: 600;">
+                                  $ {{previously_paid_amount}}
+                                </td>
+                              </tr>
+                              <tr>
+                                <td class="text-muted-gray"
+                                  style="padding: 8px 18px; color: #525252 !important; font-size: 16px; line-height: 22px; text-align: left;">
+                                  Revised Total
+                                </td>
+                                <td class="text-black-forced" align="right"
+                                  style="padding: 8px 18px; color: #000000 !important; font-size: 16px; line-height: 22px; font-weight: 600;">
+                                  $ {{revised_total}}
+                                </td>
+                              </tr>
+                              {{#if has_available_credit}}
+                              <tr>
+                                <td class="text-muted-gray"
+                                  style="padding: 8px 18px; color: #525252 !important; font-size: 16px; line-height: 22px; text-align: left;">
+                                  Available Credit
+                                </td>
+                                <td class="text-black-forced" align="right"
+                                  style="padding: 8px 18px; color: #000000 !important; font-size: 16px; line-height: 22px; font-weight: 600;">
+                                  $ {{available_credit_amount}}
+                                </td>
+                              </tr>
+                              {{/if}}
+                            </table>
+                            {{/if}}
+                            {{/if}}
+                          </td>
+                        </tr>
+                      </table>
 
-                        </td>
-                      </tr>
-                    </table>
-                  </td>
-                </tr>
-              </table>
+                    </td>
+                  </tr>
+                </table>
+              </div>
             </td>
           </tr>
 
@@ -549,16 +667,20 @@
                 height="450" />
 
               <div style="padding: 40px 40px;">
-                <p class="bg-gold-pill-forced text-black-alpha-forced" style="background-color: #E8D1AB !important; font-size: 20px; font-style: normal; font-weight: 500; line-height: normal; letter-spacing: 0.415px; color: rgba(0, 0, 0, 0.7) !important; padding: 20px 24px; border-radius: 32px; width: fit-content;">
+                <p class="bg-gold-pill-forced text-black-alpha-forced"
+                  style="background-color: #E8D1AB !important; font-size: 20px; font-style: normal; font-weight: 500; line-height: normal; letter-spacing: 0.415px; color: rgba(0, 0, 0, 0.7) !important; padding: 20px 24px; border-radius: 32px; width: fit-content;">
                   ✔ Vetted Creative Partners
                 </p>
-                <p class="bg-gold-pill-forced text-black-alpha-forced" style="background-color: #E8D1AB !important; font-size: 20px; font-style: normal; font-weight: 500; line-height: normal; letter-spacing: 0.415px; color: rgba(0, 0, 0, 0.7) !important; padding: 20px 24px; border-radius: 32px; width: fit-content;">
+                <p class="bg-gold-pill-forced text-black-alpha-forced"
+                  style="background-color: #E8D1AB !important; font-size: 20px; font-style: normal; font-weight: 500; line-height: normal; letter-spacing: 0.415px; color: rgba(0, 0, 0, 0.7) !important; padding: 20px 24px; border-radius: 32px; width: fit-content;">
                   ✔ Professional Production Standards
                 </p>
-                <p class="bg-gold-pill-forced text-black-alpha-forced" style="background-color: #E8D1AB !important; font-size: 20px; font-style: normal; font-weight: 500; line-height: normal; letter-spacing: 0.415px; color: rgba(0, 0, 0, 0.7) !important; padding: 20px 24px; border-radius: 32px; width: fit-content;">
+                <p class="bg-gold-pill-forced text-black-alpha-forced"
+                  style="background-color: #E8D1AB !important; font-size: 20px; font-style: normal; font-weight: 500; line-height: normal; letter-spacing: 0.415px; color: rgba(0, 0, 0, 0.7) !important; padding: 20px 24px; border-radius: 32px; width: fit-content;">
                   ✔ Beige Quality Guarantee
                 </p>
-                <p class="text-black-forced" style="font-size: 28px; font-style: normal; font-weight: 600; color: #000000 !important; margin: 30px 0 0 0;">
+                <p class="text-black-forced"
+                  style="font-size: 28px; font-style: normal; font-weight: 600; color: #000000 !important; margin: 30px 0 0 0;">
                   Beige AI Platform -<br />
                   Production Marketplace
                 </p>

@@ -1,11 +1,37 @@
 const jwt = require('jsonwebtoken');
 const config = require('../config/config');
+const db = require('../models');
+
+const validatePermissionVersion = async (decoded) => {
+  const user = await db.users.findOne({
+    where: {
+      id: decoded.userId
+    },
+    attributes: [
+      'id',
+      'permissions_version'
+    ]
+  });
+
+  if (!user) {
+    throw new Error('USER_NOT_FOUND');
+  }
+
+  if (
+    user.permissions_version !==
+    decoded.permissionsVersion
+  ) {
+    throw new Error('PERMISSION_CHANGED');
+  }
+
+  return user;
+};
 
 /**
  * JWT Authentication Middleware
  * Verifies JWT token and attaches user information to request
  */
-const authMiddleware = (req, res, next) => {
+const authMiddleware = async (req, res, next) => {
   try {
     // Extract token from Authorization header or revure_token cookie
     const authHeader = req.headers.authorization;
@@ -34,6 +60,8 @@ const authMiddleware = (req, res, next) => {
     // Verify token
     const decoded = jwt.verify(token, config.jwtSecret);
 
+    await validatePermissionVersion(decoded);
+
     // Attach user information to request
     req.user = {
       userId: decoded.userId,
@@ -54,6 +82,17 @@ const authMiddleware = (req, res, next) => {
       return res.status(401).json({
         error: true,
         message: 'Invalid token'
+      });
+    }
+
+    if (
+      error.message === 'PERMISSION_CHANGED' ||
+      error.message === 'USER_NOT_FOUND'
+    ) {
+      return res.status(401).json({
+        success: false,
+        force_logout: true,
+        message: 'Please login again.'
       });
     }
 
@@ -155,5 +194,6 @@ module.exports = {
   authMiddleware,
   authenticate: authMiddleware,  // Alias for compatibility
   optionalAuth,
-  authenticateAdmin
+  authenticateAdmin,
+  validatePermissionVersion
 };

@@ -18,7 +18,7 @@ module.exports = function(sequelize, DataTypes) {
     },
     item_id: {
       type: DataTypes.INTEGER,
-      allowNull: false,
+      allowNull: true,
       references: {
         model: 'pricing_items',
         key: 'item_id'
@@ -76,4 +76,3 @@ module.exports = function(sequelize, DataTypes) {
     ]
   });
 };
-

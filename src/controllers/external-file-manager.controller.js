@@ -105,6 +105,7 @@ const getRequestUserId = (req) => req.userId || req.user?.userId || null;
 const getRequestUserRole = (req) => req.userRole || req.user?.userRole || null;
 const getNormalizedRequestUserRole = (req) => String(getRequestUserRole(req) || '').trim().toLowerCase();
 const isAdminRole = (req) => ['admin', 'super_admin', 'superadmin', 'sales_admin'].includes(getNormalizedRequestUserRole(req));
+const isClientRole = (req) => getNormalizedRequestUserRole(req) === 'client';
 const isCreatorRole = (req) => {
   const role = getNormalizedRequestUserRole(req);
   return ['creator', 'creative', 'Creative'].includes(role);
@@ -214,6 +215,35 @@ const buildProjectFilesUrl = (bookingId) => {
   return `${frontendUrl}/affiliate/dashboard`;
 };
 
+const buildAdminDashboardUrl = () => {
+  const frontendUrl = String(process.env.FRONTEND_URL || '').trim().replace(/\/+$/, '');
+  if (!frontendUrl) return '';
+  return `${frontendUrl}/admin/dashboard`;
+};
+
+const buildCreatorDashboardUrl = () => {
+  const frontendUrl = String(process.env.FRONTEND_URL || '').trim().replace(/\/+$/, '');
+  if (!frontendUrl) return '';
+  return `${frontendUrl}/creator/dashboard`;
+};
+
+const formatEditingSubmissionTime = (value = new Date()) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value || '');
+  return date.toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: 'Asia/Kolkata',
+  });
+};
+
+const isFilesForEditingCopy = ({ phase }) =>
+  String(phase || '').trim().toLowerCase() === 'post';
+
 const isRawFootageUploadPath = (filepath) =>
   String(filepath || '')
     .trim()
@@ -221,6 +251,46 @@ const isRawFootageUploadPath = (filepath) =>
     .toLowerCase()
     .replace(/[_\s]+/g, '-')
     .includes('/post-production/raw-footage/');
+
+const normalizePathSegmentKey = (value) =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+
+const isEditedRevisionVersionPath = (filepath) => {
+  const segments = String(filepath || '')
+    .trim()
+    .replace(/\\/g, '/')
+    .split('/')
+    .map(normalizePathSegmentKey)
+    .filter(Boolean);
+
+  const postProductionIndex = segments.indexOf('postproduction');
+  if (postProductionIndex === -1) return false;
+
+  return (
+    segments[postProductionIndex + 1] === 'edits' &&
+    segments[postProductionIndex + 2] === 'revisions' &&
+    /^version0*[1-9]\d*$/.test(segments[postProductionIndex + 3] || '')
+  );
+};
+
+const getEditedRevisionVersionLabel = (filepath) => {
+  const segments = String(filepath || '')
+    .trim()
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter(Boolean);
+
+  const versionSegment = segments.find((segment) =>
+    /^version\s*0*[1-9]\d*$/i.test(String(segment || '').replace(/[^a-z0-9]+/gi, ''))
+  );
+  return versionSegment || '';
+};
+
+const getFileNameFromPath = (filepath) =>
+  String(filepath || '').replace(/\\/g, '/').split('/').filter(Boolean).pop() || '';
 
 const getUploadFolderName = (filepath, phase) => {
   const normalizedPath = String(filepath || '').trim().replace(/\\/g, '/');
@@ -297,6 +367,170 @@ const getBookingForUploadEmail = async (bookingId) => {
       },
     ],
   });
+};
+
+const getBookingForEditingInternalEmail = async (bookingId) => {
+  if (!bookingId) return null;
+  return stream_project_booking.findOne({
+    where: {
+      stream_project_booking_id: Number(bookingId),
+      is_active: 1,
+    },
+    include: [
+      {
+        model: db.users,
+        as: 'user',
+        required: false,
+        attributes: ['id', 'name', 'email'],
+      },
+      {
+        model: assigned_crew,
+        as: 'assigned_crews',
+        required: false,
+        where: { is_active: 1 },
+        include: [
+          {
+            model: crew_members,
+            as: 'crew_member',
+            required: false,
+            attributes: ['crew_member_id', 'first_name', 'last_name', 'email'],
+          },
+        ],
+      },
+    ],
+  });
+};
+
+const parseRecipientEnvList = (...values) =>
+  values
+    .flatMap((value) => String(value || '').split(','))
+    .map((value) => normalizeEmailAddress(value))
+    .filter(Boolean);
+
+const buildFilesForEditingInternalRecipients = (booking) => {
+  const recipients = [];
+  const seenEmails = new Set();
+  const pushRecipient = ({ email, name, data = {} }) => {
+    const normalizedEmail = normalizeEmailAddress(email);
+    if (!normalizedEmail || seenEmails.has(normalizedEmail)) return;
+    seenEmails.add(normalizedEmail);
+    recipients.push({ email: normalizedEmail, name, data });
+  };
+
+  for (const email of parseRecipientEnvList(
+    process.env.FILES_FOR_EDITING_INTERNAL_TEAM_EMAIL,
+    process.env.POST_PRODUCTION_TEAM_EMAIL,
+    process.env.ADMIN_NOTIFICATION_EMAIL,
+    process.env.SALES_NOTIFICATION_EMAIL
+  )) {
+    pushRecipient({
+      email,
+      name: 'Admin',
+      data: {
+        recipient_name: 'Admin',
+        dashboard_link: buildAdminDashboardUrl(),
+      },
+    });
+  }
+
+  const assignedCrews = Array.isArray(booking?.assigned_crews) ? booking.assigned_crews : [];
+  for (const assignment of assignedCrews) {
+    const crew = assignment?.crew_member;
+    const name = [crew?.first_name, crew?.last_name].filter(Boolean).join(' ').trim() || 'Creative Partner';
+    pushRecipient({
+      email: crew?.email,
+      name,
+      data: {
+        recipient_name: name,
+        dashboard_link: buildCreatorDashboardUrl() || buildAdminDashboardUrl(),
+      },
+    });
+  }
+
+  return recipients;
+};
+
+const getAdminNotificationRecipients = () =>
+  parseRecipientEnvList(
+    process.env.EDITS_DELIVERED_TOCLIENT_ADMIN_EMAIL,
+    process.env.FILES_FOR_EDITING_INTERNAL_TEAM_EMAIL,
+    process.env.POST_PRODUCTION_TEAM_EMAIL,
+    process.env.ADMIN_NOTIFICATION_EMAIL,
+    process.env.SALES_NOTIFICATION_EMAIL
+  );
+
+const getAssignedCreativePartnerRecipients = (booking) => {
+  const seenEmails = new Set();
+  const assignedCrews = Array.isArray(booking?.assigned_crews) ? booking.assigned_crews : [];
+
+  return assignedCrews
+    .map((assignment) => {
+      const crew = assignment?.crew_member;
+      const email = normalizeEmailAddress(crew?.email);
+      if (!email || seenEmails.has(email)) return null;
+      seenEmails.add(email);
+
+      const name = [crew?.first_name, crew?.last_name].filter(Boolean).join(' ').trim() || 'Creative Partner';
+      return {
+        email,
+        name,
+        data: {
+          recipient_name: name,
+          frontend_url: buildCreatorDashboardUrl() || buildAdminDashboardUrl(),
+        },
+      };
+    })
+    .filter(Boolean);
+};
+
+const sendFilesForEditingInternalEmailForCopy = async ({
+  externalId,
+  phase,
+  targetPath,
+  sourcePaths = [],
+  submittedByName = 'Client',
+}) => {
+  try {
+    if (!isFilesForEditingCopy({ phase, targetPath })) return;
+
+    const booking = await getBookingForEditingInternalEmail(externalId);
+    if (!booking) return;
+
+    const plainBooking = typeof booking.get === 'function' ? booking.get({ plain: true }) : booking;
+    const recipients = buildFilesForEditingInternalRecipients(plainBooking);
+    if (!recipients.length) return;
+
+    const bookingReference = String(plainBooking?.stream_project_booking_id || externalId);
+    const projectName = String(
+      plainBooking?.project_name ||
+      plainBooking?.client_name ||
+      buildWorkspaceFolderName(plainBooking) ||
+      `Booking #${bookingReference}`
+    );
+
+    const emailResult = await emailService.sendFilesForEditingInternalTeamEmail({
+      recipients,
+      data: {
+        shoot_name: projectName,
+        project_name: projectName,
+        booking_id: bookingReference,
+        order_id: bookingReference,
+        total_files: sourcePaths.length || 1,
+        submitted_by: submittedByName || 'Client',
+        submission_time: formatEditingSubmissionTime(),
+        dashboard_link: buildAdminDashboardUrl(),
+      },
+    });
+
+    if (!emailResult?.success) {
+      console.error(
+        'Files for editing internal team email failed:',
+        emailResult?.error || emailResult?.failedRecipients || 'Unknown email error'
+      );
+    }
+  } catch (error) {
+    console.error('Files for editing internal team email trigger failed:', error?.message || error);
+  }
 };
 
 const getLinkedLeadIdsFromBooking = (booking) =>
@@ -543,6 +777,546 @@ const sendRawFootageReadyEmailForUploadedFiles = async ({ filepaths = [] }) => {
     }
   } catch (error) {
     console.error('Raw footage ready email trigger failed:', error?.message || error);
+  }
+};
+
+const sendRawFilesUploadedEmailsForUploadedItems = async ({
+  items = [],
+  uploadedByName = 'Beige User',
+  uploadedById = '',
+}) => {
+  try {
+    const rawFootageItemsByBooking = new Map();
+
+    for (const item of items) {
+      const filepath = item?.filepath;
+      if (!isRawFootageUploadPath(filepath)) continue;
+
+      const bookingId = parseBookingIdFromFilepath(filepath);
+      if (!bookingId) continue;
+
+      const bookingKey = String(bookingId);
+      const existingItems = rawFootageItemsByBooking.get(bookingKey) || [];
+      existingItems.push(item);
+      rawFootageItemsByBooking.set(bookingKey, existingItems);
+    }
+
+    for (const [bookingId, bookingItems] of rawFootageItemsByBooking.entries()) {
+      const booking = await getBookingForUploadEmail(bookingId);
+      if (!booking) continue;
+
+      const plainBooking = typeof booking.get === 'function' ? booking.get({ plain: true }) : booking;
+      const toEmail = normalizeEmailAddress(plainBooking?.user?.email || plainBooking?.guest_email);
+      const recipientName = String(
+        plainBooking?.user?.name ||
+        plainBooking?.client_name ||
+        plainBooking?.project_name ||
+        plainBooking?.guest_email ||
+        ''
+      ).trim();
+      const bookingReference = String(plainBooking?.stream_project_booking_id || bookingId);
+      const projectName = String(plainBooking?.project_name || plainBooking?.client_name || `Project #${bookingId}`);
+      const dashboardLink = buildProjectFilesUrl(bookingReference);
+      const adminDashboardLink = buildAdminDashboardUrl();
+      const uploadedAt = new Date().toISOString();
+      const totalFiles = bookingItems.length || 1;
+
+      if (toEmail) {
+        const clientEmailResult = await emailService.sendRawFilesUploadedClientEmail({
+          recipients: [toEmail],
+          data: {
+            first_name: getFirstName(recipientName, 'there'),
+            client_name: getFirstName(recipientName, 'there'),
+            shoot_name: projectName,
+            project_name: projectName,
+            booking_id: bookingReference,
+            order_id: bookingReference,
+            total_files: totalFiles,
+            frontend_url: dashboardLink,
+            dashboard_link: dashboardLink,
+            uploaded_at: uploadedAt,
+          },
+        });
+
+        if (!clientEmailResult?.success) {
+          console.error(
+            'Raw files uploaded client email failed:',
+            clientEmailResult?.error || clientEmailResult?.failedRecipients || 'Unknown email error'
+          );
+        }
+      }
+
+      const adminEmailResult = await emailService.sendRawFilesUploadedAdminEmail({
+        recipient_name: 'Admin',
+        shoot_name: projectName,
+        project_name: projectName,
+        booking_id: bookingReference,
+        order_id: bookingReference,
+        Team_member_name: String(uploadedByName || 'Beige User'),
+        team_member_name: String(uploadedByName || 'Beige User'),
+        uploaded_by: String(uploadedByName || 'Beige User'),
+        uploaded_by_id: String(uploadedById || ''),
+        total_files: totalFiles,
+        upload_time: uploadedAt,
+        uploaded_at: uploadedAt,
+        dashboard_link: adminDashboardLink,
+      });
+
+      if (!adminEmailResult?.success) {
+        console.error(
+          'Raw files uploaded admin email failed:',
+          adminEmailResult?.error || adminEmailResult?.failedRecipients || 'Unknown email error'
+        );
+      }
+    }
+  } catch (error) {
+    console.error('Raw files uploaded email trigger failed:', error?.message || error);
+  }
+};
+
+const sendEditsDeliveredEmailsForUploadedItems = async ({ items = [], deliveredByName = 'Production Team' }) => {
+  try {
+    const editedRevisionItemsByBooking = new Map();
+
+    for (const item of items) {
+      const filepath = item?.filepath;
+      if (!isEditedRevisionVersionPath(filepath)) continue;
+
+      const bookingId = parseBookingIdFromFilepath(filepath);
+      if (!bookingId) continue;
+
+      const phase = resolveUploadPhase(filepath);
+      const folderPath = getUploadFolderPath(filepath, phase || 'post');
+      const bookingKey = `${bookingId}::${folderPath.toLowerCase()}`;
+      const existingItems = editedRevisionItemsByBooking.get(bookingKey) || {
+        bookingId: String(bookingId),
+        folderPath,
+        items: [],
+      };
+      existingItems.items.push(item);
+      editedRevisionItemsByBooking.set(bookingKey, existingItems);
+    }
+
+    for (const entry of editedRevisionItemsByBooking.values()) {
+      const booking = await getBookingForUploadEmail(entry.bookingId);
+      if (!booking) continue;
+
+      const plainBooking = typeof booking.get === 'function' ? booking.get({ plain: true }) : booking;
+      const linkedLeadIds = getLinkedLeadIdsFromBooking(plainBooking);
+      const bookingReference = String(plainBooking?.stream_project_booking_id || entry.bookingId);
+
+      const hasClientEmailAlreadyBeenSent =
+        await hasUploadEmailAlreadyBeenSent({
+          linkedLeadIds,
+          bookingId: bookingReference,
+          folderPath: entry.folderPath,
+          emailEvent: 'edits_delivered_client',
+        });
+
+      const toEmail = normalizeEmailAddress(plainBooking?.user?.email || plainBooking?.guest_email);
+
+      const recipientName = String(
+        plainBooking?.user?.name ||
+        plainBooking?.client_name ||
+        plainBooking?.project_name ||
+        plainBooking?.guest_email ||
+        ''
+      ).trim();
+      const projectName = String(
+        plainBooking?.project_name ||
+        plainBooking?.client_name ||
+        `Booking #${bookingReference}`
+      );
+      const reviewLink = buildProjectFilesUrl(bookingReference);
+      const deliveredAt = new Date().toISOString();
+      const deliveryTime = formatEditingSubmissionTime(deliveredAt);
+
+      if (toEmail && !hasClientEmailAlreadyBeenSent) {
+        const emailResult = await emailService.sendEditsDeliveredClientEmail({
+          to: toEmail,
+          data: {
+            first_name: getFirstName(recipientName, 'there'),
+            client_name: getFirstName(recipientName, 'there'),
+            shoot_name: projectName,
+            project_name: projectName,
+            booking_id: bookingReference,
+            order_id: bookingReference,
+            total_files: entry.items.length || 1,
+            frontend_url: reviewLink,
+            review_link: reviewLink,
+            delivered_at: deliveredAt,
+          },
+        });
+
+        if (!emailResult?.success) {
+          console.error(
+            'Edits delivered client email failed:',
+            emailResult?.error || 'Unknown email error'
+          );
+        } else {
+          await recordUploadEmailSent({
+            linkedLeadIds,
+            bookingId: bookingReference,
+            folderPath: entry.folderPath,
+            filepath: entry.items[0]?.filepath || '',
+            emailEvent: 'edits_delivered_client',
+          });
+        }
+      }
+
+      const adminRecipients = getAdminNotificationRecipients();
+      const hasAdminEmailAlreadyBeenSent =
+        await hasUploadEmailAlreadyBeenSent({
+          linkedLeadIds,
+          bookingId: bookingReference,
+          folderPath: entry.folderPath,
+          emailEvent: 'edits_delivered_to_client_admin',
+        });
+
+      if (adminRecipients.length && !hasAdminEmailAlreadyBeenSent) {
+        const adminEmailResult = await emailService.sendEditsDeliveredToClientAdminEmail({
+          recipients: adminRecipients,
+          data: {
+            recipient_name: 'Admin',
+            shoot_name: projectName,
+            project_name: projectName,
+            booking_id: bookingReference,
+            order_id: bookingReference,
+            total_files: entry.items.length || 1,
+            delivered_by: deliveredByName || 'Production Team',
+            delivery_time: deliveryTime,
+            delivered_at: deliveredAt,
+            dashboard_link: buildAdminDashboardUrl(),
+          },
+        });
+
+        if (!adminEmailResult?.success) {
+          console.error(
+            'Edits delivered to client admin email failed:',
+            adminEmailResult?.error || adminEmailResult?.failedRecipients || 'Unknown email error'
+          );
+        } else {
+          await recordUploadEmailSent({
+            linkedLeadIds,
+            bookingId: bookingReference,
+            folderPath: entry.folderPath,
+            filepath: entry.items[0]?.filepath || '',
+            emailEvent: 'edits_delivered_to_client_admin',
+          });
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Edits delivered email trigger failed:', error?.message || error);
+  }
+};
+
+const sendRevisionRequestedEmailsForFiles = async ({
+  externalId,
+  filepaths = [],
+  requestedByName = 'Client',
+}) => {
+  try {
+    const revisionRequestsByFolder = new Map();
+
+    for (const filepath of filepaths) {
+      if (!isEditedRevisionVersionPath(filepath)) continue;
+
+      const bookingId = parseBookingIdFromFilepath(filepath) || Number(externalId);
+      if (!bookingId) continue;
+
+      const phase = resolveUploadPhase(filepath);
+      const folderPath = getUploadFolderPath(filepath, phase || 'post');
+      const bookingKey = `${bookingId}::${folderPath.toLowerCase()}`;
+      const existing = revisionRequestsByFolder.get(bookingKey) || {
+        bookingId: String(bookingId),
+        folderPath,
+        filepaths: [],
+      };
+      existing.filepaths.push(filepath);
+      revisionRequestsByFolder.set(bookingKey, existing);
+    }
+
+    for (const entry of revisionRequestsByFolder.values()) {
+      const booking = await getBookingForEditingInternalEmail(entry.bookingId);
+      if (!booking) continue;
+
+      const plainBooking = typeof booking.get === 'function' ? booking.get({ plain: true }) : booking;
+      const bookingReference = String(plainBooking?.stream_project_booking_id || entry.bookingId);
+      const projectName = String(
+        plainBooking?.project_name ||
+        plainBooking?.client_name ||
+        `Booking #${bookingReference}`
+      );
+      const fileNames = entry.filepaths.map(getFileNameFromPath).filter(Boolean);
+      const fileNameLabel = fileNames.length > 1 ? `${fileNames.length} files selected` : fileNames[0] || '';
+      const currentVersion = getEditedRevisionVersionLabel(entry.filepaths[0]) || '';
+      const requestedAt = new Date().toISOString();
+      const requestTime = formatEditingSubmissionTime(requestedAt);
+
+      const cpRecipients = getAssignedCreativePartnerRecipients(plainBooking);
+      if (cpRecipients.length) {
+        const cpEmailResult = await emailService.sendRevisionRequestedOnEditEmail({
+          recipients: cpRecipients,
+          data: {
+            shoot_name: projectName,
+            project_name: projectName,
+            booking_id: bookingReference,
+            order_id: bookingReference,
+            file_name: fileNameLabel,
+            file_names: fileNames.join(', '),
+            total_files: fileNames.length || entry.filepaths.length || 1,
+            current_version: currentVersion,
+            requested_by: requestedByName || 'Client',
+            request_time: requestTime,
+            requested_at: requestedAt,
+            frontend_url: buildCreatorDashboardUrl() || buildAdminDashboardUrl(),
+          },
+        });
+
+        if (!cpEmailResult?.success) {
+          console.error(
+            'Revision requested on edit email failed:',
+            cpEmailResult?.error || cpEmailResult?.failedRecipients || 'Unknown email error'
+          );
+        }
+      }
+
+      const adminRecipients = getAdminNotificationRecipients();
+      if (adminRecipients.length) {
+        const adminEmailResult = await emailService.sendClientRequestedRevisionsAdminEmail({
+          recipients: adminRecipients,
+          data: {
+            recipient_name: 'Admin',
+            shoot_name: projectName,
+            project_name: projectName,
+            booking_id: bookingReference,
+            order_id: bookingReference,
+            revision_type: 'Edited File Revision',
+            file_name: fileNameLabel,
+            file_names: fileNames.join(', '),
+            total_files: fileNames.length || entry.filepaths.length || 1,
+            current_version: currentVersion,
+            requested_by: requestedByName || 'Client',
+            request_time: requestTime,
+            requested_at: requestedAt,
+            dashboard_link: buildAdminDashboardUrl(),
+          },
+        });
+
+        if (!adminEmailResult?.success) {
+          console.error(
+            'Client requested edit revisions admin email failed:',
+            adminEmailResult?.error || adminEmailResult?.failedRecipients || 'Unknown email error'
+          );
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Revision requested email trigger failed:', error?.message || error);
+  }
+};
+
+const sendFileApprovedInternalEmailsForReviews = async ({
+  externalId,
+  reviewResults = [],
+  approvedByName = 'Client',
+}) => {
+  try {
+    const approvedItemsByFolder = new Map();
+
+    for (const item of reviewResults) {
+      const filepath = item?.filepath;
+      if (!item?.success || !isEditedRevisionVersionPath(filepath)) continue;
+
+      const bookingId = parseBookingIdFromFilepath(filepath) || Number(externalId);
+      if (!bookingId) continue;
+
+      const phase = resolveUploadPhase(filepath);
+      const folderPath = getUploadFolderPath(filepath, phase || 'post');
+      const bookingKey = `${bookingId}::${folderPath.toLowerCase()}`;
+      const existing = approvedItemsByFolder.get(bookingKey) || {
+        bookingId: String(bookingId),
+        folderPath,
+        items: [],
+      };
+      existing.items.push(item);
+      approvedItemsByFolder.set(bookingKey, existing);
+    }
+
+    for (const entry of approvedItemsByFolder.values()) {
+      const booking = await getBookingForEditingInternalEmail(entry.bookingId);
+      if (!booking) continue;
+
+      const plainBooking = typeof booking.get === 'function' ? booking.get({ plain: true }) : booking;
+      const bookingReference = String(plainBooking?.stream_project_booking_id || entry.bookingId);
+      const projectName = String(
+        plainBooking?.project_name ||
+        plainBooking?.client_name ||
+        `Booking #${bookingReference}`
+      );
+
+      const recipients = [
+        ...getAssignedCreativePartnerRecipients(plainBooking),
+        ...getAdminNotificationRecipients().map((email) => ({
+          email,
+          name: 'Admin',
+          data: {
+            recipient_name: 'Admin',
+            frontend_url: buildAdminDashboardUrl(),
+            dashboard_link: buildAdminDashboardUrl(),
+          },
+        })),
+      ];
+      const seenEmails = new Set();
+      const uniqueRecipients = recipients.filter((recipient) => {
+        const email = normalizeEmailAddress(recipient?.email);
+        if (!email || seenEmails.has(email)) return false;
+        seenEmails.add(email);
+        return true;
+      });
+      if (!uniqueRecipients.length) continue;
+
+      const approvedAt = new Date().toISOString();
+      const approvalTime = formatEditingSubmissionTime(approvedAt);
+
+      for (const item of entry.items) {
+        const responseData = item?.result?.data || {};
+        const finalDeliverable = responseData?.finalDeliverable || {};
+        const fileName =
+          finalDeliverable?.name ||
+          responseData?.name ||
+          getFileNameFromPath(item?.filepath);
+        const versionNumber = responseData?.versionNumber || getEditedRevisionVersionLabel(item?.filepath);
+        const version = versionNumber && String(versionNumber).toLowerCase().startsWith('version')
+          ? String(versionNumber)
+          : versionNumber
+            ? `Version${versionNumber}`
+            : getEditedRevisionVersionLabel(item?.filepath);
+
+        const emailResult = await emailService.sendFileApprovedInternalEmail({
+          recipients: uniqueRecipients,
+          data: {
+            shoot_name: projectName,
+            project_name: projectName,
+            booking_id: bookingReference,
+            order_id: bookingReference,
+            file_name: fileName,
+            version,
+            current_version: version,
+            approved_by: approvedByName || 'Client',
+            approval_time: approvalTime,
+            approved_at: approvedAt,
+            final_deliverable_path: finalDeliverable?.path || '',
+            final_deliverable_name: finalDeliverable?.name || fileName,
+            dashboard_link: buildAdminDashboardUrl(),
+            frontend_url: buildAdminDashboardUrl(),
+          },
+        });
+
+        if (!emailResult?.success) {
+          console.error(
+            'File approved internal email failed:',
+            emailResult?.error || emailResult?.failedRecipients || 'Unknown email error'
+          );
+        }
+      }
+    }
+  } catch (error) {
+    console.error('File approved internal email trigger failed:', error?.message || error);
+  }
+};
+
+const isNewEditedRevisionVersionFolder = ({ phase, path, folderName, result }) => {
+  if (result?.success === false || result?.data?.alreadyExists === true) return false;
+
+  const resultFolder = result?.data?.folder || {};
+  const effectiveFolderName = resultFolder?.name || folderName;
+  const folderNameKey = normalizePathSegmentKey(effectiveFolderName);
+  const isVersionFolder = /^version0*[1-9]\d*$/.test(folderNameKey);
+  if (!isVersionFolder) return false;
+
+  const folderPath = resultFolder?.path || '';
+  const resultPathIsRevisionVersion = isEditedRevisionVersionPath(folderPath);
+  const normalizedPhase = normalizeWorkspacePhase(phase, null);
+  const pathSegments = String(path || '')
+    .replace(/\\/g, '/')
+    .split('/')
+    .map(normalizePathSegmentKey)
+    .filter(Boolean);
+  const requestPathIsRevisionRoot =
+    pathSegments[pathSegments.length - 2] === 'edits' &&
+    pathSegments[pathSegments.length - 1] === 'revisions';
+
+  return (
+    (normalizedPhase === 'post' || resultPathIsRevisionVersion) &&
+    (requestPathIsRevisionRoot || resultPathIsRevisionVersion)
+  );
+};
+
+const sendNewVersionUploadedClientEmailForFolder = async ({
+  externalId,
+  phase,
+  path,
+  folderName,
+  result,
+  uploadedByName = 'Production Team',
+}) => {
+  try {
+    if (!isNewEditedRevisionVersionFolder({ phase, path, folderName, result })) return;
+    if (!/^\d+$/.test(String(externalId || '').trim())) return;
+
+    const booking = await getBookingForUploadEmail(externalId);
+    if (!booking) return;
+
+    const plainBooking = typeof booking.get === 'function' ? booking.get({ plain: true }) : booking;
+    const toEmail = normalizeEmailAddress(plainBooking?.user?.email || plainBooking?.guest_email);
+    if (!toEmail) return;
+
+    const bookingReference = String(plainBooking?.stream_project_booking_id || externalId);
+    const recipientName = String(
+      plainBooking?.user?.name ||
+      plainBooking?.client_name ||
+      plainBooking?.project_name ||
+      plainBooking?.guest_email ||
+      ''
+    ).trim();
+    const projectName = String(
+      plainBooking?.project_name ||
+      plainBooking?.client_name ||
+      `Booking #${bookingReference}`
+    );
+    const version = String(result?.data?.folder?.name || folderName || '').trim();
+    const dashboardLink = buildProjectFilesUrl(bookingReference);
+
+    const emailResult = await emailService.sendNewVersionUploadedClientEmail({
+      to: toEmail,
+      data: {
+        first_name: getFirstName(recipientName, 'there'),
+        recipient_name: getFirstName(recipientName, 'there'),
+        client_name: recipientName || getFirstName(toEmail, 'there'),
+        shoot_name: projectName,
+        project_name: projectName,
+        booking_id: bookingReference,
+        order_id: bookingReference,
+        file_name: version,
+        folder_name: version,
+        version,
+        uploaded_by: uploadedByName || 'Production Team',
+        dashboard_link: dashboardLink,
+        review_link: dashboardLink,
+        frontend_url: dashboardLink,
+      },
+    });
+
+    if (!emailResult?.success) {
+      console.error(
+        'New version uploaded client email failed:',
+        emailResult?.error || emailResult?.failedRecipients || 'Unknown email error'
+      );
+    }
+  } catch (error) {
+    console.error('New version uploaded client email trigger failed:', error?.message || error);
   }
 };
 
@@ -1553,6 +2327,7 @@ const ensureCreatorPostProductionUploadWindow = async (req, filepath) => {
 
 const validateUploadAccessForPath = async (req, filepath) => {
   await ensureCreatorFileAccess(req, filepath);
+  await ensureClientFileAccess(req, filepath);
 
   const commonEventExternalId = extractCommonEventExternalIdFromPath(filepath);
   const commonEventByPath = commonEventExternalId ? null : await findCommonEventByFilepath(filepath);
@@ -1615,6 +2390,7 @@ const ensureCreatorWorkspaceAccess = async (req, bookingId) => {
     where: {
       project_id: normalizedBookingId,
       crew_member_id: crewMemberId,
+      is_active: 1,
     },
     attributes: ['id', 'crew_accept'],
   });
@@ -1650,6 +2426,62 @@ const ensureCreatorFileAccess = async (req, filepath) => {
   await ensureCreatorWorkspaceAccess(req, bookingId);
 };
 
+const ensureClientWorkspaceAccess = async (req, bookingId) => {
+  if (!isClientRole(req)) return;
+
+  if (isCommonEventExternalId(bookingId)) {
+    return;
+  }
+
+  const normalizedBookingId = Number(bookingId);
+  if (!normalizedBookingId) {
+    const error = new Error('Invalid project reference');
+    error.status = 400;
+    throw error;
+  }
+
+  const userId = getRequestUserId(req);
+  if (!userId) {
+    const error = new Error('User profile not found');
+    error.status = 403;
+    throw error;
+  }
+
+  const booking = await stream_project_booking.findOne({
+    where: {
+      stream_project_booking_id: normalizedBookingId,
+      user_id: userId,
+      is_active: 1,
+    },
+    attributes: ['stream_project_booking_id'],
+  });
+
+  if (!booking) {
+    const error = new Error('You do not have access to this project file manager');
+    error.status = 403;
+    throw error;
+  }
+};
+
+const ensureClientFileAccess = async (req, filepath) => {
+  if (!isClientRole(req)) return;
+
+  const commonEventExternalId = extractCommonEventExternalIdFromPath(filepath);
+  const commonEventByPath = commonEventExternalId ? null : await findCommonEventByFilepath(filepath);
+  if (commonEventExternalId || commonEventByPath) {
+    return;
+  }
+
+  const bookingId = parseBookingIdFromFilepath(filepath);
+  if (!bookingId) {
+    const error = new Error('Invalid project file path');
+    error.status = 400;
+    throw error;
+  }
+
+  await ensureClientWorkspaceAccess(req, bookingId);
+};
+
 const getCreatorAssignedProjectIds = async (req) => {
   if (!isCreatorRole(req)) return null;
 
@@ -1659,6 +2491,7 @@ const getCreatorAssignedProjectIds = async (req) => {
   const assignments = await assigned_crew.findAll({
     where: {
       crew_member_id: crewMemberId,
+      is_active: 1,
     },
     attributes: ['project_id'],
   });
@@ -1668,50 +2501,23 @@ const getCreatorAssignedProjectIds = async (req) => {
     .filter(Boolean);
 };
 
-const getCreatorAssignedWorkspacePlaceholders = async (req, existingExternalIds = new Set()) => {
-  if (!isCreatorRole(req)) return [];
+const getClientProjectIds = async (req) => {
+  if (!isClientRole(req)) return null;
 
-  const crewMemberId = await resolveCreatorCrewMemberId(getRequestUserId(req));
-  if (!crewMemberId) return [];
+  const userId = getRequestUserId(req);
+  if (!userId) return [];
 
-  const assignments = await assigned_crew.findAll({
+  const bookings = await stream_project_booking.findAll({
     where: {
-      crew_member_id: crewMemberId,
+      user_id: userId,
+      is_active: 1,
     },
-    attributes: ['project_id', 'crew_accept', 'created_at', 'updated_at'],
-    include: [
-      {
-        model: stream_project_booking,
-        as: 'project',
-        required: true,
-      },
-    ],
+    attributes: ['stream_project_booking_id'],
+    raw: true,
   });
 
-  return assignments
-    .map((assignment) => {
-      const booking = assignment?.project;
-      const bookingId = Number(booking?.stream_project_booking_id || assignment?.project_id);
-      if (!bookingId) return null;
-      if (existingExternalIds.has(String(bookingId).toLowerCase())) return null;
-
-      return {
-        externalId: String(bookingId),
-        folderName: buildWorkspaceFolderName(booking),
-        rootPath: null,
-        fullPath: null,
-        consoleUrl: null,
-        fileCount: 0,
-        createdAt: assignment?.created_at || booking?.created_at || null,
-        updatedAt: assignment?.updated_at || booking?.updated_at || null,
-        assignmentStatus:
-          Number(assignment?.crew_accept) === 1
-            ? 'accepted'
-            : Number(assignment?.crew_accept) === 2
-              ? 'rejected'
-              : 'pending',
-      };
-    })
+  return bookings
+    .map((booking) => Number(booking.stream_project_booking_id))
     .filter(Boolean);
 };
 
@@ -1845,6 +2651,7 @@ exports.createWorkspace = async (req, res) => {
     }
 
     await ensureCreatorWorkspaceAccess(req, bookingId);
+    await ensureClientWorkspaceAccess(req, bookingId);
 
     const result = await exports.syncWorkspaceForBooking({
       bookingId,
@@ -2120,10 +2927,11 @@ exports.searchFaceMatches = async (req, res) => {
 
     const scanImageBase64 = String(req.body.scanImageBase64 || '').trim();
     const scanImageUrl = String(req.body.scanImageUrl || '').trim();
-    if (!scanImageBase64 && !scanImageUrl) {
+    const scanImagePath = String(req.body.scanImagePath || '').trim();
+    if (!scanImageBase64 && !scanImageUrl && !scanImagePath) {
       return res.status(400).json({
         success: false,
-        message: 'scanImageBase64 or scanImageUrl is required',
+        message: 'scanImageBase64, scanImageUrl or scanImagePath is required',
       });
     }
 
@@ -2132,8 +2940,9 @@ exports.searchFaceMatches = async (req, res) => {
       method: 'POST',
       body: JSON.stringify({
         externalId,
-        scanImageBase64: scanImageBase64 || undefined,
+        scanImageBase64: scanImagePath ? undefined : scanImageBase64 || undefined,
         scanImageUrl: scanImageUrl || undefined,
+        scanImagePath: scanImagePath || undefined,
         threshold: req.body.threshold,
         minScore: req.body.minScore,
         maxResults: req.body.maxResults,
@@ -2151,6 +2960,113 @@ exports.searchFaceMatches = async (req, res) => {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
       message: error.message || 'Face scan search failed',
+    });
+  }
+};
+
+exports.getFaceScanQueryUploadPolicy = async (req, res) => {
+  try {
+    const proxyResult = await proxyRequest('/face-scan/query-upload-policy', {
+      method: 'POST',
+      body: JSON.stringify({
+        externalId: req.body.externalId || req.body.eventExternalId,
+        fileContentType: req.body.fileContentType,
+        fileSize: req.body.fileSize,
+        userId: getRequestUserId(req),
+      }),
+    });
+
+    return res.status(200).json(proxyResult);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to create face scan upload policy',
+    });
+  }
+};
+
+exports.createFaceScanJob = async (req, res) => {
+  try {
+    const externalId = String(req.body.externalId || req.body.eventExternalId || '').trim().toLowerCase();
+    if (!externalId) {
+      return res.status(400).json({
+        success: false,
+        message: 'externalId is required',
+      });
+    }
+
+    const scanImageBase64 = String(req.body.scanImageBase64 || '').trim();
+    const scanImageUrl = String(req.body.scanImageUrl || '').trim();
+    const scanImagePath = String(req.body.scanImagePath || '').trim();
+    if (!scanImageBase64 && !scanImageUrl && !scanImagePath) {
+      return res.status(400).json({
+        success: false,
+        message: 'scanImageBase64, scanImageUrl or scanImagePath is required',
+      });
+    }
+
+    await ensureCreatorWorkspaceAccess(req, externalId);
+    const proxyResult = await proxyRequest('/face-scan/jobs', {
+      method: 'POST',
+      body: JSON.stringify({
+        externalId,
+        scanImageBase64: scanImagePath ? undefined : scanImageBase64 || undefined,
+        scanImageUrl: scanImageUrl || undefined,
+        scanImagePath: scanImagePath || undefined,
+        threshold: req.body.threshold,
+        minScore: req.body.minScore,
+        maxResults: req.body.maxResults,
+        candidateLimit: req.body.candidateLimit,
+        fallbackCandidateLimit: req.body.fallbackCandidateLimit,
+        backgroundReindex: req.body.backgroundReindex,
+        backgroundBatchLimit: req.body.backgroundBatchLimit,
+        backgroundConcurrency: req.body.backgroundConcurrency,
+        includeLiveFallback: req.body.includeLiveFallback,
+        providerTimeoutMs: req.body.providerTimeoutMs,
+      }),
+    });
+
+    return res.status(202).json(proxyResult);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Face scan job queue failed',
+    });
+  }
+};
+
+exports.getFaceScanJob = async (req, res) => {
+  try {
+    const externalId = String(req.query.externalId || '').trim().toLowerCase();
+    if (!externalId) {
+      return res.status(400).json({
+        success: false,
+        message: 'externalId is required',
+      });
+    }
+
+    await ensureCreatorWorkspaceAccess(req, externalId);
+    const proxyResult = await proxyRequest(
+      `/face-scan/jobs/${encodeURIComponent(String(req.params.jobId || ''))}`
+    );
+
+    return res.status(200).json(proxyResult);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to fetch face scan job',
+    });
+  }
+};
+
+exports.getFaceScanQueueStatus = async (req, res) => {
+  try {
+    const proxyResult = await proxyRequest('/face-scan/queue-status');
+    return res.status(200).json(proxyResult);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to fetch face scan queue status',
     });
   }
 };
@@ -2354,21 +3270,17 @@ exports.listWorkspaces = async (req, res) => {
     if (isCreatorRole(req)) {
       const allowedProjectIds = await getCreatorAssignedProjectIds(req);
       const allowedIdSet = new Set((allowedProjectIds || []).map((id) => String(id)));
-      filteredWorkspaces = mergedWorkspaces.filter((workspace) =>
+      filteredWorkspaces = filteredWorkspaces.filter((workspace) =>
         isCommonEventExternalId(workspace.externalId) || allowedIdSet.has(String(workspace.externalId))
       );
+    }
 
-      const existingCreatorWorkspaceIds = new Set(
-        filteredWorkspaces.map((workspace) => String(workspace.externalId || '').trim().toLowerCase())
+    if (isClientRole(req)) {
+      const allowedProjectIds = await getClientProjectIds(req);
+      const allowedIdSet = new Set((allowedProjectIds || []).map((id) => String(id)));
+      filteredWorkspaces = filteredWorkspaces.filter((workspace) =>
+        isCommonEventExternalId(workspace.externalId) || allowedIdSet.has(String(workspace.externalId))
       );
-      const missingAssignedWorkspaces = await getCreatorAssignedWorkspacePlaceholders(
-        req,
-        existingCreatorWorkspaceIds
-      );
-      filteredWorkspaces = [
-        ...filteredWorkspaces,
-        ...missingAssignedWorkspaces,
-      ];
     }
 
     if (commonEventsOnly || expiredCommonEventsOnly) {
@@ -2429,13 +3341,14 @@ exports.listWorkspaces = async (req, res) => {
 exports.getWorkspace = async (req, res) => {
   try {
     await ensureCreatorWorkspaceAccess(req, req.params.bookingId);
+    await ensureClientWorkspaceAccess(req, req.params.bookingId);
     await assertCommonEventVisibleForRequest(req, req.params.bookingId);
     const isCommonEventWorkspace = isCommonEventExternalId(req.params.bookingId);
     let result;
     try {
       result = await proxyRequest(`/workspace/${req.params.bookingId}`);
     } catch (error) {
-      if (error.status !== 404 || isCommonEventWorkspace) {
+      if (error.status !== 404 || isCommonEventWorkspace || isCreatorRole(req) || isClientRole(req)) {
         throw error;
       }
       result = await syncWorkspaceForExistingBookingId(req.params.bookingId);
@@ -2541,6 +3454,7 @@ exports.getWorkspaceByBookingId = async (bookingId) => {
 exports.getWorkspaceFiles = async (req, res) => {
   try {
     await ensureCreatorWorkspaceAccess(req, req.params.bookingId);
+    await ensureClientWorkspaceAccess(req, req.params.bookingId);
     await assertCommonEventVisibleForRequest(req, req.params.bookingId);
     const query = new URLSearchParams();
     if (req.query.phase) query.set('phase', req.query.phase);
@@ -2552,7 +3466,12 @@ exports.getWorkspaceFiles = async (req, res) => {
         `/workspace/${req.params.bookingId}/files${query.toString() ? `?${query.toString()}` : ''}`
       );
     } catch (error) {
-      if (error.status !== 404 || isCommonEventExternalId(req.params.bookingId)) {
+      if (
+        error.status !== 404 ||
+        isCommonEventExternalId(req.params.bookingId) ||
+        isCreatorRole(req) ||
+        isClientRole(req)
+      ) {
         throw error;
       }
       await syncWorkspaceForExistingBookingId(req.params.bookingId);
@@ -2666,6 +3585,18 @@ exports.getUploadPoliciesBatch = async (req, res) => {
         })),
       }),
     });
+
+    if (result?.success !== false) {
+      const uploaderName = await getUserDisplayName(getRequestUserId(req)).catch(() => null);
+      await sendEditsDeliveredEmailsForUploadedItems({
+        items: items.map((item = {}) => ({
+          filepath: item.filepath,
+          fileName: item.fileName || String(item.filepath || '').split('/').pop() || '',
+        })),
+        deliveredByName: uploaderName || 'Production Team',
+      });
+    }
+
     return res.status(200).json(result);
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {
@@ -2678,6 +3609,7 @@ exports.getUploadPoliciesBatch = async (req, res) => {
 exports.notifyFileUploaded = async (req, res) => {
   try {
     await validateUploadAccessForPath(req, req.body.filepath);
+    const uploaderName = await getUserDisplayName(getRequestUserId(req)).catch(() => null);
 
     const result = await proxyRequest('/file-uploaded', {
       method: 'POST',
@@ -2687,16 +3619,31 @@ exports.notifyFileUploaded = async (req, res) => {
         fileSize: req.body.fileSize,
         fileName: req.body.fileName,
         userId: getRequestUserId(req),
+        authorName: uploaderName || 'Beige User',
       }),
     });
 
     if (result?.success !== false && req.body.filepath) {
-      const uploaderName = await getUserDisplayName(getRequestUserId(req)).catch(() => null);
       await sendUploadTemplateEmailForFile({
         filepath: req.body.filepath,
         fileName: req.body.fileName,
         uploadedByName: uploaderName || 'Beige User',
         uploadedById: getRequestUserId(req),
+      });
+      await sendRawFilesUploadedEmailsForUploadedItems({
+        items: [{
+          filepath: req.body.filepath,
+          fileName: req.body.fileName,
+        }],
+        uploadedByName: uploaderName || 'Beige User',
+        uploadedById: getRequestUserId(req),
+      });
+      await sendEditsDeliveredEmailsForUploadedItems({
+        items: [{
+          filepath: req.body.filepath,
+          fileName: req.body.fileName,
+        }],
+        deliveredByName: uploaderName || 'Production Team',
       });
       await sendRawFootageReadyEmailForUploadedFiles({
         filepaths: [req.body.filepath],
@@ -2733,6 +3680,7 @@ exports.notifyFilesUploadedBatch = async (req, res) => {
     for (const item of items) {
       await validateUploadAccessForPath(req, item?.filepath);
     }
+    const uploaderName = await getUserDisplayName(getRequestUserId(req)).catch(() => null);
 
     const result = await proxyRequest('/files-uploaded/batch', {
       method: 'POST',
@@ -2744,6 +3692,7 @@ exports.notifyFilesUploadedBatch = async (req, res) => {
           fileSize: item.fileSize,
           fileName: item.fileName,
           userId: getRequestUserId(req),
+          authorName: uploaderName || 'Beige User',
         })),
       }),
     });
@@ -2751,7 +3700,6 @@ exports.notifyFilesUploadedBatch = async (req, res) => {
     const succeededItems = Array.isArray(result?.data?.items)
       ? result.data.items.filter((item) => item?.success && item?.filepath)
       : [];
-    const uploaderName = await getUserDisplayName(getRequestUserId(req)).catch(() => null);
     const notifiedFolderKeys = new Set();
     for (const item of succeededItems) {
       const phase = resolveUploadPhase(item?.filepath);
@@ -2776,6 +3724,17 @@ exports.notifyFilesUploadedBatch = async (req, res) => {
       }
     }
 
+    await sendRawFilesUploadedEmailsForUploadedItems({
+      items: succeededItems,
+      uploadedByName: uploaderName || 'Beige User',
+      uploadedById: getRequestUserId(req),
+    });
+
+    await sendEditsDeliveredEmailsForUploadedItems({
+      items: succeededItems,
+      deliveredByName: uploaderName || 'Production Team',
+    });
+
     await sendRawFootageReadyEmailForUploadedFiles({
       filepaths: succeededItems.map((item) => item?.filepath).filter(Boolean),
     });
@@ -2789,6 +3748,143 @@ exports.notifyFilesUploadedBatch = async (req, res) => {
         console.error('Timeline update skipped after file upload batch item:', timelineError.message);
       }
     }
+
+    return res.status(200).json(result);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.copyFiles = async (req, res) => {
+  try {
+    const externalId = String(req.body.externalId || req.body.bookingId || '').trim();
+    const phase = normalizeWorkspacePhase(req.body.phase || req.body.state || req.body.stage, null);
+    const targetPath = sanitizeRelativeFolderPath(req.body.targetPath || req.body.path);
+    const sourcePaths = Array.isArray(req.body.sourcePaths)
+      ? req.body.sourcePaths.map((item) => String(item || '').trim()).filter(Boolean)
+      : [];
+
+    if (!externalId || !phase || !targetPath || !sourcePaths.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'externalId, phase, targetPath and sourcePaths are required',
+      });
+    }
+
+    await ensureCreatorWorkspaceAccess(req, externalId);
+    for (const sourcePath of sourcePaths) {
+      await ensureCreatorFileAccess(req, sourcePath);
+    }
+
+    const authorName = await getUserDisplayName(getRequestUserId(req)).catch(() => 'Beige User');
+    const result = await proxyRequest('/copy-files', {
+      method: 'POST',
+      body: JSON.stringify({
+        externalId,
+        phase,
+        targetPath,
+        sourcePaths,
+        userId: getRequestUserId(req),
+        authorName,
+      }),
+    });
+
+    if (result?.success !== false) {
+      await sendFilesForEditingInternalEmailForCopy({
+        externalId,
+        phase,
+        targetPath,
+        sourcePaths,
+        submittedByName: authorName,
+      });
+    }
+
+    return res.status(200).json(result);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.reviewRevisionFile = async (req, res) => {
+  try {
+    const externalId = String(req.body.externalId || req.body.bookingId || '').trim();
+    const filepaths = Array.isArray(req.body.filepaths)
+      ? req.body.filepaths.map((item) => String(item || '').trim()).filter(Boolean)
+      : [String(req.body.filepath || req.body.path || '').trim()].filter(Boolean);
+    const action = String(req.body.action || '').trim().toLowerCase();
+
+    if (!externalId || !filepaths.length || !['approve', 'request_revision'].includes(action)) {
+      return res.status(400).json({
+        success: false,
+        message: 'externalId, filepath/filepaths and action are required',
+      });
+    }
+
+    await ensureCreatorWorkspaceAccess(req, externalId);
+    for (const filepath of filepaths) {
+      await ensureCreatorFileAccess(req, filepath);
+    }
+
+    const authorName = await getUserDisplayName(getRequestUserId(req)).catch(() => 'Beige User');
+    const reviewResults = [];
+
+    for (const filepath of filepaths) {
+      const reviewResult = await proxyRequest('/revision-file/review', {
+        method: 'POST',
+        body: JSON.stringify({
+          externalId,
+          filepath,
+          action,
+          userId: getRequestUserId(req),
+          authorName,
+        }),
+      });
+      reviewResults.push({
+        filepath,
+        success: reviewResult?.success !== false,
+        result: reviewResult,
+      });
+    }
+
+    if (action === 'request_revision') {
+      const succeededFilepaths = reviewResults
+        .filter((item) => item.success)
+        .map((item) => item.filepath)
+        .filter(Boolean);
+
+      if (succeededFilepaths.length) {
+        await sendRevisionRequestedEmailsForFiles({
+          externalId,
+          filepaths: succeededFilepaths,
+          requestedByName: authorName,
+        });
+      }
+    } else if (action === 'approve') {
+      await sendFileApprovedInternalEmailsForReviews({
+        externalId,
+        reviewResults,
+        approvedByName: authorName,
+      });
+    }
+
+    if (filepaths.length === 1) {
+      return res.status(200).json(reviewResults[0].result);
+    }
+
+    const hasFailure = reviewResults.some((item) => !item.success);
+    const result = {
+      success: !hasFailure,
+      partialSuccess: hasFailure && reviewResults.some((item) => item.success),
+      data: {
+        items: reviewResults,
+      },
+    };
 
     return res.status(200).json(result);
   } catch (error) {
@@ -2833,6 +3929,7 @@ exports.reindexFaceEmbeddings = async (req, res) => {
 exports.getFileViewUrl = async (req, res) => {
   try {
     await ensureCreatorFileAccess(req, req.body.filepath);
+    await ensureClientFileAccess(req, req.body.filepath);
     const result = await proxyRequest('/file-view-url', {
       method: 'POST',
       body: JSON.stringify({
@@ -2852,6 +3949,7 @@ exports.createFolder = async (req, res) => {
   try {
     const externalId = String(req.body.externalId || req.body.bookingId || '').trim();
     await ensureCreatorWorkspaceAccess(req, externalId);
+    await ensureClientWorkspaceAccess(req, externalId);
 
     const isCommonEvent = isCommonEventExternalId(externalId);
     const phase = normalizeWorkspacePhase(
@@ -2859,6 +3957,16 @@ exports.createFolder = async (req, res) => {
       null
     );
     const path = sanitizeRelativeFolderPath(req.body.path);
+    const folderName = req.body.folderName || req.body.name;
+
+    // Regular workspaces must target Pre/Post Production. Common Events are
+    // intentionally phase-less and create folders directly under their path.
+    if (!isCommonEvent && !phase) {
+      return res.status(400).json({
+        success: false,
+        message: 'phase is required. Allowed values: pre, post, pre-production, post-production',
+      });
+    }
 
     if (isCommonEvent && isCreatorRole(req)) {
       if (!path) {
@@ -2880,7 +3988,7 @@ exports.createFolder = async (req, res) => {
     const folderPayload = {
       externalId,
       path: path || undefined,
-      folderName: req.body.folderName || req.body.name,
+      folderName,
     };
     if (phase || req.body.phase) {
       folderPayload.phase = phase || req.body.phase;
@@ -2890,6 +3998,19 @@ exports.createFolder = async (req, res) => {
       method: 'POST',
       body: JSON.stringify(folderPayload),
     });
+
+    if (result?.success !== false) {
+      const uploaderName = await getUserDisplayName(getRequestUserId(req)).catch(() => null);
+      await sendNewVersionUploadedClientEmailForFolder({
+        externalId,
+        phase: phase || req.body.phase,
+        path,
+        folderName,
+        result,
+        uploadedByName: uploaderName || 'Production Team',
+      });
+    }
+
     return res.status(200).json(result);
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {
@@ -2902,6 +4023,7 @@ exports.createFolder = async (req, res) => {
 exports.getFileDownloadUrl = async (req, res) => {
   try {
     await ensureCreatorFileAccess(req, req.body.filepath);
+    await ensureClientFileAccess(req, req.body.filepath);
     const result = await proxyRequest('/file-download-url', {
       method: 'POST',
       body: JSON.stringify({
@@ -2921,6 +4043,7 @@ exports.getFolderDownloadUrl = async (req, res) => {
   try {
     const externalId = String(req.body.externalId || req.body.bookingId || '').trim();
     await ensureCreatorWorkspaceAccess(req, externalId);
+    await ensureClientWorkspaceAccess(req, externalId);
 
     if (isCreatorRole(req) && isCommonEventExternalId(externalId)) {
       await ensureCreatorCommonEventRelativePathAccess({
@@ -2953,6 +4076,7 @@ exports.deleteEntry = async (req, res) => {
   try {
     const targetPath = req.body.filepath || req.body.path;
     await ensureCreatorFileAccess(req, targetPath);
+    await ensureClientFileAccess(req, targetPath);
     const result = await proxyRequest('/delete', {
       method: 'POST',
       body: JSON.stringify({
@@ -2962,6 +4086,9 @@ exports.deleteEntry = async (req, res) => {
 
     const deletedPath = normalizePathForAccess(targetPath);
     if (deletedPath) {
+      await deactivateSharesForDeletedPath(deletedPath).catch((error) => {
+        console.error('Failed to invalidate deleted file-manager shares:', error);
+      });
       await deleteFaceEmbeddingRecordsByPath(deletedPath).catch(() => null);
 
       const rows = await listCommonEventRows().catch(() => []);
@@ -2992,6 +4119,75 @@ const getShareByToken = async (shareToken) => {
   );
   return Array.isArray(rows) && rows.length ? rows[0] : null;
 };
+
+const isMissingSharedResourceError = (error) => {
+  const status = Number(error?.status);
+  if (status === 404 || status === 410) return true;
+
+  const message = String(error?.payload?.message || error?.message || '').trim().toLowerCase();
+  // The storage service currently returns this opaque 500 when a previously
+  // shared object has already been removed. Never expose that implementation
+  // detail on a public share page.
+  if (status === 500 && message === 'internal server error') return true;
+
+  return (
+    message.includes('file not found') ||
+    message.includes('not available') ||
+    message.includes('no longer available') ||
+    message.includes('does not exist') ||
+    message.includes('missing') ||
+    message.includes('enoent') ||
+    message.includes('deleted')
+  );
+};
+
+const sendSharedResourceUnavailable = (res) =>
+  res.status(410).json({
+    success: false,
+    code: 'SHARED_RESOURCE_UNAVAILABLE',
+    message: 'This shared file or folder is no longer available. It may have been deleted by the owner.',
+  });
+
+async function deactivateSharesForDeletedPath(deletedPath) {
+  const normalizedDeletedPath = normalizePathForAccess(deletedPath);
+  if (!normalizedDeletedPath) return;
+
+  await ensureFileShareTable();
+  const [rows] = await db.sequelize.query(
+    `SELECT share_id, resource_type, external_id, phase, path, filepath
+     FROM file_manager_shares
+     WHERE is_active = 1`
+  );
+
+  const deletedShareIds = (Array.isArray(rows) ? rows : [])
+    .filter((share) => {
+      const resourceType = String(share?.resource_type || '').toLowerCase();
+      if (resourceType === 'file') {
+        const sharedFilepath = normalizePathForAccess(share?.filepath || '');
+        return sharedFilepath && isPathWithin(normalizedDeletedPath, sharedFilepath);
+      }
+
+      const externalId = normalizePathForAccess(share?.external_id || '');
+      const relativePath = normalizePathForAccess(share?.path || '');
+      const phase = normalizeWorkspacePhase(share?.phase, null);
+      const phaseFolder = phase === 'pre' ? 'pre-production' : phase === 'post' ? 'post-production' : '';
+      const sharedResourcePath = normalizePathForAccess(
+        [externalId, phaseFolder, relativePath].filter(Boolean).join('/')
+      );
+
+      return sharedResourcePath && isPathWithin(normalizedDeletedPath, sharedResourcePath);
+    })
+    .map((share) => Number(share.share_id))
+    .filter(Boolean);
+
+  if (!deletedShareIds.length) return;
+  await db.sequelize.query(
+    `UPDATE file_manager_shares
+     SET is_active = 0, updated_at = NOW()
+     WHERE share_id IN (:shareIds)`,
+    { replacements: { shareIds: deletedShareIds } }
+  );
+}
 
 const extractBearerToken = (req) => {
   const authHeader = String(req.headers?.authorization || '').trim();
@@ -3155,8 +4351,10 @@ exports.createShare = async (req, res) => {
     }
 
     await ensureCreatorWorkspaceAccess(req, externalId);
+    await ensureClientWorkspaceAccess(req, externalId);
     if (resourceType === 'file' && filepath) {
       await ensureCreatorFileAccess(req, filepath);
+      await ensureClientFileAccess(req, filepath);
     }
 
     const shareToken = generateShareToken();
@@ -3220,7 +4418,7 @@ exports.requestShareOtp = async (req, res) => {
     }
 
     const share = await getShareByToken(shareToken);
-    if (!share) return res.status(404).json({ success: false, message: 'Share link not found' });
+    if (!share) return sendSharedResourceUnavailable(res);
     if (
       String(share.access_mode || 'email_only') !== 'anyone_with_link' &&
       normalizeEmailAddress(share.shared_with_email) !== email
@@ -3268,7 +4466,7 @@ exports.verifyShareOtp = async (req, res) => {
     }
 
     const share = await getShareByToken(shareToken);
-    if (!share) return res.status(404).json({ success: false, message: 'Share link not found' });
+    if (!share) return sendSharedResourceUnavailable(res);
     if (
       String(share.access_mode || 'email_only') !== 'anyone_with_link' &&
       normalizeEmailAddress(share.shared_with_email) !== email
@@ -3314,7 +4512,7 @@ exports.getSharedContent = async (req, res) => {
     }
 
     const share = await getShareByToken(shareToken);
-    if (!share) return res.status(404).json({ success: false, message: 'Share link not found' });
+    if (!share) return sendSharedResourceUnavailable(res);
     if (
       String(share.access_mode || 'email_only') !== 'anyone_with_link' &&
       normalizeEmailAddress(share.shared_with_email) !== normalizeEmailAddress(claims.email)
@@ -3324,18 +4522,25 @@ exports.getSharedContent = async (req, res) => {
     await recordShareAccessLog(req, share, claims.email, 'content_view', accessToken);
 
     if (share.resource_type === 'file') {
-      const viewResult = await proxyRequest('/file-view-url', {
-        method: 'POST',
-        body: JSON.stringify({ filepath: share.filepath }),
-      });
-      return res.status(200).json({
-        success: true,
-        data: {
-          type: 'file',
-          file: { path: share.filepath, name: String(share.filepath || '').split('/').pop() || '' },
-          view: withPublicUrl(viewResult, req)?.data || null,
-        },
-      });
+      try {
+        const viewResult = await proxyRequest('/file-view-url', {
+          method: 'POST',
+          body: JSON.stringify({ filepath: share.filepath }),
+        });
+        return res.status(200).json({
+          success: true,
+          data: {
+            type: 'file',
+            file: { path: share.filepath, name: String(share.filepath || '').split('/').pop() || '' },
+            view: withPublicUrl(viewResult, req)?.data || null,
+          },
+        });
+      } catch (error) {
+        if (isMissingSharedResourceError(error)) {
+          return sendSharedResourceUnavailable(res);
+        }
+        throw error;
+      }
     }
 
     const requestedPhase = String(req.query.phase || '').trim() || null;
@@ -3348,7 +4553,15 @@ exports.getSharedContent = async (req, res) => {
     const query = new URLSearchParams();
     if (phaseToUse) query.set('phase', phaseToUse);
     if (pathToUse) query.set('path', pathToUse);
-    const listing = await proxyRequest(`/workspace/${encodeURIComponent(String(share.external_id))}/files${query.toString() ? `?${query.toString()}` : ''}`);
+    let listing;
+    try {
+      listing = await proxyRequest(`/workspace/${encodeURIComponent(String(share.external_id))}/files${query.toString() ? `?${query.toString()}` : ''}`);
+    } catch (error) {
+      if (isMissingSharedResourceError(error)) {
+        return sendSharedResourceUnavailable(res);
+      }
+      throw error;
+    }
     return res.status(200).json({
       success: true,
       data: {
@@ -3362,6 +4575,9 @@ exports.getSharedContent = async (req, res) => {
       },
     });
   } catch (error) {
+    if (isMissingSharedResourceError(error)) {
+      return sendSharedResourceUnavailable(res);
+    }
     const statusCode = String(error?.message || '').toLowerCase().includes('outside the shared scope') ? 403 : 401;
     return res.status(statusCode).json({ success: false, message: error.message || 'Invalid or expired share access token' });
   }
@@ -3533,7 +4749,7 @@ exports.getSharedDownloadUrl = async (req, res) => {
     }
 
     const share = await getShareByToken(shareToken);
-    if (!share) return res.status(404).json({ success: false, message: 'Share link not found' });
+    if (!share) return sendSharedResourceUnavailable(res);
     if (
       String(share.access_mode || 'email_only') !== 'anyone_with_link' &&
       normalizeEmailAddress(share.shared_with_email) !== normalizeEmailAddress(claims.email)
@@ -3543,11 +4759,18 @@ exports.getSharedDownloadUrl = async (req, res) => {
     await recordShareAccessLog(req, share, claims.email, 'download', accessToken);
 
     if (share.resource_type === 'file') {
-      const result = await proxyRequest('/file-download-url', {
-        method: 'POST',
-        body: JSON.stringify({ filepath: share.filepath }),
-      });
-      return res.status(200).json(withPublicUrl(result, req));
+      try {
+        const result = await proxyRequest('/file-download-url', {
+          method: 'POST',
+          body: JSON.stringify({ filepath: share.filepath }),
+        });
+        return res.status(200).json(withPublicUrl(result, req));
+      } catch (error) {
+        if (isMissingSharedResourceError(error)) {
+          return sendSharedResourceUnavailable(res);
+        }
+        throw error;
+      }
     }
 
     if (!filepath) {
@@ -3568,6 +4791,9 @@ exports.getSharedDownloadUrl = async (req, res) => {
     });
     return res.status(200).json(withPublicUrl(result, req));
   } catch (error) {
+    if (isMissingSharedResourceError(error)) {
+      return sendSharedResourceUnavailable(res);
+    }
     const statusCode = String(error?.message || '').toLowerCase().includes('outside the shared scope') ? 403 : 401;
     return res.status(statusCode).json({ success: false, message: error.message || 'Invalid or expired share access token' });
   }
@@ -3587,7 +4813,7 @@ exports.getSharedViewUrl = async (req, res) => {
     }
 
     const share = await getShareByToken(shareToken);
-    if (!share) return res.status(404).json({ success: false, message: 'Share link not found' });
+    if (!share) return sendSharedResourceUnavailable(res);
     if (
       String(share.access_mode || 'email_only') !== 'anyone_with_link' &&
       normalizeEmailAddress(share.shared_with_email) !== normalizeEmailAddress(claims.email)
@@ -3596,11 +4822,18 @@ exports.getSharedViewUrl = async (req, res) => {
     }
 
     if (share.resource_type === 'file') {
-      const result = await proxyRequest('/file-view-url', {
-        method: 'POST',
-        body: JSON.stringify({ filepath: share.filepath }),
-      });
-      return res.status(200).json(withPublicUrl(result, req));
+      try {
+        const result = await proxyRequest('/file-view-url', {
+          method: 'POST',
+          body: JSON.stringify({ filepath: share.filepath }),
+        });
+        return res.status(200).json(withPublicUrl(result, req));
+      } catch (error) {
+        if (isMissingSharedResourceError(error)) {
+          return sendSharedResourceUnavailable(res);
+        }
+        throw error;
+      }
     }
 
     if (!filepath) {
@@ -3621,6 +4854,9 @@ exports.getSharedViewUrl = async (req, res) => {
     });
     return res.status(200).json(withPublicUrl(result, req));
   } catch (error) {
+    if (isMissingSharedResourceError(error)) {
+      return sendSharedResourceUnavailable(res);
+    }
     const statusCode = String(error?.message || '').toLowerCase().includes('outside the shared scope') ? 403 : 401;
     return res.status(statusCode).json({ success: false, message: error.message || 'Invalid or expired share access token' });
   }
