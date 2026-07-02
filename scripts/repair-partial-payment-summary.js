@@ -52,6 +52,28 @@ async function getRecordedReceiptPaidTotalForBooking(bookingId, transaction = nu
   return round2(stripePaidAmount + manualPaidAmount);
 }
 
+async function getSalesQuoteForBooking(bookingId, transaction = null) {
+  const lead = await db.sales_leads.findOne({
+    where: { booking_id: bookingId },
+    attributes: ['lead_id'],
+    transaction
+  });
+
+  if (!lead?.lead_id || !db.sales_quotes) return null;
+
+  return db.sales_quotes.findOne({
+    where: { lead_id: lead.lead_id },
+    attributes: ['sales_quote_id', 'total', 'subtotal'],
+    order: [
+      [db.sequelize.literal("CASE WHEN status = 'paid' THEN 0 WHEN status = 'accepted' THEN 1 WHEN status = 'partially_paid' THEN 2 WHEN status = 'sent' THEN 3 WHEN status = 'viewed' THEN 4 WHEN status = 'pending' THEN 5 ELSE 6 END"), 'ASC'],
+      ['accepted_at', 'DESC'],
+      ['updated_at', 'DESC'],
+      ['sales_quote_id', 'DESC']
+    ],
+    transaction
+  });
+}
+
 async function main() {
   const bookingId = Number(process.argv[2]);
   const explicitPaymentId = Number(process.argv[3]);
@@ -72,7 +94,10 @@ async function main() {
     }
 
     const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId, transaction);
+    const salesQuote = await getSalesQuoteForBooking(bookingId, transaction);
     const quoteTotal = round2(
+      salesQuote?.total ||
+      salesQuote?.subtotal ||
       existingSummary?.quote_total ||
       booking.primary_quote?.total ||
       booking.primary_quote?.price_after_discount ||
@@ -112,6 +137,7 @@ async function main() {
 
     await bookingPaymentSummaryService.upsertBookingPaymentSummary({
       bookingId,
+      salesQuoteId: salesQuote?.sales_quote_id || existingSummary?.sales_quote_id || null,
       quoteTotal,
       paidAmount,
       creditUsedAmount: 0,

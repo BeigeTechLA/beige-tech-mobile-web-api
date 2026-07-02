@@ -2629,7 +2629,15 @@ exports.confirmPaymentMulti = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Booking not found' });
     }
 
-    const quoteTotal = round2(booking.primary_quote?.total || 0);
+    const linkedSalesQuoteForPayment = await getSalesQuoteForBooking(booking_id, transaction);
+    const quoteTotal = round2(
+      linkedSalesQuoteForPayment?.total ||
+      linkedSalesQuoteForPayment?.subtotal ||
+      booking.primary_quote?.total ||
+      booking.primary_quote?.price_after_discount ||
+      booking.primary_quote?.subtotal ||
+      0
+    );
     const bookingAlreadyPaid = Boolean(booking.payment_id || booking.is_completed === 1);
     const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
       bookingId: booking_id,
@@ -3255,7 +3263,15 @@ exports.confirmPaymentMulti = async (req, res) => {
               }
 
               creditApplied = round2(usedCreditEntry?.amount || 0);
-              const repairQuoteTotal = round2(repairBooking.primary_quote?.total || 0);
+              const repairSalesQuote = await getSalesQuoteForBooking(bookingIdFromBody, repairTransaction);
+              const repairQuoteTotal = round2(
+                repairSalesQuote?.total ||
+                repairSalesQuote?.subtotal ||
+                repairBooking.primary_quote?.total ||
+                repairBooking.primary_quote?.price_after_discount ||
+                repairBooking.primary_quote?.subtotal ||
+                0
+              );
 
               await ensureInvoicePaymentReceiptLink({
                 booking: repairBooking,
