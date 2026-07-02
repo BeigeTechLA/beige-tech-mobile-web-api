@@ -488,6 +488,20 @@ function isPaymentIntentUniqueConstraintError(error) {
   return isUniqueName && (hasStripeField || duplicateMessage);
 }
 
+function isRecoverablePaymentPersistenceError(error) {
+  if (!error) return false;
+  if (isPaymentIntentUniqueConstraintError(error)) return true;
+
+  const name = String(error.name || '');
+  const message = String(error?.parent?.sqlMessage || error.message || '');
+  return (
+    name === 'SequelizeUniqueConstraintError' ||
+    name === 'SequelizeValidationError' ||
+    message.includes('Validation error') ||
+    message.includes('Duplicate entry')
+  );
+}
+
 async function ensureInvoicePaymentReceiptLink({
   booking,
   bookingId,
@@ -2720,7 +2734,14 @@ exports.confirmPaymentMulti = async (req, res) => {
         ))
         : round2(existingPayment.total_amount || 0);
 
-      if (bookingFullySettledBeforePayment || existingSummaryDueAmount > 0 || creditApplied > 0) {
+      const existingPaymentSource = await resolvePaymentSourceForBooking({
+        bookingId: booking_id,
+        currentSource: paymentIntent?.metadata?.payment_source,
+        metadata: paymentIntent?.metadata || {},
+        transaction
+      });
+
+      if (bookingFullySettledBeforePayment || existingPaymentSource === PAYMENT_SOURCE.ADDITIONAL_INVOICE) {
         await markAdditionalQuoteInvoiceAsPaid({
           bookingId: booking_id,
           paymentIntentId,
@@ -3192,7 +3213,7 @@ exports.confirmPaymentMulti = async (req, res) => {
         await transaction.rollback();
     }
 
-    if (isPaymentIntentUniqueConstraintError(error)) {
+    if (isRecoverablePaymentPersistenceError(error)) {
       try {
         const paymentIntentIdFromBody = req.body?.paymentIntentId;
         const existingPayment = paymentIntentIdFromBody
@@ -3205,11 +3226,14 @@ exports.confirmPaymentMulti = async (req, res) => {
           const bookingIdFromBody = req.body?.booking_id || null;
           const shouldUseCreditFromBody = Boolean(req.body?.use_credit);
           const requestedCreditFromBody = round2(req.body?.credit_amount_used || 0);
+          const paymentLinkTokenFromBody = req.body?.payment_link_token || null;
           let creditApplied = 0;
+          let reconciledPaymentState = null;
 
           if (bookingIdFromBody) {
             await db.sequelize.transaction(async (repairTransaction) => {
               const repairBooking = await db.stream_project_booking.findByPk(bookingIdFromBody, {
+                include: [{ model: db.quotes, as: 'primary_quote' }],
                 transaction: repairTransaction,
                 lock: repairTransaction.LOCK.UPDATE
               });
@@ -3231,24 +3255,36 @@ exports.confirmPaymentMulti = async (req, res) => {
               }
 
               creditApplied = round2(usedCreditEntry?.amount || 0);
-              const repairSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingIdFromBody, repairTransaction);
-              const repairSummaryDueAmount = round2(repairSummary?.due_amount || 0);
-              const cashAmountToApply = repairSummary
-                ? round2(Math.min(
-                  round2(existingPayment.total_amount || 0),
-                  Math.max(repairSummaryDueAmount - creditApplied, 0)
-                ))
-                : round2(existingPayment.total_amount || 0);
+              const repairQuoteTotal = round2(repairBooking.primary_quote?.total || 0);
 
-              if (repairSummaryDueAmount > 0 || creditApplied > 0) {
-                await markAdditionalQuoteInvoiceAsPaid({
-                  bookingId: bookingIdFromBody,
-                  paymentIntentId: paymentIntentIdFromBody,
-                  paymentMetadata: {},
-                  paidAmount: cashAmountToApply,
-                  creditUsedAmount: creditApplied,
-                  transaction: repairTransaction
-                });
+              await ensureInvoicePaymentReceiptLink({
+                booking: repairBooking,
+                bookingId: bookingIdFromBody,
+                payment: existingPayment,
+                amount: existingPayment.total_amount,
+                isFullyPaid: false,
+                transaction: repairTransaction
+              });
+
+              reconciledPaymentState = await reconcileBookingPaymentSummaryFromReceipts({
+                booking: repairBooking,
+                bookingId: bookingIdFromBody,
+                quoteTotal: repairQuoteTotal,
+                latestPaymentId: existingPayment.payment_id,
+                transaction: repairTransaction
+              });
+
+              if (paymentLinkTokenFromBody) {
+                await db.payment_links.update(
+                  { is_used: 1, used_at: new Date() },
+                  {
+                    where: {
+                      link_token: paymentLinkTokenFromBody,
+                      booking_id: bookingIdFromBody
+                    },
+                    transaction: repairTransaction
+                  }
+                );
               }
             });
           }
@@ -3259,7 +3295,11 @@ exports.confirmPaymentMulti = async (req, res) => {
             data: {
               payment_id: existingPayment.payment_id,
               booking_id: bookingIdFromBody,
-              credit_applied: creditApplied
+              credit_applied: creditApplied,
+              payment_status: reconciledPaymentState?.paymentStatus,
+              paid_amount: reconciledPaymentState?.paidAmount,
+              due_amount: reconciledPaymentState?.dueAmount,
+              quote_total: reconciledPaymentState?.quoteTotal
             }
           });
         }
