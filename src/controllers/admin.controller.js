@@ -1856,7 +1856,7 @@ exports.getProjectDetails = async (req, res) => {
       : [];
 
     // 3. Fetch Transaction Total (from payment_transactions table)
-    const [paymentData, formSubmission, shootNotesCountMap, bookingPaymentSummary, manualPaymentRows] = await Promise.all([
+    const [paymentData, formSubmission, shootNotesCountMap, bookingPaymentSummary, manualPaymentRows, stripeReceiptRows] = await Promise.all([
       payment_transactions.findOne({
         where: { payment_id: projectJson.payment_id },
         attributes: ['payment_id', 'total_amount', 'status', 'created_at'],
@@ -1882,6 +1882,35 @@ exports.getProjectDetails = async (req, res) => {
           FROM booking_manual_payments
           WHERE booking_id = :bookingId
           ORDER BY created_at ASC, booking_manual_payment_id ASC
+        `,
+        {
+          replacements: { bookingId: projectJson.stream_project_booking_id },
+          type: QueryTypes.SELECT
+        }
+      ).catch((error) => {
+        const code = error?.original?.code || error?.parent?.code || error?.code;
+        if (code === 'ER_NO_SUCH_TABLE' || code === 'ER_BAD_TABLE_ERROR') return [];
+        throw error;
+      }),
+      db.sequelize.query(
+        `
+          SELECT
+            fip.finance_invoice_payment_id,
+            fip.payment_id,
+            fip.amount,
+            fip.status,
+            fip.paid_at,
+            fip.created_at,
+            p.total_amount,
+            p.status AS payment_status,
+            p.created_at AS payment_created_at
+          FROM finance_invoice_payments fip
+          LEFT JOIN payment_transactions p
+            ON p.payment_id = fip.payment_id
+          WHERE fip.booking_id = :bookingId
+            AND fip.payment_id IS NOT NULL
+            AND fip.status = 'paid'
+          ORDER BY COALESCE(fip.paid_at, p.created_at, fip.created_at) ASC, fip.finance_invoice_payment_id ASC
         `,
         {
           replacements: { bookingId: projectJson.stream_project_booking_id },
@@ -2139,7 +2168,40 @@ exports.getProjectDetails = async (req, res) => {
       });
     });
 
-    if (paymentData?.payment_id && Number(paymentData.total_amount || 0) > 0) {
+    const stripePaymentIdsInHistory = new Set();
+    (stripeReceiptRows || []).forEach((stripeReceipt) => {
+      const paymentId = Number(stripeReceipt.payment_id || 0);
+      if (!Number.isFinite(paymentId) || paymentId <= 0) return;
+      stripePaymentIdsInHistory.add(paymentId);
+      const normalizedStripeStatus = String(stripeReceipt.payment_status || stripeReceipt.status || '').trim().toLowerCase();
+      paymentHistory.push({
+        id: `stripe-${paymentId}`,
+        type: 'stripe',
+        receipt_number: `RCPT-${String(projectJson.stream_project_booking_id).padStart(6, '0')}-S${String(paymentId).padStart(3, '0')}`,
+        invoice_number: `INVBEIGE-S-${String(projectJson.stream_project_booking_id).padStart(4, '0')}-${String(paymentId).padStart(3, '0')}`,
+        method: 'Online Payment',
+        amount: Number(stripeReceipt.amount || stripeReceipt.total_amount || 0),
+        status: ['succeeded', 'success', 'completed', 'complete', 'paid'].includes(normalizedStripeStatus)
+          ? 'paid'
+          : (stripeReceipt.payment_status || stripeReceipt.status || 'paid'),
+        paid_at: stripeReceipt.paid_at || stripeReceipt.payment_created_at || stripeReceipt.created_at || null,
+        receipt_url: buildShootReceiptUrl({
+          bookingId: projectJson.stream_project_booking_id,
+          paymentId
+        }),
+        receipt_download_url: buildShootReceiptUrl({
+          bookingId: projectJson.stream_project_booking_id,
+          paymentId,
+          download: true
+        })
+      });
+    });
+
+    if (
+      paymentData?.payment_id &&
+      Number(paymentData.total_amount || 0) > 0 &&
+      !stripePaymentIdsInHistory.has(Number(paymentData.payment_id))
+    ) {
       const normalizedStripeStatus = String(paymentData.status || '').trim().toLowerCase();
       paymentHistory.push({
         id: `stripe-${paymentData.payment_id}`,
