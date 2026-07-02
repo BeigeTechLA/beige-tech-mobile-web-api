@@ -2790,6 +2790,12 @@ exports.getLeadById = async (req, res) => {
     let active_payment_link = null;
     const pLinks = leadJson.payment_links || leadJson.paymentLinks || [];
     const dCodes = leadJson.discount_codes || leadJson.discountCodes || [];
+    const summaryForActiveLink = customQuoteFinancials?.payment_summary || null;
+    const summaryPaidForActiveLink = Number(summaryForActiveLink?.paid_amount || 0);
+    const summaryDueForActiveLink = Number(summaryForActiveLink?.due_amount || 0);
+    const summaryUpdatedAtForActiveLink = summaryForActiveLink?.updated_at
+      ? new Date(summaryForActiveLink.updated_at)
+      : null;
 
     if (pLinks.length > 0) {
       const latestLink = [...pLinks].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
@@ -2801,13 +2807,30 @@ exports.getLeadById = async (req, res) => {
         if (attachedDiscount && attachedDiscount.code) fullUrl += `?discount=${attachedDiscount.code}`;
         const now = new Date();
         const expiryDate = latestLink.expires_at ? new Date(latestLink.expires_at) : null;
+        const requestedAmount = latestLink.requested_amount ? Number(latestLink.requested_amount) : null;
+        const latestLinkCreatedAt = latestLink.created_at ? new Date(latestLink.created_at) : null;
+        const summaryUpdatedAfterLink =
+          summaryUpdatedAtForActiveLink &&
+          latestLinkCreatedAt &&
+          !Number.isNaN(summaryUpdatedAtForActiveLink.getTime()) &&
+          !Number.isNaN(latestLinkCreatedAt.getTime()) &&
+          summaryUpdatedAtForActiveLink >= latestLinkCreatedAt;
+        const linkCoveredByPaymentSummary =
+          !latestLink.is_used &&
+          summaryUpdatedAfterLink &&
+          Number.isFinite(requestedAmount) &&
+          requestedAmount > 0 &&
+          Number.isFinite(summaryPaidForActiveLink) &&
+          summaryPaidForActiveLink + 0.009 >= requestedAmount &&
+          Number.isFinite(summaryDueForActiveLink) &&
+          summaryDueForActiveLink > 0.009;
         active_payment_link = {
           payment_link_id: latestLink.payment_link_id || latestLink.id,
           full_url: fullUrl,
           token: latestLink.link_token,
-          requested_amount: latestLink.requested_amount ? Number(latestLink.requested_amount) : null,
+          requested_amount: requestedAmount,
           expires_at: latestLink.expires_at,
-          is_used: !!latestLink.is_used,
+          is_used: !!latestLink.is_used || linkCoveredByPaymentSummary,
           is_expired: expiryDate ? expiryDate < now : false,
           discount_details: attachedDiscount ? {
             code: attachedDiscount.code,

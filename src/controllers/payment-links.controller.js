@@ -234,10 +234,19 @@ const resolveHostedPaymentUrlForInvoice = async ({
   const pendingAmount = Number(paymentState?.dueAmount ?? pricingData?.total ?? 0);
   if (!Number.isFinite(pendingAmount) || pendingAmount <= 0.009) return null;
 
+  const hostedPaymentPricingData = buildOutstandingInvoicePricingData(pricingData, paymentState);
+  const expectedPendingCents = Math.round(Number(hostedPaymentPricingData.total || pendingAmount) * 100);
+
   if (booking?.stripe_invoice_id) {
     try {
       const existingInvoice = await stripe.invoices.retrieve(booking.stripe_invoice_id);
-      if (existingInvoice?.hosted_invoice_url && ['draft', 'open'].includes(String(existingInvoice.status || '').toLowerCase())) {
+      const existingInvoiceTotalCents = Number(existingInvoice?.total || existingInvoice?.amount_due || 0);
+      const invoiceMatchesPendingAmount = Math.abs(existingInvoiceTotalCents - expectedPendingCents) <= 1;
+      if (
+        invoiceMatchesPendingAmount &&
+        existingInvoice?.hosted_invoice_url &&
+        ['draft', 'open'].includes(String(existingInvoice.status || '').toLowerCase())
+      ) {
         return existingInvoice.hosted_invoice_url;
       }
     } catch (error) {
@@ -246,12 +255,13 @@ const resolveHostedPaymentUrlForInvoice = async ({
   }
 
   try {
-    const paymentInvoice = await paymentLinksService.createStripeInvoice(booking, pricingData, {
+    const paymentInvoice = await paymentLinksService.createStripeInvoice(booking, hostedPaymentPricingData, {
       recipientOverride,
       forceNewInvoice: false,
       metadata: {
         payment_source: 'quote_invoice',
-        standardized_parent_invoice: 'true'
+        standardized_parent_invoice: 'true',
+        payment_amount_type: hostedPaymentPricingData.is_outstanding_balance ? 'remaining_balance' : 'full_balance'
       }
     });
     return paymentInvoice?.hosted_invoice_url || null;
@@ -259,6 +269,45 @@ const resolveHostedPaymentUrlForInvoice = async ({
     console.warn(`Could not create hosted payment invoice for booking ${bookingId}: ${error.message}`);
     return null;
   }
+};
+
+const buildOutstandingInvoicePricingData = (pricingData = {}, paymentState = null) => {
+  const totalAmount = Number(pricingData?.total || 0);
+  const dueAmount = Number(paymentState?.dueAmount ?? paymentState?.due_amount ?? totalAmount);
+  const paidAmount = Number(paymentState?.paidAmount ?? paymentState?.paid_amount ?? 0);
+  const creditUsedAmount = Number(paymentState?.creditUsedAmount ?? paymentState?.credit_used_amount ?? 0);
+  const shouldUseOutstandingAmount =
+    Number.isFinite(dueAmount) &&
+    dueAmount > 0.009 &&
+    totalAmount > 0 &&
+    dueAmount < totalAmount - 0.009;
+
+  if (!shouldUseOutstandingAmount) {
+    return pricingData;
+  }
+
+  return {
+    ...pricingData,
+    source: 'remaining_balance',
+    is_outstanding_balance: true,
+    original_total: totalAmount,
+    previously_paid_amount: Number.isFinite(paidAmount) ? paidAmount : 0,
+    credit_used_amount: Number.isFinite(creditUsedAmount) ? creditUsedAmount : 0,
+    total: dueAmount,
+    subtotal: dueAmount,
+    discount_amount: 0,
+    price_after_discount: dueAmount,
+    tax_type: null,
+    tax_rate: 0,
+    tax_amount: 0,
+    line_items: [
+      {
+        name: 'Remaining balance',
+        quantity: 1,
+        total: dueAmount
+      }
+    ]
+  };
 };
 
 const resolveInvoiceDisplayNumber = (booking, stripeInvoiceNumber = null) =>
@@ -2049,6 +2098,12 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
     });
     let invoiceDetails = null;
     const totalAmount = Number(pricingData.total || 0);
+    const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+      bookingId: parsedBookingId,
+      quoteTotal: totalAmount
+    });
+    const payablePricingData = buildOutstandingInvoicePricingData(pricingData, paymentState);
+    const payableTotalAmount = Number(payablePricingData.total || totalAmount);
 
     // Stripe does not support collecting a 0 amount, so for fully discounted bookings we always use BEIGE manual invoice.
     if (totalAmount <= 0) {
@@ -2249,24 +2304,29 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
 
     } else {
       // --- CASE 2: NOT PAID YET ---
-      const stripeInvoice = await paymentLinksService.createStripeInvoice(booking, pricingData, {
+      const stripeInvoice = await paymentLinksService.createStripeInvoice(booking, payablePricingData, {
         recipientOverride,
         forceNewInvoice: recipientIdentityChanged,
         metadata: quoteId ? {
           payment_source: 'quote_invoice',
-          sales_quote_id: String(quoteId)
+          sales_quote_id: String(quoteId),
+          payment_amount_type: payablePricingData.is_outstanding_balance ? 'remaining_balance' : 'full_balance'
         } : {
-          payment_source: 'booking_checkout'
+          payment_source: 'booking_checkout',
+          payment_amount_type: payablePricingData.is_outstanding_balance ? 'remaining_balance' : 'full_balance'
         }
       });
-      invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
+      invoiceDetails = buildInvoiceTemplateDetails(booking, payablePricingData, {
         invoiceUrl: stripeInvoice.hosted_invoice_url,
         invoicePdf: stripeInvoice.invoice_pdf,
         stripeInvoiceNumber: stripeInvoice.number,
         invoiceNumber: stripeInvoice.number,
-        totalAmount: pricingData.total,
+        totalAmount: payableTotalAmount,
         isPaid: false,
-        isAdditionalPayment: false
+        isAdditionalPayment: Boolean(payablePricingData.is_outstanding_balance),
+        previouslyPaidAmount: payablePricingData.previously_paid_amount,
+        revisedTotal: payablePricingData.original_total,
+        additionalAmount: payableTotalAmount
       });
     }
 

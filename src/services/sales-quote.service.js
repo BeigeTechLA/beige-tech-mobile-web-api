@@ -1817,12 +1817,16 @@ function resolveValidity({ validUntil, quoteValidityDays, validUntilProvided = f
   };
 }
 
+function normalizeRoleName(role) {
+  return String(role || '').trim().toLowerCase().replace(/\s+/g, '_');
+}
+
 function isAdminRole(role) {
-  return role === 'admin' || role === 'Admin' || role === 'sales_admin' || role === 'Sales_Admin';
+  return ['admin', 'sales_admin', 'super_admin', 'superadmin'].includes(normalizeRoleName(role));
 }
 
 function isClientRole(role) {
-  return role === 'client' || role === 'Client';
+  return normalizeRoleName(role) === 'client';
 }
 
 async function getRandomActiveSalesRepId(transaction) {
@@ -1911,6 +1915,13 @@ function buildQuoteAccessWhere(user, options = {}) {
       { assigned_sales_rep_id: user.userId }
     ]
   };
+}
+
+function buildQuoteReadAccessWhere(user) {
+  if (isClientRole(user?.role)) {
+    return buildQuoteAccessWhere(user);
+  }
+  return buildQuoteAccessWhere(user, { restrictToLoggedInRep: false });
 }
 
 async function getCatalog(pricingMode = null) {
@@ -5555,7 +5566,7 @@ async function ensureQuoteBookingForPayment(salesQuoteId, user, payload = {}) {
 }
 
 async function fetchQuoteById(salesQuoteId, user = null) {
-  const accessWhere = user ? buildQuoteAccessWhere(user) : {};
+  const accessWhere = user ? buildQuoteReadAccessWhere(user) : {};
   const quote = await db.sales_quotes.findOne({
     where: { sales_quote_id: salesQuoteId, ...accessWhere },
     include: [
@@ -5692,7 +5703,7 @@ async function getQuoteById(salesQuoteId, user) {
 
 async function listQuoteVersions(salesQuoteId, user) {
   const quote = await db.sales_quotes.findOne({
-    where: { sales_quote_id: salesQuoteId, ...buildQuoteAccessWhere(user) },
+    where: { sales_quote_id: salesQuoteId, ...buildQuoteReadAccessWhere(user) },
     attributes: ['sales_quote_id', 'created_at', 'updated_at'],
     raw: true
   });
@@ -5726,7 +5737,7 @@ async function getQuoteVersionByNumber(salesQuoteId, versionNumber, user) {
   }
 
   const quote = await db.sales_quotes.findOne({
-    where: { sales_quote_id: salesQuoteId, ...buildQuoteAccessWhere(user) },
+    where: { sales_quote_id: salesQuoteId, ...buildQuoteReadAccessWhere(user) },
     attributes: ['sales_quote_id', 'created_at', 'updated_at'],
     raw: true
   });
@@ -5807,7 +5818,7 @@ async function getCurrentUsableQuoteVersionSnapshot(salesQuoteId, user = null) {
   const quote = await db.sales_quotes.findOne({
     where: {
       sales_quote_id: normalizedQuoteId,
-      ...(user ? buildQuoteAccessWhere(user) : {})
+      ...(user ? buildQuoteReadAccessWhere(user) : {})
     },
     attributes: ['sales_quote_id', 'created_at', 'updated_at'],
     raw: true
