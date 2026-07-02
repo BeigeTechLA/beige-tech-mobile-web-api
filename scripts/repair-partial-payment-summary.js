@@ -3,6 +3,48 @@ const bookingPaymentSummaryService = require('../src/services/booking-payment-su
 
 const round2 = (value) => Number(Number(value || 0).toFixed(2));
 
+async function getRecordedReceiptPaidTotalForBooking(bookingId, transaction = null) {
+  const stripeRows = db.finance_invoice_payments
+    ? await db.finance_invoice_payments.findAll({
+        where: {
+          booking_id: bookingId,
+          status: 'paid',
+          payment_id: { [db.Sequelize.Op.ne]: null }
+        },
+        attributes: ['amount'],
+        transaction
+      })
+    : [];
+
+  let manualPaidAmount = 0;
+  try {
+    const manualRows = await db.sequelize.query(
+      `
+        SELECT COALESCE(SUM(amount), 0) AS paid_amount
+        FROM booking_manual_payments
+        WHERE booking_id = :bookingId
+      `,
+      {
+        replacements: { bookingId },
+        type: db.Sequelize.QueryTypes.SELECT,
+        transaction
+      }
+    );
+    manualPaidAmount = round2(manualRows?.[0]?.paid_amount || 0);
+  } catch (error) {
+    const code = error?.original?.code || error?.parent?.code || error?.code;
+    if (code !== 'ER_NO_SUCH_TABLE' && code !== 'ER_BAD_TABLE_ERROR') {
+      throw error;
+    }
+  }
+
+  const stripePaidAmount = round2(
+    stripeRows.reduce((sum, row) => sum + Number(row.amount || 0), 0)
+  );
+
+  return round2(stripePaidAmount + manualPaidAmount);
+}
+
 async function main() {
   const bookingId = Number(process.argv[2]);
   const explicitPaymentId = Number(process.argv[3]);
@@ -50,12 +92,15 @@ async function main() {
       : [];
 
     const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId, transaction);
+    const recordedReceiptPaidAmount = await getRecordedReceiptPaidTotalForBooking(bookingId, transaction);
     const repairedPaidAmount = round2(
       bookingPayments.reduce((sum, payment) => sum + Number(payment.total_amount || 0), 0)
     );
-    const paidAmount = repairedPaidAmount > 0
-      ? repairedPaidAmount
-      : round2(existingSummary?.paid_amount || 0);
+    const paidAmount = round2(Math.max(
+      repairedPaidAmount,
+      recordedReceiptPaidAmount,
+      round2(existingSummary?.paid_amount || 0)
+    ));
     const dueAmount = round2(Math.max(quoteTotal - paidAmount, 0));
     const paymentStatus = dueAmount <= 0 ? 'paid' : (paidAmount > 0 ? 'partially_paid' : 'pending');
 

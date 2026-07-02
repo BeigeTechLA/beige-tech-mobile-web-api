@@ -268,6 +268,124 @@ async function saveStripePaymentSummary({
   });
 }
 
+async function getRecordedReceiptPaidTotalForBooking(bookingId, transaction = null) {
+  const stripeRows = db.finance_invoice_payments
+    ? await db.finance_invoice_payments.findAll({
+        where: {
+          booking_id: bookingId,
+          status: 'paid',
+          payment_id: { [db.Sequelize.Op.ne]: null }
+        },
+        attributes: ['amount'],
+        transaction
+      })
+    : [];
+
+  let manualPaidAmount = 0;
+  try {
+    const manualRows = await db.sequelize.query(
+      `
+        SELECT COALESCE(SUM(amount), 0) AS paid_amount
+        FROM booking_manual_payments
+        WHERE booking_id = :bookingId
+      `,
+      {
+        replacements: { bookingId },
+        type: db.Sequelize.QueryTypes.SELECT,
+        transaction
+      }
+    );
+    manualPaidAmount = round2(manualRows?.[0]?.paid_amount || 0);
+  } catch (error) {
+    const code = error?.original?.code || error?.parent?.code || error?.code;
+    if (code !== 'ER_NO_SUCH_TABLE' && code !== 'ER_BAD_TABLE_ERROR') {
+      throw error;
+    }
+  }
+
+  const stripePaidAmount = round2(
+    stripeRows.reduce((sum, row) => sum + Number(row.amount || 0), 0)
+  );
+
+  return round2(stripePaidAmount + manualPaidAmount);
+}
+
+async function reconcileBookingPaymentSummaryFromReceipts({
+  booking,
+  bookingId,
+  quoteTotal = null,
+  salesQuoteId = null,
+  latestPaymentId = null,
+  transaction = null
+}) {
+  const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId, transaction);
+  const recordedPaidAmount = await getRecordedReceiptPaidTotalForBooking(bookingId, transaction);
+  const resolvedQuoteTotal = round2(
+    quoteTotal ||
+    existingSummary?.quote_total ||
+    booking?.primary_quote?.total ||
+    booking?.primary_quote?.price_after_discount ||
+    booking?.primary_quote?.subtotal ||
+    booking?.budget ||
+    0
+  );
+  const resolvedPaidAmount = round2(Math.max(
+    recordedPaidAmount,
+    Number(existingSummary?.paid_amount || 0)
+  ));
+  const creditUsedAmount = round2(existingSummary?.credit_used_amount || 0);
+
+  await bookingPaymentSummaryService.upsertBookingPaymentSummary({
+    bookingId,
+    salesQuoteId: salesQuoteId || existingSummary?.sales_quote_id || null,
+    quoteTotal: resolvedQuoteTotal,
+    paidAmount: resolvedPaidAmount,
+    creditUsedAmount,
+    creditCreatedAmount: existingSummary?.credit_created_amount || 0,
+    lastQuoteChangeType: existingSummary?.last_quote_change_type || 'none',
+    lastQuoteChangeAmount: existingSummary?.last_quote_change_amount || 0,
+    lastQuoteChangeStatus: existingSummary?.last_quote_change_status || 'none',
+    transaction
+  });
+
+  const updatedPaymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+    bookingId,
+    quoteTotal: resolvedQuoteTotal,
+    transaction
+  });
+  const isFullyPaid = updatedPaymentState.isPaid || updatedPaymentState.dueAmount <= 0.009;
+
+  await db.stream_project_booking.update(
+    isFullyPaid
+      ? {
+          payment_completed_at: new Date(),
+          payment_id: latestPaymentId || booking?.payment_id || null,
+          is_draft: 0
+        }
+      : {
+          payment_id: null,
+          payment_completed_at: null,
+          is_completed: 0,
+          is_draft: 0
+        },
+    { where: { stream_project_booking_id: bookingId }, transaction }
+  );
+
+  await db.sales_leads.update(
+    { lead_status: isFullyPaid ? 'booked' : 'partially_paid' },
+    { where: { booking_id: bookingId }, transaction }
+  );
+
+  if (db.client_leads) {
+    await db.client_leads.update(
+      { lead_status: isFullyPaid ? 'booked' : 'partially_paid' },
+      { where: { booking_id: bookingId }, transaction }
+    );
+  }
+
+  return updatedPaymentState;
+}
+
 async function inferCreditAmountForPayment({
   booking,
   bookingId,
@@ -2392,6 +2510,9 @@ exports.confirmPaymentMulti = async (req, res) => {
       transaction
     });
     const isSummaryNoPaymentDue = paymentState.hasSummary && paymentState.isPaid;
+    const bookingFullySettledBeforePayment = paymentState.hasSummary
+      ? (paymentState.isPaid || paymentState.dueAmount <= 0.009)
+      : bookingAlreadyPaid;
     const payableAmount = paymentState.hasSummary ? paymentState.payableAmount : quoteTotal;
     const isCreditCoveredCheckout =
       shouldUseCredit &&
@@ -2486,7 +2607,7 @@ exports.confirmPaymentMulti = async (req, res) => {
         ))
         : round2(existingPayment.total_amount || 0);
 
-      if (bookingAlreadyPaid || existingSummaryDueAmount > 0 || creditApplied > 0) {
+      if (bookingFullySettledBeforePayment || existingSummaryDueAmount > 0 || creditApplied > 0) {
         await markAdditionalQuoteInvoiceAsPaid({
           bookingId: booking_id,
           paymentIntentId,
@@ -2496,6 +2617,23 @@ exports.confirmPaymentMulti = async (req, res) => {
           transaction
         });
       }
+
+      await ensureInvoicePaymentReceiptLink({
+        booking,
+        bookingId: booking_id,
+        payment: existingPayment,
+        amount: existingPayment.total_amount,
+        isFullyPaid: bookingFullySettledBeforePayment && existingSummaryDueAmount <= 0.009,
+        transaction
+      });
+
+      const reconciledPaymentState = await reconcileBookingPaymentSummaryFromReceipts({
+        booking,
+        bookingId: booking_id,
+        quoteTotal,
+        latestPaymentId: existingPayment.payment_id,
+        transaction
+      });
 
       if (resolvedPaymentLinkToken) {
         await db.payment_links.update(
@@ -2590,7 +2728,11 @@ exports.confirmPaymentMulti = async (req, res) => {
         data: {
           payment_id: existingPayment.payment_id,
           booking_id,
-          credit_applied: creditApplied
+          credit_applied: creditApplied,
+          payment_status: reconciledPaymentState.paymentStatus,
+          paid_amount: reconciledPaymentState.paidAmount,
+          due_amount: reconciledPaymentState.dueAmount,
+          quote_total: reconciledPaymentState.quoteTotal
         },
       });
     }
@@ -2718,7 +2860,7 @@ exports.confirmPaymentMulti = async (req, res) => {
       });
     }
 
-    if (bookingAlreadyPaid) {
+    if (bookingFullySettledBeforePayment) {
       await markAdditionalQuoteInvoiceAsPaid({
         bookingId: booking_id,
         paymentIntentId,
@@ -2796,24 +2938,16 @@ exports.confirmPaymentMulti = async (req, res) => {
       transaction
     });
 
-    await db.stream_project_booking.update(
-      isFullyPaid
-        ? {
-            payment_completed_at: new Date(),
-            payment_id: payment.payment_id,
-            is_draft: 0,
-            // is_completed: 1
-          }
-        : {
-            is_draft: 0
-          },
-      { where: { stream_project_booking_id: booking_id }, transaction }
-    );
-
-    await db.sales_leads.update(
-      { lead_status: isFullyPaid ? 'booked' : 'partially_paid' },
-      { where: { booking_id: booking_id }, transaction }
-    );
+    const reconciledPaymentState = await reconcileBookingPaymentSummaryFromReceipts({
+      booking,
+      bookingId: booking_id,
+      quoteTotal,
+      salesQuoteId,
+      latestPaymentId: payment.payment_id,
+      transaction
+    });
+    const isFullyPaidAfterReconcile =
+      reconciledPaymentState.isPaid || reconciledPaymentState.dueAmount <= 0.009;
 
     if (resolvedPaymentLinkToken) {
       await db.payment_links.update(
@@ -2828,7 +2962,7 @@ exports.confirmPaymentMulti = async (req, res) => {
       );
     }
 
-    if (!isFullyPaid) {
+    if (!isFullyPaidAfterReconcile) {
       await transaction.commit();
 
       return res.status(201).json({
@@ -2838,10 +2972,10 @@ exports.confirmPaymentMulti = async (req, res) => {
           payment_id: payment.payment_id,
           booking_id,
           credit_applied: round2(usedCreditEntry?.amount || 0),
-          payment_status: updatedPaymentState.paymentStatus,
-          paid_amount: updatedPaymentState.paidAmount,
-          due_amount: updatedPaymentState.dueAmount,
-          quote_total: updatedPaymentState.quoteTotal
+          payment_status: reconciledPaymentState.paymentStatus,
+          paid_amount: reconciledPaymentState.paidAmount,
+          due_amount: reconciledPaymentState.dueAmount,
+          quote_total: reconciledPaymentState.quoteTotal
         }
       });
     }
