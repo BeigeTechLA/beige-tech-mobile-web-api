@@ -269,17 +269,28 @@ async function saveStripePaymentSummary({
 }
 
 async function getRecordedReceiptPaidTotalForBooking(bookingId, transaction = null) {
-  const stripeRows = db.finance_invoice_payments
-    ? await db.finance_invoice_payments.findAll({
-        where: {
-          booking_id: bookingId,
-          status: 'paid',
-          payment_id: { [db.Sequelize.Op.ne]: null }
-        },
-        attributes: ['amount'],
+  let stripePaidAmount = 0;
+  if (db.finance_invoice_payments) {
+    const stripeRows = await db.sequelize.query(
+      `
+        SELECT COALESCE(SUM(unique_payments.amount), 0) AS paid_amount
+        FROM (
+          SELECT payment_id, MAX(amount) AS amount
+          FROM finance_invoice_payments
+          WHERE booking_id = :bookingId
+            AND status = 'paid'
+            AND payment_id IS NOT NULL
+          GROUP BY payment_id
+        ) unique_payments
+      `,
+      {
+        replacements: { bookingId },
+        type: db.Sequelize.QueryTypes.SELECT,
         transaction
-      })
-    : [];
+      }
+    );
+    stripePaidAmount = round2(stripeRows?.[0]?.paid_amount || 0);
+  }
 
   let manualPaidAmount = 0;
   try {
@@ -302,10 +313,6 @@ async function getRecordedReceiptPaidTotalForBooking(bookingId, transaction = nu
       throw error;
     }
   }
-
-  const stripePaidAmount = round2(
-    stripeRows.reduce((sum, row) => sum + Number(row.amount || 0), 0)
-  );
 
   return round2(stripePaidAmount + manualPaidAmount);
 }
@@ -330,8 +337,10 @@ async function reconcileBookingPaymentSummaryFromReceipts({
     0
   );
   const resolvedPaidAmount = round2(Math.max(
-    recordedPaidAmount,
-    Number(existingSummary?.paid_amount || 0)
+    recordedPaidAmount > 0
+      ? recordedPaidAmount
+      : Number(existingSummary?.paid_amount || 0),
+    0
   ));
   const creditUsedAmount = round2(existingSummary?.credit_used_amount || 0);
 
@@ -547,19 +556,30 @@ async function ensureInvoicePaymentReceiptLink({
     updated_at: new Date()
   };
 
-  const [invoicePayment] = await db.finance_invoice_payments.findOrCreate({
+  const existingInvoicePayments = await db.finance_invoice_payments.findAll({
     where: {
       booking_id: bookingId,
       payment_id: payment.payment_id
     },
-    defaults: receiptPayload,
+    order: [['finance_invoice_payment_id', 'ASC']],
     transaction
   });
 
-  if (!invoicePayment.isNewRecord) {
+  if (existingInvoicePayments.length > 0) {
+    const [invoicePayment, ...duplicateInvoicePayments] = existingInvoicePayments;
     await invoicePayment.update(receiptPayload, { transaction });
+    if (duplicateInvoicePayments.length > 0) {
+      await db.finance_invoice_payments.destroy({
+        where: {
+          finance_invoice_payment_id: duplicateInvoicePayments.map((row) => row.finance_invoice_payment_id)
+        },
+        transaction
+      });
+    }
+    return invoicePayment;
   }
 
+  const invoicePayment = await db.finance_invoice_payments.create(receiptPayload, { transaction });
   return invoicePayment;
 }
 
@@ -972,6 +992,9 @@ async function processStripePaidWebhookEvent(event, req = {}) {
       if (existing) {
         const duplicateSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(booking_id, transaction);
         const duplicateSummaryDueAmount = round2(duplicateSummary?.due_amount || 0);
+        const duplicateBookingFullySettled = duplicateSummary
+          ? duplicateSummaryDueAmount <= 0
+          : Boolean(booking.payment_id || booking.is_completed === 1);
         webhookRequestedCreditAmount = await inferCreditAmountForPayment({
           booking,
           bookingId: booking_id,
@@ -1001,13 +1024,33 @@ async function processStripePaidWebhookEvent(event, req = {}) {
           ))
           : round2(existing.total_amount || 0);
 
-        const additionalInvoiceMarkedPaid = await markAdditionalQuoteInvoiceAsPaid({
+        let additionalInvoiceMarkedPaid = false;
+        if (duplicateBookingFullySettled || paymentSource === PAYMENT_SOURCE.ADDITIONAL_INVOICE) {
+          additionalInvoiceMarkedPaid = await markAdditionalQuoteInvoiceAsPaid({
+            bookingId: booking_id,
+            stripeInvoice,
+            paymentIntentId,
+            paymentMetadata: invoiceMetadata || {},
+            paidAmount: duplicateCashAmountToApply,
+            creditUsedAmount: duplicateCreditApplied,
+            transaction
+          });
+        }
+
+        await ensureInvoicePaymentReceiptLink({
+          booking,
           bookingId: booking_id,
-          stripeInvoice,
-          paymentIntentId,
-          paymentMetadata: invoiceMetadata || {},
-          paidAmount: duplicateCashAmountToApply,
-          creditUsedAmount: duplicateCreditApplied,
+          payment: existing,
+          amount: existing.total_amount,
+          isFullyPaid: duplicateBookingFullySettled,
+          transaction
+        });
+
+        const reconciledPaymentState = await reconcileBookingPaymentSummaryFromReceipts({
+          booking,
+          bookingId: booking_id,
+          quoteTotal: duplicateSummary?.quote_total || booking.budget || null,
+          latestPaymentId: existing.payment_id,
           transaction
         });
 
@@ -1017,12 +1060,23 @@ async function processStripePaidWebhookEvent(event, req = {}) {
           received: true,
           duplicate: true,
           additional_invoice_paid: Boolean(additionalInvoiceMarkedPaid),
-          credit_applied: duplicateCreditApplied
+          credit_applied: duplicateCreditApplied,
+          payment_status: reconciledPaymentState.paymentStatus,
+          paid_amount: reconciledPaymentState.paidAmount,
+          due_amount: reconciledPaymentState.dueAmount
         };
       }
     }
 
-    if (booking.payment_id || booking.is_completed === 1) {
+    const webhookPaymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+      bookingId: booking_id,
+      transaction
+    });
+    const bookingFullySettledForWebhook = webhookPaymentState.hasSummary
+      ? (webhookPaymentState.isPaid || webhookPaymentState.dueAmount <= 0.009)
+      : Boolean(booking.payment_id || booking.is_completed === 1);
+
+    if (bookingFullySettledForWebhook) {
       const paidAmountForInference = round2(
         (dataObject.amount_paid ?? dataObject.amount_received ?? dataObject.amount ?? 0) / 100
       );

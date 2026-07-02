@@ -4,17 +4,28 @@ const bookingPaymentSummaryService = require('../src/services/booking-payment-su
 const round2 = (value) => Number(Number(value || 0).toFixed(2));
 
 async function getRecordedReceiptPaidTotalForBooking(bookingId, transaction = null) {
-  const stripeRows = db.finance_invoice_payments
-    ? await db.finance_invoice_payments.findAll({
-        where: {
-          booking_id: bookingId,
-          status: 'paid',
-          payment_id: { [db.Sequelize.Op.ne]: null }
-        },
-        attributes: ['amount'],
+  let stripePaidAmount = 0;
+  if (db.finance_invoice_payments) {
+    const stripeRows = await db.sequelize.query(
+      `
+        SELECT COALESCE(SUM(unique_payments.amount), 0) AS paid_amount
+        FROM (
+          SELECT payment_id, MAX(amount) AS amount
+          FROM finance_invoice_payments
+          WHERE booking_id = :bookingId
+            AND status = 'paid'
+            AND payment_id IS NOT NULL
+          GROUP BY payment_id
+        ) unique_payments
+      `,
+      {
+        replacements: { bookingId },
+        type: db.Sequelize.QueryTypes.SELECT,
         transaction
-      })
-    : [];
+      }
+    );
+    stripePaidAmount = round2(stripeRows?.[0]?.paid_amount || 0);
+  }
 
   let manualPaidAmount = 0;
   try {
@@ -38,10 +49,6 @@ async function getRecordedReceiptPaidTotalForBooking(bookingId, transaction = nu
     }
   }
 
-  const stripePaidAmount = round2(
-    stripeRows.reduce((sum, row) => sum + Number(row.amount || 0), 0)
-  );
-
   return round2(stripePaidAmount + manualPaidAmount);
 }
 
@@ -64,7 +71,9 @@ async function main() {
       throw new Error(`Booking ${bookingId} not found`);
     }
 
+    const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId, transaction);
     const quoteTotal = round2(
+      existingSummary?.quote_total ||
       booking.primary_quote?.total ||
       booking.primary_quote?.price_after_discount ||
       booking.primary_quote?.subtotal ||
@@ -91,16 +100,13 @@ async function main() {
         })
       : [];
 
-    const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId, transaction);
     const recordedReceiptPaidAmount = await getRecordedReceiptPaidTotalForBooking(bookingId, transaction);
     const repairedPaidAmount = round2(
       bookingPayments.reduce((sum, payment) => sum + Number(payment.total_amount || 0), 0)
     );
-    const paidAmount = round2(Math.max(
-      repairedPaidAmount,
-      recordedReceiptPaidAmount,
-      round2(existingSummary?.paid_amount || 0)
-    ));
+    const paidAmount = recordedReceiptPaidAmount > 0 || repairedPaidAmount > 0
+      ? round2(Math.max(repairedPaidAmount, recordedReceiptPaidAmount))
+      : round2(existingSummary?.paid_amount || 0);
     const dueAmount = round2(Math.max(quoteTotal - paidAmount, 0));
     const paymentStatus = dueAmount <= 0 ? 'paid' : (paidAmount > 0 ? 'partially_paid' : 'pending');
 

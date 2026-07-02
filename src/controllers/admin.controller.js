@@ -1895,12 +1895,12 @@ exports.getProjectDetails = async (req, res) => {
       db.sequelize.query(
         `
           SELECT
-            fip.finance_invoice_payment_id,
             fip.payment_id,
-            fip.amount,
-            fip.status,
-            fip.paid_at,
-            fip.created_at,
+            MIN(fip.finance_invoice_payment_id) AS finance_invoice_payment_id,
+            MAX(fip.amount) AS amount,
+            'paid' AS status,
+            MIN(fip.paid_at) AS paid_at,
+            MIN(fip.created_at) AS created_at,
             p.total_amount,
             p.status AS payment_status,
             p.created_at AS payment_created_at
@@ -1910,7 +1910,12 @@ exports.getProjectDetails = async (req, res) => {
           WHERE fip.booking_id = :bookingId
             AND fip.payment_id IS NOT NULL
             AND fip.status = 'paid'
-          ORDER BY COALESCE(fip.paid_at, p.created_at, fip.created_at) ASC, fip.finance_invoice_payment_id ASC
+          GROUP BY
+            fip.payment_id,
+            p.total_amount,
+            p.status,
+            p.created_at
+          ORDER BY COALESCE(MIN(fip.paid_at), p.created_at, MIN(fip.created_at)) ASC, MIN(fip.finance_invoice_payment_id) ASC
         `,
         {
           replacements: { bookingId: projectJson.stream_project_booking_id },

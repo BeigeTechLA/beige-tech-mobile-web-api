@@ -197,9 +197,10 @@ const fetchStripePaymentReceiptRowsForBooking = async ({ bookingId }) => {
           p.payment_id,
           p.stripe_payment_intent_id,
           p.stripe_charge_id,
+          MAX(fip.amount) AS receipt_amount,
           p.total_amount,
           p.status,
-          COALESCE(fip.paid_at, p.created_at) AS created_at
+          MIN(COALESCE(fip.paid_at, p.created_at)) AS created_at
         FROM finance_invoice_payments fip
         INNER JOIN payment_transactions p
           ON p.payment_id = fip.payment_id
@@ -207,7 +208,13 @@ const fetchStripePaymentReceiptRowsForBooking = async ({ bookingId }) => {
           AND fip.payment_id IS NOT NULL
           AND fip.status = 'paid'
           AND p.status = 'succeeded'
-        ORDER BY COALESCE(fip.paid_at, p.created_at) ASC, fip.finance_invoice_payment_id ASC
+        GROUP BY
+          p.payment_id,
+          p.stripe_payment_intent_id,
+          p.stripe_charge_id,
+          p.total_amount,
+          p.status
+        ORDER BY MIN(COALESCE(fip.paid_at, p.created_at)) ASC, p.payment_id ASC
       `,
       {
         replacements: { bookingId: parsedBookingId },
@@ -2801,14 +2808,19 @@ exports.getStripeInvoicePdf = async (req, res) => {
         bookingId: parsedBookingId
       });
       const totalStripeHistoryAmount = stripePaymentHistoryRows.reduce((sum, payment) => {
-        const amount = Number(payment?.total_amount || 0);
+        const amount = Number(payment?.receipt_amount || payment?.total_amount || 0);
         return sum + (Number.isFinite(amount) ? amount : 0);
       }, 0);
+      const stripePaymentIds = new Set(
+        stripePaymentHistoryRows
+          .map((payment) => Number(payment.payment_id))
+          .filter((paymentId) => Number.isFinite(paymentId) && paymentId > 0)
+      );
 
       if (stripePaymentHistoryRows.length > 0) {
         stripePaymentHistoryRows.forEach((payment) => {
           const paymentId = Number(payment.payment_id);
-          const amount = Number(payment.total_amount || 0);
+          const amount = Number(payment.receipt_amount || payment.total_amount || 0);
           if (!Number.isFinite(paymentId) || paymentId <= 0 || !Number.isFinite(amount) || amount <= 0) return;
 
           manualHistory.push({
@@ -2830,7 +2842,10 @@ exports.getStripeInvoicePdf = async (req, res) => {
       }
 
       const remainingOnlinePaidAmount = Math.max(nonManualPaidAmount - totalStripeHistoryAmount, 0);
-      if (remainingOnlinePaidAmount > 0.009) {
+      if (
+        remainingOnlinePaidAmount > 0.009 &&
+        (!booking.payment_id || !stripePaymentIds.has(Number(booking.payment_id)))
+      ) {
         manualHistory.push({
           method: 'Online Payment',
           date: formatInvoiceDate(paymentSummary?.updated_at || new Date()),
