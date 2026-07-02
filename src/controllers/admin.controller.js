@@ -3177,6 +3177,11 @@ exports.getAllProjectDetails = async (req, res) => {
     let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment, production_filter, summary_only } = req.query;
     const today = new Date();
     const noPagination = !limit && !page;
+    const requestUserId = Number(req.user?.userId || req.user?.id || req.userId);
+    const requestUserRole = String(req.user?.userRole || req.userRole || '').toLowerCase().trim();
+    const clientProjectFilter = requestUserRole === 'client' && Number.isInteger(requestUserId) && requestUserId > 0
+      ? { user_id: requestUserId }
+      : {};
 
     let pageNumber = null, pageSize = null, offset = null;
     if (!noPagination) {
@@ -3311,6 +3316,7 @@ exports.getAllProjectDetails = async (req, res) => {
 
     const paidOnlyFilter = {
       is_active: 1,
+      ...clientProjectFilter,
       [Sequelize.Op.or]: [
         { payment_id: { [Sequelize.Op.ne]: null } },
         ...(bookedBookingIds.length > 0
