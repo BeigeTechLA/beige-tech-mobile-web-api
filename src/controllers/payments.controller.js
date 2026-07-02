@@ -1227,18 +1227,9 @@ async function processStripePaidWebhookEvent(event, req = {}) {
 
     await db.stream_project_booking.update({
       is_draft: 0,
-      payment_id: payment.payment_id,
-      payment_completed_at: new Date(),
       ...(stripeInvoice?.id ? { stripe_invoice_id: stripeInvoice.id } : {})
     }, {
       where: { stream_project_booking_id: booking_id },
-      transaction
-    });
-
-    await db.sales_leads.update({
-      lead_status: 'booked'
-    }, {
-      where: { booking_id: booking_id },
       transaction
     });
 
@@ -1259,17 +1250,55 @@ async function processStripePaidWebhookEvent(event, req = {}) {
       transaction
     });
 
-    await ensureProjectAfterPayment({
+    await ensureInvoicePaymentReceiptLink({
+      booking,
       bookingId: booking_id,
-      transaction,
-      initiatedByUserId: booking.user_id || null,
-      ipAddress: req.ip || req.connection?.remoteAddress,
-      userAgent: req.headers?.['user-agent']
+      payment,
+      amount: amountPaid,
+      isFullyPaid: false,
+      transaction
     });
-    await syncExternalWorkspaceAfterPayment(booking);
+
+    const reconciledPaymentState = await reconcileBookingPaymentSummaryFromReceipts({
+      booking,
+      bookingId: booking_id,
+      salesQuoteId,
+      latestPaymentId: payment.payment_id,
+      transaction
+    });
+    const isFullyPaidAfterWebhook =
+      reconciledPaymentState.isPaid || reconciledPaymentState.dueAmount <= 0.009;
+
+    let projectSync = null;
+    if (isFullyPaidAfterWebhook) {
+      projectSync = await ensureProjectAfterPayment({
+        bookingId: booking_id,
+        transaction,
+        initiatedByUserId: booking.user_id || null,
+        ipAddress: req.ip || req.connection?.remoteAddress,
+        userAgent: req.headers?.['user-agent']
+      });
+      await syncExternalWorkspaceAfterPayment(booking);
+    }
 
     await transaction.commit();
-    console.log(`Webhook: booking ${booking_id} marked as paid`);
+    console.log(`Webhook: booking ${booking_id} payment summary updated`, {
+      paid_amount: reconciledPaymentState.paidAmount,
+      due_amount: reconciledPaymentState.dueAmount,
+      payment_status: reconciledPaymentState.paymentStatus
+    });
+
+    if (!isFullyPaidAfterWebhook) {
+      return {
+        received: true,
+        payment_id: payment.payment_id,
+        booking_id,
+        payment_status: reconciledPaymentState.paymentStatus,
+        paid_amount: reconciledPaymentState.paidAmount,
+        due_amount: reconciledPaymentState.dueAmount,
+        partial_payment: true
+      };
+    }
 
     const lead = await db.sales_leads.findOne({
       where: { booking_id }
@@ -1283,8 +1312,31 @@ async function processStripePaidWebhookEvent(event, req = {}) {
 
     const guestEmail = booking.guest_email || user?.email || lead?.guest_email || '';
     const clientName = user?.name || lead?.client_name || '';
-    const phoneNumber = user?.phone_number || lead?.phone || '';
 
+    if (guestEmail) {
+      try {
+        await sendBookingConfirmationEmail({
+          booking,
+          clientName,
+          guestEmail,
+          payment,
+          projectSync,
+          externalWorkspaceSync: null
+        });
+      } catch (emailError) {
+        console.error(`Webhook: failed to send confirmation email for booking ${booking_id}:`, emailError);
+      }
+    }
+
+    try {
+      await financeService.syncBookingFinance(booking_id, {
+        userId: booking.user_id || null
+      });
+    } catch (financeError) {
+      console.error(`Webhook: failed to sync finance for booking ${booking_id}:`, financeError);
+    }
+
+    const phoneNumber = user?.phone_number || lead?.phone || '';
     emailService.sendPaymentSuccessSalesNotification({
       guestEmail: guestEmail || 'Unknown Client',
       email: user?.email || guestEmail,
@@ -1312,7 +1364,14 @@ async function processStripePaidWebhookEvent(event, req = {}) {
     notifyAssignedCreatorsAfterPayment(booking_id)
       .catch(err => console.error('Assigned Creator Notification Error:', err));
 
-    return { received: true };
+    return {
+      received: true,
+      payment_id: payment.payment_id,
+      booking_id,
+      payment_status: reconciledPaymentState.paymentStatus,
+      paid_amount: reconciledPaymentState.paidAmount,
+      due_amount: reconciledPaymentState.dueAmount
+    };
   } catch (dbError) {
     await transaction.rollback();
     throw dbError;
@@ -3335,300 +3394,8 @@ exports.handleStripeWebhook = async (req, res) => {
   }
 
   try {
-    if (event.type !== 'invoice.paid' && event.type !== 'payment_intent.succeeded') {
-      return res.status(200).json({ received: true });
-    }
-
-    const dataObject = event.data.object;
-    let booking_id = null;
-    let paymentIntentId = null;
-    let stripeInvoice = null;
-    let invoiceMetadata = {};
-
-    if (event.type === 'payment_intent.succeeded') {
-      const bookingIdRaw = dataObject.metadata?.booking_id;
-      booking_id = bookingIdRaw ? parseInt(bookingIdRaw, 10) : null;
-      paymentIntentId = dataObject.id;
-      invoiceMetadata = dataObject.metadata || {};
-
-      // Fallback/source lookup and paid invoice capture.
-      if (dataObject.invoice) {
-        try {
-          const invoiceId = typeof dataObject.invoice === 'string'
-            ? dataObject.invoice
-            : dataObject.invoice.id;
-          if (invoiceId) {
-            const linkedInvoice = await stripe.invoices.retrieve(invoiceId);
-            stripeInvoice = linkedInvoice;
-            invoiceMetadata = linkedInvoice.metadata || invoiceMetadata;
-            if (!booking_id || Number.isNaN(booking_id)) {
-              const invoiceBookingIdRaw = linkedInvoice.metadata?.booking_id;
-              booking_id = invoiceBookingIdRaw ? parseInt(invoiceBookingIdRaw, 10) : null;
-            }
-          }
-        } catch (invoiceLookupError) {
-          console.warn(`Webhook payment_intent.succeeded: failed to fetch linked invoice metadata: ${invoiceLookupError.message}`);
-        }
-      }
-    } else if (event.type === 'invoice.paid') {
-      stripeInvoice = dataObject;
-      invoiceMetadata = dataObject.metadata || {};
-      const bookingIdRaw = dataObject.metadata?.booking_id;
-      booking_id = bookingIdRaw ? parseInt(bookingIdRaw, 10) : null;
-      paymentIntentId = typeof dataObject.payment_intent === 'string'
-        ? dataObject.payment_intent
-        : dataObject.payment_intent?.id;
-    }
-
-    if (!booking_id || Number.isNaN(booking_id)) {
-      console.log(`Webhook ${event.type} ignored: missing metadata.booking_id`);
-      return res.status(200).json({ received: true });
-    }
-
-    const transaction = await db.sequelize.transaction();
-
-    try {
-      if (paymentIntentId) {
-        const existing = await db.payment_transactions.findOne({
-          where: { stripe_payment_intent_id: paymentIntentId },
-          transaction
-        });
-
-        if (existing) {
-          await transaction.rollback();
-          console.log(`Webhook: payment already processed for booking ${booking_id}`);
-          return res.status(200).json({ received: true, duplicate: true });
-        }
-      } else {
-        console.log(`Webhook ${event.type}: no payment intent id for booking ${booking_id}, continuing with booking-level idempotency`);
-      }
-
-      const booking = await db.stream_project_booking.findByPk(booking_id, {
-        transaction,
-        lock: transaction.LOCK.UPDATE
-      });
-      if (!booking) {
-        await transaction.rollback();
-        console.log(`Webhook: booking ${booking_id} not found`);
-        return res.status(200).json({ received: true, booking_found: false });
-      }
-
-      const paymentSource = await resolvePaymentSourceForBooking({
-        bookingId: booking_id,
-        currentSource: invoiceMetadata.payment_source,
-        metadata: invoiceMetadata,
-        transaction
-      });
-
-      // Booking-level idempotency: do not create a second payment for an already paid booking.
-      if (booking.payment_id || booking.is_completed === 1) {
-        const additionalInvoiceMarkedPaid = await markAdditionalQuoteInvoiceAsPaid({
-          bookingId: booking_id,
-          stripeInvoice,
-          paymentIntentId,
-          paymentMetadata: invoiceMetadata || {},
-          transaction
-        });
-
-        if (additionalInvoiceMarkedPaid) {
-          await transaction.commit();
-          console.log(`Webhook: additional invoice marked paid for booking ${booking_id}`);
-          return res.status(200).json({ received: true, additional_invoice_paid: true });
-        }
-
-        await transaction.rollback();
-        console.log(`Webhook: booking ${booking_id} already marked paid`);
-        return res.status(200).json({ received: true, booking_already_paid: true });
-      }
-
-      let validCreatorId = null;
-      if (booking.creator_id) {
-        const creator = await db.crew_members.findByPk(booking.creator_id, { transaction });
-        if (creator) validCreatorId = booking.creator_id;
-      }
-      if (!validCreatorId) {
-        const assigned = await db.assigned_crew.findOne({
-          where: { project_id: booking_id },
-          transaction
-        });
-        if (assigned) validCreatorId = assigned.crew_member_id;
-      }
-      if (!validCreatorId) {
-        const firstCreator = await db.crew_members.findOne({
-          attributes: ['crew_member_id'],
-          transaction
-        });
-        validCreatorId = firstCreator ? firstCreator.crew_member_id : null;
-      }
-      if (!validCreatorId) {
-        throw new Error(`Cannot process webhook for booking ${booking_id}: no valid creator found`);
-      }
-
-      const amountInCents =
-        dataObject.amount_paid ?? dataObject.amount_received ?? dataObject.amount ?? 0;
-      const amountPaid = parseFloat((amountInCents / 100).toFixed(2));
-
-      const chargeId =
-        dataObject.charge ||
-        dataObject.latest_charge ||
-        dataObject.charges?.data?.[0]?.id ||
-        null;
-
-      const finalShootDate = booking.shoot_date || booking.event_date || new Date();
-      const finalLocation = booking.event_location
-        ? (typeof booking.event_location === 'string'
-          ? booking.event_location
-          : JSON.stringify(booking.event_location))
-        : 'Stripe Webhook';
-
-      const bookingHours = Number(booking.shoot_hours || booking.duration_hours || 0);
-      const canDeferHours =
-        paymentSource === PAYMENT_SOURCE.QUOTE_INVOICE ||
-        paymentSource === PAYMENT_SOURCE.ADDITIONAL_INVOICE;
-
-      if ((!Number.isFinite(bookingHours) || bookingHours <= 0) && !canDeferHours) {
-        throw new Error(`Cannot process webhook for booking ${booking_id}: booking duration is required for ${paymentSource}`);
-      }
-
-      const paymentTransactionHours = Number.isFinite(bookingHours) && bookingHours > 0
-        ? bookingHours
-        : null;
-      const paymentNotes = [
-        booking.special_requests || null,
-        paymentTransactionHours === null
-          ? 'Invoice paid before schedule/duration was finalized; payment transaction hours left empty.'
-          : null
-      ].filter(Boolean).join('\n') || null;
-
-      const payment = await db.payment_transactions.create({
-        stripe_payment_intent_id: paymentIntentId || null,
-        stripe_charge_id: chargeId,
-        creator_id: validCreatorId,
-        user_id: booking.user_id || null,
-        guest_email: dataObject.customer_email || dataObject.receipt_email || booking.guest_email || null,
-        payment_source: paymentSource,
-        hours: paymentTransactionHours,
-        hourly_rate: 0,
-        cp_cost: 0,
-        equipment_cost: 0,
-        subtotal: amountPaid,
-        beige_margin_percent: 0,
-        beige_margin_amount: 0,
-        total_amount: amountPaid,
-        shoot_date: finalShootDate,
-        location: finalLocation,
-        shoot_type: booking.shoot_type || null,
-        notes: paymentNotes,
-        status: 'succeeded'
-      }, { transaction });
-
-      await db.stream_project_booking.update({
-        // is_completed: 1,
-        is_draft: 0,
-        payment_id: payment.payment_id,
-        payment_completed_at: new Date(),
-        ...(stripeInvoice?.id ? { stripe_invoice_id: stripeInvoice.id } : {})
-      }, {
-        where: { stream_project_booking_id: booking_id },
-        transaction
-      });
-
-      await db.sales_leads.update({
-        lead_status: 'booked'
-      }, {
-        where: { booking_id: booking_id },
-        transaction
-      });
-
-      const salesQuoteId = await markConvertedSalesQuoteAsPaid({
-        bookingId: booking_id,
-        paymentId: payment.payment_id,
-        paymentIntentId,
-        paidAmount: amountPaid,
-        transaction
-      });
-
-      await saveStripePaymentSummary({
-        bookingId: booking_id,
-        salesQuoteId,
-        amountPaid,
-        transaction
-      });
-      
-       await ensureProjectAfterPayment({
-        bookingId: booking_id,
-        transaction,
-        initiatedByUserId: booking.user_id || null,
-        ipAddress: req.ip || req.connection?.remoteAddress,
-        userAgent: req.headers['user-agent'],
-      });
-      await syncExternalWorkspaceAfterPayment(booking);
-
-      await transaction.commit();
-      console.log(`Webhook: booking ${booking_id} marked as paid`);
-
-      try {
-        await ensureProjectAfterPayment({
-          bookingId: booking_id,
-          initiatedByUserId: booking.user_id || null,
-          ipAddress: req.ip || req.connection?.remoteAddress,
-          userAgent: req.headers['user-agent'],
-        });
-        await syncExternalWorkspaceAfterPayment(booking);
-        await financeService.syncBookingFinance(booking_id, {
-          userId: booking.user_id || null
-        });
-      } catch (postPaymentError) {
-        console.error('Webhook post-payment sync failed:', postPaymentError.message);
-      }
-      
-      const lead = await db.sales_leads.findOne({
-        where: { booking_id }
-      });
-
-      const user = booking.user_id
-        ? await db.users.findByPk(booking.user_id, {
-          attributes: ['name', 'email', 'phone_number']
-        })
-        : null;
-
-      const guestEmail = booking.guest_email || user?.email || lead?.guest_email || '';
-      const clientName = user?.name || lead?.client_name || '';
-      const phoneNumber = user?.phone_number || lead?.phone || '';
-
-      // Send Sales Notification Email
-      emailService.sendPaymentSuccessSalesNotification({
-        guestEmail: guestEmail || 'Unknown Client',
-        email: user?.email || guestEmail,
-        clientName,
-        phone_number: phoneNumber,
-        amount: amountPaid, // or totalAmount
-        shootType: booking.shoot_type || 'Shoot',
-        shoot_date: booking.shoot_date || booking.event_date,
-        startTime: booking.start_time,
-        endTime: booking.end_time,
-        editsNeeded: booking.edits_needed ?? lead?.edits_needed,
-        paymentIntentId
-      }).catch(err => console.error('Sales Notification Error:', err));
-
-      const webhookPaymentMethod =
-        dataObject.payment_method_details?.type ||
-        dataObject.payment_method_types?.[0] ||
-        'card';
-      sendBookingConfirmationForBooking({
-        bookingId: booking_id,
-        amountPaid,
-        paymentMethod: webhookPaymentMethod,
-        transactionId: paymentIntentId
-      }).catch(err => console.error('Booking Confirmation Email Error:', err));
-      notifyAssignedCreatorsAfterPayment(booking_id)
-        .catch(err => console.error('Assigned Creator Notification Error:', err));
-    } catch (dbError) {
-      await transaction.rollback();
-      throw dbError;
-    }
-
-    return res.status(200).json({ received: true });
+    const result = await processStripePaidWebhookEvent(event, req);
+    return res.status(200).json(result || { received: true });
   } catch (error) {
     console.error('Webhook processing error:', error);
     return res.status(500).send('Internal Server Error');
