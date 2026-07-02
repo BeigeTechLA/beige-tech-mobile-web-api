@@ -2803,8 +2803,9 @@ exports.getLeadById = async (req, res) => {
       const baseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
       
       if (latestLink.link_token) {
-        let fullUrl = `${baseUrl}/payment-link/${latestLink.link_token}`;
-        if (attachedDiscount && attachedDiscount.code) fullUrl += `?discount=${attachedDiscount.code}`;
+        const fullUrl = new URL(`${String(baseUrl).replace(/\/+$/, '')}/payment-link/${latestLink.link_token}`);
+        if (attachedDiscount && attachedDiscount.code) fullUrl.searchParams.set('discount', attachedDiscount.code);
+        if (latestLink.requested_amount) fullUrl.searchParams.set('amount', String(latestLink.requested_amount));
         const now = new Date();
         const expiryDate = latestLink.expires_at ? new Date(latestLink.expires_at) : null;
         const requestedAmount = latestLink.requested_amount ? Number(latestLink.requested_amount) : null;
@@ -2826,7 +2827,7 @@ exports.getLeadById = async (req, res) => {
           summaryDueForActiveLink > 0.009;
         active_payment_link = {
           payment_link_id: latestLink.payment_link_id || latestLink.id,
-          full_url: fullUrl,
+          full_url: fullUrl.toString(),
           token: latestLink.link_token,
           requested_amount: requestedAmount,
           expires_at: latestLink.expires_at,
@@ -4655,13 +4656,14 @@ exports.getClientLeadById = async (req, res) => {
       const baseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
 
       if (latestLink.link_token) {
-        let fullUrl = `${baseUrl}/payment-link/${latestLink.link_token}`;
-        if (attachedDiscount && attachedDiscount.code) fullUrl += `?discount=${attachedDiscount.code}`;
+        const fullUrl = new URL(`${String(baseUrl).replace(/\/+$/, '')}/payment-link/${latestLink.link_token}`);
+        if (attachedDiscount && attachedDiscount.code) fullUrl.searchParams.set('discount', attachedDiscount.code);
+        if (latestLink.requested_amount) fullUrl.searchParams.set('amount', String(latestLink.requested_amount));
         const now = new Date();
         const expiryDate = latestLink.expires_at ? new Date(latestLink.expires_at) : null;
         active_payment_link = {
           payment_link_id: latestLink.payment_link_id || latestLink.id,
-          full_url: fullUrl,
+          full_url: fullUrl.toString(),
           token: latestLink.link_token,
           requested_amount: latestLink.requested_amount ? Number(latestLink.requested_amount) : null,
           expires_at: latestLink.expires_at,

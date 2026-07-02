@@ -1603,7 +1603,8 @@ exports.generatePaymentLink = async (req, res) => {
     // 7. Build final payment URL
     const paymentUrl = paymentLinksService.buildPaymentUrl(
       token,
-      discountCode ? discountCode.code : null
+      discountCode ? discountCode.code : null,
+      validatedRequestedAmount
     );
 
     // 8. Update lead status if associated with lead
@@ -1721,7 +1722,12 @@ exports.sendPaymentLinkEmail = async (req, res) => {
       });
     }
 
-    const paymentUrl = paymentLinksService.buildPaymentUrl(link.link_token);
+    const linkRequestedAmount = normalizeRequestedPaymentAmount(link.requested_amount);
+    const paymentUrl = paymentLinksService.buildPaymentUrl(
+      link.link_token,
+      null,
+      linkRequestedAmount
+    );
     const formattedShootType = emailService.formatShootTypes(
       link.booking.shoot_type || link.booking.event_type || 'Shoot'
     );
@@ -1734,7 +1740,6 @@ exports.sendPaymentLinkEmail = async (req, res) => {
       bookingId: link.booking.stream_project_booking_id,
       quoteTotal: link.booking.primary_quote?.total || 0
     });
-    const linkRequestedAmount = normalizeRequestedPaymentAmount(link.requested_amount);
     const proposedAmount = linkRequestedAmount
       ? linkRequestedAmount
       : hasApprovedAdditionalAmount
@@ -1918,7 +1923,7 @@ exports.validatePaymentLink = async (req, res) => {
         { 
           model: stream_project_booking, 
           as: 'booking', 
-          attributes: ['stream_project_booking_id', 'payment_id'] 
+          attributes: ['stream_project_booking_id', 'payment_id', 'is_completed'] 
         },
         { 
           model: discount_codes, 
@@ -1944,6 +1949,23 @@ exports.validatePaymentLink = async (req, res) => {
     const hasApprovedAdditionalAmount =
       Number(convertedQuoteContexts.additionalInvoiceContext?.additionalAmount || 0) > 0 &&
       additionalApprovalStatus === 'approved';
+    const paymentState = paymentLink.booking
+      ? await bookingPaymentSummaryService.resolveBookingPaymentState({
+          bookingId: paymentLink.booking.stream_project_booking_id
+        })
+      : { hasSummary: false, isPaid: false, dueAmount: 0, payableAmount: 0 };
+    const isFullySettledBySummary =
+      paymentState.hasSummary &&
+      (paymentState.isPaid || Number(paymentState.dueAmount || 0) <= 0.009);
+    const bookingMarkedPaid = Boolean(
+      paymentLink.booking?.payment_id ||
+      paymentLink.booking?.is_completed === 1
+    );
+    const shouldTreatBookingAsPaid = hasApprovedAdditionalAmount
+      ? false
+      : paymentState.hasSummary
+        ? isFullySettledBySummary
+        : bookingMarkedPaid;
 
     if (paymentLink.is_used === 1) {
       return res.status(200).json({
@@ -1954,7 +1976,7 @@ exports.validatePaymentLink = async (req, res) => {
       });
     }
 
-    if (paymentLink.booking && paymentLink.booking.payment_id && !hasApprovedAdditionalAmount) {
+    if (shouldTreatBookingAsPaid && !hasApprovedAdditionalAmount) {
       await paymentLink.update({ is_used: 1 });
 
       return res.status(200).json({
@@ -2002,6 +2024,15 @@ exports.validatePaymentLink = async (req, res) => {
         booking_id: paymentLink.booking_id,
         discount_code: paymentLink.discount_code ? paymentLink.discount_code.code : null,
         requested_amount: paymentLink.requested_amount ? Number(paymentLink.requested_amount) : null,
+        payment_summary: paymentState.hasSummary
+          ? {
+              quote_total: paymentState.quoteTotal,
+              paid_amount: paymentState.paidAmount,
+              due_amount: paymentState.dueAmount,
+              payable_amount: paymentState.payableAmount,
+              payment_status: paymentState.paymentStatus
+            }
+          : null,
         expires_at: paymentLink.expires_at
       }
     });
