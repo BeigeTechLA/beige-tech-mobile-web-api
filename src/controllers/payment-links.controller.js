@@ -1492,23 +1492,31 @@ exports.generatePaymentLink = async (req, res) => {
       });
     }
 
+    const approvedAdditionalAmount = Number(convertedQuoteContexts.additionalInvoiceContext?.additionalAmount || 0);
+    const pricingForAmount = hasApprovedAdditionalAmount
+      ? { total: approvedAdditionalAmount }
+      : await calculateLeadPricing(booking);
+    const quoteTotal = Number(pricingForAmount?.total || booking.budget || booking.total_amount || 0);
+    const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+      bookingId: booking_id,
+      quoteTotal
+    });
+    const maxPayableAmount = hasApprovedAdditionalAmount
+      ? approvedAdditionalAmount
+      : paymentState.hasSummary
+        ? Number(paymentState.payableAmount || paymentState.dueAmount || 0)
+        : quoteTotal;
+    const isFullySettledBySummary =
+      paymentState.hasSummary &&
+      (paymentState.isPaid || Number(paymentState.dueAmount || 0) <= 0.009);
+    const shouldTreatBookingAsPaid = hasApprovedAdditionalAmount
+      ? false
+      : paymentState.hasSummary
+        ? isFullySettledBySummary
+        : bookingMarkedPaid;
+
     let validatedRequestedAmount = null;
     if (requestedPaymentAmount !== null) {
-      const approvedAdditionalAmount = Number(convertedQuoteContexts.additionalInvoiceContext?.additionalAmount || 0);
-      const pricingForAmount = hasApprovedAdditionalAmount
-        ? { total: approvedAdditionalAmount }
-        : await calculateLeadPricing(booking);
-      const quoteTotal = Number(pricingForAmount?.total || booking.budget || booking.total_amount || 0);
-      const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
-        bookingId: booking_id,
-        quoteTotal
-      });
-      const maxPayableAmount = hasApprovedAdditionalAmount
-        ? approvedAdditionalAmount
-        : paymentState.hasSummary
-          ? Number(paymentState.payableAmount || paymentState.dueAmount || 0)
-          : quoteTotal;
-
       if (!Number.isFinite(maxPayableAmount) || maxPayableAmount <= 0) {
         return res.status(400).json({
           success: false,
@@ -1526,7 +1534,7 @@ exports.generatePaymentLink = async (req, res) => {
       validatedRequestedAmount = requestedPaymentAmount;
     }
 
-    if (bookingMarkedPaid && !hasApprovedAdditionalAmount) {
+    if (shouldTreatBookingAsPaid && !hasApprovedAdditionalAmount) {
       if (convertedQuoteContexts.additionalInvoiceContext) {
         return res.status(409).json({
           success: false,
@@ -1548,6 +1556,17 @@ exports.generatePaymentLink = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'Payment for this booking has already been completed. No new link is required.'
+      });
+    }
+
+    if (
+      !hasApprovedAdditionalAmount &&
+      paymentState.hasSummary &&
+      (!Number.isFinite(maxPayableAmount) || maxPayableAmount <= 0.009)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'No outstanding amount is available for this booking.'
       });
     }
 
