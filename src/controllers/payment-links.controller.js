@@ -25,6 +25,19 @@ const buildManualInvoiceFrontendUrl = (bookingId, { download = false } = {}) => 
   return url.toString();
 };
 
+const buildBookingCheckoutFrontendUrl = (bookingId, amount = null) => {
+  const frontendBaseUrl = getFrontendBaseUrl();
+  const url = new URL(`${frontendBaseUrl}/search-results/payment`);
+  url.searchParams.set('shootId', String(bookingId));
+
+  const numericAmount = Number(amount);
+  if (Number.isFinite(numericAmount) && numericAmount > 0.009) {
+    url.searchParams.set('amount', numericAmount.toFixed(2));
+  }
+
+  return url.toString();
+};
+
 const buildReceiptFrontendUrl = ({ bookingId, manualPaymentId = null, paymentId = null, download = false }) => {
   const frontendBaseUrl = getFrontendBaseUrl();
   const url = new URL(`${frontendBaseUrl}/beige_invoice/${encodeURIComponent(String(bookingId))}`);
@@ -243,6 +256,7 @@ const resolveHostedPaymentUrlForInvoice = async ({
 }) => {
   const pendingAmount = Number(paymentState?.dueAmount ?? pricingData?.total ?? 0);
   if (!Number.isFinite(pendingAmount) || pendingAmount <= 0.009) return null;
+  const fallbackCheckoutUrl = buildBookingCheckoutFrontendUrl(bookingId, pendingAmount);
 
   const hostedPaymentPricingData = buildOutstandingInvoicePricingData(pricingData, paymentState);
   const expectedPendingCents = Math.round(Number(hostedPaymentPricingData.total || pendingAmount) * 100);
@@ -274,10 +288,10 @@ const resolveHostedPaymentUrlForInvoice = async ({
         payment_amount_type: hostedPaymentPricingData.is_outstanding_balance ? 'remaining_balance' : 'full_balance'
       }
     });
-    return paymentInvoice?.hosted_invoice_url || null;
+    return paymentInvoice?.hosted_invoice_url || fallbackCheckoutUrl;
   } catch (error) {
     console.warn(`Could not create hosted payment invoice for booking ${bookingId}: ${error.message}`);
-    return null;
+    return fallbackCheckoutUrl;
   }
 };
 
