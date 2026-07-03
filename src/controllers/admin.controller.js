@@ -551,6 +551,7 @@ const buildExternalHeaders = ({ authHeader } = {}) => {
 const fetchExternalWorkspaceFiles = async (bookingId, phase, options = {}) => {
   const query = new URLSearchParams();
   if (phase) query.set('phase', phase);
+  if (options?.path) query.set('path', options.path);
 
   const url = `${EXTERNAL_FILE_MANAGER_API_BASE_URL}/workspace/${encodeURIComponent(String(bookingId))}/files${query.toString() ? `?${query.toString()}` : ''}`;
   const response = await fetch(url, {
@@ -598,6 +599,94 @@ const hasExternalWorkspaceFiles = async (bookingId, phase, options = {}) => {
     });
     return false;
   }
+};
+
+const STRICT_PRODUCTION_FILTERS = {
+  post_production_raw_footages: true,
+  post_production_edits: true,
+  post_production_final_deliverables: true,
+};
+
+const collectNumericIds = (value, output = new Set()) => {
+  if (value === null || value === undefined) return output;
+
+  if (Array.isArray(value)) {
+    value.forEach((entry) => collectNumericIds(entry, output));
+    return output;
+  }
+
+  if (typeof value === 'object') {
+    [
+      value.stream_project_booking_id,
+      value.stream_project_booking_ids,
+      value.booking_id,
+      value.booking_ids,
+      value.bookingId,
+      value.bookingIds,
+      value.project_id,
+      value.project_ids,
+      value.projectId,
+      value.projectIds,
+      value.shoot_id,
+      value.shoot_ids,
+      value.shootId,
+      value.shootIds,
+      value.orderId,
+      value.orderIds,
+      value.order_id,
+      value.order_ids,
+      value.id,
+      value._id,
+      value.metadata?.orderId,
+      value.metadata?.orderIds,
+      value.metadata?.stream_project_booking_id,
+      value.metadata?.stream_project_booking_ids,
+      value.metadata?.projectId,
+      value.metadata?.projectIds,
+      value.metadata?.bookingId,
+      value.metadata?.bookingIds,
+    ].forEach((entry) => collectNumericIds(entry, output));
+    return output;
+  }
+
+  const numericId = Number(String(value).trim());
+  if (Number.isFinite(numericId) && numericId > 0) output.add(numericId);
+  return output;
+};
+
+const fetchProductionFolderMatchedIds = async (productionFilter, options = {}) => {
+  const query = new URLSearchParams({ production_filter: productionFilter });
+  const url = `${EXTERNAL_FILE_MANAGER_API_BASE_URL}/production-folder-matches?${query.toString()}`;
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: buildExternalHeaders({ authHeader: options?.authHeader })
+  });
+
+  if (!response.ok) {
+    throw new Error(`External file manager production-folder-matches returned ${response.status}`);
+  }
+
+  const payload = await response.json();
+  const matchedPayload =
+    payload?.data?.matchedIds ||
+    payload?.data?.matched_ids ||
+    payload?.data?.ids ||
+    payload?.data?.bookingIds ||
+    payload?.data?.projectIds ||
+    payload?.data?.matches ||
+    payload?.data?.matchedRows ||
+    payload?.data?.items ||
+    payload?.data?.results ||
+    payload?.matchedIds ||
+    payload?.matched_ids ||
+    payload?.ids ||
+    payload?.matches ||
+    payload?.matchedRows ||
+    payload?.items ||
+    payload?.results ||
+    [];
+
+  return Array.from(collectNumericIds(matchedPayload));
 };
 
 const fetchExternalMeetingsByBookingIds = async (bookingIds = [], options = {}) => {
@@ -3491,6 +3580,27 @@ exports.getAllProjectDetails = async (req, res) => {
       };
     }
 
+    const normalizedProductionFilter = production_filter
+      ? String(production_filter).toLowerCase().trim()
+      : '';
+    const usesStrictProductionFolderFilter = Boolean(STRICT_PRODUCTION_FILTERS[normalizedProductionFilter]);
+    let strictProductionMatchedIds = [];
+
+    if (usesStrictProductionFolderFilter) {
+      strictProductionMatchedIds = await fetchProductionFolderMatchedIds(
+        normalizedProductionFilter,
+        { authHeader: req.headers?.authorization || null }
+      );
+
+      whereConditions = {
+        ...whereConditions,
+        [Sequelize.Op.and]: [
+          ...(whereConditions[Sequelize.Op.and] || []),
+          { stream_project_booking_id: { [Sequelize.Op.in]: strictProductionMatchedIds.length ? strictProductionMatchedIds : [-1] } }
+        ]
+      };
+    }
+
     const [ total_active, total_cancelled, total_completed, total_upcoming, total_draft, allEventMasterTypes ] = await Promise.all([
       stream_project_booking.count({ where: { ...whereConditions, is_cancelled: 0, is_completed: 0, is_draft: 0 } }),
       stream_project_booking.count({ where: { ...whereConditions, is_cancelled: 1 } }),
@@ -3514,6 +3624,14 @@ exports.getAllProjectDetails = async (req, res) => {
       const projects = projectRows.map((project) => ({
         project: typeof project.toJSON === 'function' ? project.toJSON() : project,
       }));
+
+      if (usesStrictProductionFolderFilter && process.env.NODE_ENV !== 'production') {
+        console.log('[admin/get-projects] production_filter', {
+          production_filter,
+          matchedCount: strictProductionMatchedIds.length,
+          returnedCount: projects.length
+        });
+      }
 
       return res.status(200).json({
         error: false,
@@ -3755,6 +3873,14 @@ exports.getAllProjectDetails = async (req, res) => {
     }
 
     const filteredTotalRecords = projectDetails.length;
+
+    if (usesStrictProductionFolderFilter && process.env.NODE_ENV !== 'production') {
+      console.log('[admin/get-projects] production_filter', {
+        production_filter,
+        matchedCount: strictProductionMatchedIds.length,
+        returnedCount: filteredTotalRecords
+      });
+    }
 
     return res.status(200).json({
       error: false,
