@@ -71,11 +71,11 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.STRING(64),
       allowNull: true
     },
-    start_date_time_utc: {
+    start_date_time: {
       type: DataTypes.STRING(50),
       allowNull: true
     },
-    end_date_time_utc: {
+    end_date_time: {
       type: DataTypes.STRING(50),
       allowNull: true
     },

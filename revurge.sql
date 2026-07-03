@@ -2543,5 +2543,5 @@ ALTER TABLE payment_links
 
 --03-07-26
 ALTER TABLE stream_project_booking
-MODIFY COLUMN start_date_time_utc VARCHAR(50) NULL,
-MODIFY COLUMN end_date_time_utc VARCHAR(50) NULL;
+  ADD COLUMN start_date_time VARCHAR(50) NULL,
+  ADD COLUMN end_date_time VARCHAR(50) NULL;

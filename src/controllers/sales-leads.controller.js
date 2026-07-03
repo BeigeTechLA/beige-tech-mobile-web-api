@@ -1485,8 +1485,8 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             start_time: start_time_final,
             end_time: end_time_final,
             time_zone: time_zone || null,
-            start_date_time_utc: startDateTimeUtc,
-            end_date_time_utc: endDateTimeUtc,
+            start_date_time: startDateTimeUtc,
+            end_date_time: endDateTimeUtc,
             duration_hours: totalDurationHours,
             event_location: location || null,
             event_latitude: latitude,
@@ -6322,8 +6322,8 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
   if (event_date) updateData.event_date = event_date;
   if (start_time_final) updateData.start_time = start_time_final;
   if (end_time_only) updateData.end_time = end_time_only;
-  if (startDateTimeUtc) updateData.start_date_time_utc = startDateTimeUtc;
-  if (endDateTimeUtc) updateData.end_date_time_utc = endDateTimeUtc;
+  if (startDateTimeUtc) updateData.start_date_time = startDateTimeUtc;
+  if (endDateTimeUtc) updateData.end_date_time = endDateTimeUtc;
   if (time_zone !== undefined) updateData.time_zone = time_zone || null;
 
   if (duration_hours != null)
@@ -6618,8 +6618,8 @@ async function updateBookingScheduleAndLocationCore({ booking, bookingId, payloa
   if (startTimeFinal) updateData.start_time = startTimeFinal;
   if (endTimeFinal) updateData.end_time = endTimeFinal;
   if (time_zone !== undefined) updateData.time_zone = time_zone || null;
-  if (startDateTimeUtc) updateData.start_date_time_utc = startDateTimeUtc;
-  if (endDateTimeUtc) updateData.end_date_time_utc = endDateTimeUtc;
+  if (startDateTimeUtc) updateData.start_date_time = startDateTimeUtc;
+  if (endDateTimeUtc) updateData.end_date_time = endDateTimeUtc;
   if (totalDurationHours != null) updateData.duration_hours = totalDurationHours;
 
   if (Object.keys(updateData).length > 0) {
