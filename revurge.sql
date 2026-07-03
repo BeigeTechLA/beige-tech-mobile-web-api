@@ -2540,3 +2540,8 @@ CREATE TABLE IF NOT EXISTS user_archive_history (
 
 ALTER TABLE payment_links
   ADD COLUMN IF NOT EXISTS requested_amount DECIMAL(10, 2) NULL AFTER discount_code_id;
+
+--03-07-26
+ALTER TABLE stream_project_booking
+MODIFY COLUMN start_date_time_utc VARCHAR(50) NULL,
+MODIFY COLUMN end_date_time_utc VARCHAR(50) NULL;

@@ -1354,6 +1354,7 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             client_name,
             startDate, 
             endDate,
+            start_date_time,
             start_date,
             start_time,
             end_time,
@@ -1378,6 +1379,8 @@ exports.trackEarlyBookingInterest = async (req, res) => {
         const normalizedGuestEmail = String(guest_email).trim().toLowerCase();
         const resolvedUserId = await resolveUserId(user_id, normalizedGuestEmail);
         const normalizedEstimatedDeliveryDate = normalizeDateOnlyInput(estimated_delivery_date);
+        const startDateTimeUtc = startDate || start_date_time || null;
+        const endDateTimeUtc = endDate || null;
 
         if (estimated_delivery_date && !normalizedEstimatedDeliveryDate) {
             return res.status(400).json({ success: false, message: 'estimated_delivery_date must be a valid date' });
@@ -1482,6 +1485,8 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             start_time: start_time_final,
             end_time: end_time_final,
             time_zone: time_zone || null,
+            start_date_time_utc: startDateTimeUtc,
+            end_date_time_utc: endDateTimeUtc,
             duration_hours: totalDurationHours,
             event_location: location || null,
             event_latitude: latitude,
@@ -6206,6 +6211,8 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
   const {
     content_type,
     shoot_type,
+    startDate,
+    endDate,
     start_date_time,
     start_date,
     start_time,
@@ -6227,6 +6234,8 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
     time_zone
   } = finalizeBody;
   const { latitude, longitude } = extractCoordinatesFromPayload(finalizeBody, location);
+  const startDateTimeUtc = startDate || start_date_time || null;
+  const endDateTimeUtc = endDate || null;
 
   /* -----------------------------
   Normalize booking days
@@ -6313,6 +6322,9 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
   if (event_date) updateData.event_date = event_date;
   if (start_time_final) updateData.start_time = start_time_final;
   if (end_time_only) updateData.end_time = end_time_only;
+  if (startDateTimeUtc) updateData.start_date_time_utc = startDateTimeUtc;
+  if (endDateTimeUtc) updateData.end_date_time_utc = endDateTimeUtc;
+  if (time_zone !== undefined) updateData.time_zone = time_zone || null;
 
   if (duration_hours != null)
     updateData.duration_hours = parseInt(duration_hours, 10);
@@ -6528,6 +6540,8 @@ async function updateBookingScheduleAndLocationCore({ booking, bookingId, payloa
     booking_type,
     booking_days,
     time_zone,
+    startDate,
+    endDate,
     start_date_time,
     start_date,
     start_time,
@@ -6535,6 +6549,8 @@ async function updateBookingScheduleAndLocationCore({ booking, bookingId, payloa
     duration_hours
   } = payload;
   const { latitude, longitude } = extractCoordinatesFromPayload(payload, location);
+  const startDateTimeUtc = startDate || start_date_time || null;
+  const endDateTimeUtc = endDate || null;
 
   let normalizedBookingDays = Array.isArray(booking_days) ? booking_days : [];
   normalizedBookingDays = normalizedBookingDays
@@ -6602,6 +6618,8 @@ async function updateBookingScheduleAndLocationCore({ booking, bookingId, payloa
   if (startTimeFinal) updateData.start_time = startTimeFinal;
   if (endTimeFinal) updateData.end_time = endTimeFinal;
   if (time_zone !== undefined) updateData.time_zone = time_zone || null;
+  if (startDateTimeUtc) updateData.start_date_time_utc = startDateTimeUtc;
+  if (endDateTimeUtc) updateData.end_date_time_utc = endDateTimeUtc;
   if (totalDurationHours != null) updateData.duration_hours = totalDurationHours;
 
   if (Object.keys(updateData).length > 0) {
@@ -6667,6 +6685,8 @@ exports.finalizeGuestBooking = async (req, res) => {
       content_type,
       shoot_type,
       event_type,
+      startDate,
+      endDate,
       start_date_time,
       start_date,
       start_time,
@@ -6714,6 +6734,8 @@ exports.finalizeGuestBooking = async (req, res) => {
         content_type,
         shoot_type,
         event_type,
+        startDate,
+        endDate,
         start_date_time,
         start_date,
         start_time,
@@ -6868,6 +6890,8 @@ exports.finalizeClientLeadBooking = async (req, res) => {
       content_type,
       shoot_type,
       event_type,
+      startDate,
+      endDate,
       start_date_time,
       start_date,
       start_time,
@@ -6935,6 +6959,8 @@ exports.finalizeClientLeadBooking = async (req, res) => {
         content_type,
         shoot_type,
         event_type,
+        startDate,
+        endDate,
         start_date_time,
         start_date,
         start_time,
@@ -7208,6 +7234,8 @@ exports.finalizeCreateDeal = async (req, res) => {
       content_type,
       shoot_type,
       event_type,
+      startDate,
+      endDate,
       start_date_time,
       start_date,
       start_time,
@@ -7432,6 +7460,8 @@ exports.finalizeCreateDeal = async (req, res) => {
         content_type,
         shoot_type,
         event_type,
+        startDate,
+        endDate,
         start_date_time,
         start_date,
         start_time,
