@@ -17,9 +17,12 @@ const https = require('https');
 const getFrontendBaseUrl = () =>
   String(process.env.FRONTEND_URL || 'http://localhost:3000').trim().replace(/\/+$/, '');
 
-const buildManualInvoiceFrontendUrl = (bookingId) => {
+const buildManualInvoiceFrontendUrl = (bookingId, { download = false } = {}) => {
   const frontendBaseUrl = getFrontendBaseUrl();
-  return `${frontendBaseUrl}/beige_invoice/${encodeURIComponent(String(bookingId))}?manual=1`;
+  const url = new URL(`${frontendBaseUrl}/beige_invoice/${encodeURIComponent(String(bookingId))}`);
+  url.searchParams.set('manual', '1');
+  if (download) url.searchParams.set('download', '1');
+  return url.toString();
 };
 
 const buildReceiptFrontendUrl = ({ bookingId, manualPaymentId = null, paymentId = null, download = false }) => {
@@ -2373,14 +2376,19 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
           payment_amount_type: payablePricingData.is_outstanding_balance ? 'remaining_balance' : 'full_balance'
         }
       });
-      invoiceDetails = buildInvoiceTemplateDetails(booking, payablePricingData, {
-        invoiceUrl: stripeInvoice.hosted_invoice_url,
-        invoicePdf: stripeInvoice.invoice_pdf,
+      const brandedInvoiceUrl = buildManualInvoiceFrontendUrl(parsedBookingId);
+      const brandedInvoicePdfUrl = buildManualInvoiceFrontendUrl(parsedBookingId, { download: true });
+      invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
+        invoiceUrl: brandedInvoiceUrl,
+        invoicePdf: brandedInvoicePdfUrl,
+        paymentUrl: stripeInvoice.hosted_invoice_url,
+        stripeInvoiceUrl: stripeInvoice.hosted_invoice_url,
+        stripeInvoicePdf: stripeInvoice.invoice_pdf,
         stripeInvoiceNumber: stripeInvoice.number,
         invoiceNumber: stripeInvoice.number,
-        totalAmount: payableTotalAmount,
+        totalAmount,
         isPaid: false,
-        isAdditionalPayment: Boolean(payablePricingData.is_outstanding_balance),
+        isAdditionalPayment: false,
         previouslyPaidAmount: payablePricingData.previously_paid_amount,
         revisedTotal: payablePricingData.original_total,
         additionalAmount: payableTotalAmount
