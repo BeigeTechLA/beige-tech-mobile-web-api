@@ -1856,7 +1856,7 @@ exports.getProjectDetails = async (req, res) => {
       : [];
 
     // 3. Fetch Transaction Total (from payment_transactions table)
-    const [paymentData, formSubmission, shootNotesCountMap, bookingPaymentSummary, manualPaymentRows] = await Promise.all([
+    const [paymentData, formSubmission, shootNotesCountMap, bookingPaymentSummary, manualPaymentRows, stripeReceiptRows] = await Promise.all([
       payment_transactions.findOne({
         where: { payment_id: projectJson.payment_id },
         attributes: ['payment_id', 'total_amount', 'status', 'created_at'],
@@ -1882,6 +1882,40 @@ exports.getProjectDetails = async (req, res) => {
           FROM booking_manual_payments
           WHERE booking_id = :bookingId
           ORDER BY created_at ASC, booking_manual_payment_id ASC
+        `,
+        {
+          replacements: { bookingId: projectJson.stream_project_booking_id },
+          type: QueryTypes.SELECT
+        }
+      ).catch((error) => {
+        const code = error?.original?.code || error?.parent?.code || error?.code;
+        if (code === 'ER_NO_SUCH_TABLE' || code === 'ER_BAD_TABLE_ERROR') return [];
+        throw error;
+      }),
+      db.sequelize.query(
+        `
+          SELECT
+            fip.payment_id,
+            MIN(fip.finance_invoice_payment_id) AS finance_invoice_payment_id,
+            MAX(fip.amount) AS amount,
+            'paid' AS status,
+            MIN(fip.paid_at) AS paid_at,
+            MIN(fip.created_at) AS created_at,
+            p.total_amount,
+            p.status AS payment_status,
+            p.created_at AS payment_created_at
+          FROM finance_invoice_payments fip
+          LEFT JOIN payment_transactions p
+            ON p.payment_id = fip.payment_id
+          WHERE fip.booking_id = :bookingId
+            AND fip.payment_id IS NOT NULL
+            AND fip.status = 'paid'
+          GROUP BY
+            fip.payment_id,
+            p.total_amount,
+            p.status,
+            p.created_at
+          ORDER BY COALESCE(MIN(fip.paid_at), p.created_at, MIN(fip.created_at)) ASC, MIN(fip.finance_invoice_payment_id) ASC
         `,
         {
           replacements: { bookingId: projectJson.stream_project_booking_id },
@@ -2161,7 +2195,40 @@ exports.getProjectDetails = async (req, res) => {
       });
     });
 
-    if (paymentData?.payment_id && Number(paymentData.total_amount || 0) > 0) {
+    const stripePaymentIdsInHistory = new Set();
+    (stripeReceiptRows || []).forEach((stripeReceipt) => {
+      const paymentId = Number(stripeReceipt.payment_id || 0);
+      if (!Number.isFinite(paymentId) || paymentId <= 0) return;
+      stripePaymentIdsInHistory.add(paymentId);
+      const normalizedStripeStatus = String(stripeReceipt.payment_status || stripeReceipt.status || '').trim().toLowerCase();
+      paymentHistory.push({
+        id: `stripe-${paymentId}`,
+        type: 'stripe',
+        receipt_number: `RCPT-${String(projectJson.stream_project_booking_id).padStart(6, '0')}-S${String(paymentId).padStart(3, '0')}`,
+        invoice_number: `INVBEIGE-S-${String(projectJson.stream_project_booking_id).padStart(4, '0')}-${String(paymentId).padStart(3, '0')}`,
+        method: 'Online Payment',
+        amount: Number(stripeReceipt.amount || stripeReceipt.total_amount || 0),
+        status: ['succeeded', 'success', 'completed', 'complete', 'paid'].includes(normalizedStripeStatus)
+          ? 'paid'
+          : (stripeReceipt.payment_status || stripeReceipt.status || 'paid'),
+        paid_at: stripeReceipt.paid_at || stripeReceipt.payment_created_at || stripeReceipt.created_at || null,
+        receipt_url: buildShootReceiptUrl({
+          bookingId: projectJson.stream_project_booking_id,
+          paymentId
+        }),
+        receipt_download_url: buildShootReceiptUrl({
+          bookingId: projectJson.stream_project_booking_id,
+          paymentId,
+          download: true
+        })
+      });
+    });
+
+    if (
+      paymentData?.payment_id &&
+      Number(paymentData.total_amount || 0) > 0 &&
+      !stripePaymentIdsInHistory.has(Number(paymentData.payment_id))
+    ) {
       const normalizedStripeStatus = String(paymentData.status || '').trim().toLowerCase();
       paymentHistory.push({
         id: `stripe-${paymentData.payment_id}`,
@@ -3199,6 +3266,11 @@ exports.getAllProjectDetails = async (req, res) => {
     let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment, production_filter, summary_only } = req.query;
     const today = new Date();
     const noPagination = !limit && !page;
+    const requestUserId = Number(req.user?.userId || req.user?.id || req.userId);
+    const requestUserRole = String(req.user?.userRole || req.userRole || '').toLowerCase().trim();
+    const clientProjectFilter = requestUserRole === 'client' && Number.isInteger(requestUserId) && requestUserId > 0
+      ? { user_id: requestUserId }
+      : {};
 
     let pageNumber = null, pageSize = null, offset = null;
     if (!noPagination) {
@@ -3333,6 +3405,7 @@ exports.getAllProjectDetails = async (req, res) => {
 
     const paidOnlyFilter = {
       is_active: 1,
+      ...clientProjectFilter,
       [Sequelize.Op.or]: [
         { payment_id: { [Sequelize.Op.ne]: null } },
         ...(bookedBookingIds.length > 0
@@ -12697,6 +12770,7 @@ exports.getUserRoleDetails = async (req, res) => {
         'email',
         'user_type',
         'created_at',
+        'updated_at',
         'is_active'
       ]
     });
@@ -12737,7 +12811,8 @@ exports.getUserRoleDetails = async (req, res) => {
           user_type_name: role ? role.user_role : null,
           is_active: user.is_active,
           status_label: user.is_active ? 'Active' : 'In-Active',
-          created_at: user.created_at
+          created_at: user.created_at,
+          updated_at:user.updated_at
         },
 
         role: role

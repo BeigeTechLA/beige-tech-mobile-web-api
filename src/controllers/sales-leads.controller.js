@@ -324,7 +324,24 @@ const hasExternalWorkspaceFiles = async (bookingId, phase) => {
 };
 
 async function getCustomQuoteFinancialDetails({ quoteId = null, bookingId = null }) {
-  if (!quoteId) return null;
+  if (!quoteId) {
+    if (!bookingId) return null;
+
+    const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+      bookingId
+    });
+
+    return paymentState.paymentSummary
+      ? {
+          latest_invoice: null,
+          additional_payment: null,
+          partial_payment: null,
+          reduced_payment: null,
+          credit_summary: null,
+          payment_summary: paymentState.paymentSummary
+        }
+      : null;
+  }
 
   const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
     bookingId,
@@ -1337,6 +1354,7 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             client_name,
             startDate, 
             endDate,
+            start_date_time,
             start_date,
             start_time,
             end_time,
@@ -1361,6 +1379,8 @@ exports.trackEarlyBookingInterest = async (req, res) => {
         const normalizedGuestEmail = String(guest_email).trim().toLowerCase();
         const resolvedUserId = await resolveUserId(user_id, normalizedGuestEmail);
         const normalizedEstimatedDeliveryDate = normalizeDateOnlyInput(estimated_delivery_date);
+        const startDateTimeUtc = startDate || start_date_time || null;
+        const endDateTimeUtc = endDate || null;
 
         if (estimated_delivery_date && !normalizedEstimatedDeliveryDate) {
             return res.status(400).json({ success: false, message: 'estimated_delivery_date must be a valid date' });
@@ -1465,6 +1485,8 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             start_time: start_time_final,
             end_time: end_time_final,
             time_zone: time_zone || null,
+            start_date_time: startDateTimeUtc,
+            end_date_time: endDateTimeUtc,
             duration_hours: totalDurationHours,
             event_location: location || null,
             event_latitude: latitude,
@@ -2773,6 +2795,12 @@ exports.getLeadById = async (req, res) => {
     let active_payment_link = null;
     const pLinks = leadJson.payment_links || leadJson.paymentLinks || [];
     const dCodes = leadJson.discount_codes || leadJson.discountCodes || [];
+    const summaryForActiveLink = customQuoteFinancials?.payment_summary || null;
+    const summaryPaidForActiveLink = Number(summaryForActiveLink?.paid_amount || 0);
+    const summaryDueForActiveLink = Number(summaryForActiveLink?.due_amount || 0);
+    const summaryUpdatedAtForActiveLink = summaryForActiveLink?.updated_at
+      ? new Date(summaryForActiveLink.updated_at)
+      : null;
 
     if (pLinks.length > 0) {
       const latestLink = [...pLinks].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
@@ -2780,16 +2808,35 @@ exports.getLeadById = async (req, res) => {
       const baseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
       
       if (latestLink.link_token) {
-        let fullUrl = `${baseUrl}/payment-link/${latestLink.link_token}`;
-        if (attachedDiscount && attachedDiscount.code) fullUrl += `?discount=${attachedDiscount.code}`;
+        const fullUrl = new URL(`${String(baseUrl).replace(/\/+$/, '')}/payment-link/${latestLink.link_token}`);
+        if (attachedDiscount && attachedDiscount.code) fullUrl.searchParams.set('discount', attachedDiscount.code);
+        if (latestLink.requested_amount) fullUrl.searchParams.set('amount', String(latestLink.requested_amount));
         const now = new Date();
         const expiryDate = latestLink.expires_at ? new Date(latestLink.expires_at) : null;
+        const requestedAmount = latestLink.requested_amount ? Number(latestLink.requested_amount) : null;
+        const latestLinkCreatedAt = latestLink.created_at ? new Date(latestLink.created_at) : null;
+        const summaryUpdatedAfterLink =
+          summaryUpdatedAtForActiveLink &&
+          latestLinkCreatedAt &&
+          !Number.isNaN(summaryUpdatedAtForActiveLink.getTime()) &&
+          !Number.isNaN(latestLinkCreatedAt.getTime()) &&
+          summaryUpdatedAtForActiveLink >= latestLinkCreatedAt;
+        const linkCoveredByPaymentSummary =
+          !latestLink.is_used &&
+          summaryUpdatedAfterLink &&
+          Number.isFinite(requestedAmount) &&
+          requestedAmount > 0 &&
+          Number.isFinite(summaryPaidForActiveLink) &&
+          summaryPaidForActiveLink + 0.009 >= requestedAmount &&
+          Number.isFinite(summaryDueForActiveLink) &&
+          summaryDueForActiveLink > 0.009;
         active_payment_link = {
           payment_link_id: latestLink.payment_link_id || latestLink.id,
-          full_url: fullUrl,
+          full_url: fullUrl.toString(),
           token: latestLink.link_token,
+          requested_amount: requestedAmount,
           expires_at: latestLink.expires_at,
-          is_used: !!latestLink.is_used,
+          is_used: !!latestLink.is_used || linkCoveredByPaymentSummary,
           is_expired: expiryDate ? expiryDate < now : false,
           discount_details: attachedDiscount ? {
             code: attachedDiscount.code,
@@ -2932,7 +2979,11 @@ exports.getLeadById = async (req, res) => {
     // --- STANDARDIZED STATUS & INTENT CALLS ---
     const intent = lead.intent ?? leadAssignmentService.getLeadIntent({ lead, booking: lead.booking });
     let booking_status = leadAssignmentService.getLeadBookingStatus(lead, lead.booking);
-    if (hasOutstandingAdditionalPayment(customQuoteFinancials)) {
+    if (['partially_paid', 'partial_paid', 'approval_pending'].includes(payment_status)) {
+      booking_status = 'Partially Paid';
+    } else if (payment_status === 'paid') {
+      booking_status = 'Paid';
+    } else if (hasOutstandingAdditionalPayment(customQuoteFinancials)) {
       booking_status = 'Partially Paid';
     }
     // ------------------------------------------
@@ -3033,6 +3084,7 @@ exports.getLeadById = async (req, res) => {
         payment_status,
         collected_amount: quoteAmounts.collected_amount,
         outstanding_amount: quoteAmounts.outstanding_amount,
+        payment_summary: customQuoteFinancials?.payment_summary || null,
         active_payment_link,
         booking_step,
         can_edit_booking,
@@ -3847,10 +3899,21 @@ async function processSalesLeadForList(lead, context = {}) {
         lead,
         lead?.booking
       );
+    const paymentSummary = customQuoteFinancials?.payment_summary || null;
+    const summaryStatus = String(paymentSummary?.payment_status || '').trim().toLowerCase();
+    const summaryPaidAmount = parseFloat(paymentSummary?.paid_amount || 0);
+    const summaryDueAmount = parseFloat(paymentSummary?.due_amount || 0);
 
     if (manualProgress.hasFullPayment) {
       computedBookingStatus = 'Booked';
     } else if (manualProgress.isPartiallyPaid) {
+      computedBookingStatus = 'Partially Paid';
+    } else if (summaryStatus === 'paid') {
+      computedBookingStatus = 'Paid';
+    } else if (
+      ['partially_paid', 'partial_paid', 'approval_pending'].includes(summaryStatus) ||
+      (summaryPaidAmount > 0 && summaryDueAmount > 0)
+    ) {
       computedBookingStatus = 'Partially Paid';
     } else if (hasOutstandingAdditionalPayment(customQuoteFinancials)) {
       computedBookingStatus = 'Partially Paid';
@@ -3908,7 +3971,9 @@ async function processSalesLeadForList(lead, context = {}) {
         manualProgress || {
           hasFullPayment: false,
           isPartiallyPaid: false
-        }
+        },
+      payment_summary:
+        paymentSummary || null
     };
 
     if (Date.now() - startedAt > 3000) {
@@ -4596,14 +4661,16 @@ exports.getClientLeadById = async (req, res) => {
       const baseUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
 
       if (latestLink.link_token) {
-        let fullUrl = `${baseUrl}/payment-link/${latestLink.link_token}`;
-        if (attachedDiscount && attachedDiscount.code) fullUrl += `?discount=${attachedDiscount.code}`;
+        const fullUrl = new URL(`${String(baseUrl).replace(/\/+$/, '')}/payment-link/${latestLink.link_token}`);
+        if (attachedDiscount && attachedDiscount.code) fullUrl.searchParams.set('discount', attachedDiscount.code);
+        if (latestLink.requested_amount) fullUrl.searchParams.set('amount', String(latestLink.requested_amount));
         const now = new Date();
         const expiryDate = latestLink.expires_at ? new Date(latestLink.expires_at) : null;
         active_payment_link = {
           payment_link_id: latestLink.payment_link_id || latestLink.id,
-          full_url: fullUrl,
+          full_url: fullUrl.toString(),
           token: latestLink.link_token,
+          requested_amount: latestLink.requested_amount ? Number(latestLink.requested_amount) : null,
           expires_at: latestLink.expires_at,
           is_used: !!latestLink.is_used,
           is_expired: expiryDate ? expiryDate < now : false,
@@ -6144,6 +6211,8 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
   const {
     content_type,
     shoot_type,
+    startDate,
+    endDate,
     start_date_time,
     start_date,
     start_time,
@@ -6165,6 +6234,8 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
     time_zone
   } = finalizeBody;
   const { latitude, longitude } = extractCoordinatesFromPayload(finalizeBody, location);
+  const startDateTimeUtc = startDate || start_date_time || null;
+  const endDateTimeUtc = endDate || null;
 
   /* -----------------------------
   Normalize booking days
@@ -6251,6 +6322,9 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
   if (event_date) updateData.event_date = event_date;
   if (start_time_final) updateData.start_time = start_time_final;
   if (end_time_only) updateData.end_time = end_time_only;
+  if (startDateTimeUtc) updateData.start_date_time = startDateTimeUtc;
+  if (endDateTimeUtc) updateData.end_date_time = endDateTimeUtc;
+  if (time_zone !== undefined) updateData.time_zone = time_zone || null;
 
   if (duration_hours != null)
     updateData.duration_hours = parseInt(duration_hours, 10);
@@ -6466,6 +6540,8 @@ async function updateBookingScheduleAndLocationCore({ booking, bookingId, payloa
     booking_type,
     booking_days,
     time_zone,
+    startDate,
+    endDate,
     start_date_time,
     start_date,
     start_time,
@@ -6473,6 +6549,8 @@ async function updateBookingScheduleAndLocationCore({ booking, bookingId, payloa
     duration_hours
   } = payload;
   const { latitude, longitude } = extractCoordinatesFromPayload(payload, location);
+  const startDateTimeUtc = startDate || start_date_time || null;
+  const endDateTimeUtc = endDate || null;
 
   let normalizedBookingDays = Array.isArray(booking_days) ? booking_days : [];
   normalizedBookingDays = normalizedBookingDays
@@ -6540,6 +6618,8 @@ async function updateBookingScheduleAndLocationCore({ booking, bookingId, payloa
   if (startTimeFinal) updateData.start_time = startTimeFinal;
   if (endTimeFinal) updateData.end_time = endTimeFinal;
   if (time_zone !== undefined) updateData.time_zone = time_zone || null;
+  if (startDateTimeUtc) updateData.start_date_time = startDateTimeUtc;
+  if (endDateTimeUtc) updateData.end_date_time = endDateTimeUtc;
   if (totalDurationHours != null) updateData.duration_hours = totalDurationHours;
 
   if (Object.keys(updateData).length > 0) {
@@ -6605,6 +6685,8 @@ exports.finalizeGuestBooking = async (req, res) => {
       content_type,
       shoot_type,
       event_type,
+      startDate,
+      endDate,
       start_date_time,
       start_date,
       start_time,
@@ -6652,6 +6734,8 @@ exports.finalizeGuestBooking = async (req, res) => {
         content_type,
         shoot_type,
         event_type,
+        startDate,
+        endDate,
         start_date_time,
         start_date,
         start_time,
@@ -6806,6 +6890,8 @@ exports.finalizeClientLeadBooking = async (req, res) => {
       content_type,
       shoot_type,
       event_type,
+      startDate,
+      endDate,
       start_date_time,
       start_date,
       start_time,
@@ -6873,6 +6959,8 @@ exports.finalizeClientLeadBooking = async (req, res) => {
         content_type,
         shoot_type,
         event_type,
+        startDate,
+        endDate,
         start_date_time,
         start_date,
         start_time,
@@ -7146,6 +7234,8 @@ exports.finalizeCreateDeal = async (req, res) => {
       content_type,
       shoot_type,
       event_type,
+      startDate,
+      endDate,
       start_date_time,
       start_date,
       start_time,
@@ -7370,6 +7460,8 @@ exports.finalizeCreateDeal = async (req, res) => {
         content_type,
         shoot_type,
         event_type,
+        startDate,
+        endDate,
         start_date_time,
         start_date,
         start_time,

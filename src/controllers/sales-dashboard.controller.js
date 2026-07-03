@@ -11,7 +11,8 @@ const {
   sales_rep_live_status,
   stream_project_booking,
   sales_quotes,
-  payment_transactions
+  payment_transactions,
+  finance_invoice_payments
 } = require('../models');
 const { Op, QueryTypes } = require('sequelize');
 const sequelize = require('../db');
@@ -124,6 +125,66 @@ async function fetchBookingPaymentSummaryRows(bookingIds = []) {
         type: QueryTypes.SELECT
       }
     );
+  } catch (error) {
+    if (isOptionalTableMissingError(error)) {
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function fetchStripeInvoicePaymentReceiptRows(bookingIds = []) {
+  const normalizedBookingIds = Array.from(new Set(
+    bookingIds
+      .map((bookingId) => Number(bookingId))
+      .filter((bookingId) => Number.isFinite(bookingId) && bookingId > 0)
+  ));
+
+  if (normalizedBookingIds.length === 0 || !finance_invoice_payments) {
+    return [];
+  }
+
+  try {
+    const rows = await finance_invoice_payments.findAll({
+      where: {
+        booking_id: { [Op.in]: normalizedBookingIds },
+        payment_id: { [Op.ne]: null },
+        status: 'paid'
+      },
+      include: [
+        {
+          model: payment_transactions,
+          as: 'payment',
+          required: true,
+          attributes: ['payment_id', 'stripe_payment_intent_id', 'stripe_charge_id', 'guest_email', 'payment_source', 'total_amount', 'status', 'created_at']
+        },
+        {
+          model: invoice_send_history,
+          as: 'invoice',
+          required: false,
+          attributes: [
+            'invoice_send_history_id',
+            'lead_id',
+            'client_lead_id',
+            'booking_id',
+            'quote_id',
+            'client_name',
+            'client_email',
+            'assigned_sales_rep_id',
+            'sent_at'
+          ]
+        }
+      ],
+      order: [['paid_at', 'DESC'], ['finance_invoice_payment_id', 'DESC']]
+    });
+
+    const seen = new Set();
+    return rows.filter((row) => {
+      const key = `${row.booking_id}:${row.payment_id}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   } catch (error) {
     if (isOptionalTableMissingError(error)) {
       return [];
@@ -1833,6 +1894,79 @@ exports.getInvoiceHistory = async (req, res) => {
     ));
 
     if (itemBookingIds.length > 0) {
+      const parentItemByBookingId = new Map();
+      items.forEach((item) => {
+        const bookingId = Number(item.booking_id);
+        if (!Number.isFinite(bookingId) || bookingId <= 0 || parentItemByBookingId.has(bookingId)) return;
+        if (item.receipt_type === 'invoice_history') {
+          parentItemByBookingId.set(bookingId, item);
+        }
+      });
+
+      const existingStripeReceiptKeys = new Set(
+        items
+          .filter((item) => item.receipt_type === 'stripe_payment')
+          .map((item) => Number(item.invoice_send_history_id))
+          .filter((id) => Number.isFinite(id))
+      );
+
+      const stripeInvoicePaymentRows = await fetchStripeInvoicePaymentReceiptRows(itemBookingIds);
+      const stripeInvoiceReceiptItems = stripeInvoicePaymentRows
+        .map((invoicePayment) => {
+          const plain = invoicePayment.get ? invoicePayment.get({ plain: true }) : invoicePayment;
+          const bookingId = Number(plain.booking_id);
+          const paymentId = Number(plain.payment_id);
+          const payment = plain.payment || null;
+          const parentInvoice = plain.invoice || parentItemByBookingId.get(bookingId) || null;
+          const receiptKey = -(2000000000 + paymentId);
+
+          if (!Number.isFinite(bookingId) || bookingId <= 0 || !Number.isFinite(paymentId) || paymentId <= 0) {
+            return null;
+          }
+          if (existingStripeReceiptKeys.has(receiptKey)) {
+            return null;
+          }
+
+          existingStripeReceiptKeys.add(receiptKey);
+
+          const amount = Number(plain.amount || payment?.total_amount || 0);
+          const sendDate = plain.paid_at || payment?.created_at || parentInvoice?.sent_at || parentInvoice?.send_date_time || new Date();
+          const parentSalesRepId = parentInvoice?.assigned_sales_rep_id || parentInvoice?.sales_rep?.id || null;
+
+          if (salesRepId && Number(parentSalesRepId) !== Number(salesRepId)) {
+            return null;
+          }
+
+          return {
+            invoice_send_history_id: receiptKey,
+            lead_id: parentInvoice?.lead_id || null,
+            client_lead_id: parentInvoice?.client_lead_id || null,
+            booking_id: bookingId,
+            quote_id: parentInvoice?.quote_id || null,
+            quote_number: parentInvoice?.quote_number || null,
+            client_name: parentInvoice?.client_name || null,
+            client_email: parentInvoice?.client_email || payment?.guest_email || null,
+            send_date_time: sendDate,
+            payment_status: 'paid',
+            invoice_number: `INVBEIGE-S-${String(bookingId).padStart(4, '0')}-${String(paymentId).padStart(3, '0')}`,
+            invoice_url: null,
+            invoice_pdf: `${apiBase}/sales/invoice-pdf/${bookingId}?receipt=1&payment_id=${paymentId}`,
+            payment_amount: Number.isFinite(amount) && amount > 0 ? amount : null,
+            payment_method: payment?.stripe_payment_intent_id ? 'stripe' : 'card',
+            receipt_type: 'stripe_payment',
+            sent_by: null,
+            sales_rep: parentSalesRepId
+              ? { id: parentSalesRepId, name: parentInvoice?.sales_rep?.name || null }
+              : null,
+            created_at: plain.created_at || sendDate
+          };
+        })
+        .filter(Boolean);
+
+      if (stripeInvoiceReceiptItems.length > 0) {
+        items = [...items, ...stripeInvoiceReceiptItems];
+      }
+
       const [statusBookings, bookingPaymentSummaries] = await Promise.all([
         stream_project_booking.findAll({
           where: { stream_project_booking_id: { [Op.in]: itemBookingIds } },

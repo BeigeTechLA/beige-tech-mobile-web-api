@@ -576,16 +576,16 @@ exports.updateRequestStatus = async (req, res) => {
         });
       }
 
-      const availableCategory = crewCategories.find(cat => 
-        currentAcceptedCounts[cat] < (requestedLimits[cat] || 0)
-      );
+      // const availableCategory = crewCategories.find(cat => 
+      //   currentAcceptedCounts[cat] < (requestedLimits[cat] || 0)
+      // );
 
-      if (!availableCategory) {
-        return res.status(200).json({
-          error: true,
-          message: `The project slots for ${crewCategories.join(' / ')} are already full.`
-        });
-      }
+      // if (!availableCategory) {
+      //   return res.status(200).json({
+      //     error: true,
+      //     message: `The project slots for ${crewCategories.join(' / ')} are already full.`
+      //   });
+      // }
 
       const updateResult = await assigned_crew.update(
         { 

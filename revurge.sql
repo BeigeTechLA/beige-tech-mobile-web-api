@@ -2552,3 +2552,12 @@ ALTER TABLE creator_earnings
   ADD COLUMN approval_notes TEXT NULL AFTER rejection_reason,
   ADD INDEX idx_creator_earnings_approval_status (approval_status),
   ADD INDEX idx_creator_earnings_compensation_source (compensation_source);
+-- 01-07-26
+
+ALTER TABLE payment_links
+  ADD COLUMN IF NOT EXISTS requested_amount DECIMAL(10, 2) NULL AFTER discount_code_id;
+
+--03-07-26
+ALTER TABLE stream_project_booking
+  ADD COLUMN start_date_time VARCHAR(50) NULL,
+  ADD COLUMN end_date_time VARCHAR(50) NULL;
