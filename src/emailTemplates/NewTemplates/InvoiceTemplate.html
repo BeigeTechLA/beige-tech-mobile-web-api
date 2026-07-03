@@ -188,100 +188,14 @@
 
           <tr>
             <td style="padding: 0 40px;">
-              {{#if isPaid}}
               <h1 class="text-black-forced"
-                style="margin: 0; color: #000000 !important; font-size: 52px; font-weight: 600; line-height: 1.05;">
-                Your Payment is Confirmed
+                style="margin: 0; color: #000000 !important; font-size: 58px; font-weight: 600; line-height: 1.05;">
+                Hello {{first_name}},
               </h1>
               <p class="text-dark-gray"
-                style="margin: 18px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
-                Hello {{first_name}},
+                style="margin: 22px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
+                Please find the attached invoice below for your reference. Reach out to us for any further details.
               </p>
-              <p class="text-dark-gray"
-                style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
-                Your payment has been successfully received. We will begin <span class="text-black-forced"
-                  style="color: #000000 !important; font-weight: 600;">production</span> shortly.
-              </p>
-              {{else}}
-              {{#if isAdditionalPayment}}
-              <h1 class="text-black-forced"
-                style="margin: 0; color: #000000 !important; font-size: 52px; font-weight: 600; line-height: 1.05;">
-                Additional Payment Required
-              </h1>
-              <p class="text-dark-gray"
-                style="margin: 18px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
-                Hello {{first_name}},
-              </p>
-              <p class="text-dark-gray"
-                style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
-                Your quote for [<span class="text-black-forced"
-                  style="color: #000000 !important; font-weight: 600;">{{shoot_type}} +
-                  {{shoot_category}}</span>] was updated after payment.
-              </p>
-              <p class="text-dark-gray"
-                style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
-                Please complete the additional payment below so we can continue <span class="text-black-forced"
-                  style="color: #000000 !important; font-weight: 600;">production</span> with the revised scope.
-              </p>
-              {{else}}
-              {{#if isReducedAmount}}
-              <h1 class="text-black-forced"
-                style="margin: 0; color: #000000 !important; font-size: 52px; font-weight: 600; line-height: 1.05;">
-                Updated Receipt
-              </h1>
-              <p class="text-dark-gray"
-                style="margin: 18px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
-                Hello {{first_name}},
-              </p>
-              <p class="text-dark-gray"
-                style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
-                Your quote for [<span class="text-black-forced"
-                  style="color: #000000 !important; font-weight: 600;">{{shoot_type}} +
-                  {{shoot_category}}</span>] was updated after payment and the total has been reduced.
-              </p>
-              {{#if has_available_credit}}
-              <p class="text-dark-gray"
-                style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
-                The difference has been added to your Beige account as credit and can be used on your next booking.
-              </p>
-              <div class="alert-box-container"
-                style="margin: 24px 0 0; padding: 20px 22px; border-radius: 20px; background-color: #FFF3DE !important; border: 1px solid rgba(232, 209, 171, 0.8);">
-                <p class="text-black-forced"
-                  style="margin: 0; font-size: 18px; line-height: 1.6; color: #000000 !important; font-weight: 600;">
-                  You have $ {{available_credit_amount}} credit available to use on your next booking.
-                </p>
-              </div>
-              {{else}}
-              <p class="text-dark-gray"
-                style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
-                The revised amount is reflected below. If you have any questions about your updated quote, our team is
-                happy to help.
-              </p>
-              {{/if}}
-              {{else}}
-              <h1 class="text-black-forced"
-                style="margin: 0; color: #000000 !important; font-size: 52px; font-weight: 600; line-height: 1.05;">
-                Your Invoice is Ready
-              </h1>
-              <p class="text-dark-gray"
-                style="margin: 18px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
-                Hello {{first_name}},
-              </p>
-              <p class="text-dark-gray"
-                style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
-                Thank you for choosing Beige for your
-                upcoming [<span class="text-black-forced"
-                  style="color: #000000 !important; font-weight: 600;">{{shoot_type}} +
-                  {{shoot_category}}</span>]
-              </p>
-              <p class="text-dark-gray"
-                style="margin: 16px 0 0; font-size: 24px; color: #403E3E !important; line-height: 1.45;">
-                Once payment is done, we can begin <span class="text-black-forced"
-                  style="color: #000000 !important; font-weight: 600;">production</span>.
-              </p>
-              {{/if}}
-              {{/if}}
-              {{/if}}
             </td>
           </tr>
 
@@ -494,19 +408,7 @@
                         <tr>
                           <td class="text-black-forced"
                             style="padding: 0 0 12px; font-size: 24px; line-height: 1.3; font-weight: 600; color: #000000 !important; text-align: center;">
-                            {{#if isAdditionalPayment}}
-                            {{#if isPaid}}
-                            Additional Amount Paid
-                            {{else}}
-                            Additional Amount Due
-                            {{/if}}
-                            {{else}}
-                            {{#if isReducedAmount}}
-                            Updated Amount Summary
-                            {{else}}
                             Invoice Amount
-                            {{/if}}
-                            {{/if}}
                           </td>
                         </tr>
                         <tr>
@@ -599,92 +501,18 @@
             </td>
           </tr>
 
-          <!-- Part 3: Pay Button, Next Steps & Help Footer -->
+          <!-- Part 3: Invoice Links & Help Footer -->
           <tr>
             <td align="center" style="padding: 52px;">
-              {{#if isPaid}}
               <a class="bg-black-forced text-gold-forced" href="{{payment_link}}" target="_blank"
                 style="display:block; border-radius: 100px; padding: 18px 40px; font-size: 18px; font-weight: 600; color: #E8D1AB !important; text-decoration: none; text-transform: capitalize; letter-spacing: 1px; line-height: 1.7; background-color: #000000 !important; width: fit-content; margin: 0 auto;">
                 View Invoice &rarr;
               </a>
-              {{else}}
-              <a class="bg-black-forced text-gold-forced" href="{{payment_link}}" target="_blank"
-                style="display:block; border-radius: 100px; padding: 18px 40px; font-size: 18px; font-weight: 600; color: #E8D1AB !important; text-decoration: none; text-transform: capitalize; letter-spacing: 1px; line-height: 1.7; background-color: #000000 !important; width: fit-content; margin: 0 auto;">
-                {{#if isAdditionalPayment}}
-                Pay Additional Amount &rarr;
-                {{else}}
-                {{#if isReducedAmount}}
-                View Updated Invoice &rarr;
-                {{else}}
-                Pay Invoice Now &rarr;
-                {{/if}}
-                {{/if}}
-              </a>
-              {{/if}}
 
               <a class="text-black-forced" href="{{invoice_pdf}}" target="_blank"
                 style="display:block; margin: 0 0 24px; font-size: 25px; color: #000000 !important; line-height: 1.4; font-weight: 600; margin-top: 32px; text-decoration: underline;">
                 Download PDF Version
               </a>
-            </td>
-          </tr>
-
-          <!-- Next steps -->
-          <tr>
-            <td class="bg-tan-forced" style="padding: 0; text-align: left;" bgcolor="#FFF3DE">
-              <!-- Message -->
-              <div style="padding: 40px 40px 20px;">
-                <p class="text-black-forced"
-                  style="font-size: 28px; font-style: normal; font-weight: 500; line-height: normal; color: #000000 !important; margin: 0 0 27px;">
-                  {{#if isAdditionalPayment}}
-                  {{#if isPaid}}
-                  Your additional payment is confirmed:
-                  {{else}}
-                  After confirming the additional payment:
-                  {{/if}}
-                  {{else}}
-                  {{#if isReducedAmount}}
-                  After reviewing your updated receipt:
-                  {{else}}
-                  After confirming your booking:
-                  {{/if}}
-                  {{/if}}
-                </p>
-
-                <div class="gradient-list-item"
-                  style="border-radius: 18px; background: linear-gradient(90deg, #FFF 0%, rgba(255, 255, 255, 0.00) 100%); padding: 20px; color: #000000B2; font-size: 20px; font-weight: 500;">
-                  <ul class="text-black-alpha-forced" style="margin: 0;">
-                    <li style="margin-bottom: 15px;">Your production team will be assigned</li>
-                    <li style="margin-bottom: 15px;">Your shoot timeline will be finalized</li>
-                    <li style="margin-bottom: 0;">Your creative brief will be reviewed</li>
-                  </ul>
-                </div>
-              </div>
-
-              <img src="https://beige-web-prod.s3.us-east-1.amazonaws.com/beige/assets/email_assets/ProdProposalImg.png"
-                alt="Laptop Image" width="100%"
-                style="display: block; border: 0; object-fit: cover; object-position: top; border-radius: 18px; max-width: 100%;"
-                height="450" />
-
-              <div style="padding: 40px 40px;">
-                <p class="bg-gold-pill-forced text-black-alpha-forced"
-                  style="background-color: #E8D1AB !important; font-size: 20px; font-style: normal; font-weight: 500; line-height: normal; letter-spacing: 0.415px; color: rgba(0, 0, 0, 0.7) !important; padding: 20px 24px; border-radius: 32px; width: fit-content;">
-                  ✔ Vetted Creative Partners
-                </p>
-                <p class="bg-gold-pill-forced text-black-alpha-forced"
-                  style="background-color: #E8D1AB !important; font-size: 20px; font-style: normal; font-weight: 500; line-height: normal; letter-spacing: 0.415px; color: rgba(0, 0, 0, 0.7) !important; padding: 20px 24px; border-radius: 32px; width: fit-content;">
-                  ✔ Professional Production Standards
-                </p>
-                <p class="bg-gold-pill-forced text-black-alpha-forced"
-                  style="background-color: #E8D1AB !important; font-size: 20px; font-style: normal; font-weight: 500; line-height: normal; letter-spacing: 0.415px; color: rgba(0, 0, 0, 0.7) !important; padding: 20px 24px; border-radius: 32px; width: fit-content;">
-                  ✔ Beige Quality Guarantee
-                </p>
-                <p class="text-black-forced"
-                  style="font-size: 28px; font-style: normal; font-weight: 600; color: #000000 !important; margin: 30px 0 0 0;">
-                  Beige AI Platform -<br />
-                  Production Marketplace
-                </p>
-              </div>
             </td>
           </tr>
 
