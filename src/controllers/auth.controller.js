@@ -2781,6 +2781,25 @@ exports.createInternalCredential = async (req, res) => {
 
       await transaction.commit();
 
+      const inviterUserId = req.user?.userId || req.userId;
+      const inviterUser = inviterUserId
+        ? await User.findOne({
+            where: { id: inviterUserId },
+            attributes: ['name', 'email']
+          })
+        : null;
+
+      const welcomeEmailResult = await emailService.sendWelcomeUserEmail({
+        name: createdUser.name,
+        email: createdUser.email,
+        password,
+        inviter_name: inviterUser?.name || inviterUser?.email || 'Beige'
+      });
+
+      if (!welcomeEmailResult.success) {
+        console.error('Internal credential welcome email failed:', welcomeEmailResult.error);
+      }
+
       return res.status(201).json({
         success: true,
         message: 'Internal credential created successfully',
