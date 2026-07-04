@@ -4843,7 +4843,7 @@ exports.getCrewMembers = async (req, res) => {
         limit = parseInt(limit);
         const offset = (page - 1) * limit;
 
-        let conditions = [{ is_active: 1 }];
+        let conditions = [{ is_active: 1 }, { is_completed_registered: 1 }];
 
         if (status) {
             if (status === 'pending') conditions.push({ is_crew_verified: 0 });
@@ -6630,6 +6630,7 @@ exports.getCrewMembersByName = async (req, res) => {
     const crewMembers = await crew_members.findAll({
       where: {
         is_active: 1,
+        is_completed_registered: 1,
         [Op.or]: [
           { first_name: { [Op.like]: `%${query}%` } },
           { last_name: { [Op.like]: `%${query}%` } }
@@ -6664,7 +6665,8 @@ exports.getCrewCount = async (req, res) => {
     const total = await crew_members.count({
       where: {
         is_active: 1,
-        is_draft: 0
+        is_draft: 0,
+        is_completed_registered: 1
       }
     });
 
@@ -6733,19 +6735,19 @@ exports.getDashboardSummary = async (req, res) => {
       }),
 
       crew_members.count({
-        where: { is_active: 1, ...standardDateFilter }
+        where: { is_active: 1, is_completed_registered: 1, ...standardDateFilter }
       }),
 
       crew_members.count({
-        where: { is_active: 1, is_crew_verified: 1, ...standardDateFilter }
+        where: { is_active: 1, is_completed_registered: 1, is_crew_verified: 1, ...standardDateFilter }
       }),
 
       crew_members.count({
-        where: { is_active: 1, is_crew_verified: 0, ...standardDateFilter }
+        where: { is_active: 1, is_completed_registered: 1, is_crew_verified: 0, ...standardDateFilter }
       }),
 
       crew_members.count({
-        where: { is_active: 1, is_crew_verified: 2, ...standardDateFilter }
+        where: { is_active: 1, is_completed_registered: 1, is_crew_verified: 2, ...standardDateFilter }
       })
     ]);
 
@@ -6810,10 +6812,10 @@ exports.getDashboardChartData = async (req, res) => {
             stream_project_booking.count({ where: { is_active: 1, is_completed: 1, ...paidShootFilter, ...bookingDateFilter } }),
             
             clients.count({ where: { is_active: 1, ...standardDateFilter } }),
-            crew_members.count({ where: { is_active: 1, ...standardDateFilter } }),
-            crew_members.count({ where: { is_active: 1, is_crew_verified: 1, ...standardDateFilter } }),
-            crew_members.count({ where: { is_active: 1, is_crew_verified: 0, ...standardDateFilter } }),
-            crew_members.count({ where: { is_active: 1, is_crew_verified: 2, ...standardDateFilter } }),
+            crew_members.count({ where: { is_active: 1, is_completed_registered: 1, ...standardDateFilter } }),
+            crew_members.count({ where: { is_active: 1, is_completed_registered: 1, is_crew_verified: 1, ...standardDateFilter } }),
+            crew_members.count({ where: { is_active: 1, is_completed_registered: 1, is_crew_verified: 0, ...standardDateFilter } }),
+            crew_members.count({ where: { is_active: 1, is_completed_registered: 1, is_crew_verified: 2, ...standardDateFilter } }),
 
             sales_leads.count({ where: { ...standardDateFilter } }),
             sales_leads.count({
@@ -6851,7 +6853,7 @@ exports.getDashboardChartData = async (req, res) => {
                     [Sequelize.fn('DATE_FORMAT', Sequelize.col('created_at'), '%Y-%m'), 'month'],
                     [Sequelize.fn('COUNT', Sequelize.literal('*')), 'count']
                 ],
-                where: { is_active: 1, created_at: chartMonthRange },
+                where: { is_active: 1, is_completed_registered: 1, created_at: chartMonthRange },
                 group: [Sequelize.fn('DATE_FORMAT', Sequelize.col('created_at'), '%Y-%m')],
                 raw: true
             }),
@@ -7092,7 +7094,7 @@ exports.getPendingPayout = async (req, res) => {
 exports.getTotalCPCount = async (req, res) => {
   try {
     const totalCPs = await crew_members.count({
-      where: { is_active: 1, is_crew_verified: 1 }
+      where: { is_active: 1, is_completed_registered: 1, is_crew_verified: 1 }
     });
 
     return res.status(200).json({
@@ -8737,6 +8739,7 @@ exports.getAllPendingCrewMembers = async (req, res) => {
       crew_members.findAll({
         where: { 
           is_active: 1, 
+          is_completed_registered: 1,
           is_crew_verified: 0  // Hardcoded for Pending
         },
         include: [
@@ -8814,7 +8817,7 @@ exports.getApprovedCrewMembers = async (req, res) => {
         const offset = (page - 1) * limit;
 
         // 1. Setup Base Conditions
-        let conditions = [{ is_active: 1 }, { is_crew_verified: 1 }];
+        let conditions = [{ is_active: 1 }, { is_completed_registered: 1 }, { is_crew_verified: 1 }];
 
         if (start_date && end_date) {
             conditions.push({ 'created_at': { [Sequelize.Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`] } });
@@ -9572,6 +9575,7 @@ exports.searchCrewForLead = async (req, res) => {
 
         const crewWhere = {
             is_active: true,
+            is_completed_registered: 1,
             is_crew_verified: 1,
             crew_member_id: { [Op.notIn]: excludeIds.length ? excludeIds : [0] }
         };
@@ -10997,6 +11001,7 @@ exports.searchCrewForProject = async (req, res) => {
 
         const crewWhere = {
             is_active: true,
+            is_completed_registered: 1,
             is_crew_verified: 1,
             crew_member_id: { [Op.notIn]: excludeIds.length ? excludeIds : [0] }
         };

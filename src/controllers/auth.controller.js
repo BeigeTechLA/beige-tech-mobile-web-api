@@ -1824,7 +1824,7 @@ exports.registerCrewMemberStep1 = [
 
       if (crew_member_id && user_id) {
         await crew_members.update(
-          { first_name, last_name, email, phone_number, location, latitude: lat || null, longitude: lng || null, working_distance }, 
+          { first_name, last_name, email, phone_number, location, latitude: lat || null, longitude: lng || null, working_distance, is_completed_registered: 0 }, 
           { where: { crew_member_id }, transaction }
         );
         await User.update(
@@ -1873,7 +1873,8 @@ exports.registerCrewMemberStep1 = [
             latitude: lat || null,
             longitude: lng || null,
             working_distance,
-            is_active: 1
+            is_active: 1,
+            is_completed_registered: 0
           }, { transaction });
 
           await existingUser.update({
@@ -1970,6 +1971,7 @@ exports.registerCrewMemberStep1 = [
         longitude: lng || null,
         working_distance, 
         is_active: 1,
+        is_completed_registered: 0,
         created_from: 1 // 1 = web
       }, { transaction });
 
@@ -2086,6 +2088,7 @@ exports.registerCrewMemberStep2 = async (req, res) => {
     member.bio = bio;
     member.skills = JSON.stringify(skills);
     member.equipment_ownership = JSON.stringify(equipment_ownership);
+    member.is_completed_registered = 0;
     await member.save();
 
      await updateSheetRow('Crew_data', crew_member_id, {
@@ -2253,6 +2256,9 @@ exports.registerCrewMemberStep3 = [
       await updateSheetRow('Crew_data', crew_member_id, {
         'N': JSON.stringify(social_media_links),
       });
+
+      member.is_completed_registered = 1;
+      await member.save();
 
       // SEND WELCOME EMAIL
       const user = await User.findOne({
