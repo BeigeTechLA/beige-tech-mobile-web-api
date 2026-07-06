@@ -7630,6 +7630,140 @@ exports.getShootByCategory = async (req, res) => {
   }
 };
 
+exports.getQuoteItemUsage = async (req, res) => {
+  try {
+    const categoryMap = {
+      services: 'service',
+      addons: 'addon',
+      logistics: 'logistics'
+    };
+    const responseKeyMap = {
+      service: 'services',
+      addon: 'addons',
+      logistics: 'logistics'
+    };
+
+    const requestedCategory = req.query.category
+      ? String(req.query.category).toLowerCase().trim()
+      : null;
+
+    if (requestedCategory && !categoryMap[requestedCategory]) {
+      return res.status(400).json({
+        error: true,
+        message: 'Invalid category. Allowed values are services, addons, logistics'
+      });
+    }
+
+    const sectionTypes = requestedCategory
+      ? [categoryMap[requestedCategory]]
+      : Object.values(categoryMap);
+
+    const catalogItems = await db.quote_catalog_items.findAll({
+      attributes: ['catalog_item_id', 'section_type', 'name'],
+      where: {
+        is_active: 1,
+        section_type: { [Op.in]: sectionTypes }
+      },
+      raw: true
+    });
+
+    const usageRows = await db.sales_quote_line_items.findAll({
+      attributes: [
+        'catalog_item_id',
+        'section_type',
+        'item_name',
+        [Sequelize.fn('COUNT', Sequelize.col('line_item_id')), 'count']
+      ],
+      where: {
+        is_active: 1,
+        section_type: { [Op.in]: sectionTypes }
+      },
+      group: ['catalog_item_id', 'section_type', 'item_name'],
+      order: [
+        ['section_type', 'ASC'],
+        [Sequelize.literal('count'), 'DESC'],
+        ['item_name', 'ASC']
+      ],
+      raw: true
+    });
+
+    const data = {};
+    sectionTypes.forEach((sectionType) => {
+      data[responseKeyMap[sectionType]] = {
+        total_count: 0,
+        items: []
+      };
+    });
+
+    const itemBuckets = {};
+    sectionTypes.forEach((sectionType) => {
+      itemBuckets[sectionType] = new Map();
+    });
+
+    catalogItems.forEach((item) => {
+      if (!itemBuckets[item.section_type]) return;
+
+      itemBuckets[item.section_type].set(`catalog:${item.catalog_item_id}`, {
+        label: item.name,
+        count: 0,
+        percentage: 0,
+        catalog_item_id: item.catalog_item_id
+      });
+    });
+
+    usageRows.forEach((row) => {
+      const sectionType = row.section_type;
+      if (!itemBuckets[sectionType]) return;
+
+      const catalogItemId = Number(row.catalog_item_id || 0);
+      const bucketKey = catalogItemId > 0
+        ? `catalog:${catalogItemId}`
+        : `custom:${String(row.item_name || '').toLowerCase().trim()}`;
+
+      if (!itemBuckets[sectionType].has(bucketKey)) {
+        itemBuckets[sectionType].set(bucketKey, {
+          label: row.item_name,
+          count: 0,
+          percentage: 0,
+          catalog_item_id: catalogItemId > 0 ? catalogItemId : null
+        });
+      }
+
+      const bucket = itemBuckets[sectionType].get(bucketKey);
+      bucket.count += Number(row.count || 0);
+    });
+
+    sectionTypes.forEach((sectionType) => {
+      const sectionKey = responseKeyMap[sectionType];
+      if (!sectionKey || !data[sectionKey]) return;
+
+      const items = Array.from(itemBuckets[sectionType].values());
+      data[sectionKey].total_count = items.reduce((sum, item) => sum + item.count, 0);
+      data[sectionKey].items = items
+        .map((item) => ({
+          label: item.label,
+          count: item.count,
+          percentage: data[sectionKey].total_count > 0
+            ? Math.round((item.count / data[sectionKey].total_count) * 100)
+            : 0
+        }))
+        .sort((first, second) => (
+          second.count - first.count ||
+          String(first.label || '').localeCompare(String(second.label || ''))
+        ));
+    });
+
+    return res.status(200).json({
+      error: false,
+      message: 'Item usage stats retrieved successfully',
+      data
+    });
+  } catch (error) {
+    console.error('Quote Item Usage Error:', error);
+    return res.status(500).json({ error: true, message: 'Internal server error' });
+  }
+};
+
 // Controller to fetch all post production members
 exports.getPostProductionMembers = async (req, res) => {
   try {

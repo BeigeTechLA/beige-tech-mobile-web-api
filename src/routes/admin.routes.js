@@ -149,6 +149,7 @@ const shootsViewOrEdit = requireAnyPermission([
   'sales_admin_shoots.view',
   'sales_admin_shoots.edit'
 ], allowSalesRepRoles);
+const shootStatsViewMiddlewares = [authMiddleware, dashboardOrShootsView];
 
 router.post('/create-project', authMiddleware, shootsCreate, admin.createProject);
 router.post('/match-crew', admin.matchCrew);
@@ -209,7 +210,8 @@ router.get('/dashboard/shoot-status', authMiddleware, dashboardView, admin.getSh
 router.get('/dashboard/top-creative-partners', authMiddleware, dashboardView, admin.getTopCreativePartners)
 router.post('/dashboard-detail', authMiddleware, dashboardView, admin.getDashboardDetails);
 router.post('/verify-crew-member', authMiddleware, adminUsersEdit, admin.verifyCrewMember);
-router.get('/shoot-category-count', authMiddleware, dashboardOrShootsView, admin.getShootByCategory);
+router.get('/shoot-category-count', ...shootStatsViewMiddlewares, admin.getShootByCategory);
+router.get('/quote-item-usage', ...shootStatsViewMiddlewares, admin.getQuoteItemUsage);
 router.get('/get-post-production-members', admin.getPostProductionMembers);
 router.post('/assign-post-production-member', authMiddleware, shootsEdit, admin.assignPostProductionMember);
 router.get('/get-clients', authMiddleware, adminUsersView, admin.getClients);

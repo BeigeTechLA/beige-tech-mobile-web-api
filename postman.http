@@ -2,7 +2,7 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI2MywidXNlclJvbGUiOiJDbGllbnQiLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjEsInVzZXJUeXBlSWQiOjMsImlhdCI6MTc4Mjk3NDAxMSwiZXhwIjoxNzgzNTc4ODExfQ.AL-yJLpZ68EXILp2AmqPAX42LDr1KU-YsIsR_AKMQnM
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjIsInVzZXJUeXBlSWQiOjEsImlhdCI6MTc4MzMzMzY5NiwiZXhwIjoxNzgzOTM4NDk2fQ.kxL7OU8IM8sj1LlZez60uI4SF8jylyU0_uRfC77NM6Q
 
 @TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI3NiwidXNlclJvbGUiOiJwcm9kdWN0aW9uX21hbmFnZXIiLCJpYXQiOjE3ODA1Nzk4MTYsImV4cCI6MTc4MTE4NDYxNn0.zRMGMPJGIL34Bjh3SO1yJa5qYhfxKoknlUFwhwWW7qE
 
@@ -2987,4 +2987,34 @@ Authorization: {{CP_TOKEN}}
       "fileSize": 17343
     }
   ]
+}
+
+
+### quote item usage - all categories
+GET {{URL}}admin/quote-item-usage HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### quote item usage - services only
+GET {{URL}}admin/quote-item-usage?category=services HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### quote item usage - addons only
+GET {{URL}}admin/quote-item-usage?category=addons HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### quote item usage - logistics only
+GET {{URL}}admin/quote-item-usage?category=logistics HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### quote item usage - admin login only
+POST {{URL}}auth/login HTTP/1.1
+Content-Type: application/json
+
+{
+  "email": "harsh.panchal@gmail.com",
+  "password": "password123"
 }
