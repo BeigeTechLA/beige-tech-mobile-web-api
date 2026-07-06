@@ -364,8 +364,24 @@ const resolveProjectDisplayAmount = async ({ project, paymentData }) => {
   return 0;
 };
 
-const resolveProjectTotalValueAmount = async ({ project }) => {
+const resolveProjectTotalValueAmount = async ({ project, salesQuoteId = null }) => {
   const budgetAmount = parseAmountCandidate(project?.budget);
+
+  const salesQuoteAmount = salesQuoteId
+    ? await db.sales_quotes.findByPk(salesQuoteId, {
+        attributes: ['total', 'subtotal'],
+      }).then((quote) => {
+        if (!quote) return null;
+        return (
+          parseAmountCandidate(quote.total) ??
+          parseAmountCandidate(quote.subtotal)
+        );
+      })
+    : null;
+
+  if (salesQuoteAmount !== null && salesQuoteAmount > 0) {
+    return salesQuoteAmount;
+  }
 
   const quoteAmountFromLinkedQuote = project?.quote_id
     ? await quotes.findByPk(project.quote_id, {
@@ -405,6 +421,32 @@ const resolveProjectTotalValueAmount = async ({ project }) => {
 
   if (quoteAmountFromBooking !== null && quoteAmountFromBooking > 0) {
     return quoteAmountFromBooking;
+  }
+
+  const bookingId = project?.stream_project_booking_id;
+  const salesQuoteAmountFromLead = bookingId
+    ? await db.sales_leads.findOne({
+        where: { booking_id: bookingId, is_active: 1 },
+        attributes: ['lead_id'],
+        order: [['lead_id', 'DESC']],
+      }).then((lead) => {
+        if (!lead?.lead_id) return null;
+        return db.sales_quotes.findOne({
+          where: { lead_id: lead.lead_id },
+          attributes: ['total', 'subtotal'],
+          order: [['updated_at', 'DESC'], ['sales_quote_id', 'DESC']],
+        });
+      }).then((quote) => {
+        if (!quote) return null;
+        return (
+          parseAmountCandidate(quote.total) ??
+          parseAmountCandidate(quote.subtotal)
+        );
+      })
+    : null;
+
+  if (salesQuoteAmountFromLead !== null && salesQuoteAmountFromLead > 0) {
+    return salesQuoteAmountFromLead;
   }
 
   if (budgetAmount !== null && budgetAmount > 0) {
@@ -625,6 +667,20 @@ const buildManualPaymentSummaryFromActivities = (activities = [], totalAmount = 
     isPartiallyPaid: !hasFullPayment && paidAmount > 0 && pendingAmount > 0,
   };
 };
+
+const fetchCollectedBookingPaymentSummaries = async () => db.sequelize.query(
+  `
+  SELECT booking_id, sales_quote_id, payment_status, paid_amount, credit_used_amount, due_amount, quote_total
+  FROM booking_payment_summary
+  WHERE payment_status IN ('paid', 'partially_paid', 'approval_pending', 'no_payment_due')
+    AND (
+      COALESCE(paid_amount, 0) > 0
+      OR COALESCE(credit_used_amount, 0) > 0
+      OR payment_status = 'no_payment_due'
+    )
+  `,
+  { type: QueryTypes.SELECT }
+);
 
 const countActiveShootNotesByBookingIds = async (bookingIds = []) => {
   const ids = Array.from(new Set(
@@ -1800,7 +1856,7 @@ exports.getProjectDetails = async (req, res) => {
       : [];
 
     // 3. Fetch Transaction Total (from payment_transactions table)
-    const [paymentData, formSubmission, shootNotesCountMap, bookingPaymentSummary, manualPaymentRows] = await Promise.all([
+    const [paymentData, formSubmission, shootNotesCountMap, bookingPaymentSummary, manualPaymentRows, stripeReceiptRows] = await Promise.all([
       payment_transactions.findOne({
         where: { payment_id: projectJson.payment_id },
         attributes: ['payment_id', 'total_amount', 'status', 'created_at'],
@@ -1826,6 +1882,40 @@ exports.getProjectDetails = async (req, res) => {
           FROM booking_manual_payments
           WHERE booking_id = :bookingId
           ORDER BY created_at ASC, booking_manual_payment_id ASC
+        `,
+        {
+          replacements: { bookingId: projectJson.stream_project_booking_id },
+          type: QueryTypes.SELECT
+        }
+      ).catch((error) => {
+        const code = error?.original?.code || error?.parent?.code || error?.code;
+        if (code === 'ER_NO_SUCH_TABLE' || code === 'ER_BAD_TABLE_ERROR') return [];
+        throw error;
+      }),
+      db.sequelize.query(
+        `
+          SELECT
+            fip.payment_id,
+            MIN(fip.finance_invoice_payment_id) AS finance_invoice_payment_id,
+            MAX(fip.amount) AS amount,
+            'paid' AS status,
+            MIN(fip.paid_at) AS paid_at,
+            MIN(fip.created_at) AS created_at,
+            p.total_amount,
+            p.status AS payment_status,
+            p.created_at AS payment_created_at
+          FROM finance_invoice_payments fip
+          LEFT JOIN payment_transactions p
+            ON p.payment_id = fip.payment_id
+          WHERE fip.booking_id = :bookingId
+            AND fip.payment_id IS NOT NULL
+            AND fip.status = 'paid'
+          GROUP BY
+            fip.payment_id,
+            p.total_amount,
+            p.status,
+            p.created_at
+          ORDER BY COALESCE(MIN(fip.paid_at), p.created_at, MIN(fip.created_at)) ASC, MIN(fip.finance_invoice_payment_id) ASC
         `,
         {
           replacements: { bookingId: projectJson.stream_project_booking_id },
@@ -1919,13 +2009,11 @@ exports.getProjectDetails = async (req, res) => {
     });
     let totalValueAmount = await resolveProjectTotalValueAmount({
       project: projectJson,
+      salesQuoteId: bookingPaymentSummary?.sales_quote_id || convertedSalesQuoteId || null,
     });
     const currentUsableQuoteTotal = parseAmountCandidate(currentUsableConvertedQuote?.total);
     if (currentUsableQuoteTotal !== null && currentUsableQuoteTotal > 0) {
-      totalValueAmount = currentUsableQuoteTotal;
-      if (displayAmount > currentUsableQuoteTotal) {
-        displayAmount = currentUsableQuoteTotal;
-      }
+      totalValueAmount = Math.max(totalValueAmount, currentUsableQuoteTotal);
     }
 
     // 4. Process Event Type Labels
@@ -2085,7 +2173,40 @@ exports.getProjectDetails = async (req, res) => {
       });
     });
 
-    if (paymentData?.payment_id && Number(paymentData.total_amount || 0) > 0) {
+    const stripePaymentIdsInHistory = new Set();
+    (stripeReceiptRows || []).forEach((stripeReceipt) => {
+      const paymentId = Number(stripeReceipt.payment_id || 0);
+      if (!Number.isFinite(paymentId) || paymentId <= 0) return;
+      stripePaymentIdsInHistory.add(paymentId);
+      const normalizedStripeStatus = String(stripeReceipt.payment_status || stripeReceipt.status || '').trim().toLowerCase();
+      paymentHistory.push({
+        id: `stripe-${paymentId}`,
+        type: 'stripe',
+        receipt_number: `RCPT-${String(projectJson.stream_project_booking_id).padStart(6, '0')}-S${String(paymentId).padStart(3, '0')}`,
+        invoice_number: `INVBEIGE-S-${String(projectJson.stream_project_booking_id).padStart(4, '0')}-${String(paymentId).padStart(3, '0')}`,
+        method: 'Online Payment',
+        amount: Number(stripeReceipt.amount || stripeReceipt.total_amount || 0),
+        status: ['succeeded', 'success', 'completed', 'complete', 'paid'].includes(normalizedStripeStatus)
+          ? 'paid'
+          : (stripeReceipt.payment_status || stripeReceipt.status || 'paid'),
+        paid_at: stripeReceipt.paid_at || stripeReceipt.payment_created_at || stripeReceipt.created_at || null,
+        receipt_url: buildShootReceiptUrl({
+          bookingId: projectJson.stream_project_booking_id,
+          paymentId
+        }),
+        receipt_download_url: buildShootReceiptUrl({
+          bookingId: projectJson.stream_project_booking_id,
+          paymentId,
+          download: true
+        })
+      });
+    });
+
+    if (
+      paymentData?.payment_id &&
+      Number(paymentData.total_amount || 0) > 0 &&
+      !stripePaymentIdsInHistory.has(Number(paymentData.payment_id))
+    ) {
       const normalizedStripeStatus = String(paymentData.status || '').trim().toLowerCase();
       paymentHistory.push({
         id: `stripe-${paymentData.payment_id}`,
@@ -2114,8 +2235,30 @@ exports.getProjectDetails = async (req, res) => {
     const summaryPaidAmount = bookingPaymentSummary
       ? parseAmountCandidate(bookingPaymentSummary.paid_amount)
       : null;
+    const summaryCreditUsedAmount = bookingPaymentSummary
+      ? parseAmountCandidate(bookingPaymentSummary.credit_used_amount)
+      : null;
+    const summaryPendingAmount = bookingPaymentSummary
+      ? parseAmountCandidate(bookingPaymentSummary.due_amount)
+      : null;
+    const summaryQuoteTotal = bookingPaymentSummary
+      ? parseAmountCandidate(bookingPaymentSummary.quote_total)
+      : null;
     const totalPaidAmount = summaryPaidAmount !== null ? summaryPaidAmount : displayAmount;
-    const resolvedPaymentStatus = projectJson.payment_id
+    totalValueAmount = Math.max(
+      totalValueAmount || 0,
+      summaryQuoteTotal || 0,
+      totalPaidAmount + (summaryCreditUsedAmount || 0) + (summaryPendingAmount || 0)
+    );
+    const creditUsedAmount = summaryCreditUsedAmount || 0;
+    const pendingAmount = Math.max(
+      summaryPendingAmount || 0,
+      totalValueAmount - totalPaidAmount - creditUsedAmount,
+      0
+    );
+    const resolvedPaymentStatus = pendingAmount > 0 && totalPaidAmount > 0
+      ? 'partially_paid'
+      : projectJson.payment_id
       ? 'paid'
       : manualPaymentSummary.hasFullPayment
         ? 'paid'
@@ -2132,6 +2275,11 @@ exports.getProjectDetails = async (req, res) => {
           ...projectJson,
           total_paid_amount: totalPaidAmount,
           total_value_amount: totalValueAmount,
+          paid_amount: totalPaidAmount,
+          pending_amount: pendingAmount,
+          due_amount: pendingAmount,
+          credit_used_amount: creditUsedAmount,
+          payment_status: resolvedPaymentStatus,
           notes_count: shootNotesCount,
           contact_registration_type: contactRegistrationType,
           is_registered_user: isRegisteredUser,
@@ -3096,6 +3244,11 @@ exports.getAllProjectDetails = async (req, res) => {
     let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment, production_filter, summary_only } = req.query;
     const today = new Date();
     const noPagination = !limit && !page;
+    const requestUserId = Number(req.user?.userId || req.user?.id || req.userId);
+    const requestUserRole = String(req.user?.userRole || req.userRole || '').toLowerCase().trim();
+    const clientProjectFilter = requestUserRole === 'client' && Number.isInteger(requestUserId) && requestUserId > 0
+      ? { user_id: requestUserId }
+      : {};
 
     let pageNumber = null, pageSize = null, offset = null;
     if (!noPagination) {
@@ -3139,6 +3292,7 @@ exports.getAllProjectDetails = async (req, res) => {
       bookedClientLeads,
       salesManualPaymentActivities,
       clientManualPaymentActivities,
+      collectedPaymentSummaryRows,
     ] = await Promise.all([
       sales_leads.findAll({
         where: {
@@ -3172,7 +3326,15 @@ exports.getAllProjectDetails = async (req, res) => {
         attributes: ['lead_id'],
         raw: true,
       }),
+      fetchCollectedBookingPaymentSummaries(),
     ]);
+
+    const collectedPaymentSummaryByBookingId = new Map();
+    collectedPaymentSummaryRows.forEach((row) => {
+      const bookingId = Number(row.booking_id);
+      if (!Number.isFinite(bookingId) || bookingId <= 0) return;
+      collectedPaymentSummaryByBookingId.set(bookingId, row);
+    });
 
     const manualSalesLeadIds = Array.from(new Set(
       salesManualPaymentActivities
@@ -3216,10 +3378,12 @@ exports.getAllProjectDetails = async (req, res) => {
       ...bookedClientLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
       ...manualPaidSalesLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
       ...manualPaidClientLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
+      ...collectedPaymentSummaryRows.map((row) => Number(row.booking_id)).filter(Number.isFinite),
     ]));
 
     const paidOnlyFilter = {
       is_active: 1,
+      ...clientProjectFilter,
       [Sequelize.Op.or]: [
         { payment_id: { [Sequelize.Op.ne]: null } },
         ...(bookedBookingIds.length > 0
@@ -3402,13 +3566,62 @@ exports.getAllProjectDetails = async (req, res) => {
         }),
       ]);
 
+      const bookingPaymentSummary = collectedPaymentSummaryByBookingId.get(Number(project.stream_project_booking_id)) || null;
       const displayAmount = await resolveProjectDisplayAmount({
         project,
         paymentData,
       });
-      const totalValueAmount = await resolveProjectTotalValueAmount({
+      const summaryPaidAmount = bookingPaymentSummary
+        ? parseAmountCandidate(bookingPaymentSummary.paid_amount)
+        : null;
+      const summaryCreditUsedAmount = bookingPaymentSummary
+        ? parseAmountCandidate(bookingPaymentSummary.credit_used_amount)
+        : null;
+      const summaryPendingAmount = bookingPaymentSummary
+        ? parseAmountCandidate(bookingPaymentSummary.due_amount)
+        : null;
+      const summaryQuoteTotal = bookingPaymentSummary
+        ? parseAmountCandidate(bookingPaymentSummary.quote_total)
+        : null;
+      const resolvedQuoteValueAmount = await resolveProjectTotalValueAmount({
         project,
+        salesQuoteId: bookingPaymentSummary?.sales_quote_id || null,
       });
+      const totalPaidAmount = summaryPaidAmount !== null
+        ? summaryPaidAmount
+        : (project.payment_id ? displayAmount : 0);
+      const creditUsedAmount = summaryCreditUsedAmount || 0;
+      const knownCollectedTotal = totalPaidAmount + creditUsedAmount + (summaryPendingAmount || 0);
+      let totalValueAmount = Math.max(
+        summaryQuoteTotal || 0,
+        resolvedQuoteValueAmount || 0,
+        knownCollectedTotal || 0
+      );
+      const shouldUseCalculatedBookingPricing =
+        totalValueAmount <= totalPaidAmount ||
+        (summaryQuoteTotal === null && (!resolvedQuoteValueAmount || resolvedQuoteValueAmount <= 0));
+
+      if (shouldUseCalculatedBookingPricing) {
+        const projectedPricing = await bookingPricingService.calculateBookingPricing({
+          ...project.toJSON(),
+          booking_days: bookingDaysData
+        });
+        const projectedTotal = parseAmountCandidate(projectedPricing?.total);
+        if (projectedTotal !== null && projectedTotal > totalValueAmount) {
+          totalValueAmount = projectedTotal;
+        }
+      }
+      const pendingAmount = Math.max(
+        summaryPendingAmount || 0,
+        totalValueAmount - totalPaidAmount - creditUsedAmount,
+        0
+      );
+      const paymentStatus = pendingAmount > 0 && totalPaidAmount > 0
+        ? 'partially_paid'
+        : String(
+            bookingPaymentSummary?.payment_status ||
+            (project.payment_id ? 'paid' : (totalPaidAmount > 0 ? 'partially_paid' : 'pending'))
+          ).toLowerCase();
 
       const rawTypes = project.event_type ? project.event_type.split(',') : [];
       const formattedTypes = rawTypes.map(t => {
@@ -3429,8 +3642,13 @@ exports.getAllProjectDetails = async (req, res) => {
       return {
         project: {
           ...projectJson,
-          total_paid_amount: displayAmount,
+          total_paid_amount: totalPaidAmount,
           total_value_amount: totalValueAmount,
+          paid_amount: totalPaidAmount,
+          pending_amount: pendingAmount,
+          due_amount: pendingAmount,
+          credit_used_amount: summaryCreditUsedAmount || 0,
+          payment_status: paymentStatus,
           notes_count: shootNotesCount,
           event_type_labels: formattedTypes.join(', '),
           timeline_status: timelineStatus,
@@ -4610,6 +4828,11 @@ exports.createCrewMember = [
 
 exports.getCrewMembers = async (req, res) => {
     try {
+        const payload = {
+            ...req.body,
+            ...req.query
+        };
+
         let {
             page = 1,
             limit = 20,
@@ -4619,7 +4842,7 @@ exports.getCrewMembers = async (req, res) => {
             range,
             start_date,
             end_date
-        } = req.body;
+        } = payload;
 
         page = parseInt(page);
         limit = parseInt(limit);
@@ -7321,12 +7544,24 @@ exports.getShootByCategory = async (req, res) => {
       narrative: { label: 'Short Films & Narrative', color: '#6366F1', matches: ['narrative', 'short film'] }
     };
 
-    // 1. Fetch Paid Bookings
+    const collectedPaymentSummaryRows = await fetchCollectedBookingPaymentSummaries();
+    const collectedSummaryBookingIds = Array.from(new Set(
+      collectedPaymentSummaryRows
+        .map((row) => Number(row.booking_id))
+        .filter(Number.isFinite)
+    ));
+
+    // 1. Fetch paid or partially paid bookings
     const bookings = await stream_project_booking.findAll({
       attributes: ['project_name', 'event_type', 'skills_needed', 'stream_project_booking_id', 'payment_id'],
       where: { 
         is_active: 1,
-        payment_id: { [Sequelize.Op.ne]: null } // Paid projects only
+        [Sequelize.Op.or]: [
+          { payment_id: { [Sequelize.Op.ne]: null } },
+          ...(collectedSummaryBookingIds.length
+            ? [{ stream_project_booking_id: { [Sequelize.Op.in]: collectedSummaryBookingIds } }]
+            : [])
+        ]
       },
       raw: true
     });
@@ -7640,6 +7875,58 @@ const getArchiveHistoryForClient = async (clientId) => {
     where: {
       target_type: 'client',
       target_id: clientId
+    },
+    order: [['created_at', 'DESC']],
+    raw: true
+  });
+
+  return rows.map((row) => ({
+    history_id: row.history_id,
+    target_type: row.target_type,
+    target_id: row.target_id,
+    user_id: row.user_id,
+    action: row.action,
+    reason: row.reason,
+    performed_by_user_id: row.performed_by_user_id,
+    performed_by_name: row.performed_by_name,
+    performed_by_role: row.performed_by_role,
+    previous_status: row.previous_status,
+    new_status: row.new_status,
+    metadata: row.metadata,
+    created_at: row.created_at
+  }));
+};
+
+const writeInternalUserArchiveHistory = async ({
+  user,
+  action,
+  reason = null,
+  actor,
+  previousStatus,
+  newStatus,
+  metadata = null,
+  transaction = null
+}) => {
+  return user_archive_history.create({
+    target_type: 'internal_user',
+    target_id: user.id,
+    user_id: user.id,
+    action,
+    reason,
+    performed_by_user_id: actor.id,
+    performed_by_name: actor.name,
+    performed_by_role: actor.role,
+    previous_status: previousStatus,
+    new_status: newStatus,
+    metadata
+  }, { transaction });
+};
+
+const getArchiveHistoryForInternalUser = async (userId) => {
+  const rows = await user_archive_history.findAll({
+    where: {
+      target_type: 'internal_user',
+      target_id: userId
     },
     order: [['created_at', 'DESC']],
     raw: true
@@ -7994,6 +8281,10 @@ exports.deleteClient = async (req, res) => {
         where: { id: client.user_id },
         transaction
       });
+      await affiliates.update(
+        { status: 'paused', is_active: 0 },
+        { where: { user_id: client.user_id }, transaction }
+      );
     }
 
     await writeArchiveHistory({
@@ -8134,6 +8425,10 @@ exports.restoreClient = async (req, res) => {
         where: { id: client.user_id },
         transaction
       });
+      await affiliates.update(
+        { status: 'active', is_active: 1 },
+        { where: { user_id: client.user_id }, transaction }
+      );
     }
 
     await writeArchiveHistory({
@@ -8257,6 +8552,11 @@ exports.convertClientToCreativePartner = async (req, res) => {
       is_active: 1,
       permissions_version: Number(clientUser.permissions_version || 1) + 1
     }, { transaction });
+
+    await affiliates.update(
+      { status: 'active', is_active: 1 },
+      { where: { user_id: clientUser.id }, transaction }
+    );
 
     const wasActive = Number(client.is_active) === 1;
     if (wasActive) {
@@ -8864,7 +9164,7 @@ exports.getClientsShoots = async (req, res) => {
 
     // 1️⃣ Get client to find user_id
     const client = await clients.findOne({
-      where: { client_id: clientId, is_active: 1 }
+      where: { client_id: clientId }
     });
 
     if (!client) {
@@ -11931,7 +12231,8 @@ exports.getRoles = async (req, res) => {
       roles.map(async (role) => {
         const totalUsers = await db.users.count({
           where: {
-            user_type: role.user_type_id
+            user_type: role.user_type_id,
+            is_active: 1
           }
         });
 
@@ -12238,7 +12539,8 @@ exports.getRoleById = async (req, res) => {
 
     const totalUsers = await db.users.count({
       where: {
-        user_type: role_id
+        user_type: role_id,
+        is_active: 1
       }
     });
 
@@ -12327,7 +12629,7 @@ exports.getUsersWithRoles = async (req, res) => {
       };
     }
 
-    const users = await db.users.findAll({
+    const users = await db.users.scope('all').findAll({
       where: userWhereCondition,
       attributes: [
         'id',
@@ -12339,6 +12641,40 @@ exports.getUsersWithRoles = async (req, res) => {
         'is_active'
       ],
       order: [[sortField, sortOrder]]
+    });
+
+    const userIds = users.map((user) => Number(user.id)).filter(Boolean);
+    const archiveHistoryRows = userIds.length
+      ? await user_archive_history.findAll({
+          where: {
+            target_type: 'internal_user',
+            target_id: { [Op.in]: userIds }
+          },
+          order: [['created_at', 'DESC']],
+          raw: true
+        })
+      : [];
+
+    const archiveHistoryMap = new Map();
+    archiveHistoryRows.forEach((row) => {
+      const key = Number(row.target_id);
+      const currentRows = archiveHistoryMap.get(key) || [];
+      currentRows.push({
+        history_id: row.history_id,
+        target_type: row.target_type,
+        target_id: row.target_id,
+        user_id: row.user_id,
+        action: row.action,
+        reason: row.reason,
+        performed_by_user_id: row.performed_by_user_id,
+        performed_by_name: row.performed_by_name,
+        performed_by_role: row.performed_by_role,
+        previous_status: row.previous_status,
+        new_status: row.new_status,
+        metadata: row.metadata,
+        created_at: row.created_at
+      });
+      archiveHistoryMap.set(key, currentRows);
     });
 
     const userTypes = await db.user_type.findAll({
@@ -12353,17 +12689,28 @@ exports.getUsersWithRoles = async (req, res) => {
       userTypeMap[type.user_type_id] = type.user_role;
     });
 
-    const formattedUsers = users.map(user => ({
-      user_id: user.id,
-      name: user.name,
-      email: user.email,
-      role_id: user.user_type,
-      role_name: userTypeMap[user.user_type] || null,
-      created_at: user.created_at,
-      updated_at: user.updated_at,
-      is_active: user.is_active,
-      status_label: user.is_active ? 'Active' : 'In-Active'
-    }));
+    const formattedUsers = users.map(user => {
+      const archiveHistory = archiveHistoryMap.get(Number(user.id)) || [];
+      const latestArchiveEvent = archiveHistory[0] || null;
+
+      return {
+        user_id: user.id,
+        name: user.name,
+        email: user.email,
+        role_id: user.user_type,
+        role_name: userTypeMap[user.user_type] || null,
+        created_at: user.created_at,
+        updated_at: user.updated_at,
+        is_active: user.is_active,
+        status_label: user.is_active ? 'Active' : 'In-Active',
+        archive_history: archiveHistory,
+        last_archive_event: latestArchiveEvent,
+        deleted_by_name: latestArchiveEvent?.action === 'deleted' ? latestArchiveEvent.performed_by_name : null,
+        deleted_at: latestArchiveEvent?.action === 'deleted' ? latestArchiveEvent.created_at : null,
+        restored_by_name: latestArchiveEvent?.action === 'restored' ? latestArchiveEvent.performed_by_name : null,
+        restored_at: latestArchiveEvent?.action === 'restored' ? latestArchiveEvent.created_at : null
+      };
+    });
 
     return res.status(200).json({
       success: true,
@@ -12396,7 +12743,7 @@ exports.getUserRoleDetails = async (req, res) => {
       });
     }
 
-    const user = await db.users.findOne({
+    const user = await db.users.scope('all').findOne({
       where: {
         id: user_id
       },
@@ -12406,6 +12753,7 @@ exports.getUserRoleDetails = async (req, res) => {
         'email',
         'user_type',
         'created_at',
+        'updated_at',
         'is_active'
       ]
     });
@@ -12433,6 +12781,8 @@ exports.getUserRoleDetails = async (req, res) => {
       );
     }
 
+    const archiveHistory = await getArchiveHistoryForInternalUser(user.id);
+
     return res.status(200).json({
       success: true,
       data: {
@@ -12444,7 +12794,8 @@ exports.getUserRoleDetails = async (req, res) => {
           user_type_name: role ? role.user_role : null,
           is_active: user.is_active,
           status_label: user.is_active ? 'Active' : 'In-Active',
-          created_at: user.created_at
+          created_at: user.created_at,
+          updated_at:user.updated_at
         },
 
         role: role
@@ -12459,6 +12810,8 @@ exports.getUserRoleDetails = async (req, res) => {
           : null,
 
         display_role: role ? role.user_role : null,
+
+        archive_history: archiveHistory,
 
         permissions: formattedPermissions
       }
@@ -12594,6 +12947,7 @@ exports.getPermissionModules = async (req, res) => {
 
 exports.deleteUser = async (req, res) => {
   const user_id = Number(req.params.user_id);
+  const { reason = null } = req.body || {};
 
   if (!Number.isInteger(user_id) || user_id <= 0) {
     return res.status(400).json({
@@ -12605,7 +12959,17 @@ exports.deleteUser = async (req, res) => {
   const transaction = await db.sequelize.transaction();
 
   try {
-    const user = await users.findOne({
+    const actor = await getRequestActor(req);
+
+    if (!actor) {
+      await transaction.rollback();
+      return res.status(401).json({
+        error: true,
+        message: 'Authentication required to delete user'
+      });
+    }
+
+    const user = await users.scope('all').findOne({
       where: {
         id: user_id,
         is_active: 1
@@ -12620,6 +12984,13 @@ exports.deleteUser = async (req, res) => {
         message: 'User not found or inactive'
       });
     }
+
+    const role = await db.user_type.findOne({
+      where: { user_type_id: user.user_type },
+      attributes: ['user_type_id', 'user_role'],
+      raw: true,
+      transaction
+    });
 
     // ================= CLIENT DELETE =================
     if (user.user_type == 3) {
@@ -12728,6 +13099,21 @@ exports.deleteUser = async (req, res) => {
       { transaction }
     );
 
+    await writeInternalUserArchiveHistory({
+      user,
+      action: 'deleted',
+      reason: reason || 'Deleted from roles and permissions',
+      actor,
+      previousStatus: 'active',
+      newStatus: 'inactive',
+      metadata: {
+        source_endpoint: 'DELETE /admin/delete-user/:user_id',
+        role_id: user.user_type,
+        role_name: role?.user_role || user.role || null
+      },
+      transaction
+    });
+
     await transaction.commit();
 
     return res.status(200).json({
@@ -12739,6 +13125,142 @@ exports.deleteUser = async (req, res) => {
     await transaction.rollback();
 
     console.error('Error deleting user:', error);
+
+    return res.status(500).json({
+      error: true,
+      message: 'Internal server error'
+    });
+  }
+};
+
+exports.restoreUser = async (req, res) => {
+  const user_id = Number(req.params.user_id);
+  const { reason = null } = req.body || {};
+
+  if (!Number.isInteger(user_id) || user_id <= 0) {
+    return res.status(400).json({
+      error: true,
+      message: 'Valid user_id is required'
+    });
+  }
+
+  const transaction = await db.sequelize.transaction();
+
+  try {
+    const actor = await getRequestActor(req);
+
+    if (!actor) {
+      await transaction.rollback();
+      return res.status(401).json({
+        error: true,
+        message: 'Authentication required to restore user'
+      });
+    }
+
+    const user = await users.scope('all').findOne({
+      where: { id: user_id },
+      transaction
+    });
+
+    if (!user) {
+      await transaction.rollback();
+      return res.status(404).json({
+        error: true,
+        message: 'User not found'
+      });
+    }
+
+    if (Number(user.is_active) === 1) {
+      await transaction.rollback();
+      return res.status(409).json({
+        error: true,
+        message: 'User is already active'
+      });
+    }
+
+    const role = await db.user_type.findOne({
+      where: {
+        user_type_id: user.user_type,
+        is_active: 1
+      },
+      attributes: ['user_type_id', 'user_role'],
+      raw: true,
+      transaction
+    });
+
+    if (!role) {
+      await transaction.rollback();
+      return res.status(404).json({
+        error: true,
+        message: 'Assigned role not found or inactive'
+      });
+    }
+
+    await user.update({
+      is_active: 1,
+      permissions_version: Sequelize.literal('permissions_version + 1')
+    }, { transaction });
+
+    await db.user_roles.update(
+      { is_active: 0 },
+      {
+        where: { user_id },
+        transaction
+      }
+    );
+
+    const existingUserRole = await db.user_roles.findOne({
+      where: {
+        user_id,
+        role_id: user.user_type
+      },
+      transaction
+    });
+
+    if (existingUserRole) {
+      await existingUserRole.update({ is_active: 1 }, { transaction });
+    } else {
+      await db.user_roles.create({
+        user_id,
+        role_id: user.user_type,
+        is_active: 1
+      }, { transaction });
+    }
+
+    await writeInternalUserArchiveHistory({
+      user,
+      action: 'restored',
+      reason: reason || 'Restored from roles and permissions',
+      actor,
+      previousStatus: 'inactive',
+      newStatus: 'active',
+      metadata: {
+        source_endpoint: 'POST /admin/restore-user/:user_id',
+        role_id: user.user_type,
+        role_name: role.user_role
+      },
+      transaction
+    });
+
+    await transaction.commit();
+
+    return res.status(200).json({
+      error: false,
+      success: true,
+      message: 'User restored successfully',
+      data: {
+        user_id,
+        is_active: 1,
+        status_label: 'Active',
+        role_id: user.user_type,
+        role_name: role.user_role
+      }
+    });
+
+  } catch (error) {
+    await transaction.rollback();
+
+    console.error('Error restoring user:', error);
 
     return res.status(500).json({
       error: true,

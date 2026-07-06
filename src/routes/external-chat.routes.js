@@ -7,7 +7,9 @@ const messagesView = requireAnyPermission([
   'admin_messages.view',
   'sales_rep_messages.view',
   'sales_admin_messages.view',
-  'production_manager_messages.view'
+  'production_manager_messages.view',
+  'creative_partner_messages.view',
+  'client_messages.view'
 ], { allowRoles: ['sales_rep', 'sales_admin', 'production_manager', 'creative', 'client'] });
 const messagesCreate = requireAnyPermission([
   'admin_messages.create'
@@ -41,11 +43,17 @@ const shootMessagesCreate = requireAnyPermission([
   'admin_shoots.edit',
   'admin_messages.create',
   'sales_rep_messages.create',
-  'sales_admin_messages.create'
+  'sales_admin_messages.create',
+  'client_messages.create',
+  'creative_partner_messages.create'
 ], { allowRoles: ['sales_rep', 'sales_admin', 'client', 'creative'] });
 const shootMessagesEdit = requireAnyPermission([
   'admin_shoots.edit',
-  'admin_messages.edit'
+  'admin_messages.edit',
+  'sales_admin_messages.edit',
+  'sales_rep_messages.edit',
+  'client_messages.edit',
+  'creative_partner_messages.edit'
 ], { allowRoles: ['sales_rep', 'sales_admin', 'client', 'creative'] });
 
 router.get('/rooms', authenticate, messagesView, externalChatController.listChatRooms);

@@ -225,6 +225,37 @@ const parseSort = (sortBy) => {
   return [[field, direction]];
 };
 
+const getEffectiveMeetingStatus = (meeting) => {
+  if (!meeting) return 'pending';
+
+  const storedStatus = String(meeting.meeting_status || 'pending').toLowerCase();
+  if (['cancelled', 'change_request', 'rescheduled'].includes(storedStatus)) {
+    return storedStatus;
+  }
+
+  const now = Date.now();
+  const start = meeting.meeting_date_time ? new Date(meeting.meeting_date_time).getTime() : NaN;
+  const end = meeting.meeting_end_time ? new Date(meeting.meeting_end_time).getTime() : NaN;
+
+  if (!Number.isNaN(end) && end <= now) {
+    return 'completed';
+  }
+
+  if (!Number.isNaN(start) && !Number.isNaN(end) && start <= now && end > now) {
+    return 'ongoing';
+  }
+
+  if (storedStatus === 'in_progress') {
+    return 'ongoing';
+  }
+
+  if (storedStatus === 'confirmed') {
+    return 'pending';
+  }
+
+  return storedStatus;
+};
+
 const ensureMeetingsTable = async () => {
   if (!meetingsTableReadyPromise) {
     meetingsTableReadyPromise = db.sequelize.query(`
@@ -455,7 +486,7 @@ const formatMeeting = (meeting, booking, storedParticipants) => {
 
   return {
     id: plainMeeting.meeting_id,
-    meeting_status: plainMeeting.meeting_status,
+    meeting_status: getEffectiveMeetingStatus(plainMeeting),
     meeting_date_time: plainMeeting.meeting_date_time,
     meeting_end_time: plainMeeting.meeting_end_time,
     meeting_type: plainMeeting.meeting_type,

@@ -1,0 +1,250 @@
+const db = require('../src/models');
+const bookingPaymentSummaryService = require('../src/services/booking-payment-summary.service');
+
+const round2 = (value) => Number(Number(value || 0).toFixed(2));
+
+async function getRecordedReceiptPaidTotalForBooking(bookingId, transaction = null) {
+  let stripePaidAmount = 0;
+  if (db.finance_invoice_payments) {
+    const stripeRows = await db.sequelize.query(
+      `
+        SELECT COALESCE(SUM(unique_payments.amount), 0) AS paid_amount
+        FROM (
+          SELECT payment_id, MAX(amount) AS amount
+          FROM finance_invoice_payments
+          WHERE booking_id = :bookingId
+            AND status = 'paid'
+            AND payment_id IS NOT NULL
+          GROUP BY payment_id
+        ) unique_payments
+      `,
+      {
+        replacements: { bookingId },
+        type: db.Sequelize.QueryTypes.SELECT,
+        transaction
+      }
+    );
+    stripePaidAmount = round2(stripeRows?.[0]?.paid_amount || 0);
+  }
+
+  let manualPaidAmount = 0;
+  try {
+    const manualRows = await db.sequelize.query(
+      `
+        SELECT COALESCE(SUM(amount), 0) AS paid_amount
+        FROM booking_manual_payments
+        WHERE booking_id = :bookingId
+      `,
+      {
+        replacements: { bookingId },
+        type: db.Sequelize.QueryTypes.SELECT,
+        transaction
+      }
+    );
+    manualPaidAmount = round2(manualRows?.[0]?.paid_amount || 0);
+  } catch (error) {
+    const code = error?.original?.code || error?.parent?.code || error?.code;
+    if (code !== 'ER_NO_SUCH_TABLE' && code !== 'ER_BAD_TABLE_ERROR') {
+      throw error;
+    }
+  }
+
+  return round2(stripePaidAmount + manualPaidAmount);
+}
+
+async function getSalesQuoteForBooking(bookingId, transaction = null) {
+  const lead = await db.sales_leads.findOne({
+    where: { booking_id: bookingId },
+    attributes: ['lead_id'],
+    transaction
+  });
+
+  if (!lead?.lead_id || !db.sales_quotes) return null;
+
+  return db.sales_quotes.findOne({
+    where: { lead_id: lead.lead_id },
+    attributes: ['sales_quote_id', 'total', 'subtotal'],
+    order: [
+      [db.sequelize.literal("CASE WHEN status = 'paid' THEN 0 WHEN status = 'accepted' THEN 1 WHEN status = 'partially_paid' THEN 2 WHEN status = 'sent' THEN 3 WHEN status = 'viewed' THEN 4 WHEN status = 'pending' THEN 5 ELSE 6 END"), 'ASC'],
+      ['accepted_at', 'DESC'],
+      ['updated_at', 'DESC'],
+      ['sales_quote_id', 'DESC']
+    ],
+    transaction
+  });
+}
+
+async function main() {
+  const bookingId = Number(process.argv[2]);
+  const explicitPaymentId = Number(process.argv[3]);
+  if (!Number.isFinite(bookingId) || bookingId <= 0) {
+    throw new Error('Usage: node scripts/repair-partial-payment-summary.js <booking_id> [payment_id]');
+  }
+
+  const transaction = await db.sequelize.transaction();
+
+  try {
+    const booking = await db.stream_project_booking.findByPk(bookingId, {
+      include: [{ model: db.quotes, as: 'primary_quote' }],
+      transaction
+    });
+
+    if (!booking) {
+      throw new Error(`Booking ${bookingId} not found`);
+    }
+
+    const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId, transaction);
+    const salesQuote = await getSalesQuoteForBooking(bookingId, transaction);
+    const quoteTotal = round2(
+      salesQuote?.total ||
+      salesQuote?.subtotal ||
+      existingSummary?.quote_total ||
+      booking.primary_quote?.total ||
+      booking.primary_quote?.price_after_discount ||
+      booking.primary_quote?.subtotal ||
+      booking.budget ||
+      0
+    );
+
+    if (!(quoteTotal > 0)) {
+      throw new Error(`Booking ${bookingId} does not have a quote total`);
+    }
+
+    const paymentIds = Array.from(new Set([
+      Number.isFinite(explicitPaymentId) && explicitPaymentId > 0 ? explicitPaymentId : null,
+      booking.payment_id ? Number(booking.payment_id) : null
+    ].filter(Boolean)));
+
+    const bookingPayments = paymentIds.length
+      ? await db.payment_transactions.findAll({
+          where: {
+            payment_id: paymentIds,
+            status: 'succeeded'
+          },
+          transaction
+        })
+      : [];
+
+    const recordedReceiptPaidAmount = await getRecordedReceiptPaidTotalForBooking(bookingId, transaction);
+    const repairedPaidAmount = round2(
+      bookingPayments.reduce((sum, payment) => sum + Number(payment.total_amount || 0), 0)
+    );
+    const paidAmount = recordedReceiptPaidAmount > 0 || repairedPaidAmount > 0
+      ? round2(Math.max(repairedPaidAmount, recordedReceiptPaidAmount))
+      : round2(existingSummary?.paid_amount || 0);
+    const dueAmount = round2(Math.max(quoteTotal - paidAmount, 0));
+    const paymentStatus = dueAmount <= 0 ? 'paid' : (paidAmount > 0 ? 'partially_paid' : 'pending');
+
+    await bookingPaymentSummaryService.upsertBookingPaymentSummary({
+      bookingId,
+      salesQuoteId: salesQuote?.sales_quote_id || existingSummary?.sales_quote_id || null,
+      quoteTotal,
+      paidAmount,
+      creditUsedAmount: 0,
+      transaction
+    });
+
+    if (dueAmount > 0) {
+      await db.stream_project_booking.update(
+        {
+          payment_id: null,
+          payment_completed_at: null,
+          is_completed: 0
+        },
+        { where: { stream_project_booking_id: bookingId }, transaction }
+      );
+
+      await db.sales_leads.update(
+        { lead_status: paidAmount > 0 ? 'partially_paid' : 'payment_link_sent' },
+        { where: { booking_id: bookingId }, transaction }
+      );
+    }
+
+    if (bookingPayments.length > 0 && db.invoice_send_history && db.finance_invoice_payments) {
+      let invoice = await db.invoice_send_history.findOne({
+        where: { booking_id: bookingId },
+        order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
+        transaction
+      });
+
+      if (!invoice) {
+        const lead = await db.sales_leads.findOne({
+          where: { booking_id: bookingId },
+          attributes: ['lead_id', 'client_name', 'guest_email', 'assigned_sales_rep_id'],
+          transaction
+        });
+
+        invoice = await db.invoice_send_history.create({
+          booking_id: bookingId,
+          quote_id: null,
+          lead_id: lead?.lead_id || null,
+          client_lead_id: null,
+          assigned_sales_rep_id: lead?.assigned_sales_rep_id || null,
+          client_name: lead?.client_name || null,
+          client_email: lead?.guest_email || booking.guest_email || null,
+          invoice_number: `INVBEIGE-M-${String(bookingId).padStart(4, '0')}`,
+          invoice_url: null,
+          invoice_pdf: null,
+          payment_status: dueAmount <= 0 ? 'paid' : 'pending',
+          sent_by_user_id: null,
+          sent_at: new Date()
+        }, { transaction });
+      }
+
+      for (const payment of bookingPayments) {
+        const payload = {
+          invoice_send_history_id: invoice.invoice_send_history_id,
+          payment_id: payment.payment_id,
+          finance_transaction_id: null,
+          booking_id: bookingId,
+          amount: round2(payment.total_amount || 0),
+          status: 'paid',
+          paid_at: payment.created_at || new Date(),
+          metadata_json: JSON.stringify({
+            source: 'partial_payment_repair',
+            stripe_payment_intent_id: payment.stripe_payment_intent_id || null,
+            stripe_charge_id: payment.stripe_charge_id || null
+          }),
+          updated_at: new Date()
+        };
+
+        const [invoicePayment] = await db.finance_invoice_payments.findOrCreate({
+          where: {
+            booking_id: bookingId,
+            payment_id: payment.payment_id
+          },
+          defaults: payload,
+          transaction
+        });
+
+        if (!invoicePayment.isNewRecord) {
+          await invoicePayment.update(payload, { transaction });
+        }
+      }
+    }
+
+    await transaction.commit();
+
+    console.log(JSON.stringify({
+      booking_id: bookingId,
+      quote_total: quoteTotal,
+      paid_amount: paidAmount,
+      due_amount: dueAmount,
+      payment_status: paymentStatus,
+      linked_payment_ids: bookingPayments.map((payment) => payment.payment_id)
+    }, null, 2));
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  } finally {
+    await db.sequelize.close();
+  }
+}
+
+main().catch(async (error) => {
+  console.error(error);
+  try {
+    await db.sequelize.close();
+  } catch (_) {}
+  process.exit(1);
+});

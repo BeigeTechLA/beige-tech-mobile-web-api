@@ -17,9 +17,25 @@ const https = require('https');
 const getFrontendBaseUrl = () =>
   String(process.env.FRONTEND_URL || 'http://localhost:3000').trim().replace(/\/+$/, '');
 
-const buildManualInvoiceFrontendUrl = (bookingId) => {
+const buildManualInvoiceFrontendUrl = (bookingId, { download = false } = {}) => {
   const frontendBaseUrl = getFrontendBaseUrl();
-  return `${frontendBaseUrl}/beige_invoice/${encodeURIComponent(String(bookingId))}?manual=1`;
+  const url = new URL(`${frontendBaseUrl}/beige_invoice/${encodeURIComponent(String(bookingId))}`);
+  url.searchParams.set('manual', '1');
+  if (download) url.searchParams.set('download', '1');
+  return url.toString();
+};
+
+const buildBookingCheckoutFrontendUrl = (bookingId, amount = null) => {
+  const frontendBaseUrl = getFrontendBaseUrl();
+  const url = new URL(`${frontendBaseUrl}/search-results/payment`);
+  url.searchParams.set('shootId', String(bookingId));
+
+  const numericAmount = Number(amount);
+  if (Number.isFinite(numericAmount) && numericAmount > 0.009) {
+    url.searchParams.set('amount', numericAmount.toFixed(2));
+  }
+
+  return url.toString();
 };
 
 const buildReceiptFrontendUrl = ({ bookingId, manualPaymentId = null, paymentId = null, download = false }) => {
@@ -186,6 +202,51 @@ const fetchStripePaymentReceiptRow = async ({ paymentId }) => {
   });
 };
 
+const fetchStripePaymentReceiptRowsForBooking = async ({ bookingId }) => {
+  const parsedBookingId = Number(bookingId);
+  if (!Number.isFinite(parsedBookingId) || parsedBookingId <= 0) return [];
+
+  try {
+    return await db.sequelize.query(
+      `
+        SELECT
+          p.payment_id,
+          p.stripe_payment_intent_id,
+          p.stripe_charge_id,
+          MAX(fip.amount) AS receipt_amount,
+          p.total_amount,
+          p.status,
+          MIN(COALESCE(fip.paid_at, p.created_at)) AS created_at
+        FROM finance_invoice_payments fip
+        INNER JOIN payment_transactions p
+          ON p.payment_id = fip.payment_id
+        WHERE fip.booking_id = :bookingId
+          AND fip.payment_id IS NOT NULL
+          AND fip.status = 'paid'
+          AND p.status = 'succeeded'
+        GROUP BY
+          p.payment_id,
+          p.stripe_payment_intent_id,
+          p.stripe_charge_id,
+          p.total_amount,
+          p.status
+        ORDER BY MIN(COALESCE(fip.paid_at, p.created_at)) ASC, p.payment_id ASC
+      `,
+      {
+        replacements: { bookingId: parsedBookingId },
+        type: QueryTypes.SELECT
+      }
+    );
+  } catch (error) {
+    const code = error?.original?.code || error?.parent?.code || error?.code;
+    if (code === 'ER_NO_SUCH_TABLE' || code === 'ER_BAD_TABLE_ERROR') {
+      return [];
+    }
+
+    throw error;
+  }
+};
+
 const resolveHostedPaymentUrlForInvoice = async ({
   booking,
   bookingId,
@@ -195,11 +256,21 @@ const resolveHostedPaymentUrlForInvoice = async ({
 }) => {
   const pendingAmount = Number(paymentState?.dueAmount ?? pricingData?.total ?? 0);
   if (!Number.isFinite(pendingAmount) || pendingAmount <= 0.009) return null;
+  const fallbackCheckoutUrl = buildBookingCheckoutFrontendUrl(bookingId, pendingAmount);
+
+  const hostedPaymentPricingData = buildOutstandingInvoicePricingData(pricingData, paymentState);
+  const expectedPendingCents = Math.round(Number(hostedPaymentPricingData.total || pendingAmount) * 100);
 
   if (booking?.stripe_invoice_id) {
     try {
       const existingInvoice = await stripe.invoices.retrieve(booking.stripe_invoice_id);
-      if (existingInvoice?.hosted_invoice_url && ['draft', 'open'].includes(String(existingInvoice.status || '').toLowerCase())) {
+      const existingInvoiceTotalCents = Number(existingInvoice?.total || existingInvoice?.amount_due || 0);
+      const invoiceMatchesPendingAmount = Math.abs(existingInvoiceTotalCents - expectedPendingCents) <= 1;
+      if (
+        invoiceMatchesPendingAmount &&
+        existingInvoice?.hosted_invoice_url &&
+        ['draft', 'open'].includes(String(existingInvoice.status || '').toLowerCase())
+      ) {
         return existingInvoice.hosted_invoice_url;
       }
     } catch (error) {
@@ -208,19 +279,59 @@ const resolveHostedPaymentUrlForInvoice = async ({
   }
 
   try {
-    const paymentInvoice = await paymentLinksService.createStripeInvoice(booking, pricingData, {
+    const paymentInvoice = await paymentLinksService.createStripeInvoice(booking, hostedPaymentPricingData, {
       recipientOverride,
       forceNewInvoice: false,
       metadata: {
         payment_source: 'quote_invoice',
-        standardized_parent_invoice: 'true'
+        standardized_parent_invoice: 'true',
+        payment_amount_type: hostedPaymentPricingData.is_outstanding_balance ? 'remaining_balance' : 'full_balance'
       }
     });
-    return paymentInvoice?.hosted_invoice_url || null;
+    return paymentInvoice?.hosted_invoice_url || fallbackCheckoutUrl;
   } catch (error) {
     console.warn(`Could not create hosted payment invoice for booking ${bookingId}: ${error.message}`);
-    return null;
+    return fallbackCheckoutUrl;
   }
+};
+
+const buildOutstandingInvoicePricingData = (pricingData = {}, paymentState = null) => {
+  const totalAmount = Number(pricingData?.total || 0);
+  const dueAmount = Number(paymentState?.dueAmount ?? paymentState?.due_amount ?? totalAmount);
+  const paidAmount = Number(paymentState?.paidAmount ?? paymentState?.paid_amount ?? 0);
+  const creditUsedAmount = Number(paymentState?.creditUsedAmount ?? paymentState?.credit_used_amount ?? 0);
+  const shouldUseOutstandingAmount =
+    Number.isFinite(dueAmount) &&
+    dueAmount > 0.009 &&
+    totalAmount > 0 &&
+    dueAmount < totalAmount - 0.009;
+
+  if (!shouldUseOutstandingAmount) {
+    return pricingData;
+  }
+
+  return {
+    ...pricingData,
+    source: 'remaining_balance',
+    is_outstanding_balance: true,
+    original_total: totalAmount,
+    previously_paid_amount: Number.isFinite(paidAmount) ? paidAmount : 0,
+    credit_used_amount: Number.isFinite(creditUsedAmount) ? creditUsedAmount : 0,
+    total: dueAmount,
+    subtotal: dueAmount,
+    discount_amount: 0,
+    price_after_discount: dueAmount,
+    tax_type: null,
+    tax_rate: 0,
+    tax_amount: 0,
+    line_items: [
+      {
+        name: 'Remaining balance',
+        quantity: 1,
+        total: dueAmount
+      }
+    ]
+  };
 };
 
 const resolveInvoiceDisplayNumber = (booking, stripeInvoiceNumber = null) =>
@@ -259,6 +370,13 @@ const formatInvoiceDate = (value) => {
     month: 'long',
     day: 'numeric'
   });
+};
+
+const normalizeRequestedPaymentAmount = (value) => {
+  if (value === undefined || value === null || value === '') return null;
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return NaN;
+  return Math.round(numericValue * 100) / 100;
 };
 
 const formatInvoiceTime = (value) => {
@@ -1041,6 +1159,189 @@ const applyQuoteDiscountFromLatestPaymentLink = async (booking, performedByUserI
     return true;
 };
 
+const toCurrencyNumber = (value) => {
+    const parsed = parseFloat(value);
+    return Number.isFinite(parsed) ? parseFloat(parsed.toFixed(2)) : 0;
+};
+
+const sumInvoiceLineItems = (items = []) => parseFloat(
+    items.reduce((sum, item) => sum + toCurrencyNumber(item?.total ?? item?.line_total), 0).toFixed(2)
+);
+
+const mapLegacyQuoteLineItems = (lineItems = []) => (lineItems || []).map(item => ({
+    name: item.item_name,
+    quantity: item.quantity,
+    unit_price: toCurrencyNumber(item.unit_price || 0),
+    total: toCurrencyNumber(item.line_total)
+}));
+
+const mapSalesQuoteLineItems = (lineItems = []) => (lineItems || [])
+    .filter((item) => item && item.is_active !== 0 && item.is_active !== false)
+    .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))
+    .map(item => ({
+        name: item.item_name,
+        quantity: item.quantity,
+        unit_price: toCurrencyNumber(item.unit_rate || item.estimated_pricing || 0),
+        total: toCurrencyNumber(item.line_total),
+        section_type: item.section_type || null
+    }));
+
+const resolveLinkedSalesQuoteForBooking = async (booking) => {
+    const bookingId = Number(booking?.stream_project_booking_id || 0);
+    if (!bookingId || !db.sales_quotes || !db.sales_quote_line_items) return null;
+
+    const includedSalesLeadIds = Array.isArray(booking.sales_leads)
+        ? booking.sales_leads.map((lead) => Number(lead?.lead_id || 0)).filter(Boolean)
+        : [];
+    const includedClientLeadIds = Array.isArray(booking.client_leads)
+        ? booking.client_leads.map((lead) => Number(lead?.lead_id || 0)).filter(Boolean)
+        : [];
+
+    let leadIds = [...includedSalesLeadIds, ...includedClientLeadIds];
+    if (!leadIds.length) {
+        const [salesLeadRows, clientLeadRows] = await Promise.all([
+            db.sales_leads.findAll({
+                where: { booking_id: bookingId },
+                attributes: ['lead_id'],
+                order: [['lead_id', 'DESC']],
+                limit: 5
+            }),
+            db.client_leads.findAll({
+                where: { booking_id: bookingId },
+                attributes: ['lead_id'],
+                order: [['lead_id', 'DESC']],
+                limit: 5
+            })
+        ]);
+
+        leadIds = [
+            ...(salesLeadRows || []).map((lead) => Number(lead?.lead_id || 0)),
+            ...(clientLeadRows || []).map((lead) => Number(lead?.lead_id || 0))
+        ].filter(Boolean);
+    }
+
+    if (!leadIds.length) return null;
+
+    return db.sales_quotes.findOne({
+        where: { lead_id: { [Op.in]: [...new Set(leadIds)] } },
+        include: [{
+            model: db.sales_quote_line_items,
+            as: 'line_items',
+            required: false
+        }],
+        order: [
+            ['accepted_at', 'DESC'],
+            ['sales_quote_id', 'DESC'],
+            [{ model: db.sales_quote_line_items, as: 'line_items' }, 'sort_order', 'ASC']
+        ]
+    });
+};
+
+const shouldPreferSalesQuotePricing = (salesQuote, legacyQuote) => {
+    if (!salesQuote) return false;
+    if (!legacyQuote) return true;
+
+    const salesLineItems = mapSalesQuoteLineItems(salesQuote.line_items || []);
+    const salesSubtotal = toCurrencyNumber(salesQuote.subtotal);
+    const salesTotal = toCurrencyNumber(salesQuote.total);
+
+    // Converted quote invoices must stay faithful to the accepted quote snapshot.
+    // Direct booking fees such as rush order fees can exist on the legacy booking quote,
+    // but they should not be added back onto quote-originated invoices.
+    if (salesLineItems.length > 0 || salesSubtotal > 0 || salesTotal > 0) return true;
+
+    const legacyLineItems = mapLegacyQuoteLineItems(legacyQuote.line_items || []);
+    const legacySubtotal = toCurrencyNumber(legacyQuote.subtotal);
+    const legacyTotal = toCurrencyNumber(legacyQuote.total);
+    const salesLineTotal = sumInvoiceLineItems(salesLineItems);
+    const legacyLineTotal = sumInvoiceLineItems(legacyLineItems);
+
+    if (salesLineItems.length > legacyLineItems.length) return true;
+    if (Math.abs(salesSubtotal - legacySubtotal) > 0.01 && salesSubtotal >= legacySubtotal) return true;
+    if (Math.abs(salesLineTotal - legacyLineTotal) > 0.01 && salesLineTotal >= legacyLineTotal) return true;
+    if (Math.abs(salesTotal - legacyTotal) > 0.01 && salesTotal > 0 && legacyTotal <= 0) return true;
+
+    return false;
+};
+
+const buildPricingDataFromQuoteSnapshot = async ({
+    quote,
+    booking,
+    paymentTransaction = null,
+    bookingMarkedPaid = false,
+    source = 'database'
+}) => {
+    const totalFromQuote = toCurrencyNumber(quote?.total);
+    const subtotal = toCurrencyNumber(quote?.subtotal);
+    const discountAmount = toCurrencyNumber(quote?.discount_amount);
+    const taxAmount = toCurrencyNumber(quote?.tax_amount);
+    const priceAfterDiscount = toCurrencyNumber(
+        quote?.price_after_discount != null
+            ? quote.price_after_discount
+            : Math.max(subtotal - discountAmount, 0)
+    );
+    const totalFromPayment = toCurrencyNumber(paymentTransaction?.total_amount);
+    const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+        bookingId: booking.stream_project_booking_id,
+        quoteTotal: totalFromQuote > 0 ? totalFromQuote : priceAfterDiscount,
+        paidAmount: totalFromPayment,
+        paymentStatus: bookingMarkedPaid ? 'paid' : 'pending'
+    });
+    const paymentSummary = paymentState.paymentSummary;
+    let resolvedTotal = totalFromQuote > 0 ? totalFromQuote : priceAfterDiscount;
+    let creditApplied = 0;
+    let effectivePaidFlag = bookingMarkedPaid;
+
+    if (paymentSummary) {
+        const fullQuoteTotal = paymentState.quoteTotal > 0 ? paymentState.quoteTotal : resolvedTotal;
+        const isSettled = paymentState.isPaid;
+        resolvedTotal = fullQuoteTotal;
+        creditApplied = paymentState.creditUsedAmount;
+        effectivePaidFlag = isSettled;
+    } else {
+        if (bookingMarkedPaid && totalFromPayment > 0 && resolvedTotal <= 0) {
+            resolvedTotal = totalFromPayment;
+        }
+        if (bookingMarkedPaid && totalFromPayment > 0 && resolvedTotal > totalFromPayment) {
+            creditApplied = Math.max(0, resolvedTotal - totalFromPayment);
+            resolvedTotal = creditApplied;
+            effectivePaidFlag = resolvedTotal <= 0;
+        } else if (bookingMarkedPaid && totalFromPayment > 0 && resolvedTotal <= totalFromPayment) {
+            resolvedTotal = 0;
+            effectivePaidFlag = true;
+        }
+    }
+
+    const isSalesQuote = Boolean(quote?.sales_quote_id);
+    const fullLineItems = isSalesQuote
+        ? mapSalesQuoteLineItems(quote.line_items || [])
+        : mapLegacyQuoteLineItems(quote.line_items || []);
+
+    return {
+        source,
+        sales_quote_id: quote?.sales_quote_id || null,
+        quote_id: quote?.quote_id || null,
+        is_paid: effectivePaidFlag,
+        stripe_payment_intent_id: paymentTransaction?.stripe_payment_intent_id || null,
+        total: toCurrencyNumber(resolvedTotal),
+        total_before_credit: paymentSummary && paymentState.quoteTotal > 0
+            ? toCurrencyNumber(paymentState.quoteTotal)
+            : (totalFromQuote > 0 ? totalFromQuote : priceAfterDiscount),
+        credit_applied: toCurrencyNumber(creditApplied),
+        paid_amount: paymentSummary ? toCurrencyNumber(paymentState.paidAmount) : totalFromPayment,
+        due_amount: paymentSummary ? toCurrencyNumber(paymentState.dueAmount) : toCurrencyNumber(resolvedTotal),
+        subtotal,
+        discount_amount: discountAmount,
+        price_after_discount: priceAfterDiscount,
+        tax_type: quote?.tax_type || null,
+        tax_rate: toCurrencyNumber(quote?.tax_rate || 0),
+        tax_amount: taxAmount,
+        discount_type: quote?.discount_type || quote?.applied_discount_type || null,
+        discount_value: toCurrencyNumber(quote?.discount_value ?? quote?.applied_discount_value ?? 0),
+        line_items: fullLineItems
+    };
+};
+
 const calculateLeadPricing = async (booking) => {
     if (!booking) return null;
 
@@ -1052,83 +1353,26 @@ const calculateLeadPricing = async (booking) => {
 
         // Prefer quote line items for both paid and unpaid bookings
         // so invoice/receipt keeps full breakdown (additional creatives, etc.).
-        const q = booking.primary_quote; 
-        if (q) {
-            const totalFromQuote = parseFloat(q.total || 0);
-            const totalAfterDiscount = parseFloat(q.price_after_discount || 0);
-            const totalFromPayment = parseFloat(paymentTransaction?.total_amount || 0);
-            const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
-                bookingId: booking.stream_project_booking_id,
-                quoteTotal: totalFromQuote > 0 ? totalFromQuote : totalAfterDiscount,
-                paidAmount: totalFromPayment,
-                paymentStatus: bookingMarkedPaid ? 'paid' : 'pending'
+        const q = booking.primary_quote;
+        const linkedSalesQuote = await resolveLinkedSalesQuoteForBooking(booking);
+        if (linkedSalesQuote && shouldPreferSalesQuotePricing(linkedSalesQuote, q)) {
+            return buildPricingDataFromQuoteSnapshot({
+                quote: linkedSalesQuote,
+                booking,
+                paymentTransaction,
+                bookingMarkedPaid,
+                source: 'sales_quote'
             });
-            const paymentSummary = paymentState.paymentSummary;
-            let resolvedTotal = totalFromQuote > 0 ? totalFromQuote : totalAfterDiscount;
-            let creditApplied = 0;
-            let effectivePaidFlag = bookingMarkedPaid;
+        }
 
-            if (paymentSummary) {
-                const fullQuoteTotal = paymentState.quoteTotal > 0 ? paymentState.quoteTotal : resolvedTotal;
-                const isSettled = paymentState.isPaid;
-                resolvedTotal = isSettled ? fullQuoteTotal : paymentState.dueAmount;
-                creditApplied = paymentState.creditUsedAmount;
-                effectivePaidFlag = isSettled;
-            } else {
-                if (bookingMarkedPaid && totalFromPayment > 0 && resolvedTotal <= 0) {
-                    resolvedTotal = totalFromPayment;
-                }
-                if (bookingMarkedPaid && totalFromPayment > 0 && resolvedTotal > totalFromPayment) {
-                    // When quote total is revised upward after an earlier payment,
-                    // collect only the remaining balance in the next payment flow.
-                    creditApplied = Math.max(0, resolvedTotal - totalFromPayment);
-                    resolvedTotal = creditApplied;
-                    effectivePaidFlag = resolvedTotal <= 0;
-                } else if (bookingMarkedPaid && totalFromPayment > 0 && resolvedTotal <= totalFromPayment) {
-                    // Booking has already covered current quote total.
-                    resolvedTotal = 0;
-                    effectivePaidFlag = true;
-                }
-            }
-            return {
-                source: 'database',
-                is_paid: effectivePaidFlag,
-                stripe_payment_intent_id: paymentTransaction?.stripe_payment_intent_id || null,
-                total: resolvedTotal,
-                total_before_credit: paymentSummary && paymentState.quoteTotal > 0
-                    ? paymentState.quoteTotal
-                    : (totalFromQuote > 0 ? totalFromQuote : totalAfterDiscount),
-                credit_applied: parseFloat(creditApplied.toFixed(2)),
-                paid_amount: paymentSummary ? paymentState.paidAmount : totalFromPayment,
-                due_amount: paymentSummary ? paymentState.dueAmount : resolvedTotal,
-                subtotal: paymentSummary && !effectivePaidFlag
-                    ? resolvedTotal
-                    : parseFloat(q.subtotal || 0),
-                discount_amount: paymentSummary && !effectivePaidFlag
-                    ? 0
-                    : parseFloat(q.discount_amount || 0),
-                price_after_discount: paymentSummary && !effectivePaidFlag
-                    ? resolvedTotal
-                    : parseFloat(q.price_after_discount || 0),
-                tax_type: q.tax_type || null,
-                tax_rate: parseFloat(q.tax_rate || 0),
-                tax_amount: paymentSummary && !effectivePaidFlag
-                    ? 0
-                    : parseFloat(q.tax_amount || 0),
-                line_items: paymentSummary && !effectivePaidFlag
-                    ? [{
-                        name: 'Remaining balance',
-                        quantity: 1,
-                        unit_price: resolvedTotal,
-                        total: resolvedTotal
-                    }]
-                    : (q.line_items || []).map(item => ({
-                        name: item.item_name,
-                        quantity: item.quantity,
-                        unit_price: parseFloat(item.unit_price || 0),
-                        total: parseFloat(item.line_total)
-                    }))
-            };
+        if (q) {
+            return buildPricingDataFromQuoteSnapshot({
+                quote: q,
+                booking,
+                paymentTransaction,
+                bookingMarkedPaid,
+                source: 'database'
+            });
         }
 
         if (paymentTransaction) {
@@ -1217,7 +1461,9 @@ exports.generatePaymentLink = async (req, res) => {
       client_lead_id,
       booking_id,
       discount_code_id,
-      expiry_hours
+      expiry_hours,
+      requested_amount,
+      payment_amount
     } = req.body;
 
     const createdBy = req.userId;
@@ -1259,7 +1505,60 @@ exports.generatePaymentLink = async (req, res) => {
       Number(convertedQuoteContexts.additionalInvoiceContext?.additionalAmount || 0) > 0 &&
       additionalApprovalStatus === 'approved';
 
-    if (bookingMarkedPaid && !hasApprovedAdditionalAmount) {
+    const requestedPaymentAmount = normalizeRequestedPaymentAmount(
+      requested_amount ?? payment_amount
+    );
+
+    if (Number.isNaN(requestedPaymentAmount) || (requestedPaymentAmount !== null && requestedPaymentAmount <= 0)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Payment amount must be greater than $0.00.'
+      });
+    }
+
+    const approvedAdditionalAmount = Number(convertedQuoteContexts.additionalInvoiceContext?.additionalAmount || 0);
+    const pricingForAmount = hasApprovedAdditionalAmount
+      ? { total: approvedAdditionalAmount }
+      : await calculateLeadPricing(booking);
+    const quoteTotal = Number(pricingForAmount?.total || booking.budget || booking.total_amount || 0);
+    const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+      bookingId: booking_id,
+      quoteTotal
+    });
+    const maxPayableAmount = hasApprovedAdditionalAmount
+      ? approvedAdditionalAmount
+      : paymentState.hasSummary
+        ? Number(paymentState.payableAmount || paymentState.dueAmount || 0)
+        : quoteTotal;
+    const isFullySettledBySummary =
+      paymentState.hasSummary &&
+      (paymentState.isPaid || Number(paymentState.dueAmount || 0) <= 0.009);
+    const shouldTreatBookingAsPaid = hasApprovedAdditionalAmount
+      ? false
+      : paymentState.hasSummary
+        ? isFullySettledBySummary
+        : bookingMarkedPaid;
+
+    let validatedRequestedAmount = null;
+    if (requestedPaymentAmount !== null) {
+      if (!Number.isFinite(maxPayableAmount) || maxPayableAmount <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'No outstanding amount is available for this booking.'
+        });
+      }
+
+      if (requestedPaymentAmount > maxPayableAmount + 0.009) {
+        return res.status(400).json({
+          success: false,
+          message: `Payment amount cannot exceed the outstanding balance of $${maxPayableAmount.toFixed(2)}.`
+        });
+      }
+
+      validatedRequestedAmount = requestedPaymentAmount;
+    }
+
+    if (shouldTreatBookingAsPaid && !hasApprovedAdditionalAmount) {
       if (convertedQuoteContexts.additionalInvoiceContext) {
         return res.status(409).json({
           success: false,
@@ -1284,6 +1583,17 @@ exports.generatePaymentLink = async (req, res) => {
       });
     }
 
+    if (
+      !hasApprovedAdditionalAmount &&
+      paymentState.hasSummary &&
+      (!Number.isFinite(maxPayableAmount) || maxPayableAmount <= 0.009)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'No outstanding amount is available for this booking.'
+      });
+    }
+
     const token = paymentLinksService.generateLinkToken();
 
     // 4. Calculate expiration
@@ -1302,6 +1612,7 @@ exports.generatePaymentLink = async (req, res) => {
       client_lead_id: client_lead_id || null,
       booking_id,
       discount_code_id: discount_code_id || null,
+      requested_amount: validatedRequestedAmount,
       created_by_user_id: createdBy,
       expires_at: expiresAt,
       is_used: 0
@@ -1316,7 +1627,8 @@ exports.generatePaymentLink = async (req, res) => {
     // 7. Build final payment URL
     const paymentUrl = paymentLinksService.buildPaymentUrl(
       token,
-      discountCode ? discountCode.code : null
+      discountCode ? discountCode.code : null,
+      validatedRequestedAmount
     );
 
     // 8. Update lead status if associated with lead
@@ -1329,6 +1641,7 @@ exports.generatePaymentLink = async (req, res) => {
         payment_link_id: paymentLink.payment_link_id,
         booking_id,
         discount_code_id,
+        requested_amount: validatedRequestedAmount,
         expires_at: expiresAt
       },
       performedByUserId: createdBy
@@ -1342,6 +1655,7 @@ exports.generatePaymentLink = async (req, res) => {
         link_token: token,
         url: paymentUrl,
         expires_at: expiresAt,
+        requested_amount: validatedRequestedAmount,
         discount_code: discountCode ? {
           code: discountCode.code,
           discount_type: discountCode.discount_type,
@@ -1432,7 +1746,12 @@ exports.sendPaymentLinkEmail = async (req, res) => {
       });
     }
 
-    const paymentUrl = paymentLinksService.buildPaymentUrl(link.link_token);
+    const linkRequestedAmount = normalizeRequestedPaymentAmount(link.requested_amount);
+    const paymentUrl = paymentLinksService.buildPaymentUrl(
+      link.link_token,
+      null,
+      linkRequestedAmount
+    );
     const formattedShootType = emailService.formatShootTypes(
       link.booking.shoot_type || link.booking.event_type || 'Shoot'
     );
@@ -1445,7 +1764,9 @@ exports.sendPaymentLinkEmail = async (req, res) => {
       bookingId: link.booking.stream_project_booking_id,
       quoteTotal: link.booking.primary_quote?.total || 0
     });
-    const proposedAmount = hasApprovedAdditionalAmount
+    const proposedAmount = linkRequestedAmount
+      ? linkRequestedAmount
+      : hasApprovedAdditionalAmount
       ? approvedAdditionalAmount
       : paymentState.hasSummary
         ? (paymentState.paidAmount > 0 ? paymentState.payableAmount : paymentState.quoteTotal)
@@ -1597,6 +1918,7 @@ exports.getPaymentLinkDetails = async (req, res) => {
         booking,
         pricing,
         discount_code: discountCode,
+        requested_amount: paymentLink.requested_amount ? Number(paymentLink.requested_amount) : null,
         expires_at: paymentLink.expires_at
       }
     });
@@ -1625,7 +1947,7 @@ exports.validatePaymentLink = async (req, res) => {
         { 
           model: stream_project_booking, 
           as: 'booking', 
-          attributes: ['stream_project_booking_id', 'payment_id'] 
+          attributes: ['stream_project_booking_id', 'payment_id', 'is_completed'] 
         },
         { 
           model: discount_codes, 
@@ -1651,6 +1973,23 @@ exports.validatePaymentLink = async (req, res) => {
     const hasApprovedAdditionalAmount =
       Number(convertedQuoteContexts.additionalInvoiceContext?.additionalAmount || 0) > 0 &&
       additionalApprovalStatus === 'approved';
+    const paymentState = paymentLink.booking
+      ? await bookingPaymentSummaryService.resolveBookingPaymentState({
+          bookingId: paymentLink.booking.stream_project_booking_id
+        })
+      : { hasSummary: false, isPaid: false, dueAmount: 0, payableAmount: 0 };
+    const isFullySettledBySummary =
+      paymentState.hasSummary &&
+      (paymentState.isPaid || Number(paymentState.dueAmount || 0) <= 0.009);
+    const bookingMarkedPaid = Boolean(
+      paymentLink.booking?.payment_id ||
+      paymentLink.booking?.is_completed === 1
+    );
+    const shouldTreatBookingAsPaid = hasApprovedAdditionalAmount
+      ? false
+      : paymentState.hasSummary
+        ? isFullySettledBySummary
+        : bookingMarkedPaid;
 
     if (paymentLink.is_used === 1) {
       return res.status(200).json({
@@ -1661,7 +2000,7 @@ exports.validatePaymentLink = async (req, res) => {
       });
     }
 
-    if (paymentLink.booking && paymentLink.booking.payment_id && !hasApprovedAdditionalAmount) {
+    if (shouldTreatBookingAsPaid && !hasApprovedAdditionalAmount) {
       await paymentLink.update({ is_used: 1 });
 
       return res.status(200).json({
@@ -1708,6 +2047,16 @@ exports.validatePaymentLink = async (req, res) => {
       data: {
         booking_id: paymentLink.booking_id,
         discount_code: paymentLink.discount_code ? paymentLink.discount_code.code : null,
+        requested_amount: paymentLink.requested_amount ? Number(paymentLink.requested_amount) : null,
+        payment_summary: paymentState.hasSummary
+          ? {
+              quote_total: paymentState.quoteTotal,
+              paid_amount: paymentState.paidAmount,
+              due_amount: paymentState.dueAmount,
+              payable_amount: paymentState.payableAmount,
+              payment_status: paymentState.paymentStatus
+            }
+          : null,
         expires_at: paymentLink.expires_at
       }
     });
@@ -1823,6 +2172,12 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
     });
     let invoiceDetails = null;
     const totalAmount = Number(pricingData.total || 0);
+    const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+      bookingId: parsedBookingId,
+      quoteTotal: totalAmount
+    });
+    const payablePricingData = buildOutstandingInvoicePricingData(pricingData, paymentState);
+    const payableTotalAmount = Number(payablePricingData.total || totalAmount);
 
     // Stripe does not support collecting a 0 amount, so for fully discounted bookings we always use BEIGE manual invoice.
     if (totalAmount <= 0) {
@@ -1911,7 +2266,7 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
           invoicePdf: stripeInvoice?.invoice_pdf || additionalInvoiceContext.existingInvoice?.invoice_pdf,
           stripeInvoiceNumber: stripeInvoice?.number || null,
           invoiceNumber: stripeInvoice?.number || additionalInvoiceContext.existingInvoice?.invoice_number,
-          totalAmount: additionalInvoiceContext.additionalAmount,
+          totalAmount: additionalInvoiceContext.revisedTotal ?? additionalInvoiceContext.additionalAmount,
           isPaid: false,
           isAdditionalPayment: true,
           previouslyPaidAmount: additionalInvoiceContext.previouslyPaidAmount,
@@ -1954,7 +2309,7 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
         invoicePdf,
         stripeInvoiceNumber: invoiceNumber,
         invoiceNumber,
-        totalAmount: reducedInvoiceContext.reducedAmount,
+        totalAmount: reducedInvoiceContext.revisedTotal ?? reducedInvoiceContext.reducedAmount,
         isPaid: false,
         isAdditionalPayment: false,
         isReducedAmount: true,
@@ -2023,24 +2378,34 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
 
     } else {
       // --- CASE 2: NOT PAID YET ---
-      const stripeInvoice = await paymentLinksService.createStripeInvoice(booking, pricingData, {
+      const stripeInvoice = await paymentLinksService.createStripeInvoice(booking, payablePricingData, {
         recipientOverride,
         forceNewInvoice: recipientIdentityChanged,
         metadata: quoteId ? {
           payment_source: 'quote_invoice',
-          sales_quote_id: String(quoteId)
+          sales_quote_id: String(quoteId),
+          payment_amount_type: payablePricingData.is_outstanding_balance ? 'remaining_balance' : 'full_balance'
         } : {
-          payment_source: 'booking_checkout'
+          payment_source: 'booking_checkout',
+          payment_amount_type: payablePricingData.is_outstanding_balance ? 'remaining_balance' : 'full_balance'
         }
       });
+      const brandedInvoiceUrl = buildManualInvoiceFrontendUrl(parsedBookingId);
+      const brandedInvoicePdfUrl = buildManualInvoiceFrontendUrl(parsedBookingId, { download: true });
       invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
-        invoiceUrl: stripeInvoice.hosted_invoice_url,
-        invoicePdf: stripeInvoice.invoice_pdf,
+        invoiceUrl: brandedInvoiceUrl,
+        invoicePdf: brandedInvoicePdfUrl,
+        paymentUrl: stripeInvoice.hosted_invoice_url,
+        stripeInvoiceUrl: stripeInvoice.hosted_invoice_url,
+        stripeInvoicePdf: stripeInvoice.invoice_pdf,
         stripeInvoiceNumber: stripeInvoice.number,
         invoiceNumber: stripeInvoice.number,
-        totalAmount: pricingData.total,
+        totalAmount,
         isPaid: false,
-        isAdditionalPayment: false
+        isAdditionalPayment: false,
+        previouslyPaidAmount: payablePricingData.previously_paid_amount,
+        revisedTotal: payablePricingData.original_total,
+        additionalAmount: payableTotalAmount
       });
     }
 
@@ -2305,7 +2670,11 @@ exports.getStripeInvoicePdf = async (req, res) => {
       }
       const pricingTotalAmount = Number(pricingData.total || 0);
       const totalAmount = paymentState.quoteTotal > 0 ? paymentState.quoteTotal : pricingTotalAmount;
-      const allowManualForZeroTotal = totalAmount <= 0 || isPaidFromSummary || (isReceiptRequested && pricingData?.is_paid);
+      const allowManualForZeroTotal =
+        totalAmount <= 0 ||
+        hasPaymentSummary ||
+        isPaidFromSummary ||
+        (isReceiptRequested && pricingData?.is_paid);
       if (!manualContext.isManual && !allowManualForZeroTotal) {
         return res.status(400).json({
           success: false,
@@ -2363,6 +2732,7 @@ exports.getStripeInvoicePdf = async (req, res) => {
           manualHistory.push({
             method: resolvedMethod,
             date: formatInvoiceDate(manualPayment.created_at),
+            sortDate: manualPayment.created_at,
             amount: Number(manualPayment.amount || 0),
             receiptUrl: buildReceiptFrontendOpenUrl({
               bookingId: parsedBookingId,
@@ -2398,6 +2768,7 @@ exports.getStripeInvoicePdf = async (req, res) => {
             manualHistory.push({
               method: resolvedMethod,
               date: formatInvoiceDate(activity.created_at),
+              sortDate: activity.created_at,
               amount: resolvedAmount,
               receiptUrl: meta.booking_manual_payment_id
                 ? buildReceiptFrontendOpenUrl({
@@ -2419,8 +2790,10 @@ exports.getStripeInvoicePdf = async (req, res) => {
       const lineItems = Array.isArray(pricingData.line_items) ? pricingData.line_items : [];
       const quoteDiscountAmount = Number(pricingData.discount_amount || 0);
       let quoteDiscountCode = null;
-      let quoteDiscountType = null;
-      let quoteDiscountValue = null;
+      let quoteDiscountType = pricingData.discount_type || null;
+      let quoteDiscountValue = pricingData.discount_value != null
+        ? Number(pricingData.discount_value)
+        : null;
       const primaryQuote = booking.primary_quote || null;
       if (primaryQuote?.discount_code_id) {
         const linkedDiscountCode = await discount_codes.findByPk(primaryQuote.discount_code_id, {
@@ -2453,11 +2826,53 @@ exports.getStripeInvoicePdf = async (req, res) => {
       const nonManualPaidAmount = summaryPaidTotal !== null
         ? Math.max(normalizedPaidAmount - totalManualPaidAmount, 0)
         : 0;
-      if (nonManualPaidAmount > 0.009) {
+      const stripePaymentHistoryRows = await fetchStripePaymentReceiptRowsForBooking({
+        bookingId: parsedBookingId
+      });
+      const totalStripeHistoryAmount = stripePaymentHistoryRows.reduce((sum, payment) => {
+        const amount = Number(payment?.receipt_amount || payment?.total_amount || 0);
+        return sum + (Number.isFinite(amount) ? amount : 0);
+      }, 0);
+      const stripePaymentIds = new Set(
+        stripePaymentHistoryRows
+          .map((payment) => Number(payment.payment_id))
+          .filter((paymentId) => Number.isFinite(paymentId) && paymentId > 0)
+      );
+
+      if (stripePaymentHistoryRows.length > 0) {
+        stripePaymentHistoryRows.forEach((payment) => {
+          const paymentId = Number(payment.payment_id);
+          const amount = Number(payment.receipt_amount || payment.total_amount || 0);
+          if (!Number.isFinite(paymentId) || paymentId <= 0 || !Number.isFinite(amount) || amount <= 0) return;
+
+          manualHistory.push({
+            method: 'Online Payment',
+            date: formatInvoiceDate(payment.created_at || paymentSummary?.updated_at || new Date()),
+            sortDate: payment.created_at || paymentSummary?.updated_at || new Date(),
+            amount,
+            receiptUrl: buildReceiptFrontendOpenUrl({
+              bookingId: parsedBookingId,
+              paymentId
+            }),
+            receiptDownloadUrl: buildReceiptFrontendUrl({
+              bookingId: parsedBookingId,
+              paymentId,
+              download: true
+            })
+          });
+        });
+      }
+
+      const remainingOnlinePaidAmount = Math.max(nonManualPaidAmount - totalStripeHistoryAmount, 0);
+      if (
+        remainingOnlinePaidAmount > 0.009 &&
+        (!booking.payment_id || !stripePaymentIds.has(Number(booking.payment_id)))
+      ) {
         manualHistory.push({
           method: 'Online Payment',
           date: formatInvoiceDate(paymentSummary?.updated_at || new Date()),
-          amount: nonManualPaidAmount,
+          sortDate: paymentSummary?.updated_at || new Date(),
+          amount: remainingOnlinePaidAmount,
           receiptUrl: booking.payment_id
             ? buildReceiptFrontendOpenUrl({
                 bookingId: parsedBookingId,
@@ -2478,6 +2893,7 @@ exports.getStripeInvoicePdf = async (req, res) => {
         manualHistory.push({
           method: 'Online Payment',
           date: formatInvoiceDate(paymentSummary?.updated_at || new Date()),
+          sortDate: paymentSummary?.updated_at || new Date(),
           amount: totalAmount,
           receiptUrl: booking.payment_id
             ? buildReceiptFrontendOpenUrl({
@@ -2500,6 +2916,7 @@ exports.getStripeInvoicePdf = async (req, res) => {
               ? String(selectedManualPayment.other_payment_mode).trim()
               : String(selectedManualPayment.payment_mode || 'manual').replace(/_/g, ' '),
             date: formatInvoiceDate(selectedManualPayment.created_at || new Date()),
+            sortDate: selectedManualPayment.created_at || new Date(),
             amount: Number(selectedManualPayment.amount || 0),
             receiptUrl: buildReceiptFrontendOpenUrl({
               bookingId: parsedBookingId,
@@ -2519,6 +2936,7 @@ exports.getStripeInvoicePdf = async (req, res) => {
         ? [{
             method: 'Online Payment',
             date: formatInvoiceDate(selectedStripePayment.created_at || new Date()),
+            sortDate: selectedStripePayment.created_at || new Date(),
             amount: Number(selectedStripePayment.total_amount || 0),
             receiptUrl: buildReceiptFrontendOpenUrl({
               bookingId: parsedBookingId,
@@ -2543,7 +2961,11 @@ exports.getStripeInvoicePdf = async (req, res) => {
               isPaidRequestedReceipt ||
               (hasPaymentSummary && paymentState.dueAmount <= 0 && normalizedPaidAmount >= totalAmount)
             );
-      const receiptPaymentHistory = selectedManualHistory || selectedStripeHistory || manualHistory;
+      const receiptPaymentHistory = selectedManualHistory || selectedStripeHistory || [...manualHistory].sort((a, b) => {
+        const aTime = new Date(a?.sortDate || a?.date || 0).getTime();
+        const bTime = new Date(b?.sortDate || b?.date || 0).getTime();
+        return (Number.isFinite(aTime) ? aTime : 0) - (Number.isFinite(bTime) ? bTime : 0);
+      });
       const receiptPaidAmount = selectedManualHistory || selectedStripeHistory
         ? Math.max(Number(selectedManualAmount ?? selectedStripeAmount ?? 0), 0)
         : normalizedPaidAmount;
@@ -2562,9 +2984,19 @@ exports.getStripeInvoicePdf = async (req, res) => {
             paymentState
           });
       const quoteLineItems = Array.isArray(primaryQuote?.line_items) ? primaryQuote.line_items : [];
-      const parentLineItems = quoteLineItems.length > 0 ? quoteLineItems : lineItems;
-      const parentSubtotal = Number(primaryQuote?.subtotal ?? pricingData.subtotal ?? totalAmount);
-      const parentDiscountAmount = Number(primaryQuote?.discount_amount ?? quoteDiscountAmount);
+      const pricingLineItemsTotal = sumInvoiceLineItems(lineItems);
+      const quoteLineItemsTotal = sumInvoiceLineItems(quoteLineItems);
+      const parentLineItems = lineItems.length > 0 ? lineItems : quoteLineItems;
+      const parentSubtotal = Number(
+        pricingData.subtotal != null
+          ? pricingData.subtotal
+          : (primaryQuote?.subtotal ?? (pricingLineItemsTotal || quoteLineItemsTotal || totalAmount))
+      );
+      const parentDiscountAmount = Number(
+        pricingData.discount_amount != null
+          ? pricingData.discount_amount
+          : (primaryQuote?.discount_amount ?? quoteDiscountAmount)
+      );
       const receiptItems = isChildReceipt
         ? [{
             name: `${selectedStripePayment ? 'Online' : 'Manual'} payment received`,
@@ -2603,6 +3035,9 @@ exports.getStripeInvoicePdf = async (req, res) => {
         discountCode: quoteDiscountCode,
         discountType: quoteDiscountType,
         discountValue: quoteDiscountValue,
+        taxAmount: isChildReceipt ? 0 : Number(pricingData.tax_amount || 0),
+        taxType: pricingData.tax_type || 'Tax',
+        taxRate: Number(pricingData.tax_rate || 0),
         total: documentTotal,
         paidAmount: receiptPaidAmount,
         paymentUrl,

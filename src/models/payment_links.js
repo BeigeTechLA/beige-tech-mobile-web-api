@@ -45,6 +45,10 @@ module.exports = function(sequelize, DataTypes) {
         key: 'discount_code_id'
       }
     },
+    requested_amount: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true
+    },
     created_by_user_id: {
       type: DataTypes.INTEGER,
       allowNull: false,

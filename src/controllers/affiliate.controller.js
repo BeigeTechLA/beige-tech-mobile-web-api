@@ -55,6 +55,61 @@ function generateReferralCode() {
   return crypto.randomBytes(3).toString('hex').toUpperCase();
 }
 
+async function isArchivedClientOnlyUser(userId, transaction = null) {
+  if (!userId) return false;
+
+  const [archivedClient, activeClient, activeCrew] = await Promise.all([
+    db.clients.findOne({
+      where: { user_id: userId, is_active: 0 },
+      attributes: ['client_id'],
+      transaction,
+      raw: true
+    }),
+    db.clients.findOne({
+      where: { user_id: userId, is_active: 1 },
+      attributes: ['client_id'],
+      transaction,
+      raw: true
+    }),
+    db.crew_members.findOne({
+      where: { user_id: userId, is_active: 1 },
+      attributes: ['crew_member_id'],
+      transaction,
+      raw: true
+    })
+  ]);
+
+  return Boolean(archivedClient && !activeClient && !activeCrew);
+}
+
+async function isAffiliateEligibleForReferral(affiliate, transaction = null) {
+  if (!affiliate) return false;
+
+  const plainAffiliate = affiliate.toJSON ? affiliate.toJSON() : affiliate;
+  const userId = plainAffiliate.user_id;
+
+  if (!userId) return false;
+  if (plainAffiliate.status && plainAffiliate.status !== 'active') return false;
+  if (plainAffiliate.is_active !== undefined && Number(plainAffiliate.is_active) !== 1) return false;
+
+  const owner = await db.users.scope('all').findOne({
+    where: { id: userId },
+    attributes: ['id', 'is_active'],
+    transaction,
+    raw: true
+  });
+
+  if (!owner || Number(owner.is_active) !== 1) return false;
+
+  if (await isArchivedClientOnlyUser(userId, transaction)) {
+    return false;
+  }
+
+  return true;
+}
+
+exports.isAffiliateEligibleForReferral = isAffiliateEligibleForReferral;
+
 /**
  * Create affiliate account for a user
  * Called automatically on user registration
@@ -189,6 +244,14 @@ exports.validateReferralCode = async (req, res) => {
 
     // 3. If no affiliate found, return error
     if (!affiliate) {
+      return res.status(404).json({
+        success: false,
+        message: 'Referral code not found or inactive',
+        valid: false
+      });
+    }
+
+    if (!(await isAffiliateEligibleForReferral(affiliate))) {
       return res.status(404).json({
         success: false,
         message: 'Referral code not found or inactive',
@@ -557,6 +620,11 @@ exports.processReferral = async (referralCode, paymentId, bookingAmount, referre
       return null;
     }
 
+    if (!(await isAffiliateEligibleForReferral(affiliate, transaction))) {
+      console.log('Referral code owner is not eligible:', referralCode);
+      return null;
+    }
+
     // Prevent self-referral
     if (referredUserId && affiliate.user_id === referredUserId) {
       console.log('Self-referral attempted and blocked for user:', referredUserId);
@@ -607,6 +675,7 @@ exports.processUserAffiliateCommission = async (
     });
 
     if (!affiliate) return null;
+    if (!(await isAffiliateEligibleForReferral(affiliate, transaction))) return null;
     if (excludeAffiliateId && Number(affiliate.affiliate_id) === Number(excludeAffiliateId)) {
       return null;
     }

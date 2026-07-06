@@ -81,6 +81,12 @@ function buildManualReceiptHtml(data) {
   const discountLabel = discountCode
     ? `Discount (${escapeHtml(discountCode)}${discountMeta ? `, ${escapeHtml(discountMeta)}` : ''})`
     : (discountMeta ? `Discount (${escapeHtml(discountMeta)})` : 'Discount');
+  const taxAmount = Math.max(0, Number(data.taxAmount || 0));
+  const taxType = String(data.taxType || 'Tax').trim() || 'Tax';
+  const taxRate = Number(data.taxRate || 0);
+  const taxLabel = Number.isFinite(taxRate) && taxRate > 0
+    ? `${taxType} (${taxRate}%)`
+    : taxType;
 
   const itemRows = items
     .map((item) => `
@@ -731,6 +737,7 @@ function buildManualReceiptHtml(data) {
           <div class="totals">
             <div class="tot-row"><span>Subtotal</span><span>${formatCurrency(data.subtotal || 0)}</span></div>
             ${discountAmount > 0 ? `<div class="tot-row"><span>${discountLabel}</span><span>- ${formatCurrency(discountAmount)}</span></div>` : ''}
+            ${taxAmount > 0 ? `<div class="tot-row"><span>${escapeHtml(taxLabel)}</span><span>${formatCurrency(taxAmount)}</span></div>` : ''}
             <div class="tot-row"><span><b>Total</b></span><span><b>${formatCurrency(totalAmount)}</b></span></div>
             <div class="tot-row amount-paid"><span>Amount Paid</span><b>${formatCurrencyBold(totalPaidAmount)}</b></div>
             <div class="tot-row"><span>Pending Amount</span><span><b>${formatCurrency(pendingAmount)}</b></span></div>

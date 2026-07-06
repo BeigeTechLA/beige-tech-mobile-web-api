@@ -2535,3 +2535,13 @@ CREATE TABLE IF NOT EXISTS user_archive_history (
   CONSTRAINT fk_user_archive_history_performed_by
     FOREIGN KEY (performed_by_user_id) REFERENCES users(id) ON DELETE RESTRICT
 );
+
+-- 01-07-26
+
+ALTER TABLE payment_links
+  ADD COLUMN IF NOT EXISTS requested_amount DECIMAL(10, 2) NULL AFTER discount_code_id;
+
+--03-07-26
+ALTER TABLE stream_project_booking
+  ADD COLUMN start_date_time VARCHAR(50) NULL,
+  ADD COLUMN end_date_time VARCHAR(50) NULL;

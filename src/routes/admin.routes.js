@@ -16,7 +16,7 @@ const dashboardOrShootsView = requireAnyPermission([
   'admin_shoots.view',
   'production_manager_dashboard.view'
 ], { allowRoles: ['production_manager'] });
-const shootsView = requireAnyPermission(['admin_shoots.view']);
+const shootsView = requireAnyPermission(['admin_shoots.view', 'sales_rep_shoots.view'], { allowRoles: ['sales_rep'] });
 const shootsCreate = requireAnyPermission(['admin_shoots.create']);
 const allowSalesRepRoles = { allowRoles: ['sales_rep', 'sales_admin'] };
 const shootsEdit = requireAnyPermission([
@@ -165,6 +165,7 @@ router.get('/get-projects', authMiddleware, projectListView, admin.getAllProject
 router.get('/get-upcoming-projects', admin.getUpcomingEvents);
 router.get('/get-project-status', admin.getProjectStats);
 router.post('/final-project-brief', admin.createProjectBrief);
+router.get('/get-crew-members', authMiddleware, adminUsersOrSalesRepresentativeView, admin.getCrewMembers);
 router.post('/get-crew-members', authMiddleware, adminUsersOrSalesRepresentativeView, admin.getCrewMembers);
 router.post('/get-approved-crew-members', authMiddleware, crewAvailabilityView, admin.getApprovedCrewMembers);
 router.get('/crew-member/:crew_member_id', authMiddleware, adminSalesRepresentativeAvailabilityView, admin.getCrewMemberById);
@@ -245,6 +246,7 @@ router.get('/users/roles', authMiddleware, requireSuperAdmin, admin.getUsersWith
 router.get('/users/:user_id/role-details', authMiddleware, requireSuperAdmin, admin.getUserRoleDetails);
 router.get('/permissions/modules', authMiddleware, requireSuperAdmin, admin.getPermissionModules);
 router.delete('/delete-user/:user_id', authMiddleware, requireSuperAdmin, admin.deleteUser);
+router.post('/restore-user/:user_id', authMiddleware, requireSuperAdmin, admin.restoreUser);
 router.post('/users/permissions/assign', authMiddleware, requireSuperAdmin, admin.assignPermissionsToUser);
 router.put('/users/permissions/update', authMiddleware, requireSuperAdmin, admin.updateUserPermissions);
 router.get('/users/:user_id/permissions', authMiddleware, admin.getUserPermissions);

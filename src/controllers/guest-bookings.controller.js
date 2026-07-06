@@ -14,6 +14,7 @@ const {
 } = require('../utils/studio-pricing');
 const accountCreditService = require('../services/account-credit.service');
 const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
+const affiliateController = require('./affiliate.controller');
 const REFERRAL_DISCOUNT_PERCENT = 10;
 
 const parseQuoteActivityMetadata = (value) => {
@@ -1735,6 +1736,13 @@ exports.getBookingPaymentDetails = async (req, res) => {
         });
 
         if (!referralAffiliate) {
+          return res.status(constants.BAD_REQUEST.code).json({
+            success: false,
+            message: 'Invalid referral code'
+          });
+        }
+
+        if (!(await affiliateController.isAffiliateEligibleForReferral(referralAffiliate))) {
           return res.status(constants.BAD_REQUEST.code).json({
             success: false,
             message: 'Invalid referral code'

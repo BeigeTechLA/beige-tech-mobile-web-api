@@ -1817,12 +1817,16 @@ function resolveValidity({ validUntil, quoteValidityDays, validUntilProvided = f
   };
 }
 
+function normalizeRoleName(role) {
+  return String(role || '').trim().toLowerCase().replace(/\s+/g, '_');
+}
+
 function isAdminRole(role) {
-  return role === 'admin' || role === 'Admin' || role === 'sales_admin' || role === 'Sales_Admin';
+  return ['admin', 'sales_admin', 'super_admin', 'superadmin'].includes(normalizeRoleName(role));
 }
 
 function isClientRole(role) {
-  return role === 'client' || role === 'Client';
+  return normalizeRoleName(role) === 'client';
 }
 
 async function getRandomActiveSalesRepId(transaction) {
@@ -1911,6 +1915,13 @@ function buildQuoteAccessWhere(user, options = {}) {
       { assigned_sales_rep_id: user.userId }
     ]
   };
+}
+
+function buildQuoteReadAccessWhere(user) {
+  if (isClientRole(user?.role)) {
+    return buildQuoteAccessWhere(user);
+  }
+  return buildQuoteAccessWhere(user, { restrictToLoggedInRep: false });
 }
 
 async function getCatalog(pricingMode = null) {
@@ -3529,6 +3540,28 @@ function normalizeBookingDaysPayload(bookingDays = [], defaultTimeZone = null) {
     });
 }
 
+function buildBookingDateTimeValue(dateValue, timeValue) {
+  const date = dateValue ? String(dateValue).trim() : '';
+  const time = normalizeTime(timeValue || null);
+  if (!date || !time) return null;
+  return `${date}T${time}`;
+}
+
+function resolveBookingDateTimeValues(prefillData = {}) {
+  if (prefillData.booking_type === 'multi_day' && Array.isArray(prefillData.booking_days) && prefillData.booking_days.length) {
+    const firstDay = [...prefillData.booking_days].sort((a, b) => new Date(a.date) - new Date(b.date))[0];
+    return {
+      start_date_time: buildBookingDateTimeValue(firstDay?.date, firstDay?.start_time),
+      end_date_time: buildBookingDateTimeValue(firstDay?.date, firstDay?.end_time)
+    };
+  }
+
+  return {
+    start_date_time: buildBookingDateTimeValue(prefillData.start_date, prefillData.start_time),
+    end_date_time: buildBookingDateTimeValue(prefillData.start_date, prefillData.end_time)
+  };
+}
+
 function applyConvertBookingOverrides(prefillData, payload = {}) {
   const next = { ...prefillData };
   const timeZone = payload.time_zone || payload.timeZone || null;
@@ -3721,6 +3754,7 @@ async function syncConvertedQuoteArtifacts({
 
   const wasAlreadyConverted = Boolean(lead && booking);
   const bookingDescription = buildConvertedBookingDescription(quoteDetails, prefillData);
+  const bookingDateTimeValues = resolveBookingDateTimeValues(prefillData);
 
   if (!booking) {
     booking = await db.stream_project_booking.create({
@@ -3736,6 +3770,8 @@ async function syncConvertedQuoteArtifacts({
       start_time: prefillData.start_time || null,
       end_time: prefillData.end_time || null,
       time_zone: prefillData.time_zone || null,
+      start_date_time: bookingDateTimeValues.start_date_time,
+      end_date_time: bookingDateTimeValues.end_date_time,
       budget: Number(quoteDetails.total || 0) || null,
       crew_size_needed: prefillData.crew_size,
       event_location: prefillData.location,
@@ -3767,6 +3803,8 @@ async function syncConvertedQuoteArtifacts({
       start_time: prefillData.start_time || booking.start_time || null,
       end_time: prefillData.end_time || booking.end_time || null,
       time_zone: prefillData.time_zone || booking.time_zone || null,
+      start_date_time: bookingDateTimeValues.start_date_time || booking.start_date_time || null,
+      end_date_time: bookingDateTimeValues.end_date_time || booking.end_date_time || null,
       budget: Number(quoteDetails.total || 0) || booking.budget || null,
       crew_size_needed: prefillData.crew_size ?? booking.crew_size_needed,
       event_location: prefillData.location || booking.event_location || null,
@@ -4282,7 +4320,20 @@ async function resolveQuoteBillingState(quote, transaction) {
       })
     : null;
 
-  const bookingMarkedCollected = Boolean(booking?.payment_id);
+  const bookingPayment = booking?.payment_id && db.payment_transactions
+    ? await db.payment_transactions.findByPk(booking.payment_id, {
+        attributes: ['payment_id', 'total_amount', 'status'],
+        transaction
+      })
+    : null;
+  const bookingPaidAmount = roundCurrency(bookingPayment?.total_amount || 0);
+  const quoteTotal = roundCurrency(quote.total || 0);
+  const bookingMarkedCollected = quoteTotal > 0
+    ? bookingPaidAmount >= quoteTotal
+    : Boolean(booking?.payment_id);
+  const bookingPaymentStatus = bookingPaidAmount > 0
+    ? (bookingMarkedCollected ? 'paid' : 'partially_paid')
+    : null;
   const historyMarkedCollected = latestInvoiceHistory?.payment_status === 'paid';
   const refreshActivity = db.sales_quote_activities
     ? await db.sales_quote_activities.findOne({
@@ -4323,7 +4374,9 @@ async function resolveQuoteBillingState(quote, transaction) {
   const summaryCollectedAmount = roundCurrency(
     Number(paymentState.paidAmount || 0) + Number(paymentState.creditUsedAmount || 0)
   );
-  const summaryPaymentStatus = String(paymentState.paymentStatus || '').toLowerCase();
+  const summaryPaymentStatus = paymentState.hasSummary
+    ? String(paymentState.paymentStatus || '').toLowerCase()
+    : '';
   const summaryHasManualPaymentEvidence = Boolean(
     paymentSummary?.manual_payment_mode ||
     paymentSummary?.manual_payment_proof_url ||
@@ -4348,12 +4401,20 @@ async function resolveQuoteBillingState(quote, transaction) {
   const isCollected = !refreshOutstanding && (bookingMarkedCollected || historyMarkedCollected || summaryMarkedCollected);
   const paymentStatus = refreshOutstanding
     ? 'partially_paid'
-    : (summaryPaymentStatus || refreshInvoiceHistory?.payment_status || latestInvoiceHistory?.payment_status || (isCollected ? 'paid' : 'pending'));
-  const fallbackCollectedAmount = isCollected ? roundCurrency(quote.total) : 0;
+    : (
+        summaryPaymentStatus ||
+        bookingPaymentStatus ||
+        refreshInvoiceHistory?.payment_status ||
+        latestInvoiceHistory?.payment_status ||
+        (isCollected ? 'paid' : 'pending')
+      );
+  const fallbackCollectedAmount = isCollected
+    ? quoteTotal
+    : bookingPaidAmount;
   const collectedAmount = refreshOutstanding
     ? Math.max(refreshPreviousTotal, summaryCollectedAmount)
     : Math.max(fallbackCollectedAmount, summaryCollectedAmount);
-  const outstandingAmount = roundCurrency(Math.max(roundCurrency(quote.total) - collectedAmount, 0));
+  const outstandingAmount = roundCurrency(Math.max(quoteTotal - collectedAmount, 0));
 
   return {
     booking,
@@ -5091,6 +5152,12 @@ async function updateQuote(salesQuoteId, payload, user) {
         location_longitude: quote.location_longitude,
         project_description: quote.project_description,
         video_shoot_type: quote.video_shoot_type,
+        booking_type: quote.booking_type,
+        time_zone: quote.time_zone,
+        start_date: quote.start_date,
+        start_time: quote.start_time,
+        end_time: quote.end_time,
+        booking_days: quote.booking_days,
         quote_validity_days: quote.quote_validity_days,
         valid_until: quote.valid_until,
         discount_type: quote.discount_type,
@@ -5119,6 +5186,20 @@ async function updateQuote(salesQuoteId, payload, user) {
         location: resolveQuoteLocationAddress(updatedQuoteDetails),
         location_latitude: updatedQuoteDetails.location_latitude ?? null,
         location_longitude: updatedQuoteDetails.location_longitude ?? null,
+        booking_type: updatedQuoteDetails.booking_type || null,
+        time_zone: updatedQuoteDetails.time_zone || null,
+        start_date: updatedQuoteDetails.start_date || null,
+        start_time: normalizeTime(updatedQuoteDetails.start_time) || null,
+        end_time: normalizeTime(updatedQuoteDetails.end_time) || null,
+        booking_days: parseBookingDaysValue(updatedQuoteDetails.booking_days),
+        has_schedule_override: Boolean(
+          updatedQuoteDetails.booking_type ||
+          updatedQuoteDetails.time_zone ||
+          updatedQuoteDetails.start_date ||
+          updatedQuoteDetails.start_time ||
+          updatedQuoteDetails.end_time ||
+          parseBookingDaysValue(updatedQuoteDetails.booking_days).length
+        ),
         content_type: roleData.content_type,
         shoot_type: mapQuoteShootTypeToBookingShootType(updatedQuoteDetails.video_shoot_type),
         quote_shoot_type_label: updatedQuoteDetails.video_shoot_type || null,
@@ -5436,6 +5517,20 @@ async function buildPaymentBookingPrefillDataFromQuote(quoteDetails, payload = {
     location: resolveQuoteLocationAddress(quoteDetails),
     location_latitude: quoteDetails.location_latitude ?? quoteDetails.latitude ?? null,
     location_longitude: quoteDetails.location_longitude ?? quoteDetails.longitude ?? null,
+    booking_type: quoteDetails.booking_type || null,
+    time_zone: quoteDetails.time_zone || null,
+    start_date: quoteDetails.start_date || null,
+    start_time: normalizeTime(quoteDetails.start_time) || null,
+    end_time: normalizeTime(quoteDetails.end_time) || null,
+    booking_days: parseBookingDaysValue(quoteDetails.booking_days),
+    has_schedule_override: Boolean(
+      quoteDetails.booking_type ||
+      quoteDetails.time_zone ||
+      quoteDetails.start_date ||
+      quoteDetails.start_time ||
+      quoteDetails.end_time ||
+      parseBookingDaysValue(quoteDetails.booking_days).length
+    ),
     content_type: roleData.content_type,
     shoot_type: mapQuoteShootTypeToBookingShootType(quoteDetails.video_shoot_type),
     quote_shoot_type_label: quoteDetails.video_shoot_type || null,
@@ -5532,7 +5627,7 @@ async function ensureQuoteBookingForPayment(salesQuoteId, user, payload = {}) {
 }
 
 async function fetchQuoteById(salesQuoteId, user = null) {
-  const accessWhere = user ? buildQuoteAccessWhere(user) : {};
+  const accessWhere = user ? buildQuoteReadAccessWhere(user) : {};
   const quote = await db.sales_quotes.findOne({
     where: { sales_quote_id: salesQuoteId, ...accessWhere },
     include: [
@@ -5669,7 +5764,7 @@ async function getQuoteById(salesQuoteId, user) {
 
 async function listQuoteVersions(salesQuoteId, user) {
   const quote = await db.sales_quotes.findOne({
-    where: { sales_quote_id: salesQuoteId, ...buildQuoteAccessWhere(user) },
+    where: { sales_quote_id: salesQuoteId, ...buildQuoteReadAccessWhere(user) },
     attributes: ['sales_quote_id', 'created_at', 'updated_at'],
     raw: true
   });
@@ -5703,7 +5798,7 @@ async function getQuoteVersionByNumber(salesQuoteId, versionNumber, user) {
   }
 
   const quote = await db.sales_quotes.findOne({
-    where: { sales_quote_id: salesQuoteId, ...buildQuoteAccessWhere(user) },
+    where: { sales_quote_id: salesQuoteId, ...buildQuoteReadAccessWhere(user) },
     attributes: ['sales_quote_id', 'created_at', 'updated_at'],
     raw: true
   });
@@ -5784,7 +5879,7 @@ async function getCurrentUsableQuoteVersionSnapshot(salesQuoteId, user = null) {
   const quote = await db.sales_quotes.findOne({
     where: {
       sales_quote_id: normalizedQuoteId,
-      ...(user ? buildQuoteAccessWhere(user) : {})
+      ...(user ? buildQuoteReadAccessWhere(user) : {})
     },
     attributes: ['sales_quote_id', 'created_at', 'updated_at'],
     raw: true
