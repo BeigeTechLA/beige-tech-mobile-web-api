@@ -1,4 +1,6 @@
 const cpCompensationService = require('../services/cp-compensation.service');
+const constants = require('../utils/constants');
+const { S3UploadFiles, toAbsoluteBeigeAssetUrl } = require('../utils/common');
 
 function getRequestUserId(req) {
   return req.userId || req.user?.userId || req.user?.id || null;
@@ -10,6 +12,52 @@ function buildPayload(req, bookingId = null) {
     booking_id: req.body.booking_id || req.body.bookingId || bookingId
   };
 }
+
+const sanitizeFolderId = (value, fallback) => {
+  const normalized = String(value || '').replace(/[^a-zA-Z0-9_-]/g, '').trim();
+  return normalized || fallback;
+};
+
+exports.uploadPaymentProof = async (req, res) => {
+  try {
+    const file = req.file;
+    if (!file) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Proof file is required'
+      });
+    }
+
+    const bookingId = sanitizeFolderId(req.body.booking_id || req.body.bookingId, 'unknown-booking');
+    const earningId = sanitizeFolderId(req.body.creator_earning_id || req.body.earningId, 'unknown-earning');
+    const folder = `cp-compensation/receipts/booking-${bookingId}/earning-${earningId}`;
+    const uploaded = await S3UploadFiles({ cp_receipt: [file] }, { prefix: folder });
+    const uploadedFilePath = uploaded?.[0]?.file_path || null;
+
+    if (!uploadedFilePath) {
+      return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+        success: false,
+        message: 'Failed to upload proof file'
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'CP compensation proof uploaded successfully',
+      data: {
+        file_path: uploadedFilePath,
+        proof_url: toAbsoluteBeigeAssetUrl(uploadedFilePath),
+        folder
+      }
+    });
+  } catch (error) {
+    console.error('Upload CP compensation proof error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to upload proof file'
+    });
+  }
+};
 
 exports.submitFromSalesAdmin = async (req, res) => {
   try {

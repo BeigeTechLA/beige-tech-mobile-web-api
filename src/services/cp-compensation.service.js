@@ -1,5 +1,6 @@
 const db = require('../models');
 const config = require('../config/config');
+const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
 
 const stripe = config.stripe?.secretKey
   ? require('stripe')(config.stripe.secretKey)
@@ -260,6 +261,66 @@ function getPaymentMethod(payload = {}) {
     throw buildError('payment_method must be stripe, manual, or outside_platform');
   }
   return method;
+}
+
+function buildProofUrl(metadata = {}) {
+  const proofUrl = metadata.proof_url || metadata.proof_file_path || null;
+  if (!proofUrl) return null;
+  return toAbsoluteBeigeAssetUrl(proofUrl) || String(proofUrl);
+}
+
+async function buildCpPayoutHistoryForEarnings(earnings = [], transaction = null) {
+  const earningIds = earnings.map((earning) => Number(earning.creator_earning_id)).filter(Boolean);
+  const creatorIds = [...new Set(earnings.map((earning) => Number(earning.creator_id)).filter(Boolean))];
+  if (!earningIds.length || !creatorIds.length) return { byEarningId: new Map(), all: [] };
+
+  const payouts = await db.creator_payout_requests.findAll({
+    where: {
+      creator_id: { [db.Sequelize.Op.in]: creatorIds },
+      status: { [db.Sequelize.Op.in]: ['processing', 'paid'] }
+    },
+    order: [['paid_at', 'DESC'], ['processed_at', 'DESC'], ['created_at', 'DESC']],
+    transaction
+  });
+
+  const earningById = new Map(earnings.map((earning) => [Number(earning.creator_earning_id), earning]));
+  const byEarningId = new Map();
+  const all = [];
+
+  payouts.map(toPlain).forEach((payout) => {
+    const metadata = parseJson(payout.metadata_json, {});
+    if (metadata?.source !== 'cp_compensation') return;
+
+    const creatorEarningId = Number(metadata.creator_earning_id);
+    if (!earningById.has(creatorEarningId)) return;
+
+    const earning = earningById.get(creatorEarningId);
+    const proofUrl = buildProofUrl(metadata);
+    const paymentScope = metadata.payment_scope || 'final';
+    const historyItem = {
+      id: payout.creator_payout_request_id,
+      creator_earning_id: creatorEarningId,
+      creator_id: Number(earning.creator_id),
+      creator_name: buildCreatorName(earning.creator),
+      cp_role: earning.creator?.primary_role || null,
+      type: paymentScope === 'advance' ? 'partial_payment' : 'final_payment',
+      method: metadata.payment_mode || payout.payout_method || 'manual',
+      status: payout.status,
+      amount: toMoney(payout.amount),
+      paid_at: payout.paid_at || payout.processed_at || payout.created_at || null,
+      receipt_url: proofUrl,
+      receipt_download_url: proofUrl,
+      transaction_reference: metadata.transaction_reference || payout.external_reference || null,
+      proof_file_name: metadata.proof_file_name || null,
+      notes: metadata.notes || null
+    };
+
+    if (!byEarningId.has(creatorEarningId)) byEarningId.set(creatorEarningId, []);
+    byEarningId.get(creatorEarningId).push(historyItem);
+    all.push(historyItem);
+  });
+
+  return { byEarningId, all };
 }
 
 function normalizeCompensationMethod(value) {
@@ -1067,6 +1128,7 @@ async function getCpCompensationDetails(bookingId) {
   const shootAmount = resolveShootAmount(plain, breakdown);
   const marginAmount = toMoney(Math.max(shootAmount - totalCpPayout, 0));
   const marginPercent = shootAmount > 0 ? toMoney((marginAmount / shootAmount) * 100) : null;
+  const paymentHistory = await buildCpPayoutHistoryForEarnings(earnings);
 
   return {
     booking_id: plain.stream_project_booking_id,
@@ -1083,6 +1145,7 @@ async function getCpCompensationDetails(bookingId) {
       margin_percent: marginPercent,
       status: buildCompensationStatus(earnings)
     },
+    payment_history: paymentHistory.all,
     audit_logs: buildAuditLogs(earnings),
     creators: await Promise.all(earnings.map(async (earning) => {
       const compensationItems = buildCompensationItems(earning.compensation_items || []);
@@ -1106,6 +1169,7 @@ async function getCpCompensationDetails(bookingId) {
         remaining_balance: paymentState.remaining_balance,
         compensation_items: compensationItems,
         advances: advanceItems,
+        payment_history: paymentHistory.byEarningId.get(Number(earning.creator_earning_id)) || [],
         timeline: (earning.timeline_events || [])
           .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0))
           .map((event) => ({
