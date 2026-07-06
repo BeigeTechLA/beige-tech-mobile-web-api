@@ -17,9 +17,25 @@ const https = require('https');
 const getFrontendBaseUrl = () =>
   String(process.env.FRONTEND_URL || 'http://localhost:3000').trim().replace(/\/+$/, '');
 
-const buildManualInvoiceFrontendUrl = (bookingId) => {
+const buildManualInvoiceFrontendUrl = (bookingId, { download = false } = {}) => {
   const frontendBaseUrl = getFrontendBaseUrl();
-  return `${frontendBaseUrl}/beige_invoice/${encodeURIComponent(String(bookingId))}?manual=1`;
+  const url = new URL(`${frontendBaseUrl}/beige_invoice/${encodeURIComponent(String(bookingId))}`);
+  url.searchParams.set('manual', '1');
+  if (download) url.searchParams.set('download', '1');
+  return url.toString();
+};
+
+const buildBookingCheckoutFrontendUrl = (bookingId, amount = null) => {
+  const frontendBaseUrl = getFrontendBaseUrl();
+  const url = new URL(`${frontendBaseUrl}/search-results/payment`);
+  url.searchParams.set('shootId', String(bookingId));
+
+  const numericAmount = Number(amount);
+  if (Number.isFinite(numericAmount) && numericAmount > 0.009) {
+    url.searchParams.set('amount', numericAmount.toFixed(2));
+  }
+
+  return url.toString();
 };
 
 const buildReceiptFrontendUrl = ({ bookingId, manualPaymentId = null, paymentId = null, download = false }) => {
@@ -240,6 +256,7 @@ const resolveHostedPaymentUrlForInvoice = async ({
 }) => {
   const pendingAmount = Number(paymentState?.dueAmount ?? pricingData?.total ?? 0);
   if (!Number.isFinite(pendingAmount) || pendingAmount <= 0.009) return null;
+  const fallbackCheckoutUrl = buildBookingCheckoutFrontendUrl(bookingId, pendingAmount);
 
   const hostedPaymentPricingData = buildOutstandingInvoicePricingData(pricingData, paymentState);
   const expectedPendingCents = Math.round(Number(hostedPaymentPricingData.total || pendingAmount) * 100);
@@ -271,10 +288,10 @@ const resolveHostedPaymentUrlForInvoice = async ({
         payment_amount_type: hostedPaymentPricingData.is_outstanding_balance ? 'remaining_balance' : 'full_balance'
       }
     });
-    return paymentInvoice?.hosted_invoice_url || null;
+    return paymentInvoice?.hosted_invoice_url || fallbackCheckoutUrl;
   } catch (error) {
     console.warn(`Could not create hosted payment invoice for booking ${bookingId}: ${error.message}`);
-    return null;
+    return fallbackCheckoutUrl;
   }
 };
 
@@ -2249,7 +2266,7 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
           invoicePdf: stripeInvoice?.invoice_pdf || additionalInvoiceContext.existingInvoice?.invoice_pdf,
           stripeInvoiceNumber: stripeInvoice?.number || null,
           invoiceNumber: stripeInvoice?.number || additionalInvoiceContext.existingInvoice?.invoice_number,
-          totalAmount: additionalInvoiceContext.additionalAmount,
+          totalAmount: additionalInvoiceContext.revisedTotal ?? additionalInvoiceContext.additionalAmount,
           isPaid: false,
           isAdditionalPayment: true,
           previouslyPaidAmount: additionalInvoiceContext.previouslyPaidAmount,
@@ -2292,7 +2309,7 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
         invoicePdf,
         stripeInvoiceNumber: invoiceNumber,
         invoiceNumber,
-        totalAmount: reducedInvoiceContext.reducedAmount,
+        totalAmount: reducedInvoiceContext.revisedTotal ?? reducedInvoiceContext.reducedAmount,
         isPaid: false,
         isAdditionalPayment: false,
         isReducedAmount: true,
@@ -2373,14 +2390,19 @@ const prepareInvoiceDetailsForBooking = async (bookingId, performedByUserId = nu
           payment_amount_type: payablePricingData.is_outstanding_balance ? 'remaining_balance' : 'full_balance'
         }
       });
-      invoiceDetails = buildInvoiceTemplateDetails(booking, payablePricingData, {
-        invoiceUrl: stripeInvoice.hosted_invoice_url,
-        invoicePdf: stripeInvoice.invoice_pdf,
+      const brandedInvoiceUrl = buildManualInvoiceFrontendUrl(parsedBookingId);
+      const brandedInvoicePdfUrl = buildManualInvoiceFrontendUrl(parsedBookingId, { download: true });
+      invoiceDetails = buildInvoiceTemplateDetails(booking, pricingData, {
+        invoiceUrl: brandedInvoiceUrl,
+        invoicePdf: brandedInvoicePdfUrl,
+        paymentUrl: stripeInvoice.hosted_invoice_url,
+        stripeInvoiceUrl: stripeInvoice.hosted_invoice_url,
+        stripeInvoicePdf: stripeInvoice.invoice_pdf,
         stripeInvoiceNumber: stripeInvoice.number,
         invoiceNumber: stripeInvoice.number,
-        totalAmount: payableTotalAmount,
+        totalAmount,
         isPaid: false,
-        isAdditionalPayment: Boolean(payablePricingData.is_outstanding_balance),
+        isAdditionalPayment: false,
         previouslyPaidAmount: payablePricingData.previously_paid_amount,
         revisedTotal: payablePricingData.original_total,
         additionalAmount: payableTotalAmount

@@ -1403,8 +1403,8 @@ function buildAdminCreditWhere(filters = {}) {
   if (filters.invoice_id) where.invoice_send_history_id = Number(filters.invoice_id);
   if (filters.date_from || filters.date_to) {
     where.created_at = {};
-    if (filters.date_from) where.created_at[Op.gte] = new Date(filters.date_from);
-    if (filters.date_to) where.created_at[Op.lte] = new Date(filters.date_to);
+    if (filters.date_from) where.created_at[Op.gte] = new Date(`${filters.date_from}T00:00:00`);
+    if (filters.date_to) where.created_at[Op.lte] = new Date(`${filters.date_to}T23:59:59.999`);
   }
   if (filters.expires_from || filters.expires_to) {
     where.expires_at = {};
@@ -1728,6 +1728,7 @@ async function getAdminCreditUsers(filters = {}) {
   delete where.entry_type;
   delete where.status;
   const search = String(filters.search || filters.q || '').trim().toLowerCase();
+  const historyStatus = String(filters.history_status || filters.credit_history_status || filters.status || '').trim().toLowerCase();
   const { page, limit, offset } = parsePageParams(filters);
 
   await syncExpiredAccountCredits({ where });
@@ -1797,6 +1798,12 @@ async function getAdminCreditUsers(filters = {}) {
       row.guest_email,
       row.identity_key
     ].some((value) => String(value || '').toLowerCase().includes(search)));
+  }
+
+  if (historyStatus === 'used') {
+    rows = rows.filter((row) => Number(row.total_credits_used || 0) > 0);
+  } else if (historyStatus === 'available') {
+    rows = rows.filter((row) => Number(row.total_credits_used || 0) <= 0);
   }
 
   rows.sort((a, b) => new Date(b.last_activity_at || 0) - new Date(a.last_activity_at || 0));

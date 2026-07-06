@@ -4850,6 +4850,11 @@ exports.createCrewMember = [
 
 exports.getCrewMembers = async (req, res) => {
     try {
+        const payload = {
+            ...req.body,
+            ...req.query
+        };
+
         let {
             page = 1,
             limit = 20,
@@ -4859,7 +4864,7 @@ exports.getCrewMembers = async (req, res) => {
             range,
             start_date,
             end_date
-        } = req.body;
+        } = payload;
 
         page = parseInt(page);
         limit = parseInt(limit);
