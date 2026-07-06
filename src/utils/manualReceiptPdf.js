@@ -137,8 +137,9 @@ function buildManualReceiptHtml(data) {
   const paidLabel = isFullyPaid ? 'Paid in Full' : 'Pending';
   const transactionRef = escapeHtml(data.transactionReference || data.confirmationNumber || '');
   const documentTitle = escapeHtml(data.documentTitle || 'INVOICE');
-  const paymentUrl = String(data.paymentUrl || '').trim();
-  const showPaymentButton = paymentUrl && pendingAmount > 0.009;
+  const paymentUrl = String(data.paymentUrl || data.payment_url || '').trim();
+  const finalPaymentUrl = paymentUrl || '#';
+  const showPaymentButton = pendingAmount > 0.009 && !isFullyPaid;
 
   return `
   <!doctype html>
@@ -743,7 +744,7 @@ function buildManualReceiptHtml(data) {
             <div class="tot-row"><span>Pending Amount</span><span><b>${formatCurrency(pendingAmount)}</b></span></div>
             ${showPaymentButton ? `
               <a
-                href="${escapeHtml(paymentUrl)}"
+                href="${escapeHtml(finalPaymentUrl)}"
                 target="_blank"
                 class="pay-online"
               >
