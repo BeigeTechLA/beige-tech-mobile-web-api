@@ -101,6 +101,13 @@ var _role_permissions = require("./role_permissions");
 var _user_roles = require("./user_roles");
 var _user_permissions = require("./user_permissions");
 
+var _studios = require("./studios");
+var _studio_media = require("./studio_media");
+var _studio_operating_hours = require("./studio_operating_hours");
+var _studio_availability = require("./studio_availability");
+var _studio_reviews = require("./studio_reviews");
+var _studio_bookings = require("./studio_bookings");
+
 function initModels(sequelize) {
   var account_credit_ledger = _account_credit_ledger(sequelize, DataTypes);
   var assigned_crew = _assigned_crew(sequelize, DataTypes);
@@ -206,6 +213,13 @@ function initModels(sequelize) {
   var role_permissions = _role_permissions(sequelize, DataTypes);
   var user_roles = _user_roles(sequelize, DataTypes);
   var user_permissions = _user_permissions(sequelize, DataTypes);
+
+  var studios = _studios(sequelize, DataTypes);
+  var studio_media = _studio_media(sequelize, DataTypes);
+  var studio_operating_hours = _studio_operating_hours(sequelize, DataTypes);
+  var studio_availability = _studio_availability(sequelize, DataTypes);
+  var studio_reviews = _studio_reviews(sequelize, DataTypes);
+  var studio_bookings = _studio_bookings(sequelize, DataTypes);
 
   account_credit_ledger.belongsTo(users, { as: "user", foreignKey: "user_id" });
   users.hasMany(account_credit_ledger, { as: "account_credit_entries", foreignKey: "user_id" });
@@ -740,6 +754,33 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
   sales_quote_versions.belongsTo(sales_quote_activities, { as: "source_activity", foreignKey: "source_activity_id" });
   sales_quote_activities.hasMany(sales_quote_versions, { as: "created_versions", foreignKey: "source_activity_id" });
 
+  studios.hasMany(studio_media, { as: "media", foreignKey: "studio_id" });
+  studio_media.belongsTo(studios, { as: "studio", foreignKey: "studio_id" });
+
+  studios.hasMany(studio_operating_hours, { as: "operating_hours", foreignKey: "studio_id" });
+  studio_operating_hours.belongsTo(studios, { as: "studio", foreignKey: "studio_id" });
+
+  studios.hasMany(studio_availability, { as: "availability", foreignKey: "studio_id" });
+  studio_availability.belongsTo(studios, { as: "studio", foreignKey: "studio_id" });
+
+  studios.belongsTo(users, { as: "owner", foreignKey: "owner_user_id" });
+  users.hasMany(studios, { as: "owned_studios", foreignKey: "owner_user_id" });
+  
+  studios.hasMany(studio_reviews, { as: "reviews", foreignKey: "studio_id" });
+  studio_reviews.belongsTo(studios, { as: "studio", foreignKey: "studio_id" });
+
+  studio_reviews.belongsTo(users, { as: "reviewer", foreignKey: "reviewer_user_id" });
+  users.hasMany(studio_reviews, { as: "studio_reviews", foreignKey: "reviewer_user_id" });
+
+  studio_bookings.belongsTo(studios, { as: "studio", foreignKey: "studio_id" });
+  studios.hasMany(studio_bookings, { as: "studio_bookings", foreignKey: "studio_id" });
+
+  studio_bookings.belongsTo(stream_project_booking, { as: "booking", foreignKey: "stream_project_booking_id" });
+  stream_project_booking.hasMany(studio_bookings, { as: "studio_bookings", foreignKey: "stream_project_booking_id" });
+
+  studio_bookings.belongsTo(users, { as: "user", foreignKey: "user_id" });
+  users.hasMany(studio_bookings, { as: "studio_bookings", foreignKey: "user_id" });
+  
   user_roles.belongsTo(user_type, {
     as: "role",
     foreignKey: "role_id"
@@ -906,6 +947,12 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
     creator_earning_advances,
     creator_earning_compensation_items,
     creator_earning_timeline_events,
+    studios,
+    studio_media,
+    studio_operating_hours,
+    studio_availability,
+    studio_reviews,
+    studio_bookings,
   };
 }
 module.exports = initModels;
