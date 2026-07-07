@@ -165,6 +165,36 @@ exports.getDetails = async (req, res) => {
   }
 };
 
+exports.updateDueDate = async (req, res) => {
+  try {
+    const bookingId = parseInt(req.params.bookingId || req.body.booking_id || req.body.bookingId, 10);
+    if (!bookingId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid booking ID is required'
+      });
+    }
+
+    const data = await cpCompensationService.updateBookingCompensationDueDate(
+      bookingId,
+      req.body,
+      { userId: getRequestUserId(req) }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'CP compensation due date updated successfully',
+      data
+    });
+  } catch (error) {
+    console.error('Update CP compensation due date error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to update compensation due date'
+    });
+  }
+};
+
 exports.approve = async (req, res) => {
   try {
     const creatorEarningId = parseInt(req.params.earningId, 10);

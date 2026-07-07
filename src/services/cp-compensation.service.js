@@ -1,6 +1,7 @@
 const db = require('../models');
 const config = require('../config/config');
 const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
+const bookingPricingService = require('./booking-pricing.service');
 
 const stripe = config.stripe?.secretKey
   ? require('stripe')(config.stripe.secretKey)
@@ -12,6 +13,11 @@ const VALID_PAYMENT_METHODS = new Set(['stripe', 'manual']);
 
 function toMoney(value) {
   return Number(Number(value || 0).toFixed(2));
+}
+
+function parseAmountCandidate(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
 }
 
 function parseJson(value, fallback = null) {
@@ -68,6 +74,13 @@ function formatDateOnly(value) {
   if (!value) return null;
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 10);
+}
+
+function addDaysDateOnly(value, days = 0) {
+  const date = value instanceof Date ? new Date(value) : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  date.setDate(date.getDate() + days);
   return date.toISOString().slice(0, 10);
 }
 
@@ -199,6 +212,14 @@ function buildCompensationStatus(earnings = []) {
   return 'mixed';
 }
 
+function resolveCompensationDueDate(earnings = [], booking = {}) {
+  const explicitDueDate = earnings
+    .map((earning) => parseJson(earning.metadata_json, {})?.due_date || parseJson(earning.metadata_json, {})?.payout_due_date)
+    .find(Boolean);
+
+  return formatDateOnly(explicitDueDate) || addDaysDateOnly(booking.event_date, 15);
+}
+
 function getApprovalWhere(filters = {}) {
   const Op = db.Sequelize.Op;
   if (filters.approval_status && ACTIVE_APPROVAL_STATUSES.includes(filters.approval_status)) {
@@ -220,14 +241,245 @@ function buildCompensationItems(items = []) {
     }));
 }
 
-function resolveShootAmount(booking = {}, breakdown = {}) {
-  return toMoney(
-    booking.total_value_amount ||
-    booking.budget ||
-    booking.total_paid_amount ||
-    breakdown.total_amount ||
-    0
+async function fetchBookingPaymentSummaries(bookingIds = []) {
+  const ids = [...new Set(
+    bookingIds
+      .map((id) => Number(id))
+      .filter((id) => Number.isInteger(id) && id > 0)
+  )];
+
+  if (!ids.length) return new Map();
+
+  const rows = await db.sequelize.query(
+    `
+      SELECT booking_id, sales_quote_id, paid_amount, credit_used_amount, due_amount, quote_total
+      FROM booking_payment_summary
+      WHERE booking_id IN (:bookingIds)
+    `,
+    {
+      replacements: { bookingIds: ids },
+      type: db.Sequelize.QueryTypes.SELECT
+    }
   );
+
+  return new Map(rows.map((row) => [Number(row.booking_id), row]));
+}
+
+async function fetchShootTabBookedBookingIds() {
+  const [
+    bookedSalesLeads,
+    bookedClientLeads,
+    salesManualPaymentActivities,
+    clientManualPaymentActivities,
+    collectedPaymentSummaryRows
+  ] = await Promise.all([
+    db.sales_leads.findAll({
+      where: {
+        is_active: 1,
+        lead_status: 'booked',
+        booking_id: { [db.Sequelize.Op.ne]: null }
+      },
+      attributes: ['booking_id'],
+      raw: true
+    }),
+    db.client_leads.findAll({
+      where: {
+        is_active: 1,
+        lead_status: 'booked',
+        booking_id: { [db.Sequelize.Op.ne]: null }
+      },
+      attributes: ['booking_id'],
+      raw: true
+    }),
+    db.sales_lead_activities.findAll({
+      where: { activity_type: 'payment_completed' },
+      attributes: ['lead_id'],
+      raw: true
+    }),
+    db.client_lead_activities.findAll({
+      where: { activity_type: 'payment_completed' },
+      attributes: ['lead_id'],
+      raw: true
+    }),
+    db.sequelize.query(
+      `
+        SELECT booking_id
+        FROM booking_payment_summary
+        WHERE payment_status IN ('paid', 'partially_paid', 'approval_pending', 'no_payment_due')
+          AND (
+            COALESCE(paid_amount, 0) > 0
+            OR COALESCE(credit_used_amount, 0) > 0
+            OR payment_status = 'no_payment_due'
+          )
+      `,
+      { type: db.Sequelize.QueryTypes.SELECT }
+    )
+  ]);
+
+  const manualSalesLeadIds = [...new Set(
+    salesManualPaymentActivities
+      .map((row) => Number(row.lead_id))
+      .filter(Number.isFinite)
+  )];
+  const manualClientLeadIds = [...new Set(
+    clientManualPaymentActivities
+      .map((row) => Number(row.lead_id))
+      .filter(Number.isFinite)
+  )];
+
+  const [manualPaidSalesLeads, manualPaidClientLeads] = await Promise.all([
+    manualSalesLeadIds.length
+      ? db.sales_leads.findAll({
+          where: {
+            is_active: 1,
+            lead_id: { [db.Sequelize.Op.in]: manualSalesLeadIds },
+            booking_id: { [db.Sequelize.Op.ne]: null }
+          },
+          attributes: ['booking_id'],
+          raw: true
+        })
+      : Promise.resolve([]),
+    manualClientLeadIds.length
+      ? db.client_leads.findAll({
+          where: {
+            is_active: 1,
+            lead_id: { [db.Sequelize.Op.in]: manualClientLeadIds },
+            booking_id: { [db.Sequelize.Op.ne]: null }
+          },
+          attributes: ['booking_id'],
+          raw: true
+        })
+      : Promise.resolve([])
+  ]);
+
+  return [...new Set([
+    ...bookedSalesLeads.map((row) => Number(row.booking_id)),
+    ...bookedClientLeads.map((row) => Number(row.booking_id)),
+    ...manualPaidSalesLeads.map((row) => Number(row.booking_id)),
+    ...manualPaidClientLeads.map((row) => Number(row.booking_id)),
+    ...collectedPaymentSummaryRows.map((row) => Number(row.booking_id))
+  ].filter(Number.isFinite))];
+}
+
+function resolveShootAmount(booking = {}, breakdown = {}, paymentSummary = {}) {
+  const paidAmount = Number(paymentSummary.paid_amount || 0);
+  const creditUsedAmount = Number(paymentSummary.credit_used_amount || 0);
+  const dueAmount = Number(paymentSummary.due_amount || 0);
+  const summaryKnownTotal = paidAmount + creditUsedAmount + dueAmount;
+  const amount = [
+    booking.total_value_amount,
+    paymentSummary.quote_total,
+    summaryKnownTotal,
+    booking.total_paid_amount,
+    paymentSummary.paid_amount,
+    breakdown.total_amount,
+    booking.budget
+  ].find((value) => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) && numeric > 0;
+  });
+
+  return toMoney(amount || 0);
+}
+
+async function resolveBookingTotalValueAmount(booking = {}, paymentSummary = {}) {
+  const bookingId = Number(booking.stream_project_booking_id || booking.booking_id || booking.id);
+  const budgetAmount = parseAmountCandidate(booking.budget);
+
+  const salesQuoteAmount = paymentSummary.sales_quote_id
+    ? await db.sales_quotes.findByPk(paymentSummary.sales_quote_id, {
+        attributes: ['total', 'subtotal']
+      }).then((quote) => {
+        if (!quote) return null;
+        return parseAmountCandidate(quote.total) ?? parseAmountCandidate(quote.subtotal);
+      })
+    : null;
+
+  if (salesQuoteAmount !== null && salesQuoteAmount > 0) return salesQuoteAmount;
+
+  const linkedQuoteAmount = booking.quote_id
+    ? await db.quotes.findByPk(booking.quote_id, {
+        attributes: ['total', 'price_after_discount', 'subtotal']
+      }).then((quote) => {
+        if (!quote) return null;
+        if (budgetAmount !== null && budgetAmount > 0) return budgetAmount;
+        return (
+          parseAmountCandidate(quote.total) ??
+          parseAmountCandidate(quote.price_after_discount) ??
+          parseAmountCandidate(quote.subtotal)
+        );
+      })
+    : null;
+
+  if (linkedQuoteAmount !== null && linkedQuoteAmount > 0) return linkedQuoteAmount;
+
+  const bookingQuoteAmount = bookingId
+    ? await db.quotes.findOne({
+        where: { booking_id: bookingId },
+        attributes: ['total', 'price_after_discount', 'subtotal'],
+        order: [['quote_id', 'DESC']]
+      }).then((quote) => {
+        if (!quote) return null;
+        if (budgetAmount !== null && budgetAmount > 0) return budgetAmount;
+        return (
+          parseAmountCandidate(quote.total) ??
+          parseAmountCandidate(quote.price_after_discount) ??
+          parseAmountCandidate(quote.subtotal)
+        );
+      })
+    : null;
+
+  if (bookingQuoteAmount !== null && bookingQuoteAmount > 0) return bookingQuoteAmount;
+
+  const salesQuoteAmountFromLead = bookingId
+    ? await db.sales_leads.findOne({
+        where: { booking_id: bookingId, is_active: 1 },
+        attributes: ['lead_id'],
+        order: [['lead_id', 'DESC']]
+      }).then((lead) => {
+        if (!lead?.lead_id) return null;
+        return db.sales_quotes.findOne({
+          where: { lead_id: lead.lead_id },
+          attributes: ['total', 'subtotal'],
+          order: [['updated_at', 'DESC'], ['sales_quote_id', 'DESC']]
+        });
+      }).then((quote) => {
+        if (!quote) return null;
+        return parseAmountCandidate(quote.total) ?? parseAmountCandidate(quote.subtotal);
+      })
+    : null;
+
+  if (salesQuoteAmountFromLead !== null && salesQuoteAmountFromLead > 0) return salesQuoteAmountFromLead;
+  if (budgetAmount !== null && budgetAmount > 0) return budgetAmount;
+
+  if (!bookingId) return 0;
+
+  try {
+    const bookingDays = await db.stream_project_booking_days.findAll({
+      where: { stream_project_booking_id: bookingId },
+      attributes: ['event_date', 'start_time', 'end_time', 'duration_hours', 'time_zone'],
+      raw: true
+    });
+    const projectedPricing = await bookingPricingService.calculateBookingPricing({
+      ...booking,
+      booking_days: bookingDays
+    });
+
+    return parseAmountCandidate(projectedPricing?.total) ?? 0;
+  } catch (error) {
+    console.warn('[cp-compensation] booking pricing fallback failed:', {
+      booking_id: bookingId,
+      message: error?.message || error
+    });
+    return 0;
+  }
+}
+
+async function resolveShootAmountLikeShoots(booking = {}, breakdown = {}, paymentSummary = {}) {
+  const currentAmount = resolveShootAmount(booking, breakdown, paymentSummary);
+  if (currentAmount > 0) return currentAmount;
+
+  return toMoney(await resolveBookingTotalValueAmount(booking, paymentSummary));
 }
 
 function buildAdvances(advances = []) {
@@ -408,19 +660,32 @@ async function ensureCreatorEarning(bookingId, creatorId, defaults = {}, transac
 async function listPendingCompensationShoots(filters = {}) {
   const Op = db.Sequelize.Op;
   const search = String(filters.search || '').trim();
+  const bookedBookingIds = await fetchShootTabBookedBookingIds();
   const bookingWhere = {
     is_active: 1,
-    is_cancelled: 0
+    is_cancelled: 0,
+    [Op.or]: [
+      { payment_id: { [Op.ne]: null } },
+      ...(bookedBookingIds.length
+        ? [{ stream_project_booking_id: { [Op.in]: bookedBookingIds } }]
+        : [])
+    ]
   };
 
   if (search) {
     const term = `%${search}%`;
-    bookingWhere[Op.or] = [
-      { project_name: { [Op.like]: term } },
-      { shoot_type: { [Op.like]: term } },
-      { event_type: { [Op.like]: term } },
-      { content_type: { [Op.like]: term } },
-      { guest_email: { [Op.like]: term } }
+    bookingWhere[Op.and] = [
+      ...(bookingWhere[Op.and] || []),
+      {
+        [Op.or]: [
+          { stream_project_booking_id: Number(term.replace(/%/g, '')) || 0 },
+          { project_name: { [Op.like]: term } },
+          { shoot_type: { [Op.like]: term } },
+          { event_type: { [Op.like]: term } },
+          { content_type: { [Op.like]: term } },
+          { guest_email: { [Op.like]: term } }
+        ]
+      }
     ];
   }
 
@@ -431,6 +696,7 @@ async function listPendingCompensationShoots(filters = {}) {
     order: [['created_at', 'DESC'], ['stream_project_booking_id', 'DESC']],
     attributes: [
       'stream_project_booking_id',
+      'quote_id',
       'project_name',
       'shoot_type',
       'event_type',
@@ -479,13 +745,18 @@ async function listPendingCompensationShoots(filters = {}) {
     ]
   });
 
-  const rows = bookings
-    .map(toPlain)
+  const plainBookings = bookings.map(toPlain);
+  const paymentSummaryByBookingId = await fetchBookingPaymentSummaries(
+    plainBookings.map((booking) => booking.stream_project_booking_id)
+  );
+
+  const rows = await Promise.all(plainBookings
     .filter((booking) => !(booking.creator_earnings || []).length)
-    .map((booking) => {
+    .map(async (booking) => {
       const breakdown = booking.finance_breakdown || {};
-      const shootAmount = resolveShootAmount(booking, breakdown);
-      const creators = (booking.assigned_crews || []).map((assignment) => {
+      const paymentSummary = paymentSummaryByBookingId.get(Number(booking.stream_project_booking_id)) || {};
+      const shootAmount = await resolveShootAmountLikeShoots(booking, breakdown, paymentSummary);
+      const creators = (booking.assigned_crews || []).filter((assignment) => assignment.crew_member).map((assignment) => {
         const creator = assignment.crew_member || {};
         return {
           assignment_id: assignment.id,
@@ -510,7 +781,7 @@ async function listPendingCompensationShoots(filters = {}) {
         creators,
         created_at: booking.created_at
       };
-    });
+    }));
 
   return {
     rows,
@@ -925,6 +1196,7 @@ async function listCpCompensations(filters = {}) {
         where: bookingWhere,
         attributes: [
           'stream_project_booking_id',
+          'quote_id',
           'project_name',
           'shoot_type',
           'event_type',
@@ -954,6 +1226,7 @@ async function listCpCompensations(filters = {}) {
 
   const earnings = result.rows.map(toPlain);
   const bookingIds = [...new Set(earnings.map((earning) => Number(earning.booking_id)).filter(Boolean))];
+  const paymentSummaryByBookingId = await fetchBookingPaymentSummaries(bookingIds);
   const breakdowns = bookingIds.length
     ? await db.finance_project_breakdowns.findAll({
         where: { booking_id: { [Op.in]: bookingIds } },
@@ -968,11 +1241,12 @@ async function listCpCompensations(filters = {}) {
   );
 
   if (view === 'creators') {
-    const rows = earnings.map((earning) => {
+    const rows = await Promise.all(earnings.map(async (earning) => {
       const booking = earning.booking || {};
       const bookingId = Number(earning.booking_id);
       const breakdown = breakdownByBookingId.get(bookingId) || {};
-      const shootAmount = resolveShootAmount(booking, breakdown);
+      const paymentSummary = paymentSummaryByBookingId.get(bookingId) || {};
+      const shootAmount = await resolveShootAmountLikeShoots(booking, breakdown, paymentSummary);
       const cpPayout = toMoney(earning.net_earning_amount || earning.gross_amount || 0);
       const marginAmount = toMoney(Math.max(shootAmount - cpPayout, 0));
       const marginPercent = shootAmount > 0 ? toMoney((marginAmount / shootAmount) * 100) : null;
@@ -997,9 +1271,10 @@ async function listCpCompensations(filters = {}) {
         earning_status: earning.status,
         compensation_source: earning.compensation_source,
         compensation_method: earning.compensation_method,
+        due_date: resolveCompensationDueDate([earning], booking),
         latest_activity_at: earning.updated_at || earning.created_at || null
       };
-    });
+    }));
 
     return {
       view: 'creators',
@@ -1023,11 +1298,12 @@ async function listCpCompensations(filters = {}) {
     grouped.get(bookingId).push(earning);
   });
 
-  const rows = Array.from(grouped.entries()).map(([bookingId, bookingEarnings]) => {
+  const rows = await Promise.all(Array.from(grouped.entries()).map(async ([bookingId, bookingEarnings]) => {
     const booking = bookingEarnings[0].booking || {};
     const breakdown = breakdownByBookingId.get(bookingId) || {};
+    const paymentSummary = paymentSummaryByBookingId.get(bookingId) || {};
     const cpPayout = toMoney(bookingEarnings.reduce((sum, earning) => sum + Number(earning.net_earning_amount || 0), 0));
-    const shootAmount = resolveShootAmount(booking, breakdown);
+    const shootAmount = await resolveShootAmountLikeShoots(booking, breakdown, paymentSummary);
     const marginAmount = toMoney(Math.max(shootAmount - cpPayout, 0));
     const marginPercent = shootAmount > 0 ? toMoney((marginAmount / shootAmount) * 100) : null;
 
@@ -1041,12 +1317,13 @@ async function listCpCompensations(filters = {}) {
       total_cps: bookingEarnings.length,
       cp_payout: cpPayout,
       shoot_amount: shootAmount,
+      due_date: resolveCompensationDueDate(bookingEarnings, booking),
       margin_amount: marginAmount,
       margin_percent: marginPercent,
       status: buildCompensationStatus(bookingEarnings),
       latest_activity_at: bookingEarnings[0].updated_at || bookingEarnings[0].created_at || null
     };
-  });
+  }));
 
   return {
     view: 'shoots',
@@ -1065,6 +1342,7 @@ async function getCpCompensationDetails(bookingId) {
   const booking = await db.stream_project_booking.findByPk(bookingId, {
     attributes: [
       'stream_project_booking_id',
+      'quote_id',
       'project_name',
       'shoot_type',
       'event_type',
@@ -1124,8 +1402,10 @@ async function getCpCompensationDetails(bookingId) {
   const plain = toPlain(booking);
   const earnings = plain.creator_earnings || [];
   const breakdown = plain.finance_breakdown || {};
+  const paymentSummaryByBookingId = await fetchBookingPaymentSummaries([bookingId]);
+  const paymentSummary = paymentSummaryByBookingId.get(Number(bookingId)) || {};
   const totalCpPayout = toMoney(earnings.reduce((sum, earning) => sum + Number(earning.net_earning_amount || 0), 0));
-  const shootAmount = resolveShootAmount(plain, breakdown);
+  const shootAmount = await resolveShootAmountLikeShoots(plain, breakdown, paymentSummary);
   const marginAmount = toMoney(Math.max(shootAmount - totalCpPayout, 0));
   const marginPercent = shootAmount > 0 ? toMoney((marginAmount / shootAmount) * 100) : null;
   const paymentHistory = await buildCpPayoutHistoryForEarnings(earnings);
@@ -1183,6 +1463,7 @@ async function getCpCompensationDetails(bookingId) {
             sort_order: event.sort_order
           })),
         submitted_by_user_id: earning.submitted_by_user_id,
+        due_date: resolveCompensationDueDate([earning], plain),
         submitted_at: earning.submitted_at,
         approved_by_user_id: earning.approved_by_user_id,
         approved_at: earning.approved_at,
@@ -1793,6 +2074,48 @@ async function processCompensationPayment(creatorEarningId, payload = {}, option
   }
 }
 
+async function updateBookingCompensationDueDate(bookingId, payload = {}, options = {}) {
+  const normalizedBookingId = Number(bookingId || payload.booking_id || payload.bookingId);
+  const dueDate = formatDateOnly(payload.due_date || payload.dueDate);
+
+  if (!normalizedBookingId) throw buildError('booking_id is required');
+  if (!dueDate) throw buildError('Valid due_date is required');
+
+  const earnings = await db.creator_earnings.findAll({
+    where: {
+      booking_id: normalizedBookingId,
+      approval_status: { [db.Sequelize.Op.in]: ACTIVE_APPROVAL_STATUSES }
+    }
+  });
+
+  if (!earnings.length) {
+    throw buildError('No compensation records found for this booking', 404);
+  }
+
+  const now = new Date();
+  const updatedByUserId = getUserId(options);
+
+  await Promise.all(earnings.map((earning) => {
+    const metadata = parseJson(earning.metadata_json, {}) || {};
+    return earning.update({
+      metadata_json: stringifyMetadata({
+        ...metadata,
+        due_date: dueDate,
+        payout_due_date: dueDate,
+        due_date_updated_by_user_id: updatedByUserId,
+        due_date_updated_at: now.toISOString()
+      }),
+      updated_at: now
+    });
+  }));
+
+  return {
+    booking_id: normalizedBookingId,
+    due_date: dueDate,
+    updated_count: earnings.length
+  };
+}
+
 async function submitSalesAdminCompensation(payload = {}, options = {}) {
   return upsertBulkCreatorCompensations(payload, {
     ...options,
@@ -1821,5 +2144,6 @@ module.exports = {
   modifyCompensation,
   addAdvancePayment,
   processCompensationPayment,
+  updateBookingCompensationDueDate,
   listPendingCompensationShoots
 };

@@ -75,6 +75,7 @@ router.get('/admin/credit-points/export', authenticate, requireAdmin, financeCon
 router.get('/cp-compensation/pending-shoots', authenticate, adminFinancesView, cpCompensationController.listPendingShoots);
 router.get('/cp-compensation', authenticate, adminFinancesView, cpCompensationController.list);
 router.post('/cp-compensation/payment-proof', authenticate, adminFinancesCreate, cpReceiptUpload.single('proof_file'), cpCompensationController.uploadPaymentProof);
+router.patch('/cp-compensation/:bookingId/due-date', authenticate, adminFinancesCreate, cpCompensationController.updateDueDate);
 router.get('/cp-compensation/:bookingId', authenticate, adminFinancesView, cpCompensationController.getDetails);
 router.post('/cp-compensation', authenticate, adminFinancesCreate, cpCompensationController.addFromAdmin);
 router.patch('/cp-compensation/:earningId/approve', authenticate, adminFinancesCreate, cpCompensationController.approve);
