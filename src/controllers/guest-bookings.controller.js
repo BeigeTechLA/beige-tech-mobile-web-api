@@ -14,6 +14,7 @@ const {
 } = require('../utils/studio-pricing');
 const accountCreditService = require('../services/account-credit.service');
 const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
+const studioBookingService = require('../services/studio-booking.service');
 const affiliateController = require('./affiliate.controller');
 const REFERRAL_DISCOUNT_PERCENT = 10;
 
@@ -1080,6 +1081,15 @@ exports.updateGuestBooking = async (req, res) => {
     try {
       // Update booking
       await booking.update(updateData, { transaction: tx });
+
+      if (hasStudioItemsPayload) {
+        await studioBookingService.replaceBookAShootStudioBookings({
+          bookingId: id,
+          userId: booking.user_id || resolvedUserId || null,
+          studioItems: normalizedStudioItems,
+          transaction: tx
+        });
+      }
 
       const salesLeadUpdate = {};
       if (full_name) salesLeadUpdate.client_name = full_name;

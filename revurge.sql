@@ -2737,3 +2737,9 @@ ALTER TABLE payment_links
 ALTER TABLE stream_project_booking
   ADD COLUMN start_date_time VARCHAR(50) NULL,
   ADD COLUMN end_date_time VARCHAR(50) NULL;
+
+-- 07-07-26
+
+ALTER TABLE studio_bookings DROP FOREIGN KEY studio_bookings_ibfk_2;
+ALTER TABLE studio_bookings MODIFY studio_id VARCHAR(255) NOT NULL;
+ALTER TABLE studio_bookings ADD COLUMN time_zone VARCHAR(100) NULL AFTER duration_hours;

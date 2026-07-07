@@ -286,6 +286,7 @@ const formatStudioRequest = (request) => {
     start_time: row.start_time || booking.start_time || null,
     end_time: row.end_time || booking.end_time || null,
     duration_hours: row.duration_hours || booking.duration_hours || null,
+    time_zone: row.time_zone || null,
 
     status: row.status,
     status_label: STUDIO_REQUEST_STATUS_LABELS[row.status] || row.status,
@@ -805,7 +806,7 @@ exports.updateStudio = async (req, res) => {
 
 exports.getStudioDashboard = async (req, res) => {
   try {
-    const studioId = req.query.studio_id ? Number(req.query.studio_id) : null;
+    const studioId = req.query.studio_id ? String(req.query.studio_id).trim() : null;
     const month = String(req.query.month || '').trim(); // YYYY-MM
 
     const where = {};
@@ -903,6 +904,7 @@ exports.getStudioDashboard = async (req, res) => {
       start_time: booking.start_time,
       end_time: booking.end_time,
       duration_hours: booking.duration_hours,
+      time_zone: booking.time_zone,
       status: booking.status,
       base_amount: booking.base_amount,
       overtime_amount: booking.overtime_amount,
@@ -1000,7 +1002,7 @@ exports.getStudioRequests = async (req, res) => {
     }
 
     if (studio_id) {
-      where.studio_id = Number(studio_id);
+      where.studio_id = String(studio_id).trim();
     }
 
     if (month && year) {
@@ -1062,7 +1064,7 @@ exports.getStudioRequests = async (req, res) => {
         {
           model: studios,
           as: 'studio',
-          required: true,
+          required: false,
           attributes: [
             'studio_id',
             'studio_name',

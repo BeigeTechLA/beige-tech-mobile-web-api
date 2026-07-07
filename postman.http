@@ -3514,36 +3514,34 @@ Content-Type: application/json
   "guest_email": "harsh.patel@revurge.com",
   "content_type": "videographer",
   "shoot_type": "podcasts_and_shows",
-  "client_name": "Neha",
-  "start_date": "2026-01-06",
+  "client_name": "Harsh",
+  "start_date": "2026-07-16",
   "start_time": "10:30",
-  "end_time": "16:30",
+  "end_time": "14:30",
   "time_zone": "Asia/Calcutta",
-  "startDate": "2026-01-06T10:30:00",
-  "endDate": "2026-01-06T16:30:00",
+  "startDate": "2026-07-16T10:30:00",
+  "endDate": "2026-07-16T14:30:00",
   "booking_type": "single_day",
   "edits_needed": true,
   "video_edit_types": [
     { "slug": "social_reel_15_30", "quantity": 1 },
     { "slug": "social_reel_30_90", "quantity": 1 }
-  ],
-  "photo_edit_types": [
-    { "slug": "edited_photos", "quantity": 1 }
   ]
 }
 
 ### 2) Save crew requirement and shoot location
-PATCH {{URL}}sales/bookings/1282/crew HTTP/1.1
+PATCH {{URL}}sales/bookings/1297/crew HTTP/1.1
 Content-Type: application/json
 
 {
   "crew_roles": {
-    "videographer": 1
+    "videographer": 2
   },
-  "location": "Woodland Hills, Woodland Hills, CA",
-  "location_latitude": 34.1654,
-  "location_longitude": -118.6089,
-  "reference_links": []
+  "location": "Woodland Hills, California, United States",
+  "location_latitude": 34.168454,
+  "location_longitude": -118.603802,
+  "reference_links": [],
+  "description":""
 }
 
 ### 3) Search creators near selected location
@@ -3559,16 +3557,13 @@ Content-Type: application/json
 {
   "creator_ids": [],
   "role_counts": {
-    "videographer": 1
+    "videographer": 2
   },
   "content_type": "videographer",
-  "event_type": "podcasts_and_shows",
+  "event_type": "podcast",
   "video_edit_types": [
     { "slug": "social_reel_15_30", "quantity": 1 },
     { "slug": "social_reel_30_90", "quantity": 1 }
-  ],
-  "photo_edit_types": [
-    { "slug": "edited_photos", "quantity": 1 }
   ],
   "skip_discount": true,
   "skip_margin": true,
@@ -3586,9 +3581,9 @@ Content-Type: application/json
       "quantity": 4,
       "total": 600,
       "price_label": "$150/hour",
-      "selected_date": "2026-01-06",
+      "selected_date": "2026-07-16",
       "start_time": "10:30",
-      "end_time": "16:30",
+      "end_time": "14:30",
       "studio_booking_type": "single_day",
       "booking_days": [],
       "cast_and_crew_count": 0,
@@ -3597,8 +3592,8 @@ Content-Type: application/json
       "lng": -118.6089
     }
   ],
-  "shoot_hours": 6,
-  "shoot_start_date": "2026-01-06T10:30:00.000Z"
+  "shoot_hours": 4,
+  "shoot_start_date": "2026-07-16T10:30:00.000Z"
 }
 
 ### 6) Save quote for the booking/payment flow
@@ -3607,18 +3602,16 @@ Content-Type: application/json
 
 {
   "items": [
-    { "item_id": 11, "quantity": 1 }
+    { "item_id": 11, "quantity": 2 },
+    { "item_id": 50, "quantity": 2 }
   ],
-  "shootHours": 6,
-  "eventType": "podcasts_and_shows",
+  "shootHours": 4,
+  "eventType": "podcast",
   "guestEmail": "harsh.patel@revurge.com",
-  "shoot_start_date": "2026-01-06T10:30:00.000Z",
+  "shoot_start_date": "2026-07-16T10:30:00.000Z",
   "video_edit_types": [
     { "slug": "social_reel_15_30", "quantity": 1 },
     { "slug": "social_reel_30_90", "quantity": 1 }
-  ],
-  "photo_edit_types": [
-    { "slug": "edited_photos", "quantity": 1 }
   ],
   "studio_total": 600,
   "studio_items": [
@@ -3634,9 +3627,9 @@ Content-Type: application/json
       "quantity": 4,
       "total": 600,
       "price_label": "$150/hour",
-      "selected_date": "2026-01-06",
+      "selected_date": "2026-07-16",
       "start_time": "10:30",
-      "end_time": "16:30",
+      "end_time": "14:30",
       "studio_booking_type": "single_day",
       "booking_days": [],
       "cast_and_crew_count": 0,
@@ -3648,30 +3641,29 @@ Content-Type: application/json
 }
 
 ### 7) Finalize booking. selected_crew_ids can be [] for "Continue with 0 Creatives".
-PUT {{URL}}guest-bookings/1282
+PUT {{URL}}guest-bookings/1295
 Content-Type: application/json
 
 {
-  "order_name": "PODCASTS_AND_SHOWS Shoot - Neha",
+  "order_name": "PODCASTS_AND_SHOWS Shoot - Harsh",
   "guest_email": "harsh.patel@revurge.com",
   "content_type": "videographer",
-  "shoot_type": "podcasts_and_shows",
+  "shoot_type": "podcast",
   "booking_type": "single_day",
-  "start_date": "2026-01-06",
+  "start_date": "2026-07-16",
   "start_time": "10:30",
-  "end_time": "16:30",
+  "end_time": "14:30",
   "time_zone": "Asia/Calcutta",
-  "duration_hours": 6,
-  "location": "Woodland Hills, Woodland Hills, CA",
-  "location_latitude": 34.1654,
-  "location_longitude": -118.6089,
-  "quote_id": 520,
-  "full_name": "Neha",
+  "duration_hours": 4,
+  "location": "Woodland Hills, California, United States",
+  "location_latitude": 34.168454,
+  "location_longitude": -118.603802,
+  "quote_id": 534,
+  "full_name": "Harsh",
   "phone": "+919173965896",
   "edits_needed": true,
   "video_edit_types": ["social_reel_15_30", "social_reel_30_90"],
-  "photo_edit_types": ["edited_photos"],
-  "crew_size": "1",
+  "crew_size": "2",
   "matching_method": "ai_matchmaker",
   "selected_crew_ids": [],
   "special_instructions": "",
@@ -3690,9 +3682,9 @@ Content-Type: application/json
       "quantity": 4,
       "total": 600,
       "price_label": "$150/hour",
-      "selected_date": "2026-01-06",
+      "selected_date": "2026-07-16",
       "start_time": "10:00",
-      "end_time": "18:00",
+      "end_time": "14:30",
       "studio_booking_type": "single_day",
       "booking_days": [],
       "cast_and_crew_count": 0,
@@ -3701,8 +3693,8 @@ Content-Type: application/json
       "lng": -118.6089
     }
   ],
-  "start_date_time": "2026-01-06T10:30:00",
-  "end_date_time": "2026-01-06T16:30:00",
+  "start_date_time": "2026-07-16T10:30:00",
+  "end_date_time": "2026-07-16T14:30:00",
   "is_draft": false
 }
 
@@ -3738,11 +3730,11 @@ Content-Type: application/json
 # }
 
 ### 8) Admin summary check
-GET {{URL}}admin/1282/get-booking-summary
+GET {{URL}}admin/1295/get-booking-summary
 Content-Type: application/json
 
 ### 9) Payment details check
-GET {{URL}}guest-bookings/1282/payment-details
+GET {{URL}}guest-bookings/1295/payment-details
 Content-Type: application/json
 
 ### 10) Create payment intent. Replace amount with quote total.
@@ -3750,8 +3742,8 @@ POST {{URL}}payments/create-intent-multi
 Content-Type: application/json
 
 {
-  "booking_id": "1282",
-  "amount": 3900,
+  "booking_id": "1296",
+  "amount": 3850,
   "guest_email": "harsh.patel@revurge.com",
   "use_credit": false,
   "credit_amount_used": 0
@@ -3762,8 +3754,8 @@ POST {{URL}}payments/confirm-multi
 Content-Type: application/json
 
 {
-  "paymentIntentId": "pi_3TmSJl54hnPNgHXU0jn217yo",
-  "booking_id": "1282",
+  "paymentIntentId": "pi_3TqTDQ54hnPNgHXU0jxKccLP",
+  "booking_id": "1295",
   "referral_code": null,
   "use_credit": false,
   "credit_amount_used": 0

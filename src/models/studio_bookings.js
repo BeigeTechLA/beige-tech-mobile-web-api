@@ -17,12 +17,8 @@ module.exports = function(sequelize, DataTypes) {
       }
     },
     studio_id: {
-      type: DataTypes.INTEGER,
-      allowNull: false,
-      references: {
-        model: 'studios',
-        key: 'studio_id'
-      }
+      type: DataTypes.STRING(255),
+      allowNull: false
     },
     user_id: {
       type: DataTypes.INTEGER,
@@ -46,6 +42,10 @@ module.exports = function(sequelize, DataTypes) {
     },
     duration_hours: {
       type: DataTypes.DECIMAL(5,2),
+      allowNull: true
+    },
+    time_zone: {
+      type: DataTypes.STRING(100),
       allowNull: true
     },
     status: {

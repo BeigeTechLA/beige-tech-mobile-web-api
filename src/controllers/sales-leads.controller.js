@@ -14,6 +14,7 @@ const accountCreditService = require('../services/account-credit.service');
 const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
 const quoteService = require('../services/sales-quote.service');
 const bookingPricingService = require('../services/booking-pricing.service');
+const studioBookingService = require('../services/studio-booking.service');
 const emailService = require('../utils/emailService');
 const { sendCPNewBookingRequestEmail } = require('../utils/emailService');
 const { resolveEventDateAndStartTime, normalizeTime, splitDateTime } = require('../utils/timezone');
@@ -1455,7 +1456,8 @@ exports.trackEarlyBookingInterest = async (req, res) => {
 
         const { latitude, longitude } = extractCoordinatesFromPayload(req.body, location);
 
-        const normalizedStudioItems = normalizeStudioItems(studio_items);
+        const hasStudioItemsPayload = Array.isArray(req.body.studio_items);
+        const normalizedStudioItems = hasStudioItemsPayload ? normalizeStudioItems(studio_items) : [];
         const normalizedStudioTotal = normalizedStudioItems.reduce((sum, studio) => sum + studio.totalPrice, 0);
         if (normalizedStudioItems.length > 0 && Number(studio_total) > 0 && Math.abs(normalizedStudioTotal - Number(studio_total)) > 0.01) {
             return res.status(400).json({ success: false, message: 'Studio pricing total does not match selected studio items' });
@@ -1528,6 +1530,15 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             if (booking_type === 'single_day') {
                 await stream_project_booking_days.destroy({
                     where: { stream_project_booking_id: booking.stream_project_booking_id },
+                    transaction: tx
+                });
+            }
+
+            if (hasStudioItemsPayload) {
+                await studioBookingService.replaceBookAShootStudioBookings({
+                    bookingId: booking.stream_project_booking_id,
+                    userId: booking.user_id || resolvedUserId || null,
+                    studioItems: normalizedStudioItems,
                     transaction: tx
                 });
             }
