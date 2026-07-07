@@ -62,6 +62,45 @@ function toDbJson(value) {
   }
 }
 
+function parseJsonUntilStable(value) {
+  let current = value;
+
+  for (let i = 0; i < 4; i += 1) {
+    if (typeof current !== 'string') return current;
+
+    const trimmed = current.trim();
+    if (!trimmed) return [];
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed === current) return parsed;
+      current = parsed;
+    } catch (_) {
+      return current;
+    }
+  }
+
+  return current;
+}
+
+function normalizeCrewRoleIds(value) {
+  const parsed = parseJsonUntilStable(value);
+  const values = Array.isArray(parsed) ? parsed : [parsed];
+  const roleIds = [];
+
+  values.forEach((item) => {
+    const normalized = parseJsonUntilStable(item);
+    const items = Array.isArray(normalized) ? normalized : [normalized];
+
+    items.forEach((roleId) => {
+      const stringValue = String(roleId || '').trim();
+      if (stringValue && !roleIds.includes(stringValue)) roleIds.push(stringValue);
+    });
+  });
+
+  return roleIds;
+}
+
 const toIdArray = (value) => {
   if (!value) return [];
 
@@ -1580,6 +1619,7 @@ exports.getProfile = async (req, res) => {
 
     let result = member.toJSON();
     result.skills = skillList;
+    result.primary_role = normalizeCrewRoleIds(result.primary_role);
 
     return res.status(constants.OK.code).json({
       error: false,
@@ -1664,9 +1704,7 @@ exports.editProfile = async (req, res) => {
     if (bio !== undefined) updateData.bio = bio;
 
     if (primary_role !== undefined) {
-      updateData.primary_role = Array.isArray(primary_role) 
-        ? JSON.stringify(primary_role) 
-        : primary_role;
+      updateData.primary_role = JSON.stringify(normalizeCrewRoleIds(primary_role));
     }
 
     if (skills !== undefined) {
@@ -1705,11 +1743,7 @@ exports.editProfile = async (req, res) => {
     const responseData = updatedMember.toJSON();
 
     try {
-      if (responseData.primary_role) {
-        responseData.primary_role = JSON.parse(responseData.primary_role);
-      } else {
-        responseData.primary_role = [];
-      }
+      responseData.primary_role = normalizeCrewRoleIds(responseData.primary_role);
     } catch (e) {
       responseData.primary_role = responseData.primary_role ? [responseData.primary_role] : [];
     }
@@ -2084,6 +2118,64 @@ exports.editPortfolioLink = async (req, res) => {
 
   } catch (err) {
     console.error('editPortfolioLink error:', err);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      error: true,
+      code: constants.INTERNAL_SERVER_ERROR.code,
+      message: constants.INTERNAL_SERVER_ERROR.message,
+      data: null
+    });
+  }
+};
+
+exports.editFeaturedWorkProject = async (req, res) => {
+  try {
+    const crew_member_id = req.user?.crew_member_id || req.body.crew_member_id;
+    const { file_ids, title, tag } = req.body;
+
+    const fileIds = Array.isArray(file_ids)
+      ? file_ids.map((id) => Number(id)).filter(Number.isFinite)
+      : [];
+
+    if (!crew_member_id || fileIds.length === 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        error: true,
+        code: constants.BAD_REQUEST.code,
+        message: 'Member ID and file IDs are required',
+        data: null
+      });
+    }
+
+    const updateData = {};
+    if (title !== undefined) updateData.title = title || 'Untitled';
+    if (tag !== undefined) updateData.tag = tag || '[]';
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        error: true,
+        code: constants.BAD_REQUEST.code,
+        message: 'No featured work fields provided',
+        data: null
+      });
+    }
+
+    const [updatedCount] = await crew_member_files.update(updateData, {
+      where: {
+        crew_files_id: { [Op.in]: fileIds },
+        crew_member_id,
+        file_type: 'recent_work',
+        is_active: 1
+      }
+    });
+
+    return res.status(constants.OK.code).json({
+      error: false,
+      code: constants.OK.code,
+      message: 'Featured work updated successfully',
+      data: { updated_count: updatedCount }
+    });
+
+  } catch (err) {
+    console.error('editFeaturedWorkProject error:', err);
     return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
       error: true,
       code: constants.INTERNAL_SERVER_ERROR.code,
