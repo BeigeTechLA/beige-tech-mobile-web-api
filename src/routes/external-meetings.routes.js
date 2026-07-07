@@ -54,6 +54,7 @@ router.get('/', authenticate, meetingsView, externalMeetingsController.getAllMee
 router.get('/order/:orderId', authenticate, shootMeetingsView, externalMeetingsController.getMeetingsByOrder);
 router.get('/user/:userId', authenticate, meetingsView, externalMeetingsController.getMeetingsByUser);
 router.post('/create-event', authenticate, meetingsCreate, externalMeetingsController.createMeetEvent);
+router.post('/update-event', authenticate, meetingsEdit, externalMeetingsController.updateMeetEvent);
 router.post('/schedule/:meetingId', authenticate, meetingsEdit, externalMeetingsController.placeChangeRequest);
 router.patch('/schedule/:meetingId/:status', authenticate, meetingsEdit, externalMeetingsController.updateChangeRequestStatus);
 router.post('/', authenticate, shootMeetingsCreate, externalMeetingsController.createMeeting);
