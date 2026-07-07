@@ -10,7 +10,7 @@
 
 @SALES_TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjIzNiwidXNlclJvbGUiOiJzYWxlc19yZXAiLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjksInVzZXJUeXBlSWQiOjUsImlhdCI6MTc4Mjg4MDg1MywiZXhwIjoxNzgzNDg1NjUzfQ.p_ImbqwLajajk6pxdS53cmDFueKidY9f8gALJfOxmJ0
 
-@SALES_ADMIN_TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI4MiwidXNlclJvbGUiOiJzdXBlcl9hZG1pbiIsInBlcm1pc3Npb25zVmVyc2lvbiI6MSwidXNlclR5cGVJZCI6OCwiaWF0IjoxNzgyMjg4MTc4LCJleHAiOjE3ODI4OTI5Nzh9.QA0tnX0k9SvELnlrEg5fgtvkF82QXQeIG1tPfuBLMyw
+@SALES_ADMIN_TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI4MiwidXNlclJvbGUiOiJzdXBlcl9hZG1pbiIsInBlcm1pc3Npb25zVmVyc2lvbiI6MSwidXNlclR5cGVJZCI6OCwiaWF0IjoxNzgzMDczODU5LCJleHAiOjE3ODM2Nzg2NTl9.yYEIoDNSGqT6qj2gm8pkmuOz437nnS6TFqPdlIW8iGY
 
 ###
 # Client Archive: active clients only
@@ -141,10 +141,10 @@ Content-Type: application/json
 Authorization: {{SALES_ADMIN_TOKEN}}
 
 {
-  "name": "Super Admin",
-  "email": "superadmin@gmail.com",
-  "phone_number": "7533867558",
-  "password": "Super@2026!",
+  "name": "Neha panchal",
+  "email": "nehapanchal.np07@gmail.com",
+  "phone_number": "7733867558",
+  "password": "12345678",
   "userType": 8
 }
 
