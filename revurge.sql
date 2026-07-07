@@ -2561,3 +2561,9 @@ ALTER TABLE payment_links
 ALTER TABLE stream_project_booking
   ADD COLUMN start_date_time VARCHAR(50) NULL,
   ADD COLUMN end_date_time VARCHAR(50) NULL;
+
+-- 07-07-26
+
+ALTER TABLE `project_meetings`
+  ADD COLUMN `google_calendar_event_id` VARCHAR(255) NULL AFTER `meet_link`,
+  ADD COLUMN `google_calendar_id` VARCHAR(255) NULL DEFAULT 'primary' AFTER `google_calendar_event_id`;
