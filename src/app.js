@@ -86,6 +86,7 @@ app.get('/health', (req, res) => {
 // Mount API routes with /v1 prefix
 
 app.use('/v1', routes);
+app.use('/api', routes);
 app.use('/v1/signatures', signatureRoutes); 
 app.use('/v1/creator-earnings', creatorEarningsRoutes);
 // app.use('/api/creator', creatorRoutes);

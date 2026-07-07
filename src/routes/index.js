@@ -40,6 +40,7 @@ router.use('/creator', require('./creator.routes'));
 router.use('/reviews', require('./reviews.routes'));
 router.use('/affiliates', require('./affiliate.routes'));
 router.use('/client', require('./client.routes'));
+router.use('/', require('./quotes-report.routes'));
 router.use('/sales', require('./sales.routes'));
 router.use('/external-file-manager', require('./external-file-manager.routes'));
 router.use('/external-chat', require('./external-chat.routes'));
