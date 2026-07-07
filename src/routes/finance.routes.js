@@ -4,6 +4,7 @@ const fs = require('fs');
 const multer = require('multer');
 const router = express.Router();
 const financeController = require('../controllers/finance.controller');
+const cpCompensationController = require('../controllers/cp-compensation.controller');
 const { authenticate, requireAdmin, requireSalesRepOrAdmin } = require('../middleware/auth.middleware');
 const { requireAnyPermission } = require('../middleware/permission.middleware');
 
@@ -22,6 +23,25 @@ const disputeUpload = multer({
     }
   }),
   limits: { fileSize: 50 * 1024 * 1024 }
+});
+
+const cpReceiptUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, disputeUploadDir),
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname || '');
+      const base = path.basename(file.originalname || 'cp-receipt', ext).replace(/[^a-z0-9_-]/gi, '_');
+      cb(null, `${base}_${Date.now()}${ext}`);
+    }
+  }),
+  limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/jpg', 'application/pdf'];
+    if (!allowedTypes.includes(file.mimetype)) {
+      return cb(new Error('Invalid file type. Only image and PDF proof files are allowed.'));
+    }
+    cb(null, true);
+  }
 });
 
 router.get('/transactions', authenticate, requireSalesRepOrAdmin, financeController.listTransactions);
@@ -52,6 +72,17 @@ router.get('/admin/credit-points/users', authenticate, requireAdmin, financeCont
 router.get('/admin/credit-points/users/:userId', authenticate, adminFinancesView, financeController.getAdminCreditPointUserDetails);
 router.post('/admin/credit-points/manual', authenticate, adminFinancesCreate, financeController.createAdminManualCredit);
 router.get('/admin/credit-points/export', authenticate, requireAdmin, financeController.listAdminCreditPointTransactions);
+router.get('/cp-compensation/pending-shoots', authenticate, adminFinancesView, cpCompensationController.listPendingShoots);
+router.get('/cp-compensation', authenticate, adminFinancesView, cpCompensationController.list);
+router.post('/cp-compensation/payment-proof', authenticate, adminFinancesCreate, cpReceiptUpload.single('proof_file'), cpCompensationController.uploadPaymentProof);
+router.patch('/cp-compensation/:bookingId/due-date', authenticate, adminFinancesCreate, cpCompensationController.updateDueDate);
+router.get('/cp-compensation/:bookingId', authenticate, adminFinancesView, cpCompensationController.getDetails);
+router.post('/cp-compensation', authenticate, adminFinancesCreate, cpCompensationController.addFromAdmin);
+router.patch('/cp-compensation/:earningId/approve', authenticate, adminFinancesCreate, cpCompensationController.approve);
+router.patch('/cp-compensation/:earningId/reject', authenticate, adminFinancesCreate, cpCompensationController.reject);
+router.patch('/cp-compensation/:earningId/modify', authenticate, adminFinancesCreate, cpCompensationController.modify);
+router.post('/cp-compensation/:earningId/advance', authenticate, adminFinancesCreate, cpCompensationController.addAdvance);
+router.post('/cp-compensation/:earningId/payment', authenticate, adminFinancesCreate, cpCompensationController.processPayment);
 router.get('/creator-wallets/:creatorId', authenticate, requireSalesRepOrAdmin, financeController.getCreatorWallet);
 router.get('/creator-payouts', authenticate, requireSalesRepOrAdmin, financeController.listCreatorPayouts);
 router.post('/creator-payout-accounts', authenticate, requireSalesRepOrAdmin, financeController.upsertCreatorPayoutAccount);

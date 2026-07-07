@@ -2082,6 +2082,25 @@ exports.getProjectDetails = async (req, res) => {
         : Math.max(subtotal - pricing_breakdown.discount, 0);
     pricing_breakdown.total = pricing_breakdown.total_after_credit;
 
+    const creatorCompensations = await db.creator_earnings.findAll({
+      where: {
+        booking_id: projectJson.stream_project_booking_id,
+        approval_status: { [Op.in]: ['pending_approval', 'approved', 'rejected'] }
+      },
+      attributes: ['creator_earning_id', 'creator_id', 'gross_amount', 'net_earning_amount'],
+      order: [['updated_at', 'DESC'], ['creator_earning_id', 'DESC']]
+    });
+
+    const compensationByCreatorId = new Map();
+    creatorCompensations.forEach((row) => {
+      const earning = row.toJSON();
+      const totalCompensation = Number(earning.net_earning_amount || earning.gross_amount || 0);
+
+      if (!compensationByCreatorId.has(Number(earning.creator_id))) {
+        compensationByCreatorId.set(Number(earning.creator_id), totalCompensation);
+      }
+    });
+
     // 6. Crew Processing & Fulfillment Summary
     const ROLE_GROUPS = { videographer: ['9', '1'], photographer: ['10', '2'], cinematographer: ['11', '3'] };
     const ID_TO_ROLE_MAP = {};
@@ -2109,9 +2128,11 @@ exports.getProjectDetails = async (req, res) => {
                 }
             } catch(e){}
         }
+        const totalCompensation = compensationByCreatorId.get(Number(ac.crew_member_id)) ?? null;
         return {
             ...ac,
             acceptance_status: ac.crew_accept === 1 ? 'accepted' : ac.crew_accept === 2 ? 'rejected' : 'pending',
+            total_compensation: totalCompensation,
             crew_member: { 
                 ...ac.crew_member, 
                 role_name: roleNames.join(', ') || 'N/A',
@@ -2122,6 +2143,7 @@ exports.getProjectDetails = async (req, res) => {
     });
 
     Object.keys(fulfillmentSummary).forEach(k => { fulfillmentSummary[k].display = `${fulfillmentSummary[k].accepted}/${fulfillmentSummary[k].required}`; });
+    projectJson.assigned_crews = processedCrew;
 
     // 7. Payment Link Logic
     let active_payment_link = null;

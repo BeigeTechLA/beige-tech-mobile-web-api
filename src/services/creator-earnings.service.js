@@ -1,7 +1,19 @@
 const db = require('../models');
+const { Op } = db.Sequelize;
+
+const CP_COMPENSATION_SOURCES = ['admin', 'sales_admin'];
+const CP_COMPENSATION_APPROVAL_STATUSES = ['pending_approval', 'approved', 'rejected'];
 
 function toMoney(value) {
     return Number(Number(value || 0).toFixed(2));
+}
+
+function buildCreatorCompensationWhere(creatorId) {
+    return {
+        creator_id: Number(creatorId),
+        compensation_source: { [Op.in]: CP_COMPENSATION_SOURCES },
+        approval_status: { [Op.in]: CP_COMPENSATION_APPROVAL_STATUSES }
+    };
 }
 
 function parseJson(value, fallback = null) {
@@ -27,22 +39,39 @@ function formatDate(value) {
     return date.toISOString().slice(0, 10);
 }
 
+function addDaysDateOnly(value, days) {
+    const date = value ? new Date(value) : null;
+    if (!date || Number.isNaN(date.getTime())) return null;
+    date.setDate(date.getDate() + days);
+    return date.toISOString().slice(0, 10);
+}
+
+function resolveDueDate(earning, booking = {}) {
+    const metadata = parseJson(earning.metadata_json, {});
+    return metadata?.due_date || metadata?.payout_due_date || addDaysDateOnly(booking.event_date, 15);
+}
+
 function buildCreatorName(creator) {
     if (!creator) return null;
     return [creator.first_name, creator.last_name].filter(Boolean).join(' ').trim() || creator.email || null;
 }
 
-function getEarningDisplayStatus(earning, assignedCrew) {
-    if (!assignedCrew) return 'pending';
-
-    const crewAccept = Number(assignedCrew.crew_accept);
+function getEarningDisplayStatus(earning, assignedCrew, paymentBreakdown = null) {
+    const paidAmount = Number(paymentBreakdown?.advance_paid || 0);
+    const remainingBalance = Number(paymentBreakdown?.remaining_balance || 0);
 
     if (earning.status === 'paid') return 'paid';
     if (earning.status === 'payout_pending') return 'payout_pending';
-    if (earning.status === 'earned') return 'partially_paid';
+    if (earning.status === 'earned') return paidAmount > 0 && remainingBalance > 0 ? 'partially_paid' : 'approved';
+    if (earning.approval_status === 'approved') return paidAmount > 0 && remainingBalance > 0 ? 'partially_paid' : 'accepted';
+    if (earning.approval_status === 'pending_approval') return 'pending_approval';
+    if (earning.approval_status === 'rejected') return 'rejected';
 
-    if (crewAccept === 0) return 'awaiting_proposal';
-    if (crewAccept === 1) return 'booked';
+    if (!assignedCrew) return 'pending';
+
+    const crewAccept = Number(assignedCrew.crew_accept);
+    if (crewAccept === 0) return 'awaiting_response';
+    if (crewAccept === 1) return 'accepted';
     if (crewAccept === 2) return 'declined';
 
     return 'pending';
@@ -53,8 +82,11 @@ function buildEarningStatusLabel(status) {
         paid: 'Paid',
         partially_paid: 'Partially Paid',
         payout_pending: 'Awaiting Payout',
-        awaiting_proposal: 'Awaiting Proposal',
-        booked: 'Booked',
+        awaiting_response: 'Awaiting Response',
+        pending_approval: 'Pending Approval',
+        approved: 'Approved',
+        accepted: 'Accepted',
+        rejected: 'Rejected',
         declined: 'Declined',
         pending: 'Pending'
     };
@@ -62,18 +94,20 @@ function buildEarningStatusLabel(status) {
 }
 
 function buildPaymentBreakdown(earning, advances = []) {
-    const totalCompensation = toMoney(earning.gross_amount || earning.net_earning_amount || 0);
-    const advanceTotal = toMoney(
+    const totalCompensation = toMoney(earning.net_earning_amount || earning.gross_amount || 0);
+    const processedAdvanceTotal = toMoney(
         advances.filter(a => a.status === 'processed').reduce((sum, a) => sum + Number(a.amount || 0), 0)
     );
-    const remainingBalance = toMoney(Math.max(totalCompensation - advanceTotal, 0));
+    const paidTotal = earning.status === 'paid' ? totalCompensation : processedAdvanceTotal;
+    const remainingBalance = toMoney(Math.max(totalCompensation - paidTotal, 0));
     const paymentPercent = totalCompensation > 0
-        ? Math.round((advanceTotal / totalCompensation) * 100)
+        ? Math.round((paidTotal / totalCompensation) * 100)
         : 0;
 
     return {
         total_compensation: totalCompensation,
-        advance_paid: advanceTotal,
+        advance_paid: processedAdvanceTotal,
+        paid_total: paidTotal,
         remaining_balance: remainingBalance,
         payment_percent: paymentPercent,
         advances: advances.map(advance => ({
@@ -101,6 +135,134 @@ function buildCompensationBreakdown(compensationItems = [], grossAmount = 0) {
             label: item.item_label,
             amount: toMoney(item.amount)
         }));
+}
+
+function buildEarningRow(earning) {
+    const booking = earning.booking || {};
+    const assignedCrew = (booking.assigned_crews || [])[0] || null;
+    const advances = earning.advances || [];
+    const compensationItems = earning.compensation_items || [];
+    const paymentBreakdown = buildPaymentBreakdown(earning, advances);
+    const status = getEarningDisplayStatus(earning, assignedCrew, paymentBreakdown);
+
+    return {
+        creator_earning_id: earning.creator_earning_id,
+        booking_id: earning.booking_id,
+        shoot_name: booking.project_name || `Shoot #${earning.booking_id}`,
+        client_name: booking.guest_email || null,
+        customer_name: booking.guest_email || null,
+        shoot_type: booking.shoot_type || booking.event_type || null,
+        event_date: booking.event_date ? formatDate(booking.event_date) : null,
+        due_date: resolveDueDate(earning, booking),
+        event_location: booking.event_location || null,
+        start_time: booking.start_time || null,
+        end_time: booking.end_time || null,
+        status,
+        status_label: buildEarningStatusLabel(status),
+        earning_status: earning.status,
+        approval_status: earning.approval_status,
+        crew_accept: assignedCrew ? Number(assignedCrew.crew_accept) : null,
+        can_accept: assignedCrew ? Number(assignedCrew.crew_accept) === 0 : false,
+        can_decline: assignedCrew ? Number(assignedCrew.crew_accept) === 0 : false,
+        total_compensation: paymentBreakdown.total_compensation,
+        advance_paid: paymentBreakdown.advance_paid,
+        paid_amount: paymentBreakdown.paid_total,
+        remaining_balance: paymentBreakdown.remaining_balance,
+        payment_percent: paymentBreakdown.payment_percent,
+        compensation_items: buildCompensationBreakdown(compensationItems, earning.net_earning_amount || earning.gross_amount),
+        created_at: earning.created_at,
+        updated_at: earning.updated_at
+    };
+}
+
+function normalizeStatusFilter(status) {
+    if (!status || status === 'all' || status === 'All Status') return null;
+    return String(status).trim().toLowerCase();
+}
+
+function buildDateWhere(filters = {}) {
+    const dateWhere = {};
+    if (filters.date_from) dateWhere[Op.gte] = filters.date_from;
+    if (filters.date_to) dateWhere[Op.lte] = filters.date_to;
+    return Object.keys(dateWhere).length ? dateWhere : null;
+}
+
+function matchesDisplayFilters(row, filters = {}) {
+    const status = normalizeStatusFilter(filters.status);
+    if (status && row.status !== status && row.earning_status !== status && row.approval_status !== status) {
+        return false;
+    }
+
+    const search = String(filters.search || '').trim().toLowerCase();
+    if (search) {
+        const haystack = [
+            row.creator_earning_id,
+            row.booking_id,
+            row.shoot_name,
+            row.client_name,
+            row.shoot_type,
+            row.event_location,
+            row.status_label
+        ].filter(Boolean).join(' ').toLowerCase();
+        if (!haystack.includes(search)) return false;
+    }
+
+    return true;
+}
+
+function buildMonthlyChart(rows = []) {
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const buckets = monthNames.map((month, index) => ({
+        month,
+        month_number: index + 1,
+        upcoming: 0,
+        pending: 0,
+        paid: 0,
+        total: 0
+    }));
+
+    rows.forEach((row) => {
+        const date = row.event_date ? new Date(row.event_date) : null;
+        if (!date || Number.isNaN(date.getTime())) return;
+        const bucket = buckets[date.getMonth()];
+        bucket.total = toMoney(bucket.total + row.total_compensation);
+        if (row.status === 'paid') bucket.paid = toMoney(bucket.paid + row.total_compensation);
+        else if (row.status === 'payout_pending' || row.status === 'approved' || row.status === 'partially_paid') {
+            bucket.pending = toMoney(bucket.pending + row.remaining_balance);
+        } else {
+            bucket.upcoming = toMoney(bucket.upcoming + row.remaining_balance);
+        }
+    });
+
+    return buckets;
+}
+
+async function resolveCreatorForUser(userId) {
+    if (!userId) return null;
+    let creator = await db.crew_members.findOne({
+        where: { user_id: Number(userId), is_active: 1 },
+        attributes: ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email']
+    });
+    if (!creator) {
+        const user = await db.users.scope('all').findByPk(Number(userId), {
+            attributes: ['id', 'email']
+        });
+        const email = user?.email ? String(user.email).trim() : null;
+        if (email) {
+            creator = await db.crew_members.findOne({
+                where: { email, is_active: 1 },
+                attributes: ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email']
+            });
+        }
+    }
+    if (!creator) return null;
+    const plain = toPlain(creator);
+    return {
+        creator_id: plain.crew_member_id,
+        user_id: plain.user_id,
+        name: buildCreatorName(plain),
+        email: plain.email
+    };
 }
 
 function buildTimeline(timelineEvents = [], earning = {}, assignedCrew = null) {
@@ -189,10 +351,8 @@ function buildTimeline(timelineEvents = [], earning = {}, assignedCrew = null) {
 // DASHBOARD
 
 async function getCreatorEarningsDashboard(creatorId, filters = {}) {
-    console.log('creatorId received:', creatorId, typeof creatorId);
-
     const earnings = await db.creator_earnings.findAll({
-        where: { creator_id: Number(creatorId) },
+        where: buildCreatorCompensationWhere(creatorId),
         include: [
             {
                 model: db.stream_project_booking,
@@ -200,7 +360,7 @@ async function getCreatorEarningsDashboard(creatorId, filters = {}) {
                 required: false,
                 attributes: [
                     'stream_project_booking_id', 'project_name', 'shoot_type',
-                    'event_type', 'event_date', 'event_location', 'start_time',
+                    'event_type', 'guest_email', 'event_date', 'event_location', 'start_time',
                     'end_time', 'is_completed', 'created_at'
                 ],
                 include: [
@@ -227,67 +387,39 @@ async function getCreatorEarningsDashboard(creatorId, filters = {}) {
         order: [['created_at', 'DESC']]
     });
 
-    console.log('EARNINGS FOUND:', earnings.length);
-
     const plainEarnings = earnings.map(toPlain);
+    const rows = plainEarnings.map(buildEarningRow).filter(row => matchesDisplayFilters(row, filters));
 
     const upcomingEarnings = toMoney(
-        plainEarnings
-            .filter(e => !['paid'].includes(e.status))
-            .reduce((sum, e) => sum + Number(e.net_earning_amount || 0), 0)
+        rows
+            .filter(row => row.status !== 'paid')
+            .reduce((sum, row) => sum + Number(row.remaining_balance || 0), 0)
     );
 
     const pendingEarnings = toMoney(
-        plainEarnings
-            .filter(e => e.status === 'payout_pending')
-            .reduce((sum, e) => sum + Number(e.net_earning_amount || 0), 0)
+        rows
+            .filter(row => ['payout_pending', 'approved', 'partially_paid'].includes(row.status))
+            .reduce((sum, row) => sum + Number(row.remaining_balance || 0), 0)
     );
 
     const paidEarnings = toMoney(
-        plainEarnings
-            .filter(e => e.status === 'paid')
-            .reduce((sum, e) => sum + Number(e.net_earning_amount || 0), 0)
+        rows.reduce((sum, row) => sum + Number(row.paid_amount || 0), 0)
     );
 
     const lifetimeEarnings = toMoney(
-        plainEarnings.reduce((sum, e) => sum + Number(e.gross_amount || 0), 0)
+        rows.reduce((sum, row) => sum + Number(row.total_compensation || 0), 0)
     );
 
-    const rows = plainEarnings.map(earning => {
-        const booking = earning.booking || {};
-        const assignedCrew = (booking.assigned_crews || [])[0] || null;
-        const advances = earning.advances || [];
-        const compensationItems = earning.compensation_items || [];
-        const status = getEarningDisplayStatus(earning, assignedCrew);
-        const paymentBreakdown = buildPaymentBreakdown(earning, advances);
-
-        return {
-            creator_earning_id: earning.creator_earning_id,
-            booking_id: earning.booking_id,
-            shoot_name: booking.project_name || `Shoot #${earning.booking_id}`,
-            shoot_type: booking.shoot_type || booking.event_type || null,
-            event_date: booking.event_date ? formatDate(booking.event_date) : null,
-            event_location: booking.event_location || null,
-            start_time: booking.start_time || null,
-            end_time: booking.end_time || null,
-            status,
-            status_label: buildEarningStatusLabel(status),
-            crew_accept: assignedCrew ? Number(assignedCrew.crew_accept) : null,
-            total_compensation: toMoney(earning.gross_amount || earning.net_earning_amount || 0),
-            advance_paid: paymentBreakdown.advance_paid,
-            remaining_balance: paymentBreakdown.remaining_balance,
-            payment_percent: paymentBreakdown.payment_percent,
-            compensation_items: buildCompensationBreakdown(compensationItems, earning.gross_amount)
-        };
-    });
-
     return {
+        creator_id: Number(creatorId),
         overview: {
             upcoming_earnings: upcomingEarnings,
             pending_payments: pendingEarnings,
             paid_earnings: paidEarnings,
-            total_lifetime_earnings: lifetimeEarnings
+            total_lifetime_earnings: lifetimeEarnings,
+            total_received: paidEarnings
         },
+        chart: buildMonthlyChart(rows),
         rows
     };
 }
@@ -299,7 +431,7 @@ async function getCreatorEarningDetails(creatorEarningId, creatorId) {
     const earning = await db.creator_earnings.findOne({
         where: {
             creator_earning_id: creatorEarningId,
-            creator_id: creatorId
+            ...buildCreatorCompensationWhere(creatorId)
         },
         include: [
             {
@@ -354,23 +486,29 @@ async function getCreatorEarningDetails(creatorEarningId, creatorId) {
     const advances = plain.advances || [];
     const compensationItems = plain.compensation_items || [];
     const timelineEvents = plain.timeline_events || [];
-    const status = getEarningDisplayStatus(plain, assignedCrew);
     const paymentBreakdown = buildPaymentBreakdown(plain, advances);
+    const status = getEarningDisplayStatus(plain, assignedCrew, paymentBreakdown);
+    const row = buildEarningRow(plain);
 
     return {
         creator_earning_id: plain.creator_earning_id,
         booking_id: plain.booking_id,
+        creator_id: plain.creator_id,
         shoot_info: {
             shoot_name: booking.project_name || `Shoot #${plain.booking_id}`,
             shoot_type: booking.shoot_type || booking.event_type || null,
             creator_name: buildCreatorName(plain.creator),
+            client_name: booking.guest_email || null,
             status_label: buildEarningStatusLabel(status),
             status,
             event_date: booking.event_date ? formatDate(booking.event_date) : null,
-            event_location: booking.event_location || null
+            due_date: row.due_date,
+            event_location: booking.event_location || null,
+            start_time: booking.start_time || null,
+            end_time: booking.end_time || null
         },
         compensation_breakdown: buildCompensationBreakdown(compensationItems, plain.gross_amount),
-        total_compensation: toMoney(plain.gross_amount || plain.net_earning_amount || 0),
+        total_compensation: paymentBreakdown.total_compensation,
         payment_breakdown: paymentBreakdown,
         timeline: buildTimeline(timelineEvents, plain, assignedCrew)
     };
@@ -506,21 +644,23 @@ async function getCreatorEarningsList(creatorId, filters = {}) {
     const page = Math.max(parseInt(filters.page, 10) || 1, 1);
     const limit = Math.min(Math.max(parseInt(filters.limit, 10) || 20, 1), 100);
     const offset = (page - 1) * limit;
-    const where = { creator_id: Number(creatorId) };
+    const where = buildCreatorCompensationWhere(creatorId);
+    const bookingWhere = {};
+    const dateWhere = buildDateWhere(filters);
+    if (dateWhere) bookingWhere.event_date = dateWhere;
 
-    const earnings = await db.creator_earnings.findAndCountAll({
+    const earnings = await db.creator_earnings.findAll({
         where,
-        limit,
-        offset,
         order: [['created_at', 'DESC']],
         include: [
             {
                 model: db.stream_project_booking,
                 as: 'booking',
                 required: false,
+                where: Object.keys(bookingWhere).length ? bookingWhere : undefined,
                 attributes: [
                     'stream_project_booking_id', 'project_name', 'shoot_type',
-                    'event_type', 'event_date', 'event_location',
+                    'event_type', 'guest_email', 'event_date', 'event_location',
                     'start_time', 'end_time', 'is_completed', 'created_at'
                 ],
                 include: [
@@ -546,44 +686,17 @@ async function getCreatorEarningsList(creatorId, filters = {}) {
         ]
     });
 
-    const rows = earnings.rows.map(earning => {
-        const plain = toPlain(earning);
-        const booking = plain.booking || {};
-        const assignedCrew = (booking.assigned_crews || [])[0] || null;
-        const advances = plain.advances || [];
-        const compensationItems = plain.compensation_items || [];
-        const status = getEarningDisplayStatus(plain, assignedCrew);
-        const paymentBreakdown = buildPaymentBreakdown(plain, advances);
-
-        return {
-            creator_earning_id: plain.creator_earning_id,
-            booking_id: plain.booking_id,
-            shoot_name: booking.project_name || `Shoot #${plain.booking_id}`,
-            shoot_type: booking.shoot_type || booking.event_type || null,
-            event_date: booking.event_date ? formatDate(booking.event_date) : null,
-            event_location: booking.event_location || null,
-            start_time: booking.start_time || null,
-            end_time: booking.end_time || null,
-            status,
-            status_label: buildEarningStatusLabel(status),
-            crew_accept: assignedCrew ? Number(assignedCrew.crew_accept) : null,
-            can_accept: assignedCrew ? Number(assignedCrew.crew_accept) === 0 : false,
-            can_decline: assignedCrew ? Number(assignedCrew.crew_accept) === 0 : false,
-            total_compensation: toMoney(plain.gross_amount || plain.net_earning_amount || 0),
-            advance_paid: paymentBreakdown.advance_paid,
-            remaining_balance: paymentBreakdown.remaining_balance,
-            payment_percent: paymentBreakdown.payment_percent,
-            compensation_items: buildCompensationBreakdown(compensationItems, plain.gross_amount)
-        };
-    });
+    const allRows = earnings.map(earning => buildEarningRow(toPlain(earning)));
+    const filteredRows = allRows.filter(row => matchesDisplayFilters(row, filters));
+    const rows = filteredRows.slice(offset, offset + limit);
 
     return {
         rows,
         pagination: {
             page,
             limit,
-            total: earnings.count,
-            total_pages: Math.ceil(earnings.count / limit)
+            total: filteredRows.length,
+            total_pages: Math.ceil(filteredRows.length / limit)
         }
     };
 }
@@ -681,7 +794,10 @@ async function declineShoot(bookingId, creatorId) {
 
 async function getPayoutTimeline(creatorEarningId, creatorId) {
     const earning = await db.creator_earnings.findOne({
-        where: { creator_earning_id: creatorEarningId, creator_id: creatorId },
+        where: {
+            creator_earning_id: creatorEarningId,
+            ...buildCreatorCompensationWhere(creatorId)
+        },
         include: [
             {
                 model: db.stream_project_booking,
@@ -761,6 +877,7 @@ async function upsertCompensationItems(creatorEarningId, items = [], options = {
 }
 
 module.exports = {
+    resolveCreatorForUser,
     getCreatorEarningsDashboard,
     getCreatorEarningsList,
     getCreatorEarningDetails,
