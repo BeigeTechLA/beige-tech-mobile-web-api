@@ -3001,7 +3001,7 @@ Content-Type: application/json
 
 {
   "booking_id": null,
-  "guest_email": "nehapanchal.np07@gmail.com",
+  "guest_email": "harsh.patel@revurge.com",
   "content_type": "videographer",
   "shoot_type": "podcasts_and_shows",
   "client_name": "Neha",
@@ -3101,7 +3101,7 @@ Content-Type: application/json
   ],
   "shootHours": 6,
   "eventType": "podcasts_and_shows",
-  "guestEmail": "nehapanchal.np07@gmail.com",
+  "guestEmail": "harsh.patel@revurge.com",
   "shoot_start_date": "2026-01-06T10:30:00.000Z",
   "video_edit_types": [
     { "slug": "social_reel_15_30", "quantity": 1 },
@@ -3143,7 +3143,7 @@ Content-Type: application/json
 
 {
   "order_name": "PODCASTS_AND_SHOWS Shoot - Neha",
-  "guest_email": "nehapanchal.np07@gmail.com",
+  "guest_email": "harsh.patel@revurge.com",
   "content_type": "videographer",
   "shoot_type": "podcasts_and_shows",
   "booking_type": "single_day",
@@ -3242,7 +3242,7 @@ Content-Type: application/json
 {
   "booking_id": "1282",
   "amount": 3900,
-  "guest_email": "nehapanchal.np07@gmail.com",
+  "guest_email": "harsh.patel@revurge.com",
   "use_credit": false,
   "credit_amount_used": 0
 }
