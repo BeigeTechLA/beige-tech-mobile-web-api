@@ -36,6 +36,10 @@ function normalizeClientPaymentStatus(project, paymentState) {
   return paymentState?.payment_status || 'pending';
 }
 
+function hasClientProjectPayment(project, paymentState) {
+  return Boolean(project?.payment_id || paymentState?.isPaid || paymentState?.isPartiallyPaid);
+}
+
 function toArray(value) {
   if (!value) return [];
 
@@ -480,7 +484,7 @@ exports.getProjectFormStatusByBookingId = async (req, res) => {
     }
 
     const booking = await stream_project_booking.findByPk(booking_id, {
-      attributes: ['stream_project_booking_id', 'project_name', 'guest_email', 'payment_id', 'is_active', 'is_cancelled'],
+      attributes: ['stream_project_booking_id', 'project_name', 'guest_email', 'payment_id', 'quote_id', 'budget', 'is_active', 'is_cancelled'],
       raw: true
     });
 
@@ -499,6 +503,13 @@ exports.getProjectFormStatusByBookingId = async (req, res) => {
       order: [['id', 'DESC']],
       raw: true
     });
+    const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+      bookingId: booking.stream_project_booking_id,
+      salesQuoteId: booking.quote_id,
+      quoteTotal: parseFloat(booking.budget || 0),
+      paidAmount: booking.payment_id ? parseFloat(booking.budget || 0) : 0,
+      paymentStatus: booking.payment_id ? 'paid' : 'pending'
+    });
 
     return res.status(200).json({
       success: true,
@@ -509,7 +520,9 @@ exports.getProjectFormStatusByBookingId = async (req, res) => {
         booking_id: booking.stream_project_booking_id,
         project_name: booking.project_name,
         guest_email: booking.guest_email,
-        has_payment: Boolean(booking.payment_id),
+        has_payment: hasClientProjectPayment(booking, paymentState),
+        payment_status: normalizeClientPaymentStatus(booking, paymentState),
+        payment_summary: paymentState,
         is_active: Boolean(booking.is_active),
         is_cancelled: Boolean(booking.is_cancelled),
         is_submitted: Boolean(existingSubmission),
@@ -1298,18 +1311,13 @@ exports.getPendingProjectForms = async (req, res) => {
             return res.status(400).json({ error: true, message: "user_id is required" });
         }
 
-        // Fetch projects that have payment but NO form submission
-        const pendingProjects = await stream_project_booking.findAll({
-            where: {
-                user_id: user_id,
-                is_active: 1,
-                is_cancelled: 0,
-                is_draft: 0,
-                payment_id: { [Sequelize.Op.ne]: null } // Only payment completed projects
-            },
+        // Fetch active booked projects with no active form submission, then apply
+        // normalized payment checks so manual/partial payments are included.
+        const projectsWithoutForms = await stream_project_booking.findAll({
             include: [{
                 model: project_form_submissions,
                 as: 'form_submissions', // This must match the alias in your initModels
+                where: { is_active: 1 },
                 required: false // This makes it a LEFT JOIN
             }],
             // Filter: Only return projects where the submission record DOES NOT exist
@@ -1318,12 +1326,28 @@ exports.getPendingProjectForms = async (req, res) => {
                     { user_id: user_id },
                     { is_active: 1 },
                     { is_cancelled: 0 },
-                    { payment_id: { [Sequelize.Op.ne]: null } },
+                    { is_draft: 0 },
                     Sequelize.where(Sequelize.col('form_submissions.id'), 'IS', null)
                 ]
             },
             order: [['event_date', 'ASC']] // Show the soonest project first
         });
+        const projectsWithPaymentState = await Promise.all(
+            projectsWithoutForms.map(async (project) => {
+                const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+                    bookingId: project.stream_project_booking_id,
+                    salesQuoteId: project.quote_id,
+                    quoteTotal: parseFloat(project.budget || 0),
+                    paidAmount: project.payment_id ? parseFloat(project.budget || 0) : 0,
+                    paymentStatus: project.payment_id ? 'paid' : 'pending'
+                });
+
+                return { project, paymentState };
+            })
+        );
+        const pendingProjects = projectsWithPaymentState.filter(({ project, paymentState }) =>
+            hasClientProjectPayment(project, paymentState)
+        );
 
         if (!pendingProjects || pendingProjects.length === 0) {
             return res.status(200).json({
@@ -1335,13 +1359,19 @@ exports.getPendingProjectForms = async (req, res) => {
         }
 
         // Format the response similarly to your other API
-        const formattedProjects = pendingProjects.map(project => {
+        const formattedProjects = pendingProjects.map(({ project, paymentState }) => {
             return {
                 project_id: project.stream_project_booking_id,
                 project_name: project.project_name,
                 event_date: project.event_date,
                 event_type: project.event_type,
                 payment_id: project.payment_id,
+                payment_status: normalizeClientPaymentStatus(project, paymentState),
+                payment_summary: paymentState,
+                paid_amount: paymentState?.paid_amount ?? 0,
+                due_amount: paymentState?.due_amount ?? 0,
+                pending_amount: paymentState?.pending_amount ?? 0,
+                requires_payment: paymentState?.requires_payment ?? true,
                 message: "Please fill out the project detail form for this project."
             };
         });
