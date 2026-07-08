@@ -153,18 +153,31 @@ const normalizeDateOnlyInput = (value) => {
 };
 
 async function resolveUserId(userId, guestEmail) {
-  if (userId) return parseInt(userId);
-  if (!guestEmail) return null;
+  const normalizedEmail = guestEmail ? String(guestEmail).trim().toLowerCase() : '';
+  if (normalizedEmail) {
+    const existingUser = await db.users.findOne({
+      where: db.sequelize.where(
+        db.sequelize.fn('LOWER', db.sequelize.col('email')),
+        normalizedEmail
+      ),
+      attributes: ['id']
+    });
 
-  const normalizedEmail = String(guestEmail).trim().toLowerCase();
-  if (!normalizedEmail) return null;
+    if (existingUser) return existingUser.id;
 
-  const existingUser = await db.users.findOne({
-    where: { email: normalizedEmail },
-    attributes: ['id']
-  });
+    if (userId) {
+      const suppliedUser = await db.users.findByPk(parseInt(userId, 10), {
+        attributes: ['id', 'email']
+      });
+      const suppliedUserEmail = suppliedUser?.email
+        ? String(suppliedUser.email).trim().toLowerCase()
+        : '';
 
-  return existingUser ? existingUser.id : null;
+      return suppliedUserEmail === normalizedEmail ? suppliedUser.id : null;
+    }
+  }
+
+  return userId ? parseInt(userId, 10) : null;
 }
 
 const notifyAssignedCreators = async (
