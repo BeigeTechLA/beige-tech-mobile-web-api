@@ -2251,13 +2251,13 @@ exports.getProjectDetails = async (req, res) => {
       totalPaidAmount + (summaryCreditUsedAmount || 0) + (summaryPendingAmount || 0)
     );
     const creditUsedAmount = summaryCreditUsedAmount || 0;
-    const pendingAmount = Math.max(
-      summaryPendingAmount || 0,
-      totalValueAmount - totalPaidAmount - creditUsedAmount,
-      0
-    );
+    const pendingAmount = bookingPaymentSummary
+      ? Math.max(summaryPendingAmount || 0, 0)
+      : Math.max(totalValueAmount - totalPaidAmount - creditUsedAmount, 0);
     const resolvedPaymentStatus = pendingAmount > 0 && totalPaidAmount > 0
       ? 'partially_paid'
+      : bookingPaymentSummary?.payment_status
+        ? String(bookingPaymentSummary.payment_status).toLowerCase()
       : projectJson.payment_id
       ? 'paid'
       : manualPaymentSummary.hasFullPayment
@@ -3597,9 +3597,17 @@ exports.getAllProjectDetails = async (req, res) => {
         resolvedQuoteValueAmount || 0,
         knownCollectedTotal || 0
       );
+      const summaryPaymentStatus = String(bookingPaymentSummary?.payment_status || '').toLowerCase();
+      const isNoPaymentDueSummary =
+        Boolean(bookingPaymentSummary) &&
+        summaryPaymentStatus === 'no_payment_due' &&
+        (summaryPendingAmount || 0) <= 0 &&
+        totalPaidAmount <= 0 &&
+        creditUsedAmount <= 0;
       const shouldUseCalculatedBookingPricing =
         totalValueAmount <= totalPaidAmount ||
-        (summaryQuoteTotal === null && (!resolvedQuoteValueAmount || resolvedQuoteValueAmount <= 0));
+        (summaryQuoteTotal === null && (!resolvedQuoteValueAmount || resolvedQuoteValueAmount <= 0)) ||
+        isNoPaymentDueSummary;
 
       if (shouldUseCalculatedBookingPricing) {
         const projectedPricing = await bookingPricingService.calculateBookingPricing({
@@ -3607,15 +3615,16 @@ exports.getAllProjectDetails = async (req, res) => {
           booking_days: bookingDaysData
         });
         const projectedTotal = parseAmountCandidate(projectedPricing?.total);
-        if (projectedTotal !== null && projectedTotal > totalValueAmount) {
+        const projectedSubtotal = parseAmountCandidate(projectedPricing?.subtotal);
+        if (isNoPaymentDueSummary && projectedSubtotal !== null && projectedSubtotal > totalValueAmount) {
+          totalValueAmount = projectedSubtotal;
+        } else if (projectedTotal !== null && projectedTotal > totalValueAmount) {
           totalValueAmount = projectedTotal;
         }
       }
-      const pendingAmount = Math.max(
-        summaryPendingAmount || 0,
-        totalValueAmount - totalPaidAmount - creditUsedAmount,
-        0
-      );
+      const pendingAmount = bookingPaymentSummary
+        ? Math.max(summaryPendingAmount || 0, 0)
+        : Math.max(totalValueAmount - totalPaidAmount - creditUsedAmount, 0);
       const paymentStatus = pendingAmount > 0 && totalPaidAmount > 0
         ? 'partially_paid'
         : String(
