@@ -120,6 +120,50 @@ function buildPaymentBreakdown(earning, advances = []) {
     };
 }
 
+function buildProofUrl(metadata = {}) {
+    const proofUrl = metadata.proof_url || metadata.proof_file_path || null;
+    if (!proofUrl) return null;
+    return String(proofUrl);
+}
+
+async function getCpPaymentHistoryForEarning(earning) {
+    if (!earning?.creator_earning_id || !earning?.creator_id) return [];
+
+    const payouts = await db.creator_payout_requests.findAll({
+        where: {
+            creator_id: Number(earning.creator_id),
+            status: { [Op.in]: ['processing', 'paid'] }
+        },
+        order: [['paid_at', 'DESC'], ['processed_at', 'DESC'], ['created_at', 'DESC']]
+    });
+
+    return payouts.map(toPlain)
+        .map((payout) => {
+            const metadata = parseJson(payout.metadata_json, {});
+            if (metadata?.source !== 'cp_compensation') return null;
+            if (Number(metadata.creator_earning_id) !== Number(earning.creator_earning_id)) return null;
+
+            const proofUrl = buildProofUrl(metadata);
+            const paidAt = payout.paid_at || payout.processed_at || payout.created_at || null;
+
+            return {
+                id: payout.creator_payout_request_id,
+                creator_earning_id: Number(earning.creator_earning_id),
+                type: metadata.payment_scope === 'advance' ? 'advance_payment' : 'final_payment',
+                method: metadata.payment_mode || payout.payout_method || 'manual',
+                status: payout.status,
+                amount: toMoney(payout.amount),
+                paid_at: paidAt,
+                receipt_url: proofUrl,
+                receipt_download_url: proofUrl,
+                transaction_reference: metadata.transaction_reference || payout.external_reference || null,
+                proof_file_name: metadata.proof_file_name || null,
+                notes: metadata.notes || null
+            };
+        })
+        .filter(Boolean);
+}
+
 function buildCompensationBreakdown(compensationItems = [], grossAmount = 0) {
     if (!compensationItems.length) {
         return [{
@@ -169,6 +213,7 @@ function buildEarningRow(earning) {
         paid_amount: paymentBreakdown.paid_total,
         remaining_balance: paymentBreakdown.remaining_balance,
         payment_percent: paymentBreakdown.payment_percent,
+        advances: paymentBreakdown.advances,
         compensation_items: buildCompensationBreakdown(compensationItems, earning.net_earning_amount || earning.gross_amount),
         created_at: earning.created_at,
         updated_at: earning.updated_at
@@ -210,7 +255,7 @@ function matchesDisplayFilters(row, filters = {}) {
     return true;
 }
 
-function buildMonthlyChart(rows = []) {
+function buildMonthlyChart(rows = [], paymentHistoryByEarningId = new Map()) {
     const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     const buckets = monthNames.map((month, index) => ({
         month,
@@ -222,16 +267,37 @@ function buildMonthlyChart(rows = []) {
     }));
 
     rows.forEach((row) => {
-        const date = row.event_date ? new Date(row.event_date) : null;
+        const paymentHistory = paymentHistoryByEarningId.get(Number(row.creator_earning_id)) || [];
+        const paidEntries = paymentHistory.length
+            ? paymentHistory
+            : (row.advances || [])
+                .filter(advance => advance.status === 'processed')
+                .map(advance => ({
+                    amount: advance.amount,
+                    paid_at: advance.processed_at
+                }));
+
+        paidEntries.forEach((payment) => {
+            const paidDate = payment.paid_at ? new Date(payment.paid_at) : null;
+            if (!paidDate || Number.isNaN(paidDate.getTime())) return;
+            const paidBucket = buckets[paidDate.getMonth()];
+            paidBucket.paid = toMoney(paidBucket.paid + Number(payment.amount || 0));
+            paidBucket.total = toMoney(paidBucket.total + Number(payment.amount || 0));
+        });
+
+        const dueOrEventDate = row.due_date || row.event_date;
+        const date = dueOrEventDate ? new Date(dueOrEventDate) : null;
         if (!date || Number.isNaN(date.getTime())) return;
         const bucket = buckets[date.getMonth()];
-        bucket.total = toMoney(bucket.total + row.total_compensation);
-        if (row.status === 'paid') bucket.paid = toMoney(bucket.paid + row.total_compensation);
-        else if (row.status === 'payout_pending' || row.status === 'approved' || row.status === 'partially_paid') {
+
+        if (row.status === 'paid') {
+            return;
+        } else if (row.status === 'payout_pending' || row.status === 'approved' || row.status === 'partially_paid') {
             bucket.pending = toMoney(bucket.pending + row.remaining_balance);
         } else {
             bucket.upcoming = toMoney(bucket.upcoming + row.remaining_balance);
         }
+        bucket.total = toMoney(bucket.total + row.remaining_balance);
     });
 
     return buckets;
@@ -266,21 +332,27 @@ async function resolveCreatorForUser(userId) {
 }
 
 function buildTimeline(timelineEvents = [], earning = {}, assignedCrew = null) {
-    if (timelineEvents.length > 0) {
-        return timelineEvents
-            .sort((a, b) => a.sort_order - b.sort_order)
-            .map(event => ({
-                timeline_event_id: event.timeline_event_id,
-                event_type: event.event_type,
-                label: event.label,
-                sub_label: event.sub_label,
-                amount: event.amount ? toMoney(event.amount) : null,
-                is_completed: Boolean(event.is_completed),
-                event_date: event.event_date ? formatDate(event.event_date) : null
-            }));
-    }
-
     const booking = earning.booking || {};
+    const storedEvents = new Map(
+        timelineEvents.map(event => [event.event_type, event])
+    );
+
+    const mergeStoredEvent = (fallback) => {
+        const stored = storedEvents.get(fallback.event_type);
+        if (!stored) return fallback;
+
+        return {
+            ...fallback,
+            timeline_event_id: stored.timeline_event_id,
+            label: stored.label || fallback.label,
+            sub_label: stored.sub_label ?? fallback.sub_label,
+            amount: stored.amount != null ? toMoney(stored.amount) : fallback.amount,
+            is_completed: Boolean(stored.is_completed),
+            event_date: stored.event_date ? formatDate(stored.event_date) : fallback.event_date,
+            sort_order: stored.sort_order ?? fallback.sort_order
+        };
+    };
+
     const timeline = [];
 
     timeline.push({
@@ -289,7 +361,8 @@ function buildTimeline(timelineEvents = [], earning = {}, assignedCrew = null) {
         sub_label: null,
         amount: null,
         is_completed: true,
-        event_date: booking.created_at ? formatDate(booking.created_at) : null
+        event_date: booking.created_at ? formatDate(booking.created_at) : null,
+        sort_order: 1
     });
 
     const crewAccept = assignedCrew ? Number(assignedCrew.crew_accept) : null;
@@ -299,7 +372,8 @@ function buildTimeline(timelineEvents = [], earning = {}, assignedCrew = null) {
         sub_label: null,
         amount: null,
         is_completed: crewAccept === 1,
-        event_date: assignedCrew?.responded_at ? formatDate(assignedCrew.responded_at) : null
+        event_date: assignedCrew?.responded_at ? formatDate(assignedCrew.responded_at) : null,
+        sort_order: 2
     });
 
     const advances = earning.advances || [];
@@ -310,7 +384,8 @@ function buildTimeline(timelineEvents = [], earning = {}, assignedCrew = null) {
         sub_label: processedAdvance ? `$${toMoney(processedAdvance.amount)} Has Been Processed` : null,
         amount: processedAdvance ? toMoney(processedAdvance.amount) : null,
         is_completed: Boolean(processedAdvance),
-        event_date: processedAdvance?.processed_at ? formatDate(processedAdvance.processed_at) : null
+        event_date: processedAdvance?.processed_at ? formatDate(processedAdvance.processed_at) : null,
+        sort_order: 3
     });
 
     timeline.push({
@@ -319,7 +394,8 @@ function buildTimeline(timelineEvents = [], earning = {}, assignedCrew = null) {
         sub_label: 'Awaiting Completion',
         amount: null,
         is_completed: Boolean(booking.is_completed),
-        event_date: null
+        event_date: null,
+        sort_order: 4
     });
 
     timeline.push({
@@ -328,7 +404,8 @@ function buildTimeline(timelineEvents = [], earning = {}, assignedCrew = null) {
         sub_label: null,
         amount: null,
         is_completed: ['earned', 'payout_pending', 'paid'].includes(earning.status),
-        event_date: null
+        event_date: null,
+        sort_order: 5
     });
 
     const remainingBalance = toMoney(
@@ -341,10 +418,22 @@ function buildTimeline(timelineEvents = [], earning = {}, assignedCrew = null) {
         sub_label: 'Remaining Balance Paid',
         amount: remainingBalance > 0 ? remainingBalance : null,
         is_completed: earning.status === 'paid',
-        event_date: null
+        event_date: null,
+        sort_order: 6
     });
 
-    return timeline;
+    return timeline
+        .map(mergeStoredEvent)
+        .sort((a, b) => a.sort_order - b.sort_order)
+        .map(event => ({
+            timeline_event_id: event.timeline_event_id || `${earning.creator_earning_id || 'earning'}-${event.event_type}`,
+            event_type: event.event_type,
+            label: event.label,
+            sub_label: event.sub_label,
+            amount: event.amount,
+            is_completed: Boolean(event.is_completed),
+            event_date: event.event_date
+        }));
 }
 
 
@@ -389,6 +478,13 @@ async function getCreatorEarningsDashboard(creatorId, filters = {}) {
 
     const plainEarnings = earnings.map(toPlain);
     const rows = plainEarnings.map(buildEarningRow).filter(row => matchesDisplayFilters(row, filters));
+    const paymentHistoryEntries = await Promise.all(plainEarnings.map(getCpPaymentHistoryForEarning));
+    const paymentHistoryByEarningId = new Map(
+        plainEarnings.map((earning, index) => [
+            Number(earning.creator_earning_id),
+            paymentHistoryEntries[index] || []
+        ])
+    );
 
     const upcomingEarnings = toMoney(
         rows
@@ -419,7 +515,7 @@ async function getCreatorEarningsDashboard(creatorId, filters = {}) {
             total_lifetime_earnings: lifetimeEarnings,
             total_received: paidEarnings
         },
-        chart: buildMonthlyChart(rows),
+        chart: buildMonthlyChart(rows, paymentHistoryByEarningId),
         rows
     };
 }
@@ -489,6 +585,8 @@ async function getCreatorEarningDetails(creatorEarningId, creatorId) {
     const paymentBreakdown = buildPaymentBreakdown(plain, advances);
     const status = getEarningDisplayStatus(plain, assignedCrew, paymentBreakdown);
     const row = buildEarningRow(plain);
+    const paymentHistory = await getCpPaymentHistoryForEarning(plain);
+    const latestProof = paymentHistory.find(item => item.receipt_url || item.receipt_download_url) || null;
 
     return {
         creator_earning_id: plain.creator_earning_id,
@@ -510,6 +608,14 @@ async function getCreatorEarningDetails(creatorEarningId, creatorId) {
         compensation_breakdown: buildCompensationBreakdown(compensationItems, plain.gross_amount),
         total_compensation: paymentBreakdown.total_compensation,
         payment_breakdown: paymentBreakdown,
+        payment_history: paymentHistory,
+        payment_proof: latestProof ? {
+            receipt_url: latestProof.receipt_url,
+            receipt_download_url: latestProof.receipt_download_url,
+            proof_file_name: latestProof.proof_file_name,
+            paid_at: latestProof.paid_at,
+            amount: latestProof.amount
+        } : null,
         timeline: buildTimeline(timelineEvents, plain, assignedCrew)
     };
 }
