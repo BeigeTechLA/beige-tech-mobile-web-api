@@ -17,6 +17,14 @@ function formatCurrencyBold(value) {
   return `$${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+function formatHours(value) {
+  if (value === null || value === undefined || value === '') return '';
+  const hours = Number(value);
+  if (!Number.isFinite(hours) || hours <= 0) return '';
+  const formatted = Number.isInteger(hours) ? String(hours) : hours.toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
+  return `${formatted} ${hours === 1 ? 'hour' : 'hours'}`;
+}
+
 function formatDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return 'N/A';
@@ -87,12 +95,14 @@ function buildManualReceiptHtml(data) {
   const taxLabel = Number.isFinite(taxRate) && taxRate > 0
     ? `${taxType} (${taxRate}%)`
     : taxType;
+  const hasHourlyItems = items.some((item) => formatHours(item.hours));
 
   const itemRows = items
     .map((item) => `
       <tr>
         <td class="desc">${escapeHtml(item.name || 'Item')}</td>
         <td class="qty">${escapeHtml(item.quantity || 1)}</td>
+        ${hasHourlyItems ? `<td class="hours">${escapeHtml(formatHours(item.hours) || '-')}</td>` : ''}
         <td class="money">${formatCurrency(item.unitPrice || 0)}</td>
         <td class="money total">${formatCurrency(item.total || 0)}</td>
       </tr>
@@ -459,6 +469,12 @@ function buildManualReceiptHtml(data) {
           width: 80px;
         }
 
+        .items .hours {
+          text-align: center;
+          width: 90px;
+          color: #4b5563;
+        }
+
         .items .money {
           text-align: right;
           width: 140px;
@@ -724,6 +740,7 @@ function buildManualReceiptHtml(data) {
                 <tr>
                   <th>Description</th>
                   <th class="qty">Quantity</th>
+                  ${hasHourlyItems ? '<th class="hours">Hours</th>' : ''}
                   <th class="money">Unit price</th>
                   <th class="money">Total Amount</th>
                 </tr>

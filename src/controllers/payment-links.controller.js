@@ -1168,11 +1168,26 @@ const sumInvoiceLineItems = (items = []) => parseFloat(
     items.reduce((sum, item) => sum + toCurrencyNumber(item?.total ?? item?.line_total), 0).toFixed(2)
 );
 
+const toPositiveNumberOrNull = (value) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+};
+
+const isHourlyInvoiceItem = (item = {}) => {
+    const rateType = String(item.rate_type || item.rateType || '').toLowerCase();
+    const sectionType = String(item.section_type || item.sectionType || '').toLowerCase();
+    const name = String(item.name || item.item_name || '').toLowerCase();
+    return rateType === 'per_hour'
+      || (sectionType === 'service' && (name.includes('photography') || name.includes('videography')));
+};
+
 const mapLegacyQuoteLineItems = (lineItems = []) => (lineItems || []).map(item => ({
     name: item.item_name,
     quantity: item.quantity,
     unit_price: toCurrencyNumber(item.unit_price || 0),
-    total: toCurrencyNumber(item.line_total)
+    total: toCurrencyNumber(item.line_total),
+    duration_hours: toPositiveNumberOrNull(item.duration_hours),
+    rate_type: item.rate_type || null
 }));
 
 const mapSalesQuoteLineItems = (lineItems = []) => (lineItems || [])
@@ -1183,6 +1198,8 @@ const mapSalesQuoteLineItems = (lineItems = []) => (lineItems || [])
         quantity: item.quantity,
         unit_price: toCurrencyNumber(item.unit_rate || item.estimated_pricing || 0),
         total: toCurrencyNumber(item.line_total),
+        duration_hours: toPositiveNumberOrNull(item.duration_hours),
+        rate_type: item.rate_type || null,
         section_type: item.section_type || null
     }));
 
@@ -3004,18 +3021,29 @@ exports.getStripeInvoicePdf = async (req, res) => {
             unitPrice: receiptPaidAmount,
             total: receiptPaidAmount
           }]
-        : parentLineItems.map((item) => ({
-            name: item.name || item.item_name || 'Item',
-            quantity: Number(item.quantity || 1),
-            unitPrice: (() => {
+        : parentLineItems.map((item) => {
+            const quantity = Number(item.quantity || 1);
+            const total = Number(item.total || item.line_total || 0);
+            const unitPrice = (() => {
               const qty = Number(item.quantity || 1);
-              const total = Number(item.total || item.line_total || 0);
               const raw = Number(item.unit_price || item.rate || 0);
               if (raw > 0) return raw;
               return qty > 0 ? total / qty : total;
-            })(),
-            total: Number(item.total || item.line_total || 0)
-          }));
+            })();
+            const explicitHours = toPositiveNumberOrNull(item.duration_hours ?? item.durationHours ?? item.hours);
+            const inferredHours = !explicitHours && isHourlyInvoiceItem(item) && unitPrice > 0 && quantity > 0 && total > 0
+              ? toPositiveNumberOrNull(total / (unitPrice * quantity))
+              : null;
+            const hours = explicitHours || (inferredHours && Math.abs(inferredHours - 1) > 0.009 ? inferredHours : null);
+
+            return {
+              name: item.name || item.item_name || 'Item',
+              quantity,
+              hours,
+              unitPrice,
+              total
+            };
+          });
       const documentTotal = isChildReceipt ? receiptPaidAmount : totalAmount;
 
       const pdfBuffer = await generateManualReceiptPdfBuffer({
