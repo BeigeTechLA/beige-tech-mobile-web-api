@@ -585,6 +585,9 @@ exports.calculateFromCreators = async (req, res) => {
       (!!video_edit_types && !Array.isArray(video_edit_types) && Object.keys(video_edit_types).length > 0) ||
       (Array.isArray(photo_edit_types) && photo_edit_types.length > 0) ||
       (!!photo_edit_types && !Array.isArray(photo_edit_types) && Object.keys(photo_edit_types).length > 0);
+    const hasStudioSelections =
+      (Array.isArray(studio_items) && studio_items.length > 0) ||
+      Number(studio_total || 0) > 0;
 
     const numericShootHours = Number(shoot_hours);
     const resolvedShootHours = Number.isFinite(numericShootHours) && numericShootHours > 0
@@ -681,10 +684,10 @@ exports.calculateFromCreators = async (req, res) => {
       });
     }
 
-    if (pricingItems.length === 0 && add_on_items.length === 0 && !hasEditSelections) {
+    if (pricingItems.length === 0 && add_on_items.length === 0 && !hasEditSelections && !hasStudioSelections) {
       return res.status(400).json({
         success: false,
-        message: 'No pricing items or edit types resolved',
+        message: 'No pricing items, studio items, or edit types resolved',
       });
     }
 

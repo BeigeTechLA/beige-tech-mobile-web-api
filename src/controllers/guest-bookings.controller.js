@@ -874,7 +874,9 @@ exports.updateGuestBooking = async (req, res) => {
       booking_days,
       time_zone,
       studio_items,
-      studio_total
+      studio_total,
+      studio_booking_for,
+      booking_for
     } = req.body;
 
     if (!id) {
@@ -1009,11 +1011,32 @@ exports.updateGuestBooking = async (req, res) => {
       });
     }
 
+    const normalizedStudioBookingFor = String(studio_booking_for || booking_for || '').trim();
+    const studioBookingForLine = normalizedStudioBookingFor
+      ? `Studio Booking For: ${normalizedStudioBookingFor}`
+      : '';
+    const stripStudioBookingForLine = (value) => String(value || '')
+      .split('\n')
+      .filter((line) => !/^Studio Booking For:/i.test(line.trim()))
+      .join('\n')
+      .trim();
+
     // V3: Combine description with new fields
     let combinedDescription = description || special_instructions || '';
     if (hasStudioItemsPayload) {
       const studioMeta = buildStudioMetaString(normalizedStudioItems);
-      combinedDescription = [stripStudioMeta(combinedDescription), studioMeta]
+      combinedDescription = [
+        stripStudioBookingForLine(stripStudioMeta(combinedDescription)),
+        studioBookingForLine,
+        studioMeta
+      ]
+        .filter((value) => String(value || '').trim())
+        .join('\n\n');
+    } else if (studioBookingForLine) {
+      combinedDescription = [
+        stripStudioBookingForLine(combinedDescription),
+        studioBookingForLine
+      ]
         .filter((value) => String(value || '').trim())
         .join('\n\n');
     }

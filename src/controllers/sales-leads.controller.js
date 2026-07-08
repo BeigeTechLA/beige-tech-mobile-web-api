@@ -24,7 +24,8 @@ const {
   buildStudioMetaString,
   getStudioPricingSnapshot,
   isStudioLineItem,
-  normalizeStudioItems
+  normalizeStudioItems,
+  stripStudioMeta
 } = require('../utils/studio-pricing');
 
 const sequelize = require('../db');
@@ -1369,7 +1370,12 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             booking_type,
             booking_days,
             location,
+            project_name,
+            description,
             specialInstructions,
+            special_instructions,
+            studio_booking_for,
+            booking_for,
             reference_links,
             video_edit_types, 
             photo_edit_types, 
@@ -1463,14 +1469,30 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Studio pricing total does not match selected studio items' });
         }
         const studioMeta = buildStudioMetaString(normalizedStudioItems);
-        const combinedDescription = [specialInstructions, studioMeta]
+        const submittedSpecialInstructions = specialInstructions ?? special_instructions ?? description;
+        const hasSubmittedDescription = specialInstructions !== undefined || special_instructions !== undefined || description !== undefined;
+        const normalizedStudioBookingFor = String(studio_booking_for || booking_for || '').trim();
+        const studioBookingForLine = normalizedStudioBookingFor
+            ? `Studio Booking For: ${normalizedStudioBookingFor}`
+            : '';
+        const stripStudioBookingForLine = (value) => String(value || '')
+            .split('\n')
+            .filter((line) => !/^Studio Booking For:/i.test(line.trim()))
+            .join('\n')
+            .trim();
+        const buildCombinedDescription = (baseDescription = '') => [
+            stripStudioBookingForLine(baseDescription),
+            studioBookingForLine,
+            studioMeta
+        ]
             .filter((value) => String(value || '').trim())
             .join('\n\n') || null;
+        const combinedDescription = buildCombinedDescription(submittedSpecialInstructions);
 
         const bookingData = {
             user_id: resolvedUserId,
             guest_email: normalizedGuestEmail,
-            project_name: `${shoot_type?.toUpperCase() || 'NEW'} Shoot - ${client_name || normalizedGuestEmail}`,
+            project_name: project_name || `${shoot_type?.toUpperCase() || 'NEW'} Shoot - ${client_name || normalizedGuestEmail}`,
             event_type: content_type || 'general',
             shoot_type: shoot_type,
             content_type: content_type,
@@ -1504,6 +1526,14 @@ exports.trackEarlyBookingInterest = async (req, res) => {
             if (booking_id) {
                 booking = await stream_project_booking.findByPk(booking_id);
                 if (booking) {
+                    if (hasSubmittedDescription || hasStudioItemsPayload || studioBookingForLine) {
+                        const baseDescription = hasSubmittedDescription
+                            ? submittedSpecialInstructions
+                            : stripStudioMeta(booking.description || '');
+                        bookingData.description = buildCombinedDescription(baseDescription);
+                    } else {
+                        delete bookingData.description;
+                    }
                     await booking.update(bookingData, { transaction: tx });
                 }
             } 
@@ -6050,9 +6080,29 @@ exports.sendFinalAssetsDeliveredWithRevision = async (req, res) => {
 // };
 
 exports.updateBookingCrew = async (req, res) => {
+  let tx;
   try {
     const { bookingId } = req.params;
-    const { crew_roles, location, description, reference_links } = req.body;
+    const {
+      crew_roles,
+      location,
+      description,
+      reference_links,
+      booking_type,
+      booking_days,
+      startDate,
+      endDate,
+      start_date_time,
+      end_date_time,
+      start_date,
+      start_time,
+      end_time,
+      time_zone,
+      duration_hours,
+      edits_needed,
+      video_edit_types,
+      photo_edit_types
+    } = req.body;
     const { latitude, longitude } = extractCoordinatesFromPayload(req.body, location);
 
     if (!crew_roles || typeof crew_roles !== 'object') {
@@ -6076,6 +6126,44 @@ exports.updateBookingCrew = async (req, res) => {
       });
     }
 
+    const hasSchedulePayload =
+      booking_type !== undefined ||
+      booking_days !== undefined ||
+      startDate !== undefined ||
+      endDate !== undefined ||
+      start_date_time !== undefined ||
+      end_date_time !== undefined ||
+      start_date !== undefined ||
+      start_time !== undefined ||
+      end_time !== undefined ||
+      time_zone !== undefined ||
+      duration_hours !== undefined;
+
+    const calculateDurationHours = (startTime, endTime) => {
+      if (!startTime || !endTime) return null;
+
+      const start = new Date(`1970-01-01T${startTime}`);
+      const end = new Date(`1970-01-01T${endTime}`);
+      const diff = (end - start) / 3600000;
+
+      return diff > 0 ? Math.round(diff * 100) / 100 : null;
+    };
+
+    let normalizedBookingDays = Array.isArray(booking_days) ? booking_days : [];
+    normalizedBookingDays = normalizedBookingDays
+      .filter((d) => d && d.date)
+      .map((d) => ({
+        date: d.date,
+        start_time: normalizeTime(d.start_time || d.startTime) || null,
+        end_time: normalizeTime(d.end_time || d.endTime) || null,
+        duration_hours: d.duration_hours != null
+          ? Number(d.duration_hours)
+          : d.durationHours != null
+            ? Number(d.durationHours)
+            : null,
+        time_zone: d.time_zone || d.timeZone || time_zone || null
+      }));
+
     const updateData = {
       crew_roles: JSON.stringify(crew_roles)
     };
@@ -6091,14 +6179,87 @@ exports.updateBookingCrew = async (req, res) => {
     if (reference_links !== undefined) {
       updateData.reference_links = JSON.stringify(reference_links);
     }
+    if (hasSchedulePayload) {
+      const startDateTimeUtc = startDate || start_date_time || null;
+      const endDateTimeUtc = endDate || end_date_time || null;
+      const resolvedSingleDay = resolveEventDateAndStartTime({
+        start_date,
+        start_time,
+        start_date_time: startDateTimeUtc
+      });
+      let eventDate = resolvedSingleDay.event_date;
+      let startTimeFinal = resolvedSingleDay.start_time;
+      let endTimeFinal = normalizeTime(end_time) || splitDateTime(endDateTimeUtc).time || null;
+      let totalDurationHours = duration_hours != null ? Number(duration_hours) : null;
 
-    await booking.update(updateData);
+      if (booking_type === 'multi_day' && normalizedBookingDays.length > 0) {
+        normalizedBookingDays.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+        eventDate = normalizedBookingDays[0].date;
+        startTimeFinal = normalizeTime(normalizedBookingDays[0].start_time) || null;
+        endTimeFinal = normalizeTime(normalizedBookingDays[0].end_time) || null;
+        totalDurationHours = normalizedBookingDays.reduce((sum, d) => {
+          const hours = d.duration_hours != null
+            ? d.duration_hours
+            : calculateDurationHours(d.start_time, d.end_time);
+          return sum + (hours || 0);
+        }, 0);
+        totalDurationHours = totalDurationHours > 0 ? Math.round(totalDurationHours * 100) / 100 : null;
+      } else if (totalDurationHours == null) {
+        totalDurationHours = calculateDurationHours(startTimeFinal, endTimeFinal);
+      }
+
+      if (eventDate) updateData.event_date = eventDate;
+      if (startTimeFinal) updateData.start_time = startTimeFinal;
+      if (endTimeFinal) updateData.end_time = endTimeFinal;
+      if (time_zone !== undefined) updateData.time_zone = time_zone || null;
+      if (startDateTimeUtc) updateData.start_date_time = startDateTimeUtc;
+      if (endDateTimeUtc) updateData.end_date_time = endDateTimeUtc;
+      if (totalDurationHours != null && !Number.isNaN(totalDurationHours)) {
+        updateData.duration_hours = totalDurationHours;
+      }
+    }
+    if (edits_needed !== undefined) {
+      updateData.edits_needed = edits_needed ? 1 : 0;
+    }
+    if (video_edit_types !== undefined) {
+      updateData.video_edit_types = JSON.stringify(Array.isArray(video_edit_types) ? video_edit_types : []);
+    }
+    if (photo_edit_types !== undefined) {
+      updateData.photo_edit_types = JSON.stringify(Array.isArray(photo_edit_types) ? photo_edit_types : []);
+    }
+
+    tx = await db.sequelize.transaction();
+
+    await booking.update(updateData, { transaction: tx });
+
+    if (hasSchedulePayload && booking_type === 'multi_day' && normalizedBookingDays.length > 0) {
+      await stream_project_booking_days.destroy({
+        where: { stream_project_booking_id: bookingId },
+        transaction: tx
+      });
+
+      const dayRows = normalizedBookingDays.map((d) => ({
+        stream_project_booking_id: bookingId,
+        event_date: d.date,
+        start_time: normalizeTime(d.start_time) || null,
+        end_time: normalizeTime(d.end_time) || null,
+        duration_hours: d.duration_hours != null ? d.duration_hours : calculateDurationHours(d.start_time, d.end_time),
+        time_zone: d.time_zone || null
+      }));
+      await stream_project_booking_days.bulkCreate(dayRows, { transaction: tx });
+    } else if (hasSchedulePayload && booking_type === 'single_day') {
+      await stream_project_booking_days.destroy({
+        where: { stream_project_booking_id: bookingId },
+        transaction: tx
+      });
+    }
 
     await sales_leads.update(
       { lead_status: 'booking_in_progress' },
       {
         where: { booking_id: parseInt(bookingId, 10) },
-        limit: 1
+        limit: 1,
+        transaction: tx
       }
     );
 
@@ -6106,9 +6267,13 @@ exports.updateBookingCrew = async (req, res) => {
       { lead_status: 'booking_in_progress' },
       {
         where: { booking_id: parseInt(bookingId, 10) },
-        limit: 1
+        limit: 1,
+        transaction: tx
       }
     );
+
+    await tx.commit();
+
     return res.json({
       success: true,
       message: 'Crew roles and project details saved',
@@ -6116,11 +6281,13 @@ exports.updateBookingCrew = async (req, res) => {
         booking_id: bookingId,
         crew_roles,
         location,
-        description
+        description,
+        schedule_updated: hasSchedulePayload
       }
     });
 
   } catch (error) {
+    if (tx) await tx.rollback();
     console.error('Error updating booking details:', error);
     return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
       success: false,
