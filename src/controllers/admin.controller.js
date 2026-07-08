@@ -3592,22 +3592,18 @@ exports.getAllProjectDetails = async (req, res) => {
         : (project.payment_id ? displayAmount : 0);
       const creditUsedAmount = summaryCreditUsedAmount || 0;
       const knownCollectedTotal = totalPaidAmount + creditUsedAmount + (summaryPendingAmount || 0);
-      let totalValueAmount = Math.max(
-        summaryQuoteTotal || 0,
-        resolvedQuoteValueAmount || 0,
-        knownCollectedTotal || 0
-      );
-      const summaryPaymentStatus = String(bookingPaymentSummary?.payment_status || '').toLowerCase();
-      const isNoPaymentDueSummary =
-        Boolean(bookingPaymentSummary) &&
-        summaryPaymentStatus === 'no_payment_due' &&
-        (summaryPendingAmount || 0) <= 0 &&
-        totalPaidAmount <= 0 &&
-        creditUsedAmount <= 0;
+      let totalValueAmount = bookingPaymentSummary && summaryQuoteTotal !== null
+        ? summaryQuoteTotal
+        : Math.max(
+          resolvedQuoteValueAmount || 0,
+          knownCollectedTotal || 0
+        );
       const shouldUseCalculatedBookingPricing =
-        totalValueAmount <= totalPaidAmount ||
-        (summaryQuoteTotal === null && (!resolvedQuoteValueAmount || resolvedQuoteValueAmount <= 0)) ||
-        isNoPaymentDueSummary;
+        !bookingPaymentSummary &&
+        (
+          totalValueAmount <= totalPaidAmount ||
+          (summaryQuoteTotal === null && (!resolvedQuoteValueAmount || resolvedQuoteValueAmount <= 0))
+        );
 
       if (shouldUseCalculatedBookingPricing) {
         const projectedPricing = await bookingPricingService.calculateBookingPricing({
@@ -3615,10 +3611,7 @@ exports.getAllProjectDetails = async (req, res) => {
           booking_days: bookingDaysData
         });
         const projectedTotal = parseAmountCandidate(projectedPricing?.total);
-        const projectedSubtotal = parseAmountCandidate(projectedPricing?.subtotal);
-        if (isNoPaymentDueSummary && projectedSubtotal !== null && projectedSubtotal > totalValueAmount) {
-          totalValueAmount = projectedSubtotal;
-        } else if (projectedTotal !== null && projectedTotal > totalValueAmount) {
+        if (projectedTotal !== null && projectedTotal > totalValueAmount) {
           totalValueAmount = projectedTotal;
         }
       }
