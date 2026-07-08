@@ -7,6 +7,7 @@ const { Op } = require('sequelize');
 const { S3UploadFiles } = require('../utils/common.js');
 const { sendTaskAssignmentEmail } = require('../utils/emailService');
 const accountCreditService = require('../services/account-credit.service');
+const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
 const { stream_project_booking, crew_members, crew_member_files, tasks, equipment, crew_roles,
   equipment_accessories,
   equipment_category,
@@ -27,6 +28,13 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   event_type_master, payment_transactions, assigned_post_production_member, post_production_members, quotes, project_form_submissions,
   users,
   sales_leads, sales_lead_activities } = require('../models');
+
+function normalizeClientPaymentStatus(project, paymentState) {
+  if (paymentState?.isPaid) return 'paid';
+  if (paymentState?.isPartiallyPaid) return 'partially_paid';
+  if (project?.payment_id) return 'paid';
+  return paymentState?.payment_status || 'pending';
+}
 
 function toArray(value) {
   if (!value) return [];
@@ -896,6 +904,13 @@ exports.getAllProjectDetailsForUser = async (req, res) => {
           raw: true
         })
       ]);
+      const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+        bookingId: project.stream_project_booking_id,
+        salesQuoteId: project.quote_id,
+        quoteTotal: quote ? parseFloat(quote.total || 0) : parseFloat(project.budget || 0),
+        paidAmount: project.payment_id ? parseFloat(project.budget || 0) : 0,
+        paymentStatus: project.payment_id ? 'paid' : 'pending'
+      });
 
       // --- ADDED: LABEL FORMATTING LOGIC ---
       const rawTypes = project.event_type ? project.event_type.split(',') : [];
@@ -911,7 +926,12 @@ exports.getAllProjectDetailsForUser = async (req, res) => {
         project: {
           ...project.toJSON(),
           event_type_labels: formattedTypes.join(', '), // Added this line
-          payment_status: project.payment_id ? 'paid' : 'pending',
+          payment_status: normalizeClientPaymentStatus(project, paymentState),
+          payment_summary: paymentState,
+          paid_amount: paymentState?.paid_amount ?? 0,
+          due_amount: paymentState?.due_amount ?? 0,
+          pending_amount: paymentState?.pending_amount ?? 0,
+          requires_payment: paymentState?.requires_payment ?? true,
           quote_total: quote ? parseFloat(quote.total) : null,
           quote_subtotal: quote ? parseFloat(quote.subtotal) : null,
           quote_status: quote ? quote.status : null,
@@ -1032,7 +1052,6 @@ exports.getProjectDetailsForUser = async (req, res) => {
     const formattedProject = {
       ...project.toJSON(),
       event_type_labels: formattedTypes.join(', '),
-      payment_status: project.payment_id ? 'paid' : 'pending',
       quote_total: quote ? parseFloat(quote.total) : null,
       quote_subtotal: quote ? parseFloat(quote.subtotal) : null,
       quote_status: quote ? quote.status : null,
@@ -1048,6 +1067,19 @@ exports.getProjectDetailsForUser = async (req, res) => {
         return loc;
       })()
     };
+    const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+      bookingId: project.stream_project_booking_id,
+      salesQuoteId: project.quote_id,
+      quoteTotal: quote ? parseFloat(quote.total || 0) : parseFloat(project.budget || 0),
+      paidAmount: project.payment_id ? parseFloat(project.budget || 0) : 0,
+      paymentStatus: project.payment_id ? 'paid' : 'pending'
+    });
+    formattedProject.payment_status = normalizeClientPaymentStatus(project, paymentState);
+    formattedProject.payment_summary = paymentState;
+    formattedProject.paid_amount = paymentState?.paid_amount ?? 0;
+    formattedProject.due_amount = paymentState?.due_amount ?? 0;
+    formattedProject.pending_amount = paymentState?.pending_amount ?? 0;
+    formattedProject.requires_payment = paymentState?.requires_payment ?? true;
 
     return res.status(200).json({
       error: false,
