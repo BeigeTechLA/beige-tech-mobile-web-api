@@ -4145,11 +4145,18 @@ Content-Type: application/json
 
 ### =====================================================
 ### BOOK A SHOOT - STUDIO JOURNEY 3 - STUDIO + VIDEOGRAPHY
-### Flow: select Studio + Videography -> select studio -> configure videography timing/edits -> crew matching -> select CP -> quote -> finalize -> payment
+### UI Flow:
+### Screen 1: Service type + booking for + studio selection + cast/crew + shoot type + studio timing
+### Screen 2: Video shoot type + videography timing + edit types
+### Screen 3: Crew requirement count + location + additional details + links
+### Screen 4: Crew size and matching
+### Screen 5: Select dream team
+### Screen 6: Review and confirm
 ### Replace booking_id, quote_id, selected_crew_ids, amount, and paymentIntentId from responses.
 ### =====================================================
 
-### 1) Start draft for combined Studio + Videography service
+### SCREEN 1) Create draft with combined service + selected studio
+### Studio timing lives inside studio_items. This is the studio rental window.
 POST {{URL}}sales/leads/track-early-interest HTTP/1.1
 Content-Type: application/json
 
@@ -4165,18 +4172,45 @@ Content-Type: application/json
   "special_instructions": "Studio and videography booking for a podcast recording.",
   "booking_type": "single_day",
   "start_date": "2026-01-12",
-  "start_time": "10:30",
-  "end_time": "16:30",
+  "start_time": "10:00",
+  "end_time": "18:00",
   "time_zone": "America/Los_Angeles",
-  "startDate": "2026-01-12T10:30:00",
-  "endDate": "2026-01-12T16:30:00",
-  "edits_needed": true,
-  "video_edit_types": ["social_reel_15_30"],
-  "photo_edit_types": []
+  "startDate": "2026-01-12T10:00:00",
+  "endDate": "2026-01-12T18:00:00",
+  "edits_needed": false,
+  "video_edit_types": [],
+  "photo_edit_types": [],
+  "studio_total": 1200,
+  "studio_items": [
+    {
+      "studio_id": "beige-modern-resort-villa",
+      "name": "Beige Media (Modern Resort Villa with Jacuzzi)",
+      "location": "Woodland Hills, Los Angeles, CA",
+      "image": "https://d2jhn32fsulyac.cloudfront.net/assets/studio/weho-content/Weho+Studio-2.jpg",
+      "pricing_mode": "hourly",
+      "pricing_category": "production",
+      "pricing_label": "Production",
+      "unit_price": 150,
+      "quantity": 8,
+      "total": 1200,
+      "price_label": "$150/hour",
+      "selected_date": "2026-01-12",
+      "start_time": "10:00",
+      "end_time": "18:00",
+      "time_zone": "America/Los_Angeles",
+      "studio_booking_type": "single_day",
+      "booking_days": [],
+      "cast_and_crew_count": 4,
+      "update_studio_datetime": true,
+      "lat": 34.1654,
+      "lng": -118.6089
+    }
+  ]
 }
 
-### 2) Save videography crew requirement and optional updated videography timing/edits
-### Location is not sent here; use selected studio coordinates for creator search and final booking location.
+### SCREEN 2) Save videography service settings
+### Top-level timing is videography/creator shoot timing, separate from studio rental timing.
+### If user selects "Keep it same", omit booking_type/start_date/start_time/end_time/time_zone/duration_hours.
 PATCH {{URL}}sales/bookings/1305/crew HTTP/1.1
 Content-Type: application/json
 
@@ -4196,10 +4230,31 @@ Content-Type: application/json
   "reference_links": []
 }
 
-### 3) Search videographers near the selected studio
+### SCREEN 3) Save more details: crew count + location + additional details + links
+### For studio bookings, location should be prefilled/derived from selected studio.
+PATCH {{URL}}sales/bookings/1305/crew HTTP/1.1
+Content-Type: application/json
+
+{
+  "crew_roles": {
+    "videographer": 1
+  },
+  "location": "Woodland Hills, Los Angeles, CA",
+  "location_latitude": 34.1654,
+  "location_longitude": -118.6089,
+  "description": "Need one videographer for a podcast recording. Please bring a compact lighting setup.",
+  "reference_links": [
+    "https://example.com/reference-podcast-look"
+  ]
+}
+
+### SCREEN 4) Crew size and matching
+### No required save API. Use current draft/frontend state to show recommendation.
+
+### SCREEN 5) Search videographers near the selected studio, then select dream team in frontend state
 GET {{URL}}creators/search?content_types=videographer&latitude=34.1654&longitude=-118.6089&limit=12&page=1
 
-### 4) Pricing preview with selected videographer + studio
+### SCREEN 6A) Pricing preview with selected videographer + studio
 POST {{URL}}pricing/calculate-from-creators
 Content-Type: application/json
 
@@ -4245,7 +4300,7 @@ Content-Type: application/json
   "shoot_start_date": "2026-01-12T10:30:00.000Z"
 }
 
-### 5) Save quote with videographer + studio
+### SCREEN 6B) Save quote with videographer + studio
 POST {{URL}}pricing/quotes
 Content-Type: application/json
 
@@ -4284,7 +4339,7 @@ Content-Type: application/json
   ]
 }
 
-### 6) Finalize booking with selected videographer
+### SCREEN 6C) Finalize booking with selected videographer
 ### Top-level location is derived from the selected studio. studio_items persist studio metadata and studio_bookings.
 PUT {{URL}}guest-bookings/1305
 Content-Type: application/json
@@ -4316,8 +4371,10 @@ Content-Type: application/json
   },
   "matching_method": "manual_selection",
   "selected_crew_ids": [2130],
-  "special_instructions": "Studio and videography booking for a podcast recording.",
-  "reference_links": [],
+  "special_instructions": "Need one videographer for a podcast recording. Please bring a compact lighting setup.",
+  "reference_links": [
+    "https://example.com/reference-podcast-look"
+  ],
   "studio_total": 1200,
   "studio_items": [
     {
@@ -4349,6 +4406,30 @@ Content-Type: application/json
   "is_draft": false
 }
 
-### 7) Payment details check
+### PAYMENT 1) Payment details check
 GET {{URL}}guest-bookings/1305/payment-details
 Content-Type: application/json
+
+### PAYMENT 2) Create payment intent
+POST {{URL}}payments/create-intent-multi
+Content-Type: application/json
+
+{
+  "booking_id": "1305",
+  "amount": 3900,
+  "guest_email": "journey3@beige.test",
+  "use_credit": false,
+  "credit_amount_used": 0
+}
+
+### PAYMENT 3) Confirm payment after Stripe confirms client-side
+POST {{URL}}payments/confirm-multi
+Content-Type: application/json
+
+{
+  "paymentIntentId": "pi_replace_from_stripe",
+  "booking_id": "1305",
+  "referral_code": null,
+  "use_credit": false,
+  "credit_amount_used": 0
+}
