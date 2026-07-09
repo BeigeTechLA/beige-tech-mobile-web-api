@@ -28,6 +28,10 @@ module.exports = function(sequelize, DataTypes) {
         key: 'id'
       }
     },
+    guest_email: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
     booking_date: {
       type: DataTypes.DATEONLY,
       allowNull: true
@@ -112,6 +116,11 @@ module.exports = function(sequelize, DataTypes) {
         name: 'idx_studio_bookings_booking',
         using: 'BTREE',
         fields: [{ name: 'stream_project_booking_id' }]
+      },
+      {
+        name: 'idx_studio_bookings_guest_email',
+        using: 'BTREE',
+        fields: [{ name: 'guest_email' }]
       }
     ]
   });

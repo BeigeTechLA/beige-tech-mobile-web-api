@@ -1109,6 +1109,7 @@ exports.updateGuestBooking = async (req, res) => {
         await studioBookingService.replaceBookAShootStudioBookings({
           bookingId: id,
           userId: booking.user_id || resolvedUserId || null,
+          guestEmail: normalizedGuestEmail || booking.guest_email || null,
           studioItems: normalizedStudioItems,
           transaction: tx
         });

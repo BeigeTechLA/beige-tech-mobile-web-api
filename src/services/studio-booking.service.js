@@ -34,13 +34,14 @@ function resolveStudioDurationHours(studio = {}) {
   return Number.isFinite(quantity) && quantity > 0 ? quantity : null;
 }
 
-function buildStudioBookingRow({ bookingId, userId = null, studio }) {
+function buildStudioBookingRow({ bookingId, userId = null, guestEmail = null, studio }) {
   const totalPrice = Number(studio.totalPrice || 0);
 
   return {
     stream_project_booking_id: bookingId,
     studio_id: String(studio.studioId),
     user_id: userId || null,
+    guest_email: guestEmail || null,
     booking_date: resolveStudioBookingDate(studio),
     start_time: resolveStudioStartTime(studio),
     end_time: resolveStudioEndTime(studio),
@@ -59,6 +60,7 @@ function buildStudioBookingRow({ bookingId, userId = null, studio }) {
 async function replaceBookAShootStudioBookings({
   bookingId,
   userId = null,
+  guestEmail = null,
   studioItems = [],
   transaction = null,
 }) {
@@ -76,7 +78,7 @@ async function replaceBookAShootStudioBookings({
 
   const rows = (Array.isArray(studioItems) ? studioItems : [])
     .filter((studio) => studio?.studioId && Number(studio?.totalPrice || 0) > 0)
-    .map((studio) => buildStudioBookingRow({ bookingId, userId, studio }));
+    .map((studio) => buildStudioBookingRow({ bookingId, userId, guestEmail, studio }));
 
   if (rows.length > 0) {
     await db.studio_bookings.bulkCreate(rows, { transaction });

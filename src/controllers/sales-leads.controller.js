@@ -1568,6 +1568,7 @@ exports.trackEarlyBookingInterest = async (req, res) => {
                 await studioBookingService.replaceBookAShootStudioBookings({
                     bookingId: booking.stream_project_booking_id,
                     userId: booking.user_id || resolvedUserId || null,
+                    guestEmail: booking.guest_email || normalizedGuestEmail || null,
                     studioItems: normalizedStudioItems,
                     transaction: tx
                 });

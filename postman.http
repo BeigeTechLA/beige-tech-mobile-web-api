@@ -3530,7 +3530,7 @@ Content-Type: application/json
 }
 
 ### 2) Save crew requirement and shoot location
-PATCH {{URL}}sales/bookings/1301/crew HTTP/1.1
+PATCH {{URL}}sales/bookings/1309/crew HTTP/1.1
 Content-Type: application/json
 
 {
@@ -3641,7 +3641,7 @@ Content-Type: application/json
 }
 
 ### 7) Finalize booking. selected_crew_ids can be [] for "Continue with 0 Creatives".
-PUT {{URL}}guest-bookings/1301
+PUT {{URL}}guest-bookings/1309
 Content-Type: application/json
 
 {
@@ -3658,7 +3658,7 @@ Content-Type: application/json
   "location": "Woodland Hills, California, United States",
   "location_latitude": 34.168454,
   "location_longitude": -118.603802,
-  "quote_id": 538,
+  "quote_id": 542,
   "full_name": "Harsh",
   "phone": "+919173965896",
   "edits_needed": true,
@@ -3742,7 +3742,7 @@ POST {{URL}}payments/create-intent-multi
 Content-Type: application/json
 
 {
-  "booking_id": "1296",
+  "booking_id": "1309",
   "amount": 3850,
   "guest_email": "harsh.patel@revurge.com",
   "use_credit": false,
@@ -4414,3 +4414,25 @@ Content-Type: application/json
   "use_credit": false,
   "credit_amount_used": 0
 }
+
+### =====================================================
+### PUBLIC STUDIO CATALOG - DYNAMIC STUDIO DATA
+### These APIs are for Book a Shoot frontend studio cards/details.
+### No admin auth required. Only active studios are returned.
+### =====================================================
+
+### List active studios
+GET {{URL}}studios/catalog?page=1&limit=20
+Content-Type: application/json
+
+### List active studios filtered by pricing/category key
+GET {{URL}}studios/catalog?page=1&limit=20&booking_for=productions
+Content-Type: application/json
+
+### Search active studios
+GET {{URL}}studios/catalog?page=1&limit=20&search=woodland
+Content-Type: application/json
+
+### Get studio detail by slug or numeric studio_id
+GET {{URL}}studios/catalog/beige-west-hollywood-content-studio
+Content-Type: application/json
