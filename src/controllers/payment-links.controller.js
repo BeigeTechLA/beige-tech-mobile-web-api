@@ -334,6 +334,55 @@ const buildOutstandingInvoicePricingData = (pricingData = {}, paymentState = nul
   };
 };
 
+const resolveCurrentPaymentStateForPaymentLink = async ({
+  bookingId,
+  quoteTotal,
+  salesQuoteId = null
+}) => {
+  let paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+    bookingId,
+    quoteTotal
+  });
+
+  const currentQuoteTotal = toCurrencyNumber(quoteTotal);
+  const summaryQuoteTotal = toCurrencyNumber(paymentState.quoteTotal);
+  const hasStaleSummaryTotal =
+    paymentState.hasSummary &&
+    currentQuoteTotal > 0 &&
+    Math.abs(summaryQuoteTotal - currentQuoteTotal) > 0.009;
+
+  if (!hasStaleSummaryTotal) {
+    return paymentState;
+  }
+
+  const summary = paymentState.paymentSummary || {};
+  await bookingPaymentSummaryService.upsertBookingPaymentSummary({
+    bookingId,
+    leadId: summary.lead_id || null,
+    salesQuoteId: salesQuoteId || summary.sales_quote_id || null,
+    quoteTotal: currentQuoteTotal,
+    paidAmount: paymentState.paidAmount,
+    creditUsedAmount: paymentState.creditUsedAmount,
+    creditCreatedAmount: paymentState.creditCreatedAmount,
+    lastQuoteChangeType: paymentState.lastQuoteChangeType || 'none',
+    lastQuoteChangeAmount: paymentState.lastQuoteChangeAmount || 0,
+    lastQuoteChangeStatus: paymentState.lastQuoteChangeStatus || 'none',
+    manualPaymentMode: summary.manual_payment_mode || null,
+    manualPaymentOtherMode: summary.manual_payment_other_mode || null,
+    manualPaymentProofUrl: summary.manual_payment_proof_url || null,
+    manualPaymentProofFilePath: summary.manual_payment_proof_file_path || null,
+    manualPaymentProofFileName: summary.manual_payment_proof_file_name || null,
+    manualPaymentNotes: summary.manual_payment_notes || null,
+    manualPaymentUpdatedByUserId: summary.manual_payment_updated_by_user_id || null,
+    manualPaymentUpdatedAt: summary.manual_payment_updated_at || null
+  });
+
+  return bookingPaymentSummaryService.resolveBookingPaymentState({
+    bookingId,
+    quoteTotal: currentQuoteTotal
+  });
+};
+
 const resolveInvoiceDisplayNumber = (booking, stripeInvoiceNumber = null) =>
   paymentLinksService.buildBeigeInvoiceReference(booking) || stripeInvoiceNumber || null;
 
@@ -1538,10 +1587,16 @@ exports.generatePaymentLink = async (req, res) => {
       ? { total: approvedAdditionalAmount }
       : await calculateLeadPricing(booking);
     const quoteTotal = Number(pricingForAmount?.total || booking.budget || booking.total_amount || 0);
-    const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
-      bookingId: booking_id,
-      quoteTotal
-    });
+    const paymentState = hasApprovedAdditionalAmount
+      ? await bookingPaymentSummaryService.resolveBookingPaymentState({
+        bookingId: booking_id,
+        quoteTotal
+      })
+      : await resolveCurrentPaymentStateForPaymentLink({
+        bookingId: booking_id,
+        quoteTotal,
+        salesQuoteId: pricingForAmount?.sales_quote_id || null
+      });
     const maxPayableAmount = hasApprovedAdditionalAmount
       ? approvedAdditionalAmount
       : paymentState.hasSummary
