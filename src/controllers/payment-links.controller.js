@@ -4,6 +4,7 @@ const paymentLinksService = require('../services/payment-links.service');
 const quoteService = require('../services/sales-quote.service');
 const accountCreditService = require('../services/account-credit.service');
 const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
+const bookingPricingService = require('../services/booking-pricing.service');
 const constants = require('../utils/constants');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const emailService = require('../utils/emailService');
@@ -1463,51 +1464,28 @@ const calculateLeadPricing = async (booking) => {
             };
         }
 
-        // --- CASE 3: Fallback Manual Calculation ---
-        const ROLE_TO_ITEM_MAP = { videographer: 11, photographer: 10, cinematographer: 12 };
-        let crewRoles = typeof booking.crew_roles === 'string' 
-            ? JSON.parse(booking.crew_roles || '{}') 
-            : (booking.crew_roles || {});
-
-        if ((!crewRoles || Object.keys(crewRoles).length === 0) && booking.event_type) {
-            const types = booking.event_type.toLowerCase();
-            if (types.includes('videographer')) crewRoles.videographer = 1;
-            if (types.includes('photographer')) crewRoles.photographer = 1;
-        }
-
-        const items = Object.entries(crewRoles).map(([role, count]) => ({
-            item_id: ROLE_TO_ITEM_MAP[role.toLowerCase()],
-            quantity: count
-        })).filter(item => item.item_id);
-
-        let hours = Number(booking.duration_hours) || 8;
-        
-        const calculated = await pricingService.calculateQuote({
-            items,
-            shootHours: hours,
-            eventType: booking.shoot_type || booking.event_type || 'general',
-            shootStartDate: booking.event_date,
-            skipDiscount: true, 
-            skipMargin: true
-        });
+        // --- CASE 3: Fallback Current Booking Calculation ---
+        // Keep payment links aligned with sales lead pricing. This shared service
+        // includes editing selections, studio items, and current booking duration.
+        const calculated = await bookingPricingService.calculateBookingPricing(booking);
 
         return {
-            source: 'calculated',
+            source: calculated?.source || 'calculated',
             is_paid: bookingMarkedPaid,
             total: calculated?.total || 0,
             total_before_credit: calculated?.total || 0,
             credit_applied: 0,
             subtotal: calculated?.subtotal || 0,
-            discount_amount: calculated?.discountAmount || 0,
-            price_after_discount: calculated?.priceAfterDiscount || calculated?.subtotal || 0,
+            discount_amount: calculated?.discount_amount || calculated?.discountAmount || 0,
+            price_after_discount: calculated?.priceAfterDiscount || calculated?.subtotal || calculated?.total || 0,
             tax_type: null,
             tax_rate: 0,
             tax_amount: 0,
-            line_items: (calculated?.lineItems || []).map(li => ({
-                name: li.item_name,
+            line_items: (calculated?.line_items || calculated?.lineItems || []).map(li => ({
+                name: li.item_name || li.name,
                 quantity: li.quantity,
                 unit_price: Number(li.unit_price || li.rate || ((Number(li.quantity || 1) > 0) ? (Number(li.line_total || 0) / Number(li.quantity || 1)) : 0)),
-                total: li.line_total
+                total: li.line_total ?? li.total
             }))
         };
     } catch (error) {
