@@ -2245,9 +2245,9 @@ const sendCPStatusUpdateByRequest = async ({ project_id, crew_member_id, cp_acti
       attributes: ['first_name', 'last_name']
     });
 
-    const toEmail = process.env.SALES_NOTIFICATION_EMAIL;
+    const toEmail = process.env.CP_NOTIFICATION_EMAIL;
     if (!toEmail) {
-      return { success: false, error: 'SALES_NOTIFICATION_EMAIL is not configured' };
+      return { success: false, error: 'CP_NOTIFICATION_EMAIL is not configured' };
     }
 
     const cpName =
