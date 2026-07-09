@@ -4168,8 +4168,6 @@ Content-Type: application/json
   "content_type": "studio,videographer",
   "shoot_type": "podcasts_shows",
   "studio_booking_for": "production",
-  "project_name": "Podcast Studio Video Shoot",
-  "special_instructions": "Studio and videography booking for a podcast recording.",
   "booking_type": "single_day",
   "start_date": "2026-01-12",
   "start_time": "10:00",
@@ -4208,13 +4206,15 @@ Content-Type: application/json
   ]
 }
 
-### SCREEN 2) Save videography service settings
-### Top-level timing is videography/creator shoot timing, separate from studio rental timing.
+### SCREEN 2) Save videography service settings & SCREEN 3) Save more details: crew count + location + additional details + links
+### keep Screen 2 data in frontend state, then send everything together on Screen 3
 ### If user selects "Keep it same", omit booking_type/start_date/start_time/end_time/time_zone/duration_hours.
-PATCH {{URL}}sales/bookings/1305/crew HTTP/1.1
+### For studio bookings, location should be prefilled/derived from selected studio.
+PATCH {{URL}}sales/bookings/1306/crew HTTP/1.1
 Content-Type: application/json
 
 {
+  "shoot_type": "podcasts_shows",
   "crew_roles": {
     "videographer": 1
   },
@@ -4227,25 +4227,11 @@ Content-Type: application/json
   "edits_needed": true,
   "video_edit_types": ["social_reel_15_30"],
   "photo_edit_types": [],
-  "reference_links": []
-}
-
-### SCREEN 3) Save more details: crew count + location + additional details + links
-### For studio bookings, location should be prefilled/derived from selected studio.
-PATCH {{URL}}sales/bookings/1305/crew HTTP/1.1
-Content-Type: application/json
-
-{
-  "crew_roles": {
-    "videographer": 1
-  },
   "location": "Woodland Hills, Los Angeles, CA",
   "location_latitude": 34.1654,
   "location_longitude": -118.6089,
-  "description": "Need one videographer for a podcast recording. Please bring a compact lighting setup.",
-  "reference_links": [
-    "https://example.com/reference-podcast-look"
-  ]
+  "description": "Need one videographer for a podcast recording.",
+  "reference_links": []
 }
 
 ### SCREEN 4) Crew size and matching
@@ -4265,12 +4251,7 @@ Content-Type: application/json
   },
   "content_type": "studio,videographer",
   "event_type": "podcasts_shows",
-  "video_edit_types": [
-    {
-      "slug": "social_reel_15_30",
-      "quantity": 1
-    }
-  ],
+  "video_edit_types": ["social_reel_15_30"],
   "photo_edit_types": [],
   "skip_discount": true,
   "skip_margin": true,
@@ -4311,7 +4292,7 @@ Content-Type: application/json
   "shootHours": 6,
   "eventType": "podcasts_shows",
   "guestEmail": "journey3@beige.test",
-  "bookingId": 1305,
+  "bookingId": 1306,
   "shoot_start_date": "2026-01-12T10:30:00.000Z",
   "video_edit_types": ["social_reel_15_30"],
   "photo_edit_types": [],
@@ -4341,7 +4322,7 @@ Content-Type: application/json
 
 ### SCREEN 6C) Finalize booking with selected videographer
 ### Top-level location is derived from the selected studio. studio_items persist studio metadata and studio_bookings.
-PUT {{URL}}guest-bookings/1305
+PUT {{URL}}guest-bookings/1306
 Content-Type: application/json
 
 {
@@ -4407,7 +4388,7 @@ Content-Type: application/json
 }
 
 ### PAYMENT 1) Payment details check
-GET {{URL}}guest-bookings/1305/payment-details
+GET {{URL}}guest-bookings/1306/payment-details
 Content-Type: application/json
 
 ### PAYMENT 2) Create payment intent
@@ -4415,8 +4396,8 @@ POST {{URL}}payments/create-intent-multi
 Content-Type: application/json
 
 {
-  "booking_id": "1305",
-  "amount": 3900,
+  "booking_id": "1306",
+  "amount": 2950,
   "guest_email": "journey3@beige.test",
   "use_credit": false,
   "credit_amount_used": 0
@@ -4427,8 +4408,8 @@ POST {{URL}}payments/confirm-multi
 Content-Type: application/json
 
 {
-  "paymentIntentId": "pi_replace_from_stripe",
-  "booking_id": "1305",
+  "paymentIntentId": "pi_3TrDiW54hnPNgHXU0kAtA3y1",
+  "booking_id": "1306",
   "referral_code": null,
   "use_credit": false,
   "credit_amount_used": 0

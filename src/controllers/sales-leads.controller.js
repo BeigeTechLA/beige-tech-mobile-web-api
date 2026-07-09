@@ -6085,6 +6085,7 @@ exports.updateBookingCrew = async (req, res) => {
     const { bookingId } = req.params;
     const {
       crew_roles,
+      shoot_type,
       location,
       description,
       reference_links,
@@ -6168,6 +6169,9 @@ exports.updateBookingCrew = async (req, res) => {
       crew_roles: JSON.stringify(crew_roles)
     };
 
+    if (shoot_type !== undefined) {
+      updateData.shoot_type = shoot_type || null;
+    }
     if (location !== undefined || latitude !== null || longitude !== null) {
       updateData.event_location = location ?? booking.event_location;
       updateData.event_latitude = latitude;
