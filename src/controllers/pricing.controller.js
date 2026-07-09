@@ -222,7 +222,9 @@ exports.saveQuote = async (req, res) => {
       skipMargin: true
     });
     
-    const userId = req.userId || null;
+    // const userId = req.userId || null;
+
+    const userId = guestEmail ? null : (req.userId || null);
     
     // 3. Save the result (quoteData now includes the calculated editing lines)
     const savedQuote = await pricingService.saveQuote(quoteData, {
