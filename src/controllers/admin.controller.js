@@ -2087,13 +2087,15 @@ exports.getProjectDetails = async (req, res) => {
         booking_id: projectJson.stream_project_booking_id,
         approval_status: { [Op.in]: ['pending_approval', 'approved', 'rejected'] }
       },
-      attributes: ['creator_earning_id', 'creator_id', 'gross_amount', 'net_earning_amount'],
+      attributes: ['creator_earning_id', 'creator_id', 'gross_amount', 'net_earning_amount', 'approval_status'],
       order: [['updated_at', 'DESC'], ['creator_earning_id', 'DESC']]
     });
 
+    const cpCompensationRows = creatorCompensations.map((row) => row.toJSON());
+    const cpCompensationLocked = cpCompensationRows.some((earning) => earning.approval_status === 'approved');
+    const cpCompensationHasPending = cpCompensationRows.some((earning) => earning.approval_status === 'pending_approval');
     const compensationByCreatorId = new Map();
-    creatorCompensations.forEach((row) => {
-      const earning = row.toJSON();
+    cpCompensationRows.forEach((earning) => {
       const totalCompensation = Number(earning.net_earning_amount || earning.gross_amount || 0);
 
       if (!compensationByCreatorId.has(Number(earning.creator_id))) {
@@ -2317,6 +2319,9 @@ exports.getProjectDetails = async (req, res) => {
           event_type_labels: eventTypeLabels.join(', '),
           timeline_status: timelineStatus,
           timeline_label: timelineLabel,
+          cp_compensation_locked: cpCompensationLocked,
+          cp_compensation_has_pending: cpCompensationHasPending,
+          cp_compensation_status: cpCompensationLocked ? 'approved' : cpCompensationHasPending ? 'pending_approval' : null,
           needs_attention: buildShootNeedsAttention(projectJson, formSubmission),
           sales_leads: undefined // Remove from main object to avoid redundancy
         },
@@ -2332,6 +2337,9 @@ exports.getProjectDetails = async (req, res) => {
         converted_sales_quote_id: convertedSalesQuoteId,
         converted_sales_quote_number: convertedSalesQuote?.quote_number || null,
         is_quote_converted_booking: isQuoteConvertedBooking,
+        cp_compensation_locked: cpCompensationLocked,
+        cp_compensation_has_pending: cpCompensationHasPending,
+        cp_compensation_status: cpCompensationLocked ? 'approved' : cpCompensationHasPending ? 'pending_approval' : null,
         manual_payment_summary: manualPaymentSummary,
         payment_history: paymentHistory,
         pricing_breakdown,
@@ -9920,7 +9928,7 @@ exports.searchCrewForLead = async (req, res) => {
 exports.assignCrewBulkSmart = async (req, res) => {
     try {
         const assigned_by_user_id = req.user?.userId;
-        const { lead_id, client_lead_id, crew_member_ids } = req.body;
+        const { lead_id, client_lead_id, crew_member_ids, allow_pending_compensation_assignment } = req.body;
 
         if (!lead_id && !client_lead_id) {
             return res.status(400).json({ success: false, message: "lead_id or client_lead_id is required." });
@@ -9968,6 +9976,34 @@ exports.assignCrewBulkSmart = async (req, res) => {
         }
 
         const booking = lead.booking;
+        const approvedCompensationCount = await db.creator_earnings.count({
+          where: {
+            booking_id: booking.stream_project_booking_id,
+            approval_status: 'approved'
+          }
+        });
+
+        if (approvedCompensationCount > 0) {
+            return res.status(409).json({
+                success: false,
+                message: "CP compensation is already approved for this shoot. You cannot assign more CPs."
+            });
+        }
+
+        const pendingCompensationCount = await db.creator_earnings.count({
+          where: {
+            booking_id: booking.stream_project_booking_id,
+            approval_status: 'pending_approval'
+          }
+        });
+
+        if (pendingCompensationCount > 0 && !allow_pending_compensation_assignment) {
+            return res.status(409).json({
+                success: false,
+                message: "This shoot has pending CP compensation. Add CPs through the compensation flow so payout records stay updated."
+            });
+        }
+
         const requestedLimits = typeof booking.crew_roles === 'string'
           ? JSON.parse(booking.crew_roles)
           : (booking.crew_roles || {});
@@ -11140,7 +11176,7 @@ exports.searchCrewForProject = async (req, res) => {
 exports.assignProjectCrewBulk = async (req, res) => {
     try {
         const assigned_by_user_id = req.user?.userId;
-        const { project_id, crew_member_ids } = req.body;
+        const { project_id, crew_member_ids, allow_pending_compensation_assignment } = req.body;
 
         if (!project_id) {
             return res.status(400).json({ success: false, message: "Project ID is required." });
@@ -11181,6 +11217,34 @@ exports.assignProjectCrewBulk = async (req, res) => {
 
         if (!booking) {
             return res.status(404).json({ success: false, message: "Project booking not found." });
+        }
+
+        const approvedCompensationCount = await db.creator_earnings.count({
+          where: {
+            booking_id: project_id,
+            approval_status: 'approved'
+          }
+        });
+
+        if (approvedCompensationCount > 0) {
+            return res.status(409).json({
+                success: false,
+                message: "CP compensation is already approved for this shoot. You cannot assign more CPs."
+            });
+        }
+
+        const pendingCompensationCount = await db.creator_earnings.count({
+          where: {
+            booking_id: project_id,
+            approval_status: 'pending_approval'
+          }
+        });
+
+        if (pendingCompensationCount > 0 && !allow_pending_compensation_assignment) {
+            return res.status(409).json({
+                success: false,
+                message: "This shoot has pending CP compensation. Add CPs through the compensation flow so payout records stay updated."
+            });
         }
 
         const leadId = booking.sales_leads?.[0]?.lead_id || null;

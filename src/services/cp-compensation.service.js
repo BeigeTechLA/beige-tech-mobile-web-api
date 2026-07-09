@@ -203,12 +203,21 @@ function buildCreatorName(creator = null) {
   return [creator.first_name, creator.last_name].filter(Boolean).join(' ').trim() || creator.email || null;
 }
 
-function buildCompensationStatus(earnings = []) {
+async function buildCompensationStatus(earnings = []) {
   if (!earnings.length) return 'draft';
   if (earnings.some((earning) => earning.approval_status === 'pending_approval')) return 'pending_approval';
-  if (earnings.every((earning) => earning.status === 'paid')) return 'paid';
-  if (earnings.every((earning) => earning.approval_status === 'approved')) return 'approved';
   if (earnings.every((earning) => earning.approval_status === 'rejected')) return 'rejected';
+
+  const paymentStates = await Promise.all(earnings.map((earning) => getCompensationPaymentState(earning)));
+  const paidStates = paymentStates.filter((state) => state.total_compensation > 0 && state.paid_total > 0);
+  if (
+    paymentStates.length > 0 &&
+    paymentStates.every((state) => state.total_compensation > 0 && state.remaining_balance <= 0)
+  ) {
+    return 'paid';
+  }
+  if (paidStates.some((state) => state.remaining_balance > 0)) return 'partially_paid';
+  if (earnings.every((earning) => earning.approval_status === 'approved')) return 'approved';
   return 'mixed';
 }
 
@@ -1250,6 +1259,7 @@ async function listCpCompensations(filters = {}) {
       const cpPayout = toMoney(earning.net_earning_amount || earning.gross_amount || 0);
       const marginAmount = toMoney(Math.max(shootAmount - cpPayout, 0));
       const marginPercent = shootAmount > 0 ? toMoney((marginAmount / shootAmount) * 100) : null;
+      const status = await buildCompensationStatus([earning]);
 
       return {
         creator_earning_id: earning.creator_earning_id,
@@ -1267,7 +1277,7 @@ async function listCpCompensations(filters = {}) {
         cp_payout: cpPayout,
         margin_amount: marginAmount,
         margin_percent: marginPercent,
-        status: earning.approval_status,
+        status,
         earning_status: earning.status,
         compensation_source: earning.compensation_source,
         compensation_method: earning.compensation_method,
@@ -1320,7 +1330,7 @@ async function listCpCompensations(filters = {}) {
       due_date: resolveCompensationDueDate(bookingEarnings, booking),
       margin_amount: marginAmount,
       margin_percent: marginPercent,
-      status: buildCompensationStatus(bookingEarnings),
+      status: await buildCompensationStatus(bookingEarnings),
       latest_activity_at: bookingEarnings[0].updated_at || bookingEarnings[0].created_at || null
     };
   }));
@@ -1423,7 +1433,7 @@ async function getCpCompensationDetails(bookingId) {
       shoot_amount: shootAmount,
       margin_amount: marginAmount,
       margin_percent: marginPercent,
-      status: buildCompensationStatus(earnings)
+      status: await buildCompensationStatus(earnings)
     },
     payment_history: paymentHistory.all,
     audit_logs: buildAuditLogs(earnings),
