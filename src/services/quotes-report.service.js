@@ -79,6 +79,28 @@ function dedupeLineItemsForMaster(items) {
   });
 }
 
+function sumLineItemsForMaster(items) {
+  return dedupeLineItemsForMaster(items).reduce((sum, item) => {
+    return sum + toNumber(item.line_total);
+  }, 0);
+}
+
+function getCatalogPrice(item) {
+  if (!hasActiveCatalogItem(item)) {
+    return null;
+  }
+
+  if (item.catalog_item.default_rate === null || item.catalog_item.default_rate === undefined) {
+    return null;
+  }
+
+  return toNumber(item.catalog_item.default_rate);
+}
+
+function hasActiveCatalogItem(item) {
+  return Boolean(item.catalog_item) && Number(item.catalog_item.is_active) === 1;
+}
+
 function formatItemsForMaster(items) {
   const uniqueItems = dedupeLineItemsForMaster(items);
 
@@ -89,6 +111,83 @@ function formatItemsForMaster(items) {
   return uniqueItems
     .map((item) => `${normalizeText(item.item_name)} (₹${toNumber(item.line_total).toFixed(2)})`)
     .join(', ');
+}
+
+function dedupeLineItemsByRecord(items) {
+  const seen = new Set();
+
+  return items.filter((item) => {
+    const key = item.line_item_id
+      ? `id:${item.line_item_id}`
+      : [
+          item.section_type,
+          item.item_name,
+          item.line_total,
+          item.quantity,
+          item.catalog_item_id,
+          item.source_type,
+          item.sort_order
+        ].join('|');
+
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
+}
+
+function formatSingleLineItemName(item) {
+  return normalizeText(item.item_name);
+}
+
+function buildMasterBaseRow(quote) {
+  return [
+    getQuoteId(quote),
+    quote.quote_number,
+    quote.status,
+    formatDateTimeForMaster(quote.created_at),
+    locationText(quote),
+    quote.valid_until || null
+  ];
+}
+
+function buildMasterLineItemRow(quote, item, category) {
+  const baseRow = buildMasterBaseRow(quote);
+  const itemName = formatSingleLineItemName(item);
+  const itemPrice = toNumber(item.line_total);
+  const categoryColumns = {
+    service: [itemName, itemPrice, '-', '-', '-', '-', '-', '-'],
+    addon: ['-', '-', itemName, itemPrice, '-', '-', '-', '-'],
+    logistics: ['-', '-', '-', '-', itemName, itemPrice, '-', '-'],
+    custom: ['-', '-', '-', '-', '-', '-', itemName, itemPrice]
+  };
+
+  return [
+    ...baseRow,
+    ...categoryColumns[category],
+    discountDescription(quote),
+    toNumber(quote.subtotal),
+    toNumber(quote.total)
+  ];
+}
+
+function buildMasterEmptyQuoteRow(quote) {
+  return [
+    ...buildMasterBaseRow(quote),
+    '-',
+    '-',
+    '-',
+    '-',
+    '-',
+    '-',
+    '-',
+    '-',
+    discountDescription(quote),
+    toNumber(quote.subtotal),
+    toNumber(quote.total)
+  ];
 }
 
 function formatDateTimeForMaster(value) {
@@ -211,18 +310,26 @@ function addServicesSheet(workbook, quotes) {
   quotes.forEach((quote) => {
     const seenInQuote = new Set();
     getLineItems(quote).forEach((item) => {
-      const itemName = normalizeText(item.item_name);
-      const key = itemName.toLowerCase();
+      if (!hasActiveCatalogItem(item)) {
+        return;
+      }
+
+      const itemName = normalizeText(item.catalog_item.name);
+      const key = `catalog:${item.catalog_item.catalog_item_id}`;
       if (!usage.has(key)) {
         usage.set(key, {
           itemName,
-          itemType: itemTypeLabel(item.section_type),
+          itemType: itemTypeLabel(item.catalog_item.section_type),
           quoteIds: new Set(),
-          totalTimesUsed: 0
+          totalTimesUsed: 0,
+          catalogPrice: getCatalogPrice(item)
         });
       }
       const record = usage.get(key);
       record.totalTimesUsed += 1;
+      if (record.catalogPrice === null) {
+        record.catalogPrice = getCatalogPrice(item);
+      }
       seenInQuote.add(key);
     });
 
@@ -233,7 +340,7 @@ function addServicesSheet(workbook, quotes) {
 
   worksheet.addRow(['Services Created — Usage Across Quotes']);
   worksheet.addRow([`Total quotes analyzed: ${totalQuotes}`]);
-  worksheet.addRow(['Item Name', 'Item Type (Main/Add-on/Logistics/Custom)', '# Quotes Using It', '% of Total Quotes', 'Total Times Used (incl. repeats)']);
+  worksheet.addRow(['Item Name', 'Item Type (Main/Add-on/Logistics/Custom)', '# Quotes Using It', '% of Total Quotes', 'Total Times Used (incl. repeats)', 'Price']);
 
   Array.from(usage.values())
     .sort((a, b) => b.quoteIds.size - a.quoteIds.size || a.itemName.localeCompare(b.itemName))
@@ -243,11 +350,12 @@ function addServicesSheet(workbook, quotes) {
         record.itemType,
         record.quoteIds.size,
         totalQuotes ? record.quoteIds.size / totalQuotes : 0,
-        record.totalTimesUsed
+        record.totalTimesUsed,
+        record.catalogPrice === null ? '-' : record.catalogPrice
       ]);
     });
 
-  styleWorksheet(worksheet, 3, [], [4]);
+  styleWorksheet(worksheet, 3, [6], [4]);
 }
 
 function addAddOnsSheet(workbook, quotes) {
@@ -350,41 +458,44 @@ function addMasterQuotesSheet(workbook, quotes) {
     'Location',
     'Validity (Valid Until)',
     'Services',
+    'Services Price',
     'Add-ons',
+    'Add-ons Price',
     'Logistics',
+    'Logistics Price',
     'Custom Items',
+    'Custom Items Price',
     'Discount',
     'Subtotal',
     'Total'
   ]);
 
   quotes.forEach((quote) => {
-    const lineItems = getLineItems(quote);
+    const lineItems = dedupeLineItemsByRecord(getLineItems(quote));
     const services = lineItems.filter((item) => item.section_type === 'service' && !isCustomLineItem(item));
     const addOns = lineItems.filter((item) => item.section_type === 'addon' && !isCustomLineItem(item));
     const logistics = lineItems.filter((item) => item.section_type === 'logistics' && !isCustomLineItem(item));
     const customItems = lineItems.filter(isCustomLineItem);
+    const orderedItems = [
+      ...services.map((item) => ({ item, category: 'service' })),
+      ...addOns.map((item) => ({ item, category: 'addon' })),
+      ...logistics.map((item) => ({ item, category: 'logistics' })),
+      ...customItems.map((item) => ({ item, category: 'custom' }))
+    ];
 
-    worksheet.addRow([
-      getQuoteId(quote),
-      quote.quote_number,
-      quote.status,
-      formatDateTimeForMaster(quote.created_at),
-      locationText(quote),
-      quote.valid_until || null,
-      formatItemsForMaster(services),
-      formatItemsForMaster(addOns),
-      formatItemsForMaster(logistics),
-      formatItemsForMaster(customItems),
-      discountDescription(quote),
-      toNumber(quote.subtotal),
-      toNumber(quote.total)
-    ]);
+    if (!orderedItems.length) {
+      worksheet.addRow(buildMasterEmptyQuoteRow(quote));
+      return;
+    }
+
+    orderedItems.forEach(({ item, category }) => {
+      worksheet.addRow(buildMasterLineItemRow(quote, item, category));
+    });
   });
 
   worksheet.getColumn(4).numFmt = '@';
   worksheet.getColumn(6).numFmt = 'yyyy-mm-dd';
-  styleWorksheet(worksheet, 3, [12, 13]);
+  styleWorksheet(worksheet, 3, [8, 10, 12, 14, 16, 17]);
   styleMasterQuotesHeader(worksheet);
 }
 
@@ -395,7 +506,14 @@ async function fetchQuotesForReport() {
         model: db.sales_quote_line_items,
         as: 'line_items',
         required: false,
-        where: { is_active: 1 }
+        where: { is_active: 1 },
+        include: [
+          {
+            model: db.quote_catalog_items,
+            as: 'catalog_item',
+            required: false
+          }
+        ]
       },
       {
         model: db.sales_quote_activities,
