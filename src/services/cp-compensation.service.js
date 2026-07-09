@@ -180,7 +180,7 @@ function buildAuditLogs(earnings = []) {
     });
 
     (earning.timeline_events || [])
-      .filter((event) => event.event_type !== 'awaiting_finance_approval')
+      .filter((event) => event.event_type !== 'awaiting_finance_approval' && !isPaymentTimelineEvent(event.event_type))
       .forEach((event) => {
         pushGroupedAuditLog(logs, event.event_type, earning, {
           label: event.label,
@@ -201,6 +201,10 @@ function buildAuditLogs(earnings = []) {
 function buildCreatorName(creator = null) {
   if (!creator) return null;
   return [creator.first_name, creator.last_name].filter(Boolean).join(' ').trim() || creator.email || null;
+}
+
+function isPaymentTimelineEvent(eventType = '') {
+  return String(eventType || '').includes('payment');
 }
 
 function buildCompensationStatus(earnings = []) {
