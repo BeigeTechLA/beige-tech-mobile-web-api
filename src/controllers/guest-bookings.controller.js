@@ -180,6 +180,54 @@ async function resolveUserId(userId, guestEmail) {
   return userId ? parseInt(userId, 10) : null;
 }
 
+async function ensureGuestClientForBooking({ userId, guestEmail, fullName, phone, transaction }) {
+  if (userId || !guestEmail) return null;
+
+  const normalizedEmail = String(guestEmail).trim().toLowerCase();
+  const normalizedPhone = phone ? String(phone).trim() : '';
+  const name = fullName
+    ? String(fullName).trim()
+    : normalizedEmail.split('@')[0] || 'Guest Client';
+
+  const duplicateConditions = [
+    normalizedEmail ? { email: normalizedEmail } : null,
+    normalizedPhone ? { phone_number: normalizedPhone } : null
+  ].filter(Boolean);
+
+  if (!duplicateConditions.length || !name || !normalizedPhone) {
+    return null;
+  }
+
+  const existingUser = await db.users.findOne({
+    where: {
+      [db.Sequelize.Op.or]: duplicateConditions
+    },
+    attributes: ['id'],
+    transaction
+  });
+
+  if (existingUser) {
+    return null;
+  }
+
+  const existingClient = await db.clients.findOne({
+    where: {
+      [db.Sequelize.Op.or]: duplicateConditions
+    },
+    transaction
+  });
+
+  if (existingClient) {
+    return existingClient;
+  }
+
+  return db.clients.create({
+    name,
+    email: normalizedEmail,
+    phone_number: normalizedPhone
+  }, { transaction });
+}
+
 const notifyAssignedCreators = async (
   creatorIds = [],
   booking = null,
@@ -746,6 +794,13 @@ exports.createGuestBooking = async (req, res) => {
     let booking;
     try {
       booking = await stream_project_booking.create(bookingData, { transaction: tx });
+      await ensureGuestClientForBooking({
+        userId: resolvedUserId,
+        guestEmail: normalizedGuestEmail,
+        fullName: full_name,
+        phone,
+        transaction: tx
+      });
 
       if (booking_type === 'multi_day' && normalizedBookingDays.length > 0) {
         const dayRows = normalizedBookingDays.map((d) => ({
@@ -1070,6 +1125,13 @@ exports.updateGuestBooking = async (req, res) => {
     try {
       // Update booking
       await booking.update(updateData, { transaction: tx });
+      await ensureGuestClientForBooking({
+        userId: booking.user_id || resolvedUserId,
+        guestEmail: lookupEmail,
+        fullName: full_name,
+        phone,
+        transaction: tx
+      });
 
       const salesLeadUpdate = {};
       if (full_name) salesLeadUpdate.client_name = full_name;
