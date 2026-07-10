@@ -5141,6 +5141,202 @@ exports.getCrewMemberById = async (req, res) => {
     }
 };
 
+const CREW_PROFILE_REQUIRED_FIELDS = ['first_name', 'last_name', 'email', 'location'];
+const CREW_PROFILE_OPTIONAL_FIELDS = ['primary_role', 'hourly_rate', 'bio'];
+const CREW_PROFILE_FILE_TYPES = ['profile_photo', 'resume', 'portfolio', 'certifications', 'recent_work'];
+
+const parseJsonArray = (value) => {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    return [];
+  }
+};
+
+const isCrewProfileFieldFilled = (value) => (
+  value !== null && value !== undefined && !(typeof value === 'string' && value.trim() === '')
+);
+
+const calculateCrewProfileCompletion = (member, files = []) => {
+  const memberData = member && typeof member.toJSON === 'function' ? member.toJSON() : member;
+  const activeFiles = Array.isArray(files) ? files : [];
+  const requiredFilled = CREW_PROFILE_REQUIRED_FIELDS.filter(field =>
+    isCrewProfileFieldFilled(memberData[field])
+  ).length;
+  const optionalFilled = CREW_PROFILE_OPTIONAL_FIELDS.filter(field =>
+    isCrewProfileFieldFilled(memberData[field])
+  ).length;
+  const totalFields = CREW_PROFILE_REQUIRED_FIELDS.length + CREW_PROFILE_OPTIONAL_FIELDS.length;
+  const totalFilled = requiredFilled + optionalFilled;
+
+  const completionNeeds = [
+    { key: 'skills', check: (m) => parseJsonArray(m.skills).length > 0 },
+    { key: 'social_links', check: (m) => parseJsonArray(m.social_media_links).length > 0 },
+    { key: 'showcase_work', check: (_m, fileList) => fileList.some(f => f.file_type === 'recent_work') }
+  ];
+  const completionNeedsDone = completionNeeds.filter(need => need.check(memberData, activeFiles)).length;
+
+  return {
+    crew_member_id: memberData.crew_member_id,
+    overall_progress_percent: Math.round((totalFilled / totalFields) * 100),
+    fields_complete: `${totalFilled}/${totalFields}`,
+    required_fields: {
+      complete: requiredFilled,
+      total: CREW_PROFILE_REQUIRED_FIELDS.length
+    },
+    total_fields: {
+      complete: totalFilled,
+      total: totalFields
+    },
+    completion_needs: {
+      complete: completionNeedsDone,
+      total: completionNeeds.length
+    }
+  };
+};
+
+const getCrewMemberWithActiveFiles = (crew_member_id) => crew_members.findOne({
+  where: { crew_member_id },
+  include: [{
+    model: crew_member_files,
+    as: 'crew_member_files',
+    attributes: ['crew_member_id', 'file_type', 'file_path', 'created_at', 'title', 'tag'],
+    where: {
+      is_active: 1,
+      file_type: { [Op.in]: CREW_PROFILE_FILE_TYPES }
+    },
+    required: false
+  }]
+});
+
+exports.getCrewProfileCompletion = async (req, res) => {
+  try {
+    const { crew_member_id } = req.params;
+    const member = await getCrewMemberWithActiveFiles(crew_member_id);
+
+    if (!member) {
+      return res.status(constants.NOT_FOUND.code).json({
+        error: true,
+        message: "Crew member not found",
+      });
+    }
+
+    const memberJson = member.toJSON();
+    const profileCompletion = calculateCrewProfileCompletion(memberJson, memberJson.crew_member_files);
+
+    return res.status(constants.OK.code).json({
+      error: false,
+      code: constants.OK.code,
+      message: "Profile completion fetched successfully",
+      data: profileCompletion,
+    });
+  } catch (error) {
+    console.error("Get Crew Profile Completion Error:", error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      error: true,
+      code: constants.INTERNAL_SERVER_ERROR.code,
+      message: constants.INTERNAL_SERVER_ERROR.message,
+      data: null,
+    });
+  }
+};
+
+exports.saveCrewProfileCompletion = async (req, res) => {
+  try {
+    const { crew_member_id } = req.params;
+    const {
+      first_name,
+      last_name,
+      email,
+      phone_number,
+      location,
+      working_distance,
+      primary_role,
+      years_of_experience,
+      hourly_rate,
+      bio,
+      skills,
+      equipment_ownership,
+      social_media_links
+    } = req.body;
+
+    const crewMember = await crew_members.findOne({ where: { crew_member_id } });
+
+    if (!crewMember) {
+      return res.status(constants.NOT_FOUND.code).json({
+        error: true,
+        message: "Crew member not found",
+      });
+    }
+
+    if (email && email !== crewMember.email) {
+      const existingEmail = await crew_members.findOne({
+        where: { email, crew_member_id: { [Sequelize.Op.ne]: crew_member_id } }
+      });
+
+      if (existingEmail) {
+        return res.status(constants.BAD_REQUEST.code).json({
+          error: true,
+          code: constants.BAD_REQUEST.code,
+          message: "Email already exists",
+          data: null,
+        });
+      }
+    }
+
+    const updateData = {};
+    if (first_name !== undefined) updateData.first_name = first_name;
+    if (last_name !== undefined) updateData.last_name = last_name;
+    if (email !== undefined) updateData.email = email;
+    if (phone_number !== undefined) updateData.phone_number = phone_number;
+    if (location !== undefined) updateData.location = JSON.stringify(location);
+    if (working_distance !== undefined) updateData.working_distance = working_distance;
+    if (years_of_experience !== undefined) updateData.years_of_experience = years_of_experience;
+    if (hourly_rate !== undefined) updateData.hourly_rate = hourly_rate;
+    if (bio !== undefined) updateData.bio = bio;
+    if (primary_role !== undefined) updateData.primary_role = JSON.stringify(primary_role);
+    if (skills !== undefined) updateData.skills = JSON.stringify(skills);
+    if (equipment_ownership !== undefined) updateData.equipment_ownership = JSON.stringify(equipment_ownership);
+    if (social_media_links !== undefined) {
+      const sanitizedLinks = Array.isArray(social_media_links)
+        ? social_media_links
+          .filter(item => item && item.platform && item.url)
+          .map(item => ({ platform: item.platform, url: item.url }))
+        : [];
+      updateData.social_media_links = JSON.stringify(sanitizedLinks);
+    }
+
+    await crewMember.update(updateData);
+
+    const updatedMember = await getCrewMemberWithActiveFiles(crew_member_id);
+    const updatedMemberJson = updatedMember.toJSON();
+    const profileCompletion = calculateCrewProfileCompletion(updatedMemberJson, updatedMemberJson.crew_member_files);
+
+    return res.status(constants.OK.code).json({
+      error: false,
+      code: constants.OK.code,
+      message: "Profile updated successfully",
+      data: {
+        crew_member_id,
+        updated_fields: Object.keys(updateData),
+        profile_completion: profileCompletion,
+      },
+    });
+  } catch (error) {
+    console.error("Save Crew Profile Completion Error:", error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      error: true,
+      code: constants.INTERNAL_SERVER_ERROR.code,
+      message: constants.INTERNAL_SERVER_ERROR.message,
+      data: null,
+    });
+  }
+};
+
 
 exports.deleteCrewMember = async (req, res) => {
   try {

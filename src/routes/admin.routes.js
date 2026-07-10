@@ -169,6 +169,8 @@ router.get('/get-crew-members', authMiddleware, adminUsersOrSalesRepresentativeV
 router.post('/get-crew-members', authMiddleware, adminUsersOrSalesRepresentativeView, admin.getCrewMembers);
 router.post('/get-approved-crew-members', authMiddleware, crewAvailabilityView, admin.getApprovedCrewMembers);
 router.get('/crew-member/:crew_member_id', authMiddleware, adminSalesRepresentativeAvailabilityView, admin.getCrewMemberById);
+router.get('/crew-members/:crew_member_id/profile-completion', authMiddleware, adminSalesRepresentativeAvailabilityView, admin.getCrewProfileCompletion);
+router.post('/crew-members/:crew_member_id/profile-completion', authMiddleware, adminSalesRepresentativeAvailabilityView, admin.saveCrewProfileCompletion);
 router.delete('/delete-crew-member/:crew_member_id', admin.deleteCrewMember);
 router.put('/edit-crew-member/:crew_member_id', admin.updateCrewMember);
 router.post('/assign_task', admin.createTask);
