@@ -254,6 +254,12 @@ function getLatestEarningAttemptsByCreator(earnings = []) {
   return Array.from(latestByCreator.values());
 }
 
+function getSummaryEarningAttempts(earnings = []) {
+  const latestEarnings = getLatestEarningAttemptsByCreator(earnings);
+  const activeEarnings = latestEarnings.filter((earning) => earning.approval_status !== 'rejected');
+  return activeEarnings.length ? activeEarnings : latestEarnings;
+}
+
 function resolveCompensationDueDate(earnings = [], booking = {}) {
   const explicitDueDate = earnings
     .map((earning) => parseJson(earning.metadata_json, {})?.due_date || parseJson(earning.metadata_json, {})?.payout_due_date)
@@ -1350,8 +1356,8 @@ async function listCpCompensations(filters = {}) {
     const booking = bookingEarnings[0].booking || {};
     const breakdown = breakdownByBookingId.get(bookingId) || {};
     const paymentSummary = paymentSummaryByBookingId.get(bookingId) || {};
-    const latestEarnings = getLatestEarningAttemptsByCreator(bookingEarnings);
-    const cpPayout = toMoney(latestEarnings.reduce((sum, earning) => sum + Number(earning.net_earning_amount || 0), 0));
+    const summaryEarnings = getSummaryEarningAttempts(bookingEarnings);
+    const cpPayout = toMoney(summaryEarnings.reduce((sum, earning) => sum + Number(earning.net_earning_amount || 0), 0));
     const shootAmount = await resolveShootAmountLikeShoots(booking, breakdown, paymentSummary);
     const marginAmount = toMoney(Math.max(shootAmount - cpPayout, 0));
     const marginPercent = shootAmount > 0 ? toMoney((marginAmount / shootAmount) * 100) : null;
@@ -1363,13 +1369,13 @@ async function listCpCompensations(filters = {}) {
       content_type: booking.content_type || booking.event_type || null,
       event_date: formatDateOnly(booking.event_date),
       customer: buildCustomer(booking),
-      total_cps: latestEarnings.length,
+      total_cps: summaryEarnings.length,
       cp_payout: cpPayout,
       shoot_amount: shootAmount,
-      due_date: resolveCompensationDueDate(latestEarnings, booking),
+      due_date: resolveCompensationDueDate(summaryEarnings, booking),
       margin_amount: marginAmount,
       margin_percent: marginPercent,
-      status: await buildCompensationStatus(latestEarnings),
+      status: await buildCompensationStatus(summaryEarnings),
       latest_activity_at: bookingEarnings[0].updated_at || bookingEarnings[0].created_at || null
     };
   }));
@@ -1450,11 +1456,11 @@ async function getCpCompensationDetails(bookingId) {
 
   const plain = toPlain(booking);
   const earnings = plain.creator_earnings || [];
-  const latestEarnings = getLatestEarningAttemptsByCreator(earnings);
+  const summaryEarnings = getSummaryEarningAttempts(earnings);
   const breakdown = plain.finance_breakdown || {};
   const paymentSummaryByBookingId = await fetchBookingPaymentSummaries([bookingId]);
   const paymentSummary = paymentSummaryByBookingId.get(Number(bookingId)) || {};
-  const totalCpPayout = toMoney(latestEarnings.reduce((sum, earning) => sum + Number(earning.net_earning_amount || 0), 0));
+  const totalCpPayout = toMoney(summaryEarnings.reduce((sum, earning) => sum + Number(earning.net_earning_amount || 0), 0));
   const shootAmount = await resolveShootAmountLikeShoots(plain, breakdown, paymentSummary);
   const marginAmount = toMoney(Math.max(shootAmount - totalCpPayout, 0));
   const marginPercent = shootAmount > 0 ? toMoney((marginAmount / shootAmount) * 100) : null;
@@ -1473,7 +1479,7 @@ async function getCpCompensationDetails(bookingId) {
       shoot_amount: shootAmount,
       margin_amount: marginAmount,
       margin_percent: marginPercent,
-      status: await buildCompensationStatus(latestEarnings)
+      status: await buildCompensationStatus(summaryEarnings)
     },
     payment_history: paymentHistory.all,
     audit_logs: buildAuditLogs(earnings),
