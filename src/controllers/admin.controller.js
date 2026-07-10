@@ -5259,6 +5259,99 @@ const getCrewMemberWithActiveFiles = (crew_member_id) => crew_members.findOne({
   }]
 });
 
+const normalizeCrewProfileJsonInput = (value) => {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') return value;
+
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return value;
+  }
+};
+
+const normalizeCrewSocialLinks = (value) => {
+  const parsedValue = normalizeCrewProfileJsonInput(value);
+
+  if (Array.isArray(parsedValue)) {
+    return parsedValue
+      .filter(item => item && item.platform && item.url)
+      .map(item => ({ platform: item.platform, url: item.url }));
+  }
+
+  if (parsedValue && typeof parsedValue === 'object') {
+    return Object.entries(parsedValue).reduce((links, [platform, url]) => {
+      if (platform && url) links[platform] = url;
+      return links;
+    }, {});
+  }
+
+  return parsedValue;
+};
+
+const normalizeCrewPortfolioLinks = (value) => {
+  const parsedValue = normalizeCrewProfileJsonInput(value);
+  if (!Array.isArray(parsedValue)) return [];
+
+  return parsedValue
+    .filter(link => link && link.url)
+    .map(link => ({
+      url: link.url,
+      platform: link.platform || null,
+      title: link.title || null
+    }));
+};
+
+const saveCrewProfileFiles = async (crew_member_id, files = {}, body = {}) => {
+  const uploadedFiles = await S3UploadFiles(files);
+  const singleFileTypes = ['profile_photo', 'resume'];
+  const savedFileTypes = [];
+
+  for (const fileData of uploadedFiles) {
+    const fileType = fileData.file_type;
+
+    if (singleFileTypes.includes(fileType)) {
+      await crew_member_files.update(
+        { is_active: 0 },
+        { where: { crew_member_id, file_type: fileType } }
+      );
+    }
+
+    await crew_member_files.create({
+      crew_member_id,
+      file_type: fileType,
+      file_path: fileData.file_path,
+      title: null,
+      tag: fileType === 'recent_work' ? body.tag || null : null,
+      is_active: 1
+    });
+
+    savedFileTypes.push(fileType);
+  }
+
+  return savedFileTypes;
+};
+
+const saveCrewPortfolioLinks = async (crew_member_id, portfolioLinks = []) => {
+  await crew_member_files.update(
+    { is_active: 0 },
+    { where: { crew_member_id, file_type: { [Op.in]: ['link', 'portfolio_link'] } } }
+  );
+
+  if (!portfolioLinks.length) return ['portfolio_links'];
+
+  await crew_member_files.bulkCreate(portfolioLinks.map(link => ({
+    crew_member_id,
+    file_type: 'portfolio_link',
+    file_path: link.url,
+    title: link.title,
+    tag: link.platform,
+    is_active: 1
+  })));
+
+  return ['portfolio_links'];
+};
+
 exports.getCrewProfileCompletion = async (req, res) => {
   try {
     const { crew_member_id } = req.params;
@@ -5291,7 +5384,16 @@ exports.getCrewProfileCompletion = async (req, res) => {
   }
 };
 
-exports.saveCrewProfileCompletion = async (req, res) => {
+exports.saveCrewProfileCompletion = [
+  upload.fields([
+    { name: 'profile_photo', maxCount: 1 },
+    { name: 'resume', maxCount: 1 },
+    { name: 'portfolio', maxCount: 10 },
+    { name: 'certifications', maxCount: 10 },
+    { name: 'recent_work', maxCount: 50 }
+  ]),
+
+  async (req, res) => {
   try {
     const { crew_member_id } = req.params;
     const {
@@ -5309,6 +5411,9 @@ exports.saveCrewProfileCompletion = async (req, res) => {
       equipment_ownership,
       social_media_links
     } = req.body;
+    const portfolio_links = req.body.portfolio_links;
+    const certifications = req.body.certifications;
+    const availability = req.body.availability;
 
     const crewMember = await crew_members.findOne({ where: { crew_member_id } });
 
@@ -5344,19 +5449,20 @@ exports.saveCrewProfileCompletion = async (req, res) => {
     if (years_of_experience !== undefined) updateData.years_of_experience = years_of_experience;
     if (hourly_rate !== undefined) updateData.hourly_rate = hourly_rate;
     if (bio !== undefined) updateData.bio = bio;
-    if (primary_role !== undefined) updateData.primary_role = JSON.stringify(primary_role);
-    if (skills !== undefined) updateData.skills = JSON.stringify(skills);
-    if (equipment_ownership !== undefined) updateData.equipment_ownership = JSON.stringify(equipment_ownership);
+    if (primary_role !== undefined) updateData.primary_role = JSON.stringify(normalizeCrewProfileJsonInput(primary_role));
+    if (skills !== undefined) updateData.skills = JSON.stringify(normalizeCrewProfileJsonInput(skills));
+    if (equipment_ownership !== undefined) updateData.equipment_ownership = JSON.stringify(normalizeCrewProfileJsonInput(equipment_ownership));
+    if (certifications !== undefined) updateData.certifications = JSON.stringify(normalizeCrewProfileJsonInput(certifications));
+    if (availability !== undefined) updateData.availability = JSON.stringify(normalizeCrewProfileJsonInput(availability));
     if (social_media_links !== undefined) {
-      const sanitizedLinks = Array.isArray(social_media_links)
-        ? social_media_links
-          .filter(item => item && item.platform && item.url)
-          .map(item => ({ platform: item.platform, url: item.url }))
-        : social_media_links;
-      updateData.social_media_links = JSON.stringify(sanitizedLinks);
+      updateData.social_media_links = JSON.stringify(normalizeCrewSocialLinks(social_media_links));
     }
 
     await crewMember.update(updateData);
+    const savedFileTypes = await saveCrewProfileFiles(crew_member_id, req.files, req.body);
+    const savedLinkTypes = portfolio_links !== undefined
+      ? await saveCrewPortfolioLinks(crew_member_id, normalizeCrewPortfolioLinks(portfolio_links))
+      : [];
 
     const updatedMember = await getCrewMemberWithActiveFiles(crew_member_id);
     const updatedMemberJson = updatedMember.toJSON();
@@ -5368,7 +5474,7 @@ exports.saveCrewProfileCompletion = async (req, res) => {
       message: "Profile updated successfully",
       data: {
         crew_member_id,
-        updated_fields: Object.keys(updateData),
+        updated_fields: [...Object.keys(updateData), ...savedFileTypes, ...savedLinkTypes],
         profile_completion: profileCompletion,
       },
     });
@@ -5381,7 +5487,8 @@ exports.saveCrewProfileCompletion = async (req, res) => {
       data: null,
     });
   }
-};
+  }
+];
 
 
 exports.deleteCrewMember = async (req, res) => {
