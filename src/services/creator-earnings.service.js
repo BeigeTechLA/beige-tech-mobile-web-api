@@ -93,12 +93,20 @@ function buildEarningStatusLabel(status) {
     return labels[status] || 'Pending';
 }
 
-function buildPaymentBreakdown(earning, advances = []) {
+function buildPaymentBreakdown(earning, advances = [], paymentHistory = []) {
     const totalCompensation = toMoney(earning.net_earning_amount || earning.gross_amount || 0);
     const processedAdvanceTotal = toMoney(
         advances.filter(a => a.status === 'processed').reduce((sum, a) => sum + Number(a.amount || 0), 0)
     );
-    const paidTotal = earning.status === 'paid' ? totalCompensation : processedAdvanceTotal;
+    const paymentHistoryTotal = toMoney(
+        paymentHistory.reduce((sum, payment) => sum + Number(payment.amount || 0), 0)
+    );
+    const rawPaidTotal = paymentHistory.length
+        ? paymentHistoryTotal
+        : earning.status === 'paid'
+            ? totalCompensation
+            : processedAdvanceTotal;
+    const paidTotal = toMoney(Math.min(Math.max(rawPaidTotal, 0), totalCompensation));
     const remainingBalance = toMoney(Math.max(totalCompensation - paidTotal, 0));
     const paymentPercent = totalCompensation > 0
         ? Math.round((paidTotal / totalCompensation) * 100)
@@ -181,12 +189,12 @@ function buildCompensationBreakdown(compensationItems = [], grossAmount = 0) {
         }));
 }
 
-function buildEarningRow(earning) {
+function buildEarningRow(earning, paymentHistory = []) {
     const booking = earning.booking || {};
     const assignedCrew = (booking.assigned_crews || [])[0] || null;
     const advances = earning.advances || [];
     const compensationItems = earning.compensation_items || [];
-    const paymentBreakdown = buildPaymentBreakdown(earning, advances);
+    const paymentBreakdown = buildPaymentBreakdown(earning, advances, paymentHistory);
     const status = getEarningDisplayStatus(earning, assignedCrew, paymentBreakdown);
 
     return {
@@ -477,7 +485,6 @@ async function getCreatorEarningsDashboard(creatorId, filters = {}) {
     });
 
     const plainEarnings = earnings.map(toPlain);
-    const rows = plainEarnings.map(buildEarningRow).filter(row => matchesDisplayFilters(row, filters));
     const paymentHistoryEntries = await Promise.all(plainEarnings.map(getCpPaymentHistoryForEarning));
     const paymentHistoryByEarningId = new Map(
         plainEarnings.map((earning, index) => [
@@ -485,6 +492,9 @@ async function getCreatorEarningsDashboard(creatorId, filters = {}) {
             paymentHistoryEntries[index] || []
         ])
     );
+    const rows = plainEarnings
+        .map((earning, index) => buildEarningRow(earning, paymentHistoryEntries[index] || []))
+        .filter(row => matchesDisplayFilters(row, filters));
 
     const upcomingEarnings = toMoney(
         rows
@@ -582,10 +592,10 @@ async function getCreatorEarningDetails(creatorEarningId, creatorId) {
     const advances = plain.advances || [];
     const compensationItems = plain.compensation_items || [];
     const timelineEvents = plain.timeline_events || [];
-    const paymentBreakdown = buildPaymentBreakdown(plain, advances);
-    const status = getEarningDisplayStatus(plain, assignedCrew, paymentBreakdown);
-    const row = buildEarningRow(plain);
     const paymentHistory = await getCpPaymentHistoryForEarning(plain);
+    const paymentBreakdown = buildPaymentBreakdown(plain, advances, paymentHistory);
+    const status = getEarningDisplayStatus(plain, assignedCrew, paymentBreakdown);
+    const row = buildEarningRow(plain, paymentHistory);
     const latestProof = paymentHistory.find(item => item.receipt_url || item.receipt_download_url) || null;
 
     return {
@@ -792,7 +802,9 @@ async function getCreatorEarningsList(creatorId, filters = {}) {
         ]
     });
 
-    const allRows = earnings.map(earning => buildEarningRow(toPlain(earning)));
+    const plainEarnings = earnings.map(toPlain);
+    const paymentHistoryEntries = await Promise.all(plainEarnings.map(getCpPaymentHistoryForEarning));
+    const allRows = plainEarnings.map((earning, index) => buildEarningRow(earning, paymentHistoryEntries[index] || []));
     const filteredRows = allRows.filter(row => matchesDisplayFilters(row, filters));
     const rows = filteredRows.slice(offset, offset + limit);
 
