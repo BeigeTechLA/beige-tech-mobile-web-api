@@ -5141,19 +5141,16 @@ exports.getCrewMemberById = async (req, res) => {
     }
 };
 
-const CREW_PROFILE_REQUIRED_FIELDS = ['first_name', 'last_name', 'email', 'location'];
-const CREW_PROFILE_OPTIONAL_FIELDS = ['primary_role', 'hourly_rate', 'bio'];
-const CREW_PROFILE_FILE_TYPES = ['profile_photo', 'resume', 'portfolio', 'certifications', 'recent_work'];
+const CREW_PROFILE_FILE_TYPES = ['profile_photo', 'resume', 'portfolio', 'certifications', 'recent_work', 'link', 'portfolio_link'];
 
-const parseJsonArray = (value) => {
-  if (!value) return [];
-  if (Array.isArray(value)) return value;
+const parseJsonValue = (value) => {
+  if (!value) return value;
+  if (typeof value !== 'string') return value;
 
   try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed : [];
+    return JSON.parse(value);
   } catch (error) {
-    return [];
+    return value;
   }
 };
 
@@ -5161,40 +5158,89 @@ const isCrewProfileFieldFilled = (value) => (
   value !== null && value !== undefined && !(typeof value === 'string' && value.trim() === '')
 );
 
+const isCrewProfileJsonFilled = (value) => {
+  const parsedValue = parseJsonValue(value);
+
+  if (Array.isArray(parsedValue)) return parsedValue.length > 0;
+  if (parsedValue && typeof parsedValue === 'object') return Object.keys(parsedValue).length > 0;
+
+  return isCrewProfileFieldFilled(parsedValue);
+};
+
+const hasCrewProfileFile = (files, fileTypes) => {
+  const types = Array.isArray(fileTypes) ? fileTypes : [fileTypes];
+  return files.some(file => types.includes(file.file_type));
+};
+
+const CREW_PROFILE_STEP_FIELDS = [
+  {
+    key: 'step_1',
+    fields: [
+      { key: 'first_name', required: true, check: (m) => isCrewProfileFieldFilled(m.first_name) },
+      { key: 'last_name', required: true, check: (m) => isCrewProfileFieldFilled(m.last_name) },
+      { key: 'email', required: true, check: (m) => isCrewProfileFieldFilled(m.email) },
+      { key: 'phone_number', required: true, check: (m) => isCrewProfileFieldFilled(m.phone_number) },
+      { key: 'location', required: true, check: (m) => isCrewProfileFieldFilled(m.location) },
+      { key: 'working_distance', required: true, check: (m) => isCrewProfileFieldFilled(m.working_distance) },
+      { key: 'profile_photo', required: true, check: (_m, files) => hasCrewProfileFile(files, 'profile_photo') }
+    ]
+  },
+  {
+    key: 'step_2',
+    fields: [
+      { key: 'primary_role', required: true, check: (m) => isCrewProfileJsonFilled(m.primary_role) },
+      { key: 'years_of_experience', required: true, check: (m) => isCrewProfileFieldFilled(m.years_of_experience) },
+      { key: 'hourly_rate', required: true, check: (m) => isCrewProfileFieldFilled(m.hourly_rate) },
+      { key: 'skills', required: true, check: (m) => isCrewProfileJsonFilled(m.skills) },
+      { key: 'equipment_ownership', required: true, check: (m) => isCrewProfileJsonFilled(m.equipment_ownership) },
+      { key: 'bio', required: false, check: (m) => isCrewProfileFieldFilled(m.bio) }
+    ]
+  },
+  {
+    key: 'step_3',
+    fields: [
+      { key: 'social_media_links', required: true, check: (m) => isCrewProfileJsonFilled(m.social_media_links) },
+      { key: 'recent_work', required: true, check: (_m, files) => hasCrewProfileFile(files, 'recent_work') },
+      { key: 'resume', required: false, check: (_m, files) => hasCrewProfileFile(files, 'resume') },
+      { key: 'portfolio', required: false, check: (_m, files) => hasCrewProfileFile(files, 'portfolio') },
+      {
+        key: 'certifications',
+        required: false,
+        check: (m, files) => isCrewProfileJsonFilled(m.certifications) || hasCrewProfileFile(files, 'certifications')
+      },
+      { key: 'portfolio_links', required: false, check: (_m, files) => hasCrewProfileFile(files, ['link', 'portfolio_link']) }
+    ]
+  }
+];
+
 const calculateCrewProfileCompletion = (member, files = []) => {
   const memberData = member && typeof member.toJSON === 'function' ? member.toJSON() : member;
   const activeFiles = Array.isArray(files) ? files : [];
-  const requiredFilled = CREW_PROFILE_REQUIRED_FIELDS.filter(field =>
-    isCrewProfileFieldFilled(memberData[field])
+  const allFields = CREW_PROFILE_STEP_FIELDS.flatMap(step => step.fields);
+  const requiredFields = allFields.filter(field => field.required);
+  const requiredFilled = requiredFields.filter(field => field.check(memberData, activeFiles)).length;
+  const totalFilled = allFields.filter(field => field.check(memberData, activeFiles)).length;
+  const completedSteps = CREW_PROFILE_STEP_FIELDS.filter(step =>
+    step.fields
+      .filter(field => field.required)
+      .every(field => field.check(memberData, activeFiles))
   ).length;
-  const optionalFilled = CREW_PROFILE_OPTIONAL_FIELDS.filter(field =>
-    isCrewProfileFieldFilled(memberData[field])
-  ).length;
-  const totalFields = CREW_PROFILE_REQUIRED_FIELDS.length + CREW_PROFILE_OPTIONAL_FIELDS.length;
-  const totalFilled = requiredFilled + optionalFilled;
-
-  const completionNeeds = [
-    { key: 'skills', check: (m) => parseJsonArray(m.skills).length > 0 },
-    { key: 'social_links', check: (m) => parseJsonArray(m.social_media_links).length > 0 },
-    { key: 'showcase_work', check: (_m, fileList) => fileList.some(f => f.file_type === 'recent_work') }
-  ];
-  const completionNeedsDone = completionNeeds.filter(need => need.check(memberData, activeFiles)).length;
 
   return {
     crew_member_id: memberData.crew_member_id,
-    overall_progress_percent: Math.round((totalFilled / totalFields) * 100),
-    fields_complete: `${totalFilled}/${totalFields}`,
+    overall_progress_percent: Math.round((totalFilled / allFields.length) * 100),
+    fields_complete: `${totalFilled}/${allFields.length}`,
     required_fields: {
       complete: requiredFilled,
-      total: CREW_PROFILE_REQUIRED_FIELDS.length
+      total: requiredFields.length
     },
     total_fields: {
       complete: totalFilled,
-      total: totalFields
+      total: allFields.length
     },
     completion_needs: {
-      complete: completionNeedsDone,
-      total: completionNeeds.length
+      complete: completedSteps,
+      total: CREW_PROFILE_STEP_FIELDS.length
     }
   };
 };
@@ -5306,7 +5352,7 @@ exports.saveCrewProfileCompletion = async (req, res) => {
         ? social_media_links
           .filter(item => item && item.platform && item.url)
           .map(item => ({ platform: item.platform, url: item.url }))
-        : [];
+        : social_media_links;
       updateData.social_media_links = JSON.stringify(sanitizedLinks);
     }
 
