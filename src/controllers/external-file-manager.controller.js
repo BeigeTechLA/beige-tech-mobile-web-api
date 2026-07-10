@@ -101,6 +101,27 @@ const withPublicUrl = (result, req) => {
   };
 };
 
+const withPublicBatchUrls = (result, req) => {
+  const files = Array.isArray(result?.data?.files) ? result.data.files : [];
+  return {
+    ...result,
+    data: {
+      ...(result?.data || {}),
+      files: files.map((file) => {
+        const currentUrl = file?.data?.url;
+        if (typeof currentUrl !== 'string') return file;
+        return {
+          ...file,
+          data: {
+            ...(file.data || {}),
+            url: rewriteExternalServiceUrl(currentUrl, req),
+          },
+        };
+      }),
+    },
+  };
+};
+
 const getRequestUserId = (req) => req.userId || req.user?.userId || null;
 const getRequestUserRole = (req) => req.userRole || req.user?.userRole || null;
 const getNormalizedRequestUserRole = (req) => String(getRequestUserRole(req) || '').trim().toLowerCase();
@@ -4853,6 +4874,75 @@ exports.getSharedViewUrl = async (req, res) => {
       body: JSON.stringify({ filepath: normalizedFilepath }),
     });
     return res.status(200).json(withPublicUrl(result, req));
+  } catch (error) {
+    if (isMissingSharedResourceError(error)) {
+      return sendSharedResourceUnavailable(res);
+    }
+    const statusCode = String(error?.message || '').toLowerCase().includes('outside the shared scope') ? 403 : 401;
+    return res.status(statusCode).json({ success: false, message: error.message || 'Invalid or expired share access token' });
+  }
+};
+
+exports.getSharedViewUrlsBatch = async (req, res) => {
+  try {
+    const shareToken = String(req.params.shareToken || '').trim();
+    const accessToken = extractBearerToken(req);
+    const requestedFilepaths = Array.isArray(req.body.filepaths) ? req.body.filepaths : [];
+    if (!shareToken || !accessToken) {
+      return res.status(401).json({ success: false, message: 'Share token and access token are required' });
+    }
+    const claims = verifyShareAccessToken(accessToken);
+    if (String(claims.shareToken) !== shareToken) {
+      return res.status(403).json({ success: false, message: 'Access token does not match share link' });
+    }
+
+    const share = await getShareByToken(shareToken);
+    if (!share) return sendSharedResourceUnavailable(res);
+    if (
+      String(share.access_mode || 'email_only') !== 'anyone_with_link' &&
+      normalizeEmailAddress(share.shared_with_email) !== normalizeEmailAddress(claims.email)
+    ) {
+      return res.status(403).json({ success: false, message: 'Access denied for this email' });
+    }
+
+    const filepaths = Array.from(
+      new Set(requestedFilepaths.map((item) => normalizePathForAccess(item)).filter(Boolean))
+    ).slice(0, 50);
+
+    if (!filepaths.length) {
+      return res.status(400).json({ success: false, message: 'filepaths array is required' });
+    }
+
+    if (share.resource_type === 'file') {
+      const sharedFilepath = normalizePathForAccess(share.filepath);
+      const allowedFilepaths = filepaths.filter((filepath) => filepath === sharedFilepath);
+      if (!allowedFilepaths.length) {
+        return res.status(403).json({ success: false, message: 'Requested path is outside the shared scope' });
+      }
+      const result = await proxyRequest('/file-view-urls', {
+        method: 'POST',
+        body: JSON.stringify({ filepaths: allowedFilepaths }),
+      });
+      return res.status(200).json(withPublicBatchUrls(result, req));
+    }
+
+    const requestedPhase = normalizeWorkspacePhase(req.body.phase, null);
+    const requestedRelativePath = normalizePathForAccess(req.body.path || '');
+
+    const allowedFilepaths = [];
+    for (const filepath of filepaths) {
+      const extractedFromFilepath = extractPhaseAndRelativePath(filepath, requestedPhase);
+      const scopePhase = extractedFromFilepath.phase || requestedPhase;
+      const scopePath = extractedFromFilepath.relativePath || requestedRelativePath;
+      ensureSharedScopeAccess(share, scopePhase, scopePath);
+      allowedFilepaths.push(filepath);
+    }
+
+    const result = await proxyRequest('/file-view-urls', {
+      method: 'POST',
+      body: JSON.stringify({ filepaths: allowedFilepaths }),
+    });
+    return res.status(200).json(withPublicBatchUrls(result, req));
   } catch (error) {
     if (isMissingSharedResourceError(error)) {
       return sendSharedResourceUnavailable(res);
