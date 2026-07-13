@@ -77,5 +77,9 @@ router.post('/share/verify-otp', externalFileManagerController.verifyShareOtp);
 router.get('/share/:shareToken/content', externalFileManagerController.getSharedContent);
 router.get('/share/:shareToken/view-url', externalFileManagerController.getSharedViewUrl);
 router.get('/share/:shareToken/download-url', externalFileManagerController.getSharedDownloadUrl);
+router.post('/share/:shareToken/upload-policy', externalFileManagerController.getSharedUploadPolicy);
+router.post('/share/:shareToken/upload-policies/batch', externalFileManagerController.getSharedUploadPoliciesBatch);
+router.post('/share/:shareToken/file-uploaded', externalFileManagerController.notifySharedFileUploaded);
+router.post('/share/:shareToken/files-uploaded/batch', externalFileManagerController.notifySharedFilesUploadedBatch);
 
 module.exports = router;

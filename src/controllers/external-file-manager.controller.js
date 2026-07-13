@@ -1381,6 +1381,10 @@ const ensureFileShareTable = async () => {
     ALTER TABLE file_manager_shares
     ADD COLUMN IF NOT EXISTS share_message TEXT NULL AFTER access_mode
   `).catch(() => null);
+  await db.sequelize.query(`
+    ALTER TABLE file_manager_shares
+    ADD COLUMN IF NOT EXISTS permission ENUM('view_download', 'upload_download') NOT NULL DEFAULT 'view_download' AFTER access_mode
+  `).catch(() => null);
 };
 
 const ensureFileShareOtpTable = async () => {
@@ -4327,6 +4331,67 @@ const ensureSharedScopeAccess = (share, requestedPhase, requestedPath) => {
   return true;
 };
 
+const normalizeSharePermission = (value, accessMode = 'email_only') => {
+  const normalizedAccessMode = String(accessMode || 'email_only').trim().toLowerCase();
+  if (normalizedAccessMode === 'anyone_with_link') return 'view_download';
+  return String(value || '').trim().toLowerCase() === 'upload_download'
+    ? 'upload_download'
+    : 'view_download';
+};
+
+const ensureSharedUploadAccess = (share) => {
+  if (String(share?.access_mode || 'email_only') === 'anyone_with_link') {
+    const error = new Error('Upload access is only available for verified email shares');
+    error.status = 403;
+    throw error;
+  }
+
+  if (normalizeSharePermission(share?.permission, share?.access_mode) !== 'upload_download') {
+    const error = new Error('This share does not allow uploads');
+    error.status = 403;
+    throw error;
+  }
+};
+
+const getSharedWorkspaceRootPath = async (externalId) => {
+  const result = await proxyRequest(`/workspace/${encodeURIComponent(String(externalId || ''))}`);
+  return normalizePathForAccess(result?.data?.workspace?.rootPath || result?.data?.workspace?.fullPath || externalId);
+};
+
+const normalizeSharedUploadPhase = (value) => {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized || normalized === 'root') return null;
+  return normalizeWorkspacePhase(normalized, null);
+};
+
+const normalizeSharedStorageFilepath = (value) =>
+  normalizePathForAccess(value).replace(/^Website_Shoots_Flow\//i, '');
+
+const resolveSharedUploadFilepath = async (share, requestedPhase, requestedPath, fileName) => {
+  const safeFileName = sanitizeFolderName(fileName, 'file');
+  if (!safeFileName) {
+    const error = new Error('fileName is required');
+    error.status = 400;
+    throw error;
+  }
+
+  if (String(share?.resource_type || '').toLowerCase() === 'file') {
+    const error = new Error('Uploads are not supported for single-file shares');
+    error.status = 400;
+    throw error;
+  }
+
+  const phaseToUse = normalizeSharedUploadPhase(requestedPhase) || normalizeSharedUploadPhase(share?.phase);
+  const pathToUse = normalizePathForAccess(requestedPath || share?.path || '');
+  ensureSharedScopeAccess(share, phaseToUse, pathToUse);
+
+  const phaseFolder = phaseToUse === 'pre' ? 'pre-production' : phaseToUse === 'post' ? 'post-production' : '';
+  const workspaceRootPath = await getSharedWorkspaceRootPath(share.external_id);
+  return normalizePathForAccess(
+    [workspaceRootPath, phaseFolder, pathToUse, safeFileName].filter(Boolean).join('/')
+  );
+};
+
 exports.createShare = async (req, res) => {
   try {
     await ensureFileShareTable();
@@ -4338,6 +4403,7 @@ exports.createShare = async (req, res) => {
     const email = normalizeEmailAddress(req.body.email);
     const accessMode = String(req.body.accessMode || 'email_only').trim().toLowerCase();
     const normalizedAccessMode = accessMode === 'anyone_with_link' ? 'anyone_with_link' : 'email_only';
+    const permission = normalizeSharePermission(req.body.permission, normalizedAccessMode);
     const effectiveEmail = normalizedAccessMode === 'anyone_with_link' ? 'anyone@link.local' : email;
     const shareMessage = String(req.body.message || '').trim().slice(0, 2000) || null;
 
@@ -4360,8 +4426,8 @@ exports.createShare = async (req, res) => {
     const shareToken = generateShareToken();
     await db.sequelize.query(
       `INSERT INTO file_manager_shares
-      (share_token, resource_type, external_id, phase, path, filepath, shared_with_email, access_mode, share_message, created_by_user_id, is_active)
-      VALUES (:shareToken, :resourceType, :externalId, :phase, :path, :filepath, :email, :accessMode, :shareMessage, :createdBy, 1)`,
+      (share_token, resource_type, external_id, phase, path, filepath, shared_with_email, access_mode, permission, share_message, created_by_user_id, is_active)
+      VALUES (:shareToken, :resourceType, :externalId, :phase, :path, :filepath, :email, :accessMode, :permission, :shareMessage, :createdBy, 1)`,
       {
         replacements: {
           shareToken,
@@ -4372,6 +4438,7 @@ exports.createShare = async (req, res) => {
           filepath,
           email: effectiveEmail,
           accessMode: normalizedAccessMode,
+          permission,
           shareMessage,
           createdBy: getRequestUserId(req) || null,
         },
@@ -4391,6 +4458,7 @@ exports.createShare = async (req, res) => {
           resource_type: resourceType,
           external_id: externalId,
           access_mode: normalizedAccessMode,
+          permission,
         },
       });
 
@@ -4402,7 +4470,7 @@ exports.createShare = async (req, res) => {
       }
     }
 
-    return res.status(201).json({ success: true, data: { shareToken, shareUrl, message: shareMessage } });
+    return res.status(201).json({ success: true, data: { shareToken, shareUrl, message: shareMessage, permission } });
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || { success: false, message: error.message });
   }
@@ -4493,7 +4561,14 @@ exports.verifyShareOtp = async (req, res) => {
     });
 
     const accessToken = signShareAccessToken({ shareToken, email });
-    return res.status(200).json({ success: true, data: { accessToken } });
+    return res.status(200).json({
+      success: true,
+      data: {
+        accessToken,
+        permission: normalizeSharePermission(share.permission, share.access_mode),
+        accessMode: share.access_mode || 'email_only',
+      },
+    });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message || 'Failed to verify OTP' });
   }
@@ -4533,6 +4608,8 @@ exports.getSharedContent = async (req, res) => {
             type: 'file',
             file: { path: share.filepath, name: String(share.filepath || '').split('/').pop() || '' },
             view: withPublicUrl(viewResult, req)?.data || null,
+            permission: normalizeSharePermission(share.permission, share.access_mode),
+            accessMode: share.access_mode || 'email_only',
           },
         });
       } catch (error) {
@@ -4571,6 +4648,8 @@ exports.getSharedContent = async (req, res) => {
         path: pathToUse,
         rootPhase: share.phase,
         rootPath: share.path,
+        permission: normalizeSharePermission(share.permission, share.access_mode),
+        accessMode: share.access_mode || 'email_only',
         ...listing.data,
       },
     });
@@ -4603,7 +4682,7 @@ exports.listShares = async (req, res) => {
     }
 
     const [rows] = await db.sequelize.query(
-      `SELECT share_id, share_token, resource_type, shared_with_email, access_mode, share_message, phase, path, filepath, created_at
+      `SELECT share_id, share_token, resource_type, shared_with_email, access_mode, permission, share_message, phase, path, filepath, created_at
        FROM file_manager_shares
        WHERE is_active = 1
          AND resource_type = :resourceType
@@ -4625,6 +4704,7 @@ exports.listShares = async (req, res) => {
           shareToken: row.share_token,
           email: row.shared_with_email,
           accessMode: row.access_mode || 'email_only',
+          permission: normalizeSharePermission(row.permission, row.access_mode),
           message: row.share_message || null,
           resourceType: row.resource_type,
           phase: row.phase,
@@ -4859,5 +4939,318 @@ exports.getSharedViewUrl = async (req, res) => {
     }
     const statusCode = String(error?.message || '').toLowerCase().includes('outside the shared scope') ? 403 : 401;
     return res.status(statusCode).json({ success: false, message: error.message || 'Invalid or expired share access token' });
+  }
+};
+
+exports.getSharedUploadPolicy = async (req, res) => {
+  try {
+    const shareToken = String(req.params.shareToken || '').trim();
+    const accessToken = extractBearerToken(req);
+    const fileName = String(req.body.fileName || '').trim();
+    if (!shareToken || !accessToken) {
+      return res.status(401).json({ success: false, message: 'Share token and access token are required' });
+    }
+
+    const claims = verifyShareAccessToken(accessToken);
+    if (String(claims.shareToken) !== shareToken) {
+      return res.status(403).json({ success: false, message: 'Access token does not match share link' });
+    }
+
+    const share = await getShareByToken(shareToken);
+    if (!share) return sendSharedResourceUnavailable(res);
+    if (normalizeEmailAddress(share.shared_with_email) !== normalizeEmailAddress(claims.email)) {
+      return res.status(403).json({ success: false, message: 'Access denied for this email' });
+    }
+    ensureSharedUploadAccess(share);
+
+    const filepath = await resolveSharedUploadFilepath(share, req.body.phase, req.body.path, fileName);
+    const result = await proxyRequest('/upload-policy', {
+      method: 'POST',
+      body: JSON.stringify({
+        filepath,
+        fileContentType: req.body.fileContentType,
+        fileSize: req.body.fileSize,
+        userId: null,
+      }),
+    });
+
+    await recordShareAccessLog(req, share, claims.email, 'upload_policy', accessToken);
+    return res.status(200).json({
+      ...result,
+      data: {
+        ...(result?.data || {}),
+        filepath,
+        filePath: filepath,
+        storageFilePath: result?.data?.filePath || null,
+      },
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to create shared upload policy',
+    });
+  }
+};
+
+exports.getSharedUploadPoliciesBatch = async (req, res) => {
+  try {
+    const shareToken = String(req.params.shareToken || '').trim();
+    const accessToken = extractBearerToken(req);
+    const items = Array.isArray(req.body.items) ? req.body.items : [];
+    if (!shareToken || !accessToken) {
+      return res.status(401).json({ success: false, message: 'Share token and access token are required' });
+    }
+    if (!items.length) {
+      return res.status(400).json({ success: false, message: 'items array is required' });
+    }
+
+    const claims = verifyShareAccessToken(accessToken);
+    if (String(claims.shareToken) !== shareToken) {
+      return res.status(403).json({ success: false, message: 'Access token does not match share link' });
+    }
+
+    const share = await getShareByToken(shareToken);
+    if (!share) return sendSharedResourceUnavailable(res);
+    if (normalizeEmailAddress(share.shared_with_email) !== normalizeEmailAddress(claims.email)) {
+      return res.status(403).json({ success: false, message: 'Access denied for this email' });
+    }
+    ensureSharedUploadAccess(share);
+
+    const resolvedItems = [];
+    for (const item of items.slice(0, 500)) {
+      try {
+        const filepath = await resolveSharedUploadFilepath(
+          share,
+          item?.phase ?? req.body.phase,
+          item?.path ?? req.body.path,
+          item?.fileName || String(item?.filepath || '').split('/').pop() || ''
+        );
+        resolvedItems.push({
+          filepath,
+          fileContentType: item?.fileContentType,
+          fileSize: item?.fileSize,
+          fileName: item?.fileName || filepath.split('/').pop() || '',
+        });
+      } catch (error) {
+        resolvedItems.push({
+          filepath: String(item?.filepath || item?.fileName || ''),
+          fileContentType: item?.fileContentType,
+          fileSize: item?.fileSize,
+          fileName: item?.fileName || '',
+          error: error?.message || 'Invalid upload target',
+        });
+      }
+    }
+
+    const validItems = resolvedItems.filter((item) => !item.error);
+    const invalidItems = resolvedItems.filter((item) => item.error);
+    const result = validItems.length
+      ? await proxyRequest('/upload-policies/batch', {
+          method: 'POST',
+          body: JSON.stringify({
+            userId: null,
+            items: validItems.map((item) => ({
+              filepath: item.filepath,
+              fileContentType: item.fileContentType,
+              fileSize: item.fileSize,
+              userId: null,
+            })),
+          }),
+        })
+      : { success: true, data: { items: [] } };
+
+    const proxyItems = Array.isArray(result?.data?.items) ? result.data.items : [];
+    const proxyItemsByPath = new Map(proxyItems.map((item) => [normalizeSharedStorageFilepath(item.filepath), item]));
+    const responseItems = [
+      ...validItems.map((item) => {
+        const proxyItem = proxyItemsByPath.get(normalizeSharedStorageFilepath(item.filepath));
+        if (!proxyItem?.success || !proxyItem?.data?.url || !proxyItem?.data?.fields) {
+          return {
+            filepath: item.filepath,
+            success: false,
+            error: proxyItem?.error || 'Failed to create upload policy',
+            code: proxyItem?.code || 500,
+          };
+        }
+        return {
+          filepath: item.filepath,
+          success: true,
+          data: {
+            ...proxyItem.data,
+            filepath: item.filepath,
+            filePath: item.filepath,
+            storageFilePath: proxyItem.data.filePath || null,
+          },
+        };
+      }),
+      ...invalidItems.map((item) => ({
+        filepath: item.filepath,
+        success: false,
+        error: item.error,
+        code: 400,
+      })),
+    ];
+
+    await recordShareAccessLog(req, share, claims.email, 'upload_policy', accessToken);
+    return res.status(200).json({
+      success: true,
+      data: {
+        total: responseItems.length,
+        successCount: responseItems.filter((item) => item.success).length,
+        failureCount: responseItems.filter((item) => !item.success).length,
+        items: responseItems,
+      },
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to create shared upload policies',
+    });
+  }
+};
+
+exports.notifySharedFileUploaded = async (req, res) => {
+  try {
+    const shareToken = String(req.params.shareToken || '').trim();
+    const accessToken = extractBearerToken(req);
+    const filepath = normalizeSharedStorageFilepath(req.body.filepath || req.body.filePath || '');
+    if (!shareToken || !accessToken) {
+      return res.status(401).json({ success: false, message: 'Share token and access token are required' });
+    }
+
+    const claims = verifyShareAccessToken(accessToken);
+    if (String(claims.shareToken) !== shareToken) {
+      return res.status(403).json({ success: false, message: 'Access token does not match share link' });
+    }
+
+    const share = await getShareByToken(shareToken);
+    if (!share) return sendSharedResourceUnavailable(res);
+    if (normalizeEmailAddress(share.shared_with_email) !== normalizeEmailAddress(claims.email)) {
+      return res.status(403).json({ success: false, message: 'Access denied for this email' });
+    }
+    ensureSharedUploadAccess(share);
+    const workspaceRootPath = await getSharedWorkspaceRootPath(share.external_id);
+    if (!isPathWithin(workspaceRootPath, filepath)) {
+      return res.status(403).json({ success: false, message: 'Uploaded file is outside the shared workspace' });
+    }
+
+    const requestedPhase = normalizeSharedUploadPhase(req.body.phase);
+    const requestedRelativePath = normalizePathForAccess(req.body.path || '');
+    const extractedFromFilepath = extractPhaseAndRelativePath(filepath, requestedPhase);
+    ensureSharedScopeAccess(
+      share,
+      extractedFromFilepath.phase || requestedPhase,
+      extractedFromFilepath.relativePath || requestedRelativePath
+    );
+
+    const result = await proxyRequest('/file-uploaded', {
+      method: 'POST',
+      body: JSON.stringify({
+        filepath,
+        fileContentType: req.body.fileContentType,
+        fileSize: req.body.fileSize,
+        fileName: req.body.fileName,
+        userId: null,
+        authorName: claims.email || 'Shared upload',
+      }),
+    });
+
+    await recordShareAccessLog(req, share, claims.email, 'upload', accessToken);
+    return res.status(200).json(result);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to record shared upload',
+    });
+  }
+};
+
+exports.notifySharedFilesUploadedBatch = async (req, res) => {
+  try {
+    const shareToken = String(req.params.shareToken || '').trim();
+    const accessToken = extractBearerToken(req);
+    const items = Array.isArray(req.body.items) ? req.body.items : [];
+    if (!shareToken || !accessToken) {
+      return res.status(401).json({ success: false, message: 'Share token and access token are required' });
+    }
+    if (!items.length) {
+      return res.status(400).json({ success: false, message: 'items array is required' });
+    }
+
+    const claims = verifyShareAccessToken(accessToken);
+    if (String(claims.shareToken) !== shareToken) {
+      return res.status(403).json({ success: false, message: 'Access token does not match share link' });
+    }
+
+    const share = await getShareByToken(shareToken);
+    if (!share) return sendSharedResourceUnavailable(res);
+    if (normalizeEmailAddress(share.shared_with_email) !== normalizeEmailAddress(claims.email)) {
+      return res.status(403).json({ success: false, message: 'Access denied for this email' });
+    }
+    ensureSharedUploadAccess(share);
+
+    const workspaceRootPath = await getSharedWorkspaceRootPath(share.external_id);
+    const validItems = [];
+    const invalidItems = [];
+    for (const item of items.slice(0, 500)) {
+      const filepath = normalizeSharedStorageFilepath(item?.filepath || item?.filePath || '');
+      try {
+        if (!isPathWithin(workspaceRootPath, filepath)) {
+          throw new Error('Uploaded file is outside the shared workspace');
+        }
+        const requestedPhase = normalizeSharedUploadPhase(item?.phase ?? req.body.phase);
+        const requestedRelativePath = normalizePathForAccess((item?.path ?? req.body.path) || '');
+        const extractedFromFilepath = extractPhaseAndRelativePath(filepath, requestedPhase);
+        ensureSharedScopeAccess(
+          share,
+          extractedFromFilepath.phase || requestedPhase,
+          extractedFromFilepath.relativePath || requestedRelativePath
+        );
+        validItems.push({
+          filepath,
+          fileContentType: item?.fileContentType,
+          fileSize: item?.fileSize,
+          fileName: item?.fileName || filepath.split('/').pop() || '',
+          authorName: claims.email || 'Shared upload',
+          userId: null,
+        });
+      } catch (error) {
+        invalidItems.push({
+          filepath,
+          success: false,
+          error: error?.message || 'Invalid uploaded file',
+          code: 400,
+        });
+      }
+    }
+
+    const result = validItems.length
+      ? await proxyRequest('/files-uploaded/batch', {
+          method: 'POST',
+          body: JSON.stringify({
+            userId: null,
+            authorName: claims.email || 'Shared upload',
+            items: validItems,
+          }),
+        })
+      : { success: true, data: { items: [] } };
+
+    const proxyItems = Array.isArray(result?.data?.items) ? result.data.items : [];
+    const responseItems = [...proxyItems, ...invalidItems];
+    await recordShareAccessLog(req, share, claims.email, 'upload', accessToken);
+    return res.status(200).json({
+      success: true,
+      data: {
+        total: responseItems.length,
+        successCount: responseItems.filter((item) => item.success).length,
+        failureCount: responseItems.filter((item) => !item.success).length,
+        items: responseItems,
+      },
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to record shared uploads',
+    });
   }
 };
