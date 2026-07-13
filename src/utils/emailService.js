@@ -90,7 +90,8 @@ const {
   CLIENT_REQUESTED_REVISIONS_ADMIN_TEMPLATE_ID,
   FILES_APPROVED_INTERNAL_TEMPLATE_ID,
   REVISIONS_COMMENT_ADDED_TEMPLATE_ID,
-  NEW_VERSIONS_UPLOADED_CLIENT_TEMPLATE_ID
+  NEW_VERSIONS_UPLOADED_CLIENT_TEMPLATE_ID,
+  WELCOME_USER_TEMPLATE_ID
 } = require('../config/sendgridTemplates');
 
 const formatDate = (value) => {
@@ -822,6 +823,73 @@ const sendCPSignupWelcomeEmail = async (userData) => {
   } catch (error) {
     console.error(
       'Error sending cp signup welcome email via SendGrid:',
+      error?.response?.body || error.message
+    );
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Send internal user welcome email via SendGrid dynamic template
+ * Trigger: successful internal credential creation
+ * @param {Object} userData - User and credential details
+ */
+const sendWelcomeUserEmail = async (userData) => {
+  try {
+    if (!process.env.SENDGRID_API_KEY) {
+      console.error('SendGrid API key missing. Skipping internal user welcome email.');
+      return { success: false, error: 'SENDGRID_API_KEY is not configured' };
+    }
+
+    if (!WELCOME_USER_TEMPLATE_ID) {
+      return { success: false, error: 'WELCOME_USER_TEMPLATE_ID is not configured' };
+    }
+
+    if (!userData?.email) {
+      return { success: false, error: 'User email is required' };
+    }
+
+    if (!userData?.password) {
+      return { success: false, error: 'User password is required' };
+    }
+
+    const fromEmail = getSendgridFromAddress();
+    if (!fromEmail) {
+      return { success: false, error: 'Sender email not configured' };
+    }
+
+    const frontendUrl = String(process.env.FRONTEND_URL || '').replace(/\/+$/, '');
+    const dashboardLink =
+      userData.dashboard_link ||
+      userData.dashboardLink ||
+      (frontendUrl ? `${frontendUrl}/login` : '');
+
+    const [response] = await sgMail.send({
+      to: userData.email,
+      from: {
+        email: fromEmail,
+        name: getSendgridFromName()
+      },
+      subject: 'Welcome to Beige - Your Internal Account Is Ready',
+      templateId: WELCOME_USER_TEMPLATE_ID,
+      dynamicTemplateData: {
+        user_name: userData.name || userData.user_name || 'there',
+        inviter_name: userData.inviter_name || userData.inviterName || 'Beige',
+        email: userData.email,
+        password: userData.password,
+        dashboard_link: dashboardLink,
+        year: new Date().getFullYear()
+      }
+    });
+
+    return {
+      success: true,
+      statusCode: response?.statusCode,
+      messageId: response?.headers?.['x-message-id'] || response?.headers?.['X-Message-Id'] || null
+    };
+  } catch (error) {
+    console.error(
+      'Error sending internal user welcome email via SendGrid:',
       error?.response?.body || error.message
     );
     return { success: false, error: error.message };
@@ -3590,6 +3658,7 @@ module.exports = {
   sendProductionLeadNotification,
   sendPaymentSuccessSalesNotification,
   sendClientSignupWelcomeEmail,
+  sendWelcomeUserEmail,
   sendBookingConfirmationEmail,
   sendShootReminder5DaysEmail,
   sendShootReminder2HoursEmail,

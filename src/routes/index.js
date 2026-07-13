@@ -33,6 +33,7 @@ router.use('/bookings', require('./bookings.routes'));
 router.use('/guest-bookings', require('./guest-bookings.routes'));
 router.use('/payments', require('./payments.routes'));
 router.use('/finance', require('./finance.routes'));
+router.use('/creator-earnings', require('./creator-earnings.routes'));
 router.use('/waitlist', require('./waitlist.routes'));
 router.use('/investors', require('./investor.routes'));
 router.use('/admin', require('./admin.routes'));
