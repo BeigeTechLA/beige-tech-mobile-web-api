@@ -12,6 +12,7 @@ const {
   sendPostProductionAssignmentEmail,
   sendOnboardingFormCriticalEmail
 } = require('../utils/emailService');
+const { Parser } = require('json2csv');
 const { stream_project_booking, crew_members, crew_member_files, tasks, equipment, crew_roles,
   equipment_accessories,
   equipment_category,
@@ -525,6 +526,154 @@ const matchShootStatusFilter = (booking, rawStatus) => {
     default:
       return null;
   }
+};
+
+const escapeShootCsvValue = (value) => {
+  if (value === null || value === undefined) {
+    return '';
+  }
+
+  const stringValue = String(value).trim();
+
+  if (/^[=+\-@]/.test(stringValue)) {
+    return `'${stringValue}`;
+  }
+
+  return stringValue;
+};
+
+const escapeClientCsvValue = (value) => {
+  if (value === null || value === undefined) {
+    return '';
+  }
+
+  const stringValue = String(value).trim();
+
+  // Protect Excel from formula injection.
+  if (/^[=+\-@]/.test(stringValue)) {
+    return `'${stringValue}`;
+  }
+
+  return stringValue;
+};
+
+const extractShootPhoneFromDescription = (description) => {
+  if (!description || typeof description !== 'string') {
+    return '';
+  }
+
+  const match = description.match(/Phone:\s*([+\d\s()-]+)/i);
+
+  return match?.[1]?.trim() || '';
+};
+
+const getShootAssignedCpNames = (assignedCrews = []) => {
+  if (!Array.isArray(assignedCrews)) {
+    return '';
+  }
+
+  return assignedCrews
+    .filter(
+      (assignment) =>
+        Number(assignment?.is_active ?? 1) === 1
+    )
+    .map((assignment) => {
+      const crewMember = assignment?.crew_member;
+
+      return [
+        crewMember?.first_name,
+        crewMember?.last_name,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+    })
+    .filter(Boolean)
+    .join(', ');
+};
+
+const getShootExportStatus = (project) => {
+  if (
+    Number(project?.is_cancelled || 0) === 1 ||
+    Number(project?.status) === 5
+  ) {
+    return 'Cancelled';
+  }
+
+  if (
+    Number(project?.is_completed || 0) === 1 ||
+    Number(project?.status) === 4
+  ) {
+    return 'Completed';
+  }
+
+  if (Number(project?.is_draft || 0) === 1) {
+    return 'Draft';
+  }
+
+  if (matchShootStatusFilter(project, 'shootday')) {
+    return 'Shoot Day';
+  }
+
+  if (matchShootStatusFilter(project, 'revision')) {
+    return 'Revision';
+  }
+
+  if (matchShootStatusFilter(project, 'postproduction')) {
+    return 'Post Production';
+  }
+
+  if (matchShootStatusFilter(project, 'preproduction')) {
+    return 'Pre Production';
+  }
+
+  if (matchShootStatusFilter(project, 'initiated')) {
+    return 'Initiated';
+  }
+
+  if (matchShootStatusFilter(project, 'upcoming')) {
+    return 'Upcoming';
+  }
+
+  return 'Active';
+};
+
+const getShootCategoryLabel = (
+  project,
+  eventTypeMap
+) => {
+  const rawTypes = String(
+    project?.event_type ||
+    project?.content_type ||
+    project?.shoot_type ||
+    ''
+  )
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  const fallbackMap = {
+    videographer: 'Videography',
+    photographer: 'Photography',
+    editing: 'Editing',
+    studio: 'Studio',
+    wedding: 'Wedding',
+    corporate: 'Corporate',
+  };
+
+  return rawTypes
+    .map((type) => {
+      return (
+        eventTypeMap.get(String(type)) ||
+        fallbackMap[type.toLowerCase()] ||
+        type
+          .replace(/_/g, ' ')
+          .replace(/\b\w/g, (character) =>
+            character.toUpperCase()
+          )
+      );
+    })
+    .join(', ');
 };
 
 const hasScheduledMeetingOfType = (meetings, meetingType) => {
@@ -3992,6 +4141,231 @@ exports.getProjectStats = async (req, res) => {
   }
 };
 
+exports.exportShootsCsv = async (req, res) => {
+  try {
+    const { start_date, end_date } = req.query;
+
+    if (!start_date || !end_date) {
+      return res.status(400).json({
+        success: false,
+        error: true,
+        message: 'Start date and end date are required.',
+      });
+    }
+
+    const startDate = moment(
+      start_date,
+      'YYYY-MM-DD',
+      true
+    );
+
+    const endDate = moment(
+      end_date,
+      'YYYY-MM-DD',
+      true
+    );
+
+    if (!startDate.isValid() || !endDate.isValid()) {
+      return res.status(400).json({
+        success: false,
+        error: true,
+        message: 'Dates must be in YYYY-MM-DD format.',
+      });
+    }
+
+    if (startDate.isAfter(endDate)) {
+      return res.status(400).json({
+        success: false,
+        error: true,
+        message: 'Start date cannot be after end date.',
+      });
+    }
+
+    const startDateTime = startDate
+      .clone()
+      .startOf('day')
+      .toDate();
+
+    const endDateTime = endDate
+      .clone()
+      .endOf('day')
+      .toDate();
+
+    const [projects, eventTypes] = await Promise.all([
+      stream_project_booking.findAll({
+        where: {
+          created_at: {
+            [Op.between]: [
+              startDateTime,
+              endDateTime,
+            ],
+          },
+        },
+        include: [
+          {
+            model: assigned_crew,
+            as: 'assigned_crews',
+            required: false,
+            where: {
+              is_active: 1,
+            },
+            include: [
+              {
+                model: crew_members,
+                as: 'crew_member',
+                required: false,
+                attributes: [
+                  'crew_member_id',
+                  'first_name',
+                  'last_name',
+                ],
+              },
+            ],
+          },
+        ],
+        order: [['created_at', 'DESC']],
+      }),
+
+      event_type_master.findAll({
+        attributes: [
+          'event_type_id',
+          'event_type_name',
+        ],
+        raw: true,
+      }),
+    ]);
+
+    if (!projects.length) {
+      return res.status(404).json({
+        success: false,
+        error: true,
+        message:
+          'No shoots found for the selected date range.',
+      });
+    }
+
+    const eventTypeMap = new Map(
+      eventTypes.map((eventType) => [
+        String(eventType.event_type_id),
+        eventType.event_type_name,
+      ])
+    );
+
+    const csvRows = await Promise.all(
+      projects.map(async (projectRecord) => {
+        const project =
+          typeof projectRecord.toJSON === 'function'
+            ? projectRecord.toJSON()
+            : projectRecord;
+
+        const [contact, amount] = await Promise.all([
+          resolveAdminBookingClientContact(project),
+
+          resolveProjectTotalValueAmount({
+            project,
+          }),
+        ]);
+
+        const email =
+          contact?.email ||
+          project.guest_email ||
+          '';
+
+        const phone =
+          contact?.phone_number ||
+          extractShootPhoneFromDescription(
+            project.description
+          );
+
+        return {
+          'Shoot ID': escapeShootCsvValue(
+            project.stream_project_booking_id
+          ),
+
+          'Project Name': escapeShootCsvValue(
+            project.project_name
+          ),
+
+          Category: escapeShootCsvValue(
+            getShootCategoryLabel(
+              project,
+              eventTypeMap
+            )
+          ),
+
+          Amount: Number(amount || 0),
+
+          Status: escapeShootCsvValue(
+            getShootExportStatus(project)
+          ),
+
+          'Email ID': escapeShootCsvValue(email),
+
+          Phone: escapeShootCsvValue(phone),
+
+          Description: escapeShootCsvValue(
+            project.description
+          ),
+
+          'CP Assigned - List of CPs':
+            escapeShootCsvValue(
+              getShootAssignedCpNames(
+                project.assigned_crews
+              )
+            ),
+        };
+      })
+    );
+
+    const fields = [
+      'Shoot ID',
+      'Project Name',
+      'Category',
+      'Amount',
+      'Status',
+      'Email ID',
+      'Phone',
+      'Description',
+      'CP Assigned - List of CPs',
+    ];
+
+    const parser = new Parser({
+      fields,
+    });
+
+    const csv = parser.parse(csvRows);
+
+    const fileName =
+      `shoots-${start_date}-to-${end_date}.csv`;
+
+    res.setHeader(
+      'Content-Type',
+      'text/csv; charset=utf-8'
+    );
+
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${fileName}"`
+    );
+
+    return res.status(200).send(`\uFEFF${csv}`);
+  } catch (error) {
+    console.error(
+      'Export Shoots CSV Error:',
+      error
+    );
+
+    return res.status(500).json({
+      success: false,
+      error: true,
+      message: 'Failed to export shoots.',
+      detail:
+        process.env.NODE_ENV === 'development'
+          ? error.message
+          : undefined,
+    });
+  }
+};
 
 exports.getRecentActivity = async (req, res) => {
   try {
@@ -5034,6 +5408,523 @@ exports.getCrewMembers = async (req, res) => {
         console.error("Get Crew Members Error:", error);
         return res.status(500).json({ error: true, message: "Internal server error" });
     }
+};
+exports.exportCrewMembersCsv = async (req, res) => {
+  try {
+    const {
+      search = '',
+      location = '',
+      status = '',
+      range = '',
+      start_date,
+      end_date
+    } = req.query;
+
+    const conditions = [
+      {
+        is_active: 1
+      }
+    ];
+
+    // Verification status filter
+    if (status && status !== 'all') {
+      if (status === 'pending') {
+        conditions.push({
+          is_crew_verified: 0
+        });
+      } else if (status === 'approved') {
+        conditions.push({
+          is_crew_verified: 1
+        });
+      } else if (status === 'rejected') {
+        conditions.push({
+          is_crew_verified: 2
+        });
+      }
+    }
+
+    // Date filter
+    if (start_date || end_date) {
+      if (!start_date || !end_date) {
+        return res.status(400).json({
+          error: true,
+          message:
+            'Both start date and end date are required.'
+        });
+      }
+
+      const startDate = moment(
+        start_date,
+        'YYYY-MM-DD',
+        true
+      );
+
+      const endDate = moment(
+        end_date,
+        'YYYY-MM-DD',
+        true
+      );
+
+      if (!startDate.isValid() || !endDate.isValid()) {
+        return res.status(400).json({
+          error: true,
+          message:
+            'Dates must be in YYYY-MM-DD format.'
+        });
+      }
+
+      if (startDate.isAfter(endDate)) {
+        return res.status(400).json({
+          error: true,
+          message:
+            'Start date cannot be after end date.'
+        });
+      }
+
+      conditions.push({
+        created_at: {
+          [Op.between]: [
+            startDate
+              .clone()
+              .startOf('day')
+              .toDate(),
+            endDate
+              .clone()
+              .endOf('day')
+              .toDate()
+          ]
+        }
+      });
+    } else if (range === 'month') {
+      conditions.push(
+        Sequelize.where(
+          Sequelize.fn(
+            'MONTH',
+            Sequelize.col(
+              'crew_members.created_at'
+            )
+          ),
+          Sequelize.fn(
+            'MONTH',
+            Sequelize.fn('CURDATE')
+          )
+        ),
+        Sequelize.where(
+          Sequelize.fn(
+            'YEAR',
+            Sequelize.col(
+              'crew_members.created_at'
+            )
+          ),
+          Sequelize.fn(
+            'YEAR',
+            Sequelize.fn('CURDATE')
+          )
+        )
+      );
+    }
+
+    // Search filter
+    if (String(search).trim()) {
+      const searchValue =
+        String(search).trim();
+
+      conditions.push({
+        [Op.or]: [
+          {
+            first_name: {
+              [Op.like]: `%${searchValue}%`
+            }
+          },
+          {
+            last_name: {
+              [Op.like]: `%${searchValue}%`
+            }
+          },
+          {
+            email: {
+              [Op.like]: `%${searchValue}%`
+            }
+          },
+          {
+            phone_number: {
+              [Op.like]: `%${searchValue}%`
+            }
+          },
+          Sequelize.where(
+            Sequelize.fn(
+              'concat',
+              Sequelize.col('first_name'),
+              ' ',
+              Sequelize.col('last_name')
+            ),
+            {
+              [Op.like]: `%${searchValue}%`
+            }
+          )
+        ]
+      });
+    }
+
+    if (String(location).trim()) {
+      conditions.push({
+        location: {
+          [Op.like]:
+            `%${String(location).trim()}%`
+        }
+      });
+    }
+
+    const [members, allRoles] =
+      await Promise.all([
+        crew_members.findAll({
+          where: {
+            [Op.and]: conditions
+          },
+          attributes: [
+            'crew_member_id',
+            'user_id',
+            'first_name',
+            'last_name',
+            'email',
+            'phone_number',
+            'primary_role',
+            'is_crew_verified',
+            'is_active',
+            'created_at'
+          ],
+          order: [
+            ['is_crew_verified', 'ASC'],
+            ['is_beige_member', 'ASC'],
+            ['crew_member_id', 'DESC']
+          ]
+        }),
+
+        crew_roles.findAll({
+          attributes: [
+            'role_id',
+            'role_name'
+          ],
+          raw: true
+        })
+      ]);
+
+    const userIds = [
+      ...new Set(
+        members
+          .map((member) =>
+            Number(member.user_id)
+          )
+          .filter(Boolean)
+      )
+    ];
+
+    const crewMemberIds = members.map(
+      (member) =>
+        Number(member.crew_member_id)
+    );
+
+    const [
+      affiliateRows,
+      assignedCrewRows
+    ] = await Promise.all([
+      userIds.length
+        ? affiliates.findAll({
+            where: {
+              user_id: {
+                [Op.in]: userIds
+              }
+            },
+            attributes: [
+              'user_id',
+              'referral_code'
+            ],
+            raw: true
+          })
+        : Promise.resolve([]),
+
+      crewMemberIds.length
+        ? assigned_crew.findAll({
+            where: {
+              crew_member_id: {
+                [Op.in]: crewMemberIds
+              },
+              is_active: 1
+            },
+            attributes: [
+              'crew_member_id',
+              'project_id'
+            ],
+            raw: true
+          })
+        : Promise.resolve([])
+    ]);
+
+    const affiliateMap = new Map(
+      affiliateRows.map((row) => [
+        Number(row.user_id),
+        row.referral_code || ''
+      ])
+    );
+
+    const projectIds = [
+      ...new Set(
+        assignedCrewRows
+          .map((assignment) =>
+            Number(assignment.project_id)
+          )
+          .filter(Boolean)
+      )
+    ];
+
+    const bookingRows = projectIds.length
+      ? await stream_project_booking.findAll({
+          where: {
+            stream_project_booking_id: {
+              [Op.in]: projectIds
+            }
+          },
+          attributes: [
+            'stream_project_booking_id',
+            'quote_id'
+          ],
+          raw: true
+        })
+      : [];
+
+    const bookingMap = new Map(
+      bookingRows.map((booking) => [
+        Number(
+          booking.stream_project_booking_id
+        ),
+        booking
+      ])
+    );
+
+    const assignmentsByCrew = new Map();
+
+    assignedCrewRows.forEach((assignment) => {
+      const crewMemberId = Number(
+        assignment.crew_member_id
+      );
+
+      if (!assignmentsByCrew.has(crewMemberId)) {
+        assignmentsByCrew.set(
+          crewMemberId,
+          []
+        );
+      }
+
+      assignmentsByCrew
+        .get(crewMemberId)
+        .push(assignment);
+    });
+
+    const roleMap = new Map(
+      allRoles.map((role) => [
+        String(role.role_id),
+        role.role_name
+      ])
+    );
+
+    const csvRows = members.map(
+      (memberRecord) => {
+        const member =
+          typeof memberRecord.toJSON ===
+          'function'
+            ? memberRecord.toJSON()
+            : memberRecord;
+
+        let roleIds = [];
+
+        try {
+          const parsed = JSON.parse(
+            member.primary_role || '[]'
+          );
+
+          roleIds = Array.isArray(parsed)
+            ? parsed.map(String)
+            : [String(parsed)];
+        } catch {
+          if (member.primary_role) {
+            roleIds = [
+              String(member.primary_role)
+            ];
+          }
+        }
+
+        const roleNames = roleIds
+          .map((roleId) =>
+            roleMap.get(roleId)
+          )
+          .filter(Boolean);
+
+        let statusLabel = 'Pending';
+
+        if (
+          Number(member.is_crew_verified) === 1
+        ) {
+          statusLabel = 'Approved';
+        } else if (
+          Number(member.is_crew_verified) === 2
+        ) {
+          statusLabel = 'Rejected';
+        }
+
+        const assignments =
+          assignmentsByCrew.get(
+            Number(member.crew_member_id)
+          ) || [];
+
+        const shootIds = [
+          ...new Set(
+            assignments
+              .map((assignment) =>
+                Number(assignment.project_id)
+              )
+              .filter(Boolean)
+          )
+        ];
+
+        const quoteIds = [
+          ...new Set(
+            shootIds
+              .map((shootId) =>
+                bookingMap.get(shootId)
+                  ?.quote_id
+              )
+              .filter(Boolean)
+              .map(String)
+          )
+        ];
+
+        const name = [
+          member.first_name,
+          member.last_name
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .trim();
+
+        const email =
+          member.email || '';
+
+        const phone =
+          member.phone_number || '';
+
+        return {
+          'User ID': escapeShootCsvValue(
+            member.user_id || ''
+          ),
+
+          Name: escapeShootCsvValue(name),
+
+          Type: escapeShootCsvValue(
+            member.user_id
+              ? 'Registered'
+              : 'Guest'
+          ),
+
+          Contact: escapeShootCsvValue(
+            [email, phone]
+              .filter(Boolean)
+              .join(' / ')
+          ),
+
+          Role: escapeShootCsvValue(
+            roleNames.join(', ')
+          ),
+
+          Status: escapeShootCsvValue(
+            statusLabel
+          ),
+
+          'Client Type':
+            'Creative Partner',
+
+          'Referral Code':
+            escapeShootCsvValue(
+              affiliateMap.get(
+                Number(member.user_id)
+              ) || ''
+            ),
+
+          Email: escapeShootCsvValue(email),
+
+          Phone: escapeShootCsvValue(phone),
+
+          'Shoot IDs':
+            escapeShootCsvValue(
+              shootIds.join(', ')
+            ),
+
+          'Quote IDs':
+            escapeShootCsvValue(
+              quoteIds.join(', ')
+            )
+        };
+      }
+    );
+
+    const fields = [
+      'User ID',
+      'Name',
+      'Type',
+      'Contact',
+      'Role',
+      'Status',
+      'Client Type',
+      'Referral Code',
+      'Email',
+      'Phone',
+      'Shoot IDs',
+      'Quote IDs'
+    ];
+
+    const parser = new Parser({
+      fields
+    });
+
+    const csv = parser.parse(csvRows);
+
+    const fileDate =
+      moment().format('YYYY-MM-DD');
+
+    const fileName =
+      start_date && end_date
+        ? `creative-partners-${start_date}-to-${end_date}.csv`
+        : `creative-partners-${fileDate}.csv`;
+
+    res.setHeader(
+      'Content-Type',
+      'text/csv; charset=utf-8'
+    );
+
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${fileName}"`
+    );
+
+    return res
+      .status(200)
+      .send(`\uFEFF${csv}`);
+  } catch (error) {
+    console.error(
+      'Export Creative Partners CSV Error:',
+      error
+    );
+
+    return res.status(500).json({
+      error: true,
+      message:
+        'Failed to export creative partners.',
+      detail:
+        process.env.NODE_ENV ===
+        'development'
+          ? error.message
+          : undefined
+    });
+  }
 };
 
 exports.verifyCrewMember = async (req, res) => {
@@ -8190,6 +9081,442 @@ exports.getClients = async (req, res) => {
     return res.status(500).json({
       error: true,
       message: 'Internal server error'
+    });
+  }
+};
+
+exports.exportClientsCsv = async (req, res) => {
+  try {
+    const {
+      start_date,
+      end_date,
+      status = 'all',
+      search = '',
+      client_type = 'all'
+    } = req.query;
+
+    const whereConditions = {};
+
+    // Optional date filtering.
+    if (start_date || end_date) {
+      if (!start_date || !end_date) {
+        return res.status(400).json({
+          error: true,
+          message: 'Both start date and end date are required.'
+        });
+      }
+
+      const startDate = moment(
+        start_date,
+        'YYYY-MM-DD',
+        true
+      );
+
+      const endDate = moment(
+        end_date,
+        'YYYY-MM-DD',
+        true
+      );
+
+      if (!startDate.isValid() || !endDate.isValid()) {
+        return res.status(400).json({
+          error: true,
+          message: 'Dates must be in YYYY-MM-DD format.'
+        });
+      }
+
+      if (startDate.isAfter(endDate)) {
+        return res.status(400).json({
+          error: true,
+          message: 'Start date cannot be after end date.'
+        });
+      }
+
+      whereConditions.created_at = {
+        [Op.between]: [
+          startDate.clone().startOf('day').toDate(),
+          endDate.clone().endOf('day').toDate()
+        ]
+      };
+    }
+
+    // Active/archived filtering.
+    if (status === 'active') {
+      whereConditions.is_active = 1;
+    } else if (
+      status === 'archived' ||
+      status === 'inactive'
+    ) {
+      whereConditions.is_active = 0;
+    }
+
+    if (search.trim()) {
+      whereConditions[Op.or] = [
+        {
+          name: {
+            [Op.like]: `%${search.trim()}%`
+          }
+        },
+        {
+          email: {
+            [Op.like]: `%${search.trim()}%`
+          }
+        },
+        {
+          phone_number: {
+            [Op.like]: `%${search.trim()}%`
+          }
+        }
+      ];
+    }
+
+    const clientRows = await clients.findAll({
+      where: whereConditions,
+      include: [
+        {
+          model: users,
+          as: 'user',
+          required: false,
+          attributes: [
+            'id',
+            'name',
+            'email',
+            'phone_number',
+            'user_type'
+          ],
+          include: [
+            {
+              model: sales_leads,
+              as: 'sales_leads',
+              required: false,
+              separate: true,
+              order: [['created_at', 'DESC']],
+              attributes: [
+                'lead_id',
+                'booking_id',
+                'user_id',
+                'guest_email',
+                'lead_status'
+              ],
+              include: [
+                {
+                  model: stream_project_booking,
+                  as: 'booking',
+                  required: false,
+                  attributes: [
+                    'stream_project_booking_id',
+                    'quote_id'
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      order: [['created_at', 'DESC']]
+    });
+
+    const filteredClients = clientRows.filter((clientRecord) => {
+      if (client_type === 'all') {
+        return true;
+      }
+
+      const hasRegisteredUser = Boolean(
+        clientRecord?.user?.id
+      );
+
+      if (client_type === 'registered') {
+        return hasRegisteredUser;
+      }
+
+      if (client_type === 'guest') {
+        return !hasRegisteredUser;
+      }
+
+      return true;
+    });
+
+    const registeredUserIds = [
+      ...new Set(
+        filteredClients
+          .map((client) => Number(client.user_id))
+          .filter(Boolean)
+      )
+    ];
+
+    const clientEmails = [
+      ...new Set(
+        filteredClients
+          .map((client) =>
+            String(client.email || '')
+              .trim()
+              .toLowerCase()
+          )
+          .filter(Boolean)
+      )
+    ];
+
+    const [
+      affiliateRows,
+      guestLeadRows
+    ] = await Promise.all([
+      registeredUserIds.length
+        ? affiliates.findAll({
+            where: {
+              user_id: {
+                [Op.in]: registeredUserIds
+              }
+            },
+            attributes: [
+              'user_id',
+              'referral_code'
+            ],
+            raw: true
+          })
+        : Promise.resolve([]),
+
+      // Guest clients do not have a linked user,
+      // so find their bookings by email.
+      clientEmails.length
+        ? sales_leads.findAll({
+            where: {
+              guest_email: {
+                [Op.in]: clientEmails
+              },
+              is_active: 1
+            },
+            attributes: [
+              'lead_id',
+              'booking_id',
+              'guest_email'
+            ],
+            include: [
+              {
+                model: stream_project_booking,
+                as: 'booking',
+                required: false,
+                attributes: [
+                  'stream_project_booking_id',
+                  'quote_id'
+                ]
+              }
+            ]
+          })
+        : Promise.resolve([])
+    ]);
+
+    const affiliateMap = new Map(
+      affiliateRows.map((affiliate) => [
+        Number(affiliate.user_id),
+        affiliate.referral_code || ''
+      ])
+    );
+
+    const guestLeadsByEmail = new Map();
+
+    guestLeadRows.forEach((leadRecord) => {
+      const lead =
+        typeof leadRecord.toJSON === 'function'
+          ? leadRecord.toJSON()
+          : leadRecord;
+
+      const email = String(
+        lead.guest_email || ''
+      )
+        .trim()
+        .toLowerCase();
+
+      if (!email) {
+        return;
+      }
+
+      if (!guestLeadsByEmail.has(email)) {
+        guestLeadsByEmail.set(email, []);
+      }
+
+      guestLeadsByEmail.get(email).push(lead);
+    });
+
+    const csvRows = filteredClients.map(
+      (clientRecord) => {
+        const client =
+          typeof clientRecord.toJSON === 'function'
+            ? clientRecord.toJSON()
+            : clientRecord;
+
+        const hasRegisteredUser = Boolean(
+          client.user?.id
+        );
+
+        const clientType = hasRegisteredUser
+          ? 'Registered'
+          : 'Guest';
+
+        const registeredLeads =
+          client.user?.sales_leads || [];
+
+        const emailKey = String(
+          client.email || ''
+        )
+          .trim()
+          .toLowerCase();
+
+        const guestLeads =
+          guestLeadsByEmail.get(emailKey) || [];
+
+        const allLeads = hasRegisteredUser
+          ? registeredLeads
+          : guestLeads;
+
+        const shootIds = [
+          ...new Set(
+            allLeads
+              .map(
+                (lead) =>
+                  lead?.booking
+                    ?.stream_project_booking_id ||
+                  lead?.booking_id
+              )
+              .filter(Boolean)
+              .map(String)
+          )
+        ];
+
+        const quoteIds = [
+          ...new Set(
+            allLeads
+              .map(
+                (lead) =>
+                  lead?.booking?.quote_id
+              )
+              .filter(Boolean)
+              .map(String)
+          )
+        ];
+
+        const email =
+          client.email ||
+          client.user?.email ||
+          '';
+
+        const phone =
+          client.phone_number ||
+          client.user?.phone_number ||
+          '';
+
+        return {
+          'User ID': escapeClientCsvValue(
+            client.user_id ||
+            client.user?.id ||
+            ''
+          ),
+
+          Name: escapeClientCsvValue(
+            client.name ||
+            client.user?.name ||
+            ''
+          ),
+
+          Type: escapeClientCsvValue(
+            clientType
+          ),
+
+          // Keep contact as email and phone.
+          Contact: escapeClientCsvValue(
+            [email, phone]
+              .filter(Boolean)
+              .join(' / ')
+          ),
+
+          Role: 'Client',
+
+          Status: escapeClientCsvValue(
+            Number(client.is_active) === 1
+              ? 'Active'
+              : 'Archived'
+          ),
+
+          'Client Type': escapeClientCsvValue(
+            client.client_type ||
+            client.registration_type ||
+            clientType.toLowerCase()
+          ),
+
+          'Referral Code':
+            escapeClientCsvValue(
+              affiliateMap.get(
+                Number(client.user_id)
+              ) || ''
+            ),
+
+          Email: escapeClientCsvValue(email),
+
+          Phone: escapeClientCsvValue(phone),
+
+          'Shoot IDs': escapeClientCsvValue(
+            shootIds.join(', ')
+          ),
+
+          'Quote IDs': escapeClientCsvValue(
+            quoteIds.join(', ')
+          )
+        };
+      }
+    );
+
+    const fields = [
+      'User ID',
+      'Name',
+      'Type',
+      'Contact',
+      'Role',
+      'Status',
+      'Client Type',
+      'Referral Code',
+      'Email',
+      'Phone',
+      'Shoot IDs',
+      'Quote IDs'
+    ];
+
+    const parser = new Parser({ fields });
+    const csv = parser.parse(csvRows);
+
+    const fileDate = moment().format(
+      'YYYY-MM-DD'
+    );
+
+    const fileName =
+      start_date && end_date
+        ? `clients-${start_date}-to-${end_date}.csv`
+        : `clients-${fileDate}.csv`;
+
+    res.setHeader(
+      'Content-Type',
+      'text/csv; charset=utf-8'
+    );
+
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${fileName}"`
+    );
+
+    return res
+      .status(200)
+      .send(`\uFEFF${csv}`);
+  } catch (error) {
+    console.error(
+      'Export Clients CSV Error:',
+      error
+    );
+
+    return res.status(500).json({
+      error: true,
+      message: 'Failed to export clients.',
+      detail:
+        process.env.NODE_ENV === 'development'
+          ? error.message
+          : undefined
     });
   }
 };

@@ -452,6 +452,12 @@ router.delete('/quotes/catalog/:catalogItemId', authenticate, adminQuotesDelete,
 
 router.get('/quotes/dashboard', authenticate, adminQuotesView, salesQuotesController.getQuoteDashboard);
 router.get('/quotes', authenticate, adminQuotesView, salesQuotesController.listQuotes);
+router.get(
+  '/quotes/export',
+  authenticate,
+  adminQuotesView,
+  salesQuotesController.exportSalesQuotesCsv
+);
 router.get('/quotes/accept', salesQuotesController.acceptQuoteProposal);
 router.post('/quotes/accept', salesQuotesController.acceptQuoteProposal);
 router.get('/quotes/reject/:quoteId', authenticate, salesQuotesController.rejectQuoteProposal);
