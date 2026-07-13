@@ -5403,6 +5403,8 @@ exports.saveCrewProfileCompletion = [
       phone_number,
       location,
       working_distance,
+      latitude,
+      longitude,
       primary_role,
       years_of_experience,
       hourly_rate,
@@ -5444,7 +5446,14 @@ exports.saveCrewProfileCompletion = [
     if (last_name !== undefined) updateData.last_name = last_name;
     if (email !== undefined) updateData.email = email;
     if (phone_number !== undefined) updateData.phone_number = phone_number;
-    if (location !== undefined) updateData.location = JSON.stringify(location);
+    if (location !== undefined) {
+      const coordinates = extractCoordinatesFromPayload(req.body, normalizeCrewProfileJsonInput(location));
+      updateData.location = JSON.stringify(normalizeCrewProfileJsonInput(location));
+      if (coordinates.latitude !== null) updateData.latitude = coordinates.latitude;
+      if (coordinates.longitude !== null) updateData.longitude = coordinates.longitude;
+    }
+    if (latitude !== undefined) updateData.latitude = latitude;
+    if (longitude !== undefined) updateData.longitude = longitude;
     if (working_distance !== undefined) updateData.working_distance = working_distance;
     if (years_of_experience !== undefined) updateData.years_of_experience = years_of_experience;
     if (hourly_rate !== undefined) updateData.hourly_rate = hourly_rate;
