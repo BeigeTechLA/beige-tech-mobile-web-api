@@ -66,6 +66,7 @@ router.post('/revision-file/review', authenticate, externalFileManagerController
 router.post('/file-view-url', authenticate, fileManagerView, externalFileManagerController.getFileViewUrl);
 router.post('/file-download-url', authenticate, fileManagerView, externalFileManagerController.getFileDownloadUrl);
 router.post('/folder-download-url', authenticate, fileManagerView, externalFileManagerController.getFolderDownloadUrl);
+router.post('/selected-download', authenticate, fileManagerView, externalFileManagerController.downloadSelectedFilesZip);
 router.post('/delete', authenticate, fileManagerDelete, externalFileManagerController.deleteEntry);
 router.post('/share', authenticate, fileManagerCreate, externalFileManagerController.createShare);
 router.get('/share', authenticate, fileManagerView, externalFileManagerController.listShares);

@@ -3,6 +3,7 @@ const PUBLIC_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_PUBLIC_BASE_URL || '';
 const INTERNAL_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
+const { Readable } = require('stream');
 const db = require('../models');
 const { users, crew_members, assigned_crew, stream_project_booking, sales_leads, sales_lead_activities } = db;
 const bookingTimelineService = require('../services/bookingTimeline.service');
@@ -17,6 +18,7 @@ const EXTERNAL_FILE_MANAGER_PROXY_TIMEOUT_MS = Math.max(
   15000,
   Number(process.env.EXTERNAL_FILE_MANAGER_PROXY_TIMEOUT_MS || 300000)
 );
+const SELECTED_ZIP_MAX_FILES = Math.max(1, Number(process.env.SELECTED_ZIP_MAX_FILES || 100));
 const COMMON_EVENT_ID_PREFIX = 'event_';
 let commonEventsTableReadyPromise = null;
 let commonEventCreatorFoldersTableReadyPromise = null;
@@ -99,6 +101,41 @@ const withPublicUrl = (result, req) => {
       url: rewriteExternalServiceUrl(currentUrl, req),
     },
   };
+};
+
+const getExternalGcpUrl = (pathWithQuery) => {
+  const base = new URL(DEFAULT_BASE_URL);
+  return `${base.origin}/v1/gcp${pathWithQuery}`;
+};
+
+const proxyZipResponse = async ({ res, externalPath, method = 'GET', body }) => {
+  const response = await fetch(getExternalGcpUrl(externalPath), {
+    method,
+    headers: {
+      ...buildHeaders(),
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body,
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    return res.status(response.status).json(payload || {
+      success: false,
+      message: 'External file manager download failed',
+    });
+  }
+
+  const contentType = response.headers.get('content-type');
+  const contentDisposition = response.headers.get('content-disposition');
+  const totalSize = response.headers.get('x-total-size');
+
+  if (contentType) res.setHeader('Content-Type', contentType);
+  if (contentDisposition) res.setHeader('Content-Disposition', contentDisposition);
+  if (totalSize) res.setHeader('X-Total-Size', totalSize);
+
+  if (!response.body) return res.end();
+  return Readable.fromWeb(response.body).pipe(res);
 };
 
 const getRequestUserId = (req) => req.userId || req.user?.userId || null;
@@ -4067,7 +4104,64 @@ exports.getFolderDownloadUrl = async (req, res) => {
         path: req.body.path,
       }),
     });
-    return res.status(200).json(withPublicUrl(result));
+    return res.status(200).json(withPublicUrl(result, req));
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.downloadFolderZip = async (req, res) => {
+  try {
+    const folderpath = String(req.query.folderpath || '').trim();
+    if (!folderpath) {
+      return res.status(400).json({ success: false, message: 'folderpath is required' });
+    }
+
+    return proxyZipResponse({
+      res,
+      externalPath: `/download-folder?folderpath=${encodeURIComponent(folderpath)}`,
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.downloadSelectedFilesZip = async (req, res) => {
+  try {
+    const rawFilepaths = Array.isArray(req.body.filepaths) ? req.body.filepaths : [];
+    const filepaths = Array.from(new Set(rawFilepaths.map((item) => String(item || '').trim()).filter(Boolean)));
+
+    if (!filepaths.length) {
+      return res.status(400).json({ success: false, message: 'filepaths array is required' });
+    }
+
+    if (filepaths.length > SELECTED_ZIP_MAX_FILES) {
+      return res.status(413).json({
+        success: false,
+        message: `Please select ${SELECTED_ZIP_MAX_FILES} files or fewer at a time`,
+      });
+    }
+
+    for (const filepath of filepaths) {
+      await ensureCreatorFileAccess(req, filepath);
+      await ensureClientFileAccess(req, filepath);
+    }
+
+    return proxyZipResponse({
+      res,
+      externalPath: '/download-selected',
+      method: 'POST',
+      body: JSON.stringify({
+        filepaths,
+        filename: req.body.filename || 'selected-files',
+      }),
+    });
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {
       success: false,

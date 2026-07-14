@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const externalFileManagerController = require('../controllers/external-file-manager.controller');
 console.log('✅ index.js loaded');
 // API Info endpoint
 // router.get('/', (req, res) => {
@@ -43,6 +44,7 @@ router.use('/affiliates', require('./affiliate.routes'));
 router.use('/client', require('./client.routes'));
 router.use('/sales', require('./sales.routes'));
 router.use('/external-file-manager', require('./external-file-manager.routes'));
+router.get('/gcp/download-folder', externalFileManagerController.downloadFolderZip);
 router.use('/external-chat', require('./external-chat.routes'));
 router.use('/external-meetings', require('./external-meetings.routes'));
 router.use('/comments', require('./comments.routes'));
