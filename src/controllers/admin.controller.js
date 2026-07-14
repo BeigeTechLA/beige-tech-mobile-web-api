@@ -5177,17 +5177,30 @@ exports.getCrewMemberById = async (req, res) => {
                 roleIds = Array.isArray(parsedRole) ? parsedRole.map(id => String(id)) : [String(parsedRole)];
             }
         } catch (err) { roleIds = []; }
+      let equipmentIds = [];
+      try {
+        const rawEquipment = member.equipment_ownership;
+        if (rawEquipment) {
+          const parsedEquipment = typeof rawEquipment === 'string' ? JSON.parse(rawEquipment) : rawEquipment;
+          equipmentIds = Array.isArray(parsedEquipment) ? parsedEquipment.map(id => Number(id)) : [Number(parsedEquipment)];
+        }
+      } catch (err) { equipmentIds = []; }
 
-        const [skillList, roleList] = await Promise.all([
-            skills_master.findAll({ where: { id: skillIds }, attributes: ['id', 'name'] }),
-            crew_roles.findAll({ where: { role_id: roleIds }, attributes: ['role_id', 'role_name'] })
-        ]);
+      const [skillList, roleList, equipmentList] = await Promise.all([
+        skills_master.findAll({ where: { id: skillIds }, attributes: ['id', 'name'] }),
+        crew_roles.findAll({ where: { role_id: roleIds }, attributes: ['role_id', 'role_name'] }),
+        equipment.findAll({ where: { equipment_id: equipmentIds }, attributes: ['equipment_id', 'equipment_name'] })
+      ]);
 
-        const memberJson = member.toJSON();
-        memberJson.skills = skillList;
-        memberJson.role = roleList.length > 0 
-            ? { role_name: roleList.map(r => r.role_name).join(", ") } 
-            : null;
+      const memberJson = member.toJSON();
+      memberJson.skills = skillList;
+      memberJson.role = roleList.length > 0
+        ? { role_name: roleList.map(r => r.role_name).join(", ") }
+        : null; 
+      memberJson.equipment_ownership = equipmentList.map(eq => ({
+        equipment_id: eq.equipment_id,
+        equipment_name: eq.equipment_name
+      }));
 
         return res.status(200).json({
             error: false,
