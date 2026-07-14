@@ -69,21 +69,44 @@ const hasValue = (value) => {
   return true;
 };
 
-const buildShootNeedsAttention = (project = {}, formSubmission = null) => {
+const buildShootNeedsAttention = (project = {}, formSubmission = null, options = {}) => {
   const missingFields = [];
   const bookingDays = Array.isArray(project.booking_days) ? project.booking_days : [];
   const hasDate = hasValue(project.event_date) || bookingDays.some((day) => hasValue(day.event_date));
   const hasLocation = hasValue(project.event_location);
   const hasOnboardingForm = !!formSubmission;
+  const cpCompensationNeedsAttention = !!options.cpCompensationNeedsAttention;
 
   if (!hasDate) missingFields.push('date');
   if (!hasLocation) missingFields.push('location');
   if (!hasOnboardingForm) missingFields.push('onboarding_form');
+  if (cpCompensationNeedsAttention) missingFields.push('cp_compensation');
 
   return {
     required: missingFields.length > 0,
     missing_fields: missingFields,
   };
+};
+
+const hasPendingOrMissingCpCompensation = (assignedCrews = [], compensationRows = []) => {
+  const assignedCreatorIds = (Array.isArray(assignedCrews) ? assignedCrews : [])
+    .map((assignment) => Number(assignment?.crew_member_id || assignment?.crew_member?.crew_member_id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+
+  if (!assignedCreatorIds.length) return false;
+
+  const approvedCreatorIds = new Set();
+  let hasPending = false;
+
+  (Array.isArray(compensationRows) ? compensationRows : []).forEach((earning) => {
+    const creatorId = Number(earning?.creator_id);
+    if (!Number.isFinite(creatorId) || creatorId <= 0) return;
+
+    if (earning.approval_status === 'approved') approvedCreatorIds.add(creatorId);
+    if (earning.approval_status === 'pending_approval') hasPending = true;
+  });
+
+  return hasPending || assignedCreatorIds.some((creatorId) => !approvedCreatorIds.has(creatorId));
 };
 
 const normalizeLocationForStorage = (location) => {
@@ -2094,6 +2117,10 @@ exports.getProjectDetails = async (req, res) => {
     const cpCompensationRows = creatorCompensations.map((row) => row.toJSON());
     const cpCompensationLocked = cpCompensationRows.some((earning) => earning.approval_status === 'approved');
     const cpCompensationHasPending = cpCompensationRows.some((earning) => earning.approval_status === 'pending_approval');
+    const cpCompensationNeedsAttention = hasPendingOrMissingCpCompensation(
+      projectJson.assigned_crews,
+      cpCompensationRows
+    );
     const compensationByCreatorId = new Map();
     cpCompensationRows.forEach((earning) => {
       const totalCompensation = Number(earning.net_earning_amount || earning.gross_amount || 0);
@@ -2322,7 +2349,7 @@ exports.getProjectDetails = async (req, res) => {
           cp_compensation_locked: cpCompensationLocked,
           cp_compensation_has_pending: cpCompensationHasPending,
           cp_compensation_status: cpCompensationLocked ? 'approved' : cpCompensationHasPending ? 'pending_approval' : null,
-          needs_attention: buildShootNeedsAttention(projectJson, formSubmission),
+          needs_attention: buildShootNeedsAttention(projectJson, formSubmission, { cpCompensationNeedsAttention }),
           sales_leads: undefined // Remove from main object to avoid redundancy
         },
         timeline_status: timelineStatus,
@@ -3560,9 +3587,29 @@ exports.getAllProjectDetails = async (req, res) => {
       });
     }
 
-    const shootNotesCountMap = await countActiveShootNotesByBookingIds(
-      projectRows.map((project) => project.stream_project_booking_id)
-    );
+    const projectBookingIds = projectRows.map((project) => project.stream_project_booking_id);
+    const [shootNotesCountMap, cpCompensationRowsForProjects] = await Promise.all([
+      countActiveShootNotesByBookingIds(projectBookingIds),
+      projectBookingIds.length
+        ? db.creator_earnings.findAll({
+            where: {
+              booking_id: { [Sequelize.Op.in]: projectBookingIds },
+              approval_status: { [Sequelize.Op.in]: ['draft', 'pending_approval', 'approved', 'rejected'] }
+            },
+            attributes: ['booking_id', 'creator_id', 'approval_status'],
+            raw: true
+          })
+        : Promise.resolve([])
+    ]);
+
+    const cpCompensationByBookingId = new Map();
+    cpCompensationRowsForProjects.forEach((earning) => {
+      const bookingId = Number(earning.booking_id);
+      if (!Number.isFinite(bookingId) || bookingId <= 0) return;
+      const rows = cpCompensationByBookingId.get(bookingId) || [];
+      rows.push(earning);
+      cpCompensationByBookingId.set(bookingId, rows);
+    });
 
     let projectDetails = await Promise.all(projectRows.map(async (project) => {
       const shootNotesCount = shootNotesCountMap.get(Number(project.stream_project_booking_id)) || 0;
@@ -3670,6 +3717,11 @@ exports.getAllProjectDetails = async (req, res) => {
         ...project.toJSON(),
         booking_days: bookingDaysData
       };
+      const cpCompensationRows = cpCompensationByBookingId.get(Number(project.stream_project_booking_id)) || [];
+      const cpCompensationNeedsAttention = hasPendingOrMissingCpCompensation(
+        assignedCrewData,
+        cpCompensationRows
+      );
 
       return {
         project: {
@@ -3685,7 +3737,7 @@ exports.getAllProjectDetails = async (req, res) => {
           event_type_labels: formattedTypes.join(', '),
           timeline_status: timelineStatus,
           timeline_label: timelineLabel,
-          needs_attention: buildShootNeedsAttention(projectJson, formSubmission),
+          needs_attention: buildShootNeedsAttention(projectJson, formSubmission, { cpCompensationNeedsAttention }),
           event_location: (() => {
             const loc = project.event_location;
             if (!loc) return null;
