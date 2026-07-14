@@ -13232,6 +13232,105 @@ exports.getAllAssignedRequests = async (req, res) => {
   }
 };
 
+exports.getCrewMemberAssignedProjectsByDate = async (req, res) => {
+  try {
+    const crew_member_id = req.params.crew_member_id || req.query.crew_member_id;
+
+    if (!crew_member_id) {
+      return res.status(400).json({
+        error: true,
+        message: "crew_member_id is required",
+      });
+    }
+
+    const STATUS_MAP = {
+      0: "pending",
+      1: "accepted",
+      2: "rejected",
+    };
+
+    const today = moment().format('YYYY-MM-DD');
+
+    const assignments = await assigned_crew.findAll({
+      where: {
+        crew_member_id,
+        is_active: 1,
+      },
+      include: [
+        {
+          model: stream_project_booking,
+          as: "project",
+          required: true,
+        },
+      ],
+      order: [
+        [{ model: stream_project_booking, as: "project" }, "event_date", "ASC"],
+        ["created_at", "DESC"],
+      ],
+    });
+
+    const formatAssignment = (assignment) => {
+      const plain = assignment.toJSON();
+      const project = plain.project || null;
+
+      return {
+        assignment_id: plain.id,
+        project_id: plain.project_id,
+        crew_member_id: plain.crew_member_id,
+        status: STATUS_MAP[plain.crew_accept] || plain.status || "unknown",
+        crew_accept: plain.crew_accept,
+        assigned_status: plain.status,
+        assigned_date: plain.assigned_date,
+        responded_at: plain.responded_at,
+        created_at: plain.created_at,
+        updated_at: plain.updated_at,
+        project,
+      };
+    };
+
+    const upcoming = [];
+    const past = [];
+
+    assignments.forEach((assignment) => {
+      const item = formatAssignment(assignment);
+      const eventDate = item.project?.event_date;
+
+      if (eventDate && eventDate < today) {
+        past.push(item);
+      } else {
+        upcoming.push(item);
+      }
+    });
+
+    past.sort((a, b) => {
+      const aDate = a.project?.event_date || '';
+      const bDate = b.project?.event_date || '';
+      return bDate.localeCompare(aDate);
+    });
+
+    return res.status(200).json({
+      error: false,
+      message: "Crew member assigned projects fetched successfully",
+      data: {
+        crew_member_id: Number(crew_member_id),
+        counts: {
+          upcoming: upcoming.length,
+          past: past.length,
+          total: assignments.length,
+        },
+        upcoming,
+        past,
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching crew member assigned projects:', error);
+    return res.status(500).json({
+      error: true,
+      message: 'Internal server error',
+    });
+  }
+};
+
 const formatUserTypeAsRole = (role, totalUsers = 0) => ({
   role_id: role.user_type_id,
   name: role.user_role,
