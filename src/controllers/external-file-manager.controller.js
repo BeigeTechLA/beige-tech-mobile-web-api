@@ -4461,6 +4461,41 @@ const normalizeSharedUploadPhase = (value) => {
 const normalizeSharedStorageFilepath = (value) =>
   normalizePathForAccess(value).replace(/^Website_Shoots_Flow\//i, '');
 
+const normalizeSharedUploadLocationSegment = (value) =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+
+const ensureSharedUploadAllowedLocation = (phase, path) => {
+  const normalizedPhase = normalizeSharedUploadPhase(phase);
+  const pathSegments = normalizePathForAccess(path)
+    .split('/')
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  const rootSegment = normalizeSharedUploadLocationSegment(pathSegments[0]);
+
+  const isAllowed =
+    normalizedPhase === 'pre' ||
+    (normalizedPhase === 'post' && pathSegments.length > 0) ||
+    (!normalizedPhase && rootSegment === 'preproduction' && pathSegments.length > 0) ||
+    (!normalizedPhase && rootSegment === 'postproduction' && pathSegments.length > 1);
+
+  if (!isAllowed) {
+    const error = new Error('Uploads are allowed only inside Pre-Production or Post-Production folders');
+    error.status = 400;
+    throw error;
+  }
+};
+
+const getParentFolderPath = (path) => {
+  const segments = normalizePathForAccess(path)
+    .split('/')
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  return segments.slice(0, -1).join('/');
+};
+
 const resolveSharedUploadFilepath = async (share, requestedPhase, requestedPath, fileName) => {
   const safeFileName = sanitizeFolderName(fileName, 'file');
   if (!safeFileName) {
@@ -4478,6 +4513,7 @@ const resolveSharedUploadFilepath = async (share, requestedPhase, requestedPath,
   const phaseToUse = normalizeSharedUploadPhase(requestedPhase) || normalizeSharedUploadPhase(share?.phase);
   const pathToUse = normalizePathForAccess(requestedPath || share?.path || '');
   ensureSharedScopeAccess(share, phaseToUse, pathToUse);
+  ensureSharedUploadAllowedLocation(phaseToUse, pathToUse);
 
   const phaseFolder = phaseToUse === 'pre' ? 'pre-production' : phaseToUse === 'post' ? 'post-production' : '';
   const workspaceRootPath = await getSharedWorkspaceRootPath(share.external_id);
@@ -5231,11 +5267,17 @@ exports.notifySharedFileUploaded = async (req, res) => {
     const requestedPhase = normalizeSharedUploadPhase(req.body.phase);
     const requestedRelativePath = normalizePathForAccess(req.body.path || '');
     const extractedFromFilepath = extractPhaseAndRelativePath(filepath, requestedPhase);
+    const effectivePhase = extractedFromFilepath.phase || requestedPhase;
+    const effectiveRelativePath = extractedFromFilepath.relativePath || requestedRelativePath;
+    const uploadFolderPath = extractedFromFilepath.relativePath
+      ? getParentFolderPath(extractedFromFilepath.relativePath)
+      : requestedRelativePath;
     ensureSharedScopeAccess(
       share,
-      extractedFromFilepath.phase || requestedPhase,
-      extractedFromFilepath.relativePath || requestedRelativePath
+      effectivePhase,
+      effectiveRelativePath
     );
+    ensureSharedUploadAllowedLocation(effectivePhase, uploadFolderPath);
 
     const result = await proxyRequest('/file-uploaded', {
       method: 'POST',
@@ -5295,11 +5337,17 @@ exports.notifySharedFilesUploadedBatch = async (req, res) => {
         const requestedPhase = normalizeSharedUploadPhase(item?.phase ?? req.body.phase);
         const requestedRelativePath = normalizePathForAccess((item?.path ?? req.body.path) || '');
         const extractedFromFilepath = extractPhaseAndRelativePath(filepath, requestedPhase);
+        const effectivePhase = extractedFromFilepath.phase || requestedPhase;
+        const effectiveRelativePath = extractedFromFilepath.relativePath || requestedRelativePath;
+        const uploadFolderPath = extractedFromFilepath.relativePath
+          ? getParentFolderPath(extractedFromFilepath.relativePath)
+          : requestedRelativePath;
         ensureSharedScopeAccess(
           share,
-          extractedFromFilepath.phase || requestedPhase,
-          extractedFromFilepath.relativePath || requestedRelativePath
+          effectivePhase,
+          effectiveRelativePath
         );
+        ensureSharedUploadAllowedLocation(effectivePhase, uploadFolderPath);
         validItems.push({
           filepath,
           fileContentType: item?.fileContentType,
