@@ -69,6 +69,30 @@ const hasValue = (value) => {
   return true;
 };
 
+const CREATIVE_PARTNER_ROLE_GROUPS = {
+  videographer: ['9', '1'],
+  photographer: ['10', '2'],
+  cinematographer: ['11', '3']
+};
+
+const CREATIVE_PARTNER_ROLE_ID_TO_CATEGORY = Object.entries(CREATIVE_PARTNER_ROLE_GROUPS)
+  .reduce((map, [category, ids]) => {
+    ids.forEach((id) => {
+      map[String(id)] = category;
+    });
+    return map;
+  }, {});
+
+const parseMaybeJson = (value, fallback = null) => {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return fallback;
+  }
+};
+
 const buildShootNeedsAttention = (project = {}, formSubmission = null, options = {}) => {
   const missingFields = [];
   const bookingDays = Array.isArray(project.booking_days) ? project.booking_days : [];
@@ -77,10 +101,10 @@ const buildShootNeedsAttention = (project = {}, formSubmission = null, options =
   const hasOnboardingForm = !!formSubmission;
   const cpCompensationNeedsAttention = !!options.cpCompensationNeedsAttention;
 
+  if (cpCompensationNeedsAttention) missingFields.push('cp_compensation');
+  if (!hasOnboardingForm) missingFields.push('onboarding_form');
   if (!hasDate) missingFields.push('date');
   if (!hasLocation) missingFields.push('location');
-  if (!hasOnboardingForm) missingFields.push('onboarding_form');
-  if (cpCompensationNeedsAttention) missingFields.push('cp_compensation');
 
   return {
     required: missingFields.length > 0,
@@ -88,25 +112,87 @@ const buildShootNeedsAttention = (project = {}, formSubmission = null, options =
   };
 };
 
+const normalizeRequestedCreativePartnerRoles = (crewRoles) => {
+  const parsed = parseMaybeJson(crewRoles, {});
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+
+  return Object.entries(parsed).reduce((roles, [role, count]) => {
+    const normalizedRole = String(role || '').toLowerCase().trim();
+    const required = Number.parseInt(count, 10) || 0;
+    if (normalizedRole && required > 0) roles[normalizedRole] = required;
+    return roles;
+  }, {});
+};
+
+const getCreativePartnerRoleCategories = (primaryRole) => {
+  const parsedRole = parseMaybeJson(primaryRole, primaryRole);
+  const roleIds = Array.isArray(parsedRole)
+    ? parsedRole
+    : (parsedRole !== null && parsedRole !== undefined ? [parsedRole] : []);
+
+  return [...new Set(
+    roleIds
+      .map((id) => CREATIVE_PARTNER_ROLE_ID_TO_CATEGORY[String(id)])
+      .filter(Boolean)
+  )];
+};
+
+const hasMissingCpAssignment = (project = {}, assignedCrews = []) => {
+  const requestedRoles = normalizeRequestedCreativePartnerRoles(project.crew_roles);
+  const fulfillment = Object.entries(requestedRoles).reduce((summary, [role, required]) => {
+    summary[role] = { required, assigned: 0 };
+    return summary;
+  }, {});
+
+  if (!Object.keys(fulfillment).length) return false;
+
+  (Array.isArray(assignedCrews) ? assignedCrews : []).forEach((assignment) => {
+    if (Number(assignment?.crew_accept) === 2) return;
+
+    const categories = getCreativePartnerRoleCategories(assignment?.crew_member?.primary_role);
+    const targetCategory = categories.find((category) =>
+      fulfillment[category] && fulfillment[category].assigned < fulfillment[category].required
+    );
+
+    if (targetCategory) fulfillment[targetCategory].assigned += 1;
+  });
+
+  return Object.values(fulfillment).some((role) => role.assigned < role.required);
+};
+
+const VALID_CP_COMPENSATION_STATUSES = new Set([
+  'pending_approval',
+  'approved',
+  'paid',
+  'partially_paid',
+  'completed'
+]);
+
 const hasPendingOrMissingCpCompensation = (assignedCrews = [], compensationRows = []) => {
   const assignedCreatorIds = (Array.isArray(assignedCrews) ? assignedCrews : [])
+    .filter((assignment) => Number(assignment?.crew_accept) !== 2)
     .map((assignment) => Number(assignment?.crew_member_id || assignment?.crew_member?.crew_member_id))
     .filter((id) => Number.isFinite(id) && id > 0);
 
   if (!assignedCreatorIds.length) return false;
 
-  const approvedCreatorIds = new Set();
-  let hasPending = false;
+  const compensatedCreatorIds = new Set();
 
   (Array.isArray(compensationRows) ? compensationRows : []).forEach((earning) => {
     const creatorId = Number(earning?.creator_id);
     if (!Number.isFinite(creatorId) || creatorId <= 0) return;
 
-    if (earning.approval_status === 'approved') approvedCreatorIds.add(creatorId);
-    if (earning.approval_status === 'pending_approval') hasPending = true;
+    const approvalStatus = String(earning?.approval_status || '').trim().toLowerCase();
+    const earningStatus = String(earning?.status || '').trim().toLowerCase();
+    if (
+      VALID_CP_COMPENSATION_STATUSES.has(approvalStatus) ||
+      VALID_CP_COMPENSATION_STATUSES.has(earningStatus)
+    ) {
+      compensatedCreatorIds.add(creatorId);
+    }
   });
 
-  return hasPending || assignedCreatorIds.some((creatorId) => !approvedCreatorIds.has(creatorId));
+  return assignedCreatorIds.some((creatorId) => !compensatedCreatorIds.has(creatorId));
 };
 
 const normalizeLocationForStorage = (location) => {
@@ -2108,9 +2194,12 @@ exports.getProjectDetails = async (req, res) => {
     const creatorCompensations = await db.creator_earnings.findAll({
       where: {
         booking_id: projectJson.stream_project_booking_id,
-        approval_status: { [Op.in]: ['pending_approval', 'approved', 'rejected'] }
+        [Op.or]: [
+          { approval_status: { [Op.in]: ['draft', 'pending_approval', 'approved', 'rejected'] } },
+          { status: { [Op.in]: ['paid', 'partially_paid', 'completed'] } }
+        ]
       },
-      attributes: ['creator_earning_id', 'creator_id', 'gross_amount', 'net_earning_amount', 'approval_status'],
+      attributes: ['creator_earning_id', 'creator_id', 'gross_amount', 'net_earning_amount', 'status', 'approval_status'],
       order: [['updated_at', 'DESC'], ['creator_earning_id', 'DESC']]
     });
 
@@ -2121,6 +2210,8 @@ exports.getProjectDetails = async (req, res) => {
       projectJson.assigned_crews,
       cpCompensationRows
     );
+    const cpAssignmentNeedsAttention = hasMissingCpAssignment(projectJson, projectJson.assigned_crews);
+    const cpNeedsAttention = cpAssignmentNeedsAttention || cpCompensationNeedsAttention;
     const compensationByCreatorId = new Map();
     cpCompensationRows.forEach((earning) => {
       const totalCompensation = Number(earning.net_earning_amount || earning.gross_amount || 0);
@@ -2349,7 +2440,9 @@ exports.getProjectDetails = async (req, res) => {
           cp_compensation_locked: cpCompensationLocked,
           cp_compensation_has_pending: cpCompensationHasPending,
           cp_compensation_status: cpCompensationLocked ? 'approved' : cpCompensationHasPending ? 'pending_approval' : null,
-          needs_attention: buildShootNeedsAttention(projectJson, formSubmission, { cpCompensationNeedsAttention }),
+          needs_attention: buildShootNeedsAttention(projectJson, formSubmission, {
+            cpCompensationNeedsAttention: cpNeedsAttention
+          }),
           sales_leads: undefined // Remove from main object to avoid redundancy
         },
         timeline_status: timelineStatus,
@@ -3594,9 +3687,12 @@ exports.getAllProjectDetails = async (req, res) => {
         ? db.creator_earnings.findAll({
             where: {
               booking_id: { [Sequelize.Op.in]: projectBookingIds },
-              approval_status: { [Sequelize.Op.in]: ['draft', 'pending_approval', 'approved', 'rejected'] }
+              [Sequelize.Op.or]: [
+                { approval_status: { [Sequelize.Op.in]: ['draft', 'pending_approval', 'approved', 'rejected'] } },
+                { status: { [Sequelize.Op.in]: ['paid', 'partially_paid', 'completed'] } }
+              ]
             },
-            attributes: ['booking_id', 'creator_id', 'approval_status'],
+            attributes: ['booking_id', 'creator_id', 'status', 'approval_status'],
             raw: true
           })
         : Promise.resolve([])
@@ -3722,6 +3818,8 @@ exports.getAllProjectDetails = async (req, res) => {
         assignedCrewData,
         cpCompensationRows
       );
+      const cpAssignmentNeedsAttention = hasMissingCpAssignment(projectJson, assignedCrewData);
+      const cpNeedsAttention = cpAssignmentNeedsAttention || cpCompensationNeedsAttention;
 
       return {
         project: {
@@ -3737,7 +3835,9 @@ exports.getAllProjectDetails = async (req, res) => {
           event_type_labels: formattedTypes.join(', '),
           timeline_status: timelineStatus,
           timeline_label: timelineLabel,
-          needs_attention: buildShootNeedsAttention(projectJson, formSubmission, { cpCompensationNeedsAttention }),
+          needs_attention: buildShootNeedsAttention(projectJson, formSubmission, {
+            cpCompensationNeedsAttention: cpNeedsAttention
+          }),
           event_location: (() => {
             const loc = project.event_location;
             if (!loc) return null;
