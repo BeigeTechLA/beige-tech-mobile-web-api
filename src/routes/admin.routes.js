@@ -235,6 +235,8 @@ router.post('/remove-project-crew',authMiddleware, admin.removeProjectAssignedCr
 router.get('/get-project-form/:project_id', authMiddleware, projectFormView, admin.getProjectFormByProjectId);
 router.post('/shoots/remind-onboarding-form/:project_id', authMiddleware, admin.sendOnboardingFormReminder);
 router.post('/get-assigned-project-crew', admin.getAllAssignedRequests);
+router.get('/crew-member-assigned-projects', authMiddleware, adminSalesRepresentativeView, admin.getCrewMemberAssignedProjectsByDate);
+router.get('/crew-member-assigned-projects/:crew_member_id', authMiddleware, adminSalesRepresentativeView, admin.getCrewMemberAssignedProjectsByDate);
 router.post('/crew-member-assigned-projects', authMiddleware, adminSalesRepresentativeView, admin.getAllAssignedRequests);
 router.post('/roles/create', authMiddleware, requireSuperAdmin, admin.createRole);
 router.get('/roles', authMiddleware, requireSuperAdmin, admin.getRoles);

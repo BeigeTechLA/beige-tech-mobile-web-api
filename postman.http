@@ -8,7 +8,7 @@
 
 @CP_TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEwOCwidXNlclJvbGUiOiJDcmVhdG9yIiwicGVybWlzc2lvbnNWZXJzaW9uIjoxLCJ1c2VyVHlwZUlkIjoyLCJpYXQiOjE3ODM0MDY3MDUsImV4cCI6MTc4NDAxMTUwNX0.MsCYXitBVLkyRacyEKGkh0d2AzeRrdBq73xFi0R6Sw8
 
-@SALES_TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjIzNiwidXNlclJvbGUiOiJzYWxlc19yZXAiLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjksInVzZXJUeXBlSWQiOjUsImlhdCI6MTc4Mjg4MDg1MywiZXhwIjoxNzgzNDg1NjUzfQ.p_ImbqwLajajk6pxdS53cmDFueKidY9f8gALJfOxmJ0
+@SALES_TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjEsInVzZXJUeXBlSWQiOjEsImlhdCI6MTc4NDAwMjc3OCwiZXhwIjoxNzg0NjA3NTc4fQ.9MuGIagVE3TA5gP1XoZtWBh-mlRpeLaxlLbo6iSO_0Q
 
 @SALES_ADMIN_TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI4MiwidXNlclJvbGUiOiJzdXBlcl9hZG1pbiIsInBlcm1pc3Npb25zVmVyc2lvbiI6MSwidXNlclR5cGVJZCI6OCwiaWF0IjoxNzgzMDczODU5LCJleHAiOjE3ODM2Nzg2NTl9.yYEIoDNSGqT6qj2gm8pkmuOz437nnS6TFqPdlIW8iGY
 
@@ -430,6 +430,16 @@ Authorization: {{SALES_TOKEN}}
 {
   "crew_member_id": "2010"
 }
+
+###
+GET {{URL}}admin/crew-member-assigned-projects/2010 HTTP/1.1
+Content-Type: application/json
+Authorization: {{SALES_TOKEN}}
+
+###
+GET {{URL}}admin/crew-member-assigned-projects?crew_member_id=2010 HTTP/1.1
+Content-Type: application/json
+Authorization: {{SALES_TOKEN}}
 
 ###
 POST {{URL}}admin/get-assigned-project-crew HTTP/1.1
