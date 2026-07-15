@@ -417,72 +417,17 @@ exports.listQuotes = async (req, res) => {
 };
 exports.exportSalesQuotesCsv = async (req, res) => {
   try {
-    const {
-      start_date,
-      end_date
-    } = req.query;
-
-    if (!start_date || !end_date) {
-      return res.status(constants.BAD_REQUEST.code).json({
-        success: false,
-        message: 'start_date and end_date are required'
-      });
-    }
-
-    if (
-      !moment(start_date, 'YYYY-MM-DD', true).isValid() ||
-      !moment(end_date, 'YYYY-MM-DD', true).isValid()
-    ) {
-      return res.status(constants.BAD_REQUEST.code).json({
-        success: false,
-        message: 'Dates must be in YYYY-MM-DD format'
-      });
-    }
-
-    if (moment(start_date).isAfter(moment(end_date))) {
-      return res.status(constants.BAD_REQUEST.code).json({
-        success: false,
-        message: 'start_date cannot be after end_date'
-      });
-    }
-
-    const startDate = moment
-      .utc(start_date, 'YYYY-MM-DD')
-      .startOf('day')
-      .toDate();
-
-    const endDate = moment
-      .utc(end_date, 'YYYY-MM-DD')
-      .endOf('day')
-      .toDate();
-
-    // Fetch all quote IDs from selected date range.
-    const quoteIdRows = await db.sales_quotes.findAll({
-      where: {
-        created_at: {
-          [Op.between]: [startDate, endDate]
-        }
-      },
-      attributes: [
-        'sales_quote_id'
-      ],
-      order: [
-        ['created_at', 'DESC'],
-        ['sales_quote_id', 'DESC']
-      ],
-      raw: true
-    });
-
-    const quoteIds = quoteIdRows
-      .map((row) => Number(row.sales_quote_id))
-      .filter((id) =>
-        Number.isInteger(id) && id > 0
-      );
+    const quoteIds = await quoteService.listQuoteExportIds(
+      req.query,
+      getUserContext(req)
+    );
 
     if (!quoteIds.length) {
       return res.status(constants.NOT_FOUND.code).json({
         success: false,
-        message: 'No quotes found in the selected date range'
+        message: req.query.start_date && req.query.end_date
+          ? 'No quotes found in the selected date range'
+          : 'No quotes found'
       });
     }
 
@@ -621,7 +566,9 @@ exports.exportSalesQuotesCsv = async (req, res) => {
     const csv = parser.parse(rows);
 
     const fileName =
-      `quotes-${start_date}-to-${end_date}.csv`;
+      req.query.start_date && req.query.end_date
+        ? `quotes-${req.query.start_date}-to-${req.query.end_date}.csv`
+        : `quotes-all-records.csv`;
 
     res.setHeader(
       'Content-Type',

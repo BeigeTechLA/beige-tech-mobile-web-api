@@ -38,7 +38,7 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   payments } = require('../models');
   const { deleteSheetRow, updateSheetRow } = require('../utils/googleSheets');
 const leadAssignmentService = require('../services/lead-assignment.service');
-const { extractCoordinatesFromPayload, calculateDistance } = require('../utils/locationHelpers');
+const { extractCoordinatesFromPayload, calculateDistance, parseLocation } = require('../utils/locationHelpers');
 const db = require('../models');
 const bookingTimelineService = require('../services/bookingTimeline.service');
 const accountCreditService = require('../services/account-credit.service');
@@ -4143,63 +4143,74 @@ exports.getProjectStats = async (req, res) => {
 
 exports.exportShootsCsv = async (req, res) => {
   try {
-    const { start_date, end_date } = req.query;
-
-    if (!start_date || !end_date) {
-      return res.status(400).json({
-        success: false,
-        error: true,
-        message: 'Start date and end date are required.',
-      });
-    }
-
-    const startDate = moment(
+    const {
       start_date,
-      'YYYY-MM-DD',
-      true
-    );
-
-    const endDate = moment(
       end_date,
-      'YYYY-MM-DD',
-      true
-    );
+      search,
+      status,
+      range,
+      date_on,
+      category,
+      cp_assignment,
+      production_filter,
+    } = req.query;
 
-    if (!startDate.isValid() || !endDate.isValid()) {
+    const hasStartDate = Boolean(start_date);
+    const hasEndDate = Boolean(end_date);
+
+    if (hasStartDate !== hasEndDate) {
       return res.status(400).json({
         success: false,
         error: true,
-        message: 'Dates must be in YYYY-MM-DD format.',
+        message: 'Select both dates or leave both blank to export all shoots.',
       });
     }
 
-    if (startDate.isAfter(endDate)) {
-      return res.status(400).json({
-        success: false,
-        error: true,
-        message: 'Start date cannot be after end date.',
-      });
+    let dateFilter = {};
+
+    if (hasStartDate && hasEndDate) {
+      const startDate = moment(
+        start_date,
+        'YYYY-MM-DD',
+        true
+      );
+
+      const endDate = moment(
+        end_date,
+        'YYYY-MM-DD',
+        true
+      );
+
+      if (!startDate.isValid() || !endDate.isValid()) {
+        return res.status(400).json({
+          success: false,
+          error: true,
+          message: 'Dates must be in YYYY-MM-DD format.',
+        });
+      }
+
+      if (startDate.isAfter(endDate)) {
+        return res.status(400).json({
+          success: false,
+          error: true,
+          message: 'Start date cannot be after end date.',
+        });
+      }
+
+      dateFilter = {
+        created_at: {
+          [Op.between]: [
+            startDate.clone().startOf('day').toDate(),
+            endDate.clone().endOf('day').toDate(),
+          ],
+        },
+      };
     }
-
-    const startDateTime = startDate
-      .clone()
-      .startOf('day')
-      .toDate();
-
-    const endDateTime = endDate
-      .clone()
-      .endOf('day')
-      .toDate();
 
     const [projects, eventTypes] = await Promise.all([
       stream_project_booking.findAll({
         where: {
-          created_at: {
-            [Op.between]: [
-              startDateTime,
-              endDateTime,
-            ],
-          },
+          ...dateFilter,
         },
         include: [
           {
@@ -4240,7 +4251,7 @@ exports.exportShootsCsv = async (req, res) => {
         success: false,
         error: true,
         message:
-          'No shoots found for the selected date range.',
+          'No shoots found for the selected filters.',
       });
     }
 
@@ -4251,16 +4262,225 @@ exports.exportShootsCsv = async (req, res) => {
       ])
     );
 
-    const csvRows = await Promise.all(
-      projects.map(async (projectRecord) => {
-        const project =
-          typeof projectRecord.toJSON === 'function'
-            ? projectRecord.toJSON()
-            : projectRecord;
+    const categoryConfig = {
+      corporate: ['corporate'],
+      wedding: ['wedding'],
+      private: ['private'],
+      commercial: ['commercial', 'brand', 'advertising'],
+      social: ['social'],
+      podcasts: ['podcast'],
+      music: ['music'],
+      narrative: ['narrative', 'short film'],
+    };
 
+    const normalizedSearch = String(search || '').trim().toLowerCase();
+    const normalizedStatus = normalizeStatusFilterValue(status);
+    const normalizedRange = String(range || '').trim().toLowerCase();
+    const normalizedDateOn = String(date_on || '').trim();
+    const normalizedCategory = String(category || '').trim().toLowerCase();
+    const normalizedCpAssignment = String(cp_assignment || '').trim().toLowerCase();
+    const normalizedProductionFilter = String(production_filter || '').trim().toLowerCase();
+    const today = getTodayDateOnlyString();
+    const rangeBoundaries = {
+      next_7_days: moment(today, 'YYYY-MM-DD', true).add(7, 'days').format('YYYY-MM-DD'),
+      next_15_days: moment(today, 'YYYY-MM-DD', true).add(15, 'days').format('YYYY-MM-DD'),
+      in_1_month: moment(today, 'YYYY-MM-DD', true).add(1, 'month').format('YYYY-MM-DD'),
+      in_2_months: moment(today, 'YYYY-MM-DD', true).add(2, 'month').format('YYYY-MM-DD'),
+      in_6_months: moment(today, 'YYYY-MM-DD', true).add(6, 'month').format('YYYY-MM-DD'),
+      in_1_year: moment(today, 'YYYY-MM-DD', true).add(1, 'year').format('YYYY-MM-DD'),
+    };
+
+    const matchesRangeFilter = (project) => {
+      if (!normalizedRange || normalizedRange === 'all' || normalizedRange === 'custom') {
+        return true;
+      }
+
+      const projectDate = getDateOnlyString(project?.event_date);
+      if (!projectDate) return false;
+
+      if (normalizedRange === 'upcoming') {
+        return projectDate >= today;
+      }
+
+      if (normalizedRange === 'next_7_days') {
+        return projectDate >= today && projectDate <= rangeBoundaries.next_7_days;
+      }
+
+      if (normalizedRange === 'next_15_days') {
+        return projectDate >= today && projectDate <= rangeBoundaries.next_15_days;
+      }
+
+      if (normalizedRange === 'in_1_month') {
+        return projectDate >= today && projectDate <= rangeBoundaries.in_1_month;
+      }
+
+      if (normalizedRange === 'in_2_months') {
+        return projectDate >= today && projectDate <= rangeBoundaries.in_2_months;
+      }
+
+      if (normalizedRange === 'in_6_months') {
+        return projectDate >= today && projectDate <= rangeBoundaries.in_6_months;
+      }
+
+      if (normalizedRange === 'in_1_year') {
+        return projectDate >= today && projectDate <= rangeBoundaries.in_1_year;
+      }
+
+      return true;
+    };
+
+    const matchesCategoryFilter = (project) => {
+      if (!normalizedCategory || normalizedCategory === 'all') {
+        return true;
+      }
+
+      const keywords = categoryConfig[normalizedCategory];
+      const projectName = String(project?.project_name || '').toLowerCase();
+
+      if (Array.isArray(keywords) && keywords.length > 0) {
+        return keywords.some((keyword) =>
+          projectName.includes(String(keyword).toLowerCase())
+        );
+      }
+
+      const categoryLabel = String(
+        getShootCategoryLabel(project, eventTypeMap)
+      ).toLowerCase();
+
+      return categoryLabel.includes(normalizedCategory);
+    };
+
+    const matchesSearchFilter = (project) => {
+      if (!normalizedSearch) return true;
+
+      const phoneValue = extractShootPhoneFromDescription(project?.description);
+      const searchableValues = [
+        project?.project_name,
+        project?.stream_project_booking_id,
+        project?.guest_email,
+        project?.description,
+        phoneValue,
+      ]
+        .filter(Boolean)
+        .map((value) => String(value).toLowerCase());
+
+      return searchableValues.some((value) => value.includes(normalizedSearch));
+    };
+
+    const matchesCpAssignmentFilter = (project) => {
+      if (!normalizedCpAssignment || normalizedCpAssignment === 'all') {
+        return true;
+      }
+
+      const assignedCrews = Array.isArray(project?.assigned_crews)
+        ? project.assigned_crews
+        : [];
+      const selectedCrewIds = Array.isArray(project?.selected_crew_ids)
+        ? project.selected_crew_ids
+        : [];
+      const hasAssigned = assignedCrews.length > 0 || selectedCrewIds.length > 0;
+
+      if (normalizedCpAssignment === 'assigned') return hasAssigned;
+      if (normalizedCpAssignment === 'not_assigned') return !hasAssigned;
+      return true;
+    };
+
+    let filteredProjects = projects
+      .map((projectRecord) => (
+        typeof projectRecord.toJSON === 'function'
+          ? projectRecord.toJSON()
+          : projectRecord
+      ))
+      .filter((project) => matchesRangeFilter(project))
+      .filter((project) => !normalizedStatus || normalizedStatus === 'all' || matchShootStatusFilter(project, normalizedStatus))
+      .filter((project) => {
+        if (normalizedRange === 'custom' && normalizedDateOn) {
+          return getDateOnlyString(project?.event_date) === normalizedDateOn;
+        }
+        return true;
+      })
+      .filter((project) => matchesCategoryFilter(project))
+      .filter((project) => matchesSearchFilter(project))
+      .filter((project) => matchesCpAssignmentFilter(project));
+
+    if (normalizedProductionFilter && normalizedProductionFilter !== 'all') {
+      const authHeader = req.headers?.authorization || null;
+      const bookingIds = Array.from(
+        new Set(
+          filteredProjects
+            .map((project) => Number(project?.stream_project_booking_id || 0))
+            .filter((id) => Number.isFinite(id) && id > 0)
+        )
+      );
+
+      const needsMeetingData =
+        normalizedProductionFilter === 'pre_production_meeting_not_done' ||
+        normalizedProductionFilter === 'post_production_meeting_not_done';
+      const needsPreFileData = normalizedProductionFilter === 'pre_production_file_not_provided';
+      const needsPostFileData = normalizedProductionFilter === 'post_production_file_not_uploaded';
+
+      const [meetingsByBookingId, preFileFlags, postFileFlags] = await Promise.all([
+        needsMeetingData ? fetchExternalMeetingsByBookingIds(bookingIds, { authHeader }) : Promise.resolve(new Map()),
+        (async () => {
+          if (!needsPreFileData) return new Map();
+          const map = new Map();
+          await Promise.all(
+            bookingIds.map(async (bookingId) => {
+              map.set(bookingId, await hasExternalWorkspaceFiles(bookingId, 'pre', { authHeader }));
+            })
+          );
+          return map;
+        })(),
+        (async () => {
+          if (!needsPostFileData) return new Map();
+          const map = new Map();
+          await Promise.all(
+            bookingIds.map(async (bookingId) => {
+              map.set(bookingId, await hasExternalWorkspaceFiles(bookingId, 'post', { authHeader }));
+            })
+          );
+          return map;
+        })(),
+      ]);
+
+      filteredProjects = filteredProjects.filter((project) => {
+        const bookingId = Number(project?.stream_project_booking_id || 0);
+        const bookingMeetings = meetingsByBookingId.get(String(bookingId)) || meetingsByBookingId.get(bookingId) || [];
+
+        if (normalizedProductionFilter === 'pre_production_file_not_provided') {
+          return preFileFlags.get(bookingId) !== true;
+        }
+
+        if (normalizedProductionFilter === 'pre_production_meeting_not_done') {
+          return !hasScheduledMeetingOfType(bookingMeetings, 'pre_production');
+        }
+
+        if (normalizedProductionFilter === 'post_production_meeting_not_done') {
+          if (!isPostProductionEligible(project)) return false;
+          return !hasScheduledMeetingOfType(bookingMeetings, 'post_production');
+        }
+
+        if (normalizedProductionFilter === 'post_production_file_not_uploaded') {
+          if (!isPostProductionEligible(project)) return false;
+          return postFileFlags.get(bookingId) !== true;
+        }
+
+        return true;
+      });
+    }
+
+    if (!filteredProjects.length) {
+      return res.status(404).json({
+        success: false,
+        error: true,
+        message: 'No shoots found for the selected filters.',
+      });
+    }
+
+    const csvRows = await Promise.all(
+      filteredProjects.map(async (project) => {
         const [contact, amount] = await Promise.all([
           resolveAdminBookingClientContact(project),
-
           resolveProjectTotalValueAmount({
             project,
           }),
@@ -4336,7 +4556,11 @@ exports.exportShootsCsv = async (req, res) => {
     const csv = parser.parse(csvRows);
 
     const fileName =
-      `shoots-${start_date}-to-${end_date}.csv`;
+      hasStartDate && hasEndDate
+        ? `shoots-${start_date}-to-${end_date}.csv`
+        : normalizedRange === 'custom' && normalizedDateOn
+          ? `shoots-${normalizedDateOn}.csv`
+          : 'shoots-all-records.csv';
 
     res.setHeader(
       'Content-Type',
@@ -5588,6 +5812,7 @@ exports.exportCrewMembersCsv = async (req, res) => {
             'last_name',
             'email',
             'phone_number',
+            'location',
             'primary_role',
             'is_crew_verified',
             'is_active',
@@ -5812,6 +6037,13 @@ exports.exportCrewMembersCsv = async (req, res) => {
         const phone =
           member.phone_number || '';
 
+        const locationData = parseLocation(member.location);
+        const location =
+          locationData?.address ||
+          (typeof member.location === 'string'
+            ? member.location
+            : '');
+
         return {
           'User ID': escapeShootCsvValue(
             member.user_id || ''
@@ -5853,6 +6085,10 @@ exports.exportCrewMembersCsv = async (req, res) => {
 
           Phone: escapeShootCsvValue(phone),
 
+          Location: escapeShootCsvValue(
+            location
+          ),
+
           'Shoot IDs':
             escapeShootCsvValue(
               shootIds.join(', ')
@@ -5877,6 +6113,7 @@ exports.exportCrewMembersCsv = async (req, res) => {
       'Referral Code',
       'Email',
       'Phone',
+      'Location',
       'Shoot IDs',
       'Quote IDs'
     ];

@@ -732,6 +732,39 @@ function buildQuoteCreatedAtCondition(range = 'all', dateOn = null) {
   return null;
 }
 
+function buildQuoteListWhere(query, user) {
+  const where = isClientRole(user?.role)
+    ? { ...buildQuoteAccessWhere(user) }
+    : {};
+
+  const statusFilter = normalizeQuoteFilterStatus(query.status);
+  if (statusFilter?.length) {
+    appendAndCondition(where, {
+      status: statusFilter.length === 1 ? statusFilter[0] : { [Op.in]: statusFilter }
+    });
+  }
+
+  applyQuoteSalesRepFilter(where, query.assigned_sales_rep_id, user);
+
+  const createdAtCondition = buildQuoteCreatedAtCondition(query.range, query.date_on);
+
+  if (createdAtCondition) {
+    appendAndCondition(where, { created_at: createdAtCondition });
+  }
+
+  if (query.search) {
+    appendAndCondition(where, {
+      [Op.or]: [
+        { quote_number: { [Op.like]: `%${query.search}%` } },
+        { client_name: { [Op.like]: `%${query.search}%` } },
+        { project_description: { [Op.like]: `%${query.search}%` } }
+      ]
+    });
+  }
+
+  return where;
+}
+
 function getDateRange(range = 'all', dateOn = null) {
   const normalizedRange = String(range || 'all').trim().toLowerCase();
   const now = new Date();
@@ -6236,33 +6269,7 @@ async function listQuotes(query, user) {
   const offset = (page - 1) * limit;
   // Quote listing is shared across admin/sales views where reps are expected
   // to browse all quotes. Keep strict restriction only for client role.
-  const where = isClientRole(user?.role)
-    ? { ...buildQuoteAccessWhere(user) }
-    : {};
-
-  const statusFilter = normalizeQuoteFilterStatus(query.status);
-  if (statusFilter?.length) {
-    appendAndCondition(where, {
-      status: statusFilter.length === 1 ? statusFilter[0] : { [Op.in]: statusFilter }
-    });
-  }
-
-  applyQuoteSalesRepFilter(where, query.assigned_sales_rep_id, user);
-
-  const createdAtCondition = buildQuoteCreatedAtCondition(query.range, query.date_on);
-  if (createdAtCondition) {
-    appendAndCondition(where, { created_at: createdAtCondition });
-  }
-
-  if (query.search) {
-    appendAndCondition(where, {
-      [Op.or]: [
-        { quote_number: { [Op.like]: `%${query.search}%` } },
-        { client_name: { [Op.like]: `%${query.search}%` } },
-        { project_description: { [Op.like]: `%${query.search}%` } }
-      ]
-    });
-  }
+  const where = buildQuoteListWhere(query, user);
 
   const sortBy = query.sort_by === 'valid_until' ? 'valid_until' : 'created_at';
   const sortOrder = String(query.sort_order || 'DESC').toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
@@ -6419,6 +6426,52 @@ async function listQuotes(query, user) {
     summary,
     rows: rowsWithFinancialDetails
   };
+}
+
+async function listQuoteExportIds(query, user) {
+  await expireQuotesPastValidUntil();
+
+  const where = buildQuoteListWhere(query, user);
+
+  const hasStartDate = Boolean(query?.start_date);
+  const hasEndDate = Boolean(query?.end_date);
+
+  if (hasStartDate !== hasEndDate) {
+    throw new Error('Select both dates or leave both blank to export all quotes');
+  }
+
+  if (hasStartDate && hasEndDate) {
+    const startDate = new Date(`${String(query.start_date).trim()}T00:00:00.000Z`);
+    const endDate = new Date(`${String(query.end_date).trim()}T23:59:59.999Z`);
+
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+      throw new Error('Dates must be in YYYY-MM-DD format');
+    }
+
+    if (startDate > endDate) {
+      throw new Error('start_date cannot be after end_date');
+    }
+
+    appendAndCondition(where, {
+      created_at: {
+        [Op.between]: [startDate, endDate]
+      }
+    });
+  }
+
+  const quoteIdRows = await db.sales_quotes.findAll({
+    where,
+    attributes: ['sales_quote_id'],
+    order: [
+      ['created_at', 'DESC'],
+      ['sales_quote_id', 'DESC']
+    ],
+    raw: true
+  });
+
+  return quoteIdRows
+    .map((row) => Number(row.sales_quote_id))
+    .filter((id) => Number.isInteger(id) && id > 0);
 }
 
 async function getQuoteDashboard(query, user) {
@@ -6970,6 +7023,7 @@ module.exports = {
   getLatestPublicQuotePreviewLink,
   getPublicQuoteByKey,
   listQuotes,
+  listQuoteExportIds,
   getQuoteDashboard,
   updateQuoteStatus,
   sendQuoteProposal,
