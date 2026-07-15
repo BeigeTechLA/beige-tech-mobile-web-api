@@ -4157,6 +4157,11 @@ exports.exportShootsCsv = async (req, res) => {
 
     const hasStartDate = Boolean(start_date);
     const hasEndDate = Boolean(end_date);
+    const requestUserId = Number(req.user?.userId || req.user?.id || req.userId);
+    const requestUserRole = String(req.user?.userRole || req.userRole || '').toLowerCase().trim();
+    const clientProjectFilter = requestUserRole === 'client' && Number.isInteger(requestUserId) && requestUserId > 0
+      ? { user_id: requestUserId }
+      : {};
 
     if (hasStartDate !== hasEndDate) {
       return res.status(400).json({
@@ -4198,7 +4203,7 @@ exports.exportShootsCsv = async (req, res) => {
       }
 
       dateFilter = {
-        created_at: {
+        event_date: {
           [Op.between]: [
             startDate.clone().startOf('day').toDate(),
             endDate.clone().endOf('day').toDate(),
@@ -4207,9 +4212,108 @@ exports.exportShootsCsv = async (req, res) => {
       };
     }
 
+    const [
+      bookedSalesLeads,
+      bookedClientLeads,
+      salesManualPaymentActivities,
+      clientManualPaymentActivities,
+      collectedPaymentSummaryRows,
+    ] = await Promise.all([
+      sales_leads.findAll({
+        where: {
+          is_active: 1,
+          lead_status: 'booked',
+          booking_id: { [Sequelize.Op.ne]: null },
+        },
+        attributes: ['booking_id'],
+        raw: true,
+      }),
+      client_leads.findAll({
+        where: {
+          is_active: 1,
+          lead_status: 'booked',
+          booking_id: { [Sequelize.Op.ne]: null },
+        },
+        attributes: ['booking_id'],
+        raw: true,
+      }),
+      sales_lead_activities.findAll({
+        where: {
+          activity_type: 'payment_completed',
+        },
+        attributes: ['lead_id'],
+        raw: true,
+      }),
+      client_lead_activities.findAll({
+        where: {
+          activity_type: 'payment_completed',
+        },
+        attributes: ['lead_id'],
+        raw: true,
+      }),
+      fetchCollectedBookingPaymentSummaries(),
+    ]);
+
+    const manualSalesLeadIds = Array.from(new Set(
+      salesManualPaymentActivities
+        .map((row) => Number(row.lead_id))
+        .filter(Number.isFinite)
+    ));
+
+    const manualClientLeadIds = Array.from(new Set(
+      clientManualPaymentActivities
+        .map((row) => Number(row.lead_id))
+        .filter(Number.isFinite)
+    ));
+
+    const [manualPaidSalesLeads, manualPaidClientLeads] = await Promise.all([
+      manualSalesLeadIds.length
+        ? sales_leads.findAll({
+            where: {
+              is_active: 1,
+              lead_id: { [Sequelize.Op.in]: manualSalesLeadIds },
+              booking_id: { [Sequelize.Op.ne]: null },
+            },
+            attributes: ['booking_id'],
+            raw: true,
+          })
+        : Promise.resolve([]),
+      manualClientLeadIds.length
+        ? client_leads.findAll({
+            where: {
+              is_active: 1,
+              lead_id: { [Sequelize.Op.in]: manualClientLeadIds },
+              booking_id: { [Sequelize.Op.ne]: null },
+            },
+            attributes: ['booking_id'],
+            raw: true,
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const bookedBookingIds = Array.from(new Set([
+      ...bookedSalesLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
+      ...bookedClientLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
+      ...manualPaidSalesLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
+      ...manualPaidClientLeads.map((row) => Number(row.booking_id)).filter(Number.isFinite),
+      ...collectedPaymentSummaryRows.map((row) => Number(row.booking_id)).filter(Number.isFinite),
+    ]));
+
+    const paidOnlyFilter = {
+      is_active: 1,
+      ...clientProjectFilter,
+      [Sequelize.Op.or]: [
+        { payment_id: { [Sequelize.Op.ne]: null } },
+        ...(bookedBookingIds.length > 0
+          ? [{ stream_project_booking_id: { [Sequelize.Op.in]: bookedBookingIds } }]
+          : []),
+      ],
+    };
+
     const [projects, eventTypes] = await Promise.all([
       stream_project_booking.findAll({
         where: {
+          ...paidOnlyFilter,
           ...dateFilter,
         },
         include: [
