@@ -159,18 +159,79 @@ const normalizeDateOnlyInput = (value) => {
 };
 
 async function resolveUserId(userId, guestEmail) {
-  if (userId) return parseInt(userId);
-  if (!guestEmail) return null;
+  const normalizedEmail = guestEmail ? String(guestEmail).trim().toLowerCase() : '';
+  if (normalizedEmail) {
+    const existingUser = await db.users.findOne({
+      where: db.sequelize.where(
+        db.sequelize.fn('LOWER', db.sequelize.col('email')),
+        normalizedEmail
+      ),
+      attributes: ['id']
+    });
+
+    if (existingUser) return existingUser.id;
+
+    if (userId) {
+      const suppliedUser = await db.users.findByPk(parseInt(userId, 10), {
+        attributes: ['id', 'email']
+      });
+      const suppliedUserEmail = suppliedUser?.email
+        ? String(suppliedUser.email).trim().toLowerCase()
+        : '';
+
+      return suppliedUserEmail === normalizedEmail ? suppliedUser.id : null;
+    }
+  }
+
+  return userId ? parseInt(userId, 10) : null;
+}
+
+async function ensureGuestClientForBooking({ userId, guestEmail, fullName, phone, transaction }) {
+  if (userId || !guestEmail) return null;
 
   const normalizedEmail = String(guestEmail).trim().toLowerCase();
-  if (!normalizedEmail) return null;
+  const normalizedPhone = phone ? String(phone).trim() : '';
+  const name = fullName
+    ? String(fullName).trim()
+    : normalizedEmail.split('@')[0] || 'Guest Client';
+
+  const duplicateConditions = [
+    normalizedEmail ? { email: normalizedEmail } : null,
+    normalizedPhone ? { phone_number: normalizedPhone } : null
+  ].filter(Boolean);
+
+  if (!duplicateConditions.length || !name || !normalizedPhone) {
+    return null;
+  }
 
   const existingUser = await db.users.findOne({
-    where: { email: normalizedEmail },
-    attributes: ['id']
+    where: {
+      [db.Sequelize.Op.or]: duplicateConditions
+    },
+    attributes: ['id'],
+    transaction
   });
 
-  return existingUser ? existingUser.id : null;
+  if (existingUser) {
+    return null;
+  }
+
+  const existingClient = await db.clients.findOne({
+    where: {
+      [db.Sequelize.Op.or]: duplicateConditions
+    },
+    transaction
+  });
+
+  if (existingClient) {
+    return existingClient;
+  }
+
+  return db.clients.create({
+    name,
+    email: normalizedEmail,
+    phone_number: normalizedPhone
+  }, { transaction });
 }
 
 const notifyAssignedCreators = async (
@@ -739,6 +800,13 @@ exports.createGuestBooking = async (req, res) => {
     let booking;
     try {
       booking = await stream_project_booking.create(bookingData, { transaction: tx });
+      await ensureGuestClientForBooking({
+        userId: resolvedUserId,
+        guestEmail: normalizedGuestEmail,
+        fullName: full_name,
+        phone,
+        transaction: tx
+      });
 
       if (booking_type === 'multi_day' && normalizedBookingDays.length > 0) {
         const dayRows = normalizedBookingDays.map((d) => ({
@@ -1104,6 +1172,13 @@ exports.updateGuestBooking = async (req, res) => {
     try {
       // Update booking
       await booking.update(updateData, { transaction: tx });
+      await ensureGuestClientForBooking({
+        userId: booking.user_id || resolvedUserId,
+        guestEmail: lookupEmail,
+        fullName: full_name,
+        phone,
+        transaction: tx
+      });
 
       if (hasStudioItemsPayload) {
         await studioBookingService.replaceBookAShootStudioBookings({

@@ -66,6 +66,7 @@ router.post('/revision-file/review', authenticate, externalFileManagerController
 router.post('/file-view-url', authenticate, fileManagerView, externalFileManagerController.getFileViewUrl);
 router.post('/file-download-url', authenticate, fileManagerView, externalFileManagerController.getFileDownloadUrl);
 router.post('/folder-download-url', authenticate, fileManagerView, externalFileManagerController.getFolderDownloadUrl);
+router.post('/selected-download', authenticate, fileManagerView, externalFileManagerController.downloadSelectedFilesZip);
 router.post('/delete', authenticate, fileManagerDelete, externalFileManagerController.deleteEntry);
 router.post('/share', authenticate, fileManagerCreate, externalFileManagerController.createShare);
 router.get('/share', authenticate, fileManagerView, externalFileManagerController.listShares);
@@ -77,5 +78,9 @@ router.post('/share/verify-otp', externalFileManagerController.verifyShareOtp);
 router.get('/share/:shareToken/content', externalFileManagerController.getSharedContent);
 router.get('/share/:shareToken/view-url', externalFileManagerController.getSharedViewUrl);
 router.get('/share/:shareToken/download-url', externalFileManagerController.getSharedDownloadUrl);
+router.post('/share/:shareToken/upload-policy', externalFileManagerController.getSharedUploadPolicy);
+router.post('/share/:shareToken/upload-policies/batch', externalFileManagerController.getSharedUploadPoliciesBatch);
+router.post('/share/:shareToken/file-uploaded', externalFileManagerController.notifySharedFileUploaded);
+router.post('/share/:shareToken/files-uploaded/batch', externalFileManagerController.notifySharedFilesUploadedBatch);
 
 module.exports = router;

@@ -85,8 +85,20 @@ const uploadS3File = async (files, field) => {
   return file.public_id;
 };
 
-const S3UploadFiles = async (files) => {
+const sanitizeS3Prefix = (value = '') => (
+  String(value || '')
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\/+|\/+$/g, '')
+    .split('/')
+    .map((part) => part.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/-+/g, '-'))
+    .filter(Boolean)
+    .join('/')
+);
+
+const S3UploadFiles = async (files, options = {}) => {
   let filePaths = [];
+  const uploadPrefix = sanitizeS3Prefix(options.prefix || options.folder || '');
 
   if (!files) return filePaths;
 
@@ -98,7 +110,8 @@ const S3UploadFiles = async (files) => {
       const ext = path.extname(file.filename).replace('.', '');
       const randomNumber = Math.floor(Math.random() * 101);
 
-      file.public_id = `${field}_${randomNumber}_${currentImageVersion}.${ext}`;
+      const fileName = `${field}_${randomNumber}_${currentImageVersion}.${ext}`;
+      file.public_id = uploadPrefix ? `${uploadPrefix}/${fileName}` : fileName;
 
       // Process image if it's an image file
       let uploadPath = file.path;
@@ -148,4 +161,3 @@ module.exports = {
   S3UploadFiles,
   toAbsoluteBeigeAssetUrl
 };
-

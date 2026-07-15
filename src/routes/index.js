@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const externalFileManagerController = require('../controllers/external-file-manager.controller');
 console.log('✅ index.js loaded');
 // API Info endpoint
 // router.get('/', (req, res) => {
@@ -33,6 +34,7 @@ router.use('/bookings', require('./bookings.routes'));
 router.use('/guest-bookings', require('./guest-bookings.routes'));
 router.use('/payments', require('./payments.routes'));
 router.use('/finance', require('./finance.routes'));
+router.use('/creator-earnings', require('./creator-earnings.routes'));
 router.use('/waitlist', require('./waitlist.routes'));
 router.use('/investors', require('./investor.routes'));
 router.use('/admin', require('./admin.routes'));
@@ -43,6 +45,7 @@ router.use('/client', require('./client.routes'));
 router.use('/sales', require('./sales.routes'));
 router.use('/studios', require('./studios.routes'));
 router.use('/external-file-manager', require('./external-file-manager.routes'));
+router.get('/gcp/download-folder', externalFileManagerController.downloadFolderZip);
 router.use('/external-chat', require('./external-chat.routes'));
 router.use('/external-meetings', require('./external-meetings.routes'));
 router.use('/comments', require('./comments.routes'));

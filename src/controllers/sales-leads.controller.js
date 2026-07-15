@@ -964,18 +964,31 @@ function normalizeIsDraft(is_draft) {
 }
 
 async function resolveUserId(userId, guestEmail) {
-  if (userId) return parseInt(userId);
-  if (!guestEmail) return null;
+  const normalizedEmail = guestEmail ? String(guestEmail).trim().toLowerCase() : '';
+  if (normalizedEmail) {
+    const existingUser = await users.findOne({
+      where: Sequelize.where(
+        Sequelize.fn('LOWER', Sequelize.col('email')),
+        normalizedEmail
+      ),
+      attributes: ['id']
+    });
 
-  const normalizedEmail = String(guestEmail).trim().toLowerCase();
-  if (!normalizedEmail) return null;
+    if (existingUser) return existingUser.id;
 
-  const existingUser = await users.findOne({
-    where: { email: normalizedEmail },
-    attributes: ['id']
-  });
+    if (userId) {
+      const suppliedUser = await users.findByPk(parseInt(userId, 10), {
+        attributes: ['id', 'email']
+      });
+      const suppliedUserEmail = suppliedUser?.email
+        ? String(suppliedUser.email).trim().toLowerCase()
+        : '';
 
-  return existingUser ? existingUser.id : null;
+      return suppliedUserEmail === normalizedEmail ? suppliedUser.id : null;
+    }
+  }
+
+  return userId ? parseInt(userId, 10) : null;
 }
 
 async function resolveAssignedSalesRepId({

@@ -4,6 +4,7 @@ const paymentLinksService = require('../services/payment-links.service');
 const quoteService = require('../services/sales-quote.service');
 const accountCreditService = require('../services/account-credit.service');
 const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
+const bookingPricingService = require('../services/booking-pricing.service');
 const constants = require('../utils/constants');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const emailService = require('../utils/emailService');
@@ -332,6 +333,55 @@ const buildOutstandingInvoicePricingData = (pricingData = {}, paymentState = nul
       }
     ]
   };
+};
+
+const resolveCurrentPaymentStateForPaymentLink = async ({
+  bookingId,
+  quoteTotal,
+  salesQuoteId = null
+}) => {
+  let paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
+    bookingId,
+    quoteTotal
+  });
+
+  const currentQuoteTotal = toCurrencyNumber(quoteTotal);
+  const summaryQuoteTotal = toCurrencyNumber(paymentState.quoteTotal);
+  const hasStaleSummaryTotal =
+    paymentState.hasSummary &&
+    currentQuoteTotal > 0 &&
+    Math.abs(summaryQuoteTotal - currentQuoteTotal) > 0.009;
+
+  if (!hasStaleSummaryTotal) {
+    return paymentState;
+  }
+
+  const summary = paymentState.paymentSummary || {};
+  await bookingPaymentSummaryService.upsertBookingPaymentSummary({
+    bookingId,
+    leadId: summary.lead_id || null,
+    salesQuoteId: salesQuoteId || summary.sales_quote_id || null,
+    quoteTotal: currentQuoteTotal,
+    paidAmount: paymentState.paidAmount,
+    creditUsedAmount: paymentState.creditUsedAmount,
+    creditCreatedAmount: paymentState.creditCreatedAmount,
+    lastQuoteChangeType: paymentState.lastQuoteChangeType || 'none',
+    lastQuoteChangeAmount: paymentState.lastQuoteChangeAmount || 0,
+    lastQuoteChangeStatus: paymentState.lastQuoteChangeStatus || 'none',
+    manualPaymentMode: summary.manual_payment_mode || null,
+    manualPaymentOtherMode: summary.manual_payment_other_mode || null,
+    manualPaymentProofUrl: summary.manual_payment_proof_url || null,
+    manualPaymentProofFilePath: summary.manual_payment_proof_file_path || null,
+    manualPaymentProofFileName: summary.manual_payment_proof_file_name || null,
+    manualPaymentNotes: summary.manual_payment_notes || null,
+    manualPaymentUpdatedByUserId: summary.manual_payment_updated_by_user_id || null,
+    manualPaymentUpdatedAt: summary.manual_payment_updated_at || null
+  });
+
+  return bookingPaymentSummaryService.resolveBookingPaymentState({
+    bookingId,
+    quoteTotal: currentQuoteTotal
+  });
 };
 
 const resolveInvoiceDisplayNumber = (booking, stripeInvoiceNumber = null) =>
@@ -1168,11 +1218,26 @@ const sumInvoiceLineItems = (items = []) => parseFloat(
     items.reduce((sum, item) => sum + toCurrencyNumber(item?.total ?? item?.line_total), 0).toFixed(2)
 );
 
+const toPositiveNumberOrNull = (value) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+};
+
+const isHourlyInvoiceItem = (item = {}) => {
+    const rateType = String(item.rate_type || item.rateType || '').toLowerCase();
+    const sectionType = String(item.section_type || item.sectionType || '').toLowerCase();
+    const name = String(item.name || item.item_name || '').toLowerCase();
+    return rateType === 'per_hour'
+      || (sectionType === 'service' && (name.includes('photography') || name.includes('videography')));
+};
+
 const mapLegacyQuoteLineItems = (lineItems = []) => (lineItems || []).map(item => ({
     name: item.item_name,
     quantity: item.quantity,
     unit_price: toCurrencyNumber(item.unit_price || 0),
-    total: toCurrencyNumber(item.line_total)
+    total: toCurrencyNumber(item.line_total),
+    duration_hours: toPositiveNumberOrNull(item.duration_hours),
+    rate_type: item.rate_type || null
 }));
 
 const mapSalesQuoteLineItems = (lineItems = []) => (lineItems || [])
@@ -1183,6 +1248,8 @@ const mapSalesQuoteLineItems = (lineItems = []) => (lineItems || [])
         quantity: item.quantity,
         unit_price: toCurrencyNumber(item.unit_rate || item.estimated_pricing || 0),
         total: toCurrencyNumber(item.line_total),
+        duration_hours: toPositiveNumberOrNull(item.duration_hours),
+        rate_type: item.rate_type || null,
         section_type: item.section_type || null
     }));
 
@@ -1397,51 +1464,28 @@ const calculateLeadPricing = async (booking) => {
             };
         }
 
-        // --- CASE 3: Fallback Manual Calculation ---
-        const ROLE_TO_ITEM_MAP = { videographer: 11, photographer: 10, cinematographer: 12 };
-        let crewRoles = typeof booking.crew_roles === 'string' 
-            ? JSON.parse(booking.crew_roles || '{}') 
-            : (booking.crew_roles || {});
-
-        if ((!crewRoles || Object.keys(crewRoles).length === 0) && booking.event_type) {
-            const types = booking.event_type.toLowerCase();
-            if (types.includes('videographer')) crewRoles.videographer = 1;
-            if (types.includes('photographer')) crewRoles.photographer = 1;
-        }
-
-        const items = Object.entries(crewRoles).map(([role, count]) => ({
-            item_id: ROLE_TO_ITEM_MAP[role.toLowerCase()],
-            quantity: count
-        })).filter(item => item.item_id);
-
-        let hours = Number(booking.duration_hours) || 8;
-        
-        const calculated = await pricingService.calculateQuote({
-            items,
-            shootHours: hours,
-            eventType: booking.shoot_type || booking.event_type || 'general',
-            shootStartDate: booking.event_date,
-            skipDiscount: true, 
-            skipMargin: true
-        });
+        // --- CASE 3: Fallback Current Booking Calculation ---
+        // Keep payment links aligned with sales lead pricing. This shared service
+        // includes editing selections, studio items, and current booking duration.
+        const calculated = await bookingPricingService.calculateBookingPricing(booking);
 
         return {
-            source: 'calculated',
+            source: calculated?.source || 'calculated',
             is_paid: bookingMarkedPaid,
             total: calculated?.total || 0,
             total_before_credit: calculated?.total || 0,
             credit_applied: 0,
             subtotal: calculated?.subtotal || 0,
-            discount_amount: calculated?.discountAmount || 0,
-            price_after_discount: calculated?.priceAfterDiscount || calculated?.subtotal || 0,
+            discount_amount: calculated?.discount_amount || calculated?.discountAmount || 0,
+            price_after_discount: calculated?.priceAfterDiscount || calculated?.subtotal || calculated?.total || 0,
             tax_type: null,
             tax_rate: 0,
             tax_amount: 0,
-            line_items: (calculated?.lineItems || []).map(li => ({
-                name: li.item_name,
+            line_items: (calculated?.line_items || calculated?.lineItems || []).map(li => ({
+                name: li.item_name || li.name,
                 quantity: li.quantity,
                 unit_price: Number(li.unit_price || li.rate || ((Number(li.quantity || 1) > 0) ? (Number(li.line_total || 0) / Number(li.quantity || 1)) : 0)),
-                total: li.line_total
+                total: li.line_total ?? li.total
             }))
         };
     } catch (error) {
@@ -1521,10 +1565,16 @@ exports.generatePaymentLink = async (req, res) => {
       ? { total: approvedAdditionalAmount }
       : await calculateLeadPricing(booking);
     const quoteTotal = Number(pricingForAmount?.total || booking.budget || booking.total_amount || 0);
-    const paymentState = await bookingPaymentSummaryService.resolveBookingPaymentState({
-      bookingId: booking_id,
-      quoteTotal
-    });
+    const paymentState = hasApprovedAdditionalAmount
+      ? await bookingPaymentSummaryService.resolveBookingPaymentState({
+        bookingId: booking_id,
+        quoteTotal
+      })
+      : await resolveCurrentPaymentStateForPaymentLink({
+        bookingId: booking_id,
+        quoteTotal,
+        salesQuoteId: pricingForAmount?.sales_quote_id || null
+      });
     const maxPayableAmount = hasApprovedAdditionalAmount
       ? approvedAdditionalAmount
       : paymentState.hasSummary
@@ -3004,18 +3054,29 @@ exports.getStripeInvoicePdf = async (req, res) => {
             unitPrice: receiptPaidAmount,
             total: receiptPaidAmount
           }]
-        : parentLineItems.map((item) => ({
-            name: item.name || item.item_name || 'Item',
-            quantity: Number(item.quantity || 1),
-            unitPrice: (() => {
+        : parentLineItems.map((item) => {
+            const quantity = Number(item.quantity || 1);
+            const total = Number(item.total || item.line_total || 0);
+            const unitPrice = (() => {
               const qty = Number(item.quantity || 1);
-              const total = Number(item.total || item.line_total || 0);
               const raw = Number(item.unit_price || item.rate || 0);
               if (raw > 0) return raw;
               return qty > 0 ? total / qty : total;
-            })(),
-            total: Number(item.total || item.line_total || 0)
-          }));
+            })();
+            const explicitHours = toPositiveNumberOrNull(item.duration_hours ?? item.durationHours ?? item.hours);
+            const inferredHours = !explicitHours && isHourlyInvoiceItem(item) && unitPrice > 0 && quantity > 0 && total > 0
+              ? toPositiveNumberOrNull(total / (unitPrice * quantity))
+              : null;
+            const hours = explicitHours || (inferredHours && Math.abs(inferredHours - 1) > 0.009 ? inferredHours : null);
+
+            return {
+              name: item.name || item.item_name || 'Item',
+              quantity,
+              hours,
+              unitPrice,
+              total
+            };
+          });
       const documentTotal = isChildReceipt ? receiptPaidAmount : totalAmount;
 
       const pdfBuffer = await generateManualReceiptPdfBuffer({
