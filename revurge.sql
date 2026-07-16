@@ -2567,3 +2567,7 @@ ALTER TABLE stream_project_booking
 ALTER TABLE `project_meetings`
   ADD COLUMN `google_calendar_event_id` VARCHAR(255) NULL AFTER `meet_link`,
   ADD COLUMN `google_calendar_id` VARCHAR(255) NULL DEFAULT 'primary' AFTER `google_calendar_event_id`;
+
+-- 16-07-26
+
+ALTER TABLE `sales_quote_line_items` CHANGE `item_name` `item_name` TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL;

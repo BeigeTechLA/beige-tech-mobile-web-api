@@ -33,7 +33,7 @@ module.exports = function(sequelize, DataTypes) {
       allowNull: false
     },
     item_name: {
-      type: DataTypes.STRING(255),
+      type: DataTypes.TEXT,
       allowNull: false
     },
     description: {
