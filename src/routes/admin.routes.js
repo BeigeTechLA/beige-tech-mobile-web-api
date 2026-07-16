@@ -224,6 +224,7 @@ router.post('/verify-crew-member', authMiddleware, adminUsersEdit, admin.verifyC
 router.get('/shoot-category-count', authMiddleware, dashboardOrShootsView, admin.getShootByCategory);
 router.get('/get-post-production-members', admin.getPostProductionMembers);
 router.post('/assign-post-production-member', authMiddleware, shootsEdit, admin.assignPostProductionMember);
+router.post('/remove-project-post-production-member', authMiddleware, admin.removeProjectPostProductionMember);
 router.get('/get-clients', authMiddleware, adminUsersView, admin.getClients);
 router.get(
   '/clients/export',

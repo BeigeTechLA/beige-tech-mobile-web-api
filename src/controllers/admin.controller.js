@@ -9072,7 +9072,11 @@ exports.assignPostProductionMember = async (req, res) => {
     return res.status(201).json({
       error: false,
       message: 'Post production member assigned successfully',
-      data: assignedPostProductionMember,
+      data: {
+        ...assignedPostProductionMember.toJSON(),
+        post_production_member_name: fullName,
+        post_production_member_email: selectedUserJson.email
+      },
     });
   } catch (error) {
     console.error('Error assigning post production member:', error);
@@ -9080,6 +9084,74 @@ exports.assignPostProductionMember = async (req, res) => {
       error: true,
       message: 'Internal server error',
     });
+  }
+};
+
+exports.removeProjectPostProductionMember = async (req, res) => {
+  try {
+    const assigned_by_user_id = req.user?.userId;
+    const { project_id, post_production_member_id } = req.body;
+
+    if (!project_id || !post_production_member_id) {
+      return res.status(400).json({
+        success: false,
+        message: "project_id and post_production_member_id are required."
+      });
+    }
+
+    const assignment = await assigned_post_production_member.findOne({
+      where: {
+        project_id: project_id,
+        post_production_member_id: post_production_member_id,
+        is_active: 1
+      },
+      include: [{
+        model: post_production_members,
+        as: 'post_production_member',
+        attributes: ['first_name', 'last_name']
+      }]
+    });
+
+    if (!assignment) {
+      return res.status(404).json({
+        success: false,
+        message: "This post production member is not currently assigned to this project or is already inactive. Please use the post_production_member_id from the assigned team list (getProjectDetails API) or the assign API response, not the users.id from the sales-reps list."
+      });
+    }
+
+    await assignment.update({ is_active: 0 });
+
+    const lead = await sales_leads.findOne({
+      where: { booking_id: project_id },
+      attributes: ['lead_id']
+    });
+
+    if (lead) {
+      const postProductionMemberName = assignment.post_production_member
+        ? `${assignment.post_production_member.first_name} ${assignment.post_production_member.last_name}`
+        : `ID: ${post_production_member_id}`;
+
+      await sales_lead_activities.create({
+        lead_id: lead.lead_id,
+        activity_type: 'status_changed',
+        activity_data: {
+          action: 'post_production_member_removed',
+          notes: `Removed ${postProductionMemberName} from the project via Project ID.`,
+          post_production_member_id
+        },
+        performed_by_user_id: assigned_by_user_id,
+        created_at: new Date()
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Post production member removed from project successfully."
+    });
+
+  } catch (error) {
+    console.error('RemoveProjectPostProductionMember Error:', error);
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
