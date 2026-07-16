@@ -3,6 +3,77 @@ const bookingPaymentSummaryService = require('../src/services/booking-payment-su
 
 const round2 = (value) => Number(Number(value || 0).toFixed(2));
 
+async function getRecordedReceiptPaidTotalForBooking(bookingId, transaction = null) {
+  let stripePaidAmount = 0;
+  if (db.finance_invoice_payments) {
+    const stripeRows = await db.sequelize.query(
+      `
+        SELECT COALESCE(SUM(unique_payments.amount), 0) AS paid_amount
+        FROM (
+          SELECT payment_id, MAX(amount) AS amount
+          FROM finance_invoice_payments
+          WHERE booking_id = :bookingId
+            AND status = 'paid'
+            AND payment_id IS NOT NULL
+          GROUP BY payment_id
+        ) unique_payments
+      `,
+      {
+        replacements: { bookingId },
+        type: db.Sequelize.QueryTypes.SELECT,
+        transaction
+      }
+    );
+    stripePaidAmount = round2(stripeRows?.[0]?.paid_amount || 0);
+  }
+
+  let manualPaidAmount = 0;
+  try {
+    const manualRows = await db.sequelize.query(
+      `
+        SELECT COALESCE(SUM(amount), 0) AS paid_amount
+        FROM booking_manual_payments
+        WHERE booking_id = :bookingId
+      `,
+      {
+        replacements: { bookingId },
+        type: db.Sequelize.QueryTypes.SELECT,
+        transaction
+      }
+    );
+    manualPaidAmount = round2(manualRows?.[0]?.paid_amount || 0);
+  } catch (error) {
+    const code = error?.original?.code || error?.parent?.code || error?.code;
+    if (code !== 'ER_NO_SUCH_TABLE' && code !== 'ER_BAD_TABLE_ERROR') {
+      throw error;
+    }
+  }
+
+  return round2(stripePaidAmount + manualPaidAmount);
+}
+
+async function getSalesQuoteForBooking(bookingId, transaction = null) {
+  const lead = await db.sales_leads.findOne({
+    where: { booking_id: bookingId },
+    attributes: ['lead_id'],
+    transaction
+  });
+
+  if (!lead?.lead_id || !db.sales_quotes) return null;
+
+  return db.sales_quotes.findOne({
+    where: { lead_id: lead.lead_id },
+    attributes: ['sales_quote_id', 'total', 'subtotal'],
+    order: [
+      [db.sequelize.literal("CASE WHEN status = 'paid' THEN 0 WHEN status = 'accepted' THEN 1 WHEN status = 'partially_paid' THEN 2 WHEN status = 'sent' THEN 3 WHEN status = 'viewed' THEN 4 WHEN status = 'pending' THEN 5 ELSE 6 END"), 'ASC'],
+      ['accepted_at', 'DESC'],
+      ['updated_at', 'DESC'],
+      ['sales_quote_id', 'DESC']
+    ],
+    transaction
+  });
+}
+
 async function main() {
   const bookingId = Number(process.argv[2]);
   const explicitPaymentId = Number(process.argv[3]);
@@ -22,7 +93,12 @@ async function main() {
       throw new Error(`Booking ${bookingId} not found`);
     }
 
+    const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId, transaction);
+    const salesQuote = await getSalesQuoteForBooking(bookingId, transaction);
     const quoteTotal = round2(
+      salesQuote?.total ||
+      salesQuote?.subtotal ||
+      existingSummary?.quote_total ||
       booking.primary_quote?.total ||
       booking.primary_quote?.price_after_discount ||
       booking.primary_quote?.subtotal ||
@@ -49,18 +125,19 @@ async function main() {
         })
       : [];
 
-    const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId, transaction);
+    const recordedReceiptPaidAmount = await getRecordedReceiptPaidTotalForBooking(bookingId, transaction);
     const repairedPaidAmount = round2(
       bookingPayments.reduce((sum, payment) => sum + Number(payment.total_amount || 0), 0)
     );
-    const paidAmount = repairedPaidAmount > 0
-      ? repairedPaidAmount
+    const paidAmount = recordedReceiptPaidAmount > 0 || repairedPaidAmount > 0
+      ? round2(Math.max(repairedPaidAmount, recordedReceiptPaidAmount))
       : round2(existingSummary?.paid_amount || 0);
     const dueAmount = round2(Math.max(quoteTotal - paidAmount, 0));
     const paymentStatus = dueAmount <= 0 ? 'paid' : (paidAmount > 0 ? 'partially_paid' : 'pending');
 
     await bookingPaymentSummaryService.upsertBookingPaymentSummary({
       bookingId,
+      salesQuoteId: salesQuote?.sales_quote_id || existingSummary?.sales_quote_id || null,
       quoteTotal,
       paidAmount,
       creditUsedAmount: 0,

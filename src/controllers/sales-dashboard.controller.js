@@ -145,7 +145,7 @@ async function fetchStripeInvoicePaymentReceiptRows(bookingIds = []) {
   }
 
   try {
-    return await finance_invoice_payments.findAll({
+    const rows = await finance_invoice_payments.findAll({
       where: {
         booking_id: { [Op.in]: normalizedBookingIds },
         payment_id: { [Op.ne]: null },
@@ -176,6 +176,14 @@ async function fetchStripeInvoicePaymentReceiptRows(bookingIds = []) {
         }
       ],
       order: [['paid_at', 'DESC'], ['finance_invoice_payment_id', 'DESC']]
+    });
+
+    const seen = new Set();
+    return rows.filter((row) => {
+      const key = `${row.booking_id}:${row.payment_id}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
     });
   } catch (error) {
     if (isOptionalTableMissingError(error)) {

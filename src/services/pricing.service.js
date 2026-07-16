@@ -580,6 +580,8 @@ async function calculateQuote({
         category_slug: dbItem.category?.slug || 'crew',
         quantity,
         unit_price: unitPrice,
+        rate_type: dbItem.rate_type,
+        duration_hours: dbItem.rate_type === 'per_hour' ? shootHours : null,
         line_total: parseFloat(lineTotal.toFixed(2)),
         is_mandatory: false
       });

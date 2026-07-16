@@ -732,6 +732,39 @@ function buildQuoteCreatedAtCondition(range = 'all', dateOn = null) {
   return null;
 }
 
+function buildQuoteListWhere(query, user) {
+  const where = isClientRole(user?.role)
+    ? { ...buildQuoteAccessWhere(user) }
+    : {};
+
+  const statusFilter = normalizeQuoteFilterStatus(query.status);
+  if (statusFilter?.length) {
+    appendAndCondition(where, {
+      status: statusFilter.length === 1 ? statusFilter[0] : { [Op.in]: statusFilter }
+    });
+  }
+
+  applyQuoteSalesRepFilter(where, query.assigned_sales_rep_id, user);
+
+  const createdAtCondition = buildQuoteCreatedAtCondition(query.range, query.date_on);
+
+  if (createdAtCondition) {
+    appendAndCondition(where, { created_at: createdAtCondition });
+  }
+
+  if (query.search) {
+    appendAndCondition(where, {
+      [Op.or]: [
+        { quote_number: { [Op.like]: `%${query.search}%` } },
+        { client_name: { [Op.like]: `%${query.search}%` } },
+        { project_description: { [Op.like]: `%${query.search}%` } }
+      ]
+    });
+  }
+
+  return where;
+}
+
 function getDateRange(range = 'all', dateOn = null) {
   const normalizedRange = String(range || 'all').trim().toLowerCase();
   const now = new Date();
@@ -1817,12 +1850,16 @@ function resolveValidity({ validUntil, quoteValidityDays, validUntilProvided = f
   };
 }
 
+function normalizeRoleName(role) {
+  return String(role || '').trim().toLowerCase().replace(/\s+/g, '_');
+}
+
 function isAdminRole(role) {
-  return role === 'admin' || role === 'Admin' || role === 'sales_admin' || role === 'Sales_Admin';
+  return ['admin', 'sales_admin', 'super_admin', 'superadmin'].includes(normalizeRoleName(role));
 }
 
 function isClientRole(role) {
-  return role === 'client' || role === 'Client';
+  return normalizeRoleName(role) === 'client';
 }
 
 async function getRandomActiveSalesRepId(transaction) {
@@ -1911,6 +1948,13 @@ function buildQuoteAccessWhere(user, options = {}) {
       { assigned_sales_rep_id: user.userId }
     ]
   };
+}
+
+function buildQuoteReadAccessWhere(user) {
+  if (isClientRole(user?.role)) {
+    return buildQuoteAccessWhere(user);
+  }
+  return buildQuoteAccessWhere(user, { restrictToLoggedInRep: false });
 }
 
 async function getCatalog(pricingMode = null) {
@@ -3529,6 +3573,28 @@ function normalizeBookingDaysPayload(bookingDays = [], defaultTimeZone = null) {
     });
 }
 
+function buildBookingDateTimeValue(dateValue, timeValue) {
+  const date = dateValue ? String(dateValue).trim() : '';
+  const time = normalizeTime(timeValue || null);
+  if (!date || !time) return null;
+  return `${date}T${time}`;
+}
+
+function resolveBookingDateTimeValues(prefillData = {}) {
+  if (prefillData.booking_type === 'multi_day' && Array.isArray(prefillData.booking_days) && prefillData.booking_days.length) {
+    const firstDay = [...prefillData.booking_days].sort((a, b) => new Date(a.date) - new Date(b.date))[0];
+    return {
+      start_date_time: buildBookingDateTimeValue(firstDay?.date, firstDay?.start_time),
+      end_date_time: buildBookingDateTimeValue(firstDay?.date, firstDay?.end_time)
+    };
+  }
+
+  return {
+    start_date_time: buildBookingDateTimeValue(prefillData.start_date, prefillData.start_time),
+    end_date_time: buildBookingDateTimeValue(prefillData.start_date, prefillData.end_time)
+  };
+}
+
 function applyConvertBookingOverrides(prefillData, payload = {}) {
   const next = { ...prefillData };
   const timeZone = payload.time_zone || payload.timeZone || null;
@@ -3721,6 +3787,7 @@ async function syncConvertedQuoteArtifacts({
 
   const wasAlreadyConverted = Boolean(lead && booking);
   const bookingDescription = buildConvertedBookingDescription(quoteDetails, prefillData);
+  const bookingDateTimeValues = resolveBookingDateTimeValues(prefillData);
 
   if (!booking) {
     booking = await db.stream_project_booking.create({
@@ -3736,6 +3803,8 @@ async function syncConvertedQuoteArtifacts({
       start_time: prefillData.start_time || null,
       end_time: prefillData.end_time || null,
       time_zone: prefillData.time_zone || null,
+      start_date_time: bookingDateTimeValues.start_date_time,
+      end_date_time: bookingDateTimeValues.end_date_time,
       budget: Number(quoteDetails.total || 0) || null,
       crew_size_needed: prefillData.crew_size,
       event_location: prefillData.location,
@@ -3767,6 +3836,8 @@ async function syncConvertedQuoteArtifacts({
       start_time: prefillData.start_time || booking.start_time || null,
       end_time: prefillData.end_time || booking.end_time || null,
       time_zone: prefillData.time_zone || booking.time_zone || null,
+      start_date_time: bookingDateTimeValues.start_date_time || booking.start_date_time || null,
+      end_date_time: bookingDateTimeValues.end_date_time || booking.end_date_time || null,
       budget: Number(quoteDetails.total || 0) || booking.budget || null,
       crew_size_needed: prefillData.crew_size ?? booking.crew_size_needed,
       event_location: prefillData.location || booking.event_location || null,
@@ -5114,6 +5185,12 @@ async function updateQuote(salesQuoteId, payload, user) {
         location_longitude: quote.location_longitude,
         project_description: quote.project_description,
         video_shoot_type: quote.video_shoot_type,
+        booking_type: quote.booking_type,
+        time_zone: quote.time_zone,
+        start_date: quote.start_date,
+        start_time: quote.start_time,
+        end_time: quote.end_time,
+        booking_days: quote.booking_days,
         quote_validity_days: quote.quote_validity_days,
         valid_until: quote.valid_until,
         discount_type: quote.discount_type,
@@ -5142,6 +5219,20 @@ async function updateQuote(salesQuoteId, payload, user) {
         location: resolveQuoteLocationAddress(updatedQuoteDetails),
         location_latitude: updatedQuoteDetails.location_latitude ?? null,
         location_longitude: updatedQuoteDetails.location_longitude ?? null,
+        booking_type: updatedQuoteDetails.booking_type || null,
+        time_zone: updatedQuoteDetails.time_zone || null,
+        start_date: updatedQuoteDetails.start_date || null,
+        start_time: normalizeTime(updatedQuoteDetails.start_time) || null,
+        end_time: normalizeTime(updatedQuoteDetails.end_time) || null,
+        booking_days: parseBookingDaysValue(updatedQuoteDetails.booking_days),
+        has_schedule_override: Boolean(
+          updatedQuoteDetails.booking_type ||
+          updatedQuoteDetails.time_zone ||
+          updatedQuoteDetails.start_date ||
+          updatedQuoteDetails.start_time ||
+          updatedQuoteDetails.end_time ||
+          parseBookingDaysValue(updatedQuoteDetails.booking_days).length
+        ),
         content_type: roleData.content_type,
         shoot_type: mapQuoteShootTypeToBookingShootType(updatedQuoteDetails.video_shoot_type),
         quote_shoot_type_label: updatedQuoteDetails.video_shoot_type || null,
@@ -5459,6 +5550,20 @@ async function buildPaymentBookingPrefillDataFromQuote(quoteDetails, payload = {
     location: resolveQuoteLocationAddress(quoteDetails),
     location_latitude: quoteDetails.location_latitude ?? quoteDetails.latitude ?? null,
     location_longitude: quoteDetails.location_longitude ?? quoteDetails.longitude ?? null,
+    booking_type: quoteDetails.booking_type || null,
+    time_zone: quoteDetails.time_zone || null,
+    start_date: quoteDetails.start_date || null,
+    start_time: normalizeTime(quoteDetails.start_time) || null,
+    end_time: normalizeTime(quoteDetails.end_time) || null,
+    booking_days: parseBookingDaysValue(quoteDetails.booking_days),
+    has_schedule_override: Boolean(
+      quoteDetails.booking_type ||
+      quoteDetails.time_zone ||
+      quoteDetails.start_date ||
+      quoteDetails.start_time ||
+      quoteDetails.end_time ||
+      parseBookingDaysValue(quoteDetails.booking_days).length
+    ),
     content_type: roleData.content_type,
     shoot_type: mapQuoteShootTypeToBookingShootType(quoteDetails.video_shoot_type),
     quote_shoot_type_label: quoteDetails.video_shoot_type || null,
@@ -5555,7 +5660,7 @@ async function ensureQuoteBookingForPayment(salesQuoteId, user, payload = {}) {
 }
 
 async function fetchQuoteById(salesQuoteId, user = null) {
-  const accessWhere = user ? buildQuoteAccessWhere(user) : {};
+  const accessWhere = user ? buildQuoteReadAccessWhere(user) : {};
   const quote = await db.sales_quotes.findOne({
     where: { sales_quote_id: salesQuoteId, ...accessWhere },
     include: [
@@ -5692,7 +5797,7 @@ async function getQuoteById(salesQuoteId, user) {
 
 async function listQuoteVersions(salesQuoteId, user) {
   const quote = await db.sales_quotes.findOne({
-    where: { sales_quote_id: salesQuoteId, ...buildQuoteAccessWhere(user) },
+    where: { sales_quote_id: salesQuoteId, ...buildQuoteReadAccessWhere(user) },
     attributes: ['sales_quote_id', 'created_at', 'updated_at'],
     raw: true
   });
@@ -5726,7 +5831,7 @@ async function getQuoteVersionByNumber(salesQuoteId, versionNumber, user) {
   }
 
   const quote = await db.sales_quotes.findOne({
-    where: { sales_quote_id: salesQuoteId, ...buildQuoteAccessWhere(user) },
+    where: { sales_quote_id: salesQuoteId, ...buildQuoteReadAccessWhere(user) },
     attributes: ['sales_quote_id', 'created_at', 'updated_at'],
     raw: true
   });
@@ -5807,7 +5912,7 @@ async function getCurrentUsableQuoteVersionSnapshot(salesQuoteId, user = null) {
   const quote = await db.sales_quotes.findOne({
     where: {
       sales_quote_id: normalizedQuoteId,
-      ...(user ? buildQuoteAccessWhere(user) : {})
+      ...(user ? buildQuoteReadAccessWhere(user) : {})
     },
     attributes: ['sales_quote_id', 'created_at', 'updated_at'],
     raw: true
@@ -6164,33 +6269,7 @@ async function listQuotes(query, user) {
   const offset = (page - 1) * limit;
   // Quote listing is shared across admin/sales views where reps are expected
   // to browse all quotes. Keep strict restriction only for client role.
-  const where = isClientRole(user?.role)
-    ? { ...buildQuoteAccessWhere(user) }
-    : {};
-
-  const statusFilter = normalizeQuoteFilterStatus(query.status);
-  if (statusFilter?.length) {
-    appendAndCondition(where, {
-      status: statusFilter.length === 1 ? statusFilter[0] : { [Op.in]: statusFilter }
-    });
-  }
-
-  applyQuoteSalesRepFilter(where, query.assigned_sales_rep_id, user);
-
-  const createdAtCondition = buildQuoteCreatedAtCondition(query.range, query.date_on);
-  if (createdAtCondition) {
-    appendAndCondition(where, { created_at: createdAtCondition });
-  }
-
-  if (query.search) {
-    appendAndCondition(where, {
-      [Op.or]: [
-        { quote_number: { [Op.like]: `%${query.search}%` } },
-        { client_name: { [Op.like]: `%${query.search}%` } },
-        { project_description: { [Op.like]: `%${query.search}%` } }
-      ]
-    });
-  }
+  const where = buildQuoteListWhere(query, user);
 
   const sortBy = query.sort_by === 'valid_until' ? 'valid_until' : 'created_at';
   const sortOrder = String(query.sort_order || 'DESC').toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
@@ -6347,6 +6426,52 @@ async function listQuotes(query, user) {
     summary,
     rows: rowsWithFinancialDetails
   };
+}
+
+async function listQuoteExportIds(query, user) {
+  await expireQuotesPastValidUntil();
+
+  const where = buildQuoteListWhere(query, user);
+
+  const hasStartDate = Boolean(query?.start_date);
+  const hasEndDate = Boolean(query?.end_date);
+
+  if (hasStartDate !== hasEndDate) {
+    throw new Error('Select both dates or leave both blank to export all quotes');
+  }
+
+  if (hasStartDate && hasEndDate) {
+    const startDate = new Date(`${String(query.start_date).trim()}T00:00:00.000Z`);
+    const endDate = new Date(`${String(query.end_date).trim()}T23:59:59.999Z`);
+
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+      throw new Error('Dates must be in YYYY-MM-DD format');
+    }
+
+    if (startDate > endDate) {
+      throw new Error('start_date cannot be after end_date');
+    }
+
+    appendAndCondition(where, {
+      created_at: {
+        [Op.between]: [startDate, endDate]
+      }
+    });
+  }
+
+  const quoteIdRows = await db.sales_quotes.findAll({
+    where,
+    attributes: ['sales_quote_id'],
+    order: [
+      ['created_at', 'DESC'],
+      ['sales_quote_id', 'DESC']
+    ],
+    raw: true
+  });
+
+  return quoteIdRows
+    .map((row) => Number(row.sales_quote_id))
+    .filter((id) => Number.isInteger(id) && id > 0);
 }
 
 async function getQuoteDashboard(query, user) {
@@ -6898,6 +7023,7 @@ module.exports = {
   getLatestPublicQuotePreviewLink,
   getPublicQuoteByKey,
   listQuotes,
+  listQuoteExportIds,
   getQuoteDashboard,
   updateQuoteStatus,
   sendQuoteProposal,

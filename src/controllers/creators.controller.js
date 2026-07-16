@@ -675,13 +675,23 @@ exports.getCreatorProfile = async (req, res) => {
         is_active: 1
       },
       include: [
-        {
-          model: crew_member_files,
-          as: 'crew_member_files',
-          attributes: ['crew_files_id', 'file_type', 'file_path', 'created_at', 'title', 'tag'],
-          required: false
-        }
-      ]
+  {
+    model: crew_member_files,
+    as: 'crew_member_files',
+    attributes: [
+      'crew_files_id',
+      'file_type',
+      'file_path',
+      'created_at',
+      'title',
+      'tag'
+    ],
+    required: false,
+    where: {
+      is_active: 1
+    }
+  }
+]
     });
 
     if (!creator) {
@@ -815,7 +825,7 @@ exports.getCreatorProfile = async (req, res) => {
 exports.getCreatorPortfolio = async (req, res) => {
   try {
     const { id } = req.params;
-    const { page = 1, limit = 12 } = req.query;
+    const { page = 1, limit = 20 } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     // Verify creator exists
@@ -1051,4 +1061,3 @@ exports.getRandomCreators = async (req, res) => {
     });
   }
 };
-

@@ -20,6 +20,7 @@ const USER_TYPE_ROLE_MAP = {
 };
 
 let meetingsTableReadyPromise = null;
+let meetingsColumnsReadyPromise = null;
 
 const buildHeaders = (req) => {
   const headers = {
@@ -59,6 +60,31 @@ const proxyRequest = async (req, path, options = {}) => {
   return payload;
 };
 
+const updateGoogleCalendarEvent = async (req, payload) => {
+  if (!payload?.eventId) return null;
+
+  const meetTokenBaseUrl = DEFAULT_BASE_URL.replace(/\/external-meetings\/?$/, '');
+  const response = await fetch(`${meetTokenBaseUrl}/create-event/update-event`, {
+    method: 'POST',
+    headers: buildHeaders(req),
+    body: JSON.stringify(payload),
+  });
+
+  const result = await response.json().catch(() => ({
+    success: false,
+    message: 'Invalid JSON response from meetings service',
+  }));
+
+  if (!response.ok) {
+    const error = new Error(result.message || result.error || 'External meetings request failed');
+    error.status = response.status;
+    error.payload = result;
+    throw error;
+  }
+
+  return result;
+};
+
 const safeJsonParse = (value, fallback) => {
   if (!value) return fallback;
 
@@ -72,6 +98,14 @@ const safeJsonParse = (value, fallback) => {
 const toPositiveInt = (value) => {
   const normalized = Number(value);
   return Number.isInteger(normalized) && normalized > 0 ? normalized : null;
+};
+
+const toCalendarDateTime = (value) => {
+  if (!value) return undefined;
+  if (typeof value === 'string') return value;
+
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 };
 
 const normalizeRole = (value) => String(value || '').trim().toLowerCase();
@@ -225,6 +259,37 @@ const parseSort = (sortBy) => {
   return [[field, direction]];
 };
 
+const getEffectiveMeetingStatus = (meeting) => {
+  if (!meeting) return 'pending';
+
+  const storedStatus = String(meeting.meeting_status || 'pending').toLowerCase();
+  if (['cancelled', 'change_request', 'rescheduled'].includes(storedStatus)) {
+    return storedStatus;
+  }
+
+  const now = Date.now();
+  const start = meeting.meeting_date_time ? new Date(meeting.meeting_date_time).getTime() : NaN;
+  const end = meeting.meeting_end_time ? new Date(meeting.meeting_end_time).getTime() : NaN;
+
+  if (!Number.isNaN(end) && end <= now) {
+    return 'completed';
+  }
+
+  if (!Number.isNaN(start) && !Number.isNaN(end) && start <= now && end > now) {
+    return 'ongoing';
+  }
+
+  if (storedStatus === 'in_progress') {
+    return 'ongoing';
+  }
+
+  if (storedStatus === 'confirmed') {
+    return 'pending';
+  }
+
+  return storedStatus;
+};
+
 const ensureMeetingsTable = async () => {
   if (!meetingsTableReadyPromise) {
     meetingsTableReadyPromise = db.sequelize.query(`
@@ -241,6 +306,8 @@ const ensureMeetingsTable = async () => {
         meeting_end_time DATETIME NULL,
         description LONGTEXT NULL,
         meet_link VARCHAR(1000) NULL,
+        google_calendar_event_id VARCHAR(255) NULL,
+        google_calendar_id VARCHAR(255) NULL DEFAULT 'primary',
         participants_json LONGTEXT NULL,
         send_notification TINYINT(1) NOT NULL DEFAULT 1,
         created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -256,6 +323,28 @@ const ensureMeetingsTable = async () => {
   }
 
   await meetingsTableReadyPromise;
+
+  if (!meetingsColumnsReadyPromise) {
+    meetingsColumnsReadyPromise = (async () => {
+      const tableDefinition = await db.sequelize.getQueryInterface().describeTable('project_meetings');
+      const addColumn = (name, definition) =>
+        tableDefinition[name]
+          ? Promise.resolve()
+          : db.sequelize.getQueryInterface().addColumn('project_meetings', name, definition);
+
+      await addColumn('google_calendar_event_id', {
+        type: db.Sequelize.STRING(255),
+        allowNull: true,
+      });
+      await addColumn('google_calendar_id', {
+        type: db.Sequelize.STRING(255),
+        allowNull: true,
+        defaultValue: 'primary',
+      });
+    })();
+  }
+
+  await meetingsColumnsReadyPromise;
 };
 
 const getBookingContext = async (bookingId) => {
@@ -455,13 +544,15 @@ const formatMeeting = (meeting, booking, storedParticipants) => {
 
   return {
     id: plainMeeting.meeting_id,
-    meeting_status: plainMeeting.meeting_status,
+    meeting_status: getEffectiveMeetingStatus(plainMeeting),
     meeting_date_time: plainMeeting.meeting_date_time,
     meeting_end_time: plainMeeting.meeting_end_time,
     meeting_type: plainMeeting.meeting_type,
     meeting_title: plainMeeting.meeting_title,
     description: plainMeeting.description,
     meetLink: plainMeeting.meet_link,
+    googleCalendarEventId: plainMeeting.google_calendar_event_id,
+    googleCalendarId: plainMeeting.google_calendar_id,
     duration: plainMeeting.meeting_end_time && plainMeeting.meeting_date_time
       ? Math.max(
           0,
@@ -1059,6 +1150,8 @@ exports.createMeeting = async (req, res) => {
       meeting_end_time: meetingEndTime || null,
       description: String(req.body.description || '').trim() || null,
       meet_link: String(req.body.meetLink || req.body.meet_link || '').trim() || null,
+      google_calendar_event_id: String(req.body.googleCalendarEventId || req.body.google_calendar_event_id || '').trim() || null,
+      google_calendar_id: String(req.body.googleCalendarId || req.body.google_calendar_id || 'primary').trim() || 'primary',
       participants_json: serializeMeetingState(participants),
       send_notification: req.body.send_notification === false ? 0 : 1,
     });
@@ -1146,6 +1239,14 @@ exports.updateMeeting = async (req, res) => {
       updates.meet_link = String(req.body.meetLink || req.body.meet_link || '').trim() || null;
     }
 
+    if (req.body.googleCalendarEventId !== undefined || req.body.google_calendar_event_id !== undefined) {
+      updates.google_calendar_event_id = String(req.body.googleCalendarEventId || req.body.google_calendar_event_id || '').trim() || null;
+    }
+
+    if (req.body.googleCalendarId !== undefined || req.body.google_calendar_id !== undefined) {
+      updates.google_calendar_id = String(req.body.googleCalendarId || req.body.google_calendar_id || 'primary').trim() || 'primary';
+    }
+
     if (req.body.meeting_status !== undefined) {
       const nextStatus = String(req.body.meeting_status || '').toLowerCase();
       if (!VALID_STATUSES.has(nextStatus)) {
@@ -1176,6 +1277,46 @@ exports.updateMeeting = async (req, res) => {
         return res.status(400).json({ message: 'meeting_end_time must be a valid date' });
       }
       updates.meeting_end_time = nextEnd;
+    }
+
+    const shouldSyncGoogleEvent =
+      Boolean(req.body.sync_google_event !== false) &&
+      Boolean(updates.google_calendar_event_id || meeting.google_calendar_event_id) &&
+      (
+        updates.meeting_title !== undefined ||
+        updates.description !== undefined ||
+        updates.meeting_date_time !== undefined ||
+        updates.meeting_end_time !== undefined
+      );
+
+    if (shouldSyncGoogleEvent) {
+      const calendarResult = await updateGoogleCalendarEvent(req, {
+        eventId: updates.google_calendar_event_id || meeting.google_calendar_event_id,
+        calendarId: updates.google_calendar_id || meeting.google_calendar_id || 'primary',
+        summary: updates.meeting_title !== undefined ? updates.meeting_title : meeting.meeting_title,
+        location: 'Online',
+        description: updates.description !== undefined ? updates.description : meeting.description,
+        startDateTime: toCalendarDateTime(updates.meeting_date_time || meeting.meeting_date_time),
+        endDateTime: toCalendarDateTime(updates.meeting_end_time || meeting.meeting_end_time),
+        timeZone: req.body.timeZone || req.body.time_zone,
+      });
+
+      if (calendarResult?.authUrl) {
+        return res.status(409).json({
+          message: 'Google authorization is required before updating this calendar event',
+          authUrl: calendarResult.authUrl,
+        });
+      }
+
+      if (calendarResult?.meetLink && updates.meet_link === undefined) {
+        updates.meet_link = calendarResult.meetLink;
+      }
+      if (calendarResult?.eventId) {
+        updates.google_calendar_event_id = calendarResult.eventId;
+      }
+      if (calendarResult?.calendarId) {
+        updates.google_calendar_id = calendarResult.calendarId;
+      }
     }
 
     await meeting.update(updates);
@@ -1438,6 +1579,27 @@ exports.createMeetEvent = async (req, res) => {
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {
       message: error.message || 'Failed to create event',
+    });
+  }
+};
+
+exports.updateMeetEvent = async (req, res) => {
+  try {
+    const result = await updateGoogleCalendarEvent(req, {
+      eventId: req.body.eventId || req.body.googleCalendarEventId,
+      calendarId: req.body.calendarId || req.body.googleCalendarId || 'primary',
+      summary: req.body.summary,
+      location: req.body.location,
+      description: req.body.description,
+      startDateTime: req.body.startDateTime,
+      endDateTime: req.body.endDateTime,
+      timeZone: req.body.timeZone,
+    });
+
+    return res.status(200).json(result || {});
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      message: error.message || 'Failed to update event',
     });
   }
 };

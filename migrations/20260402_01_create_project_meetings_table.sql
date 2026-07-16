@@ -11,6 +11,8 @@ CREATE TABLE IF NOT EXISTS `project_meetings` (
   `meeting_end_time` DATETIME NULL,
   `description` LONGTEXT NULL,
   `meet_link` VARCHAR(1000) NULL,
+  `google_calendar_event_id` VARCHAR(255) NULL,
+  `google_calendar_id` VARCHAR(255) NULL DEFAULT 'primary',
   `participants_json` LONGTEXT NULL,
   `send_notification` TINYINT(1) NOT NULL DEFAULT 1,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,

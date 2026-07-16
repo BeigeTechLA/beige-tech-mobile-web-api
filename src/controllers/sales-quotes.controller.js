@@ -2,7 +2,8 @@ const constants = require('../utils/constants');
 const quoteService = require('../services/sales-quote.service');
 const db = require('../models');
 const { Op } = require('sequelize');
-const { renderQuoteAcceptPage, renderQuoteAgreementPage } = require('../utils/quoteAcceptPage');
+const { Parser } = require('json2csv');
+const moment = require('moment');const { renderQuoteAcceptPage, renderQuoteAgreementPage } = require('../utils/quoteAcceptPage');
 
 function getUserContext(req) {
   return {
@@ -18,6 +19,82 @@ function sendError(res, error, fallbackMessage, statusCode = constants.BAD_REQUE
     data: error?.details || null,
     error: process.env.NODE_ENV === 'development' ? error.message : undefined
   });
+}
+
+function escapeSpreadsheetFormula(value) {
+  if (value === null || value === undefined) return '';
+
+  const stringValue = String(value);
+
+  if (/^[=+\-@]/.test(stringValue)) {
+    return `'${stringValue}`;
+  }
+
+  return stringValue;
+}
+
+function formatExportDate(value) {
+  if (!value) return '';
+
+  const parsed = moment(value);
+
+  return parsed.isValid()
+    ? parsed.format('YYYY-MM-DD')
+    : '';
+}
+
+function getLineItemNames(
+  lineItems = [],
+  sectionType,
+  options = {}
+) {
+  const {
+    includeCustom = true,
+    customOnly = false
+  } = options;
+
+  return lineItems
+    .filter((item) => {
+      if (
+        !item ||
+        item.is_active === false ||
+        Number(item.is_active) === 0
+      ) {
+        return false;
+      }
+
+      const currentSectionType = String(
+        item.section_type || ''
+      ).toLowerCase();
+
+      const sourceType = String(
+        item.source_type || ''
+      ).toLowerCase();
+
+      const isCustom =
+        sourceType === 'custom' ||
+        currentSectionType === 'custom_addon' ||
+        currentSectionType === 'custom-addon';
+
+      if (customOnly) {
+        return isCustom;
+      }
+
+      if (currentSectionType !== sectionType) {
+        return false;
+      }
+
+      if (!includeCustom && isCustom) {
+        return false;
+      }
+
+      return true;
+    })
+    .map((item) =>
+      escapeSpreadsheetFormula(item.item_name)
+    )
+    .filter(Boolean)
+    .join(' | ');
 }
 
 function normalizeShootTypePayload(payload = {}, { partial = false } = {}) {
@@ -336,6 +413,192 @@ exports.listQuotes = async (req, res) => {
   } catch (error) {
     console.error('Error listing sales quotes:', error);
     return sendError(res, error, 'Failed to fetch quotes', constants.INTERNAL_SERVER_ERROR.code);
+  }
+};
+exports.exportSalesQuotesCsv = async (req, res) => {
+  try {
+    const quoteIds = await quoteService.listQuoteExportIds(
+      req.query,
+      getUserContext(req)
+    );
+
+    if (!quoteIds.length) {
+      return res.status(constants.NOT_FOUND.code).json({
+        success: false,
+        message: req.query.start_date && req.query.end_date
+          ? 'No quotes found in the selected date range'
+          : 'No quotes found'
+      });
+    }
+
+    // Reuse the existing quote-by-ID service for all IDs.
+    const quoteDetails = [];
+    const batchSize = 20;
+
+    for (
+      let index = 0;
+      index < quoteIds.length;
+      index += batchSize
+    ) {
+      const currentBatch = quoteIds.slice(
+        index,
+        index + batchSize
+      );
+
+      const currentResults = await Promise.all(
+        currentBatch.map((quoteId) =>
+          quoteService.getQuoteById(
+            quoteId,
+            getUserContext(req)
+          )
+        )
+      );
+
+      quoteDetails.push(
+        ...currentResults.filter(Boolean)
+      );
+    }
+
+    const rows = quoteDetails.map((quote) => {
+      const lineItems = Array.isArray(quote.line_items)
+        ? quote.line_items
+        : [];
+
+      const services = getLineItemNames(
+        lineItems,
+        'service'
+      );
+
+      const addOns = getLineItemNames(
+        lineItems,
+        'addon',
+        {
+          includeCustom: false
+        }
+      );
+
+      const logistics = getLineItemNames(
+        lineItems,
+        'logistics'
+      );
+
+      const customAddOns = getLineItemNames(
+        lineItems,
+        'addon',
+        {
+          customOnly: true
+        }
+      );
+
+      return {
+        'Quote ID': escapeSpreadsheetFormula(
+          quote.quote_number ||
+          quote.sales_quote_id
+        ),
+
+        'Client Name': escapeSpreadsheetFormula(
+          quote.client_name
+        ),
+
+        Project: escapeSpreadsheetFormula(
+          quote.project_description
+        ),
+        'Booking Status': escapeSpreadsheetFormula(
+          quote.lead_source || ''
+        ),
+
+        Amount: Number(
+          quote.total || 0
+        ).toFixed(2),
+
+        'Quote Status': escapeSpreadsheetFormula(
+          quote.status
+        ),
+
+        Validity: formatExportDate(
+          quote.valid_until
+        ),
+
+        'Sales Person': escapeSpreadsheetFormula(
+          quote.assigned_sales_rep?.name
+        ),
+
+        'Client Phone': escapeSpreadsheetFormula(
+          quote.client_phone
+        ),
+
+        'Client Email': escapeSpreadsheetFormula(
+          quote.client_email
+        ),
+
+        Service: services,
+
+        'Add-on': addOns,
+
+        Logistics: logistics,
+
+        'Custom Add-on': customAddOns
+      };
+    });
+
+    const fields = [
+      'Quote ID',
+      'Client Name',
+      'Project',
+      'Booking Status',
+      'Amount',
+      'Quote Status',
+      'Validity',
+      'Sales Person',
+      'Client Phone',
+      'Client Email',
+      'Service',
+      'Add-on',
+      'Logistics',
+      'Custom Add-on'
+    ];
+
+    const parser = new Parser({
+      fields,
+      withBOM: true
+    });
+
+    const csv = parser.parse(rows);
+
+    const fileName =
+      req.query.start_date && req.query.end_date
+        ? `quotes-${req.query.start_date}-to-${req.query.end_date}.csv`
+        : `quotes-all-records.csv`;
+
+    res.setHeader(
+      'Content-Type',
+      'text/csv; charset=utf-8'
+    );
+
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${fileName}"`
+    );
+
+    res.setHeader(
+      'Cache-Control',
+      'no-store'
+    );
+
+    return res.status(constants.OK.code).send(csv);
+
+  } catch (error) {
+    console.error(
+      'Error exporting sales quotes:',
+      error
+    );
+
+    return sendError(
+      res,
+      error,
+      error.message || 'Failed to export quotes',
+      constants.INTERNAL_SERVER_ERROR.code
+    );
   }
 };
 

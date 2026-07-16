@@ -2,6 +2,7 @@ const db = require('../models');
 const pricingService = require('./pricing.service');
 
 const DEFAULT_PLATFORM_FEE_PERCENT = Number(process.env.BEIGE_MARGIN_PERCENT || 25);
+const AUTO_CREATE_CREATOR_EARNINGS_ON_BOOK_A_SHOOT = false;
 const ROLE_TO_ITEM_MAP = {
   videographer: 11,
   photographer: 10,
@@ -995,18 +996,20 @@ async function syncBookingFinance(bookingId, options = {}) {
       await breakdown.update(recalculatedBreakdown, { transaction });
     }
 
-    await db.creator_earnings.destroy({
-      where: { booking_id: booking.stream_project_booking_id },
-      transaction
-    });
-    if (creatorRows.length > 0) {
-      await db.creator_earnings.bulkCreate(creatorRows, { transaction });
-      const storedCreatorRows = await db.creator_earnings.findAll({
+    if (AUTO_CREATE_CREATOR_EARNINGS_ON_BOOK_A_SHOOT) {
+      await db.creator_earnings.destroy({
         where: { booking_id: booking.stream_project_booking_id },
         transaction
       });
-      for (const earning of storedCreatorRows) {
-        await syncCreatorEarningToWallet(earning, transaction);
+      if (creatorRows.length > 0) {
+        await db.creator_earnings.bulkCreate(creatorRows, { transaction });
+        const storedCreatorRows = await db.creator_earnings.findAll({
+          where: { booking_id: booking.stream_project_booking_id },
+          transaction
+        });
+        for (const earning of storedCreatorRows) {
+          await syncCreatorEarningToWallet(earning, transaction);
+        }
       }
     }
 
@@ -1046,7 +1049,7 @@ async function syncBookingFinance(bookingId, options = {}) {
     return {
       finance_transaction: financeTransaction,
       breakdown,
-      creator_earnings_count: creatorRows.length,
+      creator_earnings_count: AUTO_CREATE_CREATOR_EARNINGS_ON_BOOK_A_SHOOT ? creatorRows.length : 0,
       invoice_payments_count: invoiceRows.length
     };
   } catch (error) {
@@ -1304,6 +1307,292 @@ function buildFinanceTransactionListRow(plain, leadInfo = {}, invoiceCount = 0, 
     latest_invoice: latestInvoice ? formatClientInvoice(latestInvoice) : null,
     metadata
   };
+}
+
+function getFinanceFrontendBaseUrl() {
+  return String(process.env.FRONTEND_URL || 'http://localhost:3000').trim().replace(/\/+$/, '');
+}
+
+function buildFinanceReceiptUrl({ bookingId, manualPaymentId = null, paymentId = null, download = false }) {
+  const url = new URL(`${getFinanceFrontendBaseUrl()}/beige_invoice/${encodeURIComponent(String(bookingId))}`);
+  url.searchParams.set('receipt', '1');
+  if (manualPaymentId) url.searchParams.set('manual_payment_id', String(manualPaymentId));
+  if (paymentId) url.searchParams.set('payment_id', String(paymentId));
+  if (download) url.searchParams.set('download', '1');
+  return url.toString();
+}
+
+function formatManualPaymentMethod(payment = {}) {
+  const normalizedMode = String(payment.payment_mode || '').trim().toLowerCase();
+  if (normalizedMode === 'other' && String(payment.other_payment_mode || '').trim()) {
+    return String(payment.other_payment_mode).trim();
+  }
+  if (normalizedMode === 'net30') return 'Net 30';
+  return String(payment.payment_mode || 'manual').replace(/_/g, ' ');
+}
+
+function normalizePaymentHistoryStatus(status) {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (['succeeded', 'success', 'completed', 'complete', 'paid'].includes(normalized)) return 'paid';
+  if (normalized === 'failed') return 'failed';
+  if (normalized === 'refunded') return 'refunded';
+  return normalized || 'paid';
+}
+
+function buildPaymentHistoryListRow(payment = {}, booking = {}, leadInfo = {}) {
+  const bookingId = Number(payment.booking_id || booking.stream_project_booking_id || 0) || null;
+  const clientName =
+    booking.client?.name ||
+    leadInfo.client_name ||
+    payment.client_name ||
+    deriveNameFromEmail(payment.guest_email || leadInfo.guest_email || booking.guest_email) ||
+    'Guest Client';
+  const clientEmail = booking.client?.email || payment.guest_email || leadInfo.guest_email || booking.guest_email || null;
+  const transactionDate = payment.paid_at || payment.created_at || booking.payment_completed_at || booking.event_date || null;
+  const method = payment.method || (payment.type === 'stripe' ? 'Online Payment' : 'manual');
+  const paymentRecordId = payment.manual_payment_id || payment.payment_id || payment.payment_history_id;
+  const receiptNumber = payment.receipt_number || (
+    payment.type === 'stripe'
+      ? `RCPT-${String(bookingId).padStart(6, '0')}-S${String(paymentRecordId).padStart(3, '0')}`
+      : `RCPT-${String(bookingId).padStart(6, '0')}-${String(paymentRecordId).padStart(3, '0')}`
+  );
+
+  return {
+    finance_transaction_id: payment.payment_history_id,
+    transaction_id: receiptNumber,
+    transaction_code: receiptNumber,
+    booking_id: bookingId,
+    shoot_id: bookingId,
+    payment_id: payment.payment_id || null,
+    manual_payment_id: payment.manual_payment_id || null,
+    quote_id: booking.quote_id || payment.quote_id || null,
+    client_name: clientName,
+    client_email: clientEmail,
+    client_phone: leadInfo.phone || null,
+    shoot_type: formatShootType(booking, payment.metadata || {}),
+    project_name: booking.project_name || null,
+    event_date: formatDateOnly(booking.event_date || null),
+    transaction_date: transactionDate,
+    total_amount: toMoney(payment.amount || 0),
+    currency: payment.currency || 'USD',
+    payment_method: method,
+    status: normalizePaymentHistoryStatus(payment.status),
+    transaction_type: payment.type === 'stripe' ? 'client_payment' : 'manual_payment',
+    source: payment.type === 'stripe' ? 'stripe' : 'manual',
+    external_reference: payment.external_reference || null,
+    receipt_number: receiptNumber,
+    invoice_number: payment.invoice_number || null,
+    receipt_url: payment.receipt_url || null,
+    receipt_download_url: payment.receipt_download_url || null,
+    invoices_count: payment.invoice_count || 0,
+    latest_invoice: payment.latest_invoice || null,
+    metadata: payment.metadata || {}
+  };
+}
+
+async function fetchPaymentHistoryEntriesForBookings(bookingIds = []) {
+  const ids = [...new Set((bookingIds || []).map(Number).filter(Boolean))];
+  const hasBookingFilter = ids.length > 0;
+  const queryTypes = db.Sequelize.QueryTypes;
+  const bookingFilterSql = hasBookingFilter ? 'AND booking_id IN (:bookingIds)' : '';
+  const fipBookingFilterSql = hasBookingFilter ? 'AND fip.booking_id IN (:bookingIds)' : '';
+  const bookingPaymentFilterSql = hasBookingFilter ? 'AND b.stream_project_booking_id IN (:bookingIds)' : '';
+  const replacements = hasBookingFilter ? { bookingIds: ids } : {};
+
+  const manualRows = await db.sequelize.query(
+    `
+      SELECT
+        booking_manual_payment_id,
+        booking_id,
+        payment_type,
+        amount,
+        payment_mode,
+        other_payment_mode,
+        created_at
+      FROM booking_manual_payments
+      WHERE 1 = 1
+        ${bookingFilterSql}
+      ORDER BY created_at ASC, booking_manual_payment_id ASC
+    `,
+    { replacements, type: queryTypes.SELECT }
+  ).catch((error) => {
+    const code = error?.original?.code || error?.parent?.code || error?.code;
+    if (code === 'ER_NO_SUCH_TABLE' || code === 'ER_BAD_TABLE_ERROR') return [];
+    throw error;
+  });
+
+  const stripeReceiptRows = await db.sequelize.query(
+    `
+      SELECT
+        fip.booking_id,
+        fip.payment_id,
+        MIN(fip.finance_invoice_payment_id) AS finance_invoice_payment_id,
+        MAX(fip.amount) AS amount,
+        'paid' AS status,
+        MIN(fip.paid_at) AS paid_at,
+        MIN(fip.created_at) AS created_at,
+        p.total_amount,
+        p.status AS payment_status,
+        p.created_at AS payment_created_at,
+        p.stripe_payment_intent_id,
+        p.stripe_charge_id
+      FROM finance_invoice_payments fip
+      LEFT JOIN payment_transactions p
+        ON p.payment_id = fip.payment_id
+      WHERE fip.payment_id IS NOT NULL
+        AND fip.status = 'paid'
+        ${fipBookingFilterSql}
+      GROUP BY
+        fip.booking_id,
+        fip.payment_id,
+        p.total_amount,
+        p.status,
+        p.created_at,
+        p.stripe_payment_intent_id,
+        p.stripe_charge_id
+      ORDER BY COALESCE(MIN(fip.paid_at), p.created_at, MIN(fip.created_at)) ASC, MIN(fip.finance_invoice_payment_id) ASC
+    `,
+    { replacements, type: queryTypes.SELECT }
+  ).catch((error) => {
+    const code = error?.original?.code || error?.parent?.code || error?.code;
+    if (code === 'ER_NO_SUCH_TABLE' || code === 'ER_BAD_TABLE_ERROR') return [];
+    throw error;
+  });
+
+  const directStripeRows = await db.sequelize.query(
+    `
+      SELECT
+        b.stream_project_booking_id AS booking_id,
+        p.payment_id,
+        p.total_amount AS amount,
+        p.status AS payment_status,
+        p.created_at AS payment_created_at,
+        p.stripe_payment_intent_id,
+        p.stripe_charge_id
+      FROM stream_project_booking b
+      INNER JOIN payment_transactions p
+        ON p.payment_id = b.payment_id
+      WHERE b.payment_id IS NOT NULL
+        AND COALESCE(p.total_amount, 0) > 0
+        ${bookingPaymentFilterSql}
+      ORDER BY COALESCE(b.payment_completed_at, p.created_at) ASC, p.payment_id ASC
+    `,
+    { replacements, type: queryTypes.SELECT }
+  ).catch((error) => {
+    const code = error?.original?.code || error?.parent?.code || error?.code;
+    if (code === 'ER_NO_SUCH_TABLE' || code === 'ER_BAD_TABLE_ERROR') return [];
+    throw error;
+  });
+
+  const entries = [];
+  manualRows.forEach((manualPayment) => {
+    const bookingId = Number(manualPayment.booking_id);
+    const manualPaymentId = Number(manualPayment.booking_manual_payment_id);
+    if (!Number.isFinite(bookingId) || !Number.isFinite(manualPaymentId)) return;
+    const method = formatManualPaymentMethod(manualPayment);
+    entries.push({
+      payment_history_id: `manual-${manualPaymentId}`,
+      type: 'manual',
+      booking_id: bookingId,
+      manual_payment_id: manualPaymentId,
+      method,
+      amount: Number(manualPayment.amount || 0),
+      status: 'paid',
+      paid_at: manualPayment.created_at || null,
+      created_at: manualPayment.created_at || null,
+      receipt_number: `RCPT-${String(bookingId).padStart(6, '0')}-${String(manualPaymentId).padStart(3, '0')}`,
+      invoice_number: `INVBEIGE-M-${String(bookingId).padStart(4, '0')}-${String(manualPaymentId).padStart(3, '0')}`,
+      receipt_url: buildFinanceReceiptUrl({ bookingId, manualPaymentId }),
+      receipt_download_url: buildFinanceReceiptUrl({ bookingId, manualPaymentId, download: true })
+    });
+  });
+
+  const stripePaymentKeys = new Set();
+  stripeReceiptRows.forEach((stripeReceipt) => {
+    const bookingId = Number(stripeReceipt.booking_id);
+    const paymentId = Number(stripeReceipt.payment_id);
+    if (!Number.isFinite(bookingId) || !Number.isFinite(paymentId)) return;
+    stripePaymentKeys.add(`${bookingId}:${paymentId}`);
+    const status = normalizePaymentHistoryStatus(stripeReceipt.payment_status || stripeReceipt.status);
+    entries.push({
+      payment_history_id: `stripe-${paymentId}`,
+      type: 'stripe',
+      booking_id: bookingId,
+      payment_id: paymentId,
+      method: 'Online Payment',
+      amount: Number(stripeReceipt.amount || stripeReceipt.total_amount || 0),
+      status,
+      paid_at: stripeReceipt.paid_at || stripeReceipt.payment_created_at || stripeReceipt.created_at || null,
+      created_at: stripeReceipt.created_at || stripeReceipt.payment_created_at || null,
+      external_reference: stripeReceipt.stripe_payment_intent_id || stripeReceipt.stripe_charge_id || null,
+      receipt_number: `RCPT-${String(bookingId).padStart(6, '0')}-S${String(paymentId).padStart(3, '0')}`,
+      invoice_number: `INVBEIGE-S-${String(bookingId).padStart(4, '0')}-${String(paymentId).padStart(3, '0')}`,
+      receipt_url: buildFinanceReceiptUrl({ bookingId, paymentId }),
+      receipt_download_url: buildFinanceReceiptUrl({ bookingId, paymentId, download: true })
+    });
+  });
+
+  directStripeRows.forEach((payment) => {
+    const bookingId = Number(payment.booking_id);
+    const paymentId = Number(payment.payment_id);
+    if (!Number.isFinite(bookingId) || !Number.isFinite(paymentId)) return;
+    const key = `${bookingId}:${paymentId}`;
+    if (stripePaymentKeys.has(key)) return;
+    const status = normalizePaymentHistoryStatus(payment.payment_status);
+    entries.push({
+      payment_history_id: `stripe-${paymentId}`,
+      type: 'stripe',
+      booking_id: bookingId,
+      payment_id: paymentId,
+      method: 'Online Payment',
+      amount: Number(payment.amount || 0),
+      status,
+      paid_at: payment.payment_created_at || null,
+      created_at: payment.payment_created_at || null,
+      external_reference: payment.stripe_payment_intent_id || payment.stripe_charge_id || null,
+      receipt_number: `RCPT-${String(bookingId).padStart(6, '0')}-S${String(paymentId).padStart(3, '0')}`,
+      invoice_number: `INVBEIGE-S-${String(bookingId).padStart(4, '0')}-${String(paymentId).padStart(3, '0')}`,
+      receipt_url: buildFinanceReceiptUrl({ bookingId, paymentId }),
+      receipt_download_url: buildFinanceReceiptUrl({ bookingId, paymentId, download: true })
+    });
+  });
+
+  return entries.sort((left, right) => {
+    const leftTime = new Date(left.paid_at || left.created_at || 0).getTime();
+    const rightTime = new Date(right.paid_at || right.created_at || 0).getTime();
+    if (leftTime !== rightTime) return rightTime - leftTime;
+    return String(right.payment_history_id).localeCompare(String(left.payment_history_id));
+  });
+}
+
+function paymentHistoryMatchesMethod(entry, paymentMethod) {
+  const normalizedMethod = String(paymentMethod || '').trim().toLowerCase();
+  if (!normalizedMethod) return true;
+  const source = String(entry.type || entry.source || '').trim().toLowerCase();
+  const method = String(entry.method || entry.payment_method || '').trim().toLowerCase();
+  if (normalizedMethod === 'stripe') return source === 'stripe' || method === 'online payment' || method === 'stripe';
+  if (normalizedMethod === 'bank transfer') return method === 'bank transfer';
+  if (normalizedMethod === 'manual') return source === 'manual';
+  return method === normalizedMethod;
+}
+
+function paymentHistoryMatchesSearch(row, search) {
+  const normalizedSearch = String(search || '').trim().toLowerCase();
+  if (!normalizedSearch) return true;
+  return [
+    row.transaction_id,
+    row.transaction_code,
+    row.receipt_number,
+    row.invoice_number,
+    row.booking_id ? `#${row.booking_id}` : null,
+    row.booking_id,
+    row.client_name,
+    row.client_email,
+    row.payment_method,
+    row.shoot_type,
+    row.project_name,
+    row.external_reference
+  ].some((value) => String(value || '').toLowerCase().includes(normalizedSearch));
 }
 
 function buildClientWhere(userContext = {}, filters = {}) {
@@ -1604,80 +1893,70 @@ async function listTransactions(filters = {}) {
   const page = Math.max(parseInt(filters.page, 10) || 1, 1);
   const limit = Math.min(Math.max(parseInt(filters.limit, 10) || 20, 1), 100);
   const offset = (page - 1) * limit;
-  const where = {};
   const search = String(filters.search || filters.q || '').trim();
-
-  await syncRecentPaidBookingsMissingFinance(Math.max(limit * 2, 50));
-
-  if (filters.status) where.status = filters.status;
-  if (filters.transaction_type) where.transaction_type = filters.transaction_type;
-  if (filters.booking_id) where.booking_id = filters.booking_id;
-  if (filters.payment_id) where.payment_id = filters.payment_id;
-  if (search) {
-    const term = `%${search}%`;
-    const matchedBookingIds = await getSearchMatchedBookingIds(search);
-    where[Op.or] = [
-      { transaction_code: { [Op.like]: term } },
-      { guest_email: { [Op.like]: term } },
-      { external_reference: { [Op.like]: term } }
-    ];
-    if (matchedBookingIds.length > 0) {
-      where[Op.or].push({ booking_id: { [Op.in]: matchedBookingIds } });
-    }
-  }
-  if (filters.date_from || filters.date_to) {
-    where.transaction_date = {};
-    if (filters.date_from) where.transaction_date[Op.gte] = new Date(filters.date_from);
-    if (filters.date_to) where.transaction_date[Op.lte] = new Date(filters.date_to);
-  }
-
-  const result = await db.finance_transactions.findAndCountAll({
-    where,
-    limit,
-    offset,
-    order: [['transaction_date', 'DESC'], ['finance_transaction_id', 'DESC']],
-    include: [
-      {
-        model: db.stream_project_booking,
-        as: 'booking',
-        required: false,
-        attributes: ['stream_project_booking_id', 'quote_id', 'project_name', 'shoot_type', 'event_type', 'content_type', 'event_date', 'guest_email']
-      },
-      {
-        model: db.payment_transactions,
-        as: 'payment',
-        required: false,
-        attributes: ['payment_id', 'stripe_payment_intent_id', 'stripe_charge_id', 'guest_email', 'payment_source', 'total_amount', 'shoot_date', 'status']
-      },
-      {
-        model: db.users,
-        as: 'client',
-        required: false,
-        attributes: ['id', 'name', 'email']
-      }
-    ]
-  });
-
-  const plainRows = result.rows.map((row) => row.get({ plain: true }));
-  const bookingIds = plainRows.map((row) => row.booking_id || row.booking?.stream_project_booking_id).filter(Boolean);
+  const explicitBookingId = Number(filters.booking_id || 0) || null;
+  const entries = await fetchPaymentHistoryEntriesForBookings(explicitBookingId ? [explicitBookingId] : []);
+  const bookingIds = [...new Set(entries.map((entry) => Number(entry.booking_id)).filter(Boolean))];
   const [leadInfoByBookingId, invoiceCountsByBookingId, latestInvoicesByBookingId] = await Promise.all([
     getLeadInfoByBookingIds(bookingIds),
     getInvoiceCountsByBookingIds(bookingIds),
     getLatestInvoicesByBookingIds(bookingIds)
   ]);
+  const bookingRows = bookingIds.length
+    ? await db.stream_project_booking.findAll({
+        where: { stream_project_booking_id: { [Op.in]: bookingIds } },
+        attributes: ['stream_project_booking_id', 'quote_id', 'project_name', 'shoot_type', 'event_type', 'content_type', 'event_date', 'guest_email', 'payment_completed_at'],
+        raw: true
+      })
+    : [];
+  const bookingById = new Map(bookingRows.map((booking) => [Number(booking.stream_project_booking_id), booking]));
+
+  const mappedRows = entries
+    .map((entry) => {
+      const bookingId = Number(entry.booking_id);
+      return buildPaymentHistoryListRow(
+        {
+          ...entry,
+          invoice_count: invoiceCountsByBookingId.get(bookingId) || 0,
+          latest_invoice: latestInvoicesByBookingId.get(bookingId) || null
+        },
+        bookingById.get(bookingId) || {},
+        leadInfoByBookingId.get(bookingId) || {}
+      );
+    })
+    .filter((row) => {
+      const status = String(filters.status || '').trim().toLowerCase();
+      if (status && String(row.status || '').trim().toLowerCase() !== status) return false;
+      if (filters.payment_id && Number(row.payment_id) !== Number(filters.payment_id)) return false;
+      if (filters.transaction_type && row.transaction_type !== filters.transaction_type) return false;
+      if (!paymentHistoryMatchesMethod(row, filters.payment_method)) return false;
+      if (!paymentHistoryMatchesSearch(row, search)) return false;
+
+      const transactionTime = row.transaction_date ? new Date(row.transaction_date).getTime() : 0;
+      if (filters.date_from) {
+        const fromTime = new Date(filters.date_from).getTime();
+        if (Number.isFinite(fromTime) && transactionTime < fromTime) return false;
+      }
+      if (filters.date_to) {
+        const toDate = new Date(filters.date_to);
+        if (Number.isFinite(toDate.getTime())) {
+          toDate.setHours(23, 59, 59, 999);
+          if (transactionTime > toDate.getTime()) return false;
+        }
+      }
+
+      return true;
+    });
+
+  const pagedRows = mappedRows.slice(offset, offset + limit);
 
   return {
-    rows: plainRows.map((plain) => buildFinanceTransactionListRow(
-      plain,
-      leadInfoByBookingId.get(Number(plain.booking_id || plain.booking?.stream_project_booking_id)) || {},
-      invoiceCountsByBookingId.get(Number(plain.booking_id || plain.booking?.stream_project_booking_id)) || 0,
-      latestInvoicesByBookingId.get(Number(plain.booking_id || plain.booking?.stream_project_booking_id)) || null
-    )),
+    rows: pagedRows,
     pagination: {
       page,
       limit,
-      total: result.count,
-      total_pages: Math.ceil(result.count / limit)
+      total: mappedRows.length,
+      total_pages: Math.ceil(mappedRows.length / limit)
     }
   };
 }
@@ -1692,8 +1971,31 @@ async function listShootBreakdowns(filters = {}) {
 
   if (filters.payment_status) where.payment_status = filters.payment_status;
   if (filters.client_user_id) where.client_user_id = filters.client_user_id;
+  if (filters.payment_method) {
+    const matchingEntries = await fetchPaymentHistoryEntriesForBookings([]);
+    const matchingBookingIds = [
+      ...new Set(
+        matchingEntries
+          .filter((entry) => paymentHistoryMatchesMethod(entry, filters.payment_method))
+          .map((entry) => Number(entry.booking_id))
+          .filter(Boolean)
+      )
+    ];
+    where.booking_id = { [Op.in]: matchingBookingIds.length ? matchingBookingIds : [0] };
+  }
   if (filters.search) {
-    const term = `%${String(filters.search).trim()}%`;
+    const rawSearch = String(filters.search).trim();
+    const term = `%${rawSearch}%`;
+    const directBookingId = Number(rawSearch.replace(/^#/, ''));
+    if (Number.isFinite(directBookingId) && directBookingId > 0) {
+      if (where.booking_id?.[Op.in]) {
+        where.booking_id = {
+          [Op.in]: where.booking_id[Op.in].filter((bookingId) => Number(bookingId) === directBookingId)
+        };
+      } else {
+        where.booking_id = directBookingId;
+      }
+    }
     bookingWhere[Op.or] = [
       { project_name: { [Op.like]: term } },
       { shoot_type: { [Op.like]: term } },
@@ -1714,7 +2016,7 @@ async function listShootBreakdowns(filters = {}) {
         as: 'booking',
         required: Object.keys(bookingWhere).length > 0,
         where: bookingWhere,
-        attributes: ['stream_project_booking_id', 'project_name', 'shoot_type', 'event_type', 'event_date', 'guest_email']
+        attributes: ['stream_project_booking_id', 'quote_id', 'project_name', 'shoot_type', 'event_type', 'content_type', 'event_date', 'guest_email']
       },
       {
         model: db.users,
@@ -1731,12 +2033,55 @@ async function listShootBreakdowns(filters = {}) {
     ]
   });
 
+  const plainRows = result.rows.map((row) => row.get({ plain: true }));
+  const bookingIds = plainRows.map((row) => Number(row.booking_id)).filter(Boolean);
+  const [leadInfoByBookingId, invoiceCountsByBookingId, latestInvoicesByBookingId, paymentHistoryEntries] = await Promise.all([
+    getLeadInfoByBookingIds(bookingIds),
+    getInvoiceCountsByBookingIds(bookingIds),
+    getLatestInvoicesByBookingIds(bookingIds),
+    fetchPaymentHistoryEntriesForBookings(bookingIds)
+  ]);
+
+  const transactionsByBookingId = new Map();
+  const bookingById = new Map(plainRows.map((plain) => [Number(plain.booking_id), plain.booking || {}]));
+  paymentHistoryEntries.forEach((paymentEntry) => {
+    const bookingId = Number(paymentEntry.booking_id);
+    if (!bookingId) return;
+
+    const leadInfo = leadInfoByBookingId.get(bookingId) || {};
+    const invoiceCount = invoiceCountsByBookingId.get(bookingId) || 0;
+    const latestInvoice = latestInvoicesByBookingId.get(bookingId) || null;
+    transactionsByBookingId.set(bookingId, [
+      ...(transactionsByBookingId.get(bookingId) || []),
+      buildPaymentHistoryListRow(
+        {
+          ...paymentEntry,
+          invoice_count: invoiceCount,
+          latest_invoice: latestInvoice
+        },
+        bookingById.get(bookingId) || {},
+        leadInfo
+      )
+    ]);
+  });
+  transactionsByBookingId.forEach((transactions, bookingId) => {
+    transactionsByBookingId.set(
+      bookingId,
+      [...transactions].sort((left, right) => {
+        const leftTime = new Date(left.transaction_date || 0).getTime();
+        const rightTime = new Date(right.transaction_date || 0).getTime();
+        return leftTime - rightTime;
+      })
+    );
+  });
+
   return {
-    rows: result.rows.map((row) => {
-      const plain = row.get({ plain: true });
+    rows: plainRows.map((plain) => {
+      const bookingId = Number(plain.booking_id);
       return {
         ...plain,
-        metadata: parseJson(plain.metadata_json, null)
+        metadata: parseJson(plain.metadata_json, null),
+        transactions: transactionsByBookingId.get(bookingId) || []
       };
     }),
     pagination: {

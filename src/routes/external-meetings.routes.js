@@ -20,7 +20,8 @@ const meetingsCreate = requireAnyPermission([
 const meetingsEdit = requireAnyPermission([
   'admin_meetings.edit',
   'production_manager_meetings.edit',
-  'client_meetings.edit'
+  'client_meetings.edit',
+  'creative_partner_meetings.edit'
 ], { allowRoles: ['production_manager', 'creative', 'client'] });
 const meetingsDelete = requireAnyPermission([
   'admin_meetings.delete',
@@ -54,6 +55,7 @@ router.get('/', authenticate, meetingsView, externalMeetingsController.getAllMee
 router.get('/order/:orderId', authenticate, shootMeetingsView, externalMeetingsController.getMeetingsByOrder);
 router.get('/user/:userId', authenticate, meetingsView, externalMeetingsController.getMeetingsByUser);
 router.post('/create-event', authenticate, meetingsCreate, externalMeetingsController.createMeetEvent);
+router.post('/update-event', authenticate, meetingsEdit, externalMeetingsController.updateMeetEvent);
 router.post('/schedule/:meetingId', authenticate, meetingsEdit, externalMeetingsController.placeChangeRequest);
 router.patch('/schedule/:meetingId/:status', authenticate, meetingsEdit, externalMeetingsController.updateChangeRequestStatus);
 router.post('/', authenticate, shootMeetingsCreate, externalMeetingsController.createMeeting);
