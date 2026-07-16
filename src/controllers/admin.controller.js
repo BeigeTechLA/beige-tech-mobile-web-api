@@ -3,7 +3,7 @@ const { Sequelize, users, affiliates } = require('../models')
 const multer = require('multer');
 const path = require('path');
 const common_model = require('../utils/common_model');
-const { Op, QueryTypes } = require('sequelize');
+const { Op, QueryTypes, where } = require('sequelize');
 const { S3UploadFiles, toAbsoluteBeigeAssetUrl } = require('../utils/common.js');
 const moment = require('moment');
 const {
@@ -36,7 +36,7 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   post_production_members,
   clients, user_archive_history, sales_leads, client_leads, sales_lead_activities, client_lead_activities, quotes, quote_line_items, discount_codes, payment_links, project_form_submissions,
   payments } = require('../models');
-  const { deleteSheetRow, updateSheetRow } = require('../utils/googleSheets');
+const { deleteSheetRow, updateSheetRow } = require('../utils/googleSheets');
 const leadAssignmentService = require('../services/lead-assignment.service');
 const { extractCoordinatesFromPayload, calculateDistance, parseLocation } = require('../utils/locationHelpers');
 const db = require('../models');
@@ -198,31 +198,31 @@ const resolveAdminBookingClientContact = async (booking = null) => {
   const [bookingUser, linkedClient, linkedLead, linkedClientLead] = await Promise.all([
     userId
       ? users.findOne({
-          where: { id: userId },
-          attributes: ['name', 'email', 'phone_number'],
-          raw: true
-        })
+        where: { id: userId },
+        attributes: ['name', 'email', 'phone_number'],
+        raw: true
+      })
       : Promise.resolve(null),
     userId
       ? clients.findOne({
-          where: { user_id: userId, is_active: 1 },
-          attributes: ['name', 'email', 'phone_number'],
-          raw: true
-        })
+        where: { user_id: userId, is_active: 1 },
+        attributes: ['name', 'email', 'phone_number'],
+        raw: true
+      })
       : Promise.resolve(null),
     bookingId
       ? sales_leads.findOne({
-          where: { booking_id: bookingId, is_active: 1 },
-          attributes: ['client_name', 'guest_email', 'phone'],
-          raw: true
-        })
+        where: { booking_id: bookingId, is_active: 1 },
+        attributes: ['client_name', 'guest_email', 'phone'],
+        raw: true
+      })
       : Promise.resolve(null),
     bookingId
       ? client_leads.findOne({
-          where: { booking_id: bookingId, is_active: 1 },
-          attributes: ['client_name', 'guest_email', 'phone'],
-          raw: true
-        })
+        where: { booking_id: bookingId, is_active: 1 },
+        attributes: ['client_name', 'guest_email', 'phone'],
+        raw: true
+      })
       : Promise.resolve(null)
   ]);
 
@@ -320,18 +320,18 @@ const resolveProjectDisplayAmount = async ({ project, paymentData }) => {
 
   const quoteAmountFromLinkedQuote = project?.quote_id
     ? await quotes.findByPk(project.quote_id, {
-        attributes: ['total', 'price_after_discount', 'subtotal'],
-      }).then((quote) => {
-        if (!quote) return null;
-        if (budgetAmount !== null && budgetAmount > 0) {
-          return budgetAmount;
-        }
-        return (
-          parseAmountCandidate(quote.total) ??
-          parseAmountCandidate(quote.price_after_discount) ??
-          parseAmountCandidate(quote.subtotal)
-        );
-      })
+      attributes: ['total', 'price_after_discount', 'subtotal'],
+    }).then((quote) => {
+      if (!quote) return null;
+      if (budgetAmount !== null && budgetAmount > 0) {
+        return budgetAmount;
+      }
+      return (
+        parseAmountCandidate(quote.total) ??
+        parseAmountCandidate(quote.price_after_discount) ??
+        parseAmountCandidate(quote.subtotal)
+      );
+    })
     : null;
 
   if (quoteAmountFromLinkedQuote !== null && quoteAmountFromLinkedQuote > 0) {
@@ -370,14 +370,14 @@ const resolveProjectTotalValueAmount = async ({ project, salesQuoteId = null }) 
 
   const salesQuoteAmount = salesQuoteId
     ? await db.sales_quotes.findByPk(salesQuoteId, {
-        attributes: ['total', 'subtotal'],
-      }).then((quote) => {
-        if (!quote) return null;
-        return (
-          parseAmountCandidate(quote.total) ??
-          parseAmountCandidate(quote.subtotal)
-        );
-      })
+      attributes: ['total', 'subtotal'],
+    }).then((quote) => {
+      if (!quote) return null;
+      return (
+        parseAmountCandidate(quote.total) ??
+        parseAmountCandidate(quote.subtotal)
+      );
+    })
     : null;
 
   if (salesQuoteAmount !== null && salesQuoteAmount > 0) {
@@ -386,18 +386,18 @@ const resolveProjectTotalValueAmount = async ({ project, salesQuoteId = null }) 
 
   const quoteAmountFromLinkedQuote = project?.quote_id
     ? await quotes.findByPk(project.quote_id, {
-        attributes: ['subtotal', 'total', 'price_after_discount'],
-      }).then((quote) => {
-        if (!quote) return null;
-        if (budgetAmount !== null && budgetAmount > 0) {
-          return budgetAmount;
-        }
-        return (
-          parseAmountCandidate(quote.total) ??
-          parseAmountCandidate(quote.price_after_discount) ??
-          parseAmountCandidate(quote.subtotal)
-        );
-      })
+      attributes: ['subtotal', 'total', 'price_after_discount'],
+    }).then((quote) => {
+      if (!quote) return null;
+      if (budgetAmount !== null && budgetAmount > 0) {
+        return budgetAmount;
+      }
+      return (
+        parseAmountCandidate(quote.total) ??
+        parseAmountCandidate(quote.price_after_discount) ??
+        parseAmountCandidate(quote.subtotal)
+      );
+    })
     : null;
 
   if (quoteAmountFromLinkedQuote !== null && quoteAmountFromLinkedQuote > 0) {
@@ -427,23 +427,23 @@ const resolveProjectTotalValueAmount = async ({ project, salesQuoteId = null }) 
   const bookingId = project?.stream_project_booking_id;
   const salesQuoteAmountFromLead = bookingId
     ? await db.sales_leads.findOne({
-        where: { booking_id: bookingId, is_active: 1 },
-        attributes: ['lead_id'],
-        order: [['lead_id', 'DESC']],
-      }).then((lead) => {
-        if (!lead?.lead_id) return null;
-        return db.sales_quotes.findOne({
-          where: { lead_id: lead.lead_id },
-          attributes: ['total', 'subtotal'],
-          order: [['updated_at', 'DESC'], ['sales_quote_id', 'DESC']],
-        });
-      }).then((quote) => {
-        if (!quote) return null;
-        return (
-          parseAmountCandidate(quote.total) ??
-          parseAmountCandidate(quote.subtotal)
-        );
-      })
+      where: { booking_id: bookingId, is_active: 1 },
+      attributes: ['lead_id'],
+      order: [['lead_id', 'DESC']],
+    }).then((lead) => {
+      if (!lead?.lead_id) return null;
+      return db.sales_quotes.findOne({
+        where: { lead_id: lead.lead_id },
+        attributes: ['total', 'subtotal'],
+        order: [['updated_at', 'DESC'], ['sales_quote_id', 'DESC']],
+      });
+    }).then((quote) => {
+      if (!quote) return null;
+      return (
+        parseAmountCandidate(quote.total) ??
+        parseAmountCandidate(quote.subtotal)
+      );
+    })
     : null;
 
   if (salesQuoteAmountFromLead !== null && salesQuoteAmountFromLead > 0) {
@@ -933,7 +933,7 @@ const upload = multer({
   storage: storage,
   limits: { fileSize: 25 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowedTypes = ['image/jpeg', 'image/png','image/webp', 'image/jfif', 'image/jpg', 'application/pdf'];
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'image/jfif', 'image/jpg', 'application/pdf'];
     if (!allowedTypes.includes(file.mimetype)) {
       return cb(new Error('Invalid file type. Only JPEG, PNG, and PDF are allowed.'));
     }
@@ -1025,38 +1025,38 @@ function buildDateFilter(req) {
 }
 
 const SHOOT_TYPE_TITLES = {
-    corporate: "Corporate Event",
-    wedding: "Wedding",
-    private: "Private Event",
-    commercial: "Commercial & Advertising",
-    social_content: "Social Content",
-    podcast: "Podcasts & Shows",
-    music: "Music Videos",
-    short_film: "Short Films & Narrative",
-    brand_product: "Brand & Product",
-    people_teams: "People & Teams",
-    behind_scenes: "Behind-the-Scenes",
+  corporate: "Corporate Event",
+  wedding: "Wedding",
+  private: "Private Event",
+  commercial: "Commercial & Advertising",
+  social_content: "Social Content",
+  podcast: "Podcasts & Shows",
+  music: "Music Videos",
+  short_film: "Short Films & Narrative",
+  brand_product: "Brand & Product",
+  people_teams: "People & Teams",
+  behind_scenes: "Behind-the-Scenes",
 };
 
 const VIDEO_EDIT_TITLES = {
-    social_reel_15_30: "Social Media Reel (15 sec-30 sec)",
-    social_reel_30_90: "Social Media Reel (30 sec-90 sec)",
-    mini_highlight_1_2: "Mini Highlight Video (1-2 mins)",
-    highlight_4_7: "Highlight Video (4-7 min)",
-    feature_30_40: "Feature Video (30-40 min)",
-    commercial_2_4: "Commercial (2 min-4 min)",
-    commercial_4_10: "Commercial (4 min-10 min)",
-    social_reel_2_4: "Social Media Reel (2 min-4 min)",
-    full_podcast_15_30: "Full Length Podcast (15 min-30 min)",
-    full_podcast_30_60: "Longer Full Length Podcast (30 min-60 min)",
-    music_video_2_3: "Edited Music Video (2-3 min)",
-    music_video_vfx_2_3: "Edited Music Video with VFX (2-3 min)",
-    short_film_2_5: "Edited Short Film (2 Min-5 Min)",
-    short_film_5_10: "Edited Short Film (5 Min-10 Min)",
+  social_reel_15_30: "Social Media Reel (15 sec-30 sec)",
+  social_reel_30_90: "Social Media Reel (30 sec-90 sec)",
+  mini_highlight_1_2: "Mini Highlight Video (1-2 mins)",
+  highlight_4_7: "Highlight Video (4-7 min)",
+  feature_30_40: "Feature Video (30-40 min)",
+  commercial_2_4: "Commercial (2 min-4 min)",
+  commercial_4_10: "Commercial (4 min-10 min)",
+  social_reel_2_4: "Social Media Reel (2 min-4 min)",
+  full_podcast_15_30: "Full Length Podcast (15 min-30 min)",
+  full_podcast_30_60: "Longer Full Length Podcast (30 min-60 min)",
+  music_video_2_3: "Edited Music Video (2-3 min)",
+  music_video_vfx_2_3: "Edited Music Video with VFX (2-3 min)",
+  short_film_2_5: "Edited Short Film (2 Min-5 Min)",
+  short_film_5_10: "Edited Short Film (5 Min-10 Min)",
 };
 
 const PHOTO_EDIT_TITLES = {
-    edited_photos: "Professionally Edited Photos",
+  edited_photos: "Professionally Edited Photos",
 };
 
 // const getDistanceInMiles = (lat1, lon1, lat2, lon2) => {
@@ -1546,31 +1546,31 @@ exports.assignCrew = async (req, res) => {
 
     const uniqueCrewIds = [...new Set(crewIds.map(Number).filter(Boolean))];
 
-  for (const crewId of uniqueCrewIds) {
-  await assigned_crew.create({
-    project_id,
-    crew_member_id: crewId,
-    assigned_date: new Date(),
-    status: 'assigned',
-    is_active: 1,
-  });
+    for (const crewId of uniqueCrewIds) {
+      await assigned_crew.create({
+        project_id,
+        crew_member_id: crewId,
+        assigned_date: new Date(),
+        status: 'assigned',
+        is_active: 1,
+      });
 
-  const existingEarning = await db.creator_earnings.findOne({
-    where: { booking_id: project_id, creator_id: crewId }
-  });
+      const existingEarning = await db.creator_earnings.findOne({
+        where: { booking_id: project_id, creator_id: crewId }
+      });
 
-  if (!existingEarning) {
-    await db.creator_earnings.create({
-      booking_id: project_id,
-      creator_id: crewId,
-      gross_amount: 0,
-      net_earning_amount: 0,
-      status: 'pending',
-      created_at: new Date(),
-      updated_at: new Date()
-    });
-  }
-}
+      if (!existingEarning) {
+        await db.creator_earnings.create({
+          booking_id: project_id,
+          creator_id: crewId,
+          gross_amount: 0,
+          net_earning_amount: 0,
+          status: 'pending',
+          created_at: new Date(),
+          updated_at: new Date()
+        });
+      }
+    }
 
     // Non-blocking email trigger
     try {
@@ -1845,7 +1845,7 @@ exports.saveMatchedEquipment = async (req, res) => {
 //           const names = allRoles
 //             .filter(r => roleIds.includes(String(r.role_id)) || roleIds.includes(Number(r.role_id)))
 //             .map(r => r.role_name);
-          
+
 //           if (names.length > 0) roleName = names.join(", ");
 //         } catch (e) {
 //           console.error("Role processing error:", e);
@@ -1926,8 +1926,8 @@ exports.getProjectDetails = async (req, res) => {
         {
           model: assigned_post_production_member,
           as: 'assigned_post_production_members',
-          where: {
-            is_active: 1 },
+          where: { is_active: 1 },
+          required: false,
           include: [{ model: post_production_members, as: 'post_production_member' }]
 
         },
@@ -1940,8 +1940,8 @@ exports.getProjectDetails = async (req, res) => {
             { model: users, as: "assigned_sales_rep", attributes: ["id", "name", "email"] },
             { model: payment_links, as: "payment_links" },
             { model: discount_codes, as: "discount_codes" },
-            { 
-              model: sales_lead_activities, 
+            {
+              model: sales_lead_activities,
               as: "activities",
               include: [{ model: users, as: "performed_by", attributes: ["id", "name"] }]
             }
@@ -1960,21 +1960,21 @@ exports.getProjectDetails = async (req, res) => {
     }
 
     let projectJson = project.toJSON();
-    
+
     const bookingDayEntries =
       Array.isArray(projectJson.booking_days) && projectJson.booking_days.length
         ? [...projectJson.booking_days].sort((a, b) => {
-            const dateDiff = new Date(a.event_date) - new Date(b.event_date);
-            if (dateDiff !== 0) return dateDiff;
-            return (a.start_time || "").localeCompare(b.start_time || "");
-          })
+          const dateDiff = new Date(a.event_date) - new Date(b.event_date);
+          if (dateDiff !== 0) return dateDiff;
+          return (a.start_time || "").localeCompare(b.start_time || "");
+        })
         : [{
-            event_date: projectJson.event_date,
-            start_time: projectJson.start_time,
-            end_time: projectJson.end_time,
-            duration_hours: projectJson.duration_hours,
-            time_zone: null
-          }];
+          event_date: projectJson.event_date,
+          start_time: projectJson.start_time,
+          end_time: projectJson.end_time,
+          duration_hours: projectJson.duration_hours,
+          time_zone: null
+        }];
 
     projectJson.booking_days = bookingDayEntries.map(day => ({
       event_date: day.event_date,
@@ -1997,14 +1997,14 @@ exports.getProjectDetails = async (req, res) => {
 
     const leadPaymentActivities = leadRecord?.lead_id
       ? await sales_lead_activities.findAll({
-          where: {
-            lead_id: leadRecord.lead_id,
-            activity_type: 'payment_completed'
-          },
-          attributes: ['activity_type', 'activity_data', 'created_at'],
-          order: [['created_at', 'ASC']],
-          raw: true
-        })
+        where: {
+          lead_id: leadRecord.lead_id,
+          activity_type: 'payment_completed'
+        },
+        attributes: ['activity_type', 'activity_data', 'created_at'],
+        order: [['created_at', 'ASC']],
+        raw: true
+      })
       : [];
 
     // 3. Fetch Transaction Total (from payment_transactions table)
@@ -2085,13 +2085,13 @@ exports.getProjectDetails = async (req, res) => {
     const [emailUserRecord] = await Promise.all([
       normalizedGuestEmail
         ? users.findOne({
-            where: Sequelize.where(
-              Sequelize.fn('LOWER', Sequelize.col('email')),
-              normalizedGuestEmail
-            ),
-            attributes: ['id', 'email'],
-            raw: true
-          })
+          where: Sequelize.where(
+            Sequelize.fn('LOWER', Sequelize.col('email')),
+            normalizedGuestEmail
+          ),
+          attributes: ['id', 'email'],
+          raw: true
+        })
         : Promise.resolve(null),
     ]);
 
@@ -2099,25 +2099,25 @@ exports.getProjectDetails = async (req, res) => {
     const [clientByUser, clientByEmail] = await Promise.all([
       matchedUserId
         ? clients.findOne({
-            where: { user_id: matchedUserId, is_active: 1 },
-            attributes: ['client_id', 'user_id', 'email'],
-            raw: true
-          })
+          where: { user_id: matchedUserId, is_active: 1 },
+          attributes: ['client_id', 'user_id', 'email'],
+          raw: true
+        })
         : Promise.resolve(null),
       normalizedGuestEmail
         ? clients.findOne({
-            where: {
-              is_active: 1,
-              [Op.and]: [
-                Sequelize.where(
-                  Sequelize.fn('LOWER', Sequelize.col('email')),
-                  normalizedGuestEmail
-                )
-              ]
-            },
-            attributes: ['client_id', 'user_id', 'email'],
-            raw: true
-          })
+          where: {
+            is_active: 1,
+            [Op.and]: [
+              Sequelize.where(
+                Sequelize.fn('LOWER', Sequelize.col('email')),
+                normalizedGuestEmail
+              )
+            ]
+          },
+          attributes: ['client_id', 'user_id', 'email'],
+          raw: true
+        })
         : Promise.resolve(null),
     ]);
 
@@ -2191,7 +2191,7 @@ exports.getProjectDetails = async (req, res) => {
     ) {
       totalValueAmount = projectedTotal;
     }
-    
+
     const parsedQuoteTotal = parseFloat(activeQuoteSource?.total || 0);
     let pricing_breakdown = {
       shoot_cost: 0,
@@ -2211,15 +2211,15 @@ exports.getProjectDetails = async (req, res) => {
     let hasPersistedStudioLine = false;
 
     (activeQuoteSource?.line_items || []).forEach(item => {
-        const cost = parseFloat(item.line_total || item.total || 0);
-        subtotal += cost;
-        const name = (item.item_name || '').toLowerCase();
-        if (isStudioLineItem(item)) {
-          hasPersistedStudioLine = true;
-          pricing_breakdown.studio_cost += cost;
-        }
-        else if (name.includes('edit') || name.includes('reel') || name.includes('post')) pricing_breakdown.editing_cost += cost;
-        else pricing_breakdown.shoot_cost += cost;
+      const cost = parseFloat(item.line_total || item.total || 0);
+      subtotal += cost;
+      const name = (item.item_name || '').toLowerCase();
+      if (isStudioLineItem(item)) {
+        hasPersistedStudioLine = true;
+        pricing_breakdown.studio_cost += cost;
+      }
+      else if (name.includes('edit') || name.includes('reel') || name.includes('post')) pricing_breakdown.editing_cost += cost;
+      else pricing_breakdown.shoot_cost += cost;
     });
     if (!hasPersistedStudioLine && studioSnapshot.total > 0 && parsedQuoteTotal > subtotal) {
       const legacyStudioAmount = Math.min(studioSnapshot.total, parsedQuoteTotal - subtotal);
@@ -2262,38 +2262,38 @@ exports.getProjectDetails = async (req, res) => {
 
     let fulfillmentSummary = {};
     let requestedRoles = {};
-    try { requestedRoles = typeof projectJson.crew_roles === 'string' ? JSON.parse(projectJson.crew_roles) : projectJson.crew_roles || {}; } catch(e){}
-    
+    try { requestedRoles = typeof projectJson.crew_roles === 'string' ? JSON.parse(projectJson.crew_roles) : projectJson.crew_roles || {}; } catch (e) { }
+
     Object.keys(requestedRoles).forEach(role => {
-        fulfillmentSummary[role] = { required: requestedRoles[role], accepted: 0, display: `0/${requestedRoles[role]}` };
+      fulfillmentSummary[role] = { required: requestedRoles[role], accepted: 0, display: `0/${requestedRoles[role]}` };
     });
 
     const processedCrew = (projectJson.assigned_crews || []).map(ac => {
-        let roleNames = [];
-        if (ac.crew_member?.primary_role) {
-            try {
-                const raw = ac.crew_member.primary_role;
-                const roleIds = (typeof raw === 'string' && raw.startsWith('[')) ? JSON.parse(raw) : [raw];
-                roleNames = allRoles.filter(r => roleIds.map(String).includes(String(r.role_id))).map(r => r.role_name);
-                
-                if (ac.crew_accept === 1) {
-                    const cat = roleIds.map(id => ID_TO_ROLE_MAP[String(id)]).find(c => fulfillmentSummary[c]);
-                    if (cat) fulfillmentSummary[cat].accepted += 1;
-                }
-            } catch(e){}
+      let roleNames = [];
+      if (ac.crew_member?.primary_role) {
+        try {
+          const raw = ac.crew_member.primary_role;
+          const roleIds = (typeof raw === 'string' && raw.startsWith('[')) ? JSON.parse(raw) : [raw];
+          roleNames = allRoles.filter(r => roleIds.map(String).includes(String(r.role_id))).map(r => r.role_name);
+
+          if (ac.crew_accept === 1) {
+            const cat = roleIds.map(id => ID_TO_ROLE_MAP[String(id)]).find(c => fulfillmentSummary[c]);
+            if (cat) fulfillmentSummary[cat].accepted += 1;
+          }
+        } catch (e) { }
+      }
+      const totalCompensation = compensationByCreatorId.get(Number(ac.crew_member_id)) ?? null;
+      return {
+        ...ac,
+        acceptance_status: ac.crew_accept === 1 ? 'accepted' : ac.crew_accept === 2 ? 'rejected' : 'pending',
+        total_compensation: totalCompensation,
+        crew_member: {
+          ...ac.crew_member,
+          role_name: roleNames.join(', ') || 'N/A',
+          first_name: ac.crew_member?.first_name ? ac.crew_member.first_name.charAt(0).toUpperCase() + ac.crew_member.first_name.slice(1).toLowerCase() : '',
+          last_name: ac.crew_member?.last_name ? ac.crew_member.last_name.charAt(0).toUpperCase() : ''
         }
-        const totalCompensation = compensationByCreatorId.get(Number(ac.crew_member_id)) ?? null;
-        return {
-            ...ac,
-            acceptance_status: ac.crew_accept === 1 ? 'accepted' : ac.crew_accept === 2 ? 'rejected' : 'pending',
-            total_compensation: totalCompensation,
-            crew_member: { 
-                ...ac.crew_member, 
-                role_name: roleNames.join(', ') || 'N/A',
-                first_name: ac.crew_member?.first_name ? ac.crew_member.first_name.charAt(0).toUpperCase() + ac.crew_member.first_name.slice(1).toLowerCase() : '',
-                last_name: ac.crew_member?.last_name ? ac.crew_member.last_name.charAt(0).toUpperCase() : ''
-            }
-        };
+      };
     });
 
     Object.keys(fulfillmentSummary).forEach(k => { fulfillmentSummary[k].display = `${fulfillmentSummary[k].accepted}/${fulfillmentSummary[k].required}`; });
@@ -2302,11 +2302,11 @@ exports.getProjectDetails = async (req, res) => {
     // 7. Payment Link Logic
     let active_payment_link = null;
     if (lead?.payment_links?.length > 0) {
-        const latest = [...lead.payment_links].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
-        active_payment_link = {
-            ...latest,
-            is_expired: latest.expires_at ? new Date(latest.expires_at) < new Date() : false
-        };
+      const latest = [...lead.payment_links].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))[0];
+      active_payment_link = {
+        ...latest,
+        is_expired: latest.expires_at ? new Date(latest.expires_at) < new Date() : false
+      };
     }
 
     const timelineStatus = bookingTimelineService.getTimelineStage(projectJson);
@@ -2434,13 +2434,13 @@ exports.getProjectDetails = async (req, res) => {
       ? 'partially_paid'
       : bookingPaymentSummary?.payment_status
         ? String(bookingPaymentSummary.payment_status).toLowerCase()
-      : projectJson.payment_id
-      ? 'paid'
-      : manualPaymentSummary.hasFullPayment
-        ? 'paid'
-        : String(leadRecord?.lead_status || lead?.lead_status || '').toLowerCase() === 'booked'
+        : projectJson.payment_id
           ? 'paid'
-        : (active_payment_link ? 'link_sent' : 'unpaid');
+          : manualPaymentSummary.hasFullPayment
+            ? 'paid'
+            : String(leadRecord?.lead_status || lead?.lead_status || '').toLowerCase() === 'booked'
+              ? 'paid'
+              : (active_payment_link ? 'link_sent' : 'unpaid');
 
     // 8. Construct Response
     return res.status(200).json({
@@ -2556,21 +2556,21 @@ exports.updateProjectDateLocation = async (req, res) => {
 
     const normalizedBookingDays = hasBookingDaysPayload
       ? booking_days
-          .filter((day) => day)
-          .map((day) => {
-            const dayDate = day.date || day.event_date || day.start_date;
-            const startTime = normalizeScheduleTime(day.start_time || day.startTime);
-            const endTime = normalizeScheduleTime(day.end_time || day.endTime);
-            return {
-              event_date: dayDate,
-              start_time: startTime,
-              end_time: endTime,
-              duration_hours: day.duration_hours != null
-                ? Number(day.duration_hours)
-                : calculateDurationHours(startTime, endTime),
-              time_zone: day.time_zone || day.timeZone || time_zone || null
-            };
-          })
+        .filter((day) => day)
+        .map((day) => {
+          const dayDate = day.date || day.event_date || day.start_date;
+          const startTime = normalizeScheduleTime(day.start_time || day.startTime);
+          const endTime = normalizeScheduleTime(day.end_time || day.endTime);
+          return {
+            event_date: dayDate,
+            start_time: startTime,
+            end_time: endTime,
+            duration_hours: day.duration_hours != null
+              ? Number(day.duration_hours)
+              : calculateDurationHours(startTime, endTime),
+            time_zone: day.time_zone || day.timeZone || time_zone || null
+          };
+        })
       : [];
 
     const resolvedBookingType =
@@ -2767,7 +2767,7 @@ exports.updateProjectDateLocation = async (req, res) => {
     });
   } catch (error) {
     if (transaction) {
-      try { await transaction.rollback(); } catch (_) {}
+      try { await transaction.rollback(); } catch (_) { }
     }
     console.error('Error updating project attention fields:', error);
     return res.status(500).json({ error: true, message: 'Internal server error', details: error.message });
@@ -3283,7 +3283,7 @@ exports.updateProjectDateLocation = async (req, res) => {
 
 //     // 1. Setup Date Filters
 //     let dateFilter = {};
-    
+
 //     if (start_date && end_date) {
 //       dateFilter = { event_date: { [Sequelize.Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`] } };
 //     } else if (range === 'month') {
@@ -3322,9 +3322,9 @@ exports.updateProjectDateLocation = async (req, res) => {
 //       }
 //       else if (status === 'draft') whereConditions.is_draft = 1;
 //     }
-    
+
 //     if (event_type) whereConditions.event_type = event_type;
-    
+
 //     if (search) {
 //       whereConditions.project_name = Sequelize.where(Sequelize.fn('LOWER', Sequelize.col('project_name')), { 
 //         [Sequelize.Op.like]: `%${search.toLowerCase()}%` 
@@ -3454,15 +3454,19 @@ exports.getAllProjectDetails = async (req, res) => {
     if (start_date && end_date) {
       dateFilter = { event_date: { [Sequelize.Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`] } };
     } else if (range === 'month') {
-      dateFilter = { [Sequelize.Op.and]: [
-        Sequelize.where(Sequelize.fn('MONTH', Sequelize.col('event_date')), Sequelize.fn('MONTH', Sequelize.fn('CURDATE'))),
-        Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('event_date')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
-      ]};
+      dateFilter = {
+        [Sequelize.Op.and]: [
+          Sequelize.where(Sequelize.fn('MONTH', Sequelize.col('event_date')), Sequelize.fn('MONTH', Sequelize.fn('CURDATE'))),
+          Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('event_date')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
+        ]
+      };
     } else if (range === 'week') {
-      dateFilter = { [Sequelize.Op.and]: [
-        Sequelize.where(Sequelize.fn('WEEK', Sequelize.col('event_date')), Sequelize.fn('WEEK', Sequelize.fn('CURDATE'))),
-        Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('event_date')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
-      ]};
+      dateFilter = {
+        [Sequelize.Op.and]: [
+          Sequelize.where(Sequelize.fn('WEEK', Sequelize.col('event_date')), Sequelize.fn('WEEK', Sequelize.fn('CURDATE'))),
+          Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('event_date')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
+        ]
+      };
     } else if (range === 'all') {
       dateFilter = {};
     } else if (date_on) {
@@ -3533,25 +3537,25 @@ exports.getAllProjectDetails = async (req, res) => {
     const [manualPaidSalesLeads, manualPaidClientLeads] = await Promise.all([
       manualSalesLeadIds.length
         ? sales_leads.findAll({
-            where: {
-              is_active: 1,
-              lead_id: { [Sequelize.Op.in]: manualSalesLeadIds },
-              booking_id: { [Sequelize.Op.ne]: null }
-            },
-            attributes: ['booking_id'],
-            raw: true
-          })
+          where: {
+            is_active: 1,
+            lead_id: { [Sequelize.Op.in]: manualSalesLeadIds },
+            booking_id: { [Sequelize.Op.ne]: null }
+          },
+          attributes: ['booking_id'],
+          raw: true
+        })
         : Promise.resolve([]),
       manualClientLeadIds.length
         ? client_leads.findAll({
-            where: {
-              is_active: 1,
-              lead_id: { [Sequelize.Op.in]: manualClientLeadIds },
-              booking_id: { [Sequelize.Op.ne]: null }
-            },
-            attributes: ['booking_id'],
-            raw: true
-          })
+          where: {
+            is_active: 1,
+            lead_id: { [Sequelize.Op.in]: manualClientLeadIds },
+            booking_id: { [Sequelize.Op.ne]: null }
+          },
+          attributes: ['booking_id'],
+          raw: true
+        })
         : Promise.resolve([]),
     ]);
 
@@ -3661,7 +3665,7 @@ exports.getAllProjectDetails = async (req, res) => {
     }
 
     if (event_type) whereConditions.event_type = event_type;
-    
+
     if (search) {
       const searchCondition = Sequelize.where(Sequelize.fn('LOWER', Sequelize.col('project_name')), { [Sequelize.Op.like]: `%${search.toLowerCase()}%` });
       whereConditions = {
@@ -3673,7 +3677,7 @@ exports.getAllProjectDetails = async (req, res) => {
       };
     }
 
-    const [ total_active, total_cancelled, total_completed, total_upcoming, total_draft, allEventMasterTypes ] = await Promise.all([
+    const [total_active, total_cancelled, total_completed, total_upcoming, total_draft, allEventMasterTypes] = await Promise.all([
       stream_project_booking.count({ where: { ...whereConditions, is_cancelled: 0, is_completed: 0, is_draft: 0 } }),
       stream_project_booking.count({ where: { ...whereConditions, is_cancelled: 1 } }),
       stream_project_booking.count({ where: { ...whereConditions, is_completed: 1 } }),
@@ -3803,9 +3807,9 @@ exports.getAllProjectDetails = async (req, res) => {
       const paymentStatus = pendingAmount > 0 && totalPaidAmount > 0
         ? 'partially_paid'
         : String(
-            bookingPaymentSummary?.payment_status ||
-            (project.payment_id ? 'paid' : (totalPaidAmount > 0 ? 'partially_paid' : 'pending'))
-          ).toLowerCase();
+          bookingPaymentSummary?.payment_status ||
+          (project.payment_id ? 'paid' : (totalPaidAmount > 0 ? 'partially_paid' : 'pending'))
+        ).toLowerCase();
 
       const rawTypes = project.event_type ? project.event_type.split(',') : [];
       const formattedTypes = rawTypes.map(t => {
@@ -3947,9 +3951,9 @@ exports.getAllProjectDetails = async (req, res) => {
         stats: { total_active, total_cancelled, total_completed, total_upcoming, total_draft },
         projects: projectDetails,
         pagination: noPagination ? null : {
-            page: pageNumber,
-            limit: pageSize,
-            totalRecords: filteredTotalRecords,
+          page: pageNumber,
+          limit: pageSize,
+          totalRecords: filteredTotalRecords,
         }
       },
     });
@@ -4272,25 +4276,25 @@ exports.exportShootsCsv = async (req, res) => {
     const [manualPaidSalesLeads, manualPaidClientLeads] = await Promise.all([
       manualSalesLeadIds.length
         ? sales_leads.findAll({
-            where: {
-              is_active: 1,
-              lead_id: { [Sequelize.Op.in]: manualSalesLeadIds },
-              booking_id: { [Sequelize.Op.ne]: null },
-            },
-            attributes: ['booking_id'],
-            raw: true,
-          })
+          where: {
+            is_active: 1,
+            lead_id: { [Sequelize.Op.in]: manualSalesLeadIds },
+            booking_id: { [Sequelize.Op.ne]: null },
+          },
+          attributes: ['booking_id'],
+          raw: true,
+        })
         : Promise.resolve([]),
       manualClientLeadIds.length
         ? client_leads.findAll({
-            where: {
-              is_active: 1,
-              lead_id: { [Sequelize.Op.in]: manualClientLeadIds },
-              booking_id: { [Sequelize.Op.ne]: null },
-            },
-            attributes: ['booking_id'],
-            raw: true,
-          })
+          where: {
+            is_active: 1,
+            lead_id: { [Sequelize.Op.in]: manualClientLeadIds },
+            booking_id: { [Sequelize.Op.ne]: null },
+          },
+          attributes: ['booking_id'],
+          raw: true,
+        })
         : Promise.resolve([]),
     ]);
 
@@ -5564,181 +5568,181 @@ exports.createCrewMember = [
 // };
 
 exports.getCrewMembers = async (req, res) => {
-    try {
-        const payload = {
-            ...req.body,
-            ...req.query
-        };
+  try {
+    const payload = {
+      ...req.body,
+      ...req.query
+    };
 
-        let {
-            page = 1,
-            limit = 20,
-            search,
-            location,
-            status,
-            range,
-            start_date,
-            end_date
-        } = payload;
+    let {
+      page = 1,
+      limit = 20,
+      search,
+      location,
+      status,
+      range,
+      start_date,
+      end_date
+    } = payload;
 
-        page = parseInt(page);
-        limit = parseInt(limit);
-        const offset = (page - 1) * limit;
+    page = parseInt(page);
+    limit = parseInt(limit);
+    const offset = (page - 1) * limit;
 
-        let conditions = [{ is_active: 1 }];
+    let conditions = [{ is_active: 1 }];
 
-        if (status) {
-            if (status === 'pending') conditions.push({ is_crew_verified: 0 });
-            else if (status === 'approved') conditions.push({ is_crew_verified: 1 });
-            else if (status === 'rejected') conditions.push({ is_crew_verified: 2 });
-        }
-
-        if (start_date && end_date) {
-            conditions.push({
-                'created_at': { [Sequelize.Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`] }
-            });
-        } else if (range === 'month') {
-            conditions.push(
-                Sequelize.where(Sequelize.fn('MONTH', Sequelize.col('crew_members.created_at')), Sequelize.fn('MONTH', Sequelize.fn('CURDATE'))),
-                Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('crew_members.created_at')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
-            );
-        }
-
-          if (search) {
-                    conditions.push({
-                        [Sequelize.Op.or]: [
-                            {
-                                first_name: {
-                                    [Sequelize.Op.like]: `%${search}%`
-                                }
-                            },
-                            {
-                                last_name: {
-                                    [Sequelize.Op.like]: `%${search}%`
-                                }
-                            },
-                            {
-                                email: {
-                                    [Sequelize.Op.like]: `%${search}%`
-                                }
-                            },
-                            {
-                                phone_number: {
-                                    [Sequelize.Op.like]: `%${search}%`
-                                }
-                            },
-                            Sequelize.where(
-                                Sequelize.fn(
-                                    "concat",
-                                    Sequelize.col("first_name"),
-                                    " ",
-                                    Sequelize.col("last_name")
-                                ),
-                                {
-                                    [Sequelize.Op.like]: `%${search}%`
-                                }
-                            )
-                        ]
-                    });
-                }
-        if (location) conditions.push({ location: { [Sequelize.Op.like]: `%${location}%` } });
-
-        const [{ count, rows: members }, allRoles] = await Promise.all([
-            crew_members.findAndCountAll({
-                where: { [Sequelize.Op.and]: conditions },
-                distinct: true,
-                col: 'crew_member_id',
-                include: [{
-                    model: crew_member_files,
-                    as: 'crew_member_files',
-                    attributes: ['crew_files_id', 'file_type', 'file_path'],
-                }],
-                order: [
-                    ['is_crew_verified', 'ASC'],
-                    ['is_beige_member', 'ASC'],
-                    ['crew_member_id', 'DESC'],
-                ],
-                limit,
-                offset,
-            }),
-            crew_roles.findAll({ attributes: ['role_id', 'role_name'], raw: true })
-        ]);
-
-        const crewUserIds = Array.from(
-            new Set(
-                members
-                    .map((member) => Number(member.user_id))
-                    .filter(Boolean)
-            )
-        );
-
-        const affiliateRows = crewUserIds.length
-            ? await affiliates.findAll({
-                where: { user_id: { [Sequelize.Op.in]: crewUserIds } },
-                attributes: ['user_id', 'referral_code'],
-                raw: true
-            })
-            : [];
-
-        const affiliateMap = new Map(
-            affiliateRows.map((row) => [Number(row.user_id), row.referral_code || null])
-        );
-
-        const processedMembers = members.map((member) => {
-            const memberData = member.get({ clone: true });
-
-            let statusLabel = 'pending';
-            if (member.is_crew_verified === 1) statusLabel = 'approved';
-            else if (member.is_crew_verified === 2) statusLabel = 'rejected';
-
-            let finalLocation = memberData.location;
-            if (finalLocation && typeof finalLocation === 'string' && (finalLocation.startsWith('{') || finalLocation.startsWith('['))) {
-                try {
-                    const parsed = JSON.parse(finalLocation);
-                    finalLocation = parsed.address || parsed || finalLocation;
-                } catch { }
-            }
-
-            let roleNames = [];
-            const rawRole = memberData.primary_role;
-            if (rawRole) {
-                let roleIds = [];
-                try {
-                    const parsed = JSON.parse(rawRole);
-                    roleIds = Array.isArray(parsed) ? parsed.map(String) : [String(parsed)];
-                } catch (e) {
-                    roleIds = [String(rawRole)];
-                }
-                roleNames = allRoles
-                    .filter(r => roleIds.includes(String(r.role_id)))
-                    .map(r => r.role_name);
-            }
-
-            return {
-                ...memberData,
-                referral_code: affiliateMap.get(Number(memberData.user_id)) || null,
-                location: finalLocation,
-                status: statusLabel,
-                role: roleNames.length > 0 ? { role_name: roleNames.join(", ") } : null
-            };
-        });
-
-        return res.status(200).json({
-            error: false,
-            message: "Crew members fetched successfully",
-            pagination: {
-                total_records: count,
-                current_page: page,
-                per_page: limit,
-                total_pages: Math.ceil(count / limit),
-            },
-            data: processedMembers,
-        });
-
-    } catch (error) {
-        console.error("Get Crew Members Error:", error);
-        return res.status(500).json({ error: true, message: "Internal server error" });
+    if (status) {
+      if (status === 'pending') conditions.push({ is_crew_verified: 0 });
+      else if (status === 'approved') conditions.push({ is_crew_verified: 1 });
+      else if (status === 'rejected') conditions.push({ is_crew_verified: 2 });
     }
+
+    if (start_date && end_date) {
+      conditions.push({
+        'created_at': { [Sequelize.Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`] }
+      });
+    } else if (range === 'month') {
+      conditions.push(
+        Sequelize.where(Sequelize.fn('MONTH', Sequelize.col('crew_members.created_at')), Sequelize.fn('MONTH', Sequelize.fn('CURDATE'))),
+        Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('crew_members.created_at')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
+      );
+    }
+
+    if (search) {
+      conditions.push({
+        [Sequelize.Op.or]: [
+          {
+            first_name: {
+              [Sequelize.Op.like]: `%${search}%`
+            }
+          },
+          {
+            last_name: {
+              [Sequelize.Op.like]: `%${search}%`
+            }
+          },
+          {
+            email: {
+              [Sequelize.Op.like]: `%${search}%`
+            }
+          },
+          {
+            phone_number: {
+              [Sequelize.Op.like]: `%${search}%`
+            }
+          },
+          Sequelize.where(
+            Sequelize.fn(
+              "concat",
+              Sequelize.col("first_name"),
+              " ",
+              Sequelize.col("last_name")
+            ),
+            {
+              [Sequelize.Op.like]: `%${search}%`
+            }
+          )
+        ]
+      });
+    }
+    if (location) conditions.push({ location: { [Sequelize.Op.like]: `%${location}%` } });
+
+    const [{ count, rows: members }, allRoles] = await Promise.all([
+      crew_members.findAndCountAll({
+        where: { [Sequelize.Op.and]: conditions },
+        distinct: true,
+        col: 'crew_member_id',
+        include: [{
+          model: crew_member_files,
+          as: 'crew_member_files',
+          attributes: ['crew_files_id', 'file_type', 'file_path'],
+        }],
+        order: [
+          ['is_crew_verified', 'ASC'],
+          ['is_beige_member', 'ASC'],
+          ['crew_member_id', 'DESC'],
+        ],
+        limit,
+        offset,
+      }),
+      crew_roles.findAll({ attributes: ['role_id', 'role_name'], raw: true })
+    ]);
+
+    const crewUserIds = Array.from(
+      new Set(
+        members
+          .map((member) => Number(member.user_id))
+          .filter(Boolean)
+      )
+    );
+
+    const affiliateRows = crewUserIds.length
+      ? await affiliates.findAll({
+        where: { user_id: { [Sequelize.Op.in]: crewUserIds } },
+        attributes: ['user_id', 'referral_code'],
+        raw: true
+      })
+      : [];
+
+    const affiliateMap = new Map(
+      affiliateRows.map((row) => [Number(row.user_id), row.referral_code || null])
+    );
+
+    const processedMembers = members.map((member) => {
+      const memberData = member.get({ clone: true });
+
+      let statusLabel = 'pending';
+      if (member.is_crew_verified === 1) statusLabel = 'approved';
+      else if (member.is_crew_verified === 2) statusLabel = 'rejected';
+
+      let finalLocation = memberData.location;
+      if (finalLocation && typeof finalLocation === 'string' && (finalLocation.startsWith('{') || finalLocation.startsWith('['))) {
+        try {
+          const parsed = JSON.parse(finalLocation);
+          finalLocation = parsed.address || parsed || finalLocation;
+        } catch { }
+      }
+
+      let roleNames = [];
+      const rawRole = memberData.primary_role;
+      if (rawRole) {
+        let roleIds = [];
+        try {
+          const parsed = JSON.parse(rawRole);
+          roleIds = Array.isArray(parsed) ? parsed.map(String) : [String(parsed)];
+        } catch (e) {
+          roleIds = [String(rawRole)];
+        }
+        roleNames = allRoles
+          .filter(r => roleIds.includes(String(r.role_id)))
+          .map(r => r.role_name);
+      }
+
+      return {
+        ...memberData,
+        referral_code: affiliateMap.get(Number(memberData.user_id)) || null,
+        location: finalLocation,
+        status: statusLabel,
+        role: roleNames.length > 0 ? { role_name: roleNames.join(", ") } : null
+      };
+    });
+
+    return res.status(200).json({
+      error: false,
+      message: "Crew members fetched successfully",
+      pagination: {
+        total_records: count,
+        current_page: page,
+        per_page: limit,
+        total_pages: Math.ceil(count / limit),
+      },
+      data: processedMembers,
+    });
+
+  } catch (error) {
+    console.error("Get Crew Members Error:", error);
+    return res.status(500).json({ error: true, message: "Internal server error" });
+  }
 };
 exports.exportCrewMembersCsv = async (req, res) => {
   try {
@@ -5962,33 +5966,33 @@ exports.exportCrewMembersCsv = async (req, res) => {
     ] = await Promise.all([
       userIds.length
         ? affiliates.findAll({
-            where: {
-              user_id: {
-                [Op.in]: userIds
-              }
-            },
-            attributes: [
-              'user_id',
-              'referral_code'
-            ],
-            raw: true
-          })
+          where: {
+            user_id: {
+              [Op.in]: userIds
+            }
+          },
+          attributes: [
+            'user_id',
+            'referral_code'
+          ],
+          raw: true
+        })
         : Promise.resolve([]),
 
       crewMemberIds.length
         ? assigned_crew.findAll({
-            where: {
-              crew_member_id: {
-                [Op.in]: crewMemberIds
-              },
-              is_active: 1
+          where: {
+            crew_member_id: {
+              [Op.in]: crewMemberIds
             },
-            attributes: [
-              'crew_member_id',
-              'project_id'
-            ],
-            raw: true
-          })
+            is_active: 1
+          },
+          attributes: [
+            'crew_member_id',
+            'project_id'
+          ],
+          raw: true
+        })
         : Promise.resolve([])
     ]);
 
@@ -6011,17 +6015,17 @@ exports.exportCrewMembersCsv = async (req, res) => {
 
     const bookingRows = projectIds.length
       ? await stream_project_booking.findAll({
-          where: {
-            stream_project_booking_id: {
-              [Op.in]: projectIds
-            }
-          },
-          attributes: [
-            'stream_project_booking_id',
-            'quote_id'
-          ],
-          raw: true
-        })
+        where: {
+          stream_project_booking_id: {
+            [Op.in]: projectIds
+          }
+        },
+        attributes: [
+          'stream_project_booking_id',
+          'quote_id'
+        ],
+        raw: true
+      })
       : [];
 
     const bookingMap = new Map(
@@ -6063,7 +6067,7 @@ exports.exportCrewMembersCsv = async (req, res) => {
       (memberRecord) => {
         const member =
           typeof memberRecord.toJSON ===
-          'function'
+            'function'
             ? memberRecord.toJSON()
             : memberRecord;
 
@@ -6264,7 +6268,7 @@ exports.exportCrewMembersCsv = async (req, res) => {
         'Failed to export creative partners.',
       detail:
         process.env.NODE_ENV ===
-        'development'
+          'development'
           ? error.message
           : undefined
     });
@@ -6315,73 +6319,73 @@ exports.verifyCrewMember = async (req, res) => {
 
 
 exports.getCrewMemberById = async (req, res) => {
-    try {
-        const { crew_member_id } = req.params;
+  try {
+    const { crew_member_id } = req.params;
 
-        let member = await crew_members.findOne({
-            where: { crew_member_id },
-            include: [{
-                model: crew_member_files,
-                as: 'crew_member_files',
-                attributes: ['crew_member_id', 'file_type', 'file_path', 'created_at', 'title', 'tag'],
-                where: { is_active: 1 },
-                required: false
-            }]
-        });
+    let member = await crew_members.findOne({
+      where: { crew_member_id },
+      include: [{
+        model: crew_member_files,
+        as: 'crew_member_files',
+        attributes: ['crew_member_id', 'file_type', 'file_path', 'created_at', 'title', 'tag'],
+        where: { is_active: 1 },
+        required: false
+      }]
+    });
 
-        if (!member) {
-            return res.status(404).json({ error: true, message: "Crew member not found" });
-        }
-
-        const loc = member.location;
-        if (loc && typeof loc === 'string' && (loc.startsWith('{') || loc.startsWith('['))) {
-            try {
-                const parsed = JSON.parse(loc);
-                member.location = parsed.address || parsed || loc;
-            } catch { }
-        }
-
-        let skillIds = [];
-        try {
-            const rawSkills = member.skills;
-            if (rawSkills) {
-                const parsedSkills = typeof rawSkills === 'string' ? JSON.parse(rawSkills) : rawSkills;
-                skillIds = Array.isArray(parsedSkills) ? parsedSkills.map(id => parseInt(id)) : [parseInt(parsedSkills)];
-            }
-        } catch (err) { skillIds = []; }
-
-        let roleIds = [];
-        try {
-            const rawRole = member.primary_role;
-            if (rawRole) {
-                const parsedRole = (typeof rawRole === 'string' && (rawRole.startsWith('[') || rawRole.startsWith('{'))) 
-                    ? JSON.parse(rawRole) 
-                    : rawRole;
-                roleIds = Array.isArray(parsedRole) ? parsedRole.map(id => String(id)) : [String(parsedRole)];
-            }
-        } catch (err) { roleIds = []; }
-
-        const [skillList, roleList] = await Promise.all([
-            skills_master.findAll({ where: { id: skillIds }, attributes: ['id', 'name'] }),
-            crew_roles.findAll({ where: { role_id: roleIds }, attributes: ['role_id', 'role_name'] })
-        ]);
-
-        const memberJson = member.toJSON();
-        memberJson.skills = skillList;
-        memberJson.role = roleList.length > 0 
-            ? { role_name: roleList.map(r => r.role_name).join(", ") } 
-            : null;
-
-        return res.status(200).json({
-            error: false,
-            message: "Crew member fetched successfully",
-            data: memberJson,
-        });
-
-    } catch (error) {
-        console.error("Get Crew Member By ID Error:", error);
-        return res.status(500).json({ error: true, message: "Internal server error" });
+    if (!member) {
+      return res.status(404).json({ error: true, message: "Crew member not found" });
     }
+
+    const loc = member.location;
+    if (loc && typeof loc === 'string' && (loc.startsWith('{') || loc.startsWith('['))) {
+      try {
+        const parsed = JSON.parse(loc);
+        member.location = parsed.address || parsed || loc;
+      } catch { }
+    }
+
+    let skillIds = [];
+    try {
+      const rawSkills = member.skills;
+      if (rawSkills) {
+        const parsedSkills = typeof rawSkills === 'string' ? JSON.parse(rawSkills) : rawSkills;
+        skillIds = Array.isArray(parsedSkills) ? parsedSkills.map(id => parseInt(id)) : [parseInt(parsedSkills)];
+      }
+    } catch (err) { skillIds = []; }
+
+    let roleIds = [];
+    try {
+      const rawRole = member.primary_role;
+      if (rawRole) {
+        const parsedRole = (typeof rawRole === 'string' && (rawRole.startsWith('[') || rawRole.startsWith('{')))
+          ? JSON.parse(rawRole)
+          : rawRole;
+        roleIds = Array.isArray(parsedRole) ? parsedRole.map(id => String(id)) : [String(parsedRole)];
+      }
+    } catch (err) { roleIds = []; }
+
+    const [skillList, roleList] = await Promise.all([
+      skills_master.findAll({ where: { id: skillIds }, attributes: ['id', 'name'] }),
+      crew_roles.findAll({ where: { role_id: roleIds }, attributes: ['role_id', 'role_name'] })
+    ]);
+
+    const memberJson = member.toJSON();
+    memberJson.skills = skillList;
+    memberJson.role = roleList.length > 0
+      ? { role_name: roleList.map(r => r.role_name).join(", ") }
+      : null;
+
+    return res.status(200).json({
+      error: false,
+      message: "Crew member fetched successfully",
+      data: memberJson,
+    });
+
+  } catch (error) {
+    console.error("Get Crew Member By ID Error:", error);
+    return res.status(500).json({ error: true, message: "Internal server error" });
+  }
 };
 
 
@@ -6865,7 +6869,7 @@ exports.getEquipment = async (req, res) => {
 
     // 1. Build the base filter
     let where = { is_active: 1 };
-    
+
     if (search) {
       where[Op.or] = [
         { equipment_name: { [Op.like]: `%${search}%` } },
@@ -6907,7 +6911,7 @@ exports.getEquipment = async (req, res) => {
       where: { is_active: 1 },
       include: [{
         model: stream_project_booking,
-        as: 'project', 
+        as: 'project',
         where: { event_date: { [Op.between]: [startOfToday, endOfToday] } },
         attributes: []
       }],
@@ -6982,13 +6986,13 @@ exports.getEquipment = async (req, res) => {
 
       eq.units_in_use = unitsOut;
       eq.units_available = Math.max(0, totalQty - unitsOut);
-      eq.is_available = (totalQty > unitsOut) ? 1 : 0; 
+      eq.is_available = (totalQty > unitsOut) ? 1 : 0;
 
       if (eq.storage_location && typeof eq.storage_location === 'string' && (eq.storage_location.startsWith('{') || eq.storage_location.startsWith('['))) {
         try {
           const parsed = JSON.parse(eq.storage_location);
           eq.storage_location = parsed.address || parsed;
-        } catch (e) {}
+        } catch (e) { }
       }
       return eq;
     });
@@ -7002,7 +7006,7 @@ exports.getEquipment = async (req, res) => {
         available_equipment: summaryStats.available_equipment_types,
         in_use_equipment: summaryStats.in_use_equipment_types,
         maintenance_equipment: summaryStats.maintenance_equipment_types,
-        
+
         // Raw Unit Counts (Sum of all quantities)
         unit_summary: {
           total_units: summaryStats.total_units_count,
@@ -7297,7 +7301,7 @@ exports.assignEquipment = async (req, res) => {
   try {
     const {
       equipment_id,
-      project_id,            
+      project_id,
       crew_member_id,
       check_out_date,
       expected_return_date,
@@ -7341,7 +7345,7 @@ exports.assignEquipment = async (req, res) => {
 
     const assignment = await equipment_assignments.create({
       equipment_id,
-      project_id: project_id || null,  
+      project_id: project_id || null,
       crew_member_id,
       check_out_date,
       expected_return_date,
@@ -7958,7 +7962,7 @@ exports.getCrewCount = async (req, res) => {
 exports.getDashboardSummary = async (req, res) => {
   try {
     const { date_on } = req.query;
-    
+
     let standardDateFilter = buildDateFilter(req);
 
     let bookingDateFilter = { ...standardDateFilter };
@@ -7971,8 +7975,8 @@ exports.getDashboardSummary = async (req, res) => {
 
         bookingDateFilter = { event_date: dayRange };
         standardDateFilter = { created_at: dayRange };
-      } 
-      
+      }
+
       else if (date_on === 'event_date' && standardDateFilter.created_at) {
         bookingDateFilter = { event_date: standardDateFilter.created_at };
       }
@@ -8046,171 +8050,171 @@ exports.getDashboardSummary = async (req, res) => {
 
 
 exports.getDashboardChartData = async (req, res) => {
-    try {
-        const { date_on } = req.query;
+  try {
+    const { date_on } = req.query;
 
-        let standardDateFilter = buildDateFilter(req);
-        let bookingDateFilter = { ...standardDateFilter };
+    let standardDateFilter = buildDateFilter(req);
+    let bookingDateFilter = { ...standardDateFilter };
 
-        if (date_on) {
-            if (date_on.match(/^\d{4}-\d{2}-\d{2}$/)) {
-                const dayRange = { [Op.between]: [`${date_on} 00:00:00`, `${date_on} 23:59:59`] };
-                bookingDateFilter = { event_date: dayRange };
-                standardDateFilter = { created_at: dayRange };
-            } else if (date_on === 'event_date' && standardDateFilter.created_at) {
-                bookingDateFilter = { event_date: standardDateFilter.created_at };
-            }
-        }
-
-        const chartStartDate = moment().subtract(5, 'months').startOf('month').format('YYYY-MM-DD HH:mm:ss');
-        const chartEndDate = moment().endOf('day').format('YYYY-MM-DD HH:mm:ss');
-        const chartMonthRange = { [Op.between]: [chartStartDate, chartEndDate] };
-
-        const shootDateCol = (date_on === 'event_date') ? 'event_date' : 'created_at';
-        const paidShootFilter = { payment_id: { [Op.ne]: null } };
-
-        const [
-            total_shoots, active_shoots, completed_shoots, total_clients, total_CPs,
-            approved_CPs, pending_CPs, rejected_CPs,
-            total_leads,
-            paid_leads,
-            chartShoots, chartClients, chartCPs,
-            chartUnpaidLeads
-        ] = await Promise.all([
-            stream_project_booking.count({ where: { is_active: 1, is_draft: 0, ...paidShootFilter, ...bookingDateFilter } }),
-            stream_project_booking.count({ where: { is_active: 1, is_completed: 0, is_cancelled: 0, is_draft: 0, ...paidShootFilter, ...bookingDateFilter } }),
-            stream_project_booking.count({ where: { is_active: 1, is_completed: 1, ...paidShootFilter, ...bookingDateFilter } }),
-            
-            clients.count({ where: { is_active: 1, ...standardDateFilter } }),
-            crew_members.count({ where: { is_active: 1, ...standardDateFilter } }),
-            crew_members.count({ where: { is_active: 1, is_crew_verified: 1, ...standardDateFilter } }),
-            crew_members.count({ where: { is_active: 1, is_crew_verified: 0, ...standardDateFilter } }),
-            crew_members.count({ where: { is_active: 1, is_crew_verified: 2, ...standardDateFilter } }),
-
-            sales_leads.count({ where: { ...standardDateFilter } }),
-            sales_leads.count({
-                include: [{
-                    model: stream_project_booking,
-                    as: 'booking',
-                    where: { payment_id: { [Op.ne]: null } },
-                    required: true
-                }],
-                where: { ...standardDateFilter }
-            }),
-
-            stream_project_booking.findAll({
-                attributes: [
-                    [Sequelize.fn('DATE_FORMAT', Sequelize.col(shootDateCol), '%Y-%m'), 'month'],
-                    [Sequelize.literal('SUM(CASE WHEN is_completed = 0 AND is_cancelled = 0 AND payment_id IS NOT NULL THEN 1 ELSE 0 END)'), 'active'],
-                    [Sequelize.literal('SUM(CASE WHEN is_completed = 1 AND payment_id IS NOT NULL THEN 1 ELSE 0 END)'), 'completed'],
-                    [Sequelize.literal('SUM(CASE WHEN payment_id IS NOT NULL THEN 1 ELSE 0 END)'), 'total']
-                ],
-                where: { is_active: 1, ...paidShootFilter, [shootDateCol]: chartMonthRange },
-                group: [Sequelize.fn('DATE_FORMAT', Sequelize.col(shootDateCol), '%Y-%m')],
-                raw: true
-            }),
-            clients.findAll({
-                attributes: [
-                    [Sequelize.fn('DATE_FORMAT', Sequelize.col('created_at'), '%Y-%m'), 'month'],
-                    [Sequelize.fn('COUNT', Sequelize.literal('*')), 'count']
-                ],
-                where: { is_active: 1, created_at: chartMonthRange },
-                group: [Sequelize.fn('DATE_FORMAT', Sequelize.col('created_at'), '%Y-%m')],
-                raw: true
-            }),
-            crew_members.findAll({
-                attributes: [
-                    [Sequelize.fn('DATE_FORMAT', Sequelize.col('created_at'), '%Y-%m'), 'month'],
-                    [Sequelize.fn('COUNT', Sequelize.literal('*')), 'count']
-                ],
-                where: { is_active: 1, created_at: chartMonthRange },
-                group: [Sequelize.fn('DATE_FORMAT', Sequelize.col('created_at'), '%Y-%m')],
-                raw: true
-            }),
-            sales_leads.findAll({
-                attributes: [
-                    [Sequelize.fn('DATE_FORMAT', Sequelize.col('sales_leads.created_at'), '%Y-%m'), 'month'],
-                    [Sequelize.fn('COUNT', Sequelize.literal('*')), 'count']
-                ],
-                include: [{
-                    model: stream_project_booking,
-                    as: 'booking',
-                    required: false
-                }],
-                where: { 
-                    created_at: chartMonthRange,
-                    [Op.or]: [
-                        { '$booking.payment_id$': null },
-                        { '$booking.stream_project_booking_id$': null }
-                    ]
-                },
-                group: [Sequelize.fn('DATE_FORMAT', Sequelize.col('sales_leads.created_at'), '%Y-%m')],
-                raw: true
-            })
-        ]);
-
-        const unpaid_leads = total_leads - paid_leads;
-
-        const generateSixMonthData = (dbResults, type) => {
-            const result = [];
-            for (let i = 5; i >= 0; i--) {
-                const m = moment().subtract(i, 'months');
-                const monthKey = m.format('YYYY-MM');
-                const dbRow = dbResults.find(r => r.month === monthKey);
-
-                if (type === 'shoots') {
-                    result.push({
-                        label: m.format('MMM'),
-                        total: dbRow ? parseInt(dbRow.total) || 0 : 0,
-                        active: dbRow ? parseInt(dbRow.active) || 0 : 0,
-                        completed: dbRow ? parseInt(dbRow.completed) || 0 : 0
-                    });
-                } else {
-                    result.push({
-                        label: m.format('MMM'),
-                        count: dbRow ? parseInt(dbRow.count) || 0 : 0
-                    });
-                }
-            }
-            return result;
-        };
-
-        const shootChartData = generateSixMonthData(chartShoots, 'shoots');
-        const clientChartData = generateSixMonthData(chartClients, 'others');
-        const cpChartData = generateSixMonthData(chartCPs, 'others');
-        const leadChartData = generateSixMonthData(chartUnpaidLeads, 'others');
-
-        return res.status(200).json({
-            error: false,
-            message: "Dashboard data fetched successfully",
-            summary: {
-                total_shoots: { count: total_shoots, growth: 3 },
-                active_shoots: { count: active_shoots, growth: 3 },
-                completed_shoots: { count: completed_shoots, growth: 3 },
-                total_clients: { count: total_clients, growth: 0 },
-                total_CPs: { count: total_CPs, growth: 3 },
-                approved_CPs: { count: approved_CPs, growth: 3 },
-                pending_CPs: { count: pending_CPs, growth: 3 },
-                rejected_CPs: { count: rejected_CPs, growth: 3 },
-                // SUMMARY DATA
-                total_leads: { count: total_leads, growth: 0 },
-                paid_leads: { count: paid_leads, growth: 0 },
-                unpaid_leads: { count: unpaid_leads, growth: 0 }
-            },
-            charts: {
-                total_shoots: shootChartData.map(d => ({ label: d.label, value: d.total })),
-                active_shoots: shootChartData.map(d => ({ label: d.label, value: d.active })),
-                completed_shoots: shootChartData.map(d => ({ label: d.label, value: d.completed })),
-                total_clients: clientChartData.map(d => ({ label: d.label, value: d.count })),
-                total_CPs: cpChartData.map(d => ({ label: d.label, value: d.count })),
-                unpaid_leads: leadChartData.map(d => ({ label: d.label, value: d.count }))
-            }
-        });
-
-    } catch (error) {
-        console.error("Dashboard API Error:", error);
-        return res.status(500).json({ error: true, message: "Internal server error" });
+    if (date_on) {
+      if (date_on.match(/^\d{4}-\d{2}-\d{2}$/)) {
+        const dayRange = { [Op.between]: [`${date_on} 00:00:00`, `${date_on} 23:59:59`] };
+        bookingDateFilter = { event_date: dayRange };
+        standardDateFilter = { created_at: dayRange };
+      } else if (date_on === 'event_date' && standardDateFilter.created_at) {
+        bookingDateFilter = { event_date: standardDateFilter.created_at };
+      }
     }
+
+    const chartStartDate = moment().subtract(5, 'months').startOf('month').format('YYYY-MM-DD HH:mm:ss');
+    const chartEndDate = moment().endOf('day').format('YYYY-MM-DD HH:mm:ss');
+    const chartMonthRange = { [Op.between]: [chartStartDate, chartEndDate] };
+
+    const shootDateCol = (date_on === 'event_date') ? 'event_date' : 'created_at';
+    const paidShootFilter = { payment_id: { [Op.ne]: null } };
+
+    const [
+      total_shoots, active_shoots, completed_shoots, total_clients, total_CPs,
+      approved_CPs, pending_CPs, rejected_CPs,
+      total_leads,
+      paid_leads,
+      chartShoots, chartClients, chartCPs,
+      chartUnpaidLeads
+    ] = await Promise.all([
+      stream_project_booking.count({ where: { is_active: 1, is_draft: 0, ...paidShootFilter, ...bookingDateFilter } }),
+      stream_project_booking.count({ where: { is_active: 1, is_completed: 0, is_cancelled: 0, is_draft: 0, ...paidShootFilter, ...bookingDateFilter } }),
+      stream_project_booking.count({ where: { is_active: 1, is_completed: 1, ...paidShootFilter, ...bookingDateFilter } }),
+
+      clients.count({ where: { is_active: 1, ...standardDateFilter } }),
+      crew_members.count({ where: { is_active: 1, ...standardDateFilter } }),
+      crew_members.count({ where: { is_active: 1, is_crew_verified: 1, ...standardDateFilter } }),
+      crew_members.count({ where: { is_active: 1, is_crew_verified: 0, ...standardDateFilter } }),
+      crew_members.count({ where: { is_active: 1, is_crew_verified: 2, ...standardDateFilter } }),
+
+      sales_leads.count({ where: { ...standardDateFilter } }),
+      sales_leads.count({
+        include: [{
+          model: stream_project_booking,
+          as: 'booking',
+          where: { payment_id: { [Op.ne]: null } },
+          required: true
+        }],
+        where: { ...standardDateFilter }
+      }),
+
+      stream_project_booking.findAll({
+        attributes: [
+          [Sequelize.fn('DATE_FORMAT', Sequelize.col(shootDateCol), '%Y-%m'), 'month'],
+          [Sequelize.literal('SUM(CASE WHEN is_completed = 0 AND is_cancelled = 0 AND payment_id IS NOT NULL THEN 1 ELSE 0 END)'), 'active'],
+          [Sequelize.literal('SUM(CASE WHEN is_completed = 1 AND payment_id IS NOT NULL THEN 1 ELSE 0 END)'), 'completed'],
+          [Sequelize.literal('SUM(CASE WHEN payment_id IS NOT NULL THEN 1 ELSE 0 END)'), 'total']
+        ],
+        where: { is_active: 1, ...paidShootFilter, [shootDateCol]: chartMonthRange },
+        group: [Sequelize.fn('DATE_FORMAT', Sequelize.col(shootDateCol), '%Y-%m')],
+        raw: true
+      }),
+      clients.findAll({
+        attributes: [
+          [Sequelize.fn('DATE_FORMAT', Sequelize.col('created_at'), '%Y-%m'), 'month'],
+          [Sequelize.fn('COUNT', Sequelize.literal('*')), 'count']
+        ],
+        where: { is_active: 1, created_at: chartMonthRange },
+        group: [Sequelize.fn('DATE_FORMAT', Sequelize.col('created_at'), '%Y-%m')],
+        raw: true
+      }),
+      crew_members.findAll({
+        attributes: [
+          [Sequelize.fn('DATE_FORMAT', Sequelize.col('created_at'), '%Y-%m'), 'month'],
+          [Sequelize.fn('COUNT', Sequelize.literal('*')), 'count']
+        ],
+        where: { is_active: 1, created_at: chartMonthRange },
+        group: [Sequelize.fn('DATE_FORMAT', Sequelize.col('created_at'), '%Y-%m')],
+        raw: true
+      }),
+      sales_leads.findAll({
+        attributes: [
+          [Sequelize.fn('DATE_FORMAT', Sequelize.col('sales_leads.created_at'), '%Y-%m'), 'month'],
+          [Sequelize.fn('COUNT', Sequelize.literal('*')), 'count']
+        ],
+        include: [{
+          model: stream_project_booking,
+          as: 'booking',
+          required: false
+        }],
+        where: {
+          created_at: chartMonthRange,
+          [Op.or]: [
+            { '$booking.payment_id$': null },
+            { '$booking.stream_project_booking_id$': null }
+          ]
+        },
+        group: [Sequelize.fn('DATE_FORMAT', Sequelize.col('sales_leads.created_at'), '%Y-%m')],
+        raw: true
+      })
+    ]);
+
+    const unpaid_leads = total_leads - paid_leads;
+
+    const generateSixMonthData = (dbResults, type) => {
+      const result = [];
+      for (let i = 5; i >= 0; i--) {
+        const m = moment().subtract(i, 'months');
+        const monthKey = m.format('YYYY-MM');
+        const dbRow = dbResults.find(r => r.month === monthKey);
+
+        if (type === 'shoots') {
+          result.push({
+            label: m.format('MMM'),
+            total: dbRow ? parseInt(dbRow.total) || 0 : 0,
+            active: dbRow ? parseInt(dbRow.active) || 0 : 0,
+            completed: dbRow ? parseInt(dbRow.completed) || 0 : 0
+          });
+        } else {
+          result.push({
+            label: m.format('MMM'),
+            count: dbRow ? parseInt(dbRow.count) || 0 : 0
+          });
+        }
+      }
+      return result;
+    };
+
+    const shootChartData = generateSixMonthData(chartShoots, 'shoots');
+    const clientChartData = generateSixMonthData(chartClients, 'others');
+    const cpChartData = generateSixMonthData(chartCPs, 'others');
+    const leadChartData = generateSixMonthData(chartUnpaidLeads, 'others');
+
+    return res.status(200).json({
+      error: false,
+      message: "Dashboard data fetched successfully",
+      summary: {
+        total_shoots: { count: total_shoots, growth: 3 },
+        active_shoots: { count: active_shoots, growth: 3 },
+        completed_shoots: { count: completed_shoots, growth: 3 },
+        total_clients: { count: total_clients, growth: 0 },
+        total_CPs: { count: total_CPs, growth: 3 },
+        approved_CPs: { count: approved_CPs, growth: 3 },
+        pending_CPs: { count: pending_CPs, growth: 3 },
+        rejected_CPs: { count: rejected_CPs, growth: 3 },
+        // SUMMARY DATA
+        total_leads: { count: total_leads, growth: 0 },
+        paid_leads: { count: paid_leads, growth: 0 },
+        unpaid_leads: { count: unpaid_leads, growth: 0 }
+      },
+      charts: {
+        total_shoots: shootChartData.map(d => ({ label: d.label, value: d.total })),
+        active_shoots: shootChartData.map(d => ({ label: d.label, value: d.active })),
+        completed_shoots: shootChartData.map(d => ({ label: d.label, value: d.completed })),
+        total_clients: clientChartData.map(d => ({ label: d.label, value: d.count })),
+        total_CPs: cpChartData.map(d => ({ label: d.label, value: d.count })),
+        unpaid_leads: leadChartData.map(d => ({ label: d.label, value: d.count }))
+      }
+    });
+
+  } catch (error) {
+    console.error("Dashboard API Error:", error);
+    return res.status(500).json({ error: true, message: "Internal server error" });
+  }
 };
 
 exports.getTotalRevenue = async (req, res) => {
@@ -8501,8 +8505,8 @@ exports.getShootStatus = async (req, res) => {
       rejectedShoots,
       cancelledShoots
     ] = await Promise.all([
-      stream_project_booking.count({ 
-        where: { ...paidFilter, ...dateFilter } 
+      stream_project_booking.count({
+        where: { ...paidFilter, ...dateFilter }
       }),
 
       stream_project_booking.count({
@@ -8559,9 +8563,9 @@ exports.getShootStatus = async (req, res) => {
     });
   } catch (err) {
     console.error('Shoot Status Error:', err);
-    return res.status(500).json({ 
-      error: true, 
-      message: "Internal server error" 
+    return res.status(500).json({
+      error: true,
+      message: "Internal server error"
     });
   }
 };
@@ -8821,7 +8825,7 @@ exports.getShootByCategory = async (req, res) => {
     // 1. Fetch paid or partially paid bookings
     const bookings = await stream_project_booking.findAll({
       attributes: ['project_name', 'event_type', 'skills_needed', 'stream_project_booking_id', 'payment_id'],
-      where: { 
+      where: {
         is_active: 1,
         [Sequelize.Op.or]: [
           { payment_id: { [Sequelize.Op.ne]: null } },
@@ -8835,7 +8839,7 @@ exports.getShootByCategory = async (req, res) => {
 
     let grandTotal = 0;
     const finalResults = {};
-    
+
     Object.keys(categoryConfig).forEach(key => {
       finalResults[key] = { label: categoryConfig[key].label, count: 0, color: categoryConfig[key].color };
     });
@@ -8847,7 +8851,7 @@ exports.getShootByCategory = async (req, res) => {
       const skills = String(booking.skills_needed || '').toLowerCase();
 
       let includeInTab = false;
-      
+
       // NEW TAB LOGIC: Checking event_type for "videographer" or "photographer"
       if (activeTab === 'all') {
         includeInTab = true;
@@ -8855,7 +8859,7 @@ exports.getShootByCategory = async (req, res) => {
         // Check if event_type string contains the roles
         const isVideo = eventType.includes('videographer') || eventType.includes('video') || videoSkillIds.some(id => skills.includes(String(id)));
         const isPhoto = eventType.includes('photographer') || eventType.includes('photo') || photoSkillIds.some(id => skills.includes(String(id)));
-        
+
         if (activeTab === 'videography' && isVideo) includeInTab = true;
         if (activeTab === 'photography' && isPhoto) includeInTab = true;
       }
@@ -8867,7 +8871,7 @@ exports.getShootByCategory = async (req, res) => {
           if (config.matches.some(keyword => projectName.includes(keyword))) {
             finalResults[key].count += 1;
             grandTotal += 1;
-            break; 
+            break;
           }
         }
       }
@@ -9424,7 +9428,7 @@ exports.getClients = async (req, res) => {
           include: [
             {
               model: sales_leads,
-              as: 'sales_leads', 
+              as: 'sales_leads',
               required: false,
               separate: true,
               limit: 1,
@@ -9452,10 +9456,10 @@ exports.getClients = async (req, res) => {
 
     const affiliateRows = clientUserIds.length
       ? await affiliates.findAll({
-          where: { user_id: { [Op.in]: clientUserIds } },
-          attributes: ['user_id', 'referral_code'],
-          raw: true
-        })
+        where: { user_id: { [Op.in]: clientUserIds } },
+        attributes: ['user_id', 'referral_code'],
+        raw: true
+      })
       : [];
 
     const affiliateMap = new Map(
@@ -9678,46 +9682,46 @@ exports.exportClientsCsv = async (req, res) => {
     ] = await Promise.all([
       registeredUserIds.length
         ? affiliates.findAll({
-            where: {
-              user_id: {
-                [Op.in]: registeredUserIds
-              }
-            },
-            attributes: [
-              'user_id',
-              'referral_code'
-            ],
-            raw: true
-          })
+          where: {
+            user_id: {
+              [Op.in]: registeredUserIds
+            }
+          },
+          attributes: [
+            'user_id',
+            'referral_code'
+          ],
+          raw: true
+        })
         : Promise.resolve([]),
 
       // Guest clients do not have a linked user,
       // so find their bookings by email.
       clientEmails.length
         ? sales_leads.findAll({
-            where: {
-              guest_email: {
-                [Op.in]: clientEmails
-              },
-              is_active: 1
+          where: {
+            guest_email: {
+              [Op.in]: clientEmails
             },
-            attributes: [
-              'lead_id',
-              'booking_id',
-              'guest_email'
-            ],
-            include: [
-              {
-                model: stream_project_booking,
-                as: 'booking',
-                required: false,
-                attributes: [
-                  'stream_project_booking_id',
-                  'quote_id'
-                ]
-              }
-            ]
-          })
+            is_active: 1
+          },
+          attributes: [
+            'lead_id',
+            'booking_id',
+            'guest_email'
+          ],
+          include: [
+            {
+              model: stream_project_booking,
+              as: 'booking',
+              required: false,
+              attributes: [
+                'stream_project_booking_id',
+                'quote_id'
+              ]
+            }
+          ]
+        })
         : Promise.resolve([])
     ]);
 
@@ -10488,7 +10492,7 @@ exports.uploadProfilePhoto = [
         await crew_member_files.create({
           crew_member_id,
           file_type: 'profile_photo',
-          file_path: filePath, 
+          file_path: filePath,
         });
       }
 
@@ -10515,8 +10519,8 @@ exports.getAllPendingCrewMembers = async (req, res) => {
     // 1. Fetch all pending members (is_crew_verified: 0) and ALL roles in parallel
     const [members, allRoles] = await Promise.all([
       crew_members.findAll({
-        where: { 
-          is_active: 1, 
+        where: {
+          is_active: 1,
           is_crew_verified: 0  // Hardcoded for Pending
         },
         include: [
@@ -10534,7 +10538,7 @@ exports.getAllPendingCrewMembers = async (req, res) => {
     // 2. DATA PROCESSING
     const processedMembers = members.map((member) => {
       const memberData = member.toJSON();
-      
+
       // Handle Location Parsing
       const loc = member.location;
       let finalLocation = loc;
@@ -10550,17 +10554,17 @@ exports.getAllPendingCrewMembers = async (req, res) => {
       try {
         const roleIds = JSON.parse(memberData.primary_role || "[]");
         roleNames = allRoles
-            .filter(r => roleIds.includes(String(r.role_id)) || roleIds.includes(Number(r.role_id)))
-            .map(r => r.role_name);
+          .filter(r => roleIds.includes(String(r.role_id)) || roleIds.includes(Number(r.role_id)))
+          .map(r => r.role_name);
       } catch (e) {
         console.error("Role parsing error", e);
       }
 
-      return { 
-        ...memberData, 
-        location: finalLocation, 
+      return {
+        ...memberData,
+        location: finalLocation,
         status: 'pending',
-        role: roleNames.length > 0 ? { role_name: roleNames.join(", ") } : null 
+        role: roleNames.length > 0 ? { role_name: roleNames.join(", ") } : null
       };
     });
 
@@ -10577,126 +10581,126 @@ exports.getAllPendingCrewMembers = async (req, res) => {
 };
 
 exports.getApprovedCrewMembers = async (req, res) => {
-    try {
-        let {
-            page = 1,
-            limit = 20,
-            search,
-            location,
-            start_date,
-            end_date,
-            sort_by = 'crew_member_id',
-            sort_order = 'DESC'
-        } = req.body;
+  try {
+    let {
+      page = 1,
+      limit = 20,
+      search,
+      location,
+      start_date,
+      end_date,
+      sort_by = 'crew_member_id',
+      sort_order = 'DESC'
+    } = req.body;
 
-        page = parseInt(page);
-        limit = parseInt(limit);
-        const offset = (page - 1) * limit;
+    page = parseInt(page);
+    limit = parseInt(limit);
+    const offset = (page - 1) * limit;
 
-        // 1. Setup Base Conditions
-        let conditions = [{ is_active: 1 }, { is_crew_verified: 1 }];
+    // 1. Setup Base Conditions
+    let conditions = [{ is_active: 1 }, { is_crew_verified: 1 }];
 
-        if (start_date && end_date) {
-            conditions.push({ 'created_at': { [Sequelize.Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`] } });
-        }
-        
-        if (location) conditions.push({ location: { [Sequelize.Op.like]: `%${location}%` } });
-
-        // 2. Advanced Search Logic (Name, Email, ID AND Roles)
-        if (search) {
-            // First, find any role IDs that match the search string (e.g., "video" matches "Videographer")
-            const matchingRoles = await crew_roles.findAll({
-                where: { role_name: { [Sequelize.Op.like]: `%${search}%` } },
-                attributes: ['role_id'],
-                raw: true
-            });
-
-            const roleIds = matchingRoles.map(r => r.role_id.toString());
-
-            let searchOrConditions = [
-                { first_name: { [Sequelize.Op.like]: `%${search}%` } },
-                { last_name: { [Sequelize.Op.like]: `%${search}%` } },
-                { email: { [Sequelize.Op.like]: `%${search}%` } },
-                { crew_member_id: { [Sequelize.Op.like]: `%${search}%` } }
-            ];
-
-            // If we found matching roles, add a condition to check the primary_role column
-            roleIds.forEach(id => {
-                searchOrConditions.push({ 
-                    primary_role: { [Sequelize.Op.like]: `%${id}%` } 
-                });
-            });
-
-            conditions.push({ [Sequelize.Op.or]: searchOrConditions });
-        }
-
-        // 3. Setup Sorting
-        let orderColumn = 'crew_member_id';
-        if (sort_by === 'first_name') orderColumn = 'first_name';
-        if (sort_by === 'status') orderColumn = 'status';
-        if (sort_by === 'created_at') orderColumn = 'created_at';
-
-        const orderDirection = sort_order.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
-
-        // 4. Query Database
-        const [{ count, rows: members }, allRoles] = await Promise.all([
-            crew_members.findAndCountAll({
-                where: { [Sequelize.Op.and]: conditions },
-                distinct: true,
-                col: 'crew_member_id',
-                include: [{
-                    model: crew_member_files,
-                    as: 'crew_member_files',
-                    attributes: ['crew_files_id', 'file_type', 'file_path'],
-                }],
-                order: [[orderColumn, orderDirection]],
-                limit,
-                offset,
-            }),
-            crew_roles.findAll({ attributes: ['role_id', 'role_name'], raw: true })
-        ]);
-
-        // 5. Process Data for Frontend
-        const processedMembers = members.map((member) => {
-            const memberData = member.get({ clone: true });
-            
-            let roleNames = [];
-            const rawRole = memberData.primary_role;
-            if (rawRole) {
-                let roleIds = [];
-                try {
-                    const parsed = JSON.parse(rawRole);
-                    roleIds = Array.isArray(parsed) ? parsed.map(String) : [String(parsed)];
-                } catch (e) { roleIds = [String(rawRole)]; }
-                
-                roleNames = allRoles
-                    .filter(r => roleIds.includes(String(r.role_id)))
-                    .map(r => r.role_name);
-            }
-
-            return {
-                ...memberData,
-                status: 'approved',
-                role: { role_name: roleNames.length > 0 ? roleNames.join(", ") : "N/A" }
-            };
-        });
-
-        return res.status(200).json({
-            error: false,
-            message: "Success",
-            pagination: {
-                total_records: count,
-                current_page: page,
-                per_page: limit,
-                total_pages: Math.ceil(count / limit),
-            },
-            data: processedMembers,
-        });
-
-    } catch (error) {
-        console.error("API Error:", error);
-        return res.status(500).json({ error: true, message: "Internal error" });
+    if (start_date && end_date) {
+      conditions.push({ 'created_at': { [Sequelize.Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`] } });
     }
+
+    if (location) conditions.push({ location: { [Sequelize.Op.like]: `%${location}%` } });
+
+    // 2. Advanced Search Logic (Name, Email, ID AND Roles)
+    if (search) {
+      // First, find any role IDs that match the search string (e.g., "video" matches "Videographer")
+      const matchingRoles = await crew_roles.findAll({
+        where: { role_name: { [Sequelize.Op.like]: `%${search}%` } },
+        attributes: ['role_id'],
+        raw: true
+      });
+
+      const roleIds = matchingRoles.map(r => r.role_id.toString());
+
+      let searchOrConditions = [
+        { first_name: { [Sequelize.Op.like]: `%${search}%` } },
+        { last_name: { [Sequelize.Op.like]: `%${search}%` } },
+        { email: { [Sequelize.Op.like]: `%${search}%` } },
+        { crew_member_id: { [Sequelize.Op.like]: `%${search}%` } }
+      ];
+
+      // If we found matching roles, add a condition to check the primary_role column
+      roleIds.forEach(id => {
+        searchOrConditions.push({
+          primary_role: { [Sequelize.Op.like]: `%${id}%` }
+        });
+      });
+
+      conditions.push({ [Sequelize.Op.or]: searchOrConditions });
+    }
+
+    // 3. Setup Sorting
+    let orderColumn = 'crew_member_id';
+    if (sort_by === 'first_name') orderColumn = 'first_name';
+    if (sort_by === 'status') orderColumn = 'status';
+    if (sort_by === 'created_at') orderColumn = 'created_at';
+
+    const orderDirection = sort_order.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+
+    // 4. Query Database
+    const [{ count, rows: members }, allRoles] = await Promise.all([
+      crew_members.findAndCountAll({
+        where: { [Sequelize.Op.and]: conditions },
+        distinct: true,
+        col: 'crew_member_id',
+        include: [{
+          model: crew_member_files,
+          as: 'crew_member_files',
+          attributes: ['crew_files_id', 'file_type', 'file_path'],
+        }],
+        order: [[orderColumn, orderDirection]],
+        limit,
+        offset,
+      }),
+      crew_roles.findAll({ attributes: ['role_id', 'role_name'], raw: true })
+    ]);
+
+    // 5. Process Data for Frontend
+    const processedMembers = members.map((member) => {
+      const memberData = member.get({ clone: true });
+
+      let roleNames = [];
+      const rawRole = memberData.primary_role;
+      if (rawRole) {
+        let roleIds = [];
+        try {
+          const parsed = JSON.parse(rawRole);
+          roleIds = Array.isArray(parsed) ? parsed.map(String) : [String(parsed)];
+        } catch (e) { roleIds = [String(rawRole)]; }
+
+        roleNames = allRoles
+          .filter(r => roleIds.includes(String(r.role_id)))
+          .map(r => r.role_name);
+      }
+
+      return {
+        ...memberData,
+        status: 'approved',
+        role: { role_name: roleNames.length > 0 ? roleNames.join(", ") : "N/A" }
+      };
+    });
+
+    return res.status(200).json({
+      error: false,
+      message: "Success",
+      pagination: {
+        total_records: count,
+        current_page: page,
+        per_page: limit,
+        total_pages: Math.ceil(count / limit),
+      },
+      data: processedMembers,
+    });
+
+  } catch (error) {
+    console.error("API Error:", error);
+    return res.status(500).json({ error: true, message: "Internal error" });
+  }
 };
 
 exports.getClientById = async (req, res) => {
@@ -10873,10 +10877,10 @@ exports.getArchiveHistory = async (req, res) => {
 
     const targetClients = clientIds.length
       ? await clients.findAll({
-          where: { client_id: { [Op.in]: clientIds } },
-          attributes: ['client_id', 'name', 'email', 'is_active', 'archived_at', 'restored_at'],
-          raw: true
-        })
+        where: { client_id: { [Op.in]: clientIds } },
+        attributes: ['client_id', 'name', 'email', 'is_active', 'archived_at', 'restored_at'],
+        raw: true
+      })
       : [];
 
     const clientMap = new Map(targetClients.map((client) => [Number(client.client_id), client]));
@@ -10954,17 +10958,17 @@ exports.getClientsShoots = async (req, res) => {
     const clientProjectScope = user_id
       ? { user_id }
       : {
-          ...(clientEmail
-            ? {
-                [Sequelize.Op.and]: [
-                  Sequelize.where(
-                    Sequelize.fn('LOWER', Sequelize.col('guest_email')),
-                    clientEmail
-                  )
-                ]
-              }
-            : { guest_email: { [Sequelize.Op.eq]: '__no_guest_email__' } })
-        };
+        ...(clientEmail
+          ? {
+            [Sequelize.Op.and]: [
+              Sequelize.where(
+                Sequelize.fn('LOWER', Sequelize.col('guest_email')),
+                clientEmail
+              )
+            ]
+          }
+          : { guest_email: { [Sequelize.Op.eq]: '__no_guest_email__' } })
+      };
 
     // -------- PAGINATION --------
     const noPagination = !limit && !page;
@@ -11095,14 +11099,14 @@ exports.getClientsShoots = async (req, res) => {
 
     const bookedLeadRows = bookingIds.length
       ? await sales_leads.findAll({
-          where: {
-            booking_id: { [Sequelize.Op.in]: bookingIds },
-            lead_status: 'booked',
-            is_active: 1
-          },
-          attributes: ['booking_id'],
-          raw: true
-        })
+        where: {
+          booking_id: { [Sequelize.Op.in]: bookingIds },
+          lead_status: 'booked',
+          is_active: 1
+        },
+        attributes: ['booking_id'],
+        raw: true
+      })
       : [];
 
     const bookedBookingIdSet = new Set(
@@ -11113,78 +11117,78 @@ exports.getClientsShoots = async (req, res) => {
 
     // -------- FETCH ASSOCIATED DATA --------
     const projectDetails = await Promise.all(
-  projects.map(async (project) => {
+      projects.map(async (project) => {
 
-    const [
-      assignedCrew,
-      assignedEquipment,
-      assignedPostProd,
-      paymentData
-    ] = await Promise.all([
-      assigned_crew.findAll({
-        where: { project_id: project.stream_project_booking_id, is_active: 1 },
-        include: [{ model: crew_members, as: 'crew_member' }]
-      }),
-      assigned_equipment.findAll({
-        where: { project_id: project.stream_project_booking_id, is_active: 1 },
-        include: [{ model: equipment, as: 'equipment' }]
-      }),
-      assigned_post_production_member.findAll({
-        where: { project_id: project.stream_project_booking_id, is_active: 1 },
-        include: [{ model: post_production_members, as: 'post_production_member' }]
-      }),
-      payment_transactions.findOne({
-        where: { payment_id: project.payment_id },
-        attributes: ['total_amount']
+        const [
+          assignedCrew,
+          assignedEquipment,
+          assignedPostProd,
+          paymentData
+        ] = await Promise.all([
+          assigned_crew.findAll({
+            where: { project_id: project.stream_project_booking_id, is_active: 1 },
+            include: [{ model: crew_members, as: 'crew_member' }]
+          }),
+          assigned_equipment.findAll({
+            where: { project_id: project.stream_project_booking_id, is_active: 1 },
+            include: [{ model: equipment, as: 'equipment' }]
+          }),
+          assigned_post_production_member.findAll({
+            where: { project_id: project.stream_project_booking_id, is_active: 1 },
+            include: [{ model: post_production_members, as: 'post_production_member' }]
+          }),
+          payment_transactions.findOne({
+            where: { payment_id: project.payment_id },
+            attributes: ['total_amount']
+          })
+        ]);
+
+        // -------- FORMAT EVENT TYPES --------
+        const rawTypes = project.event_type ? project.event_type.split(',') : [];
+        const formattedTypes = rawTypes.map(t => {
+          const val = t.trim();
+          const stringMap = {
+            'videographer': 'Videography',
+            'photographer': 'Photography'
+          };
+          return stringMap[val?.toLowerCase()] ||
+            val.charAt(0).toUpperCase() + val.slice(1);
+        });
+
+        const displayAmount = await resolveProjectDisplayAmount({
+          project,
+          paymentData
+        });
+        const totalValueAmount = await resolveProjectTotalValueAmount({
+          project
+        });
+
+        return {
+          project: {
+            ...project.toJSON(),
+            total_paid_amount: displayAmount,
+            total_value_amount: totalValueAmount,
+            event_type_labels: formattedTypes.join(', '),
+            event_location: (() => {
+              const loc = project.event_location;
+              if (!loc) return null;
+              try {
+                if (typeof loc === "string" && (loc.startsWith("{") || loc.startsWith("["))) {
+                  const parsed = JSON.parse(loc);
+                  return parsed.address || parsed;
+                }
+              } catch (e) {
+                return loc;
+              }
+              return loc;
+            })()
+          },
+          assignedCrew,
+          assignedEquipment,
+          assignedPostProductionMembers: assignedPostProd
+        };
       })
-    ]);
-
-    // -------- FORMAT EVENT TYPES --------
-    const rawTypes = project.event_type ? project.event_type.split(',') : [];
-    const formattedTypes = rawTypes.map(t => {
-      const val = t.trim();
-      const stringMap = {
-        'videographer': 'Videography',
-        'photographer': 'Photography'
-      };
-      return stringMap[val?.toLowerCase()] ||
-        val.charAt(0).toUpperCase() + val.slice(1);
-    });
-
-    const displayAmount = await resolveProjectDisplayAmount({
-      project,
-      paymentData
-    });
-    const totalValueAmount = await resolveProjectTotalValueAmount({
-      project
-    });
-
-    return {
-      project: {
-        ...project.toJSON(),
-        total_paid_amount: displayAmount,
-        total_value_amount: totalValueAmount,
-        event_type_labels: formattedTypes.join(', '),
-        event_location: (() => {
-          const loc = project.event_location;
-          if (!loc) return null;
-          try {
-            if (typeof loc === "string" && (loc.startsWith("{") || loc.startsWith("["))) {
-              const parsed = JSON.parse(loc);
-              return parsed.address || parsed;
-            }
-          } catch (e) {
-            return loc;
-          }
-          return loc;
-        })()
-      },
-      assignedCrew,
-      assignedEquipment,
-      assignedPostProductionMembers: assignedPostProd
-    };
-  })
-);
+    );
 
     // 🔥 -------- SEPARATE PAID & UNPAID/DRAFT --------
     const paid = [];
@@ -11239,240 +11243,240 @@ exports.getClientsShoots = async (req, res) => {
 
 
 exports.searchCrewForLead = async (req, res) => {
-    try {
-        const {
-            lead_id,
-            role_type,
-            search_query,
-            max_distance,
-            radius,
-            latitude,
-            longitude,
-            date
-        } = req.query;
+  try {
+    const {
+      lead_id,
+      role_type,
+      search_query,
+      max_distance,
+      radius,
+      latitude,
+      longitude,
+      date
+    } = req.query;
 
-        const requestedRadius = Number(max_distance ?? radius ?? 50);
-        const normalizedSearchQuery = typeof search_query === 'string' ? search_query.trim() : '';
-        const hasGlobalCrewSearch = normalizedSearchQuery.length > 0;
+    const requestedRadius = Number(max_distance ?? radius ?? 50);
+    const normalizedSearchQuery = typeof search_query === 'string' ? search_query.trim() : '';
+    const hasGlobalCrewSearch = normalizedSearchQuery.length > 0;
 
-        let projectDate;
-        let currentBookingId = null;
-        let eventLocation = null;
-        let centerLatitude = null;
-        let centerLongitude = null;
+    let projectDate;
+    let currentBookingId = null;
+    let eventLocation = null;
+    let centerLatitude = null;
+    let centerLongitude = null;
 
-        if (lead_id) {
-            const lead = await sales_leads.findOne({
-                where: { lead_id },
-                include: [{ model: stream_project_booking, as: 'booking' }]
-            });
+    if (lead_id) {
+      const lead = await sales_leads.findOne({
+        where: { lead_id },
+        include: [{ model: stream_project_booking, as: 'booking' }]
+      });
 
-            if (!lead || !lead.booking) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Lead or associated Booking not found'
-                });
-            }
-
-            projectDate = lead.booking.event_date;
-            eventLocation = lead.booking.event_location;
-            currentBookingId = lead.booking.stream_project_booking_id;
-            centerLatitude = Number(lead.booking.event_latitude);
-            centerLongitude = Number(lead.booking.event_longitude);
-        } else {
-            if (!date && !hasGlobalCrewSearch) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Date is required when lead_id is not provided'
-                });
-            }
-            projectDate = date || null;
-        }
-
-        if (latitude !== undefined && longitude !== undefined) {
-            centerLatitude = Number(latitude);
-            centerLongitude = Number(longitude);
-        } else if ((!Number.isFinite(centerLatitude) || !Number.isFinite(centerLongitude)) && eventLocation) {
-            const coords = extractCoordinatesFromPayload({}, eventLocation);
-            centerLatitude = Number(coords.latitude);
-            centerLongitude = Number(coords.longitude);
-        }
-
-        const hasSearchCenter = Number.isFinite(centerLatitude) && Number.isFinite(centerLongitude);
-
-        const busyCrewRecords = projectDate && !hasGlobalCrewSearch
-            ? await assigned_crew.findAll({
-                where: {
-                    crew_accept: 1,
-                    is_active: 1
-                },
-                include: [{
-                    model: stream_project_booking,
-                    as: 'project',
-                    where: { event_date: projectDate }
-                }],
-                attributes: ['crew_member_id']
-            })
-            : [];
-
-        let alreadyAssignedToThisLead = [];
-        if (currentBookingId) {
-            const currentAssignments = await assigned_crew.findAll({
-                where: {
-                    project_id: currentBookingId,
-                    is_active: 1,
-                    crew_accept: { [Op.in]: [0, 1] }
-                },
-                attributes: ['crew_member_id']
-            });
-
-            alreadyAssignedToThisLead = currentAssignments.map(a => Number(a.crew_member_id));
-        }
-
-        const busyIds = busyCrewRecords.map(r => Number(r.crew_member_id));
-        const excludeIds = [...new Set([...busyIds, ...alreadyAssignedToThisLead])];
-
-        const ROLE_GROUPS = {
-            videographer: ['9', '1'],
-            photographer: ['10', '2'],
-            cinematographer: ['11', '3']
-        };
-
-        const requestedRoles = role_type
-            ? role_type.split(',').map(r => r.trim().toLowerCase())
-            : [];
-
-        let targetRoleIds = [];
-        requestedRoles.forEach(role => {
-            if (ROLE_GROUPS[role]) {
-                targetRoleIds.push(...ROLE_GROUPS[role]);
-            }
+      if (!lead || !lead.booking) {
+        return res.status(404).json({
+          success: false,
+          message: 'Lead or associated Booking not found'
         });
-        targetRoleIds = [...new Set(targetRoleIds)];
+      }
 
-        const crewWhere = {
-            is_active: true,
-            is_crew_verified: 1,
-            crew_member_id: { [Op.notIn]: excludeIds.length ? excludeIds : [0] }
-        };
-
-        if (!hasGlobalCrewSearch) {
-            crewWhere.is_available = true;
-        }
-
-        if (targetRoleIds.length > 0 && !hasGlobalCrewSearch) {
-            crewWhere[Op.or] = targetRoleIds.map(id => ({
-                primary_role: { [Op.like]: `%${id}%` }
-            }));
-        }
-
-        if (hasGlobalCrewSearch) {
-            crewWhere[Op.and] = [{
-                [Op.or]: [
-                    { first_name: { [Op.like]: `%${normalizedSearchQuery}%` } },
-                    { last_name: { [Op.like]: `%${normalizedSearchQuery}%` } },
-                    Sequelize.where(
-                        Sequelize.fn('CONCAT', Sequelize.col('first_name'), ' ', Sequelize.col('last_name')),
-                        { [Op.like]: `%${normalizedSearchQuery}%` }
-                    ),
-                    { email: { [Op.like]: `%${normalizedSearchQuery}%` } },
-                    { phone_number: { [Op.like]: `%${normalizedSearchQuery}%` } },
-                    { location: { [Op.like]: `%${normalizedSearchQuery}%` } }
-                ]
-            }];
-        }
-
-        const availableCrew = await crew_members.findAll({
-            where: crewWhere,
-            include: [
-                {
-                    model: crew_member_files,
-                    as: 'crew_member_files',
-                    attributes: ['file_path'],
-                    where: { is_active: 1, file_type: 'profile_photo' },
-                    required: false,
-                }
-            ],
-            limit: 200
+      projectDate = lead.booking.event_date;
+      eventLocation = lead.booking.event_location;
+      currentBookingId = lead.booking.stream_project_booking_id;
+      centerLatitude = Number(lead.booking.event_latitude);
+      centerLongitude = Number(lead.booking.event_longitude);
+    } else {
+      if (!date && !hasGlobalCrewSearch) {
+        return res.status(400).json({
+          success: false,
+          message: 'Date is required when lead_id is not provided'
         });
-
-        const crewWithRoles = availableCrew.map(crewMember => {
-            let matchedRoles = [];
-            let rawRoles = [];
-
-            try {
-                if (crewMember.primary_role) {
-                    if (Array.isArray(crewMember.primary_role)) {
-                        rawRoles = crewMember.primary_role;
-                    } else if (typeof crewMember.primary_role === 'string') {
-                        try {
-                            const parsed = JSON.parse(crewMember.primary_role);
-                            rawRoles = Array.isArray(parsed) ? parsed : [parsed];
-                        } catch {
-                            rawRoles = crewMember.primary_role.split(',').map(r => r.trim());
-                        }
-                    }
-                }
-            } catch (e) { rawRoles = []; }
-
-            const stringRoleIds = rawRoles.map(String);
-            if (stringRoleIds.some(id => ROLE_GROUPS.videographer.includes(id))) matchedRoles.push('videographer');
-            if (stringRoleIds.some(id => ROLE_GROUPS.photographer.includes(id))) matchedRoles.push('photographer');
-            if (stringRoleIds.some(id => ROLE_GROUPS.cinematographer.includes(id))) matchedRoles.push('cinematographer');
-
-            const profilePhoto = crewMember.crew_member_files && crewMember.crew_member_files.length > 0
-                ? crewMember.crew_member_files[0].file_path
-                : null;
-
-            const crewJson = crewMember.toJSON();
-            delete crewJson.crew_member_files;
-
-            const formattedFirstName = crewJson.first_name.charAt(0).toUpperCase() + crewJson.first_name.slice(1).toLowerCase();
-            const formattedLastName = crewJson.last_name.charAt(0).toUpperCase();
-
-            const crewLatitude = Number(crewJson.latitude);
-            const crewLongitude = Number(crewJson.longitude);
-            const distanceMiles = hasSearchCenter && Number.isFinite(crewLatitude) && Number.isFinite(crewLongitude)
-                ? calculateDistance(centerLatitude, centerLongitude, crewLatitude, crewLongitude)
-                : null;
-
-            return {
-                ...crewJson,
-                profile_photo: profilePhoto,
-                first_name: formattedFirstName,
-                last_name: formattedLastName,
-                role_names: matchedRoles.length > 0 ? matchedRoles : ['Unspecified'],
-                role: matchedRoles.length > 0 ? matchedRoles.join(', ') : 'Unspecified',
-                distance: distanceMiles
-            };
-        });
-
-        const filteredCrew = hasSearchCenter && !hasGlobalCrewSearch
-            ? crewWithRoles
-                .filter(crew => crew.distance !== null && crew.distance <= requestedRadius)
-                .sort((a, b) => a.distance - b.distance)
-            : crewWithRoles.sort((a, b) => {
-                if (a.distance === null && b.distance === null) return 0;
-                if (a.distance === null) return 1;
-                if (b.distance === null) return -1;
-                return a.distance - b.distance;
-            });
-
-        res.json({
-            success: true,
-            project_date: projectDate,
-            available_count: filteredCrew.length,
-            search_center: hasSearchCenter ? { latitude: centerLatitude, longitude: centerLongitude } : null,
-            radius: Number.isFinite(requestedRadius) ? requestedRadius : null,
-            search_query: hasGlobalCrewSearch ? normalizedSearchQuery : null,
-            search_scope: hasGlobalCrewSearch ? 'all_crew' : 'radius',
-            data: filteredCrew
-        });
-
-    } catch (error) {
-        console.error('searchCrewForLead error:', error);
-        res.status(500).json({ success: false, message: error.message });
+      }
+      projectDate = date || null;
     }
+
+    if (latitude !== undefined && longitude !== undefined) {
+      centerLatitude = Number(latitude);
+      centerLongitude = Number(longitude);
+    } else if ((!Number.isFinite(centerLatitude) || !Number.isFinite(centerLongitude)) && eventLocation) {
+      const coords = extractCoordinatesFromPayload({}, eventLocation);
+      centerLatitude = Number(coords.latitude);
+      centerLongitude = Number(coords.longitude);
+    }
+
+    const hasSearchCenter = Number.isFinite(centerLatitude) && Number.isFinite(centerLongitude);
+
+    const busyCrewRecords = projectDate && !hasGlobalCrewSearch
+      ? await assigned_crew.findAll({
+        where: {
+          crew_accept: 1,
+          is_active: 1
+        },
+        include: [{
+          model: stream_project_booking,
+          as: 'project',
+          where: { event_date: projectDate }
+        }],
+        attributes: ['crew_member_id']
+      })
+      : [];
+
+    let alreadyAssignedToThisLead = [];
+    if (currentBookingId) {
+      const currentAssignments = await assigned_crew.findAll({
+        where: {
+          project_id: currentBookingId,
+          is_active: 1,
+          crew_accept: { [Op.in]: [0, 1] }
+        },
+        attributes: ['crew_member_id']
+      });
+
+      alreadyAssignedToThisLead = currentAssignments.map(a => Number(a.crew_member_id));
+    }
+
+    const busyIds = busyCrewRecords.map(r => Number(r.crew_member_id));
+    const excludeIds = [...new Set([...busyIds, ...alreadyAssignedToThisLead])];
+
+    const ROLE_GROUPS = {
+      videographer: ['9', '1'],
+      photographer: ['10', '2'],
+      cinematographer: ['11', '3']
+    };
+
+    const requestedRoles = role_type
+      ? role_type.split(',').map(r => r.trim().toLowerCase())
+      : [];
+
+    let targetRoleIds = [];
+    requestedRoles.forEach(role => {
+      if (ROLE_GROUPS[role]) {
+        targetRoleIds.push(...ROLE_GROUPS[role]);
+      }
+    });
+    targetRoleIds = [...new Set(targetRoleIds)];
+
+    const crewWhere = {
+      is_active: true,
+      is_crew_verified: 1,
+      crew_member_id: { [Op.notIn]: excludeIds.length ? excludeIds : [0] }
+    };
+
+    if (!hasGlobalCrewSearch) {
+      crewWhere.is_available = true;
+    }
+
+    if (targetRoleIds.length > 0 && !hasGlobalCrewSearch) {
+      crewWhere[Op.or] = targetRoleIds.map(id => ({
+        primary_role: { [Op.like]: `%${id}%` }
+      }));
+    }
+
+    if (hasGlobalCrewSearch) {
+      crewWhere[Op.and] = [{
+        [Op.or]: [
+          { first_name: { [Op.like]: `%${normalizedSearchQuery}%` } },
+          { last_name: { [Op.like]: `%${normalizedSearchQuery}%` } },
+          Sequelize.where(
+            Sequelize.fn('CONCAT', Sequelize.col('first_name'), ' ', Sequelize.col('last_name')),
+            { [Op.like]: `%${normalizedSearchQuery}%` }
+          ),
+          { email: { [Op.like]: `%${normalizedSearchQuery}%` } },
+          { phone_number: { [Op.like]: `%${normalizedSearchQuery}%` } },
+          { location: { [Op.like]: `%${normalizedSearchQuery}%` } }
+        ]
+      }];
+    }
+
+    const availableCrew = await crew_members.findAll({
+      where: crewWhere,
+      include: [
+        {
+          model: crew_member_files,
+          as: 'crew_member_files',
+          attributes: ['file_path'],
+          where: { is_active: 1, file_type: 'profile_photo' },
+          required: false,
+        }
+      ],
+      limit: 200
+    });
+
+    const crewWithRoles = availableCrew.map(crewMember => {
+      let matchedRoles = [];
+      let rawRoles = [];
+
+      try {
+        if (crewMember.primary_role) {
+          if (Array.isArray(crewMember.primary_role)) {
+            rawRoles = crewMember.primary_role;
+          } else if (typeof crewMember.primary_role === 'string') {
+            try {
+              const parsed = JSON.parse(crewMember.primary_role);
+              rawRoles = Array.isArray(parsed) ? parsed : [parsed];
+            } catch {
+              rawRoles = crewMember.primary_role.split(',').map(r => r.trim());
+            }
+          }
+        }
+      } catch (e) { rawRoles = []; }
+
+      const stringRoleIds = rawRoles.map(String);
+      if (stringRoleIds.some(id => ROLE_GROUPS.videographer.includes(id))) matchedRoles.push('videographer');
+      if (stringRoleIds.some(id => ROLE_GROUPS.photographer.includes(id))) matchedRoles.push('photographer');
+      if (stringRoleIds.some(id => ROLE_GROUPS.cinematographer.includes(id))) matchedRoles.push('cinematographer');
+
+      const profilePhoto = crewMember.crew_member_files && crewMember.crew_member_files.length > 0
+        ? crewMember.crew_member_files[0].file_path
+        : null;
+
+      const crewJson = crewMember.toJSON();
+      delete crewJson.crew_member_files;
+
+      const formattedFirstName = crewJson.first_name.charAt(0).toUpperCase() + crewJson.first_name.slice(1).toLowerCase();
+      const formattedLastName = crewJson.last_name.charAt(0).toUpperCase();
+
+      const crewLatitude = Number(crewJson.latitude);
+      const crewLongitude = Number(crewJson.longitude);
+      const distanceMiles = hasSearchCenter && Number.isFinite(crewLatitude) && Number.isFinite(crewLongitude)
+        ? calculateDistance(centerLatitude, centerLongitude, crewLatitude, crewLongitude)
+        : null;
+
+      return {
+        ...crewJson,
+        profile_photo: profilePhoto,
+        first_name: formattedFirstName,
+        last_name: formattedLastName,
+        role_names: matchedRoles.length > 0 ? matchedRoles : ['Unspecified'],
+        role: matchedRoles.length > 0 ? matchedRoles.join(', ') : 'Unspecified',
+        distance: distanceMiles
+      };
+    });
+
+    const filteredCrew = hasSearchCenter && !hasGlobalCrewSearch
+      ? crewWithRoles
+        .filter(crew => crew.distance !== null && crew.distance <= requestedRadius)
+        .sort((a, b) => a.distance - b.distance)
+      : crewWithRoles.sort((a, b) => {
+        if (a.distance === null && b.distance === null) return 0;
+        if (a.distance === null) return 1;
+        if (b.distance === null) return -1;
+        return a.distance - b.distance;
+      });
+
+    res.json({
+      success: true,
+      project_date: projectDate,
+      available_count: filteredCrew.length,
+      search_center: hasSearchCenter ? { latitude: centerLatitude, longitude: centerLongitude } : null,
+      radius: Number.isFinite(requestedRadius) ? requestedRadius : null,
+      search_query: hasGlobalCrewSearch ? normalizedSearchQuery : null,
+      search_scope: hasGlobalCrewSearch ? 'all_crew' : 'radius',
+      data: filteredCrew
+    });
+
+  } catch (error) {
+    console.error('searchCrewForLead error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
 };
 // const geocoder = NodeGeocoder({ 
 //     provider: 'openstreetmap',
@@ -11497,7 +11501,7 @@ exports.searchCrewForLead = async (req, res) => {
 //     if (!address) return null;
 //     const parts = address.split(/[,،]/);
 //     if (parts.length < 2) return address.trim().toLowerCase();
-    
+
 //     // For USA: usually "City, State Zip" is at the end. 
 //     // We take the last 2-3 parts for better accuracy
 //     const cityPart = parts[parts.length - 2] || parts[0];
@@ -11602,7 +11606,7 @@ exports.searchCrewForLead = async (req, res) => {
 
 //             if (requestedRadius > 0 && crewJson.location) {
 //                 const crewCity = extractCity(crewJson.location);
-                
+
 //                 // Text Match Optimization (Instant)
 //                 if (search_query && crewJson.location.toLowerCase().includes(search_query.toLowerCase())) {
 //                     isWithinRange = true;
@@ -11669,310 +11673,310 @@ exports.searchCrewForLead = async (req, res) => {
 // };
 
 exports.assignCrewBulkSmart = async (req, res) => {
-    try {
-        const assigned_by_user_id = req.user?.userId;
-        const { lead_id, client_lead_id, crew_member_ids, allow_pending_compensation_assignment } = req.body;
+  try {
+    const assigned_by_user_id = req.user?.userId;
+    const { lead_id, client_lead_id, crew_member_ids, allow_pending_compensation_assignment } = req.body;
 
-        if (!lead_id && !client_lead_id) {
-            return res.status(400).json({ success: false, message: "lead_id or client_lead_id is required." });
-        }
+    if (!lead_id && !client_lead_id) {
+      return res.status(400).json({ success: false, message: "lead_id or client_lead_id is required." });
+    }
 
-        if (!Array.isArray(crew_member_ids) || crew_member_ids.length === 0) {
-            return res.status(400).json({ success: false, message: "No crew members selected." });
-        }
+    if (!Array.isArray(crew_member_ids) || crew_member_ids.length === 0) {
+      return res.status(400).json({ success: false, message: "No crew members selected." });
+    }
 
-        const ROLE_GROUPS = {
-            videographer: ["9", "1"],
-            photographer: ["10", "2"],
-            cinematographer: ["11", "3"]
-        };
+    const ROLE_GROUPS = {
+      videographer: ["9", "1"],
+      photographer: ["10", "2"],
+      cinematographer: ["11", "3"]
+    };
 
-        const ID_TO_ROLE_MAP = {};
-        Object.entries(ROLE_GROUPS).forEach(([roleName, ids]) => {
-            ids.forEach(id => { ID_TO_ROLE_MAP[String(id)] = roleName; });
-        });
+    const ID_TO_ROLE_MAP = {};
+    Object.entries(ROLE_GROUPS).forEach(([roleName, ids]) => {
+      ids.forEach(id => { ID_TO_ROLE_MAP[String(id)] = roleName; });
+    });
 
-        const leadModel = client_lead_id ? client_leads : sales_leads;
-        const activityModel = client_lead_id ? client_lead_activities : sales_lead_activities;
-        const resolvedLeadId = client_lead_id || lead_id;
+    const leadModel = client_lead_id ? client_leads : sales_leads;
+    const activityModel = client_lead_id ? client_lead_activities : sales_lead_activities;
+    const resolvedLeadId = client_lead_id || lead_id;
 
-        const lead = await leadModel.findOne({
-          where: { lead_id: resolvedLeadId },
-          include: [{
-            model: stream_project_booking,
-            as: 'booking',
-            include: [{
-              model: assigned_crew,
-              as: 'assigned_crews',
-              where: {
-                crew_accept: 1,
-                is_active: 1
-              },
-              required: false,
-              include: [{ model: crew_members, as: 'crew_member' }]
-            }]
-          }]
-        });
-
-        if (!lead || !lead.booking) {
-            return res.status(404).json({ success: false, message: "Lead or booking not found." });
-        }
-
-        const booking = lead.booking;
-        const approvedCompensationCount = await db.creator_earnings.count({
+    const lead = await leadModel.findOne({
+      where: { lead_id: resolvedLeadId },
+      include: [{
+        model: stream_project_booking,
+        as: 'booking',
+        include: [{
+          model: assigned_crew,
+          as: 'assigned_crews',
           where: {
-            booking_id: booking.stream_project_booking_id,
-            approval_status: 'approved'
-          }
-        });
+            crew_accept: 1,
+            is_active: 1
+          },
+          required: false,
+          include: [{ model: crew_members, as: 'crew_member' }]
+        }]
+      }]
+    });
 
-        if (approvedCompensationCount > 0) {
-            return res.status(409).json({
-                success: false,
-                message: "CP compensation is already approved for this shoot. You cannot assign more CPs."
-            });
-        }
+    if (!lead || !lead.booking) {
+      return res.status(404).json({ success: false, message: "Lead or booking not found." });
+    }
 
-        const pendingCompensationCount = await db.creator_earnings.count({
-          where: {
-            booking_id: booking.stream_project_booking_id,
-            approval_status: 'pending_approval'
-          }
-        });
+    const booking = lead.booking;
+    const approvedCompensationCount = await db.creator_earnings.count({
+      where: {
+        booking_id: booking.stream_project_booking_id,
+        approval_status: 'approved'
+      }
+    });
 
-        if (pendingCompensationCount > 0 && !allow_pending_compensation_assignment) {
-            return res.status(409).json({
-                success: false,
-                message: "This shoot has pending CP compensation. Add CPs through the compensation flow so payout records stay updated."
-            });
-        }
+    if (approvedCompensationCount > 0) {
+      return res.status(409).json({
+        success: false,
+        message: "CP compensation is already approved for this shoot. You cannot assign more CPs."
+      });
+    }
 
-        const requestedLimits = typeof booking.crew_roles === 'string'
-          ? JSON.parse(booking.crew_roles)
-          : (booking.crew_roles || {});
+    const pendingCompensationCount = await db.creator_earnings.count({
+      where: {
+        booking_id: booking.stream_project_booking_id,
+        approval_status: 'pending_approval'
+      }
+    });
 
-        const currentCounts = { videographer: 0, photographer: 0, cinematographer: 0 };
+    if (pendingCompensationCount > 0 && !allow_pending_compensation_assignment) {
+      return res.status(409).json({
+        success: false,
+        message: "This shoot has pending CP compensation. Add CPs through the compensation flow so payout records stay updated."
+      });
+    }
 
-        if (booking.assigned_crews) {
-          booking.assigned_crews.forEach(ac => {
-            if (ac.crew_member?.primary_role) {
-              try {
-                const parsed = JSON.parse(ac.crew_member.primary_role);
-                const roles = Array.isArray(parsed) ? parsed : [parsed];
-                roles.forEach(id => {
-                  const roleName = ID_TO_ROLE_MAP[String(id)];
-                  if (roleName) currentCounts[roleName]++;
-                });
-              } catch (e) {
-                console.error("Parse error in existing crew", e);
-              }
-            }
-          });
-        }
-        const uniqueCrewIds = [...new Set(crew_member_ids.map(Number).filter(Boolean))];
+    const requestedLimits = typeof booking.crew_roles === 'string'
+      ? JSON.parse(booking.crew_roles)
+      : (booking.crew_roles || {});
 
-        const newCrewDetails = await crew_members.findAll({
-            where: { crew_member_id: uniqueCrewIds }
-        });
+    const currentCounts = { videographer: 0, photographer: 0, cinematographer: 0 };
 
-        const assignmentsToCreate = [];
-        const errors = [];
-
-        newCrewDetails.forEach(crew => {
-            let roles = [];
-            try {
-                const parsed = JSON.parse(crew.primary_role || "[]");
-                roles = Array.isArray(parsed) ? parsed : [parsed];
-            } catch (e) {
-                roles = [crew.primary_role];
-            }
-
-            let roleDetected = null;
-            roles.forEach(id => {
-                if (ID_TO_ROLE_MAP[String(id)]) roleDetected = ID_TO_ROLE_MAP[String(id)];
-            });
-
-            if (roleDetected) {
-              const acceptedCount = currentCounts[roleDetected];
-              const limit = requestedLimits[roleDetected];
-
-              if (limit !== undefined && acceptedCount >= limit) {
-                errors.push(`Cannot add ${crew.first_name} (${roleDetected}).Limit of ${limit} reached.`);
-              } else {
-                assignmentsToCreate.push({
-                  project_id: booking.stream_project_booking_id,
-                  crew_member_id: crew.crew_member_id,
-                  assigned_date: new Date(),
-                  status: 'selected',
-                  crew_accept: 0,
-                  is_active: 1,
-                  organization_type: 1
-                });
-              }
-            } else {
-              assignmentsToCreate.push({
-                  project_id: booking.stream_project_booking_id,
-                  crew_member_id: crew.crew_member_id,
-                  assigned_date: new Date(),
-                  status: 'selected',
-                  crew_accept: 0,
-                  is_active: 1,
-                  organization_type: 1
-              });
-          }
-        });
-
-        if (errors.length > 0 && assignmentsToCreate.length === 0) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "Assignments failed validation.", 
-                errors: errors 
-            });
-        }
-
-        if (assignmentsToCreate.length > 0) {
-            await assigned_crew.bulkCreate(assignmentsToCreate);
-            await activityModel.create({
-                lead_id: resolvedLeadId,
-                activity_type: 'assigned',
-                activity_data: {
-                  action: 'bulk_crew_assigned',
-                  notes: `Sales rep assigned ${assignmentsToCreate.length} crew members.`,
-                  assigned_count: assignmentsToCreate.length
-                },
-                performed_by_user_id: assigned_by_user_id
-            });
-
-          // Non-blocking email trigger
+    if (booking.assigned_crews) {
+      booking.assigned_crews.forEach(ac => {
+        if (ac.crew_member?.primary_role) {
           try {
-            const createdIds = assignmentsToCreate.map(a => a.crew_member_id);
-            const crews = await crew_members.findAll({
-              where: { crew_member_id: createdIds },
-              attributes: ['crew_member_id', 'first_name', 'last_name', 'email']
+            const parsed = JSON.parse(ac.crew_member.primary_role);
+            const roles = Array.isArray(parsed) ? parsed : [parsed];
+            roles.forEach(id => {
+              const roleName = ID_TO_ROLE_MAP[String(id)];
+              if (roleName) currentCounts[roleName]++;
             });
-
-            const dashboardLink =
-              process.env.CP_DASHBOARD_LINK ||
-              process.env.FRONTEND_URL ||
-              'https://beige.app/';
-
-            const emailClientName = await resolveAdminBookingClientName(lead?.booking, lead?.client_name || null);
-            const emailShootAmount = await resolveAdminBookingShootAmount(lead?.booking);
-
-            await Promise.allSettled(
-              crews
-                .filter(c => c.email)
-                .map(c =>
-                  sendCPNewBookingRequestEmail({
-                    to_email: c.email,
-                    user_name: [c.first_name, c.last_name].filter(Boolean).join(' ') || 'there',
-                    ...getCPNewBookingEmailFields(lead?.booking, emailClientName, emailShootAmount),
-                    dashboardLink
-                  })
-                )
-            );
-        } catch (mailErr) {
-          console.error('assignCrewBulkSmart email send error:', mailErr?.message || mailErr);
+          } catch (e) {
+            console.error("Parse error in existing crew", e);
+          }
         }
+      });
+    }
+    const uniqueCrewIds = [...new Set(crew_member_ids.map(Number).filter(Boolean))];
+
+    const newCrewDetails = await crew_members.findAll({
+      where: { crew_member_id: uniqueCrewIds }
+    });
+
+    const assignmentsToCreate = [];
+    const errors = [];
+
+    newCrewDetails.forEach(crew => {
+      let roles = [];
+      try {
+        const parsed = JSON.parse(crew.primary_role || "[]");
+        roles = Array.isArray(parsed) ? parsed : [parsed];
+      } catch (e) {
+        roles = [crew.primary_role];
       }
 
-      return res.json({
-        success: true,
-        message: `${assignmentsToCreate.length} crew members assigned successfully.`,
-        errors: errors.length > 0 ? errors : undefined
+      let roleDetected = null;
+      roles.forEach(id => {
+        if (ID_TO_ROLE_MAP[String(id)]) roleDetected = ID_TO_ROLE_MAP[String(id)];
       });
 
-    } catch (error) {
-        console.error(error);
-        return res.status(500).json({ success: false, message: error.message });
+      if (roleDetected) {
+        const acceptedCount = currentCounts[roleDetected];
+        const limit = requestedLimits[roleDetected];
+
+        if (limit !== undefined && acceptedCount >= limit) {
+          errors.push(`Cannot add ${crew.first_name} (${roleDetected}).Limit of ${limit} reached.`);
+        } else {
+          assignmentsToCreate.push({
+            project_id: booking.stream_project_booking_id,
+            crew_member_id: crew.crew_member_id,
+            assigned_date: new Date(),
+            status: 'selected',
+            crew_accept: 0,
+            is_active: 1,
+            organization_type: 1
+          });
+        }
+      } else {
+        assignmentsToCreate.push({
+          project_id: booking.stream_project_booking_id,
+          crew_member_id: crew.crew_member_id,
+          assigned_date: new Date(),
+          status: 'selected',
+          crew_accept: 0,
+          is_active: 1,
+          organization_type: 1
+        });
+      }
+    });
+
+    if (errors.length > 0 && assignmentsToCreate.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Assignments failed validation.",
+        errors: errors
+      });
     }
+
+    if (assignmentsToCreate.length > 0) {
+      await assigned_crew.bulkCreate(assignmentsToCreate);
+      await activityModel.create({
+        lead_id: resolvedLeadId,
+        activity_type: 'assigned',
+        activity_data: {
+          action: 'bulk_crew_assigned',
+          notes: `Sales rep assigned ${assignmentsToCreate.length} crew members.`,
+          assigned_count: assignmentsToCreate.length
+        },
+        performed_by_user_id: assigned_by_user_id
+      });
+
+      // Non-blocking email trigger
+      try {
+        const createdIds = assignmentsToCreate.map(a => a.crew_member_id);
+        const crews = await crew_members.findAll({
+          where: { crew_member_id: createdIds },
+          attributes: ['crew_member_id', 'first_name', 'last_name', 'email']
+        });
+
+        const dashboardLink =
+          process.env.CP_DASHBOARD_LINK ||
+          process.env.FRONTEND_URL ||
+          'https://beige.app/';
+
+        const emailClientName = await resolveAdminBookingClientName(lead?.booking, lead?.client_name || null);
+        const emailShootAmount = await resolveAdminBookingShootAmount(lead?.booking);
+
+        await Promise.allSettled(
+          crews
+            .filter(c => c.email)
+            .map(c =>
+              sendCPNewBookingRequestEmail({
+                to_email: c.email,
+                user_name: [c.first_name, c.last_name].filter(Boolean).join(' ') || 'there',
+                ...getCPNewBookingEmailFields(lead?.booking, emailClientName, emailShootAmount),
+                dashboardLink
+              })
+            )
+        );
+      } catch (mailErr) {
+        console.error('assignCrewBulkSmart email send error:', mailErr?.message || mailErr);
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: `${assignmentsToCreate.length} crew members assigned successfully.`,
+      errors: errors.length > 0 ? errors : undefined
+    });
+
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
 };
 
 exports.removeAssignedCrew = async (req, res) => {
-    try {
-        const assigned_by_user_id = req.user?.userId;
-        const { lead_id, client_lead_id, crew_member_id } = req.body;
+  try {
+    const assigned_by_user_id = req.user?.userId;
+    const { lead_id, client_lead_id, crew_member_id } = req.body;
 
-        if ((!lead_id && !client_lead_id) || !crew_member_id) {
-            return res.status(400).json({
-                success: false,
-                message: "Either lead_id or client_lead_id and crew_member_id are required."
-            });
-        }
-
-        let LeadModel;
-        let LeadActivityModel;
-        let where;
-
-        if (lead_id) {
-            LeadModel = sales_leads;
-            LeadActivityModel = sales_lead_activities;
-            where = { lead_id: lead_id };
-        } else {
-            LeadModel = client_leads;
-            LeadActivityModel = client_lead_activities;
-            where = { lead_id: client_lead_id };
-        }
-
-        const lead = await LeadModel.findOne({
-            where,
-            attributes: ['booking_id']
-        });
-
-        if (!lead || !lead.booking_id) {
-            return res.status(404).json({
-                success: false,
-                message: "Lead or associated booking not found."
-            });
-        }
-
-        const assignment = await assigned_crew.findOne({
-            where: {
-                project_id: lead.booking_id,
-                crew_member_id: crew_member_id,
-                is_active: 1
-            },
-            include: [{
-                model: crew_members,
-                as: 'crew_member',
-                attributes: ['first_name', 'last_name']
-            }]
-        });
-
-        if (!assignment) {
-            return res.status(404).json({ 
-                success: false, 
-                message: "This crew member is not currently assigned to this project or is already inactive." 
-            });
-        }
-
-        await assignment.update({ is_active: 0 });
-
-        const crewName = assignment.crew_member
-            ? `${assignment.crew_member.first_name} ${assignment.crew_member.last_name}`
-            : `ID: ${crew_member_id}`;
-
-        await LeadActivityModel.create({
-            lead_id: lead_id || client_lead_id,
-            activity_type: 'status_changed',
-            activity_data: {
-                action: 'crew_removed',
-                notes: `Sales rep removed ${crewName} from the project.`,
-                crew_member_id
-            },
-            performed_by_user_id: assigned_by_user_id,
-            created_at: new Date()
-        });
-
-        res.json({
-            success: true,
-            message: "Crew member removed from project successfully."
-        });
-
-    } catch (error) {
-        console.error('RemoveCrew Error:', error);
-        res.status(500).json({ success: false, message: error.message });
+    if ((!lead_id && !client_lead_id) || !crew_member_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Either lead_id or client_lead_id and crew_member_id are required."
+      });
     }
+
+    let LeadModel;
+    let LeadActivityModel;
+    let where;
+
+    if (lead_id) {
+      LeadModel = sales_leads;
+      LeadActivityModel = sales_lead_activities;
+      where = { lead_id: lead_id };
+    } else {
+      LeadModel = client_leads;
+      LeadActivityModel = client_lead_activities;
+      where = { lead_id: client_lead_id };
+    }
+
+    const lead = await LeadModel.findOne({
+      where,
+      attributes: ['booking_id']
+    });
+
+    if (!lead || !lead.booking_id) {
+      return res.status(404).json({
+        success: false,
+        message: "Lead or associated booking not found."
+      });
+    }
+
+    const assignment = await assigned_crew.findOne({
+      where: {
+        project_id: lead.booking_id,
+        crew_member_id: crew_member_id,
+        is_active: 1
+      },
+      include: [{
+        model: crew_members,
+        as: 'crew_member',
+        attributes: ['first_name', 'last_name']
+      }]
+    });
+
+    if (!assignment) {
+      return res.status(404).json({
+        success: false,
+        message: "This crew member is not currently assigned to this project or is already inactive."
+      });
+    }
+
+    await assignment.update({ is_active: 0 });
+
+    const crewName = assignment.crew_member
+      ? `${assignment.crew_member.first_name} ${assignment.crew_member.last_name}`
+      : `ID: ${crew_member_id}`;
+
+    await LeadActivityModel.create({
+      lead_id: lead_id || client_lead_id,
+      activity_type: 'status_changed',
+      activity_data: {
+        action: 'crew_removed',
+        notes: `Sales rep removed ${crewName} from the project.`,
+        crew_member_id
+      },
+      performed_by_user_id: assigned_by_user_id,
+      created_at: new Date()
+    });
+
+    res.json({
+      success: true,
+      message: "Crew member removed from project successfully."
+    });
+
+  } catch (error) {
+    console.error('RemoveCrew Error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
 };
 
 
@@ -12175,274 +12179,274 @@ exports.getClientFullDetailsByUserId = async (req, res) => {
 };
 
 exports.getBookingSummaryById = async (req, res) => {
-    try {
-        const { bookingId } = req.params;
+  try {
+    const { bookingId } = req.params;
 
-        // 1. Fetch data with correct aliases from models
-        const booking = await stream_project_booking.findOne({
-            where: { stream_project_booking_id: bookingId },
-            include: [
-                {
-                    model: db.stream_project_booking_days,
-                    as: "booking_days",
-                    required: false
-                },
-                {
-                    model: sales_leads,
-                    as: "sales_leads", 
-                    include: [{ model: users, as: "assigned_sales_rep", attributes: ["name"] }]
-                },
-                {
-                    model: quotes,
-                    as: "primary_quote",
-                    include: [{ model: quote_line_items, as: "line_items" }]
-                }
-            ]
-        });
-
-        if (!booking) {
-            return res.status(404).json({ success: false, message: "Booking not found" });
+    // 1. Fetch data with correct aliases from models
+    const booking = await stream_project_booking.findOne({
+      where: { stream_project_booking_id: bookingId },
+      include: [
+        {
+          model: db.stream_project_booking_days,
+          as: "booking_days",
+          required: false
+        },
+        {
+          model: sales_leads,
+          as: "sales_leads",
+          include: [{ model: users, as: "assigned_sales_rep", attributes: ["name"] }]
+        },
+        {
+          model: quotes,
+          as: "primary_quote",
+          include: [{ model: quote_line_items, as: "line_items" }]
         }
+      ]
+    });
 
-        const bookingJson = booking.toJSON();
-        const primaryQuote = bookingJson.primary_quote || {};
-        const bookingDayEntries = Array.isArray(bookingJson.booking_days) && bookingJson.booking_days.length
-            ? [...bookingJson.booking_days].sort((a, b) => {
-                const dateCompare = String(a?.event_date || "").localeCompare(String(b?.event_date || ""));
-                if (dateCompare !== 0) return dateCompare;
-                return String(a?.start_time || "").localeCompare(String(b?.start_time || ""));
-            })
-            : [{
-                event_date: bookingJson.event_date,
-                start_time: bookingJson.start_time,
-                end_time: bookingJson.end_time,
-                duration_hours: bookingJson.duration_hours,
-                time_zone: null
-            }];
-        const primarySchedule = bookingDayEntries[0] || {};
-
-        // 2. Helper to handle Double-Stringified JSON or Object data
-        const safeParseJSON = (val) => {
-            if (!val) return [];
-            if (Array.isArray(val)) return val;
-            try {
-                const parsed = JSON.parse(val);
-                return typeof parsed === 'string' ? JSON.parse(parsed) : parsed;
-            } catch (e) {
-                return [];
-            }
-        };
-
-        // 3. Map Shoot Type & Event Type Label
-        const fullShootType = SHOOT_TYPE_TITLES[bookingJson.shoot_type] || bookingJson.shoot_type;
-
-        let formattedEventType = "Photography & Videography";
-        const rawEvent = (bookingJson.event_type || "").toLowerCase();
-        const hasVideo = rawEvent.includes('videographer');
-        const hasPhoto = rawEvent.includes('photographer');
-        if (hasVideo && hasPhoto) formattedEventType = "Videography & Photography";
-        else if (hasVideo) formattedEventType = "Videography";
-        else if (hasPhoto) formattedEventType = "Photography";
-
-        // 4. Handle Editing Details
-        const vKeys = safeParseJSON(bookingJson.video_edit_types);
-        const pKeys = safeParseJSON(bookingJson.photo_edit_types);
-
-        let editing = {
-            is_needed: (!!bookingJson.edits_needed || bookingJson.edits_needed == 1 || vKeys.length > 0 || pKeys.length > 0),
-            video_edits: vKeys.map(key => VIDEO_EDIT_TITLES[key] || key),
-            photo_edits: pKeys.map(key => PHOTO_EDIT_TITLES[key] || key)
-        };
-
-        // 5. Parse Crew Counts
-        let crewCounts = [];
-        try {
-            const roles = safeParseJSON(bookingJson.crew_roles);
-            if (roles && typeof roles === 'object') {
-                crewCounts = Object.entries(roles).map(([role, count]) => ({
-                    role: role.charAt(0).toUpperCase() + role.slice(1),
-                    count: count
-                }));
-            }
-        } catch (e) { crewCounts = []; }
-
-        const paymentSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(
-            bookingJson.stream_project_booking_id
-        );
-        const linkedLeadIds = Array.isArray(bookingJson.sales_leads)
-            ? bookingJson.sales_leads.map((lead) => lead.lead_id).filter(Boolean)
-            : (bookingJson.sales_leads?.lead_id ? [bookingJson.sales_leads.lead_id] : []);
-        const customQuote = await db.sales_quotes.findOne({
-            where: paymentSummary?.sales_quote_id
-                ? { sales_quote_id: paymentSummary.sales_quote_id }
-                : (linkedLeadIds.length ? { lead_id: { [Op.in]: linkedLeadIds } } : { sales_quote_id: null }),
-            include: [{
-                model: db.sales_quote_line_items,
-                as: 'line_items',
-                required: false,
-                where: { is_active: 1 }
-            }],
-            order: [[{ model: db.sales_quote_line_items, as: 'line_items' }, 'sort_order', 'ASC']]
-        });
-        const usableCustomQuote = customQuote?.sales_quote_id
-            ? await quoteService.getCurrentUsableQuoteVersionSnapshot(customQuote.sales_quote_id, null)
-            : null;
-        const activeQuote = usableCustomQuote || (customQuote ? customQuote.toJSON() : primaryQuote);
-
-        // 6. Pricing Breakdown & Discount Logic
-        
-        // Total discount recorded in the DB column (e.g., 5706.25)
-        const totalDiscountFromDb = parseFloat(activeQuote.discount_amount || 0);
-        const summaryQuoteTotal = paymentSummary ? parseFloat(paymentSummary.quote_total || 0) : 0;
-        const subtotal = parseFloat(activeQuote.subtotal || summaryQuoteTotal || 0);
-        const quoteTotal = summaryQuoteTotal || parseFloat(activeQuote.total || 0);
-
-        let pricing = {
-            shoot_cost: 0,
-            editing_cost: 0,
-            subtotal: subtotal,
-            total: quoteTotal,
-            discount: totalDiscountFromDb 
-        };
-
-        // Categorize Line Items into Shoot vs Editing
-        const items = activeQuote.line_items || [];
-        items.forEach(item => {
-            const name = (item.item_name || "").toLowerCase();
-            const total = parseFloat(item.line_total || 0);
-            if (name.includes('reel') || name.includes('edit') || name.includes('highlight') || name.includes('photo')) {
-                pricing.editing_cost += total;
-            } else {
-                pricing.shoot_cost += total;
-            }
-        });
-
-        // 7. EXTRACT REFERRAL DATA FROM NOTES (Regex Fix)
-        let referralDiscount = 0;
-        let referralCode = null;
-        let paymentData = null;
-        let latestPaymentData = null;
-        const notes = activeQuote.notes || primaryQuote.notes || '';
-
-        // Matches: Referral applied (7321F9): -$518.75
-        const referralAmountMatch = String(notes).match(/Referral applied.*?-\$([\d,.]+)/i);
-        const referralCodeMatch = String(notes).match(/Referral applied \((.*?)\)/i);
-
-        if (referralAmountMatch && referralAmountMatch[1]) {
-            referralDiscount = parseFloat(referralAmountMatch[1].replace(/,/g, ''));
-        }
-        if (referralCodeMatch && referralCodeMatch[1]) {
-            referralCode = referralCodeMatch[1];
-        }
-
-        // Check if there is a payment record for more accurate referral info
-        if (bookingJson.payment_id) {
-            paymentData = await db.payment_transactions.findByPk(bookingJson.payment_id);
-            if (paymentData && paymentData.referral_code) {
-                referralCode = paymentData.referral_code;
-            }
-        }
-        if (paymentData) {
-            latestPaymentData = paymentData;
-        }
-
-        const identityOr = [
-            ...(bookingJson.guest_email ? [{ guest_email: bookingJson.guest_email }] : []),
-            ...(bookingJson.user_id ? [{ user_id: bookingJson.user_id }] : [])
-        ];
-
-        if (identityOr.length > 0 && bookingJson.payment_id) {
-            const followupPayment = await db.payment_transactions.findOne({
-                where: {
-                    status: 'succeeded',
-                    payment_id: { [Sequelize.Op.gt]: Number(bookingJson.payment_id) || 0 },
-                    payment_source: { [Sequelize.Op.in]: ['additional_invoice', 'quote_invoice'] },
-                    [Sequelize.Op.or]: identityOr
-                },
-                order: [['payment_id', 'DESC']]
-            });
-            if (followupPayment) {
-                latestPaymentData = followupPayment;
-            }
-        }
-
-        if (!latestPaymentData && identityOr.length > 0) {
-            latestPaymentData = await db.payment_transactions.findOne({
-                where: {
-                    status: 'succeeded',
-                    payment_source: { [Sequelize.Op.in]: ['quote_invoice', 'additional_invoice', 'booking_checkout'] },
-                    [Sequelize.Op.or]: identityOr
-                },
-                order: [['payment_id', 'DESC']]
-            });
-        }
-        if (!paymentData && latestPaymentData?.referral_code) {
-            referralCode = latestPaymentData.referral_code;
-        }
-
-        // Logic: The "Promo Code" discount is whatever is left over after the Referral Discount
-        const discountCodeDiscount = Math.max(0, totalDiscountFromDb - referralDiscount);
-        const paidAmountRaw = paymentSummary
-            ? parseFloat(paymentSummary.paid_amount || 0)
-            : (latestPaymentData
-                ? parseFloat(latestPaymentData.total_amount || 0)
-                : (paymentData ? parseFloat(paymentData.total_amount || 0) : quoteTotal));
-        const normalizedPaidAmount = Number.isFinite(paidAmountRaw) ? paidAmountRaw : quoteTotal;
-        const isAdditionalPaymentFlow = String(latestPaymentData?.payment_source || '').toLowerCase() === 'additional_invoice';
-        const creditApplied = paymentSummary
-            ? parseFloat(paymentSummary.credit_used_amount || 0)
-            : (isAdditionalPaymentFlow ? 0 : Math.max(0, quoteTotal - normalizedPaidAmount));
-        const totalAfterCredit = paymentSummary
-            ? Math.max(0, quoteTotal - creditApplied)
-            : (isAdditionalPaymentFlow
-                ? normalizedPaidAmount
-                : Math.max(0, quoteTotal - creditApplied));
-
-        pricing.total_paid = parseFloat(normalizedPaidAmount.toFixed(2));
-        pricing.discount_code_discount = parseFloat(discountCodeDiscount.toFixed(2));
-        pricing.referral_discount = parseFloat(referralDiscount.toFixed(2));
-        pricing.total_before_discounts = subtotal;
-        pricing.referral_code = referralCode;
-        pricing.total_before_credit = parseFloat(quoteTotal.toFixed(2));
-        pricing.credit_applied = parseFloat(creditApplied.toFixed(2));
-        pricing.total_after_credit = parseFloat(totalAfterCredit.toFixed(2));
-        pricing.due_amount = paymentSummary
-            ? parseFloat(Number(paymentSummary.due_amount || 0).toFixed(2))
-            : Math.max(0, parseFloat((quoteTotal - normalizedPaidAmount - creditApplied).toFixed(2)));
-        pricing.payment_summary = paymentSummary || null;
-
-        // 8. Final Response
-        res.json({
-            success: true,
-            data: {
-                booking_id: bookingJson.stream_project_booking_id,
-                project_name: bookingJson.project_name,
-                client_email: bookingJson.guest_email,
-                shoot_type: fullShootType,
-                event_type: formattedEventType,
-                location: bookingJson.event_location,
-                date: primarySchedule.event_date || bookingJson.event_date,
-                estimated_delivery_date: bookingJson.estimated_delivery_date || null,
-                start_time: primarySchedule.start_time || bookingJson.start_time,
-                end_time: primarySchedule.end_time || bookingJson.end_time,
-                booking_days: bookingDayEntries.map((day) => ({
-                    event_date: day.event_date,
-                    start_time: day.start_time,
-                    end_time: day.end_time,
-                    duration_hours: day.duration_hours,
-                    time_zone: day.time_zone || null
-                })),
-                special_instructions: bookingJson.special_instructions || "",
-                editing: editing,
-                crew_counts: crewCounts,
-                pricing: pricing
-            }
-        });
-
-    } catch (error) {
-        console.error("Booking Summary API Error:", error);
-        res.status(500).json({ success: false, message: error.message });
+    if (!booking) {
+      return res.status(404).json({ success: false, message: "Booking not found" });
     }
+
+    const bookingJson = booking.toJSON();
+    const primaryQuote = bookingJson.primary_quote || {};
+    const bookingDayEntries = Array.isArray(bookingJson.booking_days) && bookingJson.booking_days.length
+      ? [...bookingJson.booking_days].sort((a, b) => {
+        const dateCompare = String(a?.event_date || "").localeCompare(String(b?.event_date || ""));
+        if (dateCompare !== 0) return dateCompare;
+        return String(a?.start_time || "").localeCompare(String(b?.start_time || ""));
+      })
+      : [{
+        event_date: bookingJson.event_date,
+        start_time: bookingJson.start_time,
+        end_time: bookingJson.end_time,
+        duration_hours: bookingJson.duration_hours,
+        time_zone: null
+      }];
+    const primarySchedule = bookingDayEntries[0] || {};
+
+    // 2. Helper to handle Double-Stringified JSON or Object data
+    const safeParseJSON = (val) => {
+      if (!val) return [];
+      if (Array.isArray(val)) return val;
+      try {
+        const parsed = JSON.parse(val);
+        return typeof parsed === 'string' ? JSON.parse(parsed) : parsed;
+      } catch (e) {
+        return [];
+      }
+    };
+
+    // 3. Map Shoot Type & Event Type Label
+    const fullShootType = SHOOT_TYPE_TITLES[bookingJson.shoot_type] || bookingJson.shoot_type;
+
+    let formattedEventType = "Photography & Videography";
+    const rawEvent = (bookingJson.event_type || "").toLowerCase();
+    const hasVideo = rawEvent.includes('videographer');
+    const hasPhoto = rawEvent.includes('photographer');
+    if (hasVideo && hasPhoto) formattedEventType = "Videography & Photography";
+    else if (hasVideo) formattedEventType = "Videography";
+    else if (hasPhoto) formattedEventType = "Photography";
+
+    // 4. Handle Editing Details
+    const vKeys = safeParseJSON(bookingJson.video_edit_types);
+    const pKeys = safeParseJSON(bookingJson.photo_edit_types);
+
+    let editing = {
+      is_needed: (!!bookingJson.edits_needed || bookingJson.edits_needed == 1 || vKeys.length > 0 || pKeys.length > 0),
+      video_edits: vKeys.map(key => VIDEO_EDIT_TITLES[key] || key),
+      photo_edits: pKeys.map(key => PHOTO_EDIT_TITLES[key] || key)
+    };
+
+    // 5. Parse Crew Counts
+    let crewCounts = [];
+    try {
+      const roles = safeParseJSON(bookingJson.crew_roles);
+      if (roles && typeof roles === 'object') {
+        crewCounts = Object.entries(roles).map(([role, count]) => ({
+          role: role.charAt(0).toUpperCase() + role.slice(1),
+          count: count
+        }));
+      }
+    } catch (e) { crewCounts = []; }
+
+    const paymentSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(
+      bookingJson.stream_project_booking_id
+    );
+    const linkedLeadIds = Array.isArray(bookingJson.sales_leads)
+      ? bookingJson.sales_leads.map((lead) => lead.lead_id).filter(Boolean)
+      : (bookingJson.sales_leads?.lead_id ? [bookingJson.sales_leads.lead_id] : []);
+    const customQuote = await db.sales_quotes.findOne({
+      where: paymentSummary?.sales_quote_id
+        ? { sales_quote_id: paymentSummary.sales_quote_id }
+        : (linkedLeadIds.length ? { lead_id: { [Op.in]: linkedLeadIds } } : { sales_quote_id: null }),
+      include: [{
+        model: db.sales_quote_line_items,
+        as: 'line_items',
+        required: false,
+        where: { is_active: 1 }
+      }],
+      order: [[{ model: db.sales_quote_line_items, as: 'line_items' }, 'sort_order', 'ASC']]
+    });
+    const usableCustomQuote = customQuote?.sales_quote_id
+      ? await quoteService.getCurrentUsableQuoteVersionSnapshot(customQuote.sales_quote_id, null)
+      : null;
+    const activeQuote = usableCustomQuote || (customQuote ? customQuote.toJSON() : primaryQuote);
+
+    // 6. Pricing Breakdown & Discount Logic
+
+    // Total discount recorded in the DB column (e.g., 5706.25)
+    const totalDiscountFromDb = parseFloat(activeQuote.discount_amount || 0);
+    const summaryQuoteTotal = paymentSummary ? parseFloat(paymentSummary.quote_total || 0) : 0;
+    const subtotal = parseFloat(activeQuote.subtotal || summaryQuoteTotal || 0);
+    const quoteTotal = summaryQuoteTotal || parseFloat(activeQuote.total || 0);
+
+    let pricing = {
+      shoot_cost: 0,
+      editing_cost: 0,
+      subtotal: subtotal,
+      total: quoteTotal,
+      discount: totalDiscountFromDb
+    };
+
+    // Categorize Line Items into Shoot vs Editing
+    const items = activeQuote.line_items || [];
+    items.forEach(item => {
+      const name = (item.item_name || "").toLowerCase();
+      const total = parseFloat(item.line_total || 0);
+      if (name.includes('reel') || name.includes('edit') || name.includes('highlight') || name.includes('photo')) {
+        pricing.editing_cost += total;
+      } else {
+        pricing.shoot_cost += total;
+      }
+    });
+
+    // 7. EXTRACT REFERRAL DATA FROM NOTES (Regex Fix)
+    let referralDiscount = 0;
+    let referralCode = null;
+    let paymentData = null;
+    let latestPaymentData = null;
+    const notes = activeQuote.notes || primaryQuote.notes || '';
+
+    // Matches: Referral applied (7321F9): -$518.75
+    const referralAmountMatch = String(notes).match(/Referral applied.*?-\$([\d,.]+)/i);
+    const referralCodeMatch = String(notes).match(/Referral applied \((.*?)\)/i);
+
+    if (referralAmountMatch && referralAmountMatch[1]) {
+      referralDiscount = parseFloat(referralAmountMatch[1].replace(/,/g, ''));
+    }
+    if (referralCodeMatch && referralCodeMatch[1]) {
+      referralCode = referralCodeMatch[1];
+    }
+
+    // Check if there is a payment record for more accurate referral info
+    if (bookingJson.payment_id) {
+      paymentData = await db.payment_transactions.findByPk(bookingJson.payment_id);
+      if (paymentData && paymentData.referral_code) {
+        referralCode = paymentData.referral_code;
+      }
+    }
+    if (paymentData) {
+      latestPaymentData = paymentData;
+    }
+
+    const identityOr = [
+      ...(bookingJson.guest_email ? [{ guest_email: bookingJson.guest_email }] : []),
+      ...(bookingJson.user_id ? [{ user_id: bookingJson.user_id }] : [])
+    ];
+
+    if (identityOr.length > 0 && bookingJson.payment_id) {
+      const followupPayment = await db.payment_transactions.findOne({
+        where: {
+          status: 'succeeded',
+          payment_id: { [Sequelize.Op.gt]: Number(bookingJson.payment_id) || 0 },
+          payment_source: { [Sequelize.Op.in]: ['additional_invoice', 'quote_invoice'] },
+          [Sequelize.Op.or]: identityOr
+        },
+        order: [['payment_id', 'DESC']]
+      });
+      if (followupPayment) {
+        latestPaymentData = followupPayment;
+      }
+    }
+
+    if (!latestPaymentData && identityOr.length > 0) {
+      latestPaymentData = await db.payment_transactions.findOne({
+        where: {
+          status: 'succeeded',
+          payment_source: { [Sequelize.Op.in]: ['quote_invoice', 'additional_invoice', 'booking_checkout'] },
+          [Sequelize.Op.or]: identityOr
+        },
+        order: [['payment_id', 'DESC']]
+      });
+    }
+    if (!paymentData && latestPaymentData?.referral_code) {
+      referralCode = latestPaymentData.referral_code;
+    }
+
+    // Logic: The "Promo Code" discount is whatever is left over after the Referral Discount
+    const discountCodeDiscount = Math.max(0, totalDiscountFromDb - referralDiscount);
+    const paidAmountRaw = paymentSummary
+      ? parseFloat(paymentSummary.paid_amount || 0)
+      : (latestPaymentData
+        ? parseFloat(latestPaymentData.total_amount || 0)
+        : (paymentData ? parseFloat(paymentData.total_amount || 0) : quoteTotal));
+    const normalizedPaidAmount = Number.isFinite(paidAmountRaw) ? paidAmountRaw : quoteTotal;
+    const isAdditionalPaymentFlow = String(latestPaymentData?.payment_source || '').toLowerCase() === 'additional_invoice';
+    const creditApplied = paymentSummary
+      ? parseFloat(paymentSummary.credit_used_amount || 0)
+      : (isAdditionalPaymentFlow ? 0 : Math.max(0, quoteTotal - normalizedPaidAmount));
+    const totalAfterCredit = paymentSummary
+      ? Math.max(0, quoteTotal - creditApplied)
+      : (isAdditionalPaymentFlow
+        ? normalizedPaidAmount
+        : Math.max(0, quoteTotal - creditApplied));
+
+    pricing.total_paid = parseFloat(normalizedPaidAmount.toFixed(2));
+    pricing.discount_code_discount = parseFloat(discountCodeDiscount.toFixed(2));
+    pricing.referral_discount = parseFloat(referralDiscount.toFixed(2));
+    pricing.total_before_discounts = subtotal;
+    pricing.referral_code = referralCode;
+    pricing.total_before_credit = parseFloat(quoteTotal.toFixed(2));
+    pricing.credit_applied = parseFloat(creditApplied.toFixed(2));
+    pricing.total_after_credit = parseFloat(totalAfterCredit.toFixed(2));
+    pricing.due_amount = paymentSummary
+      ? parseFloat(Number(paymentSummary.due_amount || 0).toFixed(2))
+      : Math.max(0, parseFloat((quoteTotal - normalizedPaidAmount - creditApplied).toFixed(2)));
+    pricing.payment_summary = paymentSummary || null;
+
+    // 8. Final Response
+    res.json({
+      success: true,
+      data: {
+        booking_id: bookingJson.stream_project_booking_id,
+        project_name: bookingJson.project_name,
+        client_email: bookingJson.guest_email,
+        shoot_type: fullShootType,
+        event_type: formattedEventType,
+        location: bookingJson.event_location,
+        date: primarySchedule.event_date || bookingJson.event_date,
+        estimated_delivery_date: bookingJson.estimated_delivery_date || null,
+        start_time: primarySchedule.start_time || bookingJson.start_time,
+        end_time: primarySchedule.end_time || bookingJson.end_time,
+        booking_days: bookingDayEntries.map((day) => ({
+          event_date: day.event_date,
+          start_time: day.start_time,
+          end_time: day.end_time,
+          duration_hours: day.duration_hours,
+          time_zone: day.time_zone || null
+        })),
+        special_instructions: bookingJson.special_instructions || "",
+        editing: editing,
+        crew_counts: crewCounts,
+        pricing: pricing
+      }
+    });
+
+  } catch (error) {
+    console.error("Booking Summary API Error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
 };
 
 exports.checkDeleteStatus = async (req, res) => {
@@ -12489,7 +12493,7 @@ exports.checkDeleteStatus = async (req, res) => {
 
     // 2. Check for Past Active History (Determines Soft vs Hard Delete)
     const activeHistoryCount = await assigned_crew.count({
-      where: { 
+      where: {
         crew_member_id: crew_member_id,
         is_active: 1 // Only consider active assignments as history
       }
@@ -12519,7 +12523,7 @@ exports.checkDeleteStatus = async (req, res) => {
 
 exports.executeDeleteCrewMember = async (req, res) => {
   const transaction = await crew_members.sequelize.transaction();
-  
+
   try {
     const { crew_member_id } = req.body;
 
@@ -12565,7 +12569,7 @@ exports.executeDeleteCrewMember = async (req, res) => {
     } else {
       // --- HARD DELETE LOGIC ---
       await crew_member_files.destroy({ where: { crew_member_id }, transaction });
-      
+
       // Note: We destroy all assigned_crew records for this ID, even if is_active was 0, 
       // because we are doing a full clean-up (Hard Delete).
       await assigned_crew.destroy({ where: { crew_member_id }, transaction });
@@ -12622,17 +12626,17 @@ exports.getProjectFulfillmentStatus = async (req, res) => {
 
     let requestedRoles = {};
     try {
-      requestedRoles = typeof booking.crew_roles === 'string' 
-        ? JSON.parse(booking.crew_roles) 
+      requestedRoles = typeof booking.crew_roles === 'string'
+        ? JSON.parse(booking.crew_roles)
         : (booking.crew_roles || {});
     } catch (e) {
       requestedRoles = {};
     }
 
-    const ROLE_GROUPS = { 
-      videographer: ['9', '1'], 
-      photographer: ['10', '2'], 
-      cinematographer: ['11', '3'] 
+    const ROLE_GROUPS = {
+      videographer: ['9', '1'],
+      photographer: ['10', '2'],
+      cinematographer: ['11', '3']
     };
     const ID_TO_ROLE_MAP = {};
     Object.entries(ROLE_GROUPS).forEach(([role, ids]) => {
@@ -12653,15 +12657,15 @@ exports.getProjectFulfillmentStatus = async (req, res) => {
           let crewRoleIds = [];
           try {
             const rawRole = ac.crew_member?.primary_role;
-            crewRoleIds = (typeof rawRole === 'string' && rawRole.startsWith('[')) 
-              ? JSON.parse(rawRole) 
+            crewRoleIds = (typeof rawRole === 'string' && rawRole.startsWith('['))
+              ? JSON.parse(rawRole)
               : (Array.isArray(rawRole) ? rawRole : [rawRole]);
           } catch (e) { crewRoleIds = []; }
 
           const categories = [...new Set(crewRoleIds.map(id => ID_TO_ROLE_MAP[String(id)]).filter(Boolean))];
-          
+
           const targetCategory = categories.find(cat => fulfillment[cat] && fulfillment[cat].accepted < fulfillment[cat].required);
-          
+
           if (targetCategory) {
             fulfillment[targetCategory].accepted += 1;
           }
@@ -12693,835 +12697,835 @@ exports.getProjectFulfillmentStatus = async (req, res) => {
 };
 
 exports.searchCrewForProject = async (req, res) => {
-    try {
-        const {
-            project_id,
-            role_type,
-            search_query,
-            max_distance,
-            radius,
-            latitude,
-            longitude,
-            date
-        } = req.query;
+  try {
+    const {
+      project_id,
+      role_type,
+      search_query,
+      max_distance,
+      radius,
+      latitude,
+      longitude,
+      date
+    } = req.query;
 
-        const requestedRadius = Number(max_distance ?? radius ?? 50);
-        const normalizedSearchQuery = typeof search_query === 'string' ? search_query.trim() : '';
-        const hasGlobalCrewSearch = normalizedSearchQuery.length > 0;
+    const requestedRadius = Number(max_distance ?? radius ?? 50);
+    const normalizedSearchQuery = typeof search_query === 'string' ? search_query.trim() : '';
+    const hasGlobalCrewSearch = normalizedSearchQuery.length > 0;
 
-        let projectDate;
-        let currentBookingId = null;
-        let eventLocation = null;
-        let centerLatitude = null;
-        let centerLongitude = null;
+    let projectDate;
+    let currentBookingId = null;
+    let eventLocation = null;
+    let centerLatitude = null;
+    let centerLongitude = null;
 
-        if (project_id) {
-            const booking = await stream_project_booking.findOne({
-                where: { stream_project_booking_id: project_id }
-            });
+    if (project_id) {
+      const booking = await stream_project_booking.findOne({
+        where: { stream_project_booking_id: project_id }
+      });
 
-            if (!booking) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Project Booking not found'
-                });
-            }
-
-            projectDate = booking.event_date;
-            currentBookingId = booking.stream_project_booking_id;
-            eventLocation = booking.event_location;
-            centerLatitude = Number(booking.event_latitude);
-            centerLongitude = Number(booking.event_longitude);
-        } else {
-            if (!date && !hasGlobalCrewSearch) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Date is required when project_id is not provided'
-                });
-            }
-            projectDate = date || null;
-        }
-
-        if (latitude !== undefined && longitude !== undefined) {
-            centerLatitude = Number(latitude);
-            centerLongitude = Number(longitude);
-        } else if ((!Number.isFinite(centerLatitude) || !Number.isFinite(centerLongitude)) && eventLocation) {
-            const coords = extractCoordinatesFromPayload({}, eventLocation);
-            centerLatitude = Number(coords.latitude);
-            centerLongitude = Number(coords.longitude);
-        }
-
-        const hasSearchCenter = Number.isFinite(centerLatitude) && Number.isFinite(centerLongitude);
-
-        const busyCrewRecords = projectDate && !hasGlobalCrewSearch
-            ? await assigned_crew.findAll({
-                where: {
-                    crew_accept: 1,
-                    is_active: 1
-                },
-                include: [{
-                    model: stream_project_booking,
-                    as: 'project',
-                    where: { event_date: projectDate }
-                }],
-                attributes: ['crew_member_id']
-            })
-            : [];
-
-        let alreadyAssignedToThisProject = [];
-        if (currentBookingId) {
-            const currentAssignments = await assigned_crew.findAll({
-                where: {
-                    project_id: currentBookingId,
-                    is_active: 1,
-                    crew_accept: { [Op.in]: [0, 1] }
-                },
-                attributes: ['crew_member_id']
-            });
-
-            alreadyAssignedToThisProject = currentAssignments.map(a => Number(a.crew_member_id));
-        }
-
-        const busyIds = busyCrewRecords.map(r => Number(r.crew_member_id));
-        const excludeIds = [...new Set([...busyIds, ...alreadyAssignedToThisProject])];
-
-        const ROLE_GROUPS = {
-            videographer: ['9', '1'],
-            photographer: ['10', '2'],
-            cinematographer: ['11', '3']
-        };
-
-        const requestedRoles = role_type
-            ? role_type.split(',').map(r => r.trim().toLowerCase())
-            : [];
-
-        let targetRoleIds = [];
-        requestedRoles.forEach(role => {
-            if (ROLE_GROUPS[role]) {
-                targetRoleIds.push(...ROLE_GROUPS[role]);
-            }
+      if (!booking) {
+        return res.status(404).json({
+          success: false,
+          message: 'Project Booking not found'
         });
-        targetRoleIds = [...new Set(targetRoleIds)];
+      }
 
-        const crewWhere = {
-            is_active: true,
-            is_crew_verified: 1,
-            crew_member_id: { [Op.notIn]: excludeIds.length ? excludeIds : [0] }
-        };
-
-        if (!hasGlobalCrewSearch) {
-            crewWhere.is_available = true;
-        }
-
-        if (targetRoleIds.length > 0 && !hasGlobalCrewSearch) {
-            crewWhere[Op.or] = targetRoleIds.map(id => ({
-                primary_role: { [Op.like]: `%${id}%` }
-            }));
-        }
-
-        if (hasGlobalCrewSearch) {
-            crewWhere[Op.and] = [{
-                [Op.or]: [
-                    { first_name: { [Op.like]: `%${normalizedSearchQuery}%` } },
-                    { last_name: { [Op.like]: `%${normalizedSearchQuery}%` } },
-                    Sequelize.where(
-                        Sequelize.fn('CONCAT', Sequelize.col('first_name'), ' ', Sequelize.col('last_name')),
-                        { [Op.like]: `%${normalizedSearchQuery}%` }
-                    ),
-                    { email: { [Op.like]: `%${normalizedSearchQuery}%` } },
-                    { phone_number: { [Op.like]: `%${normalizedSearchQuery}%` } },
-                    { location: { [Op.like]: `%${normalizedSearchQuery}%` } }
-                ]
-            }];
-        }
-
-        const availableCrew = await crew_members.findAll({
-            where: crewWhere,
-            include: [
-                {
-                    model: crew_member_files,
-                    as: 'crew_member_files',
-                    attributes: ['file_path'],
-                    where: { is_active: 1, file_type: 'profile_photo' },
-                    required: false,
-                }
-            ],
-            limit: 200
+      projectDate = booking.event_date;
+      currentBookingId = booking.stream_project_booking_id;
+      eventLocation = booking.event_location;
+      centerLatitude = Number(booking.event_latitude);
+      centerLongitude = Number(booking.event_longitude);
+    } else {
+      if (!date && !hasGlobalCrewSearch) {
+        return res.status(400).json({
+          success: false,
+          message: 'Date is required when project_id is not provided'
         });
-
-        const crewWithRoles = availableCrew.map(crewMember => {
-            let matchedRoles = [];
-            let rawRoles = [];
-
-            try {
-                if (crewMember.primary_role) {
-                    const roleData = crewMember.primary_role;
-                    rawRoles = (typeof roleData === 'string' && roleData.startsWith('['))
-                        ? JSON.parse(roleData)
-                        : (Array.isArray(roleData) ? roleData : [roleData]);
-                }
-            } catch (e) { rawRoles = []; }
-
-            const stringRoleIds = rawRoles.map(String);
-            if (stringRoleIds.some(id => ROLE_GROUPS.videographer.includes(id))) matchedRoles.push('videographer');
-            if (stringRoleIds.some(id => ROLE_GROUPS.photographer.includes(id))) matchedRoles.push('photographer');
-            if (stringRoleIds.some(id => ROLE_GROUPS.cinematographer.includes(id))) matchedRoles.push('cinematographer');
-
-            const profilePhoto = crewMember.crew_member_files?.[0]?.file_path || null;
-            const crewJson = crewMember.toJSON();
-            delete crewJson.crew_member_files;
-
-            const crewLatitude = Number(crewJson.latitude);
-            const crewLongitude = Number(crewJson.longitude);
-            const distanceMiles = hasSearchCenter && Number.isFinite(crewLatitude) && Number.isFinite(crewLongitude)
-                ? calculateDistance(centerLatitude, centerLongitude, crewLatitude, crewLongitude)
-                : null;
-
-            return {
-                ...crewJson,
-                profile_photo: profilePhoto,
-                first_name: crewJson.first_name.charAt(0).toUpperCase() + crewJson.first_name.slice(1).toLowerCase(),
-                last_name: crewJson.last_name.charAt(0).toUpperCase(),
-                role_names: matchedRoles.length > 0 ? matchedRoles : ['Unspecified'],
-                role: matchedRoles.length > 0 ? matchedRoles.join(', ') : 'Unspecified',
-                distance: distanceMiles
-            };
-        });
-
-        const filteredCrew = hasSearchCenter && !hasGlobalCrewSearch
-            ? crewWithRoles
-                .filter(crew => crew.distance !== null && crew.distance <= requestedRadius)
-                .sort((a, b) => a.distance - b.distance)
-            : crewWithRoles.sort((a, b) => {
-                if (a.distance === null && b.distance === null) return 0;
-                if (a.distance === null) return 1;
-                if (b.distance === null) return -1;
-                return a.distance - b.distance;
-            });
-
-        res.json({
-            success: true,
-            project_id: currentBookingId,
-            project_date: projectDate,
-            available_count: filteredCrew.length,
-            search_center: hasSearchCenter ? { latitude: centerLatitude, longitude: centerLongitude } : null,
-            radius: Number.isFinite(requestedRadius) ? requestedRadius : null,
-            search_query: hasGlobalCrewSearch ? normalizedSearchQuery : null,
-            search_scope: hasGlobalCrewSearch ? 'all_crew' : 'radius',
-            data: filteredCrew
-        });
-
-    } catch (error) {
-        console.error('searchCrewForProject error:', error);
-        res.status(500).json({ success: false, message: error.message });
+      }
+      projectDate = date || null;
     }
+
+    if (latitude !== undefined && longitude !== undefined) {
+      centerLatitude = Number(latitude);
+      centerLongitude = Number(longitude);
+    } else if ((!Number.isFinite(centerLatitude) || !Number.isFinite(centerLongitude)) && eventLocation) {
+      const coords = extractCoordinatesFromPayload({}, eventLocation);
+      centerLatitude = Number(coords.latitude);
+      centerLongitude = Number(coords.longitude);
+    }
+
+    const hasSearchCenter = Number.isFinite(centerLatitude) && Number.isFinite(centerLongitude);
+
+    const busyCrewRecords = projectDate && !hasGlobalCrewSearch
+      ? await assigned_crew.findAll({
+        where: {
+          crew_accept: 1,
+          is_active: 1
+        },
+        include: [{
+          model: stream_project_booking,
+          as: 'project',
+          where: { event_date: projectDate }
+        }],
+        attributes: ['crew_member_id']
+      })
+      : [];
+
+    let alreadyAssignedToThisProject = [];
+    if (currentBookingId) {
+      const currentAssignments = await assigned_crew.findAll({
+        where: {
+          project_id: currentBookingId,
+          is_active: 1,
+          crew_accept: { [Op.in]: [0, 1] }
+        },
+        attributes: ['crew_member_id']
+      });
+
+      alreadyAssignedToThisProject = currentAssignments.map(a => Number(a.crew_member_id));
+    }
+
+    const busyIds = busyCrewRecords.map(r => Number(r.crew_member_id));
+    const excludeIds = [...new Set([...busyIds, ...alreadyAssignedToThisProject])];
+
+    const ROLE_GROUPS = {
+      videographer: ['9', '1'],
+      photographer: ['10', '2'],
+      cinematographer: ['11', '3']
+    };
+
+    const requestedRoles = role_type
+      ? role_type.split(',').map(r => r.trim().toLowerCase())
+      : [];
+
+    let targetRoleIds = [];
+    requestedRoles.forEach(role => {
+      if (ROLE_GROUPS[role]) {
+        targetRoleIds.push(...ROLE_GROUPS[role]);
+      }
+    });
+    targetRoleIds = [...new Set(targetRoleIds)];
+
+    const crewWhere = {
+      is_active: true,
+      is_crew_verified: 1,
+      crew_member_id: { [Op.notIn]: excludeIds.length ? excludeIds : [0] }
+    };
+
+    if (!hasGlobalCrewSearch) {
+      crewWhere.is_available = true;
+    }
+
+    if (targetRoleIds.length > 0 && !hasGlobalCrewSearch) {
+      crewWhere[Op.or] = targetRoleIds.map(id => ({
+        primary_role: { [Op.like]: `%${id}%` }
+      }));
+    }
+
+    if (hasGlobalCrewSearch) {
+      crewWhere[Op.and] = [{
+        [Op.or]: [
+          { first_name: { [Op.like]: `%${normalizedSearchQuery}%` } },
+          { last_name: { [Op.like]: `%${normalizedSearchQuery}%` } },
+          Sequelize.where(
+            Sequelize.fn('CONCAT', Sequelize.col('first_name'), ' ', Sequelize.col('last_name')),
+            { [Op.like]: `%${normalizedSearchQuery}%` }
+          ),
+          { email: { [Op.like]: `%${normalizedSearchQuery}%` } },
+          { phone_number: { [Op.like]: `%${normalizedSearchQuery}%` } },
+          { location: { [Op.like]: `%${normalizedSearchQuery}%` } }
+        ]
+      }];
+    }
+
+    const availableCrew = await crew_members.findAll({
+      where: crewWhere,
+      include: [
+        {
+          model: crew_member_files,
+          as: 'crew_member_files',
+          attributes: ['file_path'],
+          where: { is_active: 1, file_type: 'profile_photo' },
+          required: false,
+        }
+      ],
+      limit: 200
+    });
+
+    const crewWithRoles = availableCrew.map(crewMember => {
+      let matchedRoles = [];
+      let rawRoles = [];
+
+      try {
+        if (crewMember.primary_role) {
+          const roleData = crewMember.primary_role;
+          rawRoles = (typeof roleData === 'string' && roleData.startsWith('['))
+            ? JSON.parse(roleData)
+            : (Array.isArray(roleData) ? roleData : [roleData]);
+        }
+      } catch (e) { rawRoles = []; }
+
+      const stringRoleIds = rawRoles.map(String);
+      if (stringRoleIds.some(id => ROLE_GROUPS.videographer.includes(id))) matchedRoles.push('videographer');
+      if (stringRoleIds.some(id => ROLE_GROUPS.photographer.includes(id))) matchedRoles.push('photographer');
+      if (stringRoleIds.some(id => ROLE_GROUPS.cinematographer.includes(id))) matchedRoles.push('cinematographer');
+
+      const profilePhoto = crewMember.crew_member_files?.[0]?.file_path || null;
+      const crewJson = crewMember.toJSON();
+      delete crewJson.crew_member_files;
+
+      const crewLatitude = Number(crewJson.latitude);
+      const crewLongitude = Number(crewJson.longitude);
+      const distanceMiles = hasSearchCenter && Number.isFinite(crewLatitude) && Number.isFinite(crewLongitude)
+        ? calculateDistance(centerLatitude, centerLongitude, crewLatitude, crewLongitude)
+        : null;
+
+      return {
+        ...crewJson,
+        profile_photo: profilePhoto,
+        first_name: crewJson.first_name.charAt(0).toUpperCase() + crewJson.first_name.slice(1).toLowerCase(),
+        last_name: crewJson.last_name.charAt(0).toUpperCase(),
+        role_names: matchedRoles.length > 0 ? matchedRoles : ['Unspecified'],
+        role: matchedRoles.length > 0 ? matchedRoles.join(', ') : 'Unspecified',
+        distance: distanceMiles
+      };
+    });
+
+    const filteredCrew = hasSearchCenter && !hasGlobalCrewSearch
+      ? crewWithRoles
+        .filter(crew => crew.distance !== null && crew.distance <= requestedRadius)
+        .sort((a, b) => a.distance - b.distance)
+      : crewWithRoles.sort((a, b) => {
+        if (a.distance === null && b.distance === null) return 0;
+        if (a.distance === null) return 1;
+        if (b.distance === null) return -1;
+        return a.distance - b.distance;
+      });
+
+    res.json({
+      success: true,
+      project_id: currentBookingId,
+      project_date: projectDate,
+      available_count: filteredCrew.length,
+      search_center: hasSearchCenter ? { latitude: centerLatitude, longitude: centerLongitude } : null,
+      radius: Number.isFinite(requestedRadius) ? requestedRadius : null,
+      search_query: hasGlobalCrewSearch ? normalizedSearchQuery : null,
+      search_scope: hasGlobalCrewSearch ? 'all_crew' : 'radius',
+      data: filteredCrew
+    });
+
+  } catch (error) {
+    console.error('searchCrewForProject error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
 };
 exports.assignProjectCrewBulk = async (req, res) => {
-    try {
-        const assigned_by_user_id = req.user?.userId;
-        const { project_id, crew_member_ids, allow_pending_compensation_assignment } = req.body;
+  try {
+    const assigned_by_user_id = req.user?.userId;
+    const { project_id, crew_member_ids, allow_pending_compensation_assignment } = req.body;
 
-        if (!project_id) {
-            return res.status(400).json({ success: false, message: "Project ID is required." });
+    if (!project_id) {
+      return res.status(400).json({ success: false, message: "Project ID is required." });
+    }
+
+    if (!Array.isArray(crew_member_ids) || crew_member_ids.length === 0) {
+      return res.status(400).json({ success: false, message: "No crew members selected." });
+    }
+
+    const ROLE_GROUPS = {
+      videographer: ["9", "1"],
+      photographer: ["10", "2"],
+      cinematographer: ["11", "3"]
+    };
+
+    const ID_TO_ROLE_MAP = {};
+    Object.entries(ROLE_GROUPS).forEach(([roleName, ids]) => {
+      ids.forEach(id => { ID_TO_ROLE_MAP[String(id)] = roleName; });
+    });
+
+    const booking = await stream_project_booking.findOne({
+      where: { stream_project_booking_id: project_id },
+      include: [
+        {
+          model: assigned_crew,
+          as: 'assigned_crews',
+          where: { crew_accept: 1, is_active: 1 },
+          required: false,
+          include: [{ model: crew_members, as: 'crew_member' }]
+        },
+        {
+          model: sales_leads,
+          as: 'sales_leads',
+          limit: 1
         }
+      ]
+    });
 
-        if (!Array.isArray(crew_member_ids) || crew_member_ids.length === 0) {
-            return res.status(400).json({ success: false, message: "No crew members selected." });
-        }
+    if (!booking) {
+      return res.status(404).json({ success: false, message: "Project booking not found." });
+    }
 
-        const ROLE_GROUPS = {
-            videographer: ["9", "1"],
-            photographer: ["10", "2"],
-            cinematographer: ["11", "3"]
-        };
+    const approvedCompensationCount = await db.creator_earnings.count({
+      where: {
+        booking_id: project_id,
+        approval_status: 'approved'
+      }
+    });
 
-        const ID_TO_ROLE_MAP = {};
-        Object.entries(ROLE_GROUPS).forEach(([roleName, ids]) => {
-            ids.forEach(id => { ID_TO_ROLE_MAP[String(id)] = roleName; });
-        });
+    if (approvedCompensationCount > 0) {
+      return res.status(409).json({
+        success: false,
+        message: "CP compensation is already approved for this shoot. You cannot assign more CPs."
+      });
+    }
 
-        const booking = await stream_project_booking.findOne({
-          where: { stream_project_booking_id: project_id },
-          include: [
-            {
-              model: assigned_crew,
-              as: 'assigned_crews',
-              where: { crew_accept: 1, is_active: 1 },
-              required: false,
-              include: [{ model: crew_members, as: 'crew_member' }]
-            },
-            {
-              model: sales_leads,
-              as: 'sales_leads',
-              limit: 1
-            }
-          ]
-        });
+    const pendingCompensationCount = await db.creator_earnings.count({
+      where: {
+        booking_id: project_id,
+        approval_status: 'pending_approval'
+      }
+    });
 
-        if (!booking) {
-            return res.status(404).json({ success: false, message: "Project booking not found." });
-        }
+    if (pendingCompensationCount > 0 && !allow_pending_compensation_assignment) {
+      return res.status(409).json({
+        success: false,
+        message: "This shoot has pending CP compensation. Add CPs through the compensation flow so payout records stay updated."
+      });
+    }
 
-        const approvedCompensationCount = await db.creator_earnings.count({
-          where: {
-            booking_id: project_id,
-            approval_status: 'approved'
-          }
-        });
+    const leadId = booking.sales_leads?.[0]?.lead_id || null;
 
-        if (approvedCompensationCount > 0) {
-            return res.status(409).json({
-                success: false,
-                message: "CP compensation is already approved for this shoot. You cannot assign more CPs."
+    const requestedLimits = typeof booking.crew_roles === 'string'
+      ? JSON.parse(booking.crew_roles)
+      : (booking.crew_roles || {});
+
+    const currentCounts = { videographer: 0, photographer: 0, cinematographer: 0 };
+
+    if (booking.assigned_crews) {
+      booking.assigned_crews.forEach(ac => {
+        if (ac.crew_member?.primary_role) {
+          try {
+            const raw = ac.crew_member.primary_role;
+            const roles = (typeof raw === 'string' && raw.startsWith('[')) ? JSON.parse(raw) : [raw];
+            roles.forEach(id => {
+              const roleName = ID_TO_ROLE_MAP[String(id)];
+              if (roleName) currentCounts[roleName]++;
             });
+          } catch (e) { console.error("Parse error", e); }
         }
+      });
+    }
 
-        const pendingCompensationCount = await db.creator_earnings.count({
-          where: {
-            booking_id: project_id,
-            approval_status: 'pending_approval'
-          }
-        });
+    const uniqueCrewIds = [...new Set(crew_member_ids.map(Number).filter(Boolean))];
+    const newCrewDetails = await crew_members.findAll({
+      where: { crew_member_id: uniqueCrewIds }
+    });
 
-        if (pendingCompensationCount > 0 && !allow_pending_compensation_assignment) {
-            return res.status(409).json({
-                success: false,
-                message: "This shoot has pending CP compensation. Add CPs through the compensation flow so payout records stay updated."
-            });
-        }
+    const assignmentsToCreate = [];
+    const errors = [];
 
-        const leadId = booking.sales_leads?.[0]?.lead_id || null;
+    newCrewDetails.forEach(crew => {
+      let roles = [];
+      try {
+        const raw = crew.primary_role;
+        roles = (typeof raw === 'string' && raw.startsWith('[')) ? JSON.parse(raw) : [raw];
+      } catch (e) { roles = [crew.primary_role]; }
 
-        const requestedLimits = typeof booking.crew_roles === 'string'
-          ? JSON.parse(booking.crew_roles)
-          : (booking.crew_roles || {});
+      let roleDetected = null;
+      roles.forEach(id => {
+        if (ID_TO_ROLE_MAP[String(id)]) roleDetected = ID_TO_ROLE_MAP[String(id)];
+      });
 
-        const currentCounts = { videographer: 0, photographer: 0, cinematographer: 0 };
+      if (roleDetected) {
+        const acceptedCount = currentCounts[roleDetected];
+        const limit = requestedLimits[roleDetected] || 0;
 
-        if (booking.assigned_crews) {
-          booking.assigned_crews.forEach(ac => {
-            if (ac.crew_member?.primary_role) {
-              try {
-                const raw = ac.crew_member.primary_role;
-                const roles = (typeof raw === 'string' && raw.startsWith('[')) ? JSON.parse(raw) : [raw];
-                roles.forEach(id => {
-                  const roleName = ID_TO_ROLE_MAP[String(id)];
-                  if (roleName) currentCounts[roleName]++;
-                });
-              } catch (e) { console.error("Parse error", e); }
-            }
+        if (limit > 0 && acceptedCount >= limit) {
+          errors.push(`Cannot add ${crew.first_name} (${roleDetected}). Limit of ${limit} reached.`);
+        } else {
+          assignmentsToCreate.push({
+            project_id: booking.stream_project_booking_id,
+            crew_member_id: crew.crew_member_id,
+            assigned_date: new Date(),
+            status: 'selected',
+            crew_accept: 0,
+            is_active: 1,
+            organization_type: 1
           });
         }
+      } else {
+        errors.push(`Crew member ${crew.first_name} has no valid role mapping.`);
+      }
+    });
 
-        const uniqueCrewIds = [...new Set(crew_member_ids.map(Number).filter(Boolean))];
-        const newCrewDetails = await crew_members.findAll({
-            where: { crew_member_id: uniqueCrewIds }
-        });
-
-        const assignmentsToCreate = [];
-        const errors = [];
-
-        newCrewDetails.forEach(crew => {
-            let roles = [];
-            try {
-                const raw = crew.primary_role;
-                roles = (typeof raw === 'string' && raw.startsWith('[')) ? JSON.parse(raw) : [raw];
-            } catch (e) { roles = [crew.primary_role]; }
-
-            let roleDetected = null;
-            roles.forEach(id => {
-                if (ID_TO_ROLE_MAP[String(id)]) roleDetected = ID_TO_ROLE_MAP[String(id)];
-            });
-
-            if (roleDetected) {
-              const acceptedCount = currentCounts[roleDetected];
-              const limit = requestedLimits[roleDetected] || 0;
-
-              if (limit > 0 && acceptedCount >= limit) {
-                errors.push(`Cannot add ${crew.first_name} (${roleDetected}). Limit of ${limit} reached.`);
-              } else {
-                assignmentsToCreate.push({
-                  project_id: booking.stream_project_booking_id,
-                  crew_member_id: crew.crew_member_id,
-                  assigned_date: new Date(),
-                  status: 'selected',
-                  crew_accept: 0,
-                  is_active: 1,
-                  organization_type: 1
-                });
-              }
-            } else {
-                errors.push(`Crew member ${crew.first_name} has no valid role mapping.`);
-            }
-        });
-
-        if (assignmentsToCreate.length === 0 && errors.length > 0) {
-            return res.status(400).json({ success: false, message: "Assignments failed validation.", errors });
-        }
-
-        if (assignmentsToCreate.length > 0) {
-            await assigned_crew.bulkCreate(assignmentsToCreate);
-
-            if (leadId) {
-                await sales_lead_activities.create({
-                    lead_id: leadId,
-                    activity_type: 'assigned',
-                    activity_data: {
-                        action: 'bulk_crew_assigned',
-                        notes: `Assigned ${assignmentsToCreate.length} crew members to project via Project ID.`,
-                        assigned_count: assignmentsToCreate.length
-                    },
-                    performed_by_user_id: assigned_by_user_id
-                });
-            }
-
-            try {
-                const createdIds = assignmentsToCreate.map(a => a.crew_member_id);
-                const crews = await crew_members.findAll({
-                    where: { crew_member_id: createdIds },
-                    attributes: ['first_name', 'last_name', 'email']
-                });
-
-                const dashboardLink = process.env.CP_DASHBOARD_LINK || 'https://beige.app/';
-
-                const emailClientName = await resolveAdminBookingClientName(
-                    booking,
-                    booking?.sales_leads?.[0]?.client_name || null
-                );
-                const emailShootAmount = await resolveAdminBookingShootAmount(booking);
-
-                await Promise.allSettled(
-                    crews.filter(c => c.email).map(c =>
-                        sendCPNewBookingRequestEmail({
-                            to_email: c.email,
-                            user_name: c.first_name,
-                            ...getCPNewBookingEmailFields(booking, emailClientName, emailShootAmount),
-                            dashboardLink
-                        })
-                    )
-                );
-            } catch (mailErr) {
-                console.error('Mail trigger error:', mailErr);
-            }
-        }
-
-        return res.json({
-            success: true,
-            message: `${assignmentsToCreate.length} crew members assigned successfully.`,
-            errors: errors.length > 0 ? errors : undefined
-        });
-
-    } catch (error) {
-        console.error("assignProjectCrewBulk error:", error);
-        return res.status(500).json({ success: false, message: error.message });
+    if (assignmentsToCreate.length === 0 && errors.length > 0) {
+      return res.status(400).json({ success: false, message: "Assignments failed validation.", errors });
     }
+
+    if (assignmentsToCreate.length > 0) {
+      await assigned_crew.bulkCreate(assignmentsToCreate);
+
+      if (leadId) {
+        await sales_lead_activities.create({
+          lead_id: leadId,
+          activity_type: 'assigned',
+          activity_data: {
+            action: 'bulk_crew_assigned',
+            notes: `Assigned ${assignmentsToCreate.length} crew members to project via Project ID.`,
+            assigned_count: assignmentsToCreate.length
+          },
+          performed_by_user_id: assigned_by_user_id
+        });
+      }
+
+      try {
+        const createdIds = assignmentsToCreate.map(a => a.crew_member_id);
+        const crews = await crew_members.findAll({
+          where: { crew_member_id: createdIds },
+          attributes: ['first_name', 'last_name', 'email']
+        });
+
+        const dashboardLink = process.env.CP_DASHBOARD_LINK || 'https://beige.app/';
+
+        const emailClientName = await resolveAdminBookingClientName(
+          booking,
+          booking?.sales_leads?.[0]?.client_name || null
+        );
+        const emailShootAmount = await resolveAdminBookingShootAmount(booking);
+
+        await Promise.allSettled(
+          crews.filter(c => c.email).map(c =>
+            sendCPNewBookingRequestEmail({
+              to_email: c.email,
+              user_name: c.first_name,
+              ...getCPNewBookingEmailFields(booking, emailClientName, emailShootAmount),
+              dashboardLink
+            })
+          )
+        );
+      } catch (mailErr) {
+        console.error('Mail trigger error:', mailErr);
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: `${assignmentsToCreate.length} crew members assigned successfully.`,
+      errors: errors.length > 0 ? errors : undefined
+    });
+
+  } catch (error) {
+    console.error("assignProjectCrewBulk error:", error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
 };
 
 exports.removeProjectAssignedCrew = async (req, res) => {
-    try {
-        const assigned_by_user_id = req.user?.userId;
-        const { project_id, crew_member_id } = req.body; // Changed lead_id to project_id
+  try {
+    const assigned_by_user_id = req.user?.userId;
+    const { project_id, crew_member_id } = req.body; // Changed lead_id to project_id
 
-        if (!project_id || !crew_member_id) {
-            return res.status(400).json({ 
-                success: false, 
-                message: "project_id and crew_member_id are required." 
-            });
-        }
-
-        // 1. Find the assignment directly using project_id
-        const assignment = await assigned_crew.findOne({
-            where: {
-                project_id: project_id,
-                crew_member_id: crew_member_id,
-                is_active: 1
-            },
-            include: [{ 
-                model: crew_members, 
-                as: 'crew_member', 
-                attributes: ['first_name', 'last_name'] 
-            }]
-        });
-
-        if (!assignment) {
-            return res.status(404).json({ 
-                success: false, 
-                message: "This crew member is not currently assigned to this project or is already inactive." 
-            });
-        }
-
-        // 2. Set the assignment to inactive (Soft Delete)
-        await assignment.update({ is_active: 0 });
-
-        // 3. Optional: Log activity if a lead exists for this project
-        const lead = await sales_leads.findOne({
-            where: { booking_id: project_id },
-            attributes: ['lead_id']
-        });
-
-        if (lead) {
-            const crewName = assignment.crew_member 
-                ? `${assignment.crew_member.first_name} ${assignment.crew_member.last_name}` 
-                : `ID: ${crew_member_id}`;
-
-            await sales_lead_activities.create({
-                lead_id: lead.lead_id,
-                activity_type: 'status_changed',
-                activity_data: {
-                    action: 'crew_removed',
-                    notes: `Removed ${crewName} from the project via Project ID.`,
-                    crew_member_id
-                },
-                performed_by_user_id: assigned_by_user_id,
-                created_at: new Date()
-            });
-        }
-
-        res.json({
-            success: true,
-            message: "Crew member removed from project successfully."
-        });
-
-    } catch (error) {
-        console.error('RemoveProjectCrew Error:', error);
-        res.status(500).json({ success: false, message: error.message });
+    if (!project_id || !crew_member_id) {
+      return res.status(400).json({
+        success: false,
+        message: "project_id and crew_member_id are required."
+      });
     }
+
+    // 1. Find the assignment directly using project_id
+    const assignment = await assigned_crew.findOne({
+      where: {
+        project_id: project_id,
+        crew_member_id: crew_member_id,
+        is_active: 1
+      },
+      include: [{
+        model: crew_members,
+        as: 'crew_member',
+        attributes: ['first_name', 'last_name']
+      }]
+    });
+
+    if (!assignment) {
+      return res.status(404).json({
+        success: false,
+        message: "This crew member is not currently assigned to this project or is already inactive."
+      });
+    }
+
+    // 2. Set the assignment to inactive (Soft Delete)
+    await assignment.update({ is_active: 0 });
+
+    // 3. Optional: Log activity if a lead exists for this project
+    const lead = await sales_leads.findOne({
+      where: { booking_id: project_id },
+      attributes: ['lead_id']
+    });
+
+    if (lead) {
+      const crewName = assignment.crew_member
+        ? `${assignment.crew_member.first_name} ${assignment.crew_member.last_name}`
+        : `ID: ${crew_member_id}`;
+
+      await sales_lead_activities.create({
+        lead_id: lead.lead_id,
+        activity_type: 'status_changed',
+        activity_data: {
+          action: 'crew_removed',
+          notes: `Removed ${crewName} from the project via Project ID.`,
+          crew_member_id
+        },
+        performed_by_user_id: assigned_by_user_id,
+        created_at: new Date()
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Crew member removed from project successfully."
+    });
+
+  } catch (error) {
+    console.error('RemoveProjectCrew Error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
 };
 
 exports.getProjectFormByProjectId = async (req, res) => {
-    try {
-        const { project_id } = req.params;
-        const user_id = req.user?.userId;
+  try {
+    const { project_id } = req.params;
+    const user_id = req.user?.userId;
 
-        if (!project_id) {
-            return res.status(400).json({ 
-                error: true, 
-                message: "project_id is required as a parameter." 
-            });
-        }
-
-        // 1. Security Check: Ensure the project belongs to the requesting user
-        const project = await stream_project_booking.findOne({
-            where: { 
-                stream_project_booking_id: project_id,
-                // user_id: user_id 
-            }
-        });
-
-        if (!project) {
-            return res.status(403).json({ 
-                error: true, 
-                message: "Access denied. You do not have permission to view this project's details." 
-            });
-        }
-
-        // 2. Fetch the Form Submission
-        const formDetails = await project_form_submissions.findOne({
-            where: { 
-                project_id: project_id,
-                is_active: 1 
-            },
-            order: [['created_at', 'DESC']] // Get the most recent submission
-        });
-
-        if (!formDetails) {
-            return res.status(200).json({ 
-                error: true, 
-                message: "No form submission found for this project.",
-                is_submitted: false 
-            });
-        }
-
-        // 3. Return the details
-        return res.status(200).json({
-            error: false,
-            message: "Project form details retrieved successfully.",
-            is_submitted: true,
-            data: formDetails
-        });
-
-    } catch (error) {
-        console.error('Error fetching project form details:', error);
-        return res.status(500).json({ 
-            error: true, 
-            message: "Internal server error", 
-            details: error.message 
-        });
+    if (!project_id) {
+      return res.status(400).json({
+        error: true,
+        message: "project_id is required as a parameter."
+      });
     }
+
+    // 1. Security Check: Ensure the project belongs to the requesting user
+    const project = await stream_project_booking.findOne({
+      where: {
+        stream_project_booking_id: project_id,
+        // user_id: user_id 
+      }
+    });
+
+    if (!project) {
+      return res.status(403).json({
+        error: true,
+        message: "Access denied. You do not have permission to view this project's details."
+      });
+    }
+
+    // 2. Fetch the Form Submission
+    const formDetails = await project_form_submissions.findOne({
+      where: {
+        project_id: project_id,
+        is_active: 1
+      },
+      order: [['created_at', 'DESC']] // Get the most recent submission
+    });
+
+    if (!formDetails) {
+      return res.status(200).json({
+        error: true,
+        message: "No form submission found for this project.",
+        is_submitted: false
+      });
+    }
+
+    // 3. Return the details
+    return res.status(200).json({
+      error: false,
+      message: "Project form details retrieved successfully.",
+      is_submitted: true,
+      data: formDetails
+    });
+
+  } catch (error) {
+    console.error('Error fetching project form details:', error);
+    return res.status(500).json({
+      error: true,
+      message: "Internal server error",
+      details: error.message
+    });
+  }
 };
 
 exports.sendOnboardingFormReminder = async (req, res) => {
-    try {
-        const project_id = req.params?.project_id || req.body?.project_id;
-        const admin_user_id = req.user?.userId || null;
+  try {
+    const project_id = req.params?.project_id || req.body?.project_id;
+    const admin_user_id = req.user?.userId || null;
 
-        if (!project_id) {
-            return res.status(400).json({
-                success: false,
-                message: "Project ID is required."
-            });
-        }
-
-        const booking = await stream_project_booking.findOne({
-            where: { stream_project_booking_id: project_id, is_active: 1 },
-            include: [{
-                model: users,
-                as: 'user',
-                required: false,
-                attributes: ['id', 'name', 'email', 'phone_number']
-            }]
-        });
-
-        if (!booking) {
-            return res.status(404).json({
-                success: false,
-                message: "Project/Booking not found."
-            });
-        }
-
-        const formSubmission = await project_form_submissions.findOne({
-            where: { project_id, is_active: 1 },
-            attributes: ['id'],
-            raw: true
-        });
-
-        if (formSubmission) {
-            return res.status(400).json({
-                success: false,
-                message: "Onboarding form is already submitted for this project."
-            });
-        }
-
-        const [clientDetails, lead, clientLead] = await Promise.all([
-            resolveAdminBookingClientContact(booking),
-            sales_leads.findOne({
-                where: { booking_id: project_id, is_active: 1 },
-                attributes: ['lead_id', 'client_name', 'guest_email'],
-                raw: true
-            }),
-            client_leads.findOne({
-                where: { booking_id: project_id, is_active: 1 },
-                attributes: ['lead_id', 'client_name', 'guest_email'],
-                raw: true
-            })
-        ]);
-
-        const toEmail =
-            clientDetails.email ||
-            booking.user?.email ||
-            booking.guest_email ||
-            lead?.guest_email ||
-            clientLead?.guest_email ||
-            null;
-
-        if (!toEmail) {
-            return res.status(400).json({
-                success: false,
-                message: "Client email is missing for this project."
-            });
-        }
-
-        const displayName =
-            clientDetails.full_name ||
-            lead?.client_name ||
-            clientLead?.client_name ||
-            booking.user?.name ||
-            null;
-        const firstName = getFirstNameForEmail(displayName, toEmail);
-        const frontendUrl = (process.env.FRONTEND_URL || 'https://beige.app').replace(/\/+$/, '');
-
-        const emailResult = await sendOnboardingFormCriticalEmail({
-            to_email: toEmail,
-            booking_id: project_id,
-            shoot_id: project_id,
-            user_name: firstName,
-            first_name: firstName,
-            form_link: `${frontendUrl}/project-form/${project_id}`,
-            dashboard_link: `${frontendUrl}/affiliate/dashboard`
-        });
-
-        if (!emailResult?.success) {
-            return res.status(502).json({
-                success: false,
-                message: "Failed to send onboarding reminder email.",
-                error: emailResult?.error || 'Unknown email error'
-            });
-        }
-
-        const activityData = {
-            email_event: 'onboarding_form_manual_reminder',
-            booking_id: Number(project_id),
-            recipient_email: toEmail,
-            message_id: emailResult.messageId || null
-        };
-
-        if (lead?.lead_id) {
-            await sales_lead_activities.create({
-                lead_id: lead.lead_id,
-                activity_type: 'status_changed',
-                activity_data: activityData,
-                performed_by_user_id: admin_user_id,
-                created_at: new Date()
-            });
-        } else if (clientLead?.lead_id) {
-            await client_lead_activities.create({
-                lead_id: clientLead.lead_id,
-                activity_type: 'status_changed',
-                activity_data: activityData,
-                performed_by_user_id: admin_user_id,
-                created_at: new Date()
-            });
-        }
-
-        return res.status(200).json({
-            success: true,
-            message: "Onboarding reminder email sent successfully.",
-            data: {
-                project_id: Number(project_id),
-                to_email: toEmail,
-                message_id: emailResult.messageId || null
-            }
-        });
-    } catch (error) {
-        console.error('SendOnboardingFormReminder Error:', error);
-        return res.status(500).json({
-            success: false,
-            message: "Internal Server Error",
-            error: error.message
-        });
+    if (!project_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Project ID is required."
+      });
     }
+
+    const booking = await stream_project_booking.findOne({
+      where: { stream_project_booking_id: project_id, is_active: 1 },
+      include: [{
+        model: users,
+        as: 'user',
+        required: false,
+        attributes: ['id', 'name', 'email', 'phone_number']
+      }]
+    });
+
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: "Project/Booking not found."
+      });
+    }
+
+    const formSubmission = await project_form_submissions.findOne({
+      where: { project_id, is_active: 1 },
+      attributes: ['id'],
+      raw: true
+    });
+
+    if (formSubmission) {
+      return res.status(400).json({
+        success: false,
+        message: "Onboarding form is already submitted for this project."
+      });
+    }
+
+    const [clientDetails, lead, clientLead] = await Promise.all([
+      resolveAdminBookingClientContact(booking),
+      sales_leads.findOne({
+        where: { booking_id: project_id, is_active: 1 },
+        attributes: ['lead_id', 'client_name', 'guest_email'],
+        raw: true
+      }),
+      client_leads.findOne({
+        where: { booking_id: project_id, is_active: 1 },
+        attributes: ['lead_id', 'client_name', 'guest_email'],
+        raw: true
+      })
+    ]);
+
+    const toEmail =
+      clientDetails.email ||
+      booking.user?.email ||
+      booking.guest_email ||
+      lead?.guest_email ||
+      clientLead?.guest_email ||
+      null;
+
+    if (!toEmail) {
+      return res.status(400).json({
+        success: false,
+        message: "Client email is missing for this project."
+      });
+    }
+
+    const displayName =
+      clientDetails.full_name ||
+      lead?.client_name ||
+      clientLead?.client_name ||
+      booking.user?.name ||
+      null;
+    const firstName = getFirstNameForEmail(displayName, toEmail);
+    const frontendUrl = (process.env.FRONTEND_URL || 'https://beige.app').replace(/\/+$/, '');
+
+    const emailResult = await sendOnboardingFormCriticalEmail({
+      to_email: toEmail,
+      booking_id: project_id,
+      shoot_id: project_id,
+      user_name: firstName,
+      first_name: firstName,
+      form_link: `${frontendUrl}/project-form/${project_id}`,
+      dashboard_link: `${frontendUrl}/affiliate/dashboard`
+    });
+
+    if (!emailResult?.success) {
+      return res.status(502).json({
+        success: false,
+        message: "Failed to send onboarding reminder email.",
+        error: emailResult?.error || 'Unknown email error'
+      });
+    }
+
+    const activityData = {
+      email_event: 'onboarding_form_manual_reminder',
+      booking_id: Number(project_id),
+      recipient_email: toEmail,
+      message_id: emailResult.messageId || null
+    };
+
+    if (lead?.lead_id) {
+      await sales_lead_activities.create({
+        lead_id: lead.lead_id,
+        activity_type: 'status_changed',
+        activity_data: activityData,
+        performed_by_user_id: admin_user_id,
+        created_at: new Date()
+      });
+    } else if (clientLead?.lead_id) {
+      await client_lead_activities.create({
+        lead_id: clientLead.lead_id,
+        activity_type: 'status_changed',
+        activity_data: activityData,
+        performed_by_user_id: admin_user_id,
+        created_at: new Date()
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Onboarding reminder email sent successfully.",
+      data: {
+        project_id: Number(project_id),
+        to_email: toEmail,
+        message_id: emailResult.messageId || null
+      }
+    });
+  } catch (error) {
+    console.error('SendOnboardingFormReminder Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: error.message
+    });
+  }
 };
 
 exports.submitProjectFormByAdmin = async (req, res) => {
-    try {
-        const admin_user_id = req.user?.userId || null;
-        const {
-            onsite_contact_info,
-            project_types,
-            project_type_other,
-            brief_overview,
-            num_people_attending,
-            event_agenda,
-            location_address,
-            location_specification,
-            location_scouting_refs,
-            shot_list,
-            visual_references,
-            specific_instructions,
-            creative_dress_code,
-            post_production_ideas,
-            preferred_songs,
-            additional_info,
-            wants_to_learn_more,
-            form_user_friendliness_rating
-        } = req.body || {};
-        const project_id = req.body?.project_id;
+  try {
+    const admin_user_id = req.user?.userId || null;
+    const {
+      onsite_contact_info,
+      project_types,
+      project_type_other,
+      brief_overview,
+      num_people_attending,
+      event_agenda,
+      location_address,
+      location_specification,
+      location_scouting_refs,
+      shot_list,
+      visual_references,
+      specific_instructions,
+      creative_dress_code,
+      post_production_ideas,
+      preferred_songs,
+      additional_info,
+      wants_to_learn_more,
+      form_user_friendliness_rating
+    } = req.body || {};
+    const project_id = req.body?.project_id;
 
-        if (!project_id || !brief_overview) {
-            return res.status(400).json({
-                success: false,
-                message: "Project ID and brief overview are required."
-            });
-        }
-
-        const booking = await stream_project_booking.findByPk(project_id);
-        if (!booking) {
-            return res.status(404).json({
-                success: false,
-                message: "Project/Booking not found."
-            });
-        }
-        const clientDetails = await resolveAdminBookingClientContact(booking);
-
-        const formPayload = {
-            project_id,
-            onsite_contact_info: onsite_contact_info || 'N/A',
-            project_types,
-            project_type_other,
-            brief_overview,
-            num_people_attending,
-            event_agenda: event_agenda || 'TBD',
-            location_address,
-            location_specification: location_specification || 'Indoors',
-            location_scouting_refs,
-            shot_list: shot_list || 'TBD',
-            visual_references: visual_references || 'TBD',
-            specific_instructions,
-            creative_dress_code: creative_dress_code || 'None',
-            post_production_ideas,
-            preferred_songs,
-            additional_info,
-            wants_to_learn_more: wants_to_learn_more ? 1 : 0,
-            form_user_friendliness_rating,
-            created_by: admin_user_id
-        };
-
-        const existingSubmission = await project_form_submissions.findOne({
-            where: { project_id, is_active: 1 },
-            order: [['created_at', 'DESC']]
-        });
-
-        let submission = existingSubmission;
-        const isUpdate = !!existingSubmission;
-
-        if (existingSubmission) {
-            await existingSubmission.update(formPayload);
-        } else {
-            submission = await project_form_submissions.create({
-                ...formPayload,
-                created_at: new Date()
-            });
-        }
-
-        const lead = await sales_leads.findOne({
-            where: { booking_id: project_id },
-            attributes: ['lead_id']
-        });
-
-        if (lead) {
-            await sales_lead_activities.create({
-                lead_id: lead.lead_id,
-                activity_type: 'form_submitted',
-                notes: isUpdate
-                    ? 'Admin updated the detailed Project Form.'
-                    : 'Admin submitted the detailed Project Form.',
-                performed_by_user_id: admin_user_id,
-                created_at: new Date()
-            });
-        }
-
-        return res.status(200).json({
-            success: true,
-            message: isUpdate
-                ? "Project form updated successfully."
-                : "Project form submitted and saved successfully.",
-            is_submitted: true,
-            client_details: clientDetails,
-            data: {
-                submission_id: submission.id,
-                project_id: submission.project_id,
-                needs_attention: buildShootNeedsAttention(
-                    {
-                        ...booking.toJSON(),
-                        booking_days: await db.stream_project_booking_days.findAll({
-                            where: { stream_project_booking_id: booking.stream_project_booking_id },
-                            attributes: ['event_date'],
-                            raw: true
-                        })
-                    },
-                    submission
-                )
-            }
-        });
-
-    } catch (error) {
-        console.error('SubmitProjectFormByAdmin Error:', error);
-        return res.status(500).json({
-            success: false,
-            message: "Internal Server Error",
-            error: error.message
-        });
+    if (!project_id || !brief_overview) {
+      return res.status(400).json({
+        success: false,
+        message: "Project ID and brief overview are required."
+      });
     }
+
+    const booking = await stream_project_booking.findByPk(project_id);
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        message: "Project/Booking not found."
+      });
+    }
+    const clientDetails = await resolveAdminBookingClientContact(booking);
+
+    const formPayload = {
+      project_id,
+      onsite_contact_info: onsite_contact_info || 'N/A',
+      project_types,
+      project_type_other,
+      brief_overview,
+      num_people_attending,
+      event_agenda: event_agenda || 'TBD',
+      location_address,
+      location_specification: location_specification || 'Indoors',
+      location_scouting_refs,
+      shot_list: shot_list || 'TBD',
+      visual_references: visual_references || 'TBD',
+      specific_instructions,
+      creative_dress_code: creative_dress_code || 'None',
+      post_production_ideas,
+      preferred_songs,
+      additional_info,
+      wants_to_learn_more: wants_to_learn_more ? 1 : 0,
+      form_user_friendliness_rating,
+      created_by: admin_user_id
+    };
+
+    const existingSubmission = await project_form_submissions.findOne({
+      where: { project_id, is_active: 1 },
+      order: [['created_at', 'DESC']]
+    });
+
+    let submission = existingSubmission;
+    const isUpdate = !!existingSubmission;
+
+    if (existingSubmission) {
+      await existingSubmission.update(formPayload);
+    } else {
+      submission = await project_form_submissions.create({
+        ...formPayload,
+        created_at: new Date()
+      });
+    }
+
+    const lead = await sales_leads.findOne({
+      where: { booking_id: project_id },
+      attributes: ['lead_id']
+    });
+
+    if (lead) {
+      await sales_lead_activities.create({
+        lead_id: lead.lead_id,
+        activity_type: 'form_submitted',
+        notes: isUpdate
+          ? 'Admin updated the detailed Project Form.'
+          : 'Admin submitted the detailed Project Form.',
+        performed_by_user_id: admin_user_id,
+        created_at: new Date()
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: isUpdate
+        ? "Project form updated successfully."
+        : "Project form submitted and saved successfully.",
+      is_submitted: true,
+      client_details: clientDetails,
+      data: {
+        submission_id: submission.id,
+        project_id: submission.project_id,
+        needs_attention: buildShootNeedsAttention(
+          {
+            ...booking.toJSON(),
+            booking_days: await db.stream_project_booking_days.findAll({
+              where: { stream_project_booking_id: booking.stream_project_booking_id },
+              attributes: ['event_date'],
+              raw: true
+            })
+          },
+          submission
+        )
+      }
+    });
+
+  } catch (error) {
+    console.error('SubmitProjectFormByAdmin Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: error.message
+    });
+  }
 };
 
 exports.getAllAssignedRequests = async (req, res) => {
@@ -13597,14 +13601,14 @@ exports.getAllAssignedRequests = async (req, res) => {
 
     const paymentRecords = paymentIds.length
       ? await payment_transactions.findAll({
-          where: {
-            payment_id: {
-              [Op.in]: paymentIds,
-            },
+        where: {
+          payment_id: {
+            [Op.in]: paymentIds,
           },
-          attributes: ['payment_id', 'total_amount'],
-          raw: true,
-        })
+        },
+        attributes: ['payment_id', 'total_amount'],
+        raw: true,
+      })
       : [];
 
     const paymentAmountById = paymentRecords.reduce((acc, payment) => {
@@ -14576,13 +14580,13 @@ exports.getUsersWithRoles = async (req, res) => {
     const userIds = users.map((user) => Number(user.id)).filter(Boolean);
     const archiveHistoryRows = userIds.length
       ? await user_archive_history.findAll({
-          where: {
-            target_type: 'internal_user',
-            target_id: { [Op.in]: userIds }
-          },
-          order: [['created_at', 'DESC']],
-          raw: true
-        })
+        where: {
+          target_type: 'internal_user',
+          target_id: { [Op.in]: userIds }
+        },
+        order: [['created_at', 'DESC']],
+        raw: true
+      })
       : [];
 
     const archiveHistoryMap = new Map();
@@ -14725,18 +14729,18 @@ exports.getUserRoleDetails = async (req, res) => {
           is_active: user.is_active,
           status_label: user.is_active ? 'Active' : 'In-Active',
           created_at: user.created_at,
-          updated_at:user.updated_at
+          updated_at: user.updated_at
         },
 
         role: role
           ? {
-              role_id: role.user_type_id,
-              name: role.user_role,
-              description: role.description || null,
-              is_active: role.is_active,
-              created_at: role.created_at,
-              updated_at: role.updated_at
-            }
+            role_id: role.user_type_id,
+            name: role.user_role,
+            description: role.description || null,
+            is_active: role.is_active,
+            created_at: role.created_at,
+            updated_at: role.updated_at
+          }
           : null,
 
         display_role: role ? role.user_role : null,
