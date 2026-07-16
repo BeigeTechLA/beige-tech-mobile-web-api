@@ -183,6 +183,11 @@ router.post('/get-approved-crew-members', authMiddleware, crewAvailabilityView, 
 router.get('/crew-member/:crew_member_id', authMiddleware, adminSalesRepresentativeAvailabilityView, admin.getCrewMemberById);
 router.delete('/delete-crew-member/:crew_member_id', admin.deleteCrewMember);
 router.put('/edit-crew-member/:crew_member_id', admin.updateCrewMember);
+router.put('/crew-member/:crew_member_id/profile', authMiddleware, adminUsersEdit, admin.updateCrewMemberProfile);
+router.post('/crew-member/:crew_member_id/profile/files/:file_type', authMiddleware, adminUsersEdit, admin.uploadCrewMemberProfileFiles);
+router.post('/crew-member/:crew_member_id/profile/portfolio-links', authMiddleware, adminUsersEdit, admin.addCrewMemberPortfolioLinks);
+router.put('/crew-member/:crew_member_id/profile/portfolio-links/:crew_files_id', authMiddleware, adminUsersEdit, admin.editCrewMemberPortfolioLink);
+router.delete('/crew-member/:crew_member_id/profile-file/:crew_files_id', authMiddleware, adminUsersEdit, admin.deleteCrewMemberProfileFile);
 router.post('/assign_task', admin.createTask);
 router.post('/create_equipment', admin.createEquipment);
 router.get('/get-equipments', admin.getEquipment);

@@ -6591,6 +6591,509 @@ exports.updateCrewMember = [
   }
 ];
 
+const normalizeCrewProfileFileType = (fileType) => {
+  const normalized = String(fileType || '').trim();
+  const aliases = {
+    certificates: 'certifications',
+    certificate: 'certifications',
+    featured_work: 'recent_work',
+    featurework: 'recent_work',
+    feature_work: 'recent_work'
+  };
+
+  return aliases[normalized] || normalized;
+};
+
+const parseJsonLikeField = (value, fallback = value) => {
+  if (value === undefined) return undefined;
+  if (value === null || Array.isArray(value) || typeof value === 'object') return value;
+
+  try {
+    return JSON.parse(value);
+  } catch (_) {
+    return fallback;
+  }
+};
+
+const assignIfProvided = (target, key, value) => {
+  if (value !== undefined) {
+    target[key] = value;
+  }
+};
+
+exports.updateCrewMemberProfile = async (req, res) => {
+  try {
+    const { crew_member_id } = req.params;
+
+    const member = await crew_members.findOne({
+      where: { crew_member_id, is_active: 1 }
+    });
+
+    if (!member) {
+      return res.status(constants.NOT_FOUND.code).json({
+        error: true,
+        code: constants.NOT_FOUND.code,
+        message: 'Crew member not found',
+        data: null
+      });
+    }
+
+    const {
+      first_name,
+      last_name,
+      email,
+      phone_number,
+      location,
+      lat,
+      lng,
+      latitude,
+      longitude,
+      primary_role,
+      years_of_experience,
+      hourly_rate,
+      bio,
+      skills,
+      availability,
+      certifications,
+      social_media_links,
+      equipment_ownership,
+      working_distance,
+      is_draft,
+      is_crew_verified
+    } = req.body;
+
+    const updateData = {};
+    assignIfProvided(updateData, 'first_name', first_name);
+    assignIfProvided(updateData, 'last_name', last_name);
+    assignIfProvided(updateData, 'email', email);
+    assignIfProvided(updateData, 'phone_number', phone_number);
+    assignIfProvided(updateData, 'location', location);
+    assignIfProvided(updateData, 'latitude', latitude ?? lat);
+    assignIfProvided(updateData, 'longitude', longitude ?? lng);
+    assignIfProvided(updateData, 'years_of_experience', years_of_experience);
+    assignIfProvided(updateData, 'hourly_rate', hourly_rate);
+    assignIfProvided(updateData, 'bio', bio);
+    assignIfProvided(updateData, 'working_distance', working_distance);
+    assignIfProvided(updateData, 'is_draft', is_draft);
+    assignIfProvided(updateData, 'is_crew_verified', is_crew_verified);
+
+    if (primary_role !== undefined) {
+      updateData.primary_role = JSON.stringify(parseJsonLikeField(primary_role, toArray(primary_role)));
+    }
+
+    if (skills !== undefined) {
+      updateData.skills = JSON.stringify(parseJsonLikeField(skills, toArray(skills)));
+    }
+
+    if (availability !== undefined) {
+      updateData.availability = JSON.stringify(parseJsonLikeField(availability, toArray(availability)));
+    }
+
+    if (certifications !== undefined) {
+      updateData.certifications = JSON.stringify(parseJsonLikeField(certifications, toArray(certifications)));
+    }
+
+    if (social_media_links !== undefined) {
+      updateData.social_media_links = JSON.stringify(parseJsonLikeField(social_media_links, social_media_links));
+    }
+
+    if (equipment_ownership !== undefined) {
+      let equipmentOwnershipArr = parseJsonLikeField(equipment_ownership, toArray(equipment_ownership));
+      equipmentOwnershipArr = Array.isArray(equipmentOwnershipArr)
+        ? equipmentOwnershipArr
+        : [equipmentOwnershipArr].filter(Boolean);
+
+      if (equipmentOwnershipArr.length > 0) {
+        const equipmentNames = await equipment.findAll({
+          where: {
+            equipment_name: { [Sequelize.Op.in]: equipmentOwnershipArr }
+          },
+          attributes: ['equipment_name'],
+          raw: true
+        });
+
+        const validEquipmentNames = equipmentNames.map(item => item.equipment_name);
+        const invalidEquipmentNames = equipmentOwnershipArr.filter(name => !validEquipmentNames.includes(name));
+
+        if (invalidEquipmentNames.length > 0) {
+          return res.status(constants.BAD_REQUEST.code).json({
+            error: true,
+            code: constants.BAD_REQUEST.code,
+            message: `The following equipment names are invalid: ${invalidEquipmentNames.join(', ')}`,
+            data: null
+          });
+        }
+      }
+
+      updateData.equipment_ownership = JSON.stringify(equipmentOwnershipArr);
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        error: true,
+        code: constants.BAD_REQUEST.code,
+        message: 'No profile fields provided',
+        data: null
+      });
+    }
+
+    await member.update(updateData);
+
+    if (member.user_id) {
+      const userUpdateData = {};
+      if (first_name !== undefined || last_name !== undefined) {
+        userUpdateData.name = [first_name ?? member.first_name, last_name ?? member.last_name]
+          .filter(Boolean)
+          .join(' ')
+          .trim();
+      }
+      assignIfProvided(userUpdateData, 'email', email);
+      assignIfProvided(userUpdateData, 'phone_number', phone_number);
+      assignIfProvided(userUpdateData, 'location', location);
+      assignIfProvided(userUpdateData, 'latitude', latitude ?? lat);
+      assignIfProvided(userUpdateData, 'longitude', longitude ?? lng);
+
+      if (Object.keys(userUpdateData).length > 0) {
+        await users.update(userUpdateData, { where: { id: member.user_id } });
+      }
+    }
+
+    return res.status(constants.OK.code).json({
+      error: false,
+      code: constants.OK.code,
+      message: 'Crew member profile updated successfully',
+      data: {
+        crew_member_id: member.crew_member_id
+      }
+    });
+  } catch (error) {
+    console.error('Update Crew Member Profile Error:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      error: true,
+      code: constants.INTERNAL_SERVER_ERROR.code,
+      message: constants.INTERNAL_SERVER_ERROR.message,
+      data: null
+    });
+  }
+};
+
+exports.uploadCrewMemberProfileFiles = [
+  upload.fields([
+    { name: 'files[]', maxCount: 50 },
+    { name: 'files', maxCount: 50 }
+  ]),
+
+  async (req, res) => {
+    try {
+      const { crew_member_id } = req.params;
+      const file_type = normalizeCrewProfileFileType(req.params.file_type);
+
+      const singleFileTypes = ['profile_photo', 'resume', 'portfolio'];
+      const allowedTypes = [
+        ...singleFileTypes,
+        'certifications',
+        'recent_work'
+      ];
+
+      if (!allowedTypes.includes(file_type)) {
+        return res.status(constants.BAD_REQUEST.code).json({
+          error: true,
+          code: constants.BAD_REQUEST.code,
+          message: 'Invalid file type',
+          data: null
+        });
+      }
+
+      const member = await crew_members.findOne({
+        where: { crew_member_id, is_active: 1 },
+        attributes: ['crew_member_id']
+      });
+
+      if (!member) {
+        return res.status(constants.NOT_FOUND.code).json({
+          error: true,
+          code: constants.NOT_FOUND.code,
+          message: 'Crew member not found',
+          data: null
+        });
+      }
+
+      const uploadedRequestFiles = [
+        ...(req.files?.['files[]'] || []),
+        ...(req.files?.files || [])
+      ];
+
+      if (uploadedRequestFiles.length === 0) {
+        return res.status(constants.BAD_REQUEST.code).json({
+          error: true,
+          code: constants.BAD_REQUEST.code,
+          message: 'No files uploaded',
+          data: null
+        });
+      }
+
+      const uploadedFiles = await S3UploadFiles({ [file_type]: uploadedRequestFiles });
+      const createdFiles = [];
+
+      if (singleFileTypes.includes(file_type)) {
+        await crew_member_files.update(
+          { is_active: 0 },
+          {
+            where: {
+              crew_member_id,
+              file_type,
+              is_active: 1
+            }
+          }
+        );
+
+        const file = uploadedFiles[0];
+        const created = await crew_member_files.create({
+          crew_member_id,
+          file_type,
+          file_path: file.file_path,
+          file_category: file_type,
+          title: Array.isArray(req.body.title) ? req.body.title[0] : req.body.title || null,
+          tag: Array.isArray(req.body.tag) ? req.body.tag[0] : req.body.tag || null,
+          is_active: 1
+        });
+        createdFiles.push(created);
+      } else {
+        const records = uploadedFiles.map((file, index) => ({
+          crew_member_id,
+          file_type,
+          file_path: file.file_path,
+          file_category: file_type,
+          title: Array.isArray(req.body.title)
+            ? req.body.title[index]
+            : req.body.title || (file_type === 'recent_work' ? 'Untitled' : 'Certification'),
+          tag: Array.isArray(req.body.tag)
+            ? req.body.tag[index]
+            : req.body.tag || null,
+          is_active: 1
+        }));
+
+        const created = await crew_member_files.bulkCreate(records);
+        createdFiles.push(...created);
+      }
+
+      return res.status(constants.OK.code).json({
+        error: false,
+        code: constants.OK.code,
+        message: 'Files uploaded successfully',
+        data: {
+          crew_member_id,
+          file_type,
+          files: createdFiles
+        }
+      });
+    } catch (error) {
+      console.error('Upload Crew Member Profile Files Error:', error);
+      return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+        error: true,
+        code: constants.INTERNAL_SERVER_ERROR.code,
+        message: constants.INTERNAL_SERVER_ERROR.message,
+        data: null
+      });
+    }
+  }
+];
+
+exports.addCrewMemberPortfolioLinks = async (req, res) => {
+  try {
+    const { crew_member_id } = req.params;
+    const { portfolio_links } = req.body;
+
+    const member = await crew_members.findOne({
+      where: { crew_member_id, is_active: 1 },
+      attributes: ['crew_member_id']
+    });
+
+    if (!member) {
+      return res.status(constants.NOT_FOUND.code).json({
+        error: true,
+        code: constants.NOT_FOUND.code,
+        message: 'Crew member not found',
+        data: null
+      });
+    }
+
+    if (!portfolio_links) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        error: true,
+        code: constants.BAD_REQUEST.code,
+        message: 'No links provided',
+        data: null
+      });
+    }
+
+    let linksArray = parseJsonLikeField(portfolio_links, null);
+    if (!Array.isArray(linksArray)) {
+      linksArray = [linksArray].filter(Boolean);
+    }
+
+    const validLinks = linksArray.filter((link) => link?.url || link?.file_path);
+    if (validLinks.length === 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        error: true,
+        code: constants.BAD_REQUEST.code,
+        message: 'At least one valid link URL is required',
+        data: null
+      });
+    }
+
+    const records = validLinks.map((link) => ({
+      crew_member_id,
+      file_type: 'link',
+      file_path: link.url || link.file_path,
+      file_category: 'portfolio_link',
+      title: link.title || 'Untitled',
+      tag: link.platform || link.tag || 'other',
+      is_active: 1
+    }));
+
+    const createdLinks = await crew_member_files.bulkCreate(records);
+
+    return res.status(constants.OK.code).json({
+      error: false,
+      code: constants.OK.code,
+      message: 'Portfolio links added successfully',
+      data: {
+        crew_member_id,
+        links: createdLinks
+      }
+    });
+  } catch (error) {
+    console.error('Add Crew Member Portfolio Links Error:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      error: true,
+      code: constants.INTERNAL_SERVER_ERROR.code,
+      message: constants.INTERNAL_SERVER_ERROR.message,
+      data: null
+    });
+  }
+};
+
+exports.editCrewMemberPortfolioLink = async (req, res) => {
+  try {
+    const { crew_member_id, crew_files_id } = req.params;
+    const { url, title, platform, tag } = req.body;
+
+    if (!crew_member_id || !crew_files_id) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        error: true,
+        code: constants.BAD_REQUEST.code,
+        message: 'Crew member ID and file ID are required',
+        data: null
+      });
+    }
+
+    const linkRecord = await crew_member_files.findOne({
+      where: {
+        crew_files_id,
+        crew_member_id,
+        file_type: { [Op.in]: ['link', 'portfolio_link'] },
+        is_active: 1
+      }
+    });
+
+    if (!linkRecord) {
+      return res.status(constants.NOT_FOUND.code).json({
+        error: true,
+        code: constants.NOT_FOUND.code,
+        message: 'Portfolio link not found',
+        data: null
+      });
+    }
+
+    const updateData = {};
+    assignIfProvided(updateData, 'file_path', url);
+    assignIfProvided(updateData, 'title', title);
+    assignIfProvided(updateData, 'tag', platform ?? tag);
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        error: true,
+        code: constants.BAD_REQUEST.code,
+        message: 'No portfolio link fields provided',
+        data: null
+      });
+    }
+
+    await linkRecord.update(updateData);
+
+    return res.status(constants.OK.code).json({
+      error: false,
+      code: constants.OK.code,
+      message: 'Portfolio link updated successfully',
+      data: {
+        crew_member_id,
+        link: linkRecord
+      }
+    });
+  } catch (error) {
+    console.error('Edit Crew Member Portfolio Link Error:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      error: true,
+      code: constants.INTERNAL_SERVER_ERROR.code,
+      message: constants.INTERNAL_SERVER_ERROR.message,
+      data: null
+    });
+  }
+};
+
+exports.deleteCrewMemberProfileFile = async (req, res) => {
+  try {
+    const { crew_member_id, crew_files_id } = req.params;
+
+    if (!crew_member_id || !crew_files_id) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        error: true,
+        code: constants.BAD_REQUEST.code,
+        message: 'Crew member ID and file ID are required',
+        data: null
+      });
+    }
+
+    const file = await crew_member_files.findOne({
+      where: {
+        crew_files_id,
+        crew_member_id,
+        is_active: 1
+      }
+    });
+
+    if (!file) {
+      return res.status(constants.NOT_FOUND.code).json({
+        error: true,
+        code: constants.NOT_FOUND.code,
+        message: 'File not found',
+        data: null
+      });
+    }
+
+    await file.update({ is_active: 0 });
+
+    return res.status(constants.OK.code).json({
+      error: false,
+      code: constants.OK.code,
+      message: 'File deleted successfully',
+      data: {
+        crew_member_id,
+        crew_files_id
+      }
+    });
+  } catch (error) {
+    console.error('Delete Crew Member Profile File Error:', error);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      error: true,
+      code: constants.INTERNAL_SERVER_ERROR.code,
+      message: constants.INTERNAL_SERVER_ERROR.message,
+      data: null
+    });
+  }
+};
+
 exports.createTask = async (req, res) => {
   try {
     const {

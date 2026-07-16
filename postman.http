@@ -331,6 +331,200 @@ Authorization: {{TOKEN}}
   ]
 }
 
+###
+# ============================================================
+# Admin CP Profile Edit APIs
+# Change these values before testing:
+# - ADMIN_CP_ID: crew_member_id from admin/get-crew-members or admin/crew-member/:id
+# - ADMIN_CREW_FILE_ID: crew_files_id from admin/crew-member/:id response
+# - Authorization token: use an admin / sales admin / production manager token with edit permission
+# ============================================================
+@ADMIN_CP_ID = 2047
+@ADMIN_CREW_FILE_ID = 1
+
+###
+# Admin CP: get current profile details
+GET {{URL}}admin/crew-member/{{ADMIN_CP_ID}} HTTP/1.1
+Content-Type: application/json
+Authorization: {{SALES_ADMIN_TOKEN}}
+
+###
+# Admin CP: update normal profile fields only
+PUT {{URL}}admin/crew-member/{{ADMIN_CP_ID}}/profile HTTP/1.1
+Content-Type: application/json
+Authorization: {{SALES_ADMIN_TOKEN}}
+
+{
+  "first_name": "Test",
+  "last_name": "Creative Partner",
+  "email": "test.cp@example.com",
+  "phone_number": "9999999999",
+  "location": "Mumbai, Maharashtra, India",
+  "lat": "19.0760",
+  "lng": "72.8777",
+  "working_distance": "25",
+  "primary_role": [1],
+  "years_of_experience": "5",
+  "hourly_rate": "2500",
+  "bio": "Updated by admin from profile edit API.",
+  "skills": [1, 2, 3],
+  "availability": ["weekday", "weekend"],
+  "certifications": ["Drone Certified", "Lighting Workshop"],
+  "social_media_links": {
+    "instagram": "https://instagram.com/test.cp",
+    "youtube": "https://youtube.com/@testcp"
+  },
+  "equipment_ownership": ["Camera"],
+  "is_draft": 0
+}
+
+###
+# Admin CP: upload / replace profile photo
+# Replace ./test-files/profile-photo.jpg with a real local file path.
+POST {{URL}}admin/crew-member/{{ADMIN_CP_ID}}/profile/files/profile_photo HTTP/1.1
+Authorization: {{SALES_ADMIN_TOKEN}}
+Content-Type: multipart/form-data; boundary=----AdminCPProfilePhotoBoundary
+
+------AdminCPProfilePhotoBoundary
+Content-Disposition: form-data; name="files[]"; filename="profile-photo.jpg"
+Content-Type: image/jpeg
+
+< ./test-files/profile-photo.jpg
+------AdminCPProfilePhotoBoundary--
+
+###
+# Admin CP: upload / replace resume
+# Replace ./test-files/resume.pdf with a real local file path.
+POST {{URL}}admin/crew-member/{{ADMIN_CP_ID}}/profile/files/resume HTTP/1.1
+Authorization: {{SALES_ADMIN_TOKEN}}
+Content-Type: multipart/form-data; boundary=----AdminCPResumeBoundary
+
+------AdminCPResumeBoundary
+Content-Disposition: form-data; name="files[]"; filename="resume.pdf"
+Content-Type: application/pdf
+
+< ./test-files/resume.pdf
+------AdminCPResumeBoundary--
+
+###
+# Admin CP: upload certifications / certificates
+# Both file_type values work: certifications, certificates
+# Replace file paths with real local files.
+POST {{URL}}admin/crew-member/{{ADMIN_CP_ID}}/profile/files/certifications HTTP/1.1
+Authorization: {{SALES_ADMIN_TOKEN}}
+Content-Type: multipart/form-data; boundary=----AdminCPCertificationsBoundary
+
+------AdminCPCertificationsBoundary
+Content-Disposition: form-data; name="title"
+
+Drone Certificate
+------AdminCPCertificationsBoundary
+Content-Disposition: form-data; name="files[]"; filename="certificate-1.pdf"
+Content-Type: application/pdf
+
+< ./test-files/certificate-1.pdf
+------AdminCPCertificationsBoundary
+Content-Disposition: form-data; name="files[]"; filename="certificate-2.pdf"
+Content-Type: application/pdf
+
+< ./test-files/certificate-2.pdf
+------AdminCPCertificationsBoundary--
+
+###
+# Admin CP: upload recent work / featured work
+# All file_type values work: recent_work, featured_work, featurework, feature_work
+# For multiple files, title/tag can be repeated in same order as files.
+POST {{URL}}admin/crew-member/{{ADMIN_CP_ID}}/profile/files/recent_work HTTP/1.1
+Authorization: {{SALES_ADMIN_TOKEN}}
+Content-Type: multipart/form-data; boundary=----AdminCPRecentWorkBoundary
+
+------AdminCPRecentWorkBoundary
+Content-Disposition: form-data; name="title"
+
+Brand Shoot
+------AdminCPRecentWorkBoundary
+Content-Disposition: form-data; name="tag"
+
+["brand","video"]
+------AdminCPRecentWorkBoundary
+Content-Disposition: form-data; name="files[]"; filename="recent-work-1.jpg"
+Content-Type: image/jpeg
+
+< ./test-files/recent-work-1.jpg
+------AdminCPRecentWorkBoundary
+Content-Disposition: form-data; name="title"
+
+Event Highlights
+------AdminCPRecentWorkBoundary
+Content-Disposition: form-data; name="tag"
+
+["event","photo"]
+------AdminCPRecentWorkBoundary
+Content-Disposition: form-data; name="files[]"; filename="recent-work-2.jpg"
+Content-Type: image/jpeg
+
+< ./test-files/recent-work-2.jpg
+------AdminCPRecentWorkBoundary--
+
+###
+# Admin CP: upload / replace portfolio file
+# This is for an uploaded portfolio file. Portfolio links use the JSON APIs below.
+POST {{URL}}admin/crew-member/{{ADMIN_CP_ID}}/profile/files/portfolio HTTP/1.1
+Authorization: {{SALES_ADMIN_TOKEN}}
+Content-Type: multipart/form-data; boundary=----AdminCPPortfolioFileBoundary
+
+------AdminCPPortfolioFileBoundary
+Content-Disposition: form-data; name="title"
+
+Portfolio PDF
+------AdminCPPortfolioFileBoundary
+Content-Disposition: form-data; name="files[]"; filename="portfolio.pdf"
+Content-Type: application/pdf
+
+< ./test-files/portfolio.pdf
+------AdminCPPortfolioFileBoundary--
+
+###
+# Admin CP: add portfolio links
+POST {{URL}}admin/crew-member/{{ADMIN_CP_ID}}/profile/portfolio-links HTTP/1.1
+Content-Type: application/json
+Authorization: {{SALES_ADMIN_TOKEN}}
+
+{
+  "portfolio_links": [
+    {
+      "url": "https://youtube.com/watch?v=test-video",
+      "title": "Wedding Highlight Film",
+      "platform": "youtube"
+    },
+    {
+      "url": "https://vimeo.com/test-video",
+      "title": "Brand Reel",
+      "platform": "vimeo"
+    }
+  ]
+}
+
+###
+# Admin CP: edit portfolio link
+# Set ADMIN_CREW_FILE_ID to the link crew_files_id returned by add link or get profile.
+PUT {{URL}}admin/crew-member/{{ADMIN_CP_ID}}/profile/portfolio-links/{{ADMIN_CREW_FILE_ID}} HTTP/1.1
+Content-Type: application/json
+Authorization: {{SALES_ADMIN_TOKEN}}
+
+{
+  "url": "https://youtube.com/watch?v=updated-test-video",
+  "title": "Updated Wedding Highlight Film",
+  "platform": "youtube"
+}
+
+###
+# Admin CP: delete/remove any profile file or portfolio link
+# Works for profile_photo, resume, portfolio, certifications, recent_work, and portfolio links.
+DELETE {{URL}}admin/crew-member/{{ADMIN_CP_ID}}/profile-file/{{ADMIN_CREW_FILE_ID}} HTTP/1.1
+Content-Type: application/json
+Authorization: {{SALES_ADMIN_TOKEN}}
+
 ### update shoot onboarding form
 POST {{URL}}admin/shoots/update-onboarding-form HTTP/1.1
 Content-Type: application/json
