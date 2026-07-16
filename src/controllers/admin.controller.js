@@ -1926,7 +1926,10 @@ exports.getProjectDetails = async (req, res) => {
         {
           model: assigned_post_production_member,
           as: 'assigned_post_production_members',
+          where: {
+            is_active: 1 },
           include: [{ model: post_production_members, as: 'post_production_member' }]
+
         },
         // Include the Lead associated with this project
         {
