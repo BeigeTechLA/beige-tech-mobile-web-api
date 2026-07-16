@@ -3979,3 +3979,941 @@ Authorization: {{CP_TOKEN}}
     }
   ]
 }
+
+### =====================================================
+### BOOK A SHOOT - STUDIO JOURNEY 1
+### Flow: base shoot -> crew/location -> studio add-on -> quote -> finalize -> payment
+### Replace booking_id, quote_id, selected_crew_ids, amount, and paymentIntentId from responses.
+### =====================================================
+
+### 1) Start base shoot draft - studio is selected later in this journey
+POST {{URL}}sales/leads/track-early-interest HTTP/1.1
+Content-Type: application/json
+
+{
+  "booking_id": null,
+  "guest_email": "harsh.patel@revurge.com",
+  "content_type": "videographer",
+  "shoot_type": "podcasts_and_shows",
+  "client_name": "Harsh",
+  "start_date": "2026-07-16",
+  "start_time": "10:30",
+  "end_time": "14:30",
+  "time_zone": "Asia/Calcutta",
+  "startDate": "2026-07-16T10:30:00",
+  "endDate": "2026-07-16T14:30:00",
+  "booking_type": "single_day",
+  "edits_needed": true,
+  "video_edit_types": [
+    { "slug": "social_reel_15_30", "quantity": 1 },
+    { "slug": "social_reel_30_90", "quantity": 1 }
+  ]
+}
+
+### 2) Save crew requirement and shoot location
+PATCH {{URL}}sales/bookings/1309/crew HTTP/1.1
+Content-Type: application/json
+
+{
+  "crew_roles": {
+    "videographer": 2
+  },
+  "location": "Woodland Hills, California, United States",
+  "location_latitude": 34.168454,
+  "location_longitude": -118.603802,
+  "reference_links": [],
+  "description":""
+}
+
+### 3) Search creators near selected location
+GET {{URL}}creators/search?content_types=videographer&latitude=34.1654&longitude=-118.6089&limit=12&page=1
+
+### 4) Optional fallback creators carousel
+GET {{URL}}creator/get-random-crew
+
+### 5) Pricing preview after selecting studio
+POST {{URL}}pricing/calculate-from-creators
+Content-Type: application/json
+
+{
+  "creator_ids": [],
+  "role_counts": {
+    "videographer": 2
+  },
+  "content_type": "videographer",
+  "event_type": "podcast",
+  "video_edit_types": [
+    { "slug": "social_reel_15_30", "quantity": 1 },
+    { "slug": "social_reel_30_90", "quantity": 1 }
+  ],
+  "skip_discount": true,
+  "skip_margin": true,
+  "studio_total": 600,
+  "studio_items": [
+    {
+      "studio_id": "beige-modern-resort-villa",
+      "name": "Beige Media (Modern Resort Villa with Jacuzzi)",
+      "location": "Woodland Hills, Los Angeles, CA",
+      "image": "https://d2jhn32fsulyac.cloudfront.net/assets/studio/weho-content/Weho+Studio-2.jpg",
+      "pricing_mode": "hourly",
+      "pricing_category": "productions",
+      "pricing_label": "Productions",
+      "unit_price": 150,
+      "quantity": 4,
+      "total": 600,
+      "price_label": "$150/hour",
+      "selected_date": "2026-07-16",
+      "start_time": "10:30",
+      "end_time": "14:30",
+      "studio_booking_type": "single_day",
+      "booking_days": [],
+      "cast_and_crew_count": 0,
+      "update_studio_datetime": false,
+      "lat": 34.1654,
+      "lng": -118.6089
+    }
+  ],
+  "shoot_hours": 4,
+  "shoot_start_date": "2026-07-16T10:30:00.000Z"
+}
+
+### 6) Save quote for the booking/payment flow
+POST {{URL}}pricing/quotes
+Content-Type: application/json
+
+{
+  "items": [
+    { "item_id": 11, "quantity": 2 },
+    { "item_id": 50, "quantity": 2 }
+  ],
+  "shootHours": 4,
+  "eventType": "podcast",
+  "guestEmail": "harsh.patel@revurge.com",
+  "shoot_start_date": "2026-07-16T10:30:00.000Z",
+  "video_edit_types": [
+    { "slug": "social_reel_15_30", "quantity": 1 },
+    { "slug": "social_reel_30_90", "quantity": 1 }
+  ],
+  "studio_total": 600,
+  "studio_items": [
+    {
+      "studio_id": "beige-modern-resort-villa",
+      "name": "Beige Media (Modern Resort Villa with Jacuzzi)",
+      "location": "Woodland Hills, Los Angeles, CA",
+      "image": "https://d2jhn32fsulyac.cloudfront.net/assets/studio/weho-content/Weho+Studio-2.jpg",
+      "pricing_mode": "hourly",
+      "pricing_category": "productions",
+      "pricing_label": "Productions",
+      "unit_price": 150,
+      "quantity": 4,
+      "total": 600,
+      "price_label": "$150/hour",
+      "selected_date": "2026-07-16",
+      "start_time": "10:30",
+      "end_time": "14:30",
+      "studio_booking_type": "single_day",
+      "booking_days": [],
+      "cast_and_crew_count": 0,
+      "update_studio_datetime": false,
+      "lat": 34.1654,
+      "lng": -118.6089
+    }
+  ]
+}
+
+### 7) Finalize booking. selected_crew_ids can be [] for "Continue with 0 Creatives".
+PUT {{URL}}guest-bookings/1309
+Content-Type: application/json
+
+{
+  "order_name": "PODCASTS_AND_SHOWS Shoot - Harsh",
+  "guest_email": "harsh.patel@revurge.com",
+  "content_type": "videographer",
+  "shoot_type": "podcast",
+  "booking_type": "single_day",
+  "start_date": "2026-07-16",
+  "start_time": "10:30",
+  "end_time": "14:30",
+  "time_zone": "Asia/Calcutta",
+  "duration_hours": 4,
+  "location": "Woodland Hills, California, United States",
+  "location_latitude": 34.168454,
+  "location_longitude": -118.603802,
+  "quote_id": 542,
+  "full_name": "Harsh",
+  "phone": "+919173965896",
+  "edits_needed": true,
+  "video_edit_types": ["social_reel_15_30", "social_reel_30_90"],
+  "crew_size": "2",
+  "matching_method": "ai_matchmaker",
+  "selected_crew_ids": [],
+  "special_instructions": "",
+  "reference_links": [],
+  "studio_total": 600,
+  "studio_items": [
+    {
+      "studio_id": "beige-modern-resort-villa",
+      "name": "Beige Media (Modern Resort Villa with Jacuzzi)",
+      "location": "Woodland Hills, Los Angeles, CA",
+      "image": "https://d2jhn32fsulyac.cloudfront.net/assets/studio/weho-content/Weho+Studio-2.jpg",
+      "pricing_mode": "hourly",
+      "pricing_category": "production",
+      "pricing_label": "Production",
+      "unit_price": 150,
+      "quantity": 4,
+      "total": 600,
+      "price_label": "$150/hour",
+      "selected_date": "2026-07-16",
+      "start_time": "10:00",
+      "end_time": "14:30",
+      "studio_booking_type": "single_day",
+      "booking_days": [],
+      "cast_and_crew_count": 0,
+      "update_studio_datetime": true,
+      "lat": 34.1654,
+      "lng": -118.6089
+    }
+  ],
+  "start_date_time": "2026-07-16T10:30:00",
+  "end_date_time": "2026-07-16T14:30:00",
+  "is_draft": false
+}
+
+### Studio item multi-day timing shape
+### Use this inside studio_items[] when user expands "Multiple Days" for studio timing.
+### quantity should be total billable studio hours across all days, and total should match studio_total.
+# {
+#   "studio_id": "beige-modern-resort-villa",
+#   "name": "Beige Media (Modern Resort Villa with Jacuzzi)",
+#   "pricing_mode": "hourly",
+#   "unit_price": 150,
+#   "quantity": 16,
+#   "total": 2400,
+#   "studio_booking_type": "multi_day",
+#   "booking_days": [
+#     {
+#       "date": "2026-01-06",
+#       "start_time": "10:00",
+#       "end_time": "18:00",
+#       "duration_hours": 8,
+#       "time_zone": "Asia/Calcutta"
+#     },
+#     {
+#       "date": "2026-01-07",
+#       "start_time": "10:00",
+#       "end_time": "18:00",
+#       "duration_hours": 8,
+#       "time_zone": "Asia/Calcutta"
+#     }
+#   ],
+#   "cast_and_crew_count": 0,
+#   "update_studio_datetime": true
+# }
+
+### 8) Admin summary check
+GET {{URL}}admin/1295/get-booking-summary
+Content-Type: application/json
+
+### 9) Payment details check
+GET {{URL}}guest-bookings/1295/payment-details
+Content-Type: application/json
+
+### 10) Create payment intent. Replace amount with quote total.
+POST {{URL}}payments/create-intent-multi
+Content-Type: application/json
+
+{
+  "booking_id": "1309",
+  "amount": 3850,
+  "guest_email": "harsh.patel@revurge.com",
+  "use_credit": false,
+  "credit_amount_used": 0
+}
+
+### 11) Confirm after Stripe succeeds. Replace paymentIntentId from create-intent response.
+POST {{URL}}payments/confirm-multi
+Content-Type: application/json
+
+{
+  "paymentIntentId": "pi_3TqTDQ54hnPNgHXU0jxKccLP",
+  "booking_id": "1295",
+  "referral_code": null,
+  "use_credit": false,
+  "credit_amount_used": 0
+}
+
+### =====================================================
+### BOOK A SHOOT - STUDIO JOURNEY 2A - STUDIO ONLY, NO CP
+### Flow: studio service -> project/contact -> studio selection kept in frontend state -> quote -> finalize with selected_crew_ids [] -> payment
+### Replace booking_id, quote_id, amount, and paymentIntentId from responses.
+### =====================================================
+
+### 1) Start studio-first draft before studio is selected
+POST {{URL}}sales/leads/track-early-interest HTTP/1.1
+Content-Type: application/json
+
+{
+  "booking_id": null,
+  "guest_email": "johnsmith@beige.test",
+  "client_name": "John Smith",
+  "phone": "+16502450966",
+  "content_type": "studio",
+  "shoot_type": "studio",
+  "studio_booking_for": "production",
+  "project_name": "Spring Collection Fashion Shoot",
+  "special_instructions": "Studio booking for a spring collection shoot.",
+  "booking_type": "single_day",
+  "start_date": "2026-01-06",
+  "start_time": "10:00",
+  "end_time": "18:00",
+  "time_zone": "America/Los_Angeles",
+  "startDate": "2026-01-06T10:00:00",
+  "endDate": "2026-01-06T18:00:00",
+  "edits_needed": false,
+  "video_edit_types": [],
+  "photo_edit_types": []
+}
+
+### 2) Pricing preview - studio only is valid
+### Studio selection is still frontend state here. It is persisted in step 4 final PUT.
+POST {{URL}}pricing/calculate-from-creators
+Content-Type: application/json
+
+{
+  "creator_ids": [],
+  "role_counts": {},
+  "content_type": "studio",
+  "event_type": "studio",
+  "video_edit_types": [],
+  "photo_edit_types": [],
+  "skip_discount": true,
+  "skip_margin": true,
+  "studio_total": 1200,
+  "studio_items": [
+    {
+      "studio_id": "beige-modern-resort-villa",
+      "name": "Beige Media (Modern Resort Villa with Jacuzzi)",
+      "location": "Woodland Hills, Los Angeles, CA",
+      "pricing_mode": "hourly",
+      "pricing_category": "production",
+      "pricing_label": "Production",
+      "unit_price": 150,
+      "quantity": 8,
+      "total": 1200,
+      "selected_date": "2026-01-06",
+      "start_time": "10:00",
+      "end_time": "18:00",
+      "time_zone": "America/Los_Angeles",
+      "studio_booking_type": "single_day",
+      "booking_days": [],
+      "cast_and_crew_count": 0,
+      "update_studio_datetime": true
+    }
+  ],
+  "shoot_hours": 8,
+  "shoot_start_date": "2026-01-06T10:00:00.000Z"
+}
+
+### 3) Save quote - studio only
+POST {{URL}}pricing/quotes
+Content-Type: application/json
+
+{
+  "items": [],
+  "shootHours": 8,
+  "eventType": "studio",
+  "guestEmail": "johnsmith@beige.test",
+  "bookingId": 1302,
+  "shoot_start_date": "2026-01-06T10:00:00.000Z",
+  "video_edit_types": [],
+  "photo_edit_types": [],
+  "studio_total": 1200,
+  "studio_items": [
+    {
+      "studio_id": "beige-modern-resort-villa",
+      "name": "Beige Media (Modern Resort Villa with Jacuzzi)",
+      "location": "Woodland Hills, Los Angeles, CA",
+      "pricing_mode": "hourly",
+      "pricing_category": "production",
+      "pricing_label": "Production",
+      "unit_price": 150,
+      "quantity": 8,
+      "total": 1200,
+      "selected_date": "2026-01-06",
+      "start_time": "10:00",
+      "end_time": "18:00",
+      "time_zone": "America/Los_Angeles",
+      "studio_booking_type": "single_day",
+      "booking_days": [],
+      "cast_and_crew_count": 0,
+      "update_studio_datetime": true
+    }
+  ]
+}
+
+### 4) Finalize booking - no CP selected
+### This is where studio_items are persisted to booking description and studio_bookings.
+PUT {{URL}}guest-bookings/1302
+Content-Type: application/json
+
+{
+  "order_name": "STUDIO Shoot - John Smith",
+  "guest_email": "johnsmith@beige.test",
+  "content_type": "studio",
+  "shoot_type": "studio",
+  "studio_booking_for": "production",
+  "booking_type": "single_day",
+  "start_date": "2026-01-06",
+  "start_time": "10:00",
+  "end_time": "18:00",
+  "time_zone": "America/Los_Angeles",
+  "duration_hours": 8,
+  "location": "Woodland Hills, Los Angeles, CA",
+  "location_latitude": 34.1654,
+  "location_longitude": -118.6089,
+  "quote_id": 539,
+  "full_name": "John Smith",
+  "phone": "+16502450966",
+  "edits_needed": false,
+  "video_edit_types": [],
+  "photo_edit_types": [],
+  "crew_size": "0",
+  "matching_method": "studio_only",
+  "selected_crew_ids": [],
+  "special_instructions": "A studio-only booking for a spring collection shoot. No creative partner selected.",
+  "reference_links": [],
+  "studio_total": 1200,
+  "studio_items": [
+    {
+      "studio_id": "beige-modern-resort-villa",
+      "name": "Beige Media (Modern Resort Villa with Jacuzzi)",
+      "location": "Woodland Hills, Los Angeles, CA",
+      "image": "https://d2jhn32fsulyac.cloudfront.net/assets/studio/weho-content/Weho+Studio-2.jpg",
+      "pricing_mode": "hourly",
+      "pricing_category": "production",
+      "pricing_label": "Production",
+      "unit_price": 150,
+      "quantity": 8,
+      "total": 1200,
+      "price_label": "$150/hour",
+      "selected_date": "2026-01-06",
+      "start_time": "10:00",
+      "end_time": "18:00",
+      "time_zone": "America/Los_Angeles",
+      "studio_booking_type": "single_day",
+      "booking_days": [],
+      "cast_and_crew_count": 0,
+      "update_studio_datetime": true,
+      "lat": 34.1654,
+      "lng": -118.6089
+    }
+  ],
+  "start_date_time": "2026-01-06T10:00:00",
+  "end_date_time": "2026-01-06T18:00:00",
+  "is_draft": false
+}
+
+### 5) Payment details check
+GET {{URL}}guest-bookings/1302/payment-details
+Content-Type: application/json
+
+### =====================================================
+### BOOK A SHOOT - STUDIO JOURNEY 2B - STUDIO WITH CP SELECTED
+### Flow: studio service -> project/contact -> studio selection kept in frontend state -> browse/select CP -> quote -> finalize -> payment
+### Replace booking_id, quote_id, selected_crew_ids, amount, and paymentIntentId from responses.
+### =====================================================
+
+### 1) Start studio-first draft before studio is selected
+POST {{URL}}sales/leads/track-early-interest HTTP/1.1
+Content-Type: application/json
+
+{
+  "booking_id": null,
+  "guest_email": "jane.studio@beige.test",
+  "client_name": "Jane Studio",
+  "phone": "+16502450967",
+  "content_type": "studio",
+  "shoot_type": "studio",
+  "studio_booking_for": "production",
+  "project_name": "Studio Product Campaign",
+  "special_instructions": "Studio booking with one photographer selected.",
+  "booking_type": "single_day",
+  "start_date": "2026-01-08",
+  "start_time": "10:00",
+  "end_time": "18:00",
+  "time_zone": "America/Los_Angeles",
+  "startDate": "2026-01-08T10:00:00",
+  "endDate": "2026-01-08T18:00:00",
+  "edits_needed": false,
+  "video_edit_types": [],
+  "photo_edit_types": []
+}
+
+### 2) Save CP requirement if user clicks Browse Creators
+### Optional timing/edit fields here belong to the creator/shoot portion, not studio rental timing.
+### Location is not sent here; use selected studio coordinates for creator search and final booking location.
+PATCH {{URL}}sales/bookings/1304/crew HTTP/1.1
+Content-Type: application/json
+
+{
+  "crew_roles": {
+    "photographer": 1
+  },
+  "booking_type": "single_day",
+  "start_date": "2026-01-08",
+  "start_time": "10:30",
+  "end_time": "16:30",
+  "time_zone": "America/Los_Angeles",
+  "duration_hours": 6,
+  "edits_needed": true,
+  "video_edit_types": [],
+  "photo_edit_types": ["edited_photos"],
+  "reference_links": []
+}
+
+### 3) Search CPs
+GET {{URL}}creators/search?content_types=photographer&latitude=34.1654&longitude=-118.6089&limit=12&page=1
+
+### 4) Pricing preview with selected CP. Keep role_counts as fallback for creator role mapping.
+### Studio selection is still frontend state here. It is persisted in step 6 final PUT.
+POST {{URL}}pricing/calculate-from-creators
+Content-Type: application/json
+
+{
+  "creator_ids": [2130],
+  "role_counts": {
+    "photographer": 1
+  },
+  "content_type": "studio",
+  "event_type": "studio",
+  "video_edit_types": [],
+  "photo_edit_types": ["edited_photos"],
+  "skip_discount": true,
+  "skip_margin": true,
+  "studio_total": 1200,
+  "studio_items": [
+    {
+      "studio_id": "beige-modern-resort-villa",
+      "name": "Beige Media (Modern Resort Villa with Jacuzzi)",
+      "location": "Woodland Hills, Los Angeles, CA",
+      "pricing_mode": "hourly",
+      "pricing_category": "production",
+      "pricing_label": "Production",
+      "unit_price": 150,
+      "quantity": 8,
+      "total": 1200,
+      "selected_date": "2026-01-08",
+      "start_time": "10:00",
+      "end_time": "18:00",
+      "time_zone": "America/Los_Angeles",
+      "studio_booking_type": "single_day",
+      "booking_days": [],
+      "cast_and_crew_count": 4,
+      "update_studio_datetime": true
+    }
+  ],
+  "shoot_hours": 6,
+  "shoot_start_date": "2026-01-08T10:30:00.000Z"
+}
+
+### 5) Save quote with CP + studio
+POST {{URL}}pricing/quotes
+Content-Type: application/json
+
+{
+  "items": [
+    { "item_id": 10, "quantity": 1 }
+  ],
+  "shootHours": 6,
+  "eventType": "studio",
+  "guestEmail": "jane.studio@beige.test",
+  "bookingId": 1304,
+  "shoot_start_date": "2026-01-08T10:30:00.000Z",
+  "video_edit_types": [],
+  "photo_edit_types": ["edited_photos"],
+  "studio_total": 1200,
+  "studio_items": [
+    {
+      "studio_id": "beige-modern-resort-villa",
+      "name": "Beige Media (Modern Resort Villa with Jacuzzi)",
+      "location": "Woodland Hills, Los Angeles, CA",
+      "pricing_mode": "hourly",
+      "pricing_category": "production",
+      "pricing_label": "Production",
+      "unit_price": 150,
+      "quantity": 8,
+      "total": 1200,
+      "selected_date": "2026-01-08",
+      "start_time": "10:00",
+      "end_time": "18:00",
+      "time_zone": "America/Los_Angeles",
+      "studio_booking_type": "single_day",
+      "booking_days": [],
+      "cast_and_crew_count": 4,
+      "update_studio_datetime": true
+    }
+  ]
+}
+
+### 6) Finalize booking with selected CP
+### This is where studio_items are persisted to booking description and studio_bookings.
+PUT {{URL}}guest-bookings/1304
+Content-Type: application/json
+
+{
+  "order_name": "STUDIO Shoot - Jane Studio",
+  "guest_email": "jane.studio@beige.test",
+  "content_type": "studio",
+  "shoot_type": "studio",
+  "studio_booking_for": "production",
+  "booking_type": "single_day",
+  "start_date": "2026-01-08",
+  "start_time": "10:30",
+  "end_time": "16:30",
+  "time_zone": "America/Los_Angeles",
+  "duration_hours": 6,
+  "location": "Woodland Hills, Los Angeles, CA",
+  "location_latitude": 34.1654,
+  "location_longitude": -118.6089,
+  "quote_id": 540,
+  "full_name": "Jane Studio",
+  "phone": "+16502450967",
+  "edits_needed": true,
+  "video_edit_types": [],
+  "photo_edit_types": ["edited_photos"],
+  "crew_size": "1",
+  "crew_roles": {
+    "photographer": 1
+  },
+  "matching_method": "manual_selection",
+  "selected_crew_ids": [2130],
+  "special_instructions": "Studio booking with one photographer selected.",
+  "reference_links": [],
+  "studio_total": 1200,
+  "studio_items": [
+    {
+      "studio_id": "beige-modern-resort-villa",
+      "name": "Beige Media (Modern Resort Villa with Jacuzzi)",
+      "location": "Woodland Hills, Los Angeles, CA",
+      "image": "https://d2jhn32fsulyac.cloudfront.net/assets/studio/weho-content/Weho+Studio-2.jpg",
+      "pricing_mode": "hourly",
+      "pricing_category": "production",
+      "pricing_label": "Production",
+      "unit_price": 150,
+      "quantity": 8,
+      "total": 1200,
+      "price_label": "$150/hour",
+      "selected_date": "2026-01-08",
+      "start_time": "10:00",
+      "end_time": "18:00",
+      "time_zone": "America/Los_Angeles",
+      "studio_booking_type": "single_day",
+      "booking_days": [],
+      "cast_and_crew_count": 4,
+      "update_studio_datetime": true,
+      "lat": 34.1654,
+      "lng": -118.6089
+    }
+  ],
+  "start_date_time": "2026-01-08T10:30:00",
+  "end_date_time": "2026-01-08T16:30:00",
+  "is_draft": false
+}
+
+### 7) Payment details check
+GET {{URL}}guest-bookings/1304/payment-details
+Content-Type: application/json
+
+### =====================================================
+### BOOK A SHOOT - STUDIO JOURNEY 3 - STUDIO + VIDEOGRAPHY
+### UI Flow:
+### Screen 1: Service type + booking for + studio selection + cast/crew + shoot type + studio timing
+### Screen 2: Video shoot type + videography timing + edit types
+### Screen 3: Crew requirement count + location + additional details + links
+### Screen 4: Crew size and matching
+### Screen 5: Select dream team
+### Screen 6: Review and confirm
+### Replace booking_id, quote_id, selected_crew_ids, amount, and paymentIntentId from responses.
+### =====================================================
+
+### SCREEN 1) Create draft with combined service + selected studio
+### Studio timing lives inside studio_items. This is the studio rental window.
+POST {{URL}}sales/leads/track-early-interest HTTP/1.1
+Content-Type: application/json
+
+{
+  "booking_id": null,
+  "guest_email": "journey3@beige.test",
+  "client_name": "Journey Three",
+  "phone": "+16502450968",
+  "content_type": "studio,videographer",
+  "shoot_type": "podcasts_shows",
+  "studio_booking_for": "production",
+  "booking_type": "single_day",
+  "start_date": "2026-01-12",
+  "start_time": "10:00",
+  "end_time": "18:00",
+  "time_zone": "America/Los_Angeles",
+  "startDate": "2026-01-12T10:00:00",
+  "endDate": "2026-01-12T18:00:00",
+  "edits_needed": false,
+  "video_edit_types": [],
+  "photo_edit_types": [],
+  "studio_total": 1200,
+  "studio_items": [
+    {
+      "studio_id": "beige-modern-resort-villa",
+      "name": "Beige Media (Modern Resort Villa with Jacuzzi)",
+      "location": "Woodland Hills, Los Angeles, CA",
+      "image": "https://d2jhn32fsulyac.cloudfront.net/assets/studio/weho-content/Weho+Studio-2.jpg",
+      "pricing_mode": "hourly",
+      "pricing_category": "production",
+      "pricing_label": "Production",
+      "unit_price": 150,
+      "quantity": 8,
+      "total": 1200,
+      "price_label": "$150/hour",
+      "selected_date": "2026-01-12",
+      "start_time": "10:00",
+      "end_time": "18:00",
+      "time_zone": "America/Los_Angeles",
+      "studio_booking_type": "single_day",
+      "booking_days": [],
+      "cast_and_crew_count": 4,
+      "update_studio_datetime": true,
+      "lat": 34.1654,
+      "lng": -118.6089
+    }
+  ]
+}
+
+### SCREEN 2) Save videography service settings & SCREEN 3) Save more details: crew count + location + additional details + links
+### keep Screen 2 data in frontend state, then send everything together on Screen 3
+### If user selects "Keep it same", omit booking_type/start_date/start_time/end_time/time_zone/duration_hours.
+### For studio bookings, location should be prefilled/derived from selected studio.
+PATCH {{URL}}sales/bookings/1306/crew HTTP/1.1
+Content-Type: application/json
+
+{
+  "shoot_type": "podcasts_shows",
+  "crew_roles": {
+    "videographer": 1
+  },
+  "booking_type": "single_day",
+  "start_date": "2026-01-12",
+  "start_time": "10:30",
+  "end_time": "16:30",
+  "time_zone": "America/Los_Angeles",
+  "duration_hours": 6,
+  "edits_needed": true,
+  "video_edit_types": ["social_reel_15_30"],
+  "photo_edit_types": [],
+  "location": "Woodland Hills, Los Angeles, CA",
+  "location_latitude": 34.1654,
+  "location_longitude": -118.6089,
+  "description": "Need one videographer for a podcast recording.",
+  "reference_links": []
+}
+
+### SCREEN 4) Crew size and matching
+### No required save API. Use current draft/frontend state to show recommendation.
+
+### SCREEN 5) Search videographers near the selected studio, then select dream team in frontend state
+GET {{URL}}creators/search?content_types=videographer&latitude=34.1654&longitude=-118.6089&limit=12&page=1
+
+### SCREEN 6A) Pricing preview with selected videographer + studio
+POST {{URL}}pricing/calculate-from-creators
+Content-Type: application/json
+
+{
+  "creator_ids": [2130],
+  "role_counts": {
+    "videographer": 1
+  },
+  "content_type": "studio,videographer",
+  "event_type": "podcasts_shows",
+  "video_edit_types": ["social_reel_15_30"],
+  "photo_edit_types": [],
+  "skip_discount": true,
+  "skip_margin": true,
+  "studio_total": 1200,
+  "studio_items": [
+    {
+      "studio_id": "beige-modern-resort-villa",
+      "name": "Beige Media (Modern Resort Villa with Jacuzzi)",
+      "location": "Woodland Hills, Los Angeles, CA",
+      "pricing_mode": "hourly",
+      "pricing_category": "production",
+      "pricing_label": "Production",
+      "unit_price": 150,
+      "quantity": 8,
+      "total": 1200,
+      "selected_date": "2026-01-12",
+      "start_time": "10:00",
+      "end_time": "18:00",
+      "time_zone": "America/Los_Angeles",
+      "studio_booking_type": "single_day",
+      "booking_days": [],
+      "cast_and_crew_count": 4,
+      "update_studio_datetime": true
+    }
+  ],
+  "shoot_hours": 6,
+  "shoot_start_date": "2026-01-12T10:30:00.000Z"
+}
+
+### SCREEN 6B) Save quote with videographer + studio
+POST {{URL}}pricing/quotes
+Content-Type: application/json
+
+{
+  "items": [
+    { "item_id": 11, "quantity": 1 }
+  ],
+  "shootHours": 6,
+  "eventType": "podcasts_shows",
+  "guestEmail": "journey3@beige.test",
+  "bookingId": 1306,
+  "shoot_start_date": "2026-01-12T10:30:00.000Z",
+  "video_edit_types": ["social_reel_15_30"],
+  "photo_edit_types": [],
+  "studio_total": 1200,
+  "studio_items": [
+    {
+      "studio_id": "beige-modern-resort-villa",
+      "name": "Beige Media (Modern Resort Villa with Jacuzzi)",
+      "location": "Woodland Hills, Los Angeles, CA",
+      "pricing_mode": "hourly",
+      "pricing_category": "production",
+      "pricing_label": "Production",
+      "unit_price": 150,
+      "quantity": 8,
+      "total": 1200,
+      "selected_date": "2026-01-12",
+      "start_time": "10:00",
+      "end_time": "18:00",
+      "time_zone": "America/Los_Angeles",
+      "studio_booking_type": "single_day",
+      "booking_days": [],
+      "cast_and_crew_count": 4,
+      "update_studio_datetime": true
+    }
+  ]
+}
+
+### SCREEN 6C) Finalize booking with selected videographer
+### Top-level location is derived from the selected studio. studio_items persist studio metadata and studio_bookings.
+PUT {{URL}}guest-bookings/1306
+Content-Type: application/json
+
+{
+  "order_name": "STUDIO + VIDEO Shoot - Journey Three",
+  "guest_email": "journey3@beige.test",
+  "content_type": "studio,videographer",
+  "shoot_type": "podcasts_shows",
+  "studio_booking_for": "production",
+  "booking_type": "single_day",
+  "start_date": "2026-01-12",
+  "start_time": "10:30",
+  "end_time": "16:30",
+  "time_zone": "America/Los_Angeles",
+  "duration_hours": 6,
+  "location": "Woodland Hills, Los Angeles, CA",
+  "location_latitude": 34.1654,
+  "location_longitude": -118.6089,
+  "quote_id": 541,
+  "full_name": "Journey Three",
+  "phone": "+16502450968",
+  "edits_needed": true,
+  "video_edit_types": ["social_reel_15_30"],
+  "photo_edit_types": [],
+  "crew_size": "1",
+  "crew_roles": {
+    "videographer": 1
+  },
+  "matching_method": "manual_selection",
+  "selected_crew_ids": [2130],
+  "special_instructions": "Need one videographer for a podcast recording. Please bring a compact lighting setup.",
+  "reference_links": [
+    "https://example.com/reference-podcast-look"
+  ],
+  "studio_total": 1200,
+  "studio_items": [
+    {
+      "studio_id": "beige-modern-resort-villa",
+      "name": "Beige Media (Modern Resort Villa with Jacuzzi)",
+      "location": "Woodland Hills, Los Angeles, CA",
+      "image": "https://d2jhn32fsulyac.cloudfront.net/assets/studio/weho-content/Weho+Studio-2.jpg",
+      "pricing_mode": "hourly",
+      "pricing_category": "production",
+      "pricing_label": "Production",
+      "unit_price": 150,
+      "quantity": 8,
+      "total": 1200,
+      "price_label": "$150/hour",
+      "selected_date": "2026-01-12",
+      "start_time": "10:00",
+      "end_time": "18:00",
+      "time_zone": "America/Los_Angeles",
+      "studio_booking_type": "single_day",
+      "booking_days": [],
+      "cast_and_crew_count": 4,
+      "update_studio_datetime": true,
+      "lat": 34.1654,
+      "lng": -118.6089
+    }
+  ],
+  "start_date_time": "2026-01-12T10:30:00",
+  "end_date_time": "2026-01-12T16:30:00",
+  "is_draft": false
+}
+
+### PAYMENT 1) Payment details check
+GET {{URL}}guest-bookings/1306/payment-details
+Content-Type: application/json
+
+### PAYMENT 2) Create payment intent
+POST {{URL}}payments/create-intent-multi
+Content-Type: application/json
+
+{
+  "booking_id": "1306",
+  "amount": 2950,
+  "guest_email": "journey3@beige.test",
+  "use_credit": false,
+  "credit_amount_used": 0
+}
+
+### PAYMENT 3) Confirm payment after Stripe confirms client-side
+POST {{URL}}payments/confirm-multi
+Content-Type: application/json
+
+{
+  "paymentIntentId": "pi_3TrDiW54hnPNgHXU0kAtA3y1",
+  "booking_id": "1306",
+  "referral_code": null,
+  "use_credit": false,
+  "credit_amount_used": 0
+}
+
+### =====================================================
+### PUBLIC STUDIO CATALOG - DYNAMIC STUDIO DATA
+### These APIs are for Book a Shoot frontend studio cards/details.
+### No admin auth required. Only active studios are returned.
+### =====================================================
+
+### List active studios
+GET {{URL}}studios/catalog?page=1&limit=20
+Content-Type: application/json
+
+### List active studios filtered by pricing/category key
+GET {{URL}}studios/catalog?page=1&limit=20&booking_for=productions
+Content-Type: application/json
+
+### Search active studios
+GET {{URL}}studios/catalog?page=1&limit=20&search=woodland
+Content-Type: application/json
+
+### Get studio detail by slug or numeric studio_id
+GET {{URL}}studios/catalog/beige-west-hollywood-content-studio
+Content-Type: application/json

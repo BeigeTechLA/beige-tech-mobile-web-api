@@ -17,12 +17,8 @@ module.exports = function(sequelize, DataTypes) {
       }
     },
     studio_id: {
-      type: DataTypes.INTEGER,
-      allowNull: false,
-      references: {
-        model: 'studios',
-        key: 'studio_id'
-      }
+      type: DataTypes.STRING(255),
+      allowNull: false
     },
     user_id: {
       type: DataTypes.INTEGER,
@@ -31,6 +27,10 @@ module.exports = function(sequelize, DataTypes) {
         model: 'users',
         key: 'id'
       }
+    },
+    guest_email: {
+      type: DataTypes.STRING(255),
+      allowNull: true
     },
     booking_date: {
       type: DataTypes.DATEONLY,
@@ -46,6 +46,10 @@ module.exports = function(sequelize, DataTypes) {
     },
     duration_hours: {
       type: DataTypes.DECIMAL(5,2),
+      allowNull: true
+    },
+    time_zone: {
+      type: DataTypes.STRING(100),
       allowNull: true
     },
     status: {
@@ -112,6 +116,11 @@ module.exports = function(sequelize, DataTypes) {
         name: 'idx_studio_bookings_booking',
         using: 'BTREE',
         fields: [{ name: 'stream_project_booking_id' }]
+      },
+      {
+        name: 'idx_studio_bookings_guest_email',
+        using: 'BTREE',
+        fields: [{ name: 'guest_email' }]
       }
     ]
   });
