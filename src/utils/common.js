@@ -144,15 +144,33 @@ const S3UploadFiles = async (files, options = {}) => {
 };
 
 const toAbsoluteBeigeAssetUrl = (pathValue) => {
-  const base = (process.env.BEIGE_ASSET_BASE_URL || '').replace(/\/+$/, '/');
-
   const raw = String(pathValue || '').trim();
   if (!raw) return '';
 
   // already full URL
   if (/^https?:\/\//i.test(raw)) return raw;
 
-  return `${base}${raw.replace(/^\/+/, '')}`;
+  const configuredBase = String(process.env.BEIGE_ASSET_BASE_URL || '').trim();
+  const bucket = String(process.env.S3_BUCKET_NAME || '').trim();
+  const region = String(process.env.S3_BUCKET_REGION || 'us-east-1').trim();
+  const subFolder = String(process.env.S3_SUB_FOLDER || '').trim().replace(/^\/+|\/+$/g, '');
+  const base = (
+    configuredBase ||
+    (bucket
+      ? `https://${bucket}.s3.${region || 'us-east-1'}.amazonaws.com/${subFolder ? `${subFolder}/` : ''}`
+      : '')
+  ).replace(/\/+$/, '/');
+
+  if (!base) return raw.replace(/^\/+/, '');
+
+  const cleanRaw = raw.replace(/^\/+/, '');
+  const cleanSubFolder = subFolder ? `${subFolder}/` : '';
+  const assetPath =
+    cleanSubFolder && cleanRaw.startsWith(cleanSubFolder)
+      ? cleanRaw.slice(cleanSubFolder.length)
+      : cleanRaw;
+
+  return `${base}${assetPath}`;
 };
 
 module.exports = {

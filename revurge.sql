@@ -2571,3 +2571,11 @@ ALTER TABLE `project_meetings`
 -- 16-07-26
 
 ALTER TABLE `sales_quote_line_items` CHANGE `item_name` `item_name` TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL;
+
+ALTER TABLE `sales_quotes`
+  ADD COLUMN `pre_production_notes` TEXT NULL AFTER `project_description`,
+  ADD COLUMN `pre_production_file_name` VARCHAR(255) NULL AFTER `pre_production_notes`,
+  ADD COLUMN `pre_production_file_type` VARCHAR(255) NULL AFTER `pre_production_file_name`,
+  ADD COLUMN `pre_production_file_size` INT NULL AFTER `pre_production_file_type`,
+  ADD COLUMN `pre_production_file_path` VARCHAR(500) NULL AFTER `pre_production_file_size`,
+  ADD COLUMN `pre_production_file_url` VARCHAR(1000) NULL AFTER `pre_production_file_path`;
