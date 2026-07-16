@@ -4467,6 +4467,11 @@ const normalizeSharedUploadLocationSegment = (value) =>
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '');
 
+const hasUnsafePathSegment = (value) =>
+  normalizePathForAccess(value)
+    .split('/')
+    .some((segment) => segment === '.' || segment === '..');
+
 const ensureSharedUploadAllowedLocation = (phase, path) => {
   const normalizedPhase = normalizeSharedUploadPhase(phase);
   const pathSegments = normalizePathForAccess(path)
@@ -4496,6 +4501,35 @@ const getParentFolderPath = (path) => {
   return segments.slice(0, -1).join('/');
 };
 
+const validateSharedResolvedUploadFilepath = async (share, filepath, requestedPhase, requestedPath) => {
+  const normalizedFilepath = normalizeSharedStorageFilepath(filepath);
+  if (!normalizedFilepath || hasUnsafePathSegment(normalizedFilepath)) {
+    const error = new Error('Invalid upload target');
+    error.status = 400;
+    throw error;
+  }
+
+  const workspaceRootPath = await getSharedWorkspaceRootPath(share.external_id);
+  if (!isPathWithin(workspaceRootPath, normalizedFilepath)) {
+    const error = new Error('Uploaded file is outside the shared workspace');
+    error.status = 403;
+    throw error;
+  }
+
+  const requestedUploadPhase = normalizeSharedUploadPhase(requestedPhase);
+  const requestedRelativePath = normalizePathForAccess(requestedPath || '');
+  const extractedFromFilepath = extractPhaseAndRelativePath(normalizedFilepath, requestedUploadPhase);
+  const effectivePhase = extractedFromFilepath.phase || requestedUploadPhase || normalizeSharedUploadPhase(share?.phase);
+  const effectiveRelativePath = extractedFromFilepath.relativePath || requestedRelativePath;
+  const uploadFolderPath = extractedFromFilepath.relativePath
+    ? getParentFolderPath(extractedFromFilepath.relativePath)
+    : requestedRelativePath;
+
+  ensureSharedScopeAccess(share, effectivePhase, effectiveRelativePath);
+  ensureSharedUploadAllowedLocation(effectivePhase, uploadFolderPath);
+  return normalizedFilepath;
+};
+
 const resolveSharedUploadFilepath = async (share, requestedPhase, requestedPath, fileName) => {
   const safeFileName = sanitizeFolderName(fileName, 'file');
   if (!safeFileName) {
@@ -4515,11 +4549,12 @@ const resolveSharedUploadFilepath = async (share, requestedPhase, requestedPath,
   ensureSharedScopeAccess(share, phaseToUse, pathToUse);
   ensureSharedUploadAllowedLocation(phaseToUse, pathToUse);
 
-  const phaseFolder = phaseToUse === 'pre' ? 'pre-production' : phaseToUse === 'post' ? 'post-production' : '';
+  const phaseFolder = phaseToUse === 'pre' ? 'Pre-Production' : phaseToUse === 'post' ? 'Post-Production' : '';
   const workspaceRootPath = await getSharedWorkspaceRootPath(share.external_id);
-  return normalizePathForAccess(
+  const filepath = normalizePathForAccess(
     [workspaceRootPath, phaseFolder, pathToUse, safeFileName].filter(Boolean).join('/')
   );
+  return validateSharedResolvedUploadFilepath(share, filepath, phaseToUse, pathToUse);
 };
 
 exports.createShare = async (req, res) => {
@@ -5093,7 +5128,10 @@ exports.getSharedUploadPolicy = async (req, res) => {
     }
     ensureSharedUploadAccess(share);
 
-    const filepath = await resolveSharedUploadFilepath(share, req.body.phase, req.body.path, fileName);
+    const requestedFilepath = String(req.body.filepath || req.body.filePath || '').trim();
+    const filepath = requestedFilepath
+      ? await validateSharedResolvedUploadFilepath(share, requestedFilepath, req.body.phase, req.body.path)
+      : await resolveSharedUploadFilepath(share, req.body.phase, req.body.path, fileName);
     const result = await proxyRequest('/upload-policy', {
       method: 'POST',
       body: JSON.stringify({
@@ -5149,12 +5187,17 @@ exports.getSharedUploadPoliciesBatch = async (req, res) => {
     const resolvedItems = [];
     for (const item of items.slice(0, 500)) {
       try {
-        const filepath = await resolveSharedUploadFilepath(
-          share,
-          item?.phase ?? req.body.phase,
-          item?.path ?? req.body.path,
-          item?.fileName || String(item?.filepath || '').split('/').pop() || ''
-        );
+        const requestedFilepath = String(item?.filepath || item?.filePath || '').trim();
+        const itemPhase = item?.phase ?? req.body.phase;
+        const itemPath = item?.path ?? req.body.path;
+        const filepath = requestedFilepath
+          ? await validateSharedResolvedUploadFilepath(share, requestedFilepath, itemPhase, itemPath)
+          : await resolveSharedUploadFilepath(
+              share,
+              itemPhase,
+              itemPath,
+              item?.fileName || ''
+            );
         resolvedItems.push({
           filepath,
           fileContentType: item?.fileContentType,
@@ -5259,25 +5302,7 @@ exports.notifySharedFileUploaded = async (req, res) => {
       return res.status(403).json({ success: false, message: 'Access denied for this email' });
     }
     ensureSharedUploadAccess(share);
-    const workspaceRootPath = await getSharedWorkspaceRootPath(share.external_id);
-    if (!isPathWithin(workspaceRootPath, filepath)) {
-      return res.status(403).json({ success: false, message: 'Uploaded file is outside the shared workspace' });
-    }
-
-    const requestedPhase = normalizeSharedUploadPhase(req.body.phase);
-    const requestedRelativePath = normalizePathForAccess(req.body.path || '');
-    const extractedFromFilepath = extractPhaseAndRelativePath(filepath, requestedPhase);
-    const effectivePhase = extractedFromFilepath.phase || requestedPhase;
-    const effectiveRelativePath = extractedFromFilepath.relativePath || requestedRelativePath;
-    const uploadFolderPath = extractedFromFilepath.relativePath
-      ? getParentFolderPath(extractedFromFilepath.relativePath)
-      : requestedRelativePath;
-    ensureSharedScopeAccess(
-      share,
-      effectivePhase,
-      effectiveRelativePath
-    );
-    ensureSharedUploadAllowedLocation(effectivePhase, uploadFolderPath);
+    await validateSharedResolvedUploadFilepath(share, filepath, req.body.phase, req.body.path);
 
     const result = await proxyRequest('/file-uploaded', {
       method: 'POST',
@@ -5325,29 +5350,17 @@ exports.notifySharedFilesUploadedBatch = async (req, res) => {
     }
     ensureSharedUploadAccess(share);
 
-    const workspaceRootPath = await getSharedWorkspaceRootPath(share.external_id);
     const validItems = [];
     const invalidItems = [];
     for (const item of items.slice(0, 500)) {
       const filepath = normalizeSharedStorageFilepath(item?.filepath || item?.filePath || '');
       try {
-        if (!isPathWithin(workspaceRootPath, filepath)) {
-          throw new Error('Uploaded file is outside the shared workspace');
-        }
-        const requestedPhase = normalizeSharedUploadPhase(item?.phase ?? req.body.phase);
-        const requestedRelativePath = normalizePathForAccess((item?.path ?? req.body.path) || '');
-        const extractedFromFilepath = extractPhaseAndRelativePath(filepath, requestedPhase);
-        const effectivePhase = extractedFromFilepath.phase || requestedPhase;
-        const effectiveRelativePath = extractedFromFilepath.relativePath || requestedRelativePath;
-        const uploadFolderPath = extractedFromFilepath.relativePath
-          ? getParentFolderPath(extractedFromFilepath.relativePath)
-          : requestedRelativePath;
-        ensureSharedScopeAccess(
+        await validateSharedResolvedUploadFilepath(
           share,
-          effectivePhase,
-          effectiveRelativePath
+          filepath,
+          item?.phase ?? req.body.phase,
+          item?.path ?? req.body.path
         );
-        ensureSharedUploadAllowedLocation(effectivePhase, uploadFolderPath);
         validItems.push({
           filepath,
           fileContentType: item?.fileContentType,
