@@ -5648,7 +5648,9 @@ exports.getCrewMembers = async (req, res) => {
                 include: [{
                     model: crew_member_files,
                     as: 'crew_member_files',
-                    attributes: ['crew_files_id', 'file_type', 'file_path'],
+                    attributes: ['crew_files_id', 'file_type', 'file_path', 'created_at', 'is_active'],
+                    where: { is_active: 1 },
+                    required: false,
                 }],
                 order: [
                     ['is_crew_verified', 'ASC'],
