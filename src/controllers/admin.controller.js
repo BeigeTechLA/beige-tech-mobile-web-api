@@ -6320,7 +6320,7 @@ exports.getCrewMemberById = async (req, res) => {
             include: [{
                 model: crew_member_files,
                 as: 'crew_member_files',
-                attributes: ['crew_member_id', 'file_type', 'file_path', 'created_at', 'title', 'tag'],
+                attributes: ['crew_member_id', 'crew_files_id', 'file_type', 'file_path', 'created_at', 'title', 'tag'],
                 where: { is_active: 1 },
                 required: false
             }]
