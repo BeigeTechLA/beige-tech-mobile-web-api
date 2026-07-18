@@ -5324,7 +5324,7 @@ exports.createCrewMember = [
     { name: 'profile_photo', maxCount: 1 },
     { name: 'resume', maxCount: 1 },
     { name: 'certifications', maxCount: 10 },
-    { name: 'portfolio', maxCount: 1 },
+    { name: 'portfolio', maxCount: undefined },
     { name: 'recent_work', maxCount: undefined }
   ]),
 
@@ -6427,7 +6427,7 @@ exports.updateCrewMember = [
     { name: 'profile_photo', maxCount: 1 },
     { name: 'resume', maxCount: 1 },
     { name: 'certifications', maxCount: 10 },
-    { name: 'portfolio', maxCount: 1 },
+    { name: 'portfolio', maxCount: undefined },
     { name: 'recent_work', maxCount: undefined }
   ]),
 
@@ -6790,10 +6790,11 @@ exports.uploadCrewMemberProfileFiles = [
       const { crew_member_id } = req.params;
       const file_type = normalizeCrewProfileFileType(req.params.file_type);
 
-      const singleFileTypes = ['profile_photo', 'resume', 'portfolio'];
+      const singleFileTypes = ['profile_photo', 'resume'];
       const allowedTypes = [
         ...singleFileTypes,
         'certifications',
+        'portfolio',
         'recent_work'
       ];
 
@@ -6868,7 +6869,13 @@ exports.uploadCrewMemberProfileFiles = [
           file_category: file_type,
           title: Array.isArray(req.body.title)
             ? req.body.title[index]
-            : req.body.title || (file_type === 'recent_work' ? 'Untitled' : 'Certification'),
+            : req.body.title || (
+              file_type === 'recent_work'
+                ? 'Untitled'
+                : file_type === 'portfolio'
+                  ? 'Portfolio'
+                  : 'Certification'
+            ),
           tag: Array.isArray(req.body.tag)
             ? req.body.tag[index]
             : req.body.tag || null,
