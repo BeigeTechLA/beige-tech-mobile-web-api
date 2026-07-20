@@ -2541,7 +2541,8 @@ exports.updateProjectDateLocation = async (req, res) => {
       time_zone !== undefined ||
       hasBookingDaysPayload ||
       requestedBookingType === 'single_day' ||
-      requestedBookingType === 'multi_day';
+      requestedBookingType === 'multi_day' ||
+      requestedBookingType === 'tbd';
     const hasLocationUpdate = nextLocation !== undefined;
 
     if (!hasScheduleUpdate && !hasLocationUpdate) {
@@ -2574,10 +2575,10 @@ exports.updateProjectDateLocation = async (req, res) => {
       requestedBookingType ||
       (normalizedBookingDays.length > 0 ? 'multi_day' : null);
 
-    if (resolvedBookingType && !['single_day', 'multi_day'].includes(resolvedBookingType)) {
+    if (resolvedBookingType && !['single_day', 'multi_day', 'tbd'].includes(resolvedBookingType)) {
       return res.status(400).json({
         error: true,
-        message: 'booking_type must be single_day or multi_day.'
+        message: 'booking_type must be single_day, multi_day, or tbd.'
       });
     }
 
@@ -2675,6 +2676,13 @@ exports.updateProjectDateLocation = async (req, res) => {
     }
 
     const updatePayload = {};
+    if (resolvedBookingType === 'tbd') {
+      updatePayload.event_date = null;
+      updatePayload.start_time = null;
+      updatePayload.end_time = null;
+      updatePayload.time_zone = time_zone || null;
+      updatePayload.duration_hours = null;
+    }
     if (primaryScheduleDate !== undefined && primaryScheduleDate !== null) updatePayload.event_date = primaryScheduleDate;
     if (start_time !== undefined || resolvedBookingType === 'multi_day') updatePayload.start_time = primaryStartTime || null;
     if (end_time !== undefined || resolvedBookingType === 'multi_day') updatePayload.end_time = primaryEndTime || null;
@@ -2715,7 +2723,7 @@ exports.updateProjectDateLocation = async (req, res) => {
       );
     }
 
-    if (resolvedBookingType === 'single_day') {
+    if (resolvedBookingType === 'single_day' || resolvedBookingType === 'tbd') {
       await db.stream_project_booking_days.destroy({
         where: { stream_project_booking_id: project.stream_project_booking_id },
         transaction
