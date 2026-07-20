@@ -162,15 +162,32 @@ router.post('/shoots/update-onboarding-form', authMiddleware, admin.submitProjec
 router.get('/get-active-projects', admin.getActiveProjects);
 router.get('/recent-activity', authMiddleware, dashboardView, admin.getRecentActivity);
 router.get('/get-projects', authMiddleware, projectListView, admin.getAllProjectDetails);
+router.get(
+  '/shoots/export',
+  authMiddleware,
+  projectListView,
+  admin.exportShootsCsv
+);
 router.get('/get-upcoming-projects', admin.getUpcomingEvents);
 router.get('/get-project-status', admin.getProjectStats);
 router.post('/final-project-brief', admin.createProjectBrief);
 router.get('/get-crew-members', authMiddleware, adminUsersOrSalesRepresentativeView, admin.getCrewMembers);
 router.post('/get-crew-members', authMiddleware, adminUsersOrSalesRepresentativeView, admin.getCrewMembers);
+router.get(
+  '/crew-members/export',
+  authMiddleware,
+  adminUsersOrSalesRepresentativeView,
+  admin.exportCrewMembersCsv
+);
 router.post('/get-approved-crew-members', authMiddleware, crewAvailabilityView, admin.getApprovedCrewMembers);
 router.get('/crew-member/:crew_member_id', authMiddleware, adminSalesRepresentativeAvailabilityView, admin.getCrewMemberById);
 router.delete('/delete-crew-member/:crew_member_id', admin.deleteCrewMember);
 router.put('/edit-crew-member/:crew_member_id', admin.updateCrewMember);
+router.put('/crew-member/:crew_member_id/profile', authMiddleware, adminUsersEdit, admin.updateCrewMemberProfile);
+router.post('/crew-member/:crew_member_id/profile/files/:file_type', authMiddleware, adminUsersEdit, admin.uploadCrewMemberProfileFiles);
+router.post('/crew-member/:crew_member_id/profile/portfolio-links', authMiddleware, adminUsersEdit, admin.addCrewMemberPortfolioLinks);
+router.put('/crew-member/:crew_member_id/profile/portfolio-links/:crew_files_id', authMiddleware, adminUsersEdit, admin.editCrewMemberPortfolioLink);
+router.delete('/crew-member/:crew_member_id/profile-file/:crew_files_id', authMiddleware, adminUsersEdit, admin.deleteCrewMemberProfileFile);
 router.post('/assign_task', admin.createTask);
 router.post('/create_equipment', admin.createEquipment);
 router.get('/get-equipments', admin.getEquipment);
@@ -213,6 +230,12 @@ router.get('/shoot-category-count', authMiddleware, dashboardOrShootsView, admin
 router.get('/get-post-production-members', admin.getPostProductionMembers);
 router.post('/assign-post-production-member', authMiddleware, shootsEdit, admin.assignPostProductionMember);
 router.get('/get-clients', authMiddleware, adminUsersView, admin.getClients);
+router.get(
+  '/clients/export',
+  authMiddleware,
+  adminUsersView,
+  admin.exportClientsCsv
+);
 router.get('/archive-history', authMiddleware, adminUsersView, admin.getArchiveHistory);
 router.put('/edit-client/:client_id', admin.editClient);
 router.delete('/delete-client/:client_id', authMiddleware, adminUsersDelete, admin.deleteClient);
@@ -235,6 +258,8 @@ router.post('/remove-project-crew',authMiddleware, admin.removeProjectAssignedCr
 router.get('/get-project-form/:project_id', authMiddleware, projectFormView, admin.getProjectFormByProjectId);
 router.post('/shoots/remind-onboarding-form/:project_id', authMiddleware, admin.sendOnboardingFormReminder);
 router.post('/get-assigned-project-crew', admin.getAllAssignedRequests);
+router.get('/crew-member-assigned-projects', authMiddleware, adminSalesRepresentativeView, admin.getCrewMemberAssignedProjectsByDate);
+router.get('/crew-member-assigned-projects/:crew_member_id', authMiddleware, adminSalesRepresentativeView, admin.getCrewMemberAssignedProjectsByDate);
 router.post('/crew-member-assigned-projects', authMiddleware, adminSalesRepresentativeView, admin.getAllAssignedRequests);
 router.post('/roles/create', authMiddleware, requireSuperAdmin, admin.createRole);
 router.get('/roles', authMiddleware, requireSuperAdmin, admin.getRoles);

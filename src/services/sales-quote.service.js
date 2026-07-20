@@ -1,6 +1,11 @@
 const { Op } = require('sequelize');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const http = require('http');
+const https = require('https');
 const db = require('../models');
 const constants = require('../utils/constants');
 const {
@@ -9,7 +14,7 @@ const {
   sendQuoteAcceptedSalesNotificationEmail
 } = require('../utils/emailService');
 const { generateQuotePdfBuffer } = require('../utils/quotePdf');
-const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
+const { S3UploadFiles, toAbsoluteBeigeAssetUrl } = require('../utils/common');
 const { normalizeTime, resolveEventDateAndStartTime } = require('../utils/timezone');
 const { extractCoordinatesFromPayload } = require('../utils/locationHelpers');
 const accountCreditService = require('./account-credit.service');
@@ -221,6 +226,171 @@ function normalizeLocationAddress(value) {
   return trimmed;
 }
 
+function normalizeOptionalText(value) {
+  if (value === null || value === undefined) return null;
+  const text = String(value).trim();
+  return text || null;
+}
+
+function normalizePreProductionFilePayload(payload = {}) {
+  const rawContent = normalizeOptionalText(payload.pre_production_file_content);
+  const content = rawContent ? rawContent.replace(/^data:.*;base64,/, '').trim() : null;
+
+  if (!content) {
+    return null;
+  }
+
+  return {
+    pre_production_file_name:
+      normalizeOptionalText(payload.pre_production_file_name) || 'pre-production-file',
+    pre_production_file_type:
+      normalizeOptionalText(payload.pre_production_file_type) || 'application/octet-stream',
+    pre_production_file_size:
+      Number.isFinite(Number(payload.pre_production_file_size))
+        ? Math.max(0, Math.round(Number(payload.pre_production_file_size)))
+        : null,
+    pre_production_file_content: content
+  };
+}
+
+function sanitizeUploadFileName(value = '') {
+  const fallback = 'pre-production-file';
+  const baseName = path.basename(String(value || '').trim() || fallback);
+  return baseName.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/-+/g, '-') || fallback;
+}
+
+async function uploadPreProductionFileToS3(payload = {}, quoteId = null) {
+  const nextFile = normalizePreProductionFilePayload(payload);
+  if (!nextFile) {
+    return null;
+  }
+
+  const fileName = sanitizeUploadFileName(nextFile.pre_production_file_name);
+  const tempFilePath = path.join(
+    os.tmpdir(),
+    `quote-pre-production-${quoteId || 'new'}-${Date.now()}-${fileName}`
+  );
+
+  try {
+    fs.writeFileSync(tempFilePath, Buffer.from(nextFile.pre_production_file_content, 'base64'));
+
+    const uploadedFiles = await S3UploadFiles(
+      {
+        pre_production_file: [
+          {
+            filename: fileName,
+            originalname: fileName,
+            mimetype: nextFile.pre_production_file_type,
+            size: nextFile.pre_production_file_size,
+            path: tempFilePath
+          }
+        ]
+      },
+      {
+        prefix: `quotes/pre-production/${quoteId || 'new'}`
+      }
+    );
+    const uploadedFilePath = uploadedFiles?.[0]?.file_path || null;
+
+    if (!uploadedFilePath) {
+      throw new Error('Failed to upload pre-production file to S3');
+    }
+
+    return {
+      pre_production_file_name: fileName,
+      pre_production_file_type: nextFile.pre_production_file_type,
+      pre_production_file_size: nextFile.pre_production_file_size,
+      pre_production_file_path: uploadedFilePath,
+      pre_production_file_url: toAbsoluteBeigeAssetUrl(uploadedFilePath) || uploadedFilePath
+    };
+  } finally {
+    if (fs.existsSync(tempFilePath)) {
+      fs.unlinkSync(tempFilePath);
+    }
+  }
+}
+
+async function buildPreProductionFileUpdate(payload = {}, existingQuote = null, quoteId = null) {
+  const nextFile = normalizePreProductionFilePayload(payload);
+  if (nextFile) {
+    return uploadPreProductionFileToS3(payload, quoteId);
+  }
+
+  if (payload.clear_pre_production_file === true) {
+    return {
+      pre_production_file_name: null,
+      pre_production_file_type: null,
+      pre_production_file_size: null,
+      pre_production_file_path: null,
+      pre_production_file_url: null
+    };
+  }
+
+  if (!existingQuote) {
+    return {
+      pre_production_file_name: null,
+      pre_production_file_type: null,
+      pre_production_file_size: null,
+      pre_production_file_path: null,
+      pre_production_file_url: null
+    };
+  }
+
+  return {
+    pre_production_file_name: existingQuote.pre_production_file_name || null,
+    pre_production_file_type: existingQuote.pre_production_file_type || null,
+    pre_production_file_size: existingQuote.pre_production_file_size || null,
+    pre_production_file_path: existingQuote.pre_production_file_path || null,
+    pre_production_file_url: existingQuote.pre_production_file_url || null
+  };
+}
+
+function readRemoteFileAsBase64(fileUrl) {
+  return new Promise((resolve, reject) => {
+    const url = normalizeOptionalText(fileUrl);
+    if (!url) {
+      resolve(null);
+      return;
+    }
+
+    const client = url.startsWith('https://') ? https : http;
+    client.get(url, (response) => {
+      if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+        readRemoteFileAsBase64(response.headers.location).then(resolve).catch(reject);
+        return;
+      }
+
+      if (response.statusCode !== 200) {
+        reject(new Error(`Failed to read pre-production file from S3 (${response.statusCode})`));
+        response.resume();
+        return;
+      }
+
+      const chunks = [];
+      response.on('data', (chunk) => chunks.push(chunk));
+      response.on('end', () => resolve(Buffer.concat(chunks).toString('base64')));
+    }).on('error', reject);
+  });
+}
+
+async function buildQuotePreProductionEmailAttachment(quoteDetails = {}) {
+  const fileUrl =
+    toAbsoluteBeigeAssetUrl(quoteDetails.pre_production_file_path) ||
+    toAbsoluteBeigeAssetUrl(quoteDetails.pre_production_file_url);
+  const content = await readRemoteFileAsBase64(fileUrl);
+  if (!content) return null;
+
+  const s3FileName = quoteDetails.pre_production_file_path
+    ? path.basename(String(quoteDetails.pre_production_file_path))
+    : '';
+
+  return {
+    content,
+    filename: s3FileName || quoteDetails.pre_production_file_name || 'pre-production-file',
+    type: quoteDetails.pre_production_file_type || 'application/octet-stream'
+  };
+}
+
 function resolveQuoteLocationAddress(payload = {}, fallback = {}) {
   if (payload.client_address !== undefined) {
     return normalizeLocationAddress(payload.client_address);
@@ -303,6 +473,12 @@ function buildQuoteVersionSnapshot(quoteRecord, lineItems = []) {
     client_phone: quote.client_phone || null,
     client_address: quote.client_address || null,
     project_description: quote.project_description || null,
+    pre_production_notes: quote.pre_production_notes || null,
+    pre_production_file_name: quote.pre_production_file_name || null,
+    pre_production_file_type: quote.pre_production_file_type || null,
+    pre_production_file_size: quote.pre_production_file_size || null,
+    pre_production_file_path: quote.pre_production_file_path || null,
+    pre_production_file_url: quote.pre_production_file_url || null,
     video_shoot_type: quote.video_shoot_type || null,
     booking_type: quote.booking_type || null,
     time_zone: quote.time_zone || null,
@@ -730,6 +906,39 @@ function buildQuoteCreatedAtCondition(range = 'all', dateOn = null) {
   }
 
   return null;
+}
+
+function buildQuoteListWhere(query, user) {
+  const where = isClientRole(user?.role)
+    ? { ...buildQuoteAccessWhere(user) }
+    : {};
+
+  const statusFilter = normalizeQuoteFilterStatus(query.status);
+  if (statusFilter?.length) {
+    appendAndCondition(where, {
+      status: statusFilter.length === 1 ? statusFilter[0] : { [Op.in]: statusFilter }
+    });
+  }
+
+  applyQuoteSalesRepFilter(where, query.assigned_sales_rep_id, user);
+
+  const createdAtCondition = buildQuoteCreatedAtCondition(query.range, query.date_on);
+
+  if (createdAtCondition) {
+    appendAndCondition(where, { created_at: createdAtCondition });
+  }
+
+  if (query.search) {
+    appendAndCondition(where, {
+      [Op.or]: [
+        { quote_number: { [Op.like]: `%${query.search}%` } },
+        { client_name: { [Op.like]: `%${query.search}%` } },
+        { project_description: { [Op.like]: `%${query.search}%` } }
+      ]
+    });
+  }
+
+  return where;
 }
 
 function getDateRange(range = 'all', dateOn = null) {
@@ -2458,6 +2667,8 @@ const QUOTE_AUDIT_FIELDS = [
   ['subtotal', 'Subtotal', 'currency'],
   ['total', 'Total', 'currency'],
   ['notes', 'Notes'],
+  ['pre_production_notes', 'Pre-production notes'],
+  ['pre_production_file_name', 'Pre-production file'],
   ['terms_conditions', 'Terms & conditions'],
   ['sent_at', 'Sent at'],
   ['viewed_at', 'Viewed at'],
@@ -2782,6 +2993,8 @@ function buildQuoteChangeSummary({ previousQuote = {}, nextQuote = {}, previousL
     buildFieldChange('Quote validity days', previousQuote.quote_validity_days, nextQuote.quote_validity_days, 'number'),
     buildFieldChange('Valid until', previousQuote.valid_until, nextQuote.valid_until),
     buildFieldChange('Notes', previousQuote.notes, nextQuote.notes),
+    buildFieldChange('Pre-production notes', previousQuote.pre_production_notes, nextQuote.pre_production_notes),
+    buildFieldChange('Pre-production file', previousQuote.pre_production_file_name, nextQuote.pre_production_file_name),
     buildFieldChange('Terms & conditions', previousQuote.terms_conditions, nextQuote.terms_conditions)
   ].filter(Boolean);
 
@@ -4689,6 +4902,7 @@ async function createQuote(payload, user) {
       location_latitude: latitude,
       location_longitude: longitude,
       project_description: payload.project_description || null,
+      pre_production_notes: normalizeOptionalText(payload.pre_production_notes),
       video_shoot_type: payload.video_shoot_type || null,
       booking_type: schedulePayload.booking_type,
       time_zone: schedulePayload.time_zone,
@@ -4713,6 +4927,15 @@ async function createQuote(payload, user) {
     const stableQuoteNumber = generateQuoteNumber(quote.sales_quote_id);
     if (quote.quote_number !== stableQuoteNumber) {
       await quote.update({ quote_number: stableQuoteNumber }, { transaction });
+    }
+
+    const preProductionFilePayload = await buildPreProductionFileUpdate(
+      payload,
+      null,
+      quote.sales_quote_id
+    );
+    if (Object.keys(preProductionFilePayload).length) {
+      await quote.update(preProductionFilePayload, { transaction });
     }
 
     if (lineItemsPayload.length) {
@@ -4793,6 +5016,12 @@ async function duplicateQuote(salesQuoteId, user) {
       location_latitude: sourceQuote.location_latitude ?? null,
       location_longitude: sourceQuote.location_longitude ?? null,
       project_description: sourceQuote.project_description || null,
+      pre_production_notes: sourceQuote.pre_production_notes || null,
+      pre_production_file_name: sourceQuote.pre_production_file_name || null,
+      pre_production_file_type: sourceQuote.pre_production_file_type || null,
+      pre_production_file_size: sourceQuote.pre_production_file_size || null,
+      pre_production_file_path: sourceQuote.pre_production_file_path || null,
+      pre_production_file_url: sourceQuote.pre_production_file_url || null,
       video_shoot_type: sourceQuote.video_shoot_type || null,
       booking_type: sourceQuote.booking_type || null,
       time_zone: sourceQuote.time_zone || null,
@@ -4933,6 +5162,12 @@ async function updateQuote(salesQuoteId, payload, user) {
       location_latitude: quote.location_latitude,
       location_longitude: quote.location_longitude,
       status: quote.status,
+      pre_production_notes: quote.pre_production_notes,
+      pre_production_file_name: quote.pre_production_file_name,
+      pre_production_file_type: quote.pre_production_file_type,
+      pre_production_file_size: quote.pre_production_file_size,
+      pre_production_file_path: quote.pre_production_file_path,
+      pre_production_file_url: quote.pre_production_file_url,
       discount_type: quote.discount_type,
       discount_value: quote.discount_value,
       discount_amount: quote.discount_amount,
@@ -4973,6 +5208,7 @@ async function updateQuote(salesQuoteId, payload, user) {
       quoteValidityDaysProvided: payload.quote_validity_days !== undefined
     });
     const schedulePayload = normalizeQuoteSchedulePayload(payload, quote);
+    const preProductionFilePayload = await buildPreProductionFileUpdate(payload, quote, salesQuoteId);
 
     const nextStatus = resolveQuoteStatus(payload, quote.status);
     const assignedSalesRepId = isAdminRole(user.role)
@@ -5037,6 +5273,11 @@ async function updateQuote(salesQuoteId, payload, user) {
             ).longitude
           : quote.location_longitude,
       project_description: payload.project_description !== undefined ? payload.project_description : quote.project_description,
+      pre_production_notes:
+        payload.pre_production_notes !== undefined
+          ? normalizeOptionalText(payload.pre_production_notes)
+          : quote.pre_production_notes,
+      ...preProductionFilePayload,
       video_shoot_type: payload.video_shoot_type !== undefined ? payload.video_shoot_type : quote.video_shoot_type,
       booking_type: schedulePayload.booking_type,
       time_zone: schedulePayload.time_zone,
@@ -6236,33 +6477,7 @@ async function listQuotes(query, user) {
   const offset = (page - 1) * limit;
   // Quote listing is shared across admin/sales views where reps are expected
   // to browse all quotes. Keep strict restriction only for client role.
-  const where = isClientRole(user?.role)
-    ? { ...buildQuoteAccessWhere(user) }
-    : {};
-
-  const statusFilter = normalizeQuoteFilterStatus(query.status);
-  if (statusFilter?.length) {
-    appendAndCondition(where, {
-      status: statusFilter.length === 1 ? statusFilter[0] : { [Op.in]: statusFilter }
-    });
-  }
-
-  applyQuoteSalesRepFilter(where, query.assigned_sales_rep_id, user);
-
-  const createdAtCondition = buildQuoteCreatedAtCondition(query.range, query.date_on);
-  if (createdAtCondition) {
-    appendAndCondition(where, { created_at: createdAtCondition });
-  }
-
-  if (query.search) {
-    appendAndCondition(where, {
-      [Op.or]: [
-        { quote_number: { [Op.like]: `%${query.search}%` } },
-        { client_name: { [Op.like]: `%${query.search}%` } },
-        { project_description: { [Op.like]: `%${query.search}%` } }
-      ]
-    });
-  }
+  const where = buildQuoteListWhere(query, user);
 
   const sortBy = query.sort_by === 'valid_until' ? 'valid_until' : 'created_at';
   const sortOrder = String(query.sort_order || 'DESC').toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
@@ -6419,6 +6634,52 @@ async function listQuotes(query, user) {
     summary,
     rows: rowsWithFinancialDetails
   };
+}
+
+async function listQuoteExportIds(query, user) {
+  await expireQuotesPastValidUntil();
+
+  const where = buildQuoteListWhere(query, user);
+
+  const hasStartDate = Boolean(query?.start_date);
+  const hasEndDate = Boolean(query?.end_date);
+
+  if (hasStartDate !== hasEndDate) {
+    throw new Error('Select both dates or leave both blank to export all quotes');
+  }
+
+  if (hasStartDate && hasEndDate) {
+    const startDate = new Date(`${String(query.start_date).trim()}T00:00:00.000Z`);
+    const endDate = new Date(`${String(query.end_date).trim()}T23:59:59.999Z`);
+
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+      throw new Error('Dates must be in YYYY-MM-DD format');
+    }
+
+    if (startDate > endDate) {
+      throw new Error('start_date cannot be after end_date');
+    }
+
+    appendAndCondition(where, {
+      created_at: {
+        [Op.between]: [startDate, endDate]
+      }
+    });
+  }
+
+  const quoteIdRows = await db.sales_quotes.findAll({
+    where,
+    attributes: ['sales_quote_id'],
+    order: [
+      ['created_at', 'DESC'],
+      ['sales_quote_id', 'DESC']
+    ],
+    raw: true
+  });
+
+  return quoteIdRows
+    .map((row) => Number(row.sales_quote_id))
+    .filter((id) => Number.isInteger(id) && id > 0);
 }
 
 async function getQuoteDashboard(query, user) {
@@ -6675,6 +6936,7 @@ async function sendQuoteProposal(salesQuoteId, payload, user) {
     const generatedPdfBuffer = payload?.attachment_content || payload?.pdf_base64
       ? null
       : await generateQuotePdfBuffer(quoteDetailsForPdf);
+    const preProductionAttachment = await buildQuotePreProductionEmailAttachment(quoteDetails);
 
     const emailResult = await sendCustomQuoteProposalEmail({
       to_email: toEmail,
@@ -6698,7 +6960,8 @@ async function sendQuoteProposal(salesQuoteId, payload, user) {
       accept_quote_url: buildQuotePreviewUrl(previewLink.quote_key),
       attachment_content: payload?.attachment_content || payload?.pdf_base64 || (generatedPdfBuffer ? Buffer.from(generatedPdfBuffer).toString('base64') : null),
       attachment_filename: payload?.attachment_filename || `${quoteDetails.quote_number || 'custom-quote'}.pdf`,
-      attachment_type: payload?.attachment_type || 'application/pdf'
+      attachment_type: payload?.attachment_type || 'application/pdf',
+      attachments: preProductionAttachment ? [preProductionAttachment] : []
     });
 
     if (!emailResult?.success) {
@@ -6970,6 +7233,7 @@ module.exports = {
   getLatestPublicQuotePreviewLink,
   getPublicQuoteByKey,
   listQuotes,
+  listQuoteExportIds,
   getQuoteDashboard,
   updateQuoteStatus,
   sendQuoteProposal,

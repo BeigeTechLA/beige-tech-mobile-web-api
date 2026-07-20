@@ -2720,13 +2720,37 @@ const sendCustomQuoteProposalEmail = async (data) => {
       }
     };
 
+    const attachments = [];
     if (attachmentContent) {
-      message.attachments = [{
+      attachments.push({
         content: attachmentContent,
         filename: data.attachment_filename || 'custom-quote.pdf',
         type: data.attachment_type || 'application/pdf',
         disposition: 'attachment'
-      }];
+      });
+    }
+
+    if (Array.isArray(data.attachments)) {
+      data.attachments.forEach((attachment) => {
+        const extraContent = typeof attachment?.content === 'string'
+          ? attachment.content.replace(/^data:.*;base64,/, '').trim()
+          : '';
+
+        if (!extraContent) {
+          return;
+        }
+
+        attachments.push({
+          content: extraContent,
+          filename: attachment.filename || attachment.name || 'attachment',
+          type: attachment.type || attachment.mime_type || 'application/octet-stream',
+          disposition: 'attachment'
+        });
+      });
+    }
+
+    if (attachments.length) {
+      message.attachments = attachments;
     }
 
     const [response] = await sgMail.send(message);

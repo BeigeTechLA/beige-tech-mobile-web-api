@@ -1,3 +1,6 @@
+const fs = require('fs');
+const path = require('path');
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -59,6 +62,25 @@ function formatDiscountMeta(type, value) {
     return `${numericValue}%`;
   }
   return formatCurrency(numericValue);
+}
+
+function getBrandLogoDataUri() {
+  const logoCandidates = [
+    path.resolve(__dirname, '..', 'Group 2087330257.png'),
+    path.resolve(__dirname, '..', '..', '..', 'beige-tech-mobile-web-api-2', 'src', 'Group 2087330257.png')
+  ];
+
+  for (const logoPath of logoCandidates) {
+    try {
+      if (fs.existsSync(logoPath)) {
+        return `data:image/png;base64,${fs.readFileSync(logoPath).toString('base64')}`;
+      }
+    } catch (_) {
+      // Fall back to the text mark if the logo file cannot be read.
+    }
+  }
+
+  return '';
 }
 
 function buildManualReceiptHtml(data) {
@@ -149,6 +171,10 @@ function buildManualReceiptHtml(data) {
   const documentTitle = escapeHtml(data.documentTitle || 'INVOICE');
   const paymentUrl = String(data.paymentUrl || '').trim();
   const showPaymentButton = paymentUrl && pendingAmount > 0.009;
+  const brandLogoDataUri = getBrandLogoDataUri();
+  const brandLogoMarkup = brandLogoDataUri
+    ? `<img src="${brandLogoDataUri}" alt="Beige AI" />`
+    : '<span>B</span>';
 
   return `
   <!doctype html>
@@ -157,11 +183,13 @@ function buildManualReceiptHtml(data) {
       <meta charset="utf-8" />
       <title>Manual Receipt</title>
       <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Outfit:wght@300;400;500;600;700;800&family=Inter:wght@300;400;500;600;700;800&display=swap');
+
         * { box-sizing: border-box; }
         body {
           margin: 0;
           padding: 0;
-          font-family: "Arial", "Helvetica", sans-serif;
+          font-family: 'Plus Jakarta Sans', 'Outfit', 'Inter', sans-serif;
           color: #1f2937;
           background: #f3f4f6;
         }
@@ -170,39 +198,33 @@ function buildManualReceiptHtml(data) {
           width: 794px;
           min-height: 1123px;
           margin: 0 auto;
-          background: #f2f2f2;
-          border: 3px solid #1e293b;
+          background: #f4f4f6;
           position: relative;
           overflow: hidden;
+          box-shadow: 0 10px 40px rgba(0, 0, 0, 0.08);
         }
 
-        /* Beige accent line at top */
         .beige-accent-top {
-          height: 5px;
+          height: 32px;
           background: linear-gradient(90deg, #d8be93, #e6d1aa, #d8be93);
-          width: 100%;
-        }
-
-        /* Beige accent line at bottom */
-        .beige-accent-bottom {
-          height: 5px;
-          background: linear-gradient(90deg, #d8be93, #e6d1aa, #d8be93);
-          width: 100%;
+          width: 380px;
+          clip-path: polygon(0 0, 100% 0, 100% 100%, 40px 100%);
           position: absolute;
-          bottom: 0;
-          left: 0;
+          top: 0;
+          right: 0;
+          z-index: 5;
         }
 
-        /* ─── HEADER ─── */
         .topbar {
           display: flex;
           justify-content: space-between;
-          align-items: stretch;
-          height: 128px;
+          align-items: center;
+          height: 150px;
           color: #fff;
-          background: linear-gradient(145deg, #101010 0%, #1d1d1d 58%, #0f172a 100%);
+          background: radial-gradient(circle at 80% 20%, #1c1c1f 0%, #0c0c0c 100%);
           position: relative;
           overflow: hidden;
+          padding: 34px 26px 8px;
         }
 
         /* Gold wave SVG container */
@@ -214,6 +236,7 @@ function buildManualReceiptHtml(data) {
           height: 100%;
           pointer-events: none;
           z-index: 0;
+          opacity: 0.15;
         }
 
         .header-wave svg {
@@ -225,28 +248,42 @@ function buildManualReceiptHtml(data) {
         }
 
         .brand {
-          padding: 24px 26px;
           display: flex;
           flex-direction: row;
           align-items: center;
           gap: 14px;
           z-index: 1;
+          transform: translateY(9px);
         }
 
         .brand-logo {
           width: 48px;
           height: 48px;
-          background: #e6d1aa;
-          border-radius: 10px;
+          background: #18181b;
+          border: 1.5px solid rgba(230, 209, 170, 0.5);
+          border-radius: 12px;
           display: flex;
           align-items: center;
           justify-content: center;
           flex-shrink: 0;
+          box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
         }
 
-        .brand-logo svg {
-          width: 28px;
-          height: 28px;
+        .brand-logo span {
+          font-family: "Georgia", "Times New Roman", serif;
+          font-style: italic;
+          font-weight: bold;
+          font-size: 26px;
+          color: #e6d1aa;
+          line-height: 1;
+          transform: translateY(-1px);
+        }
+
+        .brand-logo img {
+          width: 34px;
+          height: 34px;
+          object-fit: contain;
+          display: block;
         }
 
         .brand-text {
@@ -256,180 +293,197 @@ function buildManualReceiptHtml(data) {
         }
 
         .brand-title {
-          font-size: 22px;
+          font-size: 20px;
           font-weight: 700;
-          letter-spacing: 0.2px;
+          letter-spacing: 0.5px;
           margin-bottom: 2px;
+          color: #fff;
         }
 
         .brand-sub {
-          font-size: 13px;
-          color: #d1d5db;
+          font-size: 12px;
+          color: #a1a1aa;
         }
 
         .inv-head {
-          width: 320px;
-          background: rgba(17, 17, 17, 0.6);
-          padding: 14px 22px 16px;
-          border-left: 2px solid #d8be93;
           display: flex;
           flex-direction: column;
           justify-content: center;
           z-index: 1;
+          text-align: right;
+          transform: translateY(9px);
         }
 
         .inv-title {
-          font-size: 36px;
+          font-size: 28px;
           line-height: 1;
-          letter-spacing: 5px;
+          letter-spacing: 12px;
           color: #e6d1aa;
-          margin-bottom: 8px;
-          font-weight: 600;
-          font-style: italic;
+          margin-bottom: 12px;
+          font-weight: 800;
+          text-transform: uppercase;
         }
 
         .inv-meta {
           font-size: 11px;
-          line-height: 1.6;
-          color: #f3f4f6;
+          color: #a1a1aa;
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
         }
 
         .inv-meta-row {
           display: flex;
+          justify-content: flex-end;
+          gap: 12px;
           align-items: center;
-          gap: 6px;
         }
 
         .inv-meta b {
-          color: #e6d1aa;
-          display: inline-block;
-          min-width: 105px;
+          color: #d4d4d8;
           font-weight: 500;
         }
 
         .inv-meta span {
-          color: #e2e8f0;
-          min-width: 0;
-          overflow-wrap: anywhere;
-          word-break: break-word;
+          color: #f4f4f5;
+          font-weight: 600;
+          min-width: 100px;
+          text-align: right;
         }
 
-        /* ─── BOOKING STRIP ─── */
-        .booking-strip {
-          min-height: 38px;
-          background: #e7d7bc;
+        .booking-strip-container {
+          height: 38px;
+          background: radial-gradient(circle at 80% -130px, #1c1c1f 0%, #0c0c0c 100%);
+          position: relative;
+          width: 100%;
+          overflow: hidden;
+        }
+
+        .booking-strip-gold {
+          position: absolute;
+          top: 0;
+          left: 0;
+          height: 100%;
+          width: 580px;
+          background: linear-gradient(90deg, #d8be93, #e6d1aa, #d8be93);
+          clip-path: polygon(0 0, 540px 0, 580px 100%, 0 100%);
           display: flex;
           align-items: center;
-          padding: 0 26px;
-          font-size: 14px;
-          color: #2f2f2f;
-          letter-spacing: 1px;
-          border-bottom: 1px solid #d7c19d;
-          line-height: 1.25;
-          overflow-wrap: anywhere;
-          word-break: break-word;
+          padding-left: 26px;
+          padding-right: 54px;
+          font-size: 11.5px;
+          color: #1c1c1e;
+          letter-spacing: 0.8px;
+          text-transform: uppercase;
+          line-height: 1.2;
         }
 
-        .booking-strip b {
+        .booking-strip-gold b {
           margin-left: 6px;
-          letter-spacing: 1.5px;
+          font-weight: 800;
+          letter-spacing: 1px;
           overflow-wrap: anywhere;
           word-break: break-word;
         }
 
         /* ─── CONTENT ─── */
         .content {
-          padding: 18px 22px 22px;
+          padding: 20px 26px 56px;
         }
 
         /* ─── BILL GRID ─── */
         .bill-grid {
           display: grid;
           grid-template-columns: 1fr 1fr;
-          gap: 12px;
+          gap: 16px;
           margin-bottom: 16px;
+          align-items: stretch;
+        }
+
+        .bill-grid > div {
+          display: flex;
+          flex-direction: column;
         }
 
         .bill-label {
           font-size: 11px;
-          color: #6b7280;
-          margin-bottom: 5px;
-          text-transform: none;
+          color: #71717a;
+          margin-bottom: 6px;
+          text-transform: uppercase;
+          font-weight: 700;
+          letter-spacing: 0.5px;
         }
 
         .bill-card {
-          background: #f8f8f8;
-          border: 1px solid #e5e7eb;
-          border-radius: 8px;
-          padding: 10px 11px;
-          min-height: 108px;
+          background: #ffffff;
+          border-radius: 16px;
+          padding: 16px 20px;
+          min-height: 116px;
           position: relative;
           overflow: hidden;
+          box-shadow: 0 10px 25px rgba(0, 0, 0, 0.03);
+          flex: 1;
         }
 
-        .bill-card.has-stamp {
-          padding-right: 78px;
+        .bill-card.has-paid-ribbon {
+          padding-right: 84px;
         }
 
         .bill-title {
-          font-size: 14px;
+          font-size: 15px;
           font-weight: 700;
           margin-bottom: 8px;
-          color: #111827;
-          line-height: 1.25;
-          overflow-wrap: anywhere;
-          word-break: break-word;
+          color: #09090b;
         }
 
         .bill-line {
-          font-size: 11px;
-          color: #4b5563;
-          line-height: 1.45;
-          overflow-wrap: anywhere;
-          word-break: break-word;
+          font-size: 11.5px;
+          color: #52525b;
+          line-height: 1.5;
         }
 
         .bill-line.receipt-label {
-          color: #6b7280;
-          font-size: 10.5px;
+          color: #71717a;
+          font-size: 11px;
           margin-bottom: 4px;
         }
 
         .bill-line.receipt-label b {
-          color: #111827;
+          color: #18181b;
           font-weight: 700;
         }
 
         /* ─── RECEIVED PAID STAMP ─── */
-        .stamp {
+        .paid-ribbon {
           position: absolute;
-          top: 20px;
-          right: -28px;
-          background: #22c55e;
-          color: #fff;
-          font-size: 10px;
+          top: 25px;
+          right: -40px;
+          background: #10b981;
+          color: #ffffff;
+          font-size: 8px;
           font-weight: 700;
-          letter-spacing: 1.2px;
           text-transform: uppercase;
-          padding: 5px 40px;
-          transform: rotate(30deg);
-          box-shadow: 0 2px 6px rgba(34, 197, 94, 0.35);
-          z-index: 2;
-          white-space: nowrap;
-          display: flex;
-          align-items: center;
-          justify-content: center;
+          letter-spacing: 0.65px;
+          line-height: 1;
+          padding: 7px 0;
+          width: 154px;
           text-align: center;
-          line-height: 1.2;
+          transform: rotate(45deg);
+          box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
+          z-index: 10;
+          white-space: nowrap;
         }
 
         /* ─── ITEMS TABLE ─── */
-        .table-wrap {
-          border: 1px solid #e5e7eb;
-          border-radius: 10px;
-          background: #fbfbfb;
-          overflow: hidden;
+        .table-card {
+          background: #ffffff;
+          border-radius: 16px;
+          padding: 12px 0;
+          box-shadow: 0 10px 25px rgba(0, 0, 0, 0.03);
           margin-bottom: 16px;
+          overflow: hidden;
+          break-inside: avoid;
+          page-break-inside: avoid;
         }
 
         table {
@@ -438,73 +492,89 @@ function buildManualReceiptHtml(data) {
         }
 
         .items th {
-          background: #f6f7f9;
-          color: #6b7280;
-          font-size: 11px;
-          font-weight: 700;
-          padding: 10px 12px;
+          padding: 10px 20px;
           text-align: left;
-          border-bottom: 1px solid #eceef2;
+          border-bottom: none;
+        }
+
+        .th-badge {
+          display: inline-block;
+          background: #f7f3eb;
+          color: #8a6a3d;
+          font-size: 10px;
+          font-weight: 700;
+          text-transform: uppercase;
+          letter-spacing: 0.8px;
+          padding: 4px 12px;
+          border-radius: 99px;
+          line-height: 1.1;
+          white-space: nowrap;
+        }
+
+        .items th.qty, .items th.money, .items th.hours {
+          text-align: right;
         }
 
         .items td {
-          font-size: 12px;
-          color: #111827;
-          padding: 11px 12px;
-          border-bottom: 1px solid #f1f3f7;
-        }
-
-        .items tr:last-child td {
-          border-bottom: 0;
+          padding: 12px 20px;
+          font-size: 13px;
+          color: #18181b;
+          border-bottom: none;
         }
 
         .items .desc {
-          font-weight: 500;
-          overflow-wrap: anywhere;
-          word-break: break-word;
+          font-weight: 700;
+          color: #09090b;
         }
 
         .items .qty {
           text-align: center;
           width: 80px;
+          font-weight: 500;
+          color: #52525b;
         }
 
         .items .hours {
           text-align: center;
           width: 90px;
-          color: #4b5563;
+          color: #52525b;
         }
 
         .items .money {
           text-align: right;
-          width: 140px;
-          color: #4b5563;
+          width: 150px;
+          color: #52525b;
+          white-space: nowrap;
         }
 
         .items .total {
-          font-weight: 500;
-          color: #111827;
+          font-weight: 700;
+          color: #09090b;
         }
 
         /* ─── TOTALS BOX ─── */
         .totals {
-          width: 300px;
+          width: 320px;
           margin-left: auto;
-          background: #e6d1aa;
-          border-radius: 12px;
-          border: 1px solid #d8be93;
-          padding: 12px 14px;
-          margin-bottom: 18px;
+          background: #e9d8b6;
+          border-radius: 16px;
+          padding: 12px 18px;
+          margin-bottom: 12px;
+          box-shadow: 0 4px 15px rgba(233, 216, 182, 0.15);
+          break-inside: avoid;
+          page-break-inside: avoid;
         }
 
         .tot-row {
           display: flex;
           justify-content: space-between;
           align-items: center;
+          gap: 20px;
           font-size: 12px;
-          color: #2f2f2f;
+          color: #27272a;
           padding: 7px 0;
-          border-bottom: 1px solid rgba(44, 44, 44, 0.16);
+          border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+          white-space: nowrap;
         }
 
         .tot-row:last-child {
@@ -512,15 +582,16 @@ function buildManualReceiptHtml(data) {
         }
 
         .amount-paid {
-          font-size: 12px;
-          font-weight: 600;
+          font-size: 13px;
+          font-weight: 700;
+          color: #09090b;
         }
 
         .amount-paid b {
-          font-size: 20px;
-          letter-spacing: 0.2px;
-          color: #2f2f2f;
-          font-weight: 600;
+          font-size: 22px;
+          color: #09090b;
+          font-weight: 800;
+          line-height: 1;
         }
 
         .pay-online {
@@ -540,40 +611,55 @@ function buildManualReceiptHtml(data) {
         /* ─── PAYMENT HISTORY ─── */
         .section-title {
           font-size: 11px;
-          color: #374151;
+          color: #71717a;
           font-weight: 700;
-          letter-spacing: 0.4px;
+          letter-spacing: 0.5px;
           margin: 0 0 8px 0;
+          text-transform: uppercase;
+          break-after: avoid;
+          page-break-after: avoid;
         }
 
-        .history-wrap {
-          border: 1px solid #e5e7eb;
-          border-radius: 8px;
-          overflow: hidden;
-          background: #fbfbfb;
-          margin-bottom: 14px;
+        .payment-history-section {
+          padding-top: 8px;
+        }
+
+        .payment-history-card {
+          background: #ffffff;
+          border-radius: 16px;
+          padding: 14px 20px;
+          box-shadow: 0 10px 25px rgba(0, 0, 0, 0.03);
+          margin-bottom: 16px;
+          overflow: visible;
         }
 
         .history th {
-          background: #f6f7f9;
-          color: #6b7280;
+          color: #71717a;
           font-size: 10px;
-          letter-spacing: 0.5px;
+          font-weight: 700;
           text-transform: uppercase;
-          padding: 9px 10px;
+          letter-spacing: 0.8px;
+          padding: 8px 0 12px;
           text-align: left;
+          border-bottom: 1px solid #f4f4f5;
         }
 
         .history td {
-          padding: 10px;
-          border-top: 1px solid #eef1f5;
-          font-size: 12px;
-          color: #111827;
-          font-weight: 600;
+          padding: 11px 0;
+          border-top: none;
+          font-size: 13px;
+          color: #18181b;
+          font-weight: 700;
+        }
+
+        .items tr,
+        .history tr {
+          break-inside: avoid;
+          page-break-inside: avoid;
         }
 
         .history .empty-history {
-          color: #6b7280;
+          color: #71717a;
           font-weight: 500;
           text-align: center;
         }
@@ -611,63 +697,61 @@ function buildManualReceiptHtml(data) {
         /* ─── FOOTER ─── */
         .foot-grid {
           display: grid;
-          grid-template-columns: 1fr 240px;
+          grid-template-columns: 1fr;
           gap: 14px;
           align-items: end;
         }
 
         .terms {
-          border-top: 1px solid #dfe3ea;
-          padding-top: 10px;
+          border-top: 1px solid #e4e4e7;
+          padding-top: 16px;
+          margin-top: 10px;
         }
 
         .terms h4 {
           margin: 0 0 6px 0;
           font-size: 11px;
-          color: #374151;
+          color: #27272a;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
         }
 
         .terms p {
-          margin: 0 0 6px 0;
+          margin: 0 0 8px 0;
           font-size: 10px;
-          color: #6b7280;
-          line-height: 1.55;
+          color: #71717a;
+          line-height: 1.6;
         }
 
         .terms .thank-you {
-          margin-top: 10px;
-          font-size: 10px;
-          color: #6b7280;
-          line-height: 1.55;
+          margin-top: 12px;
+          font-size: 11px;
+          color: #52525b;
+          line-height: 1.6;
         }
 
         .terms .thank-you b {
-          color: #111827;
+          color: #18181b;
         }
 
-        .signature {
-          border: 1px solid #e5e7eb;
-          background: #f7f7f7;
-          border-radius: 8px;
-          min-height: 92px;
-          display: flex;
-          flex-direction: column;
-          justify-content: center;
-          align-items: center;
-          text-align: center;
-          padding: 8px;
+        .bottom-accent-container {
+          height: 38px;
+          background: #0c0c0c;
+          position: absolute;
+          bottom: 0;
+          left: 0;
+          width: 100%;
+          overflow: hidden;
         }
 
-        .signature .name {
-          font-size: 12px;
-          font-weight: 700;
-          color: #111827;
-          margin-bottom: 4px;
-        }
-
-        .signature .role {
-          font-size: 10px;
-          color: #6b7280;
+        .bottom-accent-gold {
+          position: absolute;
+          top: 0;
+          right: 0;
+          height: 100%;
+          width: 440px;
+          background: linear-gradient(90deg, #d8be93, #e6d1aa, #d8be93);
+          clip-path: polygon(0 0, 100% 0, 100% 100%, 40% 100%);
         }
       </style>
     </head>
@@ -684,10 +768,7 @@ function buildManualReceiptHtml(data) {
           </div>
           <div class="brand">
             <div class="brand-logo">
-              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <rect width="24" height="24" rx="4" fill="#e6d1aa"/>
-                <path d="M7 6h5.5c1.38 0 2.5.56 3.36 1.42.56.56.86 1.3.86 2.08 0 1.2-.7 2.1-1.72 2.7.02 0 .04.02.06.02 1.38.56 2.44 1.7 2.44 3.28 0 1.1-.42 2-1.14 2.7C15.5 19.04 14.18 19.5 12.5 19.5H7V6zm3 5.5h2.5c.56 0 1.02-.18 1.36-.52.34-.34.52-.78.52-1.28s-.18-.92-.52-1.26c-.34-.34-.8-.54-1.36-.54H10v3.6zm0 5.6h2.5c.7 0 1.3-.2 1.72-.6.42-.38.64-.9.64-1.5 0-.62-.22-1.12-.64-1.5-.42-.4-1.02-.6-1.72-.6H10V17.1z" fill="#1e1e1e"/>
-              </svg>
+              ${brandLogoMarkup}
             </div>
             <div class="brand-text">
               <div class="brand-title">Beige AI</div>
@@ -695,7 +776,7 @@ function buildManualReceiptHtml(data) {
             </div>
           </div>
           <div class="inv-head">
-              <div class="inv-title">${documentTitle}</div>
+            <div class="inv-title">${documentTitle}</div>
             <div class="inv-meta">
               <div class="inv-meta-row"><b>Invoice:</b> <span>${escapeHtml(data.invoiceNumber || 'N/A')}</span></div>
               <div class="inv-meta-row"><b>Receipt No:</b> <span>${receiptNo}</span></div>
@@ -705,8 +786,10 @@ function buildManualReceiptHtml(data) {
           </div>
         </div>
 
-        <div class="booking-strip">
-          Booking Ref: <b>${escapeHtml(data.bookingRef || data.invoiceNumber || 'N/A')}</b>
+        <div class="booking-strip-container">
+          <div class="booking-strip-gold">
+            Booking Ref: <b>${escapeHtml(data.bookingRef || data.invoiceNumber || 'N/A')}</b>
+          </div>
         </div>
 
         <div class="content">
@@ -724,8 +807,8 @@ function buildManualReceiptHtml(data) {
             </div>
             <div>
               <div class="bill-label">Bill to:</div>
-              <div class="bill-card${showPaidStamp ? ' has-stamp' : ''}">
-                ${showPaidStamp ? '<div class="stamp">Received Paid</div>' : ''}
+              <div class="bill-card${showPaidStamp ? ' has-paid-ribbon' : ''}">
+                ${showPaidStamp ? '<div class="paid-ribbon">Marked as Paid</div>' : ''}
                 <div class="bill-title">${escapeHtml(data.clientName || 'Client')}</div>
                 <div class="bill-line receipt-label">Payment Receipt: <b>${escapeHtml(data.projectTitle || 'Project')}</b></div>
                 <div class="bill-line">${escapeHtml(data.location || 'Location not available')}</div>
@@ -734,15 +817,15 @@ function buildManualReceiptHtml(data) {
             </div>
           </div>
 
-          <div class="table-wrap">
+          <div class="table-card">
             <table class="items">
               <thead>
                 <tr>
-                  <th>Description</th>
-                  <th class="qty">Quantity</th>
-                  ${hasHourlyItems ? '<th class="hours">Hours</th>' : ''}
-                  <th class="money">Unit price</th>
-                  <th class="money">Total Amount</th>
+                  <th><span class="th-badge">Description</span></th>
+                  <th class="qty"><span class="th-badge">Quantity</span></th>
+                  ${hasHourlyItems ? `<th class="hours"><span class="th-badge">Hours</span></th>` : ''}
+                  <th class="money"><span class="th-badge">Unit price</span></th>
+                  <th class="money"><span class="th-badge">Total Amount</span></th>
                 </tr>
               </thead>
               <tbody>
@@ -769,21 +852,23 @@ function buildManualReceiptHtml(data) {
             ` : ''}
           </div>
 
-          <h3 class="section-title">PAYMENT HISTORY</h3>
-          <div class="history-wrap">
-            <table class="history">
-              <thead>
-                <tr>
-                  <th>Payment Method</th>
-                  <th>Date</th>
-                  <th>Amount</th>
-                  ${hasReceiptActions ? '<th>Receipt</th>' : ''}
-                </tr>
-              </thead>
-              <tbody>
-                ${historyRows}
-              </tbody>
-            </table>
+          <div class="payment-history-section">
+            <h3 class="section-title">PAYMENT HISTORY</h3>
+            <div class="payment-history-card">
+              <table class="history">
+                <thead>
+                  <tr>
+                    <th>Payment Method</th>
+                    <th>Date</th>
+                    <th>Amount</th>
+                    ${hasReceiptActions ? '<th>Receipt</th>' : ''}
+                  </tr>
+                </thead>
+                <tbody>
+                  ${historyRows}
+                </tbody>
+              </table>
+            </div>
           </div>
 
           <div class="foot-grid">
@@ -799,7 +884,9 @@ function buildManualReceiptHtml(data) {
             </div>
           </div>
         </div>
-        <div class="beige-accent-bottom"></div>
+        <div class="bottom-accent-container">
+          <div class="bottom-accent-gold"></div>
+        </div>
       </div>
     </body>
   </html>

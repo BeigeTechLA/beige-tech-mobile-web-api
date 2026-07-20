@@ -1227,8 +1227,10 @@ const isHourlyInvoiceItem = (item = {}) => {
     const rateType = String(item.rate_type || item.rateType || '').toLowerCase();
     const sectionType = String(item.section_type || item.sectionType || '').toLowerCase();
     const name = String(item.name || item.item_name || '').toLowerCase();
+    const hasHourlyRoleName = /\b(photo(?:graphy|grapher)|video(?:graphy|grapher)|cinematographer)\b/.test(name);
     return rateType === 'per_hour'
-      || (sectionType === 'service' && (name.includes('photography') || name.includes('videography')));
+      || (sectionType === 'service' && hasHourlyRoleName)
+      || hasHourlyRoleName;
 };
 
 const mapLegacyQuoteLineItems = (lineItems = []) => (lineItems || []).map(item => ({
