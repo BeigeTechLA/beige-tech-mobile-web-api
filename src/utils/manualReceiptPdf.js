@@ -66,6 +66,7 @@ function formatDiscountMeta(type, value) {
 
 function getBrandLogoDataUri() {
   const logoCandidates = [
+    path.resolve(__dirname, '..', '..', 'public', 'uploads', 'media', 'email_logo.png'),
     path.resolve(__dirname, '..', 'Group 2087330257.png'),
     path.resolve(__dirname, '..', '..', '..', 'beige-tech-mobile-web-api-2', 'src', 'Group 2087330257.png')
   ];
