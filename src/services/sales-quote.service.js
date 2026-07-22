@@ -4969,6 +4969,7 @@ async function createQuote(payload, user) {
       changeReason: 'Quote created'
     });
     await attachQuoteVersionToActivity(transaction, createdActivity, createdVersion);
+    await createQuotePreviewLink(quote.sales_quote_id, user, { transaction });
     await transaction.commit();
     return getQuoteById(quote.sales_quote_id, user);
   } catch (error) {
@@ -5088,6 +5089,7 @@ async function duplicateQuote(salesQuoteId, user) {
       changeReason: `Quote duplicated from ${sourceQuote.quote_number || salesQuoteId}`
     });
     await attachQuoteVersionToActivity(transaction, duplicatedActivity, duplicatedVersion);
+    await createQuotePreviewLink(duplicatedQuote.sales_quote_id, user, { transaction });
 
     await transaction.commit();
     return getQuoteById(duplicatedQuote.sales_quote_id, user);
@@ -5633,6 +5635,7 @@ async function updateQuote(salesQuoteId, payload, user) {
       await attachQuoteVersionToActivity(transaction, approvalRequestActivity, updatedVersion);
     }
 
+    await createQuotePreviewLink(salesQuoteId, user, { transaction });
     await transaction.commit();
     return getQuoteById(salesQuoteId, user);
   } catch (error) {
@@ -6184,37 +6187,67 @@ function getQuotePreviewExpiryFromValidUntil(validUntil) {
   return Number.isNaN(expiry.getTime()) ? null : expiry;
 }
 
-async function createQuotePreviewLink(salesQuoteId, user) {
+function getQuotePreviewLinkStorageExpiry(validUntil) {
+  return getQuotePreviewExpiryFromValidUntil(validUntil) || new Date('9999-12-31T23:59:59.999Z');
+}
+
+async function createQuotePreviewLink(salesQuoteId, user, options = {}) {
+  const transaction = options.transaction || null;
   const quote = await db.sales_quotes.findOne({
     where: {
       sales_quote_id: salesQuoteId,
       ...(user ? buildQuoteAccessWhere(user) : {})
     },
-    attributes: ['sales_quote_id', 'valid_until']
+    attributes: ['sales_quote_id', 'valid_until'],
+    transaction
   });
 
   if (!quote) {
     throw new Error('Quote not found');
   }
 
-  const expiresAt = getQuotePreviewExpiryFromValidUntil(quote.valid_until);
-  if (!expiresAt) {
-    throw new Error('Set quote valid date before generating preview link');
-  }
+  const expiresAt = getQuotePreviewLinkStorageExpiry(quote.valid_until);
 
-  await db.sequelize.query(
+  const existingRows = await db.sequelize.query(
     `
-      UPDATE sales_quote_preview_links
-      SET is_active = 0,
-          updated_at = NOW()
+      SELECT sales_quote_preview_link_id, quote_key
+      FROM sales_quote_preview_links
       WHERE sales_quote_id = :salesQuoteId
-        AND is_active = 1
+      ORDER BY is_active DESC, created_at DESC, sales_quote_preview_link_id DESC
+      LIMIT 1
     `,
     {
       replacements: { salesQuoteId },
-      type: db.Sequelize.QueryTypes.UPDATE
+      type: db.Sequelize.QueryTypes.SELECT,
+      transaction
     }
   );
+
+  const existingLink = existingRows?.[0];
+  if (existingLink?.quote_key) {
+    await db.sequelize.query(
+      `
+        UPDATE sales_quote_preview_links
+        SET is_active = 1,
+            expires_at = :expiresAt,
+            updated_at = NOW()
+        WHERE sales_quote_preview_link_id = :previewLinkId
+      `,
+      {
+        replacements: {
+          previewLinkId: existingLink.sales_quote_preview_link_id,
+          expiresAt
+        },
+        type: db.Sequelize.QueryTypes.UPDATE,
+        transaction
+      }
+    );
+
+    return {
+      quote_key: existingLink.quote_key,
+      expires_at: expiresAt.toISOString()
+    };
+  }
 
   const quoteKey = crypto.randomBytes(32).toString('hex');
 
@@ -6232,7 +6265,8 @@ async function createQuotePreviewLink(salesQuoteId, user) {
         expiresAt,
         createdByUserId: user?.userId || null
       },
-      type: db.Sequelize.QueryTypes.INSERT
+      type: db.Sequelize.QueryTypes.INSERT,
+      transaction
     }
   );
 
@@ -6249,7 +6283,6 @@ async function getActiveQuotePreviewLinkForQuote(salesQuoteId, transaction = nul
       FROM sales_quote_preview_links
       WHERE sales_quote_id = :salesQuoteId
         AND is_active = 1
-        AND expires_at > NOW()
       ORDER BY created_at DESC
       LIMIT 1
     `,
@@ -6262,7 +6295,7 @@ async function getActiveQuotePreviewLinkForQuote(salesQuoteId, transaction = nul
 
   const activeLink = activeRows?.[0];
   if (!activeLink?.quote_key) {
-    throw new Error('Create a quote preview link before sending the quote proposal');
+    return createQuotePreviewLink(salesQuoteId, null, { transaction });
   }
 
   return {
@@ -6351,16 +6384,11 @@ async function getPublicQuoteByKey(quoteKey) {
   if (!normalizedKey) {
     throw new Error('Quote key is required');
   }
-  const now = new Date();
 
   const rows = await db.sequelize.query(
     `
       SELECT
-        l.sales_quote_id,
-        l.is_active,
-        l.expires_at,
-        l.created_at,
-        q.valid_until
+        l.sales_quote_id
       FROM sales_quote_preview_links l
       INNER JOIN sales_quotes q ON q.sales_quote_id = l.sales_quote_id
       WHERE l.quote_key = :quoteKey
@@ -6386,42 +6414,7 @@ async function getPublicQuoteByKey(quoteKey) {
       throw new Error('Quote preview link is invalid or expired');
     }
 
-    const legacyValidUntilExpiry = getQuotePreviewExpiryFromValidUntil(legacyQuote.valid_until);
-    if (legacyValidUntilExpiry && now > legacyValidUntilExpiry) {
-      throw new Error('Quote preview link is invalid or expired');
-    }
-
     return (await getCurrentUsableQuoteVersionSnapshot(Number(legacyQuoteId))) || legacyQuote;
-  }
-
-  const linkExpiresAt = linkRow.expires_at ? new Date(linkRow.expires_at) : null;
-  const quoteValidUntilExpiry = getQuotePreviewExpiryFromValidUntil(linkRow.valid_until);
-  const linkCreatedAt = linkRow.created_at ? new Date(linkRow.created_at) : null;
-  const latestVersion = await getLatestQuoteVersionRecord(Number(linkRow.sales_quote_id));
-  const latestVersionCreatedAt = latestVersion?.created_at ? new Date(latestVersion.created_at) : null;
-
-  const isSupersededLink =
-    Number(linkRow.is_active) !== 1 ||
-    (linkCreatedAt && latestVersionCreatedAt && linkCreatedAt < latestVersionCreatedAt);
-
-  if (isSupersededLink && latestVersion && !isUsableQuoteVersion(latestVersion)) {
-    const approvalMetadata = getQuoteVersionApprovalMetadata(latestVersion);
-    const error = createQuotePreviewLinkError('QUOTE_PREVIEW_APPROVAL_PENDING');
-    error.message = 'Admin approval is pending for the latest quote version';
-    error.details = {
-      ...error.details,
-      approval_status: approvalMetadata.approval_status || 'pending',
-      version_number: Number(latestVersion.version_number || 0)
-    };
-    throw error;
-  }
-
-  if (isSupersededLink) {
-    throw createQuotePreviewLinkError('QUOTE_PREVIEW_SUPERSEDED');
-  }
-
-  if ((linkExpiresAt && now > linkExpiresAt) || (quoteValidUntilExpiry && now > quoteValidUntilExpiry)) {
-    throw createQuotePreviewLinkError('QUOTE_PREVIEW_EXPIRED');
   }
 
   return getCurrentUsableQuoteVersionSnapshot(Number(linkRow.sales_quote_id));
