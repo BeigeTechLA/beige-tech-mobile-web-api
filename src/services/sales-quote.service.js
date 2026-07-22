@@ -2109,6 +2109,31 @@ function resolveQuoteStatus(payload = {}, currentStatus = 'draft') {
   return currentStatus;
 }
 
+function isDateOnlyTodayOrFuture(value) {
+  const datePart = String(value || '').trim().match(/^\d{4}-\d{2}-\d{2}/)?.[0];
+  if (!datePart) return false;
+  return datePart >= formatDateOnly(new Date());
+}
+
+function resolveUpdatedQuoteStatus({ payload = {}, currentQuote, validity }) {
+  const nextStatus = resolveQuoteStatus(payload, currentQuote?.status || 'draft');
+  const currentStatus = String(currentQuote?.status || '').trim().toLowerCase();
+  const statusWasExplicitlyProvided =
+    payload.status !== undefined ||
+    payload.is_draft === true ||
+    payload.is_draft === false;
+
+  if (
+    currentStatus === 'expired' &&
+    !statusWasExplicitlyProvided &&
+    isDateOnlyTodayOrFuture(validity?.valid_until)
+  ) {
+    return currentQuote?.sent_at ? 'sent' : 'pending';
+  }
+
+  return nextStatus;
+}
+
 function buildQuoteAccessWhere(user, options = {}) {
   const { restrictToLoggedInRep = true } = options;
 
@@ -5212,7 +5237,11 @@ async function updateQuote(salesQuoteId, payload, user) {
     const schedulePayload = normalizeQuoteSchedulePayload(payload, quote);
     const preProductionFilePayload = await buildPreProductionFileUpdate(payload, quote, salesQuoteId);
 
-    const nextStatus = resolveQuoteStatus(payload, quote.status);
+    const nextStatus = resolveUpdatedQuoteStatus({
+      payload,
+      currentQuote: quote,
+      validity
+    });
     const assignedSalesRepId = isAdminRole(user.role)
       ? (payload.assigned_sales_rep_id !== undefined ? payload.assigned_sales_rep_id : quote.assigned_sales_rep_id)
       : quote.assigned_sales_rep_id;
