@@ -284,4 +284,10 @@ router.post('/shoots/:bookingId/notes/:noteId/replies', authMiddleware, shootNot
 router.post('/shoots/:bookingId/notes/:noteId/reactions', authMiddleware, shootNotesEdit, admin.toggleShootNoteReaction);
 router.delete('/shoots/:bookingId/notes/:noteId', authMiddleware, shootNotesDelete, admin.deleteShootNote);
 
+router.get('/sales-representative/:leadId/notes', authMiddleware, adminSalesRepresentativeView, admin.getSalesRepresentativeLeadNotes);
+router.post('/sales-representative/:leadId/notes', authMiddleware, adminSalesRepresentativeEdit, admin.uploadShootNoteAttachments, admin.addSalesRepresentativeLeadNote);
+router.post('/sales-representative/:leadId/notes/:noteId/replies', authMiddleware, adminSalesRepresentativeEdit, admin.uploadShootNoteAttachments, admin.replyToSalesRepresentativeLeadNote);
+router.post('/sales-representative/:leadId/notes/:noteId/reactions', authMiddleware, adminSalesRepresentativeEdit, admin.toggleSalesRepresentativeLeadNoteReaction);
+router.delete('/sales-representative/:leadId/notes/:noteId', authMiddleware, adminSalesRepresentativeEdit, admin.deleteSalesRepresentativeLeadNote);
+
 module.exports = router;

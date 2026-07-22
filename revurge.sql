@@ -2579,3 +2579,15 @@ ALTER TABLE `sales_quotes`
   ADD COLUMN `pre_production_file_size` INT NULL AFTER `pre_production_file_type`,
   ADD COLUMN `pre_production_file_path` VARCHAR(500) NULL AFTER `pre_production_file_size`,
   ADD COLUMN `pre_production_file_url` VARCHAR(1000) NULL AFTER `pre_production_file_path`;
+
+-- 22-07-26
+
+ALTER TABLE `project_notes`
+  MODIFY `booking_id` INT NULL,
+  ADD COLUMN `lead_id` INT NULL AFTER `booking_id`,
+  ADD INDEX `idx_project_notes_lead` (`lead_id`),
+  ADD CONSTRAINT `fk_project_notes_sales_lead`
+    FOREIGN KEY (`lead_id`)
+    REFERENCES `sales_leads` (`lead_id`)
+    ON DELETE SET NULL
+    ON UPDATE CASCADE;

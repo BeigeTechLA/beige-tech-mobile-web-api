@@ -564,6 +564,8 @@ crew_members.belongsTo(crew_roles, { as: 'role', foreignKey: 'primary_role' });
   // Admin shoot notes relationships
   project_notes.belongsTo(stream_project_booking, { as: "booking", foreignKey: "booking_id" });
   stream_project_booking.hasMany(project_notes, { as: "notes", foreignKey: "booking_id" });
+  project_notes.belongsTo(sales_leads, { as: "sales_lead", foreignKey: "lead_id" });
+  sales_leads.hasMany(project_notes, { as: "notes", foreignKey: "lead_id" });
 
   project_notes.belongsTo(project_notes, { as: "parent_note", foreignKey: "parent_note_id" });
   project_notes.hasMany(project_notes, { as: "replies", foreignKey: "parent_note_id" });

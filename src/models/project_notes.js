@@ -10,10 +10,18 @@ module.exports = function(sequelize, DataTypes) {
     },
     booking_id: {
       type: DataTypes.INTEGER,
-      allowNull: false,
+      allowNull: true,
       references: {
         model: 'stream_project_booking',
         key: 'stream_project_booking_id'
+      }
+    },
+    lead_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'sales_leads',
+        key: 'lead_id'
       }
     },
     parent_note_id: {
@@ -58,6 +66,7 @@ module.exports = function(sequelize, DataTypes) {
     indexes: [
       { name: 'PRIMARY', unique: true, using: 'BTREE', fields: [{ name: 'note_id' }] },
       { name: 'idx_project_notes_booking', using: 'BTREE', fields: [{ name: 'booking_id' }] },
+      { name: 'idx_project_notes_lead', using: 'BTREE', fields: [{ name: 'lead_id' }] },
       { name: 'idx_project_notes_parent', using: 'BTREE', fields: [{ name: 'parent_note_id' }] },
       { name: 'idx_project_notes_created_by', using: 'BTREE', fields: [{ name: 'created_by_user_id' }] },
       { name: 'idx_project_notes_created_at', using: 'BTREE', fields: [{ name: 'created_at' }] }

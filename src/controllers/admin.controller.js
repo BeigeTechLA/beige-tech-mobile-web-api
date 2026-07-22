@@ -15966,6 +15966,7 @@ const formatProjectNote = (note, currentUserId, repliesByParentId) => {
   return {
     note_id: plain.note_id,
     booking_id: plain.booking_id,
+    lead_id: plain.lead_id || null,
     parent_note_id: plain.parent_note_id,
     message: plain.message,
     created_at: plain.created_at,
@@ -16081,6 +16082,116 @@ const findActiveShootNote = async (bookingId, noteId) => db.project_notes.findOn
     is_active: 1
   }
 });
+
+const loadSalesRepresentativeLeadNotes = async (leadId, currentUserId) => {
+  const notes = await db.project_notes.findAll({
+    where: {
+      lead_id: leadId,
+      is_active: 1
+    },
+    include: [
+      {
+        model: db.users,
+        as: 'created_by',
+        required: false,
+        attributes: ['id', 'name', 'email', 'user_type', 'role'],
+        include: [
+          {
+            model: db.user_type,
+            as: 'userType',
+            required: false,
+            attributes: ['user_type_id', 'user_role']
+          }
+        ]
+      },
+      {
+        model: db.project_note_attachments,
+        as: 'attachments',
+        required: false,
+        where: { is_active: 1 },
+        attributes: [
+          'attachment_id',
+          'note_id',
+          'uploaded_by_user_id',
+          'file_name',
+          'file_path',
+          'mime_type',
+          'file_size_bytes',
+          'is_active',
+          'created_at'
+        ]
+      },
+      {
+        model: db.project_note_reactions,
+        as: 'reactions',
+        required: false,
+        attributes: ['reaction_id', 'user_id', 'reaction_type', 'created_at'],
+        include: [
+          {
+            model: db.users,
+            as: 'user',
+            required: false,
+            attributes: ['id', 'name', 'email']
+          }
+        ]
+      }
+    ],
+    order: [
+      ['created_at', 'ASC'],
+      ['note_id', 'ASC']
+    ]
+  });
+
+  const repliesByParentId = new Map();
+  const rootNotes = [];
+
+  notes.forEach((note) => {
+    const parentId = Number(note.parent_note_id || 0);
+    if (parentId > 0) {
+      if (!repliesByParentId.has(parentId)) repliesByParentId.set(parentId, []);
+      repliesByParentId.get(parentId).push(note);
+    } else {
+      rootNotes.push(note);
+    }
+  });
+
+  return rootNotes.map((note) => formatProjectNote(note, currentUserId, repliesByParentId));
+};
+
+const findActiveSalesRepresentativeLead = async (leadId) => db.sales_leads.findOne({
+  where: {
+    lead_id: leadId,
+    is_active: 1
+  }
+});
+
+const findActiveSalesRepresentativeLeadNote = async (leadId, noteId) => db.project_notes.findOne({
+  where: {
+    note_id: noteId,
+    lead_id: leadId,
+    is_active: 1
+  }
+});
+
+const isAdminSalesRepresentativeNotesRole = (role) => (
+  ['admin', 'sales_admin'].includes(String(role || '').toLowerCase().replace(/\s+/g, '_'))
+);
+
+const ensureSalesRepresentativeLeadNotesAccess = async (leadId, req, res) => {
+  const userId = getAuthenticatedUserId(req);
+  if (!userId) {
+    res.status(401).json({ success: false, message: 'Authenticated user is required' });
+    return null;
+  }
+
+  const lead = await findActiveSalesRepresentativeLead(leadId);
+  if (!lead) {
+    res.status(404).json({ success: false, message: 'Sales representative lead not found' });
+    return null;
+  }
+
+  return lead;
+};
 
 const isAdminShootNotesRole = (role) => (
   ['admin', 'production_manager'].includes(String(role || '').toLowerCase().replace(/\s+/g, '_'))
@@ -16407,6 +16518,313 @@ exports.deleteShootNote = async (req, res) => {
     });
   } catch (error) {
     console.error('Delete shoot note error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+exports.getSalesRepresentativeLeadNotes = async (req, res) => {
+  try {
+    const leadId = Number(req.params.leadId);
+    const currentUserId = getAuthenticatedUserId(req);
+
+    if (!Number.isInteger(leadId) || leadId <= 0) {
+      return res.status(400).json({ success: false, message: 'Valid leadId is required' });
+    }
+
+    if (!currentUserId) {
+      return res.status(401).json({ success: false, message: 'Authenticated user is required' });
+    }
+
+    const lead = await ensureSalesRepresentativeLeadNotesAccess(leadId, req, res);
+    if (!lead) return null;
+
+    const notes = await loadSalesRepresentativeLeadNotes(leadId, currentUserId);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Sales representative lead notes fetched successfully',
+      data: notes
+    });
+  } catch (error) {
+    console.error('Get sales representative lead notes error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+exports.addSalesRepresentativeLeadNote = async (req, res) => {
+  try {
+    const leadId = Number(req.params.leadId);
+    const currentUserId = getAuthenticatedUserId(req);
+    const message = getNoteBody(req.body);
+
+    if (!Number.isInteger(leadId) || leadId <= 0) {
+      return res.status(400).json({ success: false, message: 'Valid leadId is required' });
+    }
+
+    if (!currentUserId) {
+      return res.status(401).json({ success: false, message: 'Authenticated user is required' });
+    }
+
+    if (!message) {
+      return res.status(400).json({ success: false, message: 'Note message is required' });
+    }
+
+    const lead = await ensureSalesRepresentativeLeadNotesAccess(leadId, req, res);
+    if (!lead) return null;
+
+    const user = await db.users.findOne({ where: { id: currentUserId }, attributes: ['id'] });
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const note = await db.project_notes.create({
+      lead_id: leadId,
+      created_by_user_id: currentUserId,
+      message
+    });
+
+    const uploadedAttachments = await uploadShootNoteAttachmentsToS3(req.files);
+    if (uploadedAttachments.length > 0) {
+      await db.project_note_attachments.bulkCreate(
+        uploadedAttachments.map((file) => ({
+          note_id: note.note_id,
+          uploaded_by_user_id: currentUserId,
+          file_name: file.file_name,
+          file_path: file.file_path,
+          mime_type: file.mime_type,
+          file_size_bytes: file.file_size_bytes
+        }))
+      );
+    }
+
+    const notes = await loadSalesRepresentativeLeadNotes(leadId, currentUserId);
+    const createdNote = notes.find((item) => Number(item.note_id) === Number(note.note_id));
+
+    return res.status(201).json({
+      success: true,
+      message: 'Sales representative lead note added successfully',
+      data: createdNote || note
+    });
+  } catch (error) {
+    console.error('Add sales representative lead note error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+exports.replyToSalesRepresentativeLeadNote = async (req, res) => {
+  try {
+    const leadId = Number(req.params.leadId);
+    const noteId = Number(req.params.noteId);
+    const currentUserId = getAuthenticatedUserId(req);
+    const message = getNoteBody(req.body);
+
+    if (!Number.isInteger(leadId) || leadId <= 0 || !Number.isInteger(noteId) || noteId <= 0) {
+      return res.status(400).json({ success: false, message: 'Valid leadId and noteId are required' });
+    }
+
+    if (!currentUserId) {
+      return res.status(401).json({ success: false, message: 'Authenticated user is required' });
+    }
+
+    if (!message) {
+      return res.status(400).json({ success: false, message: 'Reply message is required' });
+    }
+
+    const lead = await ensureSalesRepresentativeLeadNotesAccess(leadId, req, res);
+    if (!lead) return null;
+
+    const parentNote = await findActiveSalesRepresentativeLeadNote(leadId, noteId);
+    if (!parentNote) {
+      return res.status(404).json({ success: false, message: 'Parent note not found for this sales representative lead' });
+    }
+
+    const reply = await db.project_notes.create({
+      lead_id: leadId,
+      parent_note_id: noteId,
+      created_by_user_id: currentUserId,
+      message
+    });
+
+    const uploadedAttachments = await uploadShootNoteAttachmentsToS3(req.files);
+    if (uploadedAttachments.length > 0) {
+      await db.project_note_attachments.bulkCreate(
+        uploadedAttachments.map((file) => ({
+          note_id: reply.note_id,
+          uploaded_by_user_id: currentUserId,
+          file_name: file.file_name,
+          file_path: file.file_path,
+          mime_type: file.mime_type,
+          file_size_bytes: file.file_size_bytes
+        }))
+      );
+    }
+
+    const notes = await loadSalesRepresentativeLeadNotes(leadId, currentUserId);
+    const parent = notes.find((item) => Number(item.note_id) === Number(noteId));
+    const createdReply = parent?.replies?.find((item) => Number(item.note_id) === Number(reply.note_id));
+
+    return res.status(201).json({
+      success: true,
+      message: 'Sales representative lead note reply added successfully',
+      data: createdReply || reply
+    });
+  } catch (error) {
+    console.error('Reply to sales representative lead note error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+exports.toggleSalesRepresentativeLeadNoteReaction = async (req, res) => {
+  try {
+    const leadId = Number(req.params.leadId);
+    const noteId = Number(req.params.noteId);
+    const currentUserId = getAuthenticatedUserId(req);
+    const reactionType = getSafeReactionType(req.body?.reaction || req.body?.reaction_type);
+
+    if (!Number.isInteger(leadId) || leadId <= 0 || !Number.isInteger(noteId) || noteId <= 0) {
+      return res.status(400).json({ success: false, message: 'Valid leadId and noteId are required' });
+    }
+
+    if (!currentUserId) {
+      return res.status(401).json({ success: false, message: 'Authenticated user is required' });
+    }
+
+    const lead = await ensureSalesRepresentativeLeadNotesAccess(leadId, req, res);
+    if (!lead) return null;
+
+    const note = await findActiveSalesRepresentativeLeadNote(leadId, noteId);
+    if (!note) {
+      return res.status(404).json({ success: false, message: 'Note not found for this sales representative lead' });
+    }
+
+    const existingUserReactions = await db.project_note_reactions.findAll({
+      where: {
+        note_id: noteId,
+        user_id: currentUserId,
+      }
+    });
+
+    const existingSameReaction = existingUserReactions.find(
+      (item) => String(item.reaction_type || '').toLowerCase() === reactionType
+    );
+
+    let reactedByMe = false;
+
+    if (existingSameReaction) {
+      await db.project_note_reactions.destroy({
+        where: {
+          note_id: noteId,
+          user_id: currentUserId,
+        }
+      });
+    } else {
+      await db.project_note_reactions.destroy({
+        where: {
+          note_id: noteId,
+          user_id: currentUserId,
+        }
+      });
+
+      await db.project_note_reactions.create({
+        note_id: noteId,
+        user_id: currentUserId,
+        reaction_type: reactionType
+      });
+      reactedByMe = true;
+    }
+
+    const [likeCount, reactionCount] = await Promise.all([
+      db.project_note_reactions.count({ where: { note_id: noteId, reaction_type: 'like' } }),
+      db.project_note_reactions.count({ where: { note_id: noteId } })
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      message: reactedByMe ? 'Reaction added successfully' : 'Reaction removed successfully',
+      data: {
+        note_id: noteId,
+        reaction: reactionType,
+        reacted_by_me: reactedByMe,
+        like_count: likeCount,
+        reaction_count: reactionCount
+      }
+    });
+  } catch (error) {
+    console.error('Toggle sales representative lead note reaction error:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+exports.deleteSalesRepresentativeLeadNote = async (req, res) => {
+  try {
+    const leadId = Number(req.params.leadId);
+    const noteId = Number(req.params.noteId);
+    const currentUserId = getAuthenticatedUserId(req);
+    const userRole = String(req.user?.userRole || '').toLowerCase().replace(/\s+/g, '_');
+
+    if (!Number.isInteger(leadId) || leadId <= 0 || !Number.isInteger(noteId) || noteId <= 0) {
+      return res.status(400).json({ success: false, message: 'Valid leadId and noteId are required' });
+    }
+
+    if (!currentUserId) {
+      return res.status(401).json({ success: false, message: 'Authenticated user is required' });
+    }
+
+    const lead = await ensureSalesRepresentativeLeadNotesAccess(leadId, req, res);
+    if (!lead) return null;
+
+    const note = await findActiveSalesRepresentativeLeadNote(leadId, noteId);
+    if (!note) {
+      return res.status(404).json({ success: false, message: 'Note not found for this sales representative lead' });
+    }
+
+    const canDelete = (
+      Number(note.created_by_user_id) === Number(currentUserId) ||
+      isAdminSalesRepresentativeNotesRole(userRole)
+    );
+
+    if (!canDelete) {
+      return res.status(403).json({ success: false, message: 'You do not have permission to delete this note' });
+    }
+
+    await db.project_notes.update(
+      { is_active: 0 },
+      {
+        where: {
+          [Op.or]: [
+            { note_id: noteId },
+            { parent_note_id: noteId }
+          ]
+        }
+      }
+    );
+
+    await db.project_note_attachments.update(
+      { is_active: 0 },
+      {
+        where: {
+          note_id: {
+            [Op.in]: [
+              noteId,
+              ...(
+                await db.project_notes.findAll({
+                  where: { parent_note_id: noteId, lead_id: leadId },
+                  attributes: ['note_id'],
+                  raw: true
+                })
+              ).map((item) => Number(item.note_id))
+            ]
+          }
+        }
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'Sales representative lead note deleted successfully'
+    });
+  } catch (error) {
+    console.error('Delete sales representative lead note error:', error);
     return res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };

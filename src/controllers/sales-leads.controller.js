@@ -2765,6 +2765,13 @@ exports.getLeadById = async (req, res) => {
     }
 
     const leadJson = lead.toJSON();
+    leadJson.notes_count = await db.project_notes.count({
+      where: {
+        lead_id: lead.lead_id,
+        parent_note_id: null,
+        is_active: 1
+      }
+    });
     const linkedSalesQuote = await sales_quotes.findOne({
       where: { lead_id: lead.lead_id },
       attributes: ['sales_quote_id', 'quote_number', 'status', 'subtotal', 'discount_amount', 'total'],
