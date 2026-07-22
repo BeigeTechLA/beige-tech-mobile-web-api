@@ -1,4 +1,7 @@
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
 const router = express.Router();
 const affiliateController = require('../controllers/affiliate.controller');
 const { authenticate } = require('../middleware/auth.middleware');
@@ -17,6 +20,20 @@ const affiliateIdentityView = requireAnyPermission([
   'client_dashboard.view',
   'creative_partner_affiliate.view'
 ], { allowRoles: ['client', 'creative'] });
+
+const disputeUploadDir = path.join(__dirname, '../../public/uploads/media');
+fs.mkdirSync(disputeUploadDir, { recursive: true });
+const disputeUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, disputeUploadDir),
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname || '');
+      const base = path.basename(file.originalname || 'dispute-attachment', ext).replace(/[^a-z0-9_-]/gi, '_');
+      cb(null, `${base}_${Date.now()}${ext}`);
+    }
+  }),
+  limits: { fileSize: 50 * 1024 * 1024 }
+});
 
 /**
  * Affiliate Routes
@@ -66,6 +83,61 @@ router.put('/payout-details', authenticate, affiliateController.updatePayoutDeta
  * @access  Private (requires authentication)
  */
 router.get('/referrals', authenticate, affiliateReferralsView, affiliateController.getReferralHistory);
+
+/**
+ * @route   GET /api/affiliates/transactions
+ * @desc    Get affiliate finance transactions
+ * @query   page, limit, search, status, transaction_type, payment_method, date_from, date_to
+ * @access  Private (requires authentication)
+ */
+router.get('/transactions', authenticate, affiliateReferralsView, affiliateController.getAffiliateTransactions);
+
+/**
+ * @route   POST /api/affiliates/disputes
+ * @desc    Create an affiliate dispute
+ * @access  Private (requires authentication)
+ */
+router.post(
+  '/disputes',
+  authenticate,
+  affiliateReferralsView,
+  disputeUpload.fields([{ name: 'attachment', maxCount: 5 }, { name: 'attachments', maxCount: 10 }, { name: 'file', maxCount: 5 }]),
+  affiliateController.createDispute
+);
+
+/**
+ * @route   GET /api/affiliates/disputes
+ * @desc    List affiliate disputes
+ * @access  Private (requires authentication)
+ */
+router.get('/disputes', authenticate, affiliateReferralsView, affiliateController.listDisputes);
+
+/**
+ * @route   GET /api/affiliates/disputes/:disputeId
+ * @desc    Get affiliate dispute details
+ * @access  Private (requires authentication)
+ */
+router.get('/disputes/:disputeId', authenticate, affiliateReferralsView, affiliateController.getDisputeDetails);
+
+/**
+ * @route   POST /api/affiliates/disputes/:disputeId/comments
+ * @desc    Add comment to affiliate dispute
+ * @access  Private (requires authentication)
+ */
+router.post('/disputes/:disputeId/comments', authenticate, affiliateReferralsView, affiliateController.addDisputeComment);
+
+/**
+ * @route   POST /api/affiliates/disputes/:disputeId/attachments
+ * @desc    Add attachment to affiliate dispute
+ * @access  Private (requires authentication)
+ */
+router.post(
+  '/disputes/:disputeId/attachments',
+  authenticate,
+  affiliateReferralsView,
+  disputeUpload.fields([{ name: 'attachment', maxCount: 5 }, { name: 'attachments', maxCount: 10 }, { name: 'file', maxCount: 5 }]),
+  affiliateController.addDisputeAttachment
+);
 
 // ============================================================================
 // ADMIN ENDPOINTS

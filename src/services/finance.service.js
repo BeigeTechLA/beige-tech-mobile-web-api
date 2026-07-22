@@ -1961,6 +1961,88 @@ async function listTransactions(filters = {}) {
   };
 }
 
+async function listClientTransactions(filters = {}, userContext = {}) {
+  const Op = db.Sequelize.Op;
+  const page = Math.max(parseInt(filters.page, 10) || 1, 1);
+  const limit = Math.min(Math.max(parseInt(filters.limit, 10) || 20, 1), 100);
+  const offset = (page - 1) * limit;
+  const search = String(filters.search || filters.q || '').trim();
+  const explicitBookingId = Number(filters.booking_id || 0) || null;
+  const clientContext = await getClientUserContext(userContext);
+
+  const clientWhere = [];
+  if (clientContext.userId) clientWhere.push({ user_id: clientContext.userId });
+  if (clientContext.email) clientWhere.push({ guest_email: clientContext.email });
+
+  if (!clientWhere.length) {
+    const error = new Error('Client identity is required');
+    error.statusCode = 401;
+    throw error;
+  }
+
+  const bookingRows = await db.stream_project_booking.findAll({
+    where: clientWhere.length === 1 ? clientWhere[0] : { [Op.or]: clientWhere },
+    attributes: ['stream_project_booking_id', 'quote_id', 'project_name', 'shoot_type', 'event_type', 'content_type', 'event_date', 'guest_email', 'payment_completed_at'],
+    raw: true
+  });
+
+  let bookingIds = [...new Set(bookingRows.map((booking) => Number(booking.stream_project_booking_id)).filter(Boolean))];
+  if (explicitBookingId) {
+    bookingIds = bookingIds.filter((bookingId) => bookingId === explicitBookingId);
+  }
+
+  const [leadInfoByBookingId, paymentHistoryEntries] = await Promise.all([
+    getLeadInfoByBookingIds(bookingIds),
+    fetchPaymentHistoryEntriesForBookings(bookingIds)
+  ]);
+
+  const bookingById = new Map(bookingRows.map((booking) => [Number(booking.stream_project_booking_id), booking]));
+  const mappedRows = paymentHistoryEntries
+    .map((entry) => {
+      const bookingId = Number(entry.booking_id);
+      return buildPaymentHistoryListRow(
+        entry,
+        bookingById.get(bookingId) || {},
+        leadInfoByBookingId.get(bookingId) || {}
+      );
+    })
+    .filter((row) => {
+      const status = String(filters.status || '').trim().toLowerCase();
+      if (status && String(row.status || '').trim().toLowerCase() !== status) return false;
+      if (filters.payment_id && Number(row.payment_id) !== Number(filters.payment_id)) return false;
+      if (filters.transaction_type && row.transaction_type !== filters.transaction_type) return false;
+      if (!paymentHistoryMatchesMethod(row, filters.payment_method)) return false;
+      if (!paymentHistoryMatchesSearch(row, search)) return false;
+
+      const transactionTime = row.transaction_date ? new Date(row.transaction_date).getTime() : 0;
+      if (filters.date_from) {
+        const fromTime = new Date(filters.date_from).getTime();
+        if (Number.isFinite(fromTime) && transactionTime < fromTime) return false;
+      }
+      if (filters.date_to) {
+        const toDate = new Date(filters.date_to);
+        if (Number.isFinite(toDate.getTime())) {
+          toDate.setHours(23, 59, 59, 999);
+          if (transactionTime > toDate.getTime()) return false;
+        }
+      }
+
+      return true;
+    });
+
+  const pagedRows = mappedRows.slice(offset, offset + limit);
+
+  return {
+    rows: pagedRows,
+    pagination: {
+      page,
+      limit,
+      total: mappedRows.length,
+      total_pages: Math.ceil(mappedRows.length / limit)
+    }
+  };
+}
+
 async function listShootBreakdowns(filters = {}) {
   const Op = db.Sequelize.Op;
   const page = Math.max(parseInt(filters.page, 10) || 1, 1);
@@ -2920,6 +3002,7 @@ async function markCreatorPayoutPaid(payoutRequestId, payload = {}, options = {}
 module.exports = {
   syncBookingFinance,
   listTransactions,
+  listClientTransactions,
   listShootBreakdowns,
   getShootFinance,
   getClientPaymentManagement,

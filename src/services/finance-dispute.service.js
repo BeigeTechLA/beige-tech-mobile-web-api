@@ -300,8 +300,20 @@ function buildWhere(filters = {}) {
   if (filters.invoice_send_history_id) where.invoice_send_history_id = filters.invoice_send_history_id;
   if (filters.date_from || filters.date_to) {
     where.created_at = {};
-    if (filters.date_from) where.created_at[Op.gte] = new Date(filters.date_from);
-    if (filters.date_to) where.created_at[Op.lte] = new Date(filters.date_to);
+    if (filters.date_from) {
+      const from = new Date(filters.date_from);
+      if (!Number.isNaN(from.getTime())) {
+        from.setHours(0, 0, 0, 0);
+        where.created_at[Op.gte] = from;
+      }
+    }
+    if (filters.date_to) {
+      const to = new Date(filters.date_to);
+      if (!Number.isNaN(to.getTime())) {
+        to.setHours(23, 59, 59, 999);
+        where.created_at[Op.lte] = to;
+      }
+    }
   }
 
   if (search) {

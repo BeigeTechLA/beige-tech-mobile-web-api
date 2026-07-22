@@ -1,5 +1,7 @@
 const { Common } = require('googleapis');
 const db = require('../models');
+const financeService = require('../services/finance.service');
+const financeDisputeService = require('../services/finance-dispute.service');
 const { Op } = require('sequelize');
 const crypto = require('crypto');
 const constants = require('../utils/constants');
@@ -597,6 +599,254 @@ exports.getReferralHistory = async (req, res) => {
       success: false,
       message: 'Failed to retrieve referral history',
       error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+    });
+  }
+};
+
+function formatAffiliateTransactionMethod(method, source, externalReference) {
+  const normalized = String(method || source || '').trim().toLowerCase();
+  if (normalized === 'stripe' || String(externalReference || '').startsWith('pi_')) return 'Stripe';
+  if (normalized === 'booking_checkout' || normalized === 'quote_invoice' || normalized === 'additional_invoice') return 'Stripe';
+  if (normalized === 'bank_transfer' || normalized === 'bank transfer') return 'Bank Transfer';
+  if (normalized === 'manual') return 'Manual';
+  if (normalized === 'paypal') return 'PayPal';
+  if (!normalized) return 'Manual';
+  return normalized.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function formatAffiliateTransactionStatus(record = {}) {
+  const status = String(record.status || '').trim().toLowerCase();
+  const payoutStatus = String(record.payout_status || '').trim().toLowerCase();
+  const transactionType = String(record.transaction_type || '').trim().toLowerCase();
+
+  if (transactionType === 'affiliate_payout') {
+    if (status === 'paid') return 'paid';
+    if (status === 'approved' || status === 'processing') return 'In-Progress';
+    if (status === 'failed' || status === 'rejected') return 'Refunded';
+    return 'Pending';
+  }
+
+  if (status === 'cancelled' || status === 'refunded') return 'Refunded';
+  if (payoutStatus === 'paid' || status === 'paid') return 'Paid';
+  if (payoutStatus === 'approved' || payoutStatus === 'processing') return 'In-Progress';
+  if (status === 'completed' || status === 'pending') return 'Pending';
+  return 'Pending';
+}
+
+function formatAffiliateReferralTransactionRow(referral) {
+  const payment = referral.payment || {};
+  const transactionDate = referral.created_at || payment.created_at || null;
+  return {
+    finance_transaction_id: `ref-${referral.referral_id}`,
+    transaction_id: `AFF-REF-${referral.referral_id}`,
+    transaction_code: `AFF-REF-${referral.referral_id}`,
+    booking_id: payment.payment_id || referral.payment_id || referral.referral_id,
+    shoot_id: payment.payment_id || referral.payment_id || null,
+    payment_id: referral.payment_id || payment.payment_id || null,
+    quote_id: null,
+    client_name: payment.user?.name || payment.client_name || referral.referred_guest_email || 'Affiliate Referral',
+    client_email: payment.user?.email || referral.referred_guest_email || null,
+    client_phone: null,
+    shoot_type: payment.shoot_type || 'Affiliate Commission',
+    project_name: payment.shoot_type || 'Affiliate Commission',
+    event_date: payment.shoot_date || null,
+    transaction_date: transactionDate,
+    total_amount: parseFloat(referral.commission_amount || 0),
+    currency: 'USD',
+    payment_method: formatAffiliateTransactionMethod(payment.payment_method, payment.payment_source, payment.stripe_payment_intent_id),
+    status: formatAffiliateTransactionStatus({
+      status: referral.status,
+      payout_status: referral.payout_status,
+      transaction_type: 'affiliate_commission'
+    }),
+    transaction_type: 'affiliate_commission',
+    source: 'affiliate',
+    external_reference: referral.referral_code || payment.stripe_payment_intent_id || null,
+    receipt_number: referral.referral_code ? `REF-${referral.referral_code}` : null,
+    invoice_number: payment.payment_id ? `PAY-${payment.payment_id}` : null,
+    receipt_url: null,
+    receipt_download_url: null,
+    manual_payment_id: null,
+    invoices_count: payment.payment_id ? 1 : 0,
+    latest_invoice: payment.payment_id ? {
+      payment_id: payment.payment_id,
+      total_amount: parseFloat(payment.total_amount || 0),
+      shoot_date: payment.shoot_date || null,
+      status: payment.status || null
+    } : null,
+    metadata: {
+      referral_id: referral.referral_id,
+      booking_amount: parseFloat(referral.booking_amount || 0),
+      commission_amount: parseFloat(referral.commission_amount || 0),
+      referral_status: referral.status,
+      payout_status: referral.payout_status
+    }
+  };
+}
+
+function formatAffiliatePayoutTransactionRow(payout) {
+  return {
+    finance_transaction_id: `payout-${payout.payout_id}`,
+    transaction_id: `AFF-PAYOUT-${payout.payout_id}`,
+    transaction_code: `AFF-PAYOUT-${payout.payout_id}`,
+    booking_id: null,
+    shoot_id: null,
+    payment_id: null,
+    quote_id: null,
+    client_name: payout.affiliate?.user?.name || 'Affiliate Payout',
+    client_email: payout.affiliate?.user?.email || null,
+    client_phone: null,
+    shoot_type: 'Affiliate Payout',
+    project_name: 'Affiliate Payout',
+    event_date: null,
+    transaction_date: payout.processed_at || payout.created_at || null,
+    total_amount: parseFloat(payout.amount || 0),
+    currency: 'USD',
+    payment_method: formatAffiliateTransactionMethod(payout.payout_method, 'affiliate_payout', payout.transaction_reference),
+    status: formatAffiliateTransactionStatus({
+      status: payout.status,
+      transaction_type: 'affiliate_payout'
+    }),
+    transaction_type: 'affiliate_payout',
+    source: 'affiliate_payout',
+    external_reference: payout.transaction_reference || null,
+    receipt_number: null,
+    invoice_number: null,
+    receipt_url: null,
+    receipt_download_url: null,
+    manual_payment_id: null,
+    invoices_count: 0,
+    latest_invoice: null,
+    metadata: {
+      payout_id: payout.payout_id,
+      payout_method: payout.payout_method,
+      status: payout.status,
+      notes: payout.notes || null
+    }
+  };
+}
+
+/**
+ * Get the authenticated affiliate's finance transactions
+ * GET /api/affiliates/transactions
+ */
+exports.getAffiliateTransactions = async (req, res) => {
+  try {
+    const data = await financeService.listClientTransactions(req.query, {
+      userId: req.userId || req.user?.userId || null
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        rows: data.rows,
+        pagination: data.pagination
+      }
+    });
+  } catch (error) {
+    console.error('Get Affiliate Transactions Error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: 'Failed to retrieve affiliate transactions',
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+    });
+  }
+};
+
+exports.createDispute = async (req, res) => {
+  try {
+    const data = await financeDisputeService.createClientDispute(req.body, req.files, {
+      userId: req.userId || req.user?.userId || null
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: 'Dispute submitted successfully',
+      data
+    });
+  } catch (error) {
+    console.error('Create affiliate dispute error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to submit dispute'
+    });
+  }
+};
+
+exports.listDisputes = async (req, res) => {
+  try {
+    const data = await financeDisputeService.listClientDisputes(req.query, {
+      userId: req.userId || req.user?.userId || null
+    });
+
+    return res.status(200).json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    console.error('List affiliate disputes error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch disputes'
+    });
+  }
+};
+
+exports.getDisputeDetails = async (req, res) => {
+  try {
+    const data = await financeDisputeService.getClientDisputeDetails(req.params.disputeId, {
+      userId: req.userId || req.user?.userId || null
+    });
+
+    return res.status(200).json({
+      success: true,
+      data
+    });
+  } catch (error) {
+    console.error('Get affiliate dispute details error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch dispute details'
+    });
+  }
+};
+
+exports.addDisputeComment = async (req, res) => {
+  try {
+    const data = await financeDisputeService.addClientDisputeComment(req.params.disputeId, req.body, {
+      userId: req.userId || req.user?.userId || null
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: 'Comment added successfully',
+      data
+    });
+  } catch (error) {
+    console.error('Add affiliate dispute comment error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to add comment'
+    });
+  }
+};
+
+exports.addDisputeAttachment = async (req, res) => {
+  try {
+    const data = await financeDisputeService.addClientDisputeAttachment(req.params.disputeId, req.body, req.files, {
+      userId: req.userId || req.user?.userId || null
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: 'Attachment added successfully',
+      data
+    });
+  } catch (error) {
+    console.error('Add affiliate dispute attachment error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to add attachment'
     });
   }
 };
