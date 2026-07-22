@@ -2567,7 +2567,7 @@ CREATE TABLE IF NOT EXISTS studio_bookings (
   platform_fee DECIMAL(10,2) NOT NULL DEFAULT 0.00,
   net_amount DECIMAL(10,2) NOT NULL DEFAULT 0.00,
 
-  source ENUM('manual', 'book_a_shoot') NOT NULL DEFAULT 'manual',
+  source ENUM('manual', 'book_a_shoot', 'create_new_deal') NOT NULL DEFAULT 'manual',
   metadata JSON NULL,
 
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -3501,3 +3501,8 @@ ALTER TABLE `sales_quotes`
   ADD COLUMN `pre_production_file_size` INT NULL AFTER `pre_production_file_type`,
   ADD COLUMN `pre_production_file_path` VARCHAR(500) NULL AFTER `pre_production_file_size`,
   ADD COLUMN `pre_production_file_url` VARCHAR(1000) NULL AFTER `pre_production_file_path`;
+
+-- 22-07-26
+
+ALTER TABLE studio_bookings
+  MODIFY source ENUM('manual', 'book_a_shoot', 'create_new_deal') NOT NULL DEFAULT 'manual';

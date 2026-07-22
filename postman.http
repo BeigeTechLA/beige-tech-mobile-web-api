@@ -2,9 +2,9 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI4MSwidXNlclJvbGUiOiJDcmVhdGl2ZSIsInBlcm1pc3Npb25zVmVyc2lvbiI6MSwidXNlclR5cGVJZCI6MiwiaWF0IjoxNzgzNTc0MzEwLCJleHAiOjE3ODQxNzkxMTB9.HHegOrbgsd0P3IJJK3U8AX8o-7Gtincjv0Q5BL4jOWc
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjEsInVzZXJUeXBlSWQiOjEsImlhdCI6MTc4NDcyMDQ5OCwiZXhwIjoxNzg1MzI1Mjk4fQ.uwZfB-jdpDAthaq85kQ2AbshYPP37-RLfLGvGkgc94c
 
-@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI4MSwidXNlclJvbGUiOiJDcmVhdGl2ZSIsInBlcm1pc3Npb25zVmVyc2lvbiI6MSwidXNlclR5cGVJZCI6MiwiaWF0IjoxNzgzNDIzNzc0LCJleHAiOjE3ODQwMjg1NzR9.vRt-jV5uaMM8KiBW0kDg4NbK-xEVCbuXJnIJQiRR8Sk
+@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjEsInVzZXJUeXBlSWQiOjEsImlhdCI6MTc4NDcyMDQ3NywiZXhwIjoxNzg1MzI1Mjc3fQ.BtzY-xcRVIBL1lqMNOtRUhge9RmpipR923jZvBVbrlI
 
 @CP_TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI4MSwidXNlclJvbGUiOiJDcmVhdGl2ZSIsInBlcm1pc3Npb25zVmVyc2lvbiI6MSwidXNlclR5cGVJZCI6MiwiaWF0IjoxNzg0NjE0MzQ1LCJleHAiOjE3ODUyMTkxNDV9.guUL2MGKnEsEGNay9EdOnPrp6kfoXICnXYLuwRl4dmQ
 
@@ -1147,6 +1147,130 @@ Authorization: {{TOKEN}}
         "time_zone": "Asia/Calcutta"
       }
     ]
+}
+
+### Create New Deal - Studio Only
+### Studio rows are saved in studio_bookings with source=create_new_deal.
+POST {{URL}}sales/deals/finalize HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "client_name": "Studio Only Admin",
+  "guest_email": "studio.only.admin@beige.test",
+  "phone": "+16502450966",
+  "intent": "Warm",
+  "lead_source": "referral",
+  "content_type": "studio",
+  "shoot_type": "studio",
+  "studio_booking_for": "production",
+  "booking_type": "single_day",
+  "start_date": "2026-01-06",
+  "start_time": "10:00",
+  "end_time": "18:00",
+  "time_zone": "America/Los_Angeles",
+  "duration_hours": 8,
+  "location": "Woodland Hills, Los Angeles, CA",
+  "location_latitude": 34.1654,
+  "location_longitude": -118.6089,
+  "crew_roles": {},
+  "crew_size": 0,
+  "selected_crew_ids": [],
+  "edits_needed": false,
+  "video_edit_types": [],
+  "photo_edit_types": [],
+  "is_draft": false,
+  "skip_discount": true,
+  "skip_margin": true,
+  "studio_total": 1200,
+  "studio_items": [
+    {
+      "studio_id": "beige-modern-resort-villa",
+      "name": "Beige Media (Modern Resort Villa with Jacuzzi)",
+      "location": "Woodland Hills, Los Angeles, CA",
+      "image": "https://d2jhn32fsulyac.cloudfront.net/assets/studio/weho-content/Weho+Studio-2.jpg",
+      "pricing_mode": "hourly",
+      "pricing_category": "production",
+      "pricing_label": "Production",
+      "unit_price": 150,
+      "quantity": 8,
+      "total": 1200,
+      "price_label": "$150/hour",
+      "selected_date": "2026-01-06",
+      "start_time": "10:00",
+      "end_time": "18:00",
+      "time_zone": "America/Los_Angeles",
+      "studio_booking_type": "single_day",
+      "booking_days": [],
+      "cast_and_crew_count": 0,
+      "update_studio_datetime": true,
+      "lat": 34.1654,
+      "lng": -118.6089
+    }
+  ]
+}
+
+### Create New Deal - Studio With CP Selected
+### Top-level timing is the CP/shoot timing. Studio rental timing stays in studio_items[].
+POST {{URL}}sales/deals/finalize HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "client_name": "Studio CP Admin",
+  "guest_email": "studio.cp.admin@beige.test",
+  "phone": "+16502450967",
+  "intent": "Warm",
+  "lead_source": "referral",
+  "content_type": "studio,videographer",
+  "shoot_type": "podcasts_shows",
+  "studio_booking_for": "production",
+  "booking_type": "single_day",
+  "start_date": "2026-01-12",
+  "start_time": "10:30",
+  "end_time": "16:30",
+  "time_zone": "America/Los_Angeles",
+  "duration_hours": 6,
+  "location": "Woodland Hills, Los Angeles, CA",
+  "location_latitude": 34.1654,
+  "location_longitude": -118.6089,
+  "crew_roles": {
+    "videographer": 1
+  },
+  "crew_size": 1,
+  "selected_crew_ids": [2130],
+  "edits_needed": true,
+  "video_edit_types": ["social_reel_15_30"],
+  "photo_edit_types": [],
+  "is_draft": false,
+  "skip_discount": true,
+  "skip_margin": true,
+  "studio_total": 1200,
+  "studio_items": [
+    {
+      "studio_id": "beige-modern-resort-villa",
+      "name": "Beige Media (Modern Resort Villa with Jacuzzi)",
+      "location": "Woodland Hills, Los Angeles, CA",
+      "image": "https://d2jhn32fsulyac.cloudfront.net/assets/studio/weho-content/Weho+Studio-2.jpg",
+      "pricing_mode": "hourly",
+      "pricing_category": "production",
+      "pricing_label": "Production",
+      "unit_price": 150,
+      "quantity": 8,
+      "total": 1200,
+      "price_label": "$150/hour",
+      "selected_date": "2026-01-12",
+      "start_time": "10:00",
+      "end_time": "18:00",
+      "time_zone": "America/Los_Angeles",
+      "studio_booking_type": "single_day",
+      "booking_days": [],
+      "cast_and_crew_count": 4,
+      "update_studio_datetime": true,
+      "lat": 34.1654,
+      "lng": -118.6089
+    }
+  ]
 }
 
 ### Create Client Booking

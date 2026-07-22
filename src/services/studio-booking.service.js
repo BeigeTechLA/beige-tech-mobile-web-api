@@ -34,8 +34,13 @@ function resolveStudioDurationHours(studio = {}) {
   return Number.isFinite(quantity) && quantity > 0 ? quantity : null;
 }
 
-function buildStudioBookingRow({ bookingId, userId = null, guestEmail = null, studio }) {
+function normalizeStudioBookingSource(source) {
+  return source === 'create_new_deal' ? 'create_new_deal' : 'book_a_shoot';
+}
+
+function buildStudioBookingRow({ bookingId, userId = null, guestEmail = null, studio, source = 'book_a_shoot' }) {
   const totalPrice = Number(studio.totalPrice || 0);
+  const normalizedSource = normalizeStudioBookingSource(source);
 
   return {
     stream_project_booking_id: bookingId,
@@ -52,7 +57,7 @@ function buildStudioBookingRow({ bookingId, userId = null, guestEmail = null, st
     overtime_amount: 0,
     platform_fee: 0,
     net_amount: Number.isFinite(totalPrice) ? totalPrice : 0,
-    source: 'book_a_shoot',
+    source: normalizedSource,
     metadata: studio,
   };
 }
@@ -62,23 +67,32 @@ async function replaceBookAShootStudioBookings({
   userId = null,
   guestEmail = null,
   studioItems = [],
+  source = 'book_a_shoot',
   transaction = null,
 }) {
   if (!bookingId || !db.studio_bookings) {
     return { deleted: 0, created: 0 };
   }
 
+  const normalizedSource = normalizeStudioBookingSource(source);
+
   const destroyCount = await db.studio_bookings.destroy({
     where: {
       stream_project_booking_id: bookingId,
-      source: 'book_a_shoot',
+      source: normalizedSource,
     },
     transaction,
   });
 
   const rows = (Array.isArray(studioItems) ? studioItems : [])
     .filter((studio) => studio?.studioId && Number(studio?.totalPrice || 0) > 0)
-    .map((studio) => buildStudioBookingRow({ bookingId, userId, guestEmail, studio }));
+    .map((studio) => buildStudioBookingRow({
+      bookingId,
+      userId,
+      guestEmail,
+      studio,
+      source: normalizedSource,
+    }));
 
   if (rows.length > 0) {
     await db.studio_bookings.bulkCreate(rows, { transaction });

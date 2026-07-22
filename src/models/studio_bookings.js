@@ -78,7 +78,7 @@ module.exports = function(sequelize, DataTypes) {
       defaultValue: 0.00
     },
     source: {
-      type: DataTypes.ENUM('manual', 'book_a_shoot'),
+      type: DataTypes.ENUM('manual', 'book_a_shoot', 'create_new_deal'),
       allowNull: false,
       defaultValue: 'manual'
     },

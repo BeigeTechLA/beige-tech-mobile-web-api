@@ -6421,11 +6421,31 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
     skip_margin = true,
     booking_type,
     booking_days,
-    time_zone
+    time_zone,
+    studio_items = [],
+    studio_total = 0,
+    studio_booking_for
   } = finalizeBody;
   const { latitude, longitude } = extractCoordinatesFromPayload(finalizeBody, location);
   const startDateTimeUtc = startDate || start_date_time || null;
   const endDateTimeUtc = endDate || null;
+  const hasStudioItemsPayload = Array.isArray(finalizeBody.studio_items);
+  const normalizedStudioItems = hasStudioItemsPayload
+    ? normalizeStudioItems(studio_items).map((studio) => ({
+        ...studio,
+        studioBookingFor: studio.studioBookingFor || studio_booking_for || null
+      }))
+    : [];
+  const normalizedStudioTotal = parseFloat(
+    normalizedStudioItems.reduce((sum, studio) => sum + studio.totalPrice, 0).toFixed(2)
+  );
+  if (
+    normalizedStudioItems.length > 0 &&
+    Number(studio_total) > 0 &&
+    Math.abs(normalizedStudioTotal - Number(studio_total)) > 0.01
+  ) {
+    throw new Error('Studio pricing total does not match selected studio items');
+  }
 
   /* -----------------------------
   Normalize booking days
@@ -6543,10 +6563,33 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
   if (Array.isArray(photo_edit_types))
     updateData.photo_edit_types = safeJsonStringify(photo_edit_types);
 
+  if (hasStudioItemsPayload || studio_booking_for) {
+    const studioBookingForLine = studio_booking_for
+      ? `Studio Booking For: ${String(studio_booking_for).trim()}`
+      : '';
+    updateData.description = [
+      studioBookingForLine,
+      buildStudioMetaString(normalizedStudioItems)
+    ]
+      .filter((value) => String(value || '').trim())
+      .join('\n\n') || null;
+  }
+
   const draftVal = normalizeIsDraft(is_draft);
   if (draftVal !== null) updateData.is_draft = draftVal;
 
   await booking.update(updateData, { transaction: tx });
+
+  if (hasStudioItemsPayload) {
+    await studioBookingService.replaceBookAShootStudioBookings({
+      bookingId,
+      userId: booking.user_id || null,
+      guestEmail: booking.guest_email || null,
+      studioItems: normalizedStudioItems,
+      source: 'create_new_deal',
+      transaction: tx
+    });
+  }
 
   /* -----------------------------
   Save booking days
@@ -6654,6 +6697,8 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
 
     video_edit_types: Array.isArray(video_edit_types) ? video_edit_types : [],
     photo_edit_types: Array.isArray(photo_edit_types) ? photo_edit_types : [],
+    studio_total: normalizedStudioItems.length > 0 ? normalizedStudioTotal : Number(studio_total) || 0,
+    studio_items: normalizedStudioItems,
 
     skip_discount: !!skip_discount,
     skip_margin: !!skip_margin
@@ -7448,7 +7493,10 @@ exports.finalizeCreateDeal = async (req, res) => {
       skip_discount = true,
       skip_margin = true,
       booking_type,
-      booking_days
+      booking_days,
+      studio_booking_for,
+      studio_items = [],
+      studio_total = 0
     } = req.body;
 
     if (!user_id && !guest_email) {
@@ -7671,7 +7719,10 @@ exports.finalizeCreateDeal = async (req, res) => {
         skip_discount,
         skip_margin,
         booking_type,
-        booking_days
+        booking_days,
+        studio_booking_for,
+        studio_items,
+        studio_total
       },
       tx
     });
