@@ -6095,6 +6095,9 @@ async function getQuoteVersionByNumber(salesQuoteId, versionNumber, user) {
   const versionQuoteWithPaymentContext = isCurrentVersion && currentQuote
     ? ensureManualPaymentActivityForQuote({
         ...normalizedVersionQuote,
+        quote_validity_days: currentQuote.quote_validity_days ?? normalizedVersionQuote.quote_validity_days,
+        valid_until: currentQuote.valid_until ?? normalizedVersionQuote.valid_until,
+        expires_at: currentQuote.expires_at ?? normalizedVersionQuote.expires_at,
         booking_id: currentQuote.booking_id || normalizedVersionQuote.booking_id || null,
         activities: currentQuote.activities || normalizedVersionQuote.activities || [],
         payment_summary: currentQuote.payment_summary || null,
