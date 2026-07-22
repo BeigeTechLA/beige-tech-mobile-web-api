@@ -753,26 +753,6 @@ exports.getAffiliateTransactions = async (req, res) => {
   }
 };
 
-exports.createDispute = async (req, res) => {
-  try {
-    const data = await financeDisputeService.createClientDispute(req.body, req.files, {
-      userId: req.userId || req.user?.userId || null
-    });
-
-    return res.status(201).json({
-      success: true,
-      message: 'Dispute submitted successfully',
-      data
-    });
-  } catch (error) {
-    console.error('Create affiliate dispute error:', error);
-    return res.status(error.statusCode || 500).json({
-      success: false,
-      message: error.message || 'Failed to submit dispute'
-    });
-  }
-};
-
 exports.listDisputes = async (req, res) => {
   try {
     const data = await financeDisputeService.listClientDisputes(req.query, {

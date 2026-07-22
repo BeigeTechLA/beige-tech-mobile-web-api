@@ -93,19 +93,6 @@ router.get('/referrals', authenticate, affiliateReferralsView, affiliateControll
 router.get('/transactions', authenticate, affiliateReferralsView, affiliateController.getAffiliateTransactions);
 
 /**
- * @route   POST /api/affiliates/disputes
- * @desc    Create an affiliate dispute
- * @access  Private (requires authentication)
- */
-router.post(
-  '/disputes',
-  authenticate,
-  affiliateReferralsView,
-  disputeUpload.fields([{ name: 'attachment', maxCount: 5 }, { name: 'attachments', maxCount: 10 }, { name: 'file', maxCount: 5 }]),
-  affiliateController.createDispute
-);
-
-/**
  * @route   GET /api/affiliates/disputes
  * @desc    List affiliate disputes
  * @access  Private (requires authentication)

@@ -1356,6 +1356,17 @@ function buildPaymentHistoryListRow(payment = {}, booking = {}, leadInfo = {}) {
       ? `RCPT-${String(bookingId).padStart(6, '0')}-S${String(paymentRecordId).padStart(3, '0')}`
       : `RCPT-${String(bookingId).padStart(6, '0')}-${String(paymentRecordId).padStart(3, '0')}`
   );
+  const invoiceDocument = payment.invoice_number || payment.receipt_url || payment.receipt_download_url ? {
+    invoice_send_history_id: payment.finance_invoice_payment_id || payment.payment_history_id || payment.payment_id || payment.manual_payment_id || null,
+    invoice_id: payment.invoice_number || payment.receipt_number || receiptNumber || null,
+    invoice_number: payment.invoice_number || null,
+    invoice_url: payment.receipt_url || null,
+    invoice_pdf: payment.receipt_download_url || null,
+    receipt_url: payment.receipt_url || null,
+    receipt_download_url: payment.receipt_download_url || null,
+    payment_status: payment.status || 'pending',
+    sent_at: payment.paid_at || payment.created_at || null
+  } : null;
 
   return {
     finance_transaction_id: payment.payment_history_id,
@@ -1384,10 +1395,88 @@ function buildPaymentHistoryListRow(payment = {}, booking = {}, leadInfo = {}) {
     invoice_number: payment.invoice_number || null,
     receipt_url: payment.receipt_url || null,
     receipt_download_url: payment.receipt_download_url || null,
-    invoices_count: payment.invoice_count || 0,
-    latest_invoice: payment.latest_invoice || null,
+    invoices_count: payment.invoice_count || (invoiceDocument ? 1 : 0),
+    invoices: invoiceDocument ? [invoiceDocument] : [],
+    latest_invoice: invoiceDocument,
     metadata: payment.metadata || {}
   };
+}
+
+function getPaymentHistoryInvoiceDocuments(row = {}) {
+  const invoices = Array.isArray(row.invoices) && row.invoices.length
+    ? row.invoices
+    : row.latest_invoice
+      ? [row.latest_invoice]
+      : [];
+
+  const deduped = [];
+  const seen = new Set();
+
+  invoices.forEach((invoice) => {
+    if (!invoice) return;
+    const key = [
+      invoice.invoice_send_history_id || '',
+      invoice.invoice_number || '',
+      invoice.receipt_url || invoice.invoice_url || '',
+      invoice.receipt_download_url || invoice.invoice_pdf || ''
+    ].join('|');
+    if (seen.has(key)) return;
+    seen.add(key);
+    deduped.push(invoice);
+  });
+
+  return deduped;
+}
+
+function mergePaymentHistoryRowsByBooking(rows = []) {
+  const groupedRows = new Map();
+
+  rows.forEach((row) => {
+    const bookingId = Number(row.booking_id || 0) || null;
+    const groupKey = bookingId ? `booking:${bookingId}` : `row:${row.finance_transaction_id || row.transaction_id || row.id}`;
+    const invoiceDocuments = getPaymentHistoryInvoiceDocuments(row);
+    const hasBookingTotal = Number.isFinite(Number(row.booking_total_amount));
+    const amount = hasBookingTotal ? Number(row.booking_total_amount || 0) : Number(row.total_amount || 0);
+
+    if (!groupedRows.has(groupKey)) {
+      groupedRows.set(groupKey, {
+        ...row,
+        total_amount_value: amount,
+        has_booking_total: hasBookingTotal,
+        invoices: [...invoiceDocuments],
+        invoices_count: invoiceDocuments.length,
+        latest_invoice: invoiceDocuments[0] || row.latest_invoice || null
+      });
+      return;
+    }
+
+    const groupedRow = groupedRows.get(groupKey);
+    if (groupedRow.has_booking_total || hasBookingTotal) {
+      groupedRow.total_amount_value = Math.max(Number(groupedRow.total_amount_value || 0), amount);
+      groupedRow.has_booking_total = true;
+    } else {
+      groupedRow.total_amount_value += amount;
+    }
+    groupedRow.invoices.push(...invoiceDocuments);
+    groupedRow.latest_invoice = groupedRow.latest_invoice || invoiceDocuments[0] || row.latest_invoice || null;
+    groupedRow.invoices_count = groupedRow.invoices.length;
+  });
+
+  return [...groupedRows.values()].map((row) => {
+    const invoices = getPaymentHistoryInvoiceDocuments(row);
+    const latestInvoice = invoices[0] || row.latest_invoice || null;
+
+    return {
+      ...row,
+      total_amount: toMoney(row.total_amount_value || 0),
+      invoices,
+      invoices_count: invoices.length,
+      latest_invoice: latestInvoice,
+      invoice_number: latestInvoice?.invoice_number || row.invoice_number || null,
+      receipt_url: latestInvoice?.receipt_url || latestInvoice?.invoice_url || row.receipt_url || null,
+      receipt_download_url: latestInvoice?.receipt_download_url || latestInvoice?.invoice_pdf || row.receipt_download_url || null
+    };
+  });
 }
 
 async function fetchPaymentHistoryEntriesForBookings(bookingIds = []) {
@@ -2000,11 +2089,15 @@ async function listClientTransactions(filters = {}, userContext = {}) {
   const mappedRows = paymentHistoryEntries
     .map((entry) => {
       const bookingId = Number(entry.booking_id);
-      return buildPaymentHistoryListRow(
-        entry,
-        bookingById.get(bookingId) || {},
-        leadInfoByBookingId.get(bookingId) || {}
-      );
+
+      return {
+        ...buildPaymentHistoryListRow(
+          entry,
+          bookingById.get(bookingId) || {},
+          leadInfoByBookingId.get(bookingId) || {}
+        ),
+        total_amount: toMoney(entry.amount || 0)
+      };
     })
     .filter((row) => {
       const status = String(filters.status || '').trim().toLowerCase();
@@ -2030,15 +2123,16 @@ async function listClientTransactions(filters = {}, userContext = {}) {
       return true;
     });
 
-  const pagedRows = mappedRows.slice(offset, offset + limit);
+  const groupedRows = mergePaymentHistoryRowsByBooking(mappedRows);
+  const pagedRows = groupedRows.slice(offset, offset + limit);
 
   return {
     rows: pagedRows,
     pagination: {
       page,
       limit,
-      total: mappedRows.length,
-      total_pages: Math.ceil(mappedRows.length / limit)
+      total: groupedRows.length,
+      total_pages: Math.ceil(groupedRows.length / limit)
     }
   };
 }
