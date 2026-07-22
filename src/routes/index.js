@@ -43,6 +43,7 @@ router.use('/reviews', require('./reviews.routes'));
 router.use('/affiliates', require('./affiliate.routes'));
 router.use('/client', require('./client.routes'));
 router.use('/sales', require('./sales.routes'));
+router.use('/studios', require('./studios.routes'));
 router.use('/external-file-manager', require('./external-file-manager.routes'));
 router.get('/gcp/download-folder', externalFileManagerController.downloadFolderZip);
 router.use('/external-chat', require('./external-chat.routes'));

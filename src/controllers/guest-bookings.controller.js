@@ -7,8 +7,14 @@ const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 const { content } = require('googleapis/build/src/apis/content');
 const { sendCPNewBookingRequestEmail } = require('../utils/emailService');
 const { resolveEventDateAndStartTime, normalizeTime, splitDateTime } = require('../utils/timezone');
+const {
+  buildStudioMetaString,
+  normalizeStudioItems,
+  stripStudioMeta
+} = require('../utils/studio-pricing');
 const accountCreditService = require('../services/account-credit.service');
 const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
+const studioBookingService = require('../services/studio-booking.service');
 const affiliateController = require('./affiliate.controller');
 const REFERRAL_DISCOUNT_PERCENT = 10;
 
@@ -934,7 +940,11 @@ exports.updateGuestBooking = async (req, res) => {
       selected_crew_ids,
       booking_type,
       booking_days,
-      time_zone
+      time_zone,
+      studio_items,
+      studio_total,
+      studio_booking_for,
+      booking_for
     } = req.body;
 
     if (!id) {
@@ -1059,8 +1069,45 @@ exports.updateGuestBooking = async (req, res) => {
       combinedEditTypes = [...vTypes, ...pTypes].join(',');
     }
 
+    const hasStudioItemsPayload = Array.isArray(studio_items);
+    const normalizedStudioItems = hasStudioItemsPayload ? normalizeStudioItems(studio_items) : [];
+    const normalizedStudioTotal = normalizedStudioItems.reduce((sum, studio) => sum + studio.totalPrice, 0);
+    if (normalizedStudioItems.length > 0 && Number(studio_total) > 0 && Math.abs(normalizedStudioTotal - Number(studio_total)) > 0.01) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        success: false,
+        message: 'Studio pricing total does not match selected studio items'
+      });
+    }
+
+    const normalizedStudioBookingFor = String(studio_booking_for || booking_for || '').trim();
+    const studioBookingForLine = normalizedStudioBookingFor
+      ? `Studio Booking For: ${normalizedStudioBookingFor}`
+      : '';
+    const stripStudioBookingForLine = (value) => String(value || '')
+      .split('\n')
+      .filter((line) => !/^Studio Booking For:/i.test(line.trim()))
+      .join('\n')
+      .trim();
+
     // V3: Combine description with new fields
     let combinedDescription = description || special_instructions || '';
+    if (hasStudioItemsPayload) {
+      const studioMeta = buildStudioMetaString(normalizedStudioItems);
+      combinedDescription = [
+        stripStudioBookingForLine(stripStudioMeta(combinedDescription)),
+        studioBookingForLine,
+        studioMeta
+      ]
+        .filter((value) => String(value || '').trim())
+        .join('\n\n');
+    } else if (studioBookingForLine) {
+      combinedDescription = [
+        stripStudioBookingForLine(combinedDescription),
+        studioBookingForLine
+      ]
+        .filter((value) => String(value || '').trim())
+        .join('\n\n');
+    }
     if (full_name) combinedDescription += `\n\nContact Name: ${full_name}`;
     if (phone) combinedDescription += `\nPhone: ${phone}`;
     if (reference_links) combinedDescription += `\nReference Links: ${reference_links}`;
@@ -1132,6 +1179,16 @@ exports.updateGuestBooking = async (req, res) => {
         phone,
         transaction: tx
       });
+
+      if (hasStudioItemsPayload) {
+        await studioBookingService.replaceBookAShootStudioBookings({
+          bookingId: id,
+          userId: booking.user_id || resolvedUserId || null,
+          guestEmail: normalizedGuestEmail || booking.guest_email || null,
+          studioItems: normalizedStudioItems,
+          transaction: tx
+        });
+      }
 
       const salesLeadUpdate = {};
       if (full_name) salesLeadUpdate.client_name = full_name;

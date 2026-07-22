@@ -3,6 +3,7 @@ const router = express.Router();
 
 const admin = require('../controllers/admin.controller');
 const { authenticateAdmin, authMiddleware } = require('../middleware/auth');
+router.use('/studios', require('./studio-management.routes'));
 const { requirePermission, requireAnyPermission } = require('../middleware/permission.middleware');
 const { requireSuperAdmin } = require('../middleware/auth.middleware');
 
