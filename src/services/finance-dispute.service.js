@@ -429,6 +429,47 @@ async function getClientContext(userContext = {}) {
   return user.get({ plain: true });
 }
 
+async function getCreatorContext(userContext = {}) {
+  const userId = toPositiveInt(userContext.userId);
+  if (!userId) {
+    const error = new Error('Authentication required');
+    error.statusCode = 401;
+    throw error;
+  }
+
+  let creator = await db.crew_members.findOne({
+    where: { user_id: userId, is_active: 1 },
+    attributes: ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email']
+  });
+
+  if (!creator) {
+    const user = await db.users.scope('all').findByPk(userId, {
+      attributes: ['id', 'email']
+    });
+    const email = user?.email ? String(user.email).trim() : null;
+    if (email) {
+      creator = await db.crew_members.findOne({
+        where: { email, is_active: 1 },
+        attributes: ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email']
+      });
+    }
+  }
+
+  if (!creator) {
+    const error = new Error('Creative partner profile not found for logged-in user');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const plain = creator.get({ plain: true });
+  return {
+    id: plain.crew_member_id,
+    user_id: plain.user_id,
+    name: creatorName(plain),
+    email: plain.email
+  };
+}
+
 function buildClientDisputeWhere(filters = {}, client = {}) {
   const Op = db.Sequelize.Op;
   const where = buildWhere(filters);
@@ -480,6 +521,57 @@ async function assertClientCanAccessBooking(bookingId, client, transaction = nul
   }
 
   return booking;
+}
+
+function buildCreatorDisputeWhere(filters = {}, creator = {}) {
+  const Op = db.Sequelize.Op;
+  const where = buildWhere({ ...filters, creator_id: null });
+  where[Op.and] = [
+    ...(where[Op.and] || []),
+    {
+      [Op.or]: [
+        { creator_id: creator.id },
+        { raised_by_creator_id: creator.id }
+      ]
+    }
+  ];
+  return where;
+}
+
+async function assertCreatorCanAccessBooking(bookingId, creator, transaction = null) {
+  const id = toPositiveInt(bookingId);
+  if (!id) {
+    const error = new Error('booking_id is required');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const [earning, assignment] = await Promise.all([
+    db.creator_earnings.findOne({
+      where: {
+        booking_id: id,
+        creator_id: creator.id
+      },
+      order: [['updated_at', 'DESC'], ['creator_earning_id', 'DESC']],
+      transaction
+    }),
+    db.assigned_crew.findOne({
+      where: {
+        project_id: id,
+        crew_member_id: creator.id,
+        is_active: 1
+      },
+      transaction
+    })
+  ]);
+
+  if (!earning && !assignment) {
+    const error = new Error('Booking not found for this creative partner');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  return { earning, assignment };
 }
 
 async function listClientDisputes(filters = {}, userContext = {}) {
@@ -572,6 +664,114 @@ async function addClientDisputeAttachment(disputeId, payload = {}, files = null,
   const client = await getClientContext(userContext);
   await getClientDisputeDetails(disputeId, { userId: client.id });
   return addDisputeAttachment(disputeId, payload, files, { userId: client.id });
+}
+
+async function listCreatorDisputes(filters = {}, userContext = {}) {
+  const creator = await getCreatorContext(userContext);
+  const page = Math.max(parseInt(filters.page, 10) || 1, 1);
+  const limit = Math.min(Math.max(parseInt(filters.limit, 10) || 20, 1), 100);
+  const offset = (page - 1) * limit;
+
+  const result = await db.finance_disputes.findAndCountAll({
+    where: buildCreatorDisputeWhere(filters, creator),
+    distinct: true,
+    limit,
+    offset,
+    order: getSort(filters),
+    include: includeForList(),
+    subQuery: false
+  });
+
+  return {
+    rows: result.rows.map(formatDisputeRow),
+    pagination: {
+      page,
+      limit,
+      total: result.count,
+      total_pages: Math.ceil(result.count / limit)
+    },
+    filters: {
+      statuses: DISPUTE_STATUSES,
+      categories: DISPUTE_CATEGORIES
+    }
+  };
+}
+
+async function getCreatorDisputeDetails(disputeId, userContext = {}) {
+  const creator = await getCreatorContext(userContext);
+  const dispute = await db.finance_disputes.findOne({
+    where: {
+      finance_dispute_id: toPositiveInt(disputeId),
+      ...buildCreatorDisputeWhere({}, creator)
+    },
+    include: includeForDetails(),
+    subQuery: false
+  });
+
+  if (!dispute) {
+    const error = new Error('Dispute not found');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const details = await getAdminDisputeDetails(dispute.finance_dispute_id);
+  return {
+    ...details,
+    internal_comments: (details.internal_comments || []).filter((comment) => ['creator', 'all'].includes(comment.visibility))
+  };
+}
+
+async function createCreatorDispute(payload = {}, files = null, userContext = {}) {
+  const creator = await getCreatorContext(userContext);
+  const { earning } = await assertCreatorCanAccessBooking(payload.booking_id || payload.shoot_id, creator);
+  const defaultAmount = earning ? toMoney(earning.net_earning_amount || earning.gross_amount || 0) : 0;
+  const subject = String(payload.subject || payload.dispute_type || payload.category || payload.issue_type || 'Payout dispute').trim();
+  const dispute = await createAdminDispute({
+    ...payload,
+    subject,
+    category: payload.category || payload.issue_type || payload.reason || 'payout_issues',
+    creator_id: creator.id,
+    raised_by_type: 'creator',
+    raised_by_creator_id: creator.id,
+    status: 'open',
+    disputed_amount: payload.disputed_amount !== undefined ? payload.disputed_amount : defaultAmount,
+    impacted_payout_amount: payload.impacted_payout_amount !== undefined ? payload.impacted_payout_amount : defaultAmount
+  }, { userId: creator.user_id || userContext.userId || null });
+
+  if (hasUploadedFiles(files) || payload.attachments || payload.file_path) {
+    await addDisputeAttachment(dispute.dispute_id, {
+      ...payload,
+      metadata: {
+        ...parseJson(payload.metadata, {}),
+        uploaded_by_creator_id: creator.id
+      }
+    }, files, { userId: creator.user_id || userContext.userId || null });
+  }
+
+  return getCreatorDisputeDetails(dispute.dispute_id, { userId: userContext.userId });
+}
+
+async function addCreatorDisputeComment(disputeId, payload = {}, userContext = {}) {
+  const creator = await getCreatorContext(userContext);
+  await getCreatorDisputeDetails(disputeId, { userId: userContext.userId });
+  return addDisputeComment(disputeId, {
+    ...payload,
+    visibility: 'all',
+    comment_type: 'status_update',
+    created_by_creator_id: creator.id
+  }, { userId: creator.user_id || userContext.userId || null });
+}
+
+async function addCreatorDisputeAttachment(disputeId, payload = {}, files = null, userContext = {}) {
+  const creator = await getCreatorContext(userContext);
+  await getCreatorDisputeDetails(disputeId, { userId: userContext.userId });
+  return addDisputeAttachment(disputeId, {
+    ...payload,
+    metadata: {
+      ...parseJson(payload.metadata, {}),
+      uploaded_by_creator_id: creator.id
+    }
+  }, files, { userId: creator.user_id || userContext.userId || null });
 }
 
 async function getAdminDisputeDetails(disputeId) {
@@ -1052,6 +1252,11 @@ module.exports = {
   createClientDispute,
   addClientDisputeComment,
   addClientDisputeAttachment,
+  listCreatorDisputes,
+  getCreatorDisputeDetails,
+  createCreatorDispute,
+  addCreatorDisputeComment,
+  addCreatorDisputeAttachment,
   getAdminDisputesDashboard,
   listAdminDisputes,
   getAdminDisputeDetails,

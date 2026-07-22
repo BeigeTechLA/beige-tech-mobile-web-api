@@ -54,6 +54,11 @@ router.post('/client/disputes', authenticate, disputeUpload.fields([{ name: 'att
 router.get('/client/disputes/:disputeId', authenticate, financeController.getClientDisputeDetails);
 router.post('/client/disputes/:disputeId/comments', authenticate, financeController.addClientDisputeComment);
 router.post('/client/disputes/:disputeId/attachments', authenticate, disputeUpload.fields([{ name: 'attachment', maxCount: 5 }, { name: 'attachments', maxCount: 10 }, { name: 'file', maxCount: 5 }]), financeController.addClientDisputeAttachment);
+router.get('/creator/disputes', authenticate, financeController.listCreatorDisputes);
+router.post('/creator/disputes', authenticate, disputeUpload.fields([{ name: 'attachment', maxCount: 5 }, { name: 'attachments', maxCount: 10 }, { name: 'file', maxCount: 5 }]), financeController.createCreatorDispute);
+router.get('/creator/disputes/:disputeId', authenticate, financeController.getCreatorDisputeDetails);
+router.post('/creator/disputes/:disputeId/comments', authenticate, financeController.addCreatorDisputeComment);
+router.post('/creator/disputes/:disputeId/attachments', authenticate, disputeUpload.fields([{ name: 'attachment', maxCount: 5 }, { name: 'attachments', maxCount: 10 }, { name: 'file', maxCount: 5 }]), financeController.addCreatorDisputeAttachment);
 router.get('/admin/payouts-screen', authenticate, requireAdmin, financeController.getAdminPayoutsScreen);
 router.get('/admin/creator-wallet-overview', authenticate, requireAdmin, financeController.getAdminCreatorWalletOverview);
 router.get('/admin/disputes/dashboard', authenticate, requireAdmin, financeController.getAdminDisputesDashboard);
