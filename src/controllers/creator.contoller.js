@@ -1304,8 +1304,16 @@ exports.getDashboardRequestCounts = async (req, res) => {
       where: { crew_member_id: creator_id, crew_accept: 2 }
     });
 
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
     const completedShoots = await stream_project_booking.count({
-      where: { is_completed: 1 },
+      where: {
+        [Op.or]: [
+          { is_completed: 1 },
+          { event_date: { [Op.lt]: today } },
+        ],
+      },
       include: [{
         model: assigned_crew, as: "assigned_crews",
         where: { crew_member_id: creator_id, crew_accept: 1 },
