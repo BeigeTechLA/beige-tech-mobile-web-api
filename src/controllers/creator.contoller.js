@@ -94,6 +94,65 @@ const buildContentTypeFamilyWhere = (family) => Sequelize.where(
   }
 );
 
+const getSmartPendingRequestsForCrew = async (crew_member_id, extraProjectWhere = {}) => {
+  const ROLE_GROUPS = {
+    videographer: ["9", "1"],
+    photographer: ["10", "2"],
+    cinematographer: ["11", "3"],
+  };
+  const ID_TO_ROLE_MAP = {};
+  Object.entries(ROLE_GROUPS).forEach(([roleName, ids]) => {
+    ids.forEach(id => { ID_TO_ROLE_MAP[String(id)] = roleName; });
+  });
+
+  const currentCrew = await crew_members.findOne({ where: { crew_member_id } });
+  if (!currentCrew) return [];
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const myRoleIds = toIdArray(currentCrew.primary_role || "[]");
+  const myCategories = [...new Set(myRoleIds.map(id => ID_TO_ROLE_MAP[String(id)]).filter(Boolean))];
+
+  const pendingRecords = await assigned_crew.findAll({
+    where: { crew_member_id, crew_accept: 0 },
+    include: [{
+      model: stream_project_booking,
+      as: "project",
+      where: {
+        is_completed: 0,
+        payment_completed_at: { [Op.ne]: null },
+        event_date: { [Op.gte]: today },
+        ...extraProjectWhere,
+      },
+      include: [{
+        model: assigned_crew,
+        as: 'assigned_crews',
+        where: { crew_accept: 1 },
+        required: false,
+        include: [{ model: crew_members, as: 'crew_member' }]
+      }]
+    }]
+  });
+
+  return pendingRecords.filter((record) => {
+    const project = record.project;
+    const requestedLimits = typeof project.crew_roles === 'string' ? JSON.parse(project.crew_roles || '{}') : (project.crew_roles || {});
+    const acceptedCounts = { videographer: 0, photographer: 0, cinematographer: 0 };
+
+    if (project.assigned_crews) {
+      project.assigned_crews.forEach(ac => {
+        const acRoles = toIdArray(ac.crew_member?.primary_role || "[]");
+        const assignedTo = acRoles.map(id => ID_TO_ROLE_MAP[String(id)]).find(cat =>
+          cat && acceptedCounts[cat] < (requestedLimits[cat] || 0)
+        );
+        if (assignedTo) acceptedCounts[assignedTo]++;
+      });
+    }
+
+    return myCategories.some(cat => acceptedCounts[cat] < (requestedLimits[cat] || 0));
+  });
+};
+
 function parseJsonUntilStable(value) {
   let current = value;
 
@@ -206,9 +265,17 @@ exports.getDashboardCounts = async (req, res) => {
       });
     }
 
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
     const completedShoots = await stream_project_booking.count({
       where: {
-        is_completed: 1,
+        [Op.or]: [
+          { is_completed: 1 },
+          { event_date: { [Op.lt]: today } },
+        ],
       },
       include: [
         {
@@ -217,6 +284,7 @@ exports.getDashboardCounts = async (req, res) => {
           where: {
             crew_member_id: crew_member_id,
             is_active: 1,
+            crew_accept: 1,
           },
           required: true,
         },
@@ -225,7 +293,8 @@ exports.getDashboardCounts = async (req, res) => {
 
     const upcomingShoots = await stream_project_booking.count({
       where: {
-        event_date: { [Sequelize.Op.gt]: new Date() },
+        is_completed: 0,
+        event_date: { [Op.gt]: today },
       },
       include: [
         {
@@ -234,6 +303,7 @@ exports.getDashboardCounts = async (req, res) => {
           where: {
             crew_member_id: crew_member_id,
             is_active: 1,
+            crew_accept: 1,
           },
           required: true,
         },
@@ -251,6 +321,10 @@ exports.getDashboardCounts = async (req, res) => {
           model: stream_project_booking,
           as: "project",
           required: true,
+          where: {
+            event_date: { [Op.gte]: today },
+            is_completed: 0,
+          },
         },
       ],
     });
@@ -288,6 +362,9 @@ exports.getPendingRequests = async (req, res) => {
     const currentCrew = await crew_members.findOne({ where: { crew_member_id } });
     if (!currentCrew) return res.status(404).json({ error: true, message: "Crew member not found" });
 
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
     const pendingRequests = await assigned_crew.findAll({
       where: { crew_member_id, crew_accept: 0, is_active: 1 },
       include: [
@@ -295,6 +372,11 @@ exports.getPendingRequests = async (req, res) => {
           model: stream_project_booking,
           as: "project",
           required: true,
+          where: {
+            event_date: {
+              [Op.gte]: today,
+            },
+          },
         },
       ],
     });
@@ -1305,9 +1387,20 @@ exports.getDashboardRequestCounts = async (req, res) => {
       }]
     });
 
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
     let smartPendingCount = 0;
     pendingRecords.forEach((record) => {
       const project = record.project;
+      const projectDate = project?.event_date ? new Date(project.event_date) : null;
+      if (projectDate && !Number.isNaN(projectDate.getTime())) {
+        projectDate.setHours(0, 0, 0, 0);
+        if (projectDate.getTime() < today.getTime()) {
+          return;
+        }
+      }
+
       const requestedLimits = typeof project.crew_roles === 'string' ? JSON.parse(project.crew_roles || '{}') : (project.crew_roles || {});
 
       let acceptedCounts = { videographer: 0, photographer: 0, cinematographer: 0 };
@@ -1335,9 +1428,6 @@ exports.getDashboardRequestCounts = async (req, res) => {
     const declinedRequests = await assigned_crew.count({
       where: { crew_member_id: creator_id, crew_accept: 2 }
     });
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
 
     const completedShoots = await stream_project_booking.count({
       where: {
@@ -3051,25 +3141,7 @@ exports.getDashboardDetails = async (req, res) => {
       ]
     });
 
-    // Pending Requests (Assigned projects with crew_accept = 0)
-    const pendingRequests = await assigned_crew.findAll({
-      where: {
-        crew_accept: 0,
-        crew_member_id: crew_member_id,
-      },
-      include: [
-        {
-          model: stream_project_booking,
-          as: "project",
-          where: {
-            ...projectWhere,
-            is_completed: 0,
-            payment_completed_at: { [Op.ne]: null },
-          },
-          required: true,
-        },
-      ],
-    });
+    const pendingRequests = await getSmartPendingRequestsForCrew(crew_member_id, projectWhere);
 
     return res.status(200).json({
       error: false,
@@ -3100,47 +3172,86 @@ exports.getCrewShootStats = async (req, res) => {
       });
     }
 
-    const today = new Date();
-
-    /** 1️⃣ Completed Shoots */
-    const completedShoots = await stream_project_booking.count({
-      where: {
-        is_completed: 1,
-      },
-      include: [
-        {
-          model: assigned_crew,
-          as: "assigned_crews",
-          required: true,
-          where: { crew_member_id },
-        },
-      ],
+    const currentCrew = await crew_members.findOne({
+      where: { crew_member_id },
     });
 
-    /** 2️⃣ Pending Shoots (accepted, upcoming, not completed) */
-    const pendingShoots = await stream_project_booking.count({
+    if (!currentCrew) {
+      return res.status(404).json({
+        error: true,
+        message: "Crew member not found",
+      });
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    /*
+     * Common active assignment filter.
+     */
+    const commonAssignmentWhere = {
+      crew_member_id,
+      is_active: 1,
+    };
+
+    /*
+     * Successful shoots:
+     * Accepted requests whose shoot date has passed.
+     */
+    const successfulShootsPromise = assigned_crew.count({
       where: {
-        is_active: 1,
-        is_completed: 0,
-        event_date: { [Sequelize.Op.gt]: today },
+        ...commonAssignmentWhere,
+        crew_accept: 1,
       },
       include: [
         {
-          model: assigned_crew,
-          as: "assigned_crews",
+          model: stream_project_booking,
+          as: "project",
           required: true,
           where: {
-            crew_member_id,
-            crew_accept: 1,
+            event_date: {
+              [Op.lt]: today,
+            },
           },
         },
       ],
+      distinct: true,
     });
 
-    /** 3️⃣ Rejected Shoots */
-    const rejectedShoots = await assigned_crew.count({
+    /*
+     * Pending shoots:
+     * Accepted requests whose shoot date is today or upcoming.
+     */
+    const pendingShootsPromise = assigned_crew.count({
       where: {
-        crew_member_id,
+        ...commonAssignmentWhere,
+        crew_accept: 1,
+      },
+      include: [
+        {
+          model: stream_project_booking,
+          as: "project",
+          required: true,
+          where: {
+            event_date: {
+              [Op.gte]: today,
+            },
+          },
+        },
+      ],
+      distinct: true,
+    });
+
+    /*
+     * Rejected shoots:
+     * Count all rejected active assignments regardless of shoot date.
+     */
+    const rejectedShootsPromise = assigned_crew.count({
+      where: {
+        ...commonAssignmentWhere,
         crew_accept: 2,
       },
       include: [
@@ -3150,124 +3261,277 @@ exports.getCrewShootStats = async (req, res) => {
           required: true,
         },
       ],
+      distinct: true,
     });
 
-    /** 4️⃣ Shoot Requests */
-    const shootRequests = await assigned_crew.count({
+    /*
+     * Shoot requests:
+     * This is intentionally the same query logic as getPendingRequests.
+     *
+     * Only:
+     * - active assignments
+     * - unanswered requests
+     * - today or upcoming shoot dates
+     */
+    const shootRequestsPromise = assigned_crew.count({
       where: {
         crew_member_id,
         crew_accept: 0,
+        is_active: 1,
       },
       include: [
         {
           model: stream_project_booking,
           as: "project",
           required: true,
-          where: { is_completed: 0 },
-        },
-      ],
-    });
-
-    const buildAcceptedCategoryProjectWhere = (family) => ({
-      is_active: 1,
-      is_draft: 0,
-      is_cancelled: 0,
-      [Op.and]: [buildContentTypeFamilyWhere(family)],
-    });
-
-    const buildPendingCategoryProjectWhere = (family) => ({
-      is_active: 1,
-      is_completed: 0,
-      is_draft: 0,
-      is_cancelled: 0,
-      [Op.and]: [buildContentTypeFamilyWhere(family)],
-    });
-
-    const buildAssignmentCategoryProjectWhere = (family) => ({
-      is_draft: 0,
-      is_cancelled: 0,
-      [Op.and]: [buildContentTypeFamilyWhere(family)],
-    });
-
-    const countCategoryStats = async (family) => {
-      const acceptedShoots = await stream_project_booking.count({
-        where: buildAcceptedCategoryProjectWhere(family),
-        include: [
-          {
-            model: assigned_crew,
-            as: "assigned_crews",
-            required: true,
-            where: {
-              crew_member_id,
-              crew_accept: 1,
+          where: {
+            event_date: {
+              [Op.gte]: today,
             },
           },
-        ],
-      });
-
-      const categoryRejectedShoots = await assigned_crew.count({
-        where: {
-          crew_member_id,
-          crew_accept: 2,
         },
-        include: [
-          {
-            model: stream_project_booking,
-            as: "project",
-            required: true,
-            where: buildAssignmentCategoryProjectWhere(family),
-          },
-        ],
-      });
+      ],
+      distinct: true,
+    });
 
-      const categoryShootRequests = await assigned_crew.count({
-        where: {
-          crew_member_id,
-          crew_accept: 0,
-        },
-        include: [
-          {
-            model: stream_project_booking,
-            as: "project",
-            required: true,
-            where: buildPendingCategoryProjectWhere(family),
+    /*
+     * Active shoots:
+     * Accepted shoots happening today.
+     */
+    const activeShootsPromise = assigned_crew.count({
+      where: {
+        ...commonAssignmentWhere,
+        crew_accept: 1,
+      },
+      include: [
+        {
+          model: stream_project_booking,
+          as: "project",
+          required: true,
+          where: {
+            event_date: {
+              [Op.gte]: today,
+              [Op.lt]: tomorrow,
+            },
           },
-        ],
-      });
+        },
+      ],
+      distinct: true,
+    });
+
+    const [
+      successfulShoots,
+      pendingShoots,
+      rejectedShoots,
+      shootRequests,
+      activeShoots,
+    ] = await Promise.all([
+      successfulShootsPromise,
+      pendingShootsPromise,
+      rejectedShootsPromise,
+      shootRequestsPromise,
+      activeShootsPromise,
+    ]);
+
+    /*
+     * Total shoots:
+     *
+     * All accepted requests
+     * + all rejected requests
+     * + only current/upcoming pending requests
+     *
+     * Old pending requests are excluded.
+     */
+    const overallShoots =
+      successfulShoots +
+      pendingShoots +
+      rejectedShoots +
+      shootRequests;
+
+    /*
+     * Category-specific statistics.
+     *
+     * Pending category requests use the same pending request logic:
+     * crew_accept = 0
+     * assignment is_active = 1
+     * event_date >= today
+     */
+    const countCategoryStats = async (family) => {
+      const contentTypeCondition =
+        buildContentTypeFamilyWhere(family);
+
+      const [
+        acceptedPastShoots,
+        acceptedUpcomingShoots,
+        categoryRejectedShoots,
+        categoryShootRequests,
+      ] = await Promise.all([
+        /*
+         * Accepted past shoots for category.
+         */
+        assigned_crew.count({
+          where: {
+            ...commonAssignmentWhere,
+            crew_accept: 1,
+          },
+          include: [
+            {
+              model: stream_project_booking,
+              as: "project",
+              required: true,
+              where: {
+                event_date: {
+                  [Op.lt]: today,
+                },
+                [Op.and]: [contentTypeCondition],
+              },
+            },
+          ],
+          distinct: true,
+        }),
+
+        /*
+         * Accepted today/upcoming shoots for category.
+         */
+        assigned_crew.count({
+          where: {
+            ...commonAssignmentWhere,
+            crew_accept: 1,
+          },
+          include: [
+            {
+              model: stream_project_booking,
+              as: "project",
+              required: true,
+              where: {
+                event_date: {
+                  [Op.gte]: today,
+                },
+                [Op.and]: [contentTypeCondition],
+              },
+            },
+          ],
+          distinct: true,
+        }),
+
+        /*
+         * All rejected requests for category.
+         */
+        assigned_crew.count({
+          where: {
+            ...commonAssignmentWhere,
+            crew_accept: 2,
+          },
+          include: [
+            {
+              model: stream_project_booking,
+              as: "project",
+              required: true,
+              where: {
+                [Op.and]: [contentTypeCondition],
+              },
+            },
+          ],
+          distinct: true,
+        }),
+
+        /*
+         * Pending requests for category.
+         * Same rules as getPendingRequests.
+         */
+        assigned_crew.count({
+          where: {
+            crew_member_id,
+            crew_accept: 0,
+            is_active: 1,
+          },
+          include: [
+            {
+              model: stream_project_booking,
+              as: "project",
+              required: true,
+              where: {
+                event_date: {
+                  [Op.gte]: today,
+                },
+                [Op.and]: [contentTypeCondition],
+              },
+            },
+          ],
+          distinct: true,
+        }),
+      ]);
+
+      const acceptedShoots =
+        acceptedPastShoots + acceptedUpcomingShoots;
+
+      const totalShoots =
+        acceptedShoots +
+        categoryRejectedShoots +
+        categoryShootRequests;
 
       return {
         acceptedShoots,
+        successfulShoots: acceptedPastShoots,
+        pendingShoots: acceptedUpcomingShoots,
         rejectedShoots: categoryRejectedShoots,
         shootRequests: categoryShootRequests,
+        totalShoots,
       };
     };
 
     const [photoStats, videoStats] = await Promise.all([
-      countCategoryStats('photo'),
-      countCategoryStats('video'),
+      countCategoryStats("photo"),
+      countCategoryStats("video"),
     ]);
 
     return res.status(200).json({
       error: false,
       message: "Crew shoot stats fetched successfully",
       data: {
-        completedShoots,
+        /*
+         * Overall Shoot Status card.
+         */
+        overallShoots,
+        successfulShoots,
         pendingShoots,
         rejectedShoots,
         shootRequests,
+
+        /*
+         * Additional existing fields.
+         */
+        completedShoots: successfulShoots,
+        activeShoots,
+
+        /*
+         * Photography category.
+         */
         photographyShoots: photoStats.acceptedShoots,
-        videographyShoots: videoStats.acceptedShoots,
+        photoSuccessfulShoots: photoStats.successfulShoots,
+        photoPendingShoots: photoStats.pendingShoots,
         photoRejectedShoots: photoStats.rejectedShoots,
         photoShootRequests: photoStats.shootRequests,
+        photoTotalShoots: photoStats.totalShoots,
+
+        /*
+         * Videography category.
+         */
+        videographyShoots: videoStats.acceptedShoots,
+        videoSuccessfulShoots: videoStats.successfulShoots,
+        videoPendingShoots: videoStats.pendingShoots,
         videoRejectedShoots: videoStats.rejectedShoots,
         videoShootRequests: videoStats.shootRequests,
+        videoTotalShoots: videoStats.totalShoots,
       },
     });
   } catch (error) {
     console.error("Error fetching crew shoot stats:", error);
+
     return res.status(500).json({
       error: true,
-      message: "Something went wrong while fetching crew shoot stats",
+      message:
+        "Something went wrong while fetching crew shoot stats",
     });
   }
 };
@@ -3454,3 +3718,5 @@ exports.checkCrewStatus = async (req, res) => {
     });
   }
 };
+
+

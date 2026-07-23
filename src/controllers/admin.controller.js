@@ -6322,73 +6322,344 @@ exports.verifyCrewMember = async (req, res) => {
 
 
 exports.getCrewMemberById = async (req, res) => {
-    try {
-        const { crew_member_id } = req.params;
+  try {
+    const { crew_member_id } = req.params;
 
-        let member = await crew_members.findOne({
-            where: { crew_member_id },
-            include: [{
-                model: crew_member_files,
-                as: 'crew_member_files',
-                attributes: ['crew_member_id', 'crew_files_id', 'file_type', 'file_path', 'created_at', 'title', 'tag'],
-                where: { is_active: 1 },
-                required: false
-            }]
-        });
-
-        if (!member) {
-            return res.status(404).json({ error: true, message: "Crew member not found" });
-        }
-
-        const loc = member.location;
-        if (loc && typeof loc === 'string' && (loc.startsWith('{') || loc.startsWith('['))) {
-            try {
-                const parsed = JSON.parse(loc);
-                member.location = parsed.address || parsed || loc;
-            } catch { }
-        }
-
-        let skillIds = [];
-        try {
-            const rawSkills = member.skills;
-            if (rawSkills) {
-                const parsedSkills = typeof rawSkills === 'string' ? JSON.parse(rawSkills) : rawSkills;
-                skillIds = Array.isArray(parsedSkills) ? parsedSkills.map(id => parseInt(id)) : [parseInt(parsedSkills)];
-            }
-        } catch (err) { skillIds = []; }
-
-        let roleIds = [];
-        try {
-            const rawRole = member.primary_role;
-            if (rawRole) {
-                const parsedRole = (typeof rawRole === 'string' && (rawRole.startsWith('[') || rawRole.startsWith('{'))) 
-                    ? JSON.parse(rawRole) 
-                    : rawRole;
-                roleIds = Array.isArray(parsedRole) ? parsedRole.map(id => String(id)) : [String(parsedRole)];
-            }
-        } catch (err) { roleIds = []; }
-
-        const [skillList, roleList] = await Promise.all([
-            skills_master.findAll({ where: { id: skillIds }, attributes: ['id', 'name'] }),
-            crew_roles.findAll({ where: { role_id: roleIds }, attributes: ['role_id', 'role_name'] })
-        ]);
-
-        const memberJson = member.toJSON();
-        memberJson.skills = skillList;
-        memberJson.role = roleList.length > 0 
-            ? { role_name: roleList.map(r => r.role_name).join(", ") } 
-            : null;
-
-        return res.status(200).json({
-            error: false,
-            message: "Crew member fetched successfully",
-            data: memberJson,
-        });
-
-    } catch (error) {
-        console.error("Get Crew Member By ID Error:", error);
-        return res.status(500).json({ error: true, message: "Internal server error" });
+    if (!crew_member_id) {
+      return res.status(400).json({
+        error: true,
+        message: "crew_member_id is required",
+      });
     }
+
+    const member = await crew_members.findOne({
+      where: { crew_member_id },
+      include: [
+        {
+          model: crew_member_files,
+          as: "crew_member_files",
+          attributes: [
+            "crew_member_id",
+            "crew_files_id",
+            "file_type",
+            "file_path",
+            "created_at",
+            "title",
+            "tag",
+          ],
+          where: {
+            is_active: 1,
+          },
+          required: false,
+        },
+      ],
+    });
+
+    if (!member) {
+      return res.status(404).json({
+        error: true,
+        message: "Crew member not found",
+      });
+    }
+
+    /*
+     * Convert Sequelize model into a plain object before modifying it.
+     */
+    const memberJson = member.toJSON();
+
+    /*
+     * Format location.
+     */
+    if (
+      memberJson.location &&
+      typeof memberJson.location === "string" &&
+      (
+        memberJson.location.trim().startsWith("{") ||
+        memberJson.location.trim().startsWith("[")
+      )
+    ) {
+      try {
+        const parsedLocation = JSON.parse(memberJson.location);
+
+        memberJson.location =
+          parsedLocation?.address ||
+          parsedLocation ||
+          memberJson.location;
+      } catch (error) {
+        // Keep original location when parsing fails.
+      }
+    }
+
+    /*
+     * Parse skills.
+     */
+    let skillIds = [];
+
+    try {
+      const rawSkills = memberJson.skills;
+
+      if (rawSkills) {
+        const parsedSkills =
+          typeof rawSkills === "string"
+            ? JSON.parse(rawSkills)
+            : rawSkills;
+
+        skillIds = Array.isArray(parsedSkills)
+          ? parsedSkills
+              .map((id) => Number(id))
+              .filter((id) => Number.isInteger(id))
+          : [Number(parsedSkills)].filter((id) =>
+              Number.isInteger(id)
+            );
+      }
+    } catch (error) {
+      skillIds = [];
+    }
+
+    /*
+     * Parse primary roles.
+     */
+    let roleIds = [];
+
+    try {
+      const rawRole = memberJson.primary_role;
+
+      if (rawRole) {
+        const parsedRole =
+          typeof rawRole === "string" &&
+          (
+            rawRole.trim().startsWith("[") ||
+            rawRole.trim().startsWith("{")
+          )
+            ? JSON.parse(rawRole)
+            : rawRole;
+
+        roleIds = Array.isArray(parsedRole)
+          ? parsedRole
+              .map((id) => Number(id))
+              .filter((id) => Number.isInteger(id))
+          : [Number(parsedRole)].filter((id) =>
+              Number.isInteger(id)
+            );
+      }
+    } catch (error) {
+      roleIds = [];
+    }
+
+    /*
+     * Parse equipment ownership IDs.
+     *
+     * Example stored value:
+     * "[12,5]"
+     */
+    let equipmentIds = [];
+
+    try {
+      let rawEquipmentOwnership =
+        memberJson.equipment_ownership;
+
+      /*
+       * Handle accidentally double-stringified JSON as well.
+       */
+      for (let i = 0; i < 3; i += 1) {
+        if (typeof rawEquipmentOwnership !== "string") {
+          break;
+        }
+
+        const trimmedValue =
+          rawEquipmentOwnership.trim();
+
+        if (!trimmedValue) {
+          rawEquipmentOwnership = [];
+          break;
+        }
+
+        try {
+          rawEquipmentOwnership =
+            JSON.parse(trimmedValue);
+        } catch (error) {
+          /*
+           * Fallback for comma-separated values such as "12,5".
+           */
+          rawEquipmentOwnership = trimmedValue
+            .split(",")
+            .map((value) => value.trim());
+
+          break;
+        }
+      }
+
+      const equipmentValues = Array.isArray(
+        rawEquipmentOwnership
+      )
+        ? rawEquipmentOwnership
+        : rawEquipmentOwnership !== null &&
+            rawEquipmentOwnership !== undefined
+          ? [rawEquipmentOwnership]
+          : [];
+
+      equipmentIds = equipmentValues
+        .map((id) => Number(id))
+        .filter(
+          (id) =>
+            Number.isInteger(id) &&
+            id > 0
+        );
+    } catch (error) {
+      equipmentIds = [];
+    }
+
+    /*
+     * Remove duplicate IDs.
+     */
+    skillIds = [...new Set(skillIds)];
+    roleIds = [...new Set(roleIds)];
+    equipmentIds = [...new Set(equipmentIds)];
+
+    /*
+     * Fetch skills, roles and equipment names in parallel.
+     */
+    const [
+      skillList,
+      roleList,
+      equipmentList,
+    ] = await Promise.all([
+      skillIds.length > 0
+        ? skills_master.findAll({
+            where: {
+              id: {
+                [Op.in]: skillIds,
+              },
+            },
+            attributes: [
+              "id",
+              "name",
+            ],
+            raw: true,
+          })
+        : Promise.resolve([]),
+
+      roleIds.length > 0
+        ? crew_roles.findAll({
+            where: {
+              role_id: {
+                [Op.in]: roleIds,
+              },
+            },
+            attributes: [
+              "role_id",
+              "role_name",
+            ],
+            raw: true,
+          })
+        : Promise.resolve([]),
+
+      equipmentIds.length > 0
+        ? equipment.findAll({
+            where: {
+              equipment_id: {
+                [Op.in]: equipmentIds,
+              },
+            },
+            attributes: [
+              "equipment_id",
+              "equipment_name",
+              "manufacturer",
+              "model_number",
+            ],
+            raw: true,
+          })
+        : Promise.resolve([]),
+    ]);
+
+    /*
+     * Preserve the same order as equipment_ownership.
+     *
+     * For example:
+     * equipment_ownership = [12, 5]
+     * equipment_details will also return 12 first, then 5.
+     */
+    const equipmentMap = new Map(
+      equipmentList.map((item) => [
+        Number(item.equipment_id),
+        item,
+      ])
+    );
+
+    const equipmentDetails = equipmentIds.map(
+      (equipmentId) => {
+        const equipmentItem =
+          equipmentMap.get(equipmentId);
+
+        if (equipmentItem) {
+          return equipmentItem;
+        }
+
+        /*
+         * This helps identify deleted or invalid equipment IDs.
+         */
+        return {
+          equipment_id: equipmentId,
+          equipment_name: null,
+          manufacturer: null,
+          model_number: null,
+          is_missing: true,
+        };
+      }
+    );
+
+    /*
+     * Add resolved data to response.
+     */
+    memberJson.skills = skillList;
+
+    memberJson.role =
+      roleList.length > 0
+        ? {
+            role_name: roleList
+              .map((role) => role.role_name)
+              .join(", "),
+            roles: roleList,
+          }
+        : null;
+
+    /*
+     * Keep original field for backward compatibility.
+     */
+    memberJson.equipment_ownership =
+      equipmentIds;
+
+    /*
+     * New detailed equipment field.
+     */
+    memberJson.equipment_details =
+      equipmentDetails;
+
+    /*
+     * Optional simple names-only field.
+     */
+    memberJson.equipment_names =
+      equipmentDetails
+        .map((item) => item.equipment_name)
+        .filter(Boolean);
+
+    return res.status(200).json({
+      error: false,
+      message:
+        "Crew member fetched successfully",
+      data: memberJson,
+    });
+  } catch (error) {
+    console.error(
+      "Get Crew Member By ID Error:",
+      error
+    );
+
+    return res.status(500).json({
+      error: true,
+      message: "Internal server error",
+    });
+  }
 };
 
 
