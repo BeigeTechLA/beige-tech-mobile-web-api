@@ -246,9 +246,11 @@ const isUserIncludedInMeetingState = (state, identities = new Set()) => {
   ].some((participant) => matchesParticipantByIdentity(participant, identities));
 };
 
+const DEFAULT_MEETINGS_PAGE_SIZE = 10;
+
 const parsePagination = (req) => {
   const page = Math.max(Number(req.query.page) || 1, 1);
-  const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
+  const limit = Math.min(Math.max(Number(req.query.limit) || DEFAULT_MEETINGS_PAGE_SIZE, 1), 100);
   return { page, limit, offset: (page - 1) * limit };
 };
 
@@ -257,6 +259,19 @@ const parseSort = (sortBy) => {
   const field = VALID_SORT_FIELDS.has(rawField) ? rawField : 'meeting_date_time';
   const direction = VALID_SORT_DIRECTIONS.has(String(rawDirection || '').toLowerCase()) ? String(rawDirection).toUpperCase() : 'DESC';
   return [[field, direction]];
+};
+
+const parseDateOnly = (value) => {
+  const rawValue = String(value || '').trim();
+  if (!rawValue) return null;
+
+  const [year, month, day] = rawValue.split('-').map((part) => Number(part));
+  if (![year, month, day].every((part) => Number.isInteger(part) && part > 0)) return null;
+
+  return {
+    start: new Date(year, month - 1, day),
+    end: new Date(year, month - 1, day + 1),
+  };
 };
 
 const getEffectiveMeetingStatus = (meeting) => {
@@ -905,6 +920,8 @@ const fetchMeetings = async ({ req, bookingId = null, userId = null }) => {
 
   const { page, limit, offset } = parsePagination(req);
   const order = parseSort(req.query.sortBy);
+  const searchTerm = String(req.query.search || '').trim();
+  const meetingDateFilter = parseDateOnly(req.query.meetingDate || req.query.date);
   const isRestrictedUser = !!userId && !isAdminLikeRole(getRequestUserRole(req));
   const requestUser = isRestrictedUser ? await getUserRecordById(userId) : null;
   const requestCrewIds = isRestrictedUser
@@ -927,6 +944,33 @@ const fetchMeetings = async ({ req, bookingId = null, userId = null }) => {
     meetingType: req.query.meeting_type,
     accessibleBookingIds,
   });
+
+  const queryFilters = [];
+
+  if (searchTerm) {
+    const searchPattern = `%${searchTerm}%`;
+    queryFilters.push({
+      [Op.or]: [
+        { meeting_title: { [Op.like]: searchPattern } },
+        { description: { [Op.like]: searchPattern } },
+        { participants_json: { [Op.like]: searchPattern } },
+        { '$booking.project_name$': { [Op.like]: searchPattern } },
+      ],
+    });
+  }
+
+  if (meetingDateFilter) {
+    queryFilters.push({
+      meeting_date_time: {
+        [Op.gte]: meetingDateFilter.start,
+        [Op.lt]: meetingDateFilter.end,
+      },
+    });
+  }
+
+  if (queryFilters.length) {
+    where[Op.and] = [...(where[Op.and] || []), ...queryFilters];
+  }
 
   const queryOptions = {
     where,

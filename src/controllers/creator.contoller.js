@@ -1920,7 +1920,7 @@ exports.editProfile = async (req, res) => {
 };
 
 exports.uploadProfileFiles = [
-  upload.array('files[]', 10),
+  upload.array('files[]', 20),
 
   async (req, res) => {
     try {
