@@ -62,6 +62,38 @@ function toDbJson(value) {
   }
 }
 
+const CONTENT_TYPE_FAMILY_ALIASES = {
+  photo: [
+    '2',
+    'photo',
+    'photography',
+    'photographer',
+    'both',
+    'videography and photography',
+    'videographer,photographer',
+    'photographer,videographer',
+    '3'
+  ],
+  video: [
+    '1',
+    'video',
+    'videography',
+    'videographer',
+    'both',
+    'videography and photography',
+    'videographer,photographer',
+    'photographer,videographer',
+    '3'
+  ]
+};
+
+const buildContentTypeFamilyWhere = (family) => Sequelize.where(
+  Sequelize.fn('LOWER', Sequelize.fn('TRIM', Sequelize.col('content_type'))),
+  {
+    [Op.in]: CONTENT_TYPE_FAMILY_ALIASES[family] || CONTENT_TYPE_FAMILY_ALIASES.photo
+  }
+);
+
 function parseJsonUntilStable(value) {
   let current = value;
 
@@ -3088,6 +3120,7 @@ exports.getCrewShootStats = async (req, res) => {
     /** 2️⃣ Pending Shoots (accepted, upcoming, not completed) */
     const pendingShoots = await stream_project_booking.count({
       where: {
+        is_active: 1,
         is_completed: 0,
         event_date: { [Sequelize.Op.gt]: today },
       },
@@ -3135,23 +3168,84 @@ exports.getCrewShootStats = async (req, res) => {
       ],
     });
 
-    /** 5️⃣ Photography Shoots (crew_roles + skills_needed from booking table) */
-    const photographyShoots = await stream_project_booking.count({
-      where: {
-        crew_roles: 10,
-        skills_needed: {
-          [Sequelize.Op.like]: "%photographer%",
-        },
-      },
-      include: [
-        {
-          model: assigned_crew,
-          as: "assigned_crews",
-          required: true,
-          where: { crew_member_id },
-        },
-      ],
+    const buildAcceptedCategoryProjectWhere = (family) => ({
+      is_active: 1,
+      is_draft: 0,
+      is_cancelled: 0,
+      [Op.and]: [buildContentTypeFamilyWhere(family)],
     });
+
+    const buildPendingCategoryProjectWhere = (family) => ({
+      is_active: 1,
+      is_completed: 0,
+      is_draft: 0,
+      is_cancelled: 0,
+      [Op.and]: [buildContentTypeFamilyWhere(family)],
+    });
+
+    const buildAssignmentCategoryProjectWhere = (family) => ({
+      is_draft: 0,
+      is_cancelled: 0,
+      [Op.and]: [buildContentTypeFamilyWhere(family)],
+    });
+
+    const countCategoryStats = async (family) => {
+      const acceptedShoots = await stream_project_booking.count({
+        where: buildAcceptedCategoryProjectWhere(family),
+        include: [
+          {
+            model: assigned_crew,
+            as: "assigned_crews",
+            required: true,
+            where: {
+              crew_member_id,
+              crew_accept: 1,
+            },
+          },
+        ],
+      });
+
+      const categoryRejectedShoots = await assigned_crew.count({
+        where: {
+          crew_member_id,
+          crew_accept: 2,
+        },
+        include: [
+          {
+            model: stream_project_booking,
+            as: "project",
+            required: true,
+            where: buildAssignmentCategoryProjectWhere(family),
+          },
+        ],
+      });
+
+      const categoryShootRequests = await assigned_crew.count({
+        where: {
+          crew_member_id,
+          crew_accept: 0,
+        },
+        include: [
+          {
+            model: stream_project_booking,
+            as: "project",
+            required: true,
+            where: buildPendingCategoryProjectWhere(family),
+          },
+        ],
+      });
+
+      return {
+        acceptedShoots,
+        rejectedShoots: categoryRejectedShoots,
+        shootRequests: categoryShootRequests,
+      };
+    };
+
+    const [photoStats, videoStats] = await Promise.all([
+      countCategoryStats('photo'),
+      countCategoryStats('video'),
+    ]);
 
     return res.status(200).json({
       error: false,
@@ -3161,7 +3255,12 @@ exports.getCrewShootStats = async (req, res) => {
         pendingShoots,
         rejectedShoots,
         shootRequests,
-        photographyShoots,
+        photographyShoots: photoStats.acceptedShoots,
+        videographyShoots: videoStats.acceptedShoots,
+        photoRejectedShoots: photoStats.rejectedShoots,
+        photoShootRequests: photoStats.shootRequests,
+        videoRejectedShoots: videoStats.rejectedShoots,
+        videoShootRequests: videoStats.shootRequests,
       },
     });
   } catch (error) {
