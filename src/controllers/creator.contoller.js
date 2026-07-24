@@ -1008,7 +1008,6 @@ exports.getAcceptedShootsByCrew = async (req, res) => {
 
 exports.getCrewAvailability = async (req, res) => {
   try {
-    // const crew_member_id = req.body;
     const { year, month, crew_member_id } = req.body || req.query;
 
     if (!crew_member_id || !year || !month) {
@@ -1030,19 +1029,26 @@ exports.getCrewAvailability = async (req, res) => {
     }
 
     let availability = [];
+
     try {
       availability = JSON.parse(crewMember.availability || "[]");
-    } catch {
+    } catch (error) {
       availability = [];
     }
 
-    const monthStart = moment(`${year}-${month}-01`).startOf("month").toDate();
-    const monthEnd = moment(`${year}-${month}-01`).endOf("month").toDate();
+    const monthStart = moment(`${year}-${month}-01`)
+      .startOf("month")
+      .toDate();
+
+    const monthEnd = moment(`${year}-${month}-01`)
+      .endOf("month")
+      .toDate();
 
     const acceptedProjects = await assigned_crew.findAll({
       where: {
         crew_member_id,
         crew_accept: 1,
+        is_active: 1,
       },
       include: [
         {
@@ -1052,6 +1058,10 @@ exports.getCrewAvailability = async (req, res) => {
             event_date: {
               [Sequelize.Op.between]: [monthStart, monthEnd],
             },
+            [Sequelize.Op.or]: [
+              { is_cancelled: 0 },
+              { is_cancelled: null },
+            ],
           },
           attributes: [
             "event_date",
@@ -1071,19 +1081,26 @@ exports.getCrewAvailability = async (req, res) => {
         [Sequelize.Op.or]: [
           {
             recurrence: 1,
-            date: { [Sequelize.Op.between]: [monthStart, monthEnd] },
+            date: {
+              [Sequelize.Op.between]: [monthStart, monthEnd],
+            },
           },
           {
-            recurrence: { [Sequelize.Op.ne]: 1 },
-            recurrence_until: { [Sequelize.Op.gte]: monthStart },
+            recurrence: {
+              [Sequelize.Op.ne]: 1,
+            },
+            recurrence_until: {
+              [Sequelize.Op.gte]: monthStart,
+            },
           },
         ],
       },
-      order: [["created_at", "DESC"]], // Always fetch the latest entry
+      order: [["created_at", "DESC"]],
     });
 
     const appliesOnDate = (rule, dateMoment) => {
       const start = moment(rule.date);
+
       const end = rule.recurrence_until
         ? moment(rule.recurrence_until)
         : start;
@@ -1095,18 +1112,32 @@ exports.getCrewAvailability = async (req, res) => {
         return false;
       }
 
-      switch (rule.recurrence) {
+      switch (Number(rule.recurrence)) {
+        // One-time availability
         case 1:
           return dateMoment.isSame(start, "day");
 
+        // Daily recurrence
         case 2:
           return true;
 
+        // Weekly recurrence
         case 3: {
-          if (!rule.recurrence_days) return false;
+          if (!rule.recurrence_days) {
+            return false;
+          }
 
-          const days = JSON.parse(rule.recurrence_days)
-            .map(d => d.toLowerCase().slice(0, 3));
+          let recurrenceDays = [];
+
+          try {
+            recurrenceDays = JSON.parse(rule.recurrence_days);
+          } catch (error) {
+            recurrenceDays = [];
+          }
+
+          const days = recurrenceDays.map((day) =>
+            String(day).toLowerCase().slice(0, 3)
+          );
 
           const currentDay = dateMoment
             .format("ddd")
@@ -1115,9 +1146,11 @@ exports.getCrewAvailability = async (req, res) => {
           return days.includes(currentDay);
         }
 
+        // Monthly recurrence
         case 4:
           return (
-            dateMoment.date() === Number(rule.recurrence_day_of_month)
+            dateMoment.date() ===
+            Number(rule.recurrence_day_of_month)
           );
 
         default:
@@ -1126,56 +1159,96 @@ exports.getCrewAvailability = async (req, res) => {
     };
 
     const calendar = {};
-    const daysInMonth = moment(`${year}-${month}`, "YYYY-MM").daysInMonth();
+
+    const daysInMonth = moment(
+      `${year}-${month}`,
+      "YYYY-MM"
+    ).daysInMonth();
 
     for (let day = 1; day <= daysInMonth; day++) {
-      const date = moment(`${year}-${month}-${day}`, "YYYY-MM-DD");
+      const date = moment(
+        `${year}-${month}-${day}`,
+        "YYYY-MM-DD"
+      );
+
       const key = date.format("YYYY-MM-DD");
 
       calendar[key] = {
-        available: false,
+        // null means no availability has been added for this date
+        available: null,
         projectAssigned: false,
         projectDetails: null,
         customAvailabilityStatus: null,
         start_time: null,
         end_time: null,
-        is_full_day: 1,
+        is_full_day: null,
       };
 
+      /*
+       * Regular weekly availability.
+       * Example: if availability contains "Monday",
+       * every Monday will be marked available.
+       */
       if (availability.includes(date.format("dddd"))) {
         calendar[key].available = true;
+        calendar[key].is_full_day = 1;
       }
 
-      const rule = customAvailability.find((r) =>
-        appliesOnDate(r, date)
+      /*
+       * Custom availability overrides regular availability.
+       */
+      const rule = customAvailability.find((item) =>
+        appliesOnDate(item, date)
       );
 
       if (rule) {
-        calendar[key].available = rule.availability_status == "1";
+        calendar[key].available =
+          String(rule.availability_status) === "1";
+
         calendar[key].customAvailabilityStatus =
           rule.availability_status;
 
-        if (rule.is_full_day === 0) {
+        calendar[key].is_full_day =
+          rule.is_full_day !== null &&
+          rule.is_full_day !== undefined
+            ? Number(rule.is_full_day)
+            : 1;
+
+        if (Number(rule.is_full_day) === 0) {
           calendar[key].start_time = rule.start_time;
           calendar[key].end_time = rule.end_time;
         }
       }
     }
 
-    for (const project of acceptedProjects) {
+    /*
+     * Assigned projects override availability.
+     */
+    for (const assignedProject of acceptedProjects) {
+      if (!assignedProject.project) {
+        continue;
+      }
+
       const eventDate = moment(
-        project.project.event_date
+        assignedProject.project.event_date
       ).format("YYYY-MM-DD");
 
       if (calendar[eventDate]) {
         calendar[eventDate].available = false;
         calendar[eventDate].projectAssigned = true;
+        calendar[eventDate].is_full_day = 1;
+
         calendar[eventDate].projectDetails = {
-          project_id: project.project.stream_project_booking_id,
-          project_name: project.project.project_name,
-          start_time: project.project.start_time,
-          end_time: project.project.end_time,
-          event_location: project.project.event_location,
+          project_id:
+            assignedProject.project.stream_project_booking_id,
+          project_name:
+            assignedProject.project.project_name,
+          start_time:
+            assignedProject.project.start_time,
+          end_time:
+            assignedProject.project.end_time,
+          event_location:
+            assignedProject.project.event_location,
         };
       }
     }
@@ -1190,13 +1263,14 @@ exports.getCrewAvailability = async (req, res) => {
     });
   } catch (error) {
     console.error("Error fetching crew availability:", error);
+
     return res.status(500).json({
       error: true,
-      message: "Something went wrong while fetching crew availability",
+      message:
+        "Something went wrong while fetching crew availability",
     });
   }
 };
-
 
 // exports.setCrewAvailability = async (req, res) => {
 //   try {
@@ -1284,25 +1358,125 @@ exports.setCrewAvailability = async (req, res) => {
       });
     }
 
+    const recurrenceType = Number(recurrence);
+    const normalizedRecurrenceDays = toArray(recurrence_days);
+
     /* Validate recurrence */
-    if (recurrence !== 1 && !recurrence_until) {
+    if (![1, 2, 3, 4].includes(recurrenceType)) {
+      return res.status(400).json({
+        error: true,
+        message: "recurrence must be one of 1, 2, 3, or 4",
+      });
+    }
+
+    if (recurrenceType !== 1 && !recurrence_until) {
       return res.status(400).json({
         error: true,
         message: "recurrence_until is required for recurring availability"
       });
     }
 
-    if (recurrence === 3 && (!recurrence_days || !recurrence_days.length)) {
+    if (recurrenceType === 3 && !normalizedRecurrenceDays.length) {
       return res.status(400).json({
         error: true,
         message: "recurrence_days required for weekly recurrence"
       });
     }
 
-    if (recurrence === 4 && !recurrence_day_of_month) {
+    if (recurrenceType === 4 && !recurrence_day_of_month) {
       return res.status(400).json({
         error: true,
         message: "recurrence_day_of_month required for monthly recurrence"
+      });
+    }
+
+    const availabilityStart = moment(date, "YYYY-MM-DD", true);
+    const availabilityEnd = recurrenceType === 1
+      ? availabilityStart.clone()
+      : moment(recurrence_until, "YYYY-MM-DD", true);
+
+    if (
+      !availabilityStart.isValid() ||
+      !availabilityEnd.isValid() ||
+      availabilityEnd.isBefore(availabilityStart, "day")
+    ) {
+      return res.status(400).json({
+        error: true,
+        message: "A valid date range is required",
+      });
+    }
+
+    const acceptedProjects = await assigned_crew.findAll({
+      where: {
+        crew_member_id,
+        crew_accept: 1,
+        is_active: 1,
+      },
+      include: [
+        {
+          model: stream_project_booking,
+          as: "project",
+          required: true,
+          where: {
+            event_date: {
+              [Op.between]: [
+                availabilityStart.format("YYYY-MM-DD"),
+                availabilityEnd.format("YYYY-MM-DD"),
+              ],
+            },
+            [Op.or]: [
+              { is_cancelled: 0 },
+              { is_cancelled: null },
+            ],
+          },
+          attributes: [
+            "stream_project_booking_id",
+            "project_name",
+            "event_date",
+          ],
+        },
+      ],
+    });
+
+    const weeklyDays = normalizedRecurrenceDays.map((day) =>
+      String(day).toLowerCase().slice(0, 3)
+    );
+
+    const conflictsWithRule = (eventDate) => {
+      const projectDate = moment(eventDate);
+
+      switch (recurrenceType) {
+        case 1:
+          return projectDate.isSame(availabilityStart, "day");
+        case 2:
+          return true;
+        case 3:
+          return weeklyDays.includes(projectDate.format("ddd").toLowerCase());
+        case 4:
+          return projectDate.date() === Number(recurrence_day_of_month);
+        default:
+          return false;
+      }
+    };
+
+    const conflictingProjects = acceptedProjects.filter(
+      (assignment) =>
+        assignment.project &&
+        conflictsWithRule(assignment.project.event_date)
+    );
+
+    if (conflictingProjects.length) {
+      return res.status(409).json({
+        error: true,
+        message:
+          "Availability cannot be changed because an assigned shoot conflicts with one or more selected dates.",
+        data: {
+          conflicts: conflictingProjects.map(({ project }) => ({
+            project_id: project.stream_project_booking_id,
+            project_name: project.project_name,
+            date: moment(project.event_date).format("YYYY-MM-DD"),
+          })),
+        },
       });
     }
 
@@ -1315,9 +1489,11 @@ exports.setCrewAvailability = async (req, res) => {
       location,
       notes,
       is_full_day,
-      recurrence,
+      recurrence: recurrenceType,
       recurrence_until,
-      recurrence_days: recurrence_days ? JSON.stringify(recurrence_days) : null,
+      recurrence_days: normalizedRecurrenceDays.length
+        ? JSON.stringify(normalizedRecurrenceDays)
+        : null,
       recurrence_day_of_month
     };
 
