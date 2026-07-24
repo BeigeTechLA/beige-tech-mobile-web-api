@@ -842,7 +842,7 @@ Content-Type: application/json
 Authorization: {{SALES_ADMIN_TOKEN}}
 
 ###
-GET {{URL}}sales/leads/400 HTTP/1.1
+GET {{URL}}sales/leads/653 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN}}
 
@@ -1064,6 +1064,160 @@ Authorization: {{TOKEN2}}
   "skip_discount": true,
   "skip_margin": true,
   "sales_rep_id": 180
+}
+
+### Edit Lead Booking - Preserve Existing Studio
+### If this booking already has studio metadata, omitting studio_items keeps existing studio cost in the regenerated quote.
+PUT {{URL}}sales/leads/1341/booking HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+{
+  "content_type": "studio,videographer",
+  "shoot_type": "podcasts_shows",
+  "booking_type": "single_day",
+  "start_date": "2026-07-27",
+  "start_time": "10:30",
+  "end_time": "16:30",
+  "time_zone": "Asia/Calcutta",
+  "duration_hours": 6,
+  "edits_needed": true,
+  "video_edit_types": ["social_reel_15_30"],
+  "photo_edit_types": [],
+  "crew_roles": { "videographer": 1 },
+  "crew_size": 1,
+  "location": "838 Lopez Avenue, Los Angeles, California 90022, United States",
+  "location_latitude": 34.04628318202272,
+  "location_longitude": -118.1699542766525,
+  "selected_crew_ids": [2130],
+  "is_draft": false,
+  "skip_discount": true,
+  "skip_margin": true,
+  "sales_rep_id": 1
+}
+
+### Edit Lead Booking - Update Studio
+### Sending studio_items replaces studio metadata, studio_bookings rows, and quote studio line items.
+PUT {{URL}}sales/leads/1341/booking HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+{
+  "content_type": "studio",
+  "shoot_type": "studio",
+  "studio_booking_for": "production",
+  "booking_type": "multi_day",
+  "time_zone": "Asia/Calcutta",
+  "booking_days": [
+    {
+      "date": "2026-07-27",
+      "start_time": "00:00:00",
+      "end_time": "00:30:00",
+      "time_zone": "Asia/Calcutta"
+    },
+    {
+      "date": "2026-07-28",
+      "start_time": "00:00:00",
+      "end_time": "00:30:00",
+      "time_zone": "Asia/Calcutta"
+    },
+    {
+      "date": "2026-07-29",
+      "start_time": "00:00:00",
+      "end_time": "00:30:00",
+      "time_zone": "Asia/Calcutta"
+    }
+  ],
+  "edits_needed": false,
+  "video_edit_types": [],
+  "photo_edit_types": [],
+  "crew_roles": {},
+  "crew_size": 0,
+  "location": "838 Lopez Avenue, Los Angeles, California 90022, United States",
+  "location_latitude": 34.04628318202272,
+  "location_longitude": -118.1699542766525,
+  "selected_crew_ids": [],
+  "is_draft": false,
+  "skip_discount": true,
+  "skip_margin": true,
+  "sales_rep_id": 1,
+  "studio_total": 1000,
+  "studio_items": [
+    {
+      "studio_id": "beige-palm-springs-oasis",
+      "name": "Beige Studios Palm Springs Oasis",
+      "location": "Palm Desert, CA, United States",
+      "image": "https://d2jhn32fsulyac.cloudfront.net/assets/studio/palm-springs/aim_media_group_high_v2-48.jpg",
+      "pricing_mode": "hourly",
+      "pricing_category": "production",
+      "pricing_label": "Production",
+      "unit_price": 250,
+      "quantity": 4,
+      "total": 1000,
+      "price_label": "$250/Hr",
+      "selected_date": "2026-07-27",
+      "start_time": "10:30",
+      "end_time": "14:30",
+      "time_zone": "Asia/Calcutta",
+      "studio_booking_type": "multi_day",
+      "booking_days": [
+        {
+          "date": "2026-07-27",
+          "start_time": "00:00:00",
+          "end_time": "00:30:00",
+          "time_zone": "Asia/Calcutta"
+        },
+        {
+          "date": "2026-07-28",
+          "start_time": "00:00:00",
+          "end_time": "00:30:00",
+          "time_zone": "Asia/Calcutta"
+        },
+        {
+          "date": "2026-07-29",
+          "start_time": "00:00:00",
+          "end_time": "00:30:00",
+          "time_zone": "Asia/Calcutta"
+        }
+      ],
+      "cast_and_crew_count": 0,
+      "update_studio_datetime": true,
+      "lat": 34.04628318202272,
+      "lng": -118.1699542766525
+    }
+  ]
+}
+
+### Edit Lead Booking - Remove Studio
+### Explicitly send studio_items: [] to remove studio metadata, studio_bookings rows, and studio quote cost.
+PUT {{URL}}sales/leads/1341/booking HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+{
+  "content_type": "videographer",
+  "shoot_type": "corporate",
+  "booking_type": "single_day",
+  "start_date": "2026-07-27",
+  "start_time": "10:30",
+  "end_time": "16:30",
+  "time_zone": "Asia/Calcutta",
+  "duration_hours": 6,
+  "edits_needed": false,
+  "video_edit_types": [],
+  "photo_edit_types": [],
+  "crew_roles": { "videographer": 1 },
+  "crew_size": 1,
+  "location": "838 Lopez Avenue, Los Angeles, California 90022, United States",
+  "location_latitude": 34.04628318202272,
+  "location_longitude": -118.1699542766525,
+  "selected_crew_ids": [2130],
+  "is_draft": false,
+  "skip_discount": true,
+  "skip_margin": true,
+  "sales_rep_id": 1,
+  "studio_total": 0,
+  "studio_items": []
 }
 
 ### Edit Client Lead Booking

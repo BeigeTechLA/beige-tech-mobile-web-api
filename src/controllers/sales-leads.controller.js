@@ -6430,16 +6430,22 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
   const startDateTimeUtc = startDate || start_date_time || null;
   const endDateTimeUtc = endDate || null;
   const hasStudioItemsPayload = Array.isArray(finalizeBody.studio_items);
-  const normalizedStudioItems = hasStudioItemsPayload
-    ? normalizeStudioItems(studio_items).map((studio) => ({
+  const existingStudioSnapshot = hasStudioItemsPayload
+    ? { items: [], total: 0 }
+    : getStudioPricingSnapshot(booking.description);
+  const normalizedStudioItems = (
+    hasStudioItemsPayload
+      ? normalizeStudioItems(studio_items)
+      : normalizeStudioItems(existingStudioSnapshot.items)
+  ).map((studio) => ({
         ...studio,
         studioBookingFor: studio.studioBookingFor || studio_booking_for || null
-      }))
-    : [];
+      }));
   const normalizedStudioTotal = parseFloat(
     normalizedStudioItems.reduce((sum, studio) => sum + studio.totalPrice, 0).toFixed(2)
   );
   if (
+    hasStudioItemsPayload &&
     normalizedStudioItems.length > 0 &&
     Number(studio_total) > 0 &&
     Math.abs(normalizedStudioTotal - Number(studio_total)) > 0.01
