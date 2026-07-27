@@ -2579,3 +2579,17 @@ ALTER TABLE `sales_quotes`
   ADD COLUMN `pre_production_file_size` INT NULL AFTER `pre_production_file_type`,
   ADD COLUMN `pre_production_file_path` VARCHAR(500) NULL AFTER `pre_production_file_size`,
   ADD COLUMN `pre_production_file_url` VARCHAR(1000) NULL AFTER `pre_production_file_path`;
+
+-- 27-07-26
+
+--- remove admin default access from finance module
+
+UPDATE role_permissions rp
+INNER JOIN permissions p
+  ON p.permission_id = rp.permission_id
+INNER JOIN user_type ut
+  ON ut.user_type_id = rp.role_id
+SET rp.is_active = 0
+WHERE p.module_key = 'admin_finances'
+  AND LOWER(REPLACE(ut.user_role, ' ', '_')) = 'admin'
+  AND rp.is_active = 1;
