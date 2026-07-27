@@ -6948,7 +6948,10 @@ exports.finalizeGuestBooking = async (req, res) => {
       skip_margin = true,
       sales_rep_id,
       booking_type,
-      booking_days
+      booking_days,
+      studio_booking_for,
+      studio_items,
+      studio_total
     } = req.body;
 
     if (!id) {
@@ -6996,7 +6999,10 @@ exports.finalizeGuestBooking = async (req, res) => {
         skip_discount,
         skip_margin,
         booking_type,
-        booking_days
+        booking_days,
+        studio_booking_for,
+        studio_items,
+        studio_total
       },
       tx
     });
