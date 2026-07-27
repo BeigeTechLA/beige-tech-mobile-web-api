@@ -177,7 +177,7 @@ function includeForDetails() {
       as: 'comments',
       required: false,
       include: [
-        { model: db.users, as: 'created_by', required: false, attributes: ['id', 'name', 'email'] },
+        { model: db.users, as: 'created_by', required: false, attributes: ['id', 'name', 'email', 'role', 'user_type'] },
         { model: db.crew_members, as: 'created_by_creator', required: false, attributes: ['crew_member_id', 'first_name', 'last_name', 'email'] }
       ]
     },
@@ -185,7 +185,7 @@ function includeForDetails() {
       model: db.finance_dispute_attachments,
       as: 'attachments',
       required: false,
-      include: [{ model: db.users, as: 'uploaded_by', required: false, attributes: ['id', 'name', 'email'] }]
+      include: [{ model: db.users, as: 'uploaded_by', required: false, attributes: ['id', 'name', 'email', 'role', 'user_type'] }]
     },
     {
       model: db.finance_dispute_payout_holds,
@@ -279,7 +279,9 @@ async function hydrateBookingContext(payload, transaction = null) {
     invoice_send_history_id: invoice?.invoice_send_history_id || null,
     client_user_id: toPositiveInt(payload.client_user_id) || plain.user_id || breakdown?.client_user_id || null,
     currency: payload.currency || breakdown?.currency || 'USD',
-    disputed_amount: payload.disputed_amount !== undefined ? toMoney(payload.disputed_amount) : toMoney(breakdown?.outstanding_amount || breakdown?.total_amount || 0),
+    disputed_amount: payload.disputed_amount !== undefined
+      ? toMoney(payload.disputed_amount)
+      : toMoney(breakdown?.total_amount || plain.quote_total || plain.budget || breakdown?.outstanding_amount || 0),
     impacted_payout_amount: payload.impacted_payout_amount !== undefined
       ? toMoney(payload.impacted_payout_amount)
       : toMoney((plain.creator_earnings || []).reduce((sum, earning) => sum + Number(earning.net_earning_amount || 0), 0))
@@ -618,6 +620,8 @@ async function getAdminDisputeDetails(disputeId) {
         id: comment.created_by.id,
         name: comment.created_by.name,
         email: comment.created_by.email,
+        role: comment.created_by.role,
+        user_type: comment.created_by.user_type,
         initials: buildInitials(comment.created_by)
       } : null,
       created_by_creator: comment.created_by_creator ? {
@@ -635,7 +639,15 @@ async function getAdminDisputeDetails(disputeId) {
       file_size_bytes: attachment.file_size_bytes,
       mime_type: attachment.mime_type,
       attachment_type: attachment.attachment_type,
-      created_at: attachment.created_at
+      created_at: attachment.created_at,
+      uploaded_by: attachment.uploaded_by ? {
+        id: attachment.uploaded_by.id,
+        name: attachment.uploaded_by.name,
+        email: attachment.uploaded_by.email,
+        role: attachment.uploaded_by.role,
+        user_type: attachment.uploaded_by.user_type,
+        initials: buildInitials(attachment.uploaded_by)
+      } : null
     })),
     payout_holds: holds.map((hold) => ({
       id: hold.finance_dispute_payout_hold_id,

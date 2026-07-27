@@ -1610,6 +1610,64 @@ function buildClientWhere(userContext = {}, filters = {}) {
   return where;
 }
 
+function buildClientBookingWhere(userContext = {}, filters = {}) {
+  const Op = db.Sequelize.Op;
+  const userId = Number(userContext.userId || filters.client_user_id || 0) || null;
+  const email = String(userContext.email || filters.guest_email || '').trim();
+  const where = {};
+  const clientOr = [];
+
+  if (userId) clientOr.push({ user_id: userId });
+  if (email) clientOr.push({ guest_email: email });
+  if (clientOr.length === 1) Object.assign(where, clientOr[0]);
+  if (clientOr.length > 1) where[Op.or] = clientOr;
+
+  return where;
+}
+
+async function getClientOwnedBookingIds(userContext = {}, filters = {}) {
+  const Op = db.Sequelize.Op;
+  const userId = Number(userContext.userId || filters.client_user_id || 0) || null;
+  const email = String(userContext.email || filters.guest_email || '').trim();
+  const bookingIds = new Set();
+  const ownershipOr = [];
+
+  if (userId) ownershipOr.push({ user_id: userId });
+  if (email) ownershipOr.push({ guest_email: email });
+  if (ownershipOr.length === 0) return [];
+
+  const leadWhere = ownershipOr.length === 1 ? ownershipOr[0] : { [Op.or]: ownershipOr };
+  const [bookingRows, salesLeadRows, clientLeadRows] = await Promise.all([
+    db.stream_project_booking.findAll({
+      where: {
+        ...leadWhere,
+        is_draft: 0
+      },
+      attributes: ['stream_project_booking_id'],
+      raw: true
+    }),
+    db.sales_leads.findAll({
+      where: leadWhere,
+      attributes: ['booking_id'],
+      raw: true
+    }),
+    db.client_leads.findAll({
+      where: leadWhere,
+      attributes: ['booking_id'],
+      raw: true
+    })
+  ]);
+
+  bookingRows.forEach((booking) => {
+    if (booking.stream_project_booking_id) bookingIds.add(Number(booking.stream_project_booking_id));
+  });
+  [...salesLeadRows, ...clientLeadRows].forEach((lead) => {
+    if (lead.booking_id) bookingIds.add(Number(lead.booking_id));
+  });
+
+  return [...bookingIds].filter(Boolean);
+}
+
 function buildCostBreakdownRow(breakdown = {}) {
   const subtotal = toMoney(breakdown.subtotal_amount);
   const discount = toMoney(breakdown.discount_amount);
@@ -1656,6 +1714,17 @@ function buildClientPaymentRow(plain, invoices = [], disputes = []) {
   const latestInvoice = invoices[0] || null;
   const openDispute = disputes.find((dispute) => !['resolved', 'rejected'].includes(dispute.status));
   const disputeStatus = openDispute ? normalizeClientDisputeStatus(openDispute.status) : null;
+  const paymentStatus = plain.payment_status === 'partially_paid'
+    ? 'partially_paid'
+    : normalizeDisplayStatus(plain.payment_status, Number(plain.collected_amount || 0) > 0);
+  const transactionRows = Array.isArray(plain.transactions) ? plain.transactions : [];
+  const transactionInvoiceCount = new Set(
+    transactionRows
+      .map((transaction) => transaction.invoice_number || transaction.latest_invoice?.invoice_number || transaction.latest_invoice?.invoice_id)
+      .filter(Boolean)
+      .map(String)
+  ).size;
+  const invoicesCount = invoices.length || transactionInvoiceCount;
 
   return {
     booking_id: plain.booking_id,
@@ -1664,7 +1733,7 @@ function buildClientPaymentRow(plain, invoices = [], disputes = []) {
     project_name: booking.project_name || null,
     total_amount: toMoney(plain.total_amount),
     currency: plain.currency || 'USD',
-    invoices_count: invoices.length,
+    invoices_count: invoicesCount,
     invoices: invoices.map(formatClientInvoice),
     latest_invoice: latestInvoice ? formatClientInvoice(latestInvoice) : null,
     date_time: booking.payment_completed_at || booking.event_date || plain.calculated_at || plain.created_at,
@@ -1674,9 +1743,11 @@ function buildClientPaymentRow(plain, invoices = [], disputes = []) {
       plain.finance_transaction?.source,
       plain.finance_transaction?.external_reference
     ),
-    status: disputeStatus || normalizeDisplayStatus(plain.payment_status, Number(plain.collected_amount || 0) > 0),
+    status: disputeStatus || paymentStatus,
     payment_status: plain.payment_status,
     cost_breakdown: buildCostBreakdownRow(plain),
+    transactions: transactionRows,
+    transactions_count: transactionRows.length,
     dispute: openDispute ? {
       dispute_id: openDispute.finance_dispute_id,
       dispute_code: openDispute.dispute_code,
@@ -1691,6 +1762,53 @@ function buildClientPaymentRow(plain, invoices = [], disputes = []) {
       can_download_invoice: Boolean(latestInvoice?.invoice_pdf || latestInvoice?.invoice_url),
       can_raise_dispute: !openDispute && normalizeDisplayStatus(plain.payment_status, Number(plain.collected_amount || 0) > 0) === 'paid'
     }
+  };
+}
+
+function buildFallbackShootBreakdownRow({
+  bookingId,
+  booking = {},
+  transactions = [],
+  invoiceCount = 0,
+  latestInvoice = null
+}) {
+  const paidAmount = toMoney(transactions.reduce((sum, transaction) => sum + Number(transaction.total_amount || 0), 0));
+  const totalAmount = Number(booking.budget || 0) > 0 ? toMoney(booking.budget) : paidAmount;
+  const paymentStatus = paidAmount > 0 && totalAmount > paidAmount ? 'partially_paid' : 'paid';
+
+  return {
+    finance_project_breakdown_id: null,
+    booking_id: bookingId,
+    shoot_id: bookingId,
+    quote_id: booking.quote_id || null,
+    client_user_id: booking.user_id || null,
+    guest_email: booking.guest_email || null,
+    currency: 'USD',
+    subtotal_amount: totalAmount,
+    discount_amount: 0,
+    tax_amount: 0,
+    equipment_amount: 0,
+    platform_fee_amount: 0,
+    creator_earnings_amount: 0,
+    total_amount: totalAmount,
+    collected_amount: paidAmount,
+    outstanding_amount: toMoney(Math.max(totalAmount - paidAmount, 0)),
+    payment_status: paymentStatus,
+    booking,
+    invoices_count: invoiceCount,
+    latest_invoice: latestInvoice ? formatClientInvoice(latestInvoice) : null,
+    date_time: booking.payment_completed_at || booking.event_date || transactions[0]?.transaction_date || null,
+    event_date: formatDateOnly(booking.event_date),
+    payment_method: formatPaymentMethod(transactions[0]?.payment_method, transactions[0]?.source, transactions[0]?.external_reference),
+    status: paymentStatus,
+    cost_breakdown: {
+      total_amount: totalAmount,
+      collected_amount: paidAmount,
+      outstanding_amount: toMoney(Math.max(totalAmount - paidAmount, 0)),
+      currency: 'USD'
+    },
+    metadata: { source: 'payment_history_fallback' },
+    transactions
   };
 }
 
@@ -1743,6 +1861,10 @@ async function getClientPaymentManagement(filters = {}, userContext = {}) {
   }
 
   if (search) {
+    const directBookingId = Number(search.replace(/^#/, ''));
+    if (Number.isFinite(directBookingId) && directBookingId > 0) {
+      where.booking_id = directBookingId;
+    } else {
     const term = `%${search}%`;
     bookingWhere[Op.or] = [
       { project_name: { [Op.like]: term } },
@@ -1751,13 +1873,12 @@ async function getClientPaymentManagement(filters = {}, userContext = {}) {
       { content_type: { [Op.like]: term } },
       { guest_email: { [Op.like]: term } }
     ];
+    }
   }
 
   const result = await db.finance_project_breakdowns.findAndCountAll({
     where,
     distinct: true,
-    limit,
-    offset,
     order: [['calculated_at', 'DESC'], ['finance_project_breakdown_id', 'DESC']],
     include: [
       {
@@ -1772,22 +1893,52 @@ async function getClientPaymentManagement(filters = {}, userContext = {}) {
 
   const rows = result.rows.map((row) => row.get({ plain: true }));
   const bookingIds = rows.map((row) => Number(row.booking_id)).filter(Boolean);
-  const [invoices, disputes, transactions] = await Promise.all([
+  const ownedBookingIds = await getClientOwnedBookingIds(clientContext, filters);
+  const clientBookingRows = await db.stream_project_booking.findAll({
+    where: {
+      stream_project_booking_id: { [Op.in]: ownedBookingIds.length ? ownedBookingIds : [0] }
+    },
+    attributes: [
+      'stream_project_booking_id',
+      'quote_id',
+      'project_name',
+      'shoot_type',
+      'event_type',
+      'content_type',
+      'event_date',
+      'guest_email',
+      'payment_completed_at',
+      'budget'
+    ],
+    order: [['stream_project_booking_id', 'DESC']],
+    limit: 500,
+    raw: true
+  });
+  const clientBookingIds = [
+    ...new Set([
+      ...bookingIds,
+      ...ownedBookingIds,
+      ...clientBookingRows.map((booking) => Number(booking.stream_project_booking_id)).filter(Boolean)
+    ])
+  ];
+  const [invoices, disputes, transactions, leadInfoByBookingId, paymentHistoryEntries] = await Promise.all([
     db.invoice_send_history.findAll({
-      where: { booking_id: { [Op.in]: bookingIds.length ? bookingIds : [0] } },
+      where: { booking_id: { [Op.in]: clientBookingIds.length ? clientBookingIds : [0] } },
       order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
       raw: true
     }),
     db.finance_disputes.findAll({
-      where: { booking_id: { [Op.in]: bookingIds.length ? bookingIds : [0] } },
+      where: { booking_id: { [Op.in]: clientBookingIds.length ? clientBookingIds : [0] } },
       order: [['created_at', 'DESC'], ['finance_dispute_id', 'DESC']],
       raw: true
     }),
     db.finance_transactions.findAll({
-      where: { booking_id: { [Op.in]: bookingIds.length ? bookingIds : [0] }, transaction_type: 'client_payment' },
+      where: { booking_id: { [Op.in]: clientBookingIds.length ? clientBookingIds : [0] }, transaction_type: 'client_payment' },
       order: [['transaction_date', 'DESC'], ['finance_transaction_id', 'DESC']],
       raw: true
-    })
+    }),
+    getLeadInfoByBookingIds(clientBookingIds),
+    fetchPaymentHistoryEntriesForBookings(clientBookingIds.length ? clientBookingIds : [0])
   ]);
 
   const invoiceMap = new Map();
@@ -1808,19 +1959,107 @@ async function getClientPaymentManagement(filters = {}, userContext = {}) {
     if (!transactionMap.has(bookingId)) transactionMap.set(bookingId, transaction);
   });
 
+  const bookingMap = new Map([
+    ...clientBookingRows.map((booking) => [Number(booking.stream_project_booking_id), booking]),
+    ...rows.map((row) => [Number(row.booking_id), row.booking || {}])
+  ]);
+  const transactionsByBookingId = new Map();
+  paymentHistoryEntries.forEach((paymentEntry) => {
+    const bookingId = Number(paymentEntry.booking_id);
+    if (!bookingId) return;
+
+    const bookingInvoices = invoiceMap.get(bookingId) || [];
+    transactionsByBookingId.set(bookingId, [
+      ...(transactionsByBookingId.get(bookingId) || []),
+      buildPaymentHistoryListRow(
+        {
+          ...paymentEntry,
+          invoice_count: bookingInvoices.length,
+          latest_invoice: bookingInvoices[0] || null
+        },
+        bookingMap.get(bookingId) || {},
+        leadInfoByBookingId.get(bookingId) || {}
+      )
+    ]);
+  });
+
   const paymentRows = rows.map((row) => buildClientPaymentRow(
-    { ...row, finance_transaction: transactionMap.get(Number(row.booking_id)) || null },
+    {
+      ...row,
+      finance_transaction: transactionMap.get(Number(row.booking_id)) || null,
+      transactions: transactionsByBookingId.get(Number(row.booking_id)) || []
+    },
     invoiceMap.get(Number(row.booking_id)) || [],
     disputeMap.get(Number(row.booking_id)) || []
   ));
+  const existingRowBookingIds = new Set(rows.map((row) => Number(row.booking_id)).filter(Boolean));
+  const fallbackPaymentRows = [];
+  transactionsByBookingId.forEach((bookingTransactions, bookingId) => {
+    if (existingRowBookingIds.has(bookingId) || !Array.isArray(bookingTransactions) || bookingTransactions.length === 0) return;
+
+    const booking = bookingMap.get(bookingId) || {};
+    const search = String(filters.search || filters.q || '').trim().toLowerCase();
+    if (search) {
+      const leadInfo = leadInfoByBookingId.get(bookingId) || {};
+      const searchable = [
+        bookingId,
+        `#${bookingId}`,
+        booking.project_name,
+        booking.shoot_type,
+        booking.event_type,
+        booking.content_type,
+        booking.guest_email,
+        leadInfo.client_name,
+        leadInfo.guest_email,
+        ...bookingTransactions.flatMap((transaction) => [
+          transaction.transaction_id,
+          transaction.transaction_code,
+          transaction.receipt_number,
+          transaction.invoice_number
+        ])
+      ].map((value) => String(value || '').toLowerCase());
+      if (!searchable.some((value) => value.includes(search))) return;
+    }
+
+    const paidAmount = bookingTransactions.reduce((sum, transaction) => sum + Number(transaction.total_amount || 0), 0);
+    const totalAmount = Number(booking.budget || 0) > 0 ? Number(booking.budget) : paidAmount;
+    fallbackPaymentRows.push(buildClientPaymentRow(
+      {
+        booking_id: bookingId,
+        booking,
+        client_user_id: clientContext.userId || null,
+        guest_email: booking.guest_email || clientContext.email || null,
+        currency: 'USD',
+        subtotal_amount: totalAmount,
+        discount_amount: 0,
+        tax_amount: 0,
+        equipment_amount: 0,
+        total_amount: totalAmount,
+        collected_amount: paidAmount,
+        outstanding_amount: Math.max(totalAmount - paidAmount, 0),
+        payment_status: paidAmount > 0 && totalAmount > paidAmount ? 'partially_paid' : 'paid',
+        calculated_at: booking.payment_completed_at || booking.event_date || bookingTransactions[0]?.transaction_date || new Date(),
+        created_at: booking.payment_completed_at || booking.event_date || bookingTransactions[0]?.transaction_date || new Date(),
+        finance_transaction: null,
+        transactions: bookingTransactions
+      },
+      invoiceMap.get(bookingId) || [],
+      disputeMap.get(bookingId) || []
+    ));
+  });
+  fallbackPaymentRows.sort((left, right) => {
+    const leftTime = new Date(left.date_time || 0).getTime();
+    const rightTime = new Date(right.date_time || 0).getTime();
+    return rightTime - leftTime;
+  });
 
   return {
-    rows: paymentRows,
+    rows: [...paymentRows, ...fallbackPaymentRows],
     pagination: {
       page,
       limit,
-      total: result.count,
-      total_pages: Math.ceil(result.count / limit)
+      total: result.count + fallbackPaymentRows.length,
+      total_pages: Math.ceil((result.count + fallbackPaymentRows.length) / limit)
     },
     filters: {
       statuses: ['paid', 'pending', 'dispute_open', 'in_progress', 'resolved', 'refunded'],
@@ -1856,7 +2095,7 @@ async function getClientPaymentDetails(bookingId, userContext = {}) {
   }
 
   const plain = breakdown.get({ plain: true });
-  const [invoices, disputes, transaction] = await Promise.all([
+  const [invoices, disputes, transaction, leadInfoByBookingId, paymentHistoryEntries] = await Promise.all([
     db.invoice_send_history.findAll({
       where: { booking_id: bookingId },
       order: [['sent_at', 'DESC'], ['invoice_send_history_id', 'DESC']],
@@ -1871,11 +2110,23 @@ async function getClientPaymentDetails(bookingId, userContext = {}) {
       where: { booking_id: bookingId, transaction_type: 'client_payment' },
       order: [['transaction_date', 'DESC'], ['finance_transaction_id', 'DESC']],
       raw: true
-    })
+    }),
+    getLeadInfoByBookingIds([bookingId]),
+    fetchPaymentHistoryEntriesForBookings([bookingId])
   ]);
 
+  const paymentHistoryRows = paymentHistoryEntries.map((paymentEntry) => buildPaymentHistoryListRow(
+    {
+      ...paymentEntry,
+      invoice_count: invoices.length,
+      latest_invoice: invoices[0] || null
+    },
+    plain.booking || {},
+    leadInfoByBookingId.get(Number(bookingId)) || {}
+  ));
+
   return {
-    ...buildClientPaymentRow({ ...plain, finance_transaction: transaction }, invoices, disputes),
+    ...buildClientPaymentRow({ ...plain, finance_transaction: transaction, transactions: paymentHistoryRows }, invoices, disputes),
     creators: (plain.creator_earnings || []).map((earning) => ({
       creator_earning_id: earning.creator_earning_id,
       creator_id: earning.creator_id,
@@ -2035,15 +2286,35 @@ async function listShootBreakdowns(filters = {}) {
 
   const plainRows = result.rows.map((row) => row.get({ plain: true }));
   const bookingIds = plainRows.map((row) => Number(row.booking_id)).filter(Boolean);
-  const [leadInfoByBookingId, invoiceCountsByBookingId, latestInvoicesByBookingId, paymentHistoryEntries] = await Promise.all([
-    getLeadInfoByBookingIds(bookingIds),
-    getInvoiceCountsByBookingIds(bookingIds),
-    getLatestInvoicesByBookingIds(bookingIds),
-    fetchPaymentHistoryEntriesForBookings(bookingIds)
+  const fallbackSeedEntries = await fetchPaymentHistoryEntriesForBookings([]);
+  const fallbackSeedBookingIds = [
+    ...new Set(
+      fallbackSeedEntries
+        .filter((entry) => paymentHistoryMatchesMethod(entry, filters.payment_method))
+        .map((entry) => Number(entry.booking_id))
+        .filter(Boolean)
+    )
+  ];
+  const allBookingIds = [...new Set([...bookingIds, ...fallbackSeedBookingIds])];
+  const [leadInfoByBookingId, invoiceCountsByBookingId, latestInvoicesByBookingId, paymentHistoryEntries, fallbackBookingRows] = await Promise.all([
+    getLeadInfoByBookingIds(allBookingIds),
+    getInvoiceCountsByBookingIds(allBookingIds),
+    getLatestInvoicesByBookingIds(allBookingIds),
+    fetchPaymentHistoryEntriesForBookings(allBookingIds.length ? allBookingIds : [0]),
+    allBookingIds.length
+      ? db.stream_project_booking.findAll({
+          where: { stream_project_booking_id: { [Op.in]: allBookingIds } },
+          attributes: ['stream_project_booking_id', 'quote_id', 'project_name', 'shoot_type', 'event_type', 'content_type', 'event_date', 'guest_email', 'payment_completed_at', 'budget', 'user_id'],
+          raw: true
+        })
+      : []
   ]);
 
   const transactionsByBookingId = new Map();
-  const bookingById = new Map(plainRows.map((plain) => [Number(plain.booking_id), plain.booking || {}]));
+  const bookingById = new Map([
+    ...fallbackBookingRows.map((booking) => [Number(booking.stream_project_booking_id), booking]),
+    ...plainRows.map((plain) => [Number(plain.booking_id), plain.booking || {}])
+  ]);
   paymentHistoryEntries.forEach((paymentEntry) => {
     const bookingId = Number(paymentEntry.booking_id);
     if (!bookingId) return;
@@ -2075,20 +2346,59 @@ async function listShootBreakdowns(filters = {}) {
     );
   });
 
-  return {
-    rows: plainRows.map((plain) => {
+  const breakdownRows = plainRows.map((plain) => {
       const bookingId = Number(plain.booking_id);
       return {
         ...plain,
         metadata: parseJson(plain.metadata_json, null),
         transactions: transactionsByBookingId.get(bookingId) || []
       };
-    }),
+    });
+  const existingBookingIds = new Set(bookingIds);
+  const fallbackRows = [];
+  transactionsByBookingId.forEach((transactions, bookingId) => {
+    if (existingBookingIds.has(bookingId) || !Array.isArray(transactions) || transactions.length === 0) return;
+    const booking = bookingById.get(bookingId) || {};
+    const row = buildFallbackShootBreakdownRow({
+      bookingId,
+      booking,
+      transactions,
+      invoiceCount: invoiceCountsByBookingId.get(bookingId) || 0,
+      latestInvoice: latestInvoicesByBookingId.get(bookingId) || null
+    });
+    const search = String(filters.search || '').trim();
+    if (search) {
+      const searchable = [
+        bookingId,
+        `#${bookingId}`,
+        row.shoot_type,
+        row.project_name,
+        row.guest_email,
+        leadInfoByBookingId.get(bookingId)?.client_name,
+        leadInfoByBookingId.get(bookingId)?.guest_email
+      ].map((value) => String(value || '').toLowerCase());
+      if (!searchable.some((value) => value.includes(search.toLowerCase()))) return;
+    }
+    const requestedStatus = String(filters.payment_status || '').trim().toLowerCase();
+    if (requestedStatus && row.payment_status !== requestedStatus) return;
+    fallbackRows.push(row);
+  });
+  fallbackRows.sort((left, right) => {
+    const leftTime = new Date(left.date_time || 0).getTime();
+    const rightTime = new Date(right.date_time || 0).getTime();
+    return rightTime - leftTime;
+  });
+
+  const combinedRows = [...breakdownRows, ...fallbackRows];
+  const pagedRows = combinedRows.slice(offset, offset + limit);
+
+  return {
+    rows: pagedRows,
     pagination: {
       page,
       limit,
-      total: result.count,
-      total_pages: Math.ceil(result.count / limit)
+      total: combinedRows.length,
+      total_pages: Math.ceil(combinedRows.length / limit)
     }
   };
 }
