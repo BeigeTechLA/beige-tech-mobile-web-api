@@ -1,11 +1,15 @@
 const db = require('../models');
+const accountCreditService = require('./account-credit.service');
 const { S3UploadFiles, toAbsoluteBeigeAssetUrl } = require('../utils/common');
 
 const DISPUTE_STATUSES = ['open', 'in_review', 'resolved', 'rejected', 'escalated'];
 const DISPUTE_CATEGORIES = ['quality', 'payment_delay', 'wrong_deliverables', 'refund', 'payout_issues', 'other'];
 
 function toMoney(value) {
-  return Number(Number(value || 0).toFixed(2));
+  const numeric = typeof value === 'number'
+    ? value
+    : Number(String(value || 0).replace(/[^0-9.-]/g, ''));
+  return Number((Number.isFinite(numeric) ? numeric : 0).toFixed(2));
 }
 
 function toPositiveInt(value) {
@@ -961,6 +965,7 @@ async function closeDispute(disputeId, payload = {}, options = {}, closeStatus =
       ['payout_release', 'refund', 'partial_refund', 'credit_compensation', 'payout_adjustment', 'no_action', 'other'],
       closeStatus === 'rejected' ? 'no_action' : 'payout_release'
     );
+    let accountCreditLedger = null;
 
     if (payload.release_payout_holds || resolutionType === 'payout_release') {
       const holds = await db.finance_dispute_payout_holds.findAll({
@@ -987,6 +992,37 @@ async function closeDispute(disputeId, payload = {}, options = {}, closeStatus =
       }
     }
 
+    if (closeStatus === 'resolved' && resolutionType === 'credit_compensation') {
+      const creditAmount = toMoney(payload.credit_amount || payload.amount || payload.refund_amount);
+      if (!(creditAmount > 0)) {
+        const error = new Error('A positive credit_amount is required for Beige Credits resolution');
+        error.statusCode = 400;
+        throw error;
+      }
+
+      const booking = dispute.booking_id
+        ? await db.stream_project_booking.findByPk(dispute.booking_id, {
+          attributes: ['stream_project_booking_id', 'user_id', 'guest_email'],
+          transaction
+        })
+        : null;
+
+      accountCreditLedger = await accountCreditService.createManualCredit({
+        targetUserId: dispute.client_user_id || booking?.user_id || null,
+        guestEmail: booking?.guest_email || null,
+        amount: creditAmount,
+        source: 'payment_adjustment',
+        creditType: 'refund',
+        bookingId: dispute.booking_id,
+        invoiceSendHistoryId: dispute.invoice_send_history_id,
+        reason: payload.notes || `Beige credits added for ${dispute.dispute_code || 'dispute resolution'}`,
+        notes: payload.notes || `Beige credits added for ${dispute.dispute_code || 'dispute resolution'}. You can use this credit on your next booking.`,
+        notifyUser: false,
+        createdByUserId: options.userId || null,
+        transaction
+      });
+    }
+
     await dispute.update({
       status: closeStatus,
       resolution_type: resolutionType,
@@ -1003,7 +1039,8 @@ async function closeDispute(disputeId, payload = {}, options = {}, closeStatus =
         payment_method: payload.payment_method || undefined,
         transaction_id: payload.transaction_id || undefined,
         recipient: payload.recipient || undefined,
-        rejection_reason: payload.rejection_reason || undefined
+        rejection_reason: payload.rejection_reason || undefined,
+        account_credit_ledger_id: accountCreditLedger?.account_credit_ledger_id || undefined
       })
     }, { transaction });
 
@@ -1020,7 +1057,8 @@ async function closeDispute(disputeId, payload = {}, options = {}, closeStatus =
         payment_method: payload.payment_method || null,
         transaction_id: payload.transaction_id || null,
         recipient: payload.recipient || null,
-        rejection_reason: payload.rejection_reason || null
+        rejection_reason: payload.rejection_reason || null,
+        account_credit_ledger_id: accountCreditLedger?.account_credit_ledger_id || null
       },
       userId: options.userId,
       dispute
