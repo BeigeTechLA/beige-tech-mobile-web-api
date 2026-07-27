@@ -998,7 +998,12 @@ async function closeDispute(disputeId, payload = {}, options = {}, closeStatus =
       metadata_json: stringifyMetadata({
         ...parseJson(dispute.metadata_json, {}),
         refund_amount: payload.refund_amount === undefined ? undefined : toMoney(payload.refund_amount),
-        credit_amount: payload.credit_amount === undefined ? undefined : toMoney(payload.credit_amount)
+        credit_amount: payload.credit_amount === undefined ? undefined : toMoney(payload.credit_amount),
+        resolution_amount: payload.amount === undefined ? undefined : payload.amount,
+        payment_method: payload.payment_method || undefined,
+        transaction_id: payload.transaction_id || undefined,
+        recipient: payload.recipient || undefined,
+        rejection_reason: payload.rejection_reason || undefined
       })
     }, { transaction });
 
@@ -1010,7 +1015,12 @@ async function closeDispute(disputeId, payload = {}, options = {}, closeStatus =
       metadata: {
         resolution_type: resolutionType,
         refund_amount: payload.refund_amount === undefined ? null : toMoney(payload.refund_amount),
-        credit_amount: payload.credit_amount === undefined ? null : toMoney(payload.credit_amount)
+        credit_amount: payload.credit_amount === undefined ? null : toMoney(payload.credit_amount),
+        resolution_amount: payload.amount || null,
+        payment_method: payload.payment_method || null,
+        transaction_id: payload.transaction_id || null,
+        recipient: payload.recipient || null,
+        rejection_reason: payload.rejection_reason || null
       },
       userId: options.userId,
       dispute
@@ -1073,6 +1083,10 @@ module.exports = {
   addDisputeAttachment,
   holdDisputePayout,
   resolveDispute: (disputeId, payload, options) => closeDispute(disputeId, payload, options, 'resolved'),
-  rejectOrRefundDispute: (disputeId, payload, options) => closeDispute(disputeId, payload, options, payload?.resolution_type && payload.resolution_type !== 'no_action' ? 'resolved' : 'rejected'),
+  rejectOrRefundDispute: (disputeId, payload, options) => {
+    const resolutionType = String(payload?.resolution_type || '').trim();
+    const isRefundResolution = ['refund', 'partial_refund', 'credit_compensation', 'payout_adjustment'].includes(resolutionType);
+    return closeDispute(disputeId, payload, options, isRefundResolution ? 'resolved' : 'rejected');
+  },
   escalateDispute
 };

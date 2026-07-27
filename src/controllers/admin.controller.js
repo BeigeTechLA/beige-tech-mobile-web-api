@@ -4396,6 +4396,10 @@ exports.exportShootsCsv = async (req, res) => {
     const rangeBoundaries = {
       next_7_days: moment(today, 'YYYY-MM-DD', true).add(7, 'days').format('YYYY-MM-DD'),
       next_15_days: moment(today, 'YYYY-MM-DD', true).add(15, 'days').format('YYYY-MM-DD'),
+      next_30_days: moment(today, 'YYYY-MM-DD', true).add(30, 'days').format('YYYY-MM-DD'),
+      last_7_days: moment(today, 'YYYY-MM-DD', true).subtract(7, 'days').format('YYYY-MM-DD'),
+      last_15_days: moment(today, 'YYYY-MM-DD', true).subtract(15, 'days').format('YYYY-MM-DD'),
+      last_30_days: moment(today, 'YYYY-MM-DD', true).subtract(30, 'days').format('YYYY-MM-DD'),
       in_1_month: moment(today, 'YYYY-MM-DD', true).add(1, 'month').format('YYYY-MM-DD'),
       in_2_months: moment(today, 'YYYY-MM-DD', true).add(2, 'month').format('YYYY-MM-DD'),
       in_6_months: moment(today, 'YYYY-MM-DD', true).add(6, 'month').format('YYYY-MM-DD'),
@@ -4422,6 +4426,10 @@ exports.exportShootsCsv = async (req, res) => {
         return projectDate >= today && projectDate <= rangeBoundaries.next_15_days;
       }
 
+      if (normalizedRange === 'next_30_days') {
+        return projectDate >= today && projectDate <= rangeBoundaries.next_30_days;
+      }
+
       if (normalizedRange === 'in_1_month') {
         return projectDate >= today && projectDate <= rangeBoundaries.in_1_month;
       }
@@ -4436,6 +4444,18 @@ exports.exportShootsCsv = async (req, res) => {
 
       if (normalizedRange === 'in_1_year') {
         return projectDate >= today && projectDate <= rangeBoundaries.in_1_year;
+      }
+
+      if (normalizedRange === 'last_7_days') {
+        return projectDate <= today && projectDate >= rangeBoundaries.last_7_days;
+      }
+
+      if (normalizedRange === 'last_15_days') {
+        return projectDate <= today && projectDate >= rangeBoundaries.last_15_days;
+      }
+
+      if (normalizedRange === 'last_30_days') {
+        return projectDate <= today && projectDate >= rangeBoundaries.last_30_days;
       }
 
       return true;
