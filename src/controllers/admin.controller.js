@@ -2438,6 +2438,40 @@ exports.getProjectDetails = async (req, res) => {
         : String(leadRecord?.lead_status || lead?.lead_status || '').toLowerCase() === 'booked'
           ? 'paid'
         : (active_payment_link ? 'link_sent' : 'unpaid');
+    const activityDateCandidates = [];
+    const addActivityDateCandidate = (value) => {
+      if (!value) return;
+      const date = new Date(value);
+      if (!Number.isNaN(date.getTime())) {
+        activityDateCandidates.push(date);
+      }
+    };
+
+    addActivityDateCandidate(lead?.last_activity_at);
+    addActivityDateCandidate(lead?.updated_at);
+    addActivityDateCandidate(lead?.created_at);
+    addActivityDateCandidate(projectJson.created_at);
+
+    (lead?.activities || []).forEach((activity) => {
+      addActivityDateCandidate(activity?.created_at);
+      addActivityDateCandidate(activity?.updated_at);
+    });
+
+    (projectJson.assigned_crews || []).forEach((assignment) => {
+      addActivityDateCandidate(assignment?.responded_at);
+      addActivityDateCandidate(assignment?.updated_at);
+      addActivityDateCandidate(assignment?.assigned_date);
+      addActivityDateCandidate(assignment?.created_at);
+    });
+
+    const leadLastActivityAt = activityDateCandidates.length
+      ? activityDateCandidates.reduce((latest, date) => (
+          date.getTime() > latest.getTime() ? date : latest
+        ))
+      : null;
+    const leadDetails = lead
+      ? { ...lead, last_activity_at: leadLastActivityAt }
+      : { last_activity_at: leadLastActivityAt };
 
     // 8. Construct Response
     return res.status(200).json({
@@ -2476,7 +2510,7 @@ exports.getProjectDetails = async (req, res) => {
         },
         timeline_status: timelineStatus,
         timeline_label: timelineLabel,
-        lead_details: lead, // Sales rep, activities, etc.
+        lead_details: leadDetails, // Sales rep, activities, etc.
         contact_registration_type: contactRegistrationType,
         is_registered_user: isRegisteredUser,
         is_client: isClient,
