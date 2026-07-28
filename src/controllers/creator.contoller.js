@@ -62,6 +62,136 @@ function toDbJson(value) {
   }
 }
 
+const CONTENT_TYPE_FAMILY_ALIASES = {
+  photo: [
+    '2',
+    'photo',
+    'photography',
+    'photographer',
+    'both',
+    'videography and photography',
+    'videographer,photographer',
+    'photographer,videographer',
+    '3'
+  ],
+  video: [
+    '1',
+    'video',
+    'videography',
+    'videographer',
+    'both',
+    'videography and photography',
+    'videographer,photographer',
+    'photographer,videographer',
+    '3'
+  ]
+};
+
+const buildContentTypeFamilyWhere = (family) => Sequelize.where(
+  Sequelize.fn('LOWER', Sequelize.fn('TRIM', Sequelize.col('content_type'))),
+  {
+    [Op.in]: CONTENT_TYPE_FAMILY_ALIASES[family] || CONTENT_TYPE_FAMILY_ALIASES.photo
+  }
+);
+
+const getSmartPendingRequestsForCrew = async (crew_member_id, extraProjectWhere = {}) => {
+  const ROLE_GROUPS = {
+    videographer: ["9", "1"],
+    photographer: ["10", "2"],
+    cinematographer: ["11", "3"],
+  };
+  const ID_TO_ROLE_MAP = {};
+  Object.entries(ROLE_GROUPS).forEach(([roleName, ids]) => {
+    ids.forEach(id => { ID_TO_ROLE_MAP[String(id)] = roleName; });
+  });
+
+  const currentCrew = await crew_members.findOne({ where: { crew_member_id } });
+  if (!currentCrew) return [];
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const myRoleIds = toIdArray(currentCrew.primary_role || "[]");
+  const myCategories = [...new Set(myRoleIds.map(id => ID_TO_ROLE_MAP[String(id)]).filter(Boolean))];
+
+  const pendingRecords = await assigned_crew.findAll({
+    where: { crew_member_id, crew_accept: 0 },
+    include: [{
+      model: stream_project_booking,
+      as: "project",
+      where: {
+        is_completed: 0,
+        payment_completed_at: { [Op.ne]: null },
+        event_date: { [Op.gte]: today },
+        ...extraProjectWhere,
+      },
+      include: [{
+        model: assigned_crew,
+        as: 'assigned_crews',
+        where: { crew_accept: 1 },
+        required: false,
+        include: [{ model: crew_members, as: 'crew_member' }]
+      }]
+    }]
+  });
+
+  return pendingRecords.filter((record) => {
+    const project = record.project;
+    const requestedLimits = typeof project.crew_roles === 'string' ? JSON.parse(project.crew_roles || '{}') : (project.crew_roles || {});
+    const acceptedCounts = { videographer: 0, photographer: 0, cinematographer: 0 };
+
+    if (project.assigned_crews) {
+      project.assigned_crews.forEach(ac => {
+        const acRoles = toIdArray(ac.crew_member?.primary_role || "[]");
+        const assignedTo = acRoles.map(id => ID_TO_ROLE_MAP[String(id)]).find(cat =>
+          cat && acceptedCounts[cat] < (requestedLimits[cat] || 0)
+        );
+        if (assignedTo) acceptedCounts[assignedTo]++;
+      });
+    }
+
+    return myCategories.some(cat => acceptedCounts[cat] < (requestedLimits[cat] || 0));
+  });
+};
+
+function parseJsonUntilStable(value) {
+  let current = value;
+
+  for (let i = 0; i < 4; i += 1) {
+    if (typeof current !== 'string') return current;
+
+    const trimmed = current.trim();
+    if (!trimmed) return [];
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed === current) return parsed;
+      current = parsed;
+    } catch (_) {
+      return current;
+    }
+  }
+
+  return current;
+}
+
+function normalizeCrewRoleIds(value) {
+  const parsed = parseJsonUntilStable(value);
+  const values = Array.isArray(parsed) ? parsed : [parsed];
+  const roleIds = [];
+
+  values.forEach((item) => {
+    const normalized = parseJsonUntilStable(item);
+    const items = Array.isArray(normalized) ? normalized : [normalized];
+
+    items.forEach((roleId) => {
+      const stringValue = String(roleId || '').trim();
+      if (stringValue && !roleIds.includes(stringValue)) roleIds.push(stringValue);
+    });
+  });
+
+  return roleIds;
+}
+
 const toIdArray = (value) => {
   if (!value) return [];
 
@@ -135,9 +265,17 @@ exports.getDashboardCounts = async (req, res) => {
       });
     }
 
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
     const completedShoots = await stream_project_booking.count({
       where: {
-        is_completed: 1,
+        [Op.or]: [
+          { is_completed: 1 },
+          { event_date: { [Op.lt]: today } },
+        ],
       },
       include: [
         {
@@ -146,6 +284,7 @@ exports.getDashboardCounts = async (req, res) => {
           where: {
             crew_member_id: crew_member_id,
             is_active: 1,
+            crew_accept: 1,
           },
           required: true,
         },
@@ -154,7 +293,8 @@ exports.getDashboardCounts = async (req, res) => {
 
     const upcomingShoots = await stream_project_booking.count({
       where: {
-        event_date: { [Sequelize.Op.gt]: new Date() },
+        is_completed: 0,
+        event_date: { [Op.gt]: today },
       },
       include: [
         {
@@ -163,6 +303,7 @@ exports.getDashboardCounts = async (req, res) => {
           where: {
             crew_member_id: crew_member_id,
             is_active: 1,
+            crew_accept: 1,
           },
           required: true,
         },
@@ -180,6 +321,10 @@ exports.getDashboardCounts = async (req, res) => {
           model: stream_project_booking,
           as: "project",
           required: true,
+          where: {
+            event_date: { [Op.gte]: today },
+            is_completed: 0,
+          },
         },
       ],
     });
@@ -217,6 +362,9 @@ exports.getPendingRequests = async (req, res) => {
     const currentCrew = await crew_members.findOne({ where: { crew_member_id } });
     if (!currentCrew) return res.status(404).json({ error: true, message: "Crew member not found" });
 
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
     const pendingRequests = await assigned_crew.findAll({
       where: { crew_member_id, crew_accept: 0, is_active: 1 },
       include: [
@@ -224,6 +372,11 @@ exports.getPendingRequests = async (req, res) => {
           model: stream_project_booking,
           as: "project",
           required: true,
+          where: {
+            event_date: {
+              [Op.gte]: today,
+            },
+          },
         },
       ],
     });
@@ -576,16 +729,16 @@ exports.updateRequestStatus = async (req, res) => {
         });
       }
 
-      const availableCategory = crewCategories.find(cat => 
-        currentAcceptedCounts[cat] < (requestedLimits[cat] || 0)
-      );
+      // const availableCategory = crewCategories.find(cat => 
+      //   currentAcceptedCounts[cat] < (requestedLimits[cat] || 0)
+      // );
 
-      if (!availableCategory) {
-        return res.status(200).json({
-          error: true,
-          message: `The project slots for ${crewCategories.join(' / ')} are already full.`
-        });
-      }
+      // if (!availableCategory) {
+      //   return res.status(200).json({
+      //     error: true,
+      //     message: `The project slots for ${crewCategories.join(' / ')} are already full.`
+      //   });
+      // }
 
       const updateResult = await assigned_crew.update(
         { 
@@ -855,7 +1008,6 @@ exports.getAcceptedShootsByCrew = async (req, res) => {
 
 exports.getCrewAvailability = async (req, res) => {
   try {
-    // const crew_member_id = req.body;
     const { year, month, crew_member_id } = req.body || req.query;
 
     if (!crew_member_id || !year || !month) {
@@ -877,19 +1029,26 @@ exports.getCrewAvailability = async (req, res) => {
     }
 
     let availability = [];
+
     try {
       availability = JSON.parse(crewMember.availability || "[]");
-    } catch {
+    } catch (error) {
       availability = [];
     }
 
-    const monthStart = moment(`${year}-${month}-01`).startOf("month").toDate();
-    const monthEnd = moment(`${year}-${month}-01`).endOf("month").toDate();
+    const monthStart = moment(`${year}-${month}-01`)
+      .startOf("month")
+      .toDate();
+
+    const monthEnd = moment(`${year}-${month}-01`)
+      .endOf("month")
+      .toDate();
 
     const acceptedProjects = await assigned_crew.findAll({
       where: {
         crew_member_id,
         crew_accept: 1,
+        is_active: 1,
       },
       include: [
         {
@@ -899,6 +1058,10 @@ exports.getCrewAvailability = async (req, res) => {
             event_date: {
               [Sequelize.Op.between]: [monthStart, monthEnd],
             },
+            [Sequelize.Op.or]: [
+              { is_cancelled: 0 },
+              { is_cancelled: null },
+            ],
           },
           attributes: [
             "event_date",
@@ -918,19 +1081,26 @@ exports.getCrewAvailability = async (req, res) => {
         [Sequelize.Op.or]: [
           {
             recurrence: 1,
-            date: { [Sequelize.Op.between]: [monthStart, monthEnd] },
+            date: {
+              [Sequelize.Op.between]: [monthStart, monthEnd],
+            },
           },
           {
-            recurrence: { [Sequelize.Op.ne]: 1 },
-            recurrence_until: { [Sequelize.Op.gte]: monthStart },
+            recurrence: {
+              [Sequelize.Op.ne]: 1,
+            },
+            recurrence_until: {
+              [Sequelize.Op.gte]: monthStart,
+            },
           },
         ],
       },
-      order: [["created_at", "DESC"]], // Always fetch the latest entry
+      order: [["created_at", "DESC"]],
     });
 
     const appliesOnDate = (rule, dateMoment) => {
       const start = moment(rule.date);
+
       const end = rule.recurrence_until
         ? moment(rule.recurrence_until)
         : start;
@@ -942,18 +1112,32 @@ exports.getCrewAvailability = async (req, res) => {
         return false;
       }
 
-      switch (rule.recurrence) {
+      switch (Number(rule.recurrence)) {
+        // One-time availability
         case 1:
           return dateMoment.isSame(start, "day");
 
+        // Daily recurrence
         case 2:
           return true;
 
+        // Weekly recurrence
         case 3: {
-          if (!rule.recurrence_days) return false;
+          if (!rule.recurrence_days) {
+            return false;
+          }
 
-          const days = JSON.parse(rule.recurrence_days)
-            .map(d => d.toLowerCase().slice(0, 3));
+          let recurrenceDays = [];
+
+          try {
+            recurrenceDays = JSON.parse(rule.recurrence_days);
+          } catch (error) {
+            recurrenceDays = [];
+          }
+
+          const days = recurrenceDays.map((day) =>
+            String(day).toLowerCase().slice(0, 3)
+          );
 
           const currentDay = dateMoment
             .format("ddd")
@@ -962,9 +1146,11 @@ exports.getCrewAvailability = async (req, res) => {
           return days.includes(currentDay);
         }
 
+        // Monthly recurrence
         case 4:
           return (
-            dateMoment.date() === Number(rule.recurrence_day_of_month)
+            dateMoment.date() ===
+            Number(rule.recurrence_day_of_month)
           );
 
         default:
@@ -973,56 +1159,96 @@ exports.getCrewAvailability = async (req, res) => {
     };
 
     const calendar = {};
-    const daysInMonth = moment(`${year}-${month}`, "YYYY-MM").daysInMonth();
+
+    const daysInMonth = moment(
+      `${year}-${month}`,
+      "YYYY-MM"
+    ).daysInMonth();
 
     for (let day = 1; day <= daysInMonth; day++) {
-      const date = moment(`${year}-${month}-${day}`, "YYYY-MM-DD");
+      const date = moment(
+        `${year}-${month}-${day}`,
+        "YYYY-MM-DD"
+      );
+
       const key = date.format("YYYY-MM-DD");
 
       calendar[key] = {
-        available: false,
+        // null means no availability has been added for this date
+        available: null,
         projectAssigned: false,
         projectDetails: null,
         customAvailabilityStatus: null,
         start_time: null,
         end_time: null,
-        is_full_day: 1,
+        is_full_day: null,
       };
 
+      /*
+       * Regular weekly availability.
+       * Example: if availability contains "Monday",
+       * every Monday will be marked available.
+       */
       if (availability.includes(date.format("dddd"))) {
         calendar[key].available = true;
+        calendar[key].is_full_day = 1;
       }
 
-      const rule = customAvailability.find((r) =>
-        appliesOnDate(r, date)
+      /*
+       * Custom availability overrides regular availability.
+       */
+      const rule = customAvailability.find((item) =>
+        appliesOnDate(item, date)
       );
 
       if (rule) {
-        calendar[key].available = rule.availability_status == "1";
+        calendar[key].available =
+          String(rule.availability_status) === "1";
+
         calendar[key].customAvailabilityStatus =
           rule.availability_status;
 
-        if (rule.is_full_day === 0) {
+        calendar[key].is_full_day =
+          rule.is_full_day !== null &&
+          rule.is_full_day !== undefined
+            ? Number(rule.is_full_day)
+            : 1;
+
+        if (Number(rule.is_full_day) === 0) {
           calendar[key].start_time = rule.start_time;
           calendar[key].end_time = rule.end_time;
         }
       }
     }
 
-    for (const project of acceptedProjects) {
+    /*
+     * Assigned projects override availability.
+     */
+    for (const assignedProject of acceptedProjects) {
+      if (!assignedProject.project) {
+        continue;
+      }
+
       const eventDate = moment(
-        project.project.event_date
+        assignedProject.project.event_date
       ).format("YYYY-MM-DD");
 
       if (calendar[eventDate]) {
         calendar[eventDate].available = false;
         calendar[eventDate].projectAssigned = true;
+        calendar[eventDate].is_full_day = 1;
+
         calendar[eventDate].projectDetails = {
-          project_id: project.project.stream_project_booking_id,
-          project_name: project.project.project_name,
-          start_time: project.project.start_time,
-          end_time: project.project.end_time,
-          event_location: project.project.event_location,
+          project_id:
+            assignedProject.project.stream_project_booking_id,
+          project_name:
+            assignedProject.project.project_name,
+          start_time:
+            assignedProject.project.start_time,
+          end_time:
+            assignedProject.project.end_time,
+          event_location:
+            assignedProject.project.event_location,
         };
       }
     }
@@ -1037,13 +1263,14 @@ exports.getCrewAvailability = async (req, res) => {
     });
   } catch (error) {
     console.error("Error fetching crew availability:", error);
+
     return res.status(500).json({
       error: true,
-      message: "Something went wrong while fetching crew availability",
+      message:
+        "Something went wrong while fetching crew availability",
     });
   }
 };
-
 
 // exports.setCrewAvailability = async (req, res) => {
 //   try {
@@ -1131,25 +1358,125 @@ exports.setCrewAvailability = async (req, res) => {
       });
     }
 
+    const recurrenceType = Number(recurrence);
+    const normalizedRecurrenceDays = toArray(recurrence_days);
+
     /* Validate recurrence */
-    if (recurrence !== 1 && !recurrence_until) {
+    if (![1, 2, 3, 4].includes(recurrenceType)) {
+      return res.status(400).json({
+        error: true,
+        message: "recurrence must be one of 1, 2, 3, or 4",
+      });
+    }
+
+    if (recurrenceType !== 1 && !recurrence_until) {
       return res.status(400).json({
         error: true,
         message: "recurrence_until is required for recurring availability"
       });
     }
 
-    if (recurrence === 3 && (!recurrence_days || !recurrence_days.length)) {
+    if (recurrenceType === 3 && !normalizedRecurrenceDays.length) {
       return res.status(400).json({
         error: true,
         message: "recurrence_days required for weekly recurrence"
       });
     }
 
-    if (recurrence === 4 && !recurrence_day_of_month) {
+    if (recurrenceType === 4 && !recurrence_day_of_month) {
       return res.status(400).json({
         error: true,
         message: "recurrence_day_of_month required for monthly recurrence"
+      });
+    }
+
+    const availabilityStart = moment(date, "YYYY-MM-DD", true);
+    const availabilityEnd = recurrenceType === 1
+      ? availabilityStart.clone()
+      : moment(recurrence_until, "YYYY-MM-DD", true);
+
+    if (
+      !availabilityStart.isValid() ||
+      !availabilityEnd.isValid() ||
+      availabilityEnd.isBefore(availabilityStart, "day")
+    ) {
+      return res.status(400).json({
+        error: true,
+        message: "A valid date range is required",
+      });
+    }
+
+    const acceptedProjects = await assigned_crew.findAll({
+      where: {
+        crew_member_id,
+        crew_accept: 1,
+        is_active: 1,
+      },
+      include: [
+        {
+          model: stream_project_booking,
+          as: "project",
+          required: true,
+          where: {
+            event_date: {
+              [Op.between]: [
+                availabilityStart.format("YYYY-MM-DD"),
+                availabilityEnd.format("YYYY-MM-DD"),
+              ],
+            },
+            [Op.or]: [
+              { is_cancelled: 0 },
+              { is_cancelled: null },
+            ],
+          },
+          attributes: [
+            "stream_project_booking_id",
+            "project_name",
+            "event_date",
+          ],
+        },
+      ],
+    });
+
+    const weeklyDays = normalizedRecurrenceDays.map((day) =>
+      String(day).toLowerCase().slice(0, 3)
+    );
+
+    const conflictsWithRule = (eventDate) => {
+      const projectDate = moment(eventDate);
+
+      switch (recurrenceType) {
+        case 1:
+          return projectDate.isSame(availabilityStart, "day");
+        case 2:
+          return true;
+        case 3:
+          return weeklyDays.includes(projectDate.format("ddd").toLowerCase());
+        case 4:
+          return projectDate.date() === Number(recurrence_day_of_month);
+        default:
+          return false;
+      }
+    };
+
+    const conflictingProjects = acceptedProjects.filter(
+      (assignment) =>
+        assignment.project &&
+        conflictsWithRule(assignment.project.event_date)
+    );
+
+    if (conflictingProjects.length) {
+      return res.status(409).json({
+        error: true,
+        message:
+          "Availability cannot be changed because an assigned shoot conflicts with one or more selected dates.",
+        data: {
+          conflicts: conflictingProjects.map(({ project }) => ({
+            project_id: project.stream_project_booking_id,
+            project_name: project.project_name,
+            date: moment(project.event_date).format("YYYY-MM-DD"),
+          })),
+        },
       });
     }
 
@@ -1162,9 +1489,11 @@ exports.setCrewAvailability = async (req, res) => {
       location,
       notes,
       is_full_day,
-      recurrence,
+      recurrence: recurrenceType,
       recurrence_until,
-      recurrence_days: recurrence_days ? JSON.stringify(recurrence_days) : null,
+      recurrence_days: normalizedRecurrenceDays.length
+        ? JSON.stringify(normalizedRecurrenceDays)
+        : null,
       recurrence_day_of_month
     };
 
@@ -1234,9 +1563,20 @@ exports.getDashboardRequestCounts = async (req, res) => {
       }]
     });
 
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
     let smartPendingCount = 0;
     pendingRecords.forEach((record) => {
       const project = record.project;
+      const projectDate = project?.event_date ? new Date(project.event_date) : null;
+      if (projectDate && !Number.isNaN(projectDate.getTime())) {
+        projectDate.setHours(0, 0, 0, 0);
+        if (projectDate.getTime() < today.getTime()) {
+          return;
+        }
+      }
+
       const requestedLimits = typeof project.crew_roles === 'string' ? JSON.parse(project.crew_roles || '{}') : (project.crew_roles || {});
 
       let acceptedCounts = { videographer: 0, photographer: 0, cinematographer: 0 };
@@ -1266,7 +1606,12 @@ exports.getDashboardRequestCounts = async (req, res) => {
     });
 
     const completedShoots = await stream_project_booking.count({
-      where: { is_completed: 1 },
+      where: {
+        [Op.or]: [
+          { is_completed: 1 },
+          { event_date: { [Op.lt]: today } },
+        ],
+      },
       include: [{
         model: assigned_crew, as: "assigned_crews",
         where: { crew_member_id: creator_id, crew_accept: 1 },
@@ -1580,6 +1925,7 @@ exports.getProfile = async (req, res) => {
 
     let result = member.toJSON();
     result.skills = skillList;
+    result.primary_role = normalizeCrewRoleIds(result.primary_role);
 
     return res.status(constants.OK.code).json({
       error: false,
@@ -1664,9 +2010,7 @@ exports.editProfile = async (req, res) => {
     if (bio !== undefined) updateData.bio = bio;
 
     if (primary_role !== undefined) {
-      updateData.primary_role = Array.isArray(primary_role) 
-        ? JSON.stringify(primary_role) 
-        : primary_role;
+      updateData.primary_role = JSON.stringify(normalizeCrewRoleIds(primary_role));
     }
 
     if (skills !== undefined) {
@@ -1705,11 +2049,7 @@ exports.editProfile = async (req, res) => {
     const responseData = updatedMember.toJSON();
 
     try {
-      if (responseData.primary_role) {
-        responseData.primary_role = JSON.parse(responseData.primary_role);
-      } else {
-        responseData.primary_role = [];
-      }
+      responseData.primary_role = normalizeCrewRoleIds(responseData.primary_role);
     } catch (e) {
       responseData.primary_role = responseData.primary_role ? [responseData.primary_role] : [];
     }
@@ -1756,7 +2096,7 @@ exports.editProfile = async (req, res) => {
 };
 
 exports.uploadProfileFiles = [
-  upload.array('files[]', 10),
+  upload.array('files[]', 20),
 
   async (req, res) => {
     try {
@@ -2084,6 +2424,64 @@ exports.editPortfolioLink = async (req, res) => {
 
   } catch (err) {
     console.error('editPortfolioLink error:', err);
+    return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
+      error: true,
+      code: constants.INTERNAL_SERVER_ERROR.code,
+      message: constants.INTERNAL_SERVER_ERROR.message,
+      data: null
+    });
+  }
+};
+
+exports.editFeaturedWorkProject = async (req, res) => {
+  try {
+    const crew_member_id = req.user?.crew_member_id || req.body.crew_member_id;
+    const { file_ids, title, tag } = req.body;
+
+    const fileIds = Array.isArray(file_ids)
+      ? file_ids.map((id) => Number(id)).filter(Number.isFinite)
+      : [];
+
+    if (!crew_member_id || fileIds.length === 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        error: true,
+        code: constants.BAD_REQUEST.code,
+        message: 'Member ID and file IDs are required',
+        data: null
+      });
+    }
+
+    const updateData = {};
+    if (title !== undefined) updateData.title = title || 'Untitled';
+    if (tag !== undefined) updateData.tag = tag || '[]';
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(constants.BAD_REQUEST.code).json({
+        error: true,
+        code: constants.BAD_REQUEST.code,
+        message: 'No featured work fields provided',
+        data: null
+      });
+    }
+
+    const [updatedCount] = await crew_member_files.update(updateData, {
+      where: {
+        crew_files_id: { [Op.in]: fileIds },
+        crew_member_id,
+        file_type: 'recent_work',
+        is_active: 1
+      }
+    });
+
+    return res.status(constants.OK.code).json({
+      error: false,
+      code: constants.OK.code,
+      message: 'Featured work updated successfully',
+      data: { updated_count: updatedCount }
+    });
+
+  } catch (err) {
+    console.error('editFeaturedWorkProject error:', err);
     return res.status(constants.INTERNAL_SERVER_ERROR.code).json({
       error: true,
       code: constants.INTERNAL_SERVER_ERROR.code,
@@ -2919,25 +3317,7 @@ exports.getDashboardDetails = async (req, res) => {
       ]
     });
 
-    // Pending Requests (Assigned projects with crew_accept = 0)
-    const pendingRequests = await assigned_crew.findAll({
-      where: {
-        crew_accept: 0,
-        crew_member_id: crew_member_id,
-      },
-      include: [
-        {
-          model: stream_project_booking,
-          as: "project",
-          where: {
-            ...projectWhere,
-            is_completed: 0,
-            payment_completed_at: { [Op.ne]: null },
-          },
-          required: true,
-        },
-      ],
-    });
+    const pendingRequests = await getSmartPendingRequestsForCrew(crew_member_id, projectWhere);
 
     return res.status(200).json({
       error: false,
@@ -2968,46 +3348,86 @@ exports.getCrewShootStats = async (req, res) => {
       });
     }
 
-    const today = new Date();
-
-    /** 1️⃣ Completed Shoots */
-    const completedShoots = await stream_project_booking.count({
-      where: {
-        is_completed: 1,
-      },
-      include: [
-        {
-          model: assigned_crew,
-          as: "assigned_crews",
-          required: true,
-          where: { crew_member_id },
-        },
-      ],
+    const currentCrew = await crew_members.findOne({
+      where: { crew_member_id },
     });
 
-    /** 2️⃣ Pending Shoots (accepted, upcoming, not completed) */
-    const pendingShoots = await stream_project_booking.count({
+    if (!currentCrew) {
+      return res.status(404).json({
+        error: true,
+        message: "Crew member not found",
+      });
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const tomorrow = new Date(today);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+
+    /*
+     * Common active assignment filter.
+     */
+    const commonAssignmentWhere = {
+      crew_member_id,
+      is_active: 1,
+    };
+
+    /*
+     * Successful shoots:
+     * Accepted requests whose shoot date has passed.
+     */
+    const successfulShootsPromise = assigned_crew.count({
       where: {
-        is_completed: 0,
-        event_date: { [Sequelize.Op.gt]: today },
+        ...commonAssignmentWhere,
+        crew_accept: 1,
       },
       include: [
         {
-          model: assigned_crew,
-          as: "assigned_crews",
+          model: stream_project_booking,
+          as: "project",
           required: true,
           where: {
-            crew_member_id,
-            crew_accept: 1,
+            event_date: {
+              [Op.lt]: today,
+            },
           },
         },
       ],
+      distinct: true,
     });
 
-    /** 3️⃣ Rejected Shoots */
-    const rejectedShoots = await assigned_crew.count({
+    /*
+     * Pending shoots:
+     * Accepted requests whose shoot date is today or upcoming.
+     */
+    const pendingShootsPromise = assigned_crew.count({
       where: {
-        crew_member_id,
+        ...commonAssignmentWhere,
+        crew_accept: 1,
+      },
+      include: [
+        {
+          model: stream_project_booking,
+          as: "project",
+          required: true,
+          where: {
+            event_date: {
+              [Op.gte]: today,
+            },
+          },
+        },
+      ],
+      distinct: true,
+    });
+
+    /*
+     * Rejected shoots:
+     * Count all rejected active assignments regardless of shoot date.
+     */
+    const rejectedShootsPromise = assigned_crew.count({
+      where: {
+        ...commonAssignmentWhere,
         crew_accept: 2,
       },
       include: [
@@ -3017,58 +3437,277 @@ exports.getCrewShootStats = async (req, res) => {
           required: true,
         },
       ],
+      distinct: true,
     });
 
-    /** 4️⃣ Shoot Requests */
-    const shootRequests = await assigned_crew.count({
+    /*
+     * Shoot requests:
+     * This is intentionally the same query logic as getPendingRequests.
+     *
+     * Only:
+     * - active assignments
+     * - unanswered requests
+     * - today or upcoming shoot dates
+     */
+    const shootRequestsPromise = assigned_crew.count({
       where: {
         crew_member_id,
         crew_accept: 0,
+        is_active: 1,
       },
       include: [
         {
           model: stream_project_booking,
           as: "project",
           required: true,
-          where: { is_completed: 0 },
+          where: {
+            event_date: {
+              [Op.gte]: today,
+            },
+          },
         },
       ],
+      distinct: true,
     });
 
-    /** 5️⃣ Photography Shoots (crew_roles + skills_needed from booking table) */
-    const photographyShoots = await stream_project_booking.count({
+    /*
+     * Active shoots:
+     * Accepted shoots happening today.
+     */
+    const activeShootsPromise = assigned_crew.count({
       where: {
-        crew_roles: 10,
-        skills_needed: {
-          [Sequelize.Op.like]: "%photographer%",
-        },
+        ...commonAssignmentWhere,
+        crew_accept: 1,
       },
       include: [
         {
-          model: assigned_crew,
-          as: "assigned_crews",
+          model: stream_project_booking,
+          as: "project",
           required: true,
-          where: { crew_member_id },
+          where: {
+            event_date: {
+              [Op.gte]: today,
+              [Op.lt]: tomorrow,
+            },
+          },
         },
       ],
+      distinct: true,
     });
+
+    const [
+      successfulShoots,
+      pendingShoots,
+      rejectedShoots,
+      shootRequests,
+      activeShoots,
+    ] = await Promise.all([
+      successfulShootsPromise,
+      pendingShootsPromise,
+      rejectedShootsPromise,
+      shootRequestsPromise,
+      activeShootsPromise,
+    ]);
+
+    /*
+     * Total shoots:
+     *
+     * All accepted requests
+     * + all rejected requests
+     * + only current/upcoming pending requests
+     *
+     * Old pending requests are excluded.
+     */
+    const overallShoots =
+      successfulShoots +
+      pendingShoots +
+      rejectedShoots +
+      shootRequests;
+
+    /*
+     * Category-specific statistics.
+     *
+     * Pending category requests use the same pending request logic:
+     * crew_accept = 0
+     * assignment is_active = 1
+     * event_date >= today
+     */
+    const countCategoryStats = async (family) => {
+      const contentTypeCondition =
+        buildContentTypeFamilyWhere(family);
+
+      const [
+        acceptedPastShoots,
+        acceptedUpcomingShoots,
+        categoryRejectedShoots,
+        categoryShootRequests,
+      ] = await Promise.all([
+        /*
+         * Accepted past shoots for category.
+         */
+        assigned_crew.count({
+          where: {
+            ...commonAssignmentWhere,
+            crew_accept: 1,
+          },
+          include: [
+            {
+              model: stream_project_booking,
+              as: "project",
+              required: true,
+              where: {
+                event_date: {
+                  [Op.lt]: today,
+                },
+                [Op.and]: [contentTypeCondition],
+              },
+            },
+          ],
+          distinct: true,
+        }),
+
+        /*
+         * Accepted today/upcoming shoots for category.
+         */
+        assigned_crew.count({
+          where: {
+            ...commonAssignmentWhere,
+            crew_accept: 1,
+          },
+          include: [
+            {
+              model: stream_project_booking,
+              as: "project",
+              required: true,
+              where: {
+                event_date: {
+                  [Op.gte]: today,
+                },
+                [Op.and]: [contentTypeCondition],
+              },
+            },
+          ],
+          distinct: true,
+        }),
+
+        /*
+         * All rejected requests for category.
+         */
+        assigned_crew.count({
+          where: {
+            ...commonAssignmentWhere,
+            crew_accept: 2,
+          },
+          include: [
+            {
+              model: stream_project_booking,
+              as: "project",
+              required: true,
+              where: {
+                [Op.and]: [contentTypeCondition],
+              },
+            },
+          ],
+          distinct: true,
+        }),
+
+        /*
+         * Pending requests for category.
+         * Same rules as getPendingRequests.
+         */
+        assigned_crew.count({
+          where: {
+            crew_member_id,
+            crew_accept: 0,
+            is_active: 1,
+          },
+          include: [
+            {
+              model: stream_project_booking,
+              as: "project",
+              required: true,
+              where: {
+                event_date: {
+                  [Op.gte]: today,
+                },
+                [Op.and]: [contentTypeCondition],
+              },
+            },
+          ],
+          distinct: true,
+        }),
+      ]);
+
+      const acceptedShoots =
+        acceptedPastShoots + acceptedUpcomingShoots;
+
+      const totalShoots =
+        acceptedShoots +
+        categoryRejectedShoots +
+        categoryShootRequests;
+
+      return {
+        acceptedShoots,
+        successfulShoots: acceptedPastShoots,
+        pendingShoots: acceptedUpcomingShoots,
+        rejectedShoots: categoryRejectedShoots,
+        shootRequests: categoryShootRequests,
+        totalShoots,
+      };
+    };
+
+    const [photoStats, videoStats] = await Promise.all([
+      countCategoryStats("photo"),
+      countCategoryStats("video"),
+    ]);
 
     return res.status(200).json({
       error: false,
       message: "Crew shoot stats fetched successfully",
       data: {
-        completedShoots,
+        /*
+         * Overall Shoot Status card.
+         */
+        overallShoots,
+        successfulShoots,
         pendingShoots,
         rejectedShoots,
         shootRequests,
-        photographyShoots,
+
+        /*
+         * Additional existing fields.
+         */
+        completedShoots: successfulShoots,
+        activeShoots,
+
+        /*
+         * Photography category.
+         */
+        photographyShoots: photoStats.acceptedShoots,
+        photoSuccessfulShoots: photoStats.successfulShoots,
+        photoPendingShoots: photoStats.pendingShoots,
+        photoRejectedShoots: photoStats.rejectedShoots,
+        photoShootRequests: photoStats.shootRequests,
+        photoTotalShoots: photoStats.totalShoots,
+
+        /*
+         * Videography category.
+         */
+        videographyShoots: videoStats.acceptedShoots,
+        videoSuccessfulShoots: videoStats.successfulShoots,
+        videoPendingShoots: videoStats.pendingShoots,
+        videoRejectedShoots: videoStats.rejectedShoots,
+        videoShootRequests: videoStats.shootRequests,
+        videoTotalShoots: videoStats.totalShoots,
       },
     });
   } catch (error) {
     console.error("Error fetching crew shoot stats:", error);
+
     return res.status(500).json({
       error: true,
-      message: "Something went wrong while fetching crew shoot stats",
+      message:
+        "Something went wrong while fetching crew shoot stats",
     });
   }
 };
@@ -3255,3 +3894,5 @@ exports.checkCrewStatus = async (req, res) => {
     });
   }
 };
+
+

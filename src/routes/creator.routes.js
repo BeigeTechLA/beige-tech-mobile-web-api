@@ -61,6 +61,7 @@ router.post('/profile/files/:file_type', authenticate, crewProfileCreate, creato
 router.post('/profile/upload-profile-photo', creator.uploadCPProfilePhoto);
 router.post('/profile/add-portfolio-links', authenticate, crewProfileCreate, creator.addPortfolioLinks);
 router.post('/profile/edit-portfolio-link/:crew_files_id', creator.editPortfolioLink);
+router.post('/profile/edit-featured-work', authenticate, crewProfileEdit, creator.editFeaturedWorkProject);
 router.delete('/profile-file/:crew_files_id', creator.deleteProfileFile);
 router.get('/equipment', creator.getMyEquipment);
 router.get('/equipment/:equipment_id', creator.getMyEquipmentById);

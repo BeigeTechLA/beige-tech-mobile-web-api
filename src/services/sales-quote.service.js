@@ -1,6 +1,11 @@
 const { Op } = require('sequelize');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const http = require('http');
+const https = require('https');
 const db = require('../models');
 const constants = require('../utils/constants');
 const {
@@ -9,7 +14,7 @@ const {
   sendQuoteAcceptedSalesNotificationEmail
 } = require('../utils/emailService');
 const { generateQuotePdfBuffer } = require('../utils/quotePdf');
-const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
+const { S3UploadFiles, toAbsoluteBeigeAssetUrl } = require('../utils/common');
 const { normalizeTime, resolveEventDateAndStartTime } = require('../utils/timezone');
 const { extractCoordinatesFromPayload } = require('../utils/locationHelpers');
 const accountCreditService = require('./account-credit.service');
@@ -221,6 +226,171 @@ function normalizeLocationAddress(value) {
   return trimmed;
 }
 
+function normalizeOptionalText(value) {
+  if (value === null || value === undefined) return null;
+  const text = String(value).trim();
+  return text || null;
+}
+
+function normalizePreProductionFilePayload(payload = {}) {
+  const rawContent = normalizeOptionalText(payload.pre_production_file_content);
+  const content = rawContent ? rawContent.replace(/^data:.*;base64,/, '').trim() : null;
+
+  if (!content) {
+    return null;
+  }
+
+  return {
+    pre_production_file_name:
+      normalizeOptionalText(payload.pre_production_file_name) || 'pre-production-file',
+    pre_production_file_type:
+      normalizeOptionalText(payload.pre_production_file_type) || 'application/octet-stream',
+    pre_production_file_size:
+      Number.isFinite(Number(payload.pre_production_file_size))
+        ? Math.max(0, Math.round(Number(payload.pre_production_file_size)))
+        : null,
+    pre_production_file_content: content
+  };
+}
+
+function sanitizeUploadFileName(value = '') {
+  const fallback = 'pre-production-file';
+  const baseName = path.basename(String(value || '').trim() || fallback);
+  return baseName.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/-+/g, '-') || fallback;
+}
+
+async function uploadPreProductionFileToS3(payload = {}, quoteId = null) {
+  const nextFile = normalizePreProductionFilePayload(payload);
+  if (!nextFile) {
+    return null;
+  }
+
+  const fileName = sanitizeUploadFileName(nextFile.pre_production_file_name);
+  const tempFilePath = path.join(
+    os.tmpdir(),
+    `quote-pre-production-${quoteId || 'new'}-${Date.now()}-${fileName}`
+  );
+
+  try {
+    fs.writeFileSync(tempFilePath, Buffer.from(nextFile.pre_production_file_content, 'base64'));
+
+    const uploadedFiles = await S3UploadFiles(
+      {
+        pre_production_file: [
+          {
+            filename: fileName,
+            originalname: fileName,
+            mimetype: nextFile.pre_production_file_type,
+            size: nextFile.pre_production_file_size,
+            path: tempFilePath
+          }
+        ]
+      },
+      {
+        prefix: `quotes/pre-production/${quoteId || 'new'}`
+      }
+    );
+    const uploadedFilePath = uploadedFiles?.[0]?.file_path || null;
+
+    if (!uploadedFilePath) {
+      throw new Error('Failed to upload pre-production file to S3');
+    }
+
+    return {
+      pre_production_file_name: fileName,
+      pre_production_file_type: nextFile.pre_production_file_type,
+      pre_production_file_size: nextFile.pre_production_file_size,
+      pre_production_file_path: uploadedFilePath,
+      pre_production_file_url: toAbsoluteBeigeAssetUrl(uploadedFilePath) || uploadedFilePath
+    };
+  } finally {
+    if (fs.existsSync(tempFilePath)) {
+      fs.unlinkSync(tempFilePath);
+    }
+  }
+}
+
+async function buildPreProductionFileUpdate(payload = {}, existingQuote = null, quoteId = null) {
+  const nextFile = normalizePreProductionFilePayload(payload);
+  if (nextFile) {
+    return uploadPreProductionFileToS3(payload, quoteId);
+  }
+
+  if (payload.clear_pre_production_file === true) {
+    return {
+      pre_production_file_name: null,
+      pre_production_file_type: null,
+      pre_production_file_size: null,
+      pre_production_file_path: null,
+      pre_production_file_url: null
+    };
+  }
+
+  if (!existingQuote) {
+    return {
+      pre_production_file_name: null,
+      pre_production_file_type: null,
+      pre_production_file_size: null,
+      pre_production_file_path: null,
+      pre_production_file_url: null
+    };
+  }
+
+  return {
+    pre_production_file_name: existingQuote.pre_production_file_name || null,
+    pre_production_file_type: existingQuote.pre_production_file_type || null,
+    pre_production_file_size: existingQuote.pre_production_file_size || null,
+    pre_production_file_path: existingQuote.pre_production_file_path || null,
+    pre_production_file_url: existingQuote.pre_production_file_url || null
+  };
+}
+
+function readRemoteFileAsBase64(fileUrl) {
+  return new Promise((resolve, reject) => {
+    const url = normalizeOptionalText(fileUrl);
+    if (!url) {
+      resolve(null);
+      return;
+    }
+
+    const client = url.startsWith('https://') ? https : http;
+    client.get(url, (response) => {
+      if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+        readRemoteFileAsBase64(response.headers.location).then(resolve).catch(reject);
+        return;
+      }
+
+      if (response.statusCode !== 200) {
+        reject(new Error(`Failed to read pre-production file from S3 (${response.statusCode})`));
+        response.resume();
+        return;
+      }
+
+      const chunks = [];
+      response.on('data', (chunk) => chunks.push(chunk));
+      response.on('end', () => resolve(Buffer.concat(chunks).toString('base64')));
+    }).on('error', reject);
+  });
+}
+
+async function buildQuotePreProductionEmailAttachment(quoteDetails = {}) {
+  const fileUrl =
+    toAbsoluteBeigeAssetUrl(quoteDetails.pre_production_file_path) ||
+    toAbsoluteBeigeAssetUrl(quoteDetails.pre_production_file_url);
+  const content = await readRemoteFileAsBase64(fileUrl);
+  if (!content) return null;
+
+  const s3FileName = quoteDetails.pre_production_file_path
+    ? path.basename(String(quoteDetails.pre_production_file_path))
+    : '';
+
+  return {
+    content,
+    filename: s3FileName || quoteDetails.pre_production_file_name || 'pre-production-file',
+    type: quoteDetails.pre_production_file_type || 'application/octet-stream'
+  };
+}
+
 function resolveQuoteLocationAddress(payload = {}, fallback = {}) {
   if (payload.client_address !== undefined) {
     return normalizeLocationAddress(payload.client_address);
@@ -303,6 +473,12 @@ function buildQuoteVersionSnapshot(quoteRecord, lineItems = []) {
     client_phone: quote.client_phone || null,
     client_address: quote.client_address || null,
     project_description: quote.project_description || null,
+    pre_production_notes: quote.pre_production_notes || null,
+    pre_production_file_name: quote.pre_production_file_name || null,
+    pre_production_file_type: quote.pre_production_file_type || null,
+    pre_production_file_size: quote.pre_production_file_size || null,
+    pre_production_file_path: quote.pre_production_file_path || null,
+    pre_production_file_url: quote.pre_production_file_url || null,
     video_shoot_type: quote.video_shoot_type || null,
     booking_type: quote.booking_type || null,
     time_zone: quote.time_zone || null,
@@ -730,6 +906,39 @@ function buildQuoteCreatedAtCondition(range = 'all', dateOn = null) {
   }
 
   return null;
+}
+
+function buildQuoteListWhere(query, user) {
+  const where = isClientRole(user?.role)
+    ? { ...buildQuoteAccessWhere(user) }
+    : {};
+
+  const statusFilter = normalizeQuoteFilterStatus(query.status);
+  if (statusFilter?.length) {
+    appendAndCondition(where, {
+      status: statusFilter.length === 1 ? statusFilter[0] : { [Op.in]: statusFilter }
+    });
+  }
+
+  applyQuoteSalesRepFilter(where, query.assigned_sales_rep_id, user);
+
+  const createdAtCondition = buildQuoteCreatedAtCondition(query.range, query.date_on);
+
+  if (createdAtCondition) {
+    appendAndCondition(where, { created_at: createdAtCondition });
+  }
+
+  if (query.search) {
+    appendAndCondition(where, {
+      [Op.or]: [
+        { quote_number: { [Op.like]: `%${query.search}%` } },
+        { client_name: { [Op.like]: `%${query.search}%` } },
+        { project_description: { [Op.like]: `%${query.search}%` } }
+      ]
+    });
+  }
+
+  return where;
 }
 
 function getDateRange(range = 'all', dateOn = null) {
@@ -1817,12 +2026,16 @@ function resolveValidity({ validUntil, quoteValidityDays, validUntilProvided = f
   };
 }
 
+function normalizeRoleName(role) {
+  return String(role || '').trim().toLowerCase().replace(/\s+/g, '_');
+}
+
 function isAdminRole(role) {
-  return role === 'admin' || role === 'Admin' || role === 'sales_admin' || role === 'Sales_Admin';
+  return ['admin', 'sales_admin', 'super_admin', 'superadmin'].includes(normalizeRoleName(role));
 }
 
 function isClientRole(role) {
-  return role === 'client' || role === 'Client';
+  return normalizeRoleName(role) === 'client';
 }
 
 async function getRandomActiveSalesRepId(transaction) {
@@ -1896,6 +2109,31 @@ function resolveQuoteStatus(payload = {}, currentStatus = 'draft') {
   return currentStatus;
 }
 
+function isDateOnlyTodayOrFuture(value) {
+  const datePart = String(value || '').trim().match(/^\d{4}-\d{2}-\d{2}/)?.[0];
+  if (!datePart) return false;
+  return datePart >= formatDateOnly(new Date());
+}
+
+function resolveUpdatedQuoteStatus({ payload = {}, currentQuote, validity }) {
+  const nextStatus = resolveQuoteStatus(payload, currentQuote?.status || 'draft');
+  const currentStatus = String(currentQuote?.status || '').trim().toLowerCase();
+  const statusWasExplicitlyProvided =
+    payload.status !== undefined ||
+    payload.is_draft === true ||
+    payload.is_draft === false;
+
+  if (
+    currentStatus === 'expired' &&
+    !statusWasExplicitlyProvided &&
+    isDateOnlyTodayOrFuture(validity?.valid_until)
+  ) {
+    return currentQuote?.sent_at ? 'sent' : 'pending';
+  }
+
+  return nextStatus;
+}
+
 function buildQuoteAccessWhere(user, options = {}) {
   const { restrictToLoggedInRep = true } = options;
 
@@ -1911,6 +2149,13 @@ function buildQuoteAccessWhere(user, options = {}) {
       { assigned_sales_rep_id: user.userId }
     ]
   };
+}
+
+function buildQuoteReadAccessWhere(user) {
+  if (isClientRole(user?.role)) {
+    return buildQuoteAccessWhere(user);
+  }
+  return buildQuoteAccessWhere(user, { restrictToLoggedInRep: false });
 }
 
 async function getCatalog(pricingMode = null) {
@@ -2447,6 +2692,8 @@ const QUOTE_AUDIT_FIELDS = [
   ['subtotal', 'Subtotal', 'currency'],
   ['total', 'Total', 'currency'],
   ['notes', 'Notes'],
+  ['pre_production_notes', 'Pre-production notes'],
+  ['pre_production_file_name', 'Pre-production file'],
   ['terms_conditions', 'Terms & conditions'],
   ['sent_at', 'Sent at'],
   ['viewed_at', 'Viewed at'],
@@ -2771,6 +3018,8 @@ function buildQuoteChangeSummary({ previousQuote = {}, nextQuote = {}, previousL
     buildFieldChange('Quote validity days', previousQuote.quote_validity_days, nextQuote.quote_validity_days, 'number'),
     buildFieldChange('Valid until', previousQuote.valid_until, nextQuote.valid_until),
     buildFieldChange('Notes', previousQuote.notes, nextQuote.notes),
+    buildFieldChange('Pre-production notes', previousQuote.pre_production_notes, nextQuote.pre_production_notes),
+    buildFieldChange('Pre-production file', previousQuote.pre_production_file_name, nextQuote.pre_production_file_name),
     buildFieldChange('Terms & conditions', previousQuote.terms_conditions, nextQuote.terms_conditions)
   ].filter(Boolean);
 
@@ -3529,6 +3778,28 @@ function normalizeBookingDaysPayload(bookingDays = [], defaultTimeZone = null) {
     });
 }
 
+function buildBookingDateTimeValue(dateValue, timeValue) {
+  const date = dateValue ? String(dateValue).trim() : '';
+  const time = normalizeTime(timeValue || null);
+  if (!date || !time) return null;
+  return `${date}T${time}`;
+}
+
+function resolveBookingDateTimeValues(prefillData = {}) {
+  if (prefillData.booking_type === 'multi_day' && Array.isArray(prefillData.booking_days) && prefillData.booking_days.length) {
+    const firstDay = [...prefillData.booking_days].sort((a, b) => new Date(a.date) - new Date(b.date))[0];
+    return {
+      start_date_time: buildBookingDateTimeValue(firstDay?.date, firstDay?.start_time),
+      end_date_time: buildBookingDateTimeValue(firstDay?.date, firstDay?.end_time)
+    };
+  }
+
+  return {
+    start_date_time: buildBookingDateTimeValue(prefillData.start_date, prefillData.start_time),
+    end_date_time: buildBookingDateTimeValue(prefillData.start_date, prefillData.end_time)
+  };
+}
+
 function applyConvertBookingOverrides(prefillData, payload = {}) {
   const next = { ...prefillData };
   const timeZone = payload.time_zone || payload.timeZone || null;
@@ -3721,6 +3992,7 @@ async function syncConvertedQuoteArtifacts({
 
   const wasAlreadyConverted = Boolean(lead && booking);
   const bookingDescription = buildConvertedBookingDescription(quoteDetails, prefillData);
+  const bookingDateTimeValues = resolveBookingDateTimeValues(prefillData);
 
   if (!booking) {
     booking = await db.stream_project_booking.create({
@@ -3736,6 +4008,8 @@ async function syncConvertedQuoteArtifacts({
       start_time: prefillData.start_time || null,
       end_time: prefillData.end_time || null,
       time_zone: prefillData.time_zone || null,
+      start_date_time: bookingDateTimeValues.start_date_time,
+      end_date_time: bookingDateTimeValues.end_date_time,
       budget: Number(quoteDetails.total || 0) || null,
       crew_size_needed: prefillData.crew_size,
       event_location: prefillData.location,
@@ -3767,6 +4041,8 @@ async function syncConvertedQuoteArtifacts({
       start_time: prefillData.start_time || booking.start_time || null,
       end_time: prefillData.end_time || booking.end_time || null,
       time_zone: prefillData.time_zone || booking.time_zone || null,
+      start_date_time: bookingDateTimeValues.start_date_time || booking.start_date_time || null,
+      end_date_time: bookingDateTimeValues.end_date_time || booking.end_date_time || null,
       budget: Number(quoteDetails.total || 0) || booking.budget || null,
       crew_size_needed: prefillData.crew_size ?? booking.crew_size_needed,
       event_location: prefillData.location || booking.event_location || null,
@@ -4651,6 +4927,7 @@ async function createQuote(payload, user) {
       location_latitude: latitude,
       location_longitude: longitude,
       project_description: payload.project_description || null,
+      pre_production_notes: normalizeOptionalText(payload.pre_production_notes),
       video_shoot_type: payload.video_shoot_type || null,
       booking_type: schedulePayload.booking_type,
       time_zone: schedulePayload.time_zone,
@@ -4675,6 +4952,15 @@ async function createQuote(payload, user) {
     const stableQuoteNumber = generateQuoteNumber(quote.sales_quote_id);
     if (quote.quote_number !== stableQuoteNumber) {
       await quote.update({ quote_number: stableQuoteNumber }, { transaction });
+    }
+
+    const preProductionFilePayload = await buildPreProductionFileUpdate(
+      payload,
+      null,
+      quote.sales_quote_id
+    );
+    if (Object.keys(preProductionFilePayload).length) {
+      await quote.update(preProductionFilePayload, { transaction });
     }
 
     if (lineItemsPayload.length) {
@@ -4708,6 +4994,7 @@ async function createQuote(payload, user) {
       changeReason: 'Quote created'
     });
     await attachQuoteVersionToActivity(transaction, createdActivity, createdVersion);
+    await createQuotePreviewLink(quote.sales_quote_id, user, { transaction });
     await transaction.commit();
     return getQuoteById(quote.sales_quote_id, user);
   } catch (error) {
@@ -4755,6 +5042,12 @@ async function duplicateQuote(salesQuoteId, user) {
       location_latitude: sourceQuote.location_latitude ?? null,
       location_longitude: sourceQuote.location_longitude ?? null,
       project_description: sourceQuote.project_description || null,
+      pre_production_notes: sourceQuote.pre_production_notes || null,
+      pre_production_file_name: sourceQuote.pre_production_file_name || null,
+      pre_production_file_type: sourceQuote.pre_production_file_type || null,
+      pre_production_file_size: sourceQuote.pre_production_file_size || null,
+      pre_production_file_path: sourceQuote.pre_production_file_path || null,
+      pre_production_file_url: sourceQuote.pre_production_file_url || null,
       video_shoot_type: sourceQuote.video_shoot_type || null,
       booking_type: sourceQuote.booking_type || null,
       time_zone: sourceQuote.time_zone || null,
@@ -4821,6 +5114,7 @@ async function duplicateQuote(salesQuoteId, user) {
       changeReason: `Quote duplicated from ${sourceQuote.quote_number || salesQuoteId}`
     });
     await attachQuoteVersionToActivity(transaction, duplicatedActivity, duplicatedVersion);
+    await createQuotePreviewLink(duplicatedQuote.sales_quote_id, user, { transaction });
 
     await transaction.commit();
     return getQuoteById(duplicatedQuote.sales_quote_id, user);
@@ -4895,6 +5189,12 @@ async function updateQuote(salesQuoteId, payload, user) {
       location_latitude: quote.location_latitude,
       location_longitude: quote.location_longitude,
       status: quote.status,
+      pre_production_notes: quote.pre_production_notes,
+      pre_production_file_name: quote.pre_production_file_name,
+      pre_production_file_type: quote.pre_production_file_type,
+      pre_production_file_size: quote.pre_production_file_size,
+      pre_production_file_path: quote.pre_production_file_path,
+      pre_production_file_url: quote.pre_production_file_url,
       discount_type: quote.discount_type,
       discount_value: quote.discount_value,
       discount_amount: quote.discount_amount,
@@ -4935,8 +5235,13 @@ async function updateQuote(salesQuoteId, payload, user) {
       quoteValidityDaysProvided: payload.quote_validity_days !== undefined
     });
     const schedulePayload = normalizeQuoteSchedulePayload(payload, quote);
+    const preProductionFilePayload = await buildPreProductionFileUpdate(payload, quote, salesQuoteId);
 
-    const nextStatus = resolveQuoteStatus(payload, quote.status);
+    const nextStatus = resolveUpdatedQuoteStatus({
+      payload,
+      currentQuote: quote,
+      validity
+    });
     const assignedSalesRepId = isAdminRole(user.role)
       ? (payload.assigned_sales_rep_id !== undefined ? payload.assigned_sales_rep_id : quote.assigned_sales_rep_id)
       : quote.assigned_sales_rep_id;
@@ -4999,6 +5304,11 @@ async function updateQuote(salesQuoteId, payload, user) {
             ).longitude
           : quote.location_longitude,
       project_description: payload.project_description !== undefined ? payload.project_description : quote.project_description,
+      pre_production_notes:
+        payload.pre_production_notes !== undefined
+          ? normalizeOptionalText(payload.pre_production_notes)
+          : quote.pre_production_notes,
+      ...preProductionFilePayload,
       video_shoot_type: payload.video_shoot_type !== undefined ? payload.video_shoot_type : quote.video_shoot_type,
       booking_type: schedulePayload.booking_type,
       time_zone: schedulePayload.time_zone,
@@ -5114,6 +5424,12 @@ async function updateQuote(salesQuoteId, payload, user) {
         location_longitude: quote.location_longitude,
         project_description: quote.project_description,
         video_shoot_type: quote.video_shoot_type,
+        booking_type: quote.booking_type,
+        time_zone: quote.time_zone,
+        start_date: quote.start_date,
+        start_time: quote.start_time,
+        end_time: quote.end_time,
+        booking_days: quote.booking_days,
         quote_validity_days: quote.quote_validity_days,
         valid_until: quote.valid_until,
         discount_type: quote.discount_type,
@@ -5142,6 +5458,20 @@ async function updateQuote(salesQuoteId, payload, user) {
         location: resolveQuoteLocationAddress(updatedQuoteDetails),
         location_latitude: updatedQuoteDetails.location_latitude ?? null,
         location_longitude: updatedQuoteDetails.location_longitude ?? null,
+        booking_type: updatedQuoteDetails.booking_type || null,
+        time_zone: updatedQuoteDetails.time_zone || null,
+        start_date: updatedQuoteDetails.start_date || null,
+        start_time: normalizeTime(updatedQuoteDetails.start_time) || null,
+        end_time: normalizeTime(updatedQuoteDetails.end_time) || null,
+        booking_days: parseBookingDaysValue(updatedQuoteDetails.booking_days),
+        has_schedule_override: Boolean(
+          updatedQuoteDetails.booking_type ||
+          updatedQuoteDetails.time_zone ||
+          updatedQuoteDetails.start_date ||
+          updatedQuoteDetails.start_time ||
+          updatedQuoteDetails.end_time ||
+          parseBookingDaysValue(updatedQuoteDetails.booking_days).length
+        ),
         content_type: roleData.content_type,
         shoot_type: mapQuoteShootTypeToBookingShootType(updatedQuoteDetails.video_shoot_type),
         quote_shoot_type_label: updatedQuoteDetails.video_shoot_type || null,
@@ -5334,6 +5664,7 @@ async function updateQuote(salesQuoteId, payload, user) {
       await attachQuoteVersionToActivity(transaction, approvalRequestActivity, updatedVersion);
     }
 
+    await createQuotePreviewLink(salesQuoteId, user, { transaction });
     await transaction.commit();
     return getQuoteById(salesQuoteId, user);
   } catch (error) {
@@ -5459,6 +5790,20 @@ async function buildPaymentBookingPrefillDataFromQuote(quoteDetails, payload = {
     location: resolveQuoteLocationAddress(quoteDetails),
     location_latitude: quoteDetails.location_latitude ?? quoteDetails.latitude ?? null,
     location_longitude: quoteDetails.location_longitude ?? quoteDetails.longitude ?? null,
+    booking_type: quoteDetails.booking_type || null,
+    time_zone: quoteDetails.time_zone || null,
+    start_date: quoteDetails.start_date || null,
+    start_time: normalizeTime(quoteDetails.start_time) || null,
+    end_time: normalizeTime(quoteDetails.end_time) || null,
+    booking_days: parseBookingDaysValue(quoteDetails.booking_days),
+    has_schedule_override: Boolean(
+      quoteDetails.booking_type ||
+      quoteDetails.time_zone ||
+      quoteDetails.start_date ||
+      quoteDetails.start_time ||
+      quoteDetails.end_time ||
+      parseBookingDaysValue(quoteDetails.booking_days).length
+    ),
     content_type: roleData.content_type,
     shoot_type: mapQuoteShootTypeToBookingShootType(quoteDetails.video_shoot_type),
     quote_shoot_type_label: quoteDetails.video_shoot_type || null,
@@ -5555,7 +5900,7 @@ async function ensureQuoteBookingForPayment(salesQuoteId, user, payload = {}) {
 }
 
 async function fetchQuoteById(salesQuoteId, user = null) {
-  const accessWhere = user ? buildQuoteAccessWhere(user) : {};
+  const accessWhere = user ? buildQuoteReadAccessWhere(user) : {};
   const quote = await db.sales_quotes.findOne({
     where: { sales_quote_id: salesQuoteId, ...accessWhere },
     include: [
@@ -5692,7 +6037,7 @@ async function getQuoteById(salesQuoteId, user) {
 
 async function listQuoteVersions(salesQuoteId, user) {
   const quote = await db.sales_quotes.findOne({
-    where: { sales_quote_id: salesQuoteId, ...buildQuoteAccessWhere(user) },
+    where: { sales_quote_id: salesQuoteId, ...buildQuoteReadAccessWhere(user) },
     attributes: ['sales_quote_id', 'created_at', 'updated_at'],
     raw: true
   });
@@ -5726,7 +6071,7 @@ async function getQuoteVersionByNumber(salesQuoteId, versionNumber, user) {
   }
 
   const quote = await db.sales_quotes.findOne({
-    where: { sales_quote_id: salesQuoteId, ...buildQuoteAccessWhere(user) },
+    where: { sales_quote_id: salesQuoteId, ...buildQuoteReadAccessWhere(user) },
     attributes: ['sales_quote_id', 'created_at', 'updated_at'],
     raw: true
   });
@@ -5779,6 +6124,9 @@ async function getQuoteVersionByNumber(salesQuoteId, versionNumber, user) {
   const versionQuoteWithPaymentContext = isCurrentVersion && currentQuote
     ? ensureManualPaymentActivityForQuote({
         ...normalizedVersionQuote,
+        quote_validity_days: currentQuote.quote_validity_days ?? normalizedVersionQuote.quote_validity_days,
+        valid_until: currentQuote.valid_until ?? normalizedVersionQuote.valid_until,
+        expires_at: currentQuote.expires_at ?? normalizedVersionQuote.expires_at,
         booking_id: currentQuote.booking_id || normalizedVersionQuote.booking_id || null,
         activities: currentQuote.activities || normalizedVersionQuote.activities || [],
         payment_summary: currentQuote.payment_summary || null,
@@ -5807,7 +6155,7 @@ async function getCurrentUsableQuoteVersionSnapshot(salesQuoteId, user = null) {
   const quote = await db.sales_quotes.findOne({
     where: {
       sales_quote_id: normalizedQuoteId,
-      ...(user ? buildQuoteAccessWhere(user) : {})
+      ...(user ? buildQuoteReadAccessWhere(user) : {})
     },
     attributes: ['sales_quote_id', 'created_at', 'updated_at'],
     raw: true
@@ -5871,37 +6219,67 @@ function getQuotePreviewExpiryFromValidUntil(validUntil) {
   return Number.isNaN(expiry.getTime()) ? null : expiry;
 }
 
-async function createQuotePreviewLink(salesQuoteId, user) {
+function getQuotePreviewLinkStorageExpiry(validUntil) {
+  return getQuotePreviewExpiryFromValidUntil(validUntil) || new Date('9999-12-31T23:59:59.999Z');
+}
+
+async function createQuotePreviewLink(salesQuoteId, user, options = {}) {
+  const transaction = options.transaction || null;
   const quote = await db.sales_quotes.findOne({
     where: {
       sales_quote_id: salesQuoteId,
       ...(user ? buildQuoteAccessWhere(user) : {})
     },
-    attributes: ['sales_quote_id', 'valid_until']
+    attributes: ['sales_quote_id', 'valid_until'],
+    transaction
   });
 
   if (!quote) {
     throw new Error('Quote not found');
   }
 
-  const expiresAt = getQuotePreviewExpiryFromValidUntil(quote.valid_until);
-  if (!expiresAt) {
-    throw new Error('Set quote valid date before generating preview link');
-  }
+  const expiresAt = getQuotePreviewLinkStorageExpiry(quote.valid_until);
 
-  await db.sequelize.query(
+  const existingRows = await db.sequelize.query(
     `
-      UPDATE sales_quote_preview_links
-      SET is_active = 0,
-          updated_at = NOW()
+      SELECT sales_quote_preview_link_id, quote_key
+      FROM sales_quote_preview_links
       WHERE sales_quote_id = :salesQuoteId
-        AND is_active = 1
+      ORDER BY is_active DESC, created_at DESC, sales_quote_preview_link_id DESC
+      LIMIT 1
     `,
     {
       replacements: { salesQuoteId },
-      type: db.Sequelize.QueryTypes.UPDATE
+      type: db.Sequelize.QueryTypes.SELECT,
+      transaction
     }
   );
+
+  const existingLink = existingRows?.[0];
+  if (existingLink?.quote_key) {
+    await db.sequelize.query(
+      `
+        UPDATE sales_quote_preview_links
+        SET is_active = 1,
+            expires_at = :expiresAt,
+            updated_at = NOW()
+        WHERE sales_quote_preview_link_id = :previewLinkId
+      `,
+      {
+        replacements: {
+          previewLinkId: existingLink.sales_quote_preview_link_id,
+          expiresAt
+        },
+        type: db.Sequelize.QueryTypes.UPDATE,
+        transaction
+      }
+    );
+
+    return {
+      quote_key: existingLink.quote_key,
+      expires_at: expiresAt.toISOString()
+    };
+  }
 
   const quoteKey = crypto.randomBytes(32).toString('hex');
 
@@ -5919,7 +6297,8 @@ async function createQuotePreviewLink(salesQuoteId, user) {
         expiresAt,
         createdByUserId: user?.userId || null
       },
-      type: db.Sequelize.QueryTypes.INSERT
+      type: db.Sequelize.QueryTypes.INSERT,
+      transaction
     }
   );
 
@@ -5936,7 +6315,6 @@ async function getActiveQuotePreviewLinkForQuote(salesQuoteId, transaction = nul
       FROM sales_quote_preview_links
       WHERE sales_quote_id = :salesQuoteId
         AND is_active = 1
-        AND expires_at > NOW()
       ORDER BY created_at DESC
       LIMIT 1
     `,
@@ -5949,7 +6327,7 @@ async function getActiveQuotePreviewLinkForQuote(salesQuoteId, transaction = nul
 
   const activeLink = activeRows?.[0];
   if (!activeLink?.quote_key) {
-    throw new Error('Create a quote preview link before sending the quote proposal');
+    return createQuotePreviewLink(salesQuoteId, null, { transaction });
   }
 
   return {
@@ -6038,16 +6416,11 @@ async function getPublicQuoteByKey(quoteKey) {
   if (!normalizedKey) {
     throw new Error('Quote key is required');
   }
-  const now = new Date();
 
   const rows = await db.sequelize.query(
     `
       SELECT
-        l.sales_quote_id,
-        l.is_active,
-        l.expires_at,
-        l.created_at,
-        q.valid_until
+        l.sales_quote_id
       FROM sales_quote_preview_links l
       INNER JOIN sales_quotes q ON q.sales_quote_id = l.sales_quote_id
       WHERE l.quote_key = :quoteKey
@@ -6073,42 +6446,7 @@ async function getPublicQuoteByKey(quoteKey) {
       throw new Error('Quote preview link is invalid or expired');
     }
 
-    const legacyValidUntilExpiry = getQuotePreviewExpiryFromValidUntil(legacyQuote.valid_until);
-    if (legacyValidUntilExpiry && now > legacyValidUntilExpiry) {
-      throw new Error('Quote preview link is invalid or expired');
-    }
-
     return (await getCurrentUsableQuoteVersionSnapshot(Number(legacyQuoteId))) || legacyQuote;
-  }
-
-  const linkExpiresAt = linkRow.expires_at ? new Date(linkRow.expires_at) : null;
-  const quoteValidUntilExpiry = getQuotePreviewExpiryFromValidUntil(linkRow.valid_until);
-  const linkCreatedAt = linkRow.created_at ? new Date(linkRow.created_at) : null;
-  const latestVersion = await getLatestQuoteVersionRecord(Number(linkRow.sales_quote_id));
-  const latestVersionCreatedAt = latestVersion?.created_at ? new Date(latestVersion.created_at) : null;
-
-  const isSupersededLink =
-    Number(linkRow.is_active) !== 1 ||
-    (linkCreatedAt && latestVersionCreatedAt && linkCreatedAt < latestVersionCreatedAt);
-
-  if (isSupersededLink && latestVersion && !isUsableQuoteVersion(latestVersion)) {
-    const approvalMetadata = getQuoteVersionApprovalMetadata(latestVersion);
-    const error = createQuotePreviewLinkError('QUOTE_PREVIEW_APPROVAL_PENDING');
-    error.message = 'Admin approval is pending for the latest quote version';
-    error.details = {
-      ...error.details,
-      approval_status: approvalMetadata.approval_status || 'pending',
-      version_number: Number(latestVersion.version_number || 0)
-    };
-    throw error;
-  }
-
-  if (isSupersededLink) {
-    throw createQuotePreviewLinkError('QUOTE_PREVIEW_SUPERSEDED');
-  }
-
-  if ((linkExpiresAt && now > linkExpiresAt) || (quoteValidUntilExpiry && now > quoteValidUntilExpiry)) {
-    throw createQuotePreviewLinkError('QUOTE_PREVIEW_EXPIRED');
   }
 
   return getCurrentUsableQuoteVersionSnapshot(Number(linkRow.sales_quote_id));
@@ -6164,33 +6502,7 @@ async function listQuotes(query, user) {
   const offset = (page - 1) * limit;
   // Quote listing is shared across admin/sales views where reps are expected
   // to browse all quotes. Keep strict restriction only for client role.
-  const where = isClientRole(user?.role)
-    ? { ...buildQuoteAccessWhere(user) }
-    : {};
-
-  const statusFilter = normalizeQuoteFilterStatus(query.status);
-  if (statusFilter?.length) {
-    appendAndCondition(where, {
-      status: statusFilter.length === 1 ? statusFilter[0] : { [Op.in]: statusFilter }
-    });
-  }
-
-  applyQuoteSalesRepFilter(where, query.assigned_sales_rep_id, user);
-
-  const createdAtCondition = buildQuoteCreatedAtCondition(query.range, query.date_on);
-  if (createdAtCondition) {
-    appendAndCondition(where, { created_at: createdAtCondition });
-  }
-
-  if (query.search) {
-    appendAndCondition(where, {
-      [Op.or]: [
-        { quote_number: { [Op.like]: `%${query.search}%` } },
-        { client_name: { [Op.like]: `%${query.search}%` } },
-        { project_description: { [Op.like]: `%${query.search}%` } }
-      ]
-    });
-  }
+  const where = buildQuoteListWhere(query, user);
 
   const sortBy = query.sort_by === 'valid_until' ? 'valid_until' : 'created_at';
   const sortOrder = String(query.sort_order || 'DESC').toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
@@ -6347,6 +6659,52 @@ async function listQuotes(query, user) {
     summary,
     rows: rowsWithFinancialDetails
   };
+}
+
+async function listQuoteExportIds(query, user) {
+  await expireQuotesPastValidUntil();
+
+  const where = buildQuoteListWhere(query, user);
+
+  const hasStartDate = Boolean(query?.start_date);
+  const hasEndDate = Boolean(query?.end_date);
+
+  if (hasStartDate !== hasEndDate) {
+    throw new Error('Select both dates or leave both blank to export all quotes');
+  }
+
+  if (hasStartDate && hasEndDate) {
+    const startDate = new Date(`${String(query.start_date).trim()}T00:00:00.000Z`);
+    const endDate = new Date(`${String(query.end_date).trim()}T23:59:59.999Z`);
+
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+      throw new Error('Dates must be in YYYY-MM-DD format');
+    }
+
+    if (startDate > endDate) {
+      throw new Error('start_date cannot be after end_date');
+    }
+
+    appendAndCondition(where, {
+      created_at: {
+        [Op.between]: [startDate, endDate]
+      }
+    });
+  }
+
+  const quoteIdRows = await db.sales_quotes.findAll({
+    where,
+    attributes: ['sales_quote_id'],
+    order: [
+      ['created_at', 'DESC'],
+      ['sales_quote_id', 'DESC']
+    ],
+    raw: true
+  });
+
+  return quoteIdRows
+    .map((row) => Number(row.sales_quote_id))
+    .filter((id) => Number.isInteger(id) && id > 0);
 }
 
 async function getQuoteDashboard(query, user) {
@@ -6603,6 +6961,7 @@ async function sendQuoteProposal(salesQuoteId, payload, user) {
     const generatedPdfBuffer = payload?.attachment_content || payload?.pdf_base64
       ? null
       : await generateQuotePdfBuffer(quoteDetailsForPdf);
+    const preProductionAttachment = await buildQuotePreProductionEmailAttachment(quoteDetails);
 
     const emailResult = await sendCustomQuoteProposalEmail({
       to_email: toEmail,
@@ -6626,7 +6985,8 @@ async function sendQuoteProposal(salesQuoteId, payload, user) {
       accept_quote_url: buildQuotePreviewUrl(previewLink.quote_key),
       attachment_content: payload?.attachment_content || payload?.pdf_base64 || (generatedPdfBuffer ? Buffer.from(generatedPdfBuffer).toString('base64') : null),
       attachment_filename: payload?.attachment_filename || `${quoteDetails.quote_number || 'custom-quote'}.pdf`,
-      attachment_type: payload?.attachment_type || 'application/pdf'
+      attachment_type: payload?.attachment_type || 'application/pdf',
+      attachments: preProductionAttachment ? [preProductionAttachment] : []
     });
 
     if (!emailResult?.success) {
@@ -6898,6 +7258,7 @@ module.exports = {
   getLatestPublicQuotePreviewLink,
   getPublicQuoteByKey,
   listQuotes,
+  listQuoteExportIds,
   getQuoteDashboard,
   updateQuoteStatus,
   sendQuoteProposal,

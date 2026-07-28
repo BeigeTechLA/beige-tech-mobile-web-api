@@ -65,6 +65,52 @@ module.exports = function(sequelize, DataTypes) {
       allowNull: false,
       defaultValue: 'pending'
     },
+    approval_status: {
+      type: DataTypes.ENUM('draft', 'pending_approval', 'approved', 'rejected'),
+      allowNull: false,
+      defaultValue: 'draft'
+    },
+    compensation_source: {
+      type: DataTypes.ENUM('system', 'sales_admin', 'admin'),
+      allowNull: false,
+      defaultValue: 'system'
+    },
+    compensation_method: {
+      type: DataTypes.ENUM('equal_split', 'role_based', 'manual'),
+      allowNull: true
+    },
+    submitted_by_user_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
+    submitted_at: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    approved_by_user_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
+    approved_at: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    rejected_by_user_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
+    rejected_at: {
+      type: DataTypes.DATE,
+      allowNull: true
+    },
+    rejection_reason: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
+    approval_notes: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
     earned_at: {
       type: DataTypes.DATE,
       allowNull: true
@@ -96,7 +142,9 @@ module.exports = function(sequelize, DataTypes) {
       { name: 'idx_creator_earnings_booking', using: 'BTREE', fields: [{ name: 'booking_id' }] },
       { name: 'idx_creator_earnings_creator', using: 'BTREE', fields: [{ name: 'creator_id' }] },
       { name: 'idx_creator_earnings_payment', using: 'BTREE', fields: [{ name: 'payment_id' }] },
-      { name: 'idx_creator_earnings_status', using: 'BTREE', fields: [{ name: 'status' }] }
+      { name: 'idx_creator_earnings_status', using: 'BTREE', fields: [{ name: 'status' }] },
+      { name: 'idx_creator_earnings_approval_status', using: 'BTREE', fields: [{ name: 'approval_status' }] },
+      { name: 'idx_creator_earnings_compensation_source', using: 'BTREE', fields: [{ name: 'compensation_source' }] }
     ]
   });
 };

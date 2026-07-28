@@ -86,6 +86,30 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.TEXT,
       allowNull: true
     },
+    pre_production_notes: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
+    pre_production_file_name: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
+    pre_production_file_type: {
+      type: DataTypes.STRING(255),
+      allowNull: true
+    },
+    pre_production_file_size: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
+    pre_production_file_path: {
+      type: DataTypes.STRING(500),
+      allowNull: true
+    },
+    pre_production_file_url: {
+      type: DataTypes.STRING(1000),
+      allowNull: true
+    },
     video_shoot_type: {
       type: DataTypes.STRING(255),
       allowNull: true

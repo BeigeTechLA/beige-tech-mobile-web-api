@@ -123,17 +123,21 @@ function generateLinkToken() {
  * Build complete payment URL
  * @param {string} token - Payment link token
  * @param {string|null} discountCode - Optional discount code to pre-apply
+ * @param {number|string|null} requestedAmount - Optional payment amount to display in URL
  * @returns {string} Full payment URL
  */
-function buildPaymentUrl(token, discountCode = null) {
+function buildPaymentUrl(token, discountCode = null, requestedAmount = null) {
   const baseUrl = process.env.FRONTEND_URL || 'https://beige.app';
-  let url = `${baseUrl}/payment-link/${token}`;
+  const url = new URL(`${baseUrl.replace(/\/+$/, '')}/payment-link/${token}`);
   
   if (discountCode) {
-    url += `?discount=${discountCode}`;
+    url.searchParams.set('discount', discountCode);
+  }
+  if (requestedAmount !== null && requestedAmount !== undefined && requestedAmount !== '') {
+    url.searchParams.set('amount', String(requestedAmount));
   }
   
-  return url;
+  return url.toString();
 }
 
 /**

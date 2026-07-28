@@ -1,12 +1,61 @@
 const creatorEarningsService = require('../services/creator-earnings.service');
 
+const ADMIN_ROLES = new Set([
+    'admin',
+    'Admin',
+    'super_admin',
+    'Super_Admin',
+    'production_manager',
+    'sales_admin',
+    'Sales_Admin'
+]);
+
+function getRequestUserId(req) {
+    return req.userId || req.user?.userId || req.user?.id || null;
+}
+
+function getRequestUserRole(req) {
+    return req.userRole || req.user?.userRole || null;
+}
+
+function isAdminRequest(req) {
+    return ADMIN_ROLES.has(getRequestUserRole(req));
+}
+
+async function resolveCreatorId(req) {
+    const rawCreatorId = req.params.creatorId || req.query.creator_id || req.body?.creator_id;
+    const requestedCreatorId = rawCreatorId && rawCreatorId !== 'me' ? parseInt(rawCreatorId, 10) : null;
+
+    if (requestedCreatorId && isAdminRequest(req)) {
+        return requestedCreatorId;
+    }
+
+    const userId = getRequestUserId(req);
+    if (!userId) {
+        const error = new Error('Authentication required');
+        error.statusCode = 401;
+        throw error;
+    }
+
+    const creator = await creatorEarningsService.resolveCreatorForUser(userId);
+    if (!creator) {
+        const error = new Error('Creative partner profile not found for logged-in user');
+        error.statusCode = 404;
+        throw error;
+    }
+
+    if (requestedCreatorId && Number(requestedCreatorId) !== Number(creator.creator_id)) {
+        const error = new Error('You can only access your own earnings');
+        error.statusCode = 403;
+        throw error;
+    }
+
+    return creator.creator_id;
+}
+
 exports.getCreatorEarningsDashboard = async (req, res) => {
     try {
-        const creatorId = parseInt(req.params.creatorId || req.query.creator_id, 10);
-        if (!creatorId) {
-            return res.status(400).json({ success: false, message: 'Valid creator ID is required' });
-        }
-
+        const creatorId = await resolveCreatorId(req);
         const data = await creatorEarningsService.getCreatorEarningsDashboard(creatorId, req.query);
         return res.status(200).json({ success: true, data });
     } catch (error) {
@@ -20,11 +69,7 @@ exports.getCreatorEarningsDashboard = async (req, res) => {
 
 exports.getCreatorEarningsList = async (req, res) => {
     try {
-        const creatorId = parseInt(req.params.creatorId || req.query.creator_id, 10);
-        if (!creatorId) {
-            return res.status(400).json({ success: false, message: 'Valid creator ID is required' });
-        }
-
+        const creatorId = await resolveCreatorId(req);
         const data = await creatorEarningsService.getCreatorEarningsList(creatorId, req.query);
         return res.status(200).json({ success: true, data });
     } catch (error) {
@@ -39,10 +84,10 @@ exports.getCreatorEarningsList = async (req, res) => {
 exports.getCreatorEarningDetails = async (req, res) => {
     try {
         const creatorEarningId = parseInt(req.params.earningId, 10);
-        const creatorId = parseInt(req.params.creatorId || req.query.creator_id, 10);
+        const creatorId = await resolveCreatorId(req);
 
-        if (!creatorEarningId || !creatorId) {
-            return res.status(400).json({ success: false, message: 'Valid earning ID and creator ID are required' });
+        if (!creatorEarningId) {
+            return res.status(400).json({ success: false, message: 'Valid earning ID is required' });
         }
 
         const data = await creatorEarningsService.getCreatorEarningDetails(creatorEarningId, creatorId);
@@ -59,10 +104,10 @@ exports.getCreatorEarningDetails = async (req, res) => {
 exports.getPayoutTimeline = async (req, res) => {
     try {
         const creatorEarningId = parseInt(req.params.earningId, 10);
-        const creatorId = parseInt(req.params.creatorId || req.query.creator_id, 10);
+        const creatorId = await resolveCreatorId(req);
 
-        if (!creatorEarningId || !creatorId) {
-            return res.status(400).json({ success: false, message: 'Valid earning ID and creator ID are required' });
+        if (!creatorEarningId) {
+            return res.status(400).json({ success: false, message: 'Valid earning ID is required' });
         }
 
         const data = await creatorEarningsService.getPayoutTimeline(creatorEarningId, creatorId);
@@ -79,10 +124,10 @@ exports.getPayoutTimeline = async (req, res) => {
 exports.acceptShoot = async (req, res) => {
     try {
         const bookingId = parseInt(req.params.bookingId, 10);
-        const creatorId = parseInt(req.params.creatorId || req.body.creator_id, 10);
+        const creatorId = await resolveCreatorId(req);
 
-        if (!bookingId || !creatorId) {
-            return res.status(400).json({ success: false, message: 'Valid booking ID and creator ID are required' });
+        if (!bookingId) {
+            return res.status(400).json({ success: false, message: 'Valid booking ID is required' });
         }
 
         const data = await creatorEarningsService.acceptShoot(bookingId, creatorId);
@@ -103,10 +148,10 @@ exports.acceptShoot = async (req, res) => {
 exports.declineShoot = async (req, res) => {
     try {
         const bookingId = parseInt(req.params.bookingId, 10);
-        const creatorId = parseInt(req.params.creatorId || req.body.creator_id, 10);
+        const creatorId = await resolveCreatorId(req);
 
-        if (!bookingId || !creatorId) {
-            return res.status(400).json({ success: false, message: 'Valid booking ID and creator ID are required' });
+        if (!bookingId) {
+            return res.status(400).json({ success: false, message: 'Valid booking ID is required' });
         }
 
         const data = await creatorEarningsService.declineShoot(bookingId, creatorId);
@@ -127,11 +172,11 @@ exports.declineShoot = async (req, res) => {
 exports.respondToEarning = async (req, res) => {
     try {
         const bookingId = parseInt(req.params.bookingId, 10);
-        const creatorId = parseInt(req.params.creatorId || req.body.creator_id, 10);
+        const creatorId = await resolveCreatorId(req);
         const { action } = req.body;
 
-        if (!bookingId || !creatorId) {
-            return res.status(400).json({ success: false, message: 'Valid booking ID and creator ID are required' });
+        if (!bookingId) {
+            return res.status(400).json({ success: false, message: 'Valid booking ID is required' });
         }
 
         if (!['accept', 'decline'].includes(action)) {
@@ -156,7 +201,7 @@ exports.respondToEarning = async (req, res) => {
 exports.addAdvancePayment = async (req, res) => {
     try {
         const data = await creatorEarningsService.addAdvancePayment(req.body, {
-            userId: req.userId || req.user?.userId || null
+            userId: getRequestUserId(req)
         });
         return res.status(201).json({
             success: true,
@@ -185,7 +230,7 @@ exports.upsertCompensationItems = async (req, res) => {
         }
 
         const data = await creatorEarningsService.upsertCompensationItems(creatorEarningId, items, {
-            userId: req.userId || req.user?.userId || null
+            userId: getRequestUserId(req)
         });
         return res.status(200).json({
             success: true,

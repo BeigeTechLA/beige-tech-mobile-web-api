@@ -66,6 +66,15 @@ module.exports = function (sequelize, DataTypes) {
       type: DataTypes.STRING(1000),
       allowNull: true,
     },
+    google_calendar_event_id: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+    },
+    google_calendar_id: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+      defaultValue: 'primary',
+    },
     participants_json: {
       type: DataTypes.TEXT('long'),
       allowNull: true,

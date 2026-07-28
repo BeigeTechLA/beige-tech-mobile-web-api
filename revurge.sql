@@ -2535,3 +2535,61 @@ CREATE TABLE IF NOT EXISTS user_archive_history (
   CONSTRAINT fk_user_archive_history_performed_by
     FOREIGN KEY (performed_by_user_id) REFERENCES users(id) ON DELETE RESTRICT
 );
+
+-- 26-06-26
+
+ALTER TABLE creator_earnings
+  ADD COLUMN approval_status ENUM('draft', 'pending_approval', 'approved', 'rejected') NOT NULL DEFAULT 'draft' AFTER status,
+  ADD COLUMN compensation_source ENUM('system', 'sales_admin', 'admin') NOT NULL DEFAULT 'system' AFTER approval_status,
+  ADD COLUMN compensation_method ENUM('equal_split', 'role_based', 'manual') NULL AFTER compensation_source,
+  ADD COLUMN submitted_by_user_id INT NULL AFTER compensation_method,
+  ADD COLUMN submitted_at DATETIME NULL AFTER submitted_by_user_id,
+  ADD COLUMN approved_by_user_id INT NULL AFTER submitted_at,
+  ADD COLUMN approved_at DATETIME NULL AFTER approved_by_user_id,
+  ADD COLUMN rejected_by_user_id INT NULL AFTER approved_at,
+  ADD COLUMN rejected_at DATETIME NULL AFTER rejected_by_user_id,
+  ADD COLUMN rejection_reason TEXT NULL AFTER rejected_at,
+  ADD COLUMN approval_notes TEXT NULL AFTER rejection_reason,
+  ADD INDEX idx_creator_earnings_approval_status (approval_status),
+  ADD INDEX idx_creator_earnings_compensation_source (compensation_source);
+-- 01-07-26
+
+ALTER TABLE payment_links
+  ADD COLUMN IF NOT EXISTS requested_amount DECIMAL(10, 2) NULL AFTER discount_code_id;
+
+--03-07-26
+ALTER TABLE stream_project_booking
+  ADD COLUMN start_date_time VARCHAR(50) NULL,
+  ADD COLUMN end_date_time VARCHAR(50) NULL;
+
+-- 07-07-26
+
+ALTER TABLE `project_meetings`
+  ADD COLUMN `google_calendar_event_id` VARCHAR(255) NULL AFTER `meet_link`,
+  ADD COLUMN `google_calendar_id` VARCHAR(255) NULL DEFAULT 'primary' AFTER `google_calendar_event_id`;
+
+-- 16-07-26
+
+ALTER TABLE `sales_quote_line_items` CHANGE `item_name` `item_name` TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL;
+
+ALTER TABLE `sales_quotes`
+  ADD COLUMN `pre_production_notes` TEXT NULL AFTER `project_description`,
+  ADD COLUMN `pre_production_file_name` VARCHAR(255) NULL AFTER `pre_production_notes`,
+  ADD COLUMN `pre_production_file_type` VARCHAR(255) NULL AFTER `pre_production_file_name`,
+  ADD COLUMN `pre_production_file_size` INT NULL AFTER `pre_production_file_type`,
+  ADD COLUMN `pre_production_file_path` VARCHAR(500) NULL AFTER `pre_production_file_size`,
+  ADD COLUMN `pre_production_file_url` VARCHAR(1000) NULL AFTER `pre_production_file_path`;
+
+-- 27-07-26
+
+--- remove admin default access from finance module
+
+UPDATE role_permissions rp
+INNER JOIN permissions p
+  ON p.permission_id = rp.permission_id
+INNER JOIN user_type ut
+  ON ut.user_type_id = rp.role_id
+SET rp.is_active = 0
+WHERE p.module_key = 'admin_finances'
+  AND LOWER(REPLACE(ut.user_role, ' ', '_')) = 'admin'
+  AND rp.is_active = 1;

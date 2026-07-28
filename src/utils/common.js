@@ -85,8 +85,20 @@ const uploadS3File = async (files, field) => {
   return file.public_id;
 };
 
-const S3UploadFiles = async (files) => {
+const sanitizeS3Prefix = (value = '') => (
+  String(value || '')
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\/+|\/+$/g, '')
+    .split('/')
+    .map((part) => part.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/-+/g, '-'))
+    .filter(Boolean)
+    .join('/')
+);
+
+const S3UploadFiles = async (files, options = {}) => {
   let filePaths = [];
+  const uploadPrefix = sanitizeS3Prefix(options.prefix || options.folder || '');
 
   if (!files) return filePaths;
 
@@ -98,7 +110,8 @@ const S3UploadFiles = async (files) => {
       const ext = path.extname(file.filename).replace('.', '');
       const randomNumber = Math.floor(Math.random() * 101);
 
-      file.public_id = `${field}_${randomNumber}_${currentImageVersion}.${ext}`;
+      const fileName = `${field}_${randomNumber}_${currentImageVersion}.${ext}`;
+      file.public_id = uploadPrefix ? `${uploadPrefix}/${fileName}` : fileName;
 
       // Process image if it's an image file
       let uploadPath = file.path;
@@ -123,6 +136,10 @@ const S3UploadFiles = async (files) => {
       filePaths.push({
         file_type: field,
         file_path: file.public_id,
+        originalname: file.originalname || file.filename || file.public_id,
+        file_name: file.originalname || file.filename || file.public_id,
+        file_size_bytes: file.size || null,
+        mime_type: file.mimetype || null,
       });
     }
   }
@@ -131,15 +148,33 @@ const S3UploadFiles = async (files) => {
 };
 
 const toAbsoluteBeigeAssetUrl = (pathValue) => {
-  const base = (process.env.BEIGE_ASSET_BASE_URL || '').replace(/\/+$/, '/');
-
   const raw = String(pathValue || '').trim();
   if (!raw) return '';
 
   // already full URL
   if (/^https?:\/\//i.test(raw)) return raw;
 
-  return `${base}${raw.replace(/^\/+/, '')}`;
+  const configuredBase = String(process.env.BEIGE_ASSET_BASE_URL || '').trim();
+  const bucket = String(process.env.S3_BUCKET_NAME || '').trim();
+  const region = String(process.env.S3_BUCKET_REGION || 'us-east-1').trim();
+  const subFolder = String(process.env.S3_SUB_FOLDER || '').trim().replace(/^\/+|\/+$/g, '');
+  const base = (
+    configuredBase ||
+    (bucket
+      ? `https://${bucket}.s3.${region || 'us-east-1'}.amazonaws.com/${subFolder ? `${subFolder}/` : ''}`
+      : '')
+  ).replace(/\/+$/, '/');
+
+  if (!base) return raw.replace(/^\/+/, '');
+
+  const cleanRaw = raw.replace(/^\/+/, '');
+  const cleanSubFolder = subFolder ? `${subFolder}/` : '';
+  const assetPath =
+    cleanSubFolder && cleanRaw.startsWith(cleanSubFolder)
+      ? cleanRaw.slice(cleanSubFolder.length)
+      : cleanRaw;
+
+  return `${base}${assetPath}`;
 };
 
 module.exports = {
@@ -148,4 +183,3 @@ module.exports = {
   S3UploadFiles,
   toAbsoluteBeigeAssetUrl
 };
-
