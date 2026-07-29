@@ -2033,13 +2033,28 @@ const sendSalesPaymentReceivedNotification = async (paymentData) => {
       leadId,
       explicitUrl: paymentData?.view_details_url || paymentData?.booking_url || paymentData?.bookingLink || ''
     });
+    const recipients = [
+      to,
+      paymentData?.created_by_email || paymentData?.quote_creator_email
+    ]
+      .flat()
+      .filter(Boolean)
+      .map((email) => String(email).trim())
+      .filter(Boolean)
+      .filter((email, index, list) =>
+        list.findIndex((item) => item.toLowerCase() === email.toLowerCase()) === index
+      );
+
+    if (!recipients.length) {
+      return { success: false, error: 'SALES_NOTIFICATION_EMAIL is not configured' };
+    }
     const { firstName, lastName } = splitName(
       paymentData?.clientName || paymentData?.name,
       paymentData?.guestEmail || paymentData?.email
     );
 
     return await sendEmail({
-      to,
+      to: recipients,
       subject: isPartialPayment ? 'Partial Payment Received' : 'Payment Received',
       templateId,
       dynamicTemplateData: {
@@ -2903,8 +2918,19 @@ const sendQuoteAcceptedClientEmail = async (data) => {
 };
 
 const sendQuoteAcceptedSalesNotificationEmail = async (data) => {
-  const to = process.env.SALES_NOTIFICATION_EMAIL;
-  if (!to) {
+  const recipients = [
+    process.env.SALES_NOTIFICATION_EMAIL,
+    data?.created_by_email || data?.quote_creator_email
+  ]
+    .flat()
+    .filter(Boolean)
+    .map((email) => String(email).trim())
+    .filter(Boolean)
+    .filter((email, index, list) =>
+      list.findIndex((item) => item.toLowerCase() === email.toLowerCase()) === index
+    );
+
+  if (!recipients.length) {
     return { success: false, error: 'SALES_NOTIFICATION_EMAIL is not configured' };
   }
 
@@ -2918,7 +2944,7 @@ const sendQuoteAcceptedSalesNotificationEmail = async (data) => {
   );
 
   return sendEmail({
-    to,
+    to: recipients,
     subject: `Quote accepted: ${data?.quote_number || 'Quote'}`,
     templateId: QUOTE_ACCEPTED_SALES_NOTIFICATION_TEMPLATE_ID,
     dynamicTemplateData: {
