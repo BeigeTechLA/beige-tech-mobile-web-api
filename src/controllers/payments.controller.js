@@ -1303,6 +1303,16 @@ async function processStripePaidWebhookEvent(event, req = {}) {
     });
 
     if (!isFullyPaidAfterWebhook) {
+      notifySalesPaymentReceivedForBooking({
+        booking,
+        bookingId: booking_id,
+        amountPaid,
+        paymentIntentId,
+        paymentType: 'partial',
+        paymentMethod: dataObject.payment_method_details?.type || dataObject.payment_method_types?.[0] || 'card',
+        paymentState: reconciledPaymentState
+      });
+
       return {
         received: true,
         payment_id: payment.payment_id,
@@ -1351,24 +1361,30 @@ async function processStripePaidWebhookEvent(event, req = {}) {
     }
 
     const phoneNumber = user?.phone_number || lead?.phone || '';
+    const webhookPaymentMethod =
+      dataObject.payment_method_details?.type ||
+      dataObject.payment_method_types?.[0] ||
+      'card';
     emailService.sendPaymentSuccessSalesNotification({
       guestEmail: guestEmail || 'Unknown Client',
       email: user?.email || guestEmail,
       clientName,
       phone_number: phoneNumber,
       amount: amountPaid,
+      total_amount: reconciledPaymentState.quoteTotal,
+      paid_amount_total: reconciledPaymentState.paidAmount,
+      pending_amount: reconciledPaymentState.dueAmount,
+      payment_method: webhookPaymentMethod,
       shootType: booking.shoot_type || 'Shoot',
       shoot_date: booking.shoot_date || booking.event_date,
       startTime: booking.start_time,
       endTime: booking.end_time,
       editsNeeded: booking.edits_needed ?? lead?.edits_needed,
-      paymentIntentId
+      paymentIntentId,
+      booking_id,
+      lead_id: lead?.lead_id || ''
     }).catch(err => console.error('Sales Notification Error:', err));
 
-    const webhookPaymentMethod =
-      dataObject.payment_method_details?.type ||
-      dataObject.payment_method_types?.[0] ||
-      'card';
     sendBookingConfirmationForBooking({
       bookingId: booking_id,
       amountPaid,
@@ -1762,6 +1778,57 @@ async function notifyAssignedCreatorsAfterPayment(bookingId) {
     console.error(`Assigned creator payment notification failed for booking ${bookingId}:`, error.message);
   }
 }
+
+const notifySalesPaymentReceivedForBooking = async ({
+  booking,
+  bookingId,
+  amountPaid,
+  paymentIntentId = '',
+  paymentType = 'full',
+  paymentMethod = 'card',
+  paymentState = null,
+  paymentLink = null
+}) => {
+  try {
+    const resolvedBookingId = bookingId || booking?.stream_project_booking_id;
+    if (!resolvedBookingId) return;
+
+    const [lead, user] = await Promise.all([
+      db.sales_leads.findOne({ where: { booking_id: resolvedBookingId } }),
+      booking?.user_id
+        ? db.users.findByPk(booking.user_id, { attributes: ['name', 'email', 'phone_number'] })
+        : null
+    ]);
+
+    const guestEmail = booking?.guest_email || user?.email || lead?.guest_email || '';
+    const clientName = user?.name || lead?.client_name || '';
+    const phoneNumber = user?.phone_number || lead?.phone || '';
+
+    await emailService.sendSalesPaymentReceivedNotification({
+      guestEmail: guestEmail || 'Unknown Client',
+      email: user?.email || guestEmail,
+      clientName,
+      phone_number: phoneNumber,
+      amount: amountPaid,
+      total_amount: paymentState?.quoteTotal,
+      paid_amount_total: paymentState?.paidAmount,
+      pending_amount: paymentState?.dueAmount,
+      payment_type: paymentType,
+      payment_mode: paymentMethod,
+      shootType: booking?.shoot_type || 'Shoot',
+      shoot_date: booking?.shoot_date || booking?.event_date,
+      startTime: booking?.start_time,
+      endTime: booking?.end_time,
+      editsNeeded: booking?.edits_needed ?? lead?.edits_needed,
+      paymentIntentId,
+      payment_link_id: paymentLink?.payment_link_id || '',
+      booking_id: resolvedBookingId,
+      lead_id: lead?.lead_id || ''
+    });
+  } catch (err) {
+    console.error('Sales Payment Notification Error:', err);
+  }
+};
 
 const sendBookingConfirmationForBooking = async ({
   bookingId,
@@ -3107,6 +3174,19 @@ exports.confirmPaymentMulti = async (req, res) => {
     if (!isFullyPaidAfterReconcile) {
       await transaction.commit();
 
+      notifySalesPaymentReceivedForBooking({
+        booking,
+        bookingId: booking_id,
+        amountPaid: totalAmount,
+        paymentIntentId,
+        paymentType: 'partial',
+        paymentMethod: paymentIntent?.charges?.data?.[0]?.payment_method_details?.type || paymentIntent?.payment_method_types?.[0] || 'card',
+        paymentState: reconciledPaymentState,
+        paymentLink: resolvedPaymentLinkToken
+          ? { link_token: resolvedPaymentLinkToken }
+          : null
+      });
+
       return res.status(201).json({
         success: true,
         message: 'Partial payment confirmed successfully',
@@ -3155,22 +3235,6 @@ exports.confirmPaymentMulti = async (req, res) => {
     const guestEmail = booking.guest_email || user?.email || lead?.guest_email || '';
     const clientName = user?.name || lead?.client_name || '';
     const phoneNumber = user?.phone_number || lead?.phone || '';
-
-    // Send Sales Notification Email
-    emailService.sendPaymentSuccessSalesNotification({
-      guestEmail: guestEmail || 'Unknown Client',
-      email: user?.email || guestEmail,
-      clientName,
-      phone_number: phoneNumber,
-      amount: totalAmount,
-      shootType: booking.shoot_type || 'Shoot',
-      shoot_date: booking.shoot_date || booking.event_date,
-      startTime: booking.start_time,
-      endTime: booking.end_time,
-      editsNeeded: booking.edits_needed ?? lead?.edits_needed,
-      paymentIntentId
-    }).catch(err => console.error('Sales Notification Error:', err));
-
     let paymentMethod = 'free'; // default for free checkout
 
     if (paymentIntent) {
@@ -3179,6 +3243,27 @@ exports.confirmPaymentMulti = async (req, res) => {
         paymentIntent.payment_method_types?.[0] ||
         'card';
     }
+
+    // Send Sales Notification Email
+    emailService.sendPaymentSuccessSalesNotification({
+      guestEmail: guestEmail || 'Unknown Client',
+      email: user?.email || guestEmail,
+      clientName,
+      phone_number: phoneNumber,
+      amount: totalAmount,
+      total_amount: reconciledPaymentState.quoteTotal,
+      paid_amount_total: reconciledPaymentState.paidAmount,
+      pending_amount: reconciledPaymentState.dueAmount,
+      payment_method: paymentMethod,
+      shootType: booking.shoot_type || 'Shoot',
+      shoot_date: booking.shoot_date || booking.event_date,
+      startTime: booking.start_time,
+      endTime: booking.end_time,
+      editsNeeded: booking.edits_needed ?? lead?.edits_needed,
+      paymentIntentId,
+      booking_id,
+      lead_id: lead?.lead_id || ''
+    }).catch(err => console.error('Sales Notification Error:', err));
     sendBookingConfirmationForBooking({
       bookingId: booking_id,
       amountPaid: totalAmount,
@@ -3825,12 +3910,18 @@ exports.manualMarkWebhookPaid = async (req, res) => {
       clientName,
       phone_number: phoneNumber,
       amount: amountPaid,
+      total_amount: amountPaid,
+      paid_amount_total: amountPaid,
+      pending_amount: 0,
+      payment_method: req.body?.payment_method || 'manual_local',
       shootType: booking.shoot_type || 'Shoot',
       shoot_date: booking.shoot_date || booking.event_date,
       startTime: booking.start_time,
       endTime: booking.end_time,
       editsNeeded: booking.edits_needed ?? lead?.edits_needed,
-      paymentIntentId
+      paymentIntentId,
+      booking_id: bookingId,
+      lead_id: lead?.lead_id || ''
     }).catch(err => console.error('Manual webhook sales notification error:', err));
 
     sendBookingConfirmationForBooking({
