@@ -4154,6 +4154,32 @@ const syncExternalWorkspaceAfterManualPayment = async (bookingRecord) => {
   }
 };
 
+const getManualPaymentQuoteCreatorRecipient = async (salesQuoteId) => {
+  const normalizedSalesQuoteId = Number(salesQuoteId || 0);
+  if (!Number.isInteger(normalizedSalesQuoteId) || normalizedSalesQuoteId <= 0) {
+    return {};
+  }
+
+  const quote = await sales_quotes.findByPk(normalizedSalesQuoteId, {
+    attributes: ['sales_quote_id', 'created_by_user_id'],
+    include: [{
+      model: users,
+      as: 'created_by',
+      attributes: ['id', 'name', 'email'],
+      required: false
+    }]
+  });
+
+  const createdByEmail = quote?.created_by?.email || null;
+  if (!createdByEmail) return {};
+
+  return {
+    created_by_email: createdByEmail,
+    created_by_name: quote?.created_by?.name || null,
+    sales_quote_id: quote.sales_quote_id
+  };
+};
+
 const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }) => {
   const {
     payment_type,
@@ -4412,6 +4438,7 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
 
   const externalWorkspaceSync = await syncExternalWorkspaceAfterManualPayment(lead.booking);
   if (!isNet30Mode && amountToApply > 0) {
+    const quoteCreatorRecipient = await getManualPaymentQuoteCreatorRecipient(resolvedSalesQuoteId);
     emailService.sendSalesPaymentReceivedNotification({
       guestEmail: lead.guest_email || '',
       email: lead.guest_email || '',
@@ -4431,7 +4458,8 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
       endTime: lead.booking?.end_time,
       editsNeeded: lead.booking?.edits_needed ?? lead.edits_needed,
       booking_id: bookingId,
-      lead_id: Number(leadId)
+      lead_id: Number(leadId),
+      ...quoteCreatorRecipient
     }).catch((emailError) => {
       console.error('Manual payment sales notification error:', emailError);
     });

@@ -26,6 +26,70 @@ function normalizePaymentSource(value) {
     : PAYMENT_SOURCE.BOOKING_CHECKOUT;
 }
 
+function isQuotePaymentSource(paymentSource) {
+  return [
+    PAYMENT_SOURCE.QUOTE_INVOICE,
+    PAYMENT_SOURCE.ADDITIONAL_INVOICE
+  ].includes(normalizePaymentSource(paymentSource));
+}
+
+async function getQuoteCreatorNotificationRecipient({
+  bookingId,
+  salesQuoteId = null,
+  paymentSource,
+  transaction = null
+}) {
+  if (!bookingId || !isQuotePaymentSource(paymentSource)) return {};
+
+  const normalizedSalesQuoteId = Number(salesQuoteId || 0);
+  let quote = Number.isInteger(normalizedSalesQuoteId) && normalizedSalesQuoteId > 0
+    ? await db.sales_quotes.findByPk(normalizedSalesQuoteId, {
+        attributes: ['sales_quote_id', 'created_by_user_id'],
+        include: [{ model: db.users, as: 'created_by', attributes: ['id', 'name', 'email'], required: false }],
+        transaction
+      })
+    : null;
+
+  if (!quote) {
+    const summary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId, transaction);
+    const summarySalesQuoteId = Number(summary?.sales_quote_id || 0);
+    if (Number.isInteger(summarySalesQuoteId) && summarySalesQuoteId > 0) {
+      quote = await db.sales_quotes.findByPk(summarySalesQuoteId, {
+        attributes: ['sales_quote_id', 'created_by_user_id'],
+        include: [{ model: db.users, as: 'created_by', attributes: ['id', 'name', 'email'], required: false }],
+        transaction
+      });
+    }
+  }
+
+  if (!quote) {
+    const linkedLead = await db.sales_leads.findOne({
+      where: { booking_id: bookingId },
+      attributes: ['lead_id'],
+      transaction
+    });
+
+    if (linkedLead?.lead_id) {
+      quote = await db.sales_quotes.findOne({
+        where: { lead_id: linkedLead.lead_id },
+        attributes: ['sales_quote_id', 'created_by_user_id'],
+        include: [{ model: db.users, as: 'created_by', attributes: ['id', 'name', 'email'], required: false }],
+        order: [['sales_quote_id', 'DESC']],
+        transaction
+      });
+    }
+  }
+
+  const createdByEmail = quote?.created_by?.email || null;
+  if (!createdByEmail) return {};
+
+  return {
+    created_by_email: createdByEmail,
+    created_by_name: quote?.created_by?.name || null,
+    sales_quote_id: quote.sales_quote_id
+  };
+}
+
 async function isConvertedSalesQuoteBooking(bookingId, transaction = null) {
   const convertedLead = await db.sales_leads.findOne({
     where: {
@@ -1310,7 +1374,9 @@ async function processStripePaidWebhookEvent(event, req = {}) {
         paymentIntentId,
         paymentType: 'partial',
         paymentMethod: dataObject.payment_method_details?.type || dataObject.payment_method_types?.[0] || 'card',
-        paymentState: reconciledPaymentState
+        paymentState: reconciledPaymentState,
+        paymentSource,
+        salesQuoteId: invoiceMetadata?.sales_quote_id || invoiceMetadata?.quote_id || null
       });
 
       return {
@@ -1365,6 +1431,11 @@ async function processStripePaidWebhookEvent(event, req = {}) {
       dataObject.payment_method_details?.type ||
       dataObject.payment_method_types?.[0] ||
       'card';
+    const quoteCreatorRecipient = await getQuoteCreatorNotificationRecipient({
+      bookingId: booking_id,
+      salesQuoteId: invoiceMetadata?.sales_quote_id || invoiceMetadata?.quote_id || null,
+      paymentSource
+    });
     emailService.sendPaymentSuccessSalesNotification({
       guestEmail: guestEmail || 'Unknown Client',
       email: user?.email || guestEmail,
@@ -1382,7 +1453,8 @@ async function processStripePaidWebhookEvent(event, req = {}) {
       editsNeeded: booking.edits_needed ?? lead?.edits_needed,
       paymentIntentId,
       booking_id,
-      lead_id: lead?.lead_id || ''
+      lead_id: lead?.lead_id || '',
+      ...quoteCreatorRecipient
     }).catch(err => console.error('Sales Notification Error:', err));
 
     sendBookingConfirmationForBooking({
@@ -1787,7 +1859,9 @@ const notifySalesPaymentReceivedForBooking = async ({
   paymentType = 'full',
   paymentMethod = 'card',
   paymentState = null,
-  paymentLink = null
+  paymentLink = null,
+  paymentSource = PAYMENT_SOURCE.BOOKING_CHECKOUT,
+  salesQuoteId = null
 }) => {
   try {
     const resolvedBookingId = bookingId || booking?.stream_project_booking_id;
@@ -1803,6 +1877,11 @@ const notifySalesPaymentReceivedForBooking = async ({
     const guestEmail = booking?.guest_email || user?.email || lead?.guest_email || '';
     const clientName = user?.name || lead?.client_name || '';
     const phoneNumber = user?.phone_number || lead?.phone || '';
+    const quoteCreatorRecipient = await getQuoteCreatorNotificationRecipient({
+      bookingId: resolvedBookingId,
+      salesQuoteId,
+      paymentSource
+    });
 
     await emailService.sendSalesPaymentReceivedNotification({
       guestEmail: guestEmail || 'Unknown Client',
@@ -1823,7 +1902,8 @@ const notifySalesPaymentReceivedForBooking = async ({
       paymentIntentId,
       payment_link_id: paymentLink?.payment_link_id || '',
       booking_id: resolvedBookingId,
-      lead_id: lead?.lead_id || ''
+      lead_id: lead?.lead_id || '',
+      ...quoteCreatorRecipient
     });
   } catch (err) {
     console.error('Sales Payment Notification Error:', err);
@@ -3184,7 +3264,9 @@ exports.confirmPaymentMulti = async (req, res) => {
         paymentState: reconciledPaymentState,
         paymentLink: resolvedPaymentLinkToken
           ? { link_token: resolvedPaymentLinkToken }
-          : null
+          : null,
+        paymentSource,
+        salesQuoteId
       });
 
       return res.status(201).json({
@@ -3243,6 +3325,11 @@ exports.confirmPaymentMulti = async (req, res) => {
         paymentIntent.payment_method_types?.[0] ||
         'card';
     }
+    const quoteCreatorRecipient = await getQuoteCreatorNotificationRecipient({
+      bookingId: booking_id,
+      salesQuoteId,
+      paymentSource
+    });
 
     // Send Sales Notification Email
     emailService.sendPaymentSuccessSalesNotification({
@@ -3262,7 +3349,8 @@ exports.confirmPaymentMulti = async (req, res) => {
       editsNeeded: booking.edits_needed ?? lead?.edits_needed,
       paymentIntentId,
       booking_id,
-      lead_id: lead?.lead_id || ''
+      lead_id: lead?.lead_id || '',
+      ...quoteCreatorRecipient
     }).catch(err => console.error('Sales Notification Error:', err));
     sendBookingConfirmationForBooking({
       bookingId: booking_id,
@@ -3903,6 +3991,11 @@ exports.manualMarkWebhookPaid = async (req, res) => {
     const guestEmail = booking.guest_email || user?.email || lead?.guest_email || '';
     const clientName = user?.name || lead?.client_name || '';
     const phoneNumber = user?.phone_number || lead?.phone || '';
+    const quoteCreatorRecipient = await getQuoteCreatorNotificationRecipient({
+      bookingId,
+      salesQuoteId,
+      paymentSource
+    });
 
     emailService.sendPaymentSuccessSalesNotification({
       guestEmail: guestEmail || 'Unknown Client',
@@ -3921,7 +4014,8 @@ exports.manualMarkWebhookPaid = async (req, res) => {
       editsNeeded: booking.edits_needed ?? lead?.edits_needed,
       paymentIntentId,
       booking_id: bookingId,
-      lead_id: lead?.lead_id || ''
+      lead_id: lead?.lead_id || '',
+      ...quoteCreatorRecipient
     }).catch(err => console.error('Manual webhook sales notification error:', err));
 
     sendBookingConfirmationForBooking({
