@@ -876,7 +876,11 @@ async function processCreatorResolutionPayment(dispute, payload = {}, options = 
     proof_file_name: payload.proof_file_name || null,
     notes: payload.notes || `Paid from dispute ${dispute.dispute_code}`,
     payment_scope: amount < paymentState.remaining_balance ? 'advance' : 'final',
-    source: 'dispute_resolution'
+    source: 'dispute_resolution',
+    dispute_id: dispute.finance_dispute_id,
+    dispute_code: dispute.dispute_code || null,
+    dispute_original_compensation: paymentState.total_compensation,
+    dispute_extra_amount: extraAmount
   }, { userId: options.userId, transaction });
 }
 
