@@ -2,6 +2,10 @@ const db = require('../models');
 const config = require('../config/config');
 const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
 const bookingPricingService = require('./booking-pricing.service');
+const {
+  sendCPNewBookingRequestEmail,
+  sendCPEarningsUpdatedEmail
+} = require('../utils/emailService');
 
 const stripe = config.stripe?.secretKey
   ? require('stripe')(config.stripe.secretKey)
@@ -101,6 +105,18 @@ function formatShootType(booking = {}) {
     return `${shootType} ${contentType}`;
   }
   return shootType || contentType || booking.project_name || null;
+}
+
+function formatEmailAmount(value) {
+  return toMoney(value || 0);
+}
+
+function buildCreatorDisplayName(creator = {}) {
+  return [creator.first_name, creator.last_name].filter(Boolean).join(' ').trim() || 'there';
+}
+
+function buildCpDashboardLink() {
+  return process.env.CP_DASHBOARD_LINK || `${String(process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/creator/dashboard`;
 }
 
 function deriveNameFromEmail(email) {
@@ -569,6 +585,59 @@ function buildProofUrl(metadata = {}) {
   return toAbsoluteBeigeAssetUrl(proofUrl) || String(proofUrl);
 }
 
+function buildAttachmentProof(attachments = []) {
+  const activeAttachments = [...(attachments || [])]
+    .filter((attachment) => attachment && attachment.is_active !== false && Number(attachment.is_active ?? 1) !== 0)
+    .sort((left, right) => new Date(right.created_at || 0) - new Date(left.created_at || 0));
+  const attachment = activeAttachments.find((item) => ['payout_proof', 'refund_proof'].includes(item.attachment_type)) || activeAttachments[0];
+  if (!attachment) return null;
+  const proofUrl = attachment.file_url || toAbsoluteBeigeAssetUrl(attachment.file_path);
+  return {
+    receipt_url: proofUrl || attachment.file_path || null,
+    receipt_download_url: proofUrl || attachment.file_path || null,
+    proof_file_name: attachment.file_name || null
+  };
+}
+
+async function buildCreatorDisputeFallbacks(earnings = [], transaction = null) {
+  const bookingIds = [...new Set(earnings.map((earning) => Number(earning.booking_id)).filter(Boolean))];
+  if (!bookingIds.length) return new Map();
+
+  const disputes = await db.finance_disputes.findAll({
+    where: {
+      booking_id: { [db.Sequelize.Op.in]: bookingIds },
+      raised_by_type: 'creator',
+      status: 'resolved'
+    },
+    include: [
+      {
+        model: db.finance_dispute_attachments,
+        as: 'attachments',
+        required: false
+      }
+    ],
+    order: [['resolved_at', 'DESC'], ['updated_at', 'DESC'], ['created_at', 'DESC']],
+    transaction
+  });
+
+  const fallbackByEarningId = new Map();
+  disputes.map(toPlain).forEach((dispute) => {
+    const metadata = parseJson(dispute.metadata_json, {});
+    const creatorEarningId = Number(metadata?.cp_compensation?.creator_earning_id || metadata?.creator_earning_id || 0);
+    if (!creatorEarningId || fallbackByEarningId.has(creatorEarningId)) return;
+
+    const attachmentProof = buildAttachmentProof(dispute.attachments || []);
+    fallbackByEarningId.set(creatorEarningId, {
+      dispute_id: dispute.finance_dispute_id,
+      dispute_code: dispute.dispute_code || null,
+      disputed_amount: toMoney(dispute.disputed_amount || metadata?.cp_compensation?.disputed_amount || metadata?.cp_compensation?.total_compensation || 0),
+      ...attachmentProof
+    });
+  });
+
+  return fallbackByEarningId;
+}
+
 async function buildCpPayoutHistoryForEarnings(earnings = [], transaction = null) {
   const earningIds = earnings.map((earning) => Number(earning.creator_earning_id)).filter(Boolean);
   const creatorIds = [...new Set(earnings.map((earning) => Number(earning.creator_id)).filter(Boolean))];
@@ -584,6 +653,7 @@ async function buildCpPayoutHistoryForEarnings(earnings = [], transaction = null
   });
 
   const earningById = new Map(earnings.map((earning) => [Number(earning.creator_earning_id), earning]));
+  const disputeFallbackByEarningId = await buildCreatorDisputeFallbacks(earnings, transaction);
   const byEarningId = new Map();
   const all = [];
 
@@ -596,6 +666,10 @@ async function buildCpPayoutHistoryForEarnings(earnings = [], transaction = null
 
     const earning = earningById.get(creatorEarningId);
     const proofUrl = buildProofUrl(metadata);
+    const disputeFallback = disputeFallbackByEarningId.get(creatorEarningId) || null;
+    const receiptUrl = proofUrl || disputeFallback?.receipt_url || null;
+    const disputeOriginalAmount = toMoney(metadata.dispute_original_compensation || disputeFallback?.disputed_amount || 0);
+    const disputeExtraAmount = toMoney(metadata.dispute_extra_amount || (disputeOriginalAmount > 0 ? Math.max(toMoney(payout.amount) - disputeOriginalAmount, 0) : 0));
     const paymentScope = metadata.payment_scope || 'final';
     const historyItem = {
       id: payout.creator_payout_request_id,
@@ -608,11 +682,16 @@ async function buildCpPayoutHistoryForEarnings(earnings = [], transaction = null
       status: payout.status,
       amount: toMoney(payout.amount),
       paid_at: payout.paid_at || payout.processed_at || payout.created_at || null,
-      receipt_url: proofUrl,
-      receipt_download_url: proofUrl,
+      receipt_url: receiptUrl,
+      receipt_download_url: receiptUrl,
       transaction_reference: metadata.transaction_reference || payout.external_reference || null,
-      proof_file_name: metadata.proof_file_name || null,
-      notes: metadata.notes || null
+      proof_file_name: metadata.proof_file_name || disputeFallback?.proof_file_name || null,
+      notes: metadata.notes || null,
+      source: metadata.resolution_source || metadata.source || null,
+      dispute_id: metadata.dispute_id || disputeFallback?.dispute_id || null,
+      dispute_code: metadata.dispute_code || disputeFallback?.dispute_code || null,
+      dispute_original_compensation: disputeOriginalAmount || null,
+      dispute_extra_amount: disputeExtraAmount || null
     };
 
     if (!byEarningId.has(creatorEarningId)) byEarningId.set(creatorEarningId, []);
@@ -658,6 +737,111 @@ async function getBooking(bookingId, transaction = null) {
   const booking = await db.stream_project_booking.findByPk(bookingId, { transaction });
   if (!booking) throw buildError('Booking not found', 404);
   return booking;
+}
+
+async function getBookingForCompensationEmail(bookingId) {
+  const booking = await db.stream_project_booking.findByPk(bookingId, {
+    include: [
+      {
+        model: db.users,
+        as: 'user',
+        required: false,
+        attributes: ['id', 'name', 'email']
+      }
+    ]
+  });
+
+  return booking ? toPlain(booking) : null;
+}
+
+async function resolveCompensationEmailClientName(booking = {}) {
+  if (booking?.user?.name) return booking.user.name;
+
+  const bookingId = Number(booking?.stream_project_booking_id || booking?.booking_id || booking?.id);
+  if (bookingId) {
+    const [salesLead, clientLead] = await Promise.all([
+      db.sales_leads.findOne({
+        where: { booking_id: bookingId, is_active: 1 },
+        attributes: ['client_name', 'guest_email'],
+        raw: true
+      }),
+      db.client_leads.findOne({
+        where: { booking_id: bookingId, is_active: 1 },
+        attributes: ['client_name', 'guest_email'],
+        raw: true
+      })
+    ]);
+
+    if (salesLead?.client_name) return salesLead.client_name;
+    if (clientLead?.client_name) return clientLead.client_name;
+    if (salesLead?.guest_email) return deriveNameFromEmail(salesLead.guest_email);
+    if (clientLead?.guest_email) return deriveNameFromEmail(clientLead.guest_email);
+  }
+
+  return deriveNameFromEmail(booking?.guest_email) || 'TBD';
+}
+
+async function getCreatorForCompensationEmail(creatorId) {
+  const creator = await db.crew_members.findByPk(creatorId, {
+    attributes: ['crew_member_id', 'first_name', 'last_name', 'email', 'primary_role'],
+    raw: true
+  });
+
+  return creator || null;
+}
+
+async function buildCompensationEmailPayload({ bookingId, creatorId, amount }) {
+  const [booking, creator] = await Promise.all([
+    getBookingForCompensationEmail(bookingId),
+    getCreatorForCompensationEmail(creatorId)
+  ]);
+
+  if (!booking || !creator?.email) return null;
+
+  const clientName = await resolveCompensationEmailClientName(booking);
+  const dashboardLink = buildCpDashboardLink();
+
+  return {
+    to_email: creator.email,
+    user_name: creator.first_name,
+    cp_name: buildCreatorDisplayName(creator),
+    booking_id: booking.stream_project_booking_id || bookingId,
+    project_id: booking.stream_project_booking_id || bookingId,
+    client_name: clientName,
+    service_type: booking.content_type || booking.event_type || booking.shoot_type || null,
+    shoot_type: formatShootType(booking),
+    date: booking.event_date || null,
+    shoot_date: booking.event_date || null,
+    start_time: booking.start_time || null,
+    end_time: booking.end_time || null,
+    shoot_amount: formatEmailAmount(amount),
+    earnings: formatEmailAmount(amount),
+    dashboard_link: dashboardLink,
+    view_details_url: dashboardLink
+  };
+}
+
+async function sendCompensationNotification(notification) {
+  try {
+    const payload = await buildCompensationEmailPayload(notification);
+    if (!payload) return;
+
+    if (notification.type === 'new_booking_request') {
+      await sendCPNewBookingRequestEmail(payload);
+      return;
+    }
+
+    if (notification.type === 'earnings_updated') {
+      await sendCPEarningsUpdatedEmail(payload);
+    }
+  } catch (error) {
+    console.error('[cp-compensation] compensation email failed:', {
+      type: notification?.type,
+      booking_id: notification?.bookingId,
+      creator_id: notification?.creatorId,
+      message: error?.message || error
+    });
+  }
 }
 
 async function getAssignedCreator(bookingId, creatorId, transaction = null) {
@@ -1107,6 +1291,8 @@ async function upsertCreatorCompensation(payload = {}, options = {}) {
       payment_id: booking.payment_id || null,
       currency: 'USD'
     }, transaction);
+    const previousTotal = toMoney(earning.net_earning_amount || earning.gross_amount || 0);
+    const wasExistingCompensation = ['pending_approval', 'approved'].includes(earning.approval_status);
 
     const now = new Date();
     const approvalPayload = approvalStatus === 'approved'
@@ -1147,10 +1333,16 @@ async function upsertCreatorCompensation(payload = {}, options = {}) {
       updated_at: now
     }, { transaction });
 
-    const advancePayload = payload.advance && compensationSource === 'sales_admin'
+    const rawAdvancePayload = payload.advance || null;
+    const shouldProcessAdminAdvancePayment = compensationSource === 'admin' && rawAdvancePayload && (
+      rawAdvancePayload.proof_url || rawAdvancePayload.proof_file_path
+    );
+    const advancePayload = rawAdvancePayload && compensationSource === 'sales_admin'
       ? { ...payload.advance, status: 'pending' }
-      : payload.advance;
-    const advance = await addAdvanceIfProvided(earning, advancePayload, options, transaction);
+      : rawAdvancePayload;
+    let advance = shouldProcessAdminAdvancePayment
+      ? null
+      : await addAdvanceIfProvided(earning, advancePayload, options, transaction);
 
     if (approvalStatus === 'approved') {
       await releaseApprovedCpCompensationToWallet(earning, transaction);
@@ -1162,6 +1354,25 @@ async function upsertCreatorCompensation(payload = {}, options = {}) {
         event_date: now,
         sort_order: 5
       }, transaction);
+    }
+
+    if (approvalStatus === 'approved' && shouldProcessAdminAdvancePayment) {
+      const paymentResult = await processCompensationPayment(earning.creator_earning_id, {
+        ...rawAdvancePayload,
+        amount: rawAdvancePayload.amount,
+        payment_method: 'outside_platform',
+        payment_mode: rawAdvancePayload.payment_mode || 'advance_payment',
+        payment_scope: 'advance',
+        transaction_reference: rawAdvancePayload.transaction_reference || `ADV-${earning.creator_earning_id}-${Date.now()}`,
+        notes: rawAdvancePayload.notes || null
+      }, {
+        ...options,
+        transaction
+      });
+
+      advance = paymentResult.advance_id
+        ? await db.creator_earning_advances.findByPk(paymentResult.advance_id, { transaction })
+        : null;
     }
 
     if (approvalStatus === 'pending_approval') {
@@ -1184,6 +1395,9 @@ async function upsertCreatorCompensation(payload = {}, options = {}) {
       compensation_source: compensationSource,
       compensation_method: compensationMethod,
       total_compensation: normalized.total,
+      previous_total_compensation: previousTotal,
+      was_existing_compensation: wasExistingCompensation,
+      compensation_changed: wasExistingCompensation && previousTotal !== normalized.total,
       items: normalized.items,
       advance
     };
@@ -1242,6 +1456,34 @@ async function upsertBulkCreatorCompensations(payload = {}, options = {}) {
     }
 
     if (!externalTransaction) await transaction.commit();
+
+    if (!externalTransaction) {
+      const notifications = creators
+        .map((creator) => {
+          if (creator.was_existing_compensation && creator.compensation_changed) {
+            return {
+              type: 'earnings_updated',
+              bookingId,
+              creatorId: creator.creator_id,
+              amount: creator.total_compensation
+            };
+          }
+
+          if (!creator.was_existing_compensation) {
+            return {
+              type: 'new_booking_request',
+              bookingId,
+              creatorId: creator.creator_id,
+              amount: creator.total_compensation
+            };
+          }
+
+          return null;
+        })
+        .filter(Boolean);
+
+      await Promise.allSettled(notifications.map(sendCompensationNotification));
+    }
 
     return {
       booking_id: bookingId,
@@ -1586,7 +1828,7 @@ async function getCreatorEarningForReview(creatorEarningId, transaction = null) 
   return earning;
 }
 
-async function getCpPayoutTotalForEarning(earning, transaction = null) {
+async function getCpPayoutTotalsForEarning(earning, transaction = null) {
   const payoutRows = await db.creator_payout_requests.findAll({
     where: {
       creator_id: earning.creator_id,
@@ -1595,16 +1837,20 @@ async function getCpPayoutTotalForEarning(earning, transaction = null) {
     transaction
   });
 
-  return toMoney(payoutRows.reduce((sum, payout) => {
+  return payoutRows.reduce((totals, payout) => {
     const metadata = parseJson(payout.metadata_json, {});
     if (
       metadata?.source === 'cp_compensation' &&
       Number(metadata.creator_earning_id) === Number(earning.creator_earning_id)
     ) {
-      return sum + Number(payout.amount || 0);
+      const amount = Number(payout.amount || 0);
+      totals.total = toMoney(totals.total + amount);
+      if (metadata.payment_scope === 'advance') {
+        totals.advance = toMoney(totals.advance + amount);
+      }
     }
-    return sum;
-  }, 0));
+    return totals;
+  }, { total: 0, advance: 0 });
 }
 
 async function getCompensationPaymentState(earning, transaction = null) {
@@ -1617,13 +1863,14 @@ async function getCompensationPaymentState(earning, transaction = null) {
   });
   const totalCompensation = toMoney(earning.net_earning_amount || earning.gross_amount || 0);
   const advanceTotal = getProcessedAdvanceTotal(advances.map(toPlain));
-  const payoutTotal = await getCpPayoutTotalForEarning(earning, transaction);
-  const paidTotal = toMoney(Math.max(advanceTotal, payoutTotal));
+  const payoutTotals = await getCpPayoutTotalsForEarning(earning, transaction);
+  const directAdvanceTotal = toMoney(Math.max(advanceTotal - payoutTotals.advance, 0));
+  const paidTotal = toMoney(payoutTotals.total + directAdvanceTotal);
 
   return {
     total_compensation: totalCompensation,
     advance_paid: advanceTotal,
-    payout_paid: payoutTotal,
+    payout_paid: payoutTotals.total,
     paid_total: paidTotal,
     remaining_balance: toMoney(Math.max(totalCompensation - paidTotal, 0))
   };
@@ -1691,7 +1938,9 @@ async function createCpPayoutRecords({
     approved_at: now,
     processed_by_user_id: userId,
     processed_at: now,
-    paid_at: paymentMethod === 'manual' ? (payload.paid_at ? new Date(payload.paid_at) : now) : null,
+    paid_at: paymentMethod === 'manual'
+      ? ((payload.paid_at || payload.payment_date) ? new Date(payload.paid_at || payload.payment_date) : now)
+      : null,
     metadata_json: stringifyMetadata({
       source: 'cp_compensation',
       creator_earning_id: earning.creator_earning_id,
@@ -1703,7 +1952,12 @@ async function createCpPayoutRecords({
       proof_url: payload.proof_url || null,
       proof_file_path: payload.proof_file_path || null,
       proof_file_name: payload.proof_file_name || null,
-      notes: payload.notes || null
+      notes: payload.notes || null,
+      resolution_source: payload.source || null,
+      dispute_id: payload.dispute_id || null,
+      dispute_code: payload.dispute_code || null,
+      dispute_original_compensation: payload.dispute_original_compensation || null,
+      dispute_extra_amount: payload.dispute_extra_amount || null
     }),
     updated_at: now
   }, { transaction });
@@ -1740,7 +1994,9 @@ async function finalizeCpPayout({
   payload = {},
   userId = null
 }, transaction = null) {
-  const paidAt = payload.paid_at ? new Date(payload.paid_at) : new Date();
+  const paidAt = (payload.paid_at || payload.payment_date)
+    ? new Date(payload.paid_at || payload.payment_date)
+    : new Date();
   const metadata = parseJson(payoutRequest.metadata_json, {});
 
   const financeTransaction = await db.finance_transactions.create({
@@ -1939,6 +2195,15 @@ async function modifyCompensation(creatorEarningId, payload = {}, options = {}) 
 
     if (!externalTransaction) await transaction.commit();
 
+    if (!externalTransaction) {
+      await sendCompensationNotification({
+        type: 'earnings_updated',
+        bookingId: earning.booking_id,
+        creatorId: earning.creator_id,
+        amount: normalized.total
+      });
+    }
+
     return {
       creator_earning_id: earning.creator_earning_id,
       booking_id: earning.booking_id,
@@ -2060,7 +2325,7 @@ async function processCompensationPayment(creatorEarningId, payload = {}, option
       throw buildError('Final payment amount must equal remaining balance', 409);
     }
 
-    if (paymentMethod === 'manual') {
+    if (paymentMethod === 'manual' && payload.source !== 'dispute_resolution') {
       if (!String(payload.payment_mode || '').trim()) {
         throw buildError('payment_mode is required for outside platform payments');
       }
@@ -2148,7 +2413,7 @@ async function processCompensationPayment(creatorEarningId, payload = {}, option
         sub_label: 'Remaining Balance Paid',
         amount,
         is_completed: 1,
-        event_date: payload.paid_at ? new Date(payload.paid_at) : new Date(),
+        event_date: (payload.paid_at || payload.payment_date) ? new Date(payload.paid_at || payload.payment_date) : new Date(),
         sort_order: 6
       }, transaction);
     }

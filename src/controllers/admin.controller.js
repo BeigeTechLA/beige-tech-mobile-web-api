@@ -13846,30 +13846,32 @@ exports.assignProjectCrewBulk = async (req, res) => {
             }
 
             try {
-                const createdIds = assignmentsToCreate.map(a => a.crew_member_id);
-                const crews = await crew_members.findAll({
-                    where: { crew_member_id: createdIds },
-                    attributes: ['first_name', 'last_name', 'email']
-                });
+                if (!allow_pending_compensation_assignment) {
+                    const createdIds = assignmentsToCreate.map(a => a.crew_member_id);
+                    const crews = await crew_members.findAll({
+                        where: { crew_member_id: createdIds },
+                        attributes: ['first_name', 'last_name', 'email']
+                    });
 
-                const dashboardLink = process.env.CP_DASHBOARD_LINK || 'https://beige.app/';
+                    const dashboardLink = process.env.CP_DASHBOARD_LINK || 'https://beige.app/';
 
-                const emailClientName = await resolveAdminBookingClientName(
-                    booking,
-                    booking?.sales_leads?.[0]?.client_name || null
-                );
-                const emailShootAmount = await resolveAdminBookingShootAmount(booking);
+                    const emailClientName = await resolveAdminBookingClientName(
+                        booking,
+                        booking?.sales_leads?.[0]?.client_name || null
+                    );
+                    const emailShootAmount = await resolveAdminBookingShootAmount(booking);
 
-                await Promise.allSettled(
-                    crews.filter(c => c.email).map(c =>
-                        sendCPNewBookingRequestEmail({
-                            to_email: c.email,
-                            user_name: c.first_name,
-                            ...getCPNewBookingEmailFields(booking, emailClientName, emailShootAmount),
-                            dashboardLink
-                        })
-                    )
-                );
+                    await Promise.allSettled(
+                        crews.filter(c => c.email).map(c =>
+                            sendCPNewBookingRequestEmail({
+                                to_email: c.email,
+                                user_name: c.first_name,
+                                ...getCPNewBookingEmailFields(booking, emailClientName, emailShootAmount),
+                                dashboardLink
+                            })
+                        )
+                    );
+                }
             } catch (mailErr) {
                 console.error('Mail trigger error:', mailErr);
             }

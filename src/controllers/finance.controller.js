@@ -203,6 +203,81 @@ exports.addClientDisputeAttachment = async (req, res) => {
   }
 };
 
+exports.listCreatorDisputes = async (req, res) => {
+  try {
+    const data = await financeDisputeService.listCreatorDisputes(req.query, {
+      userId: req.userId || req.user?.userId || null
+    });
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error('List creator disputes error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch creator disputes'
+    });
+  }
+};
+
+exports.getCreatorDisputeDetails = async (req, res) => {
+  try {
+    const data = await financeDisputeService.getCreatorDisputeDetails(req.params.disputeId, {
+      userId: req.userId || req.user?.userId || null
+    });
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error('Get creator dispute details error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch creator dispute details'
+    });
+  }
+};
+
+exports.createCreatorDispute = async (req, res) => {
+  try {
+    const data = await financeDisputeService.createCreatorDispute(req.body, req.files, {
+      userId: req.userId || req.user?.userId || null
+    });
+    return res.status(201).json({ success: true, message: 'Dispute submitted successfully', data });
+  } catch (error) {
+    console.error('Create creator dispute error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to submit dispute'
+    });
+  }
+};
+
+exports.addCreatorDisputeComment = async (req, res) => {
+  try {
+    const data = await financeDisputeService.addCreatorDisputeComment(req.params.disputeId, req.body, {
+      userId: req.userId || req.user?.userId || null
+    });
+    return res.status(201).json({ success: true, message: 'Comment added successfully', data });
+  } catch (error) {
+    console.error('Add creator dispute comment error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to add dispute comment'
+    });
+  }
+};
+
+exports.addCreatorDisputeAttachment = async (req, res) => {
+  try {
+    const data = await financeDisputeService.addCreatorDisputeAttachment(req.params.disputeId, req.body, req.files, {
+      userId: req.userId || req.user?.userId || null
+    });
+    return res.status(201).json({ success: true, message: 'Attachment added successfully', data });
+  } catch (error) {
+    console.error('Add creator dispute attachment error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to add dispute attachment'
+    });
+  }
+};
+
 exports.getCreatorWallet = async (req, res) => {
   try {
     const creatorId = parseInt(req.params.creatorId || req.query.creator_id, 10);
