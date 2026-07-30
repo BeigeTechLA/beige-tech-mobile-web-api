@@ -2060,7 +2060,7 @@ async function processCompensationPayment(creatorEarningId, payload = {}, option
       throw buildError('Final payment amount must equal remaining balance', 409);
     }
 
-    if (paymentMethod === 'manual') {
+    if (paymentMethod === 'manual' && payload.source !== 'dispute_resolution') {
       if (!String(payload.payment_mode || '').trim()) {
         throw buildError('payment_mode is required for outside platform payments');
       }
