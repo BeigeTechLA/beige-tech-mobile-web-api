@@ -2593,3 +2593,8 @@ SET rp.is_active = 0
 WHERE p.module_key = 'admin_finances'
   AND LOWER(REPLACE(ut.user_role, ' ', '_')) = 'admin'
   AND rp.is_active = 1;
+
+-- 30-07-26
+
+ALTER TABLE creator_earning_advances
+  ADD COLUMN metadata_json TEXT NULL AFTER notes;

@@ -695,7 +695,7 @@ async function respondToEarning(bookingId, creatorId, action) {
 // ADMIN — Add Advance Payment
 
 async function addAdvancePayment(payload = {}, options = {}) {
-    const { creator_earning_id, booking_id, creator_id, amount, notes } = payload;
+    const { creator_earning_id, booking_id, creator_id, amount, notes, proof_url, proof_file_path, proof_file_name } = payload;
 
     if (!creator_earning_id || !amount) {
         const error = new Error('creator_earning_id and amount are required');
@@ -718,6 +718,13 @@ async function addAdvancePayment(payload = {}, options = {}) {
         status: 'processed',
         processed_at: new Date(),
         notes: notes || null,
+        metadata_json: JSON.stringify({
+            source: 'creator_earnings',
+            proof_url: proof_url || null,
+            proof_file_path: proof_file_path || null,
+            proof_file_name: proof_file_name || null,
+            notes: notes || null
+        }),
         created_by_user_id: options.userId || null
     });
 

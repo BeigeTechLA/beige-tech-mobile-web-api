@@ -49,6 +49,10 @@ module.exports = function (sequelize, DataTypes) {
             type: DataTypes.TEXT,
             allowNull: true
         },
+        metadata_json: {
+            type: DataTypes.TEXT,
+            allowNull: true
+        },
         created_by_user_id: {
             type: DataTypes.INTEGER,
             allowNull: true

@@ -532,11 +532,15 @@ async function resolveShootAmountLikeShoots(booking = {}, breakdown = {}, paymen
 
 function buildAdvances(advances = []) {
   return advances.map((advance) => ({
+    ...(parseJson(advance.metadata_json, {}) || {}),
     advance_id: advance.advance_id,
     amount: toMoney(advance.amount),
     status: advance.status,
     processed_at: advance.processed_at,
-    notes: advance.notes
+    notes: advance.notes,
+    receipt_url: buildAdvanceProofDetails(advance).proofUrl,
+    receipt_download_url: buildAdvanceProofDetails(advance).proofUrl,
+    proof_file_name: buildAdvanceProofDetails(advance).proofFileName
   }));
 }
 
@@ -567,6 +571,26 @@ function buildProofUrl(metadata = {}) {
   const proofUrl = metadata.proof_url || metadata.proof_file_path || null;
   if (!proofUrl) return null;
   return toAbsoluteBeigeAssetUrl(proofUrl) || String(proofUrl);
+}
+
+function buildAdvanceMetadata(advance = {}, fallback = {}) {
+  return {
+    ...parseJson(advance.metadata_json, {}),
+    source: 'cp_compensation',
+    proof_url: advance.proof_url || fallback.proof_url || null,
+    proof_file_path: advance.proof_file_path || fallback.proof_file_path || null,
+    proof_file_name: advance.proof_file_name || fallback.proof_file_name || null,
+    notes: advance.notes ?? fallback.notes ?? null
+  };
+}
+
+function buildAdvanceProofDetails(advance = {}) {
+  const metadata = parseJson(advance.metadata_json, {});
+  const proofUrl = metadata.proof_url || metadata.proof_file_path || advance.proof_url || advance.proof_file_path || null;
+  return {
+    proofUrl: proofUrl ? (toAbsoluteBeigeAssetUrl(proofUrl) || String(proofUrl)) : null,
+    proofFileName: metadata.proof_file_name || advance.proof_file_name || null
+  };
 }
 
 async function buildCpPayoutHistoryForEarnings(earnings = [], transaction = null) {
@@ -875,6 +899,7 @@ async function addAdvanceIfProvided(earning, advance = null, options = {}, trans
       : null;
 
   return db.creator_earning_advances.create({
+    metadata_json: stringifyMetadata(buildAdvanceMetadata(advance)),
     creator_earning_id: earning.creator_earning_id,
     booking_id: earning.booking_id,
     creator_id: earning.creator_id,
@@ -923,6 +948,14 @@ async function markPendingAdvanceProcessed(earning, payload = {}, amount, option
       ? new Date(payload.paid_at || payload.payment_date)
       : new Date(),
     notes: payload.notes ?? pendingAdvance.notes,
+    metadata_json: stringifyMetadata(buildAdvanceMetadata({
+      ...toPlain(pendingAdvance),
+      amount,
+      notes: payload.notes ?? pendingAdvance.notes,
+      proof_url: payload.proof_url ?? pendingAdvance.proof_url ?? null,
+      proof_file_path: payload.proof_file_path ?? pendingAdvance.proof_file_path ?? null,
+      proof_file_name: payload.proof_file_name ?? pendingAdvance.proof_file_name ?? null
+    })),
     created_by_user_id: pendingAdvance.created_by_user_id || getUserId(options),
     updated_at: new Date()
   }, { transaction });
@@ -1987,7 +2020,14 @@ async function addAdvancePayment(creatorEarningId, payload = {}, options = {}) {
     const advance = await addAdvanceIfProvided(earning, {
       amount,
       payment_date: payload.payment_date || payload.processed_at,
-      notes: payload.notes || null
+      notes: payload.notes || null,
+      metadata_json: stringifyMetadata({
+        source: 'cp_compensation',
+        proof_url: payload.proof_url || null,
+        proof_file_path: payload.proof_file_path || null,
+        proof_file_name: payload.proof_file_name || null,
+        notes: payload.notes || null
+      })
     }, options, transaction);
 
     const processedAt = advance.processed_at || new Date();
@@ -2012,7 +2052,10 @@ async function addAdvancePayment(creatorEarningId, payload = {}, options = {}) {
         amount: toMoney(advance.amount),
         status: advance.status,
         processed_at: advance.processed_at,
-        notes: advance.notes
+        notes: advance.notes,
+        receipt_url: buildAdvanceProofDetails(advance).proofUrl,
+        receipt_download_url: buildAdvanceProofDetails(advance).proofUrl,
+        proof_file_name: buildAdvanceProofDetails(advance).proofFileName
       },
       payment_breakdown: {
         total_compensation: totalCompensation,
