@@ -2,6 +2,10 @@ const db = require('../models');
 const config = require('../config/config');
 const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
 const bookingPricingService = require('./booking-pricing.service');
+const {
+  sendCPNewBookingRequestEmail,
+  sendCPEarningsUpdatedEmail
+} = require('../utils/emailService');
 
 const stripe = config.stripe?.secretKey
   ? require('stripe')(config.stripe.secretKey)
@@ -101,6 +105,18 @@ function formatShootType(booking = {}) {
     return `${shootType} ${contentType}`;
   }
   return shootType || contentType || booking.project_name || null;
+}
+
+function formatEmailAmount(value) {
+  return toMoney(value || 0);
+}
+
+function buildCreatorDisplayName(creator = {}) {
+  return [creator.first_name, creator.last_name].filter(Boolean).join(' ').trim() || 'there';
+}
+
+function buildCpDashboardLink() {
+  return process.env.CP_DASHBOARD_LINK || `${String(process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/creator/dashboard`;
 }
 
 function deriveNameFromEmail(email) {
@@ -723,6 +739,111 @@ async function getBooking(bookingId, transaction = null) {
   return booking;
 }
 
+async function getBookingForCompensationEmail(bookingId) {
+  const booking = await db.stream_project_booking.findByPk(bookingId, {
+    include: [
+      {
+        model: db.users,
+        as: 'user',
+        required: false,
+        attributes: ['id', 'name', 'email']
+      }
+    ]
+  });
+
+  return booking ? toPlain(booking) : null;
+}
+
+async function resolveCompensationEmailClientName(booking = {}) {
+  if (booking?.user?.name) return booking.user.name;
+
+  const bookingId = Number(booking?.stream_project_booking_id || booking?.booking_id || booking?.id);
+  if (bookingId) {
+    const [salesLead, clientLead] = await Promise.all([
+      db.sales_leads.findOne({
+        where: { booking_id: bookingId, is_active: 1 },
+        attributes: ['client_name', 'guest_email'],
+        raw: true
+      }),
+      db.client_leads.findOne({
+        where: { booking_id: bookingId, is_active: 1 },
+        attributes: ['client_name', 'guest_email'],
+        raw: true
+      })
+    ]);
+
+    if (salesLead?.client_name) return salesLead.client_name;
+    if (clientLead?.client_name) return clientLead.client_name;
+    if (salesLead?.guest_email) return deriveNameFromEmail(salesLead.guest_email);
+    if (clientLead?.guest_email) return deriveNameFromEmail(clientLead.guest_email);
+  }
+
+  return deriveNameFromEmail(booking?.guest_email) || 'TBD';
+}
+
+async function getCreatorForCompensationEmail(creatorId) {
+  const creator = await db.crew_members.findByPk(creatorId, {
+    attributes: ['crew_member_id', 'first_name', 'last_name', 'email', 'primary_role'],
+    raw: true
+  });
+
+  return creator || null;
+}
+
+async function buildCompensationEmailPayload({ bookingId, creatorId, amount }) {
+  const [booking, creator] = await Promise.all([
+    getBookingForCompensationEmail(bookingId),
+    getCreatorForCompensationEmail(creatorId)
+  ]);
+
+  if (!booking || !creator?.email) return null;
+
+  const clientName = await resolveCompensationEmailClientName(booking);
+  const dashboardLink = buildCpDashboardLink();
+
+  return {
+    to_email: creator.email,
+    user_name: creator.first_name,
+    cp_name: buildCreatorDisplayName(creator),
+    booking_id: booking.stream_project_booking_id || bookingId,
+    project_id: booking.stream_project_booking_id || bookingId,
+    client_name: clientName,
+    service_type: booking.content_type || booking.event_type || booking.shoot_type || null,
+    shoot_type: formatShootType(booking),
+    date: booking.event_date || null,
+    shoot_date: booking.event_date || null,
+    start_time: booking.start_time || null,
+    end_time: booking.end_time || null,
+    shoot_amount: formatEmailAmount(amount),
+    earnings: formatEmailAmount(amount),
+    dashboard_link: dashboardLink,
+    view_details_url: dashboardLink
+  };
+}
+
+async function sendCompensationNotification(notification) {
+  try {
+    const payload = await buildCompensationEmailPayload(notification);
+    if (!payload) return;
+
+    if (notification.type === 'new_booking_request') {
+      await sendCPNewBookingRequestEmail(payload);
+      return;
+    }
+
+    if (notification.type === 'earnings_updated') {
+      await sendCPEarningsUpdatedEmail(payload);
+    }
+  } catch (error) {
+    console.error('[cp-compensation] compensation email failed:', {
+      type: notification?.type,
+      booking_id: notification?.bookingId,
+      creator_id: notification?.creatorId,
+      message: error?.message || error
+    });
+  }
+}
+
 async function getAssignedCreator(bookingId, creatorId, transaction = null) {
   const assignedCreator = await db.assigned_crew.findOne({
     where: {
@@ -1170,6 +1291,8 @@ async function upsertCreatorCompensation(payload = {}, options = {}) {
       payment_id: booking.payment_id || null,
       currency: 'USD'
     }, transaction);
+    const previousTotal = toMoney(earning.net_earning_amount || earning.gross_amount || 0);
+    const wasExistingCompensation = ['pending_approval', 'approved'].includes(earning.approval_status);
 
     const now = new Date();
     const approvalPayload = approvalStatus === 'approved'
@@ -1272,6 +1395,9 @@ async function upsertCreatorCompensation(payload = {}, options = {}) {
       compensation_source: compensationSource,
       compensation_method: compensationMethod,
       total_compensation: normalized.total,
+      previous_total_compensation: previousTotal,
+      was_existing_compensation: wasExistingCompensation,
+      compensation_changed: wasExistingCompensation && previousTotal !== normalized.total,
       items: normalized.items,
       advance
     };
@@ -1330,6 +1456,34 @@ async function upsertBulkCreatorCompensations(payload = {}, options = {}) {
     }
 
     if (!externalTransaction) await transaction.commit();
+
+    if (!externalTransaction) {
+      const notifications = creators
+        .map((creator) => {
+          if (creator.was_existing_compensation && creator.compensation_changed) {
+            return {
+              type: 'earnings_updated',
+              bookingId,
+              creatorId: creator.creator_id,
+              amount: creator.total_compensation
+            };
+          }
+
+          if (!creator.was_existing_compensation) {
+            return {
+              type: 'new_booking_request',
+              bookingId,
+              creatorId: creator.creator_id,
+              amount: creator.total_compensation
+            };
+          }
+
+          return null;
+        })
+        .filter(Boolean);
+
+      await Promise.allSettled(notifications.map(sendCompensationNotification));
+    }
 
     return {
       booking_id: bookingId,
@@ -2040,6 +2194,15 @@ async function modifyCompensation(creatorEarningId, payload = {}, options = {}) 
     }
 
     if (!externalTransaction) await transaction.commit();
+
+    if (!externalTransaction) {
+      await sendCompensationNotification({
+        type: 'earnings_updated',
+        bookingId: earning.booking_id,
+        creatorId: earning.creator_id,
+        amount: normalized.total
+      });
+    }
 
     return {
       creator_earning_id: earning.creator_earning_id,
