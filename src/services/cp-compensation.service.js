@@ -868,9 +868,11 @@ async function addAdvanceIfProvided(earning, advance = null, options = {}, trans
   const status = ['pending', 'processed', 'failed'].includes(advance?.status)
     ? advance.status
     : 'processed';
-  const processedAt = status === 'processed'
-    ? (advance.payment_date ? new Date(advance.payment_date) : new Date())
-    : null;
+  const processedAt = advance.payment_date
+    ? new Date(advance.payment_date)
+    : status === 'processed'
+      ? new Date()
+      : null;
 
   return db.creator_earning_advances.create({
     creator_earning_id: earning.creator_earning_id,
@@ -883,6 +885,49 @@ async function addAdvanceIfProvided(earning, advance = null, options = {}, trans
     created_by_user_id: getUserId(options),
     updated_at: new Date()
   }, { transaction });
+}
+
+async function markPendingAdvanceProcessed(earning, payload = {}, amount, options = {}, transaction = null) {
+  const requestedAdvanceId = Number(payload.advance_id || payload.advanceId || 0);
+  const where = {
+    creator_earning_id: earning.creator_earning_id,
+    status: 'pending'
+  };
+
+  if (requestedAdvanceId) {
+    where.advance_id = requestedAdvanceId;
+  }
+
+  const pendingAdvance = await db.creator_earning_advances.findOne({
+    where,
+    order: [['advance_id', 'ASC']],
+    transaction
+  });
+
+  if (!pendingAdvance) {
+    if (requestedAdvanceId) {
+      throw buildError('Pending advance request not found', 404);
+    }
+    return null;
+  }
+
+  const requestedAmount = toMoney(pendingAdvance.amount);
+  if (amount > requestedAmount) {
+    throw buildError('Advance payment cannot exceed requested advance amount', 409);
+  }
+
+  await pendingAdvance.update({
+    amount,
+    status: 'processed',
+    processed_at: (payload.paid_at || payload.payment_date)
+      ? new Date(payload.paid_at || payload.payment_date)
+      : new Date(),
+    notes: payload.notes ?? pendingAdvance.notes,
+    created_by_user_id: pendingAdvance.created_by_user_id || getUserId(options),
+    updated_at: new Date()
+  }, { transaction });
+
+  return pendingAdvance;
 }
 
 async function ensureCreatorWallet(creatorId, options = {}) {
@@ -1652,6 +1697,7 @@ async function createCpPayoutRecords({
       creator_earning_id: earning.creator_earning_id,
       booking_id: earning.booking_id,
       payment_scope: paymentScope,
+      advance_id: payload.advance_id || payload.advanceId || null,
       payment_mode: payload.payment_mode || payload.payment_type || null,
       transaction_reference: payload.transaction_reference || payload.external_reference || null,
       proof_url: payload.proof_url || null,
@@ -2064,11 +2110,14 @@ async function processCompensationPayment(creatorEarningId, payload = {}, option
 
     let advance = null;
     if (paymentScope === 'advance') {
-      advance = await addAdvanceIfProvided(earning, {
-        amount,
-        payment_date: payload.paid_at || payload.payment_date || new Date(),
-        notes: payload.notes || null
-      }, options, transaction);
+      advance = await markPendingAdvanceProcessed(earning, payload, amount, options, transaction);
+      if (!advance) {
+        advance = await addAdvanceIfProvided(earning, {
+          amount,
+          payment_date: payload.paid_at || payload.payment_date || new Date(),
+          notes: payload.notes || null
+        }, options, transaction);
+      }
 
       await upsertTimelineEvent(earning, {
         event_type: 'advance_payment_processed',

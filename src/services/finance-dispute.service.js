@@ -1,11 +1,15 @@
 const db = require('../models');
+const accountCreditService = require('./account-credit.service');
 const { S3UploadFiles, toAbsoluteBeigeAssetUrl } = require('../utils/common');
 
 const DISPUTE_STATUSES = ['open', 'in_review', 'resolved', 'rejected', 'escalated'];
 const DISPUTE_CATEGORIES = ['quality', 'payment_delay', 'wrong_deliverables', 'refund', 'payout_issues', 'other'];
 
 function toMoney(value) {
-  return Number(Number(value || 0).toFixed(2));
+  const numeric = typeof value === 'number'
+    ? value
+    : Number(String(value || 0).replace(/[^0-9.-]/g, ''));
+  return Number((Number.isFinite(numeric) ? numeric : 0).toFixed(2));
 }
 
 function toPositiveInt(value) {
@@ -177,7 +181,7 @@ function includeForDetails() {
       as: 'comments',
       required: false,
       include: [
-        { model: db.users, as: 'created_by', required: false, attributes: ['id', 'name', 'email'] },
+        { model: db.users, as: 'created_by', required: false, attributes: ['id', 'name', 'email', 'role', 'user_type'] },
         { model: db.crew_members, as: 'created_by_creator', required: false, attributes: ['crew_member_id', 'first_name', 'last_name', 'email'] }
       ]
     },
@@ -185,7 +189,7 @@ function includeForDetails() {
       model: db.finance_dispute_attachments,
       as: 'attachments',
       required: false,
-      include: [{ model: db.users, as: 'uploaded_by', required: false, attributes: ['id', 'name', 'email'] }]
+      include: [{ model: db.users, as: 'uploaded_by', required: false, attributes: ['id', 'name', 'email', 'role', 'user_type'] }]
     },
     {
       model: db.finance_dispute_payout_holds,
@@ -279,7 +283,9 @@ async function hydrateBookingContext(payload, transaction = null) {
     invoice_send_history_id: invoice?.invoice_send_history_id || null,
     client_user_id: toPositiveInt(payload.client_user_id) || plain.user_id || breakdown?.client_user_id || null,
     currency: payload.currency || breakdown?.currency || 'USD',
-    disputed_amount: payload.disputed_amount !== undefined ? toMoney(payload.disputed_amount) : toMoney(breakdown?.outstanding_amount || breakdown?.total_amount || 0),
+    disputed_amount: payload.disputed_amount !== undefined
+      ? toMoney(payload.disputed_amount)
+      : toMoney(breakdown?.total_amount || plain.quote_total || plain.budget || breakdown?.outstanding_amount || 0),
     impacted_payout_amount: payload.impacted_payout_amount !== undefined
       ? toMoney(payload.impacted_payout_amount)
       : toMoney((plain.creator_earnings || []).reduce((sum, earning) => sum + Number(earning.net_earning_amount || 0), 0))
@@ -618,6 +624,8 @@ async function getAdminDisputeDetails(disputeId) {
         id: comment.created_by.id,
         name: comment.created_by.name,
         email: comment.created_by.email,
+        role: comment.created_by.role,
+        user_type: comment.created_by.user_type,
         initials: buildInitials(comment.created_by)
       } : null,
       created_by_creator: comment.created_by_creator ? {
@@ -635,7 +643,15 @@ async function getAdminDisputeDetails(disputeId) {
       file_size_bytes: attachment.file_size_bytes,
       mime_type: attachment.mime_type,
       attachment_type: attachment.attachment_type,
-      created_at: attachment.created_at
+      created_at: attachment.created_at,
+      uploaded_by: attachment.uploaded_by ? {
+        id: attachment.uploaded_by.id,
+        name: attachment.uploaded_by.name,
+        email: attachment.uploaded_by.email,
+        role: attachment.uploaded_by.role,
+        user_type: attachment.uploaded_by.user_type,
+        initials: buildInitials(attachment.uploaded_by)
+      } : null
     })),
     payout_holds: holds.map((hold) => ({
       id: hold.finance_dispute_payout_hold_id,
@@ -949,6 +965,7 @@ async function closeDispute(disputeId, payload = {}, options = {}, closeStatus =
       ['payout_release', 'refund', 'partial_refund', 'credit_compensation', 'payout_adjustment', 'no_action', 'other'],
       closeStatus === 'rejected' ? 'no_action' : 'payout_release'
     );
+    let accountCreditLedger = null;
 
     if (payload.release_payout_holds || resolutionType === 'payout_release') {
       const holds = await db.finance_dispute_payout_holds.findAll({
@@ -975,6 +992,37 @@ async function closeDispute(disputeId, payload = {}, options = {}, closeStatus =
       }
     }
 
+    if (closeStatus === 'resolved' && resolutionType === 'credit_compensation') {
+      const creditAmount = toMoney(payload.credit_amount || payload.amount || payload.refund_amount);
+      if (!(creditAmount > 0)) {
+        const error = new Error('A positive credit_amount is required for Beige Credits resolution');
+        error.statusCode = 400;
+        throw error;
+      }
+
+      const booking = dispute.booking_id
+        ? await db.stream_project_booking.findByPk(dispute.booking_id, {
+          attributes: ['stream_project_booking_id', 'user_id', 'guest_email'],
+          transaction
+        })
+        : null;
+
+      accountCreditLedger = await accountCreditService.createManualCredit({
+        targetUserId: dispute.client_user_id || booking?.user_id || null,
+        guestEmail: booking?.guest_email || null,
+        amount: creditAmount,
+        source: 'payment_adjustment',
+        creditType: 'refund',
+        bookingId: dispute.booking_id,
+        invoiceSendHistoryId: dispute.invoice_send_history_id,
+        reason: payload.notes || `Beige credits added for ${dispute.dispute_code || 'dispute resolution'}`,
+        notes: payload.notes || `Beige credits added for ${dispute.dispute_code || 'dispute resolution'}. You can use this credit on your next booking.`,
+        notifyUser: false,
+        createdByUserId: options.userId || null,
+        transaction
+      });
+    }
+
     await dispute.update({
       status: closeStatus,
       resolution_type: resolutionType,
@@ -986,7 +1034,13 @@ async function closeDispute(disputeId, payload = {}, options = {}, closeStatus =
       metadata_json: stringifyMetadata({
         ...parseJson(dispute.metadata_json, {}),
         refund_amount: payload.refund_amount === undefined ? undefined : toMoney(payload.refund_amount),
-        credit_amount: payload.credit_amount === undefined ? undefined : toMoney(payload.credit_amount)
+        credit_amount: payload.credit_amount === undefined ? undefined : toMoney(payload.credit_amount),
+        resolution_amount: payload.amount === undefined ? undefined : payload.amount,
+        payment_method: payload.payment_method || undefined,
+        transaction_id: payload.transaction_id || undefined,
+        recipient: payload.recipient || undefined,
+        rejection_reason: payload.rejection_reason || undefined,
+        account_credit_ledger_id: accountCreditLedger?.account_credit_ledger_id || undefined
       })
     }, { transaction });
 
@@ -998,7 +1052,13 @@ async function closeDispute(disputeId, payload = {}, options = {}, closeStatus =
       metadata: {
         resolution_type: resolutionType,
         refund_amount: payload.refund_amount === undefined ? null : toMoney(payload.refund_amount),
-        credit_amount: payload.credit_amount === undefined ? null : toMoney(payload.credit_amount)
+        credit_amount: payload.credit_amount === undefined ? null : toMoney(payload.credit_amount),
+        resolution_amount: payload.amount || null,
+        payment_method: payload.payment_method || null,
+        transaction_id: payload.transaction_id || null,
+        recipient: payload.recipient || null,
+        rejection_reason: payload.rejection_reason || null,
+        account_credit_ledger_id: accountCreditLedger?.account_credit_ledger_id || null
       },
       userId: options.userId,
       dispute
@@ -1061,6 +1121,10 @@ module.exports = {
   addDisputeAttachment,
   holdDisputePayout,
   resolveDispute: (disputeId, payload, options) => closeDispute(disputeId, payload, options, 'resolved'),
-  rejectOrRefundDispute: (disputeId, payload, options) => closeDispute(disputeId, payload, options, payload?.resolution_type && payload.resolution_type !== 'no_action' ? 'resolved' : 'rejected'),
+  rejectOrRefundDispute: (disputeId, payload, options) => {
+    const resolutionType = String(payload?.resolution_type || '').trim();
+    const isRefundResolution = ['refund', 'partial_refund', 'credit_compensation', 'payout_adjustment'].includes(resolutionType);
+    return closeDispute(disputeId, payload, options, isRefundResolution ? 'resolved' : 'rejected');
+  },
   escalateDispute
 };
