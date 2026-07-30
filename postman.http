@@ -1999,7 +1999,7 @@ Content-Type: application/json
 Authorization: {{TOKEN}}
 
 {
-  "booking_id": 1223
+  "booking_id": 1359
 }
 
 ### download sales quote pdf

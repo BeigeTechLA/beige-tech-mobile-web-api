@@ -204,6 +204,7 @@ const createPermissionMiddleware = (permissions, options = {}, checkPermissions)
 
   const allowRoles = new Set((options.allowRoles || []).map(normalizeRole));
   const allowBaseRoles = options.allowBaseRoles === true;
+  const allowAdminBypass = options.allowAdminBypass !== false;
 
   return async (req, res, next) => {
     try {
@@ -216,7 +217,7 @@ const createPermissionMiddleware = (permissions, options = {}, checkPermissions)
         });
       }
 
-      if (ADMIN_ROLES.has(context.role)) {
+      if (allowAdminBypass && ADMIN_ROLES.has(context.role)) {
         return next();
       }
 

@@ -41,7 +41,6 @@ const getSendgridFromAddress = () =>
 
 const {
   CLIENT_SIGNUP_WELCOME_TEMPLATE_ID,
-  PAYMENT_CONFIRMED_TEMPLATE_ID,
   SHOOT_LEAD_NOTIFICATION_TEMPLATE_ID,
   PRODUCTION_LEAD_NOTIFICATION_TEMPLATE_ID,
   BOOKING_CONFIRMED_WITH_CP_TEMPLATE_ID,
@@ -91,7 +90,9 @@ const {
   FILES_APPROVED_INTERNAL_TEMPLATE_ID,
   REVISIONS_COMMENT_ADDED_TEMPLATE_ID,
   NEW_VERSIONS_UPLOADED_CLIENT_TEMPLATE_ID,
-  WELCOME_USER_TEMPLATE_ID
+  WELCOME_USER_TEMPLATE_ID,
+  SALES_NOTIF_PARTIAL_PAYMENT_RECEIVED_TEMPLATE_ID,
+  SALES_NOTIF_PAYMENT_RECEIVED_TEMPLATE_ID
 } = require('../config/sendgridTemplates');
 
 const formatDate = (value) => {
@@ -256,6 +257,49 @@ const formatCreditAmount = (value) => {
   const numeric = Number(value || 0);
   if (!Number.isFinite(numeric)) return '0';
   return Number.isInteger(numeric) ? String(numeric) : numeric.toFixed(2);
+};
+
+const formatPaymentMethodLabel = (value) => {
+  const normalized = String(value || '').trim();
+  if (!normalized) return 'Card';
+
+  const labelMap = {
+    ach: 'ACH',
+    applepay: 'Apple Pay',
+    card: 'Card',
+    cash: 'Cash',
+    cashapp: 'Cash App',
+    manual: 'Manual',
+    manuallocal: 'Manual',
+    net30: 'Net 30',
+    stripe: 'Stripe',
+    venmo: 'Venmo',
+    wire: 'Wire',
+    zelle: 'Zelle'
+  };
+
+  const key = normalized.toLowerCase().replace(/[\s_-]+/g, '');
+  return labelMap[key] || normalized
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+};
+
+const buildSalesBookingDetailsUrl = ({ bookingId = '', leadId = '', explicitUrl = '' } = {}) => {
+  if (explicitUrl) return explicitUrl;
+
+  const frontendBaseUrl = String(process.env.FRONTEND_URL || 'https://beige.app').trim().replace(/\/+$/, '');
+  const routeTemplate = String(process.env.SALES_BOOKING_DETAILS_URL || '').trim();
+
+  if (routeTemplate) {
+    return routeTemplate
+      .replace(/\{\{\s*booking_id\s*\}\}/g, encodeURIComponent(String(bookingId || '')))
+      .replace(/\{\{\s*lead_id\s*\}\}/g, encodeURIComponent(String(leadId || '')));
+  }
+
+  const url = new URL(`${frontendBaseUrl}/admin/dashboard`);
+  if (leadId) url.searchParams.set('lead_id', String(leadId));
+  if (bookingId) url.searchParams.set('booking_id', String(bookingId));
+  return url.toString();
 };
 
 const parseLocationParts = (location) => {
@@ -1949,26 +1993,88 @@ try {
 /**
  * Send notification to sales team when a payment is confirmed
  */
-const sendPaymentSuccessSalesNotification = async (paymentData) => {
+const sendSalesPaymentReceivedNotification = async (paymentData) => {
   try {
     const to = process.env.SALES_NOTIFICATION_EMAIL;
-    const templateId = PAYMENT_CONFIRMED_TEMPLATE_ID;
+    const normalizedPaymentType = String(paymentData?.payment_type || paymentData?.paymentType || '').toLowerCase();
+    const isPartialPayment =
+      paymentData?.is_partial_payment === true ||
+      paymentData?.isPartialPayment === true ||
+      normalizedPaymentType === 'partial';
+    const templateId = isPartialPayment
+      ? SALES_NOTIF_PARTIAL_PAYMENT_RECEIVED_TEMPLATE_ID
+      : SALES_NOTIF_PAYMENT_RECEIVED_TEMPLATE_ID;
+    const formatOptionalAmount = (value) => (
+      value === undefined || value === null || value === ''
+        ? ''
+        : formatAmount(value)
+    );
+    const bookingId = paymentData?.booking_id || paymentData?.bookingId || '';
+    const leadId = paymentData?.lead_id || paymentData?.leadId || '';
+    const paymentMethod = formatPaymentMethodLabel(
+      paymentData?.payment_method ||
+      paymentData?.paymentMethod ||
+      paymentData?.payment_mode
+    );
+    const totalPaid = formatOptionalAmount(
+      paymentData?.total_paid ??
+      paymentData?.paid_amount_total ??
+      paymentData?.paidAmountTotal ??
+      paymentData?.paid_amount
+    );
+    const remainingBalance = formatOptionalAmount(
+      paymentData?.remaining_balance ??
+      paymentData?.pending_amount ??
+      paymentData?.due_amount ??
+      paymentData?.pendingAmount
+    );
+    const viewDetailsUrl = buildSalesBookingDetailsUrl({
+      bookingId,
+      leadId,
+      explicitUrl: paymentData?.view_details_url || paymentData?.booking_url || paymentData?.bookingLink || ''
+    });
+    const recipients = [
+      to,
+      paymentData?.created_by_email || paymentData?.quote_creator_email
+    ]
+      .flat()
+      .filter(Boolean)
+      .map((email) => String(email).trim())
+      .filter(Boolean)
+      .filter((email, index, list) =>
+        list.findIndex((item) => item.toLowerCase() === email.toLowerCase()) === index
+      );
+
+    if (!recipients.length) {
+      return { success: false, error: 'SALES_NOTIFICATION_EMAIL is not configured' };
+    }
     const { firstName, lastName } = splitName(
       paymentData?.clientName || paymentData?.name,
       paymentData?.guestEmail || paymentData?.email
     );
 
     return await sendEmail({
-      to,
-      subject: 'Payment Received',
+      to: recipients,
+      subject: isPartialPayment ? 'Partial Payment Received' : 'Payment Received',
       templateId,
       dynamicTemplateData: {
         first_name: paymentData?.first_name || firstName,
         last_name: paymentData?.last_name || lastName,
+        client_name: paymentData?.clientName || paymentData?.name || [paymentData?.first_name || firstName, paymentData?.last_name || lastName].filter(Boolean).join(' '),
         email: paymentData?.email || paymentData?.guestEmail || '',
         phone_number: paymentData?.phone_number || 'N/A',
         amount: formatAmount(paymentData?.amount),
+        payment_amount: formatAmount(paymentData?.amount),
+        total_amount: formatOptionalAmount(paymentData?.total_amount ?? paymentData?.quote_total ?? paymentData?.totalAmount),
+        paid_amount_total: totalPaid,
+        total_paid: totalPaid,
+        pending_amount: remainingBalance,
+        remaining_balance: remainingBalance,
+        payment_type: isPartialPayment ? 'Partial' : 'Full',
+        payment_mode: paymentMethod,
+        payment_method: paymentMethod,
         shootType: formatShootTypes(paymentData?.shootType) || 'N/A',
+        shoot_type: formatShootTypes(paymentData?.shootType) || 'N/A',
         shoot_date: formatDate(paymentData?.shoot_date || paymentData?.eventDate) || 'TBD',
         shoot_time:
           paymentData?.shoot_time ||
@@ -1976,6 +2082,12 @@ const sendPaymentSuccessSalesNotification = async (paymentData) => {
           '--',
         editing: formatEditingStatus(paymentData?.editing ?? paymentData?.editsNeeded),
         paymentIntentId: paymentData?.paymentIntentId || '',
+        payment_intent_id: paymentData?.paymentIntentId || '',
+        payment_link_id: paymentData?.payment_link_id || '',
+        booking_id: bookingId,
+        lead_id: leadId,
+        view_details_url: viewDetailsUrl,
+        booking_url: viewDetailsUrl,
         year: new Date().getFullYear(),
         frontend_url: `${process.env.FRONTEND_URL}/admin/dashboard`,
       }
@@ -1985,6 +2097,9 @@ const sendPaymentSuccessSalesNotification = async (paymentData) => {
     return { success: false, error: error.message };
   }
 };
+
+const sendPaymentSuccessSalesNotification = async (paymentData) =>
+  sendSalesPaymentReceivedNotification(paymentData);
 
 /**
  * Send notification to production team about a new lead
@@ -2803,8 +2918,19 @@ const sendQuoteAcceptedClientEmail = async (data) => {
 };
 
 const sendQuoteAcceptedSalesNotificationEmail = async (data) => {
-  const to = process.env.SALES_NOTIFICATION_EMAIL;
-  if (!to) {
+  const recipients = [
+    process.env.SALES_NOTIFICATION_EMAIL,
+    data?.created_by_email || data?.quote_creator_email
+  ]
+    .flat()
+    .filter(Boolean)
+    .map((email) => String(email).trim())
+    .filter(Boolean)
+    .filter((email, index, list) =>
+      list.findIndex((item) => item.toLowerCase() === email.toLowerCase()) === index
+    );
+
+  if (!recipients.length) {
     return { success: false, error: 'SALES_NOTIFICATION_EMAIL is not configured' };
   }
 
@@ -2818,7 +2944,7 @@ const sendQuoteAcceptedSalesNotificationEmail = async (data) => {
   );
 
   return sendEmail({
-    to,
+    to: recipients,
     subject: `Quote accepted: ${data?.quote_number || 'Quote'}`,
     templateId: QUOTE_ACCEPTED_SALES_NOTIFICATION_TEMPLATE_ID,
     dynamicTemplateData: {
@@ -3680,6 +3806,7 @@ module.exports = {
   sendInvoiceEmail,
   sendSalesLeadNotification,
   sendProductionLeadNotification,
+  sendSalesPaymentReceivedNotification,
   sendPaymentSuccessSalesNotification,
   sendClientSignupWelcomeEmail,
   sendWelcomeUserEmail,

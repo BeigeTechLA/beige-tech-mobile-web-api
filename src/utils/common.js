@@ -136,6 +136,10 @@ const S3UploadFiles = async (files, options = {}) => {
       filePaths.push({
         file_type: field,
         file_path: file.public_id,
+        originalname: file.originalname || file.filename || file.public_id,
+        file_name: file.originalname || file.filename || file.public_id,
+        file_size_bytes: file.size || null,
+        mime_type: file.mimetype || null,
       });
     }
   }
