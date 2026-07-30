@@ -605,6 +605,110 @@ async function calculateFromCreatorsInternally(pricingPayload) {
   return pricingData;
 }
 
+function roundCurrencyAmount(value) {
+  const numeric = Number(value || 0);
+  return Number.isFinite(numeric) ? Number(numeric.toFixed(2)) : 0;
+}
+
+async function syncPaymentSummaryAfterBookingQuoteEdit({
+  booking,
+  bookingId,
+  newQuoteTotal,
+  previousQuoteTotal = 0,
+  performedByUserId = null,
+  tx
+}) {
+  const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId, tx);
+  const hasPaymentRecord = Boolean(existingSummary || booking?.payment_id);
+
+  if (!hasPaymentRecord) {
+    return null;
+  }
+
+  let paidAmount = roundCurrencyAmount(existingSummary?.paid_amount || 0);
+  if (!existingSummary && booking?.payment_id) {
+    const paymentData = await db.payment_transactions.findByPk(booking.payment_id, { transaction: tx });
+    paidAmount = roundCurrencyAmount(paymentData?.total_amount || 0);
+  }
+
+  const creditUsedAmount = roundCurrencyAmount(existingSummary?.credit_used_amount || 0);
+  const creditCreatedAmount = roundCurrencyAmount(existingSummary?.credit_created_amount || 0);
+  const finalQuoteTotal = roundCurrencyAmount(newQuoteTotal);
+  const oldQuoteTotal = roundCurrencyAmount(existingSummary?.quote_total || previousQuoteTotal || 0);
+  const dueAmount = roundCurrencyAmount(Math.max(finalQuoteTotal - paidAmount - creditUsedAmount, 0));
+  const overpaidAmount = roundCurrencyAmount(Math.max(paidAmount + creditUsedAmount - finalQuoteTotal, 0));
+  const paidAmountForSummary = overpaidAmount > 0
+    ? roundCurrencyAmount(Math.min(paidAmount, finalQuoteTotal))
+    : paidAmount;
+
+  let lastQuoteChangeType = 'none';
+  let lastQuoteChangeAmount = 0;
+
+  if (oldQuoteTotal > 0 && finalQuoteTotal > oldQuoteTotal) {
+    lastQuoteChangeType = 'increase';
+    lastQuoteChangeAmount = roundCurrencyAmount(finalQuoteTotal - oldQuoteTotal);
+  } else if (oldQuoteTotal > 0 && finalQuoteTotal < oldQuoteTotal) {
+    lastQuoteChangeType = 'decrease';
+    lastQuoteChangeAmount = roundCurrencyAmount(oldQuoteTotal - finalQuoteTotal);
+  } else if (dueAmount > 0) {
+    lastQuoteChangeType = 'increase';
+    lastQuoteChangeAmount = dueAmount;
+  } else if (overpaidAmount > 0) {
+    lastQuoteChangeType = 'decrease';
+    lastQuoteChangeAmount = overpaidAmount;
+  }
+
+  if (lastQuoteChangeType === 'decrease' && overpaidAmount > 0 && db.account_credit_ledger) {
+    const duplicateWhere = {
+      booking_id: bookingId,
+      amount: overpaidAmount,
+      entry_type: 'credit_created',
+      source: 'quote_reduction',
+      status: { [Op.in]: ['pending', 'available'] }
+    };
+
+    const duplicateCredit = await db.account_credit_ledger.findOne({
+      where: duplicateWhere,
+      order: [['created_at', 'DESC'], ['account_credit_ledger_id', 'DESC']],
+      transaction: tx
+    });
+
+    if (!duplicateCredit) {
+      await db.account_credit_ledger.create({
+        user_id: booking?.user_id || null,
+        guest_email: booking?.guest_email || null,
+        booking_id: bookingId,
+        sales_quote_id: null,
+        sales_quote_activity_id: null,
+        amount: overpaidAmount,
+        entry_type: 'credit_created',
+        status: 'pending',
+        source: 'quote_reduction',
+        credit_type: 'refund',
+        usage_context: 'general',
+        user_segment: 'client',
+        notes: `Pending account credit created for lead booking quote reduction from $${oldQuoteTotal.toFixed(2)} to $${finalQuoteTotal.toFixed(2)}.`,
+        created_by_admin: Boolean(performedByUserId),
+        notification_status: 'not_requested',
+        created_by_user_id: performedByUserId || null
+      }, { transaction: tx });
+    }
+  }
+
+  return bookingPaymentSummaryService.upsertBookingPaymentSummary({
+    bookingId,
+    salesQuoteId: existingSummary?.sales_quote_id || null,
+    quoteTotal: finalQuoteTotal,
+    paidAmount: paidAmountForSummary,
+    creditUsedAmount,
+    creditCreatedAmount,
+    lastQuoteChangeType,
+    lastQuoteChangeAmount,
+    lastQuoteChangeStatus: lastQuoteChangeType === 'none' ? 'none' : 'approved',
+    transaction: tx
+  });
+}
+
 async function notifyAssignedCreators(
   creatorIds = [],
   booking = null,
@@ -6769,6 +6873,19 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
   Quote management
   ------------------------------*/
 
+  const previousQuote = booking.quote_id
+    ? await quotes.findByPk(booking.quote_id, {
+        attributes: ['quote_id', 'total', 'price_after_discount', 'subtotal'],
+        transaction: tx
+      })
+    : null;
+  const previousQuoteTotal = roundCurrencyAmount(
+    previousQuote?.total ||
+    previousQuote?.price_after_discount ||
+    previousQuote?.subtotal ||
+    0
+  );
+
   if (booking.quote_id) {
     await quotes.update(
       { status: 'expired' },
@@ -6803,6 +6920,14 @@ async function finalizeBookingCore({ booking, bookingId, finalizeBody, tx }) {
   const quoteId = quote.quote_id || quote.id;
 
   await booking.update({ quote_id: quoteId }, { transaction: tx });
+  await syncPaymentSummaryAfterBookingQuoteEdit({
+    booking,
+    bookingId,
+    newQuoteTotal: pricingData.quote.total,
+    previousQuoteTotal,
+    performedByUserId: finalizeBody.performed_by_user_id || null,
+    tx
+  });
 
   return {
     quote_id: quoteId,
@@ -7055,7 +7180,8 @@ exports.finalizeGuestBooking = async (req, res) => {
         booking_days,
         studio_booking_for,
         studio_items,
-        studio_total
+        studio_total,
+        performed_by_user_id: req.userId || null
       },
       tx
     });
@@ -7280,7 +7406,8 @@ exports.finalizeClientLeadBooking = async (req, res) => {
         skip_discount,
         skip_margin,
         booking_type,
-        booking_days
+        booking_days,
+        performed_by_user_id: req.userId || null
       },
       tx
     });
@@ -7787,7 +7914,8 @@ exports.finalizeCreateDeal = async (req, res) => {
         booking_days,
         studio_booking_for,
         studio_items,
-        studio_total
+        studio_total,
+        performed_by_user_id: req.userId || null
       },
       tx
     });

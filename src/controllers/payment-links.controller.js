@@ -1523,7 +1523,14 @@ exports.generatePaymentLink = async (req, res) => {
     }
 
     // 2. Verify booking exists
-    const booking = await stream_project_booking.findByPk(booking_id);
+    const booking = await stream_project_booking.findByPk(booking_id, {
+      include: [{
+        model: quotes,
+        as: 'primary_quote',
+        required: false,
+        include: [{ model: quote_line_items, as: 'line_items', required: false }]
+      }]
+    });
 
     if (!booking) {
       return res.status(404).json({
@@ -1566,7 +1573,17 @@ exports.generatePaymentLink = async (req, res) => {
     const pricingForAmount = hasApprovedAdditionalAmount
       ? { total: approvedAdditionalAmount }
       : await calculateLeadPricing(booking);
-    const quoteTotal = Number(pricingForAmount?.total || booking.budget || booking.total_amount || 0);
+    const currentPrimaryQuoteTotal = toCurrencyNumber(
+      booking.primary_quote?.total ||
+      booking.primary_quote?.price_after_discount ||
+      booking.primary_quote?.subtotal ||
+      0
+    );
+    const quoteTotal = hasApprovedAdditionalAmount
+      ? approvedAdditionalAmount
+      : pricingForAmount?.sales_quote_id
+        ? Number(pricingForAmount?.total || currentPrimaryQuoteTotal || booking.budget || booking.total_amount || 0)
+        : Number(currentPrimaryQuoteTotal || pricingForAmount?.total || booking.budget || booking.total_amount || 0);
     const paymentState = hasApprovedAdditionalAmount
       ? await bookingPaymentSummaryService.resolveBookingPaymentState({
         bookingId: booking_id,
