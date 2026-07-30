@@ -1,9 +1,17 @@
 const db = require('../models');
 const accountCreditService = require('./account-credit.service');
+const creatorEarningsService = require('./creator-earnings.service');
+const cpCompensationService = require('./cp-compensation.service');
 const { S3UploadFiles, toAbsoluteBeigeAssetUrl } = require('../utils/common');
 
 const DISPUTE_STATUSES = ['open', 'in_review', 'resolved', 'rejected', 'escalated'];
 const DISPUTE_CATEGORIES = ['quality', 'payment_delay', 'wrong_deliverables', 'refund', 'payout_issues', 'other'];
+const CREATOR_DISPUTE_CATEGORIES = ['payment_delay', 'payout_issues', 'other'];
+const CREATOR_DISPUTE_TYPE_LABELS = {
+  payment_delay: 'Payment Not Received',
+  payout_issues: 'Incorrect Amount',
+  other: 'Other'
+};
 
 function toMoney(value) {
   const numeric = typeof value === 'number'
@@ -106,6 +114,7 @@ function formatTimelineEntry(log) {
 
 function formatDisputeRow(dispute) {
   const plain = toPlain(dispute);
+  const metadata = parseJson(plain.metadata_json, {});
   const requesterName = getRequesterName(plain);
   const invoiceLabel = plain.invoice?.invoice_number || (plain.invoice_send_history_id ? `INV-${plain.invoice_send_history_id}` : null);
   const shootId = plain.booking_id ? `SH-${String(plain.booking_id).padStart(3, '0')}` : null;
@@ -144,6 +153,8 @@ function formatDisputeRow(dispute) {
       email: plain.creator.email,
       initials: buildInitials(plain.creator)
     } : null,
+    metadata,
+    cp_compensation: metadata?.cp_compensation || null,
     created_at: plain.created_at,
     updated_at: plain.updated_at,
     actions: buildAdminActions(plain.status)
@@ -435,6 +446,23 @@ async function getClientContext(userContext = {}) {
   return user.get({ plain: true });
 }
 
+async function getCreatorContext(userContext = {}) {
+  const userId = toPositiveInt(userContext.userId);
+  if (!userId) {
+    const error = new Error('Authentication required');
+    error.statusCode = 401;
+    throw error;
+  }
+
+  const creator = await creatorEarningsService.resolveCreatorForUser(userId);
+  if (!creator) {
+    const error = new Error('Creative partner profile not found for logged-in user');
+    error.statusCode = 404;
+    throw error;
+  }
+  return creator;
+}
+
 function buildClientDisputeWhere(filters = {}, client = {}) {
   const Op = db.Sequelize.Op;
   const where = buildWhere(filters);
@@ -578,6 +606,282 @@ async function addClientDisputeAttachment(disputeId, payload = {}, files = null,
   const client = await getClientContext(userContext);
   await getClientDisputeDetails(disputeId, { userId: client.id });
   return addDisputeAttachment(disputeId, payload, files, { userId: client.id });
+}
+
+function buildCreatorDisputeWhere(filters = {}, creator = {}) {
+  const Op = db.Sequelize.Op;
+  const where = buildWhere(filters);
+  where[Op.and] = [
+    ...(where[Op.and] || []),
+    {
+      [Op.or]: [
+        { creator_id: creator.creator_id },
+        { raised_by_creator_id: creator.creator_id }
+      ]
+    }
+  ];
+  return where;
+}
+
+async function getCreatorEarningPaymentState(earning, transaction = null) {
+  const advances = await db.creator_earning_advances.findAll({
+    where: { creator_earning_id: earning.creator_earning_id, status: 'processed' },
+    transaction
+  });
+  const payouts = await db.creator_payout_requests.findAll({
+    where: {
+      creator_id: earning.creator_id,
+      status: { [db.Sequelize.Op.in]: ['requested', 'approved', 'processing', 'paid'] }
+    },
+    transaction
+  });
+  const totalCompensation = toMoney(earning.net_earning_amount || earning.gross_amount || 0);
+  const advancePaid = toMoney(advances.reduce((sum, advance) => sum + Number(advance.amount || 0), 0));
+  const payoutPaid = toMoney(payouts.reduce((sum, payout) => {
+    const metadata = parseJson(payout.metadata_json, {});
+    return Number(metadata?.creator_earning_id) === Number(earning.creator_earning_id)
+      ? sum + Number(payout.amount || 0)
+      : sum;
+  }, 0));
+  const paidAmount = toMoney(Math.max(advancePaid, payoutPaid));
+
+  return {
+    creator_earning_id: earning.creator_earning_id,
+    total_compensation: totalCompensation,
+    advance_paid: advancePaid,
+    payout_paid: payoutPaid,
+    paid_amount: paidAmount,
+    remaining_balance: toMoney(Math.max(totalCompensation - paidAmount, 0))
+  };
+}
+
+async function getCreatorEarningForDispute(payload = {}, creator, transaction = null) {
+  const creatorEarningId = toPositiveInt(payload.creator_earning_id || payload.earning_id);
+  const bookingId = toPositiveInt(payload.booking_id || payload.shoot_id);
+  if (!creatorEarningId && !bookingId) {
+    const error = new Error('creator_earning_id or booking_id is required');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const earning = await db.creator_earnings.findOne({
+    where: {
+      ...(creatorEarningId ? { creator_earning_id: creatorEarningId } : { booking_id: bookingId }),
+      creator_id: creator.creator_id,
+      compensation_source: { [db.Sequelize.Op.in]: ['admin', 'sales_admin'] },
+      approval_status: { [db.Sequelize.Op.in]: ['pending_approval', 'approved', 'rejected'] }
+    },
+    include: [
+      { model: db.stream_project_booking, as: 'booking', required: false, attributes: ['stream_project_booking_id', 'project_name', 'guest_email', 'event_date'] }
+    ],
+    transaction
+  });
+
+  if (!earning) {
+    const error = new Error('Compensation record not found for this creative partner');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const existingActive = await db.finance_disputes.findAll({
+    where: {
+      booking_id: earning.booking_id,
+      creator_id: creator.creator_id,
+      raised_by_type: 'creator',
+      status: { [db.Sequelize.Op.in]: ['open', 'in_review', 'escalated'] }
+    },
+    transaction
+  });
+  const hasDuplicate = existingActive.some((row) => {
+    const metadata = parseJson(row.metadata_json, {});
+    return Number(metadata?.cp_compensation?.creator_earning_id || metadata?.creator_earning_id) === Number(earning.creator_earning_id);
+  });
+  if (hasDuplicate) {
+    const error = new Error('An active dispute already exists for this compensation');
+    error.statusCode = 409;
+    throw error;
+  }
+
+  return earning;
+}
+
+async function listCreatorDisputes(filters = {}, userContext = {}) {
+  const creator = await getCreatorContext(userContext);
+  const page = Math.max(parseInt(filters.page, 10) || 1, 1);
+  const limit = Math.min(Math.max(parseInt(filters.limit, 10) || 20, 1), 100);
+  const offset = (page - 1) * limit;
+
+  const result = await db.finance_disputes.findAndCountAll({
+    where: buildCreatorDisputeWhere(filters, creator),
+    distinct: true,
+    limit,
+    offset,
+    order: getSort(filters),
+    include: includeForList(),
+    subQuery: false
+  });
+
+  return {
+    rows: result.rows.map(formatDisputeRow),
+    pagination: {
+      page,
+      limit,
+      total: result.count,
+      total_pages: Math.ceil(result.count / limit)
+    },
+    filters: {
+      statuses: DISPUTE_STATUSES,
+      categories: CREATOR_DISPUTE_CATEGORIES
+    }
+  };
+}
+
+async function getCreatorDisputeDetails(disputeId, userContext = {}) {
+  const creator = await getCreatorContext(userContext);
+  const dispute = await db.finance_disputes.findOne({
+    where: {
+      finance_dispute_id: toPositiveInt(disputeId),
+      ...buildCreatorDisputeWhere({}, creator)
+    },
+    include: includeForDetails(),
+    subQuery: false
+  });
+
+  if (!dispute) {
+    const error = new Error('Dispute not found');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const details = await getAdminDisputeDetails(dispute.finance_dispute_id);
+  return {
+    ...details,
+    internal_comments: (details.internal_comments || []).filter((comment) => ['creator', 'all'].includes(comment.visibility))
+  };
+}
+
+async function createCreatorDispute(payload = {}, files = null, userContext = {}) {
+  const creator = await getCreatorContext(userContext);
+  const transaction = await db.sequelize.transaction();
+
+  try {
+    const category = validateEnum(payload.category || payload.dispute_type || payload.issue_type, CREATOR_DISPUTE_CATEGORIES, 'other');
+    const earning = await getCreatorEarningForDispute(payload, creator, transaction);
+    const paymentState = await getCreatorEarningPaymentState(earning, transaction);
+    const plain = earning.get({ plain: true });
+    const subject = CREATOR_DISPUTE_TYPE_LABELS[category] || String(payload.subject || 'Creator payout dispute').trim();
+
+    const dispute = await createAdminDispute({
+      ...payload,
+      booking_id: plain.booking_id,
+      creator_id: creator.creator_id,
+      raised_by_type: 'creator',
+      raised_by_creator_id: creator.creator_id,
+      category,
+      subject,
+      description: payload.description || null,
+      status: 'open',
+      currency: plain.currency || 'USD',
+      disputed_amount: paymentState.total_compensation,
+      payout_hold_amount: 0,
+      impacted_payout_amount: 0,
+      metadata: {
+        ...(payload.metadata || {}),
+        dispute_source: 'creator_compensation',
+        creator_earning_id: plain.creator_earning_id,
+        hide_impacted_payout: true,
+        cp_compensation: {
+          creator_earning_id: plain.creator_earning_id,
+          booking_id: plain.booking_id,
+          creator_id: creator.creator_id,
+          creator_name: creator.name,
+          shoot_name: plain.booking?.project_name || `Shoot #${plain.booking_id}`,
+          total_compensation: paymentState.total_compensation,
+          paid_amount: paymentState.paid_amount,
+          advance_paid: paymentState.advance_paid,
+          remaining_balance: paymentState.remaining_balance,
+          disputed_amount: paymentState.total_compensation
+        }
+      }
+    }, { userId: userContext.userId, transaction });
+
+    if (hasUploadedFiles(files) || payload.attachments || payload.file_path) {
+      await addDisputeAttachment(dispute.dispute_id, payload, files, { userId: userContext.userId, transaction });
+    }
+
+    await transaction.commit();
+    return getCreatorDisputeDetails(dispute.dispute_id, { userId: userContext.userId });
+  } catch (error) {
+    if (transaction && !transaction.finished) await transaction.rollback();
+    throw error;
+  }
+}
+
+async function addCreatorDisputeComment(disputeId, payload = {}, userContext = {}) {
+  const creator = await getCreatorContext(userContext);
+  await getCreatorDisputeDetails(disputeId, { userId: userContext.userId });
+  return addDisputeComment(disputeId, {
+    ...payload,
+    created_by_creator_id: creator.creator_id,
+    visibility: 'all',
+    comment_type: 'status_update'
+  }, { userId: userContext.userId });
+}
+
+async function addCreatorDisputeAttachment(disputeId, payload = {}, files = null, userContext = {}) {
+  await getCreatorDisputeDetails(disputeId, userContext);
+  return addDisputeAttachment(disputeId, payload, files, { userId: userContext.userId });
+}
+
+async function processCreatorResolutionPayment(dispute, payload = {}, options = {}, transaction = null) {
+  if (dispute.raised_by_type !== 'creator') return null;
+  const metadata = parseJson(dispute.metadata_json, {});
+  const creatorEarningId = toPositiveInt(metadata?.cp_compensation?.creator_earning_id || metadata?.creator_earning_id || payload.creator_earning_id);
+  if (!creatorEarningId) return null;
+
+  const amount = toMoney(payload.amount || payload.refund_amount || payload.payout_amount || 0);
+  if (!(amount > 0)) return null;
+
+  const earning = await db.creator_earnings.findByPk(creatorEarningId, { transaction });
+  if (!earning) return null;
+
+  const paymentState = await getCreatorEarningPaymentState(earning, transaction);
+  const extraAmount = toMoney(Math.max(amount - paymentState.remaining_balance, 0));
+  if (extraAmount > 0) {
+    const nextTotal = toMoney(paymentState.total_compensation + extraAmount);
+    await earning.update({
+      gross_amount: nextTotal,
+      net_earning_amount: nextTotal,
+      approval_notes: payload.notes || `Adjusted from dispute ${dispute.dispute_code}`,
+      updated_at: new Date()
+    }, { transaction });
+  }
+
+  if (earning.approval_status !== 'approved') {
+    await earning.update({
+      approval_status: 'approved',
+      approved_by_user_id: options.userId || null,
+      approved_at: new Date(),
+      updated_at: new Date()
+    }, { transaction });
+  }
+
+  return cpCompensationService.processCompensationPayment(creatorEarningId, {
+    amount,
+    payment_method: 'manual',
+    payment_mode: payload.payment_method || 'dispute_resolution',
+    transaction_reference: payload.transaction_id || payload.external_reference || null,
+    proof_url: payload.proof_url || null,
+    proof_file_path: payload.proof_file_path || null,
+    proof_file_name: payload.proof_file_name || null,
+    notes: payload.notes || `Paid from dispute ${dispute.dispute_code}`,
+    payment_scope: amount < paymentState.remaining_balance ? 'advance' : 'final',
+    source: 'dispute_resolution',
+    dispute_id: dispute.finance_dispute_id,
+    dispute_code: dispute.dispute_code || null,
+    dispute_original_compensation: paymentState.total_compensation,
+    dispute_extra_amount: extraAmount
+  }, { userId: options.userId, transaction });
 }
 
 async function getAdminDisputeDetails(disputeId) {
@@ -724,7 +1028,11 @@ async function createAdminDispute(payload = {}, options = {}) {
       await addDisputeComment(dispute.finance_dispute_id, { body: payload.comment }, { ...options, transaction });
     }
 
-    if (!externalTransaction) await transaction.commit();
+    if (externalTransaction) {
+      return formatDisputeRow(dispute);
+    }
+
+    await transaction.commit();
     return getAdminDisputeDetails(dispute.finance_dispute_id);
   } catch (error) {
     if (!externalTransaction && transaction && !transaction.finished) await transaction.rollback();
@@ -966,6 +1274,7 @@ async function closeDispute(disputeId, payload = {}, options = {}, closeStatus =
       closeStatus === 'rejected' ? 'no_action' : 'payout_release'
     );
     let accountCreditLedger = null;
+    let creatorResolutionPayment = null;
 
     if (payload.release_payout_holds || resolutionType === 'payout_release') {
       const holds = await db.finance_dispute_payout_holds.findAll({
@@ -1023,6 +1332,13 @@ async function closeDispute(disputeId, payload = {}, options = {}, closeStatus =
       });
     }
 
+    if (
+      closeStatus === 'resolved' &&
+      ['payout_release', 'payout_adjustment', 'other'].includes(resolutionType)
+    ) {
+      creatorResolutionPayment = await processCreatorResolutionPayment(dispute, payload, options, transaction);
+    }
+
     await dispute.update({
       status: closeStatus,
       resolution_type: resolutionType,
@@ -1040,7 +1356,8 @@ async function closeDispute(disputeId, payload = {}, options = {}, closeStatus =
         transaction_id: payload.transaction_id || undefined,
         recipient: payload.recipient || undefined,
         rejection_reason: payload.rejection_reason || undefined,
-        account_credit_ledger_id: accountCreditLedger?.account_credit_ledger_id || undefined
+        account_credit_ledger_id: accountCreditLedger?.account_credit_ledger_id || undefined,
+        creator_payment: creatorResolutionPayment || undefined
       })
     }, { transaction });
 
@@ -1058,7 +1375,8 @@ async function closeDispute(disputeId, payload = {}, options = {}, closeStatus =
         transaction_id: payload.transaction_id || null,
         recipient: payload.recipient || null,
         rejection_reason: payload.rejection_reason || null,
-        account_credit_ledger_id: accountCreditLedger?.account_credit_ledger_id || null
+        account_credit_ledger_id: accountCreditLedger?.account_credit_ledger_id || null,
+        creator_payment: creatorResolutionPayment || null
       },
       userId: options.userId,
       dispute
@@ -1112,6 +1430,11 @@ module.exports = {
   createClientDispute,
   addClientDisputeComment,
   addClientDisputeAttachment,
+  listCreatorDisputes,
+  getCreatorDisputeDetails,
+  createCreatorDispute,
+  addCreatorDisputeComment,
+  addCreatorDisputeAttachment,
   getAdminDisputesDashboard,
   listAdminDisputes,
   getAdminDisputeDetails,
