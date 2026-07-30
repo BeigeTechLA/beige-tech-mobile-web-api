@@ -92,7 +92,8 @@ const {
   NEW_VERSIONS_UPLOADED_CLIENT_TEMPLATE_ID,
   WELCOME_USER_TEMPLATE_ID,
   SALES_NOTIF_PARTIAL_PAYMENT_RECEIVED_TEMPLATE_ID,
-  SALES_NOTIF_PAYMENT_RECEIVED_TEMPLATE_ID
+  SALES_NOTIF_PAYMENT_RECEIVED_TEMPLATE_ID,
+  EARNING_UPDATED_TEMPLATE_ID
 } = require('../config/sendgridTemplates');
 
 const formatDate = (value) => {
@@ -2641,6 +2642,7 @@ const sendCPNewBookingRequestEmail = async (data) => {
       ? `$${formatAmount(data.shoot_amount)}`
       : 'TBD';
     const showFifoMessage = isSameCalendarDate(data.date || data.shoot_date || data.booking_date);
+    const dashboardLink = data.dashboard_link || data.dashboardLink || `${process.env.FRONTEND_URL}/creator/dashboard`;
 
     const [response] = await sgMail.send({
       to: data.to_email,
@@ -2657,8 +2659,8 @@ const sendCPNewBookingRequestEmail = async (data) => {
         date: shootDate,
         start_time: startTime,
         end_time: endTime,
-        // shoot_amount: shootAmount,
-        dashboard_link: `${process.env.FRONTEND_URL}/creator/dashboard`,
+        shoot_amount: shootAmount,
+        dashboard_link: dashboardLink,
         show_fifo_message: showFifoMessage,
       }
     });
@@ -2671,6 +2673,48 @@ const sendCPNewBookingRequestEmail = async (data) => {
         response?.headers?.['X-Message-Id'] ||
         null
     };
+  } catch (error) {
+    return { success: false, error: error?.response?.body || error.message };
+  }
+};
+
+const sendCPEarningsUpdatedEmail = async (data = {}) => {
+  try {
+    if (!EARNING_UPDATED_TEMPLATE_ID) {
+      return { success: false, error: 'EARNING_UPDATED_TEMPLATE_ID is not configured' };
+    }
+
+    const to = data.to_email || data.email || data.to;
+    if (!to) {
+      return { success: false, error: 'Recipient email is required' };
+    }
+
+    const clientName = splitName(data.client_name || '', data.client_email || '');
+    const shootTime = data.shoot_time || [formatTime(data.start_time), formatTime(data.end_time)]
+      .filter(Boolean)
+      .join(' - ');
+    const earnings = data.earnings !== undefined && data.earnings !== null
+      ? formatAmount(data.earnings)
+      : '0.00';
+    const dashboardLink = data.dashboard_link || `${process.env.FRONTEND_URL}/creator/dashboard`;
+
+    return await sendEmail({
+      to,
+      subject: 'Your estimated Beige earnings have been updated',
+      templateId: EARNING_UPDATED_TEMPLATE_ID,
+      dynamicTemplateData: {
+        cp_name: getFirstName(data.cp_name || data.user_name || data.first_name),
+        booking_id: data.booking_id || data.project_id || '',
+        first_name: data.first_name || clientName.firstName || 'TBD',
+        last_name: data.last_name || clientName.lastName || '',
+        shootType: formatShootTypes(data.shoot_type || data.shootType) || formatContentTypes(data.service_type) || 'TBD',
+        shoot_date: data.shoot_date ? formatDate(data.shoot_date) : data.date ? formatDate(data.date) : 'TBD',
+        shoot_time: shootTime || 'TBD',
+        earnings,
+        dashboard_link: dashboardLink,
+        view_details_url: data.view_details_url || dashboardLink
+      }
+    });
   } catch (error) {
     return { success: false, error: error?.response?.body || error.message };
   }
@@ -3825,6 +3869,7 @@ module.exports = {
   sendCPStatusUpdateByRequest,
   sendCPConfirmedEmailByRequest,
   sendCPNewBookingRequestEmail,
+  sendCPEarningsUpdatedEmail,
   sendPostProductionAssignmentEmail,
   sendNewClientSignupNotification,
   sendNewCrewSignupNotification,
