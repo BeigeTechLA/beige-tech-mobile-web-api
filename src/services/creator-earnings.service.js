@@ -98,15 +98,25 @@ function buildPaymentBreakdown(earning, advances = [], paymentHistory = []) {
     const processedAdvanceTotal = toMoney(
         advances.filter(a => a.status === 'processed').reduce((sum, a) => sum + Number(a.amount || 0), 0)
     );
+    const linkedAdvanceIds = new Set(
+        paymentHistory
+            .map((payment) => Number(payment.advance_id || 0))
+            .filter((value) => Number.isFinite(value) && value > 0)
+    );
     const paymentHistoryTotal = toMoney(
         paymentHistory.reduce((sum, payment) => sum + Number(payment.amount || 0), 0)
     );
-    const rawPaidTotal = paymentHistory.length
-        ? paymentHistoryTotal
-        : earning.status === 'paid'
-            ? totalCompensation
-            : processedAdvanceTotal;
-    const paidTotal = toMoney(Math.min(Math.max(rawPaidTotal, 0), totalCompensation));
+    const unlinkedAdvanceTotal = toMoney(
+        advances
+            .filter((advance) => advance.status === 'processed')
+            .filter((advance) => !linkedAdvanceIds.has(Number(advance.advance_id || 0)))
+            .reduce((sum, advance) => sum + Number(advance.amount || 0), 0)
+    );
+    const rawPaidTotal = paymentHistoryTotal + unlinkedAdvanceTotal;
+    const paidTotal = toMoney(Math.min(
+        Math.max(rawPaidTotal, 0),
+        totalCompensation
+    ));
     const remainingBalance = toMoney(Math.max(totalCompensation - paidTotal, 0));
     const paymentPercent = totalCompensation > 0
         ? Math.round((paidTotal / totalCompensation) * 100)
@@ -162,6 +172,7 @@ async function getCpPaymentHistoryForEarning(earning) {
                 status: payout.status,
                 amount: toMoney(payout.amount),
                 paid_at: paidAt,
+                advance_id: metadata.advance_id ? Number(metadata.advance_id) : null,
                 receipt_url: proofUrl,
                 receipt_download_url: proofUrl,
                 transaction_reference: metadata.transaction_reference || payout.external_reference || null,

@@ -632,6 +632,7 @@ async function buildCpPayoutHistoryForEarnings(earnings = [], transaction = null
       status: payout.status,
       amount: toMoney(payout.amount),
       paid_at: payout.paid_at || payout.processed_at || payout.created_at || null,
+      advance_id: metadata.advance_id ? Number(metadata.advance_id) : null,
       receipt_url: proofUrl,
       receipt_download_url: proofUrl,
       transaction_reference: metadata.transaction_reference || payout.external_reference || null,
@@ -1649,9 +1650,24 @@ async function getCompensationPaymentState(earning, transaction = null) {
     transaction
   });
   const totalCompensation = toMoney(earning.net_earning_amount || earning.gross_amount || 0);
-  const advanceTotal = getProcessedAdvanceTotal(advances.map(toPlain));
-  const payoutTotal = await getCpPayoutTotalForEarning(earning, transaction);
-  const paidTotal = toMoney(Math.max(advanceTotal, payoutTotal));
+  const advanceItems = advances.map(toPlain);
+  const advanceTotal = getProcessedAdvanceTotal(advanceItems);
+  const paymentHistory = (await buildCpPayoutHistoryForEarnings([earning], transaction)).byEarningId.get(Number(earning.creator_earning_id)) || [];
+  const payoutTotal = toMoney(
+    paymentHistory.reduce((sum, payment) => sum + Number(payment.amount || 0), 0)
+  );
+  const linkedAdvanceIds = new Set(
+    paymentHistory
+      .map((payment) => Number(payment.advance_id || 0))
+      .filter((value) => Number.isFinite(value) && value > 0)
+  );
+  const unlinkedAdvanceTotal = toMoney(
+    advanceItems
+      .filter((advance) => advance.status === 'processed')
+      .filter((advance) => !linkedAdvanceIds.has(Number(advance.advance_id || 0)))
+      .reduce((sum, advance) => sum + Number(advance.amount || 0), 0)
+  );
+  const paidTotal = toMoney(Math.min(Math.max(payoutTotal + unlinkedAdvanceTotal, 0), totalCompensation));
 
   return {
     total_compensation: totalCompensation,
