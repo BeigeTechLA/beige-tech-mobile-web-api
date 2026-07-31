@@ -83,7 +83,7 @@ module.exports = function(sequelize, DataTypes) {
       defaultValue: 'pending'
     },
     source: {
-      type: DataTypes.ENUM('quote_reduction', 'referral_bonus', 'loyalty_reward', 'manual_admin', 'payment_adjustment'),
+      type: DataTypes.ENUM('quote_reduction', 'lead_booking_reduction', 'referral_bonus', 'loyalty_reward', 'manual_admin', 'payment_adjustment'),
       allowNull: false,
       defaultValue: 'quote_reduction'
     },

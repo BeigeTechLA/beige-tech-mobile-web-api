@@ -4344,12 +4344,12 @@ Content-Type: application/json
   "content_type": "videographer",
   "shoot_type": "podcasts_and_shows",
   "client_name": "Harsh",
-  "start_date": "2026-07-16",
+  "start_date": "2026-08-16",
   "start_time": "10:30",
   "end_time": "14:30",
   "time_zone": "Asia/Calcutta",
-  "startDate": "2026-07-16T10:30:00",
-  "endDate": "2026-07-16T14:30:00",
+  "startDate": "2026-08-16T10:30:00",
+  "endDate": "2026-08-16T14:30:00",
   "booking_type": "single_day",
   "edits_needed": true,
   "video_edit_types": [
@@ -4359,14 +4359,14 @@ Content-Type: application/json
 }
 
 ### 2) Save crew requirement and shoot location
-PATCH {{URL}}sales/bookings/1309/crew HTTP/1.1
+PATCH {{URL}}sales/bookings/1378/crew HTTP/1.1
 Content-Type: application/json
 
 {
   "crew_roles": {
     "videographer": 2
   },
-  "location": "Woodland Hills, California, United States",
+  "location": "West Hollywood, Los Angeles, CA",
   "location_latitude": 34.168454,
   "location_longitude": -118.603802,
   "reference_links": [],
@@ -4396,33 +4396,33 @@ Content-Type: application/json
   ],
   "skip_discount": true,
   "skip_margin": true,
-  "studio_total": 600,
+  "studio_total": 2000,
   "studio_items": [
     {
-      "studio_id": "beige-modern-resort-villa",
-      "name": "Beige Media (Modern Resort Villa with Jacuzzi)",
-      "location": "Woodland Hills, Los Angeles, CA",
-      "image": "https://d2jhn32fsulyac.cloudfront.net/assets/studio/weho-content/Weho+Studio-2.jpg",
+      "studio_id": "beige-west-hollywood-wellness-gym",
+      "name": "Beige Studios West Hollywood Morning Wellness Club Gym",
+      "location": "West Hollywood, Los Angeles, CA",
+      "image": "https://d2jhn32fsulyac.cloudfront.net/assets/studio/weho-gym/Copy+of+DSC00042.jpg",
       "pricing_mode": "hourly",
       "pricing_category": "productions",
       "pricing_label": "Productions",
-      "unit_price": 150,
+      "unit_price": 500,
       "quantity": 4,
-      "total": 600,
-      "price_label": "$150/hour",
-      "selected_date": "2026-07-16",
+      "total": 2000,
+      "price_label": "$500/hour",
+      "selected_date": "2026-08-16",
       "start_time": "10:30",
       "end_time": "14:30",
       "studio_booking_type": "single_day",
       "booking_days": [],
-      "cast_and_crew_count": 0,
+      "cast_and_crew_count": 1,
       "update_studio_datetime": false,
       "lat": 34.1654,
       "lng": -118.6089
     }
   ],
   "shoot_hours": 4,
-  "shoot_start_date": "2026-07-16T10:30:00.000Z"
+  "shoot_start_date": "2026-08-16T10:30:00.000Z"
 }
 
 ### 6) Save quote for the booking/payment flow
@@ -4437,31 +4437,31 @@ Content-Type: application/json
   "shootHours": 4,
   "eventType": "podcast",
   "guestEmail": "harsh.patel@revurge.com",
-  "shoot_start_date": "2026-07-16T10:30:00.000Z",
+  "shoot_start_date": "2026-08-16T10:30:00.000Z",
   "video_edit_types": [
     { "slug": "social_reel_15_30", "quantity": 1 },
     { "slug": "social_reel_30_90", "quantity": 1 }
   ],
-  "studio_total": 600,
+  "studio_total": 2000,
   "studio_items": [
     {
-      "studio_id": "beige-modern-resort-villa",
-      "name": "Beige Media (Modern Resort Villa with Jacuzzi)",
-      "location": "Woodland Hills, Los Angeles, CA",
-      "image": "https://d2jhn32fsulyac.cloudfront.net/assets/studio/weho-content/Weho+Studio-2.jpg",
+      "studio_id": "beige-west-hollywood-wellness-gym",
+      "name": "Beige Studios West Hollywood Morning Wellness Club Gym",
+      "location": "West Hollywood, Los Angeles, CA",
+      "image": "https://d2jhn32fsulyac.cloudfront.net/assets/studio/weho-gym/Copy+of+DSC00042.jpg",
       "pricing_mode": "hourly",
       "pricing_category": "productions",
       "pricing_label": "Productions",
-      "unit_price": 150,
+      "unit_price": 500,
       "quantity": 4,
-      "total": 600,
-      "price_label": "$150/hour",
-      "selected_date": "2026-07-16",
+      "total": 2000,
+      "price_label": "$500/hour",
+      "selected_date": "2026-08-16",
       "start_time": "10:30",
       "end_time": "14:30",
       "studio_booking_type": "single_day",
       "booking_days": [],
-      "cast_and_crew_count": 0,
+      "cast_and_crew_count": 1,
       "update_studio_datetime": false,
       "lat": 34.1654,
       "lng": -118.6089
@@ -4470,7 +4470,7 @@ Content-Type: application/json
 }
 
 ### 7) Finalize booking. selected_crew_ids can be [] for "Continue with 0 Creatives".
-PUT {{URL}}guest-bookings/1309
+PUT {{URL}}guest-bookings/1378
 Content-Type: application/json
 
 {
@@ -4479,15 +4479,15 @@ Content-Type: application/json
   "content_type": "videographer",
   "shoot_type": "podcast",
   "booking_type": "single_day",
-  "start_date": "2026-07-16",
+  "start_date": "2026-08-16",
   "start_time": "10:30",
   "end_time": "14:30",
   "time_zone": "Asia/Calcutta",
   "duration_hours": 4,
-  "location": "Woodland Hills, California, United States",
+  "location": "West Hollywood, Los Angeles, CA",
   "location_latitude": 34.168454,
   "location_longitude": -118.603802,
-  "quote_id": 542,
+  "quote_id": 627,
   "full_name": "Harsh",
   "phone": "+919173965896",
   "edits_needed": true,
@@ -4497,33 +4497,33 @@ Content-Type: application/json
   "selected_crew_ids": [],
   "special_instructions": "",
   "reference_links": [],
-  "studio_total": 600,
+  "studio_total": 2000,
   "studio_items": [
     {
-      "studio_id": "beige-modern-resort-villa",
-      "name": "Beige Media (Modern Resort Villa with Jacuzzi)",
-      "location": "Woodland Hills, Los Angeles, CA",
-      "image": "https://d2jhn32fsulyac.cloudfront.net/assets/studio/weho-content/Weho+Studio-2.jpg",
+      "studio_id": "beige-west-hollywood-wellness-gym",
+      "name": "Beige Studios West Hollywood Morning Wellness Club Gym",
+      "location": "West Hollywood, Los Angeles, CA",
+      "image": "https://d2jhn32fsulyac.cloudfront.net/assets/studio/weho-gym/Copy+of+DSC00042.jpg",
       "pricing_mode": "hourly",
       "pricing_category": "production",
       "pricing_label": "Production",
-      "unit_price": 150,
+      "unit_price": 500,
       "quantity": 4,
-      "total": 600,
-      "price_label": "$150/hour",
+      "total": 2000,
+      "price_label": "$500/hour",
       "selected_date": "2026-07-16",
       "start_time": "10:00",
       "end_time": "14:30",
       "studio_booking_type": "single_day",
       "booking_days": [],
-      "cast_and_crew_count": 0,
+      "cast_and_crew_count": 1,
       "update_studio_datetime": true,
       "lat": 34.1654,
       "lng": -118.6089
     }
   ],
-  "start_date_time": "2026-07-16T10:30:00",
-  "end_date_time": "2026-07-16T14:30:00",
+  "start_date_time": "2026-08-16T10:30:00",
+  "end_date_time": "2026-08-16T14:30:00",
   "is_draft": false
 }
 
@@ -4571,8 +4571,8 @@ POST {{URL}}payments/create-intent-multi
 Content-Type: application/json
 
 {
-  "booking_id": "1309",
-  "amount": 3850,
+  "booking_id": "1378",
+  "amount": 5250,
   "guest_email": "harsh.patel@revurge.com",
   "use_credit": false,
   "credit_amount_used": 0
@@ -4583,12 +4583,17 @@ POST {{URL}}payments/confirm-multi
 Content-Type: application/json
 
 {
-  "paymentIntentId": "pi_3TqTDQ54hnPNgHXU0jxKccLP",
-  "booking_id": "1295",
+  "paymentIntentId": "pi_3TzC6754hnPNgHXU0HM2YZbM",
+  "booking_id": "1376",
   "referral_code": null,
   "use_credit": false,
   "credit_amount_used": 0
 }
+
+### 
+GET {{URL}}sales/leads/704
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI0OCwidXNlclJvbGUiOiJBZG1pbiIsInBlcm1pc3Npb25zVmVyc2lvbiI6MiwidXNlclR5cGVJZCI6MSwiaWF0IjoxNzg1MzI3OTAyLCJleHAiOjE3ODU5MzI3MDJ9.E4vyhvHADwFev4qrBXU7AcPWA3_NIjGhiH0vK73TW_M
 
 ### =====================================================
 ### BOOK A SHOOT - STUDIO JOURNEY 2A - STUDIO ONLY, NO CP

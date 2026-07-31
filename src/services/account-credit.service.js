@@ -48,7 +48,7 @@ function getSegmentFilter(segment) {
 
 function normalizeCreditSource(source, fallback = 'manual_admin') {
   const value = String(source || fallback).trim().toLowerCase();
-  return ['quote_reduction', 'referral_bonus', 'loyalty_reward', 'manual_admin', 'payment_adjustment'].includes(value)
+  return ['quote_reduction', 'lead_booking_reduction', 'referral_bonus', 'loyalty_reward', 'manual_admin', 'payment_adjustment'].includes(value)
     ? value
     : fallback;
 }

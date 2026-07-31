@@ -573,6 +573,66 @@ function resolveLeadQuoteAmounts({ linkedSalesQuote = null, booking = null, cust
   };
 }
 
+async function getLeadBookingCreditSummary(bookingId) {
+  if (!bookingId || !db.account_credit_ledger) {
+    return null;
+  }
+
+  const entries = await db.account_credit_ledger.findAll({
+    where: {
+      booking_id: bookingId,
+      entry_type: 'credit_created',
+      source: 'lead_booking_reduction',
+      status: { [Op.in]: ['pending', 'available', 'expired'] }
+    },
+    order: [['created_at', 'DESC'], ['account_credit_ledger_id', 'DESC']]
+  });
+
+  if (!entries.length) {
+    return null;
+  }
+
+  const totals = entries.reduce((acc, entry) => {
+    const amount = roundCurrencyAmount(entry.amount);
+    const status = String(entry.status || '').toLowerCase();
+
+    acc.total_credit_amount = roundCurrencyAmount(acc.total_credit_amount + amount);
+    if (status === 'pending') {
+      acc.pending_credit_amount = roundCurrencyAmount(acc.pending_credit_amount + amount);
+    }
+    if (status === 'available') {
+      acc.available_credit_amount = roundCurrencyAmount(acc.available_credit_amount + amount);
+    }
+    if (status === 'expired') {
+      acc.expired_credit_amount = roundCurrencyAmount(acc.expired_credit_amount + amount);
+    }
+
+    return acc;
+  }, {
+    total_credit_amount: 0,
+    pending_credit_amount: 0,
+    available_credit_amount: 0,
+    expired_credit_amount: 0
+  });
+
+  const latestEntry = entries[0];
+
+  return {
+    ...totals,
+    source: 'lead_booking_reduction',
+    latest_credit: {
+      account_credit_ledger_id: latestEntry.account_credit_ledger_id,
+      amount: roundCurrencyAmount(latestEntry.amount),
+      status: latestEntry.status,
+      source: latestEntry.source,
+      credit_type: latestEntry.credit_type || null,
+      created_at: latestEntry.created_at || null,
+      approved_at: latestEntry.approved_at || null,
+      notes: latestEntry.notes || null
+    }
+  };
+}
+
 /**
  * Internal helper to reuse calculateFromCreators safely.
  * DO NOT pass real res here.
@@ -663,7 +723,7 @@ async function syncPaymentSummaryAfterBookingQuoteEdit({
       booking_id: bookingId,
       amount: overpaidAmount,
       entry_type: 'credit_created',
-      source: 'quote_reduction',
+      source: 'lead_booking_reduction',
       status: { [Op.in]: ['pending', 'available'] }
     };
 
@@ -683,7 +743,7 @@ async function syncPaymentSummaryAfterBookingQuoteEdit({
         amount: overpaidAmount,
         entry_type: 'credit_created',
         status: 'pending',
-        source: 'quote_reduction',
+        source: 'lead_booking_reduction',
         credit_type: 'refund',
         usage_context: 'general',
         user_segment: 'client',
@@ -3006,6 +3066,17 @@ exports.getLeadById = async (req, res) => {
       activePaymentLink: active_payment_link,
       customQuoteFinancials
     });
+    let leadBookingCredit = await getLeadBookingCreditSummary(
+      leadJson.booking?.stream_project_booking_id || null
+    );
+    if (leadBookingCredit && customQuoteFinancials?.payment_summary) {
+      const appliedPaidAmount = roundCurrencyAmount(customQuoteFinancials.payment_summary.paid_amount);
+      leadBookingCredit = {
+        ...leadBookingCredit,
+        applied_paid_amount: appliedPaidAmount,
+        original_paid_amount: roundCurrencyAmount(appliedPaidAmount + leadBookingCredit.total_credit_amount)
+      };
+    }
     const quoteAmounts = resolveLeadQuoteAmounts({
       linkedSalesQuote: usableLinkedSalesQuote || linkedSalesQuote,
       booking: lead.booking,
@@ -3238,6 +3309,7 @@ exports.getLeadById = async (req, res) => {
         collected_amount: quoteAmounts.collected_amount,
         outstanding_amount: quoteAmounts.outstanding_amount,
         payment_summary: customQuoteFinancials?.payment_summary || null,
+        lead_booking_credit: leadBookingCredit,
         active_payment_link,
         booking_step,
         can_edit_booking,

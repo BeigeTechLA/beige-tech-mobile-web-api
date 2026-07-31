@@ -3548,3 +3548,15 @@ SET rp.is_active = 0
 WHERE p.module_key = 'admin_finances'
   AND LOWER(REPLACE(ut.user_role, ' ', '_')) = 'admin'
   AND rp.is_active = 1;
+
+-- 31-07-26
+
+ALTER TABLE account_credit_ledger
+  MODIFY COLUMN source ENUM(
+    'quote_reduction',
+    'lead_booking_reduction',
+    'referral_bonus',
+    'loyalty_reward',
+    'manual_admin',
+    'payment_adjustment'
+  ) NOT NULL DEFAULT 'quote_reduction';
