@@ -62,6 +62,159 @@ function toDbJson(value) {
   }
 }
 
+function normalizeDateOnly(value) {
+  if (!value) return null;
+  const parsed = moment(value, ["YYYY-MM-DD", moment.ISO_8601], true);
+  return parsed.isValid() ? parsed.format("YYYY-MM-DD") : null;
+}
+
+function normalizeTimeOnly(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  const parsed = moment(
+    String(value).trim(),
+    ["HH:mm:ss", "HH:mm", "h:mm A", "h:mm a"],
+    true
+  );
+
+  return parsed.isValid() ? parsed.format("HH:mm:ss") : null;
+}
+
+function timeToMinutes(value) {
+  const normalized = normalizeTimeOnly(value);
+  if (!normalized) return null;
+
+  const [hours, minutes] = normalized.split(":").map(Number);
+  return hours * 60 + minutes;
+}
+
+function slotRangeFromSlot(slot) {
+  const isFullDay = Number(slot?.is_full_day) === 1 || (!slot?.start_time && !slot?.end_time);
+
+  if (isFullDay) {
+    return { start: 0, end: 24 * 60, isFullDay: true };
+  }
+
+  const start = timeToMinutes(slot?.start_time);
+  const end = timeToMinutes(slot?.end_time);
+
+  return {
+    start,
+    end,
+    isFullDay: false,
+  };
+}
+
+function rangesOverlap(a, b) {
+  if (a.isFullDay || b.isFullDay) {
+    return true;
+  }
+
+  if (a.start === null || a.end === null || b.start === null || b.end === null) {
+    return false;
+  }
+
+  return a.start < b.end && b.start < a.end;
+}
+
+function normalizeAvailabilitySlot(slot, fallbackDate) {
+  const date = normalizeDateOnly(slot?.date || fallbackDate);
+  const availabilityStatus = Number(slot?.availability_status) === 1 ? 1 : 2;
+  const start_time = normalizeTimeOnly(slot?.start_time);
+  const end_time = normalizeTimeOnly(slot?.end_time);
+  const is_full_day = Number(slot?.is_full_day) === 1 ? 1 : 0;
+
+  return {
+    id: slot?.id ? Number(slot.id) : null,
+    crew_member_id: slot?.crew_member_id ? Number(slot.crew_member_id) : null,
+    date,
+    availability_status: availabilityStatus,
+    start_time,
+    end_time,
+    location: slot?.location ? String(slot.location).trim() : null,
+    recurrence: slot?.recurrence !== undefined ? Number(slot.recurrence) : 1,
+    notes: slot?.notes ? String(slot.notes).trim() : null,
+    is_full_day,
+    recurrence_until: normalizeDateOnly(slot?.recurrence_until),
+    recurrence_days: slot?.recurrence_days,
+    recurrence_day_of_month: slot?.recurrence_day_of_month !== undefined && slot?.recurrence_day_of_month !== null && String(slot?.recurrence_day_of_month).trim() !== ""
+      ? Number(slot.recurrence_day_of_month)
+      : null,
+  };
+}
+
+function slotFingerprint(slot) {
+  return [
+    slot.date,
+    slot.availability_status,
+    slot.start_time || "",
+    slot.end_time || "",
+    Number(slot.is_full_day) === 1 ? "1" : "0",
+    slot.notes || "",
+    slot.location || "",
+    Number(slot.recurrence || 1),
+    slot.recurrence_until || "",
+    Array.isArray(slot.recurrence_days)
+      ? JSON.stringify([...slot.recurrence_days].sort())
+      : String(slot.recurrence_days || ""),
+    slot.recurrence_day_of_month || "",
+  ].join("|");
+}
+
+function slotDatesInRange(slot, rangeStartMoment, rangeEndMoment) {
+  const baseDate = moment(slot.date, "YYYY-MM-DD", true);
+  const start = rangeStartMoment.clone().startOf("day");
+  const end = rangeEndMoment.clone().startOf("day");
+
+  if (!baseDate.isValid() || end.isBefore(start, "day")) {
+    return [];
+  }
+
+  const recurrenceType = Number(slot.recurrence || 1);
+  const recurrenceUntil = slot.recurrence_until
+    ? moment(slot.recurrence_until, "YYYY-MM-DD", true)
+    : baseDate.clone();
+
+  const dates = [];
+  const cursor = start.clone();
+  while (cursor.isSameOrBefore(end, "day")) {
+    if (cursor.isSameOrAfter(baseDate, "day") && cursor.isSameOrBefore(recurrenceUntil, "day")) {
+      let matches = false;
+
+      switch (recurrenceType) {
+        case 1:
+          matches = cursor.isSame(baseDate, "day");
+          break;
+        case 2:
+          matches = true;
+          break;
+        case 3: {
+          const recurrenceDays = toArray(slot.recurrence_days).map((day) =>
+            String(day).toLowerCase().slice(0, 3)
+          );
+          matches = recurrenceDays.includes(cursor.format("ddd").toLowerCase());
+          break;
+        }
+        case 4:
+          matches = cursor.date() === Number(slot.recurrence_day_of_month);
+          break;
+        default:
+          matches = false;
+      }
+
+      if (matches) {
+        dates.push(cursor.format("YYYY-MM-DD"));
+      }
+    }
+
+    cursor.add(1, "day");
+  }
+
+  return dates;
+}
+
 const CONTENT_TYPE_FAMILY_ALIASES = {
   photo: [
     '2',
@@ -1158,6 +1311,24 @@ exports.getCrewAvailability = async (req, res) => {
       }
     };
 
+    const normalizeSlotForResponse = (slot) => ({
+      id: slot.id,
+      crew_member_id: slot.crew_member_id,
+      date: slot.date,
+      availability_status: Number(slot.availability_status),
+      start_time: slot.start_time,
+      end_time: slot.end_time,
+      location: slot.location,
+      recurrence: Number(slot.recurrence || 1),
+      notes: slot.notes,
+      is_full_day: Number(slot.is_full_day || 0),
+      recurrence_until: slot.recurrence_until || null,
+      recurrence_days: slot.recurrence_days || null,
+      recurrence_day_of_month: slot.recurrence_day_of_month || null,
+      created_at: slot.created_at,
+      updated_at: slot.updated_at,
+    });
+
     const calendar = {};
 
     const daysInMonth = moment(
@@ -1182,6 +1353,9 @@ exports.getCrewAvailability = async (req, res) => {
         start_time: null,
         end_time: null,
         is_full_day: null,
+        slots: [],
+        slotCount: 0,
+        hasMixedAvailability: false,
       };
 
       /*
@@ -1197,26 +1371,47 @@ exports.getCrewAvailability = async (req, res) => {
       /*
        * Custom availability overrides regular availability.
        */
-      const rule = customAvailability.find((item) =>
+      const matchingRules = customAvailability.filter((item) =>
         appliesOnDate(item, date)
       );
 
-      if (rule) {
-        calendar[key].available =
-          String(rule.availability_status) === "1";
+      if (matchingRules.length) {
+        const slots = matchingRules.map(normalizeSlotForResponse).sort((a, b) => {
+          if (Number(a.is_full_day) !== Number(b.is_full_day)) {
+            return Number(b.is_full_day) - Number(a.is_full_day);
+          }
 
-        calendar[key].customAvailabilityStatus =
-          rule.availability_status;
+          return String(a.start_time || "").localeCompare(String(b.start_time || ""));
+        });
 
-        calendar[key].is_full_day =
-          rule.is_full_day !== null &&
-          rule.is_full_day !== undefined
-            ? Number(rule.is_full_day)
-            : 1;
+        const availableCount = slots.filter((slot) => Number(slot.availability_status) === 1).length;
+        const unavailableCount = slots.filter((slot) => Number(slot.availability_status) === 2).length;
+        const hasMixedAvailability =
+          availableCount > 0 &&
+          unavailableCount > 0;
+        const allAvailable = availableCount === slots.length;
+        const allUnavailable = unavailableCount === slots.length;
 
-        if (Number(rule.is_full_day) === 0) {
-          calendar[key].start_time = rule.start_time;
-          calendar[key].end_time = rule.end_time;
+        calendar[key].slots = slots;
+        calendar[key].slotCount = slots.length;
+        calendar[key].hasMixedAvailability = hasMixedAvailability;
+        calendar[key].available = hasMixedAvailability
+          ? null
+          : allAvailable
+            ? true
+            : allUnavailable
+              ? false
+              : null;
+        calendar[key].customAvailabilityStatus = hasMixedAvailability
+          ? null
+          : slots[0]?.availability_status ?? null;
+        calendar[key].is_full_day = slots.some((slot) => Number(slot.is_full_day) === 1)
+          ? 1
+          : 0;
+
+        if (slots.length === 1) {
+          calendar[key].start_time = slots[0].start_time;
+          calendar[key].end_time = slots[0].end_time;
         }
       }
     }
@@ -1335,33 +1530,48 @@ exports.getCrewAvailability = async (req, res) => {
 
 exports.setCrewAvailability = async (req, res) => {
   try {
-    // const crew_member_id = req.user.crew_member_id;
-    const {
-      crew_member_id,
-      date,
-      availability_status,
-      start_time,
-      end_time,
-      location,
-      notes,
-      is_full_day = 0,
-      recurrence = 1,
-      recurrence_days = null,
-      recurrence_until = null,
-      recurrence_day_of_month = null
-    } = req.body;
+    const body = req.body || {};
+    const crew_member_id = body.crew_member_id;
+    const slotsPayload = Array.isArray(body.slots) && body.slots.length
+      ? body.slots
+      : [body];
 
-    if (!crew_member_id || !date || !availability_status) {
+    if (!crew_member_id) {
       return res.status(400).json({
         error: true,
-        message: "crew_member_id, date, and availability_status are required",
+        message: "crew_member_id is required",
       });
     }
 
-    const recurrenceType = Number(recurrence);
-    const normalizedRecurrenceDays = toArray(recurrence_days);
+    const selectedDate = normalizeDateOnly(body.date || slotsPayload[0]?.date);
+    if (!selectedDate) {
+      return res.status(400).json({
+        error: true,
+        message: "date is required",
+      });
+    }
 
-    /* Validate recurrence */
+    const recurrenceType = Number(
+      body.recurrence !== undefined
+        ? body.recurrence
+        : (slotsPayload[0]?.recurrence !== undefined ? slotsPayload[0].recurrence : 1)
+    );
+    const normalizedRecurrenceDays = toArray(
+      body.recurrence_days !== undefined
+        ? body.recurrence_days
+        : slotsPayload[0]?.recurrence_days
+    );
+    const recurrenceUntil = normalizeDateOnly(
+      body.recurrence_until !== undefined
+        ? body.recurrence_until
+        : slotsPayload[0]?.recurrence_until
+    );
+    const recurrenceDayOfMonth = body.recurrence_day_of_month !== undefined && body.recurrence_day_of_month !== null && String(body.recurrence_day_of_month).trim() !== ""
+      ? Number(body.recurrence_day_of_month)
+      : (slotsPayload[0]?.recurrence_day_of_month !== undefined && slotsPayload[0]?.recurrence_day_of_month !== null && String(slotsPayload[0].recurrence_day_of_month).trim() !== ""
+        ? Number(slotsPayload[0].recurrence_day_of_month)
+        : null);
+
     if (![1, 2, 3, 4].includes(recurrenceType)) {
       return res.status(400).json({
         error: true,
@@ -1369,7 +1579,7 @@ exports.setCrewAvailability = async (req, res) => {
       });
     }
 
-    if (recurrenceType !== 1 && !recurrence_until) {
+    if (recurrenceType !== 1 && !recurrenceUntil) {
       return res.status(400).json({
         error: true,
         message: "recurrence_until is required for recurring availability"
@@ -1383,17 +1593,17 @@ exports.setCrewAvailability = async (req, res) => {
       });
     }
 
-    if (recurrenceType === 4 && !recurrence_day_of_month) {
+    if (recurrenceType === 4 && !recurrenceDayOfMonth) {
       return res.status(400).json({
         error: true,
         message: "recurrence_day_of_month required for monthly recurrence"
       });
     }
 
-    const availabilityStart = moment(date, "YYYY-MM-DD", true);
+    const availabilityStart = moment(selectedDate, "YYYY-MM-DD", true);
     const availabilityEnd = recurrenceType === 1
       ? availabilityStart.clone()
-      : moment(recurrence_until, "YYYY-MM-DD", true);
+      : moment(recurrenceUntil, "YYYY-MM-DD", true);
 
     if (
       !availabilityStart.isValid() ||
@@ -1404,6 +1614,81 @@ exports.setCrewAvailability = async (req, res) => {
         error: true,
         message: "A valid date range is required",
       });
+    }
+
+    const isBatchReplace = Array.isArray(body.slots) && body.slots.length > 0;
+    const normalizedSlots = slotsPayload.map((slot) => {
+      const normalized = normalizeAvailabilitySlot({
+        ...body,
+        ...slot,
+        recurrence: recurrenceType,
+        recurrence_days: normalizedRecurrenceDays,
+        recurrence_until: recurrenceUntil,
+        recurrence_day_of_month: recurrenceDayOfMonth,
+      }, selectedDate);
+
+      if (normalized.date !== selectedDate) {
+        throw new Error("All availability slots in a single request must use the same date");
+      }
+
+      return normalized;
+    });
+
+    const validateSlotShape = (slot) => {
+      if (![1, 2].includes(Number(slot.availability_status))) {
+        return "availability_status must be 1 or 2";
+      }
+
+      if (!slot.is_full_day) {
+        if (!slot.start_time || !slot.end_time) {
+          return "start_time and end_time are required for a partial-day slot";
+        }
+
+        const startMinutes = timeToMinutes(slot.start_time);
+        const endMinutes = timeToMinutes(slot.end_time);
+
+        if (startMinutes === null || endMinutes === null || startMinutes >= endMinutes) {
+          return "start_time must be before end_time";
+        }
+      }
+
+      return null;
+    };
+
+    for (const slot of normalizedSlots) {
+      const slotError = validateSlotShape(slot);
+      if (slotError) {
+        return res.status(400).json({
+          error: true,
+          message: slotError,
+        });
+      }
+    }
+
+    const slotFingerprints = new Set();
+    for (const slot of normalizedSlots) {
+      const fingerprint = slotFingerprint(slot);
+      if (slotFingerprints.has(fingerprint)) {
+        return res.status(400).json({
+          error: true,
+          message: "Duplicate slots are not allowed",
+        });
+      }
+      slotFingerprints.add(fingerprint);
+    }
+
+    for (let i = 0; i < normalizedSlots.length; i++) {
+      for (let j = i + 1; j < normalizedSlots.length; j++) {
+        const left = slotRangeFromSlot(normalizedSlots[i]);
+        const right = slotRangeFromSlot(normalizedSlots[j]);
+
+        if (rangesOverlap(left, right)) {
+          return res.status(400).json({
+            error: true,
+            message: "This time is already covered by another slot. Please choose a different range.",
+          });
+        }
+      }
     }
 
     const acceptedProjects = await assigned_crew.findAll({
@@ -1433,88 +1718,187 @@ exports.setCrewAvailability = async (req, res) => {
             "stream_project_booking_id",
             "project_name",
             "event_date",
+            "start_time",
+            "end_time",
           ],
         },
       ],
     });
 
-    const weeklyDays = normalizedRecurrenceDays.map((day) =>
-      String(day).toLowerCase().slice(0, 3)
-    );
-
-    const conflictsWithRule = (eventDate) => {
-      const projectDate = moment(eventDate);
-
-      switch (recurrenceType) {
-        case 1:
-          return projectDate.isSame(availabilityStart, "day");
-        case 2:
-          return true;
-        case 3:
-          return weeklyDays.includes(projectDate.format("ddd").toLowerCase());
-        case 4:
-          return projectDate.date() === Number(recurrence_day_of_month);
-        default:
-          return false;
+    const buildProjectRange = (project) => {
+      const isAllDay = !project.start_time || !project.end_time;
+      if (isAllDay) {
+        return { isFullDay: true, start: 0, end: 24 * 60 };
       }
+
+      return {
+        isFullDay: false,
+        start: timeToMinutes(project.start_time),
+        end: timeToMinutes(project.end_time),
+      };
     };
 
-    const conflictingProjects = acceptedProjects.filter(
-      (assignment) =>
-        assignment.project &&
-        conflictsWithRule(assignment.project.event_date)
-    );
+    const projectConflicts = [];
+    for (const slot of normalizedSlots) {
+      const slotRange = slotRangeFromSlot(slot);
+      const slotDates = slotDatesInRange({
+        date: selectedDate,
+        recurrence: recurrenceType,
+        recurrence_days: normalizedRecurrenceDays,
+        recurrence_until: recurrenceUntil,
+        recurrence_day_of_month: recurrenceDayOfMonth,
+      }, availabilityStart, availabilityEnd);
 
-    if (conflictingProjects.length) {
+      for (const dateKey of slotDates) {
+        const projectMatches = acceptedProjects.filter((assignment) => {
+          const project = assignment.project;
+          if (!project || moment(project.event_date).format("YYYY-MM-DD") !== dateKey) {
+            return false;
+          }
+
+          const projectRange = buildProjectRange(project);
+          return rangesOverlap(slotRange, projectRange);
+        });
+
+        if (projectMatches.length) {
+          projectConflicts.push(
+            ...projectMatches.map(({ project }) => ({
+              project_id: project.stream_project_booking_id,
+              project_name: project.project_name,
+              date: moment(project.event_date).format("YYYY-MM-DD"),
+            }))
+          );
+        }
+      }
+    }
+
+    if (projectConflicts.length) {
       return res.status(409).json({
         error: true,
         message:
           "Availability cannot be changed because an assigned shoot conflicts with one or more selected dates.",
         data: {
-          conflicts: conflictingProjects.map(({ project }) => ({
-            project_id: project.stream_project_booking_id,
-            project_name: project.project_name,
-            date: moment(project.event_date).format("YYYY-MM-DD"),
-          })),
+          conflicts: projectConflicts,
         },
       });
     }
 
-    const payload = {
-      crew_member_id,
-      date,
-      availability_status,
-      start_time,
-      end_time,
-      location,
-      notes,
-      is_full_day,
-      recurrence: recurrenceType,
-      recurrence_until,
-      recurrence_days: normalizedRecurrenceDays.length
-        ? JSON.stringify(normalizedRecurrenceDays)
-        : null,
-      recurrence_day_of_month
-    };
+    const transaction = await db.sequelize.transaction();
+    try {
+      if (isBatchReplace) {
+        const existingRows = await crew_availability.findAll({
+          where: {
+            crew_member_id,
+            [Op.or]: [
+              {
+                recurrence: 1,
+                date: {
+                  [Op.between]: [
+                    availabilityStart.format("YYYY-MM-DD"),
+                    availabilityEnd.format("YYYY-MM-DD"),
+                  ],
+                },
+              },
+              {
+                recurrence: {
+                  [Op.ne]: 1,
+                },
+                recurrence_until: {
+                  [Op.gte]: availabilityStart.format("YYYY-MM-DD"),
+                },
+              },
+            ],
+          },
+          order: [["created_at", "ASC"]],
+          transaction,
+        });
 
-    const availability = await crew_availability.create(payload);
+        const rowsToDelete = existingRows.filter((row) =>
+          slotDatesInRange({
+            date: row.date,
+            recurrence: row.recurrence,
+            recurrence_days: row.recurrence_days,
+            recurrence_until: row.recurrence_until,
+            recurrence_day_of_month: row.recurrence_day_of_month,
+          }, availabilityStart, availabilityEnd).length > 0
+        );
 
-    // await common.logActivity({
-    //   crew_member_id,
-    //   activity_type: 'availability_updated',
-    //   title: 'Availability Updated',
-    //   description: `Availability set starting ${date}`,
-    //   reference_type: 'availability',
-    //   reference_id: availability.availability_id
-    // });
+        if (rowsToDelete.length) {
+          await crew_availability.destroy({
+            where: {
+              id: rowsToDelete.map((row) => row.id),
+            },
+            transaction,
+          });
+        }
 
-    return res.status(200).json({
-      error: false,
-      message: "Availability saved successfully",
-      data: availability
-    });
+        const createdRows = await crew_availability.bulkCreate(
+          normalizedSlots.map((slot) => ({
+            crew_member_id,
+            date: slot.date,
+            availability_status: slot.availability_status,
+            start_time: slot.start_time,
+            end_time: slot.end_time,
+            location: slot.location,
+            notes: slot.notes,
+            is_full_day: slot.is_full_day,
+            recurrence: recurrenceType,
+            recurrence_until: recurrenceUntil,
+            recurrence_days: normalizedRecurrenceDays.length
+              ? JSON.stringify(normalizedRecurrenceDays)
+              : null,
+            recurrence_day_of_month: recurrenceDayOfMonth,
+          })),
+          { transaction }
+        );
+
+        await transaction.commit();
+
+        return res.status(200).json({
+          error: false,
+          message: "Availability saved successfully",
+          data: createdRows,
+        });
+      }
+
+      const availability = await crew_availability.create({
+        crew_member_id,
+        date: selectedDate,
+        availability_status: normalizedSlots[0].availability_status,
+        start_time: normalizedSlots[0].start_time,
+        end_time: normalizedSlots[0].end_time,
+        location: normalizedSlots[0].location,
+        notes: normalizedSlots[0].notes,
+        is_full_day: normalizedSlots[0].is_full_day,
+        recurrence: recurrenceType,
+        recurrence_until: recurrenceType === 1 ? null : recurrenceUntil,
+        recurrence_days: normalizedRecurrenceDays.length
+          ? JSON.stringify(normalizedRecurrenceDays)
+          : null,
+        recurrence_day_of_month: recurrenceDayOfMonth,
+      }, { transaction });
+
+      await transaction.commit();
+
+      return res.status(200).json({
+        error: false,
+        message: "Availability saved successfully",
+        data: availability
+      });
+    } catch (error) {
+      await transaction.rollback();
+      throw error;
+    }
   } catch (error) {
     console.error("setCrewAvailability error:", error);
+
+    if (error && String(error.message || "").includes("same date")) {
+      return res.status(400).json({
+        error: true,
+        message: error.message,
+      });
+    }
+
     return res.status(500).json({
       error: true,
       message: "Something went wrong while setting crew availability"
