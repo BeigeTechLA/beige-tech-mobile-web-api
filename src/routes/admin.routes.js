@@ -5,6 +5,9 @@ const admin = require('../controllers/admin.controller');
 const { authenticateAdmin, authMiddleware } = require('../middleware/auth');
 const { requirePermission, requireAnyPermission } = require('../middleware/permission.middleware');
 const { requireSuperAdmin } = require('../middleware/auth.middleware');
+const shiftManagementRoutes = require('./shifts.routes');
+const assignmentHistoryRoutes = require('./assignment-history.routes');
+const salesRepDetailRoutes = require('./sales-reps.routes');
 
 const dashboardView = requireAnyPermission([
   'admin_dashboard.view',
@@ -149,6 +152,10 @@ const shootsViewOrEdit = requireAnyPermission([
   'sales_admin_shoots.view',
   'sales_admin_shoots.edit'
 ], allowSalesRepRoles);
+
+router.use('/shifts', shiftManagementRoutes);
+router.use('/assignment-history', assignmentHistoryRoutes);
+router.use('/sales-reps', salesRepDetailRoutes);
 
 router.post('/create-project', authMiddleware, shootsCreate, admin.createProject);
 router.post('/match-crew', admin.matchCrew);

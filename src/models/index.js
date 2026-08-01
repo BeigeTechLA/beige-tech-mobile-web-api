@@ -6,6 +6,9 @@ const salesRepAvailabilityFactory = require('./sales_rep_availability');
 const salesRepLiveStatusFactory = require('./sales_rep_live_status');
 const salesRepStatusActivityFactory = require('./sales_rep_status_activity');
 const userArchiveHistoryFactory = require('./user_archive_history');
+const shiftsFactory = require('./shifts');
+const shiftSalespeopleFactory = require('./shift_salespeople');
+const assignmentHistoryFactory = require('./assignment_history');
 
 // initialize all auto-generated models properly
 const models = initModels(sequelize);
@@ -13,6 +16,9 @@ models.sales_rep_availability = salesRepAvailabilityFactory(sequelize, DataTypes
 models.sales_rep_live_status = salesRepLiveStatusFactory(sequelize, DataTypes);
 models.sales_rep_status_activity = salesRepStatusActivityFactory(sequelize, DataTypes);
 models.user_archive_history = userArchiveHistoryFactory(sequelize, DataTypes);
+models.shifts = shiftsFactory(sequelize, DataTypes);
+models.shift_salespeople = shiftSalespeopleFactory(sequelize, DataTypes);
+models.assignment_history = assignmentHistoryFactory(sequelize, DataTypes);
 
 if (models.sales_rep_availability && models.users) {
   models.sales_rep_availability.belongsTo(models.users, {
@@ -48,6 +54,17 @@ if (models.sales_rep_status_activity && models.users) {
     foreignKey: 'sales_rep_id',
     as: 'sales_rep_status_activities'
   });
+}
+
+if (models.shifts && models.shift_salespeople && models.assignment_history && models.users) {
+  models.shifts.hasMany(models.shift_salespeople, { foreignKey: 'shift_id', as: 'salespeople' });
+  models.shift_salespeople.belongsTo(models.shifts, { foreignKey: 'shift_id', as: 'shift' });
+  models.shift_salespeople.belongsTo(models.users, { foreignKey: 'sales_rep_id', as: 'sales_rep' });
+  models.users.hasMany(models.shift_salespeople, { foreignKey: 'sales_rep_id', as: 'shift_links' });
+  models.shifts.belongsTo(models.users, { foreignKey: 'next_assignee_sales_rep_id', as: 'next_assignee' });
+  models.assignment_history.belongsTo(models.shifts, { foreignKey: 'shift_id', as: 'shift' });
+  models.assignment_history.belongsTo(models.users, { foreignKey: 'sales_rep_id', as: 'sales_rep' });
+  models.shifts.hasMany(models.assignment_history, { foreignKey: 'shift_id', as: 'assignment_history' });
 }
 
 if (models.users) {

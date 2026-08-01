@@ -147,6 +147,7 @@ async function getUnavailableSalesRepIdsByLiveStatus(salesRepIds, options = {}) 
  */
 async function getActiveSalesReps(options = {}) {
   const transaction = options.transaction || null;
+  const attributes = options.attributes || ['id', 'name', 'email'];
 
   // TEMP FLOW:
   // Use admins with assign_lead=1 as assignable owners instead of sales reps.
@@ -172,7 +173,7 @@ async function getActiveSalesReps(options = {}) {
       is_active: 1,
       assign_lead: 1
     },
-    attributes: ['id', 'name', 'email'],
+    attributes,
     transaction
   });
 }
