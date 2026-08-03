@@ -1197,26 +1197,32 @@ exports.getCrewAvailability = async (req, res) => {
       /*
        * Custom availability overrides regular availability.
        */
-      const rule = customAvailability.find((item) =>
-        appliesOnDate(item, date)
-      );
+       const rules = customAvailability.filter((item) => 
+         appliesOnDate(item, date));
 
-      if (rule) {
+      if (rules.length > 0) {
+        const primaryRule = rules[0];
+        
         calendar[key].available =
-          String(rule.availability_status) === "1";
+          String(primaryRule.availability_status) === "1";
+        calendar[key].customAvailabilityStatus = primaryRule.availability_status;
+        calendar[key].is_full_day = Number(primaryRule.is_full_day);
+        calendar[key].recurrence = Number(primaryRule.recurrence || 1);
+        calendar[key].recurrence_until = primaryRule.recurrence_until || null;
+        calendar[key].recurrence_days = primaryRule.recurrence_days || null;
+        calendar[key].recurrence_day_of_month = primaryRule.recurrence_day_of_month || null;
 
-        calendar[key].customAvailabilityStatus =
-          rule.availability_status;
+        calendar[key].slots = rules
+          .filter(r => Number(r.is_full_day) === 0)
+          .map(r => ({
+            id: r.id,
+            start_time: r.start_time,
+            end_time: r.end_time
+          }));
 
-        calendar[key].is_full_day =
-          rule.is_full_day !== null &&
-          rule.is_full_day !== undefined
-            ? Number(rule.is_full_day)
-            : 1;
-
-        if (Number(rule.is_full_day) === 0) {
-          calendar[key].start_time = rule.start_time;
-          calendar[key].end_time = rule.end_time;
+        if (calendar[key].slots.length > 0) {
+          calendar[key].start_time = calendar[key].slots[0].start_time;
+          calendar[key].end_time = calendar[key].slots[0].end_time;
         }
       }
     }
@@ -1335,190 +1341,93 @@ exports.getCrewAvailability = async (req, res) => {
 
 exports.setCrewAvailability = async (req, res) => {
   try {
-    // const crew_member_id = req.user.crew_member_id;
     const {
       crew_member_id,
       date,
       availability_status,
-      start_time,
-      end_time,
       location,
       notes,
       is_full_day = 0,
       recurrence = 1,
       recurrence_days = null,
       recurrence_until = null,
-      recurrence_day_of_month = null
+      recurrence_day_of_month = null,
+      slots = []
     } = req.body;
 
     if (!crew_member_id || !date || !availability_status) {
-      return res.status(400).json({
-        error: true,
-        message: "crew_member_id, date, and availability_status are required",
-      });
+      return res.status(400).json({ error: true, message: "Required fields missing" });
     }
 
     const recurrenceType = Number(recurrence);
     const normalizedRecurrenceDays = toArray(recurrence_days);
 
-    /* Validate recurrence */
-    if (![1, 2, 3, 4].includes(recurrenceType)) {
-      return res.status(400).json({
-        error: true,
-        message: "recurrence must be one of 1, 2, 3, or 4",
-      });
-    }
-
-    if (recurrenceType !== 1 && !recurrence_until) {
-      return res.status(400).json({
-        error: true,
-        message: "recurrence_until is required for recurring availability"
-      });
-    }
-
-    if (recurrenceType === 3 && !normalizedRecurrenceDays.length) {
-      return res.status(400).json({
-        error: true,
-        message: "recurrence_days required for weekly recurrence"
-      });
-    }
-
-    if (recurrenceType === 4 && !recurrence_day_of_month) {
-      return res.status(400).json({
-        error: true,
-        message: "recurrence_day_of_month required for monthly recurrence"
-      });
-    }
-
-    const availabilityStart = moment(date, "YYYY-MM-DD", true);
-    const availabilityEnd = recurrenceType === 1
-      ? availabilityStart.clone()
-      : moment(recurrence_until, "YYYY-MM-DD", true);
-
-    if (
-      !availabilityStart.isValid() ||
-      !availabilityEnd.isValid() ||
-      availabilityEnd.isBefore(availabilityStart, "day")
-    ) {
-      return res.status(400).json({
-        error: true,
-        message: "A valid date range is required",
-      });
-    }
-
+    // 1. Conflict Check: Don't allow changing availability if a shoot is booked
     const acceptedProjects = await assigned_crew.findAll({
-      where: {
-        crew_member_id,
-        crew_accept: 1,
-        is_active: 1,
-      },
-      include: [
-        {
-          model: stream_project_booking,
-          as: "project",
-          required: true,
-          where: {
-            event_date: {
-              [Op.between]: [
-                availabilityStart.format("YYYY-MM-DD"),
-                availabilityEnd.format("YYYY-MM-DD"),
-              ],
-            },
-            [Op.or]: [
-              { is_cancelled: 0 },
-              { is_cancelled: null },
-            ],
-          },
-          attributes: [
-            "stream_project_booking_id",
-            "project_name",
-            "event_date",
-          ],
-        },
-      ],
+      where: { crew_member_id, crew_accept: 1, is_active: 1 },
+      include: [{
+        model: stream_project_booking, as: "project", required: true,
+        where: { event_date: date, [Op.or]: [{ is_cancelled: 0 }, { is_cancelled: null }] }
+      }]
     });
 
-    const weeklyDays = normalizedRecurrenceDays.map((day) =>
-      String(day).toLowerCase().slice(0, 3)
-    );
-
-    const conflictsWithRule = (eventDate) => {
-      const projectDate = moment(eventDate);
-
-      switch (recurrenceType) {
-        case 1:
-          return projectDate.isSame(availabilityStart, "day");
-        case 2:
-          return true;
-        case 3:
-          return weeklyDays.includes(projectDate.format("ddd").toLowerCase());
-        case 4:
-          return projectDate.date() === Number(recurrence_day_of_month);
-        default:
-          return false;
-      }
-    };
-
-    const conflictingProjects = acceptedProjects.filter(
-      (assignment) =>
-        assignment.project &&
-        conflictsWithRule(assignment.project.event_date)
-    );
-
-    if (conflictingProjects.length) {
+    if (acceptedProjects.length > 0) {
       return res.status(409).json({
         error: true,
-        message:
-          "Availability cannot be changed because an assigned shoot conflicts with one or more selected dates.",
-        data: {
-          conflicts: conflictingProjects.map(({ project }) => ({
-            project_id: project.stream_project_booking_id,
-            project_name: project.project_name,
-            date: moment(project.event_date).format("YYYY-MM-DD"),
-          })),
-        },
+        message: "Availability cannot be changed because of an assigned shoot on this date."
       });
     }
 
-    const payload = {
+      const submittedSlots = Array.isArray(slots) ? slots : [];
+      await crew_availability.destroy({
+        where: {
+          crew_member_id,
+          date
+        }
+      });
+    const baseData = {
       crew_member_id,
       date,
       availability_status,
-      start_time,
-      end_time,
       location,
       notes,
-      is_full_day,
       recurrence: recurrenceType,
       recurrence_until,
-      recurrence_days: normalizedRecurrenceDays.length
-        ? JSON.stringify(normalizedRecurrenceDays)
-        : null,
+      recurrence_days: normalizedRecurrenceDays.length ? JSON.stringify(normalizedRecurrenceDays) : null,
       recurrence_day_of_month
     };
 
-    const availability = await crew_availability.create(payload);
+      let entries = [];
+      if (Number(is_full_day) === 1 || submittedSlots.length === 0) {
+        // Create one entry for the whole day
+        entries.push({ ...baseData, is_full_day: 1, start_time: null, end_time: null });
+      } else {
+        // Create a separate row for every time slot
+        for (const slot of submittedSlots) {
+          entries.push({
+            ...baseData,
+            is_full_day: 0,
+            start_time: slot.start_time,
+            end_time: slot.end_time,
+          });
+        }
+      }
 
-    // await common.logActivity({
-    //   crew_member_id,
-    //   activity_type: 'availability_updated',
-    //   title: 'Availability Updated',
-    //   description: `Availability set starting ${date}`,
-    //   reference_type: 'availability',
-    //   reference_id: availability.availability_id
-    // });
+      // 4. SAVE
+      const results = [];
+      for (const entry of entries) {
+        const created = await crew_availability.create(entry);
+        results.push(created);
+      }
 
     return res.status(200).json({
       error: false,
-      message: "Availability saved successfully",
-      data: availability
+      message: "Availability slots saved successfully",
+      data: results
     });
   } catch (error) {
     console.error("setCrewAvailability error:", error);
-    return res.status(500).json({
-      error: true,
-      message: "Something went wrong while setting crew availability"
-    });
+    return res.status(500).json({ error: true, message: "Internal server error" });
   }
 };
 
