@@ -189,6 +189,10 @@ exports.listSalespeople = async (req, res) => {
   try { return ok(res, await service.listSalespeople(req.params.id, req.query)); } catch (error) { return fail(res, error); }
 };
 
+exports.listAllShiftSalespeople = async (req, res) => {
+  try { return ok(res, await service.listAllShiftSalespeople(req.query)); } catch (error) { return fail(res, error); }
+};
+
 exports.toggleSalesperson = async (req, res) => {
   try {
     const row = await models.shift_salespeople.findOne({ where: { shift_id: req.params.id, sales_rep_id: req.params.salesRepId } });

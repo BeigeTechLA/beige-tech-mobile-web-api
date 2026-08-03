@@ -3484,7 +3484,6 @@ Authorization: {{CP_TOKEN}}
 ### SHIFT MANAGEMENT MODULE
 ### ============================================================
 
-### TESTING ORDER: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10 -> 11 -> 12 -> 13 -> 14 -> 15 -> 16 -> 17 -> 18 -> 19 -> 20
 
 
 
@@ -3618,4 +3617,12 @@ GET {{URL}}admin/sales-reps/1/quotes?page=1&limit=10 HTTP/1.1
 Content-Type: application/json
 Authorization: {{TOKEN2}}
 
+### 20. Get All Shift Salespeople 
+GET {{URL}}admin/shifts/salespeople?page=1&limit=10 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
 
+### 21. Get All Shift Salespeople 
+GET {{URL}}admin/shifts/salespeople?page=2&limit=10 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}

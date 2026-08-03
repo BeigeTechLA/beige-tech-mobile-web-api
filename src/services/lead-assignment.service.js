@@ -143,19 +143,14 @@ async function getUnavailableSalesRepIdsByLiveStatus(salesRepIds, options = {}) 
 
 /**
  * Get all active sales reps
- * @returns {Promise<Array>} Array of sales rep users
+ * @returns {Promise<Array>} 
  */
 async function getActiveSalesReps(options = {}) {
   const transaction = options.transaction || null;
   const attributes = options.attributes || ['id', 'name', 'email'];
+  const search = options.search ? String(options.search).trim() : '';
 
-  // TEMP FLOW:
-  // Use admins with assign_lead=1 as assignable owners instead of sales reps.
-  // Old sales_rep lookup kept commented for easy rollback.
-  // const salesRepType = await user_type.findOne({
-  //   where: { user_role: 'sales_rep' },
-  //   transaction
-  // });
+
   const adminTypes = await user_type.findAll({
     where: { user_role: { [Op.in]: ['admin', 'Admin'] } },
     attributes: ['user_type_id'],
@@ -167,12 +162,21 @@ async function getActiveSalesReps(options = {}) {
     return [];
   }
 
+  const where = {
+    user_type: { [Op.in]: adminTypeIds },
+    is_active: 1,
+    assign_lead: 1
+  };
+
+  if (search) {
+    where[Op.or] = [
+      { name: { [Op.like]: `%${search}%` } },
+      { email: { [Op.like]: `%${search}%` } }
+    ];
+  }
+
   return await users.findAll({
-    where: {
-      user_type: { [Op.in]: adminTypeIds },
-      is_active: 1,
-      assign_lead: 1
-    },
+    where,
     attributes,
     transaction
   });
@@ -259,7 +263,7 @@ async function autoAssignLead(leadId, options = {}) {
     return null;
   }
 
-  // 1️⃣ Get all active sales reps
+  // 1️ Get all active sales reps
   const salesReps = await getActiveSalesReps({ transaction });
 
   if (!salesReps.length) {
@@ -267,14 +271,14 @@ async function autoAssignLead(leadId, options = {}) {
     return null;
   }
 
-  // 2️⃣ Get lead counts for last 24 hours
+  // 2️ Get lead counts for last 24 hours
   const salesRepIds = salesReps.map(rep => rep.id);
   const leadCounts = await getLeadCountsPerRep(salesRepIds, 24, { leadModel, transaction });
 
-  // 3️⃣ Find rep with fewest leads
+  // 3️ Find rep with fewest leads
   const selectedRep = findRepWithFewestLeads(salesReps, leadCounts);
 
-  // 4️⃣ Update lead WITH SAME TRANSACTION
+  // 4️ Update lead WITH SAME TRANSACTION
   await leadModel.update(
     { assigned_sales_rep_id: selectedRep.id },
     { 
@@ -304,14 +308,7 @@ async function autoAssignLead(leadId, options = {}) {
 async function manuallyAssignLead(leadId, salesRepId, performedByUserId) {
   const { sales_lead_activities } = require('../models');
   
-  // TEMP FLOW: verify assignable admin (assign_lead=1) exists and is active.
-  // Old generic active-user validation kept commented for rollback.
-  // const salesRep = await users.findOne({
-  //   where: {
-  //     id: salesRepId,
-  //     is_active: 1
-  //   }
-  // });
+
   const salesRep = await users.findOne({
     where: { 
       id: salesRepId,

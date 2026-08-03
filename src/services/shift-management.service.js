@@ -61,6 +61,16 @@ function salesRepPayload(link) {
   };
 }
 
+function shiftSalespersonPayload(link) {
+  const row = link.toJSON ? link.toJSON() : link;
+  const payload = salesRepPayload(row);
+  return {
+    ...payload,
+    shift_id: row.shift_id,
+    shift_name: row.shift?.name || null
+  };
+}
+
 async function getShiftOrThrow(id) {
   const shift = await models.shifts.findByPk(id);
   if (!shift) {
@@ -99,7 +109,7 @@ async function hasOverlapForSalesRep(salesRepId, shift, excludeShiftId = null) {
     include: [{ model: models.shifts, as: 'shift', where: { status: 'active' } }]
   });
 
-  return links.some((link) => (
+  return links.some((link) => link.shift && (
     daysIntersect(link.shift.active_days, shift.active_days) &&
     rangesOverlap(link.shift.start_time, link.shift.end_time, shift.start_time, shift.end_time)
   ));
@@ -229,6 +239,80 @@ async function listSalespeople(shiftId, query) {
   return { rows: rows.map(salesRepPayload), pagination: { page, limit, total: result.count, pages: Math.ceil(result.count / limit) } };
 }
 
+async function listAllShiftSalespeople(query) {
+  const { page, limit, offset } = pageParams(query);
+  const shiftId = query.shift_id ? parseInt(query.shift_id, 10) : null;
+  if (query.shift_id && !Number.isInteger(shiftId)) throw new Error('shift_id must be a number');
+  const status = query.status ? String(query.status).trim().toLowerCase() : '';
+
+  const salesReps = await leadAssignmentService.getActiveSalesReps({
+    attributes: USER_ATTRS,
+    search: query.search
+  });
+  const salesRepIds = salesReps.map((rep) => rep.id);
+  if (!salesRepIds.length) {
+    return { rows: [], pagination: { page, limit, total: 0, pages: 0 } };
+  }
+
+  const linkWhere = {
+    sales_rep_id: { [Op.in]: salesRepIds }
+  };
+  if (shiftId) linkWhere.shift_id = shiftId;
+  if (status && status !== 'active') linkWhere.status = status;
+
+  const links = await models.shift_salespeople.findAll({
+    where: linkWhere,
+    include: [{ model: models.shifts, as: 'shift', attributes: ['id', 'name', 'start_time', 'end_time', 'active_days', 'status'] }],
+    order: [
+      ['shift_id', 'ASC'],
+      ['assignment_order', 'ASC']
+    ]
+  });
+
+  const linksBySalesRepId = new Map();
+  for (const link of links) {
+    const row = link.toJSON ? link.toJSON() : link;
+    if (!linksBySalesRepId.has(row.sales_rep_id)) linksBySalesRepId.set(row.sales_rep_id, []);
+    linksBySalesRepId.get(row.sales_rep_id).push(row);
+  }
+
+  const rows = [];
+  for (const repInstance of salesReps) {
+    const rep = repInstance.toJSON ? repInstance.toJSON() : repInstance;
+    const repLinks = linksBySalesRepId.get(rep.id) || [];
+
+    if (!repLinks.length) {
+      if (shiftId) continue;
+      if (status && status !== 'active') continue;
+      rows.push({
+        sales_rep_id: rep.id,
+        name: rep.name || null,
+        email: rep.email || null,
+        status: 'active',
+        user_status: null,
+        last_activity: null,
+        assignment_order: null,
+        shift_overlapping: null,
+        shift_id: null,
+        shift_name: null
+      });
+      continue;
+    }
+
+    for (const row of repLinks) {
+      if (status && row.status !== status) continue;
+      row.sales_rep = rep;
+      row.shift_overlapping = row.shift
+        ? await hasOverlapForSalesRep(row.sales_rep_id, row.shift, row.shift_id)
+        : false;
+      rows.push(shiftSalespersonPayload(row));
+    }
+  }
+
+  const paginatedRows = rows.slice(offset, offset + limit);
+  return { rows: paginatedRows, pagination: { page, limit, total: rows.length, pages: Math.ceil(rows.length / limit) } };
+}
+
 async function getNextAssignee(shiftId) {
   const shift = await getShiftOrThrow(shiftId);
   const links = await models.shift_salespeople.findAll({ where: { shift_id: shiftId, status: 'active', user_status: true }, order: [['assignment_order', 'ASC']] });
@@ -313,6 +397,7 @@ module.exports = {
   recomputeNextAssignee,
   addSalesperson,
   listSalespeople,
+  listAllShiftSalespeople,
   getNextAssignee,
   logAssignment,
   getRoundRobin,

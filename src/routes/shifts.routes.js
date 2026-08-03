@@ -12,6 +12,7 @@ router.get('/active-now', controller.activeNow);
 router.get('/recent-assignments', controller.recentAssignments);
 router.post('/', controller.createShift);
 router.get('/', controller.listShifts);
+router.get('/salespeople', controller.listAllShiftSalespeople);
 router.get('/:id', controller.getShift);
 router.put('/:id', controller.updateShift);
 router.patch('/:id/toggle', controller.toggleShift);
