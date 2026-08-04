@@ -25,7 +25,8 @@ const otpService = require('../utils/otpService');
 const emailService = require('../utils/emailService');
 const { OAuth2Client } = require('google-auth-library');
 
-const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+const getGoogleClientId = () => process.env.GOOGLE_CLIENT_ID || process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '';
+const googleClient = new OAuth2Client(getGoogleClientId());
 
 const findCreatorTypeId = async (transaction = null) => {
   const creatorType = await user_type.findOne({
@@ -1027,9 +1028,10 @@ exports.login = async (req, res) => {
 
       // Verify password
       if (!user.password_hash) {
-        return res.status(500).json({
+        return res.status(400).json({
           success: false,
-          message: "Account configuration error",
+          code: 'GOOGLE_ACCOUNT_NO_PASSWORD',
+          message: "This account was created with Google. Please continue with Google or set a password from your profile.",
         });
       }
 
@@ -1101,8 +1103,9 @@ exports.login = async (req, res) => {
           crew_member_id,
            affiliate_id,
           is_crew_verified,
-          temp_event_popup,
-          permissions_version: user.permissions_version
+        temp_event_popup,
+          permissions_version: user.permissions_version,
+          has_password: Boolean(user.password_hash)
         },
         token,
         refreshToken,
@@ -1242,7 +1245,8 @@ affiliate_id = affiliate ? affiliate.affiliate_id : null;
           affiliate_id,
           is_crew_verified,
           temp_event_popup,
-          permissions_version: user.permissions_version
+          permissions_version: user.permissions_version,
+          has_password: Boolean(user.password_hash)
         },
 
         token,
@@ -1268,109 +1272,362 @@ affiliate_id = affiliate ? affiliate.affiliate_id : null;
 
 exports.googleLogin = async (req, res) => {
   try {
-const { token: googleToken } = req.body;
+    const { token: googleToken, credential, mode = 'login', phone_number } = req.body;
+    const idToken = googleToken || credential;
+    const googleClientId = getGoogleClientId();
+    const isSignup = mode === 'signup';
+    const normalizedPhone = phone_number && String(phone_number).trim()
+      ? String(phone_number).trim()
+      : null;
 
-    const ticket = await googleClient.verifyIdToken({
-  idToken: googleToken,
-  audience: process.env.GOOGLE_CLIENT_ID,
-});
-
-    const payload = ticket.getPayload();
-    const googleId = payload.sub;
-    const email = payload.email;
-    const name = payload.name;
-    const picture = payload.picture;
-    const user = await User.findOne({
-      where: { email },
-      include: [
-        {
-          model: UserType,
-          as: "userType",
-          attributes: ["user_type_id", "user_role"],
-        },
-      ],
-    });
-    if (!user) {
-      return res.status(404).json({
+    if (!googleClientId) {
+      return res.status(500).json({
         success: false,
-        message: "No account found with this Google email.",
+        message: 'Google sign-in is not configured'
       });
     }
-    if (!user.is_active) {
-      return res.status(403).json({
+
+    if (!idToken) {
+      return res.status(400).json({
         success: false,
-        message: "Account is inactive. Please contact support",
+        message: 'Google credential is required'
+      });
+    }
+
+    const ticket = await googleClient.verifyIdToken({
+      idToken,
+      audience: googleClientId
+    });
+
+    const payload = ticket.getPayload();
+    const googleSub = payload?.sub;
+    const email = String(payload?.email || '').trim().toLowerCase();
+    const name = String(payload?.name || '').trim() || email.split('@')[0] || 'Beige Client';
+    const emailVerified = payload?.email_verified === true || payload?.email_verified === 'true';
+
+    if (!googleSub || !email || !emailVerified) {
+      return res.status(400).json({
+        success: false,
+        message: 'Google account must provide a verified email'
+      });
+    }
+
+    const includeUserType = [{
+      model: UserType,
+      as: 'userType',
+      attributes: ['user_type_id', 'user_role']
+    }];
+    const UserAll = typeof User.scope === 'function' ? User.scope('all') : User;
+
+    let user = await UserAll.findOne({
+      where: { google_sub: googleSub },
+      include: includeUserType
+    });
+
+    const emailUser = await UserAll.findOne({
+      where: { email },
+      include: includeUserType
+    });
+
+    if (user && emailUser && user.id !== emailUser.id) {
+      return res.status(409).json({
+        success: false,
+        message: 'This Google account is already linked to another Beige account'
+      });
+    }
+
+    if (!user && emailUser) {
+      user = emailUser;
+    }
+
+    if (!user && !isSignup) {
+      return res.status(404).json({
+        success: false,
+        message: 'No client account found with this Google email. Please sign up first.'
+      });
+    }
+
+    if (!user && normalizedPhone) {
+      const phoneUser = await UserAll.findOne({
+        where: { phone_number: normalizedPhone },
+        attributes: ['id'],
+        raw: true
+      });
+
+      if (phoneUser) {
+        return res.status(409).json({
+          success: false,
+          message: 'Phone number is already associated with another account'
+        });
+      }
+    }
+
+    let clientType = await user_type.findOne({
+      where: { user_type_id: 3 }
+    });
+
+    if (!clientType) {
+      clientType = await user_type.findOne({
+        where: db.Sequelize.where(
+          db.Sequelize.fn('LOWER', db.Sequelize.col('user_role')),
+          'client'
+        ),
+        order: [['user_type_id', 'ASC']]
+      });
+    }
+
+    if (!clientType) {
+      return res.status(500).json({
+        success: false,
+        message: 'Client role configuration error'
+      });
+    }
+
+    let createdClientId = null;
+    let linkedBookingsCount = 0;
+    let linkedQuotesCount = 0;
+
+    if (!user) {
+      await db.sequelize.transaction(async (transaction) => {
+        user = await User.create({
+          name,
+          email,
+          phone_number: normalizedPhone,
+          password_hash: null,
+          google_sub: googleSub,
+          auth_provider: 'google',
+          user_type: clientType.user_type_id,
+          is_active: 1,
+          email_verified: 1,
+          verification_code: null,
+          created_from: 1
+        }, { transaction });
+
+        const clientMatchConditions = [{ email }];
+        if (normalizedPhone) {
+          clientMatchConditions.push({ phone_number: normalizedPhone });
+        }
+
+        const existingClient = await Clients.findOne({
+          where: {
+            is_active: 1,
+            [Op.or]: clientMatchConditions
+          },
+          order: [['client_id', 'ASC']],
+          transaction
+        });
+
+        let client;
+        if (existingClient) {
+          client = await existingClient.update({
+            user_id: user.id,
+            name,
+            email,
+            phone_number: normalizedPhone
+          }, { transaction });
+        } else {
+          client = await Clients.create({
+            user_id: user.id,
+            name,
+            email,
+            phone_number: normalizedPhone,
+            is_active: 1
+          }, { transaction });
+        }
+
+        createdClientId = client.client_id;
+
+        const clientLead = await db.client_leads.create({
+          user_id: user.id,
+          guest_email: email,
+          client_name: name,
+          phone: normalizedPhone,
+          lead_type: 'self_serve',
+          lead_status: 'signed_up',
+          intent: 'Hot',
+          lead_source: 'google_signup',
+          created_from: 1
+        }, { transaction });
+
+        await db.client_lead_activities.create({
+          lead_id: clientLead.lead_id,
+          activity_type: 'created',
+          activity_data: {
+            source: 'google_signup',
+            guest_email: email,
+            lead_source: 'google_signup'
+          }
+        }, { transaction });
+      });
+
+      appendToSheet('Client_data', [
+        createdClientId,
+        user.id,
+        name,
+        email,
+        normalizedPhone || 'N/A',
+        'Active'
+      ]).catch(err => console.error('Google Sheets Client Sync Error:', err.message));
+
+      emailService.sendNewClientSignupNotification({
+        name,
+        email,
+        phone_number: normalizedPhone
+      }).catch(err => console.error('Sales Google Signup Notification Error:', err));
+
+      emailService.sendClientSignupWelcomeEmail({
+        name,
+        email
+      }).catch(err => console.error('Client Google Signup Welcome Email Error:', err));
+    } else {
+      const existingRole = user.userType?.user_role || '';
+      const normalizedRole = String(existingRole).toLowerCase().replace(/\s+/g, '_');
+      const isClientUser = user.userType?.user_type_id === clientType.user_type_id || normalizedRole === 'client';
+
+      if (!isClientUser) {
+        return res.status(403).json({
+          success: false,
+          message: 'Google login is currently available only for client accounts'
+        });
+      }
+
+      if (!user.is_active) {
+        return res.status(403).json({
+          success: false,
+          message: 'Account is inactive. Please contact support'
+        });
+      }
+
+      if (user.google_sub && user.google_sub !== googleSub) {
+        return res.status(409).json({
+          success: false,
+          message: 'This email is already linked to a different Google account'
+        });
+      }
+
+      const updates = {
+        google_sub: googleSub,
+        auth_provider: user.auth_provider || 'google',
+        email_verified: 1
+      };
+
+      if (!user.phone_number && normalizedPhone) {
+        const phoneUser = await UserAll.findOne({
+          where: {
+            phone_number: normalizedPhone,
+            id: { [Op.ne]: user.id }
+          },
+          attributes: ['id'],
+          raw: true
+        });
+
+        if (phoneUser) {
+          return res.status(409).json({
+            success: false,
+            message: 'Phone number is already associated with another account'
+          });
+        }
+
+        updates.phone_number = normalizedPhone;
+      }
+
+      await user.update(updates);
+
+      if (normalizedPhone) {
+        await Clients.update(
+          {
+            user_id: user.id,
+            email,
+            phone_number: normalizedPhone,
+            name: user.name || name
+          },
+          {
+            where: {
+              is_active: 1,
+              [Op.or]: [
+                { user_id: user.id },
+                { email }
+              ]
+            }
+          }
+        );
+      }
+    }
+
+    if (!user.userType) {
+      user = await UserAll.findOne({
+        where: { id: user.id },
+        include: includeUserType
       });
     }
 
     if (await isArchivedClientOnlyAccount(user)) {
       return res.status(403).json({
         success: false,
-        code: "CLIENT_ARCHIVED",
-        message: "This client profile is archived. Please contact support.",
+        code: 'CLIENT_ARCHIVED',
+        message: 'This client profile is archived. Please contact support.'
       });
     }
-    const role = user.userType?.user_role || "client";
-const user_type_id = user.userType?.user_type_id || null;
 
-let crew_member_id = null;
-let is_crew_verified = null;
-let temp_event_popup = null;
+    let affiliate = await Affiliate.findOne({
+      where: { user_id: user.id },
+      attributes: ['affiliate_id']
+    });
 
-if (user.userType && user.userType.user_type_id === 2) {
-  const crew = await getCreatorCrewMemberForUser(user);
+    if (!affiliate) {
+      try {
+        affiliate = await affiliateController.createAffiliate(user.id);
+      } catch (affiliateError) {
+        console.error('Failed to create affiliate account:', affiliateError);
+      }
+    }
 
-  crew_member_id = crew ? crew.crew_member_id : null;
-  is_crew_verified = crew ? crew.is_crew_verified : null;
-  temp_event_popup = getTempCpEventPopup(crew);
-}
-let affiliate_id = null;
+    linkedBookingsCount = await linkGuestBookingsToUser(email, user.id);
+    linkedQuotesCount = await linkClientQuotesToUser({
+      email,
+      phoneNumber: user.phone_number || normalizedPhone,
+      userId: user.id
+    });
 
-const affiliate = await Affiliate.findOne({
-  where: { user_id: user.id },
-  attributes: ["affiliate_id"],
-});
+    const role = user.userType?.user_role || 'client';
+    const user_type_id = user.userType?.user_type_id || clientType.user_type_id;
+    const { token, refreshToken } = generateTokens(user.id, role, user.permissions_version, user_type_id);
+    const permissions = await getCombinedUserPermissions(user.id, user.user_type);
 
-affiliate_id = affiliate ? affiliate.affiliate_id : null;
-const { token, refreshToken } = generateTokens(
-  user.id,
-  role,
-  user.permissions_version,
-  user_type_id
-);
-const permissions = await getCombinedUserPermissions(
-  user.id,
-  user.user_type
-);
-
- return res.status(200).json({
-  success: true,
-  message: "Google login successful",
-  user: {
-    id: user.id,
-    name: user.name,
-    email: user.email,
-    phone_number: user.phone_number,
-    instagram_handle: user.instagram_handle,
-    role,
-    user_type_id,
-    email_verified: user.email_verified,
-    crew_member_id,
-    affiliate_id,
-    is_crew_verified,
-    temp_event_popup,
-    permissions_version: user.permissions_version,
-  },
-  token,
-  refreshToken,
-  permissions,
-});
-
-
+    return res.status(isSignup && createdClientId ? 201 : 200).json({
+      success: true,
+      message: isSignup && createdClientId ? 'Google signup successful' : 'Google login successful',
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        phone_number: user.phone_number,
+        instagram_handle: user.instagram_handle,
+        role,
+        user_type_id,
+        email_verified: user.email_verified,
+        crew_member_id: null,
+        affiliate_id: affiliate ? affiliate.affiliate_id : null,
+        is_crew_verified: null,
+        temp_event_popup: null,
+        permissions_version: user.permissions_version,
+        has_password: Boolean(user.password_hash)
+      },
+      token,
+      refreshToken,
+      permissions,
+      clientId: createdClientId,
+      linked_bookings_count: linkedBookingsCount,
+      linked_quotes_count: linkedQuotesCount,
+      permissions_version: user.permissions_version
+    });
   } catch (error) {
-    console.error(error);
-
-
+    console.error('Google Login Error:', error);
+    return res.status(401).json({
+      success: false,
+      message: 'Google authentication failed',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 };
 
@@ -1623,7 +1880,8 @@ exports.getCurrentUser = async (req, res) => {
         created_at: user.created_at,
         crew_member_id: crewMember?.crew_member_id || null,
         is_crew_verified: crewMember?.is_crew_verified || null,
-        temp_event_popup: getTempCpEventPopup(crewMember)
+        temp_event_popup: getTempCpEventPopup(crewMember),
+        has_password: Boolean(user.password_hash)
       },
       permissions
     });
@@ -2501,11 +2759,13 @@ exports.getCrewMemberDetails = async (req, res) => {
 exports.changePasswordclient = async (req, res) => {
   try {
     const { user_id, currentPassword, newPassword } = req.body;
+    const authenticatedUserId = req.user?.userId;
+    const targetUserId = authenticatedUserId || user_id;
 
-    if (!user_id || !currentPassword || !newPassword) {
+    if (!targetUserId || !newPassword) {
       return res.status(400).json({
         success: false,
-        message: 'User ID, current password, and new password are required'
+        message: 'User ID and new password are required'
       });
     }
 
@@ -2517,7 +2777,7 @@ exports.changePasswordclient = async (req, res) => {
     }
 
     // Find the user by user_id directly
-    const user = await User.findOne({ where: { id: user_id } });
+    const user = await User.findOne({ where: { id: targetUserId } });
 
     if (!user) {
       return res.status(404).json({
@@ -2526,26 +2786,38 @@ exports.changePasswordclient = async (req, res) => {
       });
     }
 
-    // Check if the current password is correct
-    const isPasswordCorrect = await bcrypt.compare(currentPassword, user.password_hash);
+    if (user.password_hash) {
+      if (!currentPassword) {
+        return res.status(400).json({
+          success: false,
+          message: 'Current password is required'
+        });
+      }
 
-    if (!isPasswordCorrect) {
-      return res.status(400).json({
-        success: false,
-        message: 'Current password is incorrect'
-      });
+      const isPasswordCorrect = await bcrypt.compare(currentPassword, user.password_hash);
+
+      if (!isPasswordCorrect) {
+        return res.status(400).json({
+          success: false,
+          message: 'Current password is incorrect'
+        });
+      }
     }
+
+    const hadPassword = Boolean(user.password_hash);
 
     // Hash the new password
     const hashedNewPassword = await bcrypt.hash(newPassword, 10);
 
     // Update the user's password in the database
     user.password_hash = hashedNewPassword;
+    user.auth_provider = user.auth_provider === 'google' ? 'google_password' : user.auth_provider;
     await user.save();
 
     return res.status(200).json({
       success: true,
-      message: 'Password changed successfully'
+      message: hadPassword ? 'Password updated successfully' : 'Password set successfully',
+      has_password: true
     });
 
   } catch (error) {
