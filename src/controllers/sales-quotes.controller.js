@@ -423,11 +423,12 @@ exports.exportSalesQuotesCsv = async (req, res) => {
     );
 
     if (!quoteIds.length) {
-      return res.status(constants.NOT_FOUND.code).json({
-        success: false,
+      return res.status(constants.OK.code).json({
+        success: true,
         message: req.query.start_date && req.query.end_date
           ? 'No quotes found in the selected date range'
-          : 'No quotes found'
+          : 'No quotes found',
+        data: []
       });
     }
 
