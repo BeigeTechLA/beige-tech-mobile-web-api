@@ -23,6 +23,9 @@ const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 // Import new utilities
 const otpService = require('../utils/otpService');
 const emailService = require('../utils/emailService');
+const { OAuth2Client } = require('google-auth-library');
+
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 const findCreatorTypeId = async (transaction = null) => {
   const creatorType = await user_type.findOne({
@@ -1260,6 +1263,114 @@ affiliate_id = affiliate ? affiliate.affiliate_id : null;
       message: 'Server error during login',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
+  }
+};
+
+exports.googleLogin = async (req, res) => {
+  try {
+const { token: googleToken } = req.body;
+
+    const ticket = await googleClient.verifyIdToken({
+  idToken: googleToken,
+  audience: process.env.GOOGLE_CLIENT_ID,
+});
+
+    const payload = ticket.getPayload();
+    const googleId = payload.sub;
+    const email = payload.email;
+    const name = payload.name;
+    const picture = payload.picture;
+    const user = await User.findOne({
+      where: { email },
+      include: [
+        {
+          model: UserType,
+          as: "userType",
+          attributes: ["user_type_id", "user_role"],
+        },
+      ],
+    });
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "No account found with this Google email.",
+      });
+    }
+    if (!user.is_active) {
+      return res.status(403).json({
+        success: false,
+        message: "Account is inactive. Please contact support",
+      });
+    }
+
+    if (await isArchivedClientOnlyAccount(user)) {
+      return res.status(403).json({
+        success: false,
+        code: "CLIENT_ARCHIVED",
+        message: "This client profile is archived. Please contact support.",
+      });
+    }
+    const role = user.userType?.user_role || "client";
+const user_type_id = user.userType?.user_type_id || null;
+
+let crew_member_id = null;
+let is_crew_verified = null;
+let temp_event_popup = null;
+
+if (user.userType && user.userType.user_type_id === 2) {
+  const crew = await getCreatorCrewMemberForUser(user);
+
+  crew_member_id = crew ? crew.crew_member_id : null;
+  is_crew_verified = crew ? crew.is_crew_verified : null;
+  temp_event_popup = getTempCpEventPopup(crew);
+}
+let affiliate_id = null;
+
+const affiliate = await Affiliate.findOne({
+  where: { user_id: user.id },
+  attributes: ["affiliate_id"],
+});
+
+affiliate_id = affiliate ? affiliate.affiliate_id : null;
+const { token, refreshToken } = generateTokens(
+  user.id,
+  role,
+  user.permissions_version,
+  user_type_id
+);
+const permissions = await getCombinedUserPermissions(
+  user.id,
+  user.user_type
+);
+
+ return res.status(200).json({
+  success: true,
+  message: "Google login successful",
+  user: {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    phone_number: user.phone_number,
+    instagram_handle: user.instagram_handle,
+    role,
+    user_type_id,
+    email_verified: user.email_verified,
+    crew_member_id,
+    affiliate_id,
+    is_crew_verified,
+    temp_event_popup,
+    permissions_version: user.permissions_version,
+  },
+  token,
+  refreshToken,
+  permissions,
+});
+
+
+  } catch (error) {
+    console.error(error);
+
+
   }
 };
 

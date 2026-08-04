@@ -32,6 +32,7 @@ router.post('/verify-email', authController.verifyEmail);
 
 // ===== LOGIN =====
 router.post('/login', authController.login);
+router.post('/google', authController.googleLogin);
 
 // ===== PASSWORD MANAGEMENT =====
 router.post('/forgot-password', authController.forgotPassword);
