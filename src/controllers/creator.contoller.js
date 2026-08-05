@@ -451,9 +451,10 @@ exports.getConfirmedRequests = async (req, res) => {
     });
 
     if (confirmedRequests.length === 0) {
-      return res.status(404).json({
-        error: true,
+      return res.status(200).json({
+        error: false,
         message: "No confirmed requests found for the given crew member.",
+        data: [],
       });
     }
 
@@ -523,9 +524,10 @@ exports.getDeclinedRequests = async (req, res) => {
     });
 
     if (declinedRequests.length === 0) {
-      return res.status(404).json({
-        error: true,
+      return res.status(200).json({
+        error: false,
         message: "No declined requests found for the given crew member.",
+        data: [],
       });
     }
 
@@ -1715,11 +1717,11 @@ exports.getEquipmentOwnedByCrewMember = [
       const equipmentOwnershipArr = JSON.parse(crewMember.equipment_ownership);
 
       if (!Array.isArray(equipmentOwnershipArr) || equipmentOwnershipArr.length === 0) {
-        return res.status(constants.NOT_FOUND.code).json({
-          error: true,
-          code: constants.NOT_FOUND.code,
+        return res.status(constants.OK.code).json({
+          error: false,
+          code: constants.OK.code,
           message: "No equipment ownership found for this crew member",
-          data: null,
+          data: [],
         });
       }
 
@@ -1730,11 +1732,11 @@ exports.getEquipmentOwnedByCrewMember = [
       });
 
       if (equipmentDetails.length === 0) {
-        return res.status(constants.NOT_FOUND.code).json({
-          error: true,
-          code: constants.NOT_FOUND.code,
+        return res.status(constants.OK.code).json({
+          error: false,
+          code: constants.OK.code,
           message: "No equipment found for the owned items",
-          data: null,
+          data: [],
         });
       }
 
@@ -3894,5 +3896,4 @@ exports.checkCrewStatus = async (req, res) => {
     });
   }
 };
-
 
