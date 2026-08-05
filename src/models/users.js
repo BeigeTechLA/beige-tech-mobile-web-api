@@ -39,6 +39,10 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.STRING(50),
       allowNull: true
     },
+    profile_image: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
     otp_code: {
       type: DataTypes.STRING(6),
       allowNull: true

@@ -524,6 +524,7 @@ async function buildAuthenticatedUserResponse(user) {
       name: user.name,
       email: user.email,
       phone_number: user.phone_number,
+      profile_image: user.profile_image,
       instagram_handle: user.instagram_handle,
       role,
       user_type_id,
@@ -1404,7 +1405,10 @@ exports.googleLogin = async (req, res) => {
     const email = String(payload?.email || '').trim().toLowerCase();
     const name = String(payload?.name || '').trim() || email.split('@')[0] || 'Beige User';
     const emailVerified = payload?.email_verified === true || payload?.email_verified === 'true';
-
+    const profileImage = String(payload?.picture || '').trim();
+console.log("========================");
+console.log("Profile Image:", profileImage);
+console.log("========================");
     if (!googleSub || !email || !emailVerified) {
       return res.status(400).json({
         success: false,
@@ -1571,6 +1575,7 @@ exports.googleLogin = async (req, res) => {
           password_hash: null,
           google_sub: googleSub,
           auth_provider: 'google',
+          profile_image: profileImage,
           user_type: clientTypeId,
           is_active: 1,
           email_verified: 1,
@@ -1658,7 +1663,8 @@ exports.googleLogin = async (req, res) => {
       const updates = {
         google_sub: googleSub,
         auth_provider: user.auth_provider || 'google',
-        email_verified: 1
+        email_verified: 1,
+        profile_image: profileImage
       };
 
       if (!user.phone_number && normalizedPhone) {
