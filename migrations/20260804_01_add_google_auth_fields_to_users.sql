@@ -7,3 +7,7 @@ ALTER TABLE `users`
 
 ALTER TABLE `clients`
   MODIFY COLUMN `phone_number` VARCHAR(20) NULL;
+
+ALTER TABLE users
+  ADD COLUMN profile_image TEXT NULL AFTER auth_provider;
+
