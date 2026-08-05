@@ -3478,3 +3478,61 @@ Authorization: {{CP_TOKEN}}
     }
   ]
 }
+
+### save token
+POST {{URL}}push-notifications/tokens
+Authorization: {{TOKEN}}
+Content-Type: application/json
+
+{
+  "fcm_token": "fvDNmXNxRA6JsisDBalpJG:APA91bEhinKfibNg89cEFiGjrY-3dpYfGiW1bhY28gSQVws2mb2CU7-_OwXAkrodMIQQnbr9XycoXW3xrVOGB1pc-Fi5nX2aRmTkzQigG_LccbgxDIeDaac",
+  "session_id": "web-session-001"
+}
+
+### remove token
+DELETE {{URL}}push-notifications/tokens
+Authorization: {{TOKEN}}
+Content-Type: application/json
+
+{
+  "session_id": "web-session-001"
+}
+
+### update notification preferences
+PATCH {{URL}}push-notifications/preferences
+Authorization: {{TOKEN}}
+Content-Type: application/json
+
+{
+  "session_id": "web-session-001",
+  "notification_preferences": {
+    "push_enabled": true,
+    "topics": {
+      "shoots": true,
+      "payments": false,
+      "messages": true,
+      "meetings": true,
+      "proposals": true,
+      "files": true,
+      "system": true
+    }
+  }
+}
+
+### send notification test
+POST {{URL}}push-notifications/test
+Authorization: {{TOKEN}}
+Content-Type: application/json
+device_type: android
+user_type_name: client
+user_type: 3
+
+{
+  "title": "Hello",
+  "body": "Good Evening!",
+  "data": {
+    "topic": "system",
+    "category": "system",
+    "type": "test"
+  }
+}

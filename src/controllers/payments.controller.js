@@ -13,6 +13,7 @@ const BEIGE_MARGIN_PERCENT = parseFloat(process.env.BEIGE_MARGIN_PERCENT || '25.
 const REFERRAL_DISCOUNT_PERCENT = 10;
 const emailService = require('../utils/emailService');
 const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
+const pushNotificationService = require('../services/push-notification.service');
 
 const PAYMENT_SOURCE = {
   BOOKING_CHECKOUT: 'booking_checkout',
@@ -31,6 +32,48 @@ function isQuotePaymentSource(paymentSource) {
     PAYMENT_SOURCE.QUOTE_INVOICE,
     PAYMENT_SOURCE.ADDITIONAL_INVOICE
   ].includes(normalizePaymentSource(paymentSource));
+}
+
+function normalizePushText(value) {
+  const text = String(value || '').trim();
+  return text || null;
+}
+
+async function sendBookingConfirmedPush({ booking, bookingId }) {
+  const clientUserId = Number(booking?.user_id || 0);
+  if (!clientUserId) return;
+
+  const shootTypeName =
+    normalizePushText(booking?.shoot_type) ||
+    normalizePushText(booking?.event_type) ||
+    'shoot';
+  const eventDate =
+    normalizePushText(booking?.event_date) ||
+    normalizePushText(booking?.shoot_date);
+  const body = eventDate
+    ? `Your ${shootTypeName} booking for ${eventDate} is confirmed.`
+    : `Your ${shootTypeName} booking is confirmed.`;
+
+  try {
+    await pushNotificationService.sendPushToUser({
+      userId: clientUserId,
+      title: 'Booking confirmed',
+      body,
+      data: {
+        topic: 'shoots',
+        category: 'shoots',
+        type: 'booking_confirmed',
+        booking_id: String(bookingId || booking?.stream_project_booking_id || ''),
+        payment_status: 'paid'
+      }
+    });
+  } catch (error) {
+    console.error('[PushNotification] Booking confirmed push failed:', {
+      bookingId: bookingId || booking?.stream_project_booking_id || null,
+      clientUserId,
+      message: error.message || error
+    });
+  }
 }
 
 async function getQuoteCreatorNotificationRecipient({
@@ -1463,6 +1506,12 @@ async function processStripePaidWebhookEvent(event, req = {}) {
       paymentMethod: webhookPaymentMethod,
       transactionId: paymentIntentId
     }).catch(err => console.error('Booking Confirmation Email Error:', err));
+    if (isFullyPaidAfterWebhook) {
+      sendBookingConfirmedPush({
+        booking,
+        bookingId: booking_id
+      }).catch(err => console.error('Webhook booking confirmed push error:', err));
+    }
     notifyAssignedCreatorsAfterPayment(booking_id)
       .catch(err => console.error('Assigned Creator Notification Error:', err));
 
@@ -3358,6 +3407,10 @@ exports.confirmPaymentMulti = async (req, res) => {
       paymentMethod,
       transactionId: paymentIntentId
     }).catch(err => console.error('Booking Confirmation Email Error:', err));
+    sendBookingConfirmedPush({
+      booking,
+      bookingId: booking_id
+    }).catch(err => console.error('Booking Confirmed Push Error:', err));
     notifyAssignedCreatorsAfterPayment(booking_id)
       .catch(err => console.error('Assigned Creator Notification Error:', err));
 
@@ -4024,6 +4077,11 @@ exports.manualMarkWebhookPaid = async (req, res) => {
       paymentMethod: req.body?.payment_method || 'manual_local',
       transactionId: paymentIntentId
     }).catch(err => console.error('Manual webhook booking confirmation email error:', err));
+
+    sendBookingConfirmedPush({
+      booking,
+      bookingId
+    }).catch(err => console.error('Manual webhook booking confirmed push error:', err));
 
     notifyAssignedCreatorsAfterPayment(bookingId)
       .catch(err => console.error('Manual webhook assigned creator notification error:', err));

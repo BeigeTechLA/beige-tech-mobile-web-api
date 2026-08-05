@@ -48,4 +48,6 @@ router.get('/gcp/download-folder', externalFileManagerController.downloadFolderZ
 router.use('/external-chat', require('./external-chat.routes'));
 router.use('/external-meetings', require('./external-meetings.routes'));
 router.use('/comments', require('./comments.routes'));
+router.use('/push-notifications', require('./push-notification.routes'));
+
 module.exports = router;
