@@ -4393,11 +4393,12 @@ exports.exportShootsCsv = async (req, res) => {
     ]);
 
     if (!projects.length) {
-      return res.status(404).json({
-        success: false,
-        error: true,
+      return res.status(200).json({
+        success: true,
+        error: false,
         message:
           'No shoots found for the selected filters.',
+        data: [],
       });
     }
 
@@ -4636,10 +4637,11 @@ exports.exportShootsCsv = async (req, res) => {
     }
 
     if (!filteredProjects.length) {
-      return res.status(404).json({
-        success: false,
-        error: true,
+      return res.status(200).json({
+        success: true,
+        error: false,
         message: 'No shoots found for the selected filters.',
+        data: [],
       });
     }
 
@@ -9765,9 +9767,10 @@ exports.getPostProductionMembers = async (req, res) => {
     });
 
     if (!internalMembers || internalMembers.length === 0) {
-      return res.status(404).json({
-        error: true,
+      return res.status(200).json({
+        error: false,
         message: 'No post-production members found',
+        data: [],
       });
     }
 
