@@ -446,6 +446,98 @@ async function getCreatorCrewMemberForUser(user) {
   return crewMember;
 }
 
+async function findClientTypeId(transaction = null) {
+  let clientType = await user_type.findOne({
+    where: { user_type_id: 3 },
+    transaction
+  });
+
+  if (!clientType) {
+    clientType = await user_type.findOne({
+      where: db.Sequelize.where(
+        db.Sequelize.fn('LOWER', db.Sequelize.col('user_role')),
+        'client'
+      ),
+      order: [['user_type_id', 'ASC']],
+      transaction
+    });
+  }
+
+  return clientType?.user_type_id || 3;
+}
+
+function splitGoogleName(displayName, email) {
+  const fallback = String(email || '').split('@')[0] || 'Beige User';
+  const parts = String(displayName || fallback).trim().split(/\s+/).filter(Boolean);
+  const firstName = parts.shift() || fallback;
+  const lastName = parts.join(' ') || 'Creator';
+
+  return { firstName, lastName };
+}
+
+async function buildAuthenticatedUserResponse(user) {
+  const UserAll = typeof User.scope === 'function' ? User.scope('all') : User;
+
+  if (!user.userType) {
+    user = await UserAll.findOne({
+      where: { id: user.id },
+      include: [{
+        model: UserType,
+        as: 'userType',
+        attributes: ['user_type_id', 'user_role']
+      }]
+    });
+  }
+
+  const role = user.userType?.user_role || 'client';
+  const user_type_id = user.userType?.user_type_id || user.user_type || null;
+
+  let crew_member_id = null;
+  let is_crew_verified = null;
+  let temp_event_popup = null;
+
+  if (user_type_id === 2) {
+    const crew = await getCreatorCrewMemberForUser(user);
+    crew_member_id = crew ? crew.crew_member_id : null;
+    is_crew_verified = crew ? crew.is_crew_verified : null;
+    temp_event_popup = getTempCpEventPopup(crew);
+  }
+
+  let affiliate_id = null;
+  const affiliate = await Affiliate.findOne({
+    where: { user_id: user.id },
+    attributes: ['affiliate_id']
+  });
+  affiliate_id = affiliate ? affiliate.affiliate_id : null;
+
+  const { token, refreshToken } = generateTokens(user.id, role, user.permissions_version, user_type_id);
+  const permissions = await getCombinedUserPermissions(user.id, user.user_type);
+
+  return {
+    role,
+    user_type_id,
+    token,
+    refreshToken,
+    permissions,
+    user: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      phone_number: user.phone_number,
+      instagram_handle: user.instagram_handle,
+      role,
+      user_type_id,
+      email_verified: user.email_verified,
+      crew_member_id,
+      affiliate_id,
+      is_crew_verified,
+      temp_event_popup,
+      permissions_version: user.permissions_version,
+      has_password: Boolean(user.password_hash)
+    }
+  };
+}
+
 // ==================== REGISTRATION ====================
 
 exports.register = async (req, res) => {
@@ -1272,10 +1364,18 @@ affiliate_id = affiliate ? affiliate.affiliate_id : null;
 
 exports.googleLogin = async (req, res) => {
   try {
-    const { token: googleToken, credential, mode = 'login', phone_number } = req.body;
+    const {
+      token: googleToken,
+      credential,
+      mode = 'login',
+      phone_number,
+      account_type = 'client'
+    } = req.body;
     const idToken = googleToken || credential;
     const googleClientId = getGoogleClientId();
     const isSignup = mode === 'signup';
+    const signupAccountType = String(account_type || 'client').toLowerCase();
+    const isCreatorSignup = isSignup && ['creator', 'cp', 'creative_partner'].includes(signupAccountType);
     const normalizedPhone = phone_number && String(phone_number).trim()
       ? String(phone_number).trim()
       : null;
@@ -1302,7 +1402,7 @@ exports.googleLogin = async (req, res) => {
     const payload = ticket.getPayload();
     const googleSub = payload?.sub;
     const email = String(payload?.email || '').trim().toLowerCase();
-    const name = String(payload?.name || '').trim() || email.split('@')[0] || 'Beige Client';
+    const name = String(payload?.name || '').trim() || email.split('@')[0] || 'Beige User';
     const emailVerified = payload?.email_verified === true || payload?.email_verified === 'true';
 
     if (!googleSub || !email || !emailVerified) {
@@ -1343,8 +1443,43 @@ exports.googleLogin = async (req, res) => {
     if (!user && !isSignup) {
       return res.status(404).json({
         success: false,
-        message: 'No client account found with this Google email. Please sign up first.'
+        message: 'No Beige account found with this Google email. Please sign up first.'
       });
+    }
+
+    if (user && !user.is_active) {
+      return res.status(403).json({
+        success: false,
+        message: 'Account is inactive. Please contact support'
+      });
+    }
+
+    if (user && user.google_sub && user.google_sub !== googleSub) {
+      return res.status(409).json({
+        success: false,
+        message: 'This email is already linked to a different Google account'
+      });
+    }
+
+    if (isSignup && user) {
+      const existingTypeId = Number(user.userType?.user_type_id || user.user_type);
+
+      if (isCreatorSignup && existingTypeId !== 2) {
+        return res.status(409).json({
+          success: false,
+          message: 'A Beige account already exists with this Google email. Please log in instead.'
+        });
+      }
+
+      if (!isCreatorSignup) {
+        const clientTypeId = await findClientTypeId();
+        if (existingTypeId !== Number(clientTypeId)) {
+          return res.status(409).json({
+            success: false,
+            message: 'A Beige account already exists with this Google email. Please log in instead.'
+          });
+        }
+      }
     }
 
     if (!user && normalizedPhone) {
@@ -1362,32 +1497,72 @@ exports.googleLogin = async (req, res) => {
       }
     }
 
-    let clientType = await user_type.findOne({
-      where: { user_type_id: 3 }
-    });
-
-    if (!clientType) {
-      clientType = await user_type.findOne({
-        where: db.Sequelize.where(
-          db.Sequelize.fn('LOWER', db.Sequelize.col('user_role')),
-          'client'
-        ),
-        order: [['user_type_id', 'ASC']]
-      });
-    }
-
-    if (!clientType) {
-      return res.status(500).json({
-        success: false,
-        message: 'Client role configuration error'
-      });
-    }
-
     let createdClientId = null;
+    let createdCrewMemberId = null;
     let linkedBookingsCount = 0;
     let linkedQuotesCount = 0;
 
-    if (!user) {
+    if (!user && isCreatorSignup) {
+      const creatorTypeId = await findCreatorTypeId();
+      const { firstName, lastName } = splitGoogleName(name, email);
+
+      await db.sequelize.transaction(async (transaction) => {
+        const existingCrew = await crew_members.findOne({
+          where: { email },
+          transaction
+        });
+
+        if (existingCrew && existingCrew.is_active == 1) {
+          const error = new Error('Crew member with this email already exists.');
+          error.statusCode = 409;
+          throw error;
+        }
+
+        user = await User.create({
+          name: `${firstName} ${lastName}`,
+          email,
+          phone_number: normalizedPhone,
+          password_hash: null,
+          google_sub: googleSub,
+          auth_provider: 'google',
+          user_type: creatorTypeId,
+          role: 'creator',
+          is_active: 1,
+          email_verified: 1,
+          verification_code: null,
+          created_from: 1
+        }, { transaction });
+
+        const crewPayload = {
+          user_id: user.id,
+          first_name: firstName,
+          last_name: lastName,
+          email,
+          phone_number: normalizedPhone,
+          is_active: 1,
+          is_draft: 1,
+          created_from: 1
+        };
+
+        let crewMember;
+        if (existingCrew && existingCrew.is_active == 0) {
+          crewMember = await existingCrew.update(crewPayload, { transaction });
+        } else {
+          crewMember = await crew_members.create(crewPayload, { transaction });
+        }
+
+        createdCrewMemberId = crewMember.crew_member_id;
+      });
+
+      emailService.sendNewCrewSignupNotification({
+        first_name: firstName,
+        last_name: lastName,
+        email,
+        phone_number: normalizedPhone
+      }).catch(err => console.error('Admin Google CP Signup Notification Error:', err));
+    } else if (!user) {
+      const clientTypeId = await findClientTypeId();
+
       await db.sequelize.transaction(async (transaction) => {
         user = await User.create({
           name,
@@ -1396,7 +1571,7 @@ exports.googleLogin = async (req, res) => {
           password_hash: null,
           google_sub: googleSub,
           auth_provider: 'google',
-          user_type: clientType.user_type_id,
+          user_type: clientTypeId,
           is_active: 1,
           email_verified: 1,
           verification_code: null,
@@ -1480,31 +1655,6 @@ exports.googleLogin = async (req, res) => {
         email
       }).catch(err => console.error('Client Google Signup Welcome Email Error:', err));
     } else {
-      const existingRole = user.userType?.user_role || '';
-      const normalizedRole = String(existingRole).toLowerCase().replace(/\s+/g, '_');
-      const isClientUser = user.userType?.user_type_id === clientType.user_type_id || normalizedRole === 'client';
-
-      if (!isClientUser) {
-        return res.status(403).json({
-          success: false,
-          message: 'Google login is currently available only for client accounts'
-        });
-      }
-
-      if (!user.is_active) {
-        return res.status(403).json({
-          success: false,
-          message: 'Account is inactive. Please contact support'
-        });
-      }
-
-      if (user.google_sub && user.google_sub !== googleSub) {
-        return res.status(409).json({
-          success: false,
-          message: 'This email is already linked to a different Google account'
-        });
-      }
-
       const updates = {
         google_sub: googleSub,
         auth_provider: user.auth_provider || 'google',
@@ -1532,34 +1682,12 @@ exports.googleLogin = async (req, res) => {
       }
 
       await user.update(updates);
-
-      if (normalizedPhone) {
-        await Clients.update(
-          {
-            user_id: user.id,
-            email,
-            phone_number: normalizedPhone,
-            name: user.name || name
-          },
-          {
-            where: {
-              is_active: 1,
-              [Op.or]: [
-                { user_id: user.id },
-                { email }
-              ]
-            }
-          }
-        );
-      }
     }
 
-    if (!user.userType) {
-      user = await UserAll.findOne({
-        where: { id: user.id },
-        include: includeUserType
-      });
-    }
+    user = await UserAll.findOne({
+      where: { id: user.id },
+      include: includeUserType
+    });
 
     if (await isArchivedClientOnlyAccount(user)) {
       return res.status(403).json({
@@ -1569,64 +1697,53 @@ exports.googleLogin = async (req, res) => {
       });
     }
 
-    let affiliate = await Affiliate.findOne({
-      where: { user_id: user.id },
-      attributes: ['affiliate_id']
-    });
+    const userTypeId = user.userType?.user_type_id || user.user_type;
 
-    if (!affiliate) {
-      try {
-        affiliate = await affiliateController.createAffiliate(user.id);
-      } catch (affiliateError) {
-        console.error('Failed to create affiliate account:', affiliateError);
+    if (userTypeId === 3) {
+      let affiliate = await Affiliate.findOne({
+        where: { user_id: user.id },
+        attributes: ['affiliate_id']
+      });
+
+      if (!affiliate) {
+        try {
+          affiliate = await affiliateController.createAffiliate(user.id);
+        } catch (affiliateError) {
+          console.error('Failed to create affiliate account:', affiliateError);
+        }
       }
+
+      linkedBookingsCount = await linkGuestBookingsToUser(email, user.id);
+      linkedQuotesCount = await linkClientQuotesToUser({
+        email,
+        phoneNumber: user.phone_number || normalizedPhone,
+        userId: user.id
+      });
     }
 
-    linkedBookingsCount = await linkGuestBookingsToUser(email, user.id);
-    linkedQuotesCount = await linkClientQuotesToUser({
-      email,
-      phoneNumber: user.phone_number || normalizedPhone,
-      userId: user.id
-    });
+    const authPayload = await buildAuthenticatedUserResponse(user);
 
-    const role = user.userType?.user_role || 'client';
-    const user_type_id = user.userType?.user_type_id || clientType.user_type_id;
-    const { token, refreshToken } = generateTokens(user.id, role, user.permissions_version, user_type_id);
-    const permissions = await getCombinedUserPermissions(user.id, user.user_type);
-
-    return res.status(isSignup && createdClientId ? 201 : 200).json({
+    return res.status(isSignup && (createdClientId || createdCrewMemberId) ? 201 : 200).json({
       success: true,
-      message: isSignup && createdClientId ? 'Google signup successful' : 'Google login successful',
-      user: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        phone_number: user.phone_number,
-        instagram_handle: user.instagram_handle,
-        role,
-        user_type_id,
-        email_verified: user.email_verified,
-        crew_member_id: null,
-        affiliate_id: affiliate ? affiliate.affiliate_id : null,
-        is_crew_verified: null,
-        temp_event_popup: null,
-        permissions_version: user.permissions_version,
-        has_password: Boolean(user.password_hash)
-      },
-      token,
-      refreshToken,
-      permissions,
+      message: isSignup && createdCrewMemberId
+        ? 'Google signup successful. Please complete your creator application.'
+        : isSignup && createdClientId
+          ? 'Google signup successful'
+          : 'Google login successful',
+      ...authPayload,
       clientId: createdClientId,
+      crew_member_id: authPayload.user.crew_member_id || createdCrewMemberId,
+      creator_onboarding_required: userTypeId === 2 && Boolean(createdCrewMemberId),
       linked_bookings_count: linkedBookingsCount,
       linked_quotes_count: linkedQuotesCount,
       permissions_version: user.permissions_version
     });
   } catch (error) {
     console.error('Google Login Error:', error);
-    return res.status(401).json({
+    return res.status(error.statusCode || 401).json({
       success: false,
-      message: 'Google authentication failed',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      message: error.statusCode ? error.message : 'Google authentication failed',
+      error: process.env.NODE_ENV === 'development' && !error.statusCode ? error.message : undefined
     });
   }
 };
@@ -2200,6 +2317,28 @@ exports.registerCrewMemberStep1 = [
           { name: `${first_name} ${last_name}`, email, phone_number, location, latitude: lat || null, longitude: lng || null }, 
           { where: { id: user_id }, transaction }
         );
+
+        if (req.files?.profile_photo) {
+          const uploadedFiles = await S3UploadFiles(req.files);
+          for (const file of uploadedFiles || []) {
+            if (file.file_type === 'profile_photo') {
+              await crew_member_files.destroy({
+                where: {
+                  crew_member_id,
+                  file_type: 'profile_photo'
+                },
+                transaction
+              });
+
+              await crew_member_files.create({
+                crew_member_id,
+                file_type: file.file_type,
+                file_path: file.file_path,
+                file_category: 'profile_photo'
+              }, { transaction });
+            }
+          }
+        }
 
         await transaction.commit();
         transaction = null;
