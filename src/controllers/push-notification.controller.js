@@ -2,7 +2,7 @@ const constants = require('../utils/constants');
 const pushNotificationService = require('../services/push-notification.service');
 
 const getRequestUserId = (req) => req.userId || req.user?.id;
-const getRequestUserType = (req) => req.userRole || req.user?.user_type || null;
+const getRequestUserType = (req) => req.userType || null;
 
 exports.saveFcmToken = async (req, res) => {
   try {

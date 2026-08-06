@@ -1,5 +1,6 @@
 const db = require('../models');
 const emailService = require('../utils/emailService');
+const pushNotificationService = require('../services/push-notification.service');
 
 const DEFAULT_BASE_URL = process.env.EXTERNAL_CHAT_API_BASE_URL || 'http://localhost:5002/v1/external-chat';
 const INTERNAL_KEY = process.env.EXTERNAL_CHAT_KEY || process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
@@ -920,6 +921,153 @@ const extractChatRecipientTargets = (envelope = {}) => {
   return recipients;
 };
 
+const resolveChatRecipientUserId = async (recipient = {}) => {
+  const directId = Number(recipient.user_id || recipient.userId || recipient.id);
+  if (Number.isInteger(directId) && directId > 0) return String(directId);
+
+  const email = normalizeEmailAddress(recipient.email);
+  if (!email) return null;
+
+  const role = String(recipient.role || '').trim().toLowerCase();
+  const userType = ['cp', 'creator', 'creative'].includes(role)
+    ? 2
+    : role === 'client'
+      ? 3
+      : null;
+
+  const user = await db.users.findOne({
+    where: {
+      email,
+      is_active: 1,
+      ...(userType ? { user_type: userType } : {}),
+    },
+    attributes: ['id'],
+    raw: true,
+  });
+  if (user?.id) return String(user.id);
+
+  if (['cp', 'creator', 'creative'].includes(role)) {
+    const crew = await db.crew_members.findOne({
+      where: { email },
+      attributes: ['user_id'],
+      raw: true,
+    });
+    if (crew?.user_id) return String(crew.user_id);
+  }
+
+  if (role === 'client') {
+    const client = await db.clients.findOne({
+      where: { email },
+      attributes: ['user_id'],
+      raw: true,
+    });
+    if (client?.user_id) return String(client.user_id);
+  }
+
+  return null;
+};
+
+const buildChatPushContent = ({ eventType, sender, messagePreview }) => {
+  const senderName = sender?.name || sender?.email || 'Someone';
+  const preview = String(messagePreview || '').replace(/\s+/g, ' ').trim();
+
+  if (eventType === 'mention') {
+    return {
+      title: 'You were mentioned',
+      body: preview ? `${senderName}: ${preview}` : `${senderName} mentioned you.`,
+    };
+  }
+
+  if (eventType === 'direct_message') {
+    return {
+      title: 'New message',
+      body: preview ? `${senderName}: ${preview}` : `${senderName} sent you a message.`,
+    };
+  }
+
+  return {
+    title: 'New message thread started',
+    body: `${senderName} started a conversation.`,
+  };
+};
+
+const sendChatPushNotifications = async ({
+  roomId,
+  bookingId = '',
+  sender,
+  eventType = 'messaging_initiated',
+  messagePreview = '',
+  recipientTargets = [],
+  mentionedUserIds = [],
+}) => {
+  try {
+    const senderId = String(sender?.id || '').trim();
+    const mentionIds = new Set(
+      (Array.isArray(mentionedUserIds) ? mentionedUserIds : [])
+        .map((value) => String(value?.id || value?.user_id || value || '').trim())
+        .filter(Boolean)
+    );
+    const notificationType = eventType === 'mention'
+      ? 'mention'
+      : eventType === 'direct_message'
+        ? 'direct_message'
+        : 'messaging_initiated';
+    const targets = [];
+    const seen = new Set();
+
+    for (const recipient of recipientTargets) {
+      const userId = await resolveChatRecipientUserId(recipient);
+      if (!userId || userId === senderId || seen.has(userId)) continue;
+      if (notificationType === 'mention' && mentionIds.size && !mentionIds.has(userId)) continue;
+      targets.push({ userId });
+      seen.add(userId);
+    }
+
+    if (!targets.length) return;
+
+    const content = buildChatPushContent({
+      eventType: notificationType,
+      sender,
+      messagePreview,
+    });
+
+    const results = await Promise.allSettled(targets.map(({ userId }) =>
+      pushNotificationService.sendPushToUser({
+        userId,
+        title: content.title,
+        body: content.body,
+        data: {
+          topic: 'messages',
+          category: 'messages',
+          type: notificationType,
+          event_type: eventType === 'participant_added' ? 'participant_added' : notificationType,
+          room_id: String(roomId || ''),
+          chat_room_id: String(roomId || ''),
+          booking_id: String(bookingId || ''),
+          sender_id: senderId,
+          sender_name: sender?.name || sender?.email || '',
+        },
+      })
+    ));
+
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        console.error('[PushNotification] Chat push failed:', {
+          roomId,
+          recipientUserId: targets[index]?.userId || null,
+          type: notificationType,
+          message: result.reason?.message || result.reason,
+        });
+      }
+    });
+  } catch (error) {
+    console.error('[PushNotification] Chat push notification failed:', {
+      roomId,
+      message: error.message || error,
+    });
+  }
+};
+
 const sendChatNotificationTemplate = async ({
   roomId,
   sender,
@@ -998,8 +1146,17 @@ const sendChatNotificationTemplate = async ({
     if (!emailResult?.success) {
       console.error('Chat email notification send result:', emailResult);
     }
+
+    await sendChatPushNotifications({
+      roomId,
+      bookingId: projectId,
+      sender,
+      eventType: eventType === 'participant_added' ? 'messaging_initiated' : eventType,
+      messagePreview,
+      recipientTargets,
+    });
   } catch (notificationError) {
-    console.error('Chat email notification failed:', notificationError?.message || notificationError);
+    console.error('Chat notification failed:', notificationError?.message || notificationError);
   }
 };
 
@@ -1918,6 +2075,56 @@ exports.sendChatMessage = async (req, res) => {
         },
       }),
     });
+
+    const participantPayload = await proxyRequest(`/participants/${req.params.roomId}`).catch(() => null);
+    const { envelope } = extractParticipantEnvelope(participantPayload || {});
+    const enrichedEnvelope = envelope ? await enrichParticipantPayload(envelope) : null;
+    let recipientTargets = extractChatRecipientTargets(enrichedEnvelope || {});
+    const roomPayload = toObject(result?.data) || toObject(result) || {};
+    const mappedBookingId = await getMappedBookingIdForRoom(req.params.roomId);
+    const resolvedBookingId =
+      mappedBookingId ||
+      resolveChatBookingId(roomPayload) ||
+      resolveChatBookingId(participantPayload || {}) ||
+      '';
+
+    if (!recipientTargets.length && resolvedBookingId) {
+      recipientTargets = await getChatBookingFallbackRecipients(resolvedBookingId);
+    }
+
+    await sendChatPushNotifications({
+      roomId: req.params.roomId,
+      bookingId: resolvedBookingId,
+      sender,
+      eventType: 'direct_message',
+      messagePreview: req.body.message,
+      recipientTargets,
+      mentionedUserIds:
+        req.body.mentioned_user_ids ||
+        req.body.mentionedUserIds ||
+        req.body.mentions ||
+        req.body.mentionedUsers ||
+        [],
+    });
+
+    const mentionedUserIds =
+      req.body.mentioned_user_ids ||
+      req.body.mentionedUserIds ||
+      req.body.mentions ||
+      req.body.mentionedUsers ||
+      [];
+
+    if (Array.isArray(mentionedUserIds) && mentionedUserIds.length) {
+      await sendChatPushNotifications({
+        roomId: req.params.roomId,
+        bookingId: resolvedBookingId,
+        sender,
+        eventType: 'mention',
+        messagePreview: req.body.message,
+        recipientTargets,
+        mentionedUserIds,
+      });
+    }
 
     return res.status(200).json(result);
   } catch (error) {
