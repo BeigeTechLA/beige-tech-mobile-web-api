@@ -161,6 +161,38 @@ function formatDisputeRow(dispute) {
   };
 }
 
+async function hydrateDisputeRowWithLiveCpCompensation(row, transaction = null) {
+  const snapshot = row?.cp_compensation || row?.metadata?.cp_compensation || null;
+  const creatorEarningId = toPositiveInt(snapshot?.creator_earning_id || row?.metadata?.creator_earning_id);
+
+  if (!creatorEarningId) {
+    return row;
+  }
+
+  const earning = await db.creator_earnings.findByPk(creatorEarningId, { transaction });
+  if (!earning) {
+    return row;
+  }
+
+  const paymentState = await getCreatorEarningPaymentState(earning, transaction);
+  return {
+    ...row,
+    cp_compensation: {
+      ...snapshot,
+      creator_earning_id: creatorEarningId,
+      booking_id: earning.booking_id || snapshot?.booking_id || row.booking_id || null,
+      creator_id: earning.creator_id || snapshot?.creator_id || row.creator?.id || null,
+      total_compensation: paymentState.total_compensation,
+      paid_amount: paymentState.paid_amount,
+      advance_paid: paymentState.advance_paid,
+      remaining_balance: paymentState.remaining_balance,
+      disputed_amount: snapshot?.disputed_amount !== undefined
+        ? snapshot.disputed_amount
+        : paymentState.total_compensation
+    }
+  };
+}
+
 function buildAdminActions(status) {
   return {
     can_update: !['resolved', 'rejected'].includes(status),
@@ -376,6 +408,10 @@ async function getAdminDisputesDashboard(filters = {}) {
     })
   ]);
 
+  const recentDisputes = await Promise.all(
+    recent.map((dispute) => hydrateDisputeRowWithLiveCpCompensation(formatDisputeRow(dispute)))
+  );
+
   return {
     overview: {
       total_disputes: total,
@@ -389,7 +425,7 @@ async function getAdminDisputesDashboard(filters = {}) {
       categories: DISPUTE_CATEGORIES,
       raised_by_types: ['client', 'creator', 'admin']
     },
-    recent_disputes: recent.map(formatDisputeRow)
+    recent_disputes: recentDisputes
   };
 }
 
@@ -408,8 +444,12 @@ async function listAdminDisputes(filters = {}) {
     subQuery: false
   });
 
+  const rows = await Promise.all(
+    result.rows.map((dispute) => hydrateDisputeRowWithLiveCpCompensation(formatDisputeRow(dispute)))
+  );
+
   return {
-    rows: result.rows.map(formatDisputeRow),
+    rows,
     pagination: {
       page,
       limit,
@@ -846,6 +886,17 @@ async function processCreatorResolutionPayment(dispute, payload = {}, options = 
   if (!earning) return null;
 
   const paymentState = await getCreatorEarningPaymentState(earning, transaction);
+  if (earning.status === 'paid' || paymentState.remaining_balance <= 0) {
+    return {
+      creator_earning_id: earning.creator_earning_id,
+      booking_id: earning.booking_id,
+      creator_id: earning.creator_id,
+      payment_skipped: true,
+      reason: 'already_settled',
+      payment_breakdown: paymentState
+    };
+  }
+
   const extraAmount = toMoney(Math.max(amount - paymentState.remaining_balance, 0));
   if (extraAmount > 0) {
     const nextTotal = toMoney(paymentState.total_compensation + extraAmount);
@@ -887,7 +938,7 @@ async function processCreatorResolutionPayment(dispute, payload = {}, options = 
 async function getAdminDisputeDetails(disputeId) {
   const dispute = await getDisputeOrThrow(disputeId, { include: includeForDetails() });
   const plain = dispute.get({ plain: true });
-  const row = formatDisputeRow(plain);
+  const row = await hydrateDisputeRowWithLiveCpCompensation(formatDisputeRow(plain));
   const comments = [...(plain.comments || [])].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
   const attachments = [...(plain.attachments || [])].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
   const holds = [...(plain.payout_holds || [])].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
