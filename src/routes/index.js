@@ -49,5 +49,6 @@ router.use('/external-chat', require('./external-chat.routes'));
 router.use('/external-meetings', require('./external-meetings.routes'));
 router.use('/comments', require('./comments.routes'));
 router.use('/push-notifications', require('./push-notification.routes'));
+router.use('/app-notifications', require('./app-notification.routes'));
 
 module.exports = router;

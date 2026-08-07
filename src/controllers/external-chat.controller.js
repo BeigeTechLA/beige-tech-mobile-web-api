@@ -1,6 +1,6 @@
 const db = require('../models');
 const emailService = require('../utils/emailService');
-const pushNotificationService = require('../services/push-notification.service');
+const appNotificationService = require('../services/app-notification.service');
 
 const DEFAULT_BASE_URL = process.env.EXTERNAL_CHAT_API_BASE_URL || 'http://localhost:5002/v1/external-chat';
 const INTERNAL_KEY = process.env.EXTERNAL_CHAT_KEY || process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
@@ -1031,24 +1031,35 @@ const sendChatPushNotifications = async ({
       messagePreview,
     });
 
-    const results = await Promise.allSettled(targets.map(({ userId }) =>
-      pushNotificationService.sendPushToUser({
+    const results = await Promise.allSettled(targets.map(({ userId }) => {
+      const payload = {
+        topic: 'messages',
+        category: 'messages',
+        type: notificationType,
+        event_type: eventType === 'participant_added' ? 'participant_added' : notificationType,
+        room_id: String(roomId || ''),
+        chat_room_id: String(roomId || ''),
+        booking_id: String(bookingId || ''),
+        sender_id: senderId,
+        sender_name: sender?.name || sender?.email || '',
+      };
+
+      const numericSenderId = Number(senderId);
+
+      return appNotificationService.createAndPushNotification({
         userId,
+        senderUserId: Number.isInteger(numericSenderId) && numericSenderId > 0 ? numericSenderId : null,
         title: content.title,
-        body: content.body,
-        data: {
-          topic: 'messages',
-          category: 'messages',
-          type: notificationType,
-          event_type: eventType === 'participant_added' ? 'participant_added' : notificationType,
-          room_id: String(roomId || ''),
-          chat_room_id: String(roomId || ''),
-          booking_id: String(bookingId || ''),
-          sender_id: senderId,
-          sender_name: sender?.name || sender?.email || '',
-        },
-      })
-    ));
+        message: content.body,
+        topic: 'messages',
+        category: 'messages',
+        type: notificationType,
+        referenceId: String(roomId || ''),
+        referenceType: 'chat_room',
+        payload,
+        actionLabel: 'View message',
+      });
+    }));
 
     results.forEach((result, index) => {
       if (result.status === 'rejected') {

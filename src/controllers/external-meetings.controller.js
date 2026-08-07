@@ -1,7 +1,7 @@
 const { Op } = require('sequelize');
 const db = require('../models');
 const emailService = require('../utils/emailService');
-const pushNotificationService = require('../services/push-notification.service');
+const appNotificationService = require('../services/app-notification.service');
 
 const DEFAULT_BASE_URL = process.env.EXTERNAL_MEETINGS_API_BASE_URL || process.env.MEETINGS_API_BASE_URL || 'http://localhost:5002/v1';
 const INTERNAL_KEY = process.env.EXTERNAL_MEETINGS_KEY || process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
@@ -338,21 +338,29 @@ const sendMeetingPushNotifications = async ({
     const plainBooking = typeof booking?.get === 'function' ? booking.get({ plain: true }) : booking;
     const bookingId = String(plainBooking?.stream_project_booking_id || meeting?.booking_id || '');
 
-    const results = await Promise.allSettled(targets.map(({ userId }) =>
-      pushNotificationService.sendPushToUser({
+    const results = await Promise.allSettled(targets.map(({ userId }) => {
+      const payload = {
+        topic: 'meetings',
+        category: 'meetings',
+        type,
+        meeting_id: String(meeting?.meeting_id || ''),
+        booking_id: bookingId,
+        meeting_status: String(meeting?.meeting_status || ''),
+      };
+
+      return appNotificationService.createAndPushNotification({
         userId,
         title: content.title,
-        body: content.body,
-        data: {
-          topic: 'meetings',
-          category: 'meetings',
-          type,
-          meeting_id: String(meeting?.meeting_id || ''),
-          booking_id: bookingId,
-          meeting_status: String(meeting?.meeting_status || ''),
-        },
-      })
-    ));
+        message: content.body,
+        topic: 'meetings',
+        category: 'meetings',
+        type,
+        referenceId: String(meeting?.meeting_id || ''),
+        referenceType: 'meeting',
+        payload,
+        actionLabel: 'View details',
+      });
+    }));
 
     results.forEach((result, index) => {
       if (result.status === 'rejected') {

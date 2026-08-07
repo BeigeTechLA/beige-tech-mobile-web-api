@@ -13,7 +13,7 @@ const BEIGE_MARGIN_PERCENT = parseFloat(process.env.BEIGE_MARGIN_PERCENT || '25.
 const REFERRAL_DISCOUNT_PERCENT = 10;
 const emailService = require('../utils/emailService');
 const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
-const pushNotificationService = require('../services/push-notification.service');
+const appNotificationService = require('../services/app-notification.service');
 
 const PAYMENT_SOURCE = {
   BOOKING_CHECKOUT: 'booking_checkout',
@@ -53,17 +53,24 @@ async function sendBookingConfirmedPush({ booking, bookingId }) {
   const body = eventDate
     ? `Your ${shootTypeName} booking for ${eventDate} is confirmed.`
     : `Your ${shootTypeName} booking is confirmed.`;
+  const resolvedBookingId = String(bookingId || booking?.stream_project_booking_id || '');
 
   try {
-    await pushNotificationService.sendPushToUser({
+    await appNotificationService.createAndPushNotification({
       userId: clientUserId,
       title: 'Booking confirmed',
-      body,
-      data: {
+      message: body,
+      topic: 'shoots',
+      category: 'shoots',
+      type: 'booking_confirmed',
+      referenceId: resolvedBookingId,
+      referenceType: 'booking',
+      actionLabel: 'View details',
+      payload: {
         topic: 'shoots',
         category: 'shoots',
         type: 'booking_confirmed',
-        booking_id: String(bookingId || booking?.stream_project_booking_id || ''),
+        booking_id: resolvedBookingId,
         payment_status: 'paid'
       }
     });

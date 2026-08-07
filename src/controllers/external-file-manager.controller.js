@@ -9,7 +9,7 @@ const { users, crew_members, assigned_crew, stream_project_booking, sales_leads,
 const bookingTimelineService = require('../services/bookingTimeline.service');
 const emailService = require('../utils/emailService');
 const otpService = require('../utils/otpService');
-const pushNotificationService = require('../services/push-notification.service');
+const appNotificationService = require('../services/app-notification.service');
 
 const FACE_SCAN_SERVICE_URL = process.env.FACE_SCAN_SERVICE_URL || '';
 const FACE_SCAN_PROVIDER_TIMEOUT_MS = Math.max(15000, Number(process.env.FACE_SCAN_PROVIDER_TIMEOUT_MS || 300000));
@@ -607,18 +607,26 @@ const sendClientFilePush = async ({
 
     const bookingId = String(plainBooking?.stream_project_booking_id || data.booking_id || '');
 
-    await pushNotificationService.sendPushToUser({
+    const payload = {
+      topic: 'files',
+      category: 'files',
+      type,
+      booking_id: bookingId,
+      project_id: bookingId,
+      ...data,
+    };
+
+    await appNotificationService.createAndPushNotification({
       userId,
       title,
-      body,
-      data: {
-        topic: 'files',
-        category: 'files',
-        type,
-        booking_id: bookingId,
-        project_id: bookingId,
-        ...data,
-      },
+      message: body,
+      topic: 'files',
+      category: 'files',
+      type,
+      referenceId: bookingId,
+      referenceType: 'booking',
+      payload,
+      actionLabel: 'Review files',
     });
   } catch (error) {
     console.error('[PushNotification] Client file push failed:', {
@@ -648,18 +656,26 @@ const sendAssignedCpFilePush = async ({
       if (!userId || sentUserIds.has(userId)) continue;
       sentUserIds.add(userId);
 
-      await pushNotificationService.sendPushToUser({
+      const payload = {
+        topic: 'files',
+        category: 'files',
+        type,
+        booking_id: bookingId,
+        project_id: bookingId,
+        ...data,
+      };
+
+      await appNotificationService.createAndPushNotification({
         userId,
         title,
-        body,
-        data: {
-          topic: 'files',
-          category: 'files',
-          type,
-          booking_id: bookingId,
-          project_id: bookingId,
-          ...data,
-        },
+        message: body,
+        topic: 'files',
+        category: 'files',
+        type,
+        referenceId: bookingId,
+        referenceType: 'booking',
+        payload,
+        actionLabel: 'Review files',
       });
     }
   } catch (error) {
