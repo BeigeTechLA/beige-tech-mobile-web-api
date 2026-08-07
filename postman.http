@@ -3007,7 +3007,7 @@ GET {{URL}}admin/studios/dashboard?month=2026-05 HTTP/1.1
 Authorization: {{TOKEN}}
 
 ###
-GET {{URL}}admin/studios/requests?page=1&limit=10&status=all&search=sunset HTTP/1.1
+GET {{URL}}admin/studios/requests?page=1&limit=10&status=all HTTP/1.1
 Authorization: {{TOKEN}}
 
 ###

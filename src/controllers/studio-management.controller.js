@@ -248,14 +248,32 @@ const normalizeStudioRequestStatus = (value) => {
   return statusMap[normalized] || null;
 };
 
+const parseJsonObject = (value) => {
+  if (!value) return {};
+  if (typeof value === 'object') return value;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+};
+
 const formatStudioRequest = (request) => {
   const row = request.get ? request.get({ plain: true }) : request;
   const studio = row.studio || {};
   const booking = row.booking || {};
   const user = row.user || booking.user || {};
+  const metadata = parseJsonObject(row.metadata);
 
   const requestDate = row.booking_date || booking.event_date || null;
   const locationParts = [studio.city, studio.state].filter(Boolean);
+  const spaceName = studio.studio_name || metadata.name || null;
+  const spaceType = studio.space_type || metadata.pricingLabel || metadata.pricingCategory || metadata.studioBookingFor || null;
+  const castAndCrewCount = Number(metadata.castAndCrewCount || 0);
+  const capacityLabel = studio.capacity_min && studio.capacity_max
+    ? `${studio.capacity_min} - ${studio.capacity_max} ppl`
+    : (castAndCrewCount > 0 ? `${castAndCrewCount} ppl` : null);
 
   return {
     studio_booking_id: row.studio_booking_id,
@@ -270,16 +288,14 @@ const formatStudioRequest = (request) => {
     studio_host_name: studio.host_name || null,
     studio_host_email: studio.host_email || null,
 
-    space_name: studio.studio_name || null,
-    studio_name: studio.studio_name || null,
-    space_type: studio.space_type || null,
-    location: locationParts.length ? locationParts.join(', ') : booking.event_location || null,
+    space_name: spaceName,
+    studio_name: spaceName,
+    space_type: spaceType,
+    location: locationParts.length ? locationParts.join(', ') : metadata.location || booking.event_location || null,
 
     capacity_min: studio.capacity_min,
     capacity_max: studio.capacity_max,
-    capacity_label: studio.capacity_min && studio.capacity_max
-      ? `${studio.capacity_min} - ${studio.capacity_max} ppl`
-      : null,
+    capacity_label: capacityLabel,
 
     request_date: requestDate,
     booking_date: row.booking_date,
@@ -307,10 +323,17 @@ const formatStudioRequest = (request) => {
       overtime_amount: row.overtime_amount,
       platform_fee: row.platform_fee,
       net_amount: row.net_amount,
+      pricing_mode: metadata.pricingMode || null,
+      pricing_category: metadata.pricingCategory || null,
+      pricing_label: metadata.pricingLabel || null,
+      unit_price: metadata.unitPrice || null,
+      quantity: metadata.quantity || null,
+      total_price: metadata.totalPrice || null,
+      price_label: metadata.priceLabel || null,
     },
 
     source: row.source,
-    metadata: row.metadata,
+    metadata,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
