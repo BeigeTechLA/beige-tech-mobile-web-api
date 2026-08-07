@@ -103,6 +103,24 @@ const normalizeDisplayStatusValue = (value) => (
     .trim()
 );
 
+const normalizeLeadListStatusFilter = (value) => {
+  const normalized = normalizeStatusFilterValue(value);
+  if (!normalized || normalized === 'all') return value;
+
+  if ([
+    'studioshoots',
+    'studioshoot',
+    'studiobookings',
+    'studiobooking',
+    'bookashootstudioleadcreated',
+    'bookashootstudio'
+  ].includes(normalized)) {
+    return leadAssignmentService.STUDIO_LEAD_CREATED_STATUS;
+  }
+
+  return normalizeDisplayStatusValue(value);
+};
+
 const isShootStatusFilterValue = (value) => (
   [
     'initiated',
@@ -2446,7 +2464,7 @@ exports.getLeads = async (req, res) => {
       query: safeQueryLog
     });
 
-    const activeStatusFilter = (status || booking_status);
+    const activeStatusFilter = normalizeLeadListStatusFilter(status || booking_status);
     const shootStatusRequested = isShootStatusFilterValue(activeStatusFilter);
     const listFilters = {
       activeStatusFilter,
@@ -2605,6 +2623,7 @@ exports.getLeads = async (req, res) => {
 const BOARD_STATUSES = [
   'Signed Up - Lead Created',
   'Book a shoot - Lead Created',
+  'Book a Shoot - Studio Lead Created',
   'Manual - Lead Created',
   'Booking In Progress',
   'Proposal Sent',
@@ -2620,6 +2639,7 @@ const normalizeBoardStatusLabel = (rawStatus) => {
   const value = String(rawStatus || '').replace(/â€“|—|–/g, '-').trim().toLowerCase();
   if (!value) return 'Unknown';
   if (value === 'signed up' || value === 'singed up' || value.includes('signed up - lead created')) return 'Signed Up - Lead Created';
+  if (value.includes('book a shoot - studio lead created')) return 'Book a Shoot - Studio Lead Created';
   if (value.includes('book a shoot - lead created')) return 'Book a shoot - Lead Created';
   if (value.includes('manual - lead created')) return 'Manual - Lead Created';
   if (value === 'booking in progress' || value === 'in-progress') return 'Booking In Progress';
@@ -2824,7 +2844,7 @@ exports.getClientLeads = async (req, res) => {
       })
     );
 
-    const activeStatusFilter = (status || booking_status);
+    const activeStatusFilter = normalizeLeadListStatusFilter(status || booking_status);
     const shootStatusRequested = isShootStatusFilterValue(activeStatusFilter);
 
     if (shootStatusRequested) {
@@ -4013,6 +4033,12 @@ const getSalesLeadListIncludes = () => ([
         attributes: ['meeting_id', 'meeting_type', 'meeting_status']
       },
       {
+        model: db.studio_bookings,
+        as: 'studio_bookings',
+        required: false,
+        attributes: ['studio_booking_id', 'source', 'status']
+      },
+      {
         model: db.projects,
         as: 'cms_project',
         required: false,
@@ -4248,13 +4274,8 @@ async function salesLeadMatchesListFilters(lead, filters, externalFileCache, con
   }
 
   if (!shootStatusRequested && activeStatusFilter && activeStatusFilter !== 'All') {
-    const leadStat = String(lead?.booking_status || '')
-      .replace('â€“', '-')
-      .trim();
-
-    const filterStat = String(activeStatusFilter || '')
-      .replace('â€“', '-')
-      .trim();
+    const leadStat = normalizeDisplayStatusValue(lead?.booking_status);
+    const filterStat = normalizeDisplayStatusValue(activeStatusFilter);
 
     if (leadStat !== filterStat) return false;
   }
