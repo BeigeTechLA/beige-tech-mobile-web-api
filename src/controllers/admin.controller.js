@@ -14162,7 +14162,309 @@ exports.sendOnboardingFormReminder = async (req, res) => {
             message: "Internal Server Error",
             error: error.message
         });
+  }
+};
+
+exports.updateShootAddOns = async (req, res) => {
+  try {
+    const { project_id } = req.params;
+    const {
+      quote_id,
+      line_items,
+      manual_payment,
+      edit_reason,
+      ops_review_confirmed
+    } = req.body || {};
+
+    if (!project_id) {
+      return res.status(400).json({ error: true, message: 'Project ID is required' });
     }
+
+    if (!Array.isArray(line_items)) {
+      return res.status(400).json({ error: true, message: 'line_items must be an array' });
+    }
+
+    const project = await stream_project_booking.findOne({
+      where: { stream_project_booking_id: project_id },
+      include: [
+        {
+          model: quotes,
+          as: 'primary_quote',
+          attributes: ['quote_id', 'total', 'price_after_discount', 'subtotal'],
+          include: [
+            {
+              model: quote_line_items,
+              as: 'line_items',
+              required: false,
+            },
+          ],
+          required: false
+        }
+      ]
+    });
+
+    if (!project) {
+      return res.status(404).json({ error: true, message: 'Project not found' });
+    }
+
+    const paymentSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(Number(project_id));
+    const linkedLead = await sales_leads.findOne({
+      where: { booking_id: Number(project_id), is_active: 1 },
+      attributes: ['lead_id'],
+      order: [['lead_id', 'DESC']],
+    });
+
+    const candidateQuoteIds = [
+      quote_id,
+      paymentSummary?.sales_quote_id,
+      paymentSummary?.quote_id,
+    ]
+      .map((value) => Number(value || 0))
+      .filter((value) => Number.isInteger(value) && value > 0);
+
+    let resolvedQuoteId = 0;
+
+    for (const candidateQuoteId of candidateQuoteIds) {
+      const existingQuote = await db.sales_quotes.findByPk(candidateQuoteId, {
+        attributes: ['sales_quote_id']
+      });
+      if (existingQuote?.sales_quote_id) {
+        resolvedQuoteId = Number(existingQuote.sales_quote_id);
+        break;
+      }
+    }
+
+    const resolvedUserId = Number(req.user?.userId || req.user?.id || req.user?.user_id || req.userId || 0) || null;
+    const resolvedUserRole = String(req.user?.userRole || req.user?.role || req.userRole || '').toLowerCase().trim();
+    if (!resolvedUserId) {
+      return res.status(401).json({ error: true, message: 'Authentication required' });
+    }
+
+    const legacyQuote = project?.primary_quote || null;
+    const legacyLineItems = Array.isArray(legacyQuote?.line_items) ? legacyQuote.line_items : [];
+    const keepLegacyLineItems = legacyLineItems.filter((item) => String(item?.notes || '').trim().toLowerCase() !== 'addon');
+
+    let updatedQuote = null;
+
+    if (Number.isInteger(resolvedQuoteId) && resolvedQuoteId > 0) {
+      const payload = {
+        line_items,
+        line_item_sections: ['addon'],
+        edit_reason: edit_reason ? String(edit_reason).trim() : 'Updated shoot add-ons',
+        ops_review_confirmed: ops_review_confirmed === true || ops_review_confirmed === 1 || ops_review_confirmed === '1'
+      };
+
+      updatedQuote = await quoteService.updateQuote(resolvedQuoteId, payload, {
+        userId: resolvedUserId,
+        role: resolvedUserRole
+      });
+    } else {
+      const createPayload = {
+        lead_id: linkedLead?.lead_id || null,
+        client_name: project?.project_name || project?.guest_email || 'Untitled Draft',
+        client_email: project?.guest_email || null,
+        client_address: project?.event_location || null,
+        project_description: project?.description || project?.project_name || null,
+        pricing_mode: legacyQuote?.pricing_mode || 'general',
+        video_shoot_type: project?.shoot_type || null,
+        booking_type: project?.content_type || project?.shoot_type || null,
+        start_date: project?.event_date || null,
+        start_time: project?.start_time || null,
+        end_time: project?.end_time || null,
+        booking_days: Array.isArray(project?.booking_days)
+          ? project.booking_days.map((day) => ({
+              event_date: day.event_date || null,
+              start_time: day.start_time || null,
+              end_time: day.end_time || null,
+              duration_hours: day.duration_hours || null,
+              time_zone: day.time_zone || null,
+            }))
+          : [],
+        discount_type:
+          legacyQuote?.applied_discount_type ||
+          (Number(legacyQuote?.discount_percent || 0) > 0 ? 'percentage' : 'none'),
+        discount_value:
+          legacyQuote?.applied_discount_value ??
+          legacyQuote?.discount_percent ??
+          legacyQuote?.discount_amount ??
+          0,
+        discount_amount: legacyQuote?.discount_amount ?? 0,
+        tax_type: legacyQuote?.tax_type || null,
+        tax_rate: legacyQuote?.tax_rate ?? 0,
+        notes: legacyQuote?.notes || null,
+        terms_conditions: legacyQuote?.terms_conditions || null,
+        line_items: [
+          ...keepLegacyLineItems.map((item, index) => ({
+            catalog_item_id: item.catalog_item_id || null,
+            source_type: item.source_type || 'custom',
+            section_type: String(item.notes || '').trim().toLowerCase() || 'custom',
+            item_name: item.item_name,
+            description: item.notes || null,
+            rate_type: 'flat',
+            rate_unit: 'fixed',
+            quantity: Number(item.quantity || 1),
+            unit_rate: Number(item.unit_price || 0),
+            estimated_pricing: Number(item.unit_price || 0),
+            line_total: Number(item.line_total || 0),
+            sort_order: index,
+          })),
+          ...line_items,
+        ],
+      };
+
+      updatedQuote = await quoteService.createQuote(createPayload, {
+        userId: resolvedUserId,
+        role: resolvedUserRole,
+      });
+      resolvedQuoteId = Number(updatedQuote?.sales_quote_id || 0);
+    }
+
+    if (!updatedQuote) {
+      return res.status(500).json({ error: true, message: 'Failed to prepare quote for add-ons update' });
+    }
+
+    const manualPayment = manual_payment && typeof manual_payment === 'object' ? manual_payment : null;
+    if (manualPayment) {
+      const normalizedPaymentType = String(manualPayment.payment_type || '').trim().toLowerCase();
+      const normalizedPaymentMode = String(manualPayment.payment_mode || '').trim().toLowerCase();
+      const normalizedProofUrl = String(manualPayment.proof_url || '').trim();
+      const transactionId = String(manualPayment.transaction_id || '').trim();
+      const otherPaymentMode = String(manualPayment.other_payment_mode || '').trim();
+      const notesValue = String(manualPayment.notes || '').trim();
+
+      const allowedModes = ['cash', 'wire', 'ach', 'zelle', 'venmo', 'cashapp', 'applepay', 'other', 'net30'];
+      if (!['full', 'partial'].includes(normalizedPaymentType)) {
+        return res.status(400).json({ success: false, message: 'payment_type must be either "full" or "partial"' });
+      }
+      if (!allowedModes.includes(normalizedPaymentMode)) {
+        return res.status(400).json({ success: false, message: 'payment_mode must be one of cash, wire, ach, zelle, venmo, cashapp, applepay, other, or net30' });
+      }
+      if (!normalizedProofUrl) {
+        return res.status(400).json({ success: false, message: 'proof_url is required for manual payment updates' });
+      }
+      if (!transactionId) {
+        return res.status(400).json({ success: false, message: 'transaction_id is required for manual payment updates' });
+      }
+      if (normalizedPaymentMode === 'other' && !otherPaymentMode) {
+        return res.status(400).json({ success: false, message: 'other_payment_mode is required when payment_mode is other' });
+      }
+
+      const bookingId = Number(project.stream_project_booking_id);
+      const finalQuoteTotal = Number(updatedQuote?.total || 0);
+      const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId);
+      const previouslyPaidAmount = Number(existingSummary?.paid_amount || 0);
+      const creditUsedAmount = Number(existingSummary?.credit_used_amount || 0);
+      const dueFromSummary = Number(existingSummary?.due_amount);
+      const remainingBefore = Number.isFinite(dueFromSummary)
+        ? Math.max(dueFromSummary, 0)
+        : Math.max(finalQuoteTotal - previouslyPaidAmount - creditUsedAmount, 0);
+      const isNet30Mode = normalizedPaymentMode === 'net30';
+
+      const numericAmount = manualPayment.amount === undefined || manualPayment.amount === null || manualPayment.amount === ''
+        ? null
+        : Number(manualPayment.amount);
+
+      if (normalizedPaymentType === 'partial' && !isNet30Mode) {
+        if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+          return res.status(400).json({ success: false, message: 'For partial payments, amount must be greater than 0' });
+        }
+        if (remainingBefore > 0 && numericAmount > remainingBefore) {
+          return res.status(400).json({ success: false, message: 'Partial amount cannot exceed remaining booking amount' });
+        }
+      }
+
+      const amountToApply = isNet30Mode
+        ? 0
+        : normalizedPaymentType === 'partial'
+          ? Number(numericAmount || 0)
+          : remainingBefore;
+      const paidAmountAfter = Math.max(previouslyPaidAmount + amountToApply, 0);
+      const summaryNotes = transactionId
+        ? `Transaction ID: ${transactionId}${notesValue ? `\n\n${notesValue}` : ''}`
+        : notesValue || null;
+
+      await db.sequelize.query(
+        `
+          INSERT INTO booking_manual_payments (
+            booking_id,
+            lead_id,
+            sales_quote_id,
+            payment_type,
+            amount,
+            payment_mode,
+            other_payment_mode,
+            proof_url,
+            proof_file_path,
+            proof_file_name,
+            notes,
+            performed_by_user_id
+          ) VALUES (
+            :bookingId,
+            NULL,
+            :salesQuoteId,
+            :paymentType,
+            :amount,
+            :paymentMode,
+            :otherPaymentMode,
+            :proofUrl,
+            :proofFilePath,
+            :proofFileName,
+            :notes,
+            :performedBy
+          )
+        `,
+        {
+          replacements: {
+            bookingId,
+            salesQuoteId: resolvedQuoteId,
+            paymentType: normalizedPaymentType,
+            amount: Number(amountToApply || 0),
+            paymentMode: normalizedPaymentMode,
+            otherPaymentMode: normalizedPaymentMode === 'other' ? otherPaymentMode : null,
+            proofUrl: normalizedProofUrl,
+            proofFilePath: String(manualPayment.proof_file_path || '').trim() || null,
+            proofFileName: String(manualPayment.proof_file_name || '').trim() || null,
+            notes: summaryNotes,
+            performedBy: req.userId || null,
+          },
+          type: QueryTypes.INSERT,
+        }
+      );
+
+      await bookingPaymentSummaryService.upsertBookingPaymentSummary({
+        bookingId,
+        salesQuoteId: resolvedQuoteId,
+        quoteTotal: finalQuoteTotal,
+        paidAmount: paidAmountAfter,
+        creditUsedAmount,
+        creditCreatedAmount: Number(existingSummary?.credit_created_amount || 0),
+        manualPaymentMode: normalizedPaymentMode,
+        manualPaymentOtherMode: normalizedPaymentMode === 'other' ? otherPaymentMode : null,
+        manualPaymentProofUrl: normalizedProofUrl,
+        manualPaymentProofFilePath: String(manualPayment.proof_file_path || '').trim() || null,
+        manualPaymentProofFileName: String(manualPayment.proof_file_name || '').trim() || null,
+        manualPaymentNotes: summaryNotes,
+        manualPaymentUpdatedByUserId: req.userId || null,
+        manualPaymentUpdatedAt: new Date(),
+        lastQuoteChangeType: existingSummary?.last_quote_change_type || 'none',
+        lastQuoteChangeAmount: Number(existingSummary?.last_quote_change_amount || 0),
+        lastQuoteChangeStatus: existingSummary?.last_quote_change_status || 'none',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Shoot add-ons updated successfully',
+      data: updatedQuote
+    });
+  } catch (error) {
+    console.error('Error updating shoot add-ons:', error);
+    const statusCode = error.statusCode || (error.message === 'Quote not found' ? constants.NOT_FOUND.code : constants.BAD_REQUEST.code);
+    return res.status(statusCode).json({
+      success: false,
+      message: error.message || 'Failed to update shoot add-ons'
+    });
+  }
 };
 
 exports.submitProjectFormByAdmin = async (req, res) => {

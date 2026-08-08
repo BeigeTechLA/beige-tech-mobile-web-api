@@ -158,6 +158,7 @@ router.post('/matchEquipments', admin.matchEquipment);
 router.post('/assignMatchEquipment', admin.saveMatchedEquipment);
 router.get('/get-project/:project_id', authMiddleware, projectDetailView, admin.getProjectDetails);
 router.put('/shoots/update-date-location/:project_id', authMiddleware, shootsEdit, admin.updateProjectDateLocation);
+router.put('/shoots/:project_id/add-ons', authMiddleware, shootsEdit, admin.updateShootAddOns);
 router.post('/shoots/update-onboarding-form', authMiddleware, admin.submitProjectFormByAdmin);
 router.get('/get-active-projects', admin.getActiveProjects);
 router.get('/recent-activity', authMiddleware, dashboardView, admin.getRecentActivity);
