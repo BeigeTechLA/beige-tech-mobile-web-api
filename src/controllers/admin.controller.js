@@ -14191,13 +14191,6 @@ exports.updateShootAddOns = async (req, res) => {
           model: quotes,
           as: 'primary_quote',
           attributes: ['quote_id', 'total', 'price_after_discount', 'subtotal'],
-          include: [
-            {
-              model: quote_line_items,
-              as: 'line_items',
-              required: false,
-            },
-          ],
           required: false
         }
       ]
@@ -14234,90 +14227,36 @@ exports.updateShootAddOns = async (req, res) => {
       }
     }
 
+    if (!resolvedQuoteId && linkedLead?.lead_id) {
+      const latestLinkedQuote = await db.sales_quotes.findOne({
+        where: { lead_id: linkedLead.lead_id },
+        attributes: ['sales_quote_id'],
+        order: [['updated_at', 'DESC'], ['sales_quote_id', 'DESC']],
+      });
+      resolvedQuoteId = Number(latestLinkedQuote?.sales_quote_id || 0);
+    }
+
+    if (!Number.isInteger(resolvedQuoteId) || resolvedQuoteId <= 0) {
+      return res.status(400).json({ error: true, message: 'Linked quote not found for this project' });
+    }
+
     const resolvedUserId = Number(req.user?.userId || req.user?.id || req.user?.user_id || req.userId || 0) || null;
     const resolvedUserRole = String(req.user?.userRole || req.user?.role || req.userRole || '').toLowerCase().trim();
     if (!resolvedUserId) {
       return res.status(401).json({ error: true, message: 'Authentication required' });
     }
 
-    const legacyQuote = project?.primary_quote || null;
-    const legacyLineItems = Array.isArray(legacyQuote?.line_items) ? legacyQuote.line_items : [];
-    const keepLegacyLineItems = legacyLineItems.filter((item) => String(item?.notes || '').trim().toLowerCase() !== 'addon');
+    const payload = {
+      line_items,
+      line_item_sections: ['addon'],
+      edit_reason: edit_reason ? String(edit_reason).trim() : 'Updated shoot add-ons',
+      ops_review_confirmed: ops_review_confirmed === true || ops_review_confirmed === 1 || ops_review_confirmed === '1'
+    };
 
-    let updatedQuote = null;
-
-    if (Number.isInteger(resolvedQuoteId) && resolvedQuoteId > 0) {
-      const payload = {
-        line_items,
-        line_item_sections: ['addon'],
-        edit_reason: edit_reason ? String(edit_reason).trim() : 'Updated shoot add-ons',
-        ops_review_confirmed: ops_review_confirmed === true || ops_review_confirmed === 1 || ops_review_confirmed === '1'
-      };
-
-      updatedQuote = await quoteService.updateQuote(resolvedQuoteId, payload, {
-        userId: resolvedUserId,
-        role: resolvedUserRole
-      });
-    } else {
-      const createPayload = {
-        lead_id: linkedLead?.lead_id || null,
-        client_name: project?.project_name || project?.guest_email || 'Untitled Draft',
-        client_email: project?.guest_email || null,
-        client_address: project?.event_location || null,
-        project_description: project?.description || project?.project_name || null,
-        pricing_mode: legacyQuote?.pricing_mode || 'general',
-        video_shoot_type: project?.shoot_type || null,
-        booking_type: project?.content_type || project?.shoot_type || null,
-        start_date: project?.event_date || null,
-        start_time: project?.start_time || null,
-        end_time: project?.end_time || null,
-        booking_days: Array.isArray(project?.booking_days)
-          ? project.booking_days.map((day) => ({
-              event_date: day.event_date || null,
-              start_time: day.start_time || null,
-              end_time: day.end_time || null,
-              duration_hours: day.duration_hours || null,
-              time_zone: day.time_zone || null,
-            }))
-          : [],
-        discount_type:
-          legacyQuote?.applied_discount_type ||
-          (Number(legacyQuote?.discount_percent || 0) > 0 ? 'percentage' : 'none'),
-        discount_value:
-          legacyQuote?.applied_discount_value ??
-          legacyQuote?.discount_percent ??
-          legacyQuote?.discount_amount ??
-          0,
-        discount_amount: legacyQuote?.discount_amount ?? 0,
-        tax_type: legacyQuote?.tax_type || null,
-        tax_rate: legacyQuote?.tax_rate ?? 0,
-        notes: legacyQuote?.notes || null,
-        terms_conditions: legacyQuote?.terms_conditions || null,
-        line_items: [
-          ...keepLegacyLineItems.map((item, index) => ({
-            catalog_item_id: item.catalog_item_id || null,
-            source_type: item.source_type || 'custom',
-            section_type: String(item.notes || '').trim().toLowerCase() || 'custom',
-            item_name: item.item_name,
-            description: item.notes || null,
-            rate_type: 'flat',
-            rate_unit: 'fixed',
-            quantity: Number(item.quantity || 1),
-            unit_rate: Number(item.unit_price || 0),
-            estimated_pricing: Number(item.unit_price || 0),
-            line_total: Number(item.line_total || 0),
-            sort_order: index,
-          })),
-          ...line_items,
-        ],
-      };
-
-      updatedQuote = await quoteService.createQuote(createPayload, {
-        userId: resolvedUserId,
-        role: resolvedUserRole,
-      });
-      resolvedQuoteId = Number(updatedQuote?.sales_quote_id || 0);
-    }
+    const updatedQuote = await quoteService.updateQuote(resolvedQuoteId, payload, {
+      userId: resolvedUserId,
+      role: resolvedUserRole
+    });
 
     if (!updatedQuote) {
       return res.status(500).json({ error: true, message: 'Failed to prepare quote for add-ons update' });
