@@ -3728,7 +3728,7 @@ exports.updateClientLeadStatus = async (req, res) => {
   }
 };
 
-const MANUAL_PAYMENT_MODES = ['cash', 'wire', 'ach', 'zelle', 'venmo', 'cashapp', 'applepay', 'other', 'net30'];
+const MANUAL_PAYMENT_MODES = ['cash', 'wire', 'ach', 'zelle', 'venmo', 'cashapp', 'applepay', 'stripe', 'other', 'net30'];
 
 const parseJsonIfNeeded = (value) => {
   if (!value) return null;
@@ -4232,7 +4232,7 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
   if (!MANUAL_PAYMENT_MODES.includes(normalizedPaymentMode)) {
     return res.status(constants.BAD_REQUEST.code).json({
       success: false,
-      message: 'payment_mode must be one of cash, wire, ach, zelle, venmo, cashapp, applepay, other, or net30',
+      message: 'payment_mode must be one of cash, wire, ach, zelle, venmo, cashapp, applepay, stripe, other, or net30',
     });
   }
 
