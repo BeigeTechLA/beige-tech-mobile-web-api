@@ -573,8 +573,21 @@ const enrichParticipantCollection = async (items = [], fallbackRole = 'member') 
   const ids = normalizedItems
     .map((item) => Number(item?.id ?? item))
     .filter(Number.isFinite);
+  const emails = normalizedItems
+    .map((item) => normalizeEmailAddress(item?.email))
+    .filter(Boolean);
 
   const uniqueIds = [...new Set(ids)];
+  const uniqueEmails = [...new Set(emails)];
+  const clientConditions = [];
+  if (uniqueIds.length) {
+    clientConditions.push({ client_id: uniqueIds });
+    clientConditions.push({ user_id: uniqueIds });
+  }
+  if (uniqueEmails.length) {
+    clientConditions.push({ email: uniqueEmails });
+  }
+
   const [staff, clients, cps] = await Promise.all([
     uniqueIds.length
       ? db.users.findAll({
@@ -583,13 +596,10 @@ const enrichParticipantCollection = async (items = [], fallbackRole = 'member') 
           raw: true,
         })
       : [],
-    uniqueIds.length
+    clientConditions.length
       ? db.clients.findAll({
           where: {
-            [db.Sequelize.Op.or]: [
-              { client_id: uniqueIds },
-              { user_id: uniqueIds },
-            ],
+            [db.Sequelize.Op.or]: clientConditions,
           },
           attributes: ['client_id', 'user_id', 'name', 'email'],
           raw: true,
@@ -618,11 +628,20 @@ const enrichParticipantCollection = async (items = [], fallbackRole = 'member') 
   ]);
 
   const staffMap = new Map(staff.map((user) => [String(user.id), user]));
-  const clientMap = new Map();
+  const clientByEmail = new Map();
+  const clientByUserId = new Map();
+  const clientByClientId = new Map();
   clients.forEach((client) => {
-    clientMap.set(String(client.client_id), client);
-    if (client.user_id != null) clientMap.set(String(client.user_id), client);
+    const email = normalizeEmailAddress(client.email);
+    if (email) clientByEmail.set(email, client);
+    if (client.user_id != null) clientByUserId.set(String(client.user_id), client);
+    if (client.client_id != null) clientByClientId.set(String(client.client_id), client);
   });
+  const resolveClientForItem = (item, id) =>
+    clientByEmail.get(normalizeEmailAddress(item?.email)) ||
+    clientByUserId.get(id) ||
+    clientByClientId.get(id) ||
+    null;
   const cpMap = new Map();
   cps.forEach((cpRecord) => {
     const plain = cpRecord.get({ plain: true });
@@ -632,12 +651,13 @@ const enrichParticipantCollection = async (items = [], fallbackRole = 'member') 
 
   return normalizedItems.map((item) => {
     const id = String(item?.id ?? item ?? '');
+    const itemRole = String(item?.role || fallbackRole).toLowerCase();
     const staffUser = staffMap.get(id);
-    const client = clientMap.get(id);
+    const client = resolveClientForItem(item, id);
     const cp = cpMap.get(id);
     const profilePhoto = Array.isArray(cp?.crew_member_files) ? cp.crew_member_files[0] : null;
 
-    if (cp && String(item?.role || fallbackRole).toLowerCase() === 'cp') {
+    if (cp && itemRole === 'cp') {
       const canonicalId = String(cp.user_id || cp.crew_member_id || id);
       return {
         ...item,
@@ -650,6 +670,18 @@ const enrichParticipantCollection = async (items = [], fallbackRole = 'member') 
         role: 'cp',
         subtitle: item?.subtitle || cp.primary_role || 'Creative Partner',
         profileImage: item?.profileImage || profilePhoto?.file_path || null,
+      };
+    }
+
+    if (client && itemRole === 'client') {
+      const canonicalId = String(client.user_id || client.client_id || id);
+      return {
+        ...item,
+        id: canonicalId,
+        client_id: String(client.client_id),
+        name: shouldUseProvidedName(item?.name, id) ? item.name : client.name || client.email || canonicalId,
+        email: shouldUseProvidedEmail(item?.email) ? item.email : client.email || null,
+        role: 'client',
       };
     }
 
