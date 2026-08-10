@@ -1167,25 +1167,24 @@ const resolveClientParticipant = async (participant) => {
 
   const numericId = Number(normalized.id);
   const normalizedEmail = normalized.email ? String(normalized.email).trim().toLowerCase() : null;
-  const orConditions = [];
+  const clientLookupConditions = [];
 
-  if (Number.isFinite(numericId)) {
-    orConditions.push({ client_id: numericId });
-    orConditions.push({ user_id: numericId });
-  }
   if (normalizedEmail) {
-    orConditions.push({ email: normalizedEmail });
+    clientLookupConditions.push({ email: normalizedEmail });
+  }
+  if (Number.isFinite(numericId)) {
+    clientLookupConditions.push({ user_id: numericId });
+    clientLookupConditions.push({ client_id: numericId });
   }
 
   let clientRecord = null;
-  if (orConditions.length) {
+  for (const condition of clientLookupConditions) {
     clientRecord = await db.clients.findOne({
-      where: {
-        [db.Sequelize.Op.or]: orConditions,
-      },
+      where: condition,
       attributes: ['client_id', 'user_id', 'name', 'email'],
       raw: true,
     });
+    if (clientRecord) break;
   }
 
   const userLookupConditions = [];
