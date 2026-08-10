@@ -103,6 +103,36 @@ const normalizeDisplayStatusValue = (value) => (
     .trim()
 );
 
+const normalizeLeadListStatusFilter = (value) => {
+  const normalized = normalizeStatusFilterValue(value);
+  if (!normalized || normalized === 'all') return value;
+
+  if ([
+    'studioshoots',
+    'studioshoot',
+    'studiobookings',
+    'studiobooking',
+    'bookashootstudioleadcreated',
+    'bookashootstudio'
+  ].includes(normalized)) {
+    return leadAssignmentService.STUDIO_LEAD_CREATED_STATUS;
+  }
+
+  return normalizeDisplayStatusValue(value);
+};
+
+const isStudioLeadListStatusFilter = (value) => {
+  const normalized = normalizeStatusFilterValue(value);
+  return [
+    'studioshoots',
+    'studioshoot',
+    'studiobookings',
+    'studiobooking',
+    'bookashootstudioleadcreated',
+    'bookashootstudio'
+  ].includes(normalized);
+};
+
 const isShootStatusFilterValue = (value) => (
   [
     'initiated',
@@ -2446,14 +2476,16 @@ exports.getLeads = async (req, res) => {
       query: safeQueryLog
     });
 
-    const rawActiveStatusFilter = (status || booking_status);
-    const shootStatusRequested = isShootStatusFilterValue(rawActiveStatusFilter);
+    const rawStatusFilter = status || booking_status;
+    const studioLeadFilter = isStudioLeadListStatusFilter(rawStatusFilter);
+    const shootStatusRequested = isShootStatusFilterValue(rawStatusFilter);
     const activeStatusFilter = shootStatusRequested
-      ? rawActiveStatusFilter
-      : normalizeLeadStatusFilterLabel(rawActiveStatusFilter);
+      ? rawStatusFilter
+      : normalizeLeadStatusFilterLabel(rawStatusFilter);
     const listFilters = {
       activeStatusFilter,
       shootStatusRequested,
+      studioLeadFilter,
       intent,
       cp_assignment,
       production_filter
@@ -2620,6 +2652,7 @@ const normalizeBoardStatusLabel = (rawStatus) => {
   const value = String(rawStatus || '').replace(/â€“|—|–/g, '-').trim().toLowerCase();
   if (!value) return 'Unknown';
   if (value === 'signed up' || value === 'singed up' || value.includes('signed up - lead created')) return 'Signed Up - Lead Created';
+  if (value.includes('book a shoot - studio lead created')) return 'Book a Shoot - Studio Lead Created';
   if (value.includes('book a shoot - lead created')) return 'Book a shoot - Lead Created';
   if (value.includes('manual - lead created')) return 'Manual - Lead Created';
   if (value === 'booking in progress' || value === 'in-progress') return 'Booking In Progress';
@@ -2846,7 +2879,7 @@ exports.getClientLeads = async (req, res) => {
       })
     );
 
-    const activeStatusFilter = (status || booking_status);
+    const activeStatusFilter = normalizeLeadListStatusFilter(status || booking_status);
     const shootStatusRequested = isShootStatusFilterValue(activeStatusFilter);
 
     if (shootStatusRequested) {
@@ -3940,7 +3973,7 @@ exports.updateClientLeadStatus = async (req, res) => {
   }
 };
 
-const MANUAL_PAYMENT_MODES = ['cash', 'wire', 'ach', 'zelle', 'venmo', 'cashapp', 'applepay', 'other', 'net30'];
+const MANUAL_PAYMENT_MODES = ['cash', 'wire', 'ach', 'zelle', 'venmo', 'cashapp', 'applepay', 'stripe', 'other', 'net30'];
 
 const parseJsonIfNeeded = (value) => {
   if (!value) return null;
@@ -4033,6 +4066,12 @@ const getSalesLeadListIncludes = () => ([
         as: 'meetings',
         required: false,
         attributes: ['meeting_id', 'meeting_type', 'meeting_status']
+      },
+      {
+        model: db.studio_bookings,
+        as: 'studio_bookings',
+        required: false,
+        attributes: ['studio_booking_id', 'source', 'status']
       },
       {
         model: db.projects,
@@ -4260,23 +4299,26 @@ async function salesLeadMatchesListFilters(lead, filters, externalFileCache, con
   const {
     activeStatusFilter,
     shootStatusRequested,
+    studioLeadFilter,
     intent,
     cp_assignment,
     production_filter
   } = filters;
 
+  const isStudioLead = leadAssignmentService.isBookAStudioLead(lead, lead?.booking);
+  if (studioLeadFilter) {
+    if (!isStudioLead) return false;
+  } else if (isStudioLead) {
+    return false;
+  }
+
   if (shootStatusRequested && !matchShootStatusFilter(lead?.booking, activeStatusFilter)) {
     return false;
   }
 
-  if (!shootStatusRequested && activeStatusFilter && activeStatusFilter !== 'All') {
-    const leadStat = String(lead?.booking_status || '')
-      .replace('â€“', '-')
-      .trim();
-
-    const filterStat = String(activeStatusFilter || '')
-      .replace('â€“', '-')
-      .trim();
+  if (!studioLeadFilter && !shootStatusRequested && activeStatusFilter && activeStatusFilter !== 'All') {
+    const leadStat = normalizeDisplayStatusValue(lead?.booking_status);
+    const filterStat = normalizeDisplayStatusValue(activeStatusFilter);
 
     if (
       normalizeLeadStatusFilterLabel(leadStat) !==
@@ -4444,7 +4486,7 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
   if (!MANUAL_PAYMENT_MODES.includes(normalizedPaymentMode)) {
     return res.status(constants.BAD_REQUEST.code).json({
       success: false,
-      message: 'payment_mode must be one of cash, wire, ach, zelle, venmo, cashapp, applepay, other, or net30',
+      message: 'payment_mode must be one of cash, wire, ach, zelle, venmo, cashapp, applepay, stripe, other, or net30',
     });
   }
 
@@ -4493,7 +4535,14 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
 
   const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId);
   const summaryQuoteTotal = Number(existingSummary?.quote_total || 0);
-  const totalAmount = Math.max(resolveLeadTotalAmount(lead, lead.booking), summaryQuoteTotal, 0);
+  const calculatedPricing = await calculateLeadPricing(lead.booking);
+  const calculatedPricingTotal = Number(calculatedPricing?.total || 0);
+  const totalAmount = Math.max(
+    resolveLeadTotalAmount(lead, lead.booking),
+    calculatedPricingTotal,
+    summaryQuoteTotal,
+    0
+  );
   const previouslyPaidAmount = Number(existingSummary?.paid_amount || 0);
   const creditUsedAmount = Number(existingSummary?.credit_used_amount || 0);
   const dueFromSummary = Number(existingSummary?.due_amount);

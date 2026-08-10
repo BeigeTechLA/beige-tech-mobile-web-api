@@ -530,9 +530,40 @@ async function unassignLead(leadId, performedByUserId) {
 //   return 'Signed Up – Lead Created';
 // };
 
+const STUDIO_LEAD_CREATED_STATUS = 'Book a Shoot - Studio Lead Created';
+
+const isBookAStudioLead = (lead, booking) => {
+  if (lead?.lead_type && lead.lead_type !== 'self_serve') return false;
+
+  const studioBookings = Array.isArray(booking?.studio_bookings) ? booking.studio_bookings : [];
+  if (studioBookings.some((studioBooking) => String(studioBooking?.source || 'book_a_shoot') === 'book_a_shoot')) {
+    return true;
+  }
+
+  if (String(booking?.description || '').includes('[BEIGE_STUDIO_META]')) {
+    return true;
+  }
+
+  const bookingTypeFields = [
+    booking?.content_type,
+    booking?.shoot_type,
+    booking?.event_type
+  ].map((value) => String(value || '').trim().toLowerCase());
+
+  return bookingTypeFields.includes('studio');
+};
+
 const getLeadBookingStatus = (lead, booking) => {
   if (lead.lead_status === 'payment_pending') {
     return 'Payment Pending';
+  }
+
+  if (
+    isBookAStudioLead(lead, booking) &&
+    !booking?.payment_id &&
+    ['book_a_shoot_lead_created', 'booking_in_progress'].includes(lead?.lead_status)
+  ) {
+    return STUDIO_LEAD_CREATED_STATUS;
   }
 
   // 1. Closed - Lost
@@ -791,5 +822,7 @@ module.exports = {
   getLeadIntent,
   getClientIntent,
   getClientBookingStatus,
-  getLeadBookingStep
+  getLeadBookingStep,
+  isBookAStudioLead,
+  STUDIO_LEAD_CREATED_STATUS
 };
