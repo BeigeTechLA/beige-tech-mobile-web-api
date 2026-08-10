@@ -3354,3 +3354,30 @@ exports.createInternalCredential = async (req, res) => {
     });
   }
 };
+exports.getOnboardingStatus = async (req, res) => {
+  try {
+    const userId = req.user?.userId;
+    const member = await crew_members.findOne({
+      where: { user_id: userId },
+      include: [{ model: db.crew_member_files, as: 'crew_member_files' }]
+    });
+
+    if (!member) return res.json({ onboardingMissingDetail: true });
+
+    const step1Missing = !member.first_name || !member.phone_number || !member.location;
+    const roles = member.primary_role ? JSON.parse(member.primary_role) : [];
+    const skills = member.skills ? JSON.parse(member.skills) : [];
+    const step2Missing = roles.length === 0 || !member.years_of_experience || skills.length === 0;
+    const files = member.crew_member_files || [];
+    const hasPhoto = files.some(f => f.file_type === 'profile_photo');
+    const hasPortfolio = files.some(f => ['recent_work', 'link'].includes(f.file_type));
+    const step3Missing = !hasPhoto || !hasPortfolio;
+
+    return res.json({
+      success: true,
+      onboardingMissingDetail: step1Missing || step2Missing || step3Missing
+    });
+  } catch (error) {
+    res.status(500).json({ onboardingMissingDetail: true });
+  }
+};

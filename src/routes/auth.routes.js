@@ -50,6 +50,7 @@ router.get('/permissions/:role', authController.getPermissions);
 
 // GET /auth/me - Get current user info
 router.get('/me', authenticate, authController.getCurrentUser);
+router.get('/onboarding-status', authenticate, authController.getOnboardingStatus);
 router.post('/cp-event-location/confirm', authenticate, authController.confirmCpEventLocation);
 router.post('/admin/create-internal-credential', authenticate, requireSuperAdmin, authController.createInternalCredential);
 
