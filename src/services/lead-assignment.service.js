@@ -534,7 +534,6 @@ const STUDIO_LEAD_CREATED_STATUS = 'Book a Shoot - Studio Lead Created';
 
 const isBookAStudioLead = (lead, booking) => {
   if (lead?.lead_type && lead.lead_type !== 'self_serve') return false;
-  if (!['book_a_shoot_lead_created', 'booking_in_progress'].includes(lead?.lead_status)) return false;
 
   const studioBookings = Array.isArray(booking?.studio_bookings) ? booking.studio_bookings : [];
   if (studioBookings.some((studioBooking) => String(studioBooking?.source || 'book_a_shoot') === 'book_a_shoot')) {
@@ -559,7 +558,11 @@ const getLeadBookingStatus = (lead, booking) => {
     return 'Payment Pending';
   }
 
-  if (isBookAStudioLead(lead, booking)) {
+  if (
+    isBookAStudioLead(lead, booking) &&
+    !booking?.payment_id &&
+    ['book_a_shoot_lead_created', 'booking_in_progress'].includes(lead?.lead_status)
+  ) {
     return STUDIO_LEAD_CREATED_STATUS;
   }
 

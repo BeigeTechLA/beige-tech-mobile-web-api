@@ -121,6 +121,18 @@ const normalizeLeadListStatusFilter = (value) => {
   return normalizeDisplayStatusValue(value);
 };
 
+const isStudioLeadListStatusFilter = (value) => {
+  const normalized = normalizeStatusFilterValue(value);
+  return [
+    'studioshoots',
+    'studioshoot',
+    'studiobookings',
+    'studiobooking',
+    'bookashootstudioleadcreated',
+    'bookashootstudio'
+  ].includes(normalized);
+};
+
 const isShootStatusFilterValue = (value) => (
   [
     'initiated',
@@ -2464,11 +2476,14 @@ exports.getLeads = async (req, res) => {
       query: safeQueryLog
     });
 
-    const activeStatusFilter = normalizeLeadListStatusFilter(status || booking_status);
+    const rawStatusFilter = status || booking_status;
+    const studioLeadFilter = isStudioLeadListStatusFilter(rawStatusFilter);
+    const activeStatusFilter = normalizeLeadListStatusFilter(rawStatusFilter);
     const shootStatusRequested = isShootStatusFilterValue(activeStatusFilter);
     const listFilters = {
       activeStatusFilter,
       shootStatusRequested,
+      studioLeadFilter,
       intent,
       cp_assignment,
       production_filter
@@ -4264,16 +4279,24 @@ async function salesLeadMatchesListFilters(lead, filters, externalFileCache, con
   const {
     activeStatusFilter,
     shootStatusRequested,
+    studioLeadFilter,
     intent,
     cp_assignment,
     production_filter
   } = filters;
 
+  const isStudioLead = leadAssignmentService.isBookAStudioLead(lead, lead?.booking);
+  if (studioLeadFilter) {
+    if (!isStudioLead) return false;
+  } else if (isStudioLead) {
+    return false;
+  }
+
   if (shootStatusRequested && !matchShootStatusFilter(lead?.booking, activeStatusFilter)) {
     return false;
   }
 
-  if (!shootStatusRequested && activeStatusFilter && activeStatusFilter !== 'All') {
+  if (!studioLeadFilter && !shootStatusRequested && activeStatusFilter && activeStatusFilter !== 'All') {
     const leadStat = normalizeDisplayStatusValue(lead?.booking_status);
     const filterStat = normalizeDisplayStatusValue(activeStatusFilter);
 
