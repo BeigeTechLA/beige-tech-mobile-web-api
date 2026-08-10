@@ -63,6 +63,147 @@ const buildShootReceiptUrl = ({ bookingId, manualPaymentId = null, paymentId = n
   return url.toString();
 };
 
+const normalizeAddOnAmount = (value) => Number(Number(value || 0).toFixed(2));
+
+const normalizeBookingLevelAddOns = (lineItems = []) => (
+  Array.isArray(lineItems) ? lineItems : []
+).map((item, index) => {
+  const quantity = Math.max(1, Number(item.quantity || 1));
+  const unitRate = normalizeAddOnAmount(
+    item.unit_rate !== undefined && item.unit_rate !== null && item.unit_rate !== ''
+      ? item.unit_rate
+      : item.estimated_pricing
+  );
+  const lineTotal = normalizeAddOnAmount(
+    item.line_total !== undefined && item.line_total !== null && item.line_total !== ''
+      ? item.line_total
+      : unitRate * quantity
+  );
+
+  return {
+    catalog_item_id: item.catalog_item_id ? Number(item.catalog_item_id) : null,
+    section_type: 'addon',
+    source_type: item.source_type || (item.catalog_item_id ? 'catalog' : 'custom'),
+    item_name: String(item.item_name || item.name || '').trim(),
+    description: item.description ?? null,
+    quantity,
+    unit_rate: unitRate,
+    estimated_pricing: item.estimated_pricing !== undefined && item.estimated_pricing !== null && item.estimated_pricing !== ''
+      ? normalizeAddOnAmount(item.estimated_pricing)
+      : null,
+    line_total: lineTotal,
+    rate_type: item.rate_type || 'flat',
+    rate_unit: item.rate_unit ?? null,
+    duration_hours: item.duration_hours !== undefined && item.duration_hours !== null && item.duration_hours !== ''
+      ? Number(item.duration_hours)
+      : null,
+    crew_size: item.crew_size !== undefined && item.crew_size !== null && item.crew_size !== ''
+      ? Number(item.crew_size)
+      : null,
+    configuration_json: item.configuration_json || null,
+    sort_order: item.sort_order !== undefined ? Number(item.sort_order) : index
+  };
+}).filter((item) => item.item_name);
+
+const saveBookingLevelAddOns = async ({ bookingId, lineItems, userId }) => {
+  const normalizedItems = normalizeBookingLevelAddOns(lineItems);
+  await db.sequelize.transaction(async (transaction) => {
+    await db.activity_logs.update(
+      { is_active: 0 },
+      {
+        where: {
+          reference_id: bookingId,
+          reference_type: 'shoot_add_ons',
+          is_active: 1
+        },
+        transaction
+      }
+    );
+
+    await db.activity_logs.create({
+      activity_type: 'shoot_add_ons_updated',
+      title: 'Shoot add-ons updated',
+      description: JSON.stringify({
+        line_items: normalizedItems,
+        total_add_ons_amount: normalizeAddOnAmount(
+          normalizedItems.reduce((sum, item) => sum + Number(item.line_total || 0), 0)
+        ),
+        updated_by_user_id: userId || null,
+        updated_at: new Date().toISOString()
+      }),
+      reference_id: bookingId,
+      reference_type: 'shoot_add_ons',
+      is_active: 1
+    }, { transaction });
+  });
+
+  return normalizedItems;
+};
+
+const fetchBookingLevelAddOns = async (bookingId) => {
+  const row = await db.activity_logs.findOne({
+    where: {
+      reference_id: Number(bookingId),
+      reference_type: 'shoot_add_ons',
+      is_active: 1
+    },
+    order: [['activity_id', 'DESC']],
+    raw: true
+  });
+
+  if (!row?.description) return [];
+  try {
+    const parsed = JSON.parse(row.description);
+    return Array.isArray(parsed?.line_items) ? parsed.line_items : [];
+  } catch (_) {
+    return [];
+  }
+};
+
+const formatProjectAddOns = (lineItems = []) => (
+  Array.isArray(lineItems) ? lineItems : []
+).map((item, index) => {
+  const quantity = Math.max(1, Number(item.quantity || 1));
+  const unitRate = normalizeAddOnAmount(
+    item.unit_rate !== undefined && item.unit_rate !== null && item.unit_rate !== ''
+      ? item.unit_rate
+      : item.estimated_pricing
+  );
+  const lineTotal = normalizeAddOnAmount(
+    item.line_total !== undefined && item.line_total !== null && item.line_total !== ''
+      ? item.line_total
+      : item.total !== undefined && item.total !== null && item.total !== ''
+        ? item.total
+        : unitRate * quantity
+  );
+
+  return {
+    catalog_item_id: item.catalog_item_id ? Number(item.catalog_item_id) : null,
+    section_type: 'addon',
+    source_type: item.source_type || (item.catalog_item_id ? 'catalog' : 'custom'),
+    item_name: String(item.item_name || item.name || '').trim(),
+    description: item.description || null,
+    quantity,
+    unit_rate: unitRate,
+    estimated_pricing: item.estimated_pricing !== undefined && item.estimated_pricing !== null && item.estimated_pricing !== ''
+      ? normalizeAddOnAmount(item.estimated_pricing)
+      : unitRate,
+    line_total: lineTotal,
+    rate_type: item.rate_type || 'flat',
+    rate_unit: item.rate_unit || null,
+    duration_hours: item.duration_hours !== null && item.duration_hours !== undefined && item.duration_hours !== ''
+      ? Number(item.duration_hours)
+      : null,
+    crew_size: item.crew_size !== null && item.crew_size !== undefined && item.crew_size !== ''
+      ? Number(item.crew_size)
+      : null,
+    configuration_json: item.configuration_json || null,
+    configuration: item.configuration || null,
+    sort_order: item.sort_order !== undefined ? Number(item.sort_order) : index,
+    is_active: item.is_active !== undefined ? Number(item.is_active) : 1
+  };
+}).filter((item) => item.item_name);
+
 const hasValue = (value) => {
   if (value === null || value === undefined) return false;
   if (typeof value === 'string') return value.trim() !== '';
@@ -2005,7 +2146,7 @@ exports.getProjectDetails = async (req, res) => {
       : [];
 
     // 3. Fetch Transaction Total (from payment_transactions table)
-    const [paymentData, formSubmission, shootNotesCountMap, bookingPaymentSummary, manualPaymentRows, stripeReceiptRows] = await Promise.all([
+    const [paymentData, formSubmission, shootNotesCountMap, bookingPaymentSummary, manualPaymentRows, stripeReceiptRows, bookingLevelAddOns] = await Promise.all([
       payment_transactions.findOne({
         where: { payment_id: projectJson.payment_id },
         attributes: ['payment_id', 'total_amount', 'status', 'created_at'],
@@ -2074,7 +2215,8 @@ exports.getProjectDetails = async (req, res) => {
         const code = error?.original?.code || error?.parent?.code || error?.code;
         if (code === 'ER_NO_SUCH_TABLE' || code === 'ER_BAD_TABLE_ERROR') return [];
         throw error;
-      })
+      }),
+      fetchBookingLevelAddOns(projectJson.stream_project_booking_id)
     ]);
     const shootNotesCount = shootNotesCountMap.get(Number(projectJson.stream_project_booking_id)) || 0;
 
@@ -2179,6 +2321,12 @@ exports.getProjectDetails = async (req, res) => {
     // Using calculateLeadPricing helper if available, otherwise manual calc
     const projectedQuote = await bookingPricingService.calculateBookingPricing(projectJson);
     const activeQuoteSource = currentUsableConvertedQuote || projectJson.primary_quote || projectedQuote;
+    const quoteAddonItems = (activeQuoteSource?.line_items || [])
+      .filter((item) => String(item.section_type || '').toLowerCase() === 'addon')
+      .map((item, index) => ({ ...item, sort_order: item.sort_order !== undefined ? item.sort_order : index }));
+    const projectAddOns = formatProjectAddOns(
+      bookingLevelAddOns.length ? bookingLevelAddOns : quoteAddonItems
+    );
     const projectedTotal = parseAmountCandidate(projectedQuote?.total);
     if (
       !currentUsableConvertedQuote &&
@@ -2487,6 +2635,9 @@ exports.getProjectDetails = async (req, res) => {
           due_amount: pendingAmount,
           credit_used_amount: creditUsedAmount,
           payment_status: resolvedPaymentStatus,
+          add_ons: projectAddOns,
+          shoot_add_ons: projectAddOns,
+          line_items: projectAddOns,
           notes_count: shootNotesCount,
           contact_registration_type: contactRegistrationType,
           is_registered_user: isRegisteredUser,
@@ -14175,6 +14326,7 @@ exports.updateShootAddOns = async (req, res) => {
       edit_reason,
       ops_review_confirmed
     } = req.body || {};
+    const lineItems = Array.isArray(line_items) ? line_items : [];
 
     if (!project_id) {
       return res.status(400).json({ error: true, message: 'Project ID is required' });
@@ -14236,10 +14388,6 @@ exports.updateShootAddOns = async (req, res) => {
       resolvedQuoteId = Number(latestLinkedQuote?.sales_quote_id || 0);
     }
 
-    if (!Number.isInteger(resolvedQuoteId) || resolvedQuoteId <= 0) {
-      return res.status(400).json({ error: true, message: 'Linked quote not found for this project' });
-    }
-
     const resolvedUserId = Number(req.user?.userId || req.user?.id || req.user?.user_id || req.userId || 0) || null;
     const resolvedUserRole = String(req.user?.userRole || req.user?.role || req.userRole || '').toLowerCase().trim();
     if (!resolvedUserId) {
@@ -14247,20 +14395,49 @@ exports.updateShootAddOns = async (req, res) => {
     }
 
     const payload = {
-      line_items,
+      line_items: lineItems,
       line_item_sections: ['addon'],
       edit_reason: edit_reason ? String(edit_reason).trim() : 'Updated shoot add-ons',
       ops_review_confirmed: ops_review_confirmed === true || ops_review_confirmed === 1 || ops_review_confirmed === '1'
     };
 
-    const updatedQuote = await quoteService.updateQuote(resolvedQuoteId, payload, {
-      userId: resolvedUserId,
-      role: resolvedUserRole
-    });
+    const hasResolvedQuote = Number.isInteger(resolvedQuoteId) && resolvedQuoteId > 0;
+    let updatedQuote = null;
+    let savedAddOns = [];
+    if (hasResolvedQuote) {
+      updatedQuote = await quoteService.updateQuote(resolvedQuoteId, payload, {
+        userId: resolvedUserId,
+        role: resolvedUserRole
+      });
 
-    if (!updatedQuote) {
-      return res.status(500).json({ error: true, message: 'Failed to prepare quote for add-ons update' });
+      if (!updatedQuote) {
+        return res.status(500).json({ error: true, message: 'Failed to prepare quote for add-ons update' });
+      }
+
+      savedAddOns = (updatedQuote.line_items || [])
+        .filter((item) => String(item.section_type || '').toLowerCase() === 'addon');
+    } else {
+      savedAddOns = await saveBookingLevelAddOns({
+        bookingId: Number(project.stream_project_booking_id),
+        lineItems,
+        userId: resolvedUserId
+      });
     }
+
+    const bookingId = Number(project.stream_project_booking_id);
+    const totalAddOnsAmount = Number(savedAddOns.reduce((sum, item) => sum + Number(item.line_total || item.total || 0), 0).toFixed(2));
+    const existingSummaryBeforePayment = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId);
+    await bookingPaymentSummaryService.upsertBookingPaymentSummary({
+      bookingId,
+      salesQuoteId: hasResolvedQuote ? resolvedQuoteId : null,
+      quoteTotal: Number(updatedQuote?.total || totalAddOnsAmount || 0),
+      paidAmount: Number(existingSummaryBeforePayment?.paid_amount || 0),
+      creditUsedAmount: Number(existingSummaryBeforePayment?.credit_used_amount || 0),
+      creditCreatedAmount: Number(existingSummaryBeforePayment?.credit_created_amount || 0),
+      lastQuoteChangeType: existingSummaryBeforePayment?.last_quote_change_type || 'none',
+      lastQuoteChangeAmount: Number(existingSummaryBeforePayment?.last_quote_change_amount || 0),
+      lastQuoteChangeStatus: existingSummaryBeforePayment?.last_quote_change_status || 'none',
+    });
 
     const manualPayment = manual_payment && typeof manual_payment === 'object' ? manual_payment : null;
     if (manualPayment) {
@@ -14288,8 +14465,7 @@ exports.updateShootAddOns = async (req, res) => {
         return res.status(400).json({ success: false, message: 'other_payment_mode is required when payment_mode is other' });
       }
 
-      const bookingId = Number(project.stream_project_booking_id);
-      const finalQuoteTotal = Number(updatedQuote?.total || 0);
+      const finalQuoteTotal = Number(updatedQuote?.total || totalAddOnsAmount || 0);
       const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId);
       const previouslyPaidAmount = Number(existingSummary?.paid_amount || 0);
       const creditUsedAmount = Number(existingSummary?.credit_used_amount || 0);
@@ -14355,7 +14531,7 @@ exports.updateShootAddOns = async (req, res) => {
         {
           replacements: {
             bookingId,
-            salesQuoteId: resolvedQuoteId,
+            salesQuoteId: hasResolvedQuote ? resolvedQuoteId : null,
             paymentType: normalizedPaymentType,
             amount: Number(amountToApply || 0),
             paymentMode: normalizedPaymentMode,
@@ -14372,7 +14548,7 @@ exports.updateShootAddOns = async (req, res) => {
 
       await bookingPaymentSummaryService.upsertBookingPaymentSummary({
         bookingId,
-        salesQuoteId: resolvedQuoteId,
+        salesQuoteId: hasResolvedQuote ? resolvedQuoteId : null,
         quoteTotal: finalQuoteTotal,
         paidAmount: paidAmountAfter,
         creditUsedAmount,
@@ -14393,8 +14569,15 @@ exports.updateShootAddOns = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: 'Shoot add-ons updated successfully',
-      data: updatedQuote
+      message: 'Add-ons updated successfully',
+      data: {
+        shoot_id: bookingId,
+        quote_id: hasResolvedQuote ? resolvedQuoteId : null,
+        line_items: savedAddOns,
+        manual_payment: manualPayment,
+        total_add_ons_amount: totalAddOnsAmount,
+        quote: updatedQuote
+      }
     });
   } catch (error) {
     console.error('Error updating shoot add-ons:', error);
