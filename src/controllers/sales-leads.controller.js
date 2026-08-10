@@ -2478,8 +2478,10 @@ exports.getLeads = async (req, res) => {
 
     const rawStatusFilter = status || booking_status;
     const studioLeadFilter = isStudioLeadListStatusFilter(rawStatusFilter);
-    const activeStatusFilter = normalizeLeadListStatusFilter(rawStatusFilter);
-    const shootStatusRequested = isShootStatusFilterValue(activeStatusFilter);
+    const shootStatusRequested = isShootStatusFilterValue(rawStatusFilter);
+    const activeStatusFilter = shootStatusRequested
+      ? rawStatusFilter
+      : normalizeLeadStatusFilterLabel(rawStatusFilter);
     const listFilters = {
       activeStatusFilter,
       shootStatusRequested,
@@ -2636,15 +2638,11 @@ exports.getLeads = async (req, res) => {
 };
 
 const BOARD_STATUSES = [
-  'Signed Up - Lead Created',
-  'Book a shoot - Lead Created',
-  'Book a Shoot - Studio Lead Created',
-  'Manual - Lead Created',
   'Booking In Progress',
-  'Proposal Sent',
   'Ready for Payment',
-  'Payment Sent',
-  'Booked',
+  'Payment Link Sent',
+  'Partially Paid',
+  'Paid',
   'Closed - Lost',
 ];
 
@@ -2658,12 +2656,34 @@ const normalizeBoardStatusLabel = (rawStatus) => {
   if (value.includes('book a shoot - lead created')) return 'Book a shoot - Lead Created';
   if (value.includes('manual - lead created')) return 'Manual - Lead Created';
   if (value === 'booking in progress' || value === 'in-progress') return 'Booking In Progress';
-  if (value === 'proposal sent' || value === 'payment link sent' || value === 'link sent') return 'Proposal Sent';
+  if (value === 'proposal sent' || value === 'payment link sent' || value === 'link sent') return 'Payment Link Sent';
   if (value === 'ready for payment') return 'Ready for Payment';
-  if (value === 'payment sent') return 'Payment Sent';
-  if (value === 'booked' || value === 'paid') return 'Booked';
+  if (value === 'payment sent') return 'Payment Link Sent';
+  if (value === 'booked' || value === 'paid') return 'Paid';
   if (value.includes('closed - lost') || value === 'cancelled') return 'Closed - Lost';
   if (value === 'partially paid') return 'Partially Paid';
+  return String(rawStatus || '').trim() || 'Unknown';
+};
+
+const normalizeLeadStatusFilterLabel = (rawStatus) => {
+  const value = String(rawStatus || '')
+    .replace(/Ã¢â‚¬â€œ|â€”|â€“/g, '-')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+
+  if (!value || value === 'all') return 'All';
+  if (value === 'signed up' || value === 'singed up' || value.includes('signed up lead created')) return 'Signed Up - Lead Created';
+  if (value.includes('book a shoot lead created')) return 'Book a shoot - Lead Created';
+  if (value.includes('manual lead created')) return 'Manual - Lead Created';
+  if (value === 'booking in progress' || value === 'in progress') return 'Booking In Progress';
+  if (value === 'proposal sent' || value === 'payment link sent' || value === 'payment sent' || value === 'link sent') return 'Payment Link Sent';
+  if (value === 'ready for payment') return 'Ready for Payment';
+  if (value === 'booked' || value === 'paid') return 'Paid';
+  if (value === 'partially paid' || value === 'partial paid' || value === 'approval pending') return 'Partially Paid';
+  if (value.includes('closed lost') || value === 'cancelled' || value === 'abandoned') return 'Closed - Lost';
+
   return String(rawStatus || '').trim() || 'Unknown';
 };
 
@@ -2690,7 +2710,7 @@ exports.getLeadsBoard = async (req, res) => {
   try {
     const rawLimit = Number.parseInt(String(req.query.limit || 10), 10);
     const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 10;
-    const requestedStatus = String(req.query.status || '').trim();
+    const requestedStatus = normalizeLeadStatusFilterLabel(req.query.status);
     const page = Number.parseInt(String(req.query.page || 1), 10) || 1;
     const snapshot = await invokeGetLeadsSnapshot(req, {
       status: undefined,
@@ -2704,7 +2724,7 @@ exports.getLeadsBoard = async (req, res) => {
 
     const groupedByStatus = new Map();
     allLeads.forEach((lead) => {
-      const normalizedStatus = normalizeBoardStatusLabel(lead?.booking_status);
+      const normalizedStatus = normalizeLeadStatusFilterLabel(lead?.booking_status);
       if (!groupedByStatus.has(normalizedStatus)) {
         groupedByStatus.set(normalizedStatus, []);
       }
@@ -2714,7 +2734,7 @@ exports.getLeadsBoard = async (req, res) => {
     const extraStatuses = Array.from(groupedByStatus.keys()).filter(
       (statusLabel) => !BOARD_STATUSES.includes(statusLabel)
     );
-    const statuses = requestedStatus ? [requestedStatus] : [...BOARD_STATUSES, ...extraStatuses];
+    const statuses = requestedStatus && requestedStatus !== 'All' ? [requestedStatus] : [...BOARD_STATUSES, ...extraStatuses];
 
     const columns = {};
     statuses.forEach((statusLabel) => {
@@ -3953,7 +3973,7 @@ exports.updateClientLeadStatus = async (req, res) => {
   }
 };
 
-const MANUAL_PAYMENT_MODES = ['cash', 'wire', 'ach', 'zelle', 'venmo', 'cashapp', 'applepay', 'other', 'net30'];
+const MANUAL_PAYMENT_MODES = ['cash', 'wire', 'ach', 'zelle', 'venmo', 'cashapp', 'applepay', 'stripe', 'other', 'net30'];
 
 const parseJsonIfNeeded = (value) => {
   if (!value) return null;
@@ -4300,7 +4320,10 @@ async function salesLeadMatchesListFilters(lead, filters, externalFileCache, con
     const leadStat = normalizeDisplayStatusValue(lead?.booking_status);
     const filterStat = normalizeDisplayStatusValue(activeStatusFilter);
 
-    if (leadStat !== filterStat) return false;
+    if (
+      normalizeLeadStatusFilterLabel(leadStat) !==
+      normalizeLeadStatusFilterLabel(filterStat)
+    ) return false;
   }
 
   if (intent && intent !== 'All') {
@@ -4463,7 +4486,7 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
   if (!MANUAL_PAYMENT_MODES.includes(normalizedPaymentMode)) {
     return res.status(constants.BAD_REQUEST.code).json({
       success: false,
-      message: 'payment_mode must be one of cash, wire, ach, zelle, venmo, cashapp, applepay, other, or net30',
+      message: 'payment_mode must be one of cash, wire, ach, zelle, venmo, cashapp, applepay, stripe, other, or net30',
     });
   }
 
@@ -4512,7 +4535,14 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
 
   const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId);
   const summaryQuoteTotal = Number(existingSummary?.quote_total || 0);
-  const totalAmount = Math.max(resolveLeadTotalAmount(lead, lead.booking), summaryQuoteTotal, 0);
+  const calculatedPricing = await calculateLeadPricing(lead.booking);
+  const calculatedPricingTotal = Number(calculatedPricing?.total || 0);
+  const totalAmount = Math.max(
+    resolveLeadTotalAmount(lead, lead.booking),
+    calculatedPricingTotal,
+    summaryQuoteTotal,
+    0
+  );
   const previouslyPaidAmount = Number(existingSummary?.paid_amount || 0);
   const creditUsedAmount = Number(existingSummary?.credit_used_amount || 0);
   const dueFromSummary = Number(existingSummary?.due_amount);
