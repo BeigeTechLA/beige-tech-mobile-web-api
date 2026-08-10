@@ -47,6 +47,101 @@ const numberOrNull = (value) => {
     return Number.isFinite(parsed) ? parsed : null;
 };
 
+const MONTH_NAME_TO_NUMBER = {
+    january: 1,
+    february: 2,
+    march: 3,
+    april: 4,
+    may: 5,
+    june: 6,
+    july: 7,
+    august: 8,
+    september: 9,
+    october: 10,
+    november: 11,
+    december: 12,
+};
+
+const formatDateOnly = (date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+};
+
+const resolveStudioDateRangeFilter = ({ period, month, year }) => {
+    const normalizedPeriod = String(period || '').trim().toLowerCase();
+    const normalizedMonth = String(month || '').trim().toLowerCase();
+    const normalizedYear = Number.parseInt(String(year || ''), 10);
+    const today = new Date();
+
+    if (normalizedPeriod === 'week') {
+        const weekStart = new Date(today);
+        weekStart.setDate(today.getDate() - today.getDay());
+        weekStart.setHours(0, 0, 0, 0);
+
+        const weekEnd = new Date(weekStart);
+        weekEnd.setDate(weekStart.getDate() + 6);
+        weekEnd.setHours(23, 59, 59, 999);
+
+        return { start: weekStart, end: weekEnd };
+    }
+
+    if (normalizedPeriod === 'month' || normalizedMonth) {
+        let targetYear = Number.isFinite(normalizedYear) ? normalizedYear : today.getFullYear();
+        let targetMonth = null;
+
+        const yearMonthMatch = normalizedMonth.match(/^(\d{4})-(\d{1,2})$/);
+        if (yearMonthMatch) {
+            targetYear = Number.parseInt(yearMonthMatch[1], 10);
+            targetMonth = Number.parseInt(yearMonthMatch[2], 10);
+        } else if (MONTH_NAME_TO_NUMBER[normalizedMonth]) {
+            targetMonth = MONTH_NAME_TO_NUMBER[normalizedMonth];
+        } else if (normalizedMonth) {
+            targetMonth = Number.parseInt(normalizedMonth, 10);
+        } else {
+            targetMonth = today.getMonth() + 1;
+        }
+
+        if (!Number.isFinite(targetYear) || targetMonth < 1 || targetMonth > 12) {
+            return null;
+        }
+
+        const start = new Date(targetYear, targetMonth - 1, 1);
+        start.setHours(0, 0, 0, 0);
+
+        const end = new Date(targetYear, targetMonth, 0);
+        end.setHours(23, 59, 59, 999);
+
+        return { start, end };
+    }
+
+    return null;
+};
+
+const resolveStudioSortOrder = (sortBy, sortOrder) => {
+    const normalizedSortBy = String(sortBy || '').trim().toLowerCase();
+    const normalizedSortOrder = String(sortOrder || '').trim().toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
+
+    switch (normalizedSortBy) {
+        case 'name':
+        case 'studio_name':
+            return [['studio_name', normalizedSortOrder]];
+        case 'price':
+        case 'hourly_rate':
+            return [['hourly_rate', normalizedSortOrder]];
+        case 'status':
+            return [['status', normalizedSortOrder]];
+        case 'oldest':
+            return [['created_at', 'ASC']];
+        case 'latest':
+        case 'newest':
+        case 'created_at':
+        default:
+            return [['created_at', normalizedSortBy === 'created_at' ? normalizedSortOrder : 'DESC']];
+    }
+};
+
 const boolValue = (value, fallback = false) => {
     if (value === undefined || value === null || value === '') return fallback;
     return value === true || value === 1 || value === '1' || String(value).toLowerCase() === 'true';
@@ -613,11 +708,23 @@ exports.getStudios = async (req, res) => {
 
     const search = String(req.query.search || '').trim();
     const status = String(req.query.status || '').trim();
+    const period = String(req.query.period || req.query.date_filter || '').trim();
+    const month = String(req.query.month || '').trim();
+    const year = String(req.query.year || '').trim();
+    const sortBy = req.query.sort_by || req.query.sortBy || req.query.sort;
+    const sortOrder = req.query.sort_order || req.query.sortOrder || req.query.order;
 
     const where = { is_active: 1 };
 
     if (status && status !== 'all') {
       where.status = status;
+    }
+
+    const dateRange = resolveStudioDateRangeFilter({ period, month, year });
+    if (dateRange) {
+      where.created_at = {
+        [db.Sequelize.Op.between]: [dateRange.start, dateRange.end],
+      };
     }
 
     if (search) {
@@ -645,7 +752,7 @@ exports.getStudios = async (req, res) => {
       limit,
       offset,
       distinct: true,
-      order: [['created_at', 'DESC']],
+      order: resolveStudioSortOrder(sortBy, sortOrder),
       include: [
         {
           model: studio_media,
@@ -699,6 +806,21 @@ exports.getStudios = async (req, res) => {
         totalPages: Math.ceil(count / limit),
         hasNextPage: page * limit < count,
         hasPreviousPage: page > 1,
+      },
+      filters: {
+        search: search || null,
+        status: status || 'all',
+        period: period || 'all',
+        month: month || null,
+        year: year || null,
+        date_range: dateRange
+          ? {
+              start_date: formatDateOnly(dateRange.start),
+              end_date: formatDateOnly(dateRange.end),
+            }
+          : null,
+        sort_by: sortBy || 'created_at',
+        sort_order: sortOrder || 'DESC',
       },
     });
   } catch (error) {

@@ -2972,7 +2972,7 @@ GET {{URL}}admin/studios/2 HTTP/1.1
 Authorization: {{TOKEN}}
 
 ### Admin - Get Studios
-GET {{URL}}admin/studios?page=1&limit=10&search=sunset&status=all HTTP/1.1
+GET {{URL}}admin/studios?page=1&limit=50&sort_by=status&sort_order=ASC HTTP/1.1
 Authorization: {{TOKEN}}
 
 ### Admin - Update Studio
