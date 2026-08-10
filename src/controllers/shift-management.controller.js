@@ -144,7 +144,7 @@ exports.deleteShift = async (req, res) => {
 };
 
 exports.overview = async (req, res) => {
-  try { return ok(res, await service.overview()); } catch (error) { return fail(res, error); }
+  try { return ok(res, await service.overview(req.query)); } catch (error) { return fail(res, error); }
 };
 
 exports.hourlyLeadVolume = async (req, res) => {
@@ -153,6 +153,15 @@ exports.hourlyLeadVolume = async (req, res) => {
 
 exports.activeNow = async (req, res) => {
   try {
+    if (req.query.date) {
+      const day = service.dayFromDate(req.query.date);
+      const shifts = await models.shifts.findAll({
+        where: { status: 'active', is_enabled: true },
+        order: [['start_time', 'ASC']]
+      });
+      return ok(res, shifts.filter((shift) => service.normalizeStoredDays(shift.active_days).includes(day)));
+    }
+
     const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date().getDay()];
     const now = new Date().toTimeString().slice(0, 8);
     const shifts = await models.shifts.findAll({
@@ -166,7 +175,13 @@ exports.activeNow = async (req, res) => {
 exports.recentAssignments = async (req, res) => {
   try {
     const limit = Math.min(Math.max(parseInt(req.query.limit || 10, 10), 1), 50);
+    const where = {};
+    if (req.query.date) {
+      const range = service.dateRange(req.query.date);
+      where.assigned_at = { [Op.between]: [range.start, range.end] };
+    }
     const rows = await models.assignment_history.findAll({
+      where,
       include: [
         { model: models.shifts, as: 'shift', attributes: ['id', 'name'] },
         { model: models.users, as: 'sales_rep', attributes: service.USER_ATTRS }
@@ -245,7 +260,15 @@ exports.assignmentHistory = async (req, res) => {
     ['shift_id', 'sales_rep_id', 'status'].forEach((field) => {
       if (req.query[field]) where[field] = req.query[field];
     });
-    if (req.query.start_date && req.query.end_date) {
+    if (req.query.date) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date))) {
+        return res.status(400).json({ success: false, message: 'date must be in YYYY-MM-DD format' });
+      }
+      where.assigned_at = {
+        [Op.gte]: `${req.query.date} 00:00:00`,
+        [Op.lte]: `${req.query.date} 23:59:59`
+      };
+    } else if (req.query.start_date && req.query.end_date) {
       where.assigned_at = { [Op.between]: [`${req.query.start_date} 00:00:00`, `${req.query.end_date} 23:59:59`] };
     }
     const result = await models.assignment_history.findAndCountAll({
@@ -270,7 +293,7 @@ exports.salesRepLeads = async (req, res) => {
       const leadType = String(req.query.lead_type).toLowerCase().replace(/[\s-]+/g, '_');
       where.lead_type = leadType === 'self_serve' ? 'self_serve' : leadType === 'sales_assisted' ? 'sales_assisted' : req.query.lead_type;
     }
-    if (req.query.intent) where.intent = req.query.intent;
+    const intentFilter = req.query.intent ? String(req.query.intent).trim().toLowerCase() : '';
     if (req.query.status) where.lead_status = normalizeLeadStatusFilter(req.query.status);
     if (req.query.booking_status) where.lead_status = normalizeLeadStatusFilter(req.query.booking_status);
 
@@ -292,19 +315,24 @@ exports.salesRepLeads = async (req, res) => {
       }]
     }];
 
+    const shouldFilterDerivedIntent = Boolean(intentFilter);
     const result = await models.sales_leads.findAndCountAll({
       where,
       include,
       distinct: true,
       order: [['created_at', 'DESC']],
-      limit,
-      offset
+      ...(shouldFilterDerivedIntent ? {} : { limit, offset })
     });
-    const rows = result.rows.map(mapLeadRow);
+    const mappedRows = result.rows.map(mapLeadRow);
+    const filteredRows = shouldFilterDerivedIntent
+      ? mappedRows.filter((row) => String(row.intent || '').toLowerCase() === intentFilter)
+      : mappedRows;
+    const rows = shouldFilterDerivedIntent ? filteredRows.slice(offset, offset + limit) : filteredRows;
+    const total = shouldFilterDerivedIntent ? filteredRows.length : result.count;
     return ok(res, {
       rows,
       unsupported_filters: req.query.booking_type ? ['booking_type'] : [],
-      pagination: { page, limit, total: result.count, pages: Math.ceil(result.count / limit) }
+      pagination: { page, limit, total, pages: Math.ceil(total / limit) }
     });
   } catch (error) { return fail(res, error); }
 };

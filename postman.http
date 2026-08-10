@@ -4,7 +4,7 @@
 
 @TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI4MSwidXNlclJvbGUiOiJDcmVhdGl2ZSIsInBlcm1pc3Npb25zVmVyc2lvbiI6MSwidXNlclR5cGVJZCI6MiwiaWF0IjoxNzgzNTc0MzEwLCJleHAiOjE3ODQxNzkxMTB9.HHegOrbgsd0P3IJJK3U8AX8o-7Gtincjv0Q5BL4jOWc
 
-@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjEsInVzZXJUeXBlSWQiOjEsImlhdCI6MTc4NTQ4MjAwMCwiZXhwIjoxNzg2MDg2ODAwfQ.4bf4CFbU_da6APXhD6d4xqNqwqczteF7TbLd75XX-Vg
+@TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjEsInVzZXJUeXBlSWQiOjEsImlhdCI6MTc4NjMzOTIxOCwiZXhwIjoxNzg2OTQ0MDE4fQ.KHBj9666n8iDGVunnloAhoBQBuyItku1tOLyIlvr694
 
 @CP_TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI4MSwidXNlclJvbGUiOiJDcmVhdGl2ZSIsInBlcm1pc3Npb25zVmVyc2lvbiI6MSwidXNlclR5cGVJZCI6MiwiaWF0IjoxNzg0NjE0MzQ1LCJleHAiOjE3ODUyMTkxNDV9.guUL2MGKnEsEGNay9EdOnPrp6kfoXICnXYLuwRl4dmQ
 
@@ -3625,4 +3625,61 @@ Authorization: {{TOKEN2}}
 ### 21. Get All Shift Salespeople 
 GET {{URL}}admin/shifts/salespeople?page=2&limit=10 HTTP/1.1
 Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+### 21. Get All Shift Salespeople 
+GET {{URL}}admin/shifts/recent-assignments HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+### Date filter test 1 — should return 3 rows (04 Aug data)
+GET {{URL}}admin/assignment-history?date=2026-08-04&page=1&limit=20 HTTP/1.1
+Authorization: {{TOKEN2}}
+
+### Date filter test 2 — should return empty (06 Aug no data)
+GET {{URL}}admin/assignment-history?date=2026-08-06&page=1&limit=20 HTTP/1.1
+Authorization: {{TOKEN2}}
+
+### 22. Sales Rep - Booking Leads with intent filter
+GET {{URL}}admin/sales-reps/1/leads?intent=Hot&page=1&limit=10 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+### 23. Sales Rep - Booking Leads with status filter
+GET {{URL}}admin/sales-reps/1/leads?page=1&limit=10 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+###
+GET {{URL}}admin/sales-reps/1/leads?intent=Hot&page=1&limit=10 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+###
+GET {{URL}}admin/sales-reps/1/leads?intent=Hot&page=1&limit=10 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+###
+GET {{URL}}admin/shifts/active-now HTTP/1.1
+Authorization: {{TOKEN2}}
+
+
+### Active Shifts Now
+GET {{URL}}admin/shifts/active-now HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+### Morning Shift Updated ke salespeople (id:1)
+GET {{URL}}admin/shifts/1/salespeople?limit=100 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+### Morning Shift ke salespeople (id:2)
+GET {{URL}}admin/shifts/2/salespeople?limit=100 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN2}}
+
+### Active Shifts Now with date filter
+GET {{URL}}admin/shifts/active-now?date=2026-08-07 HTTP/1.1
 Authorization: {{TOKEN2}}

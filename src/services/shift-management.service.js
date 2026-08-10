@@ -11,6 +11,37 @@ function pageParams(query) {
   return { page, limit, offset: (page - 1) * limit };
 }
 
+function validateDateParam(date) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) throw new Error('date must be in YYYY-MM-DD format');
+  return String(date);
+}
+
+function dateRange(date) {
+  const safeDate = validateDateParam(date);
+  return {
+    start: `${safeDate} 00:00:00`,
+    end: `${safeDate} 23:59:59`
+  };
+}
+
+function previousDate(date) {
+  const safeDate = validateDateParam(date);
+  const [year, month, day] = safeDate.split('-').map(Number);
+  const value = new Date(year, month - 1, day);
+  value.setDate(value.getDate() - 1);
+  const previousYear = value.getFullYear();
+  const previousMonth = String(value.getMonth() + 1).padStart(2, '0');
+  const previousDay = String(value.getDate()).padStart(2, '0');
+  return `${previousYear}-${previousMonth}-${previousDay}`;
+}
+
+function dayFromDate(date) {
+  const safeDate = validateDateParam(date);
+  const [year, month, day] = safeDate.split('-').map(Number);
+  const value = new Date(year, month - 1, day);
+  return VALID_DAYS[value.getDay()];
+}
+
 function normalizeDays(days) {
   if (!Array.isArray(days) || days.length === 0) throw new Error('active_days must be a non-empty array');
   days.forEach((day) => {
@@ -143,22 +174,45 @@ async function listShifts(query) {
   const { page, limit, offset } = pageParams(query);
   const where = {};
   if (query.status) where.status = query.status;
-  if (query.month) where.created_at = { [Op.between]: [`${query.month}-01`, `${query.month}-31 23:59:59`] };
+  if (query.date) {
+    const range = dateRange(query.date);
+    where.created_at = { [Op.between]: [range.start, range.end] };
+  } else if (query.month) {
+    where.created_at = { [Op.between]: [`${query.month}-01`, `${query.month}-31 23:59:59`] };
+  }
 
   const result = await models.shifts.findAndCountAll({
     where,
     order: [['created_at', 'DESC']],
     limit,
-    offset,
-    distinct: true,
-    include: [{ model: models.shift_salespeople, as: 'salespeople', include: [{ model: models.users, as: 'sales_rep', attributes: USER_ATTRS }] }]
+    offset
+  });
+
+  const shiftIds = result.rows.map((shift) => shift.id);
+  const salespeopleLinks = shiftIds.length
+    ? await models.shift_salespeople.findAll({
+        where: { shift_id: { [Op.in]: shiftIds } },
+        include: [{ model: models.users, as: 'sales_rep', attributes: USER_ATTRS }],
+        order: [
+          ['shift_id', 'ASC'],
+          ['assignment_order', 'ASC']
+        ]
+      })
+    : [];
+
+  const linksByShiftId = new Map();
+  salespeopleLinks.forEach((link) => {
+    const row = link.toJSON ? link.toJSON() : link;
+    if (!linksByShiftId.has(row.shift_id)) linksByShiftId.set(row.shift_id, []);
+    linksByShiftId.get(row.shift_id).push(row);
   });
 
   const rows = await Promise.all(result.rows.map(async (shift) => {
     const json = shift.toJSON();
-    const links = await decorateLinksWithOverlap(json.salespeople || [], json);
+    const links = await decorateLinksWithOverlap(linksByShiftId.get(json.id) || [], json);
     return {
       ...json,
+      salespeople: links,
       working_hours: workingHours(json),
       active_days: normalizeStoredDays(json.active_days),
       shift_overlapping: links.some((link) => link.shift_overlapping),
@@ -360,6 +414,10 @@ async function compareCount(model, whereCurrent, wherePrevious) {
   return { count: current, change_percent };
 }
 
+function percentChange(current, previous) {
+  return previous ? Math.round(((current - previous) / previous) * 100) : (current ? 100 : 0);
+}
+
 function monthRanges() {
   const now = new Date();
   const currentStart = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -367,7 +425,53 @@ function monthRanges() {
   return { current: { [Op.gte]: currentStart }, previous: { [Op.gte]: previousStart, [Op.lt]: currentStart } };
 }
 
-async function overview() {
+async function countActiveShiftsForDate(date) {
+  const range = dateRange(date);
+  const day = dayFromDate(date);
+  const shifts = await models.shifts.findAll({
+    where: {
+      status: 'active',
+      is_enabled: true,
+      created_at: { [Op.between]: [range.start, range.end] }
+    },
+    attributes: ['id', 'active_days']
+  });
+  return shifts.filter((shift) => normalizeStoredDays(shift.active_days).includes(day)).length;
+}
+
+async function overview(query = {}) {
+  if (query.date) {
+    const currentRange = dateRange(query.date);
+    const previousRange = dateRange(previousDate(query.date));
+
+    const [
+      activeShiftsCurrent,
+      activeShiftsPrevious,
+      leadsAssignedCurrent,
+      leadsAssignedPrevious,
+      pendingLeadsCurrent,
+      pendingLeadsPrevious,
+      activeSalespeopleCurrent,
+      activeSalespeoplePrevious
+    ] = await Promise.all([
+      countActiveShiftsForDate(query.date),
+      countActiveShiftsForDate(previousDate(query.date)),
+      models.assignment_history.count({ where: { assigned_at: { [Op.between]: [currentRange.start, currentRange.end] } } }),
+      models.assignment_history.count({ where: { assigned_at: { [Op.between]: [previousRange.start, previousRange.end] } } }),
+      models.sales_leads.count({ where: { lead_status: { [Op.like]: '%progress%' }, created_at: { [Op.between]: [currentRange.start, currentRange.end] } } }),
+      models.sales_leads.count({ where: { lead_status: { [Op.like]: '%progress%' }, created_at: { [Op.between]: [previousRange.start, previousRange.end] } } }),
+      models.shift_salespeople.count({ where: { status: 'active', user_status: true, created_at: { [Op.between]: [currentRange.start, currentRange.end] } } }),
+      models.shift_salespeople.count({ where: { status: 'active', user_status: true, created_at: { [Op.between]: [previousRange.start, previousRange.end] } } })
+    ]);
+
+    return {
+      active_shifts_count: { count: activeShiftsCurrent, change_percent: percentChange(activeShiftsCurrent, activeShiftsPrevious) },
+      leads_assigned_today: { count: leadsAssignedCurrent, change_percent: percentChange(leadsAssignedCurrent, leadsAssignedPrevious) },
+      pending_leads: { count: pendingLeadsCurrent, change_percent: percentChange(pendingLeadsCurrent, pendingLeadsPrevious) },
+      active_salespeople_count: { count: activeSalespeopleCurrent, change_percent: percentChange(activeSalespeopleCurrent, activeSalespeoplePrevious) }
+    };
+  }
+
   const ranges = monthRanges();
   const today = new Date().toISOString().slice(0, 10);
   return {
@@ -380,13 +484,18 @@ async function overview() {
 
 async function hourlyLeadVolume(query) {
   const where = {};
-  if (query.start_date && query.end_date) where.assigned_at = { [Op.between]: [`${query.start_date} 00:00:00`, `${query.end_date} 23:59:59`] };
+  if (query.date) {
+    const range = dateRange(query.date);
+    where.assigned_at = { [Op.between]: [range.start, range.end] };
+  } else if (query.start_date && query.end_date) where.assigned_at = { [Op.between]: [`${query.start_date} 00:00:00`, `${query.end_date} 23:59:59`] };
   else where.assigned_at = { [Op.gte]: `${new Date().toISOString().slice(0, 10)} 00:00:00` };
   return models.assignment_history.findAll({ where, attributes: [[fn('HOUR', col('assigned_at')), 'hour'], [fn('COUNT', col('id')), 'count']], group: [literal('hour')], order: [[literal('hour'), 'ASC']], raw: true });
 }
 
 module.exports = {
   pageParams,
+  dateRange,
+  dayFromDate,
   validateTime,
   normalizeDays,
   createShift,
