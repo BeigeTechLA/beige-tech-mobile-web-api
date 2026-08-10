@@ -4281,7 +4281,14 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
 
   const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId);
   const summaryQuoteTotal = Number(existingSummary?.quote_total || 0);
-  const totalAmount = Math.max(resolveLeadTotalAmount(lead, lead.booking), summaryQuoteTotal, 0);
+  const calculatedPricing = await calculateLeadPricing(lead.booking);
+  const calculatedPricingTotal = Number(calculatedPricing?.total || 0);
+  const totalAmount = Math.max(
+    resolveLeadTotalAmount(lead, lead.booking),
+    calculatedPricingTotal,
+    summaryQuoteTotal,
+    0
+  );
   const previouslyPaidAmount = Number(existingSummary?.paid_amount || 0);
   const creditUsedAmount = Number(existingSummary?.credit_used_amount || 0);
   const dueFromSummary = Number(existingSummary?.due_amount);
