@@ -31,6 +31,21 @@ const {
 } = require('../utils/creatorOnboarding');
 
 const getGoogleClientId = () => process.env.GOOGLE_CLIENT_ID || process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '';
+const getGoogleClientIdSource = () => {
+  if (process.env.GOOGLE_CLIENT_ID) return 'GOOGLE_CLIENT_ID';
+  if (process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID) return 'NEXT_PUBLIC_GOOGLE_CLIENT_ID';
+  return 'missing';
+};
+
+if (process.env.NODE_ENV !== 'production') {
+  const googleClientId = getGoogleClientId();
+  console.info('[Google Auth Env] backend Google client ID', {
+    configured: Boolean(googleClientId),
+    source: getGoogleClientIdSource(),
+    length: googleClientId.length
+  });
+}
+
 const googleClient = new OAuth2Client(getGoogleClientId());
 
 const findCreatorTypeId = async (transaction = null) => {
