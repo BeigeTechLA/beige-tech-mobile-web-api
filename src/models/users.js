@@ -30,6 +30,19 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.STRING(255),
       allowNull: true
     },
+    google_sub: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+      unique: "google_sub"
+    },
+    auth_provider: {
+      type: DataTypes.STRING(50),
+      allowNull: true
+    },
+    profile_image: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
     otp_code: {
       type: DataTypes.STRING(6),
       allowNull: true
@@ -141,6 +154,14 @@ module.exports = function(sequelize, DataTypes) {
         using: "BTREE",
         fields: [
           { name: "instagram_handle" },
+        ]
+      },
+      {
+        name: "google_sub",
+        unique: true,
+        using: "BTREE",
+        fields: [
+          { name: "google_sub" },
         ]
       },
     ],

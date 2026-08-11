@@ -4328,6 +4328,7 @@ Authorization: {{CP_TOKEN}}
   ]
 }
 
+<<<<<<< HEAD
 ### =====================================================
 ### BOOK A SHOOT - STUDIO JOURNEY 1
 ### Flow: base shoot -> crew/location -> studio add-on -> quote -> finalize -> payment
@@ -5270,3 +5271,82 @@ Content-Type: application/json
 ### Get studio detail by slug or numeric studio_id
 GET {{URL}}studios/catalog/beige-west-hollywood-content-studio
 Content-Type: application/json
+=======
+### ============================================================
+### EXCEL EXPORT APIs — LOCAL TESTING — 11, August 2026
+### Server: LOCAL (localhost:5001)
+### ============================================================
+
+### Step 1: Login (Admin role - has admin_users permission)
+POST {{URL}}auth/login HTTP/1.1
+Content-Type: application/json
+
+{
+  "email": "harsh.panchal@gmail.com",
+  "password": "password123"
+}
+
+### ============================================================
+### COPY the "token" value from Step 1 response and paste below
+### replacing <PASTE_TOKEN_HERE> in @LOCAL_TOKEN
+### ============================================================
+
+@LOCAL_TOKEN = Bearer <PASTE_TOKEN_HERE>
+
+### Step 2: Export All Users (Excel)
+GET {{URL}}admin/users/export HTTP/1.1
+Content-Type: application/json
+Authorization: {{LOCAL_TOKEN}}
+
+### Step 3: Try Role Export - role_id 1
+GET {{URL}}admin/roles/1/users/export HTTP/1.1
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjEsInVzZXJUeXBlSWQiOjEsImlhdCI6MTc4NjQzMzAxNywiZXhwIjoxNzg3MDM3ODE3fQ.W8iBddyJ6Gn3yIHngSTM3-ZFAo5rmUsF_SxMi_Ukl0A
+
+### Step 4: Try Role Export - role_id 2
+GET {{URL}}admin/roles/2/users/export HTTP/1.1
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjEsInVzZXJUeXBlSWQiOjEsImlhdCI6MTc4NjQzMzAxNywiZXhwIjoxNzg3MDM3ODE3fQ.W8iBddyJ6Gn3yIHngSTM3-ZFAo5rmUsF_SxMi_Ukl0A
+
+### Step 5: Try Role Export - role_id 3
+GET {{URL}}admin/roles/3/users/export HTTP/1.1
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjEsInVzZXJUeXBlSWQiOjEsImlhdCI6MTc4NjQzMzAxNywiZXhwIjoxNzg3MDM3ODE3fQ.W8iBddyJ6Gn3yIHngSTM3-ZFAo5rmUsF_SxMi_Ukl0A
+
+### Step 6: Try Role Export - role_id 4
+GET {{URL}}admin/roles/4/users/export HTTP/1.1
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjEsInVzZXJUeXBlSWQiOjEsImlhdCI6MTc4NjQzMzAxNywiZXhwIjoxNzg3MDM3ODE3fQ.W8iBddyJ6Gn3yIHngSTM3-ZFAo5rmUsF_SxMi_Ukl0A
+
+### Step 7: Try Role Export - role_id 5
+GET {{URL}}admin/roles/5/users/export HTTP/1.1
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjEsInVzZXJUeXBlSWQiOjEsImlhdCI6MTc4NjQzMzAxNywiZXhwIjoxNzg3MDM3ODE3fQ.W8iBddyJ6Gn3yIHngSTM3-ZFAo5rmUsF_SxMi_Ukl0A
+###step 8: Try Role Export - role_id 6  
+GET {{URL}}admin/roles/6/users/export HTTP/1.1
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjEsInVzZXJUeXBlSWQiOjEsImlhdCI6MTc4NjQzMzAxNywiZXhwIjoxNzg3MDM3ODE3fQ.W8iBddyJ6Gn3yIHngSTM3-ZFAo5rmUsF_SxMi_Ukl0A
+
+### Step 9: Try Role Export - role_id 7
+GET {{URL}}admin/roles/7/users/export HTTP/1.1
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjEsInVzZXJUeXBlSWQiOjEsImlhdCI6MTc4NjQzMzAxNywiZXhwIjoxNzg3MDM3ODE3fQ.W8iBddyJ6Gn3yIHngSTM3-ZFAo5rmUsF_SxMi_Ukl0A
+
+###step 10: Try Role Export - role_id 8
+GET {{URL}}admin/roles/8/users/export HTTP/1.1
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjEsInVzZXJUeXBlSWQiOjEsImlhdCI6MTc4NjQzMzAxNywiZXhwIjoxNzg3MDM3ODE3fQ.W8iBddyJ6Gn3yIHngSTM3-ZFAo5rmUsF_SxMi_Ukl0A
+### Step 8: Unauthorized check (no token - should return 401/403)
+
+GET {{URL}}admin/users/export HTTP/1.1
+Content-Type: application/json
+
+###
+GET {{URL}}admin/users/export HTTP/1.1
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjEsInVzZXJUeXBlSWQiOjEsImlhdCI6MTc4NjQzMzAxNywiZXhwIjoxNzg3MDM3ODE3fQ.W8iBddyJ6Gn3yIHngSTM3-ZFAo5rmUsF_SxMi_Ukl0A
+
+###
+GET {{URL}}admin/users/export HTTP/1.1
+Content-Type: application/json
+>>>>>>> 432e5901fd05cfa8e9e7ee552855c194929d2cda

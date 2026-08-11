@@ -223,6 +223,7 @@ const enrichChatRoomSnapshot = async (room) => {
   const enrichedManagers = await enrichParticipantCollection(room.manager_ids || [], 'manager');
   const enrichedCps = await enrichParticipantCollection(room.cp_ids || [], 'cp');
   const enrichedProduction = await enrichParticipantCollection(room.production_ids || [], 'production');
+  const enrichedExtraClients = await enrichParticipantCollection(room.client_ids || [], 'client');
   const normalizedClientSnapshot = normalizeClientEntity(room.client_snapshot);
   const normalizedClient = normalizeClientEntity(room.client_id);
   const enrichedClient = normalizedClientSnapshot
@@ -236,6 +237,7 @@ const enrichChatRoomSnapshot = async (room) => {
     manager_ids: enrichedManagers,
     cp_ids: enrichedCps,
     production_ids: enrichedProduction,
+    client_ids: enrichedExtraClients,
     client_snapshot: normalizedClientSnapshot ? enrichedClient : room.client_snapshot,
     client_id: normalizedClientSnapshot ? room.client_id : enrichedClient,
   };
@@ -289,6 +291,7 @@ const normalizeChatRoomMembers = (room, currentAdmin = null) => {
 
   const members = [
     room.client_snapshot || room.client_id,
+    ...(room.client_ids || []),
     ...(room.cp_ids || []),
     room.pm_id,
     ...(room.production_ids || []),
@@ -735,10 +738,12 @@ const enrichParticipantPayload = async (payload = {}) => {
   const client = payload?.client
     ? (await enrichParticipantCollection([payload.client], 'client'))[0] || payload.client
     : null;
+  const clients = await enrichParticipantCollection(payload?.clients || [], 'client');
 
   return {
     ...payload,
     client,
+    clients,
     cps: await enrichParticipantCollection(payload?.cps || [], 'cp'),
     pm: payload?.pm
       ? ((await enrichParticipantCollection([payload.pm], 'pm'))[0] || payload.pm)
@@ -752,7 +757,7 @@ const extractParticipantEnvelope = (payload = {}) => {
   if (
     payload &&
     typeof payload === 'object' &&
-    ('client' in payload || 'cps' in payload || 'pm' in payload || 'production' in payload || 'managers' in payload)
+    ('client' in payload || 'clients' in payload || 'cps' in payload || 'pm' in payload || 'production' in payload || 'managers' in payload)
   ) {
     return { envelope: payload, wrapped: false };
   }
@@ -760,7 +765,7 @@ const extractParticipantEnvelope = (payload = {}) => {
   if (
     payload?.data &&
     typeof payload.data === 'object' &&
-    ('client' in payload.data || 'cps' in payload.data || 'pm' in payload.data || 'production' in payload.data || 'managers' in payload.data)
+    ('client' in payload.data || 'clients' in payload.data || 'cps' in payload.data || 'pm' in payload.data || 'production' in payload.data || 'managers' in payload.data)
   ) {
     return { envelope: payload.data, wrapped: true };
   }
@@ -770,6 +775,7 @@ const extractParticipantEnvelope = (payload = {}) => {
 
 const flattenChatParticipants = (payload = {}) => [
   payload?.client,
+  ...(payload?.clients || []),
   ...(payload?.cps || []),
   payload?.pm,
   ...(payload?.production || []),
@@ -944,6 +950,7 @@ const extractChatRecipientTargets = (envelope = {}) => {
   };
 
   pushRecipient(envelope?.client, 'client');
+  (envelope?.clients || []).forEach((participant) => pushRecipient(participant, 'client'));
   pushRecipient(envelope?.pm, 'pm');
   (envelope?.cps || []).forEach((participant) => pushRecipient(participant, 'cp'));
   (envelope?.production || []).forEach((participant) => pushRecipient(participant, 'production'));
@@ -1670,10 +1677,13 @@ exports.removeChatParticipant = async (req, res) => {
       if (client) {
         const participantPayload = await proxyRequest(`/participants/${req.params.roomId}`).catch(() => null);
         const { envelope } = extractParticipantEnvelope(participantPayload || {});
-        const storedClientId = String(envelope?.client?.id || envelope?.client || '');
+        const storedClientIds = new Set([
+          envelope?.client,
+          ...(envelope?.clients || []),
+        ].map((participant) => String(participant?.id || participant || '')).filter(Boolean));
         storedParticipantId = [client.user_id, client.client_id]
           .map((id) => String(id || ''))
-          .find((id) => id && id === storedClientId) || storedParticipantId;
+          .find((id) => id && storedClientIds.has(id)) || storedParticipantId;
       }
     }
 
@@ -1857,6 +1867,7 @@ exports.getChatMessages = async (req, res) => {
     if (req.query.page) query.set('page', req.query.page);
     if (req.query.limit) query.set('limit', req.query.limit);
     if (req.query.sortBy) query.set('sortBy', req.query.sortBy);
+    if (req.query.search) query.set('search', req.query.search);
 
     const [result, participantResult] = await Promise.all([
       proxyRequest(`/messages/${req.params.roomId}${query.toString() ? `?${query.toString()}` : ''}`),
@@ -1988,11 +1999,13 @@ exports.editChatMessage = async (req, res) => {
 exports.deleteChatMessage = async (req, res) => {
   try {
     const sender = await resolveChatSender(req.user);
+    const allowAnySender = isAdminRequestUser(req.user);
 
     const result = await proxyRequest(`/messages/${req.params.messageId}/delete`, {
       method: 'POST',
       body: JSON.stringify({
         roomId: req.body.roomId,
+        allowAnySender,
         sender: {
           id: sender.id != null ? String(sender.id) : null,
           email: sender.email || null,

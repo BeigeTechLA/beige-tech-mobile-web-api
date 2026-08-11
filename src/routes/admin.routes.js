@@ -267,6 +267,8 @@ router.get('/roles', authMiddleware, requireSuperAdmin, admin.getRoles);
 router.post('/users/assign-role', authMiddleware, requireSuperAdmin, admin.assignRoleToUser);
 router.put('/roles/update', authMiddleware, requireSuperAdmin, admin.updateRole);
 router.delete('/roles/delete/:role_id', authMiddleware, requireSuperAdmin, admin.deleteRole);
+router.get('/users/export', authMiddleware, adminUsersView, admin.exportUsersExcel);
+router.get('/roles/:role_id/users/export', authMiddleware, adminUsersView, admin.exportRoleUsersExcel);
 router.get('/roles/:role_id', authMiddleware, requireSuperAdmin, admin.getRoleById);
 router.get('/users/roles', authMiddleware, requireSuperAdmin, admin.getUsersWithRoles);
 router.get('/users/:user_id/role-details', authMiddleware, requireSuperAdmin, admin.getUserRoleDetails);

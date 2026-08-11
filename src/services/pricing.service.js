@@ -490,10 +490,6 @@ function calculateRushFee(shootStartDate) {
   const diffInMs = start - now;
   const diffInHours = diffInMs / (1000 * 60 * 60);
 
-  console.log(`Current Time (Now): ${now.toISOString()}`);
-  console.log(`Shoot Start: ${start.toISOString()}`);
-  console.log(`Difference in Hours: ${diffInHours}`);
-
   if (diffInHours < 0) return 0;
 
   if (diffInHours <= 24) return 250;
