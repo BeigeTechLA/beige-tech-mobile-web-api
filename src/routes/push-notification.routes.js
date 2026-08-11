@@ -7,6 +7,7 @@ router.use(authenticate);
 
 router.post('/tokens', pushNotificationController.saveFcmToken);
 router.delete('/tokens', pushNotificationController.removeFcmToken);
+router.get('/preferences', pushNotificationController.getNotificationPreferences);
 router.patch('/preferences', pushNotificationController.updateNotificationPreferences);
 router.post('/test', pushNotificationController.sendTestPushToMe);
 

@@ -1,6 +1,7 @@
 const db = require('../models');
 const emailService = require('../utils/emailService');
 const appNotificationService = require('../services/app-notification.service');
+const pushNotificationService = require('../services/push-notification.service');
 
 const DEFAULT_BASE_URL = process.env.EXTERNAL_CHAT_API_BASE_URL || 'http://localhost:5002/v1/external-chat';
 const INTERNAL_KEY = process.env.EXTERNAL_CHAT_KEY || process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
@@ -1117,6 +1118,12 @@ const sendChatNotificationTemplate = async ({
     }
 
     if (!recipientTargets.length) return;
+    const emailRecipients = await pushNotificationService.filterEmailRecipientsByPreference({
+      recipients: recipientTargets,
+      topic: 'messages',
+    });
+    if (!emailRecipients.length) return;
+
     const chatName = resolveChatDisplayName(roomPayload);
     const clientName = String(
       booking?.client_name ||
@@ -1127,7 +1134,7 @@ const sendChatNotificationTemplate = async ({
     ).trim();
 
     const emailResult = await emailService.sendMessagingInitiatedTemplateEmail({
-      recipients: recipientTargets.map((recipient) => ({
+      recipients: emailRecipients.map((recipient) => ({
         email: recipient.email,
         name: recipient.name,
         role: recipient.role,

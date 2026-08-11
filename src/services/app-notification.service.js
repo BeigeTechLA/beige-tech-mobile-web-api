@@ -153,18 +153,6 @@ const groupByRelativeDay = (items) => {
   return grouped;
 };
 
-const getPushResult = (response) => {
-  if (!response || typeof response !== 'object') return null;
-  if (response.data && typeof response.data === 'object') return getPushResult(response.data);
-  if (response.success && typeof response.success === 'object') return response.success;
-  return response;
-};
-
-const isBlockedByPushPreferences = (response) => {
-  const result = getPushResult(response);
-  return result?.debug?.reason === 'PUSH_DISABLED_BY_SESSION_PREFERENCES';
-};
-
 exports.createNotification = async ({
   userId,
   senderUserId = null,
@@ -240,7 +228,6 @@ exports.createAndPushNotification = async ({
   deliverySurface = 'web_app',
   appUserType = null
 }) => {
-  let pushResponse = null;
   const pushData = normalizePayload({
     topic,
     category: category || topic,
@@ -250,7 +237,7 @@ exports.createAndPushNotification = async ({
 
   if (sendPush) {
     try {
-      pushResponse = await pushNotificationService.sendPushToUser({
+      await pushNotificationService.sendPushToUser({
         userId,
         title: pushTitle || title,
         body: pushBody || message,
@@ -268,11 +255,15 @@ exports.createAndPushNotification = async ({
         message: err.message
       });
     }
-
-    if (isBlockedByPushPreferences(pushResponse)) {
-      return null;
-    }
   }
+
+  const inWebAllowed = await pushNotificationService.isInAppNotificationAllowedForUser({
+    userId,
+    topic: category || topic,
+    priority
+  });
+
+  if (!inWebAllowed) return null;
 
   const notification = await exports.createNotification({
     userId,

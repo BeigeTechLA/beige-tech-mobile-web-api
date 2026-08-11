@@ -2,6 +2,7 @@ const { Op } = require('sequelize');
 const db = require('../models');
 const emailService = require('../utils/emailService');
 const appNotificationService = require('../services/app-notification.service');
+const pushNotificationService = require('../services/push-notification.service');
 
 const DEFAULT_BASE_URL = process.env.EXTERNAL_MEETINGS_API_BASE_URL || process.env.MEETINGS_API_BASE_URL || 'http://localhost:5002/v1';
 const INTERNAL_KEY = process.env.EXTERNAL_MEETINGS_KEY || process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
@@ -1419,14 +1420,18 @@ exports.createMeeting = async (req, res) => {
 
     if (req.body.send_notification !== false) {
       const recipients = collectMeetingRecipientTargets(participants, plainBooking);
-      if (recipients.length) {
+      const emailRecipients = await pushNotificationService.filterEmailRecipientsByPreference({
+        recipients,
+        topic: 'meetings',
+      });
+      if (emailRecipients.length) {
         const creator = meetingWithCreator?.creator
           ? (typeof meetingWithCreator.creator.get === 'function'
             ? meetingWithCreator.creator.get({ plain: true })
             : meetingWithCreator.creator)
           : null;
         await emailService.sendMeetingScheduledTemplateEmail({
-          recipients: recipients.map((recipient) => ({
+          recipients: emailRecipients.map((recipient) => ({
             ...recipient,
             view_details_url: getMeetingDashboardUrlByRole(recipient.role),
           })),
@@ -1719,10 +1724,14 @@ exports.addParticipants = async (req, res) => {
         role: normalizeRole(participant?.role || role || 'participant'),
       }))
       .filter((participant) => participant.email);
-    if (addedRecipients.length) {
+    const emailRecipients = await pushNotificationService.filterEmailRecipientsByPreference({
+      recipients: addedRecipients,
+      topic: 'meetings',
+    });
+    if (emailRecipients.length) {
       const plainBooking = typeof booking?.get === 'function' ? booking.get({ plain: true }) : booking;
       await emailService.sendMeetingScheduledTemplateEmail({
-        recipients: addedRecipients.map((recipient) => ({
+        recipients: emailRecipients.map((recipient) => ({
           ...recipient,
           view_details_url: getMeetingDashboardUrlByRole(recipient.role),
         })),

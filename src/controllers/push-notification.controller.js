@@ -82,6 +82,30 @@ exports.updateNotificationPreferences = async (req, res) => {
   }
 };
 
+exports.getNotificationPreferences = async (req, res) => {
+  try {
+    const result = await pushNotificationService.getNotificationPreferences({
+      userId: getRequestUserId(req),
+      sessionId: req.query.session_id,
+    });
+
+    return res.status(constants.OK.code).json({
+      error: false,
+      code: constants.OK.code,
+      message: 'Notification preferences fetched successfully.',
+      data: result,
+    });
+  } catch (err) {
+    console.error('getNotificationPreferences Error:', err);
+    return res.status(err.httpCode || constants.INTERNAL_SERVER_ERROR.code).json({
+      error: true,
+      code: err.httpCode || constants.INTERNAL_SERVER_ERROR.code,
+      message: err.message || constants.INTERNAL_SERVER_ERROR.message,
+      data: null,
+    });
+  }
+};
+
 exports.sendTestPushToMe = async (req, res) => {
   try {
     const result = await pushNotificationService.sendPushToUser({

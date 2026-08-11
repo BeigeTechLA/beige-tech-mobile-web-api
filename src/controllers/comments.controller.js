@@ -1,5 +1,6 @@
 const db = require('../models');
 const emailService = require('../utils/emailService');
+const pushNotificationService = require('../services/push-notification.service');
 
 const DEFAULT_BASE_URL = process.env.INTERNAL_API_BASE_URL || 'http://localhost:5002/v1/comments';
 const INTERNAL_KEY = process.env.EXTERNAL_CHAT_KEY || process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
@@ -326,10 +327,14 @@ const sendRevisionCommentAddedEmailIfNeeded = async ({ comment }) => {
       seenEmails.add(email);
       return true;
     });
-    if (!uniqueRecipients.length) return;
+    const emailRecipients = await pushNotificationService.filterEmailRecipientsByPreference({
+      recipients: uniqueRecipients,
+      topic: 'files',
+    });
+    if (!emailRecipients.length) return;
 
     const emailResult = await emailService.sendRevisionCommentAddedEmail({
-      recipients: uniqueRecipients,
+      recipients: emailRecipients,
       data: {
         shoot_name: projectName,
         project_name: projectName,

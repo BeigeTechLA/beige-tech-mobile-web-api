@@ -3536,3 +3536,64 @@ user_type: 3
     "type": "test"
   }
 }
+
+### get push notification preferences
+GET {{URL}}push-notifications/preferences?session_id=web-session-001
+Authorization: {{CP_TOKEN}}
+Content-Type: application/json
+device_type: web
+user_type_name: client
+user_type: 3
+
+### get all user notification preferences
+GET {{URL}}notification-preferences
+Authorization: {{TOKEN}}
+Content-Type: application/json
+device_type: web
+user_type_name: client
+user_type: 3
+
+### get email notification preferences
+GET {{URL}}notification-preferences/email
+Authorization: {{TOKEN}}
+Content-Type: application/json
+device_type: web
+user_type_name: client
+user_type: 3
+
+### update email notification preferences
+PATCH {{URL}}notification-preferences/email
+Authorization: {{TOKEN}}
+Content-Type: application/json
+device_type: web
+user_type_name: client
+user_type: 3
+
+{
+  "email_enabled": true,
+  "email_topics": {
+    "shoots": true,
+    "payments": false,
+    "messages": true,
+    "meetings": false,
+    "proposals": true,
+    "files": true,
+    "system": true
+  }
+}
+
+### get web app notifications
+GET {{URL}}app-notifications?status=all&page=1&limit=20
+Authorization: {{TOKEN}}
+Content-Type: application/json
+device_type: web
+user_type_name: client
+user_type: 3
+
+### get web app notification counts
+GET {{URL}}app-notifications/counts
+Authorization: {{TOKEN}}
+Content-Type: application/json
+device_type: web
+user_type_name: client
+user_type: 3
