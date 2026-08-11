@@ -2593,3 +2593,19 @@ SET rp.is_active = 0
 WHERE p.module_key = 'admin_finances'
   AND LOWER(REPLACE(ut.user_role, ' ', '_')) = 'admin'
   AND rp.is_active = 1;
+
+-- 11-08-26
+
+CREATE TABLE IF NOT EXISTS file_manager_workspace_access (
+  access_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  external_id VARCHAR(255) NOT NULL,
+  client_user_id BIGINT UNSIGNED NOT NULL,
+  granted_by_user_id BIGINT UNSIGNED DEFAULT NULL,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (access_id),
+  UNIQUE KEY uq_workspace_client_access (external_id, client_user_id),
+  KEY idx_workspace_access_external_id (external_id),
+  KEY idx_workspace_access_client_user (client_user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
