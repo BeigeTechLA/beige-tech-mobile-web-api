@@ -61,6 +61,11 @@ async function assignSalesLeadViaShiftRoundRobin({ lead, clientName, status, sou
   return null;
 }
 
+function isManualSalesActor(req) {
+  const role = String(req.userRole || req.user?.userRole || '').toLowerCase();
+  return Boolean(req.userId) && !['guest', 'client'].includes(role);
+}
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, path.join(__dirname, '../../public/uploads/media'));
@@ -1915,10 +1920,9 @@ exports.createSalesAssistedLead = async (req, res) => {
       }
     });
 
-    // TEMP FLOW: direct book-a-shoot leads stay unassigned for now.
-    // if (!lead.assigned_sales_rep_id) {
-    //   await leadAssignmentService.autoAssignLead(lead.lead_id);
-    // }
+    if (isManualSalesActor(req) && Number(lead.assigned_sales_rep_id || 0) !== Number(req.userId)) {
+      await lead.update({ assigned_sales_rep_id: req.userId });
+    }
 
     res.status(constants.CREATED.code).json({
       success: true,
@@ -7528,12 +7532,15 @@ exports.finalizeCreateDeal = async (req, res) => {
 
     // ASSIGN SALES REP
     let assignedRep = null;
-    const assignedSalesRepId = await resolveAssignedSalesRepId({
-      requestedSalesRepId: sales_rep_id,
-      req,
-      currentAssignedSalesRepId: lead.assigned_sales_rep_id,
-      tx
-    });
+    const manualByAdmin = isManualSalesActor(req);
+    const assignedSalesRepId = manualByAdmin
+      ? req.userId
+      : await resolveAssignedSalesRepId({
+          requestedSalesRepId: sales_rep_id,
+          req,
+          currentAssignedSalesRepId: lead.assigned_sales_rep_id,
+          tx
+        });
 
     if (assignedSalesRepId) {
       assignedRep = await users.findByPk(assignedSalesRepId, {
@@ -7598,7 +7605,7 @@ exports.finalizeCreateDeal = async (req, res) => {
 
     await tx.commit();
 
-    if (leadModel === sales_leads && !assignedRep?.id) {
+    if (leadModel === sales_leads && !assignedRep?.id && !manualByAdmin) {
       assignedRep = await assignSalesLeadViaShiftRoundRobin({
         lead,
         clientName: resolvedName,
