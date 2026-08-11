@@ -68,6 +68,10 @@ router.post('/file-download-url', authenticate, fileManagerView, externalFileMan
 router.post('/folder-download-url', authenticate, fileManagerView, externalFileManagerController.getFolderDownloadUrl);
 router.post('/selected-download', authenticate, fileManagerView, externalFileManagerController.downloadSelectedFilesZip);
 router.post('/delete', authenticate, fileManagerDelete, externalFileManagerController.deleteEntry);
+router.get('/workspace-access', authenticate, fileManagerView, externalFileManagerController.listWorkspaceAccess);
+router.get('/workspace-access/clients', authenticate, fileManagerCreate, externalFileManagerController.searchRegisteredClientsForWorkspaceAccess);
+router.post('/workspace-access', authenticate, fileManagerCreate, externalFileManagerController.grantWorkspaceAccess);
+router.delete('/workspace-access/:accessId', authenticate, fileManagerDelete, externalFileManagerController.revokeWorkspaceAccess);
 router.post('/share', authenticate, fileManagerCreate, externalFileManagerController.createShare);
 router.get('/share', authenticate, fileManagerView, externalFileManagerController.listShares);
 router.get('/share/access-logs', authenticate, fileManagerView, externalFileManagerController.listShareAccessLogs);
