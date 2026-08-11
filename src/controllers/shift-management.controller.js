@@ -162,13 +162,7 @@ exports.activeNow = async (req, res) => {
       return ok(res, shifts.filter((shift) => service.normalizeStoredDays(shift.active_days).includes(day)));
     }
 
-    const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][new Date().getDay()];
-    const now = new Date().toTimeString().slice(0, 8);
-    const shifts = await models.shifts.findAll({
-      where: { status: 'active', is_enabled: true, start_time: { [Op.lte]: now }, end_time: { [Op.gte]: now } },
-      order: [['start_time', 'ASC']]
-    });
-    return ok(res, shifts.filter((shift) => service.normalizeStoredDays(shift.active_days).includes(day)));
+    return ok(res, await service.getActiveShiftsNow());
   } catch (error) { return fail(res, error); }
 };
 
@@ -296,6 +290,10 @@ exports.salesRepLeads = async (req, res) => {
     const intentFilter = req.query.intent ? String(req.query.intent).trim().toLowerCase() : '';
     if (req.query.status) where.lead_status = normalizeLeadStatusFilter(req.query.status);
     if (req.query.booking_status) where.lead_status = normalizeLeadStatusFilter(req.query.booking_status);
+    if (req.query.date) {
+      const range = service.dateRange(req.query.date);
+      where.created_at = { [Op.between]: [range.start, range.end] };
+    }
 
     const include = [{
       model: models.stream_project_booking,
@@ -343,6 +341,10 @@ exports.salesRepQuotes = async (req, res) => {
     const where = { assigned_sales_rep_id: req.params.id };
     if (req.query.status) where.status = normalizeQuoteStatusFilter(req.query.status);
     if (req.query.booking_type) where.booking_type = req.query.booking_type;
+    if (req.query.date) {
+      const range = service.dateRange(req.query.date);
+      where.created_at = { [Op.between]: [range.start, range.end] };
+    }
     const result = await models.sales_quotes.findAndCountAll({
       where,
       attributes: ['sales_quote_id', 'quote_number', 'client_name', 'client_address', 'project_description', 'video_shoot_type', 'total', 'status', 'valid_until', 'booking_type', 'created_at'],

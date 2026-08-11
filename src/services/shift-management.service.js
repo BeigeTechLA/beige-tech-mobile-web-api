@@ -42,6 +42,23 @@ function dayFromDate(date) {
   return VALID_DAYS[value.getDay()];
 }
 
+function getIstDayAndTime(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Kolkata',
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+    hour12: false
+  }).formatToParts(now);
+  const valueByType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return {
+    day: valueByType.weekday,
+    time: `${valueByType.hour}:${valueByType.minute}:${valueByType.second}`
+  };
+}
+
 function normalizeDays(days) {
   if (!Array.isArray(days) || days.length === 0) throw new Error('active_days must be a non-empty array');
   days.forEach((day) => {
@@ -408,10 +425,72 @@ async function updateRoundRobin(shiftId, positions) {
   return getRoundRobin(shiftId);
 }
 
+async function getActiveShiftsNow(now = new Date()) {
+  const { day, time: currentTime } = getIstDayAndTime(now);
+  const shifts = await models.shifts.findAll({
+    where: {
+      status: 'active',
+      is_enabled: true,
+      start_time: { [Op.lte]: currentTime },
+      end_time: { [Op.gte]: currentTime }
+    },
+    order: [['start_time', 'ASC']]
+  });
+  return shifts.filter((shift) => normalizeStoredDays(shift.active_days).includes(day));
+}
+
 async function compareCount(model, whereCurrent, wherePrevious) {
   const [current, previous] = await Promise.all([model.count({ where: whereCurrent }), model.count({ where: wherePrevious })]);
   const change_percent = previous ? Math.round(((current - previous) / previous) * 100) : (current ? 100 : 0);
   return { count: current, change_percent };
+}
+
+const PENDING_ASSIGNMENT_LEAD_STATUSES = [
+  'book_a_shoot_lead_created',
+  'manual_lead_created',
+  'signed_up',
+  'in_progress_self_serve',
+  'in_progress_sales_assisted',
+  'booking_in_progress',
+  'payment_pending',
+  'proposal_sent',
+  'payment_link_sent',
+  'discount_applied'
+];
+
+function activeOrEnabledShiftWhere(extraWhere = {}) {
+  return {
+    [Op.or]: [
+      { is_enabled: true },
+      { status: 'active' }
+    ],
+    ...extraWhere
+  };
+}
+
+async function countPendingLeads(extraWhere = {}) {
+  return models.sales_leads.count({
+    where: {
+      is_active: 1,
+      assigned_sales_rep_id: null,
+      lead_status: { [Op.in]: PENDING_ASSIGNMENT_LEAD_STATUSES },
+      ...extraWhere
+    }
+  });
+}
+
+async function countDistinctActiveSalespeopleForShiftIds(shiftIds, extraWhere = {}) {
+  if (!shiftIds.length) return 0;
+  return models.shift_salespeople.count({
+    where: {
+      shift_id: { [Op.in]: shiftIds },
+      user_status: true,
+      status: 'active',
+      ...extraWhere
+    },
+    distinct: true,
+    col: 'sales_rep_id'
+  });
 }
 
 function percentChange(current, previous) {
@@ -429,14 +508,19 @@ async function countActiveShiftsForDate(date) {
   const range = dateRange(date);
   const day = dayFromDate(date);
   const shifts = await models.shifts.findAll({
-    where: {
-      status: 'active',
-      is_enabled: true,
+    where: activeOrEnabledShiftWhere({
       created_at: { [Op.between]: [range.start, range.end] }
-    },
+    }),
     attributes: ['id', 'active_days']
   });
   return shifts.filter((shift) => normalizeStoredDays(shift.active_days).includes(day)).length;
+}
+
+async function getActiveOrEnabledShifts(extraWhere = {}) {
+  return models.shifts.findAll({
+    where: activeOrEnabledShiftWhere(extraWhere),
+    attributes: ['id', 'status', 'is_enabled', 'created_at']
+  });
 }
 
 async function overview(query = {}) {
@@ -458,10 +542,14 @@ async function overview(query = {}) {
       countActiveShiftsForDate(previousDate(query.date)),
       models.assignment_history.count({ where: { assigned_at: { [Op.between]: [currentRange.start, currentRange.end] } } }),
       models.assignment_history.count({ where: { assigned_at: { [Op.between]: [previousRange.start, previousRange.end] } } }),
-      models.sales_leads.count({ where: { lead_status: { [Op.like]: '%progress%' }, created_at: { [Op.between]: [currentRange.start, currentRange.end] } } }),
-      models.sales_leads.count({ where: { lead_status: { [Op.like]: '%progress%' }, created_at: { [Op.between]: [previousRange.start, previousRange.end] } } }),
-      models.shift_salespeople.count({ where: { status: 'active', user_status: true, created_at: { [Op.between]: [currentRange.start, currentRange.end] } } }),
-      models.shift_salespeople.count({ where: { status: 'active', user_status: true, created_at: { [Op.between]: [previousRange.start, previousRange.end] } } })
+      countPendingLeads({ created_at: { [Op.between]: [currentRange.start, currentRange.end] } }),
+      countPendingLeads({ created_at: { [Op.between]: [previousRange.start, previousRange.end] } }),
+      countDistinctActiveSalespeopleForShiftIds(
+        (await getActiveOrEnabledShifts({ created_at: { [Op.between]: [currentRange.start, currentRange.end] } })).map((shift) => shift.id)
+      ),
+      countDistinctActiveSalespeopleForShiftIds(
+        (await getActiveOrEnabledShifts({ created_at: { [Op.between]: [previousRange.start, previousRange.end] } })).map((shift) => shift.id)
+      )
     ]);
 
     return {
@@ -474,11 +562,37 @@ async function overview(query = {}) {
 
   const ranges = monthRanges();
   const today = new Date().toISOString().slice(0, 10);
+  const activeOrEnabledShifts = await getActiveOrEnabledShifts();
+  const activeOrEnabledShiftIds = activeOrEnabledShifts.map((shift) => shift.id);
+  const [
+    activeShiftsCurrentMonth,
+    activeShiftsPreviousMonth,
+    leadsAssignedToday,
+    pendingLeadsCurrent,
+    pendingLeadsPrevious,
+    activeSalespeopleCount,
+    activeSalespeopleCurrentMonth,
+    activeSalespeoplePreviousMonth
+  ] = await Promise.all([
+    models.shifts.count({ where: activeOrEnabledShiftWhere({ created_at: ranges.current }) }),
+    models.shifts.count({ where: activeOrEnabledShiftWhere({ created_at: ranges.previous }) }),
+    models.assignment_history.count({ where: { assigned_at: { [Op.gte]: `${today} 00:00:00` } } }),
+    countPendingLeads(),
+    countPendingLeads({ created_at: ranges.previous }),
+    countDistinctActiveSalespeopleForShiftIds(activeOrEnabledShiftIds),
+    countDistinctActiveSalespeopleForShiftIds(
+      (await getActiveOrEnabledShifts({ created_at: ranges.current })).map((shift) => shift.id)
+    ),
+    countDistinctActiveSalespeopleForShiftIds(
+      (await getActiveOrEnabledShifts({ created_at: ranges.previous })).map((shift) => shift.id)
+    )
+  ]);
+
   return {
-    active_shifts_count: await compareCount(models.shifts, { status: 'active', created_at: ranges.current }, { status: 'active', created_at: ranges.previous }),
-    leads_assigned_today: { count: await models.assignment_history.count({ where: { assigned_at: { [Op.gte]: `${today} 00:00:00` } } }), change_percent: 0 },
-    pending_leads: await compareCount(models.sales_leads, { lead_status: { [Op.like]: '%progress%' }, created_at: ranges.current }, { lead_status: { [Op.like]: '%progress%' }, created_at: ranges.previous }),
-    active_salespeople_count: await compareCount(models.shift_salespeople, { status: 'active', user_status: true, created_at: ranges.current }, { status: 'active', user_status: true, created_at: ranges.previous })
+    active_shifts_count: { count: activeOrEnabledShifts.length, change_percent: percentChange(activeShiftsCurrentMonth, activeShiftsPreviousMonth) },
+    leads_assigned_today: { count: leadsAssignedToday, change_percent: 0 },
+    pending_leads: { count: pendingLeadsCurrent, change_percent: percentChange(pendingLeadsCurrent, pendingLeadsPrevious) },
+    active_salespeople_count: { count: activeSalespeopleCount, change_percent: percentChange(activeSalespeopleCurrentMonth, activeSalespeoplePreviousMonth) }
   };
 }
 
@@ -496,6 +610,7 @@ module.exports = {
   pageParams,
   dateRange,
   dayFromDate,
+  getIstDayAndTime,
   validateTime,
   normalizeDays,
   createShift,
@@ -511,6 +626,7 @@ module.exports = {
   logAssignment,
   getRoundRobin,
   updateRoundRobin,
+  getActiveShiftsNow,
   overview,
   hourlyLeadVolume,
   hasOverlapForSalesRep,
