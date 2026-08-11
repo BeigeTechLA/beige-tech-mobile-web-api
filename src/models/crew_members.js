@@ -127,6 +127,11 @@ module.exports = function(sequelize, DataTypes) {
       allowNull: false,
       defaultValue: 0
     },
+    is_registration_complete: {
+      type: DataTypes.INTEGER(1),
+      allowNull: false,
+      defaultValue: 0
+    },
     created_from: {
       type: DataTypes.INTEGER,
       allowNull: true

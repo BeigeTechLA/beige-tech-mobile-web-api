@@ -34,6 +34,7 @@
     "express": "^5.1.0",
     "fs": "^0.0.1-security",
     "fs-extra": "^11.3.4",
+    "google-auth-library": "^10.6.2",
     "googleapis": "^169.0.0",
     "json2csv": "^6.0.0-alpha.2",
     "jsonwebtoken": "^9.0.2",

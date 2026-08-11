@@ -5647,7 +5647,7 @@ exports.getCrewMembers = async (req, res) => {
         limit = parseInt(limit);
         const offset = (page - 1) * limit;
 
-        let conditions = [{ is_active: 1 }];
+        let conditions = [{ is_active: 1 }, { is_registration_complete: 1 }];
 
         if (status) {
             if (status === 'pending') conditions.push({ is_crew_verified: 0 });
@@ -5818,6 +5818,9 @@ exports.exportCrewMembersCsv = async (req, res) => {
     const conditions = [
       {
         is_active: 1
+      },
+      {
+        is_registration_complete: 1
       }
     ];
 
@@ -6343,6 +6346,22 @@ exports.verifyCrewMember = async (req, res) => {
       return res.status(400).json({
         error: true,
         message: "Missing or invalid 'crew_member_id' or 'status'.",
+      });
+    }
+
+    const member = await crew_members.findOne({
+      where: { crew_member_id },
+      attributes: ['crew_member_id', 'is_registration_complete']
+    });
+
+    if (!member) {
+      return res.status(404).json({ error: true, message: "Crew member not found." });
+    }
+
+    if (Number(member.is_registration_complete) !== 1) {
+      return res.status(400).json({
+        error: true,
+        message: "Creator onboarding is incomplete. Complete all required fields before approval review.",
       });
     }
 
