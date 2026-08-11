@@ -24,6 +24,11 @@ const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 const otpService = require('../utils/otpService');
 const emailService = require('../utils/emailService');
 const { OAuth2Client } = require('google-auth-library');
+const {
+  buildEmptyOnboardingSummary,
+  getCrewMemberWithOnboardingFiles,
+  syncCreatorRegistrationComplete,
+} = require('../utils/creatorOnboarding');
 
 const getGoogleClientId = () => process.env.GOOGLE_CLIENT_ID || process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '';
 const googleClient = new OAuth2Client(getGoogleClientId());
@@ -433,13 +438,13 @@ async function getCreatorCrewMemberForUser(user) {
 
   let crewMember = await CrewMember.findOne({
     where: { user_id: user.id },
-    attributes: ['crew_member_id', 'is_crew_verified', 'location', 'old_location']
+    attributes: ['crew_member_id', 'is_crew_verified', 'is_registration_complete', 'location', 'old_location']
   });
 
   if (!crewMember && user.email) {
     crewMember = await CrewMember.findOne({
       where: { email: user.email },
-      attributes: ['crew_member_id', 'is_crew_verified', 'location', 'old_location', 'user_id']
+      attributes: ['crew_member_id', 'is_crew_verified', 'is_registration_complete', 'location', 'old_location', 'user_id']
     });
   }
 
@@ -494,12 +499,14 @@ async function buildAuthenticatedUserResponse(user) {
 
   let crew_member_id = null;
   let is_crew_verified = null;
+  let is_registration_complete = null;
   let temp_event_popup = null;
 
   if (user_type_id === 2) {
     const crew = await getCreatorCrewMemberForUser(user);
     crew_member_id = crew ? crew.crew_member_id : null;
     is_crew_verified = crew ? crew.is_crew_verified : null;
+    is_registration_complete = crew ? crew.is_registration_complete : null;
     temp_event_popup = getTempCpEventPopup(crew);
   }
 
@@ -532,6 +539,7 @@ async function buildAuthenticatedUserResponse(user) {
       crew_member_id,
       affiliate_id,
       is_crew_verified,
+      is_registration_complete,
       temp_event_popup,
       permissions_version: user.permissions_version,
       has_password: Boolean(user.password_hash)
@@ -1154,6 +1162,7 @@ exports.login = async (req, res) => {
       // Get crew_member_id if creator
       let crew_member_id = null;
       let is_crew_verified = null;
+      let is_registration_complete = null;
 
       let temp_event_popup = null;
 
@@ -1161,6 +1170,7 @@ exports.login = async (req, res) => {
         const crew = await getCreatorCrewMemberForUser(user);
         crew_member_id = crew ? crew.crew_member_id : null;
         is_crew_verified = crew ? crew.is_crew_verified : null;
+        is_registration_complete = crew ? crew.is_registration_complete : null;
         temp_event_popup = getTempCpEventPopup(crew);
       }
 
@@ -1196,6 +1206,7 @@ exports.login = async (req, res) => {
           crew_member_id,
            affiliate_id,
           is_crew_verified,
+          is_registration_complete,
         temp_event_popup,
           permissions_version: user.permissions_version,
           has_password: Boolean(user.password_hash)
@@ -1298,6 +1309,7 @@ exports.login = async (req, res) => {
       // Get crew_member_id if creator
       let crew_member_id = null;
       let is_crew_verified = null;
+      let is_registration_complete = null;
       let temp_event_popup = null;
 
       if (user.userType && user.userType.user_type_id === 2) {
@@ -1305,6 +1317,7 @@ exports.login = async (req, res) => {
 
         crew_member_id = crew ? crew.crew_member_id : null;
         is_crew_verified = crew ? crew.is_crew_verified : null;
+        is_registration_complete = crew ? crew.is_registration_complete : null;
         temp_event_popup = getTempCpEventPopup(crew);
       }
 
@@ -1337,6 +1350,7 @@ affiliate_id = affiliate ? affiliate.affiliate_id : null;
           crew_member_id,
           affiliate_id,
           is_crew_verified,
+          is_registration_complete,
           temp_event_popup,
           permissions_version: user.permissions_version,
           has_password: Boolean(user.password_hash)
@@ -1545,6 +1559,7 @@ console.log("========================");
           phone_number: normalizedPhone,
           is_active: 1,
           is_draft: 1,
+          is_registration_complete: 0,
           created_from: 1
         };
 
@@ -2003,6 +2018,7 @@ exports.getCurrentUser = async (req, res) => {
         created_at: user.created_at,
         crew_member_id: crewMember?.crew_member_id || null,
         is_crew_verified: crewMember?.is_crew_verified || null,
+        is_registration_complete: crewMember?.is_registration_complete ?? null,
         temp_event_popup: getTempCpEventPopup(crewMember),
         has_password: Boolean(user.password_hash)
       },
@@ -2387,6 +2403,7 @@ exports.registerCrewMemberStep1 = [
             latitude: lat || null,
             longitude: lng || null,
             working_distance,
+            is_registration_complete: 0,
             is_active: 1
           }, { transaction });
 
@@ -2483,6 +2500,7 @@ exports.registerCrewMemberStep1 = [
         latitude: lat || null,
         longitude: lng || null,
         working_distance, 
+        is_registration_complete: 0,
         is_active: 1,
         created_from: 1 // 1 = web
       }, { transaction });
@@ -2764,6 +2782,9 @@ exports.registerCrewMemberStep3 = [
       }
       // ------------------------------------------------
 
+      const updatedMember = await getCrewMemberWithOnboardingFiles({ crew_member_id });
+      const onboardingSummary = await syncCreatorRegistrationComplete(updatedMember);
+
       await updateSheetRow('Crew_data', crew_member_id, {
         'N': JSON.stringify(social_media_links),
       });
@@ -2781,7 +2802,15 @@ exports.registerCrewMemberStep3 = [
         }).catch(err => console.error('CP Welcome Email Error:', err));
       }
 
-      return res.status(200).json({ success: true, message: 'Step 3 completed. Registration finished!' });
+      return res.status(200).json({
+        success: true,
+        message: onboardingSummary.is_registration_complete
+          ? 'Step 3 completed. Registration finished!'
+          : 'Step 3 saved. Please complete the remaining required details.',
+        is_registration_complete: onboardingSummary.is_registration_complete,
+        onboardingMissingDetail: onboardingSummary.onboardingMissingDetail,
+        missing_fields: onboardingSummary.missing_fields
+      });
     } catch (error) {
       console.error('Step 3 Error:', error);
       return res.status(500).json({ success: false, message: 'Server error' });
@@ -3265,6 +3294,7 @@ exports.createInternalCredential = async (req, res) => {
           last_name: lastName,
           email: normalizedEmail,
           phone_number: normalizedPhoneNumber,
+          is_registration_complete: 0,
           is_active: 1,
           created_from: 1
         }, { transaction });
@@ -3357,147 +3387,22 @@ exports.createInternalCredential = async (req, res) => {
 exports.getOnboardingStatus = async (req, res) => {
   try {
     const userId = req.user?.userId;
-    const member = await crew_members.findOne({
-      where: { user_id: userId },
-      include: [{ model: db.crew_member_files, as: 'crew_member_files' }]
-    });
-
-    const safeJsonParse = (value, fallback = []) => {
-      if (!value) return fallback;
-      if (Array.isArray(value)) return value;
-      if (typeof value !== 'string') return fallback;
-      let current = value;
-
-      for (let i = 0; i < 3; i += 1) {
-        if (typeof current !== 'string') return current || fallback;
-
-        const trimmed = current.trim();
-        if (!trimmed) return fallback;
-
-        try {
-          const parsed = JSON.parse(trimmed);
-          if (parsed === current) return parsed || fallback;
-          current = parsed;
-        } catch {
-          return fallback;
-        }
-      }
-
-      return current || fallback;
-    };
-
-    const hasMeaningfulValue = (value) => {
-      if (value === null || value === undefined) return false;
-      if (typeof value === 'string') return value.trim() !== '';
-      if (Array.isArray(value)) return value.length > 0;
-      if (typeof value === 'number') return !Number.isNaN(value);
-      if (typeof value === 'object') return Object.keys(value).length > 0;
-      return Boolean(value);
-    };
+    const member = await getCrewMemberWithOnboardingFiles({ user_id: userId });
 
     if (!member) {
-      return res.json({
-        success: true,
-        onboardingMissingDetail: true,
-        completed_count: 0,
-        total_required: 11,
-        missing_count: 11,
-        progress_percent: 0,
-        missing_fields: [
-          'Phone number',
-          'Location',
-          'Working distance',
-          'Profile photo',
-          'Primary role',
-          'Years of experience',
-          'Hourly rate',
-          'Skills',
-          'Equipment',
-          'Social links',
-          'Featured work',
-        ],
-        required_groups: [
-          { key: 'basics', label: 'Basics', total: 4, completed: 0 },
-          { key: 'professional', label: 'Professional', total: 5, completed: 0 },
-          { key: 'portfolio', label: 'Portfolio', total: 2, completed: 0 },
-        ],
-      });
+      return res.json({ success: true, ...buildEmptyOnboardingSummary() });
     }
 
-    const files = member.crew_member_files || [];
-    const roles = safeJsonParse(member.primary_role, []);
-    const skills = safeJsonParse(member.skills, []);
-    const equipment = safeJsonParse(member.equipment_ownership || member.equipment, []);
-    const socialLinks = safeJsonParse(member.social_media_links, {});
-    const featuredWorkFiles = files.filter((file) =>
-      ['recent_work', 'work_sample'].includes(String(file?.file_type || '')) &&
-      hasMeaningfulValue(file?.file_path)
-    );
-
-    const featuredWorkGroups = Object.values(
-      featuredWorkFiles.reduce((groups, file) => {
-        const title = String(file?.title || '').trim();
-        const tag = String(file?.tag || '').trim().toLowerCase();
-        const key = `${title.toLowerCase()}::${tag || 'untagged'}`;
-
-        if (!hasMeaningfulValue(title)) {
-          return groups;
-        }
-
-        if (!groups[key]) {
-          groups[key] = [];
-        }
-
-        groups[key].push(file);
-        return groups;
-      }, {})
-    );
-
-    const hasValidFeaturedWork = featuredWorkGroups.some((group) => group.length >= 5);
-
-    const fieldChecks = [
-      { label: 'Phone number', complete: hasMeaningfulValue(member.phone_number) },
-      { label: 'Location', complete: hasMeaningfulValue(member.location) },
-      { label: 'Working distance', complete: hasMeaningfulValue(member.working_distance) },
-      { label: 'Profile photo', complete: files.some(f => f.file_type === 'profile_photo' && hasMeaningfulValue(f.file_path)) },
-      { label: 'Primary role', complete: Array.isArray(roles) && roles.length > 0 },
-      { label: 'Years of experience', complete: hasMeaningfulValue(member.years_of_experience) && Number(member.years_of_experience) > 0 },
-      { label: 'Hourly rate', complete: hasMeaningfulValue(member.hourly_rate) && Number(member.hourly_rate) > 0 },
-      { label: 'Skills', complete: Array.isArray(skills) && skills.length > 0 },
-      { label: 'Equipment', complete: Array.isArray(equipment) && equipment.length > 0 },
-      {
-        label: 'Social links',
-        complete: Object.values(socialLinks || {}).some((value) => hasMeaningfulValue(value)),
-      },
-      {
-        label: 'Featured work',
-        complete: hasValidFeaturedWork,
-      },
-    ];
-
-    const completedCount = fieldChecks.filter((field) => field.complete).length;
-    const totalCount = fieldChecks.length;
-    const missingCount = totalCount - completedCount;
-    const progressPercent = totalCount ? Math.round((completedCount / totalCount) * 100) : 0;
-    const missingFields = fieldChecks.filter((field) => !field.complete).map((field) => field.label);
+    const onboardingSummary = await syncCreatorRegistrationComplete(member);
 
     return res.json({
       success: true,
-      onboardingMissingDetail: missingCount > 0,
-      completed_count: completedCount,
-      total_required: totalCount,
-      missing_count: missingCount,
-      progress_percent: progressPercent,
-      missing_fields: missingFields,
-      required_groups: [
-        { key: 'basics', label: 'Basics', total: 4, completed: fieldChecks.slice(0, 4).filter((field) => field.complete).length },
-        { key: 'professional', label: 'Professional', total: 5, completed: fieldChecks.slice(4, 9).filter((field) => field.complete).length },
-        { key: 'portfolio', label: 'Portfolio', total: 2, completed: fieldChecks.slice(9, 11).filter((field) => field.complete).length },
-      ]
+      ...onboardingSummary
     });
   } catch (error) {
     res.status(500).json({
       onboardingMissingDetail: true,
+      is_registration_complete: 0,
       completed_count: 0,
       total_required: 11,
       missing_count: 11,

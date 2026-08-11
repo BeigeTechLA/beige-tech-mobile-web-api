@@ -8,6 +8,10 @@ const { S3UploadFiles } = require('../utils/common.js');
 const { extractCoordinatesFromPayload } = require('../utils/locationHelpers');
 const { sendTaskAssignmentEmail } = require('../utils/emailService');
 const emailService = require("../utils/emailService");
+const {
+  getCrewMemberWithOnboardingFiles,
+  syncCreatorRegistrationComplete,
+} = require('../utils/creatorOnboarding');
 const db = require("../models");
 const { stream_project_booking, crew_members, crew_member_files, tasks, equipment,
   equipment_accessories,
@@ -32,6 +36,10 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
 
 const moment = require('moment');
 
+const syncOnboardingForCrewMemberId = async (crewMemberId) => {
+  const member = await getCrewMemberWithOnboardingFiles({ crew_member_id: crewMemberId });
+  return syncCreatorRegistrationComplete(member);
+};
 
 function toArray(value) {
   if (!value) return [];
@@ -2048,7 +2056,10 @@ exports.editProfile = async (req, res) => {
       ]
     });
 
+    const onboardingSummary = await syncOnboardingForCrewMemberId(crew_member_id);
+
     const responseData = updatedMember.toJSON();
+    responseData.is_registration_complete = onboardingSummary.is_registration_complete;
 
     try {
       responseData.primary_role = normalizeCrewRoleIds(responseData.primary_role);
@@ -2193,6 +2204,8 @@ exports.uploadProfileFiles = [
         await crew_member_files.bulkCreate(records);
       }
 
+      const onboardingSummary = await syncOnboardingForCrewMemberId(crew_member_id);
+
       // await common.logActivity({
       //   crew_member_id,
       //   activity_type: 'profile_file_uploaded',
@@ -2206,7 +2219,10 @@ exports.uploadProfileFiles = [
         error: false,
         code: constants.OK.code,
         message: 'Files uploaded successfully',
-        data: {}
+        data: {
+          is_registration_complete: onboardingSummary.is_registration_complete,
+          onboardingMissingDetail: onboardingSummary.onboardingMissingDetail
+        }
       });
 
     } catch (err) {
@@ -2271,6 +2287,8 @@ exports.uploadCPProfilePhoto = [
         is_active: true
       });
 
+      const onboardingSummary = await syncOnboardingForCrewMemberId(crew_member_id);
+
       // Optional: Log Activity
       /* 
       await common.logActivity({
@@ -2288,7 +2306,9 @@ exports.uploadCPProfilePhoto = [
         code: constants.OK.code,
         message: 'Profile photo updated successfully',
         data: {
-          file_path: newFilePath
+          file_path: newFilePath,
+          is_registration_complete: onboardingSummary.is_registration_complete,
+          onboardingMissingDetail: onboardingSummary.onboardingMissingDetail
         }
       });
 
@@ -2354,13 +2374,17 @@ exports.addPortfolioLinks = async (req, res) => {
 
     // 4. Save to database
     await crew_member_files.bulkCreate(records);
+    const onboardingSummary = await syncOnboardingForCrewMemberId(crew_member_id);
 
     // 5. Success Response (Matching your format)
     return res.status(constants.OK.code).json({
       error: false,
       code: constants.OK.code,
       message: 'Portfolio links added successfully',
-      data: {}
+      data: {
+        is_registration_complete: onboardingSummary.is_registration_complete,
+        onboardingMissingDetail: onboardingSummary.onboardingMissingDetail
+      }
     });
 
   } catch (err) {
@@ -2415,13 +2439,17 @@ exports.editPortfolioLink = async (req, res) => {
       title: title || linkRecord.title,
       tag: platform || linkRecord.tag
     });
+    const onboardingSummary = await syncOnboardingForCrewMemberId(crew_member_id);
 
     // 4. Success Response
     return res.status(constants.OK.code).json({
       error: false,
       code: constants.OK.code,
       message: 'Portfolio link updated successfully',
-      data: {}
+      data: {
+        is_registration_complete: onboardingSummary.is_registration_complete,
+        onboardingMissingDetail: onboardingSummary.onboardingMissingDetail
+      }
     });
 
   } catch (err) {
@@ -2474,12 +2502,17 @@ exports.editFeaturedWorkProject = async (req, res) => {
         is_active: 1
       }
     });
+    const onboardingSummary = await syncOnboardingForCrewMemberId(crew_member_id);
 
     return res.status(constants.OK.code).json({
       error: false,
       code: constants.OK.code,
       message: 'Featured work updated successfully',
-      data: { updated_count: updatedCount }
+      data: {
+        updated_count: updatedCount,
+        is_registration_complete: onboardingSummary.is_registration_complete,
+        onboardingMissingDetail: onboardingSummary.onboardingMissingDetail
+      }
     });
 
   } catch (err) {
@@ -2535,12 +2568,16 @@ exports.deleteProfileFile = async (req, res) => {
     // }
 
     await file.update({ is_active: 0 });
+    const onboardingSummary = await syncOnboardingForCrewMemberId(crew_member_id);
 
     return res.status(constants.OK.code).json({
       error: false,
       code: constants.OK.code,
       message: 'File deleted successfully',
-      data: {}
+      data: {
+        is_registration_complete: onboardingSummary.is_registration_complete,
+        onboardingMissingDetail: onboardingSummary.onboardingMissingDetail
+      }
     });
 
   } catch (err) {
@@ -3795,10 +3832,7 @@ exports.checkVerificationStatus = async (req, res) => {
       });
     }
 
-    const member = await crew_members.findOne({
-      where: { crew_member_id: crew_member_id },
-      attributes: ['crew_member_id', 'is_crew_verified', 'first_name', 'email']
-    });
+    const member = await getCrewMemberWithOnboardingFiles({ crew_member_id });
 
     if (!member) {
       return res.status(constants.NOT_FOUND.code).json({
@@ -3809,12 +3843,16 @@ exports.checkVerificationStatus = async (req, res) => {
       });
     }
 
+    const onboardingSummary = await syncCreatorRegistrationComplete(member);
+
     return res.status(constants.OK.code).json({
       error: false,
       code: constants.OK.code,
       message: "Status fetched successfully",
       data: {
         is_crew_verified: member.is_crew_verified,
+        is_registration_complete: onboardingSummary.is_registration_complete,
+        onboardingMissingDetail: onboardingSummary.onboardingMissingDetail,
         name: member.name,
         email: member.email
       },
