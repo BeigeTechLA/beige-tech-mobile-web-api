@@ -26,6 +26,7 @@ let faceEmbeddingsTableReadyPromise = null;
 let fileShareTableReadyPromise = null;
 let fileShareOtpTableReadyPromise = null;
 let fileShareAccessLogsTableReadyPromise = null;
+let workspaceAccessTableReadyPromise = null;
 
 const buildHeaders = () => ({
   'Content-Type': 'application/json',
@@ -1465,6 +1466,28 @@ const ensureFileShareOtpTable = async () => {
   await fileShareOtpTableReadyPromise;
 };
 
+const ensureWorkspaceAccessTable = async () => {
+  if (!workspaceAccessTableReadyPromise) {
+    workspaceAccessTableReadyPromise = db.sequelize.query(`
+      CREATE TABLE IF NOT EXISTS file_manager_workspace_access (
+        access_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        external_id VARCHAR(255) NOT NULL,
+        client_user_id BIGINT UNSIGNED NOT NULL,
+        granted_by_user_id BIGINT UNSIGNED DEFAULT NULL,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (access_id),
+        UNIQUE KEY uq_workspace_client_access (external_id, client_user_id),
+        KEY idx_workspace_access_external_id (external_id),
+        KEY idx_workspace_access_client_user (client_user_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+  }
+
+  await workspaceAccessTableReadyPromise;
+};
+
 const generateShareToken = () => `shr_${crypto.randomBytes(24).toString('hex')}`;
 const getShareAccessSecret = () => process.env.FILE_SHARE_ACCESS_SECRET || process.env.JWT_SECRET || 'beige-share-access-secret';
 
@@ -2518,11 +2541,137 @@ const ensureClientWorkspaceAccess = async (req, bookingId) => {
     attributes: ['stream_project_booking_id'],
   });
 
-  if (!booking) {
+  if (booking) return;
+
+  await ensureWorkspaceAccessTable();
+  const [accessRows] = await db.sequelize.query(
+    `
+      SELECT access_id
+      FROM file_manager_workspace_access
+      WHERE external_id = ?
+        AND client_user_id = ?
+        AND is_active = 1
+      LIMIT 1
+    `,
+    { replacements: [String(normalizedBookingId), userId] }
+  );
+
+  if (!Array.isArray(accessRows) || !accessRows[0]) {
     const error = new Error('You do not have access to this project file manager');
     error.status = 403;
     throw error;
   }
+};
+
+const normalizeWorkspaceExternalId = (value) => {
+  const externalId = String(value || '').trim();
+  if (!externalId) {
+    const error = new Error('externalId is required');
+    error.status = 400;
+    throw error;
+  }
+  if (isCommonEventExternalId(externalId)) {
+    const error = new Error('Client dashboard access is only available for shoot folders');
+    error.status = 400;
+    throw error;
+  }
+  return externalId;
+};
+
+const findClientForWorkspaceAccess = async ({ clientUserId, clientId, email }) => {
+  const normalizedEmail = normalizeEmailAddress(email);
+  const parsedClientUserId = Number(clientUserId);
+  const parsedClientId = Number(clientId);
+
+  const replacements = {};
+  const whereParts = [];
+
+  if (parsedClientUserId) {
+    whereParts.push('u.id = :clientUserId');
+    replacements.clientUserId = parsedClientUserId;
+  }
+  if (parsedClientId) {
+    whereParts.push('c.client_id = :clientId');
+    replacements.clientId = parsedClientId;
+  }
+  if (normalizedEmail) {
+    whereParts.push('(LOWER(u.email) = :email OR LOWER(c.email) = :email)');
+    replacements.email = normalizedEmail;
+  }
+
+  if (!whereParts.length) {
+    const error = new Error('Provide a client ID, user ID, or email');
+    error.status = 400;
+    throw error;
+  }
+
+  const [rows] = await db.sequelize.query(
+    `
+      SELECT
+        u.id AS user_id,
+        u.name AS user_name,
+        u.email AS user_email,
+        u.is_active AS user_is_active,
+        c.client_id,
+        c.name AS client_name,
+        c.email AS client_email,
+        c.is_active AS client_is_active
+      FROM users u
+      LEFT JOIN clients c ON c.user_id = u.id
+      WHERE (${whereParts.join(' OR ')})
+        AND u.is_active = 1
+      ORDER BY c.client_id IS NULL ASC, c.client_id ASC, u.id ASC
+      LIMIT 1
+    `,
+    { replacements }
+  );
+
+  const row = Array.isArray(rows) ? rows[0] : null;
+  if (!row) {
+    const error = new Error('Client user not found');
+    error.status = 404;
+    throw error;
+  }
+  if (!row.client_id) {
+    const error = new Error('A matching client profile was not found for this user');
+    error.status = 404;
+    throw error;
+  }
+  if (row.client_id && Number(row.client_is_active) !== 1) {
+    const error = new Error('This client is not active');
+    error.status = 400;
+    throw error;
+  }
+
+  return row;
+};
+
+const getWorkspaceOwnerRow = async (externalId) => {
+  const numericExternalId = Number(externalId);
+  if (!numericExternalId) return null;
+
+  const [rows] = await db.sequelize.query(
+    `
+      SELECT
+        b.stream_project_booking_id,
+        b.user_id,
+        b.guest_email,
+        b.project_name,
+        u.name AS user_name,
+        u.email AS user_email,
+        c.client_id,
+        c.name AS client_name,
+        c.email AS client_email
+      FROM stream_project_booking b
+      LEFT JOIN users u ON u.id = b.user_id
+      LEFT JOIN clients c ON c.user_id = b.user_id
+      WHERE b.stream_project_booking_id = ?
+      LIMIT 1
+    `,
+    { replacements: [numericExternalId] }
+  );
+
+  return Array.isArray(rows) ? rows[0] : null;
 };
 
 const ensureClientFileAccess = async (req, filepath) => {
@@ -2578,9 +2727,26 @@ const getClientProjectIds = async (req) => {
     raw: true,
   });
 
-  return bookings
+  await ensureWorkspaceAccessTable();
+  const [accessRows] = await db.sequelize.query(
+    `
+      SELECT external_id
+      FROM file_manager_workspace_access
+      WHERE client_user_id = ?
+        AND is_active = 1
+    `,
+    { replacements: [userId] }
+  );
+
+  const ownedIds = bookings
     .map((booking) => Number(booking.stream_project_booking_id))
     .filter(Boolean);
+
+  const grantedIds = (Array.isArray(accessRows) ? accessRows : [])
+    .map((row) => Number(row.external_id))
+    .filter(Boolean);
+
+  return [...new Set([...ownedIds, ...grantedIds])];
 };
 
 const syncWorkspaceForExistingBookingId = async (bookingId) => {
@@ -4576,6 +4742,240 @@ const resolveSharedUploadFilepath = async (share, requestedPhase, requestedPath,
     [workspaceRootPath, phaseFolder, pathToUse, safeFileName].filter(Boolean).join('/')
   );
   return validateSharedResolvedUploadFilepath(share, filepath, phaseToUse, pathToUse);
+};
+
+exports.listWorkspaceAccess = async (req, res) => {
+  try {
+    const externalId = normalizeWorkspaceExternalId(req.query.externalId || req.params.externalId);
+    await ensureWorkspaceAccessTable();
+
+    const owner = await getWorkspaceOwnerRow(externalId);
+    const [rows] = await db.sequelize.query(
+      `
+        SELECT
+          a.access_id,
+          a.external_id,
+          a.client_user_id,
+          a.granted_by_user_id,
+          a.created_at,
+          a.updated_at,
+          u.name AS user_name,
+          u.email AS user_email,
+          c.client_id,
+          c.name AS client_name,
+          c.email AS client_email
+        FROM file_manager_workspace_access a
+        INNER JOIN users u ON u.id = a.client_user_id
+        LEFT JOIN clients c ON c.user_id = a.client_user_id
+        WHERE a.external_id = ?
+          AND a.is_active = 1
+        ORDER BY a.created_at DESC
+      `,
+      { replacements: [externalId] }
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        externalId,
+        owner: owner
+          ? {
+              userId: owner.user_id,
+              clientId: owner.client_id,
+              name: owner.client_name || owner.user_name || null,
+              email: owner.client_email || owner.user_email || owner.guest_email || null,
+              projectName: owner.project_name || null,
+            }
+          : null,
+        access: (Array.isArray(rows) ? rows : []).map((row) => ({
+          accessId: row.access_id,
+          externalId: row.external_id,
+          userId: row.client_user_id,
+          clientId: row.client_id,
+          name: row.client_name || row.user_name || null,
+          email: row.client_email || row.user_email || null,
+          grantedByUserId: row.granted_by_user_id,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        })),
+      },
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to load workspace access',
+    });
+  }
+};
+
+exports.searchRegisteredClientsForWorkspaceAccess = async (req, res) => {
+  try {
+    const search = String(req.query.search || '').trim().toLowerCase();
+    const limit = Math.min(50, Math.max(1, Number.parseInt(String(req.query.limit || '20'), 10) || 20));
+    const replacements = {};
+    const whereParts = [
+      'c.is_active = 1',
+      'c.user_id IS NOT NULL',
+      'u.id IS NOT NULL',
+      'u.is_active = 1',
+    ];
+
+    if (search) {
+      whereParts.push(`
+        (
+          LOWER(c.name) LIKE :searchLike
+          OR LOWER(c.email) LIKE :searchLike
+          OR c.phone_number LIKE :searchLike
+          OR CAST(c.client_id AS CHAR) LIKE :searchLike
+          OR LOWER(u.name) LIKE :searchLike
+          OR LOWER(u.email) LIKE :searchLike
+        )
+      `);
+      replacements.searchLike = `%${search}%`;
+    }
+
+    const [rows] = await db.sequelize.query(
+      `
+        SELECT
+          c.client_id,
+          c.user_id,
+          c.name AS client_name,
+          c.email AS client_email,
+          c.phone_number,
+          u.name AS user_name,
+          u.email AS user_email
+        FROM clients c
+        INNER JOIN users u ON u.id = c.user_id
+        WHERE ${whereParts.join(' AND ')}
+        ORDER BY c.created_at DESC
+        LIMIT ${limit}
+      `,
+      { replacements }
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: (Array.isArray(rows) ? rows : []).map((row) => ({
+        clientId: row.client_id,
+        userId: row.user_id,
+        name: row.client_name || row.user_name || null,
+        email: row.client_email || row.user_email || null,
+        phoneNumber: row.phone_number || null,
+      })),
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to search registered clients',
+    });
+  }
+};
+
+exports.grantWorkspaceAccess = async (req, res) => {
+  try {
+    const externalId = normalizeWorkspaceExternalId(req.body.externalId || req.params.externalId);
+    const owner = await getWorkspaceOwnerRow(externalId);
+    if (!owner) {
+      return res.status(404).json({ success: false, message: 'Workspace project not found' });
+    }
+
+    const client = await findClientForWorkspaceAccess({
+      clientUserId: req.body.clientUserId || req.body.userId,
+      clientId: req.body.clientId,
+      email: req.body.email,
+    });
+
+    if (owner.user_id && Number(owner.user_id) === Number(client.user_id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'This client already owns the workspace',
+      });
+    }
+
+    await ensureWorkspaceAccessTable();
+    const grantedByUserId = getRequestUserId(req) || null;
+    await db.sequelize.query(
+      `
+        INSERT INTO file_manager_workspace_access
+          (external_id, client_user_id, granted_by_user_id, is_active)
+        VALUES
+          (:externalId, :clientUserId, :grantedByUserId, 1)
+        ON DUPLICATE KEY UPDATE
+          is_active = 1,
+          granted_by_user_id = VALUES(granted_by_user_id),
+          updated_at = NOW()
+      `,
+      {
+        replacements: {
+          externalId,
+          clientUserId: client.user_id,
+          grantedByUserId,
+        },
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'Client access granted',
+      data: {
+        externalId,
+        userId: client.user_id,
+        clientId: client.client_id,
+        name: client.client_name || client.user_name || null,
+        email: client.client_email || client.user_email || null,
+      },
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to grant workspace access',
+    });
+  }
+};
+
+exports.revokeWorkspaceAccess = async (req, res) => {
+  try {
+    await ensureWorkspaceAccessTable();
+    const body = req.body || {};
+    const accessId = Number(req.params.accessId || body.accessId);
+    const externalId = body.externalId ? normalizeWorkspaceExternalId(body.externalId) : null;
+
+    if (!accessId && !externalId) {
+      return res.status(400).json({ success: false, message: 'accessId or externalId is required' });
+    }
+
+    if (accessId) {
+      await db.sequelize.query(
+        `UPDATE file_manager_workspace_access SET is_active = 0, updated_at = NOW() WHERE access_id = ?`,
+        { replacements: [accessId] }
+      );
+    } else {
+      const client = await findClientForWorkspaceAccess({
+        clientUserId: body.clientUserId || body.userId,
+        clientId: body.clientId,
+        email: body.email,
+      });
+      await db.sequelize.query(
+        `
+          UPDATE file_manager_workspace_access
+          SET is_active = 0, updated_at = NOW()
+          WHERE external_id = ?
+            AND client_user_id = ?
+        `,
+        { replacements: [externalId, client.user_id] }
+      );
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Client access removed',
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to remove workspace access',
+    });
+  }
 };
 
 exports.createShare = async (req, res) => {
