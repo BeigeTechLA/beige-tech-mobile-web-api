@@ -46,6 +46,7 @@ const bookingPaymentSummaryService = require('../services/booking-payment-summar
 const quoteService = require('../services/sales-quote.service');
 const bookingPricingService = require('../services/booking-pricing.service');
 const { getStudioPricingSnapshot, isStudioLineItem } = require('../utils/studio-pricing');
+const userExportService = require('../services/user-export.service');
 // const NodeGeocoder = require('node-geocoder');
 const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
 const EXTERNAL_MEETINGS_API_BASE_URL = process.env.EXTERNAL_MEETINGS_API_BASE_URL || 'http://localhost:5002/v1/external-meetings';
@@ -15428,6 +15429,77 @@ exports.getUsersWithRoles = async (req, res) => {
         process.env.NODE_ENV === 'development'
           ? error.message
           : undefined
+    });
+  }
+};
+
+exports.exportUsersExcel = async (req, res) => {
+  try {
+    const users = await userExportService.fetchUsersForExport(req.query);
+    const buffer = await userExportService.generateUserExcel(
+      users,
+      userExportService.ALL_USERS_COLUMNS
+    );
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="all-users-export.xlsx"'
+    );
+
+    return res.status(200).send(Buffer.from(buffer));
+  } catch (error) {
+    console.error('Export Users Excel Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while exporting users',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.exportRoleUsersExcel = async (req, res) => {
+  try {
+    const roleIdentifier = req.params.role_id;
+    const { role, users } = await userExportService.fetchRoleUsersForExport(
+      roleIdentifier,
+      req.query
+    );
+
+    if (!role) {
+      return res.status(404).json({
+        success: false,
+        message: 'Role not found'
+      });
+    }
+
+    const buffer = await userExportService.generateUserExcel(
+      users,
+      userExportService.ROLE_USERS_COLUMNS
+    );
+    const roleName = userExportService.sanitizeFilenamePart(role.user_role);
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${roleName}-users-export.xlsx"`
+    );
+
+    return res.status(200).send(Buffer.from(buffer));
+  } catch (error) {
+    console.error('Export Role Users Excel Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while exporting role users',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
