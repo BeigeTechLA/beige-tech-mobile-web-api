@@ -3003,7 +3003,7 @@ Authorization: {{TOKEN}}
 }
 
 ### Admin - Studio Dashboard
-GET {{URL}}admin/studios/dashboard?month=2026-05 HTTP/1.1
+GET {{URL}}admin/studios/dashboard?month=2026-07 HTTP/1.1
 Authorization: {{TOKEN}}
 
 ###

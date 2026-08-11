@@ -987,12 +987,77 @@ exports.getStudioDashboard = async (req, res) => {
           model: studios,
           as: 'studio',
           required: false,
-          attributes: ['studio_id', 'studio_name', 'hourly_rate'],
+          attributes: ['studio_id', 'studio_name', 'slug', 'hourly_rate'],
         },
       ],
     });
 
     const plainBookings = bookings.map((booking) => booking.get({ plain: true }));
+    const bookingStudioIds = [
+      ...new Set(
+        plainBookings
+          .map((booking) => String(booking.studio_id || '').trim())
+          .filter(Boolean)
+      ),
+    ];
+    const numericStudioIds = bookingStudioIds
+      .filter((id) => /^\d+$/.test(id))
+      .map(Number);
+
+    const studioLookupRows = bookingStudioIds.length
+      ? await studios.findAll({
+          where: {
+            [db.Sequelize.Op.or]: [
+              { slug: { [db.Sequelize.Op.in]: bookingStudioIds } },
+              ...(numericStudioIds.length
+                ? [{ studio_id: { [db.Sequelize.Op.in]: numericStudioIds } }]
+                : []),
+            ],
+          },
+          attributes: ['studio_id', 'studio_name', 'slug'],
+        })
+      : [];
+
+    const studioBySlug = new Map();
+    const studioById = new Map();
+
+    studioLookupRows.forEach((studio) => {
+      const plainStudio = studio.get({ plain: true });
+
+      if (plainStudio.slug) {
+        studioBySlug.set(String(plainStudio.slug), plainStudio);
+      }
+
+      if (plainStudio.studio_id !== null && plainStudio.studio_id !== undefined) {
+        studioById.set(String(plainStudio.studio_id), plainStudio);
+      }
+    });
+
+    const getMetadata = (booking) => {
+      if (!booking?.metadata) return {};
+      if (typeof booking.metadata === 'object') return booking.metadata;
+
+      try {
+        return JSON.parse(booking.metadata);
+      } catch (error) {
+        return {};
+      }
+    };
+
+    const getStudioName = (booking) => {
+      const studioKey = String(booking.studio_id || '').trim();
+      const metadata = getMetadata(booking);
+
+      return (
+        booking.studio?.studio_name ||
+        studioBySlug.get(studioKey)?.studio_name ||
+        studioById.get(studioKey)?.studio_name ||
+        metadata.name ||
+        metadata.studio_name ||
+        metadata.studioName ||
+        null
+      );
+    };
 
     const money = (value) => Number(value || 0);
 
@@ -1042,7 +1107,7 @@ exports.getStudioDashboard = async (req, res) => {
     const formatBooking = (booking) => ({
       studio_booking_id: booking.studio_booking_id,
       studio_id: booking.studio_id,
-      studio_name: booking.studio?.studio_name || null,
+      studio_name: getStudioName(booking),
       stream_project_booking_id: booking.stream_project_booking_id,
       user_id: booking.user_id,
       booking_date: booking.booking_date,
@@ -1074,7 +1139,7 @@ exports.getStudioDashboard = async (req, res) => {
     const earningsLedger = plainBookings.map((booking) => ({
       studio_booking_id: booking.studio_booking_id,
       date: booking.booking_date,
-      studio_name: booking.studio?.studio_name || null,
+      studio_name: getStudioName(booking),
       hours: booking.duration_hours,
       base_revenue: booking.base_amount,
       overtime: booking.overtime_amount,
