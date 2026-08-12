@@ -3875,11 +3875,6 @@ async function getCachedExternalWorkspaceFiles(cache, bookingId, phase) {
 async function processSalesLeadForList(lead, context = {}) {
   try {
     const startedAt = Date.now();
-    console.log("[getLeads] Processing lead:", {
-      request_id: context.requestId,
-      lead_id: lead?.lead_id
-    });
-
     const leadJson = lead?.toJSON ? lead.toJSON() : {};
 
     const pricingData = await calculateLeadPricing(lead?.booking).catch((err) => {
