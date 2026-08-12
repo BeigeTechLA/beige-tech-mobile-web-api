@@ -14,6 +14,7 @@ const accountCreditService = require('../services/account-credit.service');
 const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
 const quoteService = require('../services/sales-quote.service');
 const bookingPricingService = require('../services/booking-pricing.service');
+const pushNotificationService = require('../services/push-notification.service');
 const emailService = require('../utils/emailService');
 const { sendCPNewBookingRequestEmail } = require('../utils/emailService');
 const { resolveEventDateAndStartTime, normalizeTime, splitDateTime } = require('../utils/timezone');
@@ -610,7 +611,7 @@ async function notifyAssignedCreators(
 
     const creators = await crew_members.findAll({
       where: { crew_member_id: uniqueIds, is_active: 1 },
-      attributes: ['crew_member_id', 'first_name', 'last_name', 'email']
+      attributes: ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email']
     });
 
     const dashboardLink =
@@ -618,9 +619,20 @@ async function notifyAssignedCreators(
       process.env.FRONTEND_URL ||
       'https://beige.app/';
 
-    await Promise.allSettled(
-      creators
+    const emailCreators = await pushNotificationService.filterEmailRecipientsByPreference({
+      recipients: creators
         .filter(c => c.email)
+        .map(c => ({
+          id: c.user_id || null,
+          email: c.email,
+          first_name: c.first_name,
+          last_name: c.last_name
+        })),
+      topic: 'shoots'
+    });
+
+    await Promise.allSettled(
+      emailCreators
         .map(c =>
           sendCPNewBookingRequestEmail({
             to_email: c.email,

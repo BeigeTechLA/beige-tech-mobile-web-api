@@ -10,6 +10,7 @@ const { resolveEventDateAndStartTime, normalizeTime, splitDateTime } = require('
 const accountCreditService = require('../services/account-credit.service');
 const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
 const affiliateController = require('./affiliate.controller');
+const pushNotificationService = require('../services/push-notification.service');
 const REFERRAL_DISCOUNT_PERCENT = 10;
 
 const parseQuoteActivityMetadata = (value) => {
@@ -240,7 +241,7 @@ const notifyAssignedCreators = async (
 
     const creators = await crew_members.findAll({
       where: { crew_member_id: uniqueIds },
-      attributes: ['crew_member_id', 'first_name', 'last_name', 'email']
+      attributes: ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email']
     });
 
     const dashboardLink =
@@ -248,9 +249,20 @@ const notifyAssignedCreators = async (
       process.env.FRONTEND_URL ||
       'https://beige.app/';
 
-    await Promise.allSettled(
-      creators
+    const emailCreators = await pushNotificationService.filterEmailRecipientsByPreference({
+      recipients: creators
         .filter((c) => c.email)
+        .map((c) => ({
+          id: c.user_id || null,
+          email: c.email,
+          first_name: c.first_name,
+          last_name: c.last_name
+        })),
+      topic: 'shoots'
+    });
+
+    await Promise.allSettled(
+      emailCreators
         .map((c) =>
           sendCPNewBookingRequestEmail({
             to_email: c.email,

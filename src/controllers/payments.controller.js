@@ -14,6 +14,7 @@ const REFERRAL_DISCOUNT_PERCENT = 10;
 const emailService = require('../utils/emailService');
 const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
 const appNotificationService = require('../services/app-notification.service');
+const pushNotificationService = require('../services/push-notification.service');
 
 const PAYMENT_SOURCE = {
   BOOKING_CHECKOUT: 'booking_checkout',
@@ -1453,7 +1454,15 @@ async function processStripePaidWebhookEvent(event, req = {}) {
     const guestEmail = booking.guest_email || user?.email || lead?.guest_email || '';
     const clientName = user?.name || lead?.client_name || '';
 
-    if (guestEmail) {
+    const shouldSendClientShootEmail = guestEmail
+      ? await pushNotificationService.isEmailAllowedForUser({
+        userId: booking.user_id || null,
+        email: guestEmail,
+        topic: 'shoots'
+      })
+      : false;
+
+    if (guestEmail && shouldSendClientShootEmail) {
       try {
         await sendBookingConfirmationEmail({
           booking,
@@ -1892,8 +1901,16 @@ async function notifyAssignedCreatorsAfterPayment(bookingId) {
 
     if (!creators.length) return;
 
+    const emailCreators = await pushNotificationService.filterEmailRecipientsByPreference({
+      recipients: creators.map((creator) => ({
+        ...creator,
+        email: creator.email
+      })),
+      topic: 'shoots'
+    });
+
     await Promise.allSettled(
-      creators.map((creator) =>
+      emailCreators.map((creator) =>
         emailService.sendCPNewBookingRequestEmail({
           to_email: creator.email,
           user_name: [creator.first_name, creator.last_name].filter(Boolean).join(' ') || 'there',
@@ -2014,6 +2031,13 @@ const sendBookingConfirmationForBooking = async ({
       console.warn(`Skipping booking confirmation email for ${bookingId}: no recipient email found`);
       return;
     }
+
+    const shouldSendClientShootEmail = await pushNotificationService.isEmailAllowedForUser({
+      userId: booking.user_id || null,
+      email: toEmail,
+      topic: 'shoots'
+    });
+    if (!shouldSendClientShootEmail) return;
 
     let clientName = booking.user?.name || '';
     if (!clientName) {
