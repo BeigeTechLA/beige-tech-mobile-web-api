@@ -2,7 +2,7 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI4MSwidXNlclJvbGUiOiJDcmVhdGl2ZSIsInBlcm1pc3Npb25zVmVyc2lvbiI6MSwidXNlclR5cGVJZCI6MiwiaWF0IjoxNzgzNTc0MzEwLCJleHAiOjE3ODQxNzkxMTB9.HHegOrbgsd0P3IJJK3U8AX8o-7Gtincjv0Q5BL4jOWc
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjEsInVzZXJUeXBlSWQiOjEsImlhdCI6MTc4NjUxNTcxMywiZXhwIjoxNzg3MTIwNTEzfQ.qtERLkuyfR145p6jmXnP1AgnZd6OE0xyBNlPrGstwB0
 
 @TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI4MSwidXNlclJvbGUiOiJDcmVhdGl2ZSIsInBlcm1pc3Npb25zVmVyc2lvbiI6MSwidXNlclR5cGVJZCI6MiwiaWF0IjoxNzgzNDIzNzc0LCJleHAiOjE3ODQwMjg1NzR9.vRt-jV5uaMM8KiBW0kDg4NbK-xEVCbuXJnIJQiRR8Sk
 
@@ -3556,3 +3556,100 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZ
 ###
 GET {{URL}}admin/users/export HTTP/1.1
 Content-Type: application/json
+
+
+### ============================================================
+### Admin Profile APIs (Self) — 12 August 2026
+### Endpoints: GET /admin/profile/:id, PUT /admin/profile/:id,
+### POST /admin/profile/change-password
+### Change ADMIN_SELF_ID to your logged-in admin's user_id
+### ============================================================
+@ADMIN_SELF_ID = 1
+
+###
+# Admin Profile: get own profile (name, phone_number)
+GET {{URL}}admin/profile/{{ADMIN_SELF_ID}} HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+###
+# Admin Profile: update name and phone_number
+PUT {{URL}}admin/profile/1 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "name": "Harsh Panchal",
+  "phone_number": "9638874520"
+}
+
+###
+# Admin Profile: update with duplicate phone_number (should fail)
+PUT {{URL}}admin/profile/{{ADMIN_SELF_ID}} HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "name": "Harsh Panchal",
+  "phone_number": "9638874520"
+}
+
+###
+# Admin Profile: change password - success case
+POST {{URL}}admin/profile/change-password HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "currentPassword": "NewPass@2026",
+  "newPassword": "password123",
+  "confirmPassword": "password123"
+}
+
+###
+# Admin Profile: change password - wrong current password (should fail)
+POST {{URL}}admin/profile/change-password HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "currentPassword": "wrongPassword",
+  "newPassword": "NewPass@2026",
+  "confirmPassword": "NewPass@2026"
+}
+
+###
+# Admin Profile: change password - mismatch new/confirm (should fail)
+POST {{URL}}admin/profile/change-password HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "currentPassword": "password123",
+  "newPassword": "NewPass@2026",
+  "confirmPassword": "DifferentPass@2026"
+}
+
+###
+# Admin Profile: get profile without token (should 401)
+GET {{URL}}admin/profile/{{ADMIN_SELF_ID}} HTTP/1.1
+Content-Type: application/json
+
+###
+POST {{URL}}auth/login HTTP/1.1
+Content-Type: application/json
+
+{
+  "email": "harsh.panchal@gmail.com",
+  "password": "NewPass@2026"
+}
+
+###
+PUT {{URL}}admin/profile/1 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "name": "Harsh Panchal",
+  "phone_number": "9874562320"
+}
