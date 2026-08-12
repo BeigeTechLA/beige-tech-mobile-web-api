@@ -2620,17 +2620,14 @@ exports.registerCrewMemberStep2 = async (req, res) => {
     member.equipment_ownership = JSON.stringify(equipment_ownership);
     await member.save();
 
-    try {
-      await updateSheetRow('Crew_data', crew_member_id, {
-        'I': primaryRoleNames.join(', '),
-        'J': years_of_experience,
-        'K': hourly_rate,
-        'L': bio,
-        'M': skillNameList.join(', ')
-      });
-    } catch (sheetError) {
-      console.error('Step 2 Sheet Sync Warning:', sheetError.message);
-    }
+    // Google Sheets sync disabled for now.
+    // await updateSheetRow('Crew_data', crew_member_id, {
+    //   'I': primaryRoleNames.join(', '),
+    //   'J': years_of_experience,
+    //   'K': hourly_rate,
+    //   'L': bio,
+    //   'M': skillNameList.join(', ')
+    // });
 
     return res.status(200).json({ success: true, message: 'Step 2 completed' });
   } catch (error) {
@@ -2669,13 +2666,23 @@ exports.registerCrewMemberStep3 = [
       const member = await crew_members.findOne({ where: { crew_member_id } });
       if (!member) return res.status(404).json({ success: false, message: 'Member not found' });
 
-      // Update DB (Added a small check to fix the "Empty Query" crash on resubmission)
-      member.availability = JSON.stringify(availability);
-      member.certifications = JSON.stringify(certifications);
-      member.social_media_links = JSON.stringify(social_media_links);
-      
-      if (member.changed()) {
-        await member.save();
+      const serializeValue = (value, fallback = null) => {
+        if (value === undefined || value === null || value === '') return fallback;
+        if (typeof value === 'string') return value;
+        return JSON.stringify(value);
+      };
+
+      const updatePayload = {};
+      const availabilityValue = serializeValue(availability);
+      const certificationsValue = serializeValue(certifications);
+      const socialMediaLinksValue = serializeValue(social_media_links, '{}');
+
+      if (availabilityValue !== null) updatePayload.availability = availabilityValue;
+      if (certificationsValue !== null) updatePayload.certifications = certificationsValue;
+      if (socialMediaLinksValue !== null) updatePayload.social_media_links = socialMediaLinksValue;
+
+      if (Object.keys(updatePayload).length > 0) {
+        await member.update(updatePayload);
       }
 
       // --- NEW: Handle both Files and Links together ---
@@ -2789,13 +2796,10 @@ exports.registerCrewMemberStep3 = [
       const updatedMember = await getCrewMemberWithOnboardingFiles({ crew_member_id });
       const onboardingSummary = await syncCreatorRegistrationComplete(updatedMember);
 
-      try {
-        await updateSheetRow('Crew_data', crew_member_id, {
-          'N': JSON.stringify(social_media_links),
-        });
-      } catch (sheetError) {
-        console.error('Step 3 Sheet Sync Warning:', sheetError.message);
-      }
+      // Google Sheets sync disabled for now.
+      // await updateSheetRow('Crew_data', crew_member_id, {
+      //   'N': JSON.stringify(social_media_links),
+      // });
 
       // SEND WELCOME EMAIL
       const user = await User.findOne({
