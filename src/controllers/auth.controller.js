@@ -3413,8 +3413,21 @@ exports.createInternalCredential = async (req, res) => {
 };
 exports.getOnboardingStatus = async (req, res) => {
   try {
-    const userId = req.user?.userId;
-    const member = await getCrewMemberWithOnboardingFiles({ user_id: userId });
+    const userId = req.user?.userId || req.userId;
+    let member = userId
+      ? await getCrewMemberWithOnboardingFiles({ user_id: userId })
+      : null;
+
+    if (!member && userId) {
+      const user = await User.findOne({
+        where: { id: userId },
+        attributes: ['email']
+      });
+
+      if (user?.email) {
+        member = await getCrewMemberWithOnboardingFiles({ email: user.email });
+      }
+    }
 
     if (!member) {
       return res.json({ success: true, ...buildEmptyOnboardingSummary() });

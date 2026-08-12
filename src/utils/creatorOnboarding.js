@@ -66,12 +66,6 @@ const getFiles = (member) => member?.crew_member_files || [];
 
 const getFileType = (file) => String(file?.file_type || '').trim().toLowerCase();
 
-const countActiveFilesByTypes = (files, types) =>
-  files.filter((file) => {
-    const fileType = getFileType(file);
-    return types.includes(fileType) && hasMeaningfulValue(file?.file_path);
-  }).length;
-
 const buildCreatorOnboardingSummary = (member) => {
   if (!member) return buildEmptyOnboardingSummary();
 
@@ -81,7 +75,7 @@ const buildCreatorOnboardingSummary = (member) => {
   const equipment = safeJsonParse(member.equipment_ownership || member.equipment, []);
   const socialLinks = safeJsonParse(member.social_media_links, {});
   const featuredWorkFiles = files.filter((file) =>
-    ['recent_work', 'work_sample'].includes(String(file?.file_type || '')) &&
+    ['recent_work', 'work_sample'].includes(getFileType(file)) &&
     hasMeaningfulValue(file?.file_path)
   );
 
