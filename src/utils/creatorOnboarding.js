@@ -64,6 +64,14 @@ const buildEmptyOnboardingSummary = () => ({
 
 const getFiles = (member) => member?.crew_member_files || [];
 
+const getFileType = (file) => String(file?.file_type || '').trim().toLowerCase();
+
+const countActiveFilesByTypes = (files, types) =>
+  files.filter((file) => {
+    const fileType = getFileType(file);
+    return types.includes(fileType) && hasMeaningfulValue(file?.file_path);
+  }).length;
+
 const buildCreatorOnboardingSummary = (member) => {
   if (!member) return buildEmptyOnboardingSummary();
 
@@ -90,17 +98,24 @@ const buildCreatorOnboardingSummary = (member) => {
     }, {})
   );
 
-  const hasValidFeaturedWork = featuredWorkGroups.some((group) => group.length >= 5);
+  const featuredWorkFileCount = featuredWorkFiles.length;
+  const hasValidFeaturedWork = featuredWorkGroups.some((group) => group.length >= 5) || featuredWorkFileCount >= 5;
   const fieldChecks = [
     { label: 'Phone number', complete: hasMeaningfulValue(member.phone_number) },
     { label: 'Location', complete: hasMeaningfulValue(member.location) },
     { label: 'Working distance', complete: hasMeaningfulValue(member.working_distance) },
-    { label: 'Profile photo', complete: files.some(f => f.file_type === 'profile_photo' && hasMeaningfulValue(f.file_path)) },
+    {
+      label: 'Profile photo',
+      complete: files.some((file) => ['profile_photo', 'profile_image'].includes(getFileType(file)) && hasMeaningfulValue(file?.file_path)),
+    },
     { label: 'Primary role', complete: Array.isArray(roles) && roles.length > 0 },
     { label: 'Years of experience', complete: hasMeaningfulValue(member.years_of_experience) && Number(member.years_of_experience) > 0 },
     { label: 'Hourly rate', complete: hasMeaningfulValue(member.hourly_rate) && Number(member.hourly_rate) > 0 },
     { label: 'Skills', complete: Array.isArray(skills) && skills.length > 0 },
-    { label: 'Equipment', complete: Array.isArray(equipment) && equipment.length > 0 },
+    {
+      label: 'Equipment',
+      complete: Array.isArray(equipment) && equipment.length > 0,
+    },
     {
       label: 'Social links',
       complete: Object.values(socialLinks || {}).some((value) => hasMeaningfulValue(value)),
