@@ -2620,13 +2620,17 @@ exports.registerCrewMemberStep2 = async (req, res) => {
     member.equipment_ownership = JSON.stringify(equipment_ownership);
     await member.save();
 
-     await updateSheetRow('Crew_data', crew_member_id, {
-      'I': primaryRoleNames.join(', '),
-      'J': years_of_experience,
-      'K': hourly_rate,
-      'L': bio,
-      'M': skillNameList.join(', ')
-    });
+    try {
+      await updateSheetRow('Crew_data', crew_member_id, {
+        'I': primaryRoleNames.join(', '),
+        'J': years_of_experience,
+        'K': hourly_rate,
+        'L': bio,
+        'M': skillNameList.join(', ')
+      });
+    } catch (sheetError) {
+      console.error('Step 2 Sheet Sync Warning:', sheetError.message);
+    }
 
     return res.status(200).json({ success: true, message: 'Step 2 completed' });
   } catch (error) {
@@ -2785,9 +2789,13 @@ exports.registerCrewMemberStep3 = [
       const updatedMember = await getCrewMemberWithOnboardingFiles({ crew_member_id });
       const onboardingSummary = await syncCreatorRegistrationComplete(updatedMember);
 
-      await updateSheetRow('Crew_data', crew_member_id, {
-        'N': JSON.stringify(social_media_links),
-      });
+      try {
+        await updateSheetRow('Crew_data', crew_member_id, {
+          'N': JSON.stringify(social_media_links),
+        });
+      } catch (sheetError) {
+        console.error('Step 3 Sheet Sync Warning:', sheetError.message);
+      }
 
       // SEND WELCOME EMAIL
       const user = await User.findOne({

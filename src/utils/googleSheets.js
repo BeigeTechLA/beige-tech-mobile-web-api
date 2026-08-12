@@ -60,6 +60,7 @@ async function updateSheetRow(tabName, id, updatedDataMap) {
       });
     }
     console.log(`Successfully updated row in ${tabName}`);
+    return true;
   } catch (error) { console.error("Update Error:", error.message); throw error; }
 }
 
