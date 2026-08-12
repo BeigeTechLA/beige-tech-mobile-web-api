@@ -2,11 +2,11 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI2MywidXNlclJvbGUiOiJDbGllbnQiLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjEsInVzZXJUeXBlSWQiOjMsImlhdCI6MTc4NjAxODI4NywiZXhwIjoxNzg2NjIzMDg3fQ.3xGEqCKaGDnLrI69q6FK-h6p8LLterq5oFK5P5_aNIo
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI2MywidXNlclJvbGUiOiJDbGllbnQiLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjEsInVzZXJUeXBlSWQiOjMsImlhdCI6MTc4NjUxMTA3OCwiZXhwIjoxNzg3MTE1ODc4fQ.KGIXqKQFVx2tKwdcQH7aeQ_W2cf0XWGctMedSmZq-dQ
 
 @TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI2MywidXNlclJvbGUiOiJDbGllbnQiLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjEsInVzZXJUeXBlSWQiOjMsImlhdCI6MTc4NjAxODExNSwiZXhwIjoxNzg2NjIyOTE1fQ.y3vlOy1ByBciUzPVlNETQQjIbJDzVaDlGJPgaG1Swvg
 
-@CP_TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI4MSwidXNlclJvbGUiOiJDcmVhdGl2ZSIsInBlcm1pc3Npb25zVmVyc2lvbiI6MSwidXNlclR5cGVJZCI6MiwiaWF0IjoxNzg0NjE0MzQ1LCJleHAiOjE3ODUyMTkxNDV9.guUL2MGKnEsEGNay9EdOnPrp6kfoXICnXYLuwRl4dmQ
+@CP_TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjI4MSwidXNlclJvbGUiOiJDcmVhdGl2ZSIsInBlcm1pc3Npb25zVmVyc2lvbiI6MSwidXNlclR5cGVJZCI6MiwiaWF0IjoxNzg2NTEwMTYyLCJleHAiOjE3ODcxMTQ5NjJ9.4y8aLVW6V9gQM7MkNna8RB4-MsJpVnxRssAkrPyFAaA
 
 @SALES_TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjEsInVzZXJUeXBlSWQiOjEsImlhdCI6MTc4NDAwMjc3OCwiZXhwIjoxNzg0NjA3NTc4fQ.9MuGIagVE3TA5gP1XoZtWBh-mlRpeLaxlLbo6iSO_0Q
 
@@ -3523,9 +3523,6 @@ Content-Type: application/json
 POST {{URL}}push-notifications/test
 Authorization: {{TOKEN}}
 Content-Type: application/json
-device_type: android
-user_type_name: client
-user_type: 3
 
 {
   "title": "Hello",
@@ -3539,35 +3536,23 @@ user_type: 3
 
 ### get push notification preferences
 GET {{URL}}push-notifications/preferences?session_id=web-session-001
-Authorization: {{CP_TOKEN}}
+Authorization: {{TOKEN}}
 Content-Type: application/json
-device_type: web
-user_type_name: client
-user_type: 3
 
 ### get all user notification preferences
 GET {{URL}}notification-preferences
 Authorization: {{TOKEN}}
 Content-Type: application/json
-device_type: web
-user_type_name: client
-user_type: 3
 
 ### get email notification preferences
 GET {{URL}}notification-preferences/email
 Authorization: {{TOKEN}}
 Content-Type: application/json
-device_type: web
-user_type_name: client
-user_type: 3
 
 ### update email notification preferences
 PATCH {{URL}}notification-preferences/email
 Authorization: {{TOKEN}}
 Content-Type: application/json
-device_type: web
-user_type_name: client
-user_type: 3
 
 {
   "email_enabled": true,
@@ -3586,14 +3571,8 @@ user_type: 3
 GET {{URL}}app-notifications?status=all&page=1&limit=20
 Authorization: {{TOKEN}}
 Content-Type: application/json
-device_type: web
-user_type_name: client
-user_type: 3
 
 ### get web app notification counts
 GET {{URL}}app-notifications/counts
 Authorization: {{TOKEN}}
 Content-Type: application/json
-device_type: web
-user_type_name: client
-user_type: 3

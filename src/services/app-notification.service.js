@@ -5,6 +5,7 @@ const pushNotificationService = require('./push-notification.service');
 
 const VALID_STATUSES = new Set(['all', 'read', 'unread']);
 const PROJECT_CATEGORIES = ['projects', 'project', 'shoots', 'meetings', 'proposals'];
+const DEFAULT_DELIVERY_SURFACES = ['mobile_app', 'web_app'];
 
 const httpError = (httpCode, message) => {
   const error = new Error(message);
@@ -46,6 +47,15 @@ const getNotificationModel = () => {
 const normalizeDeliverySurface = (value, fallback = 'web_app') => {
   const normalized = normalizeString(value)?.toLowerCase();
   return ['mobile_app', 'web_app'].includes(normalized) ? normalized : fallback;
+};
+
+const normalizeDeliverySurfaces = (values = null, fallback = DEFAULT_DELIVERY_SURFACES) => {
+  const source = Array.isArray(values) && values.length ? values : fallback;
+  const surfaces = source
+    .map((value) => normalizeDeliverySurface(value, null))
+    .filter(Boolean);
+
+  return [...new Set(surfaces)].length ? [...new Set(surfaces)] : [...DEFAULT_DELIVERY_SURFACES];
 };
 
 const normalizeAppUserType = (value) => normalizeString(value);
@@ -226,6 +236,7 @@ exports.createAndPushNotification = async ({
   pushBody = null,
   sendPush = true,
   deliverySurface = 'web_app',
+  deliverySurfaces = DEFAULT_DELIVERY_SURFACES,
   appUserType = null
 }) => {
   const pushData = normalizePayload({
@@ -265,24 +276,27 @@ exports.createAndPushNotification = async ({
 
   if (!inWebAllowed) return null;
 
-  const notification = await exports.createNotification({
-    userId,
-    senderUserId,
-    title,
-    message,
-    topic,
-    category,
-    type,
-    referenceId,
-    referenceType,
-    payload,
-    actionLabel,
-    priority,
-    deliverySurface,
-    appUserType
-  });
+  const targetSurfaces = normalizeDeliverySurfaces(deliverySurfaces, [deliverySurface]);
+  const notifications = await Promise.all(targetSurfaces.map((surface) => (
+    exports.createNotification({
+      userId,
+      senderUserId,
+      title,
+      message,
+      topic,
+      category,
+      type,
+      referenceId,
+      referenceType,
+      payload,
+      actionLabel,
+      priority,
+      deliverySurface: surface,
+      appUserType
+    })
+  )));
 
-  return notification;
+  return notifications[0] || null;
 };
 
 exports.listNotifications = async ({
