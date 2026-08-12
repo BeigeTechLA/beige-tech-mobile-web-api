@@ -59,6 +59,41 @@ function getIstDayAndTime(now = new Date()) {
   };
 }
 
+function getIstDate(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).formatToParts(now);
+  const valueByType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${valueByType.year}-${valueByType.month}-${valueByType.day}`;
+}
+
+function formatIstDateTime(value) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).format(date);
+}
+
+function istDateRangeToUtc(date) {
+  const safeDate = validateDateParam(date);
+  return {
+    start: new Date(`${safeDate}T00:00:00+05:30`),
+    end: new Date(`${safeDate}T23:59:59.999+05:30`)
+  };
+}
+
 function normalizeDays(days) {
   if (!Array.isArray(days) || days.length === 0) throw new Error('active_days must be a non-empty array');
   days.forEach((day) => {
@@ -77,8 +112,24 @@ function timeToMinutes(value) {
   return hours * 60 + minutes;
 }
 
+function timeRangesForDay(start, end) {
+  const startMinutes = timeToMinutes(start);
+  const endMinutes = timeToMinutes(end);
+  if (startMinutes <= endMinutes) {
+    return [[startMinutes, endMinutes]];
+  }
+  return [
+    [startMinutes, 24 * 60],
+    [0, endMinutes]
+  ];
+}
+
 function rangesOverlap(startA, endA, startB, endB) {
-  return timeToMinutes(startA) < timeToMinutes(endB) && timeToMinutes(startB) < timeToMinutes(endA);
+  const rangesA = timeRangesForDay(startA, endA);
+  const rangesB = timeRangesForDay(startB, endB);
+  return rangesA.some(([aStart, aEnd]) => (
+    rangesB.some(([bStart, bEnd]) => aStart < bEnd && bStart < aEnd)
+  ));
 }
 
 function daysIntersect(a, b) {
@@ -384,20 +435,36 @@ async function listAllShiftSalespeople(query) {
   return { rows: paginatedRows, pagination: { page, limit, total: rows.length, pages: Math.ceil(rows.length / limit) } };
 }
 
-async function getNextAssignee(shiftId) {
-  const shift = await getShiftOrThrow(shiftId);
-  const links = await models.shift_salespeople.findAll({ where: { shift_id: shiftId, status: 'active', user_status: true }, order: [['assignment_order', 'ASC']] });
+async function getNextAssignee(shiftId, options = {}) {
+  const transaction = options.transaction || null;
+  const shift = await models.shifts.findByPk(shiftId, {
+    transaction,
+    lock: transaction ? models.Sequelize.Transaction.LOCK.UPDATE : undefined
+  });
+  if (!shift) {
+    const error = new Error('Shift not found');
+    error.statusCode = 404;
+    throw error;
+  }
+  const links = await models.shift_salespeople.findAll({
+    where: { shift_id: shiftId, status: 'active', user_status: true },
+    order: [['assignment_order', 'ASC']],
+    transaction,
+    lock: transaction ? models.Sequelize.Transaction.LOCK.UPDATE : undefined
+  });
   if (!links.length) return null;
   const index = Math.max(links.findIndex((link) => link.sales_rep_id === shift.next_assignee_sales_rep_id), 0);
   const assignee = links[index];
   const next = links[(index + 1) % links.length];
-  await shift.update({ next_assignee_sales_rep_id: next.sales_rep_id });
-  await assignee.update({ last_activity: new Date() });
+  await shift.update({ next_assignee_sales_rep_id: next.sales_rep_id }, { transaction });
+  await assignee.update({ last_activity: new Date() }, { transaction });
   return assignee.sales_rep_id;
 }
 
-async function logAssignment(payload) {
-  return models.assignment_history.create(payload);
+async function logAssignment(payload, options = {}) {
+  return models.assignment_history.create(payload, {
+    transaction: options.transaction || null
+  });
 }
 
 async function getRoundRobin(shiftId) {
@@ -425,18 +492,117 @@ async function updateRoundRobin(shiftId, positions) {
   return getRoundRobin(shiftId);
 }
 
-async function getActiveShiftsNow(now = new Date()) {
+function previousDay(day) {
+  const index = VALID_DAYS.indexOf(day);
+  return VALID_DAYS[(index + VALID_DAYS.length - 1) % VALID_DAYS.length];
+}
+
+function isShiftActiveAt(shift, day, currentTime) {
+  const days = normalizeStoredDays(shift.active_days);
+  const start = String(shift.start_time);
+  const end = String(shift.end_time);
+  const overnight = timeToMinutes(start) > timeToMinutes(end);
+
+  if (!overnight) {
+    return days.includes(day) && start <= currentTime && currentTime <= end;
+  }
+
+  return (
+    (days.includes(day) && currentTime >= start) ||
+    (days.includes(previousDay(day)) && currentTime <= end)
+  );
+}
+
+async function getActiveShiftsNow(now = new Date(), options = {}) {
   const { day, time: currentTime } = getIstDayAndTime(now);
   const shifts = await models.shifts.findAll({
     where: {
       status: 'active',
-      is_enabled: true,
-      start_time: { [Op.lte]: currentTime },
-      end_time: { [Op.gte]: currentTime }
+      is_enabled: true
     },
-    order: [['start_time', 'ASC']]
+    order: [['start_time', 'ASC']],
+    transaction: options.transaction || null
   });
-  return shifts.filter((shift) => normalizeStoredDays(shift.active_days).includes(day));
+  return shifts.filter((shift) => isShiftActiveAt(shift, day, currentTime));
+}
+
+async function assignLeadViaActiveShiftRoundRobin({
+  lead,
+  leadModel = models.sales_leads,
+  clientName = null,
+  status = 'Lead Assigned',
+  source = 'web_form',
+  transaction = null
+}) {
+  if (!lead?.lead_id) return null;
+
+  if (!transaction) {
+    const tx = await models.sequelize.transaction();
+    try {
+      const assignedRep = await assignLeadViaActiveShiftRoundRobin({
+        lead,
+        leadModel,
+        clientName,
+        status,
+        source,
+        transaction: tx
+      });
+      await tx.commit();
+      return assignedRep;
+    } catch (error) {
+      await tx.rollback();
+      throw error;
+    }
+  }
+
+  const activeShifts = await getActiveShiftsNow(new Date(), { transaction });
+
+  for (const shift of activeShifts) {
+    const nextSalesRepId = await getNextAssignee(shift.id, { transaction });
+    if (!nextSalesRepId) continue;
+
+    await leadModel.update(
+      { assigned_sales_rep_id: nextSalesRepId },
+      {
+        where: { lead_id: lead.lead_id },
+        transaction
+      }
+    );
+
+    await logAssignment({
+      shift_id: shift.id,
+      sales_rep_id: nextSalesRepId,
+      lead_id: lead.lead_id,
+      client_name: lead.client_name || clientName || 'N/A',
+      status,
+      source
+    }, { transaction });
+
+    const activityModel = leadModel === models.client_leads
+      ? models.client_lead_activities
+      : models.sales_lead_activities;
+
+    if (activityModel) {
+      await activityModel.create({
+        lead_id: lead.lead_id,
+        activity_type: 'assigned',
+        activity_data: {
+          previous_rep_id: lead.assigned_sales_rep_id || null,
+          new_rep_id: nextSalesRepId,
+          assignment_type: 'shift_round_robin',
+          shift_id: shift.id
+        },
+        performed_by_user_id: null
+      }, { transaction });
+    }
+
+    return models.users.findByPk(nextSalesRepId, {
+      attributes: ['id', 'name', 'email'],
+      transaction
+    });
+  }
+
+  return null;
 }
 
 async function compareCount(model, whereCurrent, wherePrevious) {
@@ -523,30 +689,51 @@ async function getActiveOrEnabledShifts(extraWhere = {}) {
   });
 }
 
+async function countCurrentActiveSalespeople() {
+  const activeShifts = await getActiveShiftsNow();
+  const activeShiftIds = activeShifts.map((shift) => shift.id);
+  return {
+    activeShifts,
+    count: await countDistinctActiveSalespeopleForShiftIds(activeShiftIds)
+  };
+}
+
+async function countQuotesCreated(range) {
+  return models.sales_quotes.count({
+    where: {
+      created_at: { [Op.between]: [range.start, range.end] }
+    }
+  });
+}
+
 async function overview(query = {}) {
+  const { activeShifts: activeNowShifts, count: activeNowSalespeopleCount } = await countCurrentActiveSalespeople();
+
   if (query.date) {
     const currentRange = dateRange(query.date);
     const previousRange = dateRange(previousDate(query.date));
+    const currentAssignmentRange = istDateRangeToUtc(query.date);
+    const previousAssignmentRange = istDateRangeToUtc(previousDate(query.date));
 
     const [
       activeShiftsCurrent,
       activeShiftsPrevious,
       leadsAssignedCurrent,
       leadsAssignedPrevious,
+      quotesCreatedCurrent,
+      quotesCreatedPrevious,
       pendingLeadsCurrent,
       pendingLeadsPrevious,
-      activeSalespeopleCurrent,
       activeSalespeoplePrevious
     ] = await Promise.all([
-      countActiveShiftsForDate(query.date),
+      Promise.resolve(activeNowShifts.length),
       countActiveShiftsForDate(previousDate(query.date)),
-      models.assignment_history.count({ where: { assigned_at: { [Op.between]: [currentRange.start, currentRange.end] } } }),
-      models.assignment_history.count({ where: { assigned_at: { [Op.between]: [previousRange.start, previousRange.end] } } }),
+      models.assignment_history.count({ where: { assigned_at: { [Op.between]: [currentAssignmentRange.start, currentAssignmentRange.end] } } }),
+      models.assignment_history.count({ where: { assigned_at: { [Op.between]: [previousAssignmentRange.start, previousAssignmentRange.end] } } }),
+      countQuotesCreated(currentAssignmentRange),
+      countQuotesCreated(previousAssignmentRange),
       countPendingLeads({ created_at: { [Op.between]: [currentRange.start, currentRange.end] } }),
       countPendingLeads({ created_at: { [Op.between]: [previousRange.start, previousRange.end] } }),
-      countDistinctActiveSalespeopleForShiftIds(
-        (await getActiveOrEnabledShifts({ created_at: { [Op.between]: [currentRange.start, currentRange.end] } })).map((shift) => shift.id)
-      ),
       countDistinctActiveSalespeopleForShiftIds(
         (await getActiveOrEnabledShifts({ created_at: { [Op.between]: [previousRange.start, previousRange.end] } })).map((shift) => shift.id)
       )
@@ -555,31 +742,30 @@ async function overview(query = {}) {
     return {
       active_shifts_count: { count: activeShiftsCurrent, change_percent: percentChange(activeShiftsCurrent, activeShiftsPrevious) },
       leads_assigned_today: { count: leadsAssignedCurrent, change_percent: percentChange(leadsAssignedCurrent, leadsAssignedPrevious) },
+      total_quote_created_today: { count: quotesCreatedCurrent, change_percent: percentChange(quotesCreatedCurrent, quotesCreatedPrevious) },
       pending_leads: { count: pendingLeadsCurrent, change_percent: percentChange(pendingLeadsCurrent, pendingLeadsPrevious) },
-      active_salespeople_count: { count: activeSalespeopleCurrent, change_percent: percentChange(activeSalespeopleCurrent, activeSalespeoplePrevious) }
+      active_salespeople_count: { count: activeNowSalespeopleCount, change_percent: percentChange(activeNowSalespeopleCount, activeSalespeoplePrevious) }
     };
   }
 
   const ranges = monthRanges();
-  const today = new Date().toISOString().slice(0, 10);
-  const activeOrEnabledShifts = await getActiveOrEnabledShifts();
-  const activeOrEnabledShiftIds = activeOrEnabledShifts.map((shift) => shift.id);
+  const today = getIstDate();
   const [
     activeShiftsCurrentMonth,
     activeShiftsPreviousMonth,
     leadsAssignedToday,
+    quotesCreatedToday,
     pendingLeadsCurrent,
     pendingLeadsPrevious,
-    activeSalespeopleCount,
     activeSalespeopleCurrentMonth,
     activeSalespeoplePreviousMonth
   ] = await Promise.all([
     models.shifts.count({ where: activeOrEnabledShiftWhere({ created_at: ranges.current }) }),
     models.shifts.count({ where: activeOrEnabledShiftWhere({ created_at: ranges.previous }) }),
-    models.assignment_history.count({ where: { assigned_at: { [Op.gte]: `${today} 00:00:00` } } }),
+    models.assignment_history.count({ where: { assigned_at: { [Op.between]: [istDateRangeToUtc(today).start, istDateRangeToUtc(today).end] } } }),
+    countQuotesCreated(istDateRangeToUtc(today)),
     countPendingLeads(),
     countPendingLeads({ created_at: ranges.previous }),
-    countDistinctActiveSalespeopleForShiftIds(activeOrEnabledShiftIds),
     countDistinctActiveSalespeopleForShiftIds(
       (await getActiveOrEnabledShifts({ created_at: ranges.current })).map((shift) => shift.id)
     ),
@@ -589,21 +775,52 @@ async function overview(query = {}) {
   ]);
 
   return {
-    active_shifts_count: { count: activeOrEnabledShifts.length, change_percent: percentChange(activeShiftsCurrentMonth, activeShiftsPreviousMonth) },
+    active_shifts_count: { count: activeNowShifts.length, change_percent: percentChange(activeNowShifts.length, activeShiftsPreviousMonth) },
     leads_assigned_today: { count: leadsAssignedToday, change_percent: 0 },
+    total_quote_created_today: { count: quotesCreatedToday, change_percent: 0 },
     pending_leads: { count: pendingLeadsCurrent, change_percent: percentChange(pendingLeadsCurrent, pendingLeadsPrevious) },
-    active_salespeople_count: { count: activeSalespeopleCount, change_percent: percentChange(activeSalespeopleCurrentMonth, activeSalespeoplePreviousMonth) }
+    active_salespeople_count: { count: activeNowSalespeopleCount, change_percent: percentChange(activeNowSalespeopleCount, activeSalespeoplePreviousMonth) }
   };
 }
 
 async function hourlyLeadVolume(query) {
-  const where = {};
+  const leadWhere = {};
+  const quoteWhere = {};
   if (query.date) {
-    const range = dateRange(query.date);
-    where.assigned_at = { [Op.between]: [range.start, range.end] };
-  } else if (query.start_date && query.end_date) where.assigned_at = { [Op.between]: [`${query.start_date} 00:00:00`, `${query.end_date} 23:59:59`] };
-  else where.assigned_at = { [Op.gte]: `${new Date().toISOString().slice(0, 10)} 00:00:00` };
-  return models.assignment_history.findAll({ where, attributes: [[fn('HOUR', col('assigned_at')), 'hour'], [fn('COUNT', col('id')), 'count']], group: [literal('hour')], order: [[literal('hour'), 'ASC']], raw: true });
+    const range = istDateRangeToUtc(query.date);
+    leadWhere.assigned_at = { [Op.between]: [range.start, range.end] };
+    quoteWhere.created_at = { [Op.between]: [range.start, range.end] };
+  } else if (query.start_date && query.end_date) {
+    const startRange = istDateRangeToUtc(query.start_date);
+    const endRange = istDateRangeToUtc(query.end_date);
+    leadWhere.assigned_at = { [Op.between]: [startRange.start, endRange.end] };
+    quoteWhere.created_at = { [Op.between]: [startRange.start, endRange.end] };
+  } else {
+    const range = istDateRangeToUtc(getIstDate());
+    leadWhere.assigned_at = { [Op.between]: [range.start, range.end] };
+    quoteWhere.created_at = { [Op.between]: [range.start, range.end] };
+  }
+
+  const assignedHour = literal('HOUR(DATE_ADD(assigned_at, INTERVAL 330 MINUTE))');
+  const createdHour = literal('HOUR(DATE_ADD(created_at, INTERVAL 330 MINUTE))');
+  const [leads, quotes] = await Promise.all([
+    models.assignment_history.findAll({
+      where: leadWhere,
+      attributes: [[assignedHour, 'hour'], [fn('COUNT', col('id')), 'count']],
+      group: [assignedHour],
+      order: [[assignedHour, 'ASC']],
+      raw: true
+    }),
+    models.sales_quotes.findAll({
+      where: quoteWhere,
+      attributes: [[createdHour, 'hour'], [fn('COUNT', col('sales_quote_id')), 'count']],
+      group: [createdHour],
+      order: [[createdHour, 'ASC']],
+      raw: true
+    })
+  ]);
+
+  return { leads, quotes };
 }
 
 module.exports = {
@@ -627,6 +844,10 @@ module.exports = {
   getRoundRobin,
   updateRoundRobin,
   getActiveShiftsNow,
+  getIstDate,
+  formatIstDateTime,
+  isShiftActiveAt,
+  assignLeadViaActiveShiftRoundRobin,
   overview,
   hourlyLeadVolume,
   hasOverlapForSalesRep,

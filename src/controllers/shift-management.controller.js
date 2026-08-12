@@ -49,6 +49,13 @@ function normalizeLeadStatusFilter(value) {
   return map[normalized] || value;
 }
 
+function normalizeStatusLabel(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s–-]+/g, ' ');
+}
+
 function normalizeQuoteStatus(value) {
   return String(value || '').replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
 }
@@ -80,7 +87,7 @@ function mapLeadRow(row) {
     date: formatDisplayDate(lead.created_at),
     lead_type: formatLeadType(lead.lead_type),
     intent: leadAssignmentService.getLeadIntent({ lead, booking }),
-    booking_status: leadAssignmentService.getClientBookingStatus(lead, booking),
+    booking_status: leadAssignmentService.getLeadBookingStatus(lead, booking),
     raw_booking_status: lead.lead_status,
     last_activity: formatRelativeTime(lead.last_activity_at),
     last_activity_at: lead.last_activity_at,
@@ -153,15 +160,6 @@ exports.hourlyLeadVolume = async (req, res) => {
 
 exports.activeNow = async (req, res) => {
   try {
-    if (req.query.date) {
-      const day = service.dayFromDate(req.query.date);
-      const shifts = await models.shifts.findAll({
-        where: { status: 'active', is_enabled: true },
-        order: [['start_time', 'ASC']]
-      });
-      return ok(res, shifts.filter((shift) => service.normalizeStoredDays(shift.active_days).includes(day)));
-    }
-
     return ok(res, await service.getActiveShiftsNow());
   } catch (error) { return fail(res, error); }
 };
@@ -183,7 +181,69 @@ exports.recentAssignments = async (req, res) => {
       order: [['assigned_at', 'DESC']],
       limit
     });
-    return ok(res, rows);
+    const leadIds = [...new Set(rows.map((row) => Number(row.lead_id)).filter(Boolean))];
+    const [salesLeads, clientLeads] = leadIds.length
+      ? await Promise.all([
+          models.sales_leads.findAll({
+            where: { lead_id: { [Op.in]: leadIds } },
+            attributes: ['lead_id', 'client_name', 'guest_email', 'assigned_sales_rep_id', 'lead_status'],
+            include: [{
+              model: models.stream_project_booking,
+              as: 'booking',
+              required: false,
+              attributes: ['stream_project_booking_id', 'is_draft', 'is_cancelled', 'payment_id']
+            }]
+          }),
+          models.client_leads.findAll({
+            where: { lead_id: { [Op.in]: leadIds } },
+            attributes: ['lead_id', 'client_name', 'guest_email', 'assigned_sales_rep_id', 'lead_status'],
+            include: [{
+              model: models.stream_project_booking,
+              as: 'booking',
+              required: false,
+              attributes: ['stream_project_booking_id', 'is_draft', 'is_cancelled', 'payment_id']
+            }]
+          })
+        ])
+      : [[], []];
+
+    const leadById = new Map();
+    [
+      ...salesLeads.map((lead) => ({ lead, type: 'sales' })),
+      ...clientLeads.map((lead) => ({ lead, type: 'client' }))
+    ].forEach(({ lead, type }) => {
+      const row = lead.toJSON ? lead.toJSON() : lead;
+      row._lead_type = type;
+      const existing = leadById.get(row.lead_id);
+      const existingLabel = existing?.client_name || existing?.guest_email || '';
+      const nextLabel = row.client_name || row.guest_email || '';
+      if (!existing || String(existingLabel).trim().toLowerCase() === 'n/a' || (!existingLabel && nextLabel)) {
+        leadById.set(row.lead_id, row);
+      }
+    });
+
+    return ok(res, rows.map((row) => {
+      const assignment = row.toJSON ? row.toJSON() : row;
+      const lead = leadById.get(assignment.lead_id) || {};
+      const clientName = assignment.client_name && assignment.client_name !== 'N/A'
+        ? assignment.client_name
+        : lead.client_name || lead.guest_email || null;
+      const currentStatus = lead.lead_id
+        ? lead._lead_type === 'client'
+          ? leadAssignmentService.getClientBookingStatus(lead, lead.booking)
+          : leadAssignmentService.getLeadBookingStatus(lead, lead.booking)
+        : assignment.status;
+
+      return {
+        ...assignment,
+        status: currentStatus || assignment.status,
+        client_name: clientName,
+        client_email: lead.guest_email || null,
+        sales_rep_name: assignment.sales_rep?.name || null,
+        sales_rep_email: assignment.sales_rep?.email || null,
+        assigned_at_local: service.formatIstDateTime(assignment.assigned_at)
+      };
+    }));
   } catch (error) { return fail(res, error); }
 };
 
@@ -206,7 +266,10 @@ exports.toggleSalesperson = async (req, res) => {
   try {
     const row = await models.shift_salespeople.findOne({ where: { shift_id: req.params.id, sales_rep_id: req.params.salesRepId } });
     if (!row) return res.status(404).json({ success: false, message: 'Shift salesperson link not found' });
-    const next = req.body.user_status !== undefined ? Boolean(req.body.user_status) : !Boolean(row.user_status);
+    const body = req.body || {};
+    const next = body.user_status !== undefined
+      ? !['false', '0', 'off'].includes(String(body.user_status).toLowerCase())
+      : !Boolean(row.user_status);
     await row.update({ user_status: next });
     const next_assignee_sales_rep_id = await service.recomputeNextAssignee(req.params.id);
     return ok(res, {
@@ -275,7 +338,72 @@ exports.assignmentHistory = async (req, res) => {
       limit,
       offset
     });
-    return ok(res, { rows: result.rows, pagination: { page, limit, total: result.count, pages: Math.ceil(result.count / limit) } });
+    const leadIds = [...new Set(result.rows.map((row) => Number(row.lead_id)).filter(Boolean))];
+    const [salesLeads, clientLeads] = leadIds.length
+      ? await Promise.all([
+          models.sales_leads.findAll({
+            where: { lead_id: { [Op.in]: leadIds } },
+            attributes: ['lead_id', 'client_name', 'guest_email', 'assigned_sales_rep_id', 'lead_status'],
+            include: [{
+              model: models.stream_project_booking,
+              as: 'booking',
+              required: false,
+              attributes: ['stream_project_booking_id', 'is_draft', 'is_cancelled', 'payment_id']
+            }]
+          }),
+          models.client_leads.findAll({
+            where: { lead_id: { [Op.in]: leadIds } },
+            attributes: ['lead_id', 'client_name', 'guest_email', 'assigned_sales_rep_id', 'lead_status'],
+            include: [{
+              model: models.stream_project_booking,
+              as: 'booking',
+              required: false,
+              attributes: ['stream_project_booking_id', 'is_draft', 'is_cancelled', 'payment_id']
+            }]
+          })
+        ])
+      : [[], []];
+
+    const leadById = new Map();
+    [
+      ...salesLeads.map((lead) => ({ lead, type: 'sales' })),
+      ...clientLeads.map((lead) => ({ lead, type: 'client' }))
+    ].forEach(({ lead, type }) => {
+      const row = lead.toJSON ? lead.toJSON() : lead;
+      row._lead_type = type;
+      const existing = leadById.get(row.lead_id);
+      const existingLabel = existing?.client_name || existing?.guest_email || '';
+      const nextLabel = row.client_name || row.guest_email || '';
+      if (!existing || String(existingLabel).trim().toLowerCase() === 'n/a' || (!existingLabel && nextLabel)) {
+        leadById.set(row.lead_id, row);
+      }
+    });
+
+    return ok(res, {
+      rows: result.rows.map((row) => {
+        const assignment = row.toJSON ? row.toJSON() : row;
+        const lead = leadById.get(assignment.lead_id) || {};
+        const clientName = assignment.client_name && assignment.client_name !== 'N/A'
+          ? assignment.client_name
+          : lead.client_name || lead.guest_email || null;
+        const currentStatus = lead.lead_id
+          ? lead._lead_type === 'client'
+            ? leadAssignmentService.getClientBookingStatus(lead, lead.booking)
+            : leadAssignmentService.getLeadBookingStatus(lead, lead.booking)
+          : assignment.status;
+        return {
+          ...assignment,
+          status: currentStatus || assignment.status,
+          client_name: clientName,
+          client_email: lead.guest_email || null,
+          sales_rep_name: assignment.sales_rep?.name || null,
+          sales_rep_email: assignment.sales_rep?.email || null,
+          shift_name: assignment.shift?.name || null,
+          assigned_at_local: service.formatIstDateTime(assignment.assigned_at)
+        };
+      }),
+      pagination: { page, limit, total: result.count, pages: Math.ceil(result.count / limit) }
+    });
   } catch (error) { return fail(res, error); }
 };
 
@@ -288,8 +416,9 @@ exports.salesRepLeads = async (req, res) => {
       where.lead_type = leadType === 'self_serve' ? 'self_serve' : leadType === 'sales_assisted' ? 'sales_assisted' : req.query.lead_type;
     }
     const intentFilter = req.query.intent ? String(req.query.intent).trim().toLowerCase() : '';
-    if (req.query.status) where.lead_status = normalizeLeadStatusFilter(req.query.status);
-    if (req.query.booking_status) where.lead_status = normalizeLeadStatusFilter(req.query.booking_status);
+    const statusFilter = req.query.status || req.query.booking_status
+      ? normalizeStatusLabel(req.query.status || req.query.booking_status)
+      : '';
     if (req.query.date) {
       const range = service.dateRange(req.query.date);
       where.created_at = { [Op.between]: [range.start, range.end] };
@@ -314,19 +443,23 @@ exports.salesRepLeads = async (req, res) => {
     }];
 
     const shouldFilterDerivedIntent = Boolean(intentFilter);
+    const shouldFilterDerivedStatus = Boolean(statusFilter);
     const result = await models.sales_leads.findAndCountAll({
       where,
       include,
       distinct: true,
       order: [['created_at', 'DESC']],
-      ...(shouldFilterDerivedIntent ? {} : { limit, offset })
+      ...(shouldFilterDerivedIntent || shouldFilterDerivedStatus ? {} : { limit, offset })
     });
     const mappedRows = result.rows.map(mapLeadRow);
-    const filteredRows = shouldFilterDerivedIntent
-      ? mappedRows.filter((row) => String(row.intent || '').toLowerCase() === intentFilter)
-      : mappedRows;
-    const rows = shouldFilterDerivedIntent ? filteredRows.slice(offset, offset + limit) : filteredRows;
-    const total = shouldFilterDerivedIntent ? filteredRows.length : result.count;
+    const filteredRows = mappedRows.filter((row) => {
+      if (shouldFilterDerivedIntent && String(row.intent || '').toLowerCase() !== intentFilter) return false;
+      if (shouldFilterDerivedStatus && normalizeStatusLabel(row.booking_status || row.raw_booking_status) !== statusFilter) return false;
+      return true;
+    });
+    const shouldPaginateAfterFilter = shouldFilterDerivedIntent || shouldFilterDerivedStatus;
+    const rows = shouldPaginateAfterFilter ? filteredRows.slice(offset, offset + limit) : filteredRows;
+    const total = shouldPaginateAfterFilter ? filteredRows.length : result.count;
     return ok(res, {
       rows,
       unsupported_filters: req.query.booking_type ? ['booking_type'] : [],
