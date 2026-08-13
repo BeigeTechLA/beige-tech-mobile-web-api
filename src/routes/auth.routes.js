@@ -55,6 +55,6 @@ router.post('/cp-event-location/confirm', authenticate, authController.confirmCp
 router.post('/admin/create-internal-credential', authenticate, requireSuperAdmin, authController.createInternalCredential);
 
 router.post('/change-password-client', authenticate, clientFinancesEdit, authController.changePasswordclient);
-router.post('/change-password-crew', authController.changePasswordCrewMember);
+router.post('/change-password-crew', authenticate, authController.changePasswordCrewMember);
 
 module.exports = router;

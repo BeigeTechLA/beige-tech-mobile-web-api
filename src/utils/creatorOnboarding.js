@@ -2,6 +2,27 @@ const db = require('../models');
 
 const REQUIRED_TOTAL = 11;
 
+const REQUIRED_STEPS = [
+  {
+    key: 'step1',
+    step: 1,
+    label: 'Basic details',
+    fields: ['Phone number', 'Location', 'Working distance', 'Profile photo'],
+  },
+  {
+    key: 'step2',
+    step: 2,
+    label: 'Professional details',
+    fields: ['Primary role', 'Years of experience', 'Hourly rate', 'Skills', 'Equipment'],
+  },
+  {
+    key: 'step3',
+    step: 3,
+    label: 'Portfolio details',
+    fields: ['Social links', 'Featured work'],
+  },
+];
+
 const safeJsonParse = (value, fallback = []) => {
   if (!value) return fallback;
   if (Array.isArray(value)) return value;
@@ -60,6 +81,17 @@ const buildEmptyOnboardingSummary = () => ({
     { key: 'professional', label: 'Professional', total: 5, completed: 0 },
     { key: 'portfolio', label: 'Portfolio', total: 2, completed: 0 },
   ],
+  missing_fields_by_step: {
+    step1: ['Phone number', 'Location', 'Working distance', 'Profile photo'],
+    step2: ['Primary role', 'Years of experience', 'Hourly rate', 'Skills', 'Equipment'],
+    step3: ['Social links', 'Featured work'],
+  },
+  required_steps: [
+    { key: 'step1', step: 1, label: 'Basic details', total: 4, completed: 0, missing_count: 4, missing_fields: ['Phone number', 'Location', 'Working distance', 'Profile photo'] },
+    { key: 'step2', step: 2, label: 'Professional details', total: 5, completed: 0, missing_count: 5, missing_fields: ['Primary role', 'Years of experience', 'Hourly rate', 'Skills', 'Equipment'] },
+    { key: 'step3', step: 3, label: 'Portfolio details', total: 2, completed: 0, missing_count: 2, missing_fields: ['Social links', 'Featured work'] },
+  ],
+  next_incomplete_step: 1,
 });
 
 const getFiles = (member) => member?.crew_member_files || [];
@@ -125,6 +157,21 @@ const buildCreatorOnboardingSummary = (member) => {
   const missingCount = totalCount - completedCount;
   const progressPercent = totalCount ? Math.round((completedCount / totalCount) * 100) : 0;
   const isRegistrationComplete = missingCount === 0 ? 1 : 0;
+  const missingFields = fieldChecks.filter((field) => !field.complete).map((field) => field.label);
+  const missingFieldSet = new Set(missingFields);
+  const requiredSteps = REQUIRED_STEPS.map((stepConfig) => {
+    const stepMissingFields = stepConfig.fields.filter((field) => missingFieldSet.has(field));
+
+    return {
+      key: stepConfig.key,
+      step: stepConfig.step,
+      label: stepConfig.label,
+      total: stepConfig.fields.length,
+      completed: stepConfig.fields.length - stepMissingFields.length,
+      missing_count: stepMissingFields.length,
+      missing_fields: stepMissingFields,
+    };
+  });
 
   return {
     onboardingMissingDetail: missingCount > 0,
@@ -133,12 +180,18 @@ const buildCreatorOnboardingSummary = (member) => {
     total_required: totalCount,
     missing_count: missingCount,
     progress_percent: progressPercent,
-    missing_fields: fieldChecks.filter((field) => !field.complete).map((field) => field.label),
+    missing_fields: missingFields,
     required_groups: [
       { key: 'basics', label: 'Basics', total: 4, completed: fieldChecks.slice(0, 4).filter((field) => field.complete).length },
       { key: 'professional', label: 'Professional', total: 5, completed: fieldChecks.slice(4, 9).filter((field) => field.complete).length },
       { key: 'portfolio', label: 'Portfolio', total: 2, completed: fieldChecks.slice(9, 11).filter((field) => field.complete).length },
     ],
+    missing_fields_by_step: requiredSteps.reduce((acc, step) => {
+      acc[step.key] = step.missing_fields;
+      return acc;
+    }, {}),
+    required_steps: requiredSteps,
+    next_incomplete_step: requiredSteps.find((step) => step.missing_count > 0)?.step || null,
   };
 };
 
@@ -156,6 +209,12 @@ const getCrewMemberWithOnboardingFiles = (where, options = {}) =>
 
 const syncCreatorRegistrationComplete = async (member, transaction = null) => {
   const summary = buildCreatorOnboardingSummary(member);
+  const isVerified = Number(member?.is_crew_verified) === 1;
+
+  if (isVerified && Number(member?.is_registration_complete) === 1 && summary.is_registration_complete === 0) {
+    return summary;
+  }
+
   if (!member || Number(member.is_registration_complete) === summary.is_registration_complete) {
     return summary;
   }

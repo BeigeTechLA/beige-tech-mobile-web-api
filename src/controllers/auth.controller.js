@@ -451,6 +451,31 @@ async function getCreatorCrewMemberForUser(user) {
   return crewMember;
 }
 
+async function resolveUserProfileImage(user, crewMember = null) {
+  if (user?.profile_image) {
+    return user.profile_image;
+  }
+
+  const crewMemberId = crewMember?.crew_member_id;
+  if (!crewMemberId) {
+    return null;
+  }
+
+  const profilePhoto = await crew_member_files.findOne({
+    where: {
+      crew_member_id: crewMemberId,
+      is_active: 1,
+      file_type: {
+        [Op.in]: ['profile_photo', 'profile_image']
+      }
+    },
+    attributes: ['file_path'],
+    order: [['created_at', 'DESC']]
+  });
+
+  return profilePhoto?.file_path || null;
+}
+
 async function findClientTypeId(transaction = null) {
   let clientType = await user_type.findOne({
     where: { user_type_id: 3 },
@@ -510,6 +535,8 @@ async function buildAuthenticatedUserResponse(user) {
     temp_event_popup = getTempCpEventPopup(crew);
   }
 
+  const profileImage = await resolveUserProfileImage(user, crew_member_id ? { crew_member_id } : null);
+
   let affiliate_id = null;
   const affiliate = await Affiliate.findOne({
     where: { user_id: user.id },
@@ -531,7 +558,7 @@ async function buildAuthenticatedUserResponse(user) {
       name: user.name,
       email: user.email,
       phone_number: user.phone_number,
-      profile_image: user.profile_image,
+      profile_image: profileImage,
       instagram_handle: user.instagram_handle,
       role,
       user_type_id,
@@ -1188,6 +1215,7 @@ exports.login = async (req, res) => {
         user.id,
         user.user_type
       );
+      const resolvedProfileImage = await resolveUserProfileImage(user, crew_member_id ? { crew_member_id } : null);
 
       // const permissions = getPermissionsForRole(role);
 
@@ -1199,6 +1227,7 @@ exports.login = async (req, res) => {
           name: user.name,
           email: user.email,
           phone_number: user.phone_number,
+          profile_image: resolvedProfileImage,
           instagram_handle: user.instagram_handle,
           role,
           user_type_id,
@@ -1334,6 +1363,7 @@ affiliate_id = affiliate ? affiliate.affiliate_id : null;
         user.id,
         user.user_type
       );
+      const resolvedProfileImage = await resolveUserProfileImage(user, crew_member_id ? { crew_member_id } : null);
 
       return res.json({
         success: true,
@@ -1343,6 +1373,7 @@ affiliate_id = affiliate ? affiliate.affiliate_id : null;
           name: user.name,
           email: user.email,
           phone_number: user.phone_number,
+          profile_image: resolvedProfileImage,
           instagram_handle: user.instagram_handle,
           role,
           user_type_id,
@@ -1420,9 +1451,7 @@ exports.googleLogin = async (req, res) => {
     const name = String(payload?.name || '').trim() || email.split('@')[0] || 'Beige User';
     const emailVerified = payload?.email_verified === true || payload?.email_verified === 'true';
     const profileImage = String(payload?.picture || '').trim();
-console.log("========================");
-console.log("Profile Image:", profileImage);
-console.log("========================");
+
     if (!googleSub || !email || !emailVerified) {
       return res.status(400).json({
         success: false,
@@ -1543,6 +1572,7 @@ console.log("========================");
           password_hash: null,
           google_sub: googleSub,
           auth_provider: 'google',
+          profile_image: profileImage || null,
           user_type: creatorTypeId,
           role: 'creator',
           is_active: 1,
@@ -1678,9 +1708,12 @@ console.log("========================");
       const updates = {
         google_sub: googleSub,
         auth_provider: user.auth_provider || 'google',
-        email_verified: 1,
-        profile_image: profileImage
+        email_verified: 1
       };
+
+      if (profileImage) {
+        updates.profile_image = profileImage;
+      }
 
       if (!user.phone_number && normalizedPhone) {
         const phoneUser = await UserAll.findOne({
@@ -2358,6 +2391,11 @@ exports.registerCrewMemberStep1 = [
                 file_path: file.file_path,
                 file_category: 'profile_photo'
               }, { transaction });
+
+              await User.update(
+                { profile_image: file.file_path },
+                { where: { id: user_id }, transaction }
+              );
             }
           }
         }
@@ -2515,6 +2553,11 @@ exports.registerCrewMemberStep1 = [
               file_path: file.file_path,
               file_category: 'profile_photo'
             }, { transaction });
+
+            await User.update(
+              { profile_image: file.file_path },
+              { where: { id: newUser.id }, transaction }
+            );
           }
         }
       }
@@ -3020,11 +3063,13 @@ exports.changePasswordclient = async (req, res) => {
 exports.changePasswordCrewMember = async (req, res) => {
   try {
     const { user_id, currentPassword, newPassword } = req.body;
+    const authenticatedUserId = req.user?.userId;
+    const targetUserId = authenticatedUserId || user_id;
 
-    if (!user_id || !currentPassword || !newPassword) {
+    if (!targetUserId || !newPassword) {
       return res.status(400).json({
         success: false,
-        message: 'User ID, current password, and new password are required'
+        message: 'User ID and new password are required'
       });
     }
 
@@ -3035,7 +3080,7 @@ exports.changePasswordCrewMember = async (req, res) => {
       });
     }
 
-    const user = await User.findOne({ where: { id: user_id } });
+    const user = await User.findOne({ where: { id: targetUserId } });
 
     if (!user) {
       return res.status(404).json({
@@ -3044,23 +3089,35 @@ exports.changePasswordCrewMember = async (req, res) => {
       });
     }
 
-    const isPasswordCorrect = await bcrypt.compare(currentPassword, user.password_hash);
+    if (user.password_hash) {
+      if (!currentPassword) {
+        return res.status(400).json({
+          success: false,
+          message: 'Current password is required'
+        });
+      }
 
-    if (!isPasswordCorrect) {
-      return res.status(400).json({
-        success: false,
-        message: 'Current password is incorrect'
-      });
+      const isPasswordCorrect = await bcrypt.compare(currentPassword, user.password_hash);
+
+      if (!isPasswordCorrect) {
+        return res.status(400).json({
+          success: false,
+          message: 'Current password is incorrect'
+        });
+      }
     }
 
+    const hadPassword = Boolean(user.password_hash);
     const hashedNewPassword = await bcrypt.hash(newPassword, 10);
 
     user.password_hash = hashedNewPassword;
+    user.auth_provider = user.auth_provider === 'google' ? 'google_password' : user.auth_provider;
     await user.save();
 
     return res.status(200).json({
       success: true,
-      message: 'Password changed successfully'
+      message: hadPassword ? 'Password changed successfully' : 'Password set successfully',
+      has_password: true
     });
 
   } catch (error) {
@@ -3415,14 +3472,33 @@ exports.getOnboardingStatus = async (req, res) => {
     }
 
     if (!member) {
-      return res.json({ success: true, ...buildEmptyOnboardingSummary() });
+      return res.json({
+        success: true,
+        ...buildEmptyOnboardingSummary(),
+        is_crew_verified: 0,
+        can_access_dashboard: false,
+        should_resume_signup: true,
+        profile_onboarding_status: buildEmptyOnboardingSummary(),
+      });
     }
 
     const onboardingSummary = await syncCreatorRegistrationComplete(member);
+    const isCrewVerified = Number(member.is_crew_verified) === 1;
+    const effectiveOnboardingSummary = isCrewVerified
+      ? {
+          ...onboardingSummary,
+          onboardingMissingDetail: false,
+          is_registration_complete: 1,
+        }
+      : onboardingSummary;
 
     return res.json({
       success: true,
-      ...onboardingSummary
+      ...effectiveOnboardingSummary,
+      is_crew_verified: Number(member.is_crew_verified || 0),
+      can_access_dashboard: isCrewVerified || effectiveOnboardingSummary.is_registration_complete === 1,
+      should_resume_signup: !isCrewVerified && effectiveOnboardingSummary.is_registration_complete !== 1,
+      profile_onboarding_status: onboardingSummary,
     });
   } catch (error) {
     res.status(500).json({
