@@ -2165,6 +2165,24 @@ exports.uploadProfileFiles = [
           title: Array.isArray(req.body.title) ? req.body.title[0] : req.body.title || null,
           tag: Array.isArray(req.body.tag) ? req.body.tag[0] : req.body.tag || "[]"
         });
+
+        if (file_type === 'profile_photo') {
+          const crewMember = await crew_members.findOne({
+            where: { crew_member_id },
+            attributes: ['user_id', 'email']
+          });
+
+          if (crewMember?.user_id || crewMember?.email) {
+            await users.update(
+              { profile_image: uploadedFiles[0].file_path },
+              {
+                where: crewMember.user_id
+                  ? { id: crewMember.user_id }
+                  : { email: crewMember.email }
+              }
+            );
+          }
+        }
       } 
       /* MULTI FILE TYPES → BULK CREATE (e.g. recent_work) */
       else {
@@ -2286,6 +2304,22 @@ exports.uploadCPProfilePhoto = [
         tag: "[]",
         is_active: true
       });
+
+      const crewMember = await crew_members.findOne({
+        where: { crew_member_id },
+        attributes: ['user_id', 'email']
+      });
+
+      if (crewMember?.user_id || crewMember?.email) {
+        await users.update(
+          { profile_image: newFilePath },
+          {
+            where: crewMember.user_id
+              ? { id: crewMember.user_id }
+              : { email: crewMember.email }
+          }
+        );
+      }
 
       const onboardingSummary = await syncOnboardingForCrewMemberId(crew_member_id);
 
@@ -3934,4 +3968,3 @@ exports.checkCrewStatus = async (req, res) => {
     });
   }
 };
-
