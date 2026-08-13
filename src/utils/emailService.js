@@ -3795,6 +3795,46 @@ const sendFileShareInvitationEmail = async ({ to, data = {} }) => {
   });
 };
 
+const sendWorkspaceAccessInvitationEmail = async ({ to, data = {} }) => {
+  if (!to) {
+    return { success: false, error: 'Recipient email is required' };
+  }
+
+  const dashboardLink =
+    data?.dashboard_link ||
+    data?.shared_files_url ||
+    `${String(process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/affiliate/file-manager`;
+  const isRegistered = Boolean(data?.is_registered);
+  const folderName = data?.folder_name || data?.project_name || 'a File Manager folder';
+  const message = isRegistered
+    ? `${data?.sender_name || 'A Beige client'} shared ${folderName} with you. Log in to your Beige dashboard to view the files.`
+    : `${data?.sender_name || 'A Beige client'} shared ${folderName} with you. Please sign up for Beige using this email address to view the files in your dashboard.`;
+
+  if (FILE_SHARE_INVITATION_TEMPLATE_ID) {
+    return sendEmail({
+      to,
+      subject: 'A File Manager Folder Was Shared With You - BeigeAI',
+      templateId: FILE_SHARE_INVITATION_TEMPLATE_ID,
+      dynamicTemplateData: {
+        sender_name: data?.sender_name || 'Beige',
+        shared_files_url: dashboardLink,
+        share_url: dashboardLink,
+        share_message: message,
+        resource_type: 'workspace',
+        external_id: data?.external_id || '',
+        folder_name: folderName,
+        project_name: data?.project_name || data?.folder_name || '',
+        dashboard_link: dashboardLink,
+        signup_link: data?.signup_link || dashboardLink,
+        is_registered: isRegistered,
+        year: new Date().getFullYear(),
+      }
+    });
+  }
+
+  return { success: false, error: 'FILE_SHARE_INVITATION_TEMPLATE_ID is not configured' };
+};
+
 module.exports = {
   formatContentTypes,
   formatShootTypes,
@@ -3848,5 +3888,6 @@ module.exports = {
   sendFileApprovedInternalEmail,
   sendRevisionCommentAddedEmail,
   sendNewVersionUploadedClientEmail,
-  sendFileShareInvitationEmail
+  sendFileShareInvitationEmail,
+  sendWorkspaceAccessInvitationEmail
 };
