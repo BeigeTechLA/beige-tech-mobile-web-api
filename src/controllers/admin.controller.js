@@ -1,5 +1,6 @@
 const constants = require('../utils/constants');
 const { Sequelize, users, affiliates } = require('../models')
+const bcrypt = require('bcrypt');
 const multer = require('multer');
 const path = require('path');
 const common_model = require('../utils/common_model');
@@ -54,6 +55,274 @@ const EXTERNAL_FILE_MANAGER_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beig
 
 const getFrontendBaseUrl = () =>
   String(process.env.FRONTEND_URL || 'http://localhost:3000').trim().replace(/\/+$/, '');
+
+const normalizeAdminRole = (role) => String(role || '').trim().toLowerCase().replace(/\s+/g, '_');
+const ADMIN_PROFILE_ROLES = new Set(['admin', 'super_admin', 'superadmin', 'sales_admin', 'production_manager']);
+const normalizePhoneNumber = (number) => String(number || '').replace(/\D/g, '');
+
+const isAdminProfileRole = (role) => ADMIN_PROFILE_ROLES.has(normalizeAdminRole(role));
+
+const formatAdminProfile = (adminUser) => ({
+  id: adminUser.id,
+  name: adminUser.name,
+  number: adminUser.phone_number
+});
+
+const getAuthAdminUser = async (req) => {
+  const userId = Number(req.user?.userId || req.user?.id || req.userId);
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return null;
+  }
+
+  return users.findOne({
+    where: {
+      id: userId,
+      is_active: 1
+    },
+    attributes: ['id', 'name', 'phone_number', 'password_hash', 'user_type', 'role'],
+    include: [
+      {
+        model: db.user_type,
+        as: 'userType',
+        attributes: ['user_role'],
+        required: false
+      }
+    ]
+  });
+};
+
+const findAdminProfileById = async (id) => users.findOne({
+  where: {
+    id,
+    is_active: 1
+  },
+  attributes: ['id', 'name', 'phone_number', 'password_hash', 'user_type', 'role'],
+  include: [
+    {
+      model: db.user_type,
+      as: 'userType',
+      attributes: ['user_role'],
+      required: false
+    }
+  ]
+});
+
+const ensureAuthenticatedAdmin = async (req, res) => {
+  const authUser = await getAuthAdminUser(req);
+  const authRole = authUser?.userType?.user_role || authUser?.role || req.user?.userRole || req.userRole;
+
+  if (!authUser) {
+    res.status(401).json({
+      success: false,
+      message: 'Authenticated admin is required'
+    });
+    return null;
+  }
+
+  if (!isAdminProfileRole(authRole)) {
+    res.status(403).json({
+      success: false,
+      message: 'Admin access required'
+    });
+    return null;
+  }
+
+  return authUser;
+};
+
+const isUserAdminProfile = (user) => {
+  const role = user?.userType?.user_role || user?.role;
+  return isAdminProfileRole(role);
+};
+
+exports.getAdminProfile = async (req, res) => {
+  try {
+    const authUser = await ensureAuthenticatedAdmin(req, res);
+    if (!authUser) return null;
+
+    const adminId = Number(req.params.id);
+    if (!Number.isInteger(adminId) || adminId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid admin id is required'
+      });
+    }
+
+    const adminUser = await findAdminProfileById(adminId);
+    if (!adminUser || !isUserAdminProfile(adminUser)) {
+      return res.status(404).json({
+        success: false,
+        message: 'Admin not found'
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: formatAdminProfile(adminUser)
+    });
+  } catch (error) {
+    console.error('Get Admin Profile Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while fetching admin profile',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.updateAdminProfile = async (req, res) => {
+  try {
+    const authUser = await ensureAuthenticatedAdmin(req, res);
+    if (!authUser) return null;
+
+    const adminId = Number(req.params.id);
+    if (!Number.isInteger(adminId) || adminId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid admin id is required'
+      });
+    }
+
+    const name = String(req.body?.name || '').trim();
+    const number = normalizePhoneNumber(req.body?.number ?? req.body?.phone_number);
+
+    if (!name) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name is required'
+      });
+    }
+
+    if (!/^\d{10}$/.test(number)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Number must be a valid 10 digit mobile number'
+      });
+    }
+
+    const adminUser = await findAdminProfileById(adminId);
+    if (!adminUser || !isUserAdminProfile(adminUser)) {
+      return res.status(404).json({
+        success: false,
+        message: 'Admin not found'
+      });
+    }
+
+    const duplicateAdmin = await users.findOne({
+      where: {
+        id: { [Op.ne]: adminId },
+        phone_number: number,
+        is_active: 1
+      },
+      include: [
+        {
+          model: db.user_type,
+          as: 'userType',
+          attributes: ['user_role'],
+          required: false
+        }
+      ]
+    });
+
+    if (duplicateAdmin && isUserAdminProfile(duplicateAdmin)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Number already exists for another admin'
+      });
+    }
+
+    await adminUser.update({
+      name,
+      phone_number: number,
+      updated_at: new Date()
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Admin profile updated successfully',
+      data: formatAdminProfile(adminUser)
+    });
+  } catch (error) {
+    console.error('Update Admin Profile Error:', error);
+
+    if (error.name === 'SequelizeUniqueConstraintError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Number already exists'
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while updating admin profile',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.changeAdminProfilePassword = async (req, res) => {
+  try {
+    const authUser = await ensureAuthenticatedAdmin(req, res);
+    if (!authUser) return null;
+
+    const { currentPassword, newPassword, confirmPassword } = req.body || {};
+
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Current password, new password, and confirm password are required'
+      });
+    }
+
+    if (!authUser.password_hash) {
+      return res.status(400).json({
+        success: false,
+        message: 'Current password is incorrect'
+      });
+    }
+
+    const isPasswordCorrect = await bcrypt.compare(currentPassword, authUser.password_hash);
+    if (!isPasswordCorrect) {
+      return res.status(400).json({
+        success: false,
+        message: 'Current password is incorrect'
+      });
+    }
+
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'New password and confirm password do not match'
+      });
+    }
+
+    if (String(newPassword).length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'New password must be at least 6 characters long'
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await authUser.update({
+      password_hash: hashedPassword,
+      updated_at: new Date()
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Password changed successfully'
+    });
+  } catch (error) {
+    console.error('Change Admin Profile Password Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while changing password',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
 
 const buildShootReceiptUrl = ({ bookingId, manualPaymentId = null, paymentId = null, download = false }) => {
   const url = new URL(`${getFrontendBaseUrl()}/beige_invoice/${encodeURIComponent(String(bookingId))}`);

@@ -151,6 +151,9 @@ const shootsViewOrEdit = requireAnyPermission([
   'sales_admin_shoots.edit'
 ], allowSalesRepRoles);
 
+router.get('/profile/:id', authMiddleware, admin.getAdminProfile);
+router.put('/profile/:id', authMiddleware, admin.updateAdminProfile);
+router.post('/profile/change-password', authMiddleware, admin.changeAdminProfilePassword);
 router.post('/create-project', authMiddleware, shootsCreate, admin.createProject);
 router.post('/match-crew', admin.matchCrew);
 router.post('/assignMatchCrew', admin.assignCrew);
