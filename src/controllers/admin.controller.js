@@ -9698,112 +9698,342 @@ exports.getShootStatus = async (req, res) => {
     });
   }
 };
-
 exports.getTopCreativePartners = async (req, res) => {
   try {
-    const { range, start_date, end_date } = req.query;
+    const filter = String(req.query.filter || "most_shoot")
+      .trim()
+      .toLowerCase();
+    const limit = 10;
 
-    const parsedLimit = Number(req.query.limit || 10);
-    const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 10;
+    if (!["most_shoot", "most_paid"].includes(filter)) {
+      return res.status(400).json({
+        error: true,
+        message: "filter must be most_shoot or most_paid",
+      });
+    }
+    const getTotalEarningsByCreatorIds = async (creatorIds = []) => {
+      const normalizedCreatorIds = [
+        ...new Set(creatorIds.map((id) => Number(id)).filter(Boolean)),
+      ];
 
-    let dateFilter = {};
+      if (!normalizedCreatorIds.length) {
+        return new Map();
+      }
 
-    if (start_date && end_date) {
-      dateFilter = {
-        created_at: {
-          [Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`]
+      const earnings = await db.creator_earnings.findAll({
+        where: {
+          creator_id: {
+            [Op.in]: normalizedCreatorIds,
+          },
+          approval_status: {
+            [Op.in]: ["pending_approval", "approved", "rejected"],
+          },
+        },
+
+        attributes: [
+          "creator_earning_id",
+          "creator_id",
+          "booking_id",
+          "net_earning_amount",
+          "gross_amount",
+          "approval_status",
+          "status",
+        ],
+
+        raw: true,
+      });
+
+      const totalEarningsMap = new Map();
+      normalizedCreatorIds.forEach((creatorId) => {
+        totalEarningsMap.set(creatorId, 0);
+      });
+      earnings.forEach((earning) => {
+        const creatorId = Number(earning.creator_id);
+        if (!creatorId) {
+          return;
         }
-      };
-    } else if (range === 'month') {
-      dateFilter = {
-        created_at: {
-          [Op.gte]: Sequelize.literal("DATE_FORMAT(CURDATE(), '%Y-%m-01')")
+
+        const cpPayout = Number(
+          earning.net_earning_amount || earning.gross_amount || 0,
+        );
+
+        if (!Number.isFinite(cpPayout)) {
+          return;
         }
+
+        totalEarningsMap.set(
+          creatorId,
+          Number(totalEarningsMap.get(creatorId) || 0) + cpPayout,
+        );
+      });
+
+      const roundedMap = new Map();
+      totalEarningsMap.forEach((amount, creatorId) => {
+        roundedMap.set(creatorId, Number(Number(amount || 0).toFixed(2)));
+      });
+      return roundedMap;
+    };
+
+    const getCreatorsByIds = async (creatorIds = []) => {
+      const normalizedCreatorIds = [
+        ...new Set(creatorIds.map((id) => Number(id)).filter(Boolean)),
+      ];
+
+      if (!normalizedCreatorIds.length) {
+        return [];
+      }
+
+      return db.crew_members.findAll({
+        where: {
+          crew_member_id: {
+            [Op.in]: normalizedCreatorIds,
+          },
+          is_active: 1,
+          is_crew_verified: 1,
+        },
+        attributes: ["crew_member_id", "first_name", "last_name", "email"],
+        include: [
+          {
+            model: db.crew_member_files,
+            as: "crew_member_files",
+            attributes: ["file_path", "file_type", "created_at"],
+            where: {
+              file_type: "profile_photo",
+              is_active: 1,
+            },
+            required: false,
+            separate: true,
+            limit: 1,
+            order: [["created_at", "DESC"]],
+          },
+        ],
+      });
+    };
+
+    const getShootCountsByCreatorIds = async (creatorIds = []) => {
+      const normalizedCreatorIds = [
+        ...new Set(creatorIds.map((id) => Number(id)).filter(Boolean)),
+      ];
+      if (!normalizedCreatorIds.length) {
+        return new Map();
+      }
+
+      const shootCounts = await db.assigned_crew.findAll({
+        attributes: [
+          "crew_member_id",
+          [
+            Sequelize.fn(
+              "COUNT",
+              Sequelize.fn("DISTINCT", Sequelize.col("project_id")),
+            ),
+            "total_shoots",
+          ],
+        ],
+        where: {
+          is_active: 1,
+          crew_member_id: {
+            [Op.in]: normalizedCreatorIds,
+          },
+        },
+        group: ["crew_member_id"],
+        raw: true,
+      });
+
+      return new Map(
+        shootCounts.map((item) => [
+          Number(item.crew_member_id),
+          Number(item.total_shoots || 0),
+        ]),
+      );
+    };
+
+    const buildCreatorResult = ({
+      creator,
+      rank,
+      totalShoots,
+      totalEarnings,
+    }) => {
+      const files = creator?.crew_member_files || [];
+      const photo = files.length ? files[0].file_path : null;
+      return {
+        rank,
+        id: Number(creator.crew_member_id),
+        name: [creator.first_name, creator.last_name]
+          .filter(Boolean)
+          .join(" ")
+          .trim(),
+        email: creator.email || null,
+        total_shoots: Number(totalShoots || 0),
+        total_paid: Number(totalEarnings || 0),
+        total_earnings: Number(totalEarnings || 0),
+        avatar: photo,
       };
-    } else if (range === 'week') {
-      dateFilter = {
-        created_at: {
-          [Op.gte]: Sequelize.literal("DATE_SUB(NOW(), INTERVAL 7 DAY)")
-        }
-      };
-    } else if (range === 'year') {
-      dateFilter = {
-        created_at: {
-          [Op.gte]: Sequelize.literal("DATE_FORMAT(CURDATE(), '%Y-01-01')")
-        }
-      };
+    };
+
+    let result = [];
+    if (filter === "most_shoot") {
+      const topShootPartners = await db.assigned_crew.findAll({
+        attributes: [
+          "crew_member_id",
+          [
+            Sequelize.fn(
+              "COUNT",
+              Sequelize.fn("DISTINCT", Sequelize.col("project_id")),
+            ),
+            "total_shoots",
+          ],
+        ],
+        where: { is_active: 1 },
+        include: [
+          {
+            model: db.crew_members,
+            as: "crew_member",
+            attributes: [],
+            where: {
+              is_active: 1,
+              is_crew_verified: 1,
+            },
+            required: true,
+          },
+        ],
+        group: ["crew_member_id"],
+        having: Sequelize.where(
+          Sequelize.fn(
+            "COUNT",
+            Sequelize.fn("DISTINCT", Sequelize.col("project_id")),
+          ),
+          {
+            [Op.gt]: 0,
+          },
+        ),
+        order: [[Sequelize.literal("total_shoots"), "DESC"]],
+        limit,
+        raw: true,
+      });
+
+      const creatorIds = topShootPartners
+        .map((partner) => Number(partner.crew_member_id))
+        .filter(Boolean);
+
+      if (creatorIds.length) {
+        const [creators, totalEarningsMap] = await Promise.all([
+          getCreatorsByIds(creatorIds),
+          getTotalEarningsByCreatorIds(creatorIds),
+        ]);
+
+        const creatorMap = new Map(
+          creators.map((creator) => [Number(creator.crew_member_id), creator]),
+        );
+
+        result = topShootPartners
+          .map((partner, index) => {
+            const creatorId = Number(partner.crew_member_id);
+            const creator = creatorMap.get(creatorId);
+
+            if (!creator) {
+              return null;
+            }
+
+            return buildCreatorResult({
+              creator,
+              rank: index + 1,
+              totalShoots: Number(partner.total_shoots || 0),
+              totalEarnings: Number(totalEarningsMap.get(creatorId) || 0),
+            });
+          })
+          .filter(Boolean);
+      }
     }
 
-    const partners = await payment_transactions.findAll({
-      attributes: [
-        'creator_id',
-        [Sequelize.fn('SUM', Sequelize.col('total_amount')), 'total_earnings']
-      ],
-      where: {
-        status: 'succeeded',
-        ...dateFilter
-      },
-      include: [
-        {
-          model: crew_members,
-          as: 'creator',
-          attributes: ['crew_member_id', 'first_name', 'last_name', 'email'],
-          where: {
-            is_active: 1,
-            is_crew_verified: 1, // only approved crew (exclude pending/rejected)
+    if (filter === "most_paid") {
+      const creatorEarnings = await db.creator_earnings.findAll({
+        where: {
+          approval_status: {
+            [Op.in]: ["pending_approval", "approved", "rejected"],
           },
-          required: true,
-          include: [
-            {
-              model: crew_member_files,
-              as: 'crew_member_files',
-              attributes: ['file_path'],
-              where: {
-                file_type: 'profile_photo',
-                is_active: 1
-              },
-              required: false,
-              separate: true,
-              limit: 1,
-              order: [['created_at', 'DESC']]
-            }
-          ]
-        }
-      ],
-      group: ['creator_id'],
-      having: Sequelize.where(
-        Sequelize.fn('SUM', Sequelize.col('total_amount')),
-        { [Op.gt]: 0 } // exclude CPs with $0 earnings
-      ),
-      order: [[Sequelize.literal('total_earnings'), 'DESC']],
-      limit: limit
-    });
-
-    const result = partners
-      .filter(p => p.creator)
-      .map(p => {
-        const files = p.creator.crew_member_files || [];
-        const photo = files.length ? `${files[0].file_path}` : null;
-
-        return {
-          id: p.creator_id,
-          name: `${p.creator.first_name} ${p.creator.last_name}`,
-          email: p.creator.email,
-          total_earnings: Number(p.get('total_earnings') || 0),
-          avatar: photo
-        };
+        },
+        attributes: ["creator_id", "net_earning_amount", "gross_amount"],
+        raw: true,
       });
+
+      const totalEarningsMap = new Map();
+
+      creatorEarnings.forEach((earning) => {
+        const creatorId = Number(earning.creator_id);
+
+        if (!creatorId) {
+          return;
+        }
+        const cpPayout = Number(
+          earning.net_earning_amount || earning.gross_amount || 0,
+        );
+
+        if (!Number.isFinite(cpPayout)) {
+          return;
+        }
+
+        totalEarningsMap.set(
+          creatorId,
+          Number(totalEarningsMap.get(creatorId) || 0) + cpPayout,
+        );
+      });
+
+      const creatorIds = [...totalEarningsMap.keys()];
+
+      if (creatorIds.length) {
+        const creators = await getCreatorsByIds(creatorIds);
+        const creatorMap = new Map(
+          creators.map((creator) => [Number(creator.crew_member_id), creator]),
+        );
+
+        const sortedPartners = creatorIds
+          .filter((creatorId) => creatorMap.has(creatorId))
+          .map((creatorId) => ({
+            creator_id: creatorId,
+            total_earnings: Number(
+              Number(totalEarningsMap.get(creatorId) || 0).toFixed(2),
+            ),
+          }))
+          .filter((partner) => partner.total_earnings > 0)
+          .sort((a, b) => b.total_earnings - a.total_earnings)
+          .slice(0, limit);
+
+        const topCreatorIds = sortedPartners.map(
+          (partner) => partner.creator_id,
+        );
+
+        const shootCountMap = await getShootCountsByCreatorIds(topCreatorIds);
+
+        result = sortedPartners
+          .map((partner, index) => {
+            const creator = creatorMap.get(partner.creator_id);
+            if (!creator) {
+              return null;
+            }
+
+            return buildCreatorResult({
+              creator,
+              rank: index + 1,
+              totalShoots: shootCountMap.get(partner.creator_id) || 0,
+              totalEarnings: partner.total_earnings,
+            });
+          })
+          .filter(Boolean);
+      }
+    }
 
     return res.status(200).json({
       error: false,
       message: "Top creative partners fetched successfully",
-      data: result
+      filter,
+      data: result,
     });
   } catch (err) {
-    console.error('Top Creative Partners Error:', err);
+    console.error("Top Creative Partners Error:", err);
+
     return res.status(500).json({
       error: true,
-      message: 'Internal server error'
+      message: "Internal server error",
     });
   }
 };
