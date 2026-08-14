@@ -36,6 +36,7 @@ router.use('/payments', require('./payments.routes'));
 router.use('/finance', require('./finance.routes'));
 router.use('/creator-earnings', require('./creator-earnings.routes'));
 router.use('/waitlist', require('./waitlist.routes'));
+router.use('/newsletter', require('./newsletter.routes'));
 router.use('/investors', require('./investor.routes'));
 router.use('/admin', require('./admin.routes'));
 router.use('/creator', require('./creator.routes'));
