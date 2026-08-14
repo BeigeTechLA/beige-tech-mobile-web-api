@@ -6,7 +6,6 @@ module.exports = function (sequelize, DataTypes) {
     shift_id: { type: DataTypes.INTEGER, allowNull: false, references: { model: 'shifts', key: 'id' } },
     sales_rep_id: { type: DataTypes.INTEGER, allowNull: false, references: { model: 'users', key: 'id' } },
     assignment_order: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 0 },
-    status: { type: DataTypes.ENUM('active', 'inactive'), allowNull: true, defaultValue: 'active' },
     user_status: { type: DataTypes.BOOLEAN, allowNull: true, defaultValue: true },
     last_activity: { type: DataTypes.DATE, allowNull: true },
     created_at: { type: DataTypes.DATE, allowNull: false, defaultValue: Sequelize.Sequelize.fn('current_timestamp') },

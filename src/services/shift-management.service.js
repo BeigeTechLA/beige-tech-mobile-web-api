@@ -142,8 +142,45 @@ function normalizeStoredDays(days) {
   try { return JSON.parse(days); } catch (_) { return []; }
 }
 
+function normalizeStoredStatus(status) {
+  return String(status || '').trim().toLowerCase() === 'inactive' ? 'inactive' : 'active';
+}
+
+function normalizeUserStatusFilter(value) {
+  const normalized = String(value || '').trim().toLowerCase().replace(/\s+/g, '');
+  if (!normalized) return null;
+  if (['active', 'true', '1', 'on', 'enabled'].includes(normalized)) return true;
+  if (['inactive', 'false', '0', 'off', 'disabled'].includes(normalized)) return false;
+  return null;
+}
+
+function normalizeShiftStatusFilter(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'active' || normalized === 'inactive') return normalized;
+  return null;
+}
+
 function workingHours(shift) {
   return `${shift.start_time} - ${shift.end_time}`;
+}
+
+function getShiftRuntimeStatus(shift, now = new Date()) {
+  if (normalizeStoredStatus(shift.status) !== 'active') {
+    return 'inactive';
+  }
+
+  const { day, time } = getIstDayAndTime(now);
+  return isShiftActiveAt(shift, day, time) ? 'active' : 'inactive';
+}
+
+function decorateShiftWithRuntimeStatus(shift, now = new Date()) {
+  const row = shift?.toJSON ? shift.toJSON() : { ...shift };
+  const stored_status = normalizeStoredStatus(row.status);
+  return {
+    ...row,
+    stored_status,
+    status: getShiftRuntimeStatus({ ...row, status: stored_status }, now)
+  };
 }
 
 function salesRepPayload(link) {
@@ -152,7 +189,6 @@ function salesRepPayload(link) {
     sales_rep_id: link.sales_rep_id,
     name: rep.name || null,
     email: rep.email || null,
-    status: link.status,
     user_status: Boolean(link.user_status),
     last_activity: link.last_activity,
     assignment_order: link.assignment_order,
@@ -202,7 +238,7 @@ async function hasOverlapForSalesRep(salesRepId, shift, excludeShiftId = null) {
   const links = await models.shift_salespeople.findAll({
     where: {
       sales_rep_id: salesRepId,
-      status: 'active',
+      user_status: true,
       ...(excludeShiftId ? { shift_id: { [Op.ne]: excludeShiftId } } : {})
     },
     include: [{ model: models.shifts, as: 'shift', where: { status: 'active' } }]
@@ -227,13 +263,13 @@ async function decorateLinksWithOverlap(links, shift) {
 async function createShift(payload) {
   const start_time = validateTime(payload.start_time, 'start_time');
   const end_time = validateTime(payload.end_time, 'end_time');
+  const status = String(payload.status || 'active').trim().toLowerCase() === 'inactive' ? 'inactive' : 'active';
   const shift = await models.shifts.create({
     name: payload.name,
     start_time,
     end_time,
     active_days: normalizeDays(payload.active_days),
-    is_enabled: payload.is_enabled !== undefined ? Boolean(payload.is_enabled) : true,
-    status: payload.status || 'active'
+    status
   });
   return shift;
 }
@@ -241,7 +277,6 @@ async function createShift(payload) {
 async function listShifts(query) {
   const { page, limit, offset } = pageParams(query);
   const where = {};
-  if (query.status) where.status = query.status;
   if (query.date) {
     const range = dateRange(query.date);
     where.created_at = { [Op.between]: [range.start, range.end] };
@@ -249,17 +284,20 @@ async function listShifts(query) {
     where.created_at = { [Op.between]: [`${query.month}-01`, `${query.month}-31 23:59:59`] };
   }
 
-  const result = await models.shifts.findAndCountAll({
+  const shifts = await models.shifts.findAll({
     where,
     order: [['created_at', 'DESC']],
-    limit,
-    offset
   });
 
-  const shiftIds = result.rows.map((shift) => shift.id);
+  const normalizedStatusFilter = normalizeShiftStatusFilter(query.status);
+  const decoratedRows = shifts.map((shift) => decorateShiftWithRuntimeStatus(shift));
+  const statusFilteredRows = normalizedStatusFilter
+    ? decoratedRows.filter((shift) => shift.status === normalizedStatusFilter)
+    : decoratedRows;
+  const shiftIds = statusFilteredRows.map((shift) => shift.id);
   const salespeopleLinks = shiftIds.length
     ? await models.shift_salespeople.findAll({
-        where: { shift_id: { [Op.in]: shiftIds } },
+      where: { shift_id: { [Op.in]: shiftIds } },
         include: [{ model: models.users, as: 'sales_rep', attributes: USER_ATTRS }],
         order: [
           ['shift_id', 'ASC'],
@@ -275,11 +313,12 @@ async function listShifts(query) {
     linksByShiftId.get(row.shift_id).push(row);
   });
 
-  const rows = await Promise.all(result.rows.map(async (shift) => {
-    const json = shift.toJSON();
+  const rows = await Promise.all(statusFilteredRows.slice(offset, offset + limit).map(async (shift) => {
+    const json = shift;
+    const { is_enabled, ...rest } = json;
     const links = await decorateLinksWithOverlap(linksByShiftId.get(json.id) || [], json);
     return {
-      ...json,
+      ...rest,
       salespeople: links,
       working_hours: workingHours(json),
       active_days: normalizeStoredDays(json.active_days),
@@ -293,7 +332,7 @@ async function listShifts(query) {
     };
   }));
 
-  return { rows, pagination: { page, limit, total: result.count, pages: Math.ceil(result.count / limit) } };
+  return { rows, pagination: { page, limit, total: statusFilteredRows.length, pages: Math.ceil(statusFilteredRows.length / limit) } };
 }
 
 async function getShiftDetail(id) {
@@ -301,10 +340,11 @@ async function getShiftDetail(id) {
     include: [{ model: models.shift_salespeople, as: 'salespeople', include: [{ model: models.users, as: 'sales_rep', attributes: USER_ATTRS }] }]
   });
   if (!shift) return null;
-  const json = shift.toJSON();
+  const json = decorateShiftWithRuntimeStatus(shift);
+  const { is_enabled, ...rest } = json;
   const links = await decorateLinksWithOverlap(json.salespeople || [], json);
   return {
-    ...json,
+    ...rest,
     working_hours: workingHours(json),
     active_days: normalizeStoredDays(json.active_days),
     shift_overlapping: links.some((link) => link.shift_overlapping),
@@ -315,9 +355,12 @@ async function getShiftDetail(id) {
 async function updateShift(id, payload) {
   const shift = await getShiftOrThrow(id);
   const update = {};
-  ['name', 'is_enabled', 'status'].forEach((field) => {
+  ['name', 'status'].forEach((field) => {
     if (payload[field] !== undefined) update[field] = payload[field];
   });
+  if (payload.status !== undefined) {
+    update.status = String(payload.status).trim().toLowerCase() === 'inactive' ? 'inactive' : 'active';
+  }
   if (payload.start_time) update.start_time = validateTime(payload.start_time, 'start_time');
   if (payload.end_time) update.end_time = validateTime(payload.end_time, 'end_time');
   if (payload.active_days) update.active_days = normalizeDays(payload.active_days);
@@ -326,11 +369,25 @@ async function updateShift(id, payload) {
 }
 
 async function recomputeNextAssignee(shiftId) {
-  const firstActive = await models.shift_salespeople.findOne({
-    where: { shift_id: shiftId, status: 'active', user_status: true },
+  const shift = await models.shifts.findByPk(shiftId, {
+    attributes: ['next_assignee_sales_rep_id']
+  });
+  if (!shift) {
+    const error = new Error('Shift not found');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const links = await models.shift_salespeople.findAll({
+    where: { shift_id: shiftId },
+    attributes: ['sales_rep_id', 'assignment_order', 'user_status'],
     order: [['assignment_order', 'ASC']]
   });
-  const nextAssigneeId = firstActive ? firstActive.sales_rep_id : null;
+  const currentPointerId = shift.next_assignee_sales_rep_id;
+  const pointerStillExists = links.some((link) => String(link.sales_rep_id) === String(currentPointerId));
+  if (pointerStillExists) return currentPointerId;
+
+  const nextAssigneeId = selectNextRoundRobinAssigneeId(links, currentPointerId);
   await models.shifts.update({ next_assignee_sales_rep_id: nextAssigneeId }, { where: { id: shiftId } });
   return nextAssigneeId;
 }
@@ -352,7 +409,8 @@ async function listSalespeople(shiftId, query) {
   const shift = await getShiftOrThrow(shiftId);
   const { page, limit, offset } = pageParams(query);
   const where = { shift_id: shiftId };
-  if (query.status) where.status = query.status;
+  const userStatus = normalizeUserStatusFilter(query.user_status ?? query.status);
+  if (userStatus !== null) where.user_status = userStatus;
   // shift_salespeople rows are created only after validateSalesRep(), which uses
   // the same assignable-sales scope as GET /api/sales/sales-reps.
   const include = [{ model: models.users, as: 'sales_rep', attributes: USER_ATTRS, where: query.search ? { [Op.or]: [{ name: { [Op.like]: `%${query.search}%` } }, { email: { [Op.like]: `%${query.search}%` } }] } : undefined }];
@@ -365,7 +423,7 @@ async function listAllShiftSalespeople(query) {
   const { page, limit, offset } = pageParams(query);
   const shiftId = query.shift_id ? parseInt(query.shift_id, 10) : null;
   if (query.shift_id && !Number.isInteger(shiftId)) throw new Error('shift_id must be a number');
-  const status = query.status ? String(query.status).trim().toLowerCase() : '';
+  const userStatus = normalizeUserStatusFilter(query.user_status ?? query.status);
 
   const salesReps = await leadAssignmentService.getActiveSalesReps({
     attributes: USER_ATTRS,
@@ -380,7 +438,7 @@ async function listAllShiftSalespeople(query) {
     sales_rep_id: { [Op.in]: salesRepIds }
   };
   if (shiftId) linkWhere.shift_id = shiftId;
-  if (status && status !== 'active') linkWhere.status = status;
+  if (userStatus !== null) linkWhere.user_status = userStatus;
 
   const links = await models.shift_salespeople.findAll({
     where: linkWhere,
@@ -405,12 +463,11 @@ async function listAllShiftSalespeople(query) {
 
     if (!repLinks.length) {
       if (shiftId) continue;
-      if (status && status !== 'active') continue;
+      if (userStatus !== null) continue;
       rows.push({
         sales_rep_id: rep.id,
         name: rep.name || null,
         email: rep.email || null,
-        status: 'active',
         user_status: null,
         last_activity: null,
         assignment_order: null,
@@ -422,7 +479,7 @@ async function listAllShiftSalespeople(query) {
     }
 
     for (const row of repLinks) {
-      if (status && row.status !== status) continue;
+      if (userStatus !== null && Boolean(row.user_status) !== userStatus) continue;
       row.sales_rep = rep;
       row.shift_overlapping = row.shift
         ? await hasOverlapForSalesRep(row.sales_rep_id, row.shift, row.shift_id)
@@ -435,11 +492,30 @@ async function listAllShiftSalespeople(query) {
   return { rows: paginatedRows, pagination: { page, limit, total: rows.length, pages: Math.ceil(rows.length / limit) } };
 }
 
+function selectNextRoundRobinAssigneeId(links, currentSalesRepId) {
+  const orderedLinks = Array.isArray(links) ? links : [];
+  if (!orderedLinks.length) return null;
+
+  const currentIndex = orderedLinks.findIndex((link) => String(link.sales_rep_id) === String(currentSalesRepId));
+  const startIndex = currentIndex >= 0 ? currentIndex + 1 : 0;
+  const activeLinks = orderedLinks.filter((link) => Boolean(link.user_status));
+  if (!activeLinks.length) return null;
+
+  for (let offset = 0; offset < orderedLinks.length; offset += 1) {
+    const link = orderedLinks[(startIndex + offset) % orderedLinks.length];
+    if (!Boolean(link.user_status)) continue;
+    return link.sales_rep_id;
+  }
+
+  return activeLinks[0].sales_rep_id;
+}
+
 async function getNextAssignee(shiftId, options = {}) {
   const transaction = options.transaction || null;
   const shift = await models.shifts.findByPk(shiftId, {
     transaction,
-    lock: transaction ? models.Sequelize.Transaction.LOCK.UPDATE : undefined
+    lock: transaction ? models.Sequelize.Transaction.LOCK.UPDATE : undefined,
+    attributes: ['id', 'next_assignee_sales_rep_id']
   });
   if (!shift) {
     const error = new Error('Shift not found');
@@ -447,18 +523,30 @@ async function getNextAssignee(shiftId, options = {}) {
     throw error;
   }
   const links = await models.shift_salespeople.findAll({
-    where: { shift_id: shiftId, status: 'active', user_status: true },
+    where: { shift_id: shiftId },
+    attributes: ['sales_rep_id', 'assignment_order', 'user_status'],
     order: [['assignment_order', 'ASC']],
     transaction,
     lock: transaction ? models.Sequelize.Transaction.LOCK.UPDATE : undefined
   });
   if (!links.length) return null;
-  const index = Math.max(links.findIndex((link) => link.sales_rep_id === shift.next_assignee_sales_rep_id), 0);
-  const assignee = links[index];
-  const next = links[(index + 1) % links.length];
-  await shift.update({ next_assignee_sales_rep_id: next.sales_rep_id }, { transaction });
-  await assignee.update({ last_activity: new Date() }, { transaction });
-  return assignee.sales_rep_id;
+
+  const assigneeId = selectNextRoundRobinAssigneeId(links, shift.next_assignee_sales_rep_id);
+  if (assigneeId == null) return null;
+
+  await shift.update({ next_assignee_sales_rep_id: assigneeId }, { transaction });
+  const assigneeIndex = links.findIndex((link) => String(link.sales_rep_id) === String(assigneeId));
+  const assignee = links[assigneeIndex];
+  if (assignee) {
+    await models.shift_salespeople.update(
+      { last_activity: new Date() },
+      {
+        where: { shift_id: shiftId, sales_rep_id: assignee.sales_rep_id },
+        transaction
+      }
+    );
+  }
+  return assigneeId;
 }
 
 async function logAssignment(payload, options = {}) {
@@ -468,16 +556,19 @@ async function logAssignment(payload, options = {}) {
 }
 
 async function getRoundRobin(shiftId) {
-  const shift = await getShiftOrThrow(shiftId);
-  const nextAssigneeId = await recomputeNextAssignee(shiftId);
+  await getShiftOrThrow(shiftId);
   const links = await models.shift_salespeople.findAll({
     where: { shift_id: shiftId },
     include: [{ model: models.users, as: 'sales_rep', attributes: USER_ATTRS }],
     order: [['assignment_order', 'ASC']]
   });
+  const shift = await models.shifts.findByPk(shiftId, {
+    attributes: ['next_assignee_sales_rep_id']
+  });
+  const nextAssigneeId = selectNextRoundRobinAssigneeId(links, shift?.next_assignee_sales_rep_id);
   return {
     next_assignee_sales_rep_id: nextAssigneeId,
-    no_active_assignee: nextAssigneeId === null,
+    no_active_assignee: nextAssigneeId == null,
     salespeople: links.map(salesRepPayload)
   };
 }
@@ -517,13 +608,14 @@ async function getActiveShiftsNow(now = new Date(), options = {}) {
   const { day, time: currentTime } = getIstDayAndTime(now);
   const shifts = await models.shifts.findAll({
     where: {
-      status: 'active',
-      is_enabled: true
+      status: 'active'
     },
     order: [['start_time', 'ASC']],
     transaction: options.transaction || null
   });
-  return shifts.filter((shift) => isShiftActiveAt(shift, day, currentTime));
+  return shifts
+    .filter((shift) => isShiftActiveAt(shift, day, currentTime))
+    .map((shift) => decorateShiftWithRuntimeStatus(shift, now));
 }
 
 async function assignLeadViaActiveShiftRoundRobin({
@@ -624,12 +716,9 @@ const PENDING_ASSIGNMENT_LEAD_STATUSES = [
   'discount_applied'
 ];
 
-function activeOrEnabledShiftWhere(extraWhere = {}) {
+function activeShiftWhere(extraWhere = {}) {
   return {
-    [Op.or]: [
-      { is_enabled: true },
-      { status: 'active' }
-    ],
+    status: 'active',
     ...extraWhere
   };
 }
@@ -651,7 +740,6 @@ async function countDistinctActiveSalespeopleForShiftIds(shiftIds, extraWhere = 
     where: {
       shift_id: { [Op.in]: shiftIds },
       user_status: true,
-      status: 'active',
       ...extraWhere
     },
     distinct: true,
@@ -674,7 +762,7 @@ async function countActiveShiftsForDate(date) {
   const range = dateRange(date);
   const day = dayFromDate(date);
   const shifts = await models.shifts.findAll({
-    where: activeOrEnabledShiftWhere({
+    where: activeShiftWhere({
       created_at: { [Op.between]: [range.start, range.end] }
     }),
     attributes: ['id', 'active_days']
@@ -684,8 +772,8 @@ async function countActiveShiftsForDate(date) {
 
 async function getActiveOrEnabledShifts(extraWhere = {}) {
   return models.shifts.findAll({
-    where: activeOrEnabledShiftWhere(extraWhere),
-    attributes: ['id', 'status', 'is_enabled', 'created_at']
+    where: activeShiftWhere(extraWhere),
+    attributes: ['id', 'status', 'created_at']
   });
 }
 
@@ -698,6 +786,14 @@ async function countCurrentActiveSalespeople() {
   };
 }
 
+async function countRuntimeActiveShifts(extraWhere = {}) {
+  const shifts = await models.shifts.findAll({
+    where: activeShiftWhere(extraWhere),
+    attributes: ['id', 'status', 'active_days', 'start_time', 'end_time']
+  });
+  return shifts.filter((shift) => getShiftRuntimeStatus(shift) === 'active').length;
+}
+
 async function countQuotesCreated(range) {
   return models.sales_quotes.count({
     where: {
@@ -707,7 +803,7 @@ async function countQuotesCreated(range) {
 }
 
 async function overview(query = {}) {
-  const { activeShifts: activeNowShifts, count: activeNowSalespeopleCount } = await countCurrentActiveSalespeople();
+  const { count: activeNowSalespeopleCount } = await countCurrentActiveSalespeople();
 
   if (query.date) {
     const currentRange = dateRange(query.date);
@@ -726,8 +822,8 @@ async function overview(query = {}) {
       pendingLeadsPrevious,
       activeSalespeoplePrevious
     ] = await Promise.all([
-      Promise.resolve(activeNowShifts.length),
-      countActiveShiftsForDate(previousDate(query.date)),
+      countRuntimeActiveShifts({ created_at: { [Op.between]: [currentRange.start, currentRange.end] } }),
+      countRuntimeActiveShifts({ created_at: { [Op.between]: [previousRange.start, previousRange.end] } }),
       models.assignment_history.count({ where: { assigned_at: { [Op.between]: [currentAssignmentRange.start, currentAssignmentRange.end] } } }),
       models.assignment_history.count({ where: { assigned_at: { [Op.between]: [previousAssignmentRange.start, previousAssignmentRange.end] } } }),
       countQuotesCreated(currentAssignmentRange),
@@ -750,6 +846,7 @@ async function overview(query = {}) {
 
   const ranges = monthRanges();
   const today = getIstDate();
+
   const [
     activeShiftsCurrentMonth,
     activeShiftsPreviousMonth,
@@ -760,8 +857,8 @@ async function overview(query = {}) {
     activeSalespeopleCurrentMonth,
     activeSalespeoplePreviousMonth
   ] = await Promise.all([
-    models.shifts.count({ where: activeOrEnabledShiftWhere({ created_at: ranges.current }) }),
-    models.shifts.count({ where: activeOrEnabledShiftWhere({ created_at: ranges.previous }) }),
+    countRuntimeActiveShifts({ created_at: ranges.current }),
+    countRuntimeActiveShifts({ created_at: ranges.previous }),
     models.assignment_history.count({ where: { assigned_at: { [Op.between]: [istDateRangeToUtc(today).start, istDateRangeToUtc(today).end] } } }),
     countQuotesCreated(istDateRangeToUtc(today)),
     countPendingLeads(),
@@ -775,7 +872,7 @@ async function overview(query = {}) {
   ]);
 
   return {
-    active_shifts_count: { count: activeNowShifts.length, change_percent: percentChange(activeNowShifts.length, activeShiftsPreviousMonth) },
+    active_shifts_count: { count: activeShiftsCurrentMonth, change_percent: percentChange(activeShiftsCurrentMonth, activeShiftsPreviousMonth) },
     leads_assigned_today: { count: leadsAssignedToday, change_percent: 0 },
     total_quote_created_today: { count: quotesCreatedToday, change_percent: 0 },
     pending_leads: { count: pendingLeadsCurrent, change_percent: percentChange(pendingLeadsCurrent, pendingLeadsPrevious) },
@@ -852,5 +949,10 @@ module.exports = {
   hourlyLeadVolume,
   hasOverlapForSalesRep,
   normalizeStoredDays,
+  normalizeStoredStatus,
+  normalizeShiftStatusFilter,
+  getShiftRuntimeStatus,
+  decorateShiftWithRuntimeStatus,
+  selectNextRoundRobinAssigneeId,
   USER_ATTRS
 };

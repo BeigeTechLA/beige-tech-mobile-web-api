@@ -136,8 +136,10 @@ exports.updateShift = async (req, res) => {
 exports.toggleShift = async (req, res) => {
   try {
     const shift = await service.getShiftOrThrow(req.params.id);
-    const next = req.body.is_enabled !== undefined ? Boolean(req.body.is_enabled) : !Boolean(shift.is_enabled);
-    await shift.update({ is_enabled: next });
+    const next = req.body.status !== undefined
+      ? String(req.body.status).trim().toLowerCase() === 'active' ? 'active' : 'inactive'
+      : (String(shift.status).toLowerCase() === 'active' ? 'inactive' : 'active');
+    await shift.update({ status: next });
     return ok(res, await service.getShiftDetail(req.params.id));
   } catch (error) { return fail(res, error); }
 };
