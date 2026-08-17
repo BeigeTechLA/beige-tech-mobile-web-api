@@ -29,6 +29,7 @@ const {
   getCrewMemberWithOnboardingFiles,
   syncCreatorRegistrationComplete,
 } = require('../utils/creatorOnboarding');
+const accountCreditService = require('../services/account-credit.service');
 
 const getGoogleClientId = () => process.env.GOOGLE_CLIENT_ID || process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '';
 const googleClient = new OAuth2Client(getGoogleClientId());
@@ -243,6 +244,15 @@ async function linkClientQuotesToUser({ email, phoneNumber, userId, transaction 
   } catch (error) {
     console.error('Link Client Quotes Error:', error);
     return 0;
+  }
+}
+
+async function safeGrantSignupCredit(options = {}) {
+  try {
+    return await accountCreditService.grantSignupCreditIfEligible(options);
+  } catch (error) {
+    console.error('Signup credit grant error:', error);
+    return null;
   }
 }
 
@@ -707,6 +717,11 @@ exports.register = async (req, res) => {
           guest_email: email,
           lead_source: 'register'
         }
+      });
+
+      await safeGrantSignupCredit({
+        userId: newUser.id,
+        email
       });
     }
 
@@ -1683,6 +1698,12 @@ exports.googleLogin = async (req, res) => {
             lead_source: 'google_signup'
           }
         }, { transaction });
+
+        await safeGrantSignupCredit({
+          userId: user.id,
+          email,
+          transaction
+        });
       });
 
       appendToSheet('Client_data', [
@@ -2298,6 +2319,11 @@ exports.quickRegister = async (req, res) => {
     }
 
     const linkedBookingsCount = await linkGuestBookingsToUser(email, newUser.id);
+
+    await safeGrantSignupCredit({
+      userId: newUser.id,
+      email
+    });
 
     // Generate tokens
     const { token, refreshToken } = generateTokens(newUser.id, 'client');
