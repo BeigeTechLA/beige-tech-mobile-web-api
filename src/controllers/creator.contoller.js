@@ -2009,10 +2009,16 @@ exports.editProfile = async (req, res) => {
     if (email !== undefined) updateData.email = email;
     if (phone_number !== undefined) updateData.phone_number = phone_number;
     if (location !== undefined) {
-      const { latitude, longitude } = extractCoordinatesFromPayload(req.body, location);
-      updateData.location = JSON.stringify(location);
-      updateData.latitude = latitude;
-      updateData.longitude = longitude;
+      if (location === "" || location === null) {
+        updateData.location = null;
+        updateData.latitude = null;
+        updateData.longitude = null;
+      } else {
+        const { latitude, longitude } = extractCoordinatesFromPayload(req.body, location);
+        updateData.location = typeof location === 'object' ? JSON.stringify(location) : location;
+        updateData.latitude = latitude;
+        updateData.longitude = longitude;
+      }
     }
     if (working_distance !== undefined) updateData.working_distance = working_distance;
     if (years_of_experience !== undefined) updateData.years_of_experience = years_of_experience;
@@ -2084,9 +2090,11 @@ exports.editProfile = async (req, res) => {
     } catch (e) { responseData.social_media_links = []; }
 
     try {
-      if (typeof responseData.location === 'string') {
+      if (responseData.location && typeof responseData.location === 'string') {
         const parsedLoc = JSON.parse(responseData.location);
         responseData.location = parsedLoc.address || parsedLoc;
+      } else {
+        responseData.location = responseData.location || null;
       }
     } catch (e) { /* keep as is */ }
 
