@@ -2193,12 +2193,6 @@ exports.getLeads = async (req, res) => {
     //   whereClause.assigned_sales_rep_id = req.userId;
     // }
 
-    if (start_date && end_date) {
-      whereClause.created_at = {
-        [Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`]
-      };
-    }
-
     if (lead_type) whereClause.lead_type = lead_type;
 
     if (assigned_to) {
@@ -2256,7 +2250,9 @@ exports.getLeads = async (req, res) => {
       shootStatusRequested,
       intent,
       cp_assignment,
-      production_filter
+      production_filter,
+      start_date,
+      end_date
     };
 
     const leadIdQueryStartedAt = Date.now();
@@ -2571,12 +2567,6 @@ exports.getClientLeads = async (req, res) => {
       whereClause.assigned_sales_rep_id = req.userId;
     }
 
-    if (start_date && end_date) {
-      whereClause.created_at = {
-        [Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`]
-      };
-    }
-
     if (lead_type) whereClause.lead_type = lead_type;
 
     if (assigned_to) {
@@ -2638,6 +2628,8 @@ exports.getClientLeads = async (req, res) => {
         return {
           ...leadJson,
           potential_value: pricingData ? pricingData.total : 0,
+          event_date: leadJson.booking?.event_date || null,
+          created_at: leadJson.booking?.event_date || leadJson.created_at || null,
           booking_status: computedBookingStatus,
           intent: computedIntent,
           payment_status: lead.booking?.payment_id ? 'paid' : 'unpaid',
@@ -2645,6 +2637,13 @@ exports.getClientLeads = async (req, res) => {
         };
       })
     );
+
+    if (start_date && end_date) {
+      processedLeads = processedLeads.filter((lead) => {
+        const eventDate = getDateOnlyString(lead?.booking?.event_date);
+        return Boolean(eventDate && eventDate >= start_date && eventDate <= end_date);
+      });
+    }
 
     const activeStatusFilter = (status || booking_status);
     const shootStatusRequested = isShootStatusFilterValue(activeStatusFilter);
@@ -3988,6 +3987,8 @@ async function processSalesLeadForList(lead, context = {}) {
       potential_value: pricingData
         ? pricingData.total
         : 0,
+      event_date: leadJson.booking?.event_date || null,
+      created_at: leadJson.booking?.event_date || leadJson.created_at || null,
       booking_status:
         computedBookingStatus || 'Unknown',
       intent: computedIntent || '',
@@ -4045,8 +4046,17 @@ async function salesLeadMatchesListFilters(lead, filters, externalFileCache, con
     shootStatusRequested,
     intent,
     cp_assignment,
-    production_filter
+    production_filter,
+    start_date,
+    end_date
   } = filters;
+
+  if (start_date && end_date) {
+    const eventDate = getDateOnlyString(lead?.booking?.event_date);
+    if (!eventDate || eventDate < start_date || eventDate > end_date) {
+      return false;
+    }
+  }
 
   if (shootStatusRequested && !matchShootStatusFilter(lead?.booking, activeStatusFilter)) {
     return false;
