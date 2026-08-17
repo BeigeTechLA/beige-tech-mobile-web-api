@@ -111,6 +111,144 @@ function normalizeExpiresAt(value) {
   return date;
 }
 
+function normalizeDateOnly(value, fieldName) {
+  if (!value) return null;
+  const normalized = String(value).trim().slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    const error = new Error(`${fieldName} must be a valid date`);
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const date = new Date(`${normalized}T00:00:00Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== normalized) {
+    const error = new Error(`${fieldName} must be a valid date`);
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return normalized;
+}
+
+function todayDateOnly(now = new Date()) {
+  return now.toISOString().slice(0, 10);
+}
+
+function promotionIsActive(setting, now = new Date()) {
+  if (!setting || !setting.is_enabled) return false;
+  const today = todayDateOnly(now);
+  const startDate = setting.start_date ? String(setting.start_date).slice(0, 10) : null;
+  const endDate = setting.end_date ? String(setting.end_date).slice(0, 10) : null;
+
+  if (startDate && today < startDate) return false;
+  if (endDate && today > endDate) return false;
+  return roundCurrency(setting.amount) > 0;
+}
+
+async function getSignupCreditPromotionSetting({ transaction = null } = {}) {
+  if (!db.signup_credit_promotion_settings) {
+    return {
+      is_enabled: false,
+      amount: 250,
+      start_date: null,
+      end_date: null,
+      is_active_now: false
+    };
+  }
+
+  const [setting] = await db.signup_credit_promotion_settings.findOrCreate({
+    where: { signup_credit_promotion_setting_id: 1 },
+    defaults: {
+      signup_credit_promotion_setting_id: 1,
+      is_enabled: false,
+      amount: 250
+    },
+    transaction
+  });
+
+  const plain = toPlain(setting);
+  return {
+    ...plain,
+    amount: roundCurrency(plain.amount),
+    is_active_now: promotionIsActive(plain)
+  };
+}
+
+async function updateSignupCreditPromotionSetting(payload = {}, { updatedByUserId = null } = {}) {
+  if (!db.signup_credit_promotion_settings) {
+    const error = new Error('Signup credit promotion settings table is not available');
+    error.statusCode = 500;
+    throw error;
+  }
+
+  const amount = roundCurrency(payload.amount);
+  if (!(amount > 0)) {
+    const error = new Error('A positive signup credit amount is required');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const startDate = normalizeDateOnly(payload.start_date, 'start_date');
+  const endDate = normalizeDateOnly(payload.end_date, 'end_date');
+  if (startDate && endDate && startDate > endDate) {
+    const error = new Error('start_date must be before or equal to end_date');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  await db.signup_credit_promotion_settings.upsert({
+    signup_credit_promotion_setting_id: 1,
+    is_enabled: Boolean(payload.is_enabled),
+    amount,
+    start_date: startDate,
+    end_date: endDate,
+    updated_by_user_id: updatedByUserId || null,
+    updated_at: new Date()
+  });
+
+  return getSignupCreditPromotionSetting();
+}
+
+async function grantSignupCreditIfEligible({ userId, email = null, createdByUserId = null, transaction = null } = {}) {
+  const normalizedUserId = Number(userId || 0) || null;
+  if (!normalizedUserId || !db.account_credit_ledger) return null;
+
+  const setting = await getSignupCreditPromotionSetting({ transaction });
+  if (!promotionIsActive(setting)) return null;
+
+  const existing = await db.account_credit_ledger.findOne({
+    where: {
+      user_id: normalizedUserId,
+      user_segment: 'client',
+      entry_type: 'credit_created',
+      credit_type: 'signup_bonus'
+    },
+    transaction
+  });
+
+  if (existing) return existing;
+
+  return db.account_credit_ledger.create({
+    user_id: normalizedUserId,
+    guest_email: normalizeGuestEmail(email),
+    amount: roundCurrency(setting.amount),
+    entry_type: 'credit_created',
+    status: 'available',
+    source: 'loyalty_reward',
+    credit_type: 'signup_bonus',
+    expires_at: null,
+    usage_context: 'general',
+    user_segment: 'client',
+    notes: 'Signup Beige credit promotion',
+    restrictions_json: { allowed_usage_contexts: ['shoot_payment'] },
+    created_by_admin: false,
+    notification_status: 'not_requested',
+    created_by_user_id: createdByUserId || null,
+    approved_by_user_id: createdByUserId || null,
+    approved_at: new Date()
+  }, { transaction });
+}
+
 function entryIsExpired(entry = {}, now = new Date()) {
   return Boolean(entry.expires_at && new Date(entry.expires_at) <= now);
 }
@@ -1422,7 +1560,7 @@ function buildClientDashboardCreditWhere({ userId = null, guestEmail = null } = 
   return {
     ...identityWhere,
     user_segment: 'client',
-    source: { [Op.in]: ['quote_reduction', 'manual_admin', 'payment_adjustment'] },
+    source: { [Op.in]: ['quote_reduction', 'manual_admin', 'payment_adjustment', 'loyalty_reward'] },
     entry_type: { [Op.in]: ['credit_created', 'credit_used'] }
   };
 }
@@ -1446,16 +1584,20 @@ function formatClientDashboardLedgerRow(entry) {
     quote_number: entry.source_quote_number || null,
     payment_id: entry.payment_id || null,
     source: entry.source,
-    transaction_type: entry.source === 'quote_reduction'
-      ? 'quote_adjustment_credit'
-      : entry.source === 'manual_admin'
-        ? 'admin_added_credit'
-        : 'shoot_payment_credit_used',
-    title: entry.source === 'quote_reduction'
-      ? 'Quote adjustment credit'
-      : entry.source === 'manual_admin'
-        ? 'Admin-added credit'
-        : 'Applied to shoot payment',
+    transaction_type: entry.credit_type === 'signup_bonus'
+      ? 'signup_credit'
+      : entry.source === 'quote_reduction'
+        ? 'quote_adjustment_credit'
+        : entry.source === 'manual_admin'
+          ? 'admin_added_credit'
+          : 'shoot_payment_credit_used',
+    title: entry.credit_type === 'signup_bonus'
+      ? 'Signup credit'
+      : entry.source === 'quote_reduction'
+        ? 'Quote adjustment credit'
+        : entry.source === 'manual_admin'
+          ? 'Admin-added credit'
+          : 'Applied to shoot payment',
     entry_type: entry.entry_type,
     status: entry.status,
     credit_type: entry.credit_type || null,
@@ -1911,5 +2053,8 @@ module.exports = {
   getAdminCreditSummary,
   getAdminCreditUsers,
   getAdminCreditUserDetails,
-  getAdminCreditTransactions
+  getAdminCreditTransactions,
+  getSignupCreditPromotionSetting,
+  updateSignupCreditPromotionSetting,
+  grantSignupCreditIfEligible
 };
