@@ -34,12 +34,39 @@ function resolveStudioDurationHours(studio = {}) {
   return Number.isFinite(quantity) && quantity > 0 ? quantity : null;
 }
 
+function calculateDurationHours(startTime, endTime) {
+  if (!startTime || !endTime) return null;
+
+  const [startHour, startMinute = 0, startSecond = 0] = String(startTime).split(':').map(Number);
+  const [endHour, endMinute = 0, endSecond = 0] = String(endTime).split(':').map(Number);
+
+  if ([startHour, startMinute, startSecond, endHour, endMinute, endSecond].some((part) => Number.isNaN(part))) {
+    return null;
+  }
+
+  const startMinutes = startHour * 60 + startMinute + startSecond / 60;
+  const endMinutes = endHour * 60 + endMinute + endSecond / 60;
+  const diffMinutes = endMinutes - startMinutes;
+
+  return diffMinutes > 0 ? Number((diffMinutes / 60).toFixed(2)) : null;
+}
+
 function normalizeStudioBookingSource(source) {
   return source === 'create_new_deal' ? 'create_new_deal' : 'book_a_shoot';
 }
 
-function buildStudioBookingRow({ bookingId, userId = null, guestEmail = null, studio, source = 'book_a_shoot' }) {
+function buildStudioBookingRow({
+  bookingId,
+  userId = null,
+  guestEmail = null,
+  studio,
+  source = 'book_a_shoot',
+  bookingDay = null,
+  amount = null,
+}) {
   const totalPrice = Number(studio.totalPrice || 0);
+  const rowAmount = Number(amount);
+  const resolvedAmount = Number.isFinite(rowAmount) ? rowAmount : totalPrice;
   const normalizedSource = normalizeStudioBookingSource(source);
 
   return {
@@ -47,19 +74,50 @@ function buildStudioBookingRow({ bookingId, userId = null, guestEmail = null, st
     studio_id: String(studio.studioId),
     user_id: userId || null,
     guest_email: guestEmail || null,
-    booking_date: resolveStudioBookingDate(studio),
-    start_time: resolveStudioStartTime(studio),
-    end_time: resolveStudioEndTime(studio),
-    duration_hours: resolveStudioDurationHours(studio),
-    time_zone: resolveStudioTimeZone(studio),
+    booking_date: bookingDay?.date || resolveStudioBookingDate(studio),
+    start_time: bookingDay?.startTime || resolveStudioStartTime(studio),
+    end_time: bookingDay?.endTime || resolveStudioEndTime(studio),
+    duration_hours: bookingDay
+      ? (bookingDay.durationHours || calculateDurationHours(bookingDay.startTime, bookingDay.endTime))
+      : resolveStudioDurationHours(studio),
+    time_zone: bookingDay?.timeZone || resolveStudioTimeZone(studio),
     status: 'requested',
-    base_amount: Number.isFinite(totalPrice) ? totalPrice : 0,
+    base_amount: Number.isFinite(resolvedAmount) ? resolvedAmount : 0,
     overtime_amount: 0,
     platform_fee: 0,
-    net_amount: Number.isFinite(totalPrice) ? totalPrice : 0,
+    net_amount: Number.isFinite(resolvedAmount) ? resolvedAmount : 0,
     source: normalizedSource,
-    metadata: studio,
+    metadata: bookingDay ? { ...studio, bookingDay } : studio,
   };
+}
+
+function buildStudioBookingRows({ bookingId, userId = null, guestEmail = null, studio, source = 'book_a_shoot' }) {
+  const bookingDays = Array.isArray(studio.bookingDays) ? studio.bookingDays.filter((day) => day?.date) : [];
+
+  if (!bookingDays.length) {
+    return [buildStudioBookingRow({ bookingId, userId, guestEmail, studio, source })];
+  }
+
+  const totalPrice = Number(studio.totalPrice || 0);
+  const perDayAmount = Number.isFinite(totalPrice) && totalPrice > 0
+    ? Number((totalPrice / bookingDays.length).toFixed(2))
+    : 0;
+
+  return bookingDays.map((bookingDay, index) => {
+    const amount = index === bookingDays.length - 1
+      ? Number((totalPrice - perDayAmount * (bookingDays.length - 1)).toFixed(2))
+      : perDayAmount;
+
+    return buildStudioBookingRow({
+      bookingId,
+      userId,
+      guestEmail,
+      studio,
+      source,
+      bookingDay,
+      amount,
+    });
+  });
 }
 
 async function replaceBookAShootStudioBookings({
@@ -86,7 +144,7 @@ async function replaceBookAShootStudioBookings({
 
   const rows = (Array.isArray(studioItems) ? studioItems : [])
     .filter((studio) => studio?.studioId && Number(studio?.totalPrice || 0) > 0)
-    .map((studio) => buildStudioBookingRow({
+    .flatMap((studio) => buildStudioBookingRows({
       bookingId,
       userId,
       guestEmail,

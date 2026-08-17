@@ -47,6 +47,30 @@ const numberOrNull = (value) => {
     return Number.isFinite(parsed) ? parsed : null;
 };
 
+const buildBookedAvailabilityRows = (bookings = []) => bookings
+    .filter((booking) => booking.booking_date)
+    .map((booking) => ({
+        studio_availability_id: null,
+        studio_id: booking.studio_id,
+        availability_date: booking.booking_date,
+        start_time: booking.start_time,
+        end_time: booking.end_time,
+        status: 'shoot_booked',
+        notes: 'Booked from studio booking',
+        metadata: {
+            source: 'studio_booking',
+            studio_booking_id: booking.studio_booking_id,
+            stream_project_booking_id: booking.stream_project_booking_id,
+            booking_status: booking.status,
+            booking_source: booking.source,
+            duration_hours: booking.duration_hours,
+            time_zone: booking.time_zone,
+        },
+        created_by_user_id: null,
+        created_at: booking.created_at,
+        updated_at: booking.updated_at,
+    }));
+
 const MONTH_NAME_TO_NUMBER = {
     january: 1,
     february: 2,
@@ -605,8 +629,39 @@ exports.getStudioById = async (req, res) => {
             ],
         });
 
+        if (!studio) {
+            return res.status(404).json({
+                success: false,
+                message: 'Studio not found',
+            });
+        }
+
         const plainStudio = studio.get({ plain: true });
         const reviews = plainStudio.reviews || [];
+        const studioBookingIds = [
+            String(plainStudio.studio_id),
+            plainStudio.slug ? String(plainStudio.slug) : null,
+        ].filter(Boolean);
+
+        const bookedAvailabilityRows = await studio_bookings.findAll({
+            where: {
+                studio_id: { [db.Sequelize.Op.in]: studioBookingIds },
+                booking_date: { [db.Sequelize.Op.ne]: null },
+                status: { [db.Sequelize.Op.notIn]: ['cancelled', 'rejected'] },
+            },
+            order: [['booking_date', 'ASC'], ['start_time', 'ASC']],
+        });
+
+        plainStudio.availability = [
+            ...(plainStudio.availability || []),
+            ...buildBookedAvailabilityRows(
+                bookedAvailabilityRows.map((booking) => booking.get({ plain: true }))
+            ),
+        ].sort((a, b) => {
+            const dateCompare = String(a.availability_date || '').localeCompare(String(b.availability_date || ''));
+            if (dateCompare !== 0) return dateCompare;
+            return String(a.start_time || '').localeCompare(String(b.start_time || ''));
+        });
 
         const avg = (field) => {
             const values = reviews
@@ -625,14 +680,6 @@ exports.getStudioById = async (req, res) => {
             communication_rating: avg('communication_rating'),
             check_in_rating: avg('check_in_rating'),
         };
-
-
-        if (!studio) {
-            return res.status(404).json({
-                success: false,
-                message: 'Studio not found',
-            });
-        }
 
         return res.status(200).json({
             success: true,
