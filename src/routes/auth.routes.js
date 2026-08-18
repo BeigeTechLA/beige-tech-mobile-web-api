@@ -37,6 +37,7 @@ router.post('/google', authController.googleLogin);
 // ===== PASSWORD MANAGEMENT =====
 router.post('/forgot-password', authController.forgotPassword);
 router.post('/reset-password', authController.resetPassword);
+router.post('/admin/generate-reset-link', authController.generateUserResetLinkForAdmin);
 router.post('/change-password', authController.changePassword);
 
 // ===== PERMISSIONS =====
