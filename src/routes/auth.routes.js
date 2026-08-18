@@ -22,6 +22,7 @@ router.post('/register-sales-admin', authController.registerSalesAdmin);
 // ===== CREW MEMBER REGISTRATION (3 STEPS) =====
 router.post('/register-crew-step1', authController.registerCrewMemberStep1);
 router.post('/register-crew-step2', authController.registerCrewMemberStep2);
+router.post('/register-crew-step3-file', authController.uploadCrewMemberStep3File);
 router.post('/register-crew-step3', authController.registerCrewMemberStep3);
 router.get('/crew-member/:crew_member_id', authController.getCrewMemberDetails);
 
