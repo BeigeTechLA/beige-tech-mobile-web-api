@@ -6,6 +6,7 @@ const salesRepAvailabilityFactory = require('./sales_rep_availability');
 const salesRepLiveStatusFactory = require('./sales_rep_live_status');
 const salesRepStatusActivityFactory = require('./sales_rep_status_activity');
 const userArchiveHistoryFactory = require('./user_archive_history');
+const signupCreditPromotionSettingsFactory = require('./signup_credit_promotion_settings');
 
 // initialize all auto-generated models properly
 const models = initModels(sequelize);
@@ -13,6 +14,7 @@ models.sales_rep_availability = salesRepAvailabilityFactory(sequelize, DataTypes
 models.sales_rep_live_status = salesRepLiveStatusFactory(sequelize, DataTypes);
 models.sales_rep_status_activity = salesRepStatusActivityFactory(sequelize, DataTypes);
 models.user_archive_history = userArchiveHistoryFactory(sequelize, DataTypes);
+models.signup_credit_promotion_settings = signupCreditPromotionSettingsFactory(sequelize, DataTypes);
 
 if (models.sales_rep_availability && models.users) {
   models.sales_rep_availability.belongsTo(models.users, {
@@ -82,6 +84,11 @@ models.clients.belongsTo(models.users, {
 models.user_archive_history.belongsTo(models.users, {
   foreignKey: 'performed_by_user_id',
   as: 'performed_by'
+});
+
+models.signup_credit_promotion_settings.belongsTo(models.users, {
+  foreignKey: 'updated_by_user_id',
+  as: 'updated_by'
 });
 
 const Signature = require('./signature.model')(sequelize, DataTypes);

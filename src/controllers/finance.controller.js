@@ -335,6 +335,38 @@ exports.getAdminCreditPointsDashboard = async (req, res) => {
   }
 };
 
+exports.getSignupCreditPromotionSetting = async (_req, res) => {
+  try {
+    const data = await accountCreditService.getSignupCreditPromotionSetting();
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error('Get signup credit promotion setting error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch signup credit promotion setting'
+    });
+  }
+};
+
+exports.updateSignupCreditPromotionSetting = async (req, res) => {
+  try {
+    const data = await accountCreditService.updateSignupCreditPromotionSetting(req.body, {
+      updatedByUserId: req.userId || req.user?.userId || null
+    });
+    return res.status(200).json({
+      success: true,
+      message: 'Signup credit promotion updated successfully',
+      data
+    });
+  } catch (error) {
+    console.error('Update signup credit promotion setting error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to update signup credit promotion setting'
+    });
+  }
+};
+
 exports.listAdminCreditPointTransactions = async (req, res) => {
   try {
     const data = await accountCreditService.getAdminCreditTransactions(req.query);
