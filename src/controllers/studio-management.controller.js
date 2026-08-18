@@ -580,6 +580,141 @@ exports.uploadStudioMedia = [
     }
 ];
 
+exports.updateStudioMedia = async (req, res) => {
+  const transaction = await sequelize.transaction();
+
+  try {
+    const studioId = Number(req.params.studioId);
+
+    if (!Number.isInteger(studioId) || studioId <= 0) {
+      await transaction.rollback();
+      return res.status(400).json({
+        success: false,
+        message: 'Valid studioId is required',
+      });
+    }
+
+    if (!Array.isArray(req.body?.media)) {
+      await transaction.rollback();
+      return res.status(400).json({
+        success: false,
+        message: 'media must be an array',
+      });
+    }
+
+    const existingStudio = await studios.findOne({
+      where: { studio_id: studioId, is_active: 1 },
+      transaction,
+    });
+
+    if (!existingStudio) {
+      await transaction.rollback();
+      return res.status(404).json({
+        success: false,
+        message: 'Studio not found',
+      });
+    }
+
+    const mediaPayload = req.body.media
+      .map((item, index) => ({
+        studio_media_id: numberOrNull(item.studio_media_id ?? item.studioMediaId ?? item.id),
+        studio_id: studioId,
+        media_type: item.media_type || item.mediaType || 'image',
+        url: item.url,
+        thumbnail_url: item.thumbnail_url || item.thumbnailUrl || null,
+        title: item.title || null,
+        alt_text: item.alt_text || item.altText || null,
+        sort_order: numberOrNull(item.sort_order ?? item.sortOrder) ?? index,
+        is_cover: boolValue(item.is_cover ?? item.isCover, false),
+        metadata: item.metadata || null,
+      }))
+      .filter((item) => item.url);
+
+    if (!mediaPayload.length) {
+      await transaction.rollback();
+      return res.status(400).json({
+        success: false,
+        message: 'At least one media item with url is required',
+      });
+    }
+
+    const firstCoverIndex = mediaPayload.findIndex((item) => item.is_cover);
+    mediaPayload.forEach((item, index) => {
+      item.is_cover = firstCoverIndex >= 0 ? index === firstCoverIndex : index === 0;
+      item.sort_order = Number.isFinite(Number(item.sort_order)) ? Number(item.sort_order) : index;
+    });
+
+    const existingMedia = await studio_media.findAll({
+      where: { studio_id: studioId },
+      transaction,
+    });
+    const existingMediaById = new Map(
+      existingMedia.map((item) => [Number(item.studio_media_id), item])
+    );
+    const incomingIds = mediaPayload
+      .map((item) => Number(item.studio_media_id || 0))
+      .filter((id) => id > 0);
+
+    if (incomingIds.length) {
+      await studio_media.destroy({
+        where: {
+          studio_id: studioId,
+          studio_media_id: { [db.Sequelize.Op.notIn]: incomingIds },
+        },
+        transaction,
+      });
+    } else {
+      await studio_media.destroy({
+        where: { studio_id: studioId },
+        transaction,
+      });
+    }
+
+    for (const item of mediaPayload) {
+      const existingItem = existingMediaById.get(Number(item.studio_media_id || 0));
+      const mediaData = {
+        studio_id: studioId,
+        media_type: item.media_type,
+        url: item.url,
+        thumbnail_url: item.thumbnail_url,
+        title: item.title,
+        alt_text: item.alt_text,
+        sort_order: item.sort_order,
+        is_cover: item.is_cover,
+        metadata: item.metadata,
+      };
+
+      if (existingItem) {
+        await existingItem.update(mediaData, { transaction });
+      } else {
+        await studio_media.create(mediaData, { transaction });
+      }
+    }
+
+    await transaction.commit();
+
+    const media = await studio_media.findAll({
+      where: { studio_id: studioId },
+      order: [['is_cover', 'DESC'], ['sort_order', 'ASC'], ['studio_media_id', 'ASC']],
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Studio media updated successfully',
+      data: media,
+    });
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Update studio media error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update studio media',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
 exports.getStudioById = async (req, res) => {
     try {
         const studioId = Number(req.params.studioId);

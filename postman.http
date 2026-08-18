@@ -2957,7 +2957,9 @@ Authorization: {{TOKEN}}
       "url": "studio_media_94_1778577883770.jpg"
     },
     {
-      "url": "studio_media_48_1778577889229.jpeg"
+      "url": "studio_media_48_1778577889229.jpeg",
+      "sort_order": 1,
+      "is_cover": false
     }
   ],
   "operating_hours": [
@@ -2976,8 +2978,30 @@ Authorization: {{TOKEN}}
   ]
 }
 
+###
+PUT {{URL}}admin/studios/6/media HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "media": [
+    {
+      "studio_media_id": 346,
+      "url": "studio_media_48_1778577889229.jpeg",
+      "sort_order": 0,
+      "is_cover": false
+    },
+    {
+      "studio_media_id": 345,
+      "url": "studio_media_94_1778577883770.jpg",
+      "sort_order": 1,
+      "is_cover": true
+    }
+  ]
+}
+
 ### Admin - Get Studio By ID
-GET {{URL}}admin/studios/1 HTTP/1.1
+GET {{URL}}admin/studios/6 HTTP/1.1
 Authorization: {{TOKEN}}
 
 ### Admin - Get Studios
@@ -3239,8 +3263,24 @@ Authorization: {{TOKEN}}
   ]
 }
 
+### change cover image and indexing
+PUT {{URL}}admin/studios/6/media HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "media": [
+    {
+      "studio_media_id": 346,
+      "url": "studio_media_48_1778577889229.jpeg",
+      "sort_order": 0,
+      "is_cover": true
+    }
+  ]
+}
+
 ### Admin - Get Studio By ID
-GET {{URL}}admin/studios/2 HTTP/1.1
+GET {{URL}}admin/studios/7 HTTP/1.1
 Authorization: {{TOKEN}}
 
 ### Admin - Get Studios
