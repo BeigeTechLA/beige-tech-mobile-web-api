@@ -2033,6 +2033,80 @@ exports.resetPassword = async (req, res) => {
   }
 };
 
+/**
+ * Admin Action: Generates a manual reset link to be copied
+ * POST /auth/admin/generate-reset-link
+ */
+exports.generateUserResetLinkForAdmin = async (req, res) => {
+  try {
+    const rawIdentifier =
+      req.body.user_id ??
+      req.body.client_id ??
+      req.body.crew_member_id ??
+      req.body.id;
+
+    const identifier = Number.parseInt(String(rawIdentifier), 10);
+    if (!Number.isFinite(identifier)) {
+      return res.status(400).json({
+        success: false,
+        message: 'user_id, client_id, or crew_member_id is required'
+      });
+    }
+
+    let user = await User.findOne({ where: { id: identifier } });
+
+    if (!user) {
+      const client = await Clients.findOne({
+        where: { client_id: identifier },
+        attributes: ['user_id', 'name', 'email']
+      });
+
+      if (client?.user_id) {
+        user = await User.findOne({ where: { id: client.user_id } });
+      }
+    }
+
+    if (!user) {
+      const crewMember = await CrewMember.findOne({
+        where: { crew_member_id: identifier },
+        attributes: ['user_id', 'first_name', 'last_name', 'email']
+      });
+
+      if (crewMember?.user_id) {
+        user = await User.findOne({ where: { id: crewMember.user_id } });
+      }
+    }
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'Linked user account not found' });
+    }
+
+    const resetToken = otpService.generateResetToken();
+    const tokenExpiry = otpService.generateTokenExpiry(60);
+
+    await User.update(
+      { reset_token: resetToken, reset_token_expiry: tokenExpiry },
+      { where: { id: user.id } }
+    );
+
+    const baseUrl =
+      process.env.FRONTEND_URL ||
+      process.env.NEXT_PUBLIC_APP_URL ||
+      'http://localhost:3000';
+    const manualResetLink = `${baseUrl.replace(/\/$/, '')}/reset-password?token=${resetToken}`;
+
+    return res.status(200).json({
+      success: true,
+      message: 'Reset link generated successfully',
+      resetLink: manualResetLink,
+      user_id: user.id
+    });
+  } catch (error) {
+    console.error('Admin Reset Link Error:', error);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
 // ==================== USER INFO ====================
 
 /**
