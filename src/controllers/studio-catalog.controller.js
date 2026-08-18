@@ -5,7 +5,9 @@ const {
   studio_media,
   studio_operating_hours,
   studio_reviews,
+  studio_bookings,
 } = db;
+const studioBookingService = require('../services/studio-booking.service');
 
 const parseJsonValue = (value, fallback = null) => {
   if (value === undefined || value === null || value === '') return fallback;
@@ -22,6 +24,23 @@ const numberOrNull = (value) => {
   if (value === undefined || value === null || value === '') return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+};
+
+const normalizeDateOnly = (value) => {
+  if (!value) return null;
+  const text = String(value).trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : text.slice(0, 10);
+};
+
+const parseSelectedDates = (query = {}) => {
+  const rawDates = query.dates || query.booking_dates || query.bookingDates || query.date;
+  const values = Array.isArray(rawDates)
+    ? rawDates
+    : String(rawDates || '')
+      .split(',')
+      .map((item) => item.trim());
+
+  return [...new Set(values.map(normalizeDateOnly).filter(Boolean))];
 };
 
 const buildStudioLocation = (studio) => {
@@ -219,6 +238,8 @@ const formatStudioCatalogListItem = (studio) => ({
   propertyType: studio.poolType || studio.suggestedType || studio.spaceType,
   tags: (studio.bestFor || []).slice(0, 2),
   pricingMode: studio.pricingMode,
+  is_available: studio.is_available !== false,
+  blocked_dates: studio.blocked_dates || [],
 });
 
 const buildStudioIncludes = () => [
@@ -281,6 +302,7 @@ exports.getPublicStudioCatalog = async (req, res) => {
     const offset = (page - 1) * limit;
     const search = String(req.query.search || '').trim();
     const bookingFor = String(req.query.booking_for || req.query.bookingFor || '').trim().toLowerCase();
+    const selectedDates = parseSelectedDates(req.query);
 
     const where = {
       is_active: 1,
@@ -310,6 +332,51 @@ exports.getPublicStudioCatalog = async (req, res) => {
     });
 
     let detailedData = rows.map(formatStudioCatalogItem);
+
+    if (selectedDates.length && studio_bookings) {
+      const studioKeys = [
+        ...new Set(
+          detailedData
+            .flatMap((studio) => [String(studio.studio_id), studio.slug ? String(studio.slug) : null])
+            .filter(Boolean)
+        ),
+      ];
+      const bookedRows = studioKeys.length
+        ? await studio_bookings.findAll({
+            where: {
+              studio_id: { [db.Sequelize.Op.in]: studioKeys },
+              booking_date: { [db.Sequelize.Op.in]: selectedDates },
+              status: { [db.Sequelize.Op.in]: studioBookingService.BLOCKING_STUDIO_BOOKING_STATUSES },
+            },
+            attributes: ['studio_id', 'booking_date'],
+          })
+        : [];
+      const blockedDatesByStudioKey = new Map();
+
+      bookedRows.forEach((row) => {
+        const booking = row.get ? row.get({ plain: true }) : row;
+        const key = String(booking.studio_id || '').trim();
+        const date = normalizeDateOnly(booking.booking_date);
+        if (!key || !date) return;
+        if (!blockedDatesByStudioKey.has(key)) {
+          blockedDatesByStudioKey.set(key, new Set());
+        }
+        blockedDatesByStudioKey.get(key).add(date);
+      });
+
+      detailedData = detailedData.map((studio) => {
+        const keys = [String(studio.studio_id), studio.slug ? String(studio.slug) : null].filter(Boolean);
+        const blockedDates = [
+          ...new Set(keys.flatMap((key) => [...(blockedDatesByStudioKey.get(key) || [])])),
+        ].sort();
+
+        return {
+          ...studio,
+          is_available: blockedDates.length === 0,
+          blocked_dates: blockedDates,
+        };
+      });
+    }
 
     if (bookingFor) {
       detailedData = detailedData.filter((studio) => {

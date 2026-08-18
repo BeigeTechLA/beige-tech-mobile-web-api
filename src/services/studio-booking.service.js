@@ -1,5 +1,16 @@
 const db = require('../models');
 
+const BLOCKING_STUDIO_BOOKING_STATUSES = ['confirmed', 'completed'];
+
+class StudioBookingConflictError extends Error {
+  constructor(conflicts = []) {
+    super('Studio is already booked for one or more selected dates');
+    this.name = 'StudioBookingConflictError';
+    this.statusCode = 409;
+    this.conflicts = conflicts;
+  }
+}
+
 function firstStudioDay(studio = {}) {
   const days = Array.isArray(studio.bookingDays) ? studio.bookingDays : [];
   return days[0] || null;
@@ -53,6 +64,205 @@ function calculateDurationHours(startTime, endTime) {
 
 function normalizeStudioBookingSource(source) {
   return source === 'create_new_deal' ? 'create_new_deal' : 'book_a_shoot';
+}
+
+function normalizeDateOnly(value) {
+  if (!value) return null;
+  const text = String(value).trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : text.slice(0, 10);
+}
+
+function getStudioBookingKeys(studioId) {
+  return [...new Set([String(studioId || '').trim()].filter(Boolean))];
+}
+
+async function resolveStudioBookingKeys(studioIds = [], transaction = null) {
+  const baseKeys = [...new Set((Array.isArray(studioIds) ? studioIds : [])
+    .map((id) => String(id || '').trim())
+    .filter(Boolean))];
+
+  if (!baseKeys.length || !db.studios) return baseKeys;
+
+  const numericStudioIds = baseKeys
+    .filter((id) => /^\d+$/.test(id))
+    .map(Number);
+  const studioRows = await db.studios.findAll({
+    where: {
+      [db.Sequelize.Op.or]: [
+        { slug: { [db.Sequelize.Op.in]: baseKeys } },
+        ...(numericStudioIds.length
+          ? [{ studio_id: { [db.Sequelize.Op.in]: numericStudioIds } }]
+          : []),
+      ],
+    },
+    attributes: ['studio_id', 'slug'],
+    transaction,
+  });
+
+  const resolvedKeys = new Set(baseKeys);
+  studioRows.forEach((studio) => {
+    const plain = studio.get ? studio.get({ plain: true }) : studio;
+    if (plain.studio_id !== null && plain.studio_id !== undefined) {
+      resolvedKeys.add(String(plain.studio_id));
+    }
+    if (plain.slug) {
+      resolvedKeys.add(String(plain.slug));
+    }
+  });
+
+  return [...resolvedKeys];
+}
+
+function getStudioItemBookingDates(studio = {}) {
+  const days = Array.isArray(studio.bookingDays) ? studio.bookingDays : [];
+  const dates = days
+    .map((day) => normalizeDateOnly(day?.date))
+    .filter(Boolean);
+
+  if (!dates.length) {
+    const selectedDate = normalizeDateOnly(studio.selectedDate);
+    if (selectedDate) dates.push(selectedDate);
+  }
+
+  return [...new Set(dates)];
+}
+
+async function findConfirmedStudioBookingConflicts({
+  studioItems = [],
+  excludeBookingId = null,
+  transaction = null,
+}) {
+  if (!db.studio_bookings) return [];
+
+  const selectedItems = (Array.isArray(studioItems) ? studioItems : [])
+    .map((studio) => ({
+      studio,
+      studioId: String(studio?.studioId || studio?.studio_id || '').trim(),
+      dates: getStudioItemBookingDates(studio),
+    }))
+    .filter((item) => item.studioId && item.dates.length);
+
+  if (!selectedItems.length) return [];
+
+  const studioIds = await resolveStudioBookingKeys(
+    [...new Set(selectedItems.flatMap((item) => getStudioBookingKeys(item.studioId)))],
+    transaction
+  );
+  const dates = [...new Set(selectedItems.flatMap((item) => item.dates))];
+  const where = {
+    studio_id: { [db.Sequelize.Op.in]: studioIds },
+    booking_date: { [db.Sequelize.Op.in]: dates },
+    status: { [db.Sequelize.Op.in]: BLOCKING_STUDIO_BOOKING_STATUSES },
+  };
+
+  const normalizedExcludeBookingId = Number(excludeBookingId || 0);
+  if (Number.isFinite(normalizedExcludeBookingId) && normalizedExcludeBookingId > 0) {
+    where.stream_project_booking_id = { [db.Sequelize.Op.ne]: normalizedExcludeBookingId };
+  }
+
+  const rows = await db.studio_bookings.findAll({
+    where,
+    attributes: [
+      'studio_booking_id',
+      'stream_project_booking_id',
+      'studio_id',
+      'booking_date',
+      'start_time',
+      'end_time',
+      'status',
+    ],
+    transaction,
+  });
+
+  return rows.map((row) => {
+    const plain = row.get ? row.get({ plain: true }) : row;
+    return {
+      studio_booking_id: plain.studio_booking_id,
+      stream_project_booking_id: plain.stream_project_booking_id,
+      studio_id: plain.studio_id,
+      date: plain.booking_date,
+      start_time: plain.start_time,
+      end_time: plain.end_time,
+      status: plain.status,
+    };
+  });
+}
+
+async function assertNoConfirmedStudioBookingConflicts(options = {}) {
+  const conflicts = await findConfirmedStudioBookingConflicts(options);
+  if (conflicts.length) {
+    throw new StudioBookingConflictError(conflicts);
+  }
+  return conflicts;
+}
+
+async function confirmStudioBookingsForPaidBooking({ bookingId, transaction = null }) {
+  if (!bookingId || !db.studio_bookings) return { updated: 0 };
+
+  const studioBookings = await db.studio_bookings.findAll({
+    where: {
+      stream_project_booking_id: bookingId,
+      status: { [db.Sequelize.Op.notIn]: ['cancelled', 'rejected'] },
+    },
+    transaction,
+  });
+
+  if (!studioBookings.length) return { updated: 0 };
+
+  const studioItems = studioBookings.map((booking) => {
+    const plain = booking.get ? booking.get({ plain: true }) : booking;
+    return {
+      studioId: plain.studio_id,
+      selectedDate: plain.booking_date,
+      bookingDays: plain.booking_date ? [{ date: plain.booking_date }] : [],
+    };
+  });
+
+  await assertNoConfirmedStudioBookingConflicts({
+    studioItems,
+    excludeBookingId: bookingId,
+    transaction,
+  });
+
+  const [updated] = await db.studio_bookings.update(
+    { status: 'confirmed' },
+    {
+      where: {
+        stream_project_booking_id: bookingId,
+        status: 'requested',
+      },
+      transaction,
+    }
+  );
+
+  return { updated };
+}
+
+async function assertNoConfirmedStudioBookingConflictsForBooking({ bookingId, transaction = null }) {
+  if (!bookingId || !db.studio_bookings) return [];
+
+  const studioBookings = await db.studio_bookings.findAll({
+    where: {
+      stream_project_booking_id: bookingId,
+      status: { [db.Sequelize.Op.notIn]: ['cancelled', 'rejected'] },
+    },
+    transaction,
+  });
+
+  const studioItems = studioBookings.map((booking) => {
+    const plain = booking.get ? booking.get({ plain: true }) : booking;
+    return {
+      studioId: plain.studio_id,
+      selectedDate: plain.booking_date,
+      bookingDays: plain.booking_date ? [{ date: plain.booking_date }] : [],
+    };
+  });
+
+  return assertNoConfirmedStudioBookingConflicts({
+    studioItems,
+    excludeBookingId: bookingId,
+    transaction,
+  });
 }
 
 function buildStudioBookingRow({
@@ -163,5 +373,11 @@ async function replaceBookAShootStudioBookings({
 }
 
 module.exports = {
+  BLOCKING_STUDIO_BOOKING_STATUSES,
+  StudioBookingConflictError,
+  assertNoConfirmedStudioBookingConflicts,
+  assertNoConfirmedStudioBookingConflictsForBooking,
+  confirmStudioBookingsForPaidBooking,
+  findConfirmedStudioBookingConflicts,
   replaceBookAShootStudioBookings,
 };

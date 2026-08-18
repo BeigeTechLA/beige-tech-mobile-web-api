@@ -782,7 +782,7 @@ exports.getStudioById = async (req, res) => {
             where: {
                 studio_id: { [db.Sequelize.Op.in]: studioBookingIds },
                 booking_date: { [db.Sequelize.Op.ne]: null },
-                status: { [db.Sequelize.Op.notIn]: ['cancelled', 'rejected'] },
+                status: { [db.Sequelize.Op.in]: ['confirmed', 'completed'] },
             },
             order: [['booking_date', 'ASC'], ['start_time', 'ASC']],
         });

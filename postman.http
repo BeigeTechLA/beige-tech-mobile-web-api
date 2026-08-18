@@ -5305,7 +5305,7 @@ Content-Type: application/json
 ### =====================================================
 
 ### List active studios
-GET {{URL}}studios/catalog?page=1&limit=20
+GET {{URL}}studios/catalog?page=1&limit=8&booking_for=productions&dates=2026-09-12
 Content-Type: application/json
 
 ### List active studios filtered by pricing/category key
