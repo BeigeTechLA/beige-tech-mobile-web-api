@@ -294,6 +294,26 @@ const upload = multer({
   },
 });
 
+const CREW_STEP3_FILE_TYPES = ['resume', 'portfolio', 'certifications', 'recent_work'];
+
+const parseJsonInput = (value, fallback = []) => {
+  if (!value) return fallback;
+  if (Array.isArray(value) || typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return fallback;
+  }
+};
+
+const normalizeIdList = (value) => {
+  const parsed = parseJsonInput(value, []);
+  const list = Array.isArray(parsed) ? parsed : parsed ? [parsed] : [];
+  return list
+    .map((id) => Number(id))
+    .filter((id) => Number.isInteger(id) && id > 0);
+};
+
 // Role-based permission mapping
 const PERMISSIONS_MAP = {
   client: [
@@ -2721,6 +2741,86 @@ exports.registerCrewMemberStep2 = async (req, res) => {
 };
 
 /**
+ * STEP 3: Draft file upload
+ * Files uploaded here are staged with is_active = 0 and activated only on final Step 3 submit.
+ */
+exports.uploadCrewMemberStep3File = [
+  upload.any(),
+
+  async (req, res) => {
+    try {
+      const { crew_member_id } = req.body;
+      const requestedType = String(req.body.file_type || '').trim();
+
+      if (!crew_member_id) {
+        return res.status(400).json({ success: false, message: 'ID required' });
+      }
+
+      const member = await crew_members.findOne({ where: { crew_member_id } });
+      if (!member) {
+        return res.status(404).json({ success: false, message: 'Member not found' });
+      }
+
+      const incomingFiles = Array.isArray(req.files) ? req.files : [];
+      if (incomingFiles.length === 0) {
+        return res.status(400).json({ success: false, message: 'No files uploaded' });
+      }
+
+      const filesByType = incomingFiles.reduce((acc, file) => {
+        const fieldType = String(file.fieldname || '').trim();
+        const fileType = CREW_STEP3_FILE_TYPES.includes(fieldType) ? fieldType : requestedType;
+
+        if (!CREW_STEP3_FILE_TYPES.includes(fileType)) return acc;
+
+        if (!acc[fileType]) acc[fileType] = [];
+        acc[fileType].push(file);
+        return acc;
+      }, {});
+
+      if (Object.keys(filesByType).length === 0) {
+        return res.status(400).json({ success: false, message: 'Invalid file type' });
+      }
+
+      const uploadedFiles = await S3UploadFiles(filesByType);
+      const createdFiles = [];
+
+      for (const file of uploadedFiles || []) {
+        const created = await crew_member_files.create({
+          crew_member_id,
+          file_type: file.file_type,
+          file_path: file.file_path,
+          is_active: 0,
+          title: null,
+          tag: null
+        });
+
+        createdFiles.push({
+          crew_files_id: created.crew_files_id,
+          file_type: created.file_type,
+          file_path: created.file_path,
+          title: created.title,
+          tag: created.tag,
+          is_active: created.is_active,
+          originalname: file.originalname,
+          file_name: file.file_name,
+          file_size_bytes: file.file_size_bytes,
+          mime_type: file.mime_type
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'File uploaded successfully',
+        data: createdFiles
+      });
+    } catch (error) {
+      console.error('Step 3 Draft Upload Error:', error);
+      return res.status(500).json({ success: false, message: 'Server error' });
+    }
+  }
+];
+
+/**
  * STEP 3: Additional Details & Files
  */
 exports.registerCrewMemberStep3 = [
@@ -2741,6 +2841,9 @@ exports.registerCrewMemberStep3 = [
         social_media_links,
         portfolio_links,
         featured_work,
+        resume_file_id,
+        portfolio_file_ids,
+        certification_file_ids,
         title,
         tag
       } = req.body;
@@ -2772,19 +2875,79 @@ exports.registerCrewMemberStep3 = [
       // --- NEW: Handle both Files and Links together ---
       let itemsToCreate = [];
 
-      const parseJsonInput = (value, fallback = []) => {
-        if (!value) return fallback;
-        if (Array.isArray(value) || typeof value === 'object') return value;
-        try {
-          return JSON.parse(value);
-        } catch (error) {
-          return fallback;
-        }
-      };
-
       const featuredWorkGroups = parseJsonInput(featured_work, []);
       const recentWorkTitles = Array.isArray(title) ? title : title ? [title] : [];
       const recentWorkTags = Array.isArray(tag) ? tag : tag ? [tag] : [];
+      const stagedFileUpdates = [];
+      const stagedResumeFileIds = normalizeIdList(resume_file_id);
+      const stagedPortfolioFileIds = normalizeIdList(portfolio_file_ids);
+      const stagedCertificationFileIds = normalizeIdList(certification_file_ids);
+
+      for (const fileId of stagedResumeFileIds) {
+        stagedFileUpdates.push({
+          crew_files_id: fileId,
+          file_type: 'resume',
+          title: null,
+          tag: null
+        });
+      }
+
+      for (const fileId of stagedPortfolioFileIds) {
+        stagedFileUpdates.push({
+          crew_files_id: fileId,
+          file_type: 'portfolio',
+          title: null,
+          tag: null
+        });
+      }
+
+      for (const fileId of stagedCertificationFileIds) {
+        stagedFileUpdates.push({
+          crew_files_id: fileId,
+          file_type: 'certifications',
+          title: 'Certifications',
+          tag: null
+        });
+      }
+
+      for (const group of featuredWorkGroups) {
+        const groupFileIds = normalizeIdList(group?.fileIds || group?.file_ids);
+        const groupTitle = group?.title || null;
+        const groupTag = Array.isArray(group?.tags)
+          ? JSON.stringify(group.tags)
+          : group?.tags || group?.tag || null;
+
+        for (const fileId of groupFileIds) {
+          stagedFileUpdates.push({
+            crew_files_id: fileId,
+            file_type: 'recent_work',
+            title: groupTitle,
+            tag: groupTag
+          });
+        }
+      }
+
+      if (stagedFileUpdates.length > 0) {
+        const stagedFileIds = [...new Set(stagedFileUpdates.map((item) => item.crew_files_id))];
+        const existingStagedFiles = await crew_member_files.findAll({
+          where: {
+            crew_files_id: { [Op.in]: stagedFileIds },
+            crew_member_id
+          }
+        });
+        const existingById = new Map(existingStagedFiles.map((file) => [Number(file.crew_files_id), file]));
+
+        for (const update of stagedFileUpdates) {
+          const stagedFile = existingById.get(Number(update.crew_files_id));
+          if (!stagedFile || String(stagedFile.file_type) !== update.file_type) continue;
+
+          await stagedFile.update({
+            is_active: 1,
+            title: update.title,
+            tag: update.tag
+          });
+        }
+      }
 
       // Handle S3 uploads
       const filePaths = await S3UploadFiles(req.files);
