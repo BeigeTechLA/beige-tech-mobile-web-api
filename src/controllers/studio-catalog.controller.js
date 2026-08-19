@@ -295,6 +295,68 @@ const buildStudioIncludes = () => [
   },
 ];
 
+const buildStudioLookupWhere = (slugOrId) => {
+  const value = String(slugOrId || '').trim();
+  const numericId = Number.parseInt(value, 10);
+  const where = {
+    is_active: 1,
+    status: 'active',
+    [db.Sequelize.Op.or]: [
+      { slug: value },
+    ],
+  };
+
+  if (Number.isInteger(numericId) && String(numericId) === value) {
+    where[db.Sequelize.Op.or].push({ studio_id: numericId });
+  }
+
+  return where;
+};
+
+const buildBookedSlotDateWhere = (query = {}) => {
+  const startDate = normalizeDateOnly(query.start_date || query.startDate || query.from);
+  const endDate = normalizeDateOnly(query.end_date || query.endDate || query.to);
+
+  if (startDate && endDate) {
+    return { [db.Sequelize.Op.between]: [startDate, endDate] };
+  }
+  if (startDate) {
+    return { [db.Sequelize.Op.gte]: startDate };
+  }
+  if (endDate) {
+    return { [db.Sequelize.Op.lte]: endDate };
+  }
+
+  return { [db.Sequelize.Op.ne]: null };
+};
+
+const groupBookedSlotsByDate = (rows = []) => {
+  const byDate = new Map();
+
+  rows.forEach((row) => {
+    const booking = row.get ? row.get({ plain: true }) : row;
+    const date = normalizeDateOnly(booking.booking_date);
+    if (!date) return;
+
+    if (!byDate.has(date)) {
+      byDate.set(date, []);
+    }
+
+    byDate.get(date).push({
+      date,
+      start_time: booking.start_time || null,
+      end_time: booking.end_time || null,
+    });
+  });
+
+  return [...byDate.entries()]
+    .sort(([dateA], [dateB]) => dateA.localeCompare(dateB))
+    .map(([date, slots]) => ({
+      date,
+      slots: slots.sort((a, b) => String(a.start_time || '').localeCompare(String(b.start_time || ''))),
+    }));
+};
+
 exports.getPublicStudioCatalog = async (req, res) => {
   try {
     const page = Math.max(1, Number.parseInt(req.query.page || '1', 10));
@@ -414,18 +476,7 @@ exports.getPublicStudioCatalog = async (req, res) => {
 exports.getPublicStudioBySlugOrId = async (req, res) => {
   try {
     const slugOrId = String(req.params.slugOrId || '').trim();
-    const numericId = Number.parseInt(slugOrId, 10);
-    const where = {
-      is_active: 1,
-      status: 'active',
-      [db.Sequelize.Op.or]: [
-        { slug: slugOrId },
-      ],
-    };
-
-    if (Number.isInteger(numericId) && String(numericId) === slugOrId) {
-      where[db.Sequelize.Op.or].push({ studio_id: numericId });
-    }
+    const where = buildStudioLookupWhere(slugOrId);
 
     const studio = await studios.findOne({
       where,
@@ -452,6 +503,69 @@ exports.getPublicStudioBySlugOrId = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Failed to fetch studio details',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
+    });
+  }
+};
+
+exports.getPublicStudioBookedSlots = async (req, res) => {
+  try {
+    const slugOrId = String(req.params.slugOrId || '').trim();
+
+    if (!slugOrId) {
+      return res.status(400).json({
+        success: false,
+        message: 'studio_id or slug is required',
+      });
+    }
+
+    const studio = await studios.findOne({
+      where: buildStudioLookupWhere(slugOrId),
+      attributes: ['studio_id', 'studio_name', 'slug'],
+    });
+
+    if (!studio) {
+      return res.status(404).json({
+        success: false,
+        message: 'Studio not found',
+      });
+    }
+
+    const plainStudio = studio.get ? studio.get({ plain: true }) : studio;
+    const studioBookingIds = [
+      String(plainStudio.studio_id),
+      plainStudio.slug ? String(plainStudio.slug) : null,
+    ].filter(Boolean);
+
+    const bookedRows = studio_bookings
+      ? await studio_bookings.findAll({
+          where: {
+            studio_id: { [db.Sequelize.Op.in]: studioBookingIds },
+            booking_date: buildBookedSlotDateWhere(req.query),
+            status: { [db.Sequelize.Op.in]: studioBookingService.BLOCKING_STUDIO_BOOKING_STATUSES },
+          },
+          attributes: ['booking_date', 'start_time', 'end_time'],
+          order: [['booking_date', 'ASC'], ['start_time', 'ASC']],
+        })
+      : [];
+
+    const bookedSlots = groupBookedSlotsByDate(bookedRows);
+
+    return res.json({
+      success: true,
+      data: {
+        studio_id: plainStudio.studio_id,
+        slug: plainStudio.slug || null,
+        studio_name: plainStudio.studio_name,
+        booked_dates: bookedSlots.map((item) => item.date),
+        booked_slots: bookedSlots,
+      },
+    });
+  } catch (error) {
+    console.error('Get public studio booked slots error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch studio booked slots',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }

@@ -2513,9 +2513,6 @@ exports.confirmPayment = async (req, res) => {
         // });
 
       } catch (bookingUpdateError) {
-        if (bookingUpdateError instanceof studioBookingService.StudioBookingConflictError || bookingUpdateError?.statusCode === 409) {
-          throw bookingUpdateError;
-        }
         console.error('Failed to update booking status:', bookingUpdateError);
         // Don't fail the payment if booking update fails
       }
@@ -2591,13 +2588,6 @@ exports.confirmPayment = async (req, res) => {
   } catch (error) {
     if (transaction && !transaction.finished) {
       await transaction.rollback();
-    }
-    if (error instanceof studioBookingService.StudioBookingConflictError || error?.statusCode === 409) {
-      return res.status(409).json({
-        success: false,
-        message: error.message,
-        conflicts: error.conflicts || [],
-      });
     }
     console.error('Payment Confirmation Error:', error);
 
@@ -3536,6 +3526,9 @@ exports.confirmPaymentMulti = async (req, res) => {
           });
         }
       } catch (lookupError) {
+        if (lookupError instanceof studioBookingService.StudioBookingConflictError || lookupError?.statusCode === 409) {
+          throw lookupError;
+        }
         console.error('Failed lookup after payment intent unique conflict:', lookupError);
       }
     }
@@ -3969,11 +3962,6 @@ exports.manualMarkWebhookPaid = async (req, res) => {
       status: 'succeeded'
     }, { transaction });
 
-    await studioBookingService.confirmStudioBookingsForPaidBooking({
-      bookingId,
-      transaction,
-    });
-
     await db.stream_project_booking.update({
       is_draft: 0,
       payment_id: payment.payment_id,
@@ -4003,6 +3991,11 @@ exports.manualMarkWebhookPaid = async (req, res) => {
       salesQuoteId,
       amountPaid,
       transaction
+    });
+
+    await studioBookingService.confirmStudioBookingsForPaidBooking({
+      bookingId,
+      transaction,
     });
 
     await markAdditionalQuoteInvoiceAsPaid({
@@ -4090,13 +4083,6 @@ exports.manualMarkWebhookPaid = async (req, res) => {
     });
   } catch (error) {
     await transaction.rollback();
-    if (error instanceof studioBookingService.StudioBookingConflictError || error?.statusCode === 409) {
-      return res.status(409).json({
-        success: false,
-        message: error.message,
-        conflicts: error.conflicts || [],
-      });
-    }
     console.error('Manual webhook processing error:', error);
     return res.status(500).json({
       success: false,

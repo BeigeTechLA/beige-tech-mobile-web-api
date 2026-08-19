@@ -4,5 +4,6 @@ const studioCatalogController = require('../controllers/studio-catalog.controlle
 
 router.get('/catalog', studioCatalogController.getPublicStudioCatalog);
 router.get('/catalog/:slugOrId', studioCatalogController.getPublicStudioBySlugOrId);
+router.get('/:slugOrId/booked-slots', studioCatalogController.getPublicStudioBookedSlots);
 
 module.exports = router;

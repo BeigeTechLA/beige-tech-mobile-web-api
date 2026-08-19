@@ -5319,6 +5319,11 @@ Content-Type: application/json
 ### Get studio detail by slug or numeric studio_id
 GET {{URL}}studios/catalog/beige-west-hollywood-content-studio
 Content-Type: application/json
+
+### Get studio's booked slots
+GET {{URL}}studios/beige-west-hollywood-wellness-gym/booked-slots
+Content-Type: application/json
+
 ### ============================================================
 ### EXCEL EXPORT APIs — LOCAL TESTING — 11, August 2026
 ### Server: LOCAL (localhost:5001)
