@@ -2039,43 +2039,16 @@ exports.resetPassword = async (req, res) => {
  */
 exports.generateUserResetLinkForAdmin = async (req, res) => {
   try {
-    const rawIdentifier =
-      req.body.user_id ??
-      req.body.client_id ??
-      req.body.crew_member_id ??
-      req.body.id;
+    const email = String(req.body.email || "").trim().toLowerCase();
 
-    const identifier = Number.parseInt(String(rawIdentifier), 10);
-    if (!Number.isFinite(identifier)) {
+    if (!email) {
       return res.status(400).json({
         success: false,
-        message: 'user_id, client_id, or crew_member_id is required'
+        message: 'email is required'
       });
     }
 
-    let user = await User.findOne({ where: { id: identifier } });
-
-    if (!user) {
-      const client = await Clients.findOne({
-        where: { client_id: identifier },
-        attributes: ['user_id', 'name', 'email']
-      });
-
-      if (client?.user_id) {
-        user = await User.findOne({ where: { id: client.user_id } });
-      }
-    }
-
-    if (!user) {
-      const crewMember = await CrewMember.findOne({
-        where: { crew_member_id: identifier },
-        attributes: ['user_id', 'first_name', 'last_name', 'email']
-      });
-
-      if (crewMember?.user_id) {
-        user = await User.findOne({ where: { id: crewMember.user_id } });
-      }
-    }
+    const user = await User.findOne({ where: { email } });
 
     if (!user) {
       return res.status(404).json({ success: false, message: 'Linked user account not found' });
