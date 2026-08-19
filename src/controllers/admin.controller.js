@@ -3083,6 +3083,61 @@ exports.updateProjectDateLocation = async (req, res) => {
   }
 };
 
+exports.updateProjectName = async (req, res) => {
+  try {
+    const { project_id } = req.params;
+    const projectName = String(req.body?.project_name || '').trim();
+
+    if (!project_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Project ID is required'
+      });
+    }
+
+    if (!projectName) {
+      return res.status(400).json({
+        success: false,
+        message: 'project_name is required'
+      });
+    }
+
+    const project = await stream_project_booking.findOne({
+      where: {
+        stream_project_booking_id: project_id,
+        is_active: 1
+      }
+    });
+
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        message: 'Project not found'
+      });
+    }
+
+    await project.update({
+      project_name: projectName
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Project name updated successfully',
+      data: {
+        stream_project_booking_id: project.stream_project_booking_id,
+        project_name: project.project_name
+      }
+    });
+  } catch (error) {
+    console.error('Error updating project name:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update project name',
+      error: error.message
+    });
+  }
+};
+
 // exports.getAllProjectDetails = async (req, res) => {
 //   try {
 //     const { status, event_type, search } = req.query;  // Get filters from query params
