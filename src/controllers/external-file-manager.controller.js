@@ -3531,7 +3531,7 @@ exports.listWorkspaces = async (req, res) => {
       )
     ).filter(Boolean);
 
-    const mergedWorkspaces = [
+    const mergedWorkspacesRaw = [
       ...(result.data?.workspaces || []),
       ...verifiedMissingEventWorkspaces,
     ].map((workspace) => {
@@ -3546,6 +3546,28 @@ exports.listWorkspaces = async (req, res) => {
         visibleUntil: eventRow.visible_until,
       };
     });
+
+    const shootBookingIds = mergedWorkspacesRaw
+      .map(w => Number(w.externalId))
+      .filter(id => !isNaN(id) && id > 0);
+
+    let userMap = new Map();
+    if (shootBookingIds.length > 0) {
+      const [userRows] = await db.sequelize.query(
+        `SELECT b.stream_project_booking_id as id, u.name, u.email 
+         FROM stream_project_booking b 
+         LEFT JOIN users u ON u.id = b.user_id 
+         WHERE b.stream_project_booking_id IN (?)`,
+        { replacements: [shootBookingIds] }
+      );
+      userRows.forEach(row => userMap.set(String(row.id), row));
+    }
+
+    const mergedWorkspaces = mergedWorkspacesRaw.map(w => ({
+      ...w,
+      name: userMap.get(String(w.externalId))?.name || '',
+      email: userMap.get(String(w.externalId))?.email || ''
+    }));
 
     let filteredWorkspaces = mergedWorkspaces;
     if (isCommonEventVisibilityLimitedRole(req)) {
@@ -3594,10 +3616,14 @@ exports.listWorkspaces = async (req, res) => {
         const folderName = String(workspace.folderName || '').toLowerCase();
         const externalId = String(workspace.externalId || '').toLowerCase();
         const eventName = String(workspace.eventName || '').toLowerCase();
+        const userName = String(workspace.name || '').toLowerCase();
+        const userEmail = String(workspace.email || '').toLowerCase();
         return (
           folderName.includes(search) ||
           externalId.includes(search) ||
-          eventName.includes(search)
+          eventName.includes(search) ||
+          userName.includes(search) ||
+          userEmail.includes(search)
         );
       });
     }
