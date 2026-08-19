@@ -3732,9 +3732,14 @@ exports.updateProjectDateLocation = async (req, res) => {
 
 exports.getAllProjectDetails = async (req, res) => {
   try {
-    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment, production_filter, summary_only } = req.query;
+    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment, production_filter, payment_filter, summary_only } = req.query;
     const today = new Date();
     const noPagination = !limit && !page;
+    const hasPostFetchFilters = Boolean(
+      (cp_assignment && cp_assignment !== 'all') ||
+      (production_filter && production_filter !== 'all') ||
+      (payment_filter && payment_filter !== 'all')
+    );
     const requestUserId = Number(req.user?.userId || req.user?.id || req.userId);
     const requestUserRole = String(req.user?.userRole || req.userRole || '').toLowerCase().trim();
     const clientProjectFilter = requestUserRole === 'client' && Number.isInteger(requestUserId) && requestUserId > 0
@@ -3743,8 +3748,8 @@ exports.getAllProjectDetails = async (req, res) => {
 
     let pageNumber = null, pageSize = null, offset = null;
     if (!noPagination) {
-      pageNumber = parseInt(page ?? 1, 10);
-      pageSize = parseInt(limit ?? 10, 10);
+      pageNumber = Math.max(parseInt(page ?? 1, 10) || 1, 1);
+      pageSize = Math.min(Math.max(parseInt(limit ?? 10, 10) || 10, 1), 100);
       offset = (pageNumber - 1) * pageSize;
     }
 
@@ -3759,23 +3764,91 @@ exports.getAllProjectDetails = async (req, res) => {
       narrative: ['narrative', 'short film']
     };
 
+    const rangeLower = String(range || '').toLowerCase().trim();
     let dateFilter = {};
     if (start_date && end_date) {
-      dateFilter = { event_date: { [Sequelize.Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`] } };
-    } else if (range === 'month') {
+      dateFilter = { event_date: { [Sequelize.Op.between]: [start_date, end_date] } };
+    } else if (date_on) {
+      dateFilter = Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), date_on);
+    } else if (rangeLower === 'month') {
       dateFilter = { [Sequelize.Op.and]: [
         Sequelize.where(Sequelize.fn('MONTH', Sequelize.col('event_date')), Sequelize.fn('MONTH', Sequelize.fn('CURDATE'))),
         Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('event_date')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
       ]};
-    } else if (range === 'week') {
+    } else if (rangeLower === 'week') {
       dateFilter = { [Sequelize.Op.and]: [
         Sequelize.where(Sequelize.fn('WEEK', Sequelize.col('event_date')), Sequelize.fn('WEEK', Sequelize.fn('CURDATE'))),
         Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('event_date')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
       ]};
-    } else if (range === 'all') {
+    } else if (rangeLower === 'today') {
+      dateFilter = Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), Sequelize.fn('CURDATE'));
+    } else if (rangeLower === 'upcoming') {
+      dateFilter = Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), { [Sequelize.Op.gte]: Sequelize.fn('CURDATE') });
+    } else if (rangeLower === 'next_7_days') {
+      dateFilter = Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), {
+        [Sequelize.Op.between]: [
+          Sequelize.fn('CURDATE'),
+          Sequelize.literal('DATE_ADD(CURDATE(), INTERVAL 7 DAY)')
+        ]
+      });
+    } else if (rangeLower === 'next_15_days') {
+      dateFilter = Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), {
+        [Sequelize.Op.between]: [
+          Sequelize.fn('CURDATE'),
+          Sequelize.literal('DATE_ADD(CURDATE(), INTERVAL 15 DAY)')
+        ]
+      });
+    } else if (rangeLower === 'next_30_days' || rangeLower === 'in_1_month') {
+      dateFilter = Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), {
+        [Sequelize.Op.between]: [
+          Sequelize.fn('CURDATE'),
+          Sequelize.literal('DATE_ADD(CURDATE(), INTERVAL 30 DAY)')
+        ]
+      });
+    } else if (rangeLower === 'in_2_months') {
+      dateFilter = Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), {
+        [Sequelize.Op.between]: [
+          Sequelize.fn('CURDATE'),
+          Sequelize.literal('DATE_ADD(CURDATE(), INTERVAL 2 MONTH)')
+        ]
+      });
+    } else if (rangeLower === 'in_6_months') {
+      dateFilter = Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), {
+        [Sequelize.Op.between]: [
+          Sequelize.fn('CURDATE'),
+          Sequelize.literal('DATE_ADD(CURDATE(), INTERVAL 6 MONTH)')
+        ]
+      });
+    } else if (rangeLower === 'in_1_year') {
+      dateFilter = Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), {
+        [Sequelize.Op.between]: [
+          Sequelize.fn('CURDATE'),
+          Sequelize.literal('DATE_ADD(CURDATE(), INTERVAL 1 YEAR)')
+        ]
+      });
+    } else if (rangeLower === 'last_7_days') {
+      dateFilter = Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), {
+        [Sequelize.Op.between]: [
+          Sequelize.literal('DATE_SUB(CURDATE(), INTERVAL 7 DAY)'),
+          Sequelize.fn('CURDATE')
+        ]
+      });
+    } else if (rangeLower === 'last_15_days') {
+      dateFilter = Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), {
+        [Sequelize.Op.between]: [
+          Sequelize.literal('DATE_SUB(CURDATE(), INTERVAL 15 DAY)'),
+          Sequelize.fn('CURDATE')
+        ]
+      });
+    } else if (rangeLower === 'last_30_days' || rangeLower === 'last_1_month') {
+      dateFilter = Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), {
+        [Sequelize.Op.between]: [
+          Sequelize.literal('DATE_SUB(CURDATE(), INTERVAL 30 DAY)'),
+          Sequelize.fn('CURDATE')
+        ]
+      });
+    } else if (rangeLower === 'all' || !rangeLower || rangeLower === 'custom') {
       dateFilter = {};
-    } else if (date_on) {
-      dateFilter = { event_date: { [Sequelize.Op.eq]: `${date_on} 00:00:00` } };
     }
 
     const [
@@ -3883,7 +3956,22 @@ exports.getAllProjectDetails = async (req, res) => {
       ]
     };
 
-    let whereConditions = { ...paidOnlyFilter, ...dateFilter };
+    let whereConditions = { ...paidOnlyFilter };
+    const dateAndConditions = Array.isArray(dateFilter?.[Sequelize.Op.and])
+      ? dateFilter[Sequelize.Op.and]
+      : Object.keys(dateFilter || {}).length > 0
+        ? [dateFilter]
+        : [];
+
+    if (dateAndConditions.length) {
+      whereConditions = {
+        ...whereConditions,
+        [Sequelize.Op.and]: [
+          ...(whereConditions[Sequelize.Op.and] || []),
+          ...dateAndConditions,
+        ],
+      };
+    }
 
     if (category && categoryConfig[category.toLowerCase()]) {
       const keywords = categoryConfig[category.toLowerCase()];
@@ -3972,7 +4060,23 @@ exports.getAllProjectDetails = async (req, res) => {
     if (event_type) whereConditions.event_type = event_type;
     
     if (search) {
-      const searchCondition = Sequelize.where(Sequelize.fn('LOWER', Sequelize.col('project_name')), { [Sequelize.Op.like]: `%${search.toLowerCase()}%` });
+      const normalizedSearch = String(search).toLowerCase().trim();
+      const normalizedPhoneSearch = normalizedSearch.replace(/[^\d+]/g, '');
+      const searchConditions = [
+        Sequelize.where(Sequelize.fn('LOWER', Sequelize.col('project_name')), { [Sequelize.Op.like]: `%${normalizedSearch}%` }),
+        Sequelize.where(Sequelize.fn('LOWER', Sequelize.col('guest_email')), { [Sequelize.Op.like]: `%${normalizedSearch}%` }),
+        Sequelize.where(Sequelize.cast(Sequelize.col('stream_project_booking_id'), 'CHAR'), { [Sequelize.Op.like]: `%${normalizedSearch.replace(/^#/, '')}%` }),
+      ];
+
+      if (normalizedPhoneSearch) {
+        searchConditions.push(
+          Sequelize.where(Sequelize.fn('REGEXP_REPLACE', Sequelize.col('description'), '[^0-9]', ''), {
+            [Sequelize.Op.like]: `%${normalizedPhoneSearch}%`
+          })
+        );
+      }
+
+      const searchCondition = { [Sequelize.Op.or]: searchConditions };
       whereConditions = {
         ...whereConditions,
         [Sequelize.Op.and]: [
@@ -3982,18 +4086,19 @@ exports.getAllProjectDetails = async (req, res) => {
       };
     }
 
-    const [ total_active, total_cancelled, total_completed, total_upcoming, total_draft, allEventMasterTypes ] = await Promise.all([
+    const [ total_active, total_cancelled, total_completed, total_upcoming, total_draft, total_matching, allEventMasterTypes ] = await Promise.all([
       stream_project_booking.count({ where: { ...whereConditions, is_cancelled: 0, is_completed: 0, is_draft: 0 } }),
       stream_project_booking.count({ where: { ...whereConditions, is_cancelled: 1 } }),
       stream_project_booking.count({ where: { ...whereConditions, is_completed: 1 } }),
       stream_project_booking.count({ where: { ...whereConditions, is_cancelled: 0, is_draft: 0, event_date: { [Sequelize.Op.gt]: today } } }),
       stream_project_booking.count({ where: { ...whereConditions, is_draft: 1 } }),
+      stream_project_booking.count({ where: whereConditions }),
       event_type_master.findAll({ attributes: ['event_type_id', 'event_type_name'], raw: true })
     ]);
 
     const projectRows = await stream_project_booking.findAll({
       where: whereConditions,
-      ...(noPagination ? {} : { limit: pageSize, offset }),
+      ...(noPagination || hasPostFetchFilters ? {} : { limit: pageSize, offset }),
       order: [
         [Sequelize.literal(`CASE WHEN DATE(event_date) >= CURDATE() THEN 0 ELSE 1 END`), 'ASC'],
         [Sequelize.literal(`CASE WHEN DATE(event_date) >= CURDATE() THEN event_date END`), 'ASC'],
@@ -4015,7 +4120,7 @@ exports.getAllProjectDetails = async (req, res) => {
           pagination: noPagination ? null : {
             page: pageNumber,
             limit: pageSize,
-            totalRecords: projects.length,
+            totalRecords: total_matching,
           },
         },
       });
@@ -4178,6 +4283,19 @@ exports.getAllProjectDetails = async (req, res) => {
       });
     }
 
+    if (payment_filter && payment_filter !== 'all') {
+      const normalizedPaymentFilter = String(payment_filter).toLowerCase().trim();
+      projectDetails = projectDetails.filter((entry) => {
+        const project = entry?.project || {};
+        const pendingAmount = Number(project.pending_amount || 0);
+        const paidAmount = Number(project.paid_amount || project.total_paid_amount || 0);
+
+        if (normalizedPaymentFilter === 'pending') return pendingAmount > 0;
+        if (normalizedPaymentFilter === 'paid') return pendingAmount <= 0 && paidAmount > 0;
+        return true;
+      });
+    }
+
     if (production_filter && production_filter !== 'all') {
       const normalizedProductionFilter = String(production_filter).toLowerCase().trim();
       const authHeader = req.headers?.authorization || null;
@@ -4247,14 +4365,18 @@ exports.getAllProjectDetails = async (req, res) => {
       });
     }
 
-    const filteredTotalRecords = projectDetails.length;
+    const filteredTotalRecords = hasPostFetchFilters ? projectDetails.length : total_matching;
+    const paginatedProjectDetails =
+      noPagination || !hasPostFetchFilters
+        ? projectDetails
+        : projectDetails.slice(offset, offset + pageSize);
 
     return res.status(200).json({
       error: false,
       message: 'Filtered project details retrieved successfully',
       data: {
         stats: { total_active, total_cancelled, total_completed, total_upcoming, total_draft },
-        projects: projectDetails,
+        projects: paginatedProjectDetails,
         pagination: noPagination ? null : {
             page: pageNumber,
             limit: pageSize,
