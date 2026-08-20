@@ -67,6 +67,31 @@ const proxyRequest = async (path, options = {}) => {
   return payload;
 };
 
+const proxyMultipartRequest = async (path, formData, options = {}) => {
+  const response = await fetch(`${DEFAULT_BASE_URL}${path}`, {
+    method: 'POST',
+    headers: {
+      'x-internal-key': INTERNAL_KEY,
+      ...(options.authorization ? { Authorization: options.authorization } : {}),
+    },
+    body: formData,
+  });
+
+  const payload = await response.json().catch(() => ({
+    success: false,
+    message: 'Invalid JSON response from external chat service',
+  }));
+
+  if (!response.ok) {
+    const error = new Error(payload.message || 'External chat request failed');
+    error.status = response.status;
+    error.payload = payload;
+    throw error;
+  }
+
+  return payload;
+};
+
 const isInvalidExternalOrderReference = (error) => {
   const message = String(error?.payload?.message || error?.message || '').toLowerCase();
   return (
@@ -1953,6 +1978,10 @@ exports.sendChatMessage = async (req, res) => {
       body: JSON.stringify({
         message: req.body.message,
         replyTo: req.body.replyTo || null,
+        fileUrl: req.body.fileUrl || req.body.file_url || null,
+        fileName: req.body.fileName || req.body.file_name || null,
+        fileType: req.body.fileType || req.body.file_type || null,
+        messageType: req.body.messageType || req.body.message_type || null,
         sender: {
           id: sender.id != null ? String(sender.id) : null,
           email: sender.email || null,
@@ -1961,6 +1990,47 @@ exports.sendChatMessage = async (req, res) => {
       }),
     });
 
+    return res.status(200).json(result);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.uploadChatFile = async (req, res) => {
+  try {
+    const sender = await resolveChatSender(req.user);
+
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No file uploaded',
+      });
+    }
+
+    const formData = new FormData();
+    const blob = new Blob([req.file.buffer], {
+      type: req.file.mimetype || 'application/octet-stream',
+    });
+
+    formData.append('file', blob, req.file.originalname || 'attachment');
+    formData.append('roomId', String(req.body.roomId || req.body.room_id || req.params.roomId || ''));
+
+    if (req.body.senderId != null) {
+      formData.append('senderId', String(req.body.senderId));
+    } else if (sender.id != null) {
+      formData.append('senderId', String(sender.id));
+    }
+
+    if (req.body.caption) {
+      formData.append('caption', String(req.body.caption));
+    }
+
+    const result = await proxyMultipartRequest('/upload', formData, {
+      authorization: req.headers.authorization,
+    });
     return res.status(200).json(result);
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {

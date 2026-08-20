@@ -1,4 +1,5 @@
 const router = require('express').Router();
+const multer = require('multer');
 const externalChatController = require('../controllers/external-chat.controller');
 const { authenticate } = require('../middleware/auth');
 const { requireAnyPermission } = require('../middleware/permission.middleware');
@@ -56,10 +57,18 @@ const shootMessagesEdit = requireAnyPermission([
   'creative_partner_messages.edit'
 ], { allowRoles: ['sales_rep', 'sales_admin', 'client', 'creative'] });
 
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 25 * 1024 * 1024,
+  },
+});
+
 router.get('/rooms', authenticate, messagesView, externalChatController.listChatRooms);
 router.get('/directory', authenticate, directoryView, externalChatController.getChatDirectory);
 router.post('/room', authenticate, shootMessagesCreate, externalChatController.createChatRoom);
 router.get('/room/:bookingId', authenticate, shootMessagesView, externalChatController.getChatRoom);
+router.post('/upload', authenticate, shootMessagesCreate, upload.single('file'), externalChatController.uploadChatFile);
 router.post('/room/:roomId/participants', authenticate, shootMessagesEdit, externalChatController.addChatParticipants);
 router.delete('/room/:roomId/participants/:userId', authenticate, shootMessagesEdit, externalChatController.removeChatParticipant);
 router.patch('/room/:roomId/mark-read', authenticate, shootMessagesView, externalChatController.markChatRoomRead);
