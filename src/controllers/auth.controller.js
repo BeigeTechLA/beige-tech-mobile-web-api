@@ -19,6 +19,7 @@ const { parseLocation } = require('../utils/locationHelpers');
 const multer = require('multer');
 const path = require('path');
 const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
+const shiftManagementService = require('../services/shift-management.service');
 
 // Import new utilities
 const otpService = require('../utils/otpService');
@@ -742,6 +743,16 @@ exports.register = async (req, res) => {
       await safeGrantSignupCredit({
         userId: newUser.id,
         email
+      });
+
+      await shiftManagementService.assignLeadViaActiveShiftRoundRobin({
+        lead: clientLead,
+        leadModel: db.client_leads,
+        clientName: name,
+        status: 'Signed Up - Lead Created',
+        source: 'web_form'
+      }).catch((error) => {
+        console.error('Shift round-robin client lead assignment failed:', error);
       });
     }
 

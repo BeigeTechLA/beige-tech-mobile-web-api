@@ -14,6 +14,7 @@ const accountCreditService = require('../services/account-credit.service');
 const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
 const quoteService = require('../services/sales-quote.service');
 const bookingPricingService = require('../services/booking-pricing.service');
+const shiftManagementService = require('../services/shift-management.service');
 const emailService = require('../utils/emailService');
 const { sendCPNewBookingRequestEmail } = require('../utils/emailService');
 const { resolveEventDateAndStartTime, normalizeTime, splitDateTime } = require('../utils/timezone');
@@ -25,6 +26,28 @@ const sequelize = require('../db');
 const db = require('../models');
 const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
 const EXTERNAL_FILE_MANAGER_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
+
+async function assignSalesLeadViaShiftRoundRobin({ lead, clientName, status, source, transaction = null }) {
+  try {
+    return await shiftManagementService.assignLeadViaActiveShiftRoundRobin({
+      lead,
+      leadModel: sales_leads,
+      clientName,
+      status,
+      source,
+      transaction
+    });
+  } catch (assignmentError) {
+    console.error('Shift round-robin assignment failed:', assignmentError);
+  }
+
+  return null;
+}
+
+function isManualSalesActor(req) {
+  const role = String(req.userRole || req.user?.userRole || '').toLowerCase();
+  return Boolean(req.userId) && !['guest', 'client'].includes(role);
+}
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -1582,19 +1605,28 @@ exports.trackEarlyBookingInterest = async (req, res) => {
                 activity_data: { source: 'step_1_capture', user_id: resolvedUserId, guest_email: normalizedGuestEmail }
             });
 
-            // Force assignment to default sales inbox owner for this branch flow.
-            assignedRep = await users.findOne({
-                where: {
-                    email: 'sales@beigecorporation.io',
-                    is_active: 1
-                },
-                attributes: ['id', 'name', 'email']
+            assignedRep = await assignSalesLeadViaShiftRoundRobin({
+                lead,
+                clientName: client_name,
+                status: 'Book a Shoot - Lead Created',
+                source: 'web_form'
             });
 
-            if (assignedRep?.id) {
-                await lead.update({ assigned_sales_rep_id: assignedRep.id });
-            } else {
-                assignedRep = null;
+            if (!assignedRep?.id) {
+                // Fallback to default sales inbox owner when no active shift assignee is available.
+                assignedRep = await users.findOne({
+                    where: {
+                        email: 'sales@beigecorporation.io',
+                        is_active: 1
+                    },
+                    attributes: ['id', 'name', 'email']
+                });
+
+                if (assignedRep?.id) {
+                    await lead.update({ assigned_sales_rep_id: assignedRep.id });
+                } else {
+                    assignedRep = null;
+                }
             }
 
           // emailService.sendSalesLeadNotification({
@@ -1730,9 +1762,12 @@ exports.trackBookingStart = async (req, res) => {
       }
     });
 
-    // TEMP FLOW: direct book-a-shoot leads stay unassigned for now.
-    // const assignedRep = await leadAssignmentService.autoAssignLead(lead.lead_id);
-    const assignedRep = null;
+    const assignedRep = await assignSalesLeadViaShiftRoundRobin({
+      lead,
+      clientName: client_name,
+      status: 'Booking In Progress',
+      source: 'web_form'
+    });
 
     res.status(constants.CREATED.code).json({
       success: true,
@@ -1871,16 +1906,28 @@ exports.createSalesAssistedLead = async (req, res) => {
       }
     });
 
-    // TEMP FLOW: direct book-a-shoot leads stay unassigned for now.
-    // if (!lead.assigned_sales_rep_id) {
-    //   await leadAssignmentService.autoAssignLead(lead.lead_id);
-    // }
+    let assignedRep = null;
+
+    if (isManualSalesActor(req) && Number(lead.assigned_sales_rep_id || 0) !== Number(req.userId)) {
+      await lead.update({ assigned_sales_rep_id: req.userId });
+      assignedRep = await users.findByPk(req.userId, {
+        attributes: ['id', 'name', 'email']
+      });
+    } else if (!lead.assigned_sales_rep_id) {
+      assignedRep = await assignSalesLeadViaShiftRoundRobin({
+        lead,
+        clientName: client_name,
+        status: 'Sales Assisted Lead Created',
+        source: 'web_form'
+      });
+    }
 
     res.status(constants.CREATED.code).json({
       success: true,
       message: 'Sales team has been notified. Someone will contact you shortly.',
       data: {
-        lead_id: lead.lead_id
+        lead_id: lead.lead_id,
+        assigned_to: assignedRep
       }
     });
 
@@ -7521,19 +7568,22 @@ exports.finalizeCreateDeal = async (req, res) => {
 
     // ASSIGN SALES REP
     let assignedRep = null;
-    const assignedSalesRepId = await resolveAssignedSalesRepId({
-      requestedSalesRepId: sales_rep_id,
-      req,
-      currentAssignedSalesRepId: lead.assigned_sales_rep_id,
-      tx
-    });
+    const manualByAdmin = isManualSalesActor(req);
+    const assignedSalesRepId = manualByAdmin
+      ? req.userId
+      : await resolveAssignedSalesRepId({
+          requestedSalesRepId: sales_rep_id,
+          req,
+          currentAssignedSalesRepId: lead.assigned_sales_rep_id,
+          tx
+        });
 
     if (assignedSalesRepId) {
       assignedRep = await users.findByPk(assignedSalesRepId, {
         attributes: ['id', 'name'],
         transaction: tx
       });
-    } else {
+    } else if (leadModel !== sales_leads) {
       // TEMP FLOW:
       // Admin/Sales Admin created leads should stay with creator (resolveAssignedSalesRepId already handles this).
       // Old random/auto assignment logic kept commented for easy rollback.
@@ -7548,7 +7598,7 @@ exports.finalizeCreateDeal = async (req, res) => {
           })
         : null;
     }
-    if (assignedRep?.id) {
+    if (assignedRep?.id && Number(lead.assigned_sales_rep_id || 0) !== Number(assignedRep.id)) {
       await lead.update(
         { assigned_sales_rep_id: assignedRep.id },
         { transaction: tx }
@@ -7590,6 +7640,15 @@ exports.finalizeCreateDeal = async (req, res) => {
     });
 
     await tx.commit();
+
+    if (leadModel === sales_leads && !assignedRep?.id && !manualByAdmin) {
+      assignedRep = await assignSalesLeadViaShiftRoundRobin({
+        lead,
+        clientName: resolvedName,
+        status: 'Book a Shoot - Lead Created',
+        source: 'web_form'
+      });
+    }
     
     return res.status(200).json({
       success: true,
