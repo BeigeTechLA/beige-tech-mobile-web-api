@@ -1238,44 +1238,10 @@ exports.getSalesRepsWorkload = async (req, res) => {
 
 exports.getSalesRepsList = async (req, res) => {
   try {
-    const { user_type, users, Sequelize } = require('../models');
-    const { Op } = Sequelize;
-
-    // TEMP FLOW:
-    // Show admins with assign_lead=1 instead of sales reps.
-    // Old sales_rep filter kept commented for easy rollback.
-    const userTypes = await user_type.findAll({
-      where: {
-        user_role: {
-          [Op.in]: ['admin', 'Admin']
-          // [Op.in]: ['sales_rep']
-        }
-      },
-      attributes: ['user_type_id']
+    const salesReps = await leadAssignmentService.getActiveSalesReps({
+      attributes: ['id', 'name', 'email', 'user_type', 'role']
     });
-
-    const userTypeIds = userTypes.map(u => u.user_type_id);
-
-    // If no roles found
-    if (userTypeIds.length === 0) {
-      return res.json({
-        success: true,
-        data: []
-      });
-    }
-
-    // Fetch users
-    const salesReps = await users.findAll({
-      where: {
-        user_type: {
-          [Op.in]: userTypeIds
-        },
-        is_active: 1,
-        assign_lead: 1
-      },
-      attributes: ['id', 'name', 'email', 'user_type', 'role'],
-      order: [['name', 'ASC']]
-    });
+    salesReps.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
 
     const salesRepIds = salesReps.map((rep) => rep.id);
     const liveStatuses = salesRepIds.length
