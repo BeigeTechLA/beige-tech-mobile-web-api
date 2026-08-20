@@ -3510,42 +3510,39 @@ exports.listWorkspaces = async (req, res) => {
       visibleUntil: row.visible_until,
     }));
 
-    const existingByExternalId = new Set(
-      (result.data?.workspaces || []).map((workspace) => String(workspace.externalId || '').trim().toLowerCase())
-    );
-    const missingEventWorkspaces = eventWorkspaces.filter(
-      (workspace) => !existingByExternalId.has(String(workspace.externalId || '').trim().toLowerCase())
-    );
+    const mergedWorkspaces = [];
+    const mergedWorkspaceByExternalId = new Map();
 
-    const verifiedMissingEventWorkspaces = (
-      await Promise.all(
-        missingEventWorkspaces.map(async (workspace) => {
-          try {
-            const lookup = await proxyRequest(`/workspace/${encodeURIComponent(String(workspace.externalId))}`);
-            if (!lookup?.data?.workspace) return null;
-            return workspace;
-          } catch (error) {
-            return null;
-          }
-        })
-      )
-    ).filter(Boolean);
+    for (const workspace of result.data?.workspaces || []) {
+      const externalId = String(workspace.externalId || '').trim().toLowerCase();
+      if (!externalId || mergedWorkspaceByExternalId.has(externalId)) continue;
+      mergedWorkspaceByExternalId.set(externalId, workspace);
+    }
 
-    const mergedWorkspaces = [
-      ...(result.data?.workspaces || []),
-      ...verifiedMissingEventWorkspaces,
-    ].map((workspace) => {
+    for (const workspace of eventWorkspaces) {
+      const externalId = String(workspace.externalId || '').trim().toLowerCase();
+      if (!externalId) continue;
+      if (mergedWorkspaceByExternalId.has(externalId)) {
+        continue;
+      }
+      mergedWorkspaceByExternalId.set(externalId, workspace);
+    }
+
+    for (const workspace of mergedWorkspaceByExternalId.values()) {
       const externalId = String(workspace.externalId || '').trim().toLowerCase();
       const eventRow = eventRowByExternalId.get(externalId);
-      if (!eventRow) return workspace;
-      return {
-        ...workspace,
-        isCommonEvent: true,
-        eventId: eventRow.event_id,
-        eventName: eventRow.event_name,
-        visibleUntil: eventRow.visible_until,
-      };
-    });
+      mergedWorkspaces.push(
+        eventRow
+          ? {
+              ...workspace,
+              isCommonEvent: true,
+              eventId: eventRow.event_id,
+              eventName: eventRow.event_name,
+              visibleUntil: eventRow.visible_until,
+            }
+          : workspace
+      );
+    }
 
     let filteredWorkspaces = mergedWorkspaces;
     if (isCommonEventVisibilityLimitedRole(req)) {
