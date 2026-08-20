@@ -580,6 +580,41 @@ const parseAmountCandidate = (value) => {
   return Number.isFinite(numeric) ? numeric : null;
 };
 
+const formatProjectEventTypeLabels = (eventType, allEventMasterTypes = [], lineItems = []) => {
+  const rawTypes = eventType ? String(eventType).split(',') : [];
+  const formattedTypes = rawTypes
+    .map((type) => {
+      const val = String(type || '').trim();
+      if (!val) return null;
+      const masterMatch = allEventMasterTypes.find((eventTypeRow) => String(eventTypeRow.event_type_id) === val);
+      if (masterMatch) return masterMatch.event_type_name;
+      const stringMap = {
+        videographer: 'Videography',
+        videography: 'Videography',
+        photographer: 'Photography',
+        photography: 'Photography',
+      };
+      return stringMap[val.toLowerCase()] || val.charAt(0).toUpperCase() + val.slice(1);
+    })
+    .filter(Boolean);
+
+  if (formattedTypes.length) {
+    return Array.from(new Set(formattedTypes)).join(', ');
+  }
+
+  const serviceText = (lineItems || [])
+    .filter((item) => String(item?.section_type || '').toLowerCase() === 'service')
+    .map((item) => `${item?.item_name || ''} ${item?.catalog_item?.name || ''}`)
+    .join(' ')
+    .toLowerCase();
+
+  const inferredTypes = [];
+  if (serviceText.includes('video')) inferredTypes.push('Videography');
+  if (serviceText.includes('photo')) inferredTypes.push('Photography');
+
+  return Array.from(new Set(inferredTypes)).join(', ');
+};
+
 const resolveProjectDisplayAmount = async ({ project, paymentData }) => {
   const paymentAmount = parseAmountCandidate(paymentData?.total_amount);
   if (paymentAmount !== null && paymentAmount > 0) {
@@ -12332,23 +12367,75 @@ exports.getClientsShoots = async (req, res) => {
       .map((project) => Number(project.stream_project_booking_id))
       .filter((id) => Number.isFinite(id));
 
-    const bookedLeadRows = bookingIds.length
-      ? await sales_leads.findAll({
-          where: {
-            booking_id: { [Sequelize.Op.in]: bookingIds },
-            lead_status: 'booked',
-            is_active: 1
-          },
-          attributes: ['booking_id'],
-          raw: true
-        })
-      : [];
+    const [
+      bookedLeadRows,
+      bookingPaymentSummaryRows,
+      allEventMasterTypes
+    ] = bookingIds.length
+      ? await Promise.all([
+          sales_leads.findAll({
+            where: {
+              booking_id: { [Sequelize.Op.in]: bookingIds },
+              lead_status: 'booked',
+              is_active: 1
+            },
+            attributes: ['booking_id'],
+            raw: true
+          }),
+          db.sequelize.query(
+            `
+            SELECT booking_id, sales_quote_id, payment_status, paid_amount, credit_used_amount, due_amount, quote_total
+            FROM booking_payment_summary
+            WHERE booking_id IN (:bookingIds)
+              AND payment_status IN ('paid', 'partially_paid', 'approval_pending', 'no_payment_due')
+            `,
+            {
+              replacements: { bookingIds },
+              type: QueryTypes.SELECT
+            }
+          ),
+          event_type_master.findAll({ attributes: ['event_type_id', 'event_type_name'], raw: true })
+        ])
+      : [[], [], await event_type_master.findAll({ attributes: ['event_type_id', 'event_type_name'], raw: true })];
 
     const bookedBookingIdSet = new Set(
       bookedLeadRows
         .map((row) => Number(row.booking_id))
         .filter((id) => Number.isFinite(id))
     );
+
+    const bookingPaymentSummaryByBookingId = new Map(
+      bookingPaymentSummaryRows
+        .map((row) => [Number(row.booking_id), row])
+        .filter(([bookingId]) => Number.isFinite(bookingId))
+    );
+
+    const salesQuoteIds = Array.from(new Set(
+      bookingPaymentSummaryRows
+        .map((row) => Number(row.sales_quote_id))
+        .filter((id) => Number.isFinite(id) && id > 0)
+    ));
+
+    const salesQuoteLineItems = salesQuoteIds.length
+      ? await db.sales_quote_line_items.findAll({
+          where: {
+            sales_quote_id: { [Sequelize.Op.in]: salesQuoteIds },
+            is_active: 1
+          },
+          include: [{ model: db.quote_catalog_items, as: 'catalog_item', required: false }],
+          order: [['sales_quote_id', 'ASC'], ['sort_order', 'ASC'], ['line_item_id', 'ASC']]
+        })
+      : [];
+
+    const salesQuoteLineItemsByQuoteId = new Map();
+    salesQuoteLineItems.forEach((lineItem) => {
+      const quoteId = Number(lineItem.sales_quote_id);
+      if (!Number.isFinite(quoteId)) return;
+      if (!salesQuoteLineItemsByQuoteId.has(quoteId)) {
+        salesQuoteLineItemsByQuoteId.set(quoteId, []);
+      }
+      salesQuoteLineItemsByQuoteId.get(quoteId).push(lineItem);
+    });
 
     // -------- FETCH ASSOCIATED DATA --------
     const projectDetails = await Promise.all(
@@ -12378,32 +12465,56 @@ exports.getClientsShoots = async (req, res) => {
       })
     ]);
 
-    // -------- FORMAT EVENT TYPES --------
-    const rawTypes = project.event_type ? project.event_type.split(',') : [];
-    const formattedTypes = rawTypes.map(t => {
-      const val = t.trim();
-      const stringMap = {
-        'videographer': 'Videography',
-        'photographer': 'Photography'
-      };
-      return stringMap[val?.toLowerCase()] ||
-        val.charAt(0).toUpperCase() + val.slice(1);
-    });
-
+    const bookingPaymentSummary = bookingPaymentSummaryByBookingId.get(Number(project.stream_project_booking_id)) || null;
+    const summaryPaidAmount = bookingPaymentSummary
+      ? parseAmountCandidate(bookingPaymentSummary.paid_amount)
+      : null;
+    const summaryCreditUsedAmount = bookingPaymentSummary
+      ? parseAmountCandidate(bookingPaymentSummary.credit_used_amount)
+      : null;
+    const summaryPendingAmount = bookingPaymentSummary
+      ? parseAmountCandidate(bookingPaymentSummary.due_amount)
+      : null;
+    const summaryQuoteTotal = bookingPaymentSummary
+      ? parseAmountCandidate(bookingPaymentSummary.quote_total)
+      : null;
     const displayAmount = await resolveProjectDisplayAmount({
       project,
       paymentData
     });
     const totalValueAmount = await resolveProjectTotalValueAmount({
-      project
+      project,
+      salesQuoteId: bookingPaymentSummary?.sales_quote_id || null
     });
+    const totalPaidAmount = summaryPaidAmount !== null
+      ? summaryPaidAmount
+      : (project.payment_id ? displayAmount : 0);
+    const creditUsedAmount = summaryCreditUsedAmount || 0;
+    const resolvedTotalValueAmount = summaryQuoteTotal !== null
+      ? summaryQuoteTotal
+      : Math.max(totalValueAmount || 0, totalPaidAmount + creditUsedAmount + (summaryPendingAmount || 0));
+    const pendingAmount = summaryPendingAmount !== null
+      ? Math.max(summaryPendingAmount, 0)
+      : Math.max(resolvedTotalValueAmount - totalPaidAmount - creditUsedAmount, 0);
+    const paymentStatus = pendingAmount > 0 && totalPaidAmount > 0
+      ? 'partially_paid'
+      : String(
+          bookingPaymentSummary?.payment_status ||
+          (project.payment_id ? 'paid' : (totalPaidAmount > 0 ? 'partially_paid' : 'pending'))
+        ).toLowerCase();
+    const lineItems = salesQuoteLineItemsByQuoteId.get(Number(bookingPaymentSummary?.sales_quote_id)) || [];
 
     return {
       project: {
         ...project.toJSON(),
-        total_paid_amount: displayAmount,
-        total_value_amount: totalValueAmount,
-        event_type_labels: formattedTypes.join(', '),
+        total_paid_amount: totalPaidAmount,
+        total_value_amount: resolvedTotalValueAmount,
+        paid_amount: totalPaidAmount,
+        pending_amount: pendingAmount,
+        due_amount: pendingAmount,
+        credit_used_amount: creditUsedAmount,
+        payment_status: paymentStatus,
+        event_type_labels: formatProjectEventTypeLabels(project.event_type, allEventMasterTypes, lineItems),
         event_location: (() => {
           const loc = project.event_location;
           if (!loc) return null;
@@ -12433,7 +12544,10 @@ exports.getClientsShoots = async (req, res) => {
       const proj = item.project;
       const isManualPaid = bookedBookingIdSet.has(Number(proj.stream_project_booking_id));
       const isStripePaid = Boolean(proj.payment_id);
-      const isPaid = (isStripePaid || isManualPaid) && proj.is_draft !== 1;
+      const hasCollectedPayment = Number(proj.paid_amount || proj.total_paid_amount || 0) > 0 ||
+        Number(proj.credit_used_amount || 0) > 0 ||
+        String(proj.payment_status || '').toLowerCase() === 'no_payment_due';
+      const isPaid = hasCollectedPayment || isStripePaid || isManualPaid;
 
       if (isPaid) {
         paid.push(item);
