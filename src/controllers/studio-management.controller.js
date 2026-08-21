@@ -93,22 +93,93 @@ const formatDateOnly = (date) => {
     return `${year}-${month}-${day}`;
 };
 
-const resolveStudioDateRangeFilter = ({ period, month, year }) => {
-    const normalizedPeriod = String(period || '').trim().toLowerCase();
-    const normalizedMonth = String(month || '').trim().toLowerCase();
-    const normalizedYear = Number.parseInt(String(year || ''), 10);
+const normalizeDateOnlyValue = (value) => {
+    const normalized = String(value || '').trim();
+    const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+    if (!match) return null;
+
+    const [, yearValue, monthValue, dayValue] = match;
+    const year = Number(yearValue);
+    const month = Number(monthValue);
+    const day = Number(dayValue);
+    const date = new Date(year, month - 1, day);
+
+    if (
+        date.getFullYear() !== year ||
+        date.getMonth() + 1 !== month ||
+        date.getDate() !== day
+    ) {
+        return null;
+    }
+
+    return `${yearValue}-${monthValue}-${dayValue}`;
+};
+
+const buildDateRange = (startDate, endDate) => {
+    const normalizedStartDate = normalizeDateOnlyValue(startDate);
+    const normalizedEndDate = normalizeDateOnlyValue(endDate);
+
+    if (!normalizedStartDate || !normalizedEndDate) {
+        return { error: 'date filters must be in YYYY-MM-DD format' };
+    }
+
+    if (normalizedStartDate > normalizedEndDate) {
+        return { error: 'start_date cannot be after end_date' };
+    }
+
+    const start = new Date(`${normalizedStartDate}T00:00:00`);
+    const end = new Date(`${normalizedEndDate}T23:59:59.999`);
+
+    return {
+        start,
+        end,
+        start_date: normalizedStartDate,
+        end_date: normalizedEndDate,
+    };
+};
+
+const resolveStudioDateRangeFilter = (query = {}) => {
+    const period = String(query.period || query.date_filter || '').trim();
+    const normalizedPeriod = period.toLowerCase();
+    const month = String(query.month || '').trim();
+    const normalizedMonth = month.toLowerCase();
+    const normalizedYear = Number.parseInt(String(query.year || ''), 10);
+    const selectedDate = query.date || query.selected_date || query.selectedDate;
+    const startDate = query.start_date || query.startDate || query.from;
+    const endDate = query.end_date || query.endDate || query.to;
     const today = new Date();
+
+    if (selectedDate || normalizeDateOnlyValue(period)) {
+        const date = selectedDate || period;
+        return buildDateRange(date, date);
+    }
+
+    if (startDate || endDate) {
+        const start = startDate || endDate;
+        const end = endDate || startDate;
+        return buildDateRange(start, end);
+    }
+
+    if (normalizedPeriod === 'today') {
+        const date = formatDateOnly(today);
+        return buildDateRange(date, date);
+    }
 
     if (normalizedPeriod === 'week') {
         const weekStart = new Date(today);
         weekStart.setDate(today.getDate() - today.getDay());
-        weekStart.setHours(0, 0, 0, 0);
 
         const weekEnd = new Date(weekStart);
         weekEnd.setDate(weekStart.getDate() + 6);
-        weekEnd.setHours(23, 59, 59, 999);
 
-        return { start: weekStart, end: weekEnd };
+        return buildDateRange(formatDateOnly(weekStart), formatDateOnly(weekEnd));
+    }
+
+    if (normalizedPeriod === 'year' || (!normalizedMonth && Number.isFinite(normalizedYear))) {
+        const targetYear = Number.isFinite(normalizedYear) ? normalizedYear : today.getFullYear();
+
+        return buildDateRange(`${targetYear}-01-01`, `${targetYear}-12-31`);
     }
 
     if (normalizedPeriod === 'month' || normalizedMonth) {
@@ -128,20 +199,35 @@ const resolveStudioDateRangeFilter = ({ period, month, year }) => {
         }
 
         if (!Number.isFinite(targetYear) || targetMonth < 1 || targetMonth > 12) {
-            return null;
+            return { error: 'month must be a valid month number, month name, or YYYY-MM value' };
         }
 
-        const start = new Date(targetYear, targetMonth - 1, 1);
-        start.setHours(0, 0, 0, 0);
-
+        const paddedMonth = String(targetMonth).padStart(2, '0');
         const end = new Date(targetYear, targetMonth, 0);
-        end.setHours(23, 59, 59, 999);
+        const endDateForMonth = `${targetYear}-${paddedMonth}-${String(end.getDate()).padStart(2, '0')}`;
 
-        return { start, end };
+        return buildDateRange(`${targetYear}-${paddedMonth}-01`, endDateForMonth);
     }
 
     return null;
 };
+
+const applyDateRangeFilter = (where, column, dateRange, dateOnly = false) => {
+    if (!dateRange) return;
+
+    where[column] = {
+        [db.Sequelize.Op.between]: dateOnly
+            ? [dateRange.start_date, dateRange.end_date]
+            : [dateRange.start, dateRange.end],
+    };
+};
+
+const formatDateRangeFilter = (dateRange) => dateRange
+    ? {
+        start_date: dateRange.start_date,
+        end_date: dateRange.end_date,
+      }
+    : null;
 
 const resolveStudioSortOrder = (sortBy, sortOrder) => {
     const normalizedSortBy = String(sortBy || '').trim().toLowerCase();
@@ -902,12 +988,14 @@ exports.getStudios = async (req, res) => {
       where.status = status;
     }
 
-    const dateRange = resolveStudioDateRangeFilter({ period, month, year });
-    if (dateRange) {
-      where.created_at = {
-        [db.Sequelize.Op.between]: [dateRange.start, dateRange.end],
-      };
+    const dateRange = resolveStudioDateRangeFilter(req.query);
+    if (dateRange?.error) {
+      return res.status(400).json({
+        success: false,
+        message: dateRange.error,
+      });
     }
+    applyDateRangeFilter(where, 'created_at', dateRange);
 
     if (search) {
       where[db.Sequelize.Op.or] = [
@@ -995,12 +1083,10 @@ exports.getStudios = async (req, res) => {
         period: period || 'all',
         month: month || null,
         year: year || null,
-        date_range: dateRange
-          ? {
-              start_date: formatDateOnly(dateRange.start),
-              end_date: formatDateOnly(dateRange.end),
-            }
-          : null,
+        date: req.query.date || req.query.selected_date || req.query.selectedDate || null,
+        start_date: req.query.start_date || req.query.startDate || req.query.from || null,
+        end_date: req.query.end_date || req.query.endDate || req.query.to || null,
+        date_range: formatDateRangeFilter(dateRange),
         sort_by: sortBy || 'created_at',
         sort_order: sortOrder || 'DESC',
       },
@@ -1134,7 +1220,6 @@ exports.updateStudio = async (req, res) => {
 exports.getStudioDashboard = async (req, res) => {
   try {
     const studioId = req.query.studio_id ? String(req.query.studio_id).trim() : null;
-    const month = String(req.query.month || '').trim(); // YYYY-MM
 
     const where = {};
 
@@ -1142,24 +1227,14 @@ exports.getStudioDashboard = async (req, res) => {
       where.studio_id = studioId;
     }
 
-    if (month) {
-      const [year, monthNumber] = month.split('-').map(Number);
-
-      if (!year || !monthNumber || monthNumber < 1 || monthNumber > 12) {
-        return res.status(400).json({
-          success: false,
-          message: 'month must be in YYYY-MM format',
-        });
-      }
-
-      const startDate = `${year}-${String(monthNumber).padStart(2, '0')}-01`;
-      const end = new Date(year, monthNumber, 0);
-      const endDate = `${year}-${String(monthNumber).padStart(2, '0')}-${String(end.getDate()).padStart(2, '0')}`;
-
-      where.booking_date = {
-        [db.Sequelize.Op.between]: [startDate, endDate],
-      };
+    const dateRange = resolveStudioDateRangeFilter(req.query);
+    if (dateRange?.error) {
+      return res.status(400).json({
+        success: false,
+        message: dateRange.error,
+      });
     }
+    applyDateRangeFilter(where, 'booking_date', dateRange, true);
 
     const bookings = await studio_bookings.findAll({
       where,
@@ -1349,6 +1424,16 @@ exports.getStudioDashboard = async (req, res) => {
         },
         earnings_ledger: earningsLedger,
       },
+      filters: {
+        studio_id: studioId,
+        period: req.query.period || req.query.date_filter || 'all',
+        month: req.query.month || null,
+        year: req.query.year || null,
+        date: req.query.date || req.query.selected_date || req.query.selectedDate || null,
+        start_date: req.query.start_date || req.query.startDate || req.query.from || null,
+        end_date: req.query.end_date || req.query.endDate || req.query.to || null,
+        date_range: formatDateRangeFilter(dateRange),
+      },
     });
   } catch (error) {
     console.error('Get studio dashboard error:', error);
@@ -1369,8 +1454,6 @@ exports.getStudioRequests = async (req, res) => {
       status,
       search,
       studio_id,
-      month,
-      year,
       source = 'book_a_shoot',
       sort_by = 'created_at',
       sort_order = 'DESC',
@@ -1397,23 +1480,17 @@ exports.getStudioRequests = async (req, res) => {
       where.studio_id = String(studio_id).trim();
     }
 
-    if (month && year) {
-      const monthNumber = String(month).padStart(2, '0');
-      const startDate = `${year}-${monthNumber}-01`;
-      const endDate = new Date(Number(year), Number(month), 0).toISOString().slice(0, 10);
-
-      where[db.Sequelize.Op.or] = [
-        {
-          booking_date: {
-            [db.Sequelize.Op.between]: [startDate, endDate],
-          },
-        },
-        {
-          '$booking.event_date$': {
-            [db.Sequelize.Op.between]: [startDate, endDate],
-          },
-        },
-      ];
+    const dateRange = resolveStudioDateRangeFilter(req.query);
+    if (dateRange?.error) {
+      return res.status(400).json({
+        success: false,
+        message: dateRange.error,
+      });
+    }
+    if (dateRange) {
+      where.booking_date = {
+        [db.Sequelize.Op.between]: [dateRange.start_date, dateRange.end_date],
+      };
     }
 
     if (search) {
@@ -1511,6 +1588,21 @@ exports.getStudioRequests = async (req, res) => {
         page: pageNumber,
         limit: pageSize,
         total_pages: Math.ceil(count / pageSize),
+      },
+      filters: {
+        status: status || 'all',
+        search: search || null,
+        studio_id: studio_id || null,
+        source,
+        period: req.query.period || req.query.date_filter || 'all',
+        month: req.query.month || null,
+        year: req.query.year || null,
+        date: req.query.date || req.query.selected_date || req.query.selectedDate || null,
+        start_date: req.query.start_date || req.query.startDate || req.query.from || null,
+        end_date: req.query.end_date || req.query.endDate || req.query.to || null,
+        date_range: formatDateRangeFilter(dateRange),
+        sort_by,
+        sort_order,
       },
     });
   } catch (error) {
