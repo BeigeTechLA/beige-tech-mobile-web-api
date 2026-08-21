@@ -48,6 +48,7 @@ const quoteService = require('../services/sales-quote.service');
 const bookingPricingService = require('../services/booking-pricing.service');
 const { getStudioPricingSnapshot, isStudioLineItem } = require('../utils/studio-pricing');
 const userExportService = require('../services/user-export.service');
+const onboardingCtrl = require('../utils/creatorOnboarding'); // Real source path
 // const NodeGeocoder = require('node-geocoder');
 const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
 const EXTERNAL_MEETINGS_API_BASE_URL = process.env.EXTERNAL_MEETINGS_API_BASE_URL || 'http://localhost:5002/v1/external-meetings';
@@ -17315,7 +17316,6 @@ exports.toggleShootNoteReaction = async (req, res) => {
     return res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
-
 exports.deleteShootNote = async (req, res) => {
   try {
     const bookingId = Number(req.params.bookingId);
@@ -17387,5 +17387,73 @@ exports.deleteShootNote = async (req, res) => {
   } catch (error) {
     console.error('Delete shoot note error:', error);
     return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+/**
+ * API: Get Onboarding Status By ID (Universal ID Lookup)
+ * Try karshe Crew ID, User ID ane Email - badhu j check karshe
+ */
+exports.getOnboardingStatusById = async (req, res) => {
+  try {
+    const targetId = req.params.id;
+    let member = null;
+
+    // 1. Try karo direct Crew Member ID thi (Primary Key)
+    member = await onboardingCtrl.getCrewMemberWithOnboardingFiles({ crew_member_id: targetId });
+
+    // 2. Jo na male, toh User ID thi try karo
+    if (!member) {
+      member = await onboardingCtrl.getCrewMemberWithOnboardingFiles({ user_id: targetId });
+    }
+
+    // 3. Jo haji pan na male, toh User table mathi Email sho dhi ne try karo
+    if (!member && targetId) {
+      const user = await users.findOne({
+        where: { id: targetId },
+        attributes: ['email']
+      });
+
+      if (user?.email) {
+        member = await onboardingCtrl.getCrewMemberWithOnboardingFiles({ email: user.email });
+      }
+    }
+
+    // 4. Handle Case: Member exist j nathi kartu
+    if (!member) {
+      const empty = onboardingCtrl.buildEmptyOnboardingSummary();
+      return res.json({
+        success: true,
+        ...empty,
+        message: "No member found with this ID",
+        is_crew_verified: 0,
+        can_access_dashboard: false,
+        profile_onboarding_status: empty,
+      });
+    }
+
+    // 5. Utility function call karo (Aa exact e j logic karshe je User API kare che)
+    const onboardingSummary = await onboardingCtrl.syncCreatorRegistrationComplete(member);
+    
+    const isCrewVerified = Number(member.is_crew_verified) === 1;
+    const effectiveOnboardingSummary = isCrewVerified
+      ? { ...onboardingSummary, onboardingMissingDetail: false, is_registration_complete: 1 }
+      : onboardingSummary;
+
+    return res.json({
+      success: true,
+      ...effectiveOnboardingSummary,
+      is_crew_verified: Number(member.is_crew_verified || 0),
+      can_access_dashboard: isCrewVerified || effectiveOnboardingSummary.is_registration_complete === 1,
+      should_resume_signup: !isCrewVerified && effectiveOnboardingSummary.is_registration_complete !== 1,
+      profile_onboarding_status: onboardingSummary,
+    });
+
+  } catch (error) {
+    console.error("Admin Status Sync Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: error.message
+    });
   }
 };

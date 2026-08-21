@@ -191,6 +191,7 @@ router.get(
 );
 router.post('/get-approved-crew-members', authMiddleware, crewAvailabilityView, admin.getApprovedCrewMembers);
 router.get('/crew-member/:crew_member_id', authMiddleware, adminSalesRepresentativeAvailabilityView, admin.getCrewMemberById);
+router.get('/crew-member-onboarding-status/:id', authMiddleware, adminUsersView, admin.getOnboardingStatusById);
 router.delete('/delete-crew-member/:crew_member_id', admin.deleteCrewMember);
 router.put('/edit-crew-member/:crew_member_id', admin.updateCrewMember);
 router.put('/crew-member/:crew_member_id/profile', authMiddleware, adminUsersEdit, admin.updateCrewMemberProfile);
