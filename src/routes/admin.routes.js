@@ -6,6 +6,9 @@ const { authenticateAdmin, authMiddleware } = require('../middleware/auth');
 router.use('/studios', require('./studio-management.routes'));
 const { requirePermission, requireAnyPermission } = require('../middleware/permission.middleware');
 const { requireSuperAdmin } = require('../middleware/auth.middleware');
+const shiftManagementRoutes = require('./shifts.routes');
+const assignmentHistoryRoutes = require('./assignment-history.routes');
+const salesRepDetailRoutes = require('./sales-reps.routes');
 
 const dashboardView = requireAnyPermission([
   'admin_dashboard.view',
@@ -151,6 +154,10 @@ const shootsViewOrEdit = requireAnyPermission([
   'sales_admin_shoots.edit'
 ], allowSalesRepRoles);
 
+router.use('/shifts', shiftManagementRoutes);
+router.use('/assignment-history', assignmentHistoryRoutes);
+router.use('/sales-reps', salesRepDetailRoutes);
+
 router.get('/profile/:id', authMiddleware, admin.getAdminProfile);
 router.put('/profile/:id', authMiddleware, admin.updateAdminProfile);
 router.post('/profile/change-password', authMiddleware, admin.changeAdminProfilePassword);
@@ -260,6 +267,7 @@ router.get('/get-crew-for-shoot', authMiddleware, shootsViewOrEdit, admin.search
 router.post('/assign-crew-from-shoot', authMiddleware, shootsEdit, admin.assignProjectCrewBulk);
 router.post('/remove-project-crew',authMiddleware, admin.removeProjectAssignedCrew);
 router.get('/get-project-form/:project_id', authMiddleware, projectFormView, admin.getProjectFormByProjectId);
+router.put('/shoots/:project_id/project-name', authMiddleware, shootsEdit, admin.updateProjectName);
 router.post('/shoots/remind-onboarding-form/:project_id', authMiddleware, admin.sendOnboardingFormReminder);
 router.post('/get-assigned-project-crew', admin.getAllAssignedRequests);
 router.get('/crew-member-assigned-projects', authMiddleware, adminSalesRepresentativeView, admin.getCrewMemberAssignedProjectsByDate);
