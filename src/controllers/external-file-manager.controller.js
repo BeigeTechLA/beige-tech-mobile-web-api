@@ -2735,6 +2735,51 @@ const getWorkspaceOwnerRow = async (externalId) => {
   return Array.isArray(rows) ? rows[0] : null;
 };
 
+const getWorkspaceSearchMetadataByExternalIds = async (externalIds = []) => {
+  const numericExternalIds = Array.from(
+    new Set(
+      externalIds
+        .map((value) => Number.parseInt(String(value || '').trim(), 10))
+        .filter((value) => Number.isInteger(value) && value > 0)
+    )
+  );
+
+  if (!numericExternalIds.length) {
+    return new Map();
+  }
+
+  const [rows] = await db.sequelize.query(
+    `
+      SELECT
+        b.stream_project_booking_id,
+        b.project_name,
+        b.guest_email,
+        c.name AS client_name,
+        c.email AS client_email,
+        u.name AS user_name,
+        u.email AS user_email
+      FROM stream_project_booking b
+      LEFT JOIN users u ON u.id = b.user_id
+      LEFT JOIN clients c ON c.user_id = b.user_id
+      WHERE b.stream_project_booking_id IN (:bookingIds)
+    `,
+    {
+      replacements: { bookingIds: numericExternalIds },
+    }
+  );
+
+  return new Map(
+    (Array.isArray(rows) ? rows : []).map((row) => [
+      String(row.stream_project_booking_id),
+      {
+        projectName: row.project_name || '',
+        clientName: row.client_name || row.user_name || '',
+        clientEmail: row.client_email || row.user_email || row.guest_email || '',
+      },
+    ])
+  );
+};
+
 const ensureClientFileAccess = async (req, filepath) => {
   if (!isClientRole(req)) return;
 
@@ -3510,42 +3555,39 @@ exports.listWorkspaces = async (req, res) => {
       visibleUntil: row.visible_until,
     }));
 
-    const existingByExternalId = new Set(
-      (result.data?.workspaces || []).map((workspace) => String(workspace.externalId || '').trim().toLowerCase())
-    );
-    const missingEventWorkspaces = eventWorkspaces.filter(
-      (workspace) => !existingByExternalId.has(String(workspace.externalId || '').trim().toLowerCase())
-    );
+    const mergedWorkspaces = [];
+    const mergedWorkspaceByExternalId = new Map();
 
-    const verifiedMissingEventWorkspaces = (
-      await Promise.all(
-        missingEventWorkspaces.map(async (workspace) => {
-          try {
-            const lookup = await proxyRequest(`/workspace/${encodeURIComponent(String(workspace.externalId))}`);
-            if (!lookup?.data?.workspace) return null;
-            return workspace;
-          } catch (error) {
-            return null;
-          }
-        })
-      )
-    ).filter(Boolean);
+    for (const workspace of result.data?.workspaces || []) {
+      const externalId = String(workspace.externalId || '').trim().toLowerCase();
+      if (!externalId || mergedWorkspaceByExternalId.has(externalId)) continue;
+      mergedWorkspaceByExternalId.set(externalId, workspace);
+    }
 
-    const mergedWorkspaces = [
-      ...(result.data?.workspaces || []),
-      ...verifiedMissingEventWorkspaces,
-    ].map((workspace) => {
+    for (const workspace of eventWorkspaces) {
+      const externalId = String(workspace.externalId || '').trim().toLowerCase();
+      if (!externalId) continue;
+      if (mergedWorkspaceByExternalId.has(externalId)) {
+        continue;
+      }
+      mergedWorkspaceByExternalId.set(externalId, workspace);
+    }
+
+    for (const workspace of mergedWorkspaceByExternalId.values()) {
       const externalId = String(workspace.externalId || '').trim().toLowerCase();
       const eventRow = eventRowByExternalId.get(externalId);
-      if (!eventRow) return workspace;
-      return {
-        ...workspace,
-        isCommonEvent: true,
-        eventId: eventRow.event_id,
-        eventName: eventRow.event_name,
-        visibleUntil: eventRow.visible_until,
-      };
-    });
+      mergedWorkspaces.push(
+        eventRow
+          ? {
+              ...workspace,
+              isCommonEvent: true,
+              eventId: eventRow.event_id,
+              eventName: eventRow.event_name,
+              visibleUntil: eventRow.visible_until,
+            }
+          : workspace
+      );
+    }
 
     let filteredWorkspaces = mergedWorkspaces;
     if (isCommonEventVisibilityLimitedRole(req)) {
@@ -3590,14 +3632,26 @@ exports.listWorkspaces = async (req, res) => {
     }
 
     if (search) {
+      const workspaceSearchMetadata = await getWorkspaceSearchMetadataByExternalIds(
+        filteredWorkspaces.map((workspace) => workspace?.externalId)
+      );
+
       filteredWorkspaces = filteredWorkspaces.filter((workspace) => {
         const folderName = String(workspace.folderName || '').toLowerCase();
         const externalId = String(workspace.externalId || '').toLowerCase();
         const eventName = String(workspace.eventName || '').toLowerCase();
+        const bookingSearchMetadata = workspaceSearchMetadata.get(String(workspace.externalId || '').trim()) || {};
+        const projectName = String(bookingSearchMetadata.projectName || '').toLowerCase();
+        const clientName = String(bookingSearchMetadata.clientName || '').toLowerCase();
+        const clientEmail = String(bookingSearchMetadata.clientEmail || '').toLowerCase();
+
         return (
           folderName.includes(search) ||
           externalId.includes(search) ||
-          eventName.includes(search)
+          eventName.includes(search) ||
+          projectName.includes(search) ||
+          clientName.includes(search) ||
+          clientEmail.includes(search)
         );
       });
     }
