@@ -15002,6 +15002,9 @@ exports.getAllAssignedRequests = async (req, res) => {
   }
 };
 
+const CP_COMPENSATION_SOURCES_FOR_CREW_TIMELINE = ['admin', 'sales_admin'];
+const CP_COMPENSATION_APPROVAL_STATUSES_FOR_CREW_TIMELINE = ['pending_approval', 'approved', 'rejected'];
+
 exports.getCrewMemberAssignedProjectsByDate = async (req, res) => {
   try {
     const crew_member_id = req.params.crew_member_id || req.query.crew_member_id;
@@ -15038,10 +15041,72 @@ exports.getCrewMemberAssignedProjectsByDate = async (req, res) => {
         ["created_at", "DESC"],
       ],
     });
+    const bookingIdsForCompensation = [...new Set(
+      assignments
+        .map((assignment) => Number(assignment.project_id))
+        .filter((id) => Number.isFinite(id))
+    )];
+
+    const compensationByBookingId = new Map();
+
+    if (bookingIdsForCompensation.length > 0) {
+      const earningRecords = await db.creator_earnings.findAll({
+        where: {
+          creator_id: Number(crew_member_id),
+          booking_id: { [Op.in]: bookingIdsForCompensation },
+          compensation_source: { [Op.in]: CP_COMPENSATION_SOURCES_FOR_CREW_TIMELINE },
+          approval_status: { [Op.in]: CP_COMPENSATION_APPROVAL_STATUSES_FOR_CREW_TIMELINE }
+        },
+        include: [
+          { model: db.creator_earning_advances, as: 'advances', required: false }
+        ],
+        order: [['updated_at', 'DESC'], ['creator_earning_id', 'DESC']]
+      });
+
+      earningRecords.forEach((earningRecord) => {
+        const earning = earningRecord.toJSON();
+        const bookingId = Number(earning.booking_id);
+
+        if (compensationByBookingId.has(bookingId)) return;
+
+        const totalCompensation = Number(earning.net_earning_amount || earning.gross_amount || 0);
+        const advances = earning.advances || [];
+        const advancePaid = advances
+          .filter((advance) => advance.status === 'processed')
+          .reduce((sum, advance) => sum + Number(advance.amount || 0), 0);
+
+        const paidTotal = earning.status === 'paid'
+          ? totalCompensation
+          : Math.min(advancePaid, totalCompensation);
+
+        const remainingBalance = Math.max(totalCompensation - paidTotal, 0);
+
+        let paymentStatus = 'pending';
+        if (earning.status === 'paid') paymentStatus = 'paid';
+        else if (earning.status === 'payout_pending') paymentStatus = 'payout_pending';
+        else if (earning.status === 'earned') paymentStatus = (paidTotal > 0 && remainingBalance > 0) ? 'partially_paid' : 'approved';
+        else if (earning.approval_status === 'approved') paymentStatus = (paidTotal > 0 && remainingBalance > 0) ? 'partially_paid' : 'accepted';
+        else if (earning.approval_status === 'pending_approval') paymentStatus = 'pending_approval';
+        else if (earning.approval_status === 'rejected') paymentStatus = 'rejected';
+
+        compensationByBookingId.set(bookingId, {
+          creator_earning_id: earning.creator_earning_id,
+          total_compensation: Number(totalCompensation.toFixed(2)),
+          advance_paid: Number(advancePaid.toFixed(2)),
+          paid_amount: Number(paidTotal.toFixed(2)),
+          remaining_balance: Number(remainingBalance.toFixed(2)),
+          status: paymentStatus,
+          approval_status: earning.approval_status,
+          earning_status: earning.status
+        });
+      });
+    }
+    // ---- END compensation fetch ----
 
     const formatAssignment = (assignment) => {
       const plain = assignment.toJSON();
       const project = plain.project || null;
+      const compensation = compensationByBookingId.get(Number(plain.project_id)) || null;
 
       return {
         assignment_id: plain.id,
@@ -15055,6 +15120,7 @@ exports.getCrewMemberAssignedProjectsByDate = async (req, res) => {
         created_at: plain.created_at,
         updated_at: plain.updated_at,
         project,
+        compensation,
       };
     };
 

@@ -319,6 +319,44 @@ exports.assignmentHistory = async (req, res) => {
     ['shift_id', 'sales_rep_id', 'status'].forEach((field) => {
       if (req.query[field]) where[field] = req.query[field];
     });
+    if (req.query.search) {
+      const search = String(req.query.search).trim();
+
+      if (search) {
+        const searchLike = { [Op.like]: `%${search}%` };
+
+        const [salesSearchLeads, clientSearchLeads] = await Promise.all([
+          models.sales_leads.findAll({
+            where: {
+              [Op.or]: [
+                { client_name: searchLike },
+                { guest_email: searchLike }
+              ]
+            },
+            attributes: ['lead_id']
+          }),
+
+          models.client_leads.findAll({
+            where: {
+              [Op.or]: [
+                { client_name: searchLike },
+                { guest_email: searchLike }
+              ]
+            },
+            attributes: ['lead_id']
+          })
+        ]);
+
+        const matchingLeadIds = [
+          ...salesSearchLeads.map((lead) => lead.lead_id),
+          ...clientSearchLeads.map((lead) => lead.lead_id)
+        ];
+
+        where.lead_id = {
+          [Op.in]: [...new Set(matchingLeadIds)]
+        };
+      }
+    }
     if (req.query.date) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date))) {
         return res.status(400).json({ success: false, message: 'date must be in YYYY-MM-DD format' });
