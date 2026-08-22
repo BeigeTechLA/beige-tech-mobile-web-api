@@ -2680,9 +2680,9 @@ exports.registerCrewMemberStep1 = [
       await transaction.commit();
       transaction = null;
 
-      emailService.sendNewCrewSignupNotification({
-        first_name, last_name, email, phone_number, location, working_distance
-      }).catch(err => console.error('Admin Notification Error:', err));
+      // emailService.sendNewCrewSignupNotification({
+      //   first_name, last_name, email, phone_number, location, working_distance
+      // }).catch(err => console.error('Admin Notification Error:', err));
 
       // await emailService.sendVerificationOTP(
       //   { name: `${first_name} ${last_name}`, email },
