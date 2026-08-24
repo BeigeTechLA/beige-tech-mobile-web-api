@@ -2,6 +2,7 @@ const db = require('../models');
 const config = require('../config/config');
 const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
 const bookingPricingService = require('./booking-pricing.service');
+const emailService = require('../utils/emailService');
 
 const stripe = config.stripe?.secretKey
   ? require('stripe')(config.stripe.secretKey)
@@ -55,6 +56,14 @@ function buildError(message, statusCode = 400) {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
+}
+
+function parseBooleanFlag(value) {
+  if (value === true || value === 1) return true;
+  if (typeof value === 'string') {
+    return ['true', '1', 'yes', 'on'].includes(value.trim().toLowerCase());
+  }
+  return false;
 }
 
 function buildPayoutRequestCode(creatorId) {
@@ -1331,16 +1340,100 @@ async function upsertBulkCreatorCompensations(payload = {}, options = {}) {
 
     if (!externalTransaction) await transaction.commit();
 
+    let emailResults = [];
+    if (!externalTransaction && parseBooleanFlag(payload.send_email ?? payload.sendEmail)) {
+      emailResults = await sendCreatorCompensationEmails({
+        bookingId,
+        creators,
+        approvalStatus: options.approvalStatus
+      });
+    }
+
     return {
       booking_id: bookingId,
       approval_status: options.approvalStatus,
       compensation_source: options.compensationSource,
       compensation_method: payload.compensation_method || null,
-      creators
+      creators,
+      email_sent: emailResults.some((result) => result.success),
+      email_results: emailResults
     };
   } catch (error) {
     if (!externalTransaction && transaction && !transaction.finished) await transaction.rollback();
     throw error;
+  }
+}
+
+async function sendCreatorCompensationEmails({ bookingId, creators = [], approvalStatus }) {
+  const creatorIds = creators.map((creator) => Number(creator.creator_id)).filter(Boolean);
+  if (!bookingId || !creatorIds.length) return [];
+
+  try {
+    const [booking, crewMembers] = await Promise.all([
+      db.stream_project_booking.findByPk(bookingId, {
+        attributes: ['stream_project_booking_id', 'project_name', 'shoot_type', 'event_type', 'content_type']
+      }),
+      db.crew_members.findAll({
+        where: { crew_member_id: { [db.Sequelize.Op.in]: creatorIds } },
+        attributes: ['crew_member_id', 'first_name', 'last_name', 'email']
+      })
+    ]);
+
+    const crewById = new Map(crewMembers.map((creator) => [Number(creator.crew_member_id), creator]));
+    const shootName = booking?.project_name || `Booking #${bookingId}`;
+
+    return Promise.all(creators.map(async (creator) => {
+      const crew = crewById.get(Number(creator.creator_id));
+      const toEmail = crew?.email || null;
+      if (!toEmail) {
+        return {
+          creator_id: creator.creator_id,
+          creator_earning_id: creator.creator_earning_id,
+          success: false,
+          skipped: true,
+          error: 'Creator email is missing'
+        };
+      }
+
+      const result = await emailService.sendCreatorEarningUpdatedEmail({
+        to_email: toEmail,
+        creator_name: buildCreatorName(crew),
+        booking_id: bookingId,
+        project_name: shootName,
+        shoot_name: shootName,
+        service_type: formatShootType(booking || {}),
+        compensation_amount: creator.total_compensation,
+        total_compensation: creator.total_compensation,
+        approval_status: approvalStatus
+      });
+
+      if (!result?.success) {
+        console.warn('[cp-compensation] creator compensation email failed:', {
+          booking_id: bookingId,
+          creator_id: creator.creator_id,
+          error: result?.error || 'Unknown email error'
+        });
+      }
+
+      return {
+        creator_id: creator.creator_id,
+        creator_earning_id: creator.creator_earning_id,
+        success: Boolean(result?.success),
+        messageId: result?.messageId || null,
+        error: result?.success ? null : result?.error || 'Unknown email error'
+      };
+    }));
+  } catch (error) {
+    console.warn('[cp-compensation] creator compensation email batch failed:', {
+      booking_id: bookingId,
+      error: error?.message || error
+    });
+    return creators.map((creator) => ({
+      creator_id: creator.creator_id,
+      creator_earning_id: creator.creator_earning_id,
+      success: false,
+      error: error?.message || 'Failed to send creator compensation email'
+    }));
   }
 }
 

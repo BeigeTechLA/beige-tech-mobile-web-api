@@ -94,7 +94,8 @@ const {
   NEW_VERSIONS_UPLOADED_CLIENT_TEMPLATE_ID,
   WELCOME_USER_TEMPLATE_ID,
   SALES_NOTIF_PARTIAL_PAYMENT_RECEIVED_TEMPLATE_ID,
-  SALES_NOTIF_PAYMENT_RECEIVED_TEMPLATE_ID
+  SALES_NOTIF_PAYMENT_RECEIVED_TEMPLATE_ID,
+  EARNING_UPDATED_TEMPLATE_ID
 } = require('../config/sendgridTemplates');
 
 const formatDate = (value) => {
@@ -3946,6 +3947,27 @@ const sendWorkspaceAccessInvitationEmail = async ({ to, data = {} }) => {
   return { success: false, error: 'FILE_SHARE_INVITATION_TEMPLATE_ID is not configured' };
 };
 
+const sendCreatorEarningUpdatedEmail = async (data = {}) => {
+  return sendEmail({
+    to: data.to_email || data.email,
+    subject: data.subject || 'Your Beige creator earning has been updated',
+    templateId: EARNING_UPDATED_TEMPLATE_ID,
+    dynamicTemplateData: {
+      first_name: getFirstName(data.creator_name || data.first_name || '', data.first_name || 'there') || 'there',
+      creator_name: data.creator_name || '',
+      project_name: data.project_name || data.shoot_name || `Booking #${data.booking_id || ''}`,
+      shoot_name: data.shoot_name || data.project_name || '',
+      booking_id: data.booking_id || '',
+      service_type: data.service_type || '',
+      compensation_amount: formatAmount(data.compensation_amount || data.amount || 0),
+      total_compensation: formatAmount(data.total_compensation || data.compensation_amount || data.amount || 0),
+      approval_status: data.approval_status || '',
+      dashboard_link: data.dashboard_link || `${String(process.env.FRONTEND_URL || 'https://beige.app').replace(/\/+$/, '')}/creator/dashboard`,
+      year: new Date().getFullYear()
+    }
+  });
+};
+
 module.exports = {
   formatContentTypes,
   formatShootTypes,
@@ -3977,6 +3999,7 @@ module.exports = {
   sendCPStatusUpdateByRequest,
   sendCPConfirmedEmailByRequest,
   sendCPNewBookingRequestEmail,
+  sendCreatorEarningUpdatedEmail,
   sendPostProductionAssignmentEmail,
   sendNewClientSignupNotification,
   sendNewCrewSignupNotification,
