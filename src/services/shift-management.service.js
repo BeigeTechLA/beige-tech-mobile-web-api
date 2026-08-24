@@ -1,4 +1,4 @@
-const { Op, fn, col, literal } = require('sequelize');
+const { Op, fn, col, literal, QueryTypes } = require('sequelize');
 const models = require('../models');
 const leadAssignmentService = require('./lead-assignment.service');
 
@@ -802,6 +802,28 @@ async function countQuotesCreated(range) {
   });
 }
 
+async function countAssignedLeadsForActiveSalesLeads(range) {
+  const rows = await models.sequelize.query(
+    `
+      SELECT COUNT(ah.id) AS count
+      FROM assignment_history ah
+      INNER JOIN sales_leads sl
+        ON sl.lead_id = ah.lead_id
+       AND sl.is_active = 1
+      WHERE ah.assigned_at BETWEEN :start AND :end
+    `,
+    {
+      replacements: {
+        start: range.start,
+        end: range.end
+      },
+      type: QueryTypes.SELECT
+    }
+  );
+
+  return Number(rows?.[0]?.count || 0);
+}
+
 async function overview(query = {}) {
   const { count: activeNowSalespeopleCount } = await countCurrentActiveSalespeople();
 
@@ -824,8 +846,8 @@ async function overview(query = {}) {
     ] = await Promise.all([
       countRuntimeActiveShifts({ created_at: { [Op.between]: [currentRange.start, currentRange.end] } }),
       countRuntimeActiveShifts({ created_at: { [Op.between]: [previousRange.start, previousRange.end] } }),
-      models.assignment_history.count({ where: { assigned_at: { [Op.between]: [currentAssignmentRange.start, currentAssignmentRange.end] } } }),
-      models.assignment_history.count({ where: { assigned_at: { [Op.between]: [previousAssignmentRange.start, previousAssignmentRange.end] } } }),
+      countAssignedLeadsForActiveSalesLeads({ start: currentAssignmentRange.start, end: currentAssignmentRange.end }),
+      countAssignedLeadsForActiveSalesLeads({ start: previousAssignmentRange.start, end: previousAssignmentRange.end }),
       countQuotesCreated(currentAssignmentRange),
       countQuotesCreated(previousAssignmentRange),
       countPendingLeads({ created_at: { [Op.between]: [currentRange.start, currentRange.end] } }),
@@ -859,7 +881,7 @@ async function overview(query = {}) {
   ] = await Promise.all([
     countRuntimeActiveShifts({ created_at: ranges.current }),
     countRuntimeActiveShifts({ created_at: ranges.previous }),
-    models.assignment_history.count({ where: { assigned_at: { [Op.between]: [istDateRangeToUtc(today).start, istDateRangeToUtc(today).end] } } }),
+    countAssignedLeadsForActiveSalesLeads(istDateRangeToUtc(today)),
     countQuotesCreated(istDateRangeToUtc(today)),
     countPendingLeads(),
     countPendingLeads({ created_at: ranges.previous }),
@@ -881,33 +903,46 @@ async function overview(query = {}) {
 }
 
 async function hourlyLeadVolume(query) {
-  const leadWhere = {};
   const quoteWhere = {};
+  let leadRangeStart = null;
+  let leadRangeEnd = null;
   if (query.date) {
     const range = istDateRangeToUtc(query.date);
-    leadWhere.assigned_at = { [Op.between]: [range.start, range.end] };
+    leadRangeStart = range.start;
+    leadRangeEnd = range.end;
     quoteWhere.created_at = { [Op.between]: [range.start, range.end] };
   } else if (query.start_date && query.end_date) {
     const startRange = istDateRangeToUtc(query.start_date);
     const endRange = istDateRangeToUtc(query.end_date);
-    leadWhere.assigned_at = { [Op.between]: [startRange.start, endRange.end] };
+    leadRangeStart = startRange.start;
+    leadRangeEnd = endRange.end;
     quoteWhere.created_at = { [Op.between]: [startRange.start, endRange.end] };
   } else {
     const range = istDateRangeToUtc(getIstDate());
-    leadWhere.assigned_at = { [Op.between]: [range.start, range.end] };
+    leadRangeStart = range.start;
+    leadRangeEnd = range.end;
     quoteWhere.created_at = { [Op.between]: [range.start, range.end] };
   }
 
-  const assignedHour = literal('HOUR(DATE_ADD(assigned_at, INTERVAL 330 MINUTE))');
   const createdHour = literal('HOUR(DATE_ADD(created_at, INTERVAL 330 MINUTE))');
   const [leads, quotes] = await Promise.all([
-    models.assignment_history.findAll({
-      where: leadWhere,
-      attributes: [[assignedHour, 'hour'], [fn('COUNT', col('id')), 'count']],
-      group: [assignedHour],
-      order: [[assignedHour, 'ASC']],
-      raw: true
-    }),
+    models.sequelize.query(
+      `
+        SELECT HOUR(DATE_ADD(ah.assigned_at, INTERVAL 330 MINUTE)) AS hour,
+               COUNT(ah.id) AS count
+        FROM assignment_history ah
+        INNER JOIN sales_leads sl
+          ON sl.lead_id = ah.lead_id
+         AND sl.is_active = 1
+        WHERE ah.assigned_at BETWEEN :start AND :end
+        GROUP BY hour
+        ORDER BY hour ASC
+      `,
+      {
+        replacements: { start: leadRangeStart, end: leadRangeEnd },
+        type: QueryTypes.SELECT
+      }
+    ),
     models.sales_quotes.findAll({
       where: quoteWhere,
       attributes: [[createdHour, 'hour'], [fn('COUNT', col('sales_quote_id')), 'count']],

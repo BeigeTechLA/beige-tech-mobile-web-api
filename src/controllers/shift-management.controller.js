@@ -187,8 +187,8 @@ exports.recentAssignments = async (req, res) => {
     const [salesLeads, clientLeads] = leadIds.length
       ? await Promise.all([
           models.sales_leads.findAll({
-            where: { lead_id: { [Op.in]: leadIds } },
-            attributes: ['lead_id', 'client_name', 'guest_email', 'assigned_sales_rep_id', 'lead_status'],
+            where: { lead_id: { [Op.in]: leadIds }, is_active: 1 },
+            attributes: ['lead_id', 'client_name', 'guest_email', 'assigned_sales_rep_id', 'lead_status', 'is_active'],
             include: [{
               model: models.stream_project_booking,
               as: 'booking',
@@ -209,6 +209,17 @@ exports.recentAssignments = async (req, res) => {
         ])
       : [[], []];
 
+    const salesLeadStateById = new Map(
+      leadIds.map((leadId) => [Number(leadId), null])
+    );
+    for (const leadId of leadIds) {
+      salesLeadStateById.set(Number(leadId), 'inactive');
+    }
+    salesLeads.forEach((lead) => {
+      const row = lead.toJSON ? lead.toJSON() : lead;
+      salesLeadStateById.set(Number(row.lead_id), 'active');
+    });
+
     const leadById = new Map();
     [
       ...salesLeads.map((lead) => ({ lead, type: 'sales' })),
@@ -224,28 +235,31 @@ exports.recentAssignments = async (req, res) => {
       }
     });
 
-    return ok(res, rows.map((row) => {
-      const assignment = row.toJSON ? row.toJSON() : row;
-      const lead = leadById.get(assignment.lead_id) || {};
-      const clientName = assignment.client_name && assignment.client_name !== 'N/A'
-        ? assignment.client_name
-        : lead.client_name || lead.guest_email || null;
-      const currentStatus = lead.lead_id
-        ? lead._lead_type === 'client'
-          ? leadAssignmentService.getClientBookingStatus(lead, lead.booking)
-          : leadAssignmentService.getLeadBookingStatus(lead, lead.booking)
-        : assignment.status;
+    return ok(res, rows
+      .map((row) => {
+        const assignment = row.toJSON ? row.toJSON() : row;
+        const lead = leadById.get(assignment.lead_id) || {};
+        if (salesLeadStateById.get(Number(assignment.lead_id)) === 'inactive') return null;
+        const clientName = assignment.client_name && assignment.client_name !== 'N/A'
+          ? assignment.client_name
+          : lead.client_name || lead.guest_email || null;
+        const currentStatus = lead.lead_id
+          ? lead._lead_type === 'client'
+            ? leadAssignmentService.getClientBookingStatus(lead, lead.booking)
+            : leadAssignmentService.getLeadBookingStatus(lead, lead.booking)
+          : assignment.status;
 
-      return {
-        ...assignment,
-        status: currentStatus || assignment.status,
-        client_name: clientName,
-        client_email: lead.guest_email || null,
-        sales_rep_name: assignment.sales_rep?.name || null,
-        sales_rep_email: assignment.sales_rep?.email || null,
-        assigned_at_local: service.formatIstDateTime(assignment.assigned_at)
-      };
-    }));
+        return {
+          ...assignment,
+          status: currentStatus || assignment.status,
+          client_name: clientName,
+          client_email: lead.guest_email || null,
+          sales_rep_name: assignment.sales_rep?.name || null,
+          sales_rep_email: assignment.sales_rep?.email || null,
+          assigned_at_local: service.formatIstDateTime(assignment.assigned_at)
+        };
+      })
+      .filter(Boolean));
   } catch (error) { return fail(res, error); }
 };
 
@@ -328,12 +342,13 @@ exports.assignmentHistory = async (req, res) => {
         const [salesSearchLeads, clientSearchLeads] = await Promise.all([
           models.sales_leads.findAll({
             where: {
+              is_active: 1,
               [Op.or]: [
                 { client_name: searchLike },
                 { guest_email: searchLike }
               ]
             },
-            attributes: ['lead_id']
+            attributes: ['lead_id', 'is_active']
           }),
 
           models.client_leads.findAll({
@@ -368,22 +383,20 @@ exports.assignmentHistory = async (req, res) => {
     } else if (req.query.start_date && req.query.end_date) {
       where.assigned_at = { [Op.between]: [`${req.query.start_date} 00:00:00`, `${req.query.end_date} 23:59:59`] };
     }
-    const result = await models.assignment_history.findAndCountAll({
+    const allAssignments = await models.assignment_history.findAll({
       where,
       include: [
         { model: models.shifts, as: 'shift', attributes: ['id', 'name'] },
         { model: models.users, as: 'sales_rep', attributes: service.USER_ATTRS }
       ],
-      order: [['assigned_at', 'DESC']],
-      limit,
-      offset
+      order: [['assigned_at', 'DESC']]
     });
-    const leadIds = [...new Set(result.rows.map((row) => Number(row.lead_id)).filter(Boolean))];
+    const leadIds = [...new Set(allAssignments.map((row) => Number(row.lead_id)).filter(Boolean))];
     const [salesLeads, clientLeads] = leadIds.length
       ? await Promise.all([
           models.sales_leads.findAll({
             where: { lead_id: { [Op.in]: leadIds } },
-            attributes: ['lead_id', 'client_name', 'guest_email', 'assigned_sales_rep_id', 'lead_status'],
+            attributes: ['lead_id', 'client_name', 'guest_email', 'assigned_sales_rep_id', 'lead_status', 'is_active'],
             include: [{
               model: models.stream_project_booking,
               as: 'booking',
@@ -419,30 +432,41 @@ exports.assignmentHistory = async (req, res) => {
       }
     });
 
+    const filteredAssignments = allAssignments.filter((row) => {
+      const assignment = row.toJSON ? row.toJSON() : row;
+      const lead = leadById.get(assignment.lead_id) || {};
+      if (lead._lead_type === 'sales' && Number(lead.is_active ?? 1) !== 1) return false;
+      return true;
+    });
+    const paginatedAssignments = filteredAssignments.slice(offset, offset + limit);
+
     return ok(res, {
-      rows: result.rows.map((row) => {
-        const assignment = row.toJSON ? row.toJSON() : row;
-        const lead = leadById.get(assignment.lead_id) || {};
-        const clientName = assignment.client_name && assignment.client_name !== 'N/A'
-          ? assignment.client_name
-          : lead.client_name || lead.guest_email || null;
-        const currentStatus = lead.lead_id
-          ? lead._lead_type === 'client'
-            ? leadAssignmentService.getClientBookingStatus(lead, lead.booking)
-            : leadAssignmentService.getLeadBookingStatus(lead, lead.booking)
-          : assignment.status;
-        return {
-          ...assignment,
-          status: currentStatus || assignment.status,
-          client_name: clientName,
-          client_email: lead.guest_email || null,
-          sales_rep_name: assignment.sales_rep?.name || null,
-          sales_rep_email: assignment.sales_rep?.email || null,
-          shift_name: assignment.shift?.name || null,
-          assigned_at_local: service.formatIstDateTime(assignment.assigned_at)
-        };
-      }),
-      pagination: { page, limit, total: result.count, pages: Math.ceil(result.count / limit) }
+      rows: paginatedAssignments
+        .map((row) => {
+          const assignment = row.toJSON ? row.toJSON() : row;
+          const lead = leadById.get(assignment.lead_id) || {};
+          if (lead._lead_type === 'sales' && Number(lead.is_active ?? 1) !== 1) return null;
+          const clientName = assignment.client_name && assignment.client_name !== 'N/A'
+            ? assignment.client_name
+            : lead.client_name || lead.guest_email || null;
+          const currentStatus = lead.lead_id
+            ? lead._lead_type === 'client'
+              ? leadAssignmentService.getClientBookingStatus(lead, lead.booking)
+              : leadAssignmentService.getLeadBookingStatus(lead, lead.booking)
+            : assignment.status;
+          return {
+            ...assignment,
+            status: currentStatus || assignment.status,
+            client_name: clientName,
+            client_email: lead.guest_email || null,
+            sales_rep_name: assignment.sales_rep?.name || null,
+            sales_rep_email: assignment.sales_rep?.email || null,
+            shift_name: assignment.shift?.name || null,
+            assigned_at_local: service.formatIstDateTime(assignment.assigned_at)
+          };
+        })
+        .filter(Boolean),
+      pagination: { page, limit, total: filteredAssignments.length, pages: Math.ceil(filteredAssignments.length / limit) }
     });
   } catch (error) { return fail(res, error); }
 };
@@ -450,7 +474,7 @@ exports.assignmentHistory = async (req, res) => {
 exports.salesRepLeads = async (req, res) => {
   try {
     const { page, limit, offset } = service.pageParams(req.query);
-    const where = { assigned_sales_rep_id: req.params.id };
+    const where = { assigned_sales_rep_id: req.params.id, is_active: 1 };
     if (req.query.lead_type) {
       const leadType = String(req.query.lead_type).toLowerCase().replace(/[\s-]+/g, '_');
       where.lead_type = leadType === 'self_serve' ? 'self_serve' : leadType === 'sales_assisted' ? 'sales_assisted' : req.query.lead_type;
