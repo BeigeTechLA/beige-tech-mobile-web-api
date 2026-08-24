@@ -61,6 +61,14 @@ function buildError(message, statusCode = 400) {
   return error;
 }
 
+function parseBooleanFlag(value) {
+  if (value === true || value === 1) return true;
+  if (typeof value === 'string') {
+    return ['true', '1', 'yes', 'on'].includes(value.trim().toLowerCase());
+  }
+  return false;
+}
+
 function buildPayoutRequestCode(creatorId) {
   const date = new Date();
   const yyyy = date.getFullYear();
@@ -827,13 +835,14 @@ async function sendCompensationNotification(notification) {
     if (!payload) return;
 
     if (notification.type === 'new_booking_request') {
-      await sendCPNewBookingRequestEmail(payload);
-      return;
+      return await sendCPNewBookingRequestEmail(payload);
     }
 
     if (notification.type === 'earnings_updated') {
-      await sendCPEarningsUpdatedEmail(payload);
+      return await sendCPEarningsUpdatedEmail(payload);
     }
+
+    return { success: false, error: 'Unsupported compensation notification type' };
   } catch (error) {
     console.error('[cp-compensation] compensation email failed:', {
       type: notification?.type,
@@ -841,6 +850,7 @@ async function sendCompensationNotification(notification) {
       creator_id: notification?.creatorId,
       message: error?.message || error
     });
+    return { success: false, error: error?.message || 'Failed to send compensation email' };
   }
 }
 
@@ -1457,7 +1467,8 @@ async function upsertBulkCreatorCompensations(payload = {}, options = {}) {
 
     if (!externalTransaction) await transaction.commit();
 
-    if (!externalTransaction) {
+    let emailResults = [];
+    if (!externalTransaction && parseBooleanFlag(payload.send_email ?? payload.sendEmail)) {
       const notifications = creators
         .map((creator) => {
           if (creator.was_existing_compensation && creator.compensation_changed) {
@@ -1482,7 +1493,15 @@ async function upsertBulkCreatorCompensations(payload = {}, options = {}) {
         })
         .filter(Boolean);
 
-      await Promise.allSettled(notifications.map(sendCompensationNotification));
+      const settledResults = await Promise.allSettled(notifications.map(sendCompensationNotification));
+      emailResults = settledResults.map((result, index) => ({
+        ...notifications[index],
+        success: result.status === 'fulfilled' && Boolean(result.value?.success),
+        messageId: result.status === 'fulfilled' ? result.value?.messageId || null : null,
+        error: result.status === 'rejected'
+          ? result.reason?.message || 'Failed to send compensation email'
+          : result.value?.success ? null : result.value?.error || null
+      }));
     }
 
     return {
@@ -1490,7 +1509,9 @@ async function upsertBulkCreatorCompensations(payload = {}, options = {}) {
       approval_status: options.approvalStatus,
       compensation_source: options.compensationSource,
       compensation_method: payload.compensation_method || null,
-      creators
+      creators,
+      email_sent: emailResults.some((result) => result.success),
+      email_results: emailResults
     };
   } catch (error) {
     if (!externalTransaction && transaction && !transaction.finished) await transaction.rollback();
