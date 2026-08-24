@@ -155,6 +155,7 @@ const quoteOrSalesPaymentEdit = requireAnyPermission([
  * @access  Public
  */
 router.post('/leads/track-early-interest', salesLeadsController.trackEarlyBookingInterest);
+router.post('/v4/leads/track-early-interest', salesLeadsController.trackEarlyBookingInterest);
 
 /**
  * @route   POST /api/sales/leads/track-start
@@ -162,6 +163,7 @@ router.post('/leads/track-early-interest', salesLeadsController.trackEarlyBookin
  * @access  Public
  */
 router.post('/leads/track-start', salesLeadsController.trackBookingStart);
+router.post('/v4/leads/track-start', salesLeadsController.trackBookingStart);
 
 /**
  * @route   POST /api/sales/leads/track-payment-page
@@ -169,6 +171,7 @@ router.post('/leads/track-start', salesLeadsController.trackBookingStart);
  * @access  Public
  */
 router.post('/leads/track-payment-page', salesLeadsController.trackPaymentPageReached);
+router.post('/v4/leads/track-payment-page', salesLeadsController.trackPaymentPageReached);
 
 /**
  * @route   POST /api/sales/leads/contact-sales
@@ -176,6 +179,7 @@ router.post('/leads/track-payment-page', salesLeadsController.trackPaymentPageRe
  * @access  Public
  */
 router.post('/leads/contact-sales', salesLeadsController.createSalesAssistedLead);
+router.post('/v4/leads/contact-sales', salesLeadsController.createSalesAssistedLead);
 
 // =====================================================
 // Lead Management Routes (Requires Auth)

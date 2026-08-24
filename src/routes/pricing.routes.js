@@ -16,6 +16,7 @@ const { authenticate, optionalAuth } = require('../middleware/auth.middleware');
  * @access  Public
  */
 router.get('/catalog', pricingController.getCatalog);
+router.get('/v4/catalog', pricingController.getCatalog);
 
 /**
  * @route   GET /api/pricing/discounts
@@ -35,6 +36,7 @@ router.get('/discounts', pricingController.getDiscountTiers);
  * @access  Public
  */
 router.post('/calculate', pricingController.calculateQuote);
+router.post('/v4/calculate', pricingController.calculateFromCreators);
 
 /**
  * @route   POST /api/pricing/quotes
@@ -48,6 +50,7 @@ router.post('/calculate', pricingController.calculateQuote);
  * @access  Public (user ID captured if authenticated)
  */
 router.post('/quotes', optionalAuth, pricingController.saveQuote);
+router.post('/v4/quotes', optionalAuth, pricingController.saveQuoteV4);
 
 /**
  * @route   GET /api/pricing/quotes/:quoteId
@@ -56,6 +59,7 @@ router.post('/quotes', optionalAuth, pricingController.saveQuote);
  * @access  Public
  */
 router.get('/quotes/:quoteId', pricingController.getQuote);
+router.get('/v4/quotes/:quoteId', pricingController.getQuote);
 
 /**
  * @route   GET /api/pricing/items
@@ -66,6 +70,7 @@ router.get('/quotes/:quoteId', pricingController.getQuote);
  * @access  Public (can add auth for admin-only later)
  */
 router.get('/items', pricingController.getAllPricingItems);
+router.get('/v4/items', pricingController.getAllPricingItems);
 
 /**
  * @route   GET /api/pricing/items/:itemId
@@ -74,6 +79,7 @@ router.get('/items', pricingController.getAllPricingItems);
  * @access  Public
  */
 router.get('/items/:itemId', pricingController.getPricingItem);
+router.get('/v4/items/:itemId', pricingController.getPricingItem);
 
 /**
  * @route   GET /api/pricing/example
@@ -92,5 +98,6 @@ router.get('/example', pricingController.getPricingExample);
  * @access  Public
  */
 router.post('/calculate-from-creators', pricingController.calculateFromCreators);
+router.post('/v4/calculate-from-creators', pricingController.calculateFromCreators);
 
 module.exports = router;

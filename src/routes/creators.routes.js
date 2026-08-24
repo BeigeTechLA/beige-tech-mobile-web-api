@@ -21,6 +21,7 @@ const creatorsController = require('../controllers/creators.controller');
  * @access  Public
  */
 router.get('/search', creatorsController.searchCreators);
+router.get('/v4/search', creatorsController.searchCreators);
 
 /**
  * @route   GET /api/creators/random
@@ -29,6 +30,7 @@ router.get('/search', creatorsController.searchCreators);
  * @access  Public
  */
 router.get('/random', creatorsController.getRandomCreators);
+router.get('/v4/random', creatorsController.getRandomCreators);
 
 /**
  * @route   GET /api/creators/:id

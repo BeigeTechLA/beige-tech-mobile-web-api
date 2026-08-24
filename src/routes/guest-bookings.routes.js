@@ -21,6 +21,7 @@ const { optionalAuth } = require('../middleware/auth.middleware');
  * @access  Public (no authentication required)
  */
 router.post('/create', guestBookingsController.createGuestBooking);
+router.post('/v4/create', guestBookingsController.createGuestBooking);
 
 /**
  * @route   GET /api/guest-bookings/:id
@@ -29,6 +30,7 @@ router.post('/create', guestBookingsController.createGuestBooking);
  * @access  Public (no authentication required)
  */
 router.get('/:id', guestBookingsController.getGuestBookingById);
+router.get('/v4/:id', guestBookingsController.getGuestBookingById);
 
 /**
  * @route   PUT /api/guest-bookings/:id
@@ -38,6 +40,7 @@ router.get('/:id', guestBookingsController.getGuestBookingById);
  * @access  Public (no authentication required)
  */
 router.put('/:id', guestBookingsController.updateGuestBooking);
+router.put('/v4/:id', guestBookingsController.updateGuestBooking);
 
 /**
  * @route   POST /api/guest-bookings/:id/assign-creators
@@ -47,6 +50,7 @@ router.put('/:id', guestBookingsController.updateGuestBooking);
  * @access  Public (no authentication required)
  */
 router.post('/:id/assign-creators', guestBookingsController.assignCreatorsToBooking);
+router.post('/v4/:id/assign-creators', guestBookingsController.assignCreatorsToBooking);
 
 /**
  * @route   GET /api/guest-bookings/:id/payment-details
@@ -56,5 +60,6 @@ router.post('/:id/assign-creators', guestBookingsController.assignCreatorsToBook
  * @access  Public (no authentication required)
  */
 router.get('/:id/payment-details', optionalAuth, guestBookingsController.getBookingPaymentDetails);
+router.get('/v4/:id/payment-details', optionalAuth, guestBookingsController.getBookingPaymentDetails);
 
 module.exports = router;

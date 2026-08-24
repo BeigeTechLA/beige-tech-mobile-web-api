@@ -246,6 +246,49 @@ exports.saveQuote = async (req, res) => {
     });
   }
 };
+
+exports.saveQuoteV4 = async (req, res) => {
+  try {
+    const calculation = await exports.calculateFromCreators(
+      { ...req, body: { ...req.body, is_return: true } },
+      {
+        status(statusCode) {
+          return {
+            json(payload) {
+              const error = new Error(payload?.message || 'Failed to calculate quote');
+              error.statusCode = statusCode;
+              throw error;
+            }
+          };
+        },
+        json(payload) {
+          return payload;
+        }
+      }
+    );
+
+    const savedQuote = await pricingService.saveQuote(calculation.quote, {
+      user_id: req.userId || null,
+      guest_email: req.body.guestEmail,
+      booking_id: req.body.bookingId,
+      notes: req.body.notes,
+      status: 'pending',
+      expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+    });
+
+    res.status(201).json({
+      success: true,
+      data: savedQuote,
+    });
+  } catch (error) {
+    console.error('Error saving v4 quote:', error);
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to save quote',
+    });
+  }
+};
+
 /**
  * Get a quote by ID
  * GET /api/pricing/quotes/:quoteId
@@ -688,7 +731,40 @@ exports.calculateFromCreators = async (req, res) => {
       });
     }
 
-    const allItems = [...pricingItems, ...add_on_items];
+    const rawAddOnItems = Array.isArray(add_on_items) ? add_on_items : [];
+    const addOnSlugs = rawAddOnItems
+      .map((item) => item?.slug)
+      .filter(Boolean);
+
+    let normalizedAddOnItems = rawAddOnItems
+      .filter((item) => item?.item_id)
+      .map((item) => ({
+        item_id: Number(item.item_id),
+        quantity: Number(item.quantity) || 1,
+      }));
+
+    if (addOnSlugs.length > 0) {
+      const db = require('../models');
+      const slugItems = await db.pricing_items.findAll({
+        where: {
+          slug: addOnSlugs,
+          is_active: 1,
+        },
+        attributes: ['item_id', 'slug'],
+      });
+      const slugMap = new Map(slugItems.map((item) => [item.slug, item.item_id]));
+      rawAddOnItems.forEach((item) => {
+        if (!item?.slug || item?.item_id) return;
+        const itemId = slugMap.get(item.slug);
+        if (!itemId) return;
+        normalizedAddOnItems.push({
+          item_id: Number(itemId),
+          quantity: Number(item.quantity) || 1,
+        });
+      });
+    }
+
+    const allItems = [...pricingItems, ...normalizedAddOnItems];
 
     const quote = await pricingService.calculateQuote({
       items: allItems,

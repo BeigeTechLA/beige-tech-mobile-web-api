@@ -76,6 +76,7 @@ router.post('/equipment/delete-photo', creator.deleteEquipmentPhoto);
 router.post('/dashboard-details', authenticate, crewDashboardView, creator.getDashboardDetails);
 router.post('/get-crew-stats', authenticate, crewDashboardView, creator.getCrewShootStats);
 router.get('/get-random-crew', creator.getRandomCrewMembers);
+router.get('/v4/get-random-crew', creator.getRandomCrewMembers);
 router.post('/check-verification-status', authenticate, crewDashboardOrRequestShootsView, creator.checkVerificationStatus);
 router.get('/check-cp-status', authenticate, crewDashboardOrRequestShootsView, creator.checkCrewStatus);
 
