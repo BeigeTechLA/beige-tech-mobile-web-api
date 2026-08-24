@@ -6,6 +6,7 @@ const externalFileManagerController = require('./external-file-manager.controlle
 const accountCreditService = require('../services/account-credit.service');
 const financeService = require('../services/finance.service');
 const bookingPaymentSummaryService = require('../services/booking-payment-summary.service');
+const studioBookingService = require('../services/studio-booking.service');
 const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
 const googleSheetService = require('../utils/googleSheetsService');
 // Get Beige margin percentage from environment, default to 25%
@@ -427,6 +428,13 @@ async function reconcileBookingPaymentSummaryFromReceipts({
     transaction
   });
   const isFullyPaid = updatedPaymentState.isPaid || updatedPaymentState.dueAmount <= 0.009;
+
+  if (isFullyPaid) {
+    await studioBookingService.confirmStudioBookingsForPaidBooking({
+      bookingId,
+      transaction,
+    });
+  }
 
   await db.stream_project_booking.update(
     isFullyPaid
@@ -2480,6 +2488,11 @@ exports.confirmPayment = async (req, res) => {
     // Update booking status to payment completed if booking_id provided
     if (booking_id) {
       try {
+        await studioBookingService.confirmStudioBookingsForPaidBooking({
+          bookingId: booking_id,
+          transaction,
+        });
+
         await db.stream_project_booking.update(
           {
             // is_completed: 1,
@@ -2675,6 +2688,11 @@ exports.createPaymentIntentMulti = async (req, res) => {
       });
     }
 
+    await studioBookingService.assertNoConfirmedStudioBookingConflictsForBooking({
+      bookingId: booking_id,
+      transaction: null,
+    });
+
     // 3. Handle 100% Discount ($0.00) Case
     // Stripe does not allow creating intents for $0.00
     if (amountToCharge === 0) {
@@ -2738,6 +2756,13 @@ exports.createPaymentIntentMulti = async (req, res) => {
     });
 
   } catch (error) {
+    if (error instanceof studioBookingService.StudioBookingConflictError || error?.statusCode === 409) {
+      return res.status(409).json({
+        success: false,
+        message: error.message,
+        conflicts: error.conflicts || [],
+      });
+    }
     console.error('Create Multi-Creator Payment Intent Error:', error);
     return res.status(500).json({
       success: false,
@@ -3394,6 +3419,14 @@ exports.confirmPaymentMulti = async (req, res) => {
         await transaction.rollback();
     }
 
+    if (error instanceof studioBookingService.StudioBookingConflictError || error?.statusCode === 409) {
+      return res.status(409).json({
+        success: false,
+        message: error.message,
+        conflicts: error.conflicts || [],
+      });
+    }
+
     if (isRecoverablePaymentPersistenceError(error)) {
       try {
         const paymentIntentIdFromBody = req.body?.paymentIntentId;
@@ -3493,6 +3526,9 @@ exports.confirmPaymentMulti = async (req, res) => {
           });
         }
       } catch (lookupError) {
+        if (lookupError instanceof studioBookingService.StudioBookingConflictError || lookupError?.statusCode === 409) {
+          throw lookupError;
+        }
         console.error('Failed lookup after payment intent unique conflict:', lookupError);
       }
     }
@@ -3955,6 +3991,11 @@ exports.manualMarkWebhookPaid = async (req, res) => {
       salesQuoteId,
       amountPaid,
       transaction
+    });
+
+    await studioBookingService.confirmStudioBookingsForPaidBooking({
+      bookingId,
+      transaction,
     });
 
     await markAdditionalQuoteInvoiceAsPaid({

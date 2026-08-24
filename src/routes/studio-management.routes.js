@@ -11,6 +11,7 @@ router.get('/dashboard', authenticateAdmin, studioManagementController.getStudio
 router.get('/requests', authenticateAdmin, studioManagementController.getStudioRequests);
 router.get('/requests/:studioBookingId', authenticateAdmin, studioManagementController.getStudioRequestById);
 router.patch('/requests/:studioBookingId/status', authenticateAdmin, studioManagementController.updateStudioRequestStatus);
+router.put('/:studioId/media', authenticateAdmin, studioManagementController.updateStudioMedia);
 router.get('/:studioId', authenticateAdmin, studioManagementController.getStudioById);
 router.put('/:studioId', authenticateAdmin, studioManagementController.updateStudio);
 router.post('/:studioId/reviews', authenticateAdmin, studioManagementController.createStudioReview);

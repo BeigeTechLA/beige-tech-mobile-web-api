@@ -2,7 +2,7 @@
 
 @DEV_URL = https://api.dev.beige.app/v1/
 
-@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjIsInVzZXJUeXBlSWQiOjEsImlhdCI6MTc4NjA5NTI1OSwiZXhwIjoxNzg2NzAwMDU5fQ.G9Y6VIBdoME1d58grIZglQ5JRFNeAERokX1i-TsKtuw
+@TOKEN = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjIsInVzZXJUeXBlSWQiOjEsImlhdCI6MTc4Njk3MDM1NywiZXhwIjoxNzg3NTc1MTU3fQ.v8ZLCjelWj7p6kMFUHJE8AXgRSHrAQL_AitDD0biNTE
 
 @TOKEN2 = Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZXJSb2xlIjoiQWRtaW4iLCJwZXJtaXNzaW9uc1ZlcnNpb24iOjEsInVzZXJUeXBlSWQiOjEsImlhdCI6MTc4NDcyMDQ3NywiZXhwIjoxNzg1MzI1Mjc3fQ.BtzY-xcRVIBL1lqMNOtRUhge9RmpipR923jZvBVbrlI
 
@@ -2957,7 +2957,9 @@ Authorization: {{TOKEN}}
       "url": "studio_media_94_1778577883770.jpg"
     },
     {
-      "url": "studio_media_48_1778577889229.jpeg"
+      "url": "studio_media_48_1778577889229.jpeg",
+      "sort_order": 1,
+      "is_cover": false
     }
   ],
   "operating_hours": [
@@ -2976,12 +2978,38 @@ Authorization: {{TOKEN}}
   ]
 }
 
+###
+PUT {{URL}}admin/studios/6/media HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "media": [
+    {
+      "studio_media_id": 346,
+      "url": "studio_media_48_1778577889229.jpeg",
+      "sort_order": 0,
+      "is_cover": false
+    },
+    {
+      "studio_media_id": 345,
+      "url": "studio_media_94_1778577883770.jpg",
+      "sort_order": 1,
+      "is_cover": true
+    }
+  ]
+}
+
 ### Admin - Get Studio By ID
-GET {{URL}}admin/studios/2 HTTP/1.1
+GET {{URL}}admin/studios/6 HTTP/1.1
 Authorization: {{TOKEN}}
 
 ### Admin - Get Studios
 GET {{URL}}admin/studios?page=1&limit=50&sort_by=status&sort_order=ASC HTTP/1.1
+Authorization: {{TOKEN}}
+
+### Admin - Get Studios
+GET {{URL}}admin/studios?date=2026-07-09 HTTP/1.1
 Authorization: {{TOKEN}}
 
 ### Admin - Update Studio
@@ -3012,11 +3040,15 @@ Authorization: {{TOKEN}}
 }
 
 ### Admin - Studio Dashboard
-GET {{URL}}admin/studios/dashboard?month=2026-07 HTTP/1.1
+GET {{URL}}admin/studios/dashboard?date=2026-01-06 HTTP/1.1
 Authorization: {{TOKEN}}
 
 ###
 GET {{URL}}admin/studios/requests?page=1&limit=10&status=all HTTP/1.1
+Authorization: {{TOKEN}}
+
+###
+GET {{URL}}admin/studios/requests?date=2026-08-26 HTTP/1.1
 Authorization: {{TOKEN}}
 
 ###
@@ -3030,7 +3062,7 @@ Authorization: {{TOKEN}}
 
 ### upload studio media
 POST {{URL}}admin/studios/media/upload HTTP/1.1
-Authorization: Bearer {{TOKEN}}
+Authorization: {{TOKEN}}
 Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW
 
 ------WebKitFormBoundary7MA4YWxkTrZu0gW
@@ -3239,8 +3271,24 @@ Authorization: {{TOKEN}}
   ]
 }
 
+### change cover image and indexing
+PUT {{URL}}admin/studios/6/media HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "media": [
+    {
+      "studio_media_id": 346,
+      "url": "studio_media_48_1778577889229.jpeg",
+      "sort_order": 0,
+      "is_cover": true
+    }
+  ]
+}
+
 ### Admin - Get Studio By ID
-GET {{URL}}admin/studios/2 HTTP/1.1
+GET {{URL}}admin/studios/7 HTTP/1.1
 Authorization: {{TOKEN}}
 
 ### Admin - Get Studios
@@ -4337,7 +4385,6 @@ Authorization: {{CP_TOKEN}}
   ]
 }
 
-<<<<<<< HEAD
 ### =====================================================
 ### BOOK A SHOOT - STUDIO JOURNEY 1
 ### Flow: base shoot -> crew/location -> studio add-on -> quote -> finalize -> payment
@@ -5266,7 +5313,7 @@ Content-Type: application/json
 ### =====================================================
 
 ### List active studios
-GET {{URL}}studios/catalog?page=1&limit=20
+GET {{URL}}studios/catalog?page=1&limit=8&booking_for=productions&dates=2026-09-12
 Content-Type: application/json
 
 ### List active studios filtered by pricing/category key
@@ -5280,7 +5327,11 @@ Content-Type: application/json
 ### Get studio detail by slug or numeric studio_id
 GET {{URL}}studios/catalog/beige-west-hollywood-content-studio
 Content-Type: application/json
-=======
+
+### Get studio's booked slots
+GET {{URL}}studios/beige-west-hollywood-wellness-gym/booked-slots
+Content-Type: application/json
+
 ### ============================================================
 ### EXCEL EXPORT APIs — LOCAL TESTING — 11, August 2026
 ### Server: LOCAL (localhost:5001)
@@ -5358,7 +5409,6 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInVzZ
 ###
 GET {{URL}}admin/users/export HTTP/1.1
 Content-Type: application/json
->>>>>>> 432e5901fd05cfa8e9e7ee552855c194929d2cda
 
 
 
