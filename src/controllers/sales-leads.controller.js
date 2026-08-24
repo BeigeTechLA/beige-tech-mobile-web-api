@@ -27,6 +27,60 @@ const db = require('../models');
 const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
 const EXTERNAL_FILE_MANAGER_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
 
+const normalizeString = (value) => {
+  if (value == null) return null;
+  const text = String(value).trim();
+  return text || null;
+};
+
+async function sendCPNewShootRequestPush({ userId, booking, creatorId }) {
+  const normalizedUserId = Number(userId || 0) || null;
+  const baseUrl = normalizeString(process.env.THIRD_PARTY_API_BASE_URL);
+  const internalApiKey = normalizeString(process.env.PUSH_NOTIFICATION_INTERNAL_API_KEY);
+
+  if (!normalizedUserId || !baseUrl || !internalApiKey) return null;
+
+  const bookingId = booking?.stream_project_booking_id || booking?.id || null;
+  const shootType = normalizeString(booking?.shoot_type || booking?.event_type || booking?.content_type) || 'shoot';
+  const eventDate = normalizeString(booking?.event_date);
+  const location = normalizeString(booking?.event_location);
+  const body = [
+    `You have received a new ${shootType} request.`,
+    eventDate ? `Date: ${eventDate}.` : null,
+    location ? `Location: ${location}.` : null
+  ].filter(Boolean).join(' ');
+
+  const response = await fetch(`${baseUrl.replace(/\/+$/, '')}/v1/internal/push/send`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-internal-api-key': internalApiKey
+    },
+    body: JSON.stringify({
+      user_id: normalizedUserId,
+      title: 'New Shoot Request',
+      body,
+      data: {
+        topic: 'shoots',
+        category: 'shoots',
+        type: 'new_shoot_request',
+        legacy_type: 'newOrder',
+        booking_id: bookingId ? String(bookingId) : '',
+        order_id: bookingId ? String(bookingId) : '',
+        id: bookingId ? String(bookingId) : '',
+        crew_member_id: creatorId ? String(creatorId) : ''
+      }
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => '');
+    throw new Error(`CP push request failed with ${response.status}: ${errorText || response.statusText}`);
+  }
+
+  return response.json().catch(() => ({}));
+}
+
 async function assignSalesLeadViaShiftRoundRobin({ lead, clientName, status, source, transaction = null }) {
   try {
     return await shiftManagementService.assignLeadViaActiveShiftRoundRobin({
@@ -633,7 +687,7 @@ async function notifyAssignedCreators(
 
     const creators = await crew_members.findAll({
       where: { crew_member_id: uniqueIds, is_active: 1 },
-      attributes: ['crew_member_id', 'first_name', 'last_name', 'email']
+      attributes: ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email']
     });
 
     const dashboardLink =
@@ -653,9 +707,39 @@ async function notifyAssignedCreators(
           })
         )
     );
+
+    await Promise.allSettled(
+      creators
+        .filter(c => c.user_id)
+        .map(c =>
+          sendCPNewShootRequestPush({
+            userId: c.user_id,
+            booking,
+            creatorId: c.crew_member_id
+          })
+        )
+    );
   } catch (e) {
     console.error('notifyAssignedCreators failed:', e?.message || e);
   }
+}
+
+function queueAssignedCreatorNotifications({
+  creatorIds = [],
+  booking = null,
+  fallbackClientName = '',
+  fallbackShootAmount = null
+}) {
+  setImmediate(() => {
+    notifyAssignedCreators(
+      creatorIds,
+      booking,
+      fallbackClientName,
+      fallbackShootAmount
+    ).catch((error) => {
+      console.error('queueAssignedCreatorNotifications failed:', error?.message || error);
+    });
+  });
 }
 
 function getCPNewBookingEmailFields(booking = {}, fallbackClientName = '', fallbackShootAmount = null) {
@@ -6934,6 +7018,13 @@ exports.finalizeGuestBooking = async (req, res) => {
 
     await tx.commit();
 
+    queueAssignedCreatorNotifications({
+      creatorIds: finalizeResult.assigned_creator_ids,
+      booking: finalizeResult.booking,
+      fallbackClientName: linkedLead?.client_name || '',
+      fallbackShootAmount: getEmailShootAmountFromFinalizeResult(finalizeResult)
+    });
+
     return res.status(200).json({
       success: true,
       message: 'Booking finalized',
@@ -7161,6 +7252,13 @@ exports.finalizeClientLeadBooking = async (req, res) => {
     }, { transaction: tx });
 
     await tx.commit();
+
+    queueAssignedCreatorNotifications({
+      creatorIds: finalizeResult.assigned_creator_ids,
+      booking: finalizeResult.booking,
+      fallbackClientName: clientLead.client_name || '',
+      fallbackShootAmount: getEmailShootAmountFromFinalizeResult(finalizeResult)
+    });
 
     return res.status(200).json({
       success: true,
@@ -7640,6 +7738,13 @@ exports.finalizeCreateDeal = async (req, res) => {
     });
 
     await tx.commit();
+
+    queueAssignedCreatorNotifications({
+      creatorIds: finalizeResult.assigned_creator_ids,
+      booking: finalizeResult.booking,
+      fallbackClientName: resolvedName || '',
+      fallbackShootAmount: getEmailShootAmountFromFinalizeResult(finalizeResult)
+    });
 
     if (leadModel === sales_leads && !assignedRep?.id && !manualByAdmin) {
       assignedRep = await assignSalesLeadViaShiftRoundRobin({
