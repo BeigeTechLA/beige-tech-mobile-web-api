@@ -19,10 +19,21 @@ const { parseLocation } = require('../utils/locationHelpers');
 const multer = require('multer');
 const path = require('path');
 const { appendToSheet, updateSheetRow } = require('../utils/googleSheets');
+const shiftManagementService = require('../services/shift-management.service');
 
 // Import new utilities
 const otpService = require('../utils/otpService');
 const emailService = require('../utils/emailService');
+const { OAuth2Client } = require('google-auth-library');
+const {
+  buildEmptyOnboardingSummary,
+  getCrewMemberWithOnboardingFiles,
+  syncCreatorRegistrationComplete,
+} = require('../utils/creatorOnboarding');
+const accountCreditService = require('../services/account-credit.service');
+
+const getGoogleClientId = () => process.env.GOOGLE_CLIENT_ID || process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '';
+const googleClient = new OAuth2Client(getGoogleClientId());
 
 const findCreatorTypeId = async (transaction = null) => {
   const creatorType = await user_type.findOne({
@@ -237,6 +248,15 @@ async function linkClientQuotesToUser({ email, phoneNumber, userId, transaction 
   }
 }
 
+async function safeGrantSignupCredit(options = {}) {
+  try {
+    return await accountCreditService.grantSignupCreditIfEligible(options);
+  } catch (error) {
+    console.error('Signup credit grant error:', error);
+    return null;
+  }
+}
+
 // Multer configuration for file uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -259,6 +279,26 @@ const upload = multer({
     cb(null, true);
   },
 });
+
+const CREW_STEP3_FILE_TYPES = ['resume', 'portfolio', 'certifications', 'recent_work'];
+
+const parseJsonInput = (value, fallback = []) => {
+  if (!value) return fallback;
+  if (Array.isArray(value) || typeof value === 'object') return value;
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return fallback;
+  }
+};
+
+const normalizeIdList = (value) => {
+  const parsed = parseJsonInput(value, []);
+  const list = Array.isArray(parsed) ? parsed : parsed ? [parsed] : [];
+  return list
+    .map((id) => Number(id))
+    .filter((id) => Number.isInteger(id) && id > 0);
+};
 
 // Role-based permission mapping
 const PERMISSIONS_MAP = {
@@ -429,17 +469,140 @@ async function getCreatorCrewMemberForUser(user) {
 
   let crewMember = await CrewMember.findOne({
     where: { user_id: user.id },
-    attributes: ['crew_member_id', 'is_crew_verified', 'location', 'old_location']
+    attributes: ['crew_member_id', 'is_crew_verified', 'is_registration_complete', 'location', 'old_location']
   });
 
   if (!crewMember && user.email) {
     crewMember = await CrewMember.findOne({
       where: { email: user.email },
-      attributes: ['crew_member_id', 'is_crew_verified', 'location', 'old_location', 'user_id']
+      attributes: ['crew_member_id', 'is_crew_verified', 'is_registration_complete', 'location', 'old_location', 'user_id']
     });
   }
 
   return crewMember;
+}
+
+async function resolveUserProfileImage(user, crewMember = null) {
+  if (user?.profile_image) {
+    return user.profile_image;
+  }
+
+  const crewMemberId = crewMember?.crew_member_id;
+  if (!crewMemberId) {
+    return null;
+  }
+
+  const profilePhoto = await crew_member_files.findOne({
+    where: {
+      crew_member_id: crewMemberId,
+      is_active: 1,
+      file_type: {
+        [Op.in]: ['profile_photo', 'profile_image']
+      }
+    },
+    attributes: ['file_path'],
+    order: [['created_at', 'DESC']]
+  });
+
+  return profilePhoto?.file_path || null;
+}
+
+async function findClientTypeId(transaction = null) {
+  let clientType = await user_type.findOne({
+    where: { user_type_id: 3 },
+    transaction
+  });
+
+  if (!clientType) {
+    clientType = await user_type.findOne({
+      where: db.Sequelize.where(
+        db.Sequelize.fn('LOWER', db.Sequelize.col('user_role')),
+        'client'
+      ),
+      order: [['user_type_id', 'ASC']],
+      transaction
+    });
+  }
+
+  return clientType?.user_type_id || 3;
+}
+
+function splitGoogleName(displayName, email) {
+  const fallback = String(email || '').split('@')[0] || 'Beige User';
+  const parts = String(displayName || fallback).trim().split(/\s+/).filter(Boolean);
+  const firstName = parts.shift() || fallback;
+  const lastName = parts.join(' ') || 'Creator';
+
+  return { firstName, lastName };
+}
+
+async function buildAuthenticatedUserResponse(user) {
+  const UserAll = typeof User.scope === 'function' ? User.scope('all') : User;
+
+  if (!user.userType) {
+    user = await UserAll.findOne({
+      where: { id: user.id },
+      include: [{
+        model: UserType,
+        as: 'userType',
+        attributes: ['user_type_id', 'user_role']
+      }]
+    });
+  }
+
+  const role = user.userType?.user_role || 'client';
+  const user_type_id = user.userType?.user_type_id || user.user_type || null;
+
+  let crew_member_id = null;
+  let is_crew_verified = null;
+  let is_registration_complete = null;
+  let temp_event_popup = null;
+
+  if (user_type_id === 2) {
+    const crew = await getCreatorCrewMemberForUser(user);
+    crew_member_id = crew ? crew.crew_member_id : null;
+    is_crew_verified = crew ? crew.is_crew_verified : null;
+    is_registration_complete = crew ? crew.is_registration_complete : null;
+    temp_event_popup = getTempCpEventPopup(crew);
+  }
+
+  const profileImage = await resolveUserProfileImage(user, crew_member_id ? { crew_member_id } : null);
+
+  let affiliate_id = null;
+  const affiliate = await Affiliate.findOne({
+    where: { user_id: user.id },
+    attributes: ['affiliate_id']
+  });
+  affiliate_id = affiliate ? affiliate.affiliate_id : null;
+
+  const { token, refreshToken } = generateTokens(user.id, role, user.permissions_version, user_type_id);
+  const permissions = await getCombinedUserPermissions(user.id, user.user_type);
+
+  return {
+    role,
+    user_type_id,
+    token,
+    refreshToken,
+    permissions,
+    user: {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      phone_number: user.phone_number,
+      profile_image: profileImage,
+      instagram_handle: user.instagram_handle,
+      role,
+      user_type_id,
+      email_verified: user.email_verified,
+      crew_member_id,
+      affiliate_id,
+      is_crew_verified,
+      is_registration_complete,
+      temp_event_popup,
+      permissions_version: user.permissions_version,
+      has_password: Boolean(user.password_hash)
+    }
+  };
 }
 
 // ==================== REGISTRATION ====================
@@ -575,6 +738,21 @@ exports.register = async (req, res) => {
           guest_email: email,
           lead_source: 'register'
         }
+      });
+
+      await safeGrantSignupCredit({
+        userId: newUser.id,
+        email
+      });
+
+      await shiftManagementService.assignLeadViaActiveShiftRoundRobin({
+        lead: clientLead,
+        leadModel: db.client_leads,
+        clientName: name,
+        status: 'Signed Up - Lead Created',
+        source: 'web_form'
+      }).catch((error) => {
+        console.error('Shift round-robin client lead assignment failed:', error);
       });
     }
 
@@ -1024,9 +1202,10 @@ exports.login = async (req, res) => {
 
       // Verify password
       if (!user.password_hash) {
-        return res.status(500).json({
+        return res.status(400).json({
           success: false,
-          message: "Account configuration error",
+          code: 'GOOGLE_ACCOUNT_NO_PASSWORD',
+          message: "This account was created with Google. Please continue with Google or set a password from your profile.",
         });
       }
 
@@ -1056,6 +1235,7 @@ exports.login = async (req, res) => {
       // Get crew_member_id if creator
       let crew_member_id = null;
       let is_crew_verified = null;
+      let is_registration_complete = null;
 
       let temp_event_popup = null;
 
@@ -1063,6 +1243,7 @@ exports.login = async (req, res) => {
         const crew = await getCreatorCrewMemberForUser(user);
         crew_member_id = crew ? crew.crew_member_id : null;
         is_crew_verified = crew ? crew.is_crew_verified : null;
+        is_registration_complete = crew ? crew.is_registration_complete : null;
         temp_event_popup = getTempCpEventPopup(crew);
       }
 
@@ -1080,6 +1261,7 @@ exports.login = async (req, res) => {
         user.id,
         user.user_type
       );
+      const resolvedProfileImage = await resolveUserProfileImage(user, crew_member_id ? { crew_member_id } : null);
 
       // const permissions = getPermissionsForRole(role);
 
@@ -1091,6 +1273,7 @@ exports.login = async (req, res) => {
           name: user.name,
           email: user.email,
           phone_number: user.phone_number,
+          profile_image: resolvedProfileImage,
           instagram_handle: user.instagram_handle,
           role,
           user_type_id,
@@ -1098,8 +1281,10 @@ exports.login = async (req, res) => {
           crew_member_id,
            affiliate_id,
           is_crew_verified,
-          temp_event_popup,
-          permissions_version: user.permissions_version
+          is_registration_complete,
+        temp_event_popup,
+          permissions_version: user.permissions_version,
+          has_password: Boolean(user.password_hash)
         },
         token,
         refreshToken,
@@ -1199,6 +1384,7 @@ exports.login = async (req, res) => {
       // Get crew_member_id if creator
       let crew_member_id = null;
       let is_crew_verified = null;
+      let is_registration_complete = null;
       let temp_event_popup = null;
 
       if (user.userType && user.userType.user_type_id === 2) {
@@ -1206,6 +1392,7 @@ exports.login = async (req, res) => {
 
         crew_member_id = crew ? crew.crew_member_id : null;
         is_crew_verified = crew ? crew.is_crew_verified : null;
+        is_registration_complete = crew ? crew.is_registration_complete : null;
         temp_event_popup = getTempCpEventPopup(crew);
       }
 
@@ -1222,6 +1409,7 @@ affiliate_id = affiliate ? affiliate.affiliate_id : null;
         user.id,
         user.user_type
       );
+      const resolvedProfileImage = await resolveUserProfileImage(user, crew_member_id ? { crew_member_id } : null);
 
       return res.json({
         success: true,
@@ -1231,6 +1419,7 @@ affiliate_id = affiliate ? affiliate.affiliate_id : null;
           name: user.name,
           email: user.email,
           phone_number: user.phone_number,
+          profile_image: resolvedProfileImage,
           instagram_handle: user.instagram_handle,
           role,
           user_type_id,
@@ -1238,8 +1427,10 @@ affiliate_id = affiliate ? affiliate.affiliate_id : null;
           crew_member_id,
           affiliate_id,
           is_crew_verified,
+          is_registration_complete,
           temp_event_popup,
-          permissions_version: user.permissions_version
+          permissions_version: user.permissions_version,
+          has_password: Boolean(user.password_hash)
         },
 
         token,
@@ -1259,6 +1450,406 @@ affiliate_id = affiliate ? affiliate.affiliate_id : null;
       success: false,
       message: 'Server error during login',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.googleLogin = async (req, res) => {
+  try {
+    const {
+      token: googleToken,
+      credential,
+      mode = 'login',
+      phone_number,
+      account_type = 'client'
+    } = req.body;
+    const idToken = googleToken || credential;
+    const googleClientId = getGoogleClientId();
+    const isSignup = mode === 'signup';
+    const signupAccountType = String(account_type || 'client').toLowerCase();
+    const isCreatorSignup = isSignup && ['creator', 'cp', 'creative_partner'].includes(signupAccountType);
+    const normalizedPhone = phone_number && String(phone_number).trim()
+      ? String(phone_number).trim()
+      : null;
+
+    if (!googleClientId) {
+      return res.status(500).json({
+        success: false,
+        message: 'Google sign-in is not configured'
+      });
+    }
+
+    if (!idToken) {
+      return res.status(400).json({
+        success: false,
+        message: 'Google credential is required'
+      });
+    }
+
+    const ticket = await googleClient.verifyIdToken({
+      idToken,
+      audience: googleClientId
+    });
+
+    const payload = ticket.getPayload();
+    const googleSub = payload?.sub;
+    const email = String(payload?.email || '').trim().toLowerCase();
+    const name = String(payload?.name || '').trim() || email.split('@')[0] || 'Beige User';
+    const emailVerified = payload?.email_verified === true || payload?.email_verified === 'true';
+    const profileImage = String(payload?.picture || '').trim();
+
+    if (!googleSub || !email || !emailVerified) {
+      return res.status(400).json({
+        success: false,
+        message: 'Google account must provide a verified email'
+      });
+    }
+
+    const includeUserType = [{
+      model: UserType,
+      as: 'userType',
+      attributes: ['user_type_id', 'user_role']
+    }];
+    const UserAll = typeof User.scope === 'function' ? User.scope('all') : User;
+
+    let user = await UserAll.findOne({
+      where: { google_sub: googleSub },
+      include: includeUserType
+    });
+
+    const emailUser = await UserAll.findOne({
+      where: { email },
+      include: includeUserType
+    });
+
+    if (user && emailUser && user.id !== emailUser.id) {
+      return res.status(409).json({
+        success: false,
+        message: 'This Google account is already linked to another Beige account'
+      });
+    }
+
+    if (!user && emailUser) {
+      user = emailUser;
+    }
+
+    if (!user && !isSignup) {
+      return res.status(404).json({
+        success: false,
+        message: 'No Beige account found with this Google email. Please sign up first.'
+      });
+    }
+
+    if (user && !user.is_active) {
+      return res.status(403).json({
+        success: false,
+        message: 'Account is inactive. Please contact support'
+      });
+    }
+
+    if (user && user.google_sub && user.google_sub !== googleSub) {
+      return res.status(409).json({
+        success: false,
+        message: 'This email is already linked to a different Google account'
+      });
+    }
+
+    if (isSignup && user) {
+      const existingTypeId = Number(user.userType?.user_type_id || user.user_type);
+
+      if (isCreatorSignup && existingTypeId !== 2) {
+        return res.status(409).json({
+          success: false,
+          message: 'A Beige account already exists with this Google email. Please log in instead.'
+        });
+      }
+
+      if (!isCreatorSignup) {
+        const clientTypeId = await findClientTypeId();
+        if (existingTypeId !== Number(clientTypeId)) {
+          return res.status(409).json({
+            success: false,
+            message: 'A Beige account already exists with this Google email. Please log in instead.'
+          });
+        }
+      }
+    }
+
+    if (!user && normalizedPhone) {
+      const phoneUser = await UserAll.findOne({
+        where: { phone_number: normalizedPhone },
+        attributes: ['id'],
+        raw: true
+      });
+
+      if (phoneUser) {
+        return res.status(409).json({
+          success: false,
+          message: 'Phone number is already associated with another account'
+        });
+      }
+    }
+
+    let createdClientId = null;
+    let createdCrewMemberId = null;
+    let linkedBookingsCount = 0;
+    let linkedQuotesCount = 0;
+
+    if (!user && isCreatorSignup) {
+      const creatorTypeId = await findCreatorTypeId();
+      const { firstName, lastName } = splitGoogleName(name, email);
+
+      await db.sequelize.transaction(async (transaction) => {
+        const existingCrew = await crew_members.findOne({
+          where: { email },
+          transaction
+        });
+
+        if (existingCrew && existingCrew.is_active == 1) {
+          const error = new Error('Crew member with this email already exists.');
+          error.statusCode = 409;
+          throw error;
+        }
+
+        user = await User.create({
+          name: `${firstName} ${lastName}`,
+          email,
+          phone_number: normalizedPhone,
+          password_hash: null,
+          google_sub: googleSub,
+          auth_provider: 'google',
+          profile_image: profileImage || null,
+          user_type: creatorTypeId,
+          role: 'creator',
+          is_active: 1,
+          email_verified: 1,
+          verification_code: null,
+          created_from: 1
+        }, { transaction });
+
+        const crewPayload = {
+          user_id: user.id,
+          first_name: firstName,
+          last_name: lastName,
+          email,
+          phone_number: normalizedPhone,
+          is_active: 1,
+          is_draft: 1,
+          is_registration_complete: 0,
+          created_from: 1
+        };
+
+        let crewMember;
+        if (existingCrew && existingCrew.is_active == 0) {
+          crewMember = await existingCrew.update(crewPayload, { transaction });
+        } else {
+          crewMember = await crew_members.create(crewPayload, { transaction });
+        }
+
+        createdCrewMemberId = crewMember.crew_member_id;
+      });
+
+      emailService.sendNewCrewSignupNotification({
+        first_name: firstName,
+        last_name: lastName,
+        email,
+        phone_number: normalizedPhone
+      }).catch(err => console.error('Admin Google CP Signup Notification Error:', err));
+    } else if (!user) {
+      const clientTypeId = await findClientTypeId();
+
+      await db.sequelize.transaction(async (transaction) => {
+        user = await User.create({
+          name,
+          email,
+          phone_number: normalizedPhone,
+          password_hash: null,
+          google_sub: googleSub,
+          auth_provider: 'google',
+          profile_image: profileImage,
+          user_type: clientTypeId,
+          is_active: 1,
+          email_verified: 1,
+          verification_code: null,
+          created_from: 1
+        }, { transaction });
+
+        const clientMatchConditions = [{ email }];
+        if (normalizedPhone) {
+          clientMatchConditions.push({ phone_number: normalizedPhone });
+        }
+
+        const existingClient = await Clients.findOne({
+          where: {
+            is_active: 1,
+            [Op.or]: clientMatchConditions
+          },
+          order: [['client_id', 'ASC']],
+          transaction
+        });
+
+        let client;
+        if (existingClient) {
+          client = await existingClient.update({
+            user_id: user.id,
+            name,
+            email,
+            phone_number: normalizedPhone
+          }, { transaction });
+        } else {
+          client = await Clients.create({
+            user_id: user.id,
+            name,
+            email,
+            phone_number: normalizedPhone,
+            is_active: 1
+          }, { transaction });
+        }
+
+        createdClientId = client.client_id;
+
+        const clientLead = await db.client_leads.create({
+          user_id: user.id,
+          guest_email: email,
+          client_name: name,
+          phone: normalizedPhone,
+          lead_type: 'self_serve',
+          lead_status: 'signed_up',
+          intent: 'Hot',
+          lead_source: 'google_signup',
+          created_from: 1
+        }, { transaction });
+
+        await db.client_lead_activities.create({
+          lead_id: clientLead.lead_id,
+          activity_type: 'created',
+          activity_data: {
+            source: 'google_signup',
+            guest_email: email,
+            lead_source: 'google_signup'
+          }
+        }, { transaction });
+
+        await safeGrantSignupCredit({
+          userId: user.id,
+          email,
+          transaction
+        });
+      });
+
+      appendToSheet('Client_data', [
+        createdClientId,
+        user.id,
+        name,
+        email,
+        normalizedPhone || 'N/A',
+        'Active'
+      ]).catch(err => console.error('Google Sheets Client Sync Error:', err.message));
+
+      emailService.sendNewClientSignupNotification({
+        name,
+        email,
+        phone_number: normalizedPhone
+      }).catch(err => console.error('Sales Google Signup Notification Error:', err));
+
+      emailService.sendClientSignupWelcomeEmail({
+        name,
+        email
+      }).catch(err => console.error('Client Google Signup Welcome Email Error:', err));
+    } else {
+      const updates = {
+        google_sub: googleSub,
+        auth_provider: user.auth_provider || 'google',
+        email_verified: 1
+      };
+
+      if (profileImage) {
+        updates.profile_image = profileImage;
+      }
+
+      if (!user.phone_number && normalizedPhone) {
+        const phoneUser = await UserAll.findOne({
+          where: {
+            phone_number: normalizedPhone,
+            id: { [Op.ne]: user.id }
+          },
+          attributes: ['id'],
+          raw: true
+        });
+
+        if (phoneUser) {
+          return res.status(409).json({
+            success: false,
+            message: 'Phone number is already associated with another account'
+          });
+        }
+
+        updates.phone_number = normalizedPhone;
+      }
+
+      await user.update(updates);
+    }
+
+    user = await UserAll.findOne({
+      where: { id: user.id },
+      include: includeUserType
+    });
+
+    if (await isArchivedClientOnlyAccount(user)) {
+      return res.status(403).json({
+        success: false,
+        code: 'CLIENT_ARCHIVED',
+        message: 'This client profile is archived. Please contact support.'
+      });
+    }
+
+    const userTypeId = user.userType?.user_type_id || user.user_type;
+
+    if (userTypeId === 3) {
+      let affiliate = await Affiliate.findOne({
+        where: { user_id: user.id },
+        attributes: ['affiliate_id']
+      });
+
+      if (!affiliate) {
+        try {
+          affiliate = await affiliateController.createAffiliate(user.id);
+        } catch (affiliateError) {
+          console.error('Failed to create affiliate account:', affiliateError);
+        }
+      }
+
+      linkedBookingsCount = await linkGuestBookingsToUser(email, user.id);
+      linkedQuotesCount = await linkClientQuotesToUser({
+        email,
+        phoneNumber: user.phone_number || normalizedPhone,
+        userId: user.id
+      });
+    }
+
+    const authPayload = await buildAuthenticatedUserResponse(user);
+
+    return res.status(isSignup && (createdClientId || createdCrewMemberId) ? 201 : 200).json({
+      success: true,
+      message: isSignup && createdCrewMemberId
+        ? 'Google signup successful. Please complete your creator application.'
+        : isSignup && createdClientId
+          ? 'Google signup successful'
+          : 'Google login successful',
+      ...authPayload,
+      clientId: createdClientId,
+      crew_member_id: authPayload.user.crew_member_id || createdCrewMemberId,
+      creator_onboarding_required: userTypeId === 2 && Boolean(createdCrewMemberId),
+      linked_bookings_count: linkedBookingsCount,
+      linked_quotes_count: linkedQuotesCount,
+      permissions_version: user.permissions_version
+    });
+  } catch (error) {
+    console.error('Google Login Error:', error);
+    return res.status(error.statusCode || 401).json({
+      success: false,
+      message: error.statusCode ? error.message : 'Google authentication failed',
+      error: process.env.NODE_ENV === 'development' && !error.statusCode ? error.message : undefined
     });
   }
 };
@@ -1453,6 +2044,80 @@ exports.resetPassword = async (req, res) => {
   }
 };
 
+/**
+ * Admin Action: Generates a manual reset link to be copied
+ * POST /auth/admin/generate-reset-link
+ */
+exports.generateUserResetLinkForAdmin = async (req, res) => {
+  try {
+    const rawIdentifier =
+      req.body.user_id ??
+      req.body.client_id ??
+      req.body.crew_member_id ??
+      req.body.id;
+
+    const identifier = Number.parseInt(String(rawIdentifier), 10);
+    if (!Number.isFinite(identifier)) {
+      return res.status(400).json({
+        success: false,
+        message: 'user_id, client_id, or crew_member_id is required'
+      });
+    }
+
+    let user = await User.findOne({ where: { id: identifier } });
+
+    if (!user) {
+      const client = await Clients.findOne({
+        where: { client_id: identifier },
+        attributes: ['user_id', 'name', 'email']
+      });
+
+      if (client?.user_id) {
+        user = await User.findOne({ where: { id: client.user_id } });
+      }
+    }
+
+    if (!user) {
+      const crewMember = await CrewMember.findOne({
+        where: { crew_member_id: identifier },
+        attributes: ['user_id', 'first_name', 'last_name', 'email']
+      });
+
+      if (crewMember?.user_id) {
+        user = await User.findOne({ where: { id: crewMember.user_id } });
+      }
+    }
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'Linked user account not found' });
+    }
+
+    const resetToken = otpService.generateResetToken();
+    const tokenExpiry = otpService.generateTokenExpiry(60);
+
+    await User.update(
+      { reset_token: resetToken, reset_token_expiry: tokenExpiry },
+      { where: { id: user.id } }
+    );
+
+    const baseUrl =
+      process.env.FRONTEND_URL ||
+      process.env.NEXT_PUBLIC_APP_URL ||
+      'http://localhost:3000';
+    const manualResetLink = `${baseUrl.replace(/\/$/, '')}/reset-password?token=${resetToken}`;
+
+    return res.status(200).json({
+      success: true,
+      message: 'Reset link generated successfully',
+      resetLink: manualResetLink,
+      user_id: user.id
+    });
+  } catch (error) {
+    console.error('Admin Reset Link Error:', error);
+    return res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
 // ==================== USER INFO ====================
 
 /**
@@ -1512,7 +2177,9 @@ exports.getCurrentUser = async (req, res) => {
         created_at: user.created_at,
         crew_member_id: crewMember?.crew_member_id || null,
         is_crew_verified: crewMember?.is_crew_verified || null,
-        temp_event_popup: getTempCpEventPopup(crewMember)
+        is_registration_complete: crewMember?.is_registration_complete ?? null,
+        temp_event_popup: getTempCpEventPopup(crewMember),
+        has_password: Boolean(user.password_hash)
       },
       permissions
     });
@@ -1758,6 +2425,11 @@ exports.quickRegister = async (req, res) => {
 
     const linkedBookingsCount = await linkGuestBookingsToUser(email, newUser.id);
 
+    await safeGrantSignupCredit({
+      userId: newUser.id,
+      email
+    });
+
     // Generate tokens
     const { token, refreshToken } = generateTokens(newUser.id, 'client');
     const permissions = getPermissionsForRole('client');
@@ -1832,6 +2504,33 @@ exports.registerCrewMemberStep1 = [
           { where: { id: user_id }, transaction }
         );
 
+        if (req.files?.profile_photo) {
+          const uploadedFiles = await S3UploadFiles(req.files);
+          for (const file of uploadedFiles || []) {
+            if (file.file_type === 'profile_photo') {
+              await crew_member_files.destroy({
+                where: {
+                  crew_member_id,
+                  file_type: 'profile_photo'
+                },
+                transaction
+              });
+
+              await crew_member_files.create({
+                crew_member_id,
+                file_type: file.file_type,
+                file_path: file.file_path,
+                file_category: 'profile_photo'
+              }, { transaction });
+
+              await User.update(
+                { profile_image: file.file_path },
+                { where: { id: user_id }, transaction }
+              );
+            }
+          }
+        }
+
         await transaction.commit();
         transaction = null;
 
@@ -1873,6 +2572,7 @@ exports.registerCrewMemberStep1 = [
             latitude: lat || null,
             longitude: lng || null,
             working_distance,
+            is_registration_complete: 0,
             is_active: 1
           }, { transaction });
 
@@ -1969,6 +2669,7 @@ exports.registerCrewMemberStep1 = [
         latitude: lat || null,
         longitude: lng || null,
         working_distance, 
+        is_registration_complete: 0,
         is_active: 1,
         created_from: 1 // 1 = web
       }, { transaction });
@@ -1983,6 +2684,11 @@ exports.registerCrewMemberStep1 = [
               file_path: file.file_path,
               file_category: 'profile_photo'
             }, { transaction });
+
+            await User.update(
+              { profile_image: file.file_path },
+              { where: { id: newUser.id }, transaction }
+            );
           }
         }
       }
@@ -2088,13 +2794,14 @@ exports.registerCrewMemberStep2 = async (req, res) => {
     member.equipment_ownership = JSON.stringify(equipment_ownership);
     await member.save();
 
-     await updateSheetRow('Crew_data', crew_member_id, {
-      'I': primaryRoleNames.join(', '),
-      'J': years_of_experience,
-      'K': hourly_rate,
-      'L': bio,
-      'M': skillNameList.join(', ')
-    });
+    // Google Sheets sync disabled for now.
+    // await updateSheetRow('Crew_data', crew_member_id, {
+    //   'I': primaryRoleNames.join(', '),
+    //   'J': years_of_experience,
+    //   'K': hourly_rate,
+    //   'L': bio,
+    //   'M': skillNameList.join(', ')
+    // });
 
     return res.status(200).json({ success: true, message: 'Step 2 completed' });
   } catch (error) {
@@ -2102,6 +2809,86 @@ exports.registerCrewMemberStep2 = async (req, res) => {
     return res.status(500).json({ success: false, message: 'Server error' });
   }
 };
+
+/**
+ * STEP 3: Draft file upload
+ * Files uploaded here are staged with is_active = 0 and activated only on final Step 3 submit.
+ */
+exports.uploadCrewMemberStep3File = [
+  upload.any(),
+
+  async (req, res) => {
+    try {
+      const { crew_member_id } = req.body;
+      const requestedType = String(req.body.file_type || '').trim();
+
+      if (!crew_member_id) {
+        return res.status(400).json({ success: false, message: 'ID required' });
+      }
+
+      const member = await crew_members.findOne({ where: { crew_member_id } });
+      if (!member) {
+        return res.status(404).json({ success: false, message: 'Member not found' });
+      }
+
+      const incomingFiles = Array.isArray(req.files) ? req.files : [];
+      if (incomingFiles.length === 0) {
+        return res.status(400).json({ success: false, message: 'No files uploaded' });
+      }
+
+      const filesByType = incomingFiles.reduce((acc, file) => {
+        const fieldType = String(file.fieldname || '').trim();
+        const fileType = CREW_STEP3_FILE_TYPES.includes(fieldType) ? fieldType : requestedType;
+
+        if (!CREW_STEP3_FILE_TYPES.includes(fileType)) return acc;
+
+        if (!acc[fileType]) acc[fileType] = [];
+        acc[fileType].push(file);
+        return acc;
+      }, {});
+
+      if (Object.keys(filesByType).length === 0) {
+        return res.status(400).json({ success: false, message: 'Invalid file type' });
+      }
+
+      const uploadedFiles = await S3UploadFiles(filesByType);
+      const createdFiles = [];
+
+      for (const file of uploadedFiles || []) {
+        const created = await crew_member_files.create({
+          crew_member_id,
+          file_type: file.file_type,
+          file_path: file.file_path,
+          is_active: 0,
+          title: null,
+          tag: null
+        });
+
+        createdFiles.push({
+          crew_files_id: created.crew_files_id,
+          file_type: created.file_type,
+          file_path: created.file_path,
+          title: created.title,
+          tag: created.tag,
+          is_active: created.is_active,
+          originalname: file.originalname,
+          file_name: file.file_name,
+          file_size_bytes: file.file_size_bytes,
+          mime_type: file.mime_type
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'File uploaded successfully',
+        data: createdFiles
+      });
+    } catch (error) {
+      console.error('Step 3 Draft Upload Error:', error);
+      return res.status(500).json({ success: false, message: 'Server error' });
+    }
+  }
+];
 
 /**
  * STEP 3: Additional Details & Files
@@ -2124,6 +2911,9 @@ exports.registerCrewMemberStep3 = [
         social_media_links,
         portfolio_links,
         featured_work,
+        resume_file_id,
+        portfolio_file_ids,
+        certification_file_ids,
         title,
         tag
       } = req.body;
@@ -2133,31 +2923,101 @@ exports.registerCrewMemberStep3 = [
       const member = await crew_members.findOne({ where: { crew_member_id } });
       if (!member) return res.status(404).json({ success: false, message: 'Member not found' });
 
-      // Update DB (Added a small check to fix the "Empty Query" crash on resubmission)
-      member.availability = JSON.stringify(availability);
-      member.certifications = JSON.stringify(certifications);
-      member.social_media_links = JSON.stringify(social_media_links);
-      
-      if (member.changed()) {
-        await member.save();
+      const serializeValue = (value, fallback = null) => {
+        if (value === undefined || value === null || value === '') return fallback;
+        if (typeof value === 'string') return value;
+        return JSON.stringify(value);
+      };
+
+      const updatePayload = {};
+      const availabilityValue = serializeValue(availability);
+      const certificationsValue = serializeValue(certifications);
+      const socialMediaLinksValue = serializeValue(social_media_links, '{}');
+
+      if (availabilityValue !== null) updatePayload.availability = availabilityValue;
+      if (certificationsValue !== null) updatePayload.certifications = certificationsValue;
+      if (socialMediaLinksValue !== null) updatePayload.social_media_links = socialMediaLinksValue;
+
+      if (Object.keys(updatePayload).length > 0) {
+        await member.update(updatePayload);
       }
 
       // --- NEW: Handle both Files and Links together ---
       let itemsToCreate = [];
 
-      const parseJsonInput = (value, fallback = []) => {
-        if (!value) return fallback;
-        if (Array.isArray(value) || typeof value === 'object') return value;
-        try {
-          return JSON.parse(value);
-        } catch (error) {
-          return fallback;
-        }
-      };
-
       const featuredWorkGroups = parseJsonInput(featured_work, []);
       const recentWorkTitles = Array.isArray(title) ? title : title ? [title] : [];
       const recentWorkTags = Array.isArray(tag) ? tag : tag ? [tag] : [];
+      const stagedFileUpdates = [];
+      const stagedResumeFileIds = normalizeIdList(resume_file_id);
+      const stagedPortfolioFileIds = normalizeIdList(portfolio_file_ids);
+      const stagedCertificationFileIds = normalizeIdList(certification_file_ids);
+
+      for (const fileId of stagedResumeFileIds) {
+        stagedFileUpdates.push({
+          crew_files_id: fileId,
+          file_type: 'resume',
+          title: null,
+          tag: null
+        });
+      }
+
+      for (const fileId of stagedPortfolioFileIds) {
+        stagedFileUpdates.push({
+          crew_files_id: fileId,
+          file_type: 'portfolio',
+          title: null,
+          tag: null
+        });
+      }
+
+      for (const fileId of stagedCertificationFileIds) {
+        stagedFileUpdates.push({
+          crew_files_id: fileId,
+          file_type: 'certifications',
+          title: 'Certifications',
+          tag: null
+        });
+      }
+
+      for (const group of featuredWorkGroups) {
+        const groupFileIds = normalizeIdList(group?.fileIds || group?.file_ids);
+        const groupTitle = group?.title || null;
+        const groupTag = Array.isArray(group?.tags)
+          ? JSON.stringify(group.tags)
+          : group?.tags || group?.tag || null;
+
+        for (const fileId of groupFileIds) {
+          stagedFileUpdates.push({
+            crew_files_id: fileId,
+            file_type: 'recent_work',
+            title: groupTitle,
+            tag: groupTag
+          });
+        }
+      }
+
+      if (stagedFileUpdates.length > 0) {
+        const stagedFileIds = [...new Set(stagedFileUpdates.map((item) => item.crew_files_id))];
+        const existingStagedFiles = await crew_member_files.findAll({
+          where: {
+            crew_files_id: { [Op.in]: stagedFileIds },
+            crew_member_id
+          }
+        });
+        const existingById = new Map(existingStagedFiles.map((file) => [Number(file.crew_files_id), file]));
+
+        for (const update of stagedFileUpdates) {
+          const stagedFile = existingById.get(Number(update.crew_files_id));
+          if (!stagedFile || String(stagedFile.file_type) !== update.file_type) continue;
+
+          await stagedFile.update({
+            is_active: 1,
+            title: update.title,
+            tag: update.tag
+          });
+        }
+      }
 
       // Handle S3 uploads
       const filePaths = await S3UploadFiles(req.files);
@@ -2250,9 +3110,13 @@ exports.registerCrewMemberStep3 = [
       }
       // ------------------------------------------------
 
-      await updateSheetRow('Crew_data', crew_member_id, {
-        'N': JSON.stringify(social_media_links),
-      });
+      const updatedMember = await getCrewMemberWithOnboardingFiles({ crew_member_id });
+      const onboardingSummary = await syncCreatorRegistrationComplete(updatedMember);
+
+      // Google Sheets sync disabled for now.
+      // await updateSheetRow('Crew_data', crew_member_id, {
+      //   'N': JSON.stringify(social_media_links),
+      // });
 
       // SEND WELCOME EMAIL
       const user = await User.findOne({
@@ -2267,7 +3131,15 @@ exports.registerCrewMemberStep3 = [
         }).catch(err => console.error('CP Welcome Email Error:', err));
       }
 
-      return res.status(200).json({ success: true, message: 'Step 3 completed. Registration finished!' });
+      return res.status(200).json({
+        success: true,
+        message: onboardingSummary.is_registration_complete
+          ? 'Step 3 completed. Registration finished!'
+          : 'Step 3 saved. Please complete the remaining required details.',
+        is_registration_complete: onboardingSummary.is_registration_complete,
+        onboardingMissingDetail: onboardingSummary.onboardingMissingDetail,
+        missing_fields: onboardingSummary.missing_fields
+      });
     } catch (error) {
       console.error('Step 3 Error:', error);
       return res.status(500).json({ success: false, message: 'Server error' });
@@ -2390,11 +3262,13 @@ exports.getCrewMemberDetails = async (req, res) => {
 exports.changePasswordclient = async (req, res) => {
   try {
     const { user_id, currentPassword, newPassword } = req.body;
+    const authenticatedUserId = req.user?.userId;
+    const targetUserId = authenticatedUserId || user_id;
 
-    if (!user_id || !currentPassword || !newPassword) {
+    if (!targetUserId || !newPassword) {
       return res.status(400).json({
         success: false,
-        message: 'User ID, current password, and new password are required'
+        message: 'User ID and new password are required'
       });
     }
 
@@ -2406,7 +3280,7 @@ exports.changePasswordclient = async (req, res) => {
     }
 
     // Find the user by user_id directly
-    const user = await User.findOne({ where: { id: user_id } });
+    const user = await User.findOne({ where: { id: targetUserId } });
 
     if (!user) {
       return res.status(404).json({
@@ -2415,26 +3289,38 @@ exports.changePasswordclient = async (req, res) => {
       });
     }
 
-    // Check if the current password is correct
-    const isPasswordCorrect = await bcrypt.compare(currentPassword, user.password_hash);
+    if (user.password_hash) {
+      if (!currentPassword) {
+        return res.status(400).json({
+          success: false,
+          message: 'Current password is required'
+        });
+      }
 
-    if (!isPasswordCorrect) {
-      return res.status(400).json({
-        success: false,
-        message: 'Current password is incorrect'
-      });
+      const isPasswordCorrect = await bcrypt.compare(currentPassword, user.password_hash);
+
+      if (!isPasswordCorrect) {
+        return res.status(400).json({
+          success: false,
+          message: 'Current password is incorrect'
+        });
+      }
     }
+
+    const hadPassword = Boolean(user.password_hash);
 
     // Hash the new password
     const hashedNewPassword = await bcrypt.hash(newPassword, 10);
 
     // Update the user's password in the database
     user.password_hash = hashedNewPassword;
+    user.auth_provider = user.auth_provider === 'google' ? 'google_password' : user.auth_provider;
     await user.save();
 
     return res.status(200).json({
       success: true,
-      message: 'Password changed successfully'
+      message: hadPassword ? 'Password updated successfully' : 'Password set successfully',
+      has_password: true
     });
 
   } catch (error) {
@@ -2451,11 +3337,13 @@ exports.changePasswordclient = async (req, res) => {
 exports.changePasswordCrewMember = async (req, res) => {
   try {
     const { user_id, currentPassword, newPassword } = req.body;
+    const authenticatedUserId = req.user?.userId;
+    const targetUserId = authenticatedUserId || user_id;
 
-    if (!user_id || !currentPassword || !newPassword) {
+    if (!targetUserId || !newPassword) {
       return res.status(400).json({
         success: false,
-        message: 'User ID, current password, and new password are required'
+        message: 'User ID and new password are required'
       });
     }
 
@@ -2466,7 +3354,7 @@ exports.changePasswordCrewMember = async (req, res) => {
       });
     }
 
-    const user = await User.findOne({ where: { id: user_id } });
+    const user = await User.findOne({ where: { id: targetUserId } });
 
     if (!user) {
       return res.status(404).json({
@@ -2475,23 +3363,35 @@ exports.changePasswordCrewMember = async (req, res) => {
       });
     }
 
-    const isPasswordCorrect = await bcrypt.compare(currentPassword, user.password_hash);
+    if (user.password_hash) {
+      if (!currentPassword) {
+        return res.status(400).json({
+          success: false,
+          message: 'Current password is required'
+        });
+      }
 
-    if (!isPasswordCorrect) {
-      return res.status(400).json({
-        success: false,
-        message: 'Current password is incorrect'
-      });
+      const isPasswordCorrect = await bcrypt.compare(currentPassword, user.password_hash);
+
+      if (!isPasswordCorrect) {
+        return res.status(400).json({
+          success: false,
+          message: 'Current password is incorrect'
+        });
+      }
     }
 
+    const hadPassword = Boolean(user.password_hash);
     const hashedNewPassword = await bcrypt.hash(newPassword, 10);
 
     user.password_hash = hashedNewPassword;
+    user.auth_provider = user.auth_provider === 'google' ? 'google_password' : user.auth_provider;
     await user.save();
 
     return res.status(200).json({
       success: true,
-      message: 'Password changed successfully'
+      message: hadPassword ? 'Password changed successfully' : 'Password set successfully',
+      has_password: true
     });
 
   } catch (error) {
@@ -2737,6 +3637,7 @@ exports.createInternalCredential = async (req, res) => {
           last_name: lastName,
           email: normalizedEmail,
           phone_number: normalizedPhoneNumber,
+          is_registration_complete: 0,
           is_active: 1,
           created_from: 1
         }, { transaction });
@@ -2823,6 +3724,66 @@ exports.createInternalCredential = async (req, res) => {
       success: false,
       message: 'Server error while creating internal credential',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+exports.getOnboardingStatus = async (req, res) => {
+  try {
+    const userId = req.user?.userId || req.userId;
+    let member = userId
+      ? await getCrewMemberWithOnboardingFiles({ user_id: userId })
+      : null;
+
+    if (!member && userId) {
+      const user = await User.findOne({
+        where: { id: userId },
+        attributes: ['email']
+      });
+
+      if (user?.email) {
+        member = await getCrewMemberWithOnboardingFiles({ email: user.email });
+      }
+    }
+
+    if (!member) {
+      return res.json({
+        success: true,
+        ...buildEmptyOnboardingSummary(),
+        is_crew_verified: 0,
+        can_access_dashboard: false,
+        should_resume_signup: true,
+        profile_onboarding_status: buildEmptyOnboardingSummary(),
+      });
+    }
+
+    const onboardingSummary = await syncCreatorRegistrationComplete(member);
+    const isCrewVerified = Number(member.is_crew_verified) === 1;
+    const effectiveOnboardingSummary = isCrewVerified
+      ? {
+          ...onboardingSummary,
+          onboardingMissingDetail: false,
+          is_registration_complete: 1,
+        }
+      : onboardingSummary;
+
+    return res.json({
+      success: true,
+      ...effectiveOnboardingSummary,
+      is_crew_verified: Number(member.is_crew_verified || 0),
+      can_access_dashboard: isCrewVerified || effectiveOnboardingSummary.is_registration_complete === 1,
+      should_resume_signup: !isCrewVerified && effectiveOnboardingSummary.is_registration_complete !== 1,
+      profile_onboarding_status: onboardingSummary,
+    });
+  } catch (error) {
+    res.status(500).json({
+      onboardingMissingDetail: true,
+      is_registration_complete: 0,
+      completed_count: 0,
+      total_required: 11,
+      missing_count: 11,
+      progress_percent: 0,
+      missing_fields: [],
+      required_groups: []
     });
   }
 };

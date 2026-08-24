@@ -1,5 +1,7 @@
 const nodemailer = require('nodemailer');
 const sgMail = require('@sendgrid/mail');
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 const db = require('../models');
 const { stream_project_booking, assigned_crew, crew_members } = db;
@@ -378,6 +380,115 @@ const sendEmail = async ({ to, subject, templateId, dynamicTemplateData }) => {
     statusCode: response?.statusCode,
     messageId: response?.headers?.['x-message-id'] || response?.headers?.['X-Message-Id'] || null
   };
+};
+
+const escapeHtml = (value) => String(value || '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+
+const renderEmailTemplate = (templateName, values = {}) => {
+  const templatePath = path.join(__dirname, '..', 'emailTemplates', 'NewTemplates', templateName);
+  let html = fs.readFileSync(templatePath, 'utf8');
+
+  Object.entries(values).forEach(([key, value]) => {
+    html = html.replace(new RegExp(`{{\\s*${key}\\s*}}`, 'g'), escapeHtml(value));
+  });
+
+  return html;
+};
+
+const sendNewsletterSubscriptionNotification = async (data) => {
+  try {
+    const to =
+      process.env.NEWSLETTER_NOTIFICATION_EMAIL ||
+      process.env.SALES_NOTIFICATION_EMAIL ||
+      process.env.ADMIN_NOTIFICATION_EMAIL;
+    const subscriberEmail = String(data?.email || '').trim().toLowerCase();
+    const source = String(data?.source || 'press-blogs').trim();
+    const submittedAt = data?.submittedAt || new Date().toISOString();
+
+    if (!to) {
+      return { success: false, error: 'NEWSLETTER_NOTIFICATION_EMAIL or SALES_NOTIFICATION_EMAIL is not configured' };
+    }
+
+    if (!subscriberEmail) {
+      return { success: false, error: 'Subscriber email is required' };
+    }
+
+    const subject = 'New Newsletter Subscription';
+    const adminUrl = process.env.FRONTEND_URL
+      ? `${String(process.env.FRONTEND_URL).replace(/\/$/, '')}/admin/dashboard`
+      : 'https://beige.app';
+    const formattedSubmittedAt = (() => {
+      const date = new Date(submittedAt);
+      if (Number.isNaN(date.getTime())) return submittedAt;
+      return date.toLocaleString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      });
+    })();
+    const text = [
+      'New newsletter subscription',
+      '',
+      'Someone is interested in subscribing to the Beige newsletter.',
+      `Email: ${subscriberEmail}`,
+      `Submitted At: ${formattedSubmittedAt}`
+    ].join('\n');
+    const html = renderEmailTemplate('NewNewsletterSubscription.html', {
+      email: subscriberEmail,
+      submitted_at: formattedSubmittedAt,
+      loginUrl: adminUrl
+    });
+
+    if (process.env.SENDGRID_API_KEY) {
+      const fromEmail = getSendgridFromAddress();
+      if (!fromEmail) return { success: false, error: 'Sender email not configured' };
+
+      const [response] = await sgMail.send({
+        to,
+        from: {
+          email: fromEmail,
+          name: getSendgridFromName()
+        },
+        subject,
+        text,
+        html
+      });
+
+      return {
+        success: true,
+        statusCode: response?.statusCode,
+        messageId: response?.headers?.['x-message-id'] || response?.headers?.['X-Message-Id'] || null
+      };
+    }
+
+    if (!process.env.EMAIL_USER || !process.env.EMAIL_APP_PASSWORD) {
+      return { success: false, error: 'Email provider is not configured' };
+    }
+
+    const info = await transporter.sendMail({
+      from: `"${process.env.EMAIL_FROM_NAME || 'Beige AI'}" <${process.env.EMAIL_USER}>`,
+      to,
+      subject,
+      text,
+      html
+    });
+
+    return {
+      success: true,
+      messageId: info?.messageId || null
+    };
+  } catch (error) {
+    console.error('Error sending newsletter subscription notification:', error?.response?.body || error.message);
+    return { success: false, error: error.message };
+  }
 };
 
 /**
@@ -3795,6 +3906,46 @@ const sendFileShareInvitationEmail = async ({ to, data = {} }) => {
   });
 };
 
+const sendWorkspaceAccessInvitationEmail = async ({ to, data = {} }) => {
+  if (!to) {
+    return { success: false, error: 'Recipient email is required' };
+  }
+
+  const dashboardLink =
+    data?.dashboard_link ||
+    data?.shared_files_url ||
+    `${String(process.env.FRONTEND_URL || '').replace(/\/+$/, '')}/affiliate/file-manager`;
+  const isRegistered = Boolean(data?.is_registered);
+  const folderName = data?.folder_name || data?.project_name || 'a File Manager folder';
+  const message = isRegistered
+    ? `${data?.sender_name || 'A Beige client'} shared ${folderName} with you. Log in to your Beige dashboard to view the files.`
+    : `${data?.sender_name || 'A Beige client'} shared ${folderName} with you. Please sign up for Beige using this email address to view the files in your dashboard.`;
+
+  if (FILE_SHARE_INVITATION_TEMPLATE_ID) {
+    return sendEmail({
+      to,
+      subject: 'A File Manager Folder Was Shared With You - BeigeAI',
+      templateId: FILE_SHARE_INVITATION_TEMPLATE_ID,
+      dynamicTemplateData: {
+        sender_name: data?.sender_name || 'Beige',
+        shared_files_url: dashboardLink,
+        share_url: dashboardLink,
+        share_message: message,
+        resource_type: 'workspace',
+        external_id: data?.external_id || '',
+        folder_name: folderName,
+        project_name: data?.project_name || data?.folder_name || '',
+        dashboard_link: dashboardLink,
+        signup_link: data?.signup_link || dashboardLink,
+        is_registered: isRegistered,
+        year: new Date().getFullYear(),
+      }
+    });
+  }
+
+  return { success: false, error: 'FILE_SHARE_INVITATION_TEMPLATE_ID is not configured' };
+};
+
 module.exports = {
   formatContentTypes,
   formatShootTypes,
@@ -3805,6 +3956,7 @@ module.exports = {
   // sendPaymentLinkEmail,
   sendInvoiceEmail,
   sendSalesLeadNotification,
+  sendNewsletterSubscriptionNotification,
   sendProductionLeadNotification,
   sendSalesPaymentReceivedNotification,
   sendPaymentSuccessSalesNotification,
@@ -3848,5 +4000,6 @@ module.exports = {
   sendFileApprovedInternalEmail,
   sendRevisionCommentAddedEmail,
   sendNewVersionUploadedClientEmail,
-  sendFileShareInvitationEmail
+  sendFileShareInvitationEmail,
+  sendWorkspaceAccessInvitationEmail
 };

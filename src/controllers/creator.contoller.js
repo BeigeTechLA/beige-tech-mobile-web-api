@@ -8,6 +8,10 @@ const { S3UploadFiles } = require('../utils/common.js');
 const { extractCoordinatesFromPayload } = require('../utils/locationHelpers');
 const { sendTaskAssignmentEmail } = require('../utils/emailService');
 const emailService = require("../utils/emailService");
+const {
+  getCrewMemberWithOnboardingFiles,
+  syncCreatorRegistrationComplete,
+} = require('../utils/creatorOnboarding');
 const db = require("../models");
 const { stream_project_booking, crew_members, crew_member_files, tasks, equipment,
   equipment_accessories,
@@ -32,6 +36,10 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
 
 const moment = require('moment');
 
+const syncOnboardingForCrewMemberId = async (crewMemberId) => {
+  const member = await getCrewMemberWithOnboardingFiles({ crew_member_id: crewMemberId });
+  return syncCreatorRegistrationComplete(member);
+};
 
 function toArray(value) {
   if (!value) return [];
@@ -2001,10 +2009,16 @@ exports.editProfile = async (req, res) => {
     if (email !== undefined) updateData.email = email;
     if (phone_number !== undefined) updateData.phone_number = phone_number;
     if (location !== undefined) {
-      const { latitude, longitude } = extractCoordinatesFromPayload(req.body, location);
-      updateData.location = JSON.stringify(location);
-      updateData.latitude = latitude;
-      updateData.longitude = longitude;
+      if (location === "" || location === null) {
+        updateData.location = null;
+        updateData.latitude = null;
+        updateData.longitude = null;
+      } else {
+        const { latitude, longitude } = extractCoordinatesFromPayload(req.body, location);
+        updateData.location = typeof location === 'object' ? JSON.stringify(location) : location;
+        updateData.latitude = latitude;
+        updateData.longitude = longitude;
+      }
     }
     if (working_distance !== undefined) updateData.working_distance = working_distance;
     if (years_of_experience !== undefined) updateData.years_of_experience = years_of_experience;
@@ -2048,7 +2062,10 @@ exports.editProfile = async (req, res) => {
       ]
     });
 
+    const onboardingSummary = await syncOnboardingForCrewMemberId(crew_member_id);
+
     const responseData = updatedMember.toJSON();
+    responseData.is_registration_complete = onboardingSummary.is_registration_complete;
 
     try {
       responseData.primary_role = normalizeCrewRoleIds(responseData.primary_role);
@@ -2073,9 +2090,11 @@ exports.editProfile = async (req, res) => {
     } catch (e) { responseData.social_media_links = []; }
 
     try {
-      if (typeof responseData.location === 'string') {
+      if (responseData.location && typeof responseData.location === 'string') {
         const parsedLoc = JSON.parse(responseData.location);
         responseData.location = parsedLoc.address || parsedLoc;
+      } else {
+        responseData.location = responseData.location || null;
       }
     } catch (e) { /* keep as is */ }
 
@@ -2154,6 +2173,24 @@ exports.uploadProfileFiles = [
           title: Array.isArray(req.body.title) ? req.body.title[0] : req.body.title || null,
           tag: Array.isArray(req.body.tag) ? req.body.tag[0] : req.body.tag || "[]"
         });
+
+        if (file_type === 'profile_photo') {
+          const crewMember = await crew_members.findOne({
+            where: { crew_member_id },
+            attributes: ['user_id', 'email']
+          });
+
+          if (crewMember?.user_id || crewMember?.email) {
+            await users.update(
+              { profile_image: uploadedFiles[0].file_path },
+              {
+                where: crewMember.user_id
+                  ? { id: crewMember.user_id }
+                  : { email: crewMember.email }
+              }
+            );
+          }
+        }
       } 
       /* MULTI FILE TYPES → BULK CREATE (e.g. recent_work) */
       else {
@@ -2193,6 +2230,8 @@ exports.uploadProfileFiles = [
         await crew_member_files.bulkCreate(records);
       }
 
+      const onboardingSummary = await syncOnboardingForCrewMemberId(crew_member_id);
+
       // await common.logActivity({
       //   crew_member_id,
       //   activity_type: 'profile_file_uploaded',
@@ -2206,7 +2245,10 @@ exports.uploadProfileFiles = [
         error: false,
         code: constants.OK.code,
         message: 'Files uploaded successfully',
-        data: {}
+        data: {
+          is_registration_complete: onboardingSummary.is_registration_complete,
+          onboardingMissingDetail: onboardingSummary.onboardingMissingDetail
+        }
       });
 
     } catch (err) {
@@ -2271,6 +2313,24 @@ exports.uploadCPProfilePhoto = [
         is_active: true
       });
 
+      const crewMember = await crew_members.findOne({
+        where: { crew_member_id },
+        attributes: ['user_id', 'email']
+      });
+
+      if (crewMember?.user_id || crewMember?.email) {
+        await users.update(
+          { profile_image: newFilePath },
+          {
+            where: crewMember.user_id
+              ? { id: crewMember.user_id }
+              : { email: crewMember.email }
+          }
+        );
+      }
+
+      const onboardingSummary = await syncOnboardingForCrewMemberId(crew_member_id);
+
       // Optional: Log Activity
       /* 
       await common.logActivity({
@@ -2288,7 +2348,9 @@ exports.uploadCPProfilePhoto = [
         code: constants.OK.code,
         message: 'Profile photo updated successfully',
         data: {
-          file_path: newFilePath
+          file_path: newFilePath,
+          is_registration_complete: onboardingSummary.is_registration_complete,
+          onboardingMissingDetail: onboardingSummary.onboardingMissingDetail
         }
       });
 
@@ -2354,13 +2416,17 @@ exports.addPortfolioLinks = async (req, res) => {
 
     // 4. Save to database
     await crew_member_files.bulkCreate(records);
+    const onboardingSummary = await syncOnboardingForCrewMemberId(crew_member_id);
 
     // 5. Success Response (Matching your format)
     return res.status(constants.OK.code).json({
       error: false,
       code: constants.OK.code,
       message: 'Portfolio links added successfully',
-      data: {}
+      data: {
+        is_registration_complete: onboardingSummary.is_registration_complete,
+        onboardingMissingDetail: onboardingSummary.onboardingMissingDetail
+      }
     });
 
   } catch (err) {
@@ -2415,13 +2481,17 @@ exports.editPortfolioLink = async (req, res) => {
       title: title || linkRecord.title,
       tag: platform || linkRecord.tag
     });
+    const onboardingSummary = await syncOnboardingForCrewMemberId(crew_member_id);
 
     // 4. Success Response
     return res.status(constants.OK.code).json({
       error: false,
       code: constants.OK.code,
       message: 'Portfolio link updated successfully',
-      data: {}
+      data: {
+        is_registration_complete: onboardingSummary.is_registration_complete,
+        onboardingMissingDetail: onboardingSummary.onboardingMissingDetail
+      }
     });
 
   } catch (err) {
@@ -2474,12 +2544,17 @@ exports.editFeaturedWorkProject = async (req, res) => {
         is_active: 1
       }
     });
+    const onboardingSummary = await syncOnboardingForCrewMemberId(crew_member_id);
 
     return res.status(constants.OK.code).json({
       error: false,
       code: constants.OK.code,
       message: 'Featured work updated successfully',
-      data: { updated_count: updatedCount }
+      data: {
+        updated_count: updatedCount,
+        is_registration_complete: onboardingSummary.is_registration_complete,
+        onboardingMissingDetail: onboardingSummary.onboardingMissingDetail
+      }
     });
 
   } catch (err) {
@@ -2535,12 +2610,16 @@ exports.deleteProfileFile = async (req, res) => {
     // }
 
     await file.update({ is_active: 0 });
+    const onboardingSummary = await syncOnboardingForCrewMemberId(crew_member_id);
 
     return res.status(constants.OK.code).json({
       error: false,
       code: constants.OK.code,
       message: 'File deleted successfully',
-      data: {}
+      data: {
+        is_registration_complete: onboardingSummary.is_registration_complete,
+        onboardingMissingDetail: onboardingSummary.onboardingMissingDetail
+      }
     });
 
   } catch (err) {
@@ -3795,10 +3874,7 @@ exports.checkVerificationStatus = async (req, res) => {
       });
     }
 
-    const member = await crew_members.findOne({
-      where: { crew_member_id: crew_member_id },
-      attributes: ['crew_member_id', 'is_crew_verified', 'first_name', 'email']
-    });
+    const member = await getCrewMemberWithOnboardingFiles({ crew_member_id });
 
     if (!member) {
       return res.status(constants.NOT_FOUND.code).json({
@@ -3809,12 +3885,16 @@ exports.checkVerificationStatus = async (req, res) => {
       });
     }
 
+    const onboardingSummary = await syncCreatorRegistrationComplete(member);
+
     return res.status(constants.OK.code).json({
       error: false,
       code: constants.OK.code,
       message: "Status fetched successfully",
       data: {
         is_crew_verified: member.is_crew_verified,
+        is_registration_complete: onboardingSummary.is_registration_complete,
+        onboardingMissingDetail: onboardingSummary.onboardingMissingDetail,
         name: member.name,
         email: member.email
       },
@@ -3896,4 +3976,3 @@ exports.checkCrewStatus = async (req, res) => {
     });
   }
 };
-

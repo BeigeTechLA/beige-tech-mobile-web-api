@@ -2614,3 +2614,76 @@ CREATE TABLE IF NOT EXISTS user_notification_preferences (
 
 CREATE INDEX idx_notification_preferences_user
     ON user_notification_preferences(user_id);
+-- 2026-07-31
+
+CREATE TABLE IF NOT EXISTS shifts (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  name VARCHAR(100) NOT NULL,
+  start_time TIME NOT NULL,
+  end_time TIME NOT NULL,
+  active_days JSON NOT NULL,
+  is_enabled BOOLEAN DEFAULT TRUE,
+  status ENUM('active','inactive') DEFAULT 'active',
+  next_assignee_sales_rep_id INT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX idx_shifts_status (status),
+  INDEX idx_shifts_enabled (is_enabled),
+  CONSTRAINT fk_shifts_next_assignee
+    FOREIGN KEY (next_assignee_sales_rep_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS shift_salespeople (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  shift_id INT NOT NULL,
+  sales_rep_id INT NOT NULL,
+  assignment_order INT NOT NULL DEFAULT 0,
+  status ENUM('active','inactive') DEFAULT 'active',
+  user_status BOOLEAN DEFAULT TRUE,
+  last_activity TIMESTAMP NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uniq_shift_rep (shift_id, sales_rep_id),
+  INDEX idx_shift_salespeople_rep (sales_rep_id),
+  INDEX idx_shift_salespeople_order (shift_id, assignment_order),
+  CONSTRAINT fk_shift_salespeople_shift
+    FOREIGN KEY (shift_id) REFERENCES shifts(id) ON DELETE CASCADE,
+  CONSTRAINT fk_shift_salespeople_sales_rep
+    FOREIGN KEY (sales_rep_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS assignment_history (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  shift_id INT NOT NULL,
+  sales_rep_id INT NOT NULL,
+  lead_id INT NULL,
+  client_name VARCHAR(150) NOT NULL,
+  status VARCHAR(50) NOT NULL,
+  source ENUM('web_form','api','import','manual') NOT NULL,
+  assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_assignment_history_shift (shift_id),
+  INDEX idx_assignment_history_rep (sales_rep_id),
+  INDEX idx_assignment_history_assigned_at (assigned_at),
+  CONSTRAINT fk_assignment_history_shift
+    FOREIGN KEY (shift_id) REFERENCES shifts(id),
+  CONSTRAINT fk_assignment_history_sales_rep
+    FOREIGN KEY (sales_rep_id) REFERENCES users(id)
+);
+
+-- NOTE: assignment_history is an immutable audit log; no UPDATE/DELETE API routes are exposed.
+
+-- 11-08-26
+
+CREATE TABLE IF NOT EXISTS file_manager_workspace_access (
+  access_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  external_id VARCHAR(255) NOT NULL,
+  client_user_id BIGINT UNSIGNED NOT NULL,
+  granted_by_user_id BIGINT UNSIGNED DEFAULT NULL,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (access_id),
+  UNIQUE KEY uq_workspace_client_access (external_id, client_user_id),
+  KEY idx_workspace_access_external_id (external_id),
+  KEY idx_workspace_access_client_user (client_user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

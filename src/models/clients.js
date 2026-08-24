@@ -25,7 +25,7 @@ module.exports = function(sequelize, DataTypes) {
     },
     phone_number: {
       type: DataTypes.STRING(20),
-      allowNull: false
+      allowNull: true
     },
     is_active: {
       type: DataTypes.TINYINT(1),

@@ -33,6 +33,7 @@ var _user_type = require("./user_type");
 var _users = require("./users");
 var _waitlist = require("./waitlist");
 var _investors = require("./investors");
+var _newsletter_subscribers = require("./newsletter_subscribers");
 var _affiliates = require("./affiliates");
 var _referrals = require("./referrals");
 var _affiliate_payouts = require("./affiliate_payouts");
@@ -136,6 +137,7 @@ function initModels(sequelize) {
   var users = _users(sequelize, DataTypes);
   var waitlist = _waitlist(sequelize, DataTypes);
   var investors = _investors(sequelize, DataTypes);
+  var newsletter_subscribers = _newsletter_subscribers(sequelize, DataTypes);
   var affiliates = _affiliates(sequelize, DataTypes);
   var referrals = _referrals(sequelize, DataTypes);
   var affiliate_payouts = _affiliate_payouts(sequelize, DataTypes);
@@ -846,6 +848,7 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
     users,
     waitlist,
     investors,
+    newsletter_subscribers,
     affiliates,
     referrals,
     affiliate_payouts,

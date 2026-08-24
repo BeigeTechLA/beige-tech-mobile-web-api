@@ -5,6 +5,9 @@ const admin = require('../controllers/admin.controller');
 const { authenticateAdmin, authMiddleware } = require('../middleware/auth');
 const { requirePermission, requireAnyPermission } = require('../middleware/permission.middleware');
 const { requireSuperAdmin } = require('../middleware/auth.middleware');
+const shiftManagementRoutes = require('./shifts.routes');
+const assignmentHistoryRoutes = require('./assignment-history.routes');
+const salesRepDetailRoutes = require('./sales-reps.routes');
 
 const dashboardView = requireAnyPermission([
   'admin_dashboard.view',
@@ -150,6 +153,13 @@ const shootsViewOrEdit = requireAnyPermission([
   'sales_admin_shoots.edit'
 ], allowSalesRepRoles);
 
+router.use('/shifts', shiftManagementRoutes);
+router.use('/assignment-history', assignmentHistoryRoutes);
+router.use('/sales-reps', salesRepDetailRoutes);
+
+router.get('/profile/:id', authMiddleware, admin.getAdminProfile);
+router.put('/profile/:id', authMiddleware, admin.updateAdminProfile);
+router.post('/profile/change-password', authMiddleware, admin.changeAdminProfilePassword);
 router.post('/create-project', authMiddleware, shootsCreate, admin.createProject);
 router.post('/match-crew', admin.matchCrew);
 router.post('/assignMatchCrew', admin.assignCrew);
@@ -181,6 +191,7 @@ router.get(
 );
 router.post('/get-approved-crew-members', authMiddleware, crewAvailabilityView, admin.getApprovedCrewMembers);
 router.get('/crew-member/:crew_member_id', authMiddleware, adminSalesRepresentativeAvailabilityView, admin.getCrewMemberById);
+router.get('/crew-member-onboarding-status/:id', authMiddleware, adminUsersView, admin.getOnboardingStatusById);
 router.delete('/delete-crew-member/:crew_member_id', admin.deleteCrewMember);
 router.put('/edit-crew-member/:crew_member_id', admin.updateCrewMember);
 router.put('/crew-member/:crew_member_id/profile', authMiddleware, adminUsersEdit, admin.updateCrewMemberProfile);
@@ -256,6 +267,7 @@ router.get('/get-crew-for-shoot', authMiddleware, shootsViewOrEdit, admin.search
 router.post('/assign-crew-from-shoot', authMiddleware, shootsEdit, admin.assignProjectCrewBulk);
 router.post('/remove-project-crew',authMiddleware, admin.removeProjectAssignedCrew);
 router.get('/get-project-form/:project_id', authMiddleware, projectFormView, admin.getProjectFormByProjectId);
+router.put('/shoots/:project_id/project-name', authMiddleware, shootsEdit, admin.updateProjectName);
 router.post('/shoots/remind-onboarding-form/:project_id', authMiddleware, admin.sendOnboardingFormReminder);
 router.post('/get-assigned-project-crew', admin.getAllAssignedRequests);
 router.get('/crew-member-assigned-projects', authMiddleware, adminSalesRepresentativeView, admin.getCrewMemberAssignedProjectsByDate);
@@ -266,6 +278,8 @@ router.get('/roles', authMiddleware, requireSuperAdmin, admin.getRoles);
 router.post('/users/assign-role', authMiddleware, requireSuperAdmin, admin.assignRoleToUser);
 router.put('/roles/update', authMiddleware, requireSuperAdmin, admin.updateRole);
 router.delete('/roles/delete/:role_id', authMiddleware, requireSuperAdmin, admin.deleteRole);
+router.get('/users/export', authMiddleware, adminUsersView, admin.exportUsersExcel);
+router.get('/roles/:role_id/users/export', authMiddleware, adminUsersView, admin.exportRoleUsersExcel);
 router.get('/roles/:role_id', authMiddleware, requireSuperAdmin, admin.getRoleById);
 router.get('/users/roles', authMiddleware, requireSuperAdmin, admin.getUsersWithRoles);
 router.get('/users/:user_id/role-details', authMiddleware, requireSuperAdmin, admin.getUserRoleDetails);

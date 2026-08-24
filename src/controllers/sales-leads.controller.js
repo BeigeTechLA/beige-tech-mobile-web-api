@@ -15,6 +15,7 @@ const bookingPaymentSummaryService = require('../services/booking-payment-summar
 const quoteService = require('../services/sales-quote.service');
 const bookingPricingService = require('../services/booking-pricing.service');
 const pushNotificationService = require('../services/push-notification.service');
+const shiftManagementService = require('../services/shift-management.service');
 const emailService = require('../utils/emailService');
 const { sendCPNewBookingRequestEmail } = require('../utils/emailService');
 const { resolveEventDateAndStartTime, normalizeTime, splitDateTime } = require('../utils/timezone');
@@ -26,6 +27,28 @@ const sequelize = require('../db');
 const db = require('../models');
 const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
 const EXTERNAL_FILE_MANAGER_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
+
+async function assignSalesLeadViaShiftRoundRobin({ lead, clientName, status, source, transaction = null }) {
+  try {
+    return await shiftManagementService.assignLeadViaActiveShiftRoundRobin({
+      lead,
+      leadModel: sales_leads,
+      clientName,
+      status,
+      source,
+      transaction
+    });
+  } catch (assignmentError) {
+    console.error('Shift round-robin assignment failed:', assignmentError);
+  }
+
+  return null;
+}
+
+function isManualSalesActor(req) {
+  const role = String(req.userRole || req.user?.userRole || '').toLowerCase();
+  return Boolean(req.userId) && !['guest', 'client'].includes(role);
+}
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -1594,19 +1617,28 @@ exports.trackEarlyBookingInterest = async (req, res) => {
                 activity_data: { source: 'step_1_capture', user_id: resolvedUserId, guest_email: normalizedGuestEmail }
             });
 
-            // Force assignment to default sales inbox owner for this branch flow.
-            assignedRep = await users.findOne({
-                where: {
-                    email: 'sales@beigecorporation.io',
-                    is_active: 1
-                },
-                attributes: ['id', 'name', 'email']
+            assignedRep = await assignSalesLeadViaShiftRoundRobin({
+                lead,
+                clientName: client_name,
+                status: 'Book a Shoot - Lead Created',
+                source: 'web_form'
             });
 
-            if (assignedRep?.id) {
-                await lead.update({ assigned_sales_rep_id: assignedRep.id });
-            } else {
-                assignedRep = null;
+            if (!assignedRep?.id) {
+                // Fallback to default sales inbox owner when no active shift assignee is available.
+                assignedRep = await users.findOne({
+                    where: {
+                        email: 'sales@beigecorporation.io',
+                        is_active: 1
+                    },
+                    attributes: ['id', 'name', 'email']
+                });
+
+                if (assignedRep?.id) {
+                    await lead.update({ assigned_sales_rep_id: assignedRep.id });
+                } else {
+                    assignedRep = null;
+                }
             }
 
           // emailService.sendSalesLeadNotification({
@@ -1742,9 +1774,12 @@ exports.trackBookingStart = async (req, res) => {
       }
     });
 
-    // TEMP FLOW: direct book-a-shoot leads stay unassigned for now.
-    // const assignedRep = await leadAssignmentService.autoAssignLead(lead.lead_id);
-    const assignedRep = null;
+    const assignedRep = await assignSalesLeadViaShiftRoundRobin({
+      lead,
+      clientName: client_name,
+      status: 'Booking In Progress',
+      source: 'web_form'
+    });
 
     res.status(constants.CREATED.code).json({
       success: true,
@@ -1883,16 +1918,28 @@ exports.createSalesAssistedLead = async (req, res) => {
       }
     });
 
-    // TEMP FLOW: direct book-a-shoot leads stay unassigned for now.
-    // if (!lead.assigned_sales_rep_id) {
-    //   await leadAssignmentService.autoAssignLead(lead.lead_id);
-    // }
+    let assignedRep = null;
+
+    if (isManualSalesActor(req) && Number(lead.assigned_sales_rep_id || 0) !== Number(req.userId)) {
+      await lead.update({ assigned_sales_rep_id: req.userId });
+      assignedRep = await users.findByPk(req.userId, {
+        attributes: ['id', 'name', 'email']
+      });
+    } else if (!lead.assigned_sales_rep_id) {
+      assignedRep = await assignSalesLeadViaShiftRoundRobin({
+        lead,
+        clientName: client_name,
+        status: 'Sales Assisted Lead Created',
+        source: 'web_form'
+      });
+    }
 
     res.status(constants.CREATED.code).json({
       success: true,
       message: 'Sales team has been notified. Someone will contact you shortly.',
       data: {
-        lead_id: lead.lead_id
+        lead_id: lead.lead_id,
+        assigned_to: assignedRep
       }
     });
 
@@ -2205,12 +2252,6 @@ exports.getLeads = async (req, res) => {
     //   whereClause.assigned_sales_rep_id = req.userId;
     // }
 
-    if (start_date && end_date) {
-      whereClause.created_at = {
-        [Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`]
-      };
-    }
-
     if (lead_type) whereClause.lead_type = lead_type;
 
     if (assigned_to) {
@@ -2258,14 +2299,19 @@ exports.getLeads = async (req, res) => {
       query: safeQueryLog
     });
 
-    const activeStatusFilter = (status || booking_status);
-    const shootStatusRequested = isShootStatusFilterValue(activeStatusFilter);
+    const rawActiveStatusFilter = (status || booking_status);
+    const shootStatusRequested = isShootStatusFilterValue(rawActiveStatusFilter);
+    const activeStatusFilter = shootStatusRequested
+      ? rawActiveStatusFilter
+      : normalizeLeadStatusFilterLabel(rawActiveStatusFilter);
     const listFilters = {
       activeStatusFilter,
       shootStatusRequested,
       intent,
       cp_assignment,
-      production_filter
+      production_filter,
+      start_date,
+      end_date
     };
 
     const leadIdQueryStartedAt = Date.now();
@@ -2415,14 +2461,11 @@ exports.getLeads = async (req, res) => {
 };
 
 const BOARD_STATUSES = [
-  'Signed Up - Lead Created',
-  'Book a shoot - Lead Created',
-  'Manual - Lead Created',
   'Booking In Progress',
-  'Proposal Sent',
   'Ready for Payment',
-  'Payment Sent',
-  'Booked',
+  'Payment Link Sent',
+  'Partially Paid',
+  'Paid',
   'Closed - Lost',
 ];
 
@@ -2435,12 +2478,34 @@ const normalizeBoardStatusLabel = (rawStatus) => {
   if (value.includes('book a shoot - lead created')) return 'Book a shoot - Lead Created';
   if (value.includes('manual - lead created')) return 'Manual - Lead Created';
   if (value === 'booking in progress' || value === 'in-progress') return 'Booking In Progress';
-  if (value === 'proposal sent' || value === 'payment link sent' || value === 'link sent') return 'Proposal Sent';
+  if (value === 'proposal sent' || value === 'payment link sent' || value === 'link sent') return 'Payment Link Sent';
   if (value === 'ready for payment') return 'Ready for Payment';
-  if (value === 'payment sent') return 'Payment Sent';
-  if (value === 'booked' || value === 'paid') return 'Booked';
+  if (value === 'payment sent') return 'Payment Link Sent';
+  if (value === 'booked' || value === 'paid') return 'Paid';
   if (value.includes('closed - lost') || value === 'cancelled') return 'Closed - Lost';
   if (value === 'partially paid') return 'Partially Paid';
+  return String(rawStatus || '').trim() || 'Unknown';
+};
+
+const normalizeLeadStatusFilterLabel = (rawStatus) => {
+  const value = String(rawStatus || '')
+    .replace(/Ã¢â‚¬â€œ|â€”|â€“/g, '-')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+
+  if (!value || value === 'all') return 'All';
+  if (value === 'signed up' || value === 'singed up' || value.includes('signed up lead created')) return 'Signed Up - Lead Created';
+  if (value.includes('book a shoot lead created')) return 'Book a shoot - Lead Created';
+  if (value.includes('manual lead created')) return 'Manual - Lead Created';
+  if (value === 'booking in progress' || value === 'in progress') return 'Booking In Progress';
+  if (value === 'proposal sent' || value === 'payment link sent' || value === 'payment sent' || value === 'link sent') return 'Payment Link Sent';
+  if (value === 'ready for payment') return 'Ready for Payment';
+  if (value === 'booked' || value === 'paid') return 'Paid';
+  if (value === 'partially paid' || value === 'partial paid' || value === 'approval pending') return 'Partially Paid';
+  if (value.includes('closed lost') || value === 'cancelled' || value === 'abandoned') return 'Closed - Lost';
+
   return String(rawStatus || '').trim() || 'Unknown';
 };
 
@@ -2467,7 +2532,7 @@ exports.getLeadsBoard = async (req, res) => {
   try {
     const rawLimit = Number.parseInt(String(req.query.limit || 10), 10);
     const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 10;
-    const requestedStatus = String(req.query.status || '').trim();
+    const requestedStatus = normalizeLeadStatusFilterLabel(req.query.status);
     const page = Number.parseInt(String(req.query.page || 1), 10) || 1;
     const snapshot = await invokeGetLeadsSnapshot(req, {
       status: undefined,
@@ -2481,7 +2546,7 @@ exports.getLeadsBoard = async (req, res) => {
 
     const groupedByStatus = new Map();
     allLeads.forEach((lead) => {
-      const normalizedStatus = normalizeBoardStatusLabel(lead?.booking_status);
+      const normalizedStatus = normalizeLeadStatusFilterLabel(lead?.booking_status);
       if (!groupedByStatus.has(normalizedStatus)) {
         groupedByStatus.set(normalizedStatus, []);
       }
@@ -2491,7 +2556,7 @@ exports.getLeadsBoard = async (req, res) => {
     const extraStatuses = Array.from(groupedByStatus.keys()).filter(
       (statusLabel) => !BOARD_STATUSES.includes(statusLabel)
     );
-    const statuses = requestedStatus ? [requestedStatus] : [...BOARD_STATUSES, ...extraStatuses];
+    const statuses = requestedStatus && requestedStatus !== 'All' ? [requestedStatus] : [...BOARD_STATUSES, ...extraStatuses];
 
     const columns = {};
     statuses.forEach((statusLabel) => {
@@ -2561,12 +2626,6 @@ exports.getClientLeads = async (req, res) => {
       whereClause.assigned_sales_rep_id = req.userId;
     }
 
-    if (start_date && end_date) {
-      whereClause.created_at = {
-        [Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`]
-      };
-    }
-
     if (lead_type) whereClause.lead_type = lead_type;
 
     if (assigned_to) {
@@ -2628,6 +2687,8 @@ exports.getClientLeads = async (req, res) => {
         return {
           ...leadJson,
           potential_value: pricingData ? pricingData.total : 0,
+          event_date: leadJson.booking?.event_date || null,
+          created_at: leadJson.booking?.event_date || leadJson.created_at || null,
           booking_status: computedBookingStatus,
           intent: computedIntent,
           payment_status: lead.booking?.payment_id ? 'paid' : 'unpaid',
@@ -2635,6 +2696,13 @@ exports.getClientLeads = async (req, res) => {
         };
       })
     );
+
+    if (start_date && end_date) {
+      processedLeads = processedLeads.filter((lead) => {
+        const eventDate = getDateOnlyString(lead?.booking?.event_date);
+        return Boolean(eventDate && eventDate >= start_date && eventDate <= end_date);
+      });
+    }
 
     const activeStatusFilter = (status || booking_status);
     const shootStatusRequested = isShootStatusFilterValue(activeStatusFilter);
@@ -3718,7 +3786,7 @@ exports.updateClientLeadStatus = async (req, res) => {
   }
 };
 
-const MANUAL_PAYMENT_MODES = ['cash', 'wire', 'ach', 'zelle', 'venmo', 'cashapp', 'applepay', 'other', 'net30'];
+const MANUAL_PAYMENT_MODES = ['cash', 'wire', 'ach', 'zelle', 'venmo', 'cashapp', 'applepay', 'stripe', 'other', 'net30'];
 
 const parseJsonIfNeeded = (value) => {
   if (!value) return null;
@@ -3865,11 +3933,6 @@ async function getCachedExternalWorkspaceFiles(cache, bookingId, phase) {
 async function processSalesLeadForList(lead, context = {}) {
   try {
     const startedAt = Date.now();
-    console.log("[getLeads] Processing lead:", {
-      request_id: context.requestId,
-      lead_id: lead?.lead_id
-    });
-
     const leadJson = lead?.toJSON ? lead.toJSON() : {};
 
     const pricingData = await calculateLeadPricing(lead?.booking).catch((err) => {
@@ -3983,6 +4046,8 @@ async function processSalesLeadForList(lead, context = {}) {
       potential_value: pricingData
         ? pricingData.total
         : 0,
+      event_date: leadJson.booking?.event_date || null,
+      created_at: leadJson.booking?.event_date || leadJson.created_at || null,
       booking_status:
         computedBookingStatus || 'Unknown',
       intent: computedIntent || '',
@@ -4040,8 +4105,17 @@ async function salesLeadMatchesListFilters(lead, filters, externalFileCache, con
     shootStatusRequested,
     intent,
     cp_assignment,
-    production_filter
+    production_filter,
+    start_date,
+    end_date
   } = filters;
+
+  if (start_date && end_date) {
+    const eventDate = getDateOnlyString(lead?.booking?.event_date);
+    if (!eventDate || eventDate < start_date || eventDate > end_date) {
+      return false;
+    }
+  }
 
   if (shootStatusRequested && !matchShootStatusFilter(lead?.booking, activeStatusFilter)) {
     return false;
@@ -4056,7 +4130,10 @@ async function salesLeadMatchesListFilters(lead, filters, externalFileCache, con
       .replace('â€“', '-')
       .trim();
 
-    if (leadStat !== filterStat) return false;
+    if (
+      normalizeLeadStatusFilterLabel(leadStat) !==
+      normalizeLeadStatusFilterLabel(filterStat)
+    ) return false;
   }
 
   if (intent && intent !== 'All') {
@@ -4219,7 +4296,7 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
   if (!MANUAL_PAYMENT_MODES.includes(normalizedPaymentMode)) {
     return res.status(constants.BAD_REQUEST.code).json({
       success: false,
-      message: 'payment_mode must be one of cash, wire, ach, zelle, venmo, cashapp, applepay, other, or net30',
+      message: 'payment_mode must be one of cash, wire, ach, zelle, venmo, cashapp, applepay, stripe, other, or net30',
     });
   }
 
@@ -4268,7 +4345,14 @@ const buildManualPaymentMeta = async ({ leadModel, leadId, req, res, leadLabel }
 
   const existingSummary = await bookingPaymentSummaryService.getBookingPaymentSummary(bookingId);
   const summaryQuoteTotal = Number(existingSummary?.quote_total || 0);
-  const totalAmount = Math.max(resolveLeadTotalAmount(lead, lead.booking), summaryQuoteTotal, 0);
+  const calculatedPricing = await calculateLeadPricing(lead.booking);
+  const calculatedPricingTotal = Number(calculatedPricing?.total || 0);
+  const totalAmount = Math.max(
+    resolveLeadTotalAmount(lead, lead.booking),
+    calculatedPricingTotal,
+    summaryQuoteTotal,
+    0
+  );
   const previouslyPaidAmount = Number(existingSummary?.paid_amount || 0);
   const creditUsedAmount = Number(existingSummary?.credit_used_amount || 0);
   const dueFromSummary = Number(existingSummary?.due_amount);
@@ -7496,19 +7580,22 @@ exports.finalizeCreateDeal = async (req, res) => {
 
     // ASSIGN SALES REP
     let assignedRep = null;
-    const assignedSalesRepId = await resolveAssignedSalesRepId({
-      requestedSalesRepId: sales_rep_id,
-      req,
-      currentAssignedSalesRepId: lead.assigned_sales_rep_id,
-      tx
-    });
+    const manualByAdmin = isManualSalesActor(req);
+    const assignedSalesRepId = manualByAdmin
+      ? req.userId
+      : await resolveAssignedSalesRepId({
+          requestedSalesRepId: sales_rep_id,
+          req,
+          currentAssignedSalesRepId: lead.assigned_sales_rep_id,
+          tx
+        });
 
     if (assignedSalesRepId) {
       assignedRep = await users.findByPk(assignedSalesRepId, {
         attributes: ['id', 'name'],
         transaction: tx
       });
-    } else {
+    } else if (leadModel !== sales_leads) {
       // TEMP FLOW:
       // Admin/Sales Admin created leads should stay with creator (resolveAssignedSalesRepId already handles this).
       // Old random/auto assignment logic kept commented for easy rollback.
@@ -7523,7 +7610,7 @@ exports.finalizeCreateDeal = async (req, res) => {
           })
         : null;
     }
-    if (assignedRep?.id) {
+    if (assignedRep?.id && Number(lead.assigned_sales_rep_id || 0) !== Number(assignedRep.id)) {
       await lead.update(
         { assigned_sales_rep_id: assignedRep.id },
         { transaction: tx }
@@ -7565,6 +7652,15 @@ exports.finalizeCreateDeal = async (req, res) => {
     });
 
     await tx.commit();
+
+    if (leadModel === sales_leads && !assignedRep?.id && !manualByAdmin) {
+      assignedRep = await assignSalesLeadViaShiftRoundRobin({
+        lead,
+        clientName: resolvedName,
+        status: 'Book a Shoot - Lead Created',
+        source: 'web_form'
+      });
+    }
     
     return res.status(200).json({
       success: true,

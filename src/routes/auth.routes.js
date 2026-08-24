@@ -22,6 +22,7 @@ router.post('/register-sales-admin', authController.registerSalesAdmin);
 // ===== CREW MEMBER REGISTRATION (3 STEPS) =====
 router.post('/register-crew-step1', authController.registerCrewMemberStep1);
 router.post('/register-crew-step2', authController.registerCrewMemberStep2);
+router.post('/register-crew-step3-file', authController.uploadCrewMemberStep3File);
 router.post('/register-crew-step3', authController.registerCrewMemberStep3);
 router.get('/crew-member/:crew_member_id', authController.getCrewMemberDetails);
 
@@ -32,10 +33,12 @@ router.post('/verify-email', authController.verifyEmail);
 
 // ===== LOGIN =====
 router.post('/login', authController.login);
+router.post('/google', authController.googleLogin);
 
 // ===== PASSWORD MANAGEMENT =====
 router.post('/forgot-password', authController.forgotPassword);
 router.post('/reset-password', authController.resetPassword);
+router.post('/admin/generate-reset-link', authController.generateUserResetLinkForAdmin);
 router.post('/change-password', authController.changePassword);
 
 // ===== PERMISSIONS =====
@@ -49,10 +52,11 @@ router.get('/permissions/:role', authController.getPermissions);
 
 // GET /auth/me - Get current user info
 router.get('/me', authenticate, authController.getCurrentUser);
+router.get('/onboarding-status', authenticate, authController.getOnboardingStatus);
 router.post('/cp-event-location/confirm', authenticate, authController.confirmCpEventLocation);
 router.post('/admin/create-internal-credential', authenticate, requireSuperAdmin, authController.createInternalCredential);
 
 router.post('/change-password-client', authenticate, clientFinancesEdit, authController.changePasswordclient);
-router.post('/change-password-crew', authController.changePasswordCrewMember);
+router.post('/change-password-crew', authenticate, authController.changePasswordCrewMember);
 
 module.exports = router;

@@ -2147,6 +2147,9 @@ async function listTransactions(filters = {}) {
   const search = String(filters.search || filters.q || '').trim();
   const explicitBookingId = Number(filters.booking_id || 0) || null;
   const entries = await fetchPaymentHistoryEntriesForBookings(explicitBookingId ? [explicitBookingId] : []);
+   const leadMatchedBookingIds = search && !explicitBookingId
+    ? new Set(await getSearchMatchedBookingIds(search))
+    : new Set();
   const bookingIds = [...new Set(entries.map((entry) => Number(entry.booking_id)).filter(Boolean))];
   const [leadInfoByBookingId, invoiceCountsByBookingId, latestInvoicesByBookingId] = await Promise.all([
     getLeadInfoByBookingIds(bookingIds),
@@ -2181,8 +2184,9 @@ async function listTransactions(filters = {}) {
       if (filters.payment_id && Number(row.payment_id) !== Number(filters.payment_id)) return false;
       if (filters.transaction_type && row.transaction_type !== filters.transaction_type) return false;
       if (!paymentHistoryMatchesMethod(row, filters.payment_method)) return false;
-      if (!paymentHistoryMatchesSearch(row, search)) return false;
-
+      if (search &&
+              !paymentHistoryMatchesSearch(row, search) &&
+              !leadMatchedBookingIds.has(Number(row.booking_id))) return false;
       const transactionTime = row.transaction_date ? new Date(row.transaction_date).getTime() : 0;
       if (filters.date_from) {
         const fromTime = new Date(filters.date_from).getTime();
@@ -2236,7 +2240,6 @@ async function listShootBreakdowns(filters = {}) {
   }
   if (filters.search) {
     const rawSearch = String(filters.search).trim();
-    const term = `%${rawSearch}%`;
     const directBookingId = Number(rawSearch.replace(/^#/, ''));
     if (Number.isFinite(directBookingId) && directBookingId > 0) {
       if (where.booking_id?.[Op.in]) {
@@ -2247,12 +2250,6 @@ async function listShootBreakdowns(filters = {}) {
         where.booking_id = directBookingId;
       }
     }
-    bookingWhere[Op.or] = [
-      { project_name: { [Op.like]: term } },
-      { shoot_type: { [Op.like]: term } },
-      { event_type: { [Op.like]: term } },
-      { guest_email: { [Op.like]: term } }
-    ];
   }
 
   const result = await db.finance_project_breakdowns.findAndCountAll({
@@ -2265,8 +2262,7 @@ async function listShootBreakdowns(filters = {}) {
       {
         model: db.stream_project_booking,
         as: 'booking',
-        required: Object.keys(bookingWhere).length > 0,
-        where: bookingWhere,
+        required: false,
         attributes: ['stream_project_booking_id', 'quote_id', 'project_name', 'shoot_type', 'event_type', 'content_type', 'event_date', 'guest_email']
       },
       {
@@ -2354,13 +2350,33 @@ async function listShootBreakdowns(filters = {}) {
         transactions: transactionsByBookingId.get(bookingId) || []
       };
     });
+
+    const shootSearchTerm = String(filters.search || '').trim().toLowerCase();
+    const filteredBreakdownRows = shootSearchTerm
+    ? breakdownRows.filter((row) => {
+        const bookingId = Number(row.booking_id);
+        const lead = leadInfoByBookingId.get(bookingId) || {};
+        const haystack = [
+          bookingId,
+          `#${bookingId}`,
+          row.booking?.project_name,
+          row.booking?.shoot_type,
+          row.booking?.event_type,
+          row.guest_email,
+          lead.client_name,
+          lead.guest_email,
+          ...row.transactions.flatMap((t) => [t.client_name, t.client_email])
+        ].map((value) => String(value || '').toLowerCase());
+        return haystack.some((value) => value.includes(shootSearchTerm));
+      })
+    : breakdownRows;
   const existingBookingIds = new Set(bookingIds);
   const fallbackRows = [];
   transactionsByBookingId.forEach((transactions, bookingId) => {
     if (existingBookingIds.has(bookingId) || !Array.isArray(transactions) || transactions.length === 0) return;
     const booking = bookingById.get(bookingId) || {};
     const row = buildFallbackShootBreakdownRow({
-      bookingId,
+      bookingId,  
       booking,
       transactions,
       invoiceCount: invoiceCountsByBookingId.get(bookingId) || 0,
@@ -2389,7 +2405,7 @@ async function listShootBreakdowns(filters = {}) {
     return rightTime - leftTime;
   });
 
-  const combinedRows = [...breakdownRows, ...fallbackRows];
+  const combinedRows = [...filteredBreakdownRows, ...fallbackRows];
   const pagedRows = combinedRows.slice(offset, offset + limit);
 
   return {

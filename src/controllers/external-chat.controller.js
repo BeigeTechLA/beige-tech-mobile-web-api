@@ -225,6 +225,7 @@ const enrichChatRoomSnapshot = async (room) => {
   const enrichedManagers = await enrichParticipantCollection(room.manager_ids || [], 'manager');
   const enrichedCps = await enrichParticipantCollection(room.cp_ids || [], 'cp');
   const enrichedProduction = await enrichParticipantCollection(room.production_ids || [], 'production');
+  const enrichedExtraClients = await enrichParticipantCollection(room.client_ids || [], 'client');
   const normalizedClientSnapshot = normalizeClientEntity(room.client_snapshot);
   const normalizedClient = normalizeClientEntity(room.client_id);
   const enrichedClient = normalizedClientSnapshot
@@ -238,6 +239,7 @@ const enrichChatRoomSnapshot = async (room) => {
     manager_ids: enrichedManagers,
     cp_ids: enrichedCps,
     production_ids: enrichedProduction,
+    client_ids: enrichedExtraClients,
     client_snapshot: normalizedClientSnapshot ? enrichedClient : room.client_snapshot,
     client_id: normalizedClientSnapshot ? room.client_id : enrichedClient,
   };
@@ -291,6 +293,7 @@ const normalizeChatRoomMembers = (room, currentAdmin = null) => {
 
   const members = [
     room.client_snapshot || room.client_id,
+    ...(room.client_ids || []),
     ...(room.cp_ids || []),
     room.pm_id,
     ...(room.production_ids || []),
@@ -575,8 +578,21 @@ const enrichParticipantCollection = async (items = [], fallbackRole = 'member') 
   const ids = normalizedItems
     .map((item) => Number(item?.id ?? item))
     .filter(Number.isFinite);
+  const emails = normalizedItems
+    .map((item) => normalizeEmailAddress(item?.email))
+    .filter(Boolean);
 
   const uniqueIds = [...new Set(ids)];
+  const uniqueEmails = [...new Set(emails)];
+  const clientConditions = [];
+  if (uniqueIds.length) {
+    clientConditions.push({ client_id: uniqueIds });
+    clientConditions.push({ user_id: uniqueIds });
+  }
+  if (uniqueEmails.length) {
+    clientConditions.push({ email: uniqueEmails });
+  }
+
   const [staff, clients, cps] = await Promise.all([
     uniqueIds.length
       ? db.users.findAll({
@@ -585,13 +601,10 @@ const enrichParticipantCollection = async (items = [], fallbackRole = 'member') 
           raw: true,
         })
       : [],
-    uniqueIds.length
+    clientConditions.length
       ? db.clients.findAll({
           where: {
-            [db.Sequelize.Op.or]: [
-              { client_id: uniqueIds },
-              { user_id: uniqueIds },
-            ],
+            [db.Sequelize.Op.or]: clientConditions,
           },
           attributes: ['client_id', 'user_id', 'name', 'email'],
           raw: true,
@@ -620,11 +633,20 @@ const enrichParticipantCollection = async (items = [], fallbackRole = 'member') 
   ]);
 
   const staffMap = new Map(staff.map((user) => [String(user.id), user]));
-  const clientMap = new Map();
+  const clientByEmail = new Map();
+  const clientByUserId = new Map();
+  const clientByClientId = new Map();
   clients.forEach((client) => {
-    clientMap.set(String(client.client_id), client);
-    if (client.user_id != null) clientMap.set(String(client.user_id), client);
+    const email = normalizeEmailAddress(client.email);
+    if (email) clientByEmail.set(email, client);
+    if (client.user_id != null) clientByUserId.set(String(client.user_id), client);
+    if (client.client_id != null) clientByClientId.set(String(client.client_id), client);
   });
+  const resolveClientForItem = (item, id) =>
+    clientByEmail.get(normalizeEmailAddress(item?.email)) ||
+    clientByUserId.get(id) ||
+    clientByClientId.get(id) ||
+    null;
   const cpMap = new Map();
   cps.forEach((cpRecord) => {
     const plain = cpRecord.get({ plain: true });
@@ -634,12 +656,13 @@ const enrichParticipantCollection = async (items = [], fallbackRole = 'member') 
 
   return normalizedItems.map((item) => {
     const id = String(item?.id ?? item ?? '');
+    const itemRole = String(item?.role || fallbackRole).toLowerCase();
     const staffUser = staffMap.get(id);
-    const client = clientMap.get(id);
+    const client = resolveClientForItem(item, id);
     const cp = cpMap.get(id);
     const profilePhoto = Array.isArray(cp?.crew_member_files) ? cp.crew_member_files[0] : null;
 
-    if (cp && String(item?.role || fallbackRole).toLowerCase() === 'cp') {
+    if (cp && itemRole === 'cp') {
       const canonicalId = String(cp.user_id || cp.crew_member_id || id);
       return {
         ...item,
@@ -652,6 +675,18 @@ const enrichParticipantCollection = async (items = [], fallbackRole = 'member') 
         role: 'cp',
         subtitle: item?.subtitle || cp.primary_role || 'Creative Partner',
         profileImage: item?.profileImage || profilePhoto?.file_path || null,
+      };
+    }
+
+    if (client && itemRole === 'client') {
+      const canonicalId = String(client.user_id || client.client_id || id);
+      return {
+        ...item,
+        id: canonicalId,
+        client_id: String(client.client_id),
+        name: shouldUseProvidedName(item?.name, id) ? item.name : client.name || client.email || canonicalId,
+        email: shouldUseProvidedEmail(item?.email) ? item.email : client.email || null,
+        role: 'client',
       };
     }
 
@@ -705,10 +740,12 @@ const enrichParticipantPayload = async (payload = {}) => {
   const client = payload?.client
     ? (await enrichParticipantCollection([payload.client], 'client'))[0] || payload.client
     : null;
+  const clients = await enrichParticipantCollection(payload?.clients || [], 'client');
 
   return {
     ...payload,
     client,
+    clients,
     cps: await enrichParticipantCollection(payload?.cps || [], 'cp'),
     pm: payload?.pm
       ? ((await enrichParticipantCollection([payload.pm], 'pm'))[0] || payload.pm)
@@ -722,7 +759,7 @@ const extractParticipantEnvelope = (payload = {}) => {
   if (
     payload &&
     typeof payload === 'object' &&
-    ('client' in payload || 'cps' in payload || 'pm' in payload || 'production' in payload || 'managers' in payload)
+    ('client' in payload || 'clients' in payload || 'cps' in payload || 'pm' in payload || 'production' in payload || 'managers' in payload)
   ) {
     return { envelope: payload, wrapped: false };
   }
@@ -730,7 +767,7 @@ const extractParticipantEnvelope = (payload = {}) => {
   if (
     payload?.data &&
     typeof payload.data === 'object' &&
-    ('client' in payload.data || 'cps' in payload.data || 'pm' in payload.data || 'production' in payload.data || 'managers' in payload.data)
+    ('client' in payload.data || 'clients' in payload.data || 'cps' in payload.data || 'pm' in payload.data || 'production' in payload.data || 'managers' in payload.data)
   ) {
     return { envelope: payload.data, wrapped: true };
   }
@@ -740,6 +777,7 @@ const extractParticipantEnvelope = (payload = {}) => {
 
 const flattenChatParticipants = (payload = {}) => [
   payload?.client,
+  ...(payload?.clients || []),
   ...(payload?.cps || []),
   payload?.pm,
   ...(payload?.production || []),
@@ -914,6 +952,7 @@ const extractChatRecipientTargets = (envelope = {}) => {
   };
 
   pushRecipient(envelope?.client, 'client');
+  (envelope?.clients || []).forEach((participant) => pushRecipient(participant, 'client'));
   pushRecipient(envelope?.pm, 'pm');
   (envelope?.cps || []).forEach((participant) => pushRecipient(participant, 'cp'));
   (envelope?.production || []).forEach((participant) => pushRecipient(participant, 'production'));
@@ -1342,25 +1381,24 @@ const resolveClientParticipant = async (participant) => {
 
   const numericId = Number(normalized.id);
   const normalizedEmail = normalized.email ? String(normalized.email).trim().toLowerCase() : null;
-  const orConditions = [];
+  const clientLookupConditions = [];
 
-  if (Number.isFinite(numericId)) {
-    orConditions.push({ client_id: numericId });
-    orConditions.push({ user_id: numericId });
-  }
   if (normalizedEmail) {
-    orConditions.push({ email: normalizedEmail });
+    clientLookupConditions.push({ email: normalizedEmail });
+  }
+  if (Number.isFinite(numericId)) {
+    clientLookupConditions.push({ user_id: numericId });
+    clientLookupConditions.push({ client_id: numericId });
   }
 
   let clientRecord = null;
-  if (orConditions.length) {
+  for (const condition of clientLookupConditions) {
     clientRecord = await db.clients.findOne({
-      where: {
-        [db.Sequelize.Op.or]: orConditions,
-      },
+      where: condition,
       attributes: ['client_id', 'user_id', 'name', 'email'],
       raw: true,
     });
+    if (clientRecord) break;
   }
 
   const userLookupConditions = [];
@@ -1814,10 +1852,13 @@ exports.removeChatParticipant = async (req, res) => {
       if (client) {
         const participantPayload = await proxyRequest(`/participants/${req.params.roomId}`).catch(() => null);
         const { envelope } = extractParticipantEnvelope(participantPayload || {});
-        const storedClientId = String(envelope?.client?.id || envelope?.client || '');
+        const storedClientIds = new Set([
+          envelope?.client,
+          ...(envelope?.clients || []),
+        ].map((participant) => String(participant?.id || participant || '')).filter(Boolean));
         storedParticipantId = [client.user_id, client.client_id]
           .map((id) => String(id || ''))
-          .find((id) => id && id === storedClientId) || storedParticipantId;
+          .find((id) => id && storedClientIds.has(id)) || storedParticipantId;
       }
     }
 
@@ -2001,6 +2042,7 @@ exports.getChatMessages = async (req, res) => {
     if (req.query.page) query.set('page', req.query.page);
     if (req.query.limit) query.set('limit', req.query.limit);
     if (req.query.sortBy) query.set('sortBy', req.query.sortBy);
+    if (req.query.search) query.set('search', req.query.search);
 
     const [result, participantResult] = await Promise.all([
       proxyRequest(`/messages/${req.params.roomId}${query.toString() ? `?${query.toString()}` : ''}`),
@@ -2182,11 +2224,13 @@ exports.editChatMessage = async (req, res) => {
 exports.deleteChatMessage = async (req, res) => {
   try {
     const sender = await resolveChatSender(req.user);
+    const allowAnySender = isAdminRequestUser(req.user);
 
     const result = await proxyRequest(`/messages/${req.params.messageId}/delete`, {
       method: 'POST',
       body: JSON.stringify({
         roomId: req.body.roomId,
+        allowAnySender,
         sender: {
           id: sender.id != null ? String(sender.id) : null,
           email: sender.email || null,

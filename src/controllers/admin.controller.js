@@ -1,5 +1,6 @@
 const constants = require('../utils/constants');
 const { Sequelize, users, affiliates } = require('../models')
+const bcrypt = require('bcrypt');
 const multer = require('multer');
 const path = require('path');
 const common_model = require('../utils/common_model');
@@ -47,6 +48,8 @@ const bookingPaymentSummaryService = require('../services/booking-payment-summar
 const quoteService = require('../services/sales-quote.service');
 const bookingPricingService = require('../services/booking-pricing.service');
 const { getStudioPricingSnapshot, isStudioLineItem } = require('../utils/studio-pricing');
+const userExportService = require('../services/user-export.service');
+const onboardingCtrl = require('../utils/creatorOnboarding'); // Real source path
 // const NodeGeocoder = require('node-geocoder');
 const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
 const EXTERNAL_MEETINGS_API_BASE_URL = process.env.EXTERNAL_MEETINGS_API_BASE_URL || 'http://localhost:5002/v1/external-meetings';
@@ -54,6 +57,274 @@ const EXTERNAL_FILE_MANAGER_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beig
 
 const getFrontendBaseUrl = () =>
   String(process.env.FRONTEND_URL || 'http://localhost:3000').trim().replace(/\/+$/, '');
+
+const normalizeAdminRole = (role) => String(role || '').trim().toLowerCase().replace(/\s+/g, '_');
+const ADMIN_PROFILE_ROLES = new Set(['admin', 'super_admin', 'superadmin', 'sales_admin', 'production_manager']);
+const normalizePhoneNumber = (number) => String(number || '').replace(/\D/g, '');
+
+const isAdminProfileRole = (role) => ADMIN_PROFILE_ROLES.has(normalizeAdminRole(role));
+
+const formatAdminProfile = (adminUser) => ({
+  id: adminUser.id,
+  name: adminUser.name,
+  number: adminUser.phone_number
+});
+
+const getAuthAdminUser = async (req) => {
+  const userId = Number(req.user?.userId || req.user?.id || req.userId);
+
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return null;
+  }
+
+  return users.findOne({
+    where: {
+      id: userId,
+      is_active: 1
+    },
+    attributes: ['id', 'name', 'phone_number', 'password_hash', 'user_type', 'role'],
+    include: [
+      {
+        model: db.user_type,
+        as: 'userType',
+        attributes: ['user_role'],
+        required: false
+      }
+    ]
+  });
+};
+
+const findAdminProfileById = async (id) => users.findOne({
+  where: {
+    id,
+    is_active: 1
+  },
+  attributes: ['id', 'name', 'phone_number', 'password_hash', 'user_type', 'role'],
+  include: [
+    {
+      model: db.user_type,
+      as: 'userType',
+      attributes: ['user_role'],
+      required: false
+    }
+  ]
+});
+
+const ensureAuthenticatedAdmin = async (req, res) => {
+  const authUser = await getAuthAdminUser(req);
+  const authRole = authUser?.userType?.user_role || authUser?.role || req.user?.userRole || req.userRole;
+
+  if (!authUser) {
+    res.status(401).json({
+      success: false,
+      message: 'Authenticated admin is required'
+    });
+    return null;
+  }
+
+  if (!isAdminProfileRole(authRole)) {
+    res.status(403).json({
+      success: false,
+      message: 'Admin access required'
+    });
+    return null;
+  }
+
+  return authUser;
+};
+
+const isUserAdminProfile = (user) => {
+  const role = user?.userType?.user_role || user?.role;
+  return isAdminProfileRole(role);
+};
+
+exports.getAdminProfile = async (req, res) => {
+  try {
+    const authUser = await ensureAuthenticatedAdmin(req, res);
+    if (!authUser) return null;
+
+    const adminId = Number(req.params.id);
+    if (!Number.isInteger(adminId) || adminId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid admin id is required'
+      });
+    }
+
+    const adminUser = await findAdminProfileById(adminId);
+    if (!adminUser || !isUserAdminProfile(adminUser)) {
+      return res.status(404).json({
+        success: false,
+        message: 'Admin not found'
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: formatAdminProfile(adminUser)
+    });
+  } catch (error) {
+    console.error('Get Admin Profile Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while fetching admin profile',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.updateAdminProfile = async (req, res) => {
+  try {
+    const authUser = await ensureAuthenticatedAdmin(req, res);
+    if (!authUser) return null;
+
+    const adminId = Number(req.params.id);
+    if (!Number.isInteger(adminId) || adminId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid admin id is required'
+      });
+    }
+
+    const name = String(req.body?.name || '').trim();
+    const number = normalizePhoneNumber(req.body?.number ?? req.body?.phone_number);
+
+    if (!name) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name is required'
+      });
+    }
+
+    if (!/^\d{10}$/.test(number)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Number must be a valid 10 digit mobile number'
+      });
+    }
+
+    const adminUser = await findAdminProfileById(adminId);
+    if (!adminUser || !isUserAdminProfile(adminUser)) {
+      return res.status(404).json({
+        success: false,
+        message: 'Admin not found'
+      });
+    }
+
+    const duplicateAdmin = await users.findOne({
+      where: {
+        id: { [Op.ne]: adminId },
+        phone_number: number,
+        is_active: 1
+      },
+      include: [
+        {
+          model: db.user_type,
+          as: 'userType',
+          attributes: ['user_role'],
+          required: false
+        }
+      ]
+    });
+
+    if (duplicateAdmin && isUserAdminProfile(duplicateAdmin)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Number already exists for another admin'
+      });
+    }
+
+    await adminUser.update({
+      name,
+      phone_number: number,
+      updated_at: new Date()
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Admin profile updated successfully',
+      data: formatAdminProfile(adminUser)
+    });
+  } catch (error) {
+    console.error('Update Admin Profile Error:', error);
+
+    if (error.name === 'SequelizeUniqueConstraintError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Number already exists'
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while updating admin profile',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.changeAdminProfilePassword = async (req, res) => {
+  try {
+    const authUser = await ensureAuthenticatedAdmin(req, res);
+    if (!authUser) return null;
+
+    const { currentPassword, newPassword, confirmPassword } = req.body || {};
+
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Current password, new password, and confirm password are required'
+      });
+    }
+
+    if (!authUser.password_hash) {
+      return res.status(400).json({
+        success: false,
+        message: 'Current password is incorrect'
+      });
+    }
+
+    const isPasswordCorrect = await bcrypt.compare(currentPassword, authUser.password_hash);
+    if (!isPasswordCorrect) {
+      return res.status(400).json({
+        success: false,
+        message: 'Current password is incorrect'
+      });
+    }
+
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'New password and confirm password do not match'
+      });
+    }
+
+    if (String(newPassword).length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'New password must be at least 6 characters long'
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await authUser.update({
+      password_hash: hashedPassword,
+      updated_at: new Date()
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Password changed successfully'
+    });
+  } catch (error) {
+    console.error('Change Admin Profile Password Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while changing password',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
 
 const buildShootReceiptUrl = ({ bookingId, manualPaymentId = null, paymentId = null, download = false }) => {
   const url = new URL(`${getFrontendBaseUrl()}/beige_invoice/${encodeURIComponent(String(bookingId))}`);
@@ -309,6 +580,41 @@ const resolveAdminBookingShootAmount = async (booking = null, fallbackShootAmoun
 const parseAmountCandidate = (value) => {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : null;
+};
+
+const formatProjectEventTypeLabels = (eventType, allEventMasterTypes = [], lineItems = []) => {
+  const rawTypes = eventType ? String(eventType).split(',') : [];
+  const formattedTypes = rawTypes
+    .map((type) => {
+      const val = String(type || '').trim();
+      if (!val) return null;
+      const masterMatch = allEventMasterTypes.find((eventTypeRow) => String(eventTypeRow.event_type_id) === val);
+      if (masterMatch) return masterMatch.event_type_name;
+      const stringMap = {
+        videographer: 'Videography',
+        videography: 'Videography',
+        photographer: 'Photography',
+        photography: 'Photography',
+      };
+      return stringMap[val.toLowerCase()] || val.charAt(0).toUpperCase() + val.slice(1);
+    })
+    .filter(Boolean);
+
+  if (formattedTypes.length) {
+    return Array.from(new Set(formattedTypes)).join(', ');
+  }
+
+  const serviceText = (lineItems || [])
+    .filter((item) => String(item?.section_type || '').toLowerCase() === 'service')
+    .map((item) => `${item?.item_name || ''} ${item?.catalog_item?.name || ''}`)
+    .join(' ')
+    .toLowerCase();
+
+  const inferredTypes = [];
+  if (serviceText.includes('video')) inferredTypes.push('Videography');
+  if (serviceText.includes('photo')) inferredTypes.push('Photography');
+
+  return Array.from(new Set(inferredTypes)).join(', ');
 };
 
 const resolveProjectDisplayAmount = async ({ project, paymentData }) => {
@@ -2825,6 +3131,61 @@ exports.updateProjectDateLocation = async (req, res) => {
   }
 };
 
+exports.updateProjectName = async (req, res) => {
+  try {
+    const { project_id } = req.params;
+    const projectName = String(req.body?.project_name || '').trim();
+
+    if (!project_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Project ID is required'
+      });
+    }
+
+    if (!projectName) {
+      return res.status(400).json({
+        success: false,
+        message: 'project_name is required'
+      });
+    }
+
+    const project = await stream_project_booking.findOne({
+      where: {
+        stream_project_booking_id: project_id,
+        is_active: 1
+      }
+    });
+
+    if (!project) {
+      return res.status(404).json({
+        success: false,
+        message: 'Project not found'
+      });
+    }
+
+    await project.update({
+      project_name: projectName
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Project name updated successfully',
+      data: {
+        stream_project_booking_id: project.stream_project_booking_id,
+        project_name: project.project_name
+      }
+    });
+  } catch (error) {
+    console.error('Error updating project name:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update project name',
+      error: error.message
+    });
+  }
+};
+
 // exports.getAllProjectDetails = async (req, res) => {
 //   try {
 //     const { status, event_type, search } = req.query;  // Get filters from query params
@@ -3474,9 +3835,14 @@ exports.updateProjectDateLocation = async (req, res) => {
 
 exports.getAllProjectDetails = async (req, res) => {
   try {
-    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment, production_filter, summary_only } = req.query;
+    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment, production_filter, payment_filter, summary_only } = req.query;
     const today = new Date();
     const noPagination = !limit && !page;
+    const hasPostFetchFilters = Boolean(
+      (cp_assignment && cp_assignment !== 'all') ||
+      (production_filter && production_filter !== 'all') ||
+      (payment_filter && payment_filter !== 'all')
+    );
     const requestUserId = Number(req.user?.userId || req.user?.id || req.userId);
     const requestUserRole = String(req.user?.userRole || req.userRole || '').toLowerCase().trim();
     const clientProjectFilter = requestUserRole === 'client' && Number.isInteger(requestUserId) && requestUserId > 0
@@ -3485,8 +3851,8 @@ exports.getAllProjectDetails = async (req, res) => {
 
     let pageNumber = null, pageSize = null, offset = null;
     if (!noPagination) {
-      pageNumber = parseInt(page ?? 1, 10);
-      pageSize = parseInt(limit ?? 10, 10);
+      pageNumber = Math.max(parseInt(page ?? 1, 10) || 1, 1);
+      pageSize = Math.min(Math.max(parseInt(limit ?? 10, 10) || 10, 1), 100);
       offset = (pageNumber - 1) * pageSize;
     }
 
@@ -3501,23 +3867,91 @@ exports.getAllProjectDetails = async (req, res) => {
       narrative: ['narrative', 'short film']
     };
 
+    const rangeLower = String(range || '').toLowerCase().trim();
     let dateFilter = {};
     if (start_date && end_date) {
-      dateFilter = { event_date: { [Sequelize.Op.between]: [`${start_date} 00:00:00`, `${end_date} 23:59:59`] } };
-    } else if (range === 'month') {
+      dateFilter = { event_date: { [Sequelize.Op.between]: [start_date, end_date] } };
+    } else if (date_on) {
+      dateFilter = Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), date_on);
+    } else if (rangeLower === 'month') {
       dateFilter = { [Sequelize.Op.and]: [
         Sequelize.where(Sequelize.fn('MONTH', Sequelize.col('event_date')), Sequelize.fn('MONTH', Sequelize.fn('CURDATE'))),
         Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('event_date')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
       ]};
-    } else if (range === 'week') {
+    } else if (rangeLower === 'week') {
       dateFilter = { [Sequelize.Op.and]: [
         Sequelize.where(Sequelize.fn('WEEK', Sequelize.col('event_date')), Sequelize.fn('WEEK', Sequelize.fn('CURDATE'))),
         Sequelize.where(Sequelize.fn('YEAR', Sequelize.col('event_date')), Sequelize.fn('YEAR', Sequelize.fn('CURDATE')))
       ]};
-    } else if (range === 'all') {
+    } else if (rangeLower === 'today') {
+      dateFilter = Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), Sequelize.fn('CURDATE'));
+    } else if (rangeLower === 'upcoming') {
+      dateFilter = Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), { [Sequelize.Op.gte]: Sequelize.fn('CURDATE') });
+    } else if (rangeLower === 'next_7_days') {
+      dateFilter = Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), {
+        [Sequelize.Op.between]: [
+          Sequelize.fn('CURDATE'),
+          Sequelize.literal('DATE_ADD(CURDATE(), INTERVAL 7 DAY)')
+        ]
+      });
+    } else if (rangeLower === 'next_15_days') {
+      dateFilter = Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), {
+        [Sequelize.Op.between]: [
+          Sequelize.fn('CURDATE'),
+          Sequelize.literal('DATE_ADD(CURDATE(), INTERVAL 15 DAY)')
+        ]
+      });
+    } else if (rangeLower === 'next_30_days' || rangeLower === 'in_1_month') {
+      dateFilter = Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), {
+        [Sequelize.Op.between]: [
+          Sequelize.fn('CURDATE'),
+          Sequelize.literal('DATE_ADD(CURDATE(), INTERVAL 30 DAY)')
+        ]
+      });
+    } else if (rangeLower === 'in_2_months') {
+      dateFilter = Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), {
+        [Sequelize.Op.between]: [
+          Sequelize.fn('CURDATE'),
+          Sequelize.literal('DATE_ADD(CURDATE(), INTERVAL 2 MONTH)')
+        ]
+      });
+    } else if (rangeLower === 'in_6_months') {
+      dateFilter = Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), {
+        [Sequelize.Op.between]: [
+          Sequelize.fn('CURDATE'),
+          Sequelize.literal('DATE_ADD(CURDATE(), INTERVAL 6 MONTH)')
+        ]
+      });
+    } else if (rangeLower === 'in_1_year') {
+      dateFilter = Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), {
+        [Sequelize.Op.between]: [
+          Sequelize.fn('CURDATE'),
+          Sequelize.literal('DATE_ADD(CURDATE(), INTERVAL 1 YEAR)')
+        ]
+      });
+    } else if (rangeLower === 'last_7_days') {
+      dateFilter = Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), {
+        [Sequelize.Op.between]: [
+          Sequelize.literal('DATE_SUB(CURDATE(), INTERVAL 7 DAY)'),
+          Sequelize.fn('CURDATE')
+        ]
+      });
+    } else if (rangeLower === 'last_15_days') {
+      dateFilter = Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), {
+        [Sequelize.Op.between]: [
+          Sequelize.literal('DATE_SUB(CURDATE(), INTERVAL 15 DAY)'),
+          Sequelize.fn('CURDATE')
+        ]
+      });
+    } else if (rangeLower === 'last_30_days' || rangeLower === 'last_1_month') {
+      dateFilter = Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), {
+        [Sequelize.Op.between]: [
+          Sequelize.literal('DATE_SUB(CURDATE(), INTERVAL 30 DAY)'),
+          Sequelize.fn('CURDATE')
+        ]
+      });
+    } else if (rangeLower === 'all' || !rangeLower || rangeLower === 'custom') {
       dateFilter = {};
-    } else if (date_on) {
-      dateFilter = { event_date: { [Sequelize.Op.eq]: `${date_on} 00:00:00` } };
     }
 
     const [
@@ -3625,7 +4059,22 @@ exports.getAllProjectDetails = async (req, res) => {
       ]
     };
 
-    let whereConditions = { ...paidOnlyFilter, ...dateFilter };
+    let whereConditions = { ...paidOnlyFilter };
+    const dateAndConditions = Array.isArray(dateFilter?.[Sequelize.Op.and])
+      ? dateFilter[Sequelize.Op.and]
+      : Object.keys(dateFilter || {}).length > 0
+        ? [dateFilter]
+        : [];
+
+    if (dateAndConditions.length) {
+      whereConditions = {
+        ...whereConditions,
+        [Sequelize.Op.and]: [
+          ...(whereConditions[Sequelize.Op.and] || []),
+          ...dateAndConditions,
+        ],
+      };
+    }
 
     if (category && categoryConfig[category.toLowerCase()]) {
       const keywords = categoryConfig[category.toLowerCase()];
@@ -3714,7 +4163,23 @@ exports.getAllProjectDetails = async (req, res) => {
     if (event_type) whereConditions.event_type = event_type;
     
     if (search) {
-      const searchCondition = Sequelize.where(Sequelize.fn('LOWER', Sequelize.col('project_name')), { [Sequelize.Op.like]: `%${search.toLowerCase()}%` });
+      const normalizedSearch = String(search).toLowerCase().trim();
+      const normalizedPhoneSearch = normalizedSearch.replace(/[^\d+]/g, '');
+      const searchConditions = [
+        Sequelize.where(Sequelize.fn('LOWER', Sequelize.col('project_name')), { [Sequelize.Op.like]: `%${normalizedSearch}%` }),
+        Sequelize.where(Sequelize.fn('LOWER', Sequelize.col('guest_email')), { [Sequelize.Op.like]: `%${normalizedSearch}%` }),
+        Sequelize.where(Sequelize.cast(Sequelize.col('stream_project_booking_id'), 'CHAR'), { [Sequelize.Op.like]: `%${normalizedSearch.replace(/^#/, '')}%` }),
+      ];
+
+      if (normalizedPhoneSearch) {
+        searchConditions.push(
+          Sequelize.where(Sequelize.fn('REGEXP_REPLACE', Sequelize.col('description'), '[^0-9]', ''), {
+            [Sequelize.Op.like]: `%${normalizedPhoneSearch}%`
+          })
+        );
+      }
+
+      const searchCondition = { [Sequelize.Op.or]: searchConditions };
       whereConditions = {
         ...whereConditions,
         [Sequelize.Op.and]: [
@@ -3724,18 +4189,19 @@ exports.getAllProjectDetails = async (req, res) => {
       };
     }
 
-    const [ total_active, total_cancelled, total_completed, total_upcoming, total_draft, allEventMasterTypes ] = await Promise.all([
+    const [ total_active, total_cancelled, total_completed, total_upcoming, total_draft, total_matching, allEventMasterTypes ] = await Promise.all([
       stream_project_booking.count({ where: { ...whereConditions, is_cancelled: 0, is_completed: 0, is_draft: 0 } }),
       stream_project_booking.count({ where: { ...whereConditions, is_cancelled: 1 } }),
       stream_project_booking.count({ where: { ...whereConditions, is_completed: 1 } }),
       stream_project_booking.count({ where: { ...whereConditions, is_cancelled: 0, is_draft: 0, event_date: { [Sequelize.Op.gt]: today } } }),
       stream_project_booking.count({ where: { ...whereConditions, is_draft: 1 } }),
+      stream_project_booking.count({ where: whereConditions }),
       event_type_master.findAll({ attributes: ['event_type_id', 'event_type_name'], raw: true })
     ]);
 
     const projectRows = await stream_project_booking.findAll({
       where: whereConditions,
-      ...(noPagination ? {} : { limit: pageSize, offset }),
+      ...(noPagination || hasPostFetchFilters ? {} : { limit: pageSize, offset }),
       order: [
         [Sequelize.literal(`CASE WHEN DATE(event_date) >= CURDATE() THEN 0 ELSE 1 END`), 'ASC'],
         [Sequelize.literal(`CASE WHEN DATE(event_date) >= CURDATE() THEN event_date END`), 'ASC'],
@@ -3757,7 +4223,7 @@ exports.getAllProjectDetails = async (req, res) => {
           pagination: noPagination ? null : {
             page: pageNumber,
             limit: pageSize,
-            totalRecords: projects.length,
+            totalRecords: total_matching,
           },
         },
       });
@@ -3920,6 +4386,19 @@ exports.getAllProjectDetails = async (req, res) => {
       });
     }
 
+    if (payment_filter && payment_filter !== 'all') {
+      const normalizedPaymentFilter = String(payment_filter).toLowerCase().trim();
+      projectDetails = projectDetails.filter((entry) => {
+        const project = entry?.project || {};
+        const pendingAmount = Number(project.pending_amount || 0);
+        const paidAmount = Number(project.paid_amount || project.total_paid_amount || 0);
+
+        if (normalizedPaymentFilter === 'pending') return pendingAmount > 0;
+        if (normalizedPaymentFilter === 'paid') return pendingAmount <= 0 && paidAmount > 0;
+        return true;
+      });
+    }
+
     if (production_filter && production_filter !== 'all') {
       const normalizedProductionFilter = String(production_filter).toLowerCase().trim();
       const authHeader = req.headers?.authorization || null;
@@ -3989,14 +4468,18 @@ exports.getAllProjectDetails = async (req, res) => {
       });
     }
 
-    const filteredTotalRecords = projectDetails.length;
+    const filteredTotalRecords = hasPostFetchFilters ? projectDetails.length : total_matching;
+    const paginatedProjectDetails =
+      noPagination || !hasPostFetchFilters
+        ? projectDetails
+        : projectDetails.slice(offset, offset + pageSize);
 
     return res.status(200).json({
       error: false,
       message: 'Filtered project details retrieved successfully',
       data: {
         stats: { total_active, total_cancelled, total_completed, total_upcoming, total_draft },
-        projects: projectDetails,
+        projects: paginatedProjectDetails,
         pagination: noPagination ? null : {
             page: pageNumber,
             limit: pageSize,
@@ -5658,7 +6141,7 @@ exports.getCrewMembers = async (req, res) => {
         limit = parseInt(limit);
         const offset = (page - 1) * limit;
 
-        let conditions = [{ is_active: 1 }];
+        let conditions = [{ is_active: 1 }, { is_registration_complete: 1 }];
 
         if (status) {
             if (status === 'pending') conditions.push({ is_crew_verified: 0 });
@@ -5829,6 +6312,9 @@ exports.exportCrewMembersCsv = async (req, res) => {
     const conditions = [
       {
         is_active: 1
+      },
+      {
+        is_registration_complete: 1
       }
     ];
 
@@ -6354,6 +6840,22 @@ exports.verifyCrewMember = async (req, res) => {
       return res.status(400).json({
         error: true,
         message: "Missing or invalid 'crew_member_id' or 'status'.",
+      });
+    }
+
+    const member = await crew_members.findOne({
+      where: { crew_member_id },
+      attributes: ['crew_member_id', 'is_registration_complete']
+    });
+
+    if (!member) {
+      return res.status(404).json({ error: true, message: "Crew member not found." });
+    }
+
+    if (Number(member.is_registration_complete) !== 1) {
+      return res.status(400).json({
+        error: true,
+        message: "Creator onboarding is incomplete. Complete all required fields before approval review.",
       });
     }
 
@@ -11878,23 +12380,75 @@ exports.getClientsShoots = async (req, res) => {
       .map((project) => Number(project.stream_project_booking_id))
       .filter((id) => Number.isFinite(id));
 
-    const bookedLeadRows = bookingIds.length
-      ? await sales_leads.findAll({
-          where: {
-            booking_id: { [Sequelize.Op.in]: bookingIds },
-            lead_status: 'booked',
-            is_active: 1
-          },
-          attributes: ['booking_id'],
-          raw: true
-        })
-      : [];
+    const [
+      bookedLeadRows,
+      bookingPaymentSummaryRows,
+      allEventMasterTypes
+    ] = bookingIds.length
+      ? await Promise.all([
+          sales_leads.findAll({
+            where: {
+              booking_id: { [Sequelize.Op.in]: bookingIds },
+              lead_status: 'booked',
+              is_active: 1
+            },
+            attributes: ['booking_id'],
+            raw: true
+          }),
+          db.sequelize.query(
+            `
+            SELECT booking_id, sales_quote_id, payment_status, paid_amount, credit_used_amount, due_amount, quote_total
+            FROM booking_payment_summary
+            WHERE booking_id IN (:bookingIds)
+              AND payment_status IN ('paid', 'partially_paid', 'approval_pending', 'no_payment_due')
+            `,
+            {
+              replacements: { bookingIds },
+              type: QueryTypes.SELECT
+            }
+          ),
+          event_type_master.findAll({ attributes: ['event_type_id', 'event_type_name'], raw: true })
+        ])
+      : [[], [], await event_type_master.findAll({ attributes: ['event_type_id', 'event_type_name'], raw: true })];
 
     const bookedBookingIdSet = new Set(
       bookedLeadRows
         .map((row) => Number(row.booking_id))
         .filter((id) => Number.isFinite(id))
     );
+
+    const bookingPaymentSummaryByBookingId = new Map(
+      bookingPaymentSummaryRows
+        .map((row) => [Number(row.booking_id), row])
+        .filter(([bookingId]) => Number.isFinite(bookingId))
+    );
+
+    const salesQuoteIds = Array.from(new Set(
+      bookingPaymentSummaryRows
+        .map((row) => Number(row.sales_quote_id))
+        .filter((id) => Number.isFinite(id) && id > 0)
+    ));
+
+    const salesQuoteLineItems = salesQuoteIds.length
+      ? await db.sales_quote_line_items.findAll({
+          where: {
+            sales_quote_id: { [Sequelize.Op.in]: salesQuoteIds },
+            is_active: 1
+          },
+          include: [{ model: db.quote_catalog_items, as: 'catalog_item', required: false }],
+          order: [['sales_quote_id', 'ASC'], ['sort_order', 'ASC'], ['line_item_id', 'ASC']]
+        })
+      : [];
+
+    const salesQuoteLineItemsByQuoteId = new Map();
+    salesQuoteLineItems.forEach((lineItem) => {
+      const quoteId = Number(lineItem.sales_quote_id);
+      if (!Number.isFinite(quoteId)) return;
+      if (!salesQuoteLineItemsByQuoteId.has(quoteId)) {
+        salesQuoteLineItemsByQuoteId.set(quoteId, []);
+      }
+      salesQuoteLineItemsByQuoteId.get(quoteId).push(lineItem);
+    });
 
     // -------- FETCH ASSOCIATED DATA --------
     const projectDetails = await Promise.all(
@@ -11924,32 +12478,56 @@ exports.getClientsShoots = async (req, res) => {
       })
     ]);
 
-    // -------- FORMAT EVENT TYPES --------
-    const rawTypes = project.event_type ? project.event_type.split(',') : [];
-    const formattedTypes = rawTypes.map(t => {
-      const val = t.trim();
-      const stringMap = {
-        'videographer': 'Videography',
-        'photographer': 'Photography'
-      };
-      return stringMap[val?.toLowerCase()] ||
-        val.charAt(0).toUpperCase() + val.slice(1);
-    });
-
+    const bookingPaymentSummary = bookingPaymentSummaryByBookingId.get(Number(project.stream_project_booking_id)) || null;
+    const summaryPaidAmount = bookingPaymentSummary
+      ? parseAmountCandidate(bookingPaymentSummary.paid_amount)
+      : null;
+    const summaryCreditUsedAmount = bookingPaymentSummary
+      ? parseAmountCandidate(bookingPaymentSummary.credit_used_amount)
+      : null;
+    const summaryPendingAmount = bookingPaymentSummary
+      ? parseAmountCandidate(bookingPaymentSummary.due_amount)
+      : null;
+    const summaryQuoteTotal = bookingPaymentSummary
+      ? parseAmountCandidate(bookingPaymentSummary.quote_total)
+      : null;
     const displayAmount = await resolveProjectDisplayAmount({
       project,
       paymentData
     });
     const totalValueAmount = await resolveProjectTotalValueAmount({
-      project
+      project,
+      salesQuoteId: bookingPaymentSummary?.sales_quote_id || null
     });
+    const totalPaidAmount = summaryPaidAmount !== null
+      ? summaryPaidAmount
+      : (project.payment_id ? displayAmount : 0);
+    const creditUsedAmount = summaryCreditUsedAmount || 0;
+    const resolvedTotalValueAmount = summaryQuoteTotal !== null
+      ? summaryQuoteTotal
+      : Math.max(totalValueAmount || 0, totalPaidAmount + creditUsedAmount + (summaryPendingAmount || 0));
+    const pendingAmount = summaryPendingAmount !== null
+      ? Math.max(summaryPendingAmount, 0)
+      : Math.max(resolvedTotalValueAmount - totalPaidAmount - creditUsedAmount, 0);
+    const paymentStatus = pendingAmount > 0 && totalPaidAmount > 0
+      ? 'partially_paid'
+      : String(
+          bookingPaymentSummary?.payment_status ||
+          (project.payment_id ? 'paid' : (totalPaidAmount > 0 ? 'partially_paid' : 'pending'))
+        ).toLowerCase();
+    const lineItems = salesQuoteLineItemsByQuoteId.get(Number(bookingPaymentSummary?.sales_quote_id)) || [];
 
     return {
       project: {
         ...project.toJSON(),
-        total_paid_amount: displayAmount,
-        total_value_amount: totalValueAmount,
-        event_type_labels: formattedTypes.join(', '),
+        total_paid_amount: totalPaidAmount,
+        total_value_amount: resolvedTotalValueAmount,
+        paid_amount: totalPaidAmount,
+        pending_amount: pendingAmount,
+        due_amount: pendingAmount,
+        credit_used_amount: creditUsedAmount,
+        payment_status: paymentStatus,
+        event_type_labels: formatProjectEventTypeLabels(project.event_type, allEventMasterTypes, lineItems),
         event_location: (() => {
           const loc = project.event_location;
           if (!loc) return null;
@@ -11979,7 +12557,10 @@ exports.getClientsShoots = async (req, res) => {
       const proj = item.project;
       const isManualPaid = bookedBookingIdSet.has(Number(proj.stream_project_booking_id));
       const isStripePaid = Boolean(proj.payment_id);
-      const isPaid = (isStripePaid || isManualPaid) && proj.is_draft !== 1;
+      const hasCollectedPayment = Number(proj.paid_amount || proj.total_paid_amount || 0) > 0 ||
+        Number(proj.credit_used_amount || 0) > 0 ||
+        String(proj.payment_status || '').toLowerCase() === 'no_payment_due';
+      const isPaid = hasCollectedPayment || isStripePaid || isManualPaid;
 
       if (isPaid) {
         paid.push(item);
@@ -14456,6 +15037,9 @@ exports.getAllAssignedRequests = async (req, res) => {
   }
 };
 
+const CP_COMPENSATION_SOURCES_FOR_CREW_TIMELINE = ['admin', 'sales_admin'];
+const CP_COMPENSATION_APPROVAL_STATUSES_FOR_CREW_TIMELINE = ['pending_approval', 'approved', 'rejected'];
+
 exports.getCrewMemberAssignedProjectsByDate = async (req, res) => {
   try {
     const crew_member_id = req.params.crew_member_id || req.query.crew_member_id;
@@ -14492,10 +15076,72 @@ exports.getCrewMemberAssignedProjectsByDate = async (req, res) => {
         ["created_at", "DESC"],
       ],
     });
+    const bookingIdsForCompensation = [...new Set(
+      assignments
+        .map((assignment) => Number(assignment.project_id))
+        .filter((id) => Number.isFinite(id))
+    )];
+
+    const compensationByBookingId = new Map();
+
+    if (bookingIdsForCompensation.length > 0) {
+      const earningRecords = await db.creator_earnings.findAll({
+        where: {
+          creator_id: Number(crew_member_id),
+          booking_id: { [Op.in]: bookingIdsForCompensation },
+          compensation_source: { [Op.in]: CP_COMPENSATION_SOURCES_FOR_CREW_TIMELINE },
+          approval_status: { [Op.in]: CP_COMPENSATION_APPROVAL_STATUSES_FOR_CREW_TIMELINE }
+        },
+        include: [
+          { model: db.creator_earning_advances, as: 'advances', required: false }
+        ],
+        order: [['updated_at', 'DESC'], ['creator_earning_id', 'DESC']]
+      });
+
+      earningRecords.forEach((earningRecord) => {
+        const earning = earningRecord.toJSON();
+        const bookingId = Number(earning.booking_id);
+
+        if (compensationByBookingId.has(bookingId)) return;
+
+        const totalCompensation = Number(earning.net_earning_amount || earning.gross_amount || 0);
+        const advances = earning.advances || [];
+        const advancePaid = advances
+          .filter((advance) => advance.status === 'processed')
+          .reduce((sum, advance) => sum + Number(advance.amount || 0), 0);
+
+        const paidTotal = earning.status === 'paid'
+          ? totalCompensation
+          : Math.min(advancePaid, totalCompensation);
+
+        const remainingBalance = Math.max(totalCompensation - paidTotal, 0);
+
+        let paymentStatus = 'pending';
+        if (earning.status === 'paid') paymentStatus = 'paid';
+        else if (earning.status === 'payout_pending') paymentStatus = 'payout_pending';
+        else if (earning.status === 'earned') paymentStatus = (paidTotal > 0 && remainingBalance > 0) ? 'partially_paid' : 'approved';
+        else if (earning.approval_status === 'approved') paymentStatus = (paidTotal > 0 && remainingBalance > 0) ? 'partially_paid' : 'accepted';
+        else if (earning.approval_status === 'pending_approval') paymentStatus = 'pending_approval';
+        else if (earning.approval_status === 'rejected') paymentStatus = 'rejected';
+
+        compensationByBookingId.set(bookingId, {
+          creator_earning_id: earning.creator_earning_id,
+          total_compensation: Number(totalCompensation.toFixed(2)),
+          advance_paid: Number(advancePaid.toFixed(2)),
+          paid_amount: Number(paidTotal.toFixed(2)),
+          remaining_balance: Number(remainingBalance.toFixed(2)),
+          status: paymentStatus,
+          approval_status: earning.approval_status,
+          earning_status: earning.status
+        });
+      });
+    }
+    // ---- END compensation fetch ----
 
     const formatAssignment = (assignment) => {
       const plain = assignment.toJSON();
       const project = plain.project || null;
+      const compensation = compensationByBookingId.get(Number(plain.project_id)) || null;
 
       return {
         assignment_id: plain.id,
@@ -14509,6 +15155,7 @@ exports.getCrewMemberAssignedProjectsByDate = async (req, res) => {
         created_at: plain.created_at,
         updated_at: plain.updated_at,
         project,
+        compensation,
       };
     };
 
@@ -15466,6 +16113,77 @@ exports.getUsersWithRoles = async (req, res) => {
         process.env.NODE_ENV === 'development'
           ? error.message
           : undefined
+    });
+  }
+};
+
+exports.exportUsersExcel = async (req, res) => {
+  try {
+    const users = await userExportService.fetchUsersForExport(req.query);
+    const buffer = await userExportService.generateUserExcel(
+      users,
+      userExportService.ALL_USERS_COLUMNS
+    );
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename="all-users-export.xlsx"'
+    );
+
+    return res.status(200).send(Buffer.from(buffer));
+  } catch (error) {
+    console.error('Export Users Excel Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while exporting users',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+exports.exportRoleUsersExcel = async (req, res) => {
+  try {
+    const roleIdentifier = req.params.role_id;
+    const { role, users } = await userExportService.fetchRoleUsersForExport(
+      roleIdentifier,
+      req.query
+    );
+
+    if (!role) {
+      return res.status(404).json({
+        success: false,
+        message: 'Role not found'
+      });
+    }
+
+    const buffer = await userExportService.generateUserExcel(
+      users,
+      userExportService.ROLE_USERS_COLUMNS
+    );
+    const roleName = userExportService.sanitizeFilenamePart(role.user_role);
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${roleName}-users-export.xlsx"`
+    );
+
+    return res.status(200).send(Buffer.from(buffer));
+  } catch (error) {
+    console.error('Export Role Users Excel Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Server error while exporting role users',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 };
@@ -16699,7 +17417,6 @@ exports.toggleShootNoteReaction = async (req, res) => {
     return res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
-
 exports.deleteShootNote = async (req, res) => {
   try {
     const bookingId = Number(req.params.bookingId);
@@ -16771,5 +17488,73 @@ exports.deleteShootNote = async (req, res) => {
   } catch (error) {
     console.error('Delete shoot note error:', error);
     return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+/**
+ * API: Get Onboarding Status By ID (Universal ID Lookup)
+ * Try karshe Crew ID, User ID ane Email - badhu j check karshe
+ */
+exports.getOnboardingStatusById = async (req, res) => {
+  try {
+    const targetId = req.params.id;
+    let member = null;
+
+    // 1. Try karo direct Crew Member ID thi (Primary Key)
+    member = await onboardingCtrl.getCrewMemberWithOnboardingFiles({ crew_member_id: targetId });
+
+    // 2. Jo na male, toh User ID thi try karo
+    if (!member) {
+      member = await onboardingCtrl.getCrewMemberWithOnboardingFiles({ user_id: targetId });
+    }
+
+    // 3. Jo haji pan na male, toh User table mathi Email sho dhi ne try karo
+    if (!member && targetId) {
+      const user = await users.findOne({
+        where: { id: targetId },
+        attributes: ['email']
+      });
+
+      if (user?.email) {
+        member = await onboardingCtrl.getCrewMemberWithOnboardingFiles({ email: user.email });
+      }
+    }
+
+    // 4. Handle Case: Member exist j nathi kartu
+    if (!member) {
+      const empty = onboardingCtrl.buildEmptyOnboardingSummary();
+      return res.json({
+        success: true,
+        ...empty,
+        message: "No member found with this ID",
+        is_crew_verified: 0,
+        can_access_dashboard: false,
+        profile_onboarding_status: empty,
+      });
+    }
+
+    // 5. Utility function call karo (Aa exact e j logic karshe je User API kare che)
+    const onboardingSummary = await onboardingCtrl.syncCreatorRegistrationComplete(member);
+    
+    const isCrewVerified = Number(member.is_crew_verified) === 1;
+    const effectiveOnboardingSummary = isCrewVerified
+      ? { ...onboardingSummary, onboardingMissingDetail: false, is_registration_complete: 1 }
+      : onboardingSummary;
+
+    return res.json({
+      success: true,
+      ...effectiveOnboardingSummary,
+      is_crew_verified: Number(member.is_crew_verified || 0),
+      can_access_dashboard: isCrewVerified || effectiveOnboardingSummary.is_registration_complete === 1,
+      should_resume_signup: !isCrewVerified && effectiveOnboardingSummary.is_registration_complete !== 1,
+      profile_onboarding_status: onboardingSummary,
+    });
+
+  } catch (error) {
+    console.error("Admin Status Sync Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: error.message
+    });
   }
 };
