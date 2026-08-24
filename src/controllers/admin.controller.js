@@ -48,6 +48,7 @@ const quoteService = require('../services/sales-quote.service');
 const bookingPricingService = require('../services/booking-pricing.service');
 const { getStudioPricingSnapshot, isStudioLineItem } = require('../utils/studio-pricing');
 const userExportService = require('../services/user-export.service');
+const onboardingCtrl = require('../utils/creatorOnboarding'); // Real source path
 // const NodeGeocoder = require('node-geocoder');
 const EXTERNAL_FILE_MANAGER_API_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager';
 const EXTERNAL_MEETINGS_API_BASE_URL = process.env.EXTERNAL_MEETINGS_API_BASE_URL || 'http://localhost:5002/v1/external-meetings';
@@ -578,6 +579,41 @@ const resolveAdminBookingShootAmount = async (booking = null, fallbackShootAmoun
 const parseAmountCandidate = (value) => {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : null;
+};
+
+const formatProjectEventTypeLabels = (eventType, allEventMasterTypes = [], lineItems = []) => {
+  const rawTypes = eventType ? String(eventType).split(',') : [];
+  const formattedTypes = rawTypes
+    .map((type) => {
+      const val = String(type || '').trim();
+      if (!val) return null;
+      const masterMatch = allEventMasterTypes.find((eventTypeRow) => String(eventTypeRow.event_type_id) === val);
+      if (masterMatch) return masterMatch.event_type_name;
+      const stringMap = {
+        videographer: 'Videography',
+        videography: 'Videography',
+        photographer: 'Photography',
+        photography: 'Photography',
+      };
+      return stringMap[val.toLowerCase()] || val.charAt(0).toUpperCase() + val.slice(1);
+    })
+    .filter(Boolean);
+
+  if (formattedTypes.length) {
+    return Array.from(new Set(formattedTypes)).join(', ');
+  }
+
+  const serviceText = (lineItems || [])
+    .filter((item) => String(item?.section_type || '').toLowerCase() === 'service')
+    .map((item) => `${item?.item_name || ''} ${item?.catalog_item?.name || ''}`)
+    .join(' ')
+    .toLowerCase();
+
+  const inferredTypes = [];
+  if (serviceText.includes('video')) inferredTypes.push('Videography');
+  if (serviceText.includes('photo')) inferredTypes.push('Photography');
+
+  return Array.from(new Set(inferredTypes)).join(', ');
 };
 
 const resolveProjectDisplayAmount = async ({ project, paymentData }) => {
@@ -12332,23 +12368,75 @@ exports.getClientsShoots = async (req, res) => {
       .map((project) => Number(project.stream_project_booking_id))
       .filter((id) => Number.isFinite(id));
 
-    const bookedLeadRows = bookingIds.length
-      ? await sales_leads.findAll({
-          where: {
-            booking_id: { [Sequelize.Op.in]: bookingIds },
-            lead_status: 'booked',
-            is_active: 1
-          },
-          attributes: ['booking_id'],
-          raw: true
-        })
-      : [];
+    const [
+      bookedLeadRows,
+      bookingPaymentSummaryRows,
+      allEventMasterTypes
+    ] = bookingIds.length
+      ? await Promise.all([
+          sales_leads.findAll({
+            where: {
+              booking_id: { [Sequelize.Op.in]: bookingIds },
+              lead_status: 'booked',
+              is_active: 1
+            },
+            attributes: ['booking_id'],
+            raw: true
+          }),
+          db.sequelize.query(
+            `
+            SELECT booking_id, sales_quote_id, payment_status, paid_amount, credit_used_amount, due_amount, quote_total
+            FROM booking_payment_summary
+            WHERE booking_id IN (:bookingIds)
+              AND payment_status IN ('paid', 'partially_paid', 'approval_pending', 'no_payment_due')
+            `,
+            {
+              replacements: { bookingIds },
+              type: QueryTypes.SELECT
+            }
+          ),
+          event_type_master.findAll({ attributes: ['event_type_id', 'event_type_name'], raw: true })
+        ])
+      : [[], [], await event_type_master.findAll({ attributes: ['event_type_id', 'event_type_name'], raw: true })];
 
     const bookedBookingIdSet = new Set(
       bookedLeadRows
         .map((row) => Number(row.booking_id))
         .filter((id) => Number.isFinite(id))
     );
+
+    const bookingPaymentSummaryByBookingId = new Map(
+      bookingPaymentSummaryRows
+        .map((row) => [Number(row.booking_id), row])
+        .filter(([bookingId]) => Number.isFinite(bookingId))
+    );
+
+    const salesQuoteIds = Array.from(new Set(
+      bookingPaymentSummaryRows
+        .map((row) => Number(row.sales_quote_id))
+        .filter((id) => Number.isFinite(id) && id > 0)
+    ));
+
+    const salesQuoteLineItems = salesQuoteIds.length
+      ? await db.sales_quote_line_items.findAll({
+          where: {
+            sales_quote_id: { [Sequelize.Op.in]: salesQuoteIds },
+            is_active: 1
+          },
+          include: [{ model: db.quote_catalog_items, as: 'catalog_item', required: false }],
+          order: [['sales_quote_id', 'ASC'], ['sort_order', 'ASC'], ['line_item_id', 'ASC']]
+        })
+      : [];
+
+    const salesQuoteLineItemsByQuoteId = new Map();
+    salesQuoteLineItems.forEach((lineItem) => {
+      const quoteId = Number(lineItem.sales_quote_id);
+      if (!Number.isFinite(quoteId)) return;
+      if (!salesQuoteLineItemsByQuoteId.has(quoteId)) {
+        salesQuoteLineItemsByQuoteId.set(quoteId, []);
+      }
+      salesQuoteLineItemsByQuoteId.get(quoteId).push(lineItem);
+    });
 
     // -------- FETCH ASSOCIATED DATA --------
     const projectDetails = await Promise.all(
@@ -12378,32 +12466,56 @@ exports.getClientsShoots = async (req, res) => {
       })
     ]);
 
-    // -------- FORMAT EVENT TYPES --------
-    const rawTypes = project.event_type ? project.event_type.split(',') : [];
-    const formattedTypes = rawTypes.map(t => {
-      const val = t.trim();
-      const stringMap = {
-        'videographer': 'Videography',
-        'photographer': 'Photography'
-      };
-      return stringMap[val?.toLowerCase()] ||
-        val.charAt(0).toUpperCase() + val.slice(1);
-    });
-
+    const bookingPaymentSummary = bookingPaymentSummaryByBookingId.get(Number(project.stream_project_booking_id)) || null;
+    const summaryPaidAmount = bookingPaymentSummary
+      ? parseAmountCandidate(bookingPaymentSummary.paid_amount)
+      : null;
+    const summaryCreditUsedAmount = bookingPaymentSummary
+      ? parseAmountCandidate(bookingPaymentSummary.credit_used_amount)
+      : null;
+    const summaryPendingAmount = bookingPaymentSummary
+      ? parseAmountCandidate(bookingPaymentSummary.due_amount)
+      : null;
+    const summaryQuoteTotal = bookingPaymentSummary
+      ? parseAmountCandidate(bookingPaymentSummary.quote_total)
+      : null;
     const displayAmount = await resolveProjectDisplayAmount({
       project,
       paymentData
     });
     const totalValueAmount = await resolveProjectTotalValueAmount({
-      project
+      project,
+      salesQuoteId: bookingPaymentSummary?.sales_quote_id || null
     });
+    const totalPaidAmount = summaryPaidAmount !== null
+      ? summaryPaidAmount
+      : (project.payment_id ? displayAmount : 0);
+    const creditUsedAmount = summaryCreditUsedAmount || 0;
+    const resolvedTotalValueAmount = summaryQuoteTotal !== null
+      ? summaryQuoteTotal
+      : Math.max(totalValueAmount || 0, totalPaidAmount + creditUsedAmount + (summaryPendingAmount || 0));
+    const pendingAmount = summaryPendingAmount !== null
+      ? Math.max(summaryPendingAmount, 0)
+      : Math.max(resolvedTotalValueAmount - totalPaidAmount - creditUsedAmount, 0);
+    const paymentStatus = pendingAmount > 0 && totalPaidAmount > 0
+      ? 'partially_paid'
+      : String(
+          bookingPaymentSummary?.payment_status ||
+          (project.payment_id ? 'paid' : (totalPaidAmount > 0 ? 'partially_paid' : 'pending'))
+        ).toLowerCase();
+    const lineItems = salesQuoteLineItemsByQuoteId.get(Number(bookingPaymentSummary?.sales_quote_id)) || [];
 
     return {
       project: {
         ...project.toJSON(),
-        total_paid_amount: displayAmount,
-        total_value_amount: totalValueAmount,
-        event_type_labels: formattedTypes.join(', '),
+        total_paid_amount: totalPaidAmount,
+        total_value_amount: resolvedTotalValueAmount,
+        paid_amount: totalPaidAmount,
+        pending_amount: pendingAmount,
+        due_amount: pendingAmount,
+        credit_used_amount: creditUsedAmount,
+        payment_status: paymentStatus,
+        event_type_labels: formatProjectEventTypeLabels(project.event_type, allEventMasterTypes, lineItems),
         event_location: (() => {
           const loc = project.event_location;
           if (!loc) return null;
@@ -12433,7 +12545,10 @@ exports.getClientsShoots = async (req, res) => {
       const proj = item.project;
       const isManualPaid = bookedBookingIdSet.has(Number(proj.stream_project_booking_id));
       const isStripePaid = Boolean(proj.payment_id);
-      const isPaid = (isStripePaid || isManualPaid) && proj.is_draft !== 1;
+      const hasCollectedPayment = Number(proj.paid_amount || proj.total_paid_amount || 0) > 0 ||
+        Number(proj.credit_used_amount || 0) > 0 ||
+        String(proj.payment_status || '').toLowerCase() === 'no_payment_due';
+      const isPaid = hasCollectedPayment || isStripePaid || isManualPaid;
 
       if (isPaid) {
         paid.push(item);
@@ -14889,6 +15004,9 @@ exports.getAllAssignedRequests = async (req, res) => {
   }
 };
 
+const CP_COMPENSATION_SOURCES_FOR_CREW_TIMELINE = ['admin', 'sales_admin'];
+const CP_COMPENSATION_APPROVAL_STATUSES_FOR_CREW_TIMELINE = ['pending_approval', 'approved', 'rejected'];
+
 exports.getCrewMemberAssignedProjectsByDate = async (req, res) => {
   try {
     const crew_member_id = req.params.crew_member_id || req.query.crew_member_id;
@@ -14925,10 +15043,72 @@ exports.getCrewMemberAssignedProjectsByDate = async (req, res) => {
         ["created_at", "DESC"],
       ],
     });
+    const bookingIdsForCompensation = [...new Set(
+      assignments
+        .map((assignment) => Number(assignment.project_id))
+        .filter((id) => Number.isFinite(id))
+    )];
+
+    const compensationByBookingId = new Map();
+
+    if (bookingIdsForCompensation.length > 0) {
+      const earningRecords = await db.creator_earnings.findAll({
+        where: {
+          creator_id: Number(crew_member_id),
+          booking_id: { [Op.in]: bookingIdsForCompensation },
+          compensation_source: { [Op.in]: CP_COMPENSATION_SOURCES_FOR_CREW_TIMELINE },
+          approval_status: { [Op.in]: CP_COMPENSATION_APPROVAL_STATUSES_FOR_CREW_TIMELINE }
+        },
+        include: [
+          { model: db.creator_earning_advances, as: 'advances', required: false }
+        ],
+        order: [['updated_at', 'DESC'], ['creator_earning_id', 'DESC']]
+      });
+
+      earningRecords.forEach((earningRecord) => {
+        const earning = earningRecord.toJSON();
+        const bookingId = Number(earning.booking_id);
+
+        if (compensationByBookingId.has(bookingId)) return;
+
+        const totalCompensation = Number(earning.net_earning_amount || earning.gross_amount || 0);
+        const advances = earning.advances || [];
+        const advancePaid = advances
+          .filter((advance) => advance.status === 'processed')
+          .reduce((sum, advance) => sum + Number(advance.amount || 0), 0);
+
+        const paidTotal = earning.status === 'paid'
+          ? totalCompensation
+          : Math.min(advancePaid, totalCompensation);
+
+        const remainingBalance = Math.max(totalCompensation - paidTotal, 0);
+
+        let paymentStatus = 'pending';
+        if (earning.status === 'paid') paymentStatus = 'paid';
+        else if (earning.status === 'payout_pending') paymentStatus = 'payout_pending';
+        else if (earning.status === 'earned') paymentStatus = (paidTotal > 0 && remainingBalance > 0) ? 'partially_paid' : 'approved';
+        else if (earning.approval_status === 'approved') paymentStatus = (paidTotal > 0 && remainingBalance > 0) ? 'partially_paid' : 'accepted';
+        else if (earning.approval_status === 'pending_approval') paymentStatus = 'pending_approval';
+        else if (earning.approval_status === 'rejected') paymentStatus = 'rejected';
+
+        compensationByBookingId.set(bookingId, {
+          creator_earning_id: earning.creator_earning_id,
+          total_compensation: Number(totalCompensation.toFixed(2)),
+          advance_paid: Number(advancePaid.toFixed(2)),
+          paid_amount: Number(paidTotal.toFixed(2)),
+          remaining_balance: Number(remainingBalance.toFixed(2)),
+          status: paymentStatus,
+          approval_status: earning.approval_status,
+          earning_status: earning.status
+        });
+      });
+    }
+    // ---- END compensation fetch ----
 
     const formatAssignment = (assignment) => {
       const plain = assignment.toJSON();
       const project = plain.project || null;
+      const compensation = compensationByBookingId.get(Number(plain.project_id)) || null;
 
       return {
         assignment_id: plain.id,
@@ -14942,6 +15122,7 @@ exports.getCrewMemberAssignedProjectsByDate = async (req, res) => {
         created_at: plain.created_at,
         updated_at: plain.updated_at,
         project,
+        compensation,
       };
     };
 
@@ -17203,7 +17384,6 @@ exports.toggleShootNoteReaction = async (req, res) => {
     return res.status(500).json({ success: false, message: 'Internal server error' });
   }
 };
-
 exports.deleteShootNote = async (req, res) => {
   try {
     const bookingId = Number(req.params.bookingId);
@@ -17275,5 +17455,73 @@ exports.deleteShootNote = async (req, res) => {
   } catch (error) {
     console.error('Delete shoot note error:', error);
     return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+/**
+ * API: Get Onboarding Status By ID (Universal ID Lookup)
+ * Try karshe Crew ID, User ID ane Email - badhu j check karshe
+ */
+exports.getOnboardingStatusById = async (req, res) => {
+  try {
+    const targetId = req.params.id;
+    let member = null;
+
+    // 1. Try karo direct Crew Member ID thi (Primary Key)
+    member = await onboardingCtrl.getCrewMemberWithOnboardingFiles({ crew_member_id: targetId });
+
+    // 2. Jo na male, toh User ID thi try karo
+    if (!member) {
+      member = await onboardingCtrl.getCrewMemberWithOnboardingFiles({ user_id: targetId });
+    }
+
+    // 3. Jo haji pan na male, toh User table mathi Email sho dhi ne try karo
+    if (!member && targetId) {
+      const user = await users.findOne({
+        where: { id: targetId },
+        attributes: ['email']
+      });
+
+      if (user?.email) {
+        member = await onboardingCtrl.getCrewMemberWithOnboardingFiles({ email: user.email });
+      }
+    }
+
+    // 4. Handle Case: Member exist j nathi kartu
+    if (!member) {
+      const empty = onboardingCtrl.buildEmptyOnboardingSummary();
+      return res.json({
+        success: true,
+        ...empty,
+        message: "No member found with this ID",
+        is_crew_verified: 0,
+        can_access_dashboard: false,
+        profile_onboarding_status: empty,
+      });
+    }
+
+    // 5. Utility function call karo (Aa exact e j logic karshe je User API kare che)
+    const onboardingSummary = await onboardingCtrl.syncCreatorRegistrationComplete(member);
+    
+    const isCrewVerified = Number(member.is_crew_verified) === 1;
+    const effectiveOnboardingSummary = isCrewVerified
+      ? { ...onboardingSummary, onboardingMissingDetail: false, is_registration_complete: 1 }
+      : onboardingSummary;
+
+    return res.json({
+      success: true,
+      ...effectiveOnboardingSummary,
+      is_crew_verified: Number(member.is_crew_verified || 0),
+      can_access_dashboard: isCrewVerified || effectiveOnboardingSummary.is_registration_complete === 1,
+      should_resume_signup: !isCrewVerified && effectiveOnboardingSummary.is_registration_complete !== 1,
+      profile_onboarding_status: onboardingSummary,
+    });
+
+  } catch (error) {
+    console.error("Admin Status Sync Error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: error.message
+    });
   }
 };
