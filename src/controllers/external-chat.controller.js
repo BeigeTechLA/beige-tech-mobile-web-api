@@ -1217,11 +1217,48 @@ const sendChatNotificationTemplate = async ({
   }
 };
 
+const parseDirectoryPaging = (query = {}) => {
+  const page = Math.max(1, Number.parseInt(query.page, 10) || 1);
+  const rawLimit = Number.parseInt(query.limit, 10);
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, 100) : null;
+  return { page, limit };
+};
+
+const paginateDirectoryItems = (items = [], paging = {}) => {
+  if (!paging.limit) {
+    return {
+      items,
+      meta: {
+        page: 1,
+        limit: items.length,
+        total: items.length,
+        totalPages: 1,
+        hasMore: false,
+      },
+    };
+  }
+
+  const start = (paging.page - 1) * paging.limit;
+  const pagedItems = items.slice(start, start + paging.limit);
+  const totalPages = Math.max(1, Math.ceil(items.length / paging.limit));
+
+  return {
+    items: pagedItems,
+    meta: {
+      page: paging.page,
+      limit: paging.limit,
+      total: items.length,
+      totalPages,
+      hasMore: paging.page < totalPages,
+    },
+  };
+};
+
 const getActiveStaffDirectory = async (search = '') => {
   const where = {
     is_active: 1,
     user_type: {
-      [db.Sequelize.Op.in]: [1, 5, 6],
+      [db.Sequelize.Op.in]: [1, 5, 6, 7, 8],
     },
   };
 
@@ -1249,7 +1286,11 @@ const getActiveStaffDirectory = async (search = '') => {
           ? 'admin'
           : Number(user.user_type) === 5
             ? 'sales_rep'
-            : 'pm',
+            : Number(user.user_type) === 7
+              ? 'sales_admin'
+              : Number(user.user_type) === 8
+                ? 'super_admin'
+                : 'pm',
       source: 'staff',
     }));
 };
@@ -1266,13 +1307,31 @@ const getClientDirectory = async (search = '') => {
     ];
   }
 
-  const clients = await db.clients.findAll({
-    where,
-    attributes: ['client_id', 'user_id', 'name', 'email', 'phone_number'],
-    order: [['name', 'ASC']],
-  });
+  const [clients, clientUsers] = await Promise.all([
+    db.clients.findAll({
+      where,
+      attributes: ['client_id', 'user_id', 'name', 'email', 'phone_number'],
+      order: [['name', 'ASC']],
+    }),
+    db.users.findAll({
+      where: {
+        is_active: 1,
+        user_type: 3,
+        ...(search
+          ? {
+              [db.Sequelize.Op.or]: [
+                { name: { [db.Sequelize.Op.like]: `%${search}%` } },
+                { email: { [db.Sequelize.Op.like]: `%${search}%` } },
+              ],
+            }
+          : {}),
+      },
+      attributes: ['id', 'name', 'email', 'phone_number'],
+      order: [['name', 'ASC']],
+    }),
+  ]);
 
-  return clients
+  const clientRows = clients
     .map((client) => client.get({ plain: true }))
     .map((client) => ({
       id: String(client.user_id || client.client_id),
@@ -1284,6 +1343,29 @@ const getClientDirectory = async (search = '') => {
       role: 'client',
       source: 'client',
     }));
+
+  const userRows = clientUsers
+    .map((user) => user.get({ plain: true }))
+    .map((user) => ({
+      id: String(user.id),
+      client_id: null,
+      user_id: String(user.id),
+      name: user.name || user.email || `Client ${user.id}`,
+      email: user.email || null,
+      phone_number: user.phone_number || null,
+      role: 'client',
+      source: 'client_user',
+    }));
+
+  const seen = new Set();
+  return [...clientRows, ...userRows]
+    .filter((client) => {
+      const key = client.user_id ? `user:${client.user_id}` : `email:${String(client.email || '').toLowerCase()}`;
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
 };
 
 const getCreativePartnerDirectory = async (search = '') => {
@@ -1703,18 +1785,27 @@ exports.createChatRoom = async (req, res) => {
 exports.getChatDirectory = async (req, res) => {
   try {
     const search = String(req.query.search || '').trim();
+    const paging = parseDirectoryPaging(req.query);
     const [staff, clients, creativePartners] = await Promise.all([
       getActiveStaffDirectory(search),
       getClientDirectory(search),
       getCreativePartnerDirectory(search),
     ]);
+    const pagedStaff = paginateDirectoryItems(staff, paging);
+    const pagedClients = paginateDirectoryItems(clients, paging);
+    const pagedCreativePartners = paginateDirectoryItems(creativePartners, paging);
 
     return res.status(200).json({
       success: true,
       data: {
-        staff,
-        clients,
-        creativePartners,
+        staff: pagedStaff.items,
+        clients: pagedClients.items,
+        creativePartners: pagedCreativePartners.items,
+        meta: {
+          staff: pagedStaff.meta,
+          clients: pagedClients.meta,
+          creativePartners: pagedCreativePartners.meta,
+        },
       },
     });
   } catch (error) {
