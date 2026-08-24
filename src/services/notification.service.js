@@ -8,6 +8,7 @@
 const db = require('../models');
 const { Op } = require('sequelize');
 const { STATE_METADATA, ROLES } = require('../config/stateTransitions');
+const pushNotificationService = require('./push-notification.service');
 
 // ============================================================================
 // CONSTANTS
@@ -49,6 +50,21 @@ const TYPE_TO_PREFERENCE_MAP = {
   QC_REJECTION: 'qc_rejections',
   CLIENT_APPROVAL: 'client_approvals',
   GENERAL_MESSAGE: 'general_messages',
+};
+
+const TYPE_TO_SHARED_TOPIC_MAP = {
+  STATE_TRANSITION: 'shoots',
+  NEW_ASSIGNMENT: 'shoots',
+  FEEDBACK_RECEIVED: 'messages',
+  DEADLINE_APPROACHING: 'meetings',
+  FILE_UPLOADED: 'files',
+  FILE_VALIDATION_FAILED: 'files',
+  PROJECT_DELIVERED: 'files',
+  ASSIGNMENT_ACCEPTED: 'shoots',
+  ASSIGNMENT_DECLINED: 'shoots',
+  QC_REJECTION: 'files',
+  CLIENT_APPROVAL: 'files',
+  GENERAL_MESSAGE: 'messages',
 };
 
 // ============================================================================
@@ -964,45 +980,10 @@ async function sendDigestEmail(user, notifications) {
  */
 async function shouldSendEmail(userId, notificationType) {
   try {
-    // Get or create user preferences
-    let preferences = await db.notification_preferences.findOne({
-      where: { user_id: userId },
+    return pushNotificationService.isEmailAllowedForUser({
+      userId,
+      topic: TYPE_TO_SHARED_TOPIC_MAP[notificationType] || 'system',
     });
-
-    if (!preferences) {
-      // Create default preferences
-      preferences = await db.notification_preferences.create({
-        user_id: userId,
-      });
-    }
-
-    const prefs = preferences.toJSON();
-
-    // Check master email toggle
-    if (!prefs.enable_all_emails) {
-      return false;
-    }
-
-    // Check quiet hours
-    if (prefs.enable_quiet_hours && isQuietHours(prefs)) {
-      return false;
-    }
-
-    // Check frequency setting - if not realtime, emails go through digest
-    if (prefs.notification_frequency !== 'REALTIME') {
-      return false;
-    }
-
-    // Check type-specific preference
-    const preferenceKey = TYPE_TO_PREFERENCE_MAP[notificationType];
-    if (preferenceKey) {
-      const emailPrefKey = `email_${preferenceKey}`;
-      if (prefs[emailPrefKey] === 0) {
-        return false;
-      }
-    }
-
-    return true;
   } catch (error) {
     console.error('Error checking email preferences:', error);
     return true; // Default to sending email on error
@@ -1017,31 +998,10 @@ async function shouldSendEmail(userId, notificationType) {
  */
 async function shouldShowInAppNotification(userId, notificationType) {
   try {
-    let preferences = await db.notification_preferences.findOne({
-      where: { user_id: userId },
+    return pushNotificationService.isInAppNotificationAllowedForUser({
+      userId,
+      topic: TYPE_TO_SHARED_TOPIC_MAP[notificationType] || 'system',
     });
-
-    if (!preferences) {
-      return true; // Default to showing if no preferences set
-    }
-
-    const prefs = preferences.toJSON();
-
-    // Check master in-app toggle
-    if (!prefs.enable_all_inapp) {
-      return false;
-    }
-
-    // Check type-specific preference
-    const preferenceKey = TYPE_TO_PREFERENCE_MAP[notificationType];
-    if (preferenceKey) {
-      const inappPrefKey = `inapp_${preferenceKey}`;
-      if (prefs[inappPrefKey] === 0) {
-        return false;
-      }
-    }
-
-    return true;
   } catch (error) {
     console.error('Error checking in-app preferences:', error);
     return true; // Default to showing on error

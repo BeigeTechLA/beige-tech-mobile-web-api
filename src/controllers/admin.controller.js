@@ -13,6 +13,7 @@ const {
   sendPostProductionAssignmentEmail,
   sendOnboardingFormCriticalEmail
 } = require('../utils/emailService');
+const pushNotificationService = require('../services/push-notification.service');
 const { Parser } = require('json2csv');
 const { stream_project_booking, crew_members, crew_member_files, tasks, equipment, crew_roles,
   equipment_accessories,
@@ -1882,7 +1883,7 @@ exports.assignCrew = async (req, res) => {
     try {
       const crews = await crew_members.findAll({
         where: { crew_member_id: uniqueCrewIds },
-        attributes: ['crew_member_id', 'first_name', 'last_name', 'email']
+        attributes: ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email']
       });
       const booking = await stream_project_booking.findByPk(project_id, {
         attributes: [
@@ -1912,9 +1913,20 @@ exports.assignCrew = async (req, res) => {
       const emailClientName = await resolveAdminBookingClientName(booking, lead?.client_name || null);
       const emailShootAmount = await resolveAdminBookingShootAmount(booking);
 
-      await Promise.allSettled(
-        crews
+      const emailCrews = await pushNotificationService.filterEmailRecipientsByPreference({
+        recipients: crews
           .filter(c => c.email)
+          .map(c => ({
+            id: c.user_id || null,
+            email: c.email,
+            first_name: c.first_name,
+            last_name: c.last_name
+          })),
+        topic: 'shoots'
+      });
+
+      await Promise.allSettled(
+        emailCrews
           .map(c =>
             sendCPNewBookingRequestEmail({
               to_email: c.email,
@@ -13202,7 +13214,7 @@ exports.assignCrewBulkSmart = async (req, res) => {
             const createdIds = assignmentsToCreate.map(a => a.crew_member_id);
             const crews = await crew_members.findAll({
               where: { crew_member_id: createdIds },
-              attributes: ['crew_member_id', 'first_name', 'last_name', 'email']
+              attributes: ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email']
             });
 
             const dashboardLink =
@@ -13213,9 +13225,20 @@ exports.assignCrewBulkSmart = async (req, res) => {
             const emailClientName = await resolveAdminBookingClientName(lead?.booking, lead?.client_name || null);
             const emailShootAmount = await resolveAdminBookingShootAmount(lead?.booking);
 
-            await Promise.allSettled(
-              crews
+            const emailCrews = await pushNotificationService.filterEmailRecipientsByPreference({
+              recipients: crews
                 .filter(c => c.email)
+                .map(c => ({
+                  id: c.user_id || null,
+                  email: c.email,
+                  first_name: c.first_name,
+                  last_name: c.last_name
+                })),
+              topic: 'shoots'
+            });
+
+            await Promise.allSettled(
+              emailCrews
                 .map(c =>
                   sendCPNewBookingRequestEmail({
                     to_email: c.email,
@@ -14434,19 +14457,31 @@ exports.assignProjectCrewBulk = async (req, res) => {
                     const createdIds = assignmentsToCreate.map(a => a.crew_member_id);
                     const crews = await crew_members.findAll({
                         where: { crew_member_id: createdIds },
-                        attributes: ['first_name', 'last_name', 'email']
+                        attributes: ['user_id', 'first_name', 'last_name', 'email']
                     });
 
                     const dashboardLink = process.env.CP_DASHBOARD_LINK || 'https://beige.app/';
 
-                    const emailClientName = await resolveAdminBookingClientName(
-                        booking,
-                        booking?.sales_leads?.[0]?.client_name || null
-                    );
-                    const emailShootAmount = await resolveAdminBookingShootAmount(booking);
+                const emailClientName = await resolveAdminBookingClientName(
+                    booking,
+                    booking?.sales_leads?.[0]?.client_name || null
+                );
+                const emailShootAmount = await resolveAdminBookingShootAmount(booking);
+
+                const emailCrews = await pushNotificationService.filterEmailRecipientsByPreference({
+                    recipients: crews
+                        .filter(c => c.email)
+                        .map(c => ({
+                            id: c.user_id || null,
+                            email: c.email,
+                            first_name: c.first_name,
+                            last_name: c.last_name
+                        })),
+                    topic: 'shoots'
+                });
 
                     await Promise.allSettled(
-                        crews.filter(c => c.email).map(c =>
+                        emailCrews.map(c =>
                             sendCPNewBookingRequestEmail({
                                 to_email: c.email,
                                 user_name: c.first_name,

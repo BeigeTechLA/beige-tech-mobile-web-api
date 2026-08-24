@@ -80,6 +80,7 @@ var _project_note_attachments = require("./project_note_attachments");
 var _project_note_reactions = require("./project_note_reactions");
 var _notifications = require("./notifications");
 var _notification_preferences = require("./notification_preferences");
+var _user_notification_preferences = require("./user_notification_preferences");
 
 // Sales System Models
 var _sales_leads = require("./sales_leads");
@@ -191,6 +192,7 @@ function initModels(sequelize) {
   var project_note_reactions = _project_note_reactions(sequelize, DataTypes);
   var notifications = _notifications(sequelize, DataTypes);
   var notification_preferences = _notification_preferences(sequelize, DataTypes);
+  var user_notification_preferences = _user_notification_preferences(sequelize, DataTypes);
 
   // Sales System Models
   var sales_leads = _sales_leads(sequelize, DataTypes);
@@ -618,6 +620,8 @@ crew_members.belongsTo(crew_roles, { as: 'role', foreignKey: 'primary_role' });
   // Notification Preferences -> Users relationship (one-to-one)
   notification_preferences.belongsTo(users, { as: "user", foreignKey: "user_id" });
   users.hasOne(notification_preferences, { as: "notification_preferences", foreignKey: "user_id" });
+  user_notification_preferences.belongsTo(users, { as: "user", foreignKey: "user_id" });
+  users.hasOne(user_notification_preferences, { as: "user_notification_preferences", foreignKey: "user_id" });
 
   // =====================================================
   // Sales System Relationships
@@ -906,6 +910,7 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
     project_note_reactions,
     notifications,
     notification_preferences,
+    user_notification_preferences,
     // Sales System Models
     sales_leads,
     discount_codes,

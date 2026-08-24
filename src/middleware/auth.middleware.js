@@ -26,6 +26,7 @@ exports.authenticate = async (req, res, next) => {
     // Attach user info to request
     req.userId = decoded.userId;
     req.userRole = decoded.userRole;
+    req.userType = decoded.userTypeId;
 
     next();
 

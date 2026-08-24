@@ -1,6 +1,8 @@
 const { Op } = require('sequelize');
 const db = require('../models');
 const emailService = require('../utils/emailService');
+const appNotificationService = require('../services/app-notification.service');
+const pushNotificationService = require('../services/push-notification.service');
 
 const DEFAULT_BASE_URL = process.env.EXTERNAL_MEETINGS_API_BASE_URL || process.env.MEETINGS_API_BASE_URL || 'http://localhost:5002/v1';
 const INTERNAL_KEY = process.env.EXTERNAL_MEETINGS_KEY || process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
@@ -109,6 +111,7 @@ const toCalendarDateTime = (value) => {
 };
 
 const normalizeRole = (value) => String(value || '').trim().toLowerCase();
+const MEETING_PUSH_ROLES = new Set(['client', 'cp', 'creator', 'creative']);
 
 const isAdminLikeRole = (role) =>
   ['admin', 'administrator', 'production_manager', 'pm', 'sales_admin'].includes(normalizeRole(role));
@@ -118,6 +121,12 @@ const getRequestUserRole = (req) => normalizeRole(req.user?.userRole || '');
 const getParticipantKey = (participant) =>
   String(participant?.id || participant?.email || participant?.name || '').trim();
 const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
+
+const truncateText = (value, maxLength = 120) => {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength - 3).trim()}...`;
+};
 
 const collectMeetingEmails = (state = {}, booking = null) => {
   const emails = new Set();
@@ -179,6 +188,196 @@ const collectMeetingRecipientTargets = (state = {}, booking = null) => {
   }
 
   return recipients;
+};
+
+const normalizeMeetingPushUserId = (value = {}) => {
+  const rawId = String(value?.user_id || value?.userId || value?.id || '').trim();
+  return /^\d+$/.test(rawId) ? rawId : null;
+};
+
+const getMeetingParticipantPushUserId = async (participant = {}, booking = null) => {
+  const role = normalizeRole(participant?.role);
+  if (!MEETING_PUSH_ROLES.has(role)) return null;
+
+  if (role === 'client') {
+    const directUserId = normalizeMeetingPushUserId(participant);
+    if (directUserId) return directUserId;
+
+    const plainBooking = typeof booking?.get === 'function' ? booking.get({ plain: true }) : booking;
+    const bookingUserId = normalizeMeetingPushUserId(plainBooking?.user) ||
+      normalizeMeetingPushUserId({ id: plainBooking?.user_id }) ||
+      normalizeMeetingPushUserId(plainBooking?.cms_project?.client);
+    if (bookingUserId) return bookingUserId;
+
+    const email = normalizeEmail(participant?.email || plainBooking?.guest_email || plainBooking?.user?.email);
+    if (!email) return null;
+
+    const user = await db.users.findOne({
+      where: { email, user_type: 3, is_active: 1 },
+      attributes: ['id'],
+      raw: true,
+    });
+    return normalizeMeetingPushUserId(user);
+  }
+
+  const directCpUserId = participant?.user_id || participant?.userId;
+  if (normalizeMeetingPushUserId({ id: directCpUserId })) {
+    return normalizeMeetingPushUserId({ id: directCpUserId });
+  }
+
+  const crewLookup = [];
+  const participantId = toPositiveInt(participant?.id);
+  if (participantId) crewLookup.push({ crew_member_id: participantId });
+  const email = normalizeEmail(participant?.email);
+  if (email) crewLookup.push({ email });
+
+  const crewMember = crewLookup.length
+    ? await db.crew_members.findOne({
+        where: {
+          is_active: 1,
+          [Op.or]: crewLookup,
+        },
+        attributes: ['crew_member_id', 'user_id', 'email'],
+        raw: true,
+      })
+    : null;
+
+  const crewUserId = normalizeMeetingPushUserId({ id: crewMember?.user_id });
+  if (crewUserId) return crewUserId;
+
+  const fallbackEmail = normalizeEmail(crewMember?.email || participant?.email);
+  if (!fallbackEmail) return null;
+
+  const cpUser = await db.users.findOne({
+    where: { email: fallbackEmail, user_type: 2, is_active: 1 },
+    attributes: ['id'],
+    raw: true,
+  });
+
+  return normalizeMeetingPushUserId(cpUser);
+};
+
+const collectMeetingPushParticipants = async (state = {}, booking = null, explicitParticipants = null) => {
+  const participants = explicitParticipants || [
+    state?.client,
+    ...(state?.cps || []),
+    ...(state?.participants || []),
+  ];
+  const seen = new Set();
+  const targets = [];
+
+  for (const participant of participants.filter(Boolean)) {
+    const role = normalizeRole(participant?.role);
+    if (!MEETING_PUSH_ROLES.has(role)) continue;
+
+    const userId = await getMeetingParticipantPushUserId(participant, booking);
+    if (!userId || seen.has(userId)) continue;
+
+    targets.push({ userId, participant, role });
+    seen.add(userId);
+  }
+
+  return targets;
+};
+
+const formatMeetingDateForPush = (meeting) => {
+  if (!meeting?.meeting_date_time) return '';
+  const date = new Date(meeting.meeting_date_time);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+};
+
+const buildMeetingPushContent = ({ meeting, type }) => {
+  const title = truncateText(meeting?.meeting_title || 'Meeting', 70);
+  const dateLabel = formatMeetingDateForPush(meeting);
+
+  if (type === 'meeting_cancelled') {
+    return { title: 'Meeting cancelled', body: `${title} has been cancelled.` };
+  }
+  if (type === 'meeting_rescheduled') {
+    return {
+      title: 'Meeting rescheduled',
+      body: dateLabel ? `${title} is now scheduled for ${dateLabel}.` : `${title} has been rescheduled.`,
+    };
+  }
+  if (type === 'meeting_updated') {
+    return {
+      title: 'Meeting updated',
+      body: dateLabel ? `${title} was updated for ${dateLabel}.` : `${title} was updated.`,
+    };
+  }
+  if (type === 'meeting_participant_added') {
+    return {
+      title: 'Meeting invite',
+      body: dateLabel ? `You were added to ${title} on ${dateLabel}.` : `You were added to ${title}.`,
+    };
+  }
+
+  return {
+    title: 'Meeting scheduled',
+    body: dateLabel ? `${title} is scheduled for ${dateLabel}.` : `${title} has been scheduled.`,
+  };
+};
+
+const sendMeetingPushNotifications = async ({
+  meeting,
+  booking,
+  state,
+  type,
+  explicitParticipants = null,
+}) => {
+  try {
+    const targets = await collectMeetingPushParticipants(state, booking, explicitParticipants);
+    if (!targets.length) return;
+
+    const content = buildMeetingPushContent({ meeting, type });
+    const plainBooking = typeof booking?.get === 'function' ? booking.get({ plain: true }) : booking;
+    const bookingId = String(plainBooking?.stream_project_booking_id || meeting?.booking_id || '');
+
+    const results = await Promise.allSettled(targets.map(({ userId }) => {
+      const payload = {
+        topic: 'meetings',
+        category: 'meetings',
+        type,
+        meeting_id: String(meeting?.meeting_id || ''),
+        booking_id: bookingId,
+        meeting_status: String(meeting?.meeting_status || ''),
+      };
+
+      return appNotificationService.createAndPushNotification({
+        userId,
+        title: content.title,
+        message: content.body,
+        topic: 'meetings',
+        category: 'meetings',
+        type,
+        referenceId: String(meeting?.meeting_id || ''),
+        referenceType: 'meeting',
+        payload,
+        actionLabel: 'View details',
+      });
+    }));
+
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        console.error('[PushNotification] Meeting push failed:', {
+          meetingId: meeting?.meeting_id || null,
+          recipientUserId: targets[index]?.userId || null,
+          message: result.reason?.message || result.reason,
+        });
+      }
+    });
+  } catch (error) {
+    console.error('[PushNotification] Meeting push notification failed:', {
+      meetingId: meeting?.meeting_id || null,
+      message: error.message || error,
+    });
+  }
 };
 
 const matchesParticipantByIdentity = (participant, identities = new Set()) => {
@@ -1221,14 +1420,18 @@ exports.createMeeting = async (req, res) => {
 
     if (req.body.send_notification !== false) {
       const recipients = collectMeetingRecipientTargets(participants, plainBooking);
-      if (recipients.length) {
+      const emailRecipients = await pushNotificationService.filterEmailRecipientsByPreference({
+        recipients,
+        topic: 'meetings',
+      });
+      if (emailRecipients.length) {
         const creator = meetingWithCreator?.creator
           ? (typeof meetingWithCreator.creator.get === 'function'
             ? meetingWithCreator.creator.get({ plain: true })
             : meetingWithCreator.creator)
           : null;
         await emailService.sendMeetingScheduledTemplateEmail({
-          recipients: recipients.map((recipient) => ({
+          recipients: emailRecipients.map((recipient) => ({
             ...recipient,
             view_details_url: getMeetingDashboardUrlByRole(recipient.role),
           })),
@@ -1254,6 +1457,13 @@ exports.createMeeting = async (req, res) => {
           },
         });
       }
+
+      await sendMeetingPushNotifications({
+        meeting: createdMeeting,
+        booking: plainBooking,
+        state: participants,
+        type: 'meeting_scheduled',
+      });
     }
 
     return res.status(201).json(
@@ -1365,6 +1575,21 @@ exports.updateMeeting = async (req, res) => {
 
     await meeting.update(updates);
 
+    if (Object.keys(updates).length > 0) {
+      const notificationType = updates.meeting_status === 'cancelled'
+        ? 'meeting_cancelled'
+        : (updates.meeting_date_time || updates.meeting_end_time)
+          ? 'meeting_rescheduled'
+          : 'meeting_updated';
+
+      await sendMeetingPushNotifications({
+        meeting,
+        booking,
+        state,
+        type: notificationType,
+      });
+    }
+
     return res.status(200).json(formatMeeting(meeting, booking, state));
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {
@@ -1375,7 +1600,16 @@ exports.updateMeeting = async (req, res) => {
 
 exports.deleteMeeting = async (req, res) => {
   try {
-    const { meeting } = await getMeetingByIdInternal(req.params.meetingId);
+    const { meeting, booking, state } = await getMeetingByIdInternal(req.params.meetingId);
+    await sendMeetingPushNotifications({
+      meeting: {
+        ...meeting.get({ plain: true }),
+        meeting_status: 'cancelled',
+      },
+      booking,
+      state,
+      type: 'meeting_cancelled',
+    });
     await meeting.destroy();
     return res.status(204).send();
   } catch (error) {
@@ -1437,6 +1671,15 @@ exports.updateChangeRequestStatus = async (req, res) => {
       participants_json: serializeMeetingState(nextState),
     });
 
+    if (nextStatus === 'approved') {
+      await sendMeetingPushNotifications({
+        meeting,
+        booking,
+        state: nextState,
+        type: 'meeting_rescheduled',
+      });
+    }
+
     return res.status(200).json(formatMeeting(meeting, booking, nextState));
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {
@@ -1481,10 +1724,14 @@ exports.addParticipants = async (req, res) => {
         role: normalizeRole(participant?.role || role || 'participant'),
       }))
       .filter((participant) => participant.email);
-    if (addedRecipients.length) {
+    const emailRecipients = await pushNotificationService.filterEmailRecipientsByPreference({
+      recipients: addedRecipients,
+      topic: 'meetings',
+    });
+    if (emailRecipients.length) {
       const plainBooking = typeof booking?.get === 'function' ? booking.get({ plain: true }) : booking;
       await emailService.sendMeetingScheduledTemplateEmail({
-        recipients: addedRecipients.map((recipient) => ({
+        recipients: emailRecipients.map((recipient) => ({
           ...recipient,
           view_details_url: getMeetingDashboardUrlByRole(recipient.role),
         })),
@@ -1509,6 +1756,16 @@ exports.addParticipants = async (req, res) => {
           sent_at: new Date().toISOString(),
         },
       });
+
+      if (role === 'cp') {
+        await sendMeetingPushNotifications({
+          meeting,
+          booking,
+          state: nextState,
+          type: 'meeting_participant_added',
+          explicitParticipants: newAdditions,
+        });
+      }
     }
 
     return res.status(200).json(formatMeeting(meeting, booking, nextState));

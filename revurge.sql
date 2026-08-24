@@ -3634,3 +3634,24 @@ CREATE TABLE IF NOT EXISTS file_manager_workspace_access (
   KEY idx_workspace_access_external_id (external_id),
   KEY idx_workspace_access_client_user (client_user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 11-08-26
+
+CREATE TABLE IF NOT EXISTS user_notification_preferences (
+    preference_id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    push_enabled TINYINT(1) NOT NULL DEFAULT 1,
+    email_enabled TINYINT(1) NOT NULL DEFAULT 1,
+    topics JSON DEFAULT NULL,
+    email_topics JSON DEFAULT NULL,
+    raw_preferences JSON DEFAULT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    CONSTRAINT uniq_notification_preferences_user UNIQUE (user_id),
+    CONSTRAINT fk_user_notification_preferences_user
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_notification_preferences_user
+    ON user_notification_preferences(user_id);

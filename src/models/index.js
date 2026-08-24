@@ -6,6 +6,7 @@ const salesRepAvailabilityFactory = require('./sales_rep_availability');
 const salesRepLiveStatusFactory = require('./sales_rep_live_status');
 const salesRepStatusActivityFactory = require('./sales_rep_status_activity');
 const userArchiveHistoryFactory = require('./user_archive_history');
+const appNotificationsFactory = require('./app_notifications');
 const signupCreditPromotionSettingsFactory = require('./signup_credit_promotion_settings');
 const shiftsFactory = require('./shifts');
 const shiftSalespeopleFactory = require('./shift_salespeople');
@@ -17,6 +18,7 @@ models.sales_rep_availability = salesRepAvailabilityFactory(sequelize, DataTypes
 models.sales_rep_live_status = salesRepLiveStatusFactory(sequelize, DataTypes);
 models.sales_rep_status_activity = salesRepStatusActivityFactory(sequelize, DataTypes);
 models.user_archive_history = userArchiveHistoryFactory(sequelize, DataTypes);
+models.app_notifications = appNotificationsFactory(sequelize, DataTypes);
 models.signup_credit_promotion_settings = signupCreditPromotionSettingsFactory(sequelize, DataTypes);
 models.shifts = shiftsFactory(sequelize, DataTypes);
 models.shift_salespeople = shiftSalespeopleFactory(sequelize, DataTypes);
@@ -103,6 +105,27 @@ models.user_archive_history.belongsTo(models.users, {
   as: 'performed_by'
 });
 
+if (models.app_notifications && models.users) {
+  models.app_notifications.belongsTo(models.users, {
+    foreignKey: 'user_id',
+    as: 'user'
+  });
+
+  models.users.hasMany(models.app_notifications, {
+    foreignKey: 'user_id',
+    as: 'app_notifications'
+  });
+
+  models.app_notifications.belongsTo(models.users, {
+    foreignKey: 'sender_user_id',
+    as: 'sender_user'
+  });
+
+  models.users.hasMany(models.app_notifications, {
+    foreignKey: 'sender_user_id',
+    as: 'sender_user_app_notifications'
+  });
+}
 models.signup_credit_promotion_settings.belongsTo(models.users, {
   foreignKey: 'updated_by_user_id',
   as: 'updated_by'

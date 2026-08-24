@@ -9,6 +9,7 @@ const { users, crew_members, assigned_crew, stream_project_booking, sales_leads,
 const bookingTimelineService = require('../services/bookingTimeline.service');
 const emailService = require('../utils/emailService');
 const otpService = require('../utils/otpService');
+const appNotificationService = require('../services/app-notification.service');
 
 const FACE_SCAN_SERVICE_URL = process.env.FACE_SCAN_SERVICE_URL || '';
 const FACE_SCAN_PROVIDER_TIMEOUT_MS = Math.max(15000, Number(process.env.FACE_SCAN_PROVIDER_TIMEOUT_MS || 300000));
@@ -464,7 +465,7 @@ const getBookingForEditingInternalEmail = async (bookingId) => {
             model: crew_members,
             as: 'crew_member',
             required: false,
-            attributes: ['crew_member_id', 'first_name', 'last_name', 'email'],
+            attributes: ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email'],
           },
         ],
       },
@@ -554,6 +555,151 @@ const getAssignedCreativePartnerRecipients = (booking) => {
     .filter(Boolean);
 };
 
+const normalizePushUserId = (value = {}) => {
+  const rawId = String(value?.user_id || value?.userId || value?.id || '').trim();
+  return /^\d+$/.test(rawId) ? rawId : null;
+};
+
+const resolveCpPushUserId = async (crew = {}) => {
+  const directUserId = normalizePushUserId({ id: crew?.user_id });
+  if (directUserId) return directUserId;
+
+  const email = normalizeEmailAddress(crew?.email);
+  if (!email) return null;
+
+  const user = await users.findOne({
+    where: {
+      email,
+      user_type: 2,
+      is_active: 1,
+    },
+    attributes: ['id'],
+    raw: true,
+  });
+
+  return normalizePushUserId(user);
+};
+
+const resolveClientPushUserId = async (booking = {}) => {
+  const plainBooking = typeof booking?.get === 'function' ? booking.get({ plain: true }) : booking;
+  const directUserId =
+    normalizePushUserId({ id: plainBooking?.user_id }) ||
+    normalizePushUserId(plainBooking?.user) ||
+    normalizePushUserId({ id: plainBooking?.cms_project?.client_user_id }) ||
+    normalizePushUserId(plainBooking?.cms_project?.client);
+
+  if (directUserId) return directUserId;
+
+  const email = normalizeEmailAddress(plainBooking?.user?.email || plainBooking?.guest_email);
+  if (!email) return null;
+
+  const user = await users.findOne({
+    where: {
+      email,
+      user_type: 3,
+      is_active: 1,
+    },
+    attributes: ['id'],
+    raw: true,
+  });
+
+  return normalizePushUserId(user);
+};
+
+const sendClientFilePush = async ({
+  booking,
+  type,
+  title,
+  body,
+  data = {},
+}) => {
+  try {
+    const plainBooking = typeof booking?.get === 'function' ? booking.get({ plain: true }) : booking;
+    const userId = await resolveClientPushUserId(plainBooking);
+    if (!userId) return;
+
+    const bookingId = String(plainBooking?.stream_project_booking_id || data.booking_id || '');
+
+    const payload = {
+      topic: 'files',
+      category: 'files',
+      type,
+      booking_id: bookingId,
+      project_id: bookingId,
+      ...data,
+    };
+
+    await appNotificationService.createAndPushNotification({
+      userId,
+      title,
+      message: body,
+      topic: 'files',
+      category: 'files',
+      type,
+      referenceId: bookingId,
+      referenceType: 'booking',
+      payload,
+      actionLabel: 'Review files',
+    });
+  } catch (error) {
+    console.error('[PushNotification] Client file push failed:', {
+      bookingId: booking?.stream_project_booking_id || data.booking_id || null,
+      type,
+      message: error.message || error,
+    });
+  }
+};
+
+const sendAssignedCpFilePush = async ({
+  booking,
+  type,
+  title,
+  body,
+  data = {},
+}) => {
+  try {
+    const plainBooking = typeof booking?.get === 'function' ? booking.get({ plain: true }) : booking;
+    const assignedCrews = Array.isArray(plainBooking?.assigned_crews) ? plainBooking.assigned_crews : [];
+    const bookingId = String(plainBooking?.stream_project_booking_id || data.booking_id || '');
+    const sentUserIds = new Set();
+
+    for (const assignment of assignedCrews) {
+      const crew = assignment?.crew_member;
+      const userId = await resolveCpPushUserId(crew);
+      if (!userId || sentUserIds.has(userId)) continue;
+      sentUserIds.add(userId);
+
+      const payload = {
+        topic: 'files',
+        category: 'files',
+        type,
+        booking_id: bookingId,
+        project_id: bookingId,
+        ...data,
+      };
+
+      await appNotificationService.createAndPushNotification({
+        userId,
+        title,
+        message: body,
+        topic: 'files',
+        category: 'files',
+        type,
+        referenceId: bookingId,
+        referenceType: 'booking',
+        payload,
+        actionLabel: 'Review files',
+      });
+    }
+  } catch (error) {
+    console.error('[PushNotification] CP file push failed:', {
+      bookingId: booking?.stream_project_booking_id || data.booking_id || null,
+      type,
+      message: error.message || error,
+    });
+  }
+};
+
 const sendFilesForEditingInternalEmailForCopy = async ({
   externalId,
   phase,
@@ -599,6 +745,17 @@ const sendFilesForEditingInternalEmailForCopy = async ({
         emailResult?.error || emailResult?.failedRecipients || 'Unknown email error'
       );
     }
+
+    await sendAssignedCpFilePush({
+      booking: plainBooking,
+      type: 'files_selected_for_editing',
+      title: 'Files selected for editing',
+      body: `${submittedByName || 'Client'} selected files for editing.`,
+      data: {
+        booking_id: bookingReference,
+        total_files: String(sourcePaths.length || 1),
+      },
+    });
   } catch (error) {
     console.error('Files for editing internal team email trigger failed:', error?.message || error);
   }
@@ -917,6 +1074,18 @@ const sendRawFilesUploadedEmailsForUploadedItems = async ({
         }
       }
 
+      await sendClientFilePush({
+        booking: plainBooking,
+        type: 'raw_files_uploaded',
+        title: 'Raw files uploaded',
+        body: 'Raw files are available for your project.',
+        data: {
+          booking_id: bookingReference,
+          filepath: String(bookingItems[0]?.filepath || ''),
+          total_files: String(totalFiles),
+        },
+      });
+
       const adminEmailResult = await emailService.sendRawFilesUploadedAdminEmail({
         recipient_name: 'Admin',
         shoot_name: projectName,
@@ -1035,6 +1204,18 @@ const sendEditsDeliveredEmailsForUploadedItems = async ({ items = [], deliveredB
         }
       }
 
+      await sendClientFilePush({
+        booking: plainBooking,
+        type: 'edited_files_delivered',
+        title: 'Edited files delivered',
+        body: 'Edited files are ready for your review.',
+        data: {
+          booking_id: bookingReference,
+          filepath: String(entry.items[0]?.filepath || ''),
+          total_files: String(entry.items.length || 1),
+        },
+      });
+
       const adminRecipients = getAdminNotificationRecipients();
       const hasAdminEmailAlreadyBeenSent =
         await hasUploadEmailAlreadyBeenSent({
@@ -1152,6 +1333,18 @@ const sendRevisionRequestedEmailsForFiles = async ({
           );
         }
       }
+
+      await sendAssignedCpFilePush({
+        booking: plainBooking,
+        type: 'revision_requested_on_edit',
+        title: 'Revision requested',
+        body: `${requestedByName || 'Client'} requested revisions on delivered edits.`,
+        data: {
+          booking_id: bookingReference,
+          file_name: fileNameLabel,
+          current_version: currentVersion,
+        },
+      });
 
       const adminRecipients = getAdminNotificationRecipients();
       if (adminRecipients.length) {
@@ -1291,6 +1484,18 @@ const sendFileApprovedInternalEmailsForReviews = async ({
             emailResult?.error || emailResult?.failedRecipients || 'Unknown email error'
           );
         }
+
+        await sendAssignedCpFilePush({
+          booking: plainBooking,
+          type: 'final_files_approved',
+          title: 'Files approved',
+          body: `${approvedByName || 'Client'} approved the final files.`,
+          data: {
+            booking_id: bookingReference,
+            file_name: fileName,
+            version,
+          },
+        });
       }
     }
   } catch (error) {
@@ -1386,6 +1591,18 @@ const sendNewVersionUploadedClientEmailForFolder = async ({
         emailResult?.error || emailResult?.failedRecipients || 'Unknown email error'
       );
     }
+
+    await sendClientFilePush({
+      booking: plainBooking,
+      type: 'new_version_uploaded',
+      title: 'New files uploaded',
+      body: 'New files are available for your project.',
+      data: {
+        booking_id: bookingReference,
+        folder_name: version,
+        version,
+      },
+    });
   } catch (error) {
     console.error('New version uploaded client email trigger failed:', error?.message || error);
   }
