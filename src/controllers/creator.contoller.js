@@ -806,7 +806,25 @@ exports.updateRequestStatus = async (req, res) => {
       });
       console.log('CP status email result:', emailRes);
 
-      return res.status(200).json({ error: false, message: "Request accepted successfully." });
+      let calendarSync = null;
+      try {
+        calendarSync = await creatorCalendarService.syncAcceptedShootToGoogleCalendar({
+          crewMemberId: crew_member_id,
+          projectId: project_id,
+        });
+      } catch (calendarError) {
+        calendarSync = {
+          synced: false,
+          error: calendarError.message,
+        };
+        console.error('Google Calendar shoot event sync failed:', calendarError.message);
+      }
+
+      return res.status(200).json({
+        error: false,
+        message: "Request accepted successfully.",
+        calendar_sync: calendarSync,
+      });
     }
 
   } catch (error) {

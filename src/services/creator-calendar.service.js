@@ -216,7 +216,10 @@ const buildGoogleAuthUrl = ({ crewMemberId, userId }) => {
   return oauth2Client.generateAuthUrl({
     access_type: 'offline',
     prompt: 'consent',
-    scope: ['https://www.googleapis.com/auth/calendar.freebusy'],
+    scope: [
+      'https://www.googleapis.com/auth/calendar.freebusy',
+      'https://www.googleapis.com/auth/calendar.events',
+    ],
     state,
   });
 };
@@ -310,16 +313,9 @@ const syncGoogleBusyBlocks = async (crewMemberId, options = {}) => {
   const timeMax = moment().add(options.futureDays || DEFAULT_SYNC_FUTURE_DAYS, 'days').endOf('day');
 
   try {
-    const oauth2Client = getGoogleOAuthClient();
-    oauth2Client.setCredentials({
-      access_token: decrypt(connection.access_token_encrypted),
-      refresh_token: decrypt(connection.refresh_token_encrypted),
-      expiry_date: connection.token_expiry ? new Date(connection.token_expiry).getTime() : undefined,
-    });
-
     const selectedCalendarIds = parseJsonArray(connection.selected_calendar_ids_json, ['primary']);
     const blocks = [];
-    const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
+    const { calendar, oauth2Client } = getAuthorizedGoogleCalendarClient(connection);
     let chunkStart = timeMin.clone();
 
     while (chunkStart.isBefore(timeMax)) {
@@ -444,6 +440,200 @@ const disconnectGoogle = async (crewMemberId) => {
 };
 
 const timeOnDate = (date, time) => moment(`${date.format('YYYY-MM-DD')} ${time}`, 'YYYY-MM-DD HH:mm:ss').toDate();
+
+const getAuthorizedGoogleCalendarClient = (connection) => {
+  const oauth2Client = getGoogleOAuthClient();
+  oauth2Client.setCredentials({
+    access_token: decrypt(connection.access_token_encrypted),
+    refresh_token: decrypt(connection.refresh_token_encrypted),
+    expiry_date: connection.token_expiry ? new Date(connection.token_expiry).getTime() : undefined,
+  });
+
+  return {
+    calendar: google.calendar({ version: 'v3', auth: oauth2Client }),
+    oauth2Client,
+  };
+};
+
+const saveRefreshedGoogleTokens = async (connection, oauth2Client) => {
+  const refreshedTokens = oauth2Client.credentials || {};
+  if (!refreshedTokens.access_token && !refreshedTokens.expiry_date) return;
+
+  await connection.update({
+    access_token_encrypted: refreshedTokens.access_token
+      ? encrypt(refreshedTokens.access_token)
+      : connection.access_token_encrypted,
+    token_expiry: refreshedTokens.expiry_date
+      ? new Date(refreshedTokens.expiry_date)
+      : connection.token_expiry,
+  });
+};
+
+const parseLocationValue = (value) => {
+  if (!value) return '';
+  if (typeof value !== 'string') return String(value);
+
+  try {
+    const parsed = JSON.parse(value);
+    return parsed?.address || parsed?.formatted_address || String(value);
+  } catch (_) {
+    return value.replace(/\\+/g, '').replace(/"/g, '').trim();
+  }
+};
+
+const normalizeEventTime = (value) => {
+  const match = String(value || '').match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (!match) return null;
+  return `${String(match[1]).padStart(2, '0')}:${match[2]}:${match[3] || '00'}`;
+};
+
+const buildGoogleShootEventPayload = ({ project, crewMember, assignment }) => {
+  const eventDate = project.event_date ? moment(project.event_date).format('YYYY-MM-DD') : null;
+  const timeZone = project.time_zone || DEFAULT_TIMEZONE;
+  const startTime = normalizeEventTime(project.start_time);
+  let endTime = normalizeEventTime(project.end_time);
+
+  if (!eventDate) {
+    const error = new Error('Project event date is required to sync Google Calendar event');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (!endTime && startTime && project.duration_hours) {
+    endTime = moment(`${eventDate} ${startTime}`, 'YYYY-MM-DD HH:mm:ss')
+      .add(Number(project.duration_hours || 1), 'hours')
+      .format('HH:mm:ss');
+  }
+
+  if (!endTime && startTime) {
+    endTime = moment(`${eventDate} ${startTime}`, 'YYYY-MM-DD HH:mm:ss')
+      .add(1, 'hour')
+      .format('HH:mm:ss');
+  }
+
+  const eventBody = {
+    summary: `BEIGE Shoot: ${project.project_name || `Booking #${project.stream_project_booking_id}`}`,
+    location: parseLocationValue(project.event_location),
+    description: [
+      'Confirmed BEIGE shoot.',
+      `Booking ID: ${project.stream_project_booking_id}`,
+      project.event_type ? `Event type: ${project.event_type}` : null,
+      project.shoot_type ? `Shoot type: ${project.shoot_type}` : null,
+      project.content_type ? `Content type: ${project.content_type}` : null,
+      project.special_instructions ? `Instructions: ${project.special_instructions}` : null,
+      crewMember?.email ? `Creative Partner: ${crewMember.email}` : null,
+    ].filter(Boolean).join('\n'),
+    extendedProperties: {
+      private: {
+        beige_project_id: String(project.stream_project_booking_id),
+        beige_assignment_id: String(assignment.id),
+        beige_crew_member_id: String(assignment.crew_member_id),
+      },
+    },
+  };
+
+  if (startTime && endTime) {
+    eventBody.start = { dateTime: `${eventDate}T${startTime}`, timeZone };
+    eventBody.end = { dateTime: `${eventDate}T${endTime}`, timeZone };
+  } else {
+    eventBody.start = { date: eventDate };
+    eventBody.end = { date: moment(eventDate).add(1, 'day').format('YYYY-MM-DD') };
+  }
+
+  return eventBody;
+};
+
+const syncAcceptedShootToGoogleCalendar = async ({ crewMemberId, projectId }) => {
+  const assignment = await assigned_crew.findOne({
+    where: {
+      crew_member_id: crewMemberId,
+      project_id: projectId,
+      crew_accept: 1,
+      is_active: 1,
+    },
+    include: [
+      {
+        model: stream_project_booking,
+        as: 'project',
+        required: true,
+      },
+      {
+        model: crew_members,
+        as: 'crew_member',
+        required: false,
+        attributes: ['crew_member_id', 'first_name', 'last_name', 'email'],
+      },
+    ],
+  });
+
+  if (!assignment || !assignment.project) {
+    return { skipped: true, reason: 'accepted_assignment_not_found' };
+  }
+
+  const connection = await creator_calendar_connections.findOne({
+    where: {
+      crew_member_id: crewMemberId,
+      provider: GOOGLE_PROVIDER,
+      disconnected_at: { [Op.is]: null },
+    },
+  });
+
+  if (!connection || connection.sync_status === 'revoked') {
+    return { skipped: true, reason: 'google_calendar_not_connected' };
+  }
+
+  const selectedCalendarIds = parseJsonArray(connection.selected_calendar_ids_json, ['primary']);
+  const calendarId = assignment.google_calendar_id || selectedCalendarIds[0] || 'primary';
+  const requestBody = buildGoogleShootEventPayload({
+    project: assignment.project,
+    crewMember: assignment.crew_member,
+    assignment,
+  });
+
+  try {
+    const { calendar, oauth2Client } = getAuthorizedGoogleCalendarClient(connection);
+    let event = null;
+
+    if (assignment.google_calendar_event_id) {
+      try {
+        event = await calendar.events.update({
+          calendarId,
+          eventId: assignment.google_calendar_event_id,
+          requestBody,
+        });
+      } catch (error) {
+        const status = Number(error.status || error.code || error.response?.status);
+        if (status !== 404 && status !== 410) throw error;
+      }
+    }
+
+    if (!event) {
+      event = await calendar.events.insert({
+        calendarId,
+        requestBody,
+      });
+    }
+
+    await saveRefreshedGoogleTokens(connection, oauth2Client);
+    await assignment.update({
+      google_calendar_event_id: event?.data?.id || assignment.google_calendar_event_id,
+      google_calendar_id: calendarId,
+      google_calendar_synced_at: new Date(),
+      google_calendar_sync_error: null,
+    });
+
+    return {
+      synced: true,
+      calendar_id: calendarId,
+      event_id: event?.data?.id || assignment.google_calendar_event_id,
+    };
+  } catch (error) {
+    await assignment.update({
+      google_calendar_sync_error: error.message,
+    });
+    throw error;
+  }
+};
 
 const subtractBlocks = (windows, blocks) => {
   let remaining = windows;
@@ -576,6 +766,7 @@ module.exports = {
   listRules,
   normalizeCrewMemberId,
   replaceRules,
+  syncAcceptedShootToGoogleCalendar,
   syncGoogleBusyBlocks,
   syncStaleGoogleBusyBlocks,
 };
