@@ -237,7 +237,8 @@ exports.createAndPushNotification = async ({
   sendPush = true,
   deliverySurface = 'web_app',
   deliverySurfaces = DEFAULT_DELIVERY_SURFACES,
-  appUserType = null
+  appUserType = null,
+  dedupeWindowSeconds = 0
 }) => {
   const pushData = normalizePayload({
     topic,
@@ -245,6 +246,28 @@ exports.createAndPushNotification = async ({
     type,
     ...(payload || {})
   });
+  const targetSurfaces = normalizeDeliverySurfaces(deliverySurfaces, [deliverySurface]);
+  const dedupeSeconds = Math.max(parseInt(dedupeWindowSeconds, 10) || 0, 0);
+
+  if (dedupeSeconds > 0) {
+    const modelNotification = getNotificationModel();
+    const existingNotification = await modelNotification.findOne({
+      where: {
+        user_id: userId,
+        is_active: 1,
+        topic: normalizeString(topic)?.toLowerCase(),
+        category: normalizeString(category || topic)?.toLowerCase(),
+        type: normalizeString(type),
+        reference_id: normalizeString(referenceId),
+        reference_type: normalizeString(referenceType),
+        delivery_surface: { [Op.in]: targetSurfaces },
+        created_at: { [Op.gte]: new Date(Date.now() - dedupeSeconds * 1000) }
+      },
+      order: [['created_at', 'DESC'], ['notification_id', 'DESC']]
+    });
+
+    if (existingNotification) return existingNotification;
+  }
 
   if (sendPush) {
     try {
@@ -276,7 +299,6 @@ exports.createAndPushNotification = async ({
 
   if (!inWebAllowed) return null;
 
-  const targetSurfaces = normalizeDeliverySurfaces(deliverySurfaces, [deliverySurface]);
   const notifications = await Promise.all(targetSurfaces.map((surface) => (
     exports.createNotification({
       userId,

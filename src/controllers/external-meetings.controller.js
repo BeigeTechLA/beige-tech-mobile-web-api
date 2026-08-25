@@ -128,6 +128,18 @@ const truncateText = (value, maxLength = 120) => {
   return `${text.slice(0, maxLength - 3).trim()}...`;
 };
 
+const normalizeMeetingTimezone = (value) => {
+  const timezone = String(value || '').trim();
+  if (!timezone) return null;
+
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format(new Date());
+    return timezone;
+  } catch (error) {
+    return null;
+  }
+};
+
 const collectMeetingEmails = (state = {}, booking = null) => {
   const emails = new Set();
   const push = (value) => {
@@ -284,12 +296,15 @@ const formatMeetingDateForPush = (meeting) => {
   if (!meeting?.meeting_date_time) return '';
   const date = new Date(meeting.meeting_date_time);
   if (Number.isNaN(date.getTime())) return '';
-  return date.toLocaleString('en-US', {
+  const options = {
     month: 'short',
     day: 'numeric',
     hour: 'numeric',
     minute: '2-digit',
-  });
+  };
+  const timezone = normalizeMeetingTimezone(meeting.meeting_timezone);
+  if (timezone) options.timeZone = timezone;
+  return date.toLocaleString('en-US', options);
 };
 
 const buildMeetingPushContent = ({ meeting, type }) => {
@@ -518,6 +533,7 @@ const ensureMeetingsTable = async () => {
         meeting_platform VARCHAR(50) NULL,
         meeting_date_time DATETIME NOT NULL,
         meeting_end_time DATETIME NULL,
+        meeting_timezone VARCHAR(100) NULL,
         description LONGTEXT NULL,
         meet_link VARCHAR(1000) NULL,
         google_calendar_event_id VARCHAR(255) NULL,
@@ -554,6 +570,10 @@ const ensureMeetingsTable = async () => {
         type: db.Sequelize.STRING(255),
         allowNull: true,
         defaultValue: 'primary',
+      });
+      await addColumn('meeting_timezone', {
+        type: db.Sequelize.STRING(100),
+        allowNull: true,
       });
     })();
   }
@@ -761,6 +781,7 @@ const formatMeeting = (meeting, booking, storedParticipants) => {
     meeting_status: getEffectiveMeetingStatus(plainMeeting),
     meeting_date_time: plainMeeting.meeting_date_time,
     meeting_end_time: plainMeeting.meeting_end_time,
+    meeting_timezone: plainMeeting.meeting_timezone,
     meeting_type: plainMeeting.meeting_type,
     meeting_title: plainMeeting.meeting_title,
     description: plainMeeting.description,
@@ -1321,6 +1342,9 @@ exports.createMeeting = async (req, res) => {
     const bookingId = toPositiveInt(req.body.order_id || req.body.booking_id);
     const meetingDateTime = req.body.meeting_date_time ? new Date(req.body.meeting_date_time) : null;
     const meetingEndTime = req.body.meeting_end_time ? new Date(req.body.meeting_end_time) : null;
+    const meetingTimezone = req.body.meeting_timezone !== undefined
+      ? normalizeMeetingTimezone(req.body.meeting_timezone)
+      : null;
     const createdByUserId = toPositiveInt(req.body.created_by_id || req.body.created_by_user_id || getRequestUserId(req));
     const meetingStatus = String(req.body.meeting_status || 'pending').toLowerCase();
     const meetingType = String(req.body.meeting_type || 'post_production').toLowerCase();
@@ -1346,6 +1370,12 @@ exports.createMeeting = async (req, res) => {
     if (meetingEndTime && meetingEndTime.getTime() <= meetingDateTime.getTime()) {
       return res.status(400).json({
         message: 'meeting_end_time must be after meeting_date_time',
+      });
+    }
+
+    if (req.body.meeting_timezone !== undefined && !meetingTimezone) {
+      return res.status(400).json({
+        message: 'meeting_timezone must be a valid IANA timezone',
       });
     }
 
@@ -1391,6 +1421,7 @@ exports.createMeeting = async (req, res) => {
       meeting_platform: String(req.body.meeting_platform || (req.body.meetLink ? 'custom' : 'google')).trim() || null,
       meeting_date_time: meetingDateTime,
       meeting_end_time: meetingEndTime || null,
+      meeting_timezone: meetingTimezone,
       description: String(req.body.description || '').trim() || null,
       meet_link: String(req.body.meetLink || req.body.meet_link || '').trim() || null,
       google_calendar_event_id: String(req.body.googleCalendarEventId || req.body.google_calendar_event_id || '').trim() || null,
@@ -1447,6 +1478,7 @@ exports.createMeeting = async (req, res) => {
             meeting_status: meetingStatus,
             meeting_date_time: meetingDateTime?.toISOString?.() || '',
             meeting_end_time: meetingEndTime?.toISOString?.() || '',
+            meeting_timezone: meetingTimezone || '',
             meet_link: String(req.body.meetLink || req.body.meet_link || '').trim() || '',
             description: String(req.body.description || '').trim() || '',
             agenda: String(req.body.description || '').trim() || '',
@@ -1531,6 +1563,14 @@ exports.updateMeeting = async (req, res) => {
         return res.status(400).json({ message: 'meeting_end_time must be a valid date' });
       }
       updates.meeting_end_time = nextEnd;
+    }
+
+    if (req.body.meeting_timezone !== undefined) {
+      const nextTimezone = normalizeMeetingTimezone(req.body.meeting_timezone);
+      if (!nextTimezone) {
+        return res.status(400).json({ message: 'meeting_timezone must be a valid IANA timezone' });
+      }
+      updates.meeting_timezone = nextTimezone;
     }
 
     const shouldSyncGoogleEvent =
