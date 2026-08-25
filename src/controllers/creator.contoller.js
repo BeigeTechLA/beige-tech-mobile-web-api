@@ -32,9 +32,45 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
   project_brief,
   event_type_master,
   crew_availability,
+  creator_availability_blocks,
+  creator_availability_rules,
   crew_equipment, crew_equipment_photos, activity_logs, equipment_request , crew_roles, users } = require('../models');
 
 const moment = require('moment');
+const creatorCalendarService = require('../services/creator-calendar.service');
+
+const DEFAULT_CREATOR_TIMEZONE = 'Asia/Kolkata';
+
+const getDateKeyInTimeZone = (value, timeZone = DEFAULT_CREATOR_TIMEZONE) => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(value));
+
+  const get = (type) => parts.find((part) => part.type === type)?.value;
+  return `${get('year')}-${get('month')}-${get('day')}`;
+};
+
+const getMinutesInTimeZone = (value, timeZone = DEFAULT_CREATOR_TIMEZONE) => {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(value));
+
+  const hour = Number(parts.find((part) => part.type === 'hour')?.value || 0);
+  const minute = Number(parts.find((part) => part.type === 'minute')?.value || 0);
+  return hour * 60 + minute;
+};
+
+const timeStringToMinutes = (value, fallback = null) => {
+  const match = String(value || '').match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return fallback;
+  return Math.min(Number(match[1]), 23) * 60 + Math.min(Number(match[2]), 59);
+};
 
 const syncOnboardingForCrewMemberId = async (crewMemberId) => {
   const member = await getCrewMemberWithOnboardingFiles({ crew_member_id: crewMemberId });
@@ -1038,6 +1074,12 @@ exports.getCrewAvailability = async (req, res) => {
       });
     }
 
+    try {
+      await creatorCalendarService.syncStaleGoogleBusyBlocks(crew_member_id);
+    } catch (error) {
+      console.error('Google Calendar auto-sync skipped availability refresh:', error.message);
+    }
+
     let availability = [];
 
     try {
@@ -1046,11 +1088,14 @@ exports.getCrewAvailability = async (req, res) => {
       availability = [];
     }
 
-    const monthStart = moment(`${year}-${month}-01`)
+    const normalizedMonth = String(month).padStart(2, "0");
+    const monthKey = `${year}-${normalizedMonth}`;
+
+    const monthStart = moment(`${monthKey}-01`, "YYYY-MM-DD")
       .startOf("month")
       .toDate();
 
-    const monthEnd = moment(`${year}-${month}-01`)
+    const monthEnd = moment(`${monthKey}-01`, "YYYY-MM-DD")
       .endOf("month")
       .toDate();
 
@@ -1085,6 +1130,19 @@ exports.getCrewAvailability = async (req, res) => {
       ],
     });
 
+    const weeklyAvailabilityRules = creator_availability_rules
+      ? await creator_availability_rules.findAll({
+        where: {
+          crew_member_id,
+          is_active: 1,
+        },
+        order: [["day_of_week", "ASC"], ["start_time", "ASC"]],
+      })
+      : [];
+    const creatorTimeZone =
+      weeklyAvailabilityRules.find((rule) => rule.timezone)?.timezone ||
+      DEFAULT_CREATOR_TIMEZONE;
+
     const customAvailability = await crew_availability.findAll({
       where: {
         crew_member_id,
@@ -1107,6 +1165,25 @@ exports.getCrewAvailability = async (req, res) => {
       },
       order: [["created_at", "DESC"]],
     });
+
+    const externalCalendarBlocks = creator_availability_blocks
+      ? await creator_availability_blocks.findAll({
+        where: {
+          crew_member_id,
+          source: "google_calendar",
+          status: {
+            [Sequelize.Op.ne]: "cancelled",
+          },
+          start_at: {
+            [Sequelize.Op.lt]: monthEnd,
+          },
+          end_at: {
+            [Sequelize.Op.gt]: monthStart,
+          },
+        },
+        order: [["start_at", "ASC"]],
+      })
+      : [];
 
     const appliesOnDate = (rule, dateMoment) => {
       const start = moment(rule.date);
@@ -1170,14 +1247,11 @@ exports.getCrewAvailability = async (req, res) => {
 
     const calendar = {};
 
-    const daysInMonth = moment(
-      `${year}-${month}`,
-      "YYYY-MM"
-    ).daysInMonth();
+    const daysInMonth = moment(monthKey, "YYYY-MM").daysInMonth();
 
     for (let day = 1; day <= daysInMonth; day++) {
       const date = moment(
-        `${year}-${month}-${day}`,
+        `${monthKey}-${String(day).padStart(2, "0")}`,
         "YYYY-MM-DD"
       );
 
@@ -1192,14 +1266,30 @@ exports.getCrewAvailability = async (req, res) => {
         start_time: null,
         end_time: null,
         is_full_day: null,
+        calendarBusy: false,
+        calendarBusyBlocks: [],
       };
 
+      const rulesForDay = weeklyAvailabilityRules.filter(
+        (rule) => Number(rule.day_of_week) === date.day()
+      );
+
       /*
-       * Regular weekly availability.
-       * Example: if availability contains "Monday",
-       * every Monday will be marked available.
+       * New weekly working rules are the preferred source of truth.
+       * Fall back to the legacy crew_members.availability weekday list.
        */
-      if (availability.includes(date.format("dddd"))) {
+      if (rulesForDay.length) {
+        calendar[key].available = true;
+        calendar[key].is_full_day = 0;
+        calendar[key].start_time = rulesForDay[0].start_time;
+        calendar[key].end_time = rulesForDay[0].end_time;
+        calendar[key].weeklyRules = rulesForDay.map((rule) => ({
+          start_time: rule.start_time,
+          end_time: rule.end_time,
+          timezone: rule.timezone,
+          minimum_notice_minutes: rule.minimum_notice_minutes,
+        }));
+      } else if (availability.includes(date.format("dddd"))) {
         calendar[key].available = true;
         calendar[key].is_full_day = 1;
       }
@@ -1227,6 +1317,64 @@ exports.getCrewAvailability = async (req, res) => {
         if (Number(rule.is_full_day) === 0) {
           calendar[key].start_time = rule.start_time;
           calendar[key].end_time = rule.end_time;
+        }
+      }
+    }
+
+    /*
+     * External calendar blocks only reduce BEIGE availability.
+     * We expose busy ranges without personal event names or details.
+     */
+    for (const block of externalCalendarBlocks) {
+      const blockStart = moment(block.start_at);
+      const blockEnd = moment(block.end_at);
+      const blockStartKey = getDateKeyInTimeZone(block.start_at, creatorTimeZone);
+      const blockEndKey = getDateKeyInTimeZone(block.end_at, creatorTimeZone);
+
+      for (
+        const day = moment(blockStartKey, "YYYY-MM-DD");
+        day.isSameOrBefore(moment(blockEndKey, "YYYY-MM-DD"), "day");
+        day.add(1, "day")
+      ) {
+        const key = day.format("YYYY-MM-DD");
+        if (!calendar[key]) continue;
+        if (calendar[key].available !== true) continue;
+
+        const workingStartMinutes =
+          Number(calendar[key].is_full_day) === 1
+            ? 0
+            : timeStringToMinutes(calendar[key].start_time, 0);
+        const workingEndMinutes =
+          Number(calendar[key].is_full_day) === 1
+            ? 24 * 60
+            : timeStringToMinutes(calendar[key].end_time, 24 * 60);
+        const blockStartMinutes =
+          key === blockStartKey
+            ? getMinutesInTimeZone(block.start_at, creatorTimeZone)
+            : 0;
+        const blockEndMinutes =
+          key === blockEndKey
+            ? getMinutesInTimeZone(block.end_at, creatorTimeZone)
+            : 24 * 60;
+        const overlapsWorkingHours =
+          blockStartMinutes < workingEndMinutes &&
+          blockEndMinutes > workingStartMinutes;
+
+        if (!overlapsWorkingHours) continue;
+
+        calendar[key].calendarBusy = true;
+        calendar[key].calendarBusyBlocks.push({
+          start_at: blockStart.toISOString(),
+          end_at: blockEnd.toISOString(),
+          source: block.source,
+        });
+
+        if (
+          blockStartMinutes <= workingStartMinutes &&
+          blockEndMinutes >= workingEndMinutes
+        ) {
+          calendar[key].available = false;
+          calendar[key].is_full_day = 1;
         }
       }
     }

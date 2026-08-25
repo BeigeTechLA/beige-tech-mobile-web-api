@@ -13,7 +13,8 @@
     "db:seed:reset": "node src/db/seeders/index.js --reset --full",
     "db:setup": "npm run db:init && npm run db:seed:full",
     "db:backfill:clients": "node scripts/backfill-clients-from-users.js",
-    "db:backfill:crew-coordinates": "node scripts/backfill-crew-coordinates.js"
+    "db:backfill:crew-coordinates": "node scripts/backfill-crew-coordinates.js",
+    "calendar:sync-google": "node scripts/sync-creator-google-calendars.js"
   },
   "keywords": [
     "revure",

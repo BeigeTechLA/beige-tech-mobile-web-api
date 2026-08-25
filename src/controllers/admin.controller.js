@@ -6141,7 +6141,15 @@ exports.getCrewMembers = async (req, res) => {
         limit = parseInt(limit);
         const offset = (page - 1) * limit;
 
-        let conditions = [{ is_active: 1 }, { is_registration_complete: 1 }];
+        let conditions = [
+            { is_active: 1 },
+            {
+                [Sequelize.Op.or]: [
+                    { is_crew_verified: 1 },
+                    { is_registration_complete: 1 }
+                ]
+            }
+        ];
 
         if (status) {
             if (status === 'pending') conditions.push({ is_crew_verified: 0 });
