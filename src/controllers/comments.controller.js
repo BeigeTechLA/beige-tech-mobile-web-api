@@ -1,5 +1,6 @@
 const db = require('../models');
 const emailService = require('../utils/emailService');
+const appNotificationService = require('../services/app-notification.service');
 const pushNotificationService = require('../services/push-notification.service');
 
 const DEFAULT_BASE_URL = process.env.INTERNAL_API_BASE_URL || 'http://localhost:5002/v1/comments';
@@ -246,7 +247,7 @@ const getBookingWithAssignedCrew = async (bookingId) => {
             model: db.crew_members,
             as: 'crew_member',
             required: false,
-            attributes: ['crew_member_id', 'first_name', 'last_name', 'email'],
+            attributes: ['crew_member_id', 'user_id', 'first_name', 'last_name', 'email'],
           },
         ],
       },
@@ -279,6 +280,76 @@ const buildAssignedCreativePartnerRecipients = (booking) => {
     .filter(Boolean);
 };
 
+const normalizePushUserId = (value = {}) => {
+  const rawId = String(value?.user_id || value?.userId || value?.id || '').trim();
+  return /^\d+$/.test(rawId) ? rawId : null;
+};
+
+const resolveCpPushUserId = async (crew = {}) => {
+  const directUserId = normalizePushUserId({ id: crew?.user_id });
+  if (directUserId) return directUserId;
+
+  const email = normalizeEmailAddress(crew?.email);
+  if (!email) return null;
+
+  const user = await db.users.findOne({
+    where: {
+      email,
+      user_type: 2,
+      is_active: 1,
+    },
+    attributes: ['id'],
+    raw: true,
+  });
+
+  return normalizePushUserId(user);
+};
+
+const sendRevisionCommentAddedPush = async ({ booking, filepath, comment }) => {
+  try {
+    const plainBooking = typeof booking?.get === 'function' ? booking.get({ plain: true }) : booking;
+    const assignedCrews = Array.isArray(plainBooking?.assigned_crews) ? plainBooking.assigned_crews : [];
+    const bookingId = String(plainBooking?.stream_project_booking_id || parseBookingIdFromFilepath(filepath) || '');
+    const commenterName = String(comment?.userId?.name || comment?.userId?.email || 'Client');
+    const sentUserIds = new Set();
+
+    for (const assignment of assignedCrews) {
+      const crew = assignment?.crew_member;
+      const userId = await resolveCpPushUserId(crew);
+      if (!userId || sentUserIds.has(userId)) continue;
+      sentUserIds.add(userId);
+
+      await appNotificationService.createAndPushNotification({
+        userId,
+        title: 'New revision comment',
+        message: `${commenterName} added a comment on the revision.`,
+        topic: 'files',
+        category: 'files',
+        type: 'revision_comment_added',
+        referenceId: bookingId,
+        referenceType: 'file',
+        actionLabel: 'Review Files',
+        appUserType: 2,
+        payload: {
+          topic: 'files',
+          category: 'files',
+          type: 'revision_comment_added',
+          booking_id: bookingId,
+          project_id: bookingId,
+          filepath: String(filepath || ''),
+          file_name: getFileNameFromPath(filepath),
+          current_version: getEditedRevisionVersionLabel(filepath),
+        },
+      });
+    }
+  } catch (error) {
+    console.error('[PushNotification] Revision comment push failed:', {
+      filepath,
+      message: error.message || error,
+    });
+  }
+};
+
 const isClientCommentAuthor = (userRef) => {
   const role = String(userRef?.role || '').trim().toLowerCase();
   const userType = Number(userRef?.user_type);
@@ -305,6 +376,12 @@ const sendRevisionCommentAddedEmailIfNeeded = async ({ comment }) => {
       `Booking #${bookingReference}`
     );
     const commenterName = String(comment?.userId?.name || comment?.userId?.email || 'Client');
+
+    await sendRevisionCommentAddedPush({
+      booking: plainBooking,
+      filepath,
+      comment,
+    });
 
     const recipients = [
       ...buildAssignedCreativePartnerRecipients(plainBooking),
