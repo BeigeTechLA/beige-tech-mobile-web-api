@@ -612,6 +612,7 @@ const sendClientFilePush = async ({
   title,
   body,
   data = {},
+  dedupeWindowSeconds = 0,
 }) => {
   try {
     const plainBooking = typeof booking?.get === 'function' ? booking.get({ plain: true }) : booking;
@@ -689,6 +690,7 @@ const sendAssignedCpFilePush = async ({
         referenceType: 'booking',
         payload,
         actionLabel: 'Review files',
+        dedupeWindowSeconds,
       });
     }
   } catch (error) {
@@ -1443,6 +1445,8 @@ const sendFileApprovedInternalEmailsForReviews = async ({
 
       const approvedAt = new Date().toISOString();
       const approvalTime = formatEditingSubmissionTime(approvedAt);
+      const approvedFilesForPush = [];
+      let approvedVersionForPush = '';
 
       for (const item of entry.items) {
         const responseData = item?.result?.data || {};
@@ -1477,6 +1481,8 @@ const sendFileApprovedInternalEmailsForReviews = async ({
             frontend_url: buildAdminDashboardUrl(),
           },
         });
+        approvedFilesForPush.push(fileName);
+        if (!approvedVersionForPush && version) approvedVersionForPush = version;
 
         if (!emailResult?.success) {
           console.error(
@@ -1484,17 +1490,22 @@ const sendFileApprovedInternalEmailsForReviews = async ({
             emailResult?.error || emailResult?.failedRecipients || 'Unknown email error'
           );
         }
+      }
 
+      if (approvedFilesForPush.length) {
         await sendAssignedCpFilePush({
           booking: plainBooking,
           type: 'final_files_approved',
           title: 'Files approved',
-          body: `${approvedByName || 'Client'} approved the final files.`,
+          body: `${approvedByName || 'Client'} approved ${approvedFilesForPush.length === 1 ? 'the final file' : `${approvedFilesForPush.length} final files`}.`,
           data: {
             booking_id: bookingReference,
-            file_name: fileName,
-            version,
+            file_count: String(approvedFilesForPush.length),
+            file_names: approvedFilesForPush,
+            ...(approvedFilesForPush.length === 1 ? { file_name: approvedFilesForPush[0] } : {}),
+            ...(approvedVersionForPush ? { version: approvedVersionForPush } : {}),
           },
+          dedupeWindowSeconds: 120,
         });
       }
     }
