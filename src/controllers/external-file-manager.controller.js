@@ -657,6 +657,7 @@ const sendAssignedCpFilePush = async ({
   title,
   body,
   data = {},
+  dedupeWindowSeconds = 0,
 }) => {
   try {
     const plainBooking = typeof booking?.get === 'function' ? booking.get({ plain: true }) : booking;
@@ -1441,7 +1442,6 @@ const sendFileApprovedInternalEmailsForReviews = async ({
         seenEmails.add(email);
         return true;
       });
-      if (!uniqueRecipients.length) continue;
 
       const approvedAt = new Date().toISOString();
       const approvalTime = formatEditingSubmissionTime(approvedAt);
@@ -1462,33 +1462,36 @@ const sendFileApprovedInternalEmailsForReviews = async ({
             ? `Version${versionNumber}`
             : getEditedRevisionVersionLabel(item?.filepath);
 
-        const emailResult = await emailService.sendFileApprovedInternalEmail({
-          recipients: uniqueRecipients,
-          data: {
-            shoot_name: projectName,
-            project_name: projectName,
-            booking_id: bookingReference,
-            order_id: bookingReference,
-            file_name: fileName,
-            version,
-            current_version: version,
-            approved_by: approvedByName || 'Client',
-            approval_time: approvalTime,
-            approved_at: approvedAt,
-            final_deliverable_path: finalDeliverable?.path || '',
-            final_deliverable_name: finalDeliverable?.name || fileName,
-            dashboard_link: buildAdminDashboardUrl(),
-            frontend_url: buildAdminDashboardUrl(),
-          },
-        });
         approvedFilesForPush.push(fileName);
         if (!approvedVersionForPush && version) approvedVersionForPush = version;
 
-        if (!emailResult?.success) {
-          console.error(
-            'File approved internal email failed:',
-            emailResult?.error || emailResult?.failedRecipients || 'Unknown email error'
-          );
+        if (uniqueRecipients.length) {
+          const emailResult = await emailService.sendFileApprovedInternalEmail({
+            recipients: uniqueRecipients,
+            data: {
+              shoot_name: projectName,
+              project_name: projectName,
+              booking_id: bookingReference,
+              order_id: bookingReference,
+              file_name: fileName,
+              version,
+              current_version: version,
+              approved_by: approvedByName || 'Client',
+              approval_time: approvalTime,
+              approved_at: approvedAt,
+              final_deliverable_path: finalDeliverable?.path || '',
+              final_deliverable_name: finalDeliverable?.name || fileName,
+              dashboard_link: buildAdminDashboardUrl(),
+              frontend_url: buildAdminDashboardUrl(),
+            },
+          });
+
+          if (!emailResult?.success) {
+            console.error(
+              'File approved internal email failed:',
+              emailResult?.error || emailResult?.failedRecipients || 'Unknown email error'
+            );
+          }
         }
       }
 
