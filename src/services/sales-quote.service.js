@@ -922,6 +922,10 @@ function buildQuoteListWhere(query, user) {
 
   applyQuoteSalesRepFilter(where, query.assigned_sales_rep_id, user);
 
+  if (query.booking_type) {
+    appendAndCondition(where, { booking_type: query.booking_type });
+  }
+
   const createdAtCondition = buildQuoteCreatedAtCondition(query.range, query.date_on);
 
   if (createdAtCondition) {

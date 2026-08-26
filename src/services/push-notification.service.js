@@ -6,13 +6,11 @@ const modelUsers = db.users;
 const CRITICAL_PRIORITIES = new Set(['critical', 'urgent']);
 const DEFAULT_TOPICS = {
   shoots: true,
-  payments: true,
   messages: true,
   meetings: true,
-  proposals: true,
   files: true,
-  system: true,
 };
+const ALLOWED_TOPICS = new Set(Object.keys(DEFAULT_TOPICS));
 
 const normalizeString = (value) => {
   if (value == null) return null;
@@ -38,7 +36,7 @@ const normalizeTopics = (topics = null) => {
   return Object.fromEntries(
     Object.entries(topics)
       .map(([key, value]) => [normalizeString(key)?.toLowerCase(), normalizeBoolean(value, true)])
-      .filter(([key]) => key)
+      .filter(([key]) => key && ALLOWED_TOPICS.has(key))
   );
 };
 
@@ -81,7 +79,7 @@ const normalizeEmailNotificationPreferences = (notificationPreferences = {}) => 
 
 const withDefaultTopics = (topics = null) => ({
   ...DEFAULT_TOPICS,
-  ...(parseJsonObject(topics) || {}),
+  ...(normalizeTopics(parseJsonObject(topics)) || {}),
 });
 
 const formatUserNotificationPreference = (preference = null) => {
