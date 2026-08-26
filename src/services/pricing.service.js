@@ -78,6 +78,31 @@ function isEditingOnlyLineItem(lineItem = {}) {
   return String(lineItem.category_slug || '').toLowerCase() === 'editing';
 }
 
+function normalizeCustomAddOnItems(customAddOnItems) {
+  if (!Array.isArray(customAddOnItems)) return [];
+
+  return customAddOnItems
+    .map((item) => {
+      const quantity = Number(item?.quantity) || 1;
+      const suppliedTotal = Number(item?.total);
+      const unitPrice = Number(item?.unit_price);
+      const lineTotal = Number.isFinite(suppliedTotal) && suppliedTotal >= 0
+        ? suppliedTotal
+        : (Number.isFinite(unitPrice) ? unitPrice * quantity : 0);
+
+      return {
+        key: String(item?.key || item?.slug || '').trim(),
+        name: String(item?.name || item?.item_name || 'Add-on').trim(),
+        quantity,
+        unitPrice: Number.isFinite(unitPrice) && unitPrice >= 0
+          ? unitPrice
+          : (quantity > 0 ? lineTotal / quantity : lineTotal),
+        lineTotal: parseFloat(lineTotal.toFixed(2)),
+      };
+    })
+    .filter((item) => item.name && item.quantity > 0 && item.lineTotal > 0);
+}
+
 /**
  * Get the full pricing catalog with categories and items
  * @param {string} mode - 'general', 'wedding', or null for all
@@ -516,6 +541,7 @@ async function calculateQuote({
   shootStartDate = null, 
   studioTotal = 0,
   studioItems = [],
+  customAddOnItems = [],
   videoEditTypes = [], 
   photoEditTypes = [],
   marginPercent = null, 
@@ -639,6 +665,24 @@ async function calculateQuote({
         item_id: 50, item_name: "Mandatory Podcast Equipment (2 Cameras)", quantity: 2, unit_price: 250, line_total: 500, is_mandatory: true
       });
     }
+
+    const normalizedCustomAddOns = normalizeCustomAddOnItems(customAddOnItems);
+    normalizedCustomAddOns.forEach((addOn) => {
+      subtotal += addOn.lineTotal;
+      lineItems.push({
+        item_id: null,
+        item_name: addOn.name,
+        category_name: 'Add-ons',
+        category_slug: 'equipment-addons',
+        quantity: addOn.quantity,
+        unit_price: parseFloat(addOn.unitPrice.toFixed(2)),
+        rate_type: 'flat',
+        rate_unit: null,
+        line_total: addOn.lineTotal,
+        is_mandatory: false,
+        notes: addOn.key ? `[ADDON:${addOn.key}]` : null,
+      });
+    });
 
     // 6. Rush Fee
     const rushFee = isEditingOnlyQuote ? 0 : calculateRushFee(shootStartDate);
