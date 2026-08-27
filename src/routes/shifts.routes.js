@@ -1,31 +1,23 @@
 const express = require('express');
 const router = express.Router();
 const controller = require('../controllers/shift-management.controller');
-const { authenticate, requireSalesRepOrAdmin } = require('../middleware/auth.middleware');
+const { authenticate } = require('../middleware/auth.middleware');
 const { requireAnyPermission } = require('../middleware/permission.middleware');
 
 const shiftManagementView = requireAnyPermission([
-  'admin_sales_representative_shift_management.view',
-  'sales_rep_sales.view',
-  'sales_admin_dashboard.view'
-], { allowAdminBypass: false, allowRoles: ['sales_rep', 'sales_admin'] });
+  'admin_sales_representative_shift_management.view'
+], { allowAdminBypass: false });
 const shiftManagementCreate = requireAnyPermission([
-  'admin_sales_representative_shift_management.create',
-  'sales_rep_sales.create',
-  'sales_admin_dashboard.create'
-], { allowAdminBypass: false, allowRoles: ['sales_rep', 'sales_admin'] });
+  'admin_sales_representative_shift_management.create'
+], { allowAdminBypass: false });
 const shiftManagementEdit = requireAnyPermission([
-  'admin_sales_representative_shift_management.edit',
-  'sales_rep_sales.edit',
-  'sales_admin_dashboard.edit'
-], { allowAdminBypass: false, allowRoles: ['sales_rep', 'sales_admin'] });
+  'admin_sales_representative_shift_management.edit'
+], { allowAdminBypass: false });
 const shiftManagementDelete = requireAnyPermission([
-  'admin_sales_representative_shift_management.delete',
-  'sales_rep_sales.delete',
-  'sales_admin_dashboard.delete'
-], { allowAdminBypass: false, allowRoles: ['sales_rep', 'sales_admin'] });
+  'admin_sales_representative_shift_management.delete'
+], { allowAdminBypass: false });
 
-router.use(authenticate, requireSalesRepOrAdmin);
+router.use(authenticate);
 
 // Shifts
 router.get('/overview', shiftManagementView, controller.overview);
