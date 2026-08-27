@@ -32,6 +32,7 @@ router.use('/pricing', require('./pricing.routes'));
 router.use('/projects', require('./projects.routes'));
 router.use('/bookings', require('./bookings.routes'));
 router.use('/guest-bookings', require('./guest-bookings.routes'));
+router.use('/book-a-shoot/v4', require('./book-a-shoot-v4.routes'));
 router.use('/payments', require('./payments.routes'));
 router.use('/finance', require('./finance.routes'));
 router.use('/creator-earnings', require('./creator-earnings.routes'));

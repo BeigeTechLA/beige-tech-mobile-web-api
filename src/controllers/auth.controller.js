@@ -1664,12 +1664,6 @@ exports.googleLogin = async (req, res) => {
         createdCrewMemberId = crewMember.crew_member_id;
       });
 
-      emailService.sendNewCrewSignupNotification({
-        first_name: firstName,
-        last_name: lastName,
-        email,
-        phone_number: normalizedPhone
-      }).catch(err => console.error('Admin Google CP Signup Notification Error:', err));
     } else if (!user) {
       const clientTypeId = await findClientTypeId();
 
@@ -3100,23 +3094,51 @@ exports.registerCrewMemberStep3 = [
 
       const updatedMember = await getCrewMemberWithOnboardingFiles({ crew_member_id });
       const onboardingSummary = await syncCreatorRegistrationComplete(updatedMember);
+      const submittedAt = member.application_submitted_at || (
+        onboardingSummary.is_registration_complete ? new Date() : null
+      );
 
       // Google Sheets sync disabled for now.
       // await updateSheetRow('Crew_data', crew_member_id, {
       //   'N': JSON.stringify(social_media_links),
       // });
 
-      // SEND WELCOME EMAIL
-      const user = await User.findOne({
-        where: { email: member.email },
-        attributes: ['email']
-      });
+      if (submittedAt && !member.application_submitted_at) {
+        await member.update({ application_submitted_at: submittedAt });
+      }
 
-      if (user) {
-        emailService.sendCPSignupWelcomeEmail({
-          first_name: member.first_name,
-          email: user.email
-        }).catch(err => console.error('CP Welcome Email Error:', err));
+      // Notify sales/admin only once, after the creator has completed all required signup details.
+      if (submittedAt && !member.application_submission_email_sent_at) {
+        const user = await User.findOne({
+          where: { email: member.email },
+          attributes: ['email']
+        });
+
+        try {
+          const notificationResult = await emailService.sendNewCrewSignupNotification({
+            first_name: member.first_name,
+            last_name: member.last_name,
+            email: member.email,
+            phone_number: member.phone_number,
+            location: member.location,
+            working_distance: member.working_distance
+          });
+
+          if (notificationResult?.success) {
+            await member.update({ application_submission_email_sent_at: new Date() });
+          } else {
+            console.error('Admin CP Signup Notification Error:', notificationResult?.error);
+          }
+
+          if (user) {
+            await emailService.sendCPSignupWelcomeEmail({
+              first_name: member.first_name,
+              email: user.email
+            });
+          }
+        } catch (err) {
+          console.error('CP Application Submission Email Error:', err);
+        }
       }
 
       return res.status(200).json({
@@ -3125,6 +3147,7 @@ exports.registerCrewMemberStep3 = [
           ? 'Step 3 completed. Registration finished!'
           : 'Step 3 saved. Please complete the remaining required details.',
         is_registration_complete: onboardingSummary.is_registration_complete,
+        application_submitted_at: submittedAt,
         onboardingMissingDetail: onboardingSummary.onboardingMissingDetail,
         missing_fields: onboardingSummary.missing_fields
       });
@@ -3738,6 +3761,8 @@ exports.getOnboardingStatus = async (req, res) => {
         success: true,
         ...buildEmptyOnboardingSummary(),
         is_crew_verified: 0,
+        application_submitted_at: null,
+        application_submission_email_sent_at: null,
         can_access_dashboard: false,
         should_resume_signup: true,
         profile_onboarding_status: buildEmptyOnboardingSummary(),
@@ -3758,6 +3783,8 @@ exports.getOnboardingStatus = async (req, res) => {
       success: true,
       ...effectiveOnboardingSummary,
       is_crew_verified: Number(member.is_crew_verified || 0),
+      application_submitted_at: member.application_submitted_at || null,
+      application_submission_email_sent_at: member.application_submission_email_sent_at || null,
       can_access_dashboard: isCrewVerified || effectiveOnboardingSummary.is_registration_complete === 1,
       should_resume_signup: !isCrewVerified && effectiveOnboardingSummary.is_registration_complete !== 1,
       profile_onboarding_status: onboardingSummary,

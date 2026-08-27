@@ -203,6 +203,7 @@ exports.saveQuote = async (req, res) => {
       shoot_start_date,
       studio_total = 0,
       studio_items = [],
+      custom_add_on_items = [],
       // 1. Extract these from the request body
       video_edit_types = [], 
       photo_edit_types = [] 
@@ -216,6 +217,7 @@ exports.saveQuote = async (req, res) => {
       shootStartDate: shoot_start_date,
       studioTotal: parseFloat(studio_total) || 0,
       studioItems: studio_items,
+      customAddOnItems: custom_add_on_items,
       videoEditTypes: video_edit_types, // Pass video edits
       photoEditTypes: photo_edit_types, // Pass photo edits
       skipDiscount: true,
@@ -557,6 +559,7 @@ exports.calculateFromCreators = async (req, res) => {
       studio_total = 0,
       studio_items = [],
       add_on_items = [],
+      custom_add_on_items = [],
       video_edit_types = [], // Added
       photo_edit_types = [], 
       skip_discount = false,
@@ -684,7 +687,12 @@ exports.calculateFromCreators = async (req, res) => {
       });
     }
 
-    if (pricingItems.length === 0 && add_on_items.length === 0 && !hasEditSelections && !hasStudioSelections) {
+    if (
+      pricingItems.length === 0 &&
+      add_on_items.length === 0 &&
+      custom_add_on_items.length === 0 &&
+      !hasEditSelections
+     && !hasStudioSelections) {
       return res.status(400).json({
         success: false,
         message: 'No pricing items, studio items, or edit types resolved',
@@ -700,6 +708,7 @@ exports.calculateFromCreators = async (req, res) => {
       shootStartDate: shoot_start_date,
       studioTotal: parseFloat(studio_total) || 0,
       studioItems: studio_items,
+      customAddOnItems: custom_add_on_items,
       skipDiscount: skip_discount,
       skipMargin: skip_margin,
       videoEditTypes: video_edit_types, // Sent to service
