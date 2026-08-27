@@ -10,25 +10,24 @@ const cpCompensationController = require('../controllers/cp-compensation.control
 const { authenticate, requireSalesRepOrAdmin, requireSalesRep, requireAdmin } = require('../middleware/auth.middleware');
 const { requireAnyPermission } = require('../middleware/permission.middleware');
 
-const adminSidebarPermissionOptions = { allowAdminBypass: false };
 const allowSalesRepRoles = { allowRoles: ['sales_rep', 'sales_admin'] };
 const allowSalesRepAndClientRoles = { allowRoles: ['sales_rep', 'sales_admin', 'client'] };
 const dashboardOrSalesView = requireAnyPermission([
   'admin_dashboard.view',
-  'admin_sales_representative_dashboard.view',
+  'admin_sales_representative.view',
   'sales_rep_sales.view',
   'sales_rep_file_manager.view',
   'sales_admin_dashboard.view',
   'sales_admin_file_manager.view'
-], { ...adminSidebarPermissionOptions, ...allowSalesRepRoles });
+], allowSalesRepRoles);
 const shootOrSalesView = requireAnyPermission([
   'admin_shoots.view',
-  'admin_sales_representative_dashboard.view',
+  'admin_sales_representative.view',
   'sales_rep_sales.view',
   'sales_admin_dashboard.view',
   'sales_admin_sales_people.view',
   'sales_admin_shoots.view'
-], { ...adminSidebarPermissionOptions, ...allowSalesRepRoles });
+], allowSalesRepRoles);
 const salesAdminSalesPeopleView = requireAnyPermission([
   'sales_admin_sales_people.view'
 ], allowSalesRepRoles);
@@ -52,129 +51,93 @@ const salesRepOrSalesAdminDashboardCreate = requireAnyPermission([
 const salesRepAvailabilityView = requireAnyPermission(['sales_rep_availability.view'], allowSalesRepRoles);
 const salesRepAvailabilityCreate = requireAnyPermission(['sales_rep_availability.create'], allowSalesRepRoles);
 const adminSalesRepresentativeView = requireAnyPermission([
-  'admin_sales_representative_dashboard.view',
+  'admin_sales_representative.view',
   'sales_rep_sales.view',
   'sales_admin_dashboard.view'
-], { ...adminSidebarPermissionOptions, ...allowSalesRepRoles });
+], allowSalesRepRoles);
 const adminSalesRepresentativeCreate = requireAnyPermission([
-  'admin_sales_representative_dashboard.create',
+  'admin_sales_representative.create',
   'sales_rep_sales.create',
   'sales_admin_dashboard.create'
-], { ...adminSidebarPermissionOptions, ...allowSalesRepRoles });
+], allowSalesRepRoles);
 const adminSalesRepresentativeEdit = requireAnyPermission([
-  'admin_sales_representative_dashboard.edit',
+  'admin_sales_representative.edit',
   'sales_rep_sales.edit',
   'sales_admin_dashboard.edit'
-], { ...adminSidebarPermissionOptions, ...allowSalesRepRoles });
-const adminSalesRepresentativeDelete = requireAnyPermission(['admin_sales_representative_dashboard.delete'], adminSidebarPermissionOptions);
+], allowSalesRepRoles);
+const adminSalesRepresentativeDelete = requireAnyPermission(['admin_sales_representative.delete']);
 const adminSalesRepresentativeInvoiceView = requireAnyPermission([
-  'admin_sales_representative_dashboard.view',
+  'admin_sales_representative.view',
   'admin_invoices.view',
   'admin_shoots.view',
   'sales_rep_sales.view',
-], { ...adminSidebarPermissionOptions, ...allowSalesRepRoles });
+], allowSalesRepRoles);
 const adminFinancesOrSalesRepresentativeView = requireAnyPermission([
-  'admin_finances_transactions.view',
-  'admin_sales_representative_dashboard.view',
+  'admin_finances.view',
+  'admin_sales_representative.view',
   'sales_rep_sales.view'
-], { ...adminSidebarPermissionOptions, ...allowSalesRepRoles });
+], allowSalesRepRoles);
 const adminQuotesView = requireAnyPermission([
-  'admin_quotes_all_quotes.view',
+  'admin_quotes.view',
   'sales_rep_quotes.view',
   'sales_admin_quotes.view',
   'client_quotes.view'
-], { ...adminSidebarPermissionOptions, ...allowSalesRepAndClientRoles });
+], allowSalesRepAndClientRoles);
 const adminQuotesCreate = requireAnyPermission([
-  'admin_quotes_all_quotes.create',
+  'admin_quotes.create',
   'sales_rep_quotes.create',
   'sales_admin_quotes.create'
-], { ...adminSidebarPermissionOptions, ...allowSalesRepRoles });
+], allowSalesRepRoles);
 const adminQuotesEdit = requireAnyPermission([
-  'admin_quotes_all_quotes.edit',
+  'admin_quotes.edit',
   'sales_rep_quotes.edit',
   'sales_admin_quotes.edit'
-], { ...adminSidebarPermissionOptions, ...allowSalesRepRoles });
+], allowSalesRepRoles);
 const adminQuotesDelete = requireAnyPermission([
-  'admin_quotes_all_quotes.delete',
+  'admin_quotes.delete',
   'sales_rep_quotes.delete',
   'sales_admin_quotes.delete'
-], { ...adminSidebarPermissionOptions, ...allowSalesRepRoles });
-const adminQuoteApprovalsView = requireAnyPermission([
-  'admin_quotes_quote_approvals.view',
-  'sales_rep_quotes.view',
-  'sales_admin_quotes.view'
-], { ...adminSidebarPermissionOptions, ...allowSalesRepRoles });
-const adminQuoteApprovalsEdit = requireAnyPermission([
-  'admin_quotes_quote_approvals.edit',
-  'sales_rep_quotes.edit',
-  'sales_admin_quotes.edit'
-], { ...adminSidebarPermissionOptions, ...allowSalesRepRoles });
-const adminMasterPricingView = requireAnyPermission([
-  'admin_quotes_master_pricing.view',
-  'sales_rep_quotes.view',
-  'sales_admin_quotes.view'
-], { ...adminSidebarPermissionOptions, ...allowSalesRepRoles });
-const adminMasterPricingCreate = requireAnyPermission([
-  'admin_quotes_master_pricing.create',
-  'sales_rep_quotes.create',
-  'sales_admin_quotes.create'
-], { ...adminSidebarPermissionOptions, ...allowSalesRepRoles });
-const adminMasterPricingEdit = requireAnyPermission([
-  'admin_quotes_master_pricing.edit',
-  'sales_rep_quotes.edit',
-  'sales_admin_quotes.edit'
-], { ...adminSidebarPermissionOptions, ...allowSalesRepRoles });
-const adminMasterPricingDelete = requireAnyPermission([
-  'admin_quotes_master_pricing.delete',
-  'sales_rep_quotes.delete',
-  'sales_admin_quotes.delete'
-], { ...adminSidebarPermissionOptions, ...allowSalesRepRoles });
-const adminQuotesOrMasterPricingView = requireAnyPermission([
-  'admin_quotes_all_quotes.view',
-  'admin_quotes_master_pricing.view',
-  'sales_rep_quotes.view',
-  'sales_admin_quotes.view'
-], { ...adminSidebarPermissionOptions, ...allowSalesRepRoles });
+], allowSalesRepRoles);
 const adminQuotesOrSalesRepresentativeView = requireAnyPermission([
-  'admin_quotes_all_quotes.view',
+  'admin_quotes.view',
   'sales_rep_quotes.view',
   'sales_admin_quotes.view',
-  'admin_sales_representative_dashboard.view',
+  'admin_sales_representative.view',
   'sales_rep_sales.view',
   'sales_admin_dashboard.view'
-], { ...adminSidebarPermissionOptions, ...allowSalesRepRoles });
+], allowSalesRepRoles);
 const adminQuotesOrFinancesOrSalesRepresentativeView = requireAnyPermission([
-  'admin_quotes_all_quotes.view',
+  'admin_quotes.view',
   'sales_rep_quotes.view',
   'sales_admin_quotes.view',
-  'admin_finances_transactions.view',
-  'admin_sales_representative_dashboard.view',
+  'admin_finances.view',
+  'admin_sales_representative.view',
   'sales_rep_sales.view',
   'sales_admin_dashboard.view'
-], { ...adminSidebarPermissionOptions, ...allowSalesRepRoles });
+], allowSalesRepRoles);
 const adminQuotesOrInvoicesView = requireAnyPermission([
-  'admin_quotes_all_quotes.view',
+  'admin_quotes.view',
   'sales_rep_quotes.view',
   'sales_admin_quotes.view',
   'admin_invoices.view',
   'sales_admin_invoices.view'
-], { ...adminSidebarPermissionOptions, ...allowSalesRepRoles });
+], allowSalesRepRoles);
 const quoteOrSalesPaymentCreate = requireAnyPermission([
-  'admin_quotes_all_quotes.create',
+  'admin_quotes.create',
   'sales_rep_quotes.create',
   'sales_admin_quotes.create',
-  'admin_sales_representative_dashboard.create',
+  'admin_sales_representative.create',
   'sales_rep_sales.create',
   'sales_admin_dashboard.create'
-], { ...adminSidebarPermissionOptions, ...allowSalesRepRoles });
+], allowSalesRepRoles);
 const quoteOrSalesPaymentEdit = requireAnyPermission([
-  'admin_quotes_all_quotes.edit',
+  'admin_quotes.edit',
   'sales_rep_quotes.edit',
   'sales_admin_quotes.edit',
-  'admin_sales_representative_dashboard.edit',
+  'admin_sales_representative.edit',
   'sales_rep_sales.edit',
   'sales_admin_dashboard.edit'
-], { ...adminSidebarPermissionOptions, ...allowSalesRepRoles });
+], allowSalesRepRoles);
 
 /**
  * Sales Routes
@@ -456,9 +419,9 @@ router.get('/dashboard/sales-reps', authenticate, requireAdmin, salesDashboardCo
  */
 router.get('/dashboard/recent-activities', authenticate, requireSalesRepOrAdmin, salesDashboardController.getRecentActivities);
 router.get('/dashboard/invoice-history', authenticate, adminQuotesOrInvoicesView, salesDashboardController.getInvoiceHistory);
-router.get('/dashboard/quote-change-requests', authenticate, adminQuoteApprovalsView, salesDashboardController.getQuoteChangeRequests);
-router.post('/dashboard/quote-change-requests/approve', authenticate, adminQuoteApprovalsEdit, salesDashboardController.approveQuoteChangeRequest);
-router.post('/dashboard/quote-change-requests/reject', authenticate, adminQuoteApprovalsEdit, salesDashboardController.rejectQuoteChangeRequest);
+router.get('/dashboard/quote-change-requests', authenticate, adminQuotesView, salesDashboardController.getQuoteChangeRequests);
+router.post('/dashboard/quote-change-requests/approve', authenticate, requireAdmin, salesDashboardController.approveQuoteChangeRequest);
+router.post('/dashboard/quote-change-requests/reject', authenticate, requireAdmin, salesDashboardController.rejectQuoteChangeRequest);
 
 /**
  * @route   GET /api/sales/dashboard/funnel
@@ -474,18 +437,18 @@ router.get('/dashboard/funnel', authenticate, requireSalesRepOrAdmin, salesDashb
 
 router.get('/client-dropdown', authenticate, adminQuotesOrFinancesOrSalesRepresentativeView, salesQuotesController.getClientDropdown);
 router.post('/create-client', authenticate, requireSalesRepOrAdmin, salesQuotesController.createClient);
-router.get('/quotes/catalog', authenticate, adminQuotesOrMasterPricingView, salesQuotesController.getCatalog);
-router.get('/quotes/ai-editing-types', authenticate, adminQuotesOrMasterPricingView, salesQuotesController.getAiEditingTypes);
-router.post('/quotes/ai-editing-types', authenticate, adminMasterPricingCreate, salesQuotesController.createAiEditingType);
-router.put('/quotes/ai-editing-types/:aiEditingTypeId', authenticate, adminMasterPricingEdit, salesQuotesController.updateAiEditingType);
-router.delete('/quotes/ai-editing-types/:aiEditingTypeId', authenticate, adminMasterPricingDelete, salesQuotesController.deleteAiEditingType);
-router.get('/quotes/shoot-types/:content_type', authenticate, adminQuotesOrMasterPricingView, salesQuotesController.getShootTypes);
-router.post('/quotes/shoot-types', authenticate, adminMasterPricingCreate, salesQuotesController.createShootType);
-router.put('/quotes/shoot-types/:shootTypeId', authenticate, adminMasterPricingEdit, salesQuotesController.updateShootType);
-router.delete('/quotes/shoot-types/:shootTypeId', authenticate, adminMasterPricingDelete, salesQuotesController.deleteShootType);
-router.post('/quotes/catalog', authenticate, adminMasterPricingCreate, salesQuotesController.createCatalogItem);
-router.put('/quotes/catalog/:catalogItemId', authenticate, adminMasterPricingEdit, salesQuotesController.updateCatalogItem);
-router.delete('/quotes/catalog/:catalogItemId', authenticate, adminMasterPricingDelete, salesQuotesController.deleteCatalogItem);
+router.get('/quotes/catalog', authenticate, adminQuotesView, salesQuotesController.getCatalog);
+router.get('/quotes/ai-editing-types', authenticate, adminQuotesView, salesQuotesController.getAiEditingTypes);
+router.post('/quotes/ai-editing-types', authenticate, adminQuotesCreate, salesQuotesController.createAiEditingType);
+router.put('/quotes/ai-editing-types/:aiEditingTypeId', authenticate, adminQuotesEdit, salesQuotesController.updateAiEditingType);
+router.delete('/quotes/ai-editing-types/:aiEditingTypeId', authenticate, adminQuotesDelete, salesQuotesController.deleteAiEditingType);
+router.get('/quotes/shoot-types/:content_type', authenticate, requireSalesRepOrAdmin, salesQuotesController.getShootTypes);
+router.post('/quotes/shoot-types', authenticate, requireSalesRepOrAdmin, salesQuotesController.createShootType);
+router.put('/quotes/shoot-types/:shootTypeId', authenticate, requireSalesRepOrAdmin, salesQuotesController.updateShootType);
+router.delete('/quotes/shoot-types/:shootTypeId', authenticate, requireSalesRepOrAdmin, salesQuotesController.deleteShootType);
+router.post('/quotes/catalog', authenticate, adminQuotesCreate, salesQuotesController.createCatalogItem);
+router.put('/quotes/catalog/:catalogItemId', authenticate, adminQuotesEdit, salesQuotesController.updateCatalogItem);
+router.delete('/quotes/catalog/:catalogItemId', authenticate, adminQuotesDelete, salesQuotesController.deleteCatalogItem);
 
 router.get('/quotes/dashboard', authenticate, adminQuotesView, salesQuotesController.getQuoteDashboard);
 router.get('/quotes', authenticate, adminQuotesView, salesQuotesController.listQuotes);
