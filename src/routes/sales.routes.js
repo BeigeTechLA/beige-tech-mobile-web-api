@@ -129,6 +129,12 @@ const adminMasterPricingDelete = requireAnyPermission([
   'sales_rep_quotes.delete',
   'sales_admin_quotes.delete'
 ], { ...adminSidebarPermissionOptions, ...allowSalesRepRoles });
+const adminQuotesOrMasterPricingView = requireAnyPermission([
+  'admin_quotes_all_quotes.view',
+  'admin_quotes_master_pricing.view',
+  'sales_rep_quotes.view',
+  'sales_admin_quotes.view'
+], { ...adminSidebarPermissionOptions, ...allowSalesRepRoles });
 const adminQuotesOrSalesRepresentativeView = requireAnyPermission([
   'admin_quotes_all_quotes.view',
   'sales_rep_quotes.view',
@@ -468,12 +474,12 @@ router.get('/dashboard/funnel', authenticate, requireSalesRepOrAdmin, salesDashb
 
 router.get('/client-dropdown', authenticate, adminQuotesOrFinancesOrSalesRepresentativeView, salesQuotesController.getClientDropdown);
 router.post('/create-client', authenticate, requireSalesRepOrAdmin, salesQuotesController.createClient);
-router.get('/quotes/catalog', authenticate, adminMasterPricingView, salesQuotesController.getCatalog);
-router.get('/quotes/ai-editing-types', authenticate, adminMasterPricingView, salesQuotesController.getAiEditingTypes);
+router.get('/quotes/catalog', authenticate, adminQuotesOrMasterPricingView, salesQuotesController.getCatalog);
+router.get('/quotes/ai-editing-types', authenticate, adminQuotesOrMasterPricingView, salesQuotesController.getAiEditingTypes);
 router.post('/quotes/ai-editing-types', authenticate, adminMasterPricingCreate, salesQuotesController.createAiEditingType);
 router.put('/quotes/ai-editing-types/:aiEditingTypeId', authenticate, adminMasterPricingEdit, salesQuotesController.updateAiEditingType);
 router.delete('/quotes/ai-editing-types/:aiEditingTypeId', authenticate, adminMasterPricingDelete, salesQuotesController.deleteAiEditingType);
-router.get('/quotes/shoot-types/:content_type', authenticate, adminMasterPricingView, salesQuotesController.getShootTypes);
+router.get('/quotes/shoot-types/:content_type', authenticate, adminQuotesOrMasterPricingView, salesQuotesController.getShootTypes);
 router.post('/quotes/shoot-types', authenticate, adminMasterPricingCreate, salesQuotesController.createShootType);
 router.put('/quotes/shoot-types/:shootTypeId', authenticate, adminMasterPricingEdit, salesQuotesController.updateShootType);
 router.delete('/quotes/shoot-types/:shootTypeId', authenticate, adminMasterPricingDelete, salesQuotesController.deleteShootType);
