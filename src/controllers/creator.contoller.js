@@ -36,9 +36,65 @@ const { stream_project_booking, crew_members, crew_member_files, tasks, equipmen
 
 const moment = require('moment');
 
+const submitCreatorApplicationIfComplete = async (member, onboardingSummary) => {
+  if (!member || !onboardingSummary?.is_registration_complete) {
+    return null;
+  }
+
+  const submittedAt = member.application_submitted_at || new Date();
+
+  if (!member.application_submitted_at) {
+    await member.update({ application_submitted_at: submittedAt });
+    member.application_submitted_at = submittedAt;
+  }
+
+  if (!member.application_submission_email_sent_at) {
+    try {
+      const notificationResult = await emailService.sendNewCrewSignupNotification({
+        first_name: member.first_name,
+        last_name: member.last_name,
+        email: member.email,
+        phone_number: member.phone_number,
+        location: member.location,
+        working_distance: member.working_distance
+      });
+
+      if (notificationResult?.success) {
+        const emailSentAt = new Date();
+        await member.update({ application_submission_email_sent_at: emailSentAt });
+        member.application_submission_email_sent_at = emailSentAt;
+      } else {
+        console.error('Admin CP Signup Notification Error:', notificationResult?.error);
+      }
+
+      const user = await users.findOne({
+        where: member.user_id ? { id: member.user_id } : { email: member.email },
+        attributes: ['email']
+      });
+
+      if (user) {
+        await emailService.sendCPSignupWelcomeEmail({
+          first_name: member.first_name,
+          email: user.email
+        });
+      }
+    } catch (error) {
+      console.error('CP Application Submission Email Error:', error);
+    }
+  }
+
+  return submittedAt;
+};
+
 const syncOnboardingForCrewMemberId = async (crewMemberId) => {
   const member = await getCrewMemberWithOnboardingFiles({ crew_member_id: crewMemberId });
-  return syncCreatorRegistrationComplete(member);
+  const onboardingSummary = await syncCreatorRegistrationComplete(member);
+  const submittedAt = await submitCreatorApplicationIfComplete(member, onboardingSummary);
+
+  return {
+    ...onboardingSummary,
+    application_submitted_at: submittedAt || member?.application_submitted_at || null,
+  };
 };
 
 function toArray(value) {

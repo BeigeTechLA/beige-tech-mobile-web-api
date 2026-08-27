@@ -6141,7 +6141,10 @@ exports.getCrewMembers = async (req, res) => {
         limit = parseInt(limit);
         const offset = (page - 1) * limit;
 
-        let conditions = [{ is_active: 1 }, { is_registration_complete: 1 }];
+        let conditions = [
+            { is_active: 1 },
+            { application_submitted_at: { [Sequelize.Op.ne]: null } }
+        ];
 
         if (status) {
             if (status === 'pending') conditions.push({ is_crew_verified: 0 });
@@ -6314,7 +6317,7 @@ exports.exportCrewMembersCsv = async (req, res) => {
         is_active: 1
       },
       {
-        is_registration_complete: 1
+        application_submitted_at: { [Op.ne]: null }
       }
     ];
 
@@ -6845,17 +6848,17 @@ exports.verifyCrewMember = async (req, res) => {
 
     const member = await crew_members.findOne({
       where: { crew_member_id },
-      attributes: ['crew_member_id', 'is_registration_complete']
+      attributes: ['crew_member_id', 'application_submitted_at']
     });
 
     if (!member) {
       return res.status(404).json({ error: true, message: "Crew member not found." });
     }
 
-    if (Number(member.is_registration_complete) !== 1) {
+    if (!member.application_submitted_at) {
       return res.status(400).json({
         error: true,
-        message: "Creator onboarding is incomplete. Complete all required fields before approval review.",
+        message: "Creator application has not been submitted for approval review yet.",
       });
     }
 
@@ -9371,7 +9374,12 @@ exports.getDashboardSummary = async (req, res) => {
       }),
 
       crew_members.count({
-        where: { is_active: 1, is_crew_verified: 0, ...standardDateFilter }
+        where: {
+          is_active: 1,
+          is_crew_verified: 0,
+          application_submitted_at: { [Op.ne]: null },
+          ...standardDateFilter
+        }
       }),
 
       crew_members.count({
@@ -9442,7 +9450,14 @@ exports.getDashboardChartData = async (req, res) => {
             clients.count({ where: { is_active: 1, ...standardDateFilter } }),
             crew_members.count({ where: { is_active: 1, ...standardDateFilter } }),
             crew_members.count({ where: { is_active: 1, is_crew_verified: 1, ...standardDateFilter } }),
-            crew_members.count({ where: { is_active: 1, is_crew_verified: 0, ...standardDateFilter } }),
+            crew_members.count({
+                where: {
+                    is_active: 1,
+                    is_crew_verified: 0,
+                    application_submitted_at: { [Op.ne]: null },
+                    ...standardDateFilter
+                }
+            }),
             crew_members.count({ where: { is_active: 1, is_crew_verified: 2, ...standardDateFilter } }),
 
             sales_leads.count({ where: { ...standardDateFilter } }),
@@ -11799,12 +11814,13 @@ exports.uploadProfilePhoto = [
 
 exports.getAllPendingCrewMembers = async (req, res) => {
   try {
-    // 1. Fetch all pending members (is_crew_verified: 0) and ALL roles in parallel
+    // 1. Fetch all submitted pending members (is_crew_verified: 0) and ALL roles in parallel
     const [members, allRoles] = await Promise.all([
       crew_members.findAll({
         where: { 
           is_active: 1, 
-          is_crew_verified: 0  // Hardcoded for Pending
+          is_crew_verified: 0,
+          application_submitted_at: { [Op.ne]: null }
         },
         include: [
           {
@@ -17527,6 +17543,8 @@ exports.getOnboardingStatusById = async (req, res) => {
         ...empty,
         message: "No member found with this ID",
         is_crew_verified: 0,
+        application_submitted_at: null,
+        application_submission_email_sent_at: null,
         can_access_dashboard: false,
         profile_onboarding_status: empty,
       });
@@ -17544,6 +17562,8 @@ exports.getOnboardingStatusById = async (req, res) => {
       success: true,
       ...effectiveOnboardingSummary,
       is_crew_verified: Number(member.is_crew_verified || 0),
+      application_submitted_at: member.application_submitted_at || null,
+      application_submission_email_sent_at: member.application_submission_email_sent_at || null,
       can_access_dashboard: isCrewVerified || effectiveOnboardingSummary.is_registration_complete === 1,
       should_resume_signup: !isCrewVerified && effectiveOnboardingSummary.is_registration_complete !== 1,
       profile_onboarding_status: onboardingSummary,
