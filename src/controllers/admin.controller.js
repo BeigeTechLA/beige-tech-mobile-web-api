@@ -7531,11 +7531,16 @@ exports.updateCrewMemberProfile = async (req, res) => {
       is_crew_verified
     } = req.body;
 
+    const normalizedPhoneNumber =
+      phone_number === undefined
+        ? undefined
+        : String(phone_number).trim() || null;
+
     const updateData = {};
     assignIfProvided(updateData, 'first_name', first_name);
     assignIfProvided(updateData, 'last_name', last_name);
     assignIfProvided(updateData, 'email', email);
-    assignIfProvided(updateData, 'phone_number', phone_number);
+    assignIfProvided(updateData, 'phone_number', normalizedPhoneNumber);
     assignIfProvided(updateData, 'location', location);
     assignIfProvided(updateData, 'latitude', latitude ?? lat);
     assignIfProvided(updateData, 'longitude', longitude ?? lng);
@@ -7653,7 +7658,7 @@ exports.updateCrewMemberProfile = async (req, res) => {
           .trim();
       }
       assignIfProvided(userUpdateData, 'email', email);
-      assignIfProvided(userUpdateData, 'phone_number', phone_number);
+      assignIfProvided(userUpdateData, 'phone_number', normalizedPhoneNumber);
       assignIfProvided(userUpdateData, 'location', location);
       assignIfProvided(userUpdateData, 'latitude', latitude ?? lat);
       assignIfProvided(userUpdateData, 'longitude', longitude ?? lng);
