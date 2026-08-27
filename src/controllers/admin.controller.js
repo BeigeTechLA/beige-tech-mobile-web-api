@@ -7558,28 +7558,64 @@ exports.updateCrewMemberProfile = async (req, res) => {
         : [equipmentOwnershipArr].filter(Boolean);
 
       if (equipmentOwnershipArr.length > 0) {
-        const equipmentNames = await equipment.findAll({
+        const equipmentValues = equipmentOwnershipArr
+          .map((item) => String(item).trim())
+          .filter(Boolean);
+        const numericEquipmentIds = equipmentValues
+          .map((item) => Number(item))
+          .filter((item) => Number.isInteger(item) && item > 0);
+        const textEquipmentNames = equipmentValues
+          .filter((item) => !numericEquipmentIds.includes(Number(item)));
+
+        const equipmentRows = await equipment.findAll({
           where: {
-            equipment_name: { [Sequelize.Op.in]: equipmentOwnershipArr }
+            [Sequelize.Op.or]: [
+              ...(numericEquipmentIds.length > 0
+                ? [{ equipment_id: { [Sequelize.Op.in]: numericEquipmentIds } }]
+                : []),
+              ...(textEquipmentNames.length > 0
+                ? [{ equipment_name: { [Sequelize.Op.in]: textEquipmentNames } }]
+                : []),
+            ],
           },
-          attributes: ['equipment_name'],
+          attributes: ['equipment_id', 'equipment_name'],
           raw: true
         });
 
-        const validEquipmentNames = equipmentNames.map(item => item.equipment_name);
-        const invalidEquipmentNames = equipmentOwnershipArr.filter(name => !validEquipmentNames.includes(name));
+        const validEquipmentIds = new Set(equipmentRows.map(item => Number(item.equipment_id)));
+        const validEquipmentNames = new Set(equipmentRows.map(item => item.equipment_name));
+        const invalidEquipmentValues = equipmentValues.filter((value) => {
+          const numericValue = Number(value);
+          if (Number.isInteger(numericValue) && numericValue > 0) {
+            return !validEquipmentIds.has(numericValue);
+          }
 
-        if (invalidEquipmentNames.length > 0) {
+          return !validEquipmentNames.has(value);
+        });
+
+        if (invalidEquipmentValues.length > 0) {
           return res.status(constants.BAD_REQUEST.code).json({
             error: true,
             code: constants.BAD_REQUEST.code,
-            message: `The following equipment names are invalid: ${invalidEquipmentNames.join(', ')}`,
+            message: `The following equipment values are invalid: ${invalidEquipmentValues.join(', ')}`,
             data: null
           });
         }
+
+        equipmentOwnershipArr = equipmentValues
+          .map((value) => {
+            const numericValue = Number(value);
+            if (Number.isInteger(numericValue) && numericValue > 0) {
+              return numericValue;
+            }
+
+            const matchedEquipment = equipmentRows.find((item) => item.equipment_name === value);
+            return matchedEquipment ? Number(matchedEquipment.equipment_id) : null;
+          })
+          .filter((item) => Number.isInteger(item) && item > 0);
       }
 
-      updateData.equipment_ownership = JSON.stringify(equipmentOwnershipArr);
+      updateData.equipment_ownership = JSON.stringify([...new Set(equipmentOwnershipArr)]);
     }
 
     if (Object.keys(updateData).length === 0) {
@@ -11814,19 +11850,81 @@ exports.uploadProfilePhoto = [
 
 exports.getAllPendingCrewMembers = async (req, res) => {
   try {
+    const {
+      onboarding_status,
+      page = 1,
+      limit = 20,
+      search = '',
+      location = ''
+    } = req.query;
+
+    const isIncompleteOnboarding = onboarding_status === 'incomplete';
+    const currentPage = Math.max(parseInt(page, 10) || 1, 1);
+    const pageSize = Math.max(parseInt(limit, 10) || 20, 1);
+    const offset = (currentPage - 1) * pageSize;
+    const baseConditions = {
+      is_active: 1,
+      is_crew_verified: 0,
+      ...(isIncompleteOnboarding
+        ? { is_registration_complete: 0 }
+        : { is_registration_complete: 1 })
+    };
+
+    if (search) {
+      baseConditions[Op.or] = [
+        { first_name: { [Op.like]: `%${search}%` } },
+        { last_name: { [Op.like]: `%${search}%` } },
+        { email: { [Op.like]: `%${search}%` } },
+        { phone_number: { [Op.like]: `%${search}%` } },
+        { crew_member_id: { [Op.like]: `%${search}%` } },
+        Sequelize.where(
+          Sequelize.fn('concat', Sequelize.col('first_name'), ' ', Sequelize.col('last_name')),
+          { [Op.like]: `%${search}%` }
+        )
+      ];
+    }
+
+    if (location) {
+      baseConditions.location = { [Op.like]: `%${location}%` };
+    }
+
     // 1. Fetch all submitted pending members (is_crew_verified: 0) and ALL roles in parallel
     const [members, allRoles] = await Promise.all([
       crew_members.findAll({
-        where: { 
-          is_active: 1, 
-          is_crew_verified: 0,
-          application_submitted_at: { [Op.ne]: null }
-        },
+        where: baseConditions,
+        attributes: [
+          'crew_member_id',
+          'user_id',
+          'first_name',
+          'last_name',
+          'email',
+          'phone_number',
+          'location',
+          'working_distance',
+          'primary_role',
+          'years_of_experience',
+          'hourly_rate',
+          'skills',
+          'equipment_ownership',
+          'social_media_links',
+          'is_beige_member',
+          'is_available',
+          'rating',
+          'is_draft',
+          'is_active',
+          'created_at',
+          'updated_at',
+          'is_crew_verified',
+          'is_registration_complete',
+          'created_from',
+        ],
         include: [
           {
             model: crew_member_files,
             as: 'crew_member_files',
-            attributes: ['crew_files_id', 'file_type', 'file_path'],
+            attributes: ['crew_files_id', 'file_type', 'file_path', 'title', 'tag', 'is_active'],
+            where: { is_active: 1 },
+            required: false,
           }
         ],
         order: [['created_at', 'DESC']], // Newest applications at the top
@@ -11837,6 +11935,7 @@ exports.getAllPendingCrewMembers = async (req, res) => {
     // 2. DATA PROCESSING
     const processedMembers = members.map((member) => {
       const memberData = member.toJSON();
+      const onboardingSummary = onboardingCtrl.buildCreatorOnboardingSummary(memberData);
       
       // Handle Location Parsing
       const loc = member.location;
@@ -11863,15 +11962,37 @@ exports.getAllPendingCrewMembers = async (req, res) => {
         ...memberData, 
         location: finalLocation, 
         status: 'pending',
+        onboarding_status: onboardingSummary,
+        onboarding_progress_percent: onboardingSummary.progress_percent,
+        onboarding_completed_count: onboardingSummary.completed_count,
+        onboarding_total_required: onboardingSummary.total_required,
+        onboarding_missing_count: onboardingSummary.missing_count,
+        onboarding_missing_fields: onboardingSummary.missing_fields,
         role: roleNames.length > 0 ? { role_name: roleNames.join(", ") } : null 
       };
-    });
+    }).filter((member) => (
+      isIncompleteOnboarding
+        ? Number(member.onboarding_missing_count || 0) > 0 && Number(member.is_registration_complete || 0) !== 1
+        : true
+    ));
+
+    const paginatedMembers = isIncompleteOnboarding
+      ? processedMembers.slice(offset, offset + pageSize)
+      : processedMembers;
 
     return res.status(200).json({
       error: false,
-      message: "All pending crew members fetched successfully",
+      message: isIncompleteOnboarding
+        ? "All details pending crew members fetched successfully"
+        : "All pending crew members fetched successfully",
       total_pending: processedMembers.length,
-      data: processedMembers,
+      pagination: {
+        total_records: processedMembers.length,
+        current_page: currentPage,
+        per_page: pageSize,
+        total_pages: Math.ceil(processedMembers.length / pageSize),
+      },
+      data: paginatedMembers,
     });
   } catch (error) {
     console.error("Get All Pending Crew Members Error:", error);
