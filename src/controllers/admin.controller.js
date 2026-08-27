@@ -2266,6 +2266,12 @@ exports.getProjectDetails = async (req, res) => {
           model: db.stream_project_booking_days,
           as: "booking_days",
           required: false
+        },
+        {
+          model: users,
+          as: "updated_by_user",
+          required: false,
+          attributes: ["id", "name", "email"]
         }
       ]
     });
@@ -2876,6 +2882,8 @@ exports.updateProjectDateLocation = async (req, res) => {
       duration_hours,
       time_zone
     } = req.body || {};
+    const authUser = await getAuthAdminUser(req);
+    const updatedByUserId = Number(authUser?.id || req.user?.userId || req.user?.id || req.userId || 0);
 
     if (!project_id) {
       return res.status(400).json({ error: true, message: 'Project ID is required' });
@@ -3052,6 +3060,9 @@ exports.updateProjectDateLocation = async (req, res) => {
     }
 
     if (Object.keys(updatePayload).length > 0) {
+      if (Number.isInteger(updatedByUserId) && updatedByUserId > 0) {
+        updatePayload.updated_by = updatedByUserId;
+      }
       await project.update(updatePayload, { transaction });
     }
 
@@ -3109,6 +3120,10 @@ exports.updateProjectDateLocation = async (req, res) => {
       message: 'Project date/location updated successfully',
       data: {
         project_id: refreshedProject.stream_project_booking_id,
+        updated_by: refreshedProject.updated_by || null,
+        updated_by_user: authUser
+          ? formatAdminProfile(authUser)
+          : refreshedProject.updated_by_user || null,
         booking_type: resolvedBookingType,
         event_date: refreshedProject.event_date,
         start_time: refreshedProject.start_time,
