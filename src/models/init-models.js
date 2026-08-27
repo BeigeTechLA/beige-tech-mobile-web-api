@@ -712,6 +712,8 @@ crew_members.belongsTo(crew_roles, { as: 'role', foreignKey: 'primary_role' });
   // Add these lines near the other relationship definitions
 stream_project_booking.belongsTo(users, { as: "user", foreignKey: "user_id"});
 users.hasMany(stream_project_booking, { as: "bookings", foreignKey: "user_id"});
+stream_project_booking.belongsTo(users, { as: "updated_by_user", foreignKey: "updated_by"});
+users.hasMany(stream_project_booking, { as: "updated_stream_project_bookings", foreignKey: "updated_by"});
 
 // Add these if they are missing
 assigned_post_production_member.belongsTo(stream_project_booking, { as: "project", foreignKey: "project_id"});
