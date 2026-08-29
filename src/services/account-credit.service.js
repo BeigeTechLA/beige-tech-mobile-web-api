@@ -465,6 +465,12 @@ function buildLedgerIncludes() {
       attributes: ['id', 'name', 'email', 'user_type', 'role']
     },
     {
+      model: db.users,
+      as: 'created_by',
+      required: false,
+      attributes: ['id', 'name', 'email']
+    },
+    {
       model: db.stream_project_booking,
       as: 'booking',
       required: false,
@@ -545,6 +551,9 @@ function formatLedgerEntry(row) {
     restrictions: safeParseJsonObject(entry.restrictions_json),
     restrictions_json: entry.restrictions_json || null,
     created_by_admin: Boolean(entry.created_by_admin),
+    added_by_name: entry.entry_type === 'credit_created'
+      ? (entry.created_by?.name || entry.created_by?.email || null)
+      : null,
     notification_status: entry.notification_status || 'not_requested',
     notes: entry.notes || null,
     reason: entry.notes || null

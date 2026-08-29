@@ -260,6 +260,9 @@ function initModels(sequelize) {
   stream_project_booking.hasMany(creator_earnings, { as: "creator_earnings", foreignKey: "booking_id" });
   creator_earnings.belongsTo(crew_members, { as: "creator", foreignKey: "creator_id" });
   crew_members.hasMany(creator_earnings, { as: "creator_earnings", foreignKey: "creator_id" });
+  creator_earnings.belongsTo(users, { as: "submitted_by", foreignKey: "submitted_by_user_id" });
+  creator_earnings.belongsTo(users, { as: "approved_by", foreignKey: "approved_by_user_id" });
+  creator_earnings.belongsTo(users, { as: "rejected_by", foreignKey: "rejected_by_user_id" });
   creator_earnings.belongsTo(payment_transactions, { as: "payment", foreignKey: "payment_id" });
   payment_transactions.hasMany(creator_earnings, { as: "creator_earnings", foreignKey: "payment_id" });
   creator_earnings.belongsTo(finance_transactions, { as: "finance_transaction", foreignKey: "finance_transaction_id" });
