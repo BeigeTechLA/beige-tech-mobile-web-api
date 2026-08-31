@@ -72,6 +72,8 @@ router.get('/workspace-access', authenticate, fileManagerView, externalFileManag
 router.get('/workspace-access/clients', authenticate, fileManagerCreate, externalFileManagerController.searchRegisteredClientsForWorkspaceAccess);
 router.post('/workspace-access', authenticate, fileManagerCreate, externalFileManagerController.grantWorkspaceAccess);
 router.delete('/workspace-access/:accessId', authenticate, fileManagerDelete, externalFileManagerController.revokeWorkspaceAccess);
+router.get('/settings', authenticate, fileManagerView, externalFileManagerController.getFileManagerSettings);
+router.patch('/settings', authenticate, fileManagerCreate, externalFileManagerController.updateFileManagerSettings);
 router.post('/share', authenticate, fileManagerCreate, externalFileManagerController.createShare);
 router.get('/share', authenticate, fileManagerView, externalFileManagerController.listShares);
 router.get('/share/access-logs', authenticate, fileManagerView, externalFileManagerController.listShareAccessLogs);
