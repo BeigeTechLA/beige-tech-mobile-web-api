@@ -30,6 +30,7 @@ let fileShareAccessLogsTableReadyPromise = null;
 let workspaceAccessTableReadyPromise = null;
 let fileManagerSettingsTableReadyPromise = null;
 let creatorFoldersTableReadyPromise = null;
+let workspaceDisplayNamesTableReadyPromise = null;
 
 const buildHeaders = () => ({
   'Content-Type': 'application/json',
@@ -1654,6 +1655,59 @@ const ensureCommonEventsTable = async () => {
   `).catch(() => null);
 };
 
+const ensureWorkspaceDisplayNamesTable = async () => {
+  if (!workspaceDisplayNamesTableReadyPromise) {
+    workspaceDisplayNamesTableReadyPromise = db.sequelize.query(`
+      CREATE TABLE IF NOT EXISTS file_manager_workspace_display_names (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        external_id VARCHAR(128) NOT NULL,
+        display_name VARCHAR(255) NOT NULL,
+        updated_by_user_id BIGINT UNSIGNED DEFAULT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        UNIQUE KEY uq_file_manager_workspace_display_name_external_id (external_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+  }
+
+  await workspaceDisplayNamesTableReadyPromise;
+};
+
+const getWorkspaceDisplayNameRows = async (externalIds = []) => {
+  const normalizedIds = Array.from(new Set(
+    externalIds.map((id) => String(id || '').trim().toLowerCase()).filter(Boolean)
+  ));
+  if (!normalizedIds.length) return new Map();
+
+  await ensureWorkspaceDisplayNamesTable();
+  const [rows] = await db.sequelize.query(
+    `SELECT external_id, display_name
+     FROM file_manager_workspace_display_names
+     WHERE external_id IN (:externalIds)`,
+    { replacements: { externalIds: normalizedIds } }
+  );
+
+  return new Map(
+    (Array.isArray(rows) ? rows : []).map((row) => [
+      String(row.external_id || '').trim().toLowerCase(),
+      String(row.display_name || '').trim(),
+    ])
+  );
+};
+
+const applyWorkspaceDisplayName = (workspace, displayNameMap = new Map()) => {
+  const externalId = String(workspace?.externalId || workspace?.external_id || '').trim().toLowerCase();
+  const displayName = displayNameMap.get(externalId);
+  if (!displayName) return workspace;
+  return {
+    ...workspace,
+    folderName: displayName,
+    displayName,
+    storageFolderName: workspace?.storageFolderName || workspace?.folderName || null,
+  };
+};
+
 const ensureFileShareTable = async () => {
   if (!fileShareTableReadyPromise) {
     fileShareTableReadyPromise = db.sequelize.query(`
@@ -2085,21 +2139,66 @@ const findCommonEventByFilepath = async (filepath) => {
   if (!normalizedPath) return null;
 
   const rows = await listCommonEventRows();
+  const displayNameMap = await getWorkspaceDisplayNameRows(
+    rows.map((row) => row.workspace_external_id)
+  ).catch(() => new Map());
   const pathTokens = normalizeForPathMatch(normalizedPath);
 
   return (
     rows.find((row) => {
       const externalId = String(row.workspace_external_id || '').trim().toLowerCase();
+      const rootPath = String(row.root_path || '').trim().toLowerCase();
       const folderName = `event - ${String(row.event_name || '').trim().toLowerCase()}`;
       const folderTokens = normalizeForPathMatch(folderName);
+      const displayName = String(displayNameMap.get(externalId) || '').trim().toLowerCase();
+      const displayTokens = normalizeForPathMatch(displayName);
 
       return (
         (externalId && normalizedPath.includes(externalId)) ||
+        (rootPath && normalizedPath.includes(rootPath)) ||
         (folderName && normalizedPath.includes(folderName)) ||
-        (folderTokens && pathTokens.includes(folderTokens))
+        (folderTokens && pathTokens.includes(folderTokens)) ||
+        (displayName && normalizedPath.includes(displayName)) ||
+        (displayTokens && pathTokens.includes(displayTokens))
       );
     }) || null
   );
+};
+
+const resolveWorkspaceDisplayPathToStoragePath = async (filepath) => {
+  const normalizedPath = normalizePathForAccess(filepath);
+  if (!normalizedPath) return normalizedPath;
+
+  const rows = await listCommonEventRows().catch(() => []);
+  if (!rows.length) return normalizedPath;
+
+  const displayNameMap = await getWorkspaceDisplayNameRows(
+    rows.map((row) => row.workspace_external_id)
+  ).catch(() => new Map());
+
+  for (const row of rows) {
+    const externalId = String(row.workspace_external_id || '').trim().toLowerCase();
+    const rootPath = normalizePathForAccess(row.root_path || '');
+    if (!rootPath) continue;
+
+    const aliases = [
+      displayNameMap.get(externalId),
+      row.event_name ? `Event - ${row.event_name}` : '',
+    ]
+      .map((value) => normalizePathForAccess(value))
+      .filter(Boolean);
+
+    for (const alias of aliases) {
+      const aliasLower = alias.toLowerCase();
+      const pathLower = normalizedPath.toLowerCase();
+      if (pathLower === aliasLower) return rootPath;
+      if (pathLower.startsWith(`${aliasLower}/`)) {
+        return `${rootPath}/${normalizedPath.slice(alias.length + 1)}`.replace(/\/+/g, '/');
+      }
+    }
+  }
+
+  return normalizedPath;
 };
 
 const getUserDisplayName = async (userId) => {
@@ -4097,12 +4196,16 @@ exports.listWorkspaces = async (req, res) => {
     const expiredCommonEventsOnly = ['visibility-expired', 'expired', 'expired-common-events'].includes(workspaceType);
     const result = await proxyRequest('/workspaces');
     const eventRows = await listCommonEventRows().catch(() => []);
+    const displayNameMap = await getWorkspaceDisplayNameRows([
+      ...((result.data?.workspaces || []).map((workspace) => workspace?.externalId)),
+      ...(eventRows.map((row) => row.workspace_external_id)),
+    ]).catch(() => new Map());
     const eventRowByExternalId = new Map(
       eventRows.map((row) => [String(row.workspace_external_id || '').trim().toLowerCase(), row])
     );
     const eventWorkspaces = eventRows.map((row) => ({
       externalId: row.workspace_external_id,
-      folderName: `Event - ${row.event_name}`,
+      folderName: displayNameMap.get(String(row.workspace_external_id || '').trim().toLowerCase()) || `Event - ${row.event_name}`,
       rootPath: row.root_path || null,
       fileCount: 0,
       createdAt: row.created_at,
@@ -4119,7 +4222,7 @@ exports.listWorkspaces = async (req, res) => {
     for (const workspace of result.data?.workspaces || []) {
       const externalId = String(workspace.externalId || '').trim().toLowerCase();
       if (!externalId || mergedWorkspaceByExternalId.has(externalId)) continue;
-      mergedWorkspaceByExternalId.set(externalId, workspace);
+      mergedWorkspaceByExternalId.set(externalId, applyWorkspaceDisplayName(workspace, displayNameMap));
     }
 
     for (const workspace of eventWorkspaces) {
@@ -4141,6 +4244,7 @@ exports.listWorkspaces = async (req, res) => {
               isCommonEvent: true,
               eventId: eventRow.event_id,
               eventName: eventRow.event_name,
+              displayName: workspace.folderName,
               visibleUntil: eventRow.visible_until,
             }
           : workspace
@@ -4262,6 +4366,7 @@ exports.getWorkspace = async (req, res) => {
     if (isCommonEventWorkspace) {
       await ensureCommonEventsTable();
       const normalizedExternalId = String(req.params.bookingId || '').trim().toLowerCase();
+      const displayNameMap = await getWorkspaceDisplayNameRows([normalizedExternalId]).catch(() => new Map());
       const [eventRows] = await db.sequelize.query(
         `
         SELECT event_id, event_name, visible_until
@@ -4285,7 +4390,7 @@ exports.getWorkspace = async (req, res) => {
           data: {
             ...(result.data || {}),
             workspace: {
-              ...(result.data?.workspace || {}),
+              ...applyWorkspaceDisplayName(result.data?.workspace || {}, displayNameMap),
               isCommonEvent: true,
               eventId: eventRow?.event_id,
               eventName: eventRow?.event_name,
@@ -4303,7 +4408,7 @@ exports.getWorkspace = async (req, res) => {
           data: {
             ...(result.data || {}),
             workspace: {
-              ...(result.data?.workspace || {}),
+              ...applyWorkspaceDisplayName(result.data?.workspace || {}, displayNameMap),
               isCommonEvent: true,
               eventId: eventRow?.event_id,
               eventName: eventRow?.event_name,
@@ -4313,6 +4418,15 @@ exports.getWorkspace = async (req, res) => {
           },
         };
       }
+    } else {
+      const displayNameMap = await getWorkspaceDisplayNameRows([req.params.bookingId]).catch(() => new Map());
+      result = {
+        ...result,
+        data: {
+          ...(result.data || {}),
+          workspace: applyWorkspaceDisplayName(result.data?.workspace || {}, displayNameMap),
+        },
+      };
     }
 
     return res.status(200).json(result);
@@ -4328,6 +4442,54 @@ exports.getWorkspace = async (req, res) => {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
       message: error.message,
+    });
+  }
+};
+
+exports.updateWorkspaceDisplayName = async (req, res) => {
+  try {
+    if (!isAdminRole(req)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only admin can rename file manager folders',
+      });
+    }
+
+    const externalId = String(req.params.bookingId || req.body.externalId || '').trim().toLowerCase();
+    const displayName = sanitizeFolderName(req.body.displayName || req.body.folderName || req.body.eventName, '');
+    if (!externalId || !displayName) {
+      return res.status(400).json({
+        success: false,
+        message: 'externalId and displayName are required',
+      });
+    }
+
+    await ensureWorkspaceDisplayNamesTable();
+    await db.sequelize.query(
+      `
+      INSERT INTO file_manager_workspace_display_names
+      (external_id, display_name, updated_by_user_id)
+      VALUES (?, ?, ?)
+      ON DUPLICATE KEY UPDATE
+        display_name = VALUES(display_name),
+        updated_by_user_id = VALUES(updated_by_user_id),
+        updated_at = CURRENT_TIMESTAMP
+      `,
+      { replacements: [externalId, displayName, getRequestUserId(req) || null] }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'File manager folder renamed',
+      data: {
+        externalId,
+        displayName,
+      },
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to rename file manager folder',
     });
   }
 };
@@ -4383,6 +4545,15 @@ exports.getWorkspaceFiles = async (req, res) => {
       );
     }
 
+    const displayNameMap = await getWorkspaceDisplayNameRows([req.params.bookingId]).catch(() => new Map());
+    result = {
+      ...result,
+      data: {
+        ...(result.data || {}),
+        workspace: applyWorkspaceDisplayName(result.data?.workspace || {}, displayNameMap),
+      },
+    };
+
     if (isCreatorRole(req) && isCommonEventExternalId(req.params.bookingId)) {
       const phase = normalizeWorkspacePhase(req.query.phase, null);
       const requestedPath = sanitizeRelativeFolderPath(req.query.path || '');
@@ -4417,6 +4588,7 @@ exports.getWorkspaceFiles = async (req, res) => {
         ...result,
         data: {
           ...(result.data || {}),
+          workspace: result.data?.workspace,
           folders: filteredFolders,
           files: filteredFiles,
         },
@@ -4442,18 +4614,99 @@ exports.getWorkspaceFiles = async (req, res) => {
 
 exports.getUploadPolicy = async (req, res) => {
   try {
-    await validateUploadAccessForPath(req, req.body.filepath);
+    const filepath = await resolveWorkspaceDisplayPathToStoragePath(req.body.filepath);
+    await validateUploadAccessForPath(req, filepath);
 
     const result = await proxyRequest('/upload-policy', {
       method: 'POST',
       body: JSON.stringify({
-        filepath: req.body.filepath,
+        filepath,
         fileContentType: req.body.fileContentType,
         fileSize: req.body.fileSize,
+        conflictMode: req.body.conflictMode,
         userId: getRequestUserId(req),
       }),
     });
     return res.status(200).json(result);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
+exports.detectUploadConflicts = async (req, res) => {
+  try {
+    const items = Array.isArray(req.body.items) ? req.body.items : [];
+    if (!items.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'items array is required',
+      });
+    }
+
+    const limitedItems = items.slice(0, 500);
+    const results = [];
+
+    for (const item of limitedItems) {
+      const requestedFilepath = String(item?.filepath || '').trim();
+      let resolvedFilepath = requestedFilepath;
+
+      try {
+        resolvedFilepath = await resolveWorkspaceDisplayPathToStoragePath(requestedFilepath);
+        await validateUploadAccessForPath(req, resolvedFilepath);
+
+        let metadata = null;
+        try {
+          metadata = await getExternalEntryMetadata(resolvedFilepath);
+        } catch (metadataError) {
+          if (metadataError.status && metadataError.status !== 404) {
+            throw metadataError;
+          }
+        }
+
+        const exists = Boolean(metadata && metadata.isFolder !== true);
+        results.push({
+          filepath: requestedFilepath,
+          resolvedFilepath,
+          fileName: item?.fileName || resolvedFilepath.split('/').pop() || '',
+          success: true,
+          exists,
+          entry: exists
+            ? {
+                id: metadata.id,
+                name: metadata.name,
+                path: metadata.path,
+                size: metadata.size,
+                contentType: metadata.contentType,
+                createdAt: metadata.createdAt,
+                updatedAt: metadata.updatedAt,
+              }
+            : null,
+        });
+      } catch (error) {
+        results.push({
+          filepath: requestedFilepath,
+          resolvedFilepath,
+          fileName: item?.fileName || requestedFilepath.split('/').pop() || '',
+          success: false,
+          exists: false,
+          error: error.message || 'Unable to check upload conflict',
+          code: error.status || 500,
+        });
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        total: results.length,
+        conflictCount: results.filter((item) => item.exists).length,
+        failureCount: results.filter((item) => !item.success).length,
+        items: results,
+      },
+    });
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
@@ -4472,19 +4725,23 @@ exports.getUploadPoliciesBatch = async (req, res) => {
       });
     }
 
+    const normalizedItems = [];
     for (const item of items) {
-      await validateUploadAccessForPath(req, item?.filepath);
+      const filepath = await resolveWorkspaceDisplayPathToStoragePath(item?.filepath);
+      await validateUploadAccessForPath(req, filepath);
+      normalizedItems.push({ ...item, filepath });
     }
 
     const result = await proxyRequest('/upload-policies/batch', {
       method: 'POST',
       body: JSON.stringify({
         userId: getRequestUserId(req),
-        items: items.map((item = {}) => ({
+        items: normalizedItems.map((item = {}) => ({
           filepath: item.filepath,
           fileContentType: item.fileContentType,
           fileSize: item.fileSize,
           userId: getRequestUserId(req),
+          conflictMode: item.conflictMode || req.body.conflictMode,
         })),
       }),
     });
@@ -4831,12 +5088,13 @@ exports.reindexFaceEmbeddings = async (req, res) => {
 
 exports.getFileViewUrl = async (req, res) => {
   try {
-    await ensureCreatorFileAccess(req, req.body.filepath);
-    await ensureClientFileAccess(req, req.body.filepath);
+    const filepath = await resolveWorkspaceDisplayPathToStoragePath(req.body.filepath);
+    await ensureCreatorFileAccess(req, filepath);
+    await ensureClientFileAccess(req, filepath);
     const result = await proxyRequest('/file-view-url', {
       method: 'POST',
       body: JSON.stringify({
-        filepath: req.body.filepath,
+        filepath,
       }),
     });
     return res.status(200).json(withPublicUrl(result, req));

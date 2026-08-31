@@ -54,9 +54,11 @@ router.post('/face-scan/search', authenticate, fileManagerView, externalFileMana
 router.get('/face-scan/index-status/:externalId', authenticate, fileManagerView, externalFileManagerController.getFaceScanIndexStatus);
 router.post('/face-scan/reindex', authenticate, fileManagerCreate, externalFileManagerController.reindexFaceEmbeddings);
 router.post('/workspace', authenticate, fileManagerCreate, externalFileManagerController.createWorkspace);
+router.patch('/workspace/:bookingId/display-name', authenticate, fileManagerCreate, externalFileManagerController.updateWorkspaceDisplayName);
 router.get('/workspace/:bookingId', authenticate, shootOrFileManagerView, externalFileManagerController.getWorkspace);
 router.get('/workspace/:bookingId/files', authenticate, shootOrFileManagerView, externalFileManagerController.getWorkspaceFiles);
 router.post('/folder', authenticate, fileManagerCreate, externalFileManagerController.createFolder);
+router.post('/upload-conflicts', authenticate, fileManagerCreate, externalFileManagerController.detectUploadConflicts);
 router.post('/upload-policy', authenticate, fileManagerCreate, externalFileManagerController.getUploadPolicy);
 router.post('/upload-policies/batch', authenticate, fileManagerCreate, externalFileManagerController.getUploadPoliciesBatch);
 router.post('/file-uploaded', authenticate, fileManagerCreate, externalFileManagerController.notifyFileUploaded);
