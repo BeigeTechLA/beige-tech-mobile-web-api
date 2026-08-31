@@ -144,6 +144,11 @@ function buildCustomer(booking = {}) {
   };
 }
 
+function buildUserDisplayName(user = null) {
+  if (!user) return null;
+  return user.name || user.email || null;
+}
+
 function pushGroupedAuditLog(logs, action, earning, payload = {}) {
   const createdAt = payload.created_at || null;
   if (!createdAt) return;
@@ -162,6 +167,7 @@ function pushGroupedAuditLog(logs, action, earning, payload = {}) {
       label: payload.label,
       notes: payload.notes || null,
       performed_by_user_id: payload.performed_by_user_id || null,
+      performed_by_name: payload.performed_by_name || null,
       created_at: createdAt,
       creator_count: 0,
       creators: []
@@ -187,6 +193,7 @@ function buildAuditLogs(earnings = []) {
       label: 'Submitted to Finance',
       notes: earning.approval_notes || null,
       performed_by_user_id: earning.submitted_by_user_id || null,
+      performed_by_name: buildUserDisplayName(earning.submitted_by || null),
       created_at: earning.submitted_at
     });
 
@@ -194,6 +201,7 @@ function buildAuditLogs(earnings = []) {
       label: 'Approved by Finance',
       notes: earning.approval_notes || null,
       performed_by_user_id: earning.approved_by_user_id || null,
+      performed_by_name: buildUserDisplayName(earning.approved_by || null),
       created_at: earning.approved_at
     });
 
@@ -201,6 +209,7 @@ function buildAuditLogs(earnings = []) {
       label: 'Rejected by Finance',
       notes: earning.rejection_reason || earning.approval_notes || null,
       performed_by_user_id: earning.rejected_by_user_id || null,
+      performed_by_name: buildUserDisplayName(earning.rejected_by || null),
       created_at: earning.rejected_at
     });
 
@@ -656,6 +665,20 @@ async function buildCpPayoutHistoryForEarnings(earnings = [], transaction = null
       creator_id: { [db.Sequelize.Op.in]: creatorIds },
       status: { [db.Sequelize.Op.in]: ['processing', 'paid'] }
     },
+    include: [
+      {
+        model: db.users,
+        as: 'approved_by',
+        required: false,
+        attributes: ['id', 'name', 'email']
+      },
+      {
+        model: db.users,
+        as: 'processed_by',
+        required: false,
+        attributes: ['id', 'name', 'email']
+      }
+    ],
     order: [['paid_at', 'DESC'], ['processed_at', 'DESC'], ['created_at', 'DESC']],
     transaction
   });
@@ -699,7 +722,11 @@ async function buildCpPayoutHistoryForEarnings(earnings = [], transaction = null
       dispute_id: metadata.dispute_id || disputeFallback?.dispute_id || null,
       dispute_code: metadata.dispute_code || disputeFallback?.dispute_code || null,
       dispute_original_compensation: disputeOriginalAmount || null,
-      dispute_extra_amount: disputeExtraAmount || null
+      dispute_extra_amount: disputeExtraAmount || null,
+      approved_by_user_id: payout.approved_by_user_id || null,
+      approved_by_name: buildUserDisplayName(payout.approved_by || null),
+      processed_by_user_id: payout.processed_by_user_id || null,
+      processed_by_name: buildUserDisplayName(payout.processed_by || null)
     };
 
     if (!byEarningId.has(creatorEarningId)) byEarningId.set(creatorEarningId, []);
@@ -1729,16 +1756,34 @@ async function getCpCompensationDetails(bookingId) {
         required: false,
         where: { approval_status: { [Op.in]: ACTIVE_APPROVAL_STATUSES } },
         include: [
-          {
-            model: db.crew_members,
-            as: 'creator',
-            required: false,
-            attributes: ['crew_member_id', 'first_name', 'last_name', 'email', 'primary_role']
-          },
-          {
-            model: db.creator_earning_compensation_items,
-            as: 'compensation_items',
-            required: false
+      {
+        model: db.crew_members,
+        as: 'creator',
+        required: false,
+        attributes: ['crew_member_id', 'first_name', 'last_name', 'email', 'primary_role']
+      },
+      {
+        model: db.users,
+        as: 'submitted_by',
+        required: false,
+        attributes: ['id', 'name', 'email']
+      },
+      {
+        model: db.users,
+        as: 'approved_by',
+        required: false,
+        attributes: ['id', 'name', 'email']
+      },
+      {
+        model: db.users,
+        as: 'rejected_by',
+        required: false,
+        attributes: ['id', 'name', 'email']
+      },
+      {
+        model: db.creator_earning_compensation_items,
+        as: 'compensation_items',
+        required: false
           },
           {
             model: db.creator_earning_advances,
@@ -1834,7 +1879,10 @@ async function getCpCompensationDetails(bookingId) {
         rejected_by_user_id: earning.rejected_by_user_id,
         rejected_at: earning.rejected_at,
         rejection_reason: earning.rejection_reason,
-        approval_notes: earning.approval_notes
+        approval_notes: earning.approval_notes,
+        submitted_by_name: buildUserDisplayName(earning.submitted_by || null),
+        approved_by_name: buildUserDisplayName(earning.approved_by || null),
+        rejected_by_name: buildUserDisplayName(earning.rejected_by || null)
       };
     }))
   };

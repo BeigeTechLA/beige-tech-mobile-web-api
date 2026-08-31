@@ -367,6 +367,19 @@ exports.updateSignupCreditPromotionSetting = async (req, res) => {
   }
 };
 
+exports.getSignupCreditPromotionHistory = async (req, res) => {
+  try {
+    const data = await accountCreditService.getSignupCreditPromotionHistory(req.query);
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error('Get signup credit promotion history error:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || 'Failed to fetch signup credit promotion history'
+    });
+  }
+};
+
 exports.listAdminCreditPointTransactions = async (req, res) => {
   try {
     const data = await accountCreditService.getAdminCreditTransactions(req.query);

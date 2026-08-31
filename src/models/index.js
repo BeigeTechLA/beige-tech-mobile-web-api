@@ -8,6 +8,7 @@ const salesRepStatusActivityFactory = require('./sales_rep_status_activity');
 const userArchiveHistoryFactory = require('./user_archive_history');
 const appNotificationsFactory = require('./app_notifications');
 const signupCreditPromotionSettingsFactory = require('./signup_credit_promotion_settings');
+const signupCreditPromoHistoryFactory = require('./signup_credit_promo_history');
 const shiftsFactory = require('./shifts');
 const shiftSalespeopleFactory = require('./shift_salespeople');
 const assignmentHistoryFactory = require('./assignment_history');
@@ -20,6 +21,7 @@ models.sales_rep_status_activity = salesRepStatusActivityFactory(sequelize, Data
 models.user_archive_history = userArchiveHistoryFactory(sequelize, DataTypes);
 models.app_notifications = appNotificationsFactory(sequelize, DataTypes);
 models.signup_credit_promotion_settings = signupCreditPromotionSettingsFactory(sequelize, DataTypes);
+models.signup_credit_promo_history = signupCreditPromoHistoryFactory(sequelize, DataTypes);
 models.shifts = shiftsFactory(sequelize, DataTypes);
 models.shift_salespeople = shiftSalespeopleFactory(sequelize, DataTypes);
 models.assignment_history = assignmentHistoryFactory(sequelize, DataTypes);
@@ -129,6 +131,16 @@ if (models.app_notifications && models.users) {
 models.signup_credit_promotion_settings.belongsTo(models.users, {
   foreignKey: 'updated_by_user_id',
   as: 'updated_by'
+});
+
+models.signup_credit_promo_history.belongsTo(models.signup_credit_promotion_settings, {
+  foreignKey: 'signup_credit_promotion_setting_id',
+  as: 'setting'
+});
+
+models.signup_credit_promo_history.belongsTo(models.users, {
+  foreignKey: 'changed_by_user_id',
+  as: 'changed_by'
 });
 
 const Signature = require('./signature.model')(sequelize, DataTypes);
