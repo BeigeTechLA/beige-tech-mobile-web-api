@@ -3900,6 +3900,8 @@ exports.getAllProjectDetails = async (req, res) => {
       ]};
     } else if (rangeLower === 'today') {
       dateFilter = Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), Sequelize.fn('CURDATE'));
+      } else if (rangeLower === 'tbd') {
+      dateFilter = { event_date: { [Sequelize.Op.is]: null } }; 
     } else if (rangeLower === 'upcoming') {
       dateFilter = Sequelize.where(Sequelize.fn('DATE', Sequelize.col('event_date')), { [Sequelize.Op.gte]: Sequelize.fn('CURDATE') });
     } else if (rangeLower === 'next_7_days') {
@@ -3965,7 +3967,7 @@ exports.getAllProjectDetails = async (req, res) => {
           Sequelize.fn('CURDATE')
         ]
       });
-    } else if (rangeLower === 'all' || !rangeLower || rangeLower === 'custom') {
+    } else {
       dateFilter = {};
     }
 
@@ -4144,7 +4146,7 @@ exports.getAllProjectDetails = async (req, res) => {
         },
         revision: { status: 3 },
         completed: { status: 4 },
-        assetsdelivered: { status: 4 },
+        assetsdelivered: { status: 4 }, 
         cancelled: {
           [Sequelize.Op.or]: [
             { status: 5 },
