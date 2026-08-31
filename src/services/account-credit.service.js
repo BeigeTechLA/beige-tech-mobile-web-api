@@ -145,6 +145,41 @@ function promotionIsActive(setting, now = new Date()) {
   return roundCurrency(setting.amount) > 0;
 }
 
+function normalizePromotionSnapshot(setting = {}) {
+  return {
+    is_enabled: Boolean(setting.is_enabled),
+    amount: roundCurrency(setting.amount),
+    start_date: setting.start_date ? String(setting.start_date).slice(0, 10) : null,
+    end_date: setting.end_date ? String(setting.end_date).slice(0, 10) : null
+  };
+}
+
+function buildPromotionChangeDetails(before = null, after = null) {
+  const previous = before ? normalizePromotionSnapshot(before) : null;
+  const next = after ? normalizePromotionSnapshot(after) : null;
+  const changes = [];
+
+  if (!previous && next) {
+    changes.push({ field: 'setting', before: null, after: next });
+  } else if (previous && next) {
+    ['is_enabled', 'amount', 'start_date', 'end_date'].forEach((field) => {
+      if (String(previous[field] ?? '') !== String(next[field] ?? '')) {
+        changes.push({
+          field,
+          before: previous[field],
+          after: next[field]
+        });
+      }
+    });
+  }
+
+  return {
+    before: previous,
+    after: next,
+    changes
+  };
+}
+
 async function getSignupCreditPromotionSetting({ transaction = null } = {}) {
   if (!db.signup_credit_promotion_settings) {
     return {
@@ -196,7 +231,7 @@ async function updateSignupCreditPromotionSetting(payload = {}, { updatedByUserI
     throw error;
   }
 
-  await db.signup_credit_promotion_settings.upsert({
+  const nextSetting = {
     signup_credit_promotion_setting_id: 1,
     is_enabled: Boolean(payload.is_enabled),
     amount,
@@ -204,9 +239,109 @@ async function updateSignupCreditPromotionSetting(payload = {}, { updatedByUserI
     end_date: endDate,
     updated_by_user_id: updatedByUserId || null,
     updated_at: new Date()
+  };
+
+  await db.sequelize.transaction(async (transaction) => {
+    const current = await db.signup_credit_promotion_settings.findByPk(1, { transaction });
+    const currentPlain = current ? toPlain(current) : null;
+    const currentSnapshot = currentPlain ? normalizePromotionSnapshot(currentPlain) : null;
+    const nextSnapshot = normalizePromotionSnapshot(nextSetting);
+    const hasChanges = !currentSnapshot || ['is_enabled', 'amount', 'start_date', 'end_date'].some((field) => {
+      return String(currentSnapshot[field] ?? '') !== String(nextSnapshot[field] ?? '');
+    });
+
+    if (!current) {
+      await db.signup_credit_promotion_settings.create(nextSetting, { transaction });
+    } else if (hasChanges) {
+      await current.update(nextSetting, { transaction });
+    }
+
+    if (hasChanges) {
+      await db.signup_credit_promo_history.create({
+        signup_credit_promotion_setting_id: 1,
+        ...nextSnapshot,
+        changed_by_user_id: updatedByUserId || null,
+        changed_at: nextSetting.updated_at,
+        change_reason: current ? 'update' : 'initial_create',
+        change_details_json: buildPromotionChangeDetails(currentSnapshot, nextSnapshot)
+      }, { transaction });
+    }
   });
 
   return getSignupCreditPromotionSetting();
+}
+
+async function getSignupCreditPromotionHistory(filters = {}) {
+  if (!db.signup_credit_promo_history) {
+    return {
+      rows: [],
+      pagination: { page: 1, limit: 20, total: 0, total_pages: 0 }
+    };
+  }
+
+  const { page, limit, offset } = parsePageParams(filters);
+  const { count, rows } = await db.signup_credit_promo_history.findAndCountAll({
+    include: [
+      {
+        model: db.users.unscoped ? db.users.unscoped() : db.users,
+        as: 'changed_by',
+        required: false,
+        attributes: ['id', 'name', 'email', 'role']
+      }
+    ],
+    order: [['changed_at', 'DESC'], ['signup_credit_promo_history_id', 'DESC']],
+    limit,
+    offset
+  });
+
+  return {
+    rows: rows.map((row) => {
+      const plain = toPlain(row);
+      const details = safeParseJsonObject(plain.change_details_json) || plain.change_details_json || {};
+      const snapshot = normalizePromotionSnapshot(plain);
+      const before = details.before || null;
+      const after = details.after || snapshot;
+      const changes = Array.isArray(details.changes) && details.changes.length > 0
+        ? details.changes
+        : before
+          ? ['is_enabled', 'amount', 'start_date', 'end_date']
+            .filter((field) => String(before[field] ?? '') !== String(after[field] ?? ''))
+            .map((field) => ({
+              field,
+              before: before[field],
+              after: after[field]
+            }))
+          : [
+            {
+              field: 'setting',
+              before: null,
+              after
+            }
+          ];
+      return {
+        signup_credit_promo_history_id: plain.signup_credit_promo_history_id,
+        signup_credit_promotion_setting_id: plain.signup_credit_promotion_setting_id,
+        is_enabled: Boolean(plain.is_enabled),
+        amount: roundCurrency(plain.amount),
+        start_date: plain.start_date || null,
+        end_date: plain.end_date || null,
+        changed_at: plain.changed_at || null,
+        change_reason: plain.change_reason || null,
+        changed_by_user_id: plain.changed_by_user_id || null,
+        changed_by: plain.changed_by ? toPlain(plain.changed_by) : null,
+        change_details_json: details,
+        changes,
+        before,
+        after
+      };
+    }),
+    pagination: {
+      page,
+      limit,
+      total: count,
+      total_pages: Math.ceil(count / limit)
+    }
+  };
 }
 
 async function grantSignupCreditIfEligible({ userId, email = null, createdByUserId = null, transaction = null } = {}) {
@@ -2065,5 +2200,6 @@ module.exports = {
   getAdminCreditTransactions,
   getSignupCreditPromotionSetting,
   updateSignupCreditPromotionSetting,
+  getSignupCreditPromotionHistory,
   grantSignupCreditIfEligible
 };
