@@ -3990,6 +3990,86 @@ const sendWorkspaceAccessInvitationEmail = async ({ to, data = {} }) => {
   return { success: false, error: 'FILE_SHARE_INVITATION_TEMPLATE_ID is not configured' };
 };
 
+const sendCreativePartnerProfileReminderEmail = async (data = {}) => {
+  try {
+    const to = data.to_email || data.email;
+    if (!to) {
+      return { success: false, error: 'Recipient email is required' };
+    }
+
+    const firstName = getFirstName(data.cp_name || data.first_name || '', data.first_name || 'there') || 'there';
+    const dashboardLink =
+      data.dashboard_link ||
+      `${String(process.env.FRONTEND_URL || 'https://beige.app').replace(/\/+$/, '')}/creator/dashboard/profile`;
+    const subject = data.subject || 'Complete Your Beige Profile to Get Approved';
+    const text = [
+      `Hello ${firstName},`,
+      '',
+      "You're almost there! Your Beige profile is still incomplete.",
+      '',
+      'Please complete the remaining details so our team can review and approve your profile. Your profile needs to be complete before you can be fully approved and onboarded as a Beige Creative Partner.',
+      '',
+      `Complete Your Profile: ${dashboardLink}`,
+      '',
+      'It only takes a few minutes, and once your profile is complete, we can move ahead with the approval process.',
+      '',
+      'We look forward to having you on Beige!',
+      '',
+      'Warm regards,',
+      'The Beige Team'
+    ].join('\n');
+
+    const html = renderEmailTemplate('CPProfileReminder.html', {
+      first_name: firstName,
+      dashboard_link: dashboardLink
+    });
+
+    if (process.env.SENDGRID_API_KEY) {
+      const fromEmail = getSendgridFromAddress();
+      if (!fromEmail) {
+        return { success: false, error: 'Sender email not configured' };
+      }
+
+      const [response] = await sgMail.send({
+        to,
+        from: {
+          email: fromEmail,
+          name: getSendgridFromName()
+        },
+        subject,
+        text,
+        html
+      });
+
+      return {
+        success: true,
+        statusCode: response?.statusCode,
+        messageId: response?.headers?.['x-message-id'] || response?.headers?.['X-Message-Id'] || null
+      };
+    }
+
+    if (!process.env.EMAIL_USER || !process.env.EMAIL_APP_PASSWORD) {
+      return { success: false, error: 'Email provider is not configured' };
+    }
+
+    const info = await transporter.sendMail({
+      from: `"${process.env.EMAIL_FROM_NAME || 'Beige AI'}" <${process.env.EMAIL_USER}>`,
+      to,
+      subject,
+      text,
+      html
+    });
+
+    return {
+      success: true,
+      messageId: info?.messageId || null
+    };
+  } catch (error) {
+    console.error('Error sending creative partner profile reminder email:', error?.response?.body || error.message);
+    return { success: false, error: error.message };
+  }
+};
+
 module.exports = {
   formatContentTypes,
   formatShootTypes,
@@ -4022,6 +4102,7 @@ module.exports = {
   sendCPConfirmedEmailByRequest,
   sendCPNewBookingRequestEmail,
   sendCPEarningsUpdatedEmail,
+  sendCreativePartnerProfileReminderEmail,
   sendPostProductionAssignmentEmail,
   sendNewClientSignupNotification,
   sendNewCrewSignupNotification,

@@ -11,7 +11,8 @@ const {
   sendTaskAssignmentEmail,
   sendCPNewBookingRequestEmail,
   sendPostProductionAssignmentEmail,
-  sendOnboardingFormCriticalEmail
+  sendOnboardingFormCriticalEmail,
+  sendCreativePartnerProfileReminderEmail
 } = require('../utils/emailService');
 const pushNotificationService = require('../services/push-notification.service');
 const { Parser } = require('json2csv');
@@ -12017,6 +12018,90 @@ exports.getAllPendingCrewMembers = async (req, res) => {
   } catch (error) {
     console.error("Get All Pending Crew Members Error:", error);
     return res.status(500).json({ error: true, message: "Internal server error" });
+  }
+};
+
+exports.sendCreativePartnerProfileReminder = async (req, res) => {
+  try {
+    const crewMemberId = Number(req.params?.crew_member_id || req.body?.crew_member_id);
+
+    if (!Number.isInteger(crewMemberId) || crewMemberId <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid crew member ID is required."
+      });
+    }
+
+    const member = await onboardingCtrl.getCrewMemberWithOnboardingFiles({
+      crew_member_id: crewMemberId,
+      is_active: 1
+    });
+
+    if (!member) {
+      return res.status(404).json({
+        success: false,
+        message: "Creative partner not found."
+      });
+    }
+
+    const onboardingSummary = await onboardingCtrl.syncCreatorRegistrationComplete(member);
+
+    if (Number(member.is_crew_verified) === 1) {
+      return res.status(400).json({
+        success: false,
+        message: "This creative partner is already approved."
+      });
+    }
+
+    if (Number(onboardingSummary.is_registration_complete) === 1) {
+      return res.status(400).json({
+        success: false,
+        message: "This creative partner has already completed their profile."
+      });
+    }
+
+    const toEmail = String(member.email || '').trim().toLowerCase();
+    if (!toEmail) {
+      return res.status(400).json({
+        success: false,
+        message: "Creative partner email is missing."
+      });
+    }
+
+    const fullName = `${member.first_name || ''} ${member.last_name || ''}`.trim();
+    const frontendUrl = getFrontendBaseUrl();
+    const emailResult = await sendCreativePartnerProfileReminderEmail({
+      to_email: toEmail,
+      cp_name: fullName,
+      first_name: getFirstNameForEmail(fullName, toEmail),
+      dashboard_link: `${frontendUrl}/creator/dashboard/profile`
+    });
+
+    if (!emailResult?.success) {
+      return res.status(502).json({
+        success: false,
+        message: "Failed to send creative partner profile reminder email.",
+        error: emailResult?.error || "Unknown email error"
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Profile reminder email sent successfully.",
+      data: {
+        crew_member_id: crewMemberId,
+        to_email: toEmail,
+        message_id: emailResult.messageId || null,
+        onboarding_status: onboardingSummary
+      }
+    });
+  } catch (error) {
+    console.error("SendCreativePartnerProfileReminder Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: error.message
+    });
   }
 };
 
