@@ -220,6 +220,7 @@ router.get('/get-event-types', admin.getEventTypes),
 router.get('/get-crew-member-name', admin.getCrewMembersByName)
 router.get('/get-crew-count', admin.getCrewCount);
 router.get('/get-pending-cp', authMiddleware, salesRepSalesView, admin.getAllPendingCrewMembers);
+router.post('/crew-member/:crew_member_id/profile-reminder', authMiddleware, adminUsersEdit, admin.sendCreativePartnerProfileReminder);
 router.get('/:bookingId/get-booking-summary', admin.getBookingSummaryById);
 
 // Dashboard statistics routes

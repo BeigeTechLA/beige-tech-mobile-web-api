@@ -2160,6 +2160,12 @@ const isWorkflowPhaseFolderName = (value) => {
   return ['pre-production', 'preproduction', 'post-production', 'postproduction'].includes(normalized);
 };
 
+const hasFolderVisibleContent = (folder) =>
+  Number(folder?.fileCount || 0) > 0 || Number(folder?.childFolderCount || 0) > 0;
+
+const shouldShowCommonEventRootFolder = (folder) =>
+  !isWorkspacePhaseRootName(folder?.name || folder?.title) || hasFolderVisibleContent(folder);
+
 const extractPhaseAndRelativePath = (value, fallbackPhase = null) => {
   const normalizedPath = normalizePathForAccess(value);
   if (!normalizedPath) {
@@ -3610,6 +3616,7 @@ exports.createCommonEvent = async (req, res) => {
       body: JSON.stringify({
         externalId: workspaceExternalId,
         folderName: workspaceFolderName,
+        skipWorkflowSubfolders: true,
       }),
     });
 
@@ -4265,9 +4272,7 @@ exports.getWorkspace = async (req, res) => {
         { replacements: [normalizedExternalId] }
       );
       const eventRow = Array.isArray(eventRows) ? eventRows[0] : null;
-      const rootFolders = (result?.data?.folders || []).filter(
-        (folder) => !isWorkspacePhaseRootName(folder?.name) || Number(folder?.fileCount || 0) > 0
-      );
+      const rootFolders = (result?.data?.folders || []).filter(shouldShowCommonEventRootFolder);
 
       if (isCreatorRole(req)) {
         const creatorFolders = await listCreatorCommonEventFolders({
@@ -5332,7 +5337,7 @@ const filterSharedCommonEventRootListing = (listing, share, phaseToUse, pathToUs
   return {
     ...data,
     folders: Array.isArray(data.folders)
-      ? data.folders.filter((folder) => !isWorkflowPhaseFolderName(folder?.name || folder?.title))
+      ? data.folders.filter((folder) => !isWorkflowPhaseFolderName(folder?.name || folder?.title) || hasFolderVisibleContent(folder))
       : data.folders,
   };
 };
