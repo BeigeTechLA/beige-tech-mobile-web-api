@@ -28,6 +28,8 @@ let fileShareTableReadyPromise = null;
 let fileShareOtpTableReadyPromise = null;
 let fileShareAccessLogsTableReadyPromise = null;
 let workspaceAccessTableReadyPromise = null;
+let fileManagerSettingsTableReadyPromise = null;
+let creatorFoldersTableReadyPromise = null;
 
 const buildHeaders = () => ({
   'Content-Type': 'application/json',
@@ -173,6 +175,8 @@ const isCreatorRole = (req) => {
 const isCommonEventVisibilityLimitedRole = (req) => ['client', 'creator', 'creative'].includes(getNormalizedRequestUserRole(req));
 const isCommonEventExternalId = (value) =>
   String(value || '').trim().toLowerCase().startsWith(COMMON_EVENT_ID_PREFIX);
+
+const DEFAULT_CP_DELETE_LOCK_DAYS = 7;
 
 const extractCommonEventExternalIdFromPath = (value) => {
   const normalized = String(value || '').trim().toLowerCase();
@@ -1709,6 +1713,158 @@ const ensureFileShareOtpTable = async () => {
   await fileShareOtpTableReadyPromise;
 };
 
+const normalizeCpDeleteLockDays = (value, fallback = DEFAULT_CP_DELETE_LOCK_DAYS) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(0, Math.min(365, Math.floor(parsed)));
+};
+
+const ensureFileManagerSettingsTable = async () => {
+  if (!fileManagerSettingsTableReadyPromise) {
+    fileManagerSettingsTableReadyPromise = db.sequelize.query(`
+      CREATE TABLE IF NOT EXISTS file_manager_settings (
+        setting_id TINYINT UNSIGNED NOT NULL DEFAULT 1,
+        cp_delete_lock_days INT UNSIGNED NOT NULL DEFAULT 7,
+        updated_by_user_id BIGINT UNSIGNED DEFAULT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (setting_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+  }
+
+  await fileManagerSettingsTableReadyPromise;
+};
+
+const getFileManagerSettings = async () => {
+  await ensureFileManagerSettingsTable();
+  await db.sequelize.query(
+    `INSERT IGNORE INTO file_manager_settings (setting_id, cp_delete_lock_days)
+     VALUES (1, :defaultDays)`,
+    { replacements: { defaultDays: DEFAULT_CP_DELETE_LOCK_DAYS } }
+  );
+
+  const [rows] = await db.sequelize.query(
+    `SELECT setting_id, cp_delete_lock_days, updated_by_user_id, created_at, updated_at
+     FROM file_manager_settings
+     WHERE setting_id = 1
+     LIMIT 1`
+  );
+  const row = Array.isArray(rows) && rows.length ? rows[0] : {};
+  return {
+    cpDeleteLockDays: normalizeCpDeleteLockDays(row.cp_delete_lock_days),
+    cp_delete_lock_days: normalizeCpDeleteLockDays(row.cp_delete_lock_days),
+    updatedByUserId: row.updated_by_user_id || null,
+    updatedAt: row.updated_at || null,
+  };
+};
+
+const ensureCreatorFoldersTable = async () => {
+  if (!creatorFoldersTableReadyPromise) {
+    creatorFoldersTableReadyPromise = db.sequelize.query(`
+      CREATE TABLE IF NOT EXISTS file_manager_creator_folders (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        workspace_external_id VARCHAR(128) NOT NULL,
+        phase VARCHAR(16) NOT NULL DEFAULT 'root',
+        folder_path VARCHAR(1024) NOT NULL,
+        folder_path_hash CHAR(64) AS (SHA2(folder_path, 256)) STORED,
+        created_by_user_id BIGINT UNSIGNED NOT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        UNIQUE KEY uq_file_manager_creator_folder (workspace_external_id, phase, folder_path_hash),
+        KEY idx_file_manager_creator_folder_user (created_by_user_id),
+        KEY idx_file_manager_creator_folder_workspace (workspace_external_id),
+        KEY idx_file_manager_creator_folder_path (folder_path(191))
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+  }
+
+  await creatorFoldersTableReadyPromise;
+};
+
+const recordCreatorFolderOwnership = async ({ externalId, phase = 'root', folderPath, userId }) => {
+  const normalizedExternalId = String(externalId || '').trim().toLowerCase();
+  const normalizedFolderPath = sanitizeRelativeFolderPath(folderPath);
+  const normalizedUserId = Number(userId || 0);
+  if (!normalizedExternalId || !normalizedFolderPath || !normalizedUserId) return;
+
+  await ensureCreatorFoldersTable();
+  await db.sequelize.query(
+    `
+    INSERT INTO file_manager_creator_folders
+    (workspace_external_id, phase, folder_path, created_by_user_id)
+    VALUES (?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE
+      created_by_user_id = VALUES(created_by_user_id),
+      updated_at = CURRENT_TIMESTAMP
+    `,
+    {
+      replacements: [
+        normalizedExternalId,
+        String(phase || 'root').trim().toLowerCase(),
+        normalizedFolderPath,
+        normalizedUserId,
+      ],
+    }
+  );
+};
+
+const creatorOwnsTrackedFolder = async ({ externalId, phase = 'root', folderPath, userId }) => {
+  const normalizedExternalId = String(externalId || '').trim().toLowerCase();
+  const normalizedFolderPath = sanitizeRelativeFolderPath(folderPath);
+  const normalizedUserId = Number(userId || 0);
+  if (!normalizedExternalId || !normalizedFolderPath || !normalizedUserId) return false;
+
+  await ensureCreatorFoldersTable();
+  const [rows] = await db.sequelize.query(
+    `
+    SELECT id
+    FROM file_manager_creator_folders
+    WHERE workspace_external_id = ?
+      AND phase = ?
+      AND folder_path = ?
+      AND created_by_user_id = ?
+    LIMIT 1
+    `,
+    {
+      replacements: [
+        normalizedExternalId,
+        String(phase || 'root').trim().toLowerCase(),
+        normalizedFolderPath,
+        normalizedUserId,
+      ],
+    }
+  );
+
+  return Array.isArray(rows) && rows.length > 0;
+};
+
+const deleteCreatorFolderOwnershipUnderPath = async ({ externalId, phase = 'root', folderPath }) => {
+  const normalizedExternalId = String(externalId || '').trim().toLowerCase();
+  const normalizedFolderPath = sanitizeRelativeFolderPath(folderPath);
+  if (!normalizedExternalId || !normalizedFolderPath) return;
+
+  await ensureCreatorFoldersTable();
+  await db.sequelize.query(
+    `
+    DELETE FROM file_manager_creator_folders
+    WHERE workspace_external_id = ?
+      AND phase = ?
+      AND (folder_path = ? OR folder_path LIKE ?)
+    `,
+    {
+      replacements: [
+        normalizedExternalId,
+        String(phase || 'root').trim().toLowerCase(),
+        normalizedFolderPath,
+        `${normalizedFolderPath}/%`,
+      ],
+    }
+  );
+};
+
+
 const ensureWorkspaceAccessTable = async () => {
   if (!workspaceAccessTableReadyPromise) {
     workspaceAccessTableReadyPromise = db.sequelize.query(`
@@ -1989,6 +2145,14 @@ const normalizeWorkspacePhase = (value, fallback = null) => {
 };
 
 const isWorkspacePhaseRootName = (value) => {
+  const normalized = String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, '-');
+  return ['pre-production', 'preproduction', 'post-production', 'postproduction'].includes(normalized);
+};
+
+const isWorkflowPhaseFolderName = (value) => {
   const normalized = String(value || '')
     .trim()
     .toLowerCase()
@@ -3158,6 +3322,162 @@ const proxyRequest = async (path, options = {}) => {
   }
 
   return payload;
+};
+
+const getExternalEntryMetadata = async (filepath) => {
+  const normalizedPath = normalizePathForAccess(filepath);
+  if (!normalizedPath) return null;
+  const query = new URLSearchParams({ filepath: normalizedPath });
+  const result = await proxyRequest(`/entry-metadata?${query.toString()}`);
+  return result?.data || null;
+};
+
+const parseFileManagerMetadataValue = (value) => {
+  if (value == null) return null;
+  if (Array.isArray(value)) return value[0] ?? null;
+  if (typeof value === 'object') return value;
+  const rawValue = String(value || '').trim();
+  if (!rawValue) return null;
+  try {
+    return JSON.parse(rawValue);
+  } catch (error) {
+    return rawValue;
+  }
+};
+
+const getDeleteTargetContext = (metadata, targetPath) => {
+  const normalizedPath = normalizePathForAccess(metadata?.path || targetPath);
+  const commonEventExternalId = extractCommonEventExternalIdFromPath(normalizedPath);
+  const extracted = extractPhaseAndRelativePath(normalizedPath);
+  if (commonEventExternalId) {
+    return {
+      externalId: commonEventExternalId,
+      phase: extracted.phase || 'root',
+      relativePath: extracted.relativePath,
+      isCommonEvent: true,
+    };
+  }
+
+  const metadataOrderId = parseFileManagerMetadataValue(metadata?.metadata?.orderId);
+  return {
+    externalId: metadataOrderId ? String(metadataOrderId).trim().toLowerCase() : null,
+    phase: extracted.phase || 'root',
+    relativePath: extracted.relativePath,
+    isCommonEvent: false,
+  };
+};
+
+const assertCreatorCanDeleteFolder = async (req, metadata, targetPath) => {
+  if (!metadata?.isFolder) return;
+
+  const context = getDeleteTargetContext(metadata, targetPath);
+  let normalizedRelativePath = sanitizeRelativeFolderPath(context.relativePath);
+  if (context.isCommonEvent) {
+    const [eventRows] = await db.sequelize.query(
+      `SELECT event_name, root_path
+       FROM file_manager_common_events
+       WHERE workspace_external_id = ?
+       LIMIT 1`,
+      { replacements: [context.externalId] }
+    );
+    const eventRow = Array.isArray(eventRows) ? eventRows[0] : {};
+    normalizedRelativePath = sanitizeRelativeFolderPath(
+      stripCommonEventRootFromPath(metadata?.path || targetPath, eventRow) || normalizedRelativePath
+    );
+  }
+  const pathSegments = normalizedRelativePath.split('/').filter(Boolean);
+
+  if (!context.externalId || pathSegments.length === 0) {
+    const error = new Error('Creative partners cannot delete root folders. Please request admin support.');
+    error.status = 403;
+    throw error;
+  }
+
+  if (context.isCommonEvent && pathSegments.length <= 1) {
+    const error = new Error('Creative partners cannot delete their common event root folder. Please request admin support.');
+    error.status = 403;
+    throw error;
+  }
+
+  const userId = getRequestUserId(req);
+  let ownsFolder = await creatorOwnsTrackedFolder({
+    externalId: context.externalId,
+    phase: context.phase,
+    folderPath: normalizedRelativePath,
+    userId,
+  });
+
+  if (!ownsFolder) {
+    const error = new Error('Creative partners can delete only folders they created. Please request admin support.');
+    error.status = 403;
+    throw error;
+  }
+};
+
+const cleanupCreatorFolderOwnershipForDeletedFolder = async (metadata, targetPath) => {
+  if (!metadata?.isFolder) return;
+  const context = getDeleteTargetContext(metadata, targetPath);
+  if (!context.externalId) return;
+
+  let normalizedRelativePath = sanitizeRelativeFolderPath(context.relativePath);
+  if (context.isCommonEvent) {
+    const [eventRows] = await db.sequelize.query(
+      `SELECT event_name, root_path
+       FROM file_manager_common_events
+       WHERE workspace_external_id = ?
+       LIMIT 1`,
+      { replacements: [context.externalId] }
+    );
+    const eventRow = Array.isArray(eventRows) ? eventRows[0] : {};
+    normalizedRelativePath = sanitizeRelativeFolderPath(
+      stripCommonEventRootFromPath(metadata?.path || targetPath, eventRow) || normalizedRelativePath
+    );
+  }
+
+  await deleteCreatorFolderOwnershipUnderPath({
+    externalId: context.externalId,
+    phase: context.phase,
+    folderPath: normalizedRelativePath,
+  });
+};
+
+const assertCreatorCanDeleteFileManagerEntry = async (req, targetPath) => {
+  if (!isCreatorRole(req)) return null;
+
+  let metadata;
+  try {
+    metadata = await getExternalEntryMetadata(targetPath);
+  } catch (error) {
+    const protectedError = new Error('This file cannot be deleted by a creative partner. Please request admin support.');
+    protectedError.status = error?.status === 404 ? 404 : 403;
+    throw protectedError;
+  }
+
+  await assertCreatorCanDeleteFolder(req, metadata, targetPath);
+
+  const settings = await getFileManagerSettings();
+  const lockDays = normalizeCpDeleteLockDays(settings.cpDeleteLockDays);
+  if (lockDays <= 0) return metadata;
+
+  const createdAt = metadata?.createdAt;
+  const createdTime = new Date(createdAt || '').getTime();
+  if (!Number.isFinite(createdTime)) {
+    const error = new Error('This file cannot be deleted by a creative partner. Please request admin support.');
+    error.status = 403;
+    throw error;
+  }
+
+  const ageMs = Date.now() - createdTime;
+  const lockMs = lockDays * 24 * 60 * 60 * 1000;
+  if (ageMs > lockMs) {
+    const itemType = metadata?.isFolder ? 'folders' : 'files';
+    const ageLabel = metadata?.isFolder ? 'creation' : 'upload';
+    const error = new Error(`Creative partners can delete ${itemType} only within ${lockDays} day${lockDays === 1 ? '' : 's'} of ${ageLabel}. Please request admin support.`);
+    error.status = 403;
+    throw error;
+  }
+
+  return metadata;
 };
 
 const normalizeSegment = (value) =>
@@ -4579,6 +4899,21 @@ exports.createFolder = async (req, res) => {
 
     if (result?.success !== false) {
       const uploaderName = await getUserDisplayName(getRequestUserId(req)).catch(() => null);
+      if (isCreatorRole(req)) {
+        const createdFolderPathFromProvider = result?.data?.folder?.path || result?.data?.folderPath || '';
+        const extractedFromProvider = extractPhaseAndRelativePath(createdFolderPathFromProvider, phase || null);
+        const createdFolderPath = sanitizeRelativeFolderPath(
+          extractedFromProvider.relativePath || [path, folderName].filter(Boolean).join('/')
+        );
+        const createdFolderPhase = extractedFromProvider.phase || phase || 'root';
+        await recordCreatorFolderOwnership({
+          externalId,
+          phase: createdFolderPhase,
+          folderPath: createdFolderPath,
+          userId: getRequestUserId(req),
+        });
+      }
+
       await sendNewVersionUploadedClientEmailForFolder({
         externalId,
         phase: phase || req.body.phase,
@@ -4712,6 +5047,7 @@ exports.deleteEntry = async (req, res) => {
     const targetPath = req.body.filepath || req.body.path;
     await ensureCreatorFileAccess(req, targetPath);
     await ensureClientFileAccess(req, targetPath);
+    const deleteMetadata = await assertCreatorCanDeleteFileManagerEntry(req, targetPath);
     const result = await proxyRequest('/delete', {
       method: 'POST',
       body: JSON.stringify({
@@ -4725,6 +5061,7 @@ exports.deleteEntry = async (req, res) => {
         console.error('Failed to invalidate deleted file-manager shares:', error);
       });
       await deleteFaceEmbeddingRecordsByPath(deletedPath).catch(() => null);
+      await cleanupCreatorFolderOwnershipForDeletedFolder(deleteMetadata, deletedPath).catch(() => null);
 
       const rows = await listCommonEventRows().catch(() => []);
       const deletedRootRow = rows.find((row) => {
@@ -4962,6 +5299,44 @@ const ensureSharedScopeAccess = (share, requestedPhase, requestedPath) => {
   return true;
 };
 
+const resolveSharedScopeRequestFromFilepath = async (share, filepath, requestedPhase, requestedPath) => {
+  const normalizedFilepath = normalizePathForAccess(filepath);
+  const extractedFromFilepath = extractPhaseAndRelativePath(normalizedFilepath, requestedPhase);
+  let scopePhase = extractedFromFilepath.phase || requestedPhase;
+  let scopePath = extractedFromFilepath.relativePath || requestedPath;
+
+  if (!extractedFromFilepath.phase && isCommonEventExternalId(share?.external_id)) {
+    const workspaceRootPath = await getSharedWorkspaceRootPath(share.external_id);
+    if (workspaceRootPath && isPathWithin(workspaceRootPath, normalizedFilepath)) {
+      const relativeToCommonEventRoot =
+        normalizedFilepath.toLowerCase() === workspaceRootPath.toLowerCase()
+          ? ''
+          : normalizePathForAccess(normalizedFilepath.slice(workspaceRootPath.length + 1));
+      scopePhase = null;
+      scopePath = relativeToCommonEventRoot || requestedPath;
+    }
+  }
+
+  return {
+    phase: scopePhase,
+    path: normalizePathForAccess(scopePath || ''),
+  };
+};
+
+const filterSharedCommonEventRootListing = (listing, share, phaseToUse, pathToUse) => {
+  if (!isCommonEventExternalId(share?.external_id) || phaseToUse || pathToUse) {
+    return listing?.data || {};
+  }
+
+  const data = listing?.data || {};
+  return {
+    ...data,
+    folders: Array.isArray(data.folders)
+      ? data.folders.filter((folder) => !isWorkflowPhaseFolderName(folder?.name || folder?.title))
+      : data.folders,
+  };
+};
+
 const normalizeSharePermission = (value, accessMode = 'email_only') => {
   const normalizedAccessMode = String(accessMode || 'email_only').trim().toLowerCase();
   if (normalizedAccessMode === 'anyone_with_link') return 'view_download';
@@ -5009,7 +5384,7 @@ const hasUnsafePathSegment = (value) =>
     .split('/')
     .some((segment) => segment === '.' || segment === '..');
 
-const ensureSharedUploadAllowedLocation = (phase, path) => {
+const ensureSharedUploadAllowedLocation = (phase, path, options = {}) => {
   const normalizedPhase = normalizeSharedUploadPhase(phase);
   const pathSegments = normalizePathForAccess(path)
     .split('/')
@@ -5021,7 +5396,8 @@ const ensureSharedUploadAllowedLocation = (phase, path) => {
     normalizedPhase === 'pre' ||
     (normalizedPhase === 'post' && pathSegments.length > 0) ||
     (!normalizedPhase && rootSegment === 'preproduction' && pathSegments.length > 0) ||
-    (!normalizedPhase && rootSegment === 'postproduction' && pathSegments.length > 1);
+    (!normalizedPhase && rootSegment === 'postproduction' && pathSegments.length > 1) ||
+    (!normalizedPhase && options.allowCommonEventRoot === true && pathSegments.length > 0);
 
   if (!isAllowed) {
     const error = new Error('Uploads are allowed only inside Pre-Production or Post-Production folders');
@@ -5063,7 +5439,9 @@ const validateSharedResolvedUploadFilepath = async (share, filepath, requestedPh
     : requestedRelativePath;
 
   ensureSharedScopeAccess(share, effectivePhase, effectiveRelativePath);
-  ensureSharedUploadAllowedLocation(effectivePhase, uploadFolderPath);
+  ensureSharedUploadAllowedLocation(effectivePhase, uploadFolderPath, {
+    allowCommonEventRoot: isCommonEventExternalId(share?.external_id),
+  });
   return normalizedFilepath;
 };
 
@@ -5084,7 +5462,9 @@ const resolveSharedUploadFilepath = async (share, requestedPhase, requestedPath,
   const phaseToUse = normalizeSharedUploadPhase(requestedPhase) || normalizeSharedUploadPhase(share?.phase);
   const pathToUse = normalizePathForAccess(requestedPath || share?.path || '');
   ensureSharedScopeAccess(share, phaseToUse, pathToUse);
-  ensureSharedUploadAllowedLocation(phaseToUse, pathToUse);
+  ensureSharedUploadAllowedLocation(phaseToUse, pathToUse, {
+    allowCommonEventRoot: isCommonEventExternalId(share?.external_id),
+  });
 
   const phaseFolder = phaseToUse === 'pre' ? 'Pre-Production' : phaseToUse === 'post' ? 'Post-Production' : '';
   const workspaceRootPath = await getSharedWorkspaceRootPath(share.external_id);
@@ -5222,6 +5602,64 @@ exports.searchRegisteredClientsForWorkspaceAccess = async (req, res) => {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
       message: error.message || 'Failed to search registered clients',
+    });
+  }
+};
+
+exports.getFileManagerSettings = async (_req, res) => {
+  try {
+    const settings = await getFileManagerSettings();
+    return res.status(200).json({
+      success: true,
+      data: settings,
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to load file manager settings',
+    });
+  }
+};
+
+exports.updateFileManagerSettings = async (req, res) => {
+  try {
+    if (!isAdminRole(req)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only admin can update file manager settings',
+      });
+    }
+
+    await ensureFileManagerSettingsTable();
+    const cpDeleteLockDays = normalizeCpDeleteLockDays(
+      req.body.cp_delete_lock_days ?? req.body.cpDeleteLockDays
+    );
+
+    await db.sequelize.query(
+      `INSERT INTO file_manager_settings
+       (setting_id, cp_delete_lock_days, updated_by_user_id)
+       VALUES (1, :cpDeleteLockDays, :updatedBy)
+       ON DUPLICATE KEY UPDATE
+         cp_delete_lock_days = VALUES(cp_delete_lock_days),
+         updated_by_user_id = VALUES(updated_by_user_id),
+         updated_at = CURRENT_TIMESTAMP`,
+      {
+        replacements: {
+          cpDeleteLockDays,
+          updatedBy: getRequestUserId(req) || null,
+        },
+      }
+    );
+
+    const settings = await getFileManagerSettings();
+    return res.status(200).json({
+      success: true,
+      data: settings,
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to update file manager settings',
     });
   }
 };
@@ -5526,12 +5964,34 @@ exports.verifyShareOtp = async (req, res) => {
     const shareToken = String(req.body.shareToken || '').trim();
     const email = normalizeEmailAddress(req.body.email);
     const otp = String(req.body.otp || '').trim();
-    if (!shareToken || !email || !otp) {
-      return res.status(400).json({ success: false, message: 'shareToken, email and otp are required' });
+    if (!shareToken) {
+      return res.status(400).json({ success: false, message: 'shareToken is required' });
     }
 
     const share = await getShareByToken(shareToken);
     if (!share) return sendSharedResourceUnavailable(res);
+
+    if (String(share.access_mode || 'email_only') === 'anyone_with_link') {
+      const publicEmail = normalizeEmailAddress(share.shared_with_email) || 'anyone@link.local';
+      const accessToken = signShareAccessToken({ shareToken, email: publicEmail });
+      return res.status(200).json({
+        success: true,
+        data: {
+          accessToken,
+          permission: normalizeSharePermission(share.permission, share.access_mode),
+          accessMode: share.access_mode || 'anyone_with_link',
+        },
+      });
+    }
+
+    // Old behavior kept for quick rollback if anyone-with-link needs OTP again:
+    // if (!shareToken || !email || !otp) {
+    //   return res.status(400).json({ success: false, message: 'shareToken, email and otp are required' });
+    // }
+    if (!email || !otp) {
+      return res.status(400).json({ success: false, message: 'email and otp are required' });
+    }
+
     if (
       String(share.access_mode || 'email_only') !== 'anyone_with_link' &&
       normalizeEmailAddress(share.shared_with_email) !== email
@@ -5636,9 +6096,11 @@ exports.getSharedContent = async (req, res) => {
       }
       throw error;
     }
+    const listingData = filterSharedCommonEventRootListing(listing, share, phaseToUse, pathToUse);
     return res.status(200).json({
       success: true,
       data: {
+        ...listingData,
         type: share.resource_type === 'workspace' ? 'workspace' : 'folder',
         externalId: share.external_id,
         phase: phaseToUse,
@@ -5647,7 +6109,6 @@ exports.getSharedContent = async (req, res) => {
         rootPath: share.path,
         permission: normalizeSharePermission(share.permission, share.access_mode),
         accessMode: share.access_mode || 'email_only',
-        ...listing.data,
       },
     });
   } catch (error) {
@@ -5857,10 +6318,13 @@ exports.getSharedDownloadUrl = async (req, res) => {
     const normalizedFilepath = normalizePathForAccess(filepath);
     const requestedPhase = normalizeWorkspacePhase(req.query.phase, null);
     const requestedRelativePath = normalizePathForAccess(req.query.path || '');
-    const extractedFromFilepath = extractPhaseAndRelativePath(normalizedFilepath, requestedPhase);
-    const scopePhase = extractedFromFilepath.phase || requestedPhase;
-    const scopePath = extractedFromFilepath.relativePath || requestedRelativePath;
-    ensureSharedScopeAccess(share, scopePhase, scopePath);
+    const scopeRequest = await resolveSharedScopeRequestFromFilepath(
+      share,
+      normalizedFilepath,
+      requestedPhase,
+      requestedRelativePath
+    );
+    ensureSharedScopeAccess(share, scopeRequest.phase, scopeRequest.path);
 
     const result = await proxyRequest('/file-download-url', {
       method: 'POST',
@@ -5920,10 +6384,13 @@ exports.getSharedViewUrl = async (req, res) => {
     const normalizedFilepath = normalizePathForAccess(filepath);
     const requestedPhase = normalizeWorkspacePhase(req.query.phase, null);
     const requestedRelativePath = normalizePathForAccess(req.query.path || '');
-    const extractedFromFilepath = extractPhaseAndRelativePath(normalizedFilepath, requestedPhase);
-    const scopePhase = extractedFromFilepath.phase || requestedPhase;
-    const scopePath = extractedFromFilepath.relativePath || requestedRelativePath;
-    ensureSharedScopeAccess(share, scopePhase, scopePath);
+    const scopeRequest = await resolveSharedScopeRequestFromFilepath(
+      share,
+      normalizedFilepath,
+      requestedPhase,
+      requestedRelativePath
+    );
+    ensureSharedScopeAccess(share, scopeRequest.phase, scopeRequest.path);
 
     const result = await proxyRequest('/file-view-url', {
       method: 'POST',
@@ -5987,10 +6454,13 @@ exports.getSharedViewUrlsBatch = async (req, res) => {
 
     const allowedFilepaths = [];
     for (const filepath of filepaths) {
-      const extractedFromFilepath = extractPhaseAndRelativePath(filepath, requestedPhase);
-      const scopePhase = extractedFromFilepath.phase || requestedPhase;
-      const scopePath = extractedFromFilepath.relativePath || requestedRelativePath;
-      ensureSharedScopeAccess(share, scopePhase, scopePath);
+      const scopeRequest = await resolveSharedScopeRequestFromFilepath(
+        share,
+        filepath,
+        requestedPhase,
+        requestedRelativePath
+      );
+      ensureSharedScopeAccess(share, scopeRequest.phase, scopeRequest.path);
       allowedFilepaths.push(filepath);
     }
 
