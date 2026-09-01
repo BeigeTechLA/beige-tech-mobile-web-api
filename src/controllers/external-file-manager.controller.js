@@ -4636,6 +4636,31 @@ exports.getUploadPolicy = async (req, res) => {
   }
 };
 
+exports.getFolderActivityLogs = async (req, res) => {
+  try {
+    const query = new URLSearchParams();
+    const folderPath = req.query.folderPath || req.query.path;
+    const rootPath = req.query.rootPath;
+    const page = req.query.page;
+    const limit = req.query.limit;
+    const action = req.query.action;
+
+    if (folderPath) query.set('folderPath', String(folderPath));
+    if (rootPath) query.set('rootPath', String(rootPath));
+    if (page) query.set('page', String(page));
+    if (limit) query.set('limit', String(limit));
+    if (action) query.set('action', String(action));
+
+    const result = await proxyRequest(`/folder-activity-logs?${query.toString()}`);
+    return res.status(200).json(result);
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message,
+    });
+  }
+};
+
 exports.detectUploadConflicts = async (req, res) => {
   try {
     const items = Array.isArray(req.body.items) ? req.body.items : [];
@@ -4846,6 +4871,7 @@ exports.notifyFilesUploadedBatch = async (req, res) => {
       method: 'POST',
       body: JSON.stringify({
         userId: getRequestUserId(req),
+        authorName: uploaderName || 'Beige User',
         items: items.map((item = {}) => ({
           filepath: item.filepath,
           fileContentType: item.fileContentType,
@@ -5311,10 +5337,13 @@ exports.deleteEntry = async (req, res) => {
     await ensureCreatorFileAccess(req, targetPath);
     await ensureClientFileAccess(req, targetPath);
     const deleteMetadata = await assertCreatorCanDeleteFileManagerEntry(req, targetPath);
+    const deleterName = await getUserDisplayName(getRequestUserId(req)).catch(() => null);
     const result = await proxyRequest('/delete', {
       method: 'POST',
       body: JSON.stringify({
         filepath: targetPath,
+        userId: getRequestUserId(req),
+        authorName: deleterName || 'Beige User',
       }),
     });
 
