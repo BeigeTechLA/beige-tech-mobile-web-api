@@ -25,6 +25,9 @@ module.exports = {
     appPassword: process.env.EMAIL_APP_PASSWORD,
     fromName: process.env.EMAIL_FROM_NAME
   },
+  externalServices: {
+    webApi2BaseUrl: process.env.WEB_API_2_BASE_URL || process.env.EXTERNAL_FILE_MANAGER_API_BASE_URL || 'http://localhost:5002/v1/external-file-manager'
+  },
   stripe: {
     secretKey: process.env.STRIPE_SECRET_KEY,
     publishableKey: process.env.STRIPE_PUBLISHABLE_KEY,

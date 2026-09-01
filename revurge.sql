@@ -2695,3 +2695,23 @@ ADD COLUMN updated_by INTEGER NULL,
 ADD CONSTRAINT fk_stream_project_updated_by 
     FOREIGN KEY (updated_by) REFERENCES users(id) 
     ON DELETE SET NULL;
+
+-- 01-09-26
+
+CREATE TABLE IF NOT EXISTS file_activity_logs (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  client_id VARCHAR(255) DEFAULT NULL,
+  client_name VARCHAR(255) DEFAULT NULL,
+  action ENUM('created', 'deleted') NOT NULL,
+  folder_name VARCHAR(255) NOT NULL,
+  stage ENUM('pre_production', 'post_production') NOT NULL,
+  performed_by_user_id INT DEFAULT NULL,
+  performed_by_name VARCHAR(255) DEFAULT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_file_activity_logs_client (client_id),
+  KEY idx_file_activity_logs_stage_action (stage, action),
+  KEY idx_file_activity_logs_created_at (created_at),
+  CONSTRAINT fk_file_activity_logs_performed_by
+    FOREIGN KEY (performed_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

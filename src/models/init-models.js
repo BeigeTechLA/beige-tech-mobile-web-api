@@ -67,6 +67,7 @@ var _finance_dispute_payout_holds = require("./finance_dispute_payout_holds");
 var _creator_earning_advances = require("./creator_earning_advances");
 var _creator_earning_compensation_items = require("./creator_earning_compensation_items");
 var _creator_earning_timeline_events = require("./creator_earning_timeline_events");
+var _file_activity_logs = require("./file_activity_logs");
 
 // CMS Approval States Models
 var _projects = require("./projects");
@@ -172,6 +173,7 @@ function initModels(sequelize) {
   var finance_dispute_attachments = _finance_dispute_attachments(sequelize, DataTypes);
   var finance_dispute_resolution_logs = _finance_dispute_resolution_logs(sequelize, DataTypes);
   var finance_dispute_payout_holds = _finance_dispute_payout_holds(sequelize, DataTypes);
+  var file_activity_logs = _file_activity_logs(sequelize, DataTypes);
 
   // CMS Approval States Models
   var projects = _projects(sequelize, DataTypes);
@@ -903,6 +905,7 @@ stream_project_booking.hasMany(assigned_post_production_member, { as: "assigned_
     finance_dispute_attachments,
     finance_dispute_resolution_logs,
     finance_dispute_payout_holds,
+    file_activity_logs,
     project_form_submissions,
     quote_catalog_items,
     sales_ai_editing_types,

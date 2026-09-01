@@ -3746,7 +3746,7 @@ Content-Type: application/json
 
 {
   "email": "harsh.panchal@gmail.com",
-  "password": "NewPass@2026"
+  "password": "password123"
 }
 
 ###
@@ -3758,3 +3758,89 @@ Authorization: {{TOKEN}}
   "name": "Harsh Panchal",
   "phone_number": "9874562320"
 }
+
+
+
+
+### ============================================================
+### FILE ACTIVITY LOG / HISTORY APIs — Testing
+### ============================================================
+
+### Create folder under pre-production (to generate a log entry)
+POST {{URL}}external-file-manager/folder
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "bookingId": 934,
+  "phase": "pre",
+  "path": "",
+  "folderName": "HistoryTestFolder"
+}
+
+### Create folder under post-production (to generate a log entry)
+POST {{URL}}external-file-manager/folder
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "bookingId": 934,
+  "phase": "post",
+  "path": "",
+  "folderName": "HistoryTestFolder"
+}
+
+### Delete the folder (to generate a delete log entry)
+POST {{URL}}external-file-manager/delete
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+{
+  "filepath": "corporate_neha_#934/Pre-Production/HistoryTestFolder/"
+}
+
+### Get combined file activity history (web-api + web-api-2 merged)
+GET {{URL}}file-manager/history?page=1&limit=20 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Get history filtered by clientId
+GET {{URL}}file-manager/history?clientId=934&page=1&limit=20 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Get history filtered by stage (pre_production)
+GET {{URL}}file-manager/history?stage=pre_production&page=1&limit=20 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Get history filtered by stage (post_production)
+GET {{URL}}file-manager/history?stage=post_production&page=1&limit=20 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Get history filtered by action (created)
+GET {{URL}}file-manager/history?action=created&page=1&limit=20 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Get history filtered by action (deleted)
+GET {{URL}}file-manager/history?action=deleted&page=1&limit=20 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Get history filtered by date range
+GET {{URL}}file-manager/history?startDate=2026-08-01&endDate=2026-09-01&page=1&limit=20 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+### Get history via external-file-manager alias route
+GET {{URL}}external-file-manager/history?page=1&limit=20 HTTP/1.1
+Content-Type: application/json
+Authorization: {{TOKEN}}
+
+
+
+
+
+

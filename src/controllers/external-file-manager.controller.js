@@ -10,6 +10,7 @@ const bookingTimelineService = require('../services/bookingTimeline.service');
 const emailService = require('../utils/emailService');
 const otpService = require('../utils/otpService');
 const appNotificationService = require('../services/app-notification.service');
+const fileActivityLogService = require('../services/file-activity-log.service');
 
 const FACE_SCAN_SERVICE_URL = process.env.FACE_SCAN_SERVICE_URL || '';
 const FACE_SCAN_PROVIDER_TIMEOUT_MS = Math.max(15000, Number(process.env.FACE_SCAN_PROVIDER_TIMEOUT_MS || 300000));
@@ -2209,6 +2210,73 @@ const getUserDisplayName = async (userId) => {
 
   const nameCandidate = user?.name || user?.email || '';
   return String(nameCandidate || '').trim() || null;
+};
+
+const normalizeFileActivityStage = (phase) => {
+  const normalizedPhase = normalizeWorkspacePhase(phase, null);
+  if (normalizedPhase === 'pre') return 'pre_production';
+  if (normalizedPhase === 'post') return 'post_production';
+  return null;
+};
+
+const getFolderNameFromPath = (value) => {
+  const segments = normalizePathForAccess(value).split('/').filter(Boolean);
+  return segments.length ? segments[segments.length - 1] : '';
+};
+
+const getFileActivityClientContext = async (externalId) => {
+  const clientId = String(externalId || '').trim();
+  if (!clientId || isCommonEventExternalId(clientId)) {
+    return { clientId: clientId || null, clientName: null };
+  }
+
+  const bookingId = Number(clientId);
+  if (!Number.isInteger(bookingId) || bookingId <= 0) {
+    return { clientId, clientName: null };
+  }
+
+  const [lead, booking] = await Promise.all([
+    sales_leads.findOne({
+      where: { booking_id: bookingId, is_active: 1 },
+      attributes: ['client_name'],
+      order: [['lead_id', 'DESC']],
+    }).catch(() => null),
+    stream_project_booking.findByPk(bookingId, {
+      attributes: ['project_name'],
+    }).catch(() => null),
+  ]);
+
+  return {
+    clientId,
+    clientName: lead?.client_name || booking?.project_name || null,
+  };
+};
+
+const recordFileManagerFolderActivity = async ({
+  externalId,
+  action,
+  phase,
+  folderName,
+  performedByUserId,
+  performedByName,
+}) => {
+  const stage = normalizeFileActivityStage(phase);
+  const normalizedFolderName = String(folderName || '').trim();
+  if (!stage || !normalizedFolderName) return;
+
+  try {
+    const clientContext = await getFileActivityClientContext(externalId);
+    await fileActivityLogService.recordFileActivity({
+      ...clientContext,
+      action,
+      folderName: normalizedFolderName,
+      stage,
+      performedByUserId,
+      performedByName,
+    });
+  } catch (error) {
+    console.error('Failed to record file-manager folder activity:', error);
+  }
 };
 
 const sanitizeFolderName = (value, fallback = 'Folder') => {
@@ -5177,6 +5245,15 @@ exports.createFolder = async (req, res) => {
         });
       }
 
+      await recordFileManagerFolderActivity({
+        externalId,
+        action: 'created',
+        phase,
+        folderName,
+        performedByUserId: getRequestUserId(req),
+        performedByName: uploaderName,
+      });
+
       await sendNewVersionUploadedClientEmailForFolder({
         externalId,
         phase: phase || req.body.phase,
@@ -5192,6 +5269,25 @@ exports.createFolder = async (req, res) => {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
       message: error.message,
+    });
+  }
+};
+
+exports.listFileActivityHistory = async (req, res) => {
+  try {
+    const result = await fileActivityLogService.listFileActivityHistory(req.query || {}, {
+      authorization: req.headers?.authorization || null,
+    });
+    return res.status(200).json({
+      success: true,
+      data: result.logs,
+      pagination: result.pagination,
+      sources: result.sources,
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to load file activity history',
     });
   }
 };
@@ -5310,6 +5406,7 @@ exports.deleteEntry = async (req, res) => {
     const targetPath = req.body.filepath || req.body.path;
     await ensureCreatorFileAccess(req, targetPath);
     await ensureClientFileAccess(req, targetPath);
+    const deleteEntryMetadata = await getExternalEntryMetadata(targetPath).catch(() => null);
     const deleteMetadata = await assertCreatorCanDeleteFileManagerEntry(req, targetPath);
     const result = await proxyRequest('/delete', {
       method: 'POST',
@@ -5319,6 +5416,20 @@ exports.deleteEntry = async (req, res) => {
     });
 
     const deletedPath = normalizePathForAccess(targetPath);
+    const metadataForActivity = deleteMetadata || deleteEntryMetadata;
+    if (result?.success !== false && metadataForActivity?.isFolder) {
+      const activityContext = getDeleteTargetContext(metadataForActivity, targetPath);
+      const performerName = await getUserDisplayName(getRequestUserId(req)).catch(() => null);
+      await recordFileManagerFolderActivity({
+        externalId: activityContext.externalId,
+        action: 'deleted',
+        phase: activityContext.phase,
+        folderName: getFolderNameFromPath(activityContext.relativePath || metadataForActivity?.path || targetPath),
+        performedByUserId: getRequestUserId(req),
+        performedByName: performerName,
+      });
+    }
+
     if (deletedPath) {
       await deactivateSharesForDeletedPath(deletedPath).catch((error) => {
         console.error('Failed to invalidate deleted file-manager shares:', error);
