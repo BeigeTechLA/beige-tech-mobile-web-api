@@ -2297,6 +2297,8 @@ exports.getLeads = async (req, res) => {
       booking_id,
       start_date,
       end_date,
+      created_start_date,
+      created_end_date,
       intent,
       booking_status, // Fallback key
       cp_assignment,
@@ -2317,6 +2319,8 @@ exports.getLeads = async (req, res) => {
       has_booking_id: Boolean(booking_id),
       start_date: start_date || null,
       end_date: end_date || null,
+      created_start_date: created_start_date || null,
+      created_end_date: created_end_date || null,
       intent: intent || null,
       cp_assignment: cp_assignment || null,
       production_filter: production_filter || null,
@@ -2367,6 +2371,21 @@ exports.getLeads = async (req, res) => {
     
     if (booking_id) {
       whereClause.booking_id = parseInt(booking_id, 10);
+    }
+
+    if (created_start_date || created_end_date) {
+      if (!created_start_date || !created_end_date) {
+        return res.status(400).json({
+          success: false,
+          message: 'created_start_date and created_end_date are required for created date filtering'
+        });
+      }
+      whereClause.created_at = {
+        [Op.between]: [
+          `${created_start_date} 00:00:00`,
+          `${created_end_date} 23:59:59`
+        ]
+      };
     }
 
     if (booking_id) {
@@ -2772,7 +2791,7 @@ exports.getClientLeads = async (req, res) => {
           ...leadJson,
           potential_value: pricingData ? pricingData.total : 0,
           event_date: leadJson.booking?.event_date || null,
-          created_at: leadJson.booking?.event_date || leadJson.created_at || null,
+          created_at: leadJson.created_at || null,
           booking_status: computedBookingStatus,
           intent: computedIntent,
           payment_status: lead.booking?.payment_id ? 'paid' : 'unpaid',
@@ -4131,7 +4150,7 @@ async function processSalesLeadForList(lead, context = {}) {
         ? pricingData.total
         : 0,
       event_date: leadJson.booking?.event_date || null,
-      created_at: leadJson.booking?.event_date || leadJson.created_at || null,
+      created_at: leadJson.created_at || null,
       booking_status:
         computedBookingStatus || 'Unknown',
       intent: computedIntent || '',
