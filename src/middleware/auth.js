@@ -9,7 +9,16 @@ const validatePermissionVersion = async (decoded) => {
     },
     attributes: [
       'id',
+      'user_type',
       'permissions_version'
+    ],
+    include: [
+      {
+        model: db.user_type,
+        as: 'userType',
+        attributes: ['is_internal_member'],
+        required: false
+      }
     ]
   });
 
@@ -66,7 +75,8 @@ const authMiddleware = async (req, res, next) => {
     req.user = {
       userId: decoded.userId,
       userTypeId: decoded.userTypeId,
-      userRole: decoded.userRole
+      userRole: decoded.userRole,
+      isInternalMember: Number(user.userType?.is_internal_member || 0) === 1
     };
 
     next();

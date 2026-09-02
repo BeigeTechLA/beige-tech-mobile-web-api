@@ -1,9 +1,18 @@
 const express = require('express');
 const router = express.Router();
 const controller = require('../controllers/shift-management.controller');
-const { authenticate, requireSalesRepOrAdmin } = require('../middleware/auth.middleware');
+const { authenticate } = require('../middleware/auth.middleware');
+const { requireAnyPermission } = require('../middleware/permission.middleware');
 
-router.use(authenticate, requireSalesRepOrAdmin);
+const shiftManagementView = requireAnyPermission([
+  'admin_sales_representative.view',
+  'admin_sales_representative_dashboard.view',
+  'admin_sales_representative_shift_management.view',
+  'sales_admin_sales_people.view',
+  'sales_rep_sales.view'
+], { allowRoles: ['sales_rep', 'sales_admin'] });
+
+router.use(authenticate, shiftManagementView);
 
 // Shifts
 router.get('/overview', controller.overview);

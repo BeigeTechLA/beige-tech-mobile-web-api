@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const externalFileManagerController = require('../controllers/external-file-manager.controller');
-const { authenticate, authenticateAdmin } = require('../middleware/auth');
+const { authenticate } = require('../middleware/auth');
 const { requireAnyPermission } = require('../middleware/permission.middleware');
 
 const fileManagerView = requireAnyPermission([
@@ -47,7 +47,7 @@ router.get('/common-events', authenticate, fileManagerView, externalFileManagerC
 router.post('/common-events', authenticate, fileManagerCreate, externalFileManagerController.createCommonEvent);
 router.post('/common-events/:eventExternalId/creator-folder', authenticate, fileManagerCreate, externalFileManagerController.createCreatorEventFolder);
 router.post('/face-scan/query-upload-policy', authenticate, externalFileManagerController.getFaceScanQueryUploadPolicy);
-router.get('/face-scan/queue-status', authenticateAdmin, externalFileManagerController.getFaceScanQueueStatus);
+router.get('/face-scan/queue-status', authenticate, fileManagerView, externalFileManagerController.getFaceScanQueueStatus);
 router.post('/face-scan/jobs', authenticate, externalFileManagerController.createFaceScanJob);
 router.get('/face-scan/jobs/:jobId', authenticate, externalFileManagerController.getFaceScanJob);
 router.post('/face-scan/search', authenticate, fileManagerView, externalFileManagerController.searchFaceMatches);
@@ -81,7 +81,7 @@ router.post('/share', authenticate, fileManagerCreate, externalFileManagerContro
 router.get('/share', authenticate, fileManagerView, externalFileManagerController.listShares);
 router.get('/share/access-logs', authenticate, fileManagerView, externalFileManagerController.listShareAccessLogs);
 router.delete('/share', authenticate, fileManagerDelete, externalFileManagerController.revokeShare);
-router.patch('/common-events/:eventExternalId', authenticate, externalFileManagerController.updateCommonEvent);
+router.patch('/common-events/:eventExternalId', authenticate, fileManagerCreate, externalFileManagerController.updateCommonEvent);
 router.post('/share/request-otp', externalFileManagerController.requestShareOtp);
 router.post('/share/verify-otp', externalFileManagerController.verifyShareOtp);
 router.get('/share/:shareToken/content', externalFileManagerController.getSharedContent);

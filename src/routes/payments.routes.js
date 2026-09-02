@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const paymentsController = require('../controllers/payments.controller');
-const { authenticate, optionalAuth, requireSalesRepOrAdmin } = require('../middleware/auth.middleware');
+const { optionalAuth } = require('../middleware/auth.middleware');
 
 /**
  * @route   POST /api/payments/create-intent

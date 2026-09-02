@@ -3544,7 +3544,7 @@ exports.assignLeadToSelf = async (req, res) => {
 
     const role = req.userRole?.toLowerCase();
 
-    if (!['admin', 'sales_admin'].includes(role)) {
+    if (!req.isInternalMember && !req.user?.isInternalMember && !['admin', 'sales_admin'].includes(role)) {
       return res.status(403).json({
         success: false,
         message: 'Only admin or sales admin can assign leads to themselves'

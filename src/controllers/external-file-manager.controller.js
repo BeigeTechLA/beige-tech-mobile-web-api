@@ -167,7 +167,9 @@ const proxyZipResponse = async ({ res, externalPath, method = 'GET', body }) => 
 const getRequestUserId = (req) => req.userId || req.user?.userId || null;
 const getRequestUserRole = (req) => req.userRole || req.user?.userRole || null;
 const getNormalizedRequestUserRole = (req) => String(getRequestUserRole(req) || '').trim().toLowerCase();
-const isAdminRole = (req) => ['admin', 'super_admin', 'superadmin', 'sales_admin'].includes(getNormalizedRequestUserRole(req));
+const isAdminRole = (req) =>
+  Boolean(req.isInternalMember || req.user?.isInternalMember) ||
+  ['admin', 'super_admin', 'superadmin', 'sales_admin'].includes(getNormalizedRequestUserRole(req));
 const isClientRole = (req) => getNormalizedRequestUserRole(req) === 'client';
 const isCreatorRole = (req) => {
   const role = getNormalizedRequestUserRole(req);

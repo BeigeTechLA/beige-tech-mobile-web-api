@@ -1,7 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const creatorEarningsController = require('../controllers/creator-earnings.controller');
-const { authenticate, requireAdmin } = require('../middleware/auth.middleware');
+const { authenticate } = require('../middleware/auth.middleware');
+const { requireAnyPermission } = require('../middleware/permission.middleware');
+
+const adminFinancesCreate = requireAnyPermission(['admin_finances.create']);
 
 router.get('/me/dashboard', authenticate, creatorEarningsController.getCreatorEarningsDashboard);
 router.get('/me/earnings', authenticate, creatorEarningsController.getCreatorEarningsList);
@@ -19,7 +22,7 @@ router.post('/creator/:creatorId/bookings/:bookingId/accept', authenticate, crea
 router.post('/creator/:creatorId/bookings/:bookingId/decline', authenticate, creatorEarningsController.declineShoot);
 router.post('/creator/:creatorId/bookings/:bookingId/respond', authenticate, creatorEarningsController.respondToEarning);
 
-router.post('/admin/earnings/advance', authenticate, requireAdmin, creatorEarningsController.addAdvancePayment);
-router.put('/admin/earnings/:earningId/compensation', authenticate, requireAdmin, creatorEarningsController.upsertCompensationItems);
+router.post('/admin/earnings/advance', authenticate, adminFinancesCreate, creatorEarningsController.addAdvancePayment);
+router.put('/admin/earnings/:earningId/compensation', authenticate, adminFinancesCreate, creatorEarningsController.upsertCompensationItems);
 
 module.exports = router;

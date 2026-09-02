@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const admin = require('../controllers/admin.controller');
-const { authenticateAdmin, authMiddleware } = require('../middleware/auth');
+const { authMiddleware } = require('../middleware/auth');
 const { requirePermission, requireAnyPermission } = require('../middleware/permission.middleware');
 const shiftManagementRoutes = require('./shifts.routes');
 const assignmentHistoryRoutes = require('./assignment-history.routes');
@@ -131,10 +131,11 @@ const adminUsersDelete = requireAnyPermission([
   'admin_users.delete',
   'production_manager_creative_partner.delete'
 ], { allowRoles: ['production_manager'] });
-const rolesPermissionsView = requireAnyPermission(['roles_permissions.view']);
-const rolesPermissionsCreate = requireAnyPermission(['roles_permissions.create']);
-const rolesPermissionsEdit = requireAnyPermission(['roles_permissions.edit']);
-const rolesPermissionsDelete = requireAnyPermission(['roles_permissions.delete']);
+const rolesPermissionsOptions = { allowAdminBypass: false };
+const rolesPermissionsView = requireAnyPermission(['roles_permissions.view'], rolesPermissionsOptions);
+const rolesPermissionsCreate = requireAnyPermission(['roles_permissions.create'], rolesPermissionsOptions);
+const rolesPermissionsEdit = requireAnyPermission(['roles_permissions.edit'], rolesPermissionsOptions);
+const rolesPermissionsDelete = requireAnyPermission(['roles_permissions.delete'], rolesPermissionsOptions);
 const adminUsersOrSalesRepresentativeView = requireAnyPermission([
   'admin_users.view',
   'admin_sales_representative.view',

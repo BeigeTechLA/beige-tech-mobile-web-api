@@ -88,7 +88,7 @@ const getAuthAdminUser = async (req) => {
       {
         model: db.user_type,
         as: 'userType',
-        attributes: ['user_role'],
+        attributes: ['user_role', 'is_internal_member'],
         required: false
       }
     ]
@@ -105,7 +105,7 @@ const findAdminProfileById = async (id) => users.findOne({
     {
       model: db.user_type,
       as: 'userType',
-      attributes: ['user_role'],
+      attributes: ['user_role', 'is_internal_member'],
       required: false
     }
   ]
@@ -123,7 +123,7 @@ const ensureAuthenticatedAdmin = async (req, res) => {
     return null;
   }
 
-  if (!isAdminProfileRole(authRole)) {
+  if (!isAdminProfileRole(authRole) && Number(authUser.userType?.is_internal_member || 0) !== 1) {
     res.status(403).json({
       success: false,
       message: 'Admin access required'
@@ -136,7 +136,7 @@ const ensureAuthenticatedAdmin = async (req, res) => {
 
 const isUserAdminProfile = (user) => {
   const role = user?.userType?.user_role || user?.role;
-  return isAdminProfileRole(role);
+  return isAdminProfileRole(role) || Number(user?.userType?.is_internal_member || 0) === 1;
 };
 
 exports.getAdminProfile = async (req, res) => {
@@ -15555,6 +15555,54 @@ const getLegacyModuleKey = (moduleKey, scopeKey) => {
 
 const formatModuleDisplayName = (moduleKey, scopeKey) => formatPermissionLabel(getLegacyModuleKey(moduleKey, scopeKey));
 
+const INTERNAL_PERMISSION_MODULE_TO_ADMIN = {
+  sales_admin_dashboard: 'admin_dashboard',
+  sales_admin_file_manager: 'admin_file_manager',
+  sales_admin_invoices: 'admin_invoices',
+  sales_admin_meetings: 'admin_meetings',
+  sales_admin_messages: 'admin_messages',
+  sales_admin_quotes: 'admin_quotes',
+  sales_admin_sales_people: 'admin_sales_representative',
+  sales_admin_shoots: 'admin_shoots',
+  sales_rep_availability: 'admin_availability',
+  sales_rep_file_manager: 'admin_file_manager',
+  sales_rep_meetings: 'admin_meetings',
+  sales_rep_messages: 'admin_messages',
+  sales_rep_quotes: 'admin_quotes',
+  sales_rep_sales: 'admin_sales_representative',
+  sales_rep_shoots: 'admin_shoots',
+  production_manager_availability: 'admin_availability',
+  production_manager_creative_partner: 'admin_users_creative_partners',
+  production_manager_dashboard: 'admin_dashboard',
+  production_manager_file_manager: 'admin_file_manager',
+  production_manager_meetings: 'admin_meetings',
+  production_manager_messages: 'admin_messages',
+  production_manager_shoots: 'admin_shoots'
+};
+
+const normalizePermissionsToAdminScope = (permissions = {}) => {
+  const normalizedPermissions = {};
+
+  Object.entries(permissions || {}).forEach(([module, actions]) => {
+    const normalizedModule = INTERNAL_PERMISSION_MODULE_TO_ADMIN[module] || module;
+
+    if (!normalizedPermissions[normalizedModule]) {
+      normalizedPermissions[normalizedModule] = {
+        view: false,
+        create: false,
+        edit: false,
+        delete: false
+      };
+    }
+
+    Object.keys(actions || {}).forEach(action => {
+      normalizedPermissions[normalizedModule][action] = Boolean(actions[action]);
+    });
+  });
+
+  return normalizedPermissions;
+};
+
 const buildPermissionEntries = (permissions = {}, includeDenied = false) => {
   const permissionEntries = [];
 
@@ -15623,7 +15671,7 @@ const syncRolePermissions = async (roleId, permissions = {}) => {
   }
 };
 
-const formatRolePermissions = async (roleId) => {
+const formatRolePermissions = async (roleId, options = {}) => {
   const rolePermissions = await db.role_permissions.findAll({
     where: {
       role_id: roleId,
@@ -15662,7 +15710,9 @@ const formatRolePermissions = async (roleId) => {
     formattedPermissions[module][action] = true;
   });
 
-  return formattedPermissions;
+  return options.normalizeToAdminScope
+    ? normalizePermissionsToAdminScope(formattedPermissions)
+    : formattedPermissions;
 };
 
 const syncUserPermissions = async (userId, permissions = {}) => {
@@ -15755,7 +15805,7 @@ const syncUserPermissionsFromRole = async (userId, roleId, transaction = null) =
   return userPermissionData.length;
 };
 
-const formatUserPermissions = async (userId) => {
+const formatUserPermissions = async (userId, options = {}) => {
   const userPermissions = await db.user_permissions.findAll({
     where: {
       user_id: userId,
@@ -15790,12 +15840,14 @@ const formatUserPermissions = async (userId) => {
     formattedPermissions[module][action] = item.is_allowed === 1;
   });
 
-  return formattedPermissions;
+  return options.normalizeToAdminScope
+    ? normalizePermissionsToAdminScope(formattedPermissions)
+    : formattedPermissions;
 };
 
-const getCombinedUserPermissions = async (userId, roleId) => {
-  const rolePermissions = await formatRolePermissions(roleId);
-  const userPermissions = await formatUserPermissions(userId);
+const getCombinedUserPermissions = async (userId, roleId, options = {}) => {
+  const rolePermissions = await formatRolePermissions(roleId, options);
+  const userPermissions = await formatUserPermissions(userId, options);
 
   Object.keys(userPermissions).forEach(module => {
     if (!rolePermissions[module]) {
@@ -16237,7 +16289,9 @@ exports.getRoleById = async (req, res) => {
       }
     });
 
-    const formattedPermissions = await formatRolePermissions(role_id);
+    const formattedPermissions = await formatRolePermissions(role_id, {
+      normalizeToAdminScope: Number(role.is_internal_member || 0) === 1
+    });
 
     return res.status(200).json({
       success: true,
@@ -16546,11 +16600,24 @@ exports.getUserRoleDetails = async (req, res) => {
     });
 
     let formattedPermissions = {};
+    let formattedRolePermissions = {};
+    let formattedUserPermissions = {};
 
     if (role) {
+      const shouldNormalizeToAdminScope = Number(role.is_internal_member || 0) === 1;
+
+      formattedRolePermissions = await formatRolePermissions(role.user_type_id, {
+        normalizeToAdminScope: shouldNormalizeToAdminScope
+      });
+      formattedUserPermissions = await formatUserPermissions(user.id, {
+        normalizeToAdminScope: shouldNormalizeToAdminScope
+      });
       formattedPermissions = await getCombinedUserPermissions(
         user.id,
-        role.user_type_id
+        role.user_type_id,
+        {
+          normalizeToAdminScope: shouldNormalizeToAdminScope
+        }
       );
     }
 
@@ -16565,6 +16632,7 @@ exports.getUserRoleDetails = async (req, res) => {
           email: user.email,
           user_type: user.user_type,
           user_type_name: role ? role.user_role : null,
+          is_internal_member: role ? Number(role.is_internal_member || 0) : 0,
           is_active: user.is_active,
           status_label: user.is_active ? 'Active' : 'In-Active',
           created_at: user.created_at,
@@ -16576,6 +16644,7 @@ exports.getUserRoleDetails = async (req, res) => {
               role_id: role.user_type_id,
               name: role.user_role,
               description: role.description || null,
+              is_internal_member: Number(role.is_internal_member || 0),
               is_active: role.is_active,
               created_at: role.created_at,
               updated_at: role.updated_at
@@ -16586,7 +16655,9 @@ exports.getUserRoleDetails = async (req, res) => {
 
         archive_history: archiveHistory,
 
-        permissions: formattedPermissions
+        permissions: formattedPermissions,
+        role_permissions: formattedRolePermissions,
+        user_permissions: formattedUserPermissions
       }
     });
 
