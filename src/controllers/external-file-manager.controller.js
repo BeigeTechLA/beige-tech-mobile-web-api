@@ -646,6 +646,7 @@ const sendClientFilePush = async ({
       referenceType: 'booking',
       payload,
       actionLabel: 'Review files',
+      dedupeWindowSeconds,
     });
   } catch (error) {
     console.error('[PushNotification] Client file push failed:', {
@@ -1222,6 +1223,7 @@ const sendEditsDeliveredEmailsForUploadedItems = async ({ items = [], deliveredB
           filepath: String(entry.items[0]?.filepath || ''),
           total_files: String(entry.items.length || 1),
         },
+        dedupeWindowSeconds: 120,
       });
 
       const adminRecipients = getAdminNotificationRecipients();
@@ -4770,17 +4772,6 @@ exports.getUploadPoliciesBatch = async (req, res) => {
         })),
       }),
     });
-
-    if (result?.success !== false) {
-      const uploaderName = await getUserDisplayName(getRequestUserId(req)).catch(() => null);
-      await sendEditsDeliveredEmailsForUploadedItems({
-        items: items.map((item = {}) => ({
-          filepath: item.filepath,
-          fileName: item.fileName || String(item.filepath || '').split('/').pop() || '',
-        })),
-        deliveredByName: uploaderName || 'Production Team',
-      });
-    }
 
     return res.status(200).json(result);
   } catch (error) {
