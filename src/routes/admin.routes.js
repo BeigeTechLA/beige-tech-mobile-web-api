@@ -172,6 +172,7 @@ router.post('/shoots/update-onboarding-form', authMiddleware, admin.submitProjec
 router.get('/get-active-projects', admin.getActiveProjects);
 router.get('/recent-activity', authMiddleware, dashboardView, admin.getRecentActivity);
 router.get('/get-projects', authMiddleware, projectListView, admin.getAllProjectDetails);
+router.get('/get-projects-board', authMiddleware, projectListView, admin.getAllProjectDetailsBoard);
 router.get(
   '/shoots/export',
   authMiddleware,

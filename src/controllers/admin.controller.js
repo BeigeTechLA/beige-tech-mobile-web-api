@@ -3908,8 +3908,13 @@ exports.updateProjectName = async (req, res) => {
 
 exports.getAllProjectDetails = async (req, res) => {
   try {
-    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment, production_filter, payment_filter, summary_only } = req.query;
+    let { status, event_type, search, limit, page, range, start_date, end_date, date_on, category, cp_assignment, production_filter, payment_filter, summary_only, board_view } = req.query;
     const today = new Date();
+    const isBoardView = String(board_view || '').toLowerCase() === 'true' || String(board_view) === '1';
+    if (isBoardView) {
+      limit = undefined;
+      page = undefined;
+    }
     const noPagination = !limit && !page;
     const hasPostFetchFilters = Boolean(
       (cp_assignment && cp_assignment !== 'all') ||
@@ -4573,6 +4578,12 @@ exports.getAllProjectDetails = async (req, res) => {
     console.error('Error fetching project details:', error);
     return res.status(500).json({ error: true, message: 'Internal server error' });
   }
+};
+
+// Board/Kanban view - no pagination, saare matching records ek j call ma
+exports.getAllProjectDetailsBoard = async (req, res) => {
+  req.query = { ...req.query, board_view: 'true', limit: undefined, page: undefined };
+  return exports.getAllProjectDetails(req, res);
 };
 
 exports.getUpcomingEvents = async (req, res) => {
