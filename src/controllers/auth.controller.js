@@ -545,13 +545,14 @@ async function buildAuthenticatedUserResponse(user) {
       include: [{
         model: UserType,
         as: 'userType',
-        attributes: ['user_type_id', 'user_role']
+        attributes: ['user_type_id', 'user_role', 'is_internal_member']
       }]
     });
   }
 
   const role = user.userType?.user_role || 'client';
   const user_type_id = user.userType?.user_type_id || user.user_type || null;
+  const is_internal_member = Number(user.userType?.is_internal_member || 0) === 1;
 
   let crew_member_id = null;
   let is_crew_verified = null;
@@ -593,6 +594,7 @@ async function buildAuthenticatedUserResponse(user) {
       instagram_handle: user.instagram_handle,
       role,
       user_type_id,
+      is_internal_member,
       email_verified: user.email_verified,
       crew_member_id,
       affiliate_id,
@@ -1180,7 +1182,7 @@ exports.login = async (req, res) => {
           {
             model: UserType,
             as: "userType",
-            attributes: ["user_type_id", "user_role"],
+            attributes: ["user_type_id", "user_role", "is_internal_member"],
           },
         ],
       });
@@ -1231,6 +1233,7 @@ exports.login = async (req, res) => {
       // Get user role
       const role = user.userType?.user_role || "client";
       const user_type_id = user.userType?.user_type_id || null;
+      const is_internal_member = Number(user.userType?.is_internal_member || 0) === 1;
 
       // Get crew_member_id if creator
       let crew_member_id = null;
@@ -1277,6 +1280,7 @@ exports.login = async (req, res) => {
           instagram_handle: user.instagram_handle,
           role,
           user_type_id,
+          is_internal_member,
           email_verified: user.email_verified,
           crew_member_id,
            affiliate_id,
@@ -1339,7 +1343,7 @@ exports.login = async (req, res) => {
         include: [{
           model: UserType,
           as: 'userType',
-          attributes: ['user_type_id', 'user_role']
+          attributes: ['user_type_id', 'user_role', 'is_internal_member']
         }]
       });
 
@@ -1380,6 +1384,7 @@ exports.login = async (req, res) => {
 
       const role = user.userType?.user_role || 'client';
       const user_type_id = user.userType?.user_type_id || null;
+      const is_internal_member = Number(user.userType?.is_internal_member || 0) === 1;
 
       // Get crew_member_id if creator
       let crew_member_id = null;
@@ -1423,6 +1428,7 @@ affiliate_id = affiliate ? affiliate.affiliate_id : null;
           instagram_handle: user.instagram_handle,
           role,
           user_type_id,
+          is_internal_member,
           email_verified: user.email_verified,
           crew_member_id,
           affiliate_id,
@@ -1508,7 +1514,7 @@ exports.googleLogin = async (req, res) => {
     const includeUserType = [{
       model: UserType,
       as: 'userType',
-      attributes: ['user_type_id', 'user_role']
+      attributes: ['user_type_id', 'user_role', 'is_internal_member']
     }];
     const UserAll = typeof User.scope === 'function' ? User.scope('all') : User;
 
@@ -2109,7 +2115,7 @@ exports.getCurrentUser = async (req, res) => {
       include: [{
         model: UserType,
         as: 'userType',
-        attributes: ['user_type_id', 'user_role']
+        attributes: ['user_type_id', 'user_role', 'is_internal_member']
       }]
     });
 
@@ -2128,6 +2134,8 @@ exports.getCurrentUser = async (req, res) => {
     }
 
     const role = user.userType?.user_role || 'client';
+    const user_type_id = user.userType?.user_type_id || user.user_type || null;
+    const is_internal_member = Number(user.userType?.is_internal_member || 0) === 1;
     const permissions = getPermissionsForRole(role);
     const crewMember = await getCreatorCrewMemberForUser(user);
 
@@ -2140,6 +2148,8 @@ exports.getCurrentUser = async (req, res) => {
         phone_number: user.phone_number,
         instagram_handle: user.instagram_handle,
         role: role,
+        user_type_id,
+        is_internal_member,
         email_verified: user.email_verified,
         created_at: user.created_at,
         crew_member_id: crewMember?.crew_member_id || null,
@@ -2222,7 +2232,7 @@ exports.confirmCpEventLocation = async (req, res) => {
       include: [{
         model: UserType,
         as: 'userType',
-        attributes: ['user_type_id', 'user_role']
+        attributes: ['user_type_id', 'user_role', 'is_internal_member']
       }]
     });
 
@@ -2323,7 +2333,7 @@ exports.quickRegister = async (req, res) => {
       include: [{
         model: UserType,
         as: 'userType',
-        attributes: ['user_type_id', 'user_role']
+        attributes: ['user_type_id', 'user_role', 'is_internal_member']
       }]
     });
 
@@ -3569,13 +3579,20 @@ exports.createInternalCredential = async (req, res) => {
         user_type_id: normalizedUserType,
         is_active: 1
       },
-      attributes: ['user_type_id', 'user_role']
+      attributes: ['user_type_id', 'user_role', 'is_internal_member']
     });
 
     if (!userTypeRecord) {
       return res.status(400).json({
         success: false,
         message: 'Invalid or inactive user_type'
+      });
+    }
+
+    if (Number(userTypeRecord.is_internal_member || 0) !== 1) {
+      return res.status(400).json({
+        success: false,
+        message: 'Only internal member roles can be used for internal credentials'
       });
     }
 

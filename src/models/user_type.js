@@ -15,6 +15,11 @@ module.exports = function(sequelize, DataTypes) {
       type: DataTypes.TEXT,
       allowNull: true
     },
+    is_internal_member: {
+      type: DataTypes.TINYINT,
+      allowNull: false,
+      defaultValue: 0
+    },
     is_active: {
       type: DataTypes.INTEGER,
       allowNull: false,

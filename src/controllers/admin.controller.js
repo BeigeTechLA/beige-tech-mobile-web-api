@@ -15514,6 +15514,7 @@ const formatUserTypeAsRole = (role, totalUsers = 0) => ({
   role_id: role.user_type_id,
   name: role.user_role,
   description: role.description || null,
+  is_internal_member: Number(role.is_internal_member || 0),
   is_system: 0,
   is_active: role.is_active,
   created_by: role.created_by || null,
@@ -15849,6 +15850,7 @@ exports.createRole = async (req, res) => {
     const newRole = await db.user_type.create({
       user_role: name,
       description,
+      is_internal_member: 1,
       is_active: 1
     });
 
@@ -15890,9 +15892,7 @@ exports.getRoles = async (req, res) => {
 
     const whereCondition = {
       is_active: 1,
-      user_type_id: {
-        [Op.notIn]: [2, 3]
-      }
+      is_internal_member: 1
     };
 
     // Search filter
@@ -16317,8 +16317,17 @@ exports.getUsersWithRoles = async (req, res) => {
     if (role_id) {
       userWhereCondition.user_type = role_id;
     } else {
+      const internalRoles = await db.user_type.findAll({
+        where: {
+          is_active: 1,
+          is_internal_member: 1
+        },
+        attributes: ['user_type_id'],
+        raw: true
+      });
+
       userWhereCondition.user_type = {
-        [Op.notIn]: [2, 3]
+        [Op.in]: internalRoles.map((role) => role.user_type_id)
       };
     }
 

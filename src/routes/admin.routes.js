@@ -4,7 +4,6 @@ const router = express.Router();
 const admin = require('../controllers/admin.controller');
 const { authenticateAdmin, authMiddleware } = require('../middleware/auth');
 const { requirePermission, requireAnyPermission } = require('../middleware/permission.middleware');
-const { requireSuperAdmin } = require('../middleware/auth.middleware');
 const shiftManagementRoutes = require('./shifts.routes');
 const assignmentHistoryRoutes = require('./assignment-history.routes');
 const salesRepDetailRoutes = require('./sales-reps.routes');
@@ -132,6 +131,10 @@ const adminUsersDelete = requireAnyPermission([
   'admin_users.delete',
   'production_manager_creative_partner.delete'
 ], { allowRoles: ['production_manager'] });
+const rolesPermissionsView = requireAnyPermission(['roles_permissions.view']);
+const rolesPermissionsCreate = requireAnyPermission(['roles_permissions.create']);
+const rolesPermissionsEdit = requireAnyPermission(['roles_permissions.edit']);
+const rolesPermissionsDelete = requireAnyPermission(['roles_permissions.delete']);
 const adminUsersOrSalesRepresentativeView = requireAnyPermission([
   'admin_users.view',
   'admin_sales_representative.view',
@@ -274,24 +277,24 @@ router.post('/get-assigned-project-crew', admin.getAllAssignedRequests);
 router.get('/crew-member-assigned-projects', authMiddleware, adminSalesRepresentativeView, admin.getCrewMemberAssignedProjectsByDate);
 router.get('/crew-member-assigned-projects/:crew_member_id', authMiddleware, adminSalesRepresentativeView, admin.getCrewMemberAssignedProjectsByDate);
 router.post('/crew-member-assigned-projects', authMiddleware, adminSalesRepresentativeView, admin.getAllAssignedRequests);
-router.post('/roles/create', authMiddleware, requireSuperAdmin, admin.createRole);
-router.get('/roles', authMiddleware, requireSuperAdmin, admin.getRoles);
-router.post('/users/assign-role', authMiddleware, requireSuperAdmin, admin.assignRoleToUser);
-router.put('/roles/update', authMiddleware, requireSuperAdmin, admin.updateRole);
-router.delete('/roles/delete/:role_id', authMiddleware, requireSuperAdmin, admin.deleteRole);
+router.post('/roles/create', authMiddleware, rolesPermissionsCreate, admin.createRole);
+router.get('/roles', authMiddleware, rolesPermissionsView, admin.getRoles);
+router.post('/users/assign-role', authMiddleware, rolesPermissionsEdit, admin.assignRoleToUser);
+router.put('/roles/update', authMiddleware, rolesPermissionsEdit, admin.updateRole);
+router.delete('/roles/delete/:role_id', authMiddleware, rolesPermissionsDelete, admin.deleteRole);
 router.get('/users/export', authMiddleware, adminUsersView, admin.exportUsersExcel);
 router.get('/roles/:role_id/users/export', authMiddleware, adminUsersView, admin.exportRoleUsersExcel);
-router.get('/roles/:role_id', authMiddleware, requireSuperAdmin, admin.getRoleById);
-router.get('/users/roles', authMiddleware, requireSuperAdmin, admin.getUsersWithRoles);
-router.get('/users/:user_id/role-details', authMiddleware, requireSuperAdmin, admin.getUserRoleDetails);
-router.get('/permissions/modules', authMiddleware, requireSuperAdmin, admin.getPermissionModules);
-router.delete('/delete-user/:user_id', authMiddleware, requireSuperAdmin, admin.deleteUser);
-router.post('/restore-user/:user_id', authMiddleware, requireSuperAdmin, admin.restoreUser);
-router.post('/users/permissions/assign', authMiddleware, requireSuperAdmin, admin.assignPermissionsToUser);
-router.put('/users/permissions/update', authMiddleware, requireSuperAdmin, admin.updateUserPermissions);
+router.get('/roles/:role_id', authMiddleware, rolesPermissionsView, admin.getRoleById);
+router.get('/users/roles', authMiddleware, rolesPermissionsView, admin.getUsersWithRoles);
+router.get('/users/:user_id/role-details', authMiddleware, rolesPermissionsView, admin.getUserRoleDetails);
+router.get('/permissions/modules', authMiddleware, rolesPermissionsView, admin.getPermissionModules);
+router.delete('/delete-user/:user_id', authMiddleware, adminUsersDelete, admin.deleteUser);
+router.post('/restore-user/:user_id', authMiddleware, adminUsersDelete, admin.restoreUser);
+router.post('/users/permissions/assign', authMiddleware, rolesPermissionsEdit, admin.assignPermissionsToUser);
+router.put('/users/permissions/update', authMiddleware, rolesPermissionsEdit, admin.updateUserPermissions);
 router.get('/users/:user_id/permissions', authMiddleware, admin.getUserPermissions);
-router.delete('/users/:user_id/permissions/:module_key/:action_key', authMiddleware, requireSuperAdmin, admin.deleteUserPermission);
-router.delete('/users/:user_id/permissions/:permission_id', authMiddleware, requireSuperAdmin, admin.deleteUserPermission);
+router.delete('/users/:user_id/permissions/:module_key/:action_key', authMiddleware, rolesPermissionsDelete, admin.deleteUserPermission);
+router.delete('/users/:user_id/permissions/:permission_id', authMiddleware, rolesPermissionsDelete, admin.deleteUserPermission);
 
 router.get('/shoots/:bookingId/notes', authMiddleware, shootNotesView, admin.getShootNotes);
 router.post('/shoots/:bookingId/notes', authMiddleware, shootNotesCreate, admin.uploadShootNoteAttachments, admin.addShootNote);
