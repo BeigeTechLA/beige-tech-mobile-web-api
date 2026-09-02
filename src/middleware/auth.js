@@ -69,7 +69,7 @@ const authMiddleware = async (req, res, next) => {
     // Verify token
     const decoded = jwt.verify(token, config.jwtSecret);
 
-    await validatePermissionVersion(decoded);
+    const user = await validatePermissionVersion(decoded);
 
     // Attach user information to request
     req.user = {
