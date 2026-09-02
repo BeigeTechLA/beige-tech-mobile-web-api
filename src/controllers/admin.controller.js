@@ -606,16 +606,73 @@ const formatProjectEventTypeLabels = (eventType, allEventMasterTypes = [], lineI
   }
 
   const serviceText = (lineItems || [])
-    .filter((item) => String(item?.section_type || '').toLowerCase() === 'service')
-    .map((item) => `${item?.item_name || ''} ${item?.catalog_item?.name || ''}`)
+    .filter((item) => ['service', 'custom'].includes(String(item?.section_type || '').toLowerCase()))
+    .map((item) => `${item?.item_name || ''} ${item?.catalog_item?.name || ''} ${item?.catalog_name || ''} ${item?.description || ''}`)
     .join(' ')
     .toLowerCase();
 
   const inferredTypes = [];
-  if (serviceText.includes('video')) inferredTypes.push('Videography');
-  if (serviceText.includes('photo')) inferredTypes.push('Photography');
+  if (/\b(video|videography|camera|cinematography|cinematographer|operator|b-roll|footage)\b/.test(serviceText)) {
+    inferredTypes.push('Videography');
+  }
+  if (/\b(photo|photography|photographer|portrait|headshot)\b/.test(serviceText)) {
+    inferredTypes.push('Photography');
+  }
+  if (/\b(edit|editing|editor|post-production|post production|reel|highlight)\b/.test(serviceText)) {
+    inferredTypes.push(serviceText.includes('photo') ? 'Photo Editing' : 'Video Editing');
+  }
 
   return Array.from(new Set(inferredTypes)).join(', ');
+};
+
+const fetchSalesQuoteLineItemsByBookingId = async (bookingIds = []) => {
+  const normalizedBookingIds = Array.from(new Set(
+    bookingIds
+      .map((id) => Number(id))
+      .filter((id) => Number.isInteger(id) && id > 0)
+  ));
+
+  if (!normalizedBookingIds.length) return new Map();
+
+  const rows = await db.sequelize.query(
+    `
+      SELECT
+        linked_leads.booking_id,
+        sq.sales_quote_id,
+        sq.video_shoot_type,
+        li.section_type,
+        li.item_name,
+        li.description,
+        qci.name AS catalog_name
+      FROM (
+        SELECT booking_id, lead_id FROM sales_leads
+        WHERE is_active = 1 AND booking_id IN (:bookingIds)
+        UNION ALL
+        SELECT booking_id, lead_id FROM client_leads
+        WHERE is_active = 1 AND booking_id IN (:bookingIds)
+      ) AS linked_leads
+      INNER JOIN sales_quotes sq
+        ON sq.lead_id = linked_leads.lead_id
+      INNER JOIN sales_quote_line_items li
+        ON li.sales_quote_id = sq.sales_quote_id
+       AND li.is_active = 1
+      LEFT JOIN quote_catalog_items qci
+        ON qci.catalog_item_id = li.catalog_item_id
+      ORDER BY linked_leads.booking_id, sq.sales_quote_id DESC, li.sort_order ASC, li.line_item_id ASC
+    `,
+    {
+      replacements: { bookingIds: normalizedBookingIds },
+      type: QueryTypes.SELECT,
+    }
+  );
+
+  return rows.reduce((map, row) => {
+    const bookingId = Number(row.booking_id);
+    if (!Number.isInteger(bookingId) || bookingId <= 0) return map;
+    if (!map.has(bookingId)) map.set(bookingId, []);
+    map.get(bookingId).push(row);
+    return map;
+  }, new Map());
 };
 
 const resolveProjectDisplayAmount = async ({ project, paymentData }) => {
@@ -4250,6 +4307,9 @@ exports.getAllProjectDetails = async (req, res) => {
     const shootNotesCountMap = await countActiveShootNotesByBookingIds(
       projectRows.map((project) => project.stream_project_booking_id)
     );
+    const salesQuoteLineItemsByBookingId = await fetchSalesQuoteLineItemsByBookingId(
+      projectRows.map((project) => project.stream_project_booking_id)
+    );
 
     let projectDetails = await Promise.all(projectRows.map(async (project) => {
       const shootNotesCount = shootNotesCountMap.get(Number(project.stream_project_booking_id)) || 0;
@@ -4349,7 +4409,11 @@ exports.getAllProjectDetails = async (req, res) => {
         if (masterMatch) return masterMatch.event_type_name;
         const stringMap = { 'videographer': 'Videography', 'photographer': 'Photography' };
         return stringMap[val.toLowerCase()] || val.charAt(0).toUpperCase() + val.slice(1);
-      });
+      }).filter(Boolean);
+      const quoteLineItems = salesQuoteLineItemsByBookingId.get(Number(project.stream_project_booking_id)) || [];
+      const eventTypeLabels = formattedTypes.length
+        ? Array.from(new Set(formattedTypes)).join(', ')
+        : formatProjectEventTypeLabels(project.event_type, allEventMasterTypes, quoteLineItems);
 
       const timelineStatus = bookingTimelineService.getTimelineStage(project);
       const timelineLabel = bookingTimelineService.getTimelineLabel(timelineStatus);
@@ -4369,7 +4433,7 @@ exports.getAllProjectDetails = async (req, res) => {
           credit_used_amount: summaryCreditUsedAmount || 0,
           payment_status: paymentStatus,
           notes_count: shootNotesCount,
-          event_type_labels: formattedTypes.join(', '),
+          event_type_labels: eventTypeLabels,
           timeline_status: timelineStatus,
           timeline_label: timelineLabel,
           needs_attention: buildShootNeedsAttention(projectJson, formSubmission),
