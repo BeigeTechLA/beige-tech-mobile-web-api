@@ -58,6 +58,7 @@ router.post('/workspace', authenticate, fileManagerCreate, externalFileManagerCo
 router.patch('/workspace/:bookingId/display-name', authenticate, fileManagerCreate, externalFileManagerController.updateWorkspaceDisplayName);
 router.get('/workspace/:bookingId', authenticate, shootOrFileManagerView, externalFileManagerController.getWorkspace);
 router.get('/workspace/:bookingId/files', authenticate, shootOrFileManagerView, externalFileManagerController.getWorkspaceFiles);
+router.get('/folder-activity-logs', authenticate, fileManagerView, externalFileManagerController.getFolderActivityLogs);
 router.post('/folder', authenticate, fileManagerCreate, externalFileManagerController.createFolder);
 router.post('/upload-conflicts', authenticate, fileManagerCreate, externalFileManagerController.detectUploadConflicts);
 router.post('/upload-policy', authenticate, fileManagerCreate, externalFileManagerController.getUploadPolicy);
