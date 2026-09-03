@@ -207,9 +207,7 @@ const getAllowedPermissionIds = async ({ userId, roleId }, permissionKeys) => {
   userPermissions.forEach((item) => {
     const permissionId = Number(item.permission_id);
     if (Number(item.is_allowed) === 1) {
-      if (roleAllowedPermissionIds.has(permissionId)) {
-        allowedPermissionIds.add(permissionId);
-      }
+      allowedPermissionIds.add(permissionId);
     } else {
       allowedPermissionIds.delete(permissionId);
     }
