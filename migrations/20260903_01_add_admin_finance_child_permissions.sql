@@ -20,11 +20,23 @@ WHERE NOT EXISTS (
 
 UPDATE `permissions`
 SET `role_key` = 'admin'
-WHERE `module_key` IN (
-  'admin_finances_transactions',
-  'admin_finances_disputes',
-  'admin_finances_beige_credit_points',
-  'admin_finances_cp_compensation'
+WHERE `permission_key` IN (
+  'admin_finances_transactions.view',
+  'admin_finances_transactions.create',
+  'admin_finances_transactions.edit',
+  'admin_finances_transactions.delete',
+  'admin_finances_disputes.view',
+  'admin_finances_disputes.create',
+  'admin_finances_disputes.edit',
+  'admin_finances_disputes.delete',
+  'admin_finances_beige_credit_points.view',
+  'admin_finances_beige_credit_points.create',
+  'admin_finances_beige_credit_points.edit',
+  'admin_finances_beige_credit_points.delete',
+  'admin_finances_cp_compensation.view',
+  'admin_finances_cp_compensation.create',
+  'admin_finances_cp_compensation.edit',
+  'admin_finances_cp_compensation.delete'
 );
 
 INSERT INTO `role_permissions` (`role_id`, `permission_id`, `is_active`)
@@ -50,21 +62,28 @@ WHERE source_roles.is_active = 1
       AND existing.permission_id = child_permissions.permission_id
   );
 
-UPDATE `role_permissions` existing
-JOIN `permissions` child_permissions
-  ON child_permissions.permission_id = existing.permission_id
-  AND child_permissions.module_key IN (
-    'admin_finances_transactions',
-    'admin_finances_disputes',
-    'admin_finances_beige_credit_points',
-    'admin_finances_cp_compensation'
-  )
-JOIN `role_permissions` source_roles
-  ON source_roles.role_id = existing.role_id
-  AND source_roles.is_active = 1
-JOIN `permissions` parent_permissions
-  ON parent_permissions.permission_id = source_roles.permission_id
-  AND parent_permissions.module_key = 'admin_finances'
-  AND parent_permissions.action_key = child_permissions.action_key
-SET existing.is_active = 1
-WHERE existing.is_active = 0;
+UPDATE `role_permissions`
+SET `is_active` = 1
+WHERE `role_permission_id` IN (
+  SELECT role_permission_id
+  FROM (
+    SELECT existing.role_permission_id
+    FROM `role_permissions` existing
+    JOIN `permissions` child_permissions
+      ON child_permissions.permission_id = existing.permission_id
+      AND child_permissions.module_key IN (
+        'admin_finances_transactions',
+        'admin_finances_disputes',
+        'admin_finances_beige_credit_points',
+        'admin_finances_cp_compensation'
+      )
+    JOIN `role_permissions` source_roles
+      ON source_roles.role_id = existing.role_id
+      AND source_roles.is_active = 1
+    JOIN `permissions` parent_permissions
+      ON parent_permissions.permission_id = source_roles.permission_id
+      AND parent_permissions.module_key = 'admin_finances'
+      AND parent_permissions.action_key = child_permissions.action_key
+    WHERE existing.is_active = 0
+  ) AS role_permissions_to_enable
+);
