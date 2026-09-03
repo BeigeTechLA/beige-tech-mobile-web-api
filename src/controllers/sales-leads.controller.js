@@ -35,6 +35,7 @@ const normalizeString = (value) => {
 };
 
 async function sendCPNewShootRequestPush({ userId, booking, creatorId }) {
+  /*
   const normalizedUserId = Number(userId || 0) || null;
   const baseUrl = normalizeString(process.env.THIRD_PARTY_API_BASE_URL);
   const internalApiKey = normalizeString(process.env.PUSH_NOTIFICATION_INTERNAL_API_KEY);
@@ -80,6 +81,7 @@ async function sendCPNewShootRequestPush({ userId, booking, creatorId }) {
   }
 
   return response.json().catch(() => ({}));
+  */
 }
 
 async function assignSalesLeadViaShiftRoundRobin({ lead, clientName, status, source, transaction = null }) {

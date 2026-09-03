@@ -346,6 +346,7 @@ const sendMeetingPushNotifications = async ({
   type,
   explicitParticipants = null,
 }) => {
+  /*
   try {
     const targets = await collectMeetingPushParticipants(state, booking, explicitParticipants);
     if (!targets.length) return;
@@ -393,6 +394,7 @@ const sendMeetingPushNotifications = async ({
       message: error.message || error,
     });
   }
+    */
 };
 
 const matchesParticipantByIdentity = (participant, identities = new Set()) => {

@@ -306,6 +306,7 @@ const resolveCpPushUserId = async (crew = {}) => {
 };
 
 const sendRevisionCommentAddedPush = async ({ booking, filepath, comment }) => {
+  /*
   try {
     const plainBooking = typeof booking?.get === 'function' ? booking.get({ plain: true }) : booking;
     const assignedCrews = Array.isArray(plainBooking?.assigned_crews) ? plainBooking.assigned_crews : [];
@@ -348,6 +349,7 @@ const sendRevisionCommentAddedPush = async ({ booking, filepath, comment }) => {
       message: error.message || error,
     });
   }
+    */
 };
 
 const isClientCommentAuthor = (userRef) => {
