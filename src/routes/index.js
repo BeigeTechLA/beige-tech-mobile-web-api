@@ -48,6 +48,7 @@ router.use('/sales', require('./sales.routes'));
 router.use('/shifts', require('./shifts.routes'));
 router.use('/assignment-history', require('./assignment-history.routes'));
 router.use('/sales-reps', require('./sales-reps.routes'));
+router.use('/file-manager', require('./file-manager.routes'));
 router.use('/external-file-manager', require('./external-file-manager.routes'));
 router.get('/gcp/download-folder', externalFileManagerController.downloadFolderZip);
 router.use('/external-chat', require('./external-chat.routes'));

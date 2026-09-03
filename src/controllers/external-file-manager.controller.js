@@ -3,6 +3,7 @@ const PUBLIC_BASE_URL = process.env.EXTERNAL_FILE_MANAGER_PUBLIC_BASE_URL || '';
 const INTERNAL_KEY = process.env.EXTERNAL_FILE_MANAGER_KEY || 'beige-internal-dev-key';
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
+const { QueryTypes } = require('sequelize');
 const { Readable } = require('stream');
 const db = require('../models');
 const { users, crew_members, assigned_crew, stream_project_booking, sales_leads, sales_lead_activities } = db;
@@ -29,6 +30,7 @@ let fileShareOtpTableReadyPromise = null;
 let fileShareAccessLogsTableReadyPromise = null;
 let workspaceAccessTableReadyPromise = null;
 let fileManagerSettingsTableReadyPromise = null;
+let folderDeletionRequestsTableReadyPromise = null;
 let creatorFoldersTableReadyPromise = null;
 let workspaceDisplayNamesTableReadyPromise = null;
 
@@ -1813,6 +1815,143 @@ const getFileManagerSettings = async () => {
   };
 };
 
+const ensureFolderDeletionRequestsTable = async () => {
+  if (!folderDeletionRequestsTableReadyPromise) {
+    folderDeletionRequestsTableReadyPromise = db.sequelize.query(`
+      CREATE TABLE IF NOT EXISTS folder_deletion_requests (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        folder_id VARCHAR(1024) NOT NULL,
+        folder_id_hash CHAR(64) AS (SHA2(folder_id, 256)) STORED,
+        pending_folder_id_hash CHAR(64) AS (CASE WHEN status = 'pending' THEN SHA2(folder_id, 256) ELSE NULL END) STORED,
+        title VARCHAR(255) NOT NULL,
+        requested_by_user_id BIGINT UNSIGNED NOT NULL,
+        project_id VARCHAR(128) DEFAULT NULL,
+        event_id VARCHAR(128) DEFAULT NULL,
+        reason VARCHAR(100) NOT NULL,
+        description TEXT DEFAULT NULL,
+        status ENUM('pending', 'approved', 'rejected', 'completed') NOT NULL DEFAULT 'pending',
+        file_count INT UNSIGNED NOT NULL DEFAULT 0,
+        total_size_bytes BIGINT UNSIGNED NOT NULL DEFAULT 0,
+        requested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        reviewed_by_user_id BIGINT UNSIGNED DEFAULT NULL,
+        reviewed_at DATETIME DEFAULT NULL,
+        reject_reason TEXT DEFAULT NULL,
+        audit_log JSON DEFAULT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        KEY idx_folder_deletion_requests_status (status),
+        KEY idx_folder_deletion_requests_folder (folder_id_hash),
+        KEY idx_folder_deletion_requests_requested_by (requested_by_user_id),
+        KEY idx_folder_deletion_requests_requested_at (requested_at),
+        UNIQUE KEY uq_folder_deletion_requests_pending_folder (pending_folder_id_hash)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+  }
+
+  await folderDeletionRequestsTableReadyPromise;
+};
+
+const normalizeDeletionRequestReason = (value) => {
+  const reason = String(value || '').trim().toLowerCase();
+  return reason || 'others';
+};
+
+const normalizeDeletionRequestDescription = (value) => {
+  const description = String(value || '').trim();
+  return description || 'NA';
+};
+
+const getFolderDeletionRequestSnapshot = (metadata) => ({
+  fileCount: Math.max(0, Number(metadata?.fileCount || metadata?.filesCount || metadata?.file_count || 0) || 0),
+  totalSizeBytes: Math.max(0, Number(metadata?.totalSizeBytes || metadata?.total_size_bytes || metadata?.size || 0) || 0),
+});
+
+const getFolderDeletionTitle = (metadata, folderPath) => {
+  const title = String(metadata?.title || metadata?.name || '').trim();
+  if (title) return title.slice(0, 255);
+  const normalized = normalizePathForAccess(folderPath);
+  return (normalized.split('/').filter(Boolean).pop() || normalized || 'File Manager Folder').slice(0, 255);
+};
+
+const getFolderDeletionProjectLabel = (requestRow) =>
+  requestRow?.project_id || requestRow?.event_id || null;
+
+const mapFolderDeletionRequestRow = (row) => ({
+  id: String(row.id),
+  folder_id: row.folder_id,
+  title: row.title,
+  creative: {
+    id: row.requested_by_user_id ? String(row.requested_by_user_id) : null,
+    name: row.creative_name || row.creative_email || null,
+  },
+  project: getFolderDeletionProjectLabel(row),
+  reason: row.reason,
+  description: row.description || 'NA',
+  status: row.status,
+  file_count: Number(row.file_count || 0),
+  total_size_bytes: Number(row.total_size_bytes || 0),
+  requested_at: row.requested_at,
+  reviewed_by: row.reviewed_by_user_id
+    ? {
+        id: String(row.reviewed_by_user_id),
+        name: row.reviewed_by_name || row.reviewed_by_email || null,
+      }
+    : null,
+  reviewed_at: row.reviewed_at || null,
+  reject_reason: row.reject_reason || null,
+});
+
+const getLatestFolderDeletionRequest = async (folderPath) => {
+  await ensureFolderDeletionRequestsTable();
+  const normalizedPath = normalizePathForAccess(folderPath);
+  const [rows] = await db.sequelize.query(
+    `SELECT *
+     FROM folder_deletion_requests
+     WHERE folder_id_hash = SHA2(:folderPath, 256)
+       AND folder_id = :folderPath
+     ORDER BY requested_at DESC, id DESC
+     LIMIT 1`,
+    { replacements: { folderPath: normalizedPath } }
+  );
+  return Array.isArray(rows) && rows.length ? rows[0] : null;
+};
+
+const appendFolderDeletionAudit = (existingAuditLog, entry) => {
+  let current = [];
+  if (Array.isArray(existingAuditLog)) current = existingAuditLog;
+  else if (existingAuditLog) {
+    try {
+      current = JSON.parse(existingAuditLog);
+    } catch (error) {
+      current = [];
+    }
+  }
+  return JSON.stringify([...current, entry]);
+};
+
+const notifyFolderDeletionRequester = async (requestRow, message, actorUserId) => {
+  if (!requestRow?.requested_by_user_id) return;
+  await appNotificationService.createNotification({
+    userId: requestRow.requested_by_user_id,
+    senderUserId: actorUserId || null,
+    title: 'Folder deletion request',
+    message,
+    topic: 'file_manager',
+    category: 'file_manager',
+    type: 'folder_deletion_request',
+    referenceId: String(requestRow.id),
+    referenceType: 'folder_deletion_request',
+    payload: {
+      request_id: String(requestRow.id),
+      folder_id: requestRow.folder_id,
+      status: requestRow.status,
+    },
+  }).catch((error) => {
+    console.error('Failed to create folder deletion notification:', error);
+  });
+};
+
 const ensureCreatorFoldersTable = async () => {
   if (!creatorFoldersTableReadyPromise) {
     creatorFoldersTableReadyPromise = db.sequelize.query(`
@@ -3546,8 +3685,10 @@ const cleanupCreatorFolderOwnershipForDeletedFolder = async (metadata, targetPat
   });
 };
 
-const assertCreatorCanDeleteFileManagerEntry = async (req, targetPath) => {
-  if (!isCreatorRole(req)) return null;
+const getCreatorDeleteEligibility = async (req, targetPath) => {
+  if (!isCreatorRole(req)) {
+    return { metadata: null, withinWindow: true, lockDays: 0 };
+  }
 
   let metadata;
   try {
@@ -3562,7 +3703,7 @@ const assertCreatorCanDeleteFileManagerEntry = async (req, targetPath) => {
 
   const settings = await getFileManagerSettings();
   const lockDays = normalizeCpDeleteLockDays(settings.cpDeleteLockDays);
-  if (lockDays <= 0) return metadata;
+  if (lockDays <= 0) return { metadata, withinWindow: true, lockDays };
 
   const createdAt = metadata?.createdAt;
   const createdTime = new Date(createdAt || '').getTime();
@@ -3574,7 +3715,16 @@ const assertCreatorCanDeleteFileManagerEntry = async (req, targetPath) => {
 
   const ageMs = Date.now() - createdTime;
   const lockMs = lockDays * 24 * 60 * 60 * 1000;
-  if (ageMs > lockMs) {
+  return { metadata, withinWindow: ageMs <= lockMs, lockDays };
+};
+
+const assertCreatorCanDeleteFileManagerEntry = async (req, targetPath) => {
+  const eligibility = await getCreatorDeleteEligibility(req, targetPath);
+  if (!isCreatorRole(req)) return eligibility.metadata;
+
+  if (!eligibility.withinWindow) {
+    const metadata = eligibility.metadata;
+    const lockDays = eligibility.lockDays;
     const itemType = metadata?.isFolder ? 'folders' : 'files';
     const ageLabel = metadata?.isFolder ? 'creation' : 'upload';
     const error = new Error(`Creative partners can delete ${itemType} only within ${lockDays} day${lockDays === 1 ? '' : 's'} of ${ageLabel}. Please request admin support.`);
@@ -3582,7 +3732,7 @@ const assertCreatorCanDeleteFileManagerEntry = async (req, targetPath) => {
     throw error;
   }
 
-  return metadata;
+  return eligibility.metadata;
 };
 
 const normalizeSegment = (value) =>
@@ -5337,40 +5487,302 @@ exports.deleteEntry = async (req, res) => {
     await ensureCreatorFileAccess(req, targetPath);
     await ensureClientFileAccess(req, targetPath);
     const deleteMetadata = await assertCreatorCanDeleteFileManagerEntry(req, targetPath);
-    const deleterName = await getUserDisplayName(getRequestUserId(req)).catch(() => null);
-    const result = await proxyRequest('/delete', {
-      method: 'POST',
-      body: JSON.stringify({
-        filepath: targetPath,
-        userId: getRequestUserId(req),
-        authorName: deleterName || 'Beige User',
-      }),
-    });
-
-    const deletedPath = normalizePathForAccess(targetPath);
-    if (deletedPath) {
-      await deactivateSharesForDeletedPath(deletedPath).catch((error) => {
-        console.error('Failed to invalidate deleted file-manager shares:', error);
-      });
-      await deleteFaceEmbeddingRecordsByPath(deletedPath).catch(() => null);
-      await cleanupCreatorFolderOwnershipForDeletedFolder(deleteMetadata, deletedPath).catch(() => null);
-
-      const rows = await listCommonEventRows().catch(() => []);
-      const deletedRootRow = rows.find((row) => {
-        const rootPath = normalizePathForAccess(row?.root_path || '');
-        return rootPath && rootPath === deletedPath;
-      });
-
-      if (deletedRootRow?.workspace_external_id) {
-        await deleteCommonEventRowsByExternalId(deletedRootRow.workspace_external_id);
-      }
-    }
+    const result = await performFileManagerDelete(req, targetPath, deleteMetadata);
 
     return res.status(200).json(result);
   } catch (error) {
     return res.status(error.status || 500).json(error.payload || {
       success: false,
       message: error.message,
+    });
+  }
+};
+
+const performFileManagerDelete = async (req, targetPath, deleteMetadata) => {
+  const deleterName = await getUserDisplayName(getRequestUserId(req)).catch(() => null);
+  const result = await proxyRequest('/delete', {
+    method: 'POST',
+    body: JSON.stringify({
+      filepath: targetPath,
+      userId: getRequestUserId(req),
+      authorName: deleterName || 'Beige User',
+    }),
+  });
+
+  const deletedPath = normalizePathForAccess(targetPath);
+  if (deletedPath) {
+    await deactivateSharesForDeletedPath(deletedPath).catch((error) => {
+      console.error('Failed to invalidate deleted file-manager shares:', error);
+    });
+    await deleteFaceEmbeddingRecordsByPath(deletedPath).catch(() => null);
+    await cleanupCreatorFolderOwnershipForDeletedFolder(deleteMetadata, deletedPath).catch(() => null);
+
+    const rows = await listCommonEventRows().catch(() => []);
+    const deletedRootRow = rows.find((row) => {
+      const rootPath = normalizePathForAccess(row?.root_path || '');
+      return rootPath && rootPath === deletedPath;
+    });
+
+    if (deletedRootRow?.workspace_external_id) {
+      await deleteCommonEventRowsByExternalId(deletedRootRow.workspace_external_id);
+    }
+  }
+
+  return result;
+};
+
+exports.listFolderDeletionRequests = async (req, res) => {
+  try {
+    await ensureFolderDeletionRequestsTable();
+    const status = String(req.query.status || 'pending').trim().toLowerCase();
+    const allowedStatuses = ['pending', 'approved', 'rejected', 'completed'];
+    const page = Math.max(1, Number(req.query.page || 1) || 1);
+    const limit = Math.max(1, Math.min(100, Number(req.query.limit || 20) || 20));
+    const offset = (page - 1) * limit;
+    const search = String(req.query.search || '').trim();
+    const sort = String(req.query.sort || 'requested_at desc').trim().toLowerCase();
+    const orderBy = sort === 'requested_at asc' ? 'r.requested_at ASC, r.id ASC' : 'r.requested_at DESC, r.id DESC';
+    const where = [];
+    const replacements = { limit, offset };
+
+    if (allowedStatuses.includes(status)) {
+      where.push('r.status = :status');
+      replacements.status = status;
+    }
+    if (search) {
+      where.push(`(r.title LIKE :search OR r.folder_id LIKE :search OR r.reason LIKE :search OR u.name LIKE :search OR u.email LIKE :search)`);
+      replacements.search = `%${search}%`;
+    }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const [rows] = await db.sequelize.query(
+      `SELECT r.*, u.name AS creative_name, u.email AS creative_email,
+              reviewer.name AS reviewed_by_name, reviewer.email AS reviewed_by_email
+       FROM folder_deletion_requests r
+       LEFT JOIN users u ON u.id = r.requested_by_user_id
+       LEFT JOIN users reviewer ON reviewer.id = r.reviewed_by_user_id
+       ${whereSql}
+       ORDER BY ${orderBy}
+       LIMIT :limit OFFSET :offset`,
+      { replacements }
+    );
+    const [countRows] = await db.sequelize.query(
+      `SELECT COUNT(*) AS total
+       FROM folder_deletion_requests r
+       LEFT JOIN users u ON u.id = r.requested_by_user_id
+       ${whereSql}`,
+      { replacements }
+    );
+
+    return res.status(200).json({
+      data: (Array.isArray(rows) ? rows : []).map(mapFolderDeletionRequestRow),
+      pagination: {
+        page,
+        limit,
+        total: Number(countRows?.[0]?.total || 0),
+      },
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to load folder deletion requests',
+    });
+  }
+};
+
+const reviewFolderDeletionRequest = async (req, res, nextStatus) => {
+  try {
+    await ensureFolderDeletionRequestsTable();
+    const requestId = Number(req.params.id);
+    if (!requestId) return res.status(400).json({ success: false, message: 'Valid request id is required' });
+
+    const [rows] = await db.sequelize.query(
+      `SELECT * FROM folder_deletion_requests WHERE id = :requestId LIMIT 1`,
+      { replacements: { requestId } }
+    );
+    const requestRow = Array.isArray(rows) && rows.length ? rows[0] : null;
+    if (!requestRow) return res.status(404).json({ success: false, message: 'Deletion request not found' });
+    if (requestRow.status !== 'pending') {
+      return res.status(409).json({ success: false, message: 'Deletion request has already been reviewed' });
+    }
+
+    const actorUserId = getRequestUserId(req) || null;
+    const now = new Date();
+    const rejectReason = nextStatus === 'rejected' ? String(req.body?.reject_reason || '').trim() || null : null;
+    const auditLog = appendFolderDeletionAudit(requestRow.audit_log, {
+      action: nextStatus,
+      actor_user_id: actorUserId,
+      at: now.toISOString(),
+      folder_id: requestRow.folder_id,
+      file_count: Number(requestRow.file_count || 0),
+      total_size_bytes: Number(requestRow.total_size_bytes || 0),
+      reject_reason: rejectReason,
+    });
+
+    await db.sequelize.query(
+      `UPDATE folder_deletion_requests
+       SET status = :nextStatus,
+           reviewed_by_user_id = :actorUserId,
+           reviewed_at = :reviewedAt,
+           reject_reason = :rejectReason,
+           audit_log = :auditLog
+       WHERE id = :requestId
+         AND status = 'pending'`,
+      {
+        replacements: {
+          nextStatus,
+          actorUserId,
+          reviewedAt: now,
+          rejectReason,
+          auditLog,
+          requestId,
+        },
+      }
+    );
+
+    await notifyFolderDeletionRequester(
+      { ...requestRow, status: nextStatus },
+      nextStatus === 'approved'
+        ? 'Your delete request was approved. You can now delete this folder.'
+        : 'Request rejected. Folder retained.',
+      actorUserId
+    );
+
+    return res.status(200).json({ success: true, data: { id: String(requestId), status: nextStatus } });
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to review folder deletion request',
+    });
+  }
+};
+
+exports.approveFolderDeletionRequest = (req, res) => reviewFolderDeletionRequest(req, res, 'approved');
+exports.rejectFolderDeletionRequest = (req, res) => reviewFolderDeletionRequest(req, res, 'rejected');
+
+exports.handleFolderDeletionRequest = async (req, res) => {
+  try {
+    const targetPath = normalizePathForAccess(req.params.folderId || req.body.folderId || req.body.filepath || req.body.path);
+    if (!targetPath) return res.status(400).json({ success: false, message: 'folderId is required' });
+
+    await ensureCreatorFileAccess(req, targetPath);
+    await ensureClientFileAccess(req, targetPath);
+    const eligibility = await getCreatorDeleteEligibility(req, targetPath);
+    const metadata = eligibility.metadata;
+    if (!metadata?.isFolder) {
+      return res.status(400).json({ success: false, message: 'Deletion requests are supported for folders only' });
+    }
+
+    if (eligibility.withinWindow) {
+      const result = await performFileManagerDelete(req, targetPath, metadata);
+      return res.status(200).json(result);
+    }
+
+    const latestRequest = await getLatestFolderDeletionRequest(targetPath);
+    if (!latestRequest || latestRequest.status === 'completed') {
+      const context = getDeleteTargetContext(metadata, targetPath);
+      const snapshot = getFolderDeletionRequestSnapshot(metadata);
+      const insertResult = await db.sequelize.query(
+        `INSERT INTO folder_deletion_requests
+         (folder_id, title, requested_by_user_id, project_id, event_id, reason, description, status, file_count, total_size_bytes, audit_log)
+         VALUES
+         (:folderId, :title, :requestedBy, :projectId, :eventId, :reason, :description, 'pending', :fileCount, :totalSizeBytes, :auditLog)`,
+        {
+          replacements: {
+            folderId: targetPath,
+            title: getFolderDeletionTitle(metadata, targetPath),
+            requestedBy: getRequestUserId(req),
+            projectId: context.isCommonEvent ? null : context.externalId,
+            eventId: context.isCommonEvent ? context.externalId : null,
+            reason: normalizeDeletionRequestReason(req.body.reason),
+            description: normalizeDeletionRequestDescription(req.body.description),
+            fileCount: snapshot.fileCount,
+            totalSizeBytes: snapshot.totalSizeBytes,
+            auditLog: JSON.stringify([{
+              action: 'requested',
+              actor_user_id: getRequestUserId(req),
+              at: new Date().toISOString(),
+              folder_id: targetPath,
+              file_count: snapshot.fileCount,
+              total_size_bytes: snapshot.totalSizeBytes,
+            }]),
+          },
+          type: QueryTypes.INSERT,
+        }
+      );
+      const requestId = Array.isArray(insertResult)
+        ? Number(insertResult[0] || insertResult[1] || 0)
+        : Number(insertResult || 0);
+      return res.status(201).json({
+        success: true,
+        already_requested: false,
+        data: {
+          id: requestId ? String(requestId) : null,
+          folder_id: targetPath,
+          status: 'pending',
+        },
+        message: 'Folder deletion request submitted for admin approval',
+      });
+    }
+
+    if (latestRequest.status === 'pending') {
+      return res.status(200).json({
+        success: true,
+        already_requested: true,
+        data: mapFolderDeletionRequestRow(latestRequest),
+        message: 'Folder deletion request is already pending approval',
+      });
+    }
+
+    if (latestRequest.status === 'rejected') {
+      return res.status(403).json({
+        success: false,
+        message: 'Your deletion request for this folder was rejected.',
+      });
+    }
+
+    const snapshot = getFolderDeletionRequestSnapshot(metadata);
+    const result = await performFileManagerDelete(req, targetPath, metadata);
+    await db.sequelize.query(
+      `UPDATE folder_deletion_requests
+       SET status = 'completed',
+           file_count = :fileCount,
+           total_size_bytes = :totalSizeBytes,
+           audit_log = :auditLog
+       WHERE id = :requestId
+         AND status = 'approved'`,
+      {
+        replacements: {
+          requestId: latestRequest.id,
+          fileCount: snapshot.fileCount,
+          totalSizeBytes: snapshot.totalSizeBytes,
+          auditLog: appendFolderDeletionAudit(latestRequest.audit_log, {
+            action: 'completed',
+            actor_user_id: getRequestUserId(req),
+            at: new Date().toISOString(),
+            folder_id: targetPath,
+            file_count: snapshot.fileCount,
+            total_size_bytes: snapshot.totalSizeBytes,
+          }),
+        },
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        request_id: String(latestRequest.id),
+        folder_id: targetPath,
+        status: 'completed',
+        deletion_result: result,
+        file_count: snapshot.fileCount,
+        total_size_bytes: snapshot.totalSizeBytes,
+      },
+      message: 'Folder deleted successfully',
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json(error.payload || {
+      success: false,
+      message: error.message || 'Failed to process folder deletion request',
     });
   }
 };

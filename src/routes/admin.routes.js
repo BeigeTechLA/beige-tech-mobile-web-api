@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const admin = require('../controllers/admin.controller');
+const externalFileManagerController = require('../controllers/external-file-manager.controller');
 const { authenticateAdmin, authMiddleware } = require('../middleware/auth');
 const { requirePermission, requireAnyPermission } = require('../middleware/permission.middleware');
 const { requireSuperAdmin } = require('../middleware/auth.middleware');
@@ -32,6 +33,11 @@ const shootsDelete = requireAnyPermission([
   'admin_shoots.delete',
   'production_manager_shoots.delete'
 ], { allowRoles: ['production_manager'] });
+const adminFileManagerDelete = requireAnyPermission([
+  'admin_file_manager.delete',
+  'sales_admin_file_manager.delete',
+  'production_manager_file_manager.delete'
+], { allowRoles: ['sales_admin', 'production_manager'] });
 const shootNotesView = requireAnyPermission([
   'admin_shoots.view',
   'production_manager_shoots.view'
@@ -156,6 +162,10 @@ const shootsViewOrEdit = requireAnyPermission([
 router.use('/shifts', shiftManagementRoutes);
 router.use('/assignment-history', assignmentHistoryRoutes);
 router.use('/sales-reps', salesRepDetailRoutes);
+
+router.get('/file-manager/deletion-requests', authMiddleware, adminFileManagerDelete, externalFileManagerController.listFolderDeletionRequests);
+router.post('/file-manager/deletion-requests/:id/approve', authMiddleware, adminFileManagerDelete, externalFileManagerController.approveFolderDeletionRequest);
+router.post('/file-manager/deletion-requests/:id/reject', authMiddleware, adminFileManagerDelete, externalFileManagerController.rejectFolderDeletionRequest);
 
 router.get('/profile/:id', authMiddleware, admin.getAdminProfile);
 router.put('/profile/:id', authMiddleware, admin.updateAdminProfile);

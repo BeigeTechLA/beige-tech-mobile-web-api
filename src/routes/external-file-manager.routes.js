@@ -70,6 +70,7 @@ router.post('/file-view-url', authenticate, fileManagerView, externalFileManager
 router.post('/file-download-url', authenticate, fileManagerView, externalFileManagerController.getFileDownloadUrl);
 router.post('/folder-download-url', authenticate, fileManagerView, externalFileManagerController.getFolderDownloadUrl);
 router.post('/selected-download', authenticate, fileManagerView, externalFileManagerController.downloadSelectedFilesZip);
+router.post('/folders/:folderId/deletion-request', authenticate, fileManagerDelete, externalFileManagerController.handleFolderDeletionRequest);
 router.post('/delete', authenticate, fileManagerDelete, externalFileManagerController.deleteEntry);
 router.get('/workspace-access', authenticate, fileManagerView, externalFileManagerController.listWorkspaceAccess);
 router.get('/workspace-access/clients', authenticate, fileManagerCreate, externalFileManagerController.searchRegisteredClientsForWorkspaceAccess);
