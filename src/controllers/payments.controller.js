@@ -40,6 +40,11 @@ function normalizePushText(value) {
   return text || null;
 }
 
+function isMobileAppPaymentMetadata(metadata = {}) {
+  return String(metadata.origin || '').toLowerCase() === 'mobile_app' ||
+    String(metadata.app_source || '').toLowerCase() === 'beige_app';
+}
+
 async function sendBookingConfirmedPush({ booking, bookingId }) {
   const clientUserId = Number(booking?.user_id || 0);
   if (!clientUserId) return;
@@ -1522,11 +1527,18 @@ async function processStripePaidWebhookEvent(event, req = {}) {
       paymentMethod: webhookPaymentMethod,
       transactionId: paymentIntentId
     }).catch(err => console.error('Booking Confirmation Email Error:', err));
-    if (isFullyPaidAfterWebhook) {
+    if (isFullyPaidAfterWebhook && !isMobileAppPaymentMetadata(invoiceMetadata)) {
       sendBookingConfirmedPush({
         booking,
         bookingId: booking_id
       }).catch(err => console.error('Webhook booking confirmed push error:', err));
+    } else if (isFullyPaidAfterWebhook) {
+      console.log('Webhook booking confirmed push skipped for mobile app payment', {
+        booking_id,
+        paymentIntentId,
+        origin: invoiceMetadata?.origin || null,
+        app_source: invoiceMetadata?.app_source || null
+      });
     }
     notifyAssignedCreatorsAfterPayment(booking_id)
       .catch(err => console.error('Assigned Creator Notification Error:', err));
