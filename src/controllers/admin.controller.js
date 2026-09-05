@@ -4312,6 +4312,28 @@ exports.getAllProjectDetails = async (req, res) => {
     const shootNotesCountMap = await countActiveShootNotesByBookingIds(
       projectRows.map((project) => project.stream_project_booking_id)
     );
+    const projectBookingIds = projectRows
+      .map((project) => Number(project.stream_project_booking_id))
+      .filter((bookingId) => Number.isInteger(bookingId) && bookingId > 0);
+    const [salesLeadRows, clientLeadRows] = await Promise.all([
+      sales_leads.findAll({
+        where: { booking_id: { [Op.in]: projectBookingIds } },
+        attributes: ['booking_id', 'lead_source', 'client_name'],
+        raw: true,
+      }),
+      client_leads.findAll({
+        where: { booking_id: { [Op.in]: projectBookingIds } },
+        attributes: ['booking_id', 'lead_source', 'client_name'],
+        raw: true,
+      }),
+    ]);
+    const leadByBookingId = new Map();
+    [...clientLeadRows, ...salesLeadRows].forEach((lead) => {
+      const bookingId = Number(lead.booking_id);
+      if (Number.isInteger(bookingId) && bookingId > 0) {
+        leadByBookingId.set(bookingId, lead);
+      }
+    });
     const salesQuoteLineItemsByBookingId = await fetchSalesQuoteLineItemsByBookingId(
       projectRows.map((project) => project.stream_project_booking_id)
     );
@@ -4426,10 +4448,13 @@ exports.getAllProjectDetails = async (req, res) => {
         ...project.toJSON(),
         booking_days: bookingDaysData
       };
+      const linkedLead = leadByBookingId.get(Number(project.stream_project_booking_id));
 
       return {
         project: {
           ...projectJson,
+          lead_source: linkedLead?.lead_source || null,
+          client_name: linkedLead?.client_name || null,
           total_paid_amount: totalPaidAmount,
           total_value_amount: totalValueAmount,
           paid_amount: totalPaidAmount,
@@ -6227,12 +6252,14 @@ exports.getCrewMembers = async (req, res) => {
             status,
             range,
             start_date,
-            end_date
+            end_date,
+            fetch_all
         } = payload;
 
         page = parseInt(page);
         limit = parseInt(limit);
         const offset = (page - 1) * limit;
+        const shouldFetchAll = String(fetch_all).toLowerCase() === 'true' || String(fetch_all) === '1';
 
         let conditions = [
             { is_active: 1 },
@@ -6312,8 +6339,7 @@ exports.getCrewMembers = async (req, res) => {
                     ['is_beige_member', 'ASC'],
                     ['crew_member_id', 'DESC'],
                 ],
-                limit,
-                offset,
+                ...(shouldFetchAll ? {} : { limit, offset }),
             }),
             crew_roles.findAll({ attributes: ['role_id', 'role_name'], raw: true })
         ]);
@@ -6383,8 +6409,8 @@ exports.getCrewMembers = async (req, res) => {
             pagination: {
                 total_records: count,
                 current_page: page,
-                per_page: limit,
-                total_pages: Math.ceil(count / limit),
+                per_page: shouldFetchAll ? count : limit,
+                total_pages: shouldFetchAll ? 1 : Math.ceil(count / limit),
             },
             data: processedMembers,
         });
@@ -10787,11 +10813,12 @@ const buildClientArchiveFields = (client) => ({
 
 exports.getClients = async (req, res) => {
   try {
-    let { page = 1, limit = 20, search, range, start_date, end_date, include_archived, archived_only } = req.query;
+    let { page = 1, limit = 20, search, range, start_date, end_date, include_archived, archived_only, fetch_all } = req.query;
 
     page = parseInt(page);
     limit = parseInt(limit);
     const offset = (page - 1) * limit;
+    const shouldFetchAll = String(fetch_all).toLowerCase() === 'true' || String(fetch_all) === '1';
 
     const whereConditions = {};
     const shouldIncludeArchived = isTruthyQuery(include_archived);
@@ -10848,8 +10875,7 @@ exports.getClients = async (req, res) => {
 
     const { count, rows } = await clients.findAndCountAll({
       where: whereConditions,
-      limit,
-      offset,
+      ...(shouldFetchAll ? {} : { limit, offset }),
       order: [['created_at', 'DESC']],
       include: [
         {
@@ -10923,8 +10949,8 @@ exports.getClients = async (req, res) => {
       pagination: {
         total_records: count,
         current_page: page,
-        per_page: limit,
-        total_pages: Math.ceil(count / limit)
+        per_page: shouldFetchAll ? count : limit,
+        total_pages: shouldFetchAll ? 1 : Math.ceil(count / limit)
       }
     });
 
@@ -11953,13 +11979,15 @@ exports.getAllPendingCrewMembers = async (req, res) => {
       page = 1,
       limit = 20,
       search = '',
-      location = ''
+      location = '',
+      fetch_all
     } = req.query;
 
     const isIncompleteOnboarding = onboarding_status === 'incomplete';
     const currentPage = Math.max(parseInt(page, 10) || 1, 1);
     const pageSize = Math.max(parseInt(limit, 10) || 20, 1);
     const offset = (currentPage - 1) * pageSize;
+    const shouldFetchAll = String(fetch_all).toLowerCase() === 'true' || String(fetch_all) === '1';
     const baseConditions = {
       is_active: 1,
       is_crew_verified: 0,
@@ -12074,7 +12102,9 @@ exports.getAllPendingCrewMembers = async (req, res) => {
         : true
     ));
 
-    const paginatedMembers = isIncompleteOnboarding
+    const paginatedMembers = shouldFetchAll
+      ? processedMembers
+      : isIncompleteOnboarding
       ? processedMembers.slice(offset, offset + pageSize)
       : processedMembers;
 
@@ -12087,8 +12117,8 @@ exports.getAllPendingCrewMembers = async (req, res) => {
       pagination: {
         total_records: processedMembers.length,
         current_page: currentPage,
-        per_page: pageSize,
-        total_pages: Math.ceil(processedMembers.length / pageSize),
+        per_page: shouldFetchAll ? processedMembers.length : pageSize,
+        total_pages: shouldFetchAll ? 1 : Math.ceil(processedMembers.length / pageSize),
       },
       data: paginatedMembers,
     });
