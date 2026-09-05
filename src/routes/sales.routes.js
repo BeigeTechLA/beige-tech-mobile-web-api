@@ -438,6 +438,7 @@ router.get('/dashboard/funnel', authenticate, requireSalesRepOrAdmin, salesDashb
 router.get('/client-dropdown', authenticate, adminQuotesOrFinancesOrSalesRepresentativeView, salesQuotesController.getClientDropdown);
 router.post('/create-client', authenticate, requireSalesRepOrAdmin, salesQuotesController.createClient);
 router.get('/quotes/catalog', authenticate, adminQuotesView, salesQuotesController.getCatalog);
+router.get('/quotes/master-pricing/export', authenticate, adminQuotesView, salesQuotesController.exportMasterPricingExcel);
 router.get('/quotes/ai-editing-types', authenticate, adminQuotesView, salesQuotesController.getAiEditingTypes);
 router.post('/quotes/ai-editing-types', authenticate, adminQuotesCreate, salesQuotesController.createAiEditingType);
 router.put('/quotes/ai-editing-types/:aiEditingTypeId', authenticate, adminQuotesEdit, salesQuotesController.updateAiEditingType);

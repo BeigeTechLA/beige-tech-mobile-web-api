@@ -190,6 +190,12 @@ router.get(
   adminUsersOrSalesRepresentativeView,
   admin.exportCrewMembersCsv
 );
+router.get(
+  '/creative-partners/details-pending/export',
+  authMiddleware,
+  adminUsersOrSalesRepresentativeView,
+  admin.exportDetailsPendingCreativePartnersExcel
+);
 router.post('/get-approved-crew-members', authMiddleware, crewAvailabilityView, admin.getApprovedCrewMembers);
 router.get('/crew-member/:crew_member_id', authMiddleware, adminSalesRepresentativeAvailabilityView, admin.getCrewMemberById);
 router.get('/crew-member-onboarding-status/:id', authMiddleware, adminUsersView, admin.getOnboardingStatusById);
