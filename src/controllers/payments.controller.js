@@ -15,6 +15,7 @@ const emailService = require('../utils/emailService');
 const { toAbsoluteBeigeAssetUrl } = require('../utils/common');
 const appNotificationService = require('../services/app-notification.service');
 const pushNotificationService = require('../services/push-notification.service');
+const { getPaymentProvider, commasProvider } = require('../services/payment-providers');
 
 const PAYMENT_SOURCE = {
   BOOKING_CHECKOUT: 'booking_checkout',
@@ -1558,6 +1559,53 @@ async function processStripePaidWebhookEvent(event, req = {}) {
 }
 
 
+function buildCommasSuccessUrl(bookingId) {
+  const baseUrl = process.env.COMMAS_SUCCESS_URL || process.env.FRONTEND_URL;
+  if (!baseUrl) return null;
+  try {
+    const url = new URL(baseUrl);
+    url.searchParams.set('booking_id', String(bookingId));
+    return url.toString();
+  } catch (_) {
+    return baseUrl;
+  }
+}
+
+// Commas and Stripe have different webhook envelopes; booking fulfillment is shared.
+async function processCommasPaidWebhookEvent(event, req = {}) {
+  if (event?.type !== 'payment.succeeded') return { received: true };
+
+  const data = event.data || {};
+  const metadata = data.api_metadata?.data || data.metadata || {};
+  const paymentId = data.payment_id;
+  const amount = Number(data.amount);
+  const expectedAmountCents = Number(metadata.beige_amount_cents);
+  if (!paymentId || !Number.isFinite(amount) || amount <= 0) {
+    console.warn('Commas payment.succeeded ignored: missing payment_id or amount');
+    return { received: true, ignored: true };
+  }
+
+  const amountCents = Math.round(amount * 100);
+  if (!Number.isInteger(expectedAmountCents) || expectedAmountCents <= 0 || amountCents !== expectedAmountCents) {
+    console.error('Commas payment.succeeded ignored: amount mismatch', { paymentId, amountCents, expectedAmountCents });
+    return { received: true, ignored: true, reason: 'amount_mismatch' };
+  }
+
+  return processStripePaidWebhookEvent({
+    type: 'payment_intent.succeeded',
+    data: {
+      object: {
+        id: `commas:${paymentId}`,
+        amount: amountCents,
+        metadata,
+        customer_email: data.buyer?.email || null,
+        receipt_email: data.buyer?.email || null,
+        payment_method_types: ['commas_hosted_checkout']
+      }
+    }
+  }, req);
+}
+
 async function ensureProjectAfterPayment({
   bookingId,
   transaction,
@@ -2803,27 +2851,40 @@ exports.createPaymentIntentMulti = async (req, res) => {
       credit_amount_used: requestedCreditAmount
     });
 
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: Math.round(amountToCharge * 100), // Convert to cents
-      currency: 'usd',
-      metadata: {
-        booking_id: booking_id.toString(),
-        payment_source: paymentSource,
-        guest_email: guest_email || booking.guest_email || '',
-        type: 'multi-creator',
-        shoot_name: booking.shoot_name || '',
-        use_credit: shouldUseCredit ? '1' : '0',
-        credit_amount_used: shouldUseCredit ? String(requestedCreditAmount) : '0',
-        payment_link_token: payment_link_token || '',
-        payment_link_amount: linkRequestedAmount ? String(linkRequestedAmount) : '',
-      }
-    });
+    const paymentMetadata = {
+      booking_id: booking_id.toString(),
+      payment_source: paymentSource,
+      guest_email: guest_email || booking.guest_email || '',
+      type: 'multi-creator',
+      shoot_name: booking.shoot_name || '',
+      use_credit: shouldUseCredit ? '1' : '0',
+      credit_amount_used: shouldUseCredit ? String(requestedCreditAmount) : '0',
+      payment_link_token: payment_link_token || '',
+      payment_link_amount: linkRequestedAmount ? String(linkRequestedAmount) : '',
+      beige_amount_cents: String(Math.round(amountToCharge * 100))
+    };
+    const provider = getPaymentProvider();
+    const paymentCheckout = provider.name === 'commas'
+      ? await provider.createHostedCheckoutSession({
+          amountCents: Math.round(amountToCharge * 100),
+          title: `Beige booking #${booking_id}`,
+          description: booking.shoot_name || 'Beige shoot booking payment',
+          metadata: paymentMetadata,
+          successUrl: buildCommasSuccessUrl(booking_id)
+        })
+      : await provider.createBookingCheckout({
+          amountCents: Math.round(amountToCharge * 100),
+          metadata: paymentMetadata
+        });
 
     return res.status(200).json({
       success: true,
       data: {
-        clientSecret: paymentIntent.client_secret,
-        paymentIntentId: paymentIntent.id,
+        provider: paymentCheckout.provider,
+        clientSecret: paymentCheckout.clientSecret || null,
+        paymentIntentId: paymentCheckout.paymentIntentId || null,
+        payment_link: paymentCheckout.paymentLink || null,
+        checkout_session_id: paymentCheckout.checkoutSessionId || null,
         amount: amountToCharge,
         isFree: false
       }
@@ -3724,6 +3785,28 @@ exports.handleStripeWebhook = async (req, res) => {
   } catch (error) {
     console.error('Webhook processing error:', error);
     return res.status(500).send('Internal Server Error');
+  }
+};
+
+/** Handle verified Commas Hosted Checkout webhook events. */
+exports.handleCommasWebhook = async (req, res) => {
+  const signature = req.headers['x-webhook-signature'];
+  if (!process.env.COMMAS_WEBHOOK_SECRET) {
+    console.error('Missing COMMAS_WEBHOOK_SECRET');
+    return res.status(500).send('Webhook not configured');
+  }
+  if (!commasProvider.verifyWebhookSignature(req.body, signature)) {
+    console.error('Commas webhook signature verification failed');
+    return res.status(401).send('Invalid signature');
+  }
+
+  try {
+    const event = commasProvider.parseVerifiedWebhook(req.body);
+    const result = await processCommasPaidWebhookEvent(event, req);
+    return res.status(200).json(result || { received: true });
+  } catch (error) {
+    console.error('Commas webhook processing failed:', error);
+    return res.status(500).send('Webhook processing failed');
   }
 };
 
