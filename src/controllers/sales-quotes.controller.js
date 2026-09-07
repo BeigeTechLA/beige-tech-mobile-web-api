@@ -1,5 +1,6 @@
 const constants = require('../utils/constants');
 const quoteService = require('../services/sales-quote.service');
+const masterPricingExportService = require('../services/master-pricing-export.service');
 const db = require('../models');
 const { Op } = require('sequelize');
 const { Parser } = require('json2csv');
@@ -203,6 +204,34 @@ exports.getCatalog = async (req, res) => {
   } catch (error) {
     console.error('Error fetching quote catalog:', error);
     return sendError(res, error, 'Failed to fetch quote catalog', constants.INTERNAL_SERVER_ERROR.code);
+  }
+};
+
+exports.exportMasterPricingExcel = async (req, res) => {
+  try {
+    const rows = await masterPricingExportService.fetchMasterPricingForExport();
+    const buffer = await masterPricingExportService.generateMasterPricingExcel(rows);
+    const filename = masterPricingExportService.getMasterPricingExportFilename();
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${filename}"`
+    );
+    res.setHeader('Cache-Control', 'no-store');
+
+    return res.status(constants.OK.code).send(buffer);
+  } catch (error) {
+    console.error('Error exporting master pricing:', error);
+    return sendError(
+      res,
+      error,
+      error.message || 'Failed to export master pricing',
+      constants.INTERNAL_SERVER_ERROR.code
+    );
   }
 };
 
