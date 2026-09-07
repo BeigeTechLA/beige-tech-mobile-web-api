@@ -5,7 +5,7 @@ const { authenticate } = require('../middleware/auth');
 const { requireAnyPermission } = require('../middleware/permission.middleware');
 
 const clientFinancesEdit = requireAnyPermission(['client_finances.edit'], { allowRoles: ['client'] });
-const adminUsersCreate = requireAnyPermission(['admin_users.create']);
+const adminUsersCreate = requireAnyPermission(['admin_users_all_users.create']);
 
 /**
  * ====================

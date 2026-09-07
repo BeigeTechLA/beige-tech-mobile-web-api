@@ -6,7 +6,6 @@ const { requireAnyPermission } = require('../middleware/permission.middleware');
 
 // Read-only immutable audit log. No create/update/delete routes.
 const assignmentHistoryView = requireAnyPermission([
-  'admin_sales_representative.view',
   'admin_sales_representative_shift_management.view',
   'sales_admin_sales_people.view',
   'sales_rep_sales.view'

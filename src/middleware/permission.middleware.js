@@ -118,34 +118,6 @@ const getUserAccessContext = async (req) => {
   };
 };
 
-const hasDeniedPermission = async (userId, permissionKeys) => {
-  if (!permissionKeys.length) return false;
-
-  const permissions = await db.permissions.findAll({
-    where: {
-      permission_key: {
-        [Op.in]: permissionKeys
-      },
-      is_active: 1
-    },
-    attributes: ['permission_id']
-  });
-
-  if (!permissions.length) return false;
-
-  const deniedPermission = await db.user_permissions.findOne({
-    where: {
-      user_id: userId,
-      permission_id: permissions.map((permission) => permission.permission_id),
-      is_allowed: 0,
-      is_active: 1
-    },
-    attributes: ['user_permission_id']
-  });
-
-  return Boolean(deniedPermission);
-};
-
 const hasConfiguredPermissions = async (permissionKeys) => {
   if (!permissionKeys.length) return false;
 
@@ -257,13 +229,6 @@ const createPermissionMiddleware = (permissions, options = {}, checkPermissions)
 
       if (allowAdminBypass && ADMIN_ROLES.has(context.role)) {
         return next();
-      }
-
-      if (await hasDeniedPermission(context.userId, expandedPermissionKeys)) {
-        return res.status(403).json({
-          success: false,
-          message: 'Insufficient permissions'
-        });
       }
 
       const isAllowed = permissionKeys.length

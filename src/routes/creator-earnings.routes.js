@@ -4,7 +4,7 @@ const creatorEarningsController = require('../controllers/creator-earnings.contr
 const { authenticate } = require('../middleware/auth.middleware');
 const { requireAnyPermission } = require('../middleware/permission.middleware');
 
-const adminFinancesCreate = requireAnyPermission(['admin_finances.create']);
+const adminCpCompensationEdit = requireAnyPermission(['admin_finances_cp_compensation.edit'], { allowAdminBypass: false });
 
 router.get('/me/dashboard', authenticate, creatorEarningsController.getCreatorEarningsDashboard);
 router.get('/me/earnings', authenticate, creatorEarningsController.getCreatorEarningsList);
@@ -22,7 +22,7 @@ router.post('/creator/:creatorId/bookings/:bookingId/accept', authenticate, crea
 router.post('/creator/:creatorId/bookings/:bookingId/decline', authenticate, creatorEarningsController.declineShoot);
 router.post('/creator/:creatorId/bookings/:bookingId/respond', authenticate, creatorEarningsController.respondToEarning);
 
-router.post('/admin/earnings/advance', authenticate, adminFinancesCreate, creatorEarningsController.addAdvancePayment);
-router.put('/admin/earnings/:earningId/compensation', authenticate, adminFinancesCreate, creatorEarningsController.upsertCompensationItems);
+router.post('/admin/earnings/advance', authenticate, adminCpCompensationEdit, creatorEarningsController.addAdvancePayment);
+router.put('/admin/earnings/:earningId/compensation', authenticate, adminCpCompensationEdit, creatorEarningsController.upsertCompensationItems);
 
 module.exports = router;

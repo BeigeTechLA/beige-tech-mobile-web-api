@@ -5,8 +5,6 @@ const { authenticate } = require('../middleware/auth.middleware');
 const { requireAnyPermission } = require('../middleware/permission.middleware');
 
 const shiftManagementView = requireAnyPermission([
-  'admin_sales_representative.view',
-  'admin_sales_representative_dashboard.view',
   'admin_sales_representative_shift_management.view',
   'sales_admin_sales_people.view',
   'sales_rep_sales.view'
