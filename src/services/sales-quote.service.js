@@ -909,9 +909,18 @@ function buildQuoteCreatedAtCondition(range = 'all', dateOn = null) {
 }
 
 function buildQuoteListWhere(query, user) {
+  // const where = isClientRole(user?.role)
+  //   ? { ...buildQuoteAccessWhere(user) }
+  //   : {};
   const where = isClientRole(user?.role)
     ? { ...buildQuoteAccessWhere(user) }
     : {};
+
+  if (isClientRole(user?.role)) {
+    appendAndCondition(where, {
+      status: { [Op.ne]: 'rejected' }
+    });
+  }
 
   const statusFilter = normalizeQuoteFilterStatus(query.status);
   if (statusFilter?.length) {
