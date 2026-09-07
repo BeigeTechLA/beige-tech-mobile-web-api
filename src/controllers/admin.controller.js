@@ -4313,6 +4313,28 @@ exports.getAllProjectDetails = async (req, res) => {
     const shootNotesCountMap = await countActiveShootNotesByBookingIds(
       projectRows.map((project) => project.stream_project_booking_id)
     );
+    const projectBookingIds = projectRows
+      .map((project) => Number(project.stream_project_booking_id))
+      .filter((bookingId) => Number.isInteger(bookingId) && bookingId > 0);
+    const [salesLeadRows, clientLeadRows] = await Promise.all([
+      sales_leads.findAll({
+        where: { booking_id: { [Op.in]: projectBookingIds } },
+        attributes: ['booking_id', 'lead_source', 'client_name'],
+        raw: true,
+      }),
+      client_leads.findAll({
+        where: { booking_id: { [Op.in]: projectBookingIds } },
+        attributes: ['booking_id', 'lead_source', 'client_name'],
+        raw: true,
+      }),
+    ]);
+    const leadByBookingId = new Map();
+    [...clientLeadRows, ...salesLeadRows].forEach((lead) => {
+      const bookingId = Number(lead.booking_id);
+      if (Number.isInteger(bookingId) && bookingId > 0) {
+        leadByBookingId.set(bookingId, lead);
+      }
+    });
     const salesQuoteLineItemsByBookingId = await fetchSalesQuoteLineItemsByBookingId(
       projectRows.map((project) => project.stream_project_booking_id)
     );
@@ -4427,10 +4449,13 @@ exports.getAllProjectDetails = async (req, res) => {
         ...project.toJSON(),
         booking_days: bookingDaysData
       };
+      const linkedLead = leadByBookingId.get(Number(project.stream_project_booking_id));
 
       return {
         project: {
           ...projectJson,
+          lead_source: linkedLead?.lead_source || null,
+          client_name: linkedLead?.client_name || null,
           total_paid_amount: totalPaidAmount,
           total_value_amount: totalValueAmount,
           paid_amount: totalPaidAmount,
@@ -6228,12 +6253,14 @@ exports.getCrewMembers = async (req, res) => {
             status,
             range,
             start_date,
-            end_date
+            end_date,
+            fetch_all
         } = payload;
 
         page = parseInt(page);
         limit = parseInt(limit);
         const offset = (page - 1) * limit;
+        const shouldFetchAll = String(fetch_all).toLowerCase() === 'true' || String(fetch_all) === '1';
 
         let conditions = [
             { is_active: 1 },
@@ -6313,8 +6340,7 @@ exports.getCrewMembers = async (req, res) => {
                     ['is_beige_member', 'ASC'],
                     ['crew_member_id', 'DESC'],
                 ],
-                limit,
-                offset,
+                ...(shouldFetchAll ? {} : { limit, offset }),
             }),
             crew_roles.findAll({ attributes: ['role_id', 'role_name'], raw: true })
         ]);
@@ -6384,8 +6410,8 @@ exports.getCrewMembers = async (req, res) => {
             pagination: {
                 total_records: count,
                 current_page: page,
-                per_page: limit,
-                total_pages: Math.ceil(count / limit),
+                per_page: shouldFetchAll ? count : limit,
+                total_pages: shouldFetchAll ? 1 : Math.ceil(count / limit),
             },
             data: processedMembers,
         });
@@ -10788,11 +10814,12 @@ const buildClientArchiveFields = (client) => ({
 
 exports.getClients = async (req, res) => {
   try {
-    let { page = 1, limit = 20, search, range, start_date, end_date, include_archived, archived_only } = req.query;
+    let { page = 1, limit = 20, search, range, start_date, end_date, include_archived, archived_only, fetch_all } = req.query;
 
     page = parseInt(page);
     limit = parseInt(limit);
     const offset = (page - 1) * limit;
+    const shouldFetchAll = String(fetch_all).toLowerCase() === 'true' || String(fetch_all) === '1';
 
     const whereConditions = {};
     const shouldIncludeArchived = isTruthyQuery(include_archived);
@@ -10849,8 +10876,7 @@ exports.getClients = async (req, res) => {
 
     const { count, rows } = await clients.findAndCountAll({
       where: whereConditions,
-      limit,
-      offset,
+      ...(shouldFetchAll ? {} : { limit, offset }),
       order: [['created_at', 'DESC']],
       include: [
         {
@@ -10924,8 +10950,8 @@ exports.getClients = async (req, res) => {
       pagination: {
         total_records: count,
         current_page: page,
-        per_page: limit,
-        total_pages: Math.ceil(count / limit)
+        per_page: shouldFetchAll ? count : limit,
+        total_pages: shouldFetchAll ? 1 : Math.ceil(count / limit)
       }
     });
 
@@ -11949,29 +11975,100 @@ exports.uploadProfilePhoto = [
 
 exports.getAllPendingCrewMembers = async (req, res) => {
   try {
-    const isIncompleteOnboarding = req.query.onboarding_status === 'incomplete';
-    const pendingMembers = await detailsPendingCpService.getDetailsPendingCreativePartners(
-      req.query,
-      { paginate: isIncompleteOnboarding }
-    );
+    const isIncompleteOnboarding =
+      req.query.onboarding_status === 'incomplete';
+
+    const shouldFetchAll =
+      String(req.query.fetch_all).toLowerCase() === 'true' ||
+      String(req.query.fetch_all) === '1';
+
+    /**
+     * Current behavior:
+     *
+     * onboarding_status=incomplete
+     *   -> pagination enabled
+     *
+     * onboarding_status=incomplete&fetch_all=true
+     *   -> return all records
+     *
+     * normal pending CPs
+     *   -> return all records
+     *
+     * This matches the behavior from the previous controller.
+     */
+    const pendingMembers =
+      await detailsPendingCpService.getDetailsPendingCreativePartners(
+        req.query,
+        {
+          paginate: isIncompleteOnboarding && !shouldFetchAll,
+        }
+      );
+
+    const totalRecords = Number(pendingMembers.total || 0);
+    const currentPage = Number(pendingMembers.page || 1);
+
+    /**
+     * When fetch_all=true, service still returns its configured
+     * limit value, but API response should represent that all
+     * returned records are part of the same response.
+     */
+    const perPage = shouldFetchAll
+      ? totalRecords
+      : Number(
+          pendingMembers.limit ||
+          req.query.limit ||
+          20
+        );
+
+    let totalPages = 0;
+
+    if (totalRecords > 0) {
+      if (shouldFetchAll || !isIncompleteOnboarding) {
+        totalPages = 1;
+      } else {
+        totalPages = Math.ceil(
+          totalRecords / Math.max(perPage, 1)
+        );
+      }
+    }
 
     return res.status(200).json({
       error: false,
+
       message: isIncompleteOnboarding
-        ? "All details pending crew members fetched successfully"
-        : "All pending crew members fetched successfully",
-      total_pending: pendingMembers.total,
+        ? 'All details pending crew members fetched successfully'
+        : 'All pending crew members fetched successfully',
+
+      total_pending: totalRecords,
+
       pagination: {
-        total_records: pendingMembers.total,
-        current_page: pendingMembers.page,
-        per_page: pendingMembers.limit,
-        total_pages: Math.ceil(pendingMembers.total / pendingMembers.limit),
+        total_records: totalRecords,
+
+        current_page:
+          shouldFetchAll || !isIncompleteOnboarding
+            ? 1
+            : currentPage,
+
+        per_page:
+          shouldFetchAll || !isIncompleteOnboarding
+            ? totalRecords
+            : perPage,
+
+        total_pages: totalPages,
       },
-      data: pendingMembers.rows,
+
+      data: pendingMembers.rows || [],
     });
   } catch (error) {
-    console.error("Get All Pending Crew Members Error:", error);
-    return res.status(500).json({ error: true, message: "Internal server error" });
+    console.error(
+      'Get All Pending Crew Members Error:',
+      error
+    );
+
+    return res.status(500).json({
+      error: true,
+      message: 'Internal server error',
+    });
   }
 };
 
