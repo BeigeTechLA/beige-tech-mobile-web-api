@@ -15657,12 +15657,13 @@ const buildPermissionKeys = (permissions = {}) => {
   return buildPermissionEntries(permissions).map(entry => entry.permission_key);
 };
 
-const syncRolePermissions = async (roleId, permissions = {}) => {
+const syncRolePermissions = async (roleId, permissions = {}, transaction = null) => {
+  const queryOptions = transaction ? { transaction } : {};
   const permissionKeys = buildPermissionKeys(permissions);
 
   await db.role_permissions.update(
     { is_active: 0 },
-    { where: { role_id: roleId } }
+    { where: { role_id: roleId }, ...queryOptions }
   );
 
   if (!permissionKeys.length) {
@@ -15675,7 +15676,8 @@ const syncRolePermissions = async (roleId, permissions = {}) => {
         [Op.in]: permissionKeys
       },
       is_active: 1
-    }
+    },
+    ...queryOptions
   });
 
   const rolePermissionData = permissionRecords.map(permission => ({
@@ -15685,7 +15687,7 @@ const syncRolePermissions = async (roleId, permissions = {}) => {
   }));
 
   if (rolePermissionData.length) {
-    await db.role_permissions.bulkCreate(rolePermissionData);
+    await db.role_permissions.bulkCreate(rolePermissionData, queryOptions);
   }
 };
 
@@ -16147,6 +16149,8 @@ exports.assignRoleToUser = async (req, res) => {
 };
 
 exports.updateRole = async (req, res) => {
+  let transaction;
+
   try {
     const { role_id, name, description, permissions } = req.body;
 
@@ -16181,28 +16185,56 @@ exports.updateRole = async (req, res) => {
       roleUpdateData.description = description;
     }
 
-    if (Object.keys(roleUpdateData).length) {
-      await db.user_type.update(roleUpdateData, {
-        where: { user_type_id: role_id }
+    const hasPermissionsUpdate = Object.prototype.hasOwnProperty.call(req.body, 'permissions');
+
+    if (!Object.keys(roleUpdateData).length && !hasPermissionsUpdate) {
+      return res.status(200).json({
+        success: true,
+        message: 'Role updated successfully'
       });
     }
 
-    if (Object.prototype.hasOwnProperty.call(req.body, 'permissions')) {
-      await syncRolePermissions(role_id, permissions);
+    transaction = await db.sequelize.transaction();
 
-      // Enable this when role permission updates should force logout for all users on the role.
-      // await db.users.update(
-      //   {
-      //     permissions_version: Sequelize.literal('permissions_version + 1')
-      //   },
-      //   {
-      //     where: {
-      //       user_type: role_id,
-      //       is_active: 1
-      //     }
-      //   }
-      // );
+    if (Object.keys(roleUpdateData).length) {
+      await db.user_type.update(roleUpdateData, {
+        where: { user_type_id: role_id },
+        transaction
+      });
     }
+
+    if (hasPermissionsUpdate) {
+      await syncRolePermissions(role_id, permissions, transaction);
+
+      const roleUsers = await db.users.findAll({
+        where: {
+          user_type: role_id,
+          is_active: 1
+        },
+        attributes: ['id'],
+        transaction
+      });
+
+      await Promise.all(
+        roleUsers.map((user) => syncUserPermissionsFromRole(user.id, role_id, transaction))
+      );
+
+      // Force affected users to log in again so their token cannot retain old permissions.
+      await db.users.update(
+        {
+          permissions_version: Sequelize.literal('permissions_version + 1')
+        },
+        {
+          where: {
+            user_type: role_id,
+            is_active: 1
+          },
+          transaction
+        }
+      );
+    }
+
+    await transaction.commit();
 
     return res.status(200).json({
       success: true,
@@ -16210,6 +16242,10 @@ exports.updateRole = async (req, res) => {
     });
 
   } catch (error) {
+    if (transaction && !transaction.finished) {
+      await transaction.rollback();
+    }
+
     console.error('Update Role Error:', error);
     return res.status(500).json({
       success: false,
