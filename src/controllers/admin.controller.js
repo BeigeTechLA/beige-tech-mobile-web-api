@@ -14069,32 +14069,31 @@ exports.getBookingSummaryById = async (req, res) => {
             }
         }
 
-        if (!latestPaymentData && identityOr.length > 0) {
-            latestPaymentData = await db.payment_transactions.findOne({
-                where: {
-                    status: 'succeeded',
-                    payment_source: { [Sequelize.Op.in]: ['quote_invoice', 'additional_invoice', 'booking_checkout'] },
-                    [Sequelize.Op.or]: identityOr
-                },
-                order: [['payment_id', 'DESC']]
-            });
-        }
         if (!paymentData && latestPaymentData?.referral_code) {
             referralCode = latestPaymentData.referral_code;
         }
 
         // Logic: The "Promo Code" discount is whatever is left over after the Referral Discount
         const discountCodeDiscount = Math.max(0, totalDiscountFromDb - referralDiscount);
+        const hasPaymentCompletionWithoutTransaction = Boolean(
+            !paymentData &&
+            !latestPaymentData &&
+            (bookingJson.payment_completed_at || bookingJson.is_completed == 1)
+        );
         const paidAmountRaw = paymentSummary
             ? parseFloat(paymentSummary.paid_amount || 0)
             : (latestPaymentData
                 ? parseFloat(latestPaymentData.total_amount || 0)
-                : (paymentData ? parseFloat(paymentData.total_amount || 0) : quoteTotal));
+                : (paymentData
+                    ? parseFloat(paymentData.total_amount || 0)
+                    : (hasPaymentCompletionWithoutTransaction ? quoteTotal : 0)));
         const normalizedPaidAmount = Number.isFinite(paidAmountRaw) ? paidAmountRaw : quoteTotal;
         const isAdditionalPaymentFlow = String(latestPaymentData?.payment_source || '').toLowerCase() === 'additional_invoice';
         const creditApplied = paymentSummary
             ? parseFloat(paymentSummary.credit_used_amount || 0)
-            : (isAdditionalPaymentFlow ? 0 : Math.max(0, quoteTotal - normalizedPaidAmount));
+            : (latestPaymentData || paymentData || hasPaymentCompletionWithoutTransaction
+                ? (isAdditionalPaymentFlow ? 0 : Math.max(0, quoteTotal - normalizedPaidAmount))
+                : 0);
         const totalAfterCredit = paymentSummary
             ? Math.max(0, quoteTotal - creditApplied)
             : (isAdditionalPaymentFlow
