@@ -1197,6 +1197,70 @@ const fetchCollectedBookingPaymentSummaries = async () => db.sequelize.query(
   { type: QueryTypes.SELECT }
 );
 
+const getPaidBookingIds = async () => {
+  const [
+    bookedSalesLeads,
+    bookedClientLeads,
+    salesManualPaymentActivities,
+    clientManualPaymentActivities,
+    collectedPaymentSummaryRows,
+  ] = await Promise.all([
+    sales_leads.findAll({
+      where: { is_active: 1, lead_status: 'booked', booking_id: { [Op.ne]: null } },
+      attributes: ['booking_id'],
+      raw: true,
+    }),
+    client_leads.findAll({
+      where: { is_active: 1, lead_status: 'booked', booking_id: { [Op.ne]: null } },
+      attributes: ['booking_id'],
+      raw: true,
+    }),
+    sales_lead_activities.findAll({
+      where: { activity_type: 'payment_completed' },
+      attributes: ['lead_id'],
+      raw: true,
+    }),
+    client_lead_activities.findAll({
+      where: { activity_type: 'payment_completed' },
+      attributes: ['lead_id'],
+      raw: true,
+    }),
+    fetchCollectedBookingPaymentSummaries(),
+  ]);
+
+  const manualSalesLeadIds = Array.from(new Set(
+    salesManualPaymentActivities.map((row) => Number(row.lead_id)).filter(Number.isFinite)
+  ));
+  const manualClientLeadIds = Array.from(new Set(
+    clientManualPaymentActivities.map((row) => Number(row.lead_id)).filter(Number.isFinite)
+  ));
+
+  const [manualPaidSalesLeads, manualPaidClientLeads] = await Promise.all([
+    manualSalesLeadIds.length
+      ? sales_leads.findAll({
+          where: { is_active: 1, lead_id: { [Op.in]: manualSalesLeadIds }, booking_id: { [Op.ne]: null } },
+          attributes: ['booking_id'],
+          raw: true,
+        })
+      : Promise.resolve([]),
+    manualClientLeadIds.length
+      ? client_leads.findAll({
+          where: { is_active: 1, lead_id: { [Op.in]: manualClientLeadIds }, booking_id: { [Op.ne]: null } },
+          attributes: ['booking_id'],
+          raw: true,
+        })
+      : Promise.resolve([]),
+  ]);
+
+  return Array.from(new Set([
+    ...bookedSalesLeads,
+    ...bookedClientLeads,
+    ...manualPaidSalesLeads,
+    ...manualPaidClientLeads,
+    ...collectedPaymentSummaryRows,
+  ].map((row) => Number(row.booking_id)).filter(Number.isFinite)));
+};
+
 const countActiveShootNotesByBookingIds = async (bookingIds = []) => {
   const ids = Array.from(new Set(
     bookingIds
@@ -9500,6 +9564,20 @@ exports.getDashboardSummary = async (req, res) => {
       }
     }
 
+    const paidBookingIds = await getPaidBookingIds();
+    const paidShootFilter = {
+      [Op.or]: [
+        { payment_id: { [Op.ne]: null } },
+        ...(paidBookingIds.length
+          ? [{ stream_project_booking_id: { [Op.in]: paidBookingIds } }]
+          : [])
+      ]
+    };
+    const activeShootDateFilter = Sequelize.where(
+      Sequelize.fn('DATE', Sequelize.col('event_date')),
+      { [Op.gte]: Sequelize.fn('CURDATE') }
+    );
+
     const [
       total_shoots,
       active_shoots,
@@ -9511,15 +9589,24 @@ exports.getDashboardSummary = async (req, res) => {
       rejected_CPs
     ] = await Promise.all([
       stream_project_booking.count({
-        where: { is_active: 1, is_draft: 0, ...bookingDateFilter }
+        where: { is_active: 1, ...paidShootFilter, ...bookingDateFilter }
       }),
 
       stream_project_booking.count({
-        where: { is_active: 1, is_completed: 0, is_cancelled: 0, is_draft: 0, ...bookingDateFilter }
+        where: {
+          is_active: 1,
+          is_completed: 0,
+          is_cancelled: 0,
+          is_draft: 0,
+          ...paidShootFilter,
+          ...bookingDateFilter,
+          [Op.and]: [activeShootDateFilter]
+        }
       }),
 
       stream_project_booking.count({
-        where: { is_active: 1, is_completed: 1, ...bookingDateFilter }
+        // Matches the Shoots page's "Completed" status filter.
+        where: { is_active: 1, status: 4, ...paidShootFilter, ...bookingDateFilter }
       }),
 
       clients.count({
@@ -9594,7 +9681,19 @@ exports.getDashboardChartData = async (req, res) => {
         const chartMonthRange = { [Op.between]: [chartStartDate, chartEndDate] };
 
         const shootDateCol = (date_on === 'event_date') ? 'event_date' : 'created_at';
-        const paidShootFilter = { payment_id: { [Op.ne]: null } };
+        const paidBookingIds = await getPaidBookingIds();
+        const paidShootFilter = {
+            [Op.or]: [
+                { payment_id: { [Op.ne]: null } },
+                ...(paidBookingIds.length
+                    ? [{ stream_project_booking_id: { [Op.in]: paidBookingIds } }]
+                    : [])
+            ]
+        };
+        const activeShootDateFilter = Sequelize.where(
+            Sequelize.fn('DATE', Sequelize.col('event_date')),
+            { [Op.gte]: Sequelize.fn('CURDATE') }
+        );
 
         const [
             total_shoots, active_shoots, completed_shoots, total_clients, total_CPs,
@@ -9604,9 +9703,21 @@ exports.getDashboardChartData = async (req, res) => {
             chartShoots, chartClients, chartCPs,
             chartUnpaidLeads
         ] = await Promise.all([
-            stream_project_booking.count({ where: { is_active: 1, is_draft: 0, ...paidShootFilter, ...bookingDateFilter } }),
-            stream_project_booking.count({ where: { is_active: 1, is_completed: 0, is_cancelled: 0, is_draft: 0, ...paidShootFilter, ...bookingDateFilter } }),
-            stream_project_booking.count({ where: { is_active: 1, is_completed: 1, ...paidShootFilter, ...bookingDateFilter } }),
+            // Match the Shoots module: all paid shoots, including valid manual-payment flows.
+            stream_project_booking.count({ where: { is_active: 1, ...paidShootFilter, ...bookingDateFilter } }),
+            stream_project_booking.count({
+                where: {
+                    is_active: 1,
+                    is_completed: 0,
+                    is_cancelled: 0,
+                    is_draft: 0,
+                    ...paidShootFilter,
+                    ...bookingDateFilter,
+                    [Op.and]: [activeShootDateFilter]
+                }
+            }),
+            // Matches the Shoots page's "Completed" status filter.
+            stream_project_booking.count({ where: { is_active: 1, status: 4, ...paidShootFilter, ...bookingDateFilter } }),
             
             clients.count({ where: { is_active: 1, ...standardDateFilter } }),
             crew_members.count({ where: { is_active: 1, ...standardDateFilter } }),
@@ -9635,9 +9746,9 @@ exports.getDashboardChartData = async (req, res) => {
             stream_project_booking.findAll({
                 attributes: [
                     [Sequelize.fn('DATE_FORMAT', Sequelize.col(shootDateCol), '%Y-%m'), 'month'],
-                    [Sequelize.literal('SUM(CASE WHEN is_completed = 0 AND is_cancelled = 0 AND payment_id IS NOT NULL THEN 1 ELSE 0 END)'), 'active'],
-                    [Sequelize.literal('SUM(CASE WHEN is_completed = 1 AND payment_id IS NOT NULL THEN 1 ELSE 0 END)'), 'completed'],
-                    [Sequelize.literal('SUM(CASE WHEN payment_id IS NOT NULL THEN 1 ELSE 0 END)'), 'total']
+                    [Sequelize.literal("SUM(CASE WHEN is_completed = 0 AND is_cancelled = 0 AND is_draft = 0 AND DATE(event_date) >= CURDATE() THEN 1 ELSE 0 END)"), 'active'],
+                    [Sequelize.literal('SUM(CASE WHEN status = 4 THEN 1 ELSE 0 END)'), 'completed'],
+                    [Sequelize.literal('COUNT(*)'), 'total']
                 ],
                 where: { is_active: 1, ...paidShootFilter, [shootDateCol]: chartMonthRange },
                 group: [Sequelize.fn('DATE_FORMAT', Sequelize.col(shootDateCol), '%Y-%m')],
