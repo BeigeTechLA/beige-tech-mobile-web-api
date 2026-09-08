@@ -27,16 +27,15 @@ function getEnvironmentConfig() {
   return { baseUrl: environment.baseUrl, apiKey };
 }
 
-function requestJson({ baseUrl, apiKey, path, body }) {
+function requestJson({ baseUrl, apiKey, path, method = 'POST', body = null }) {
   const url = new URL(path, baseUrl);
-  const payload = JSON.stringify(body);
+  const payload = body === null ? null : JSON.stringify(body);
 
   return new Promise((resolve, reject) => {
     const request = https.request(url, {
-      method: 'POST',
+      method,
       headers: {
         'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(payload),
         'x-api-key': apiKey
       }
     }, (response) => {
@@ -58,7 +57,7 @@ function requestJson({ baseUrl, apiKey, path, body }) {
       });
     });
     request.on('error', reject);
-    request.write(payload);
+    if (payload) request.write(payload);
     request.end();
   });
 }
@@ -74,13 +73,12 @@ function verifyWebhookSignature(rawBody, signature) {
     crypto.timingSafeEqual(signatureBuffer, expectedBuffer);
 }
 
-async function createHostedCheckoutSession({ amountCents, title, description, metadata, successUrl }) {
+async function createHostedCheckoutSession({ amountCents, title, description, metadata, successUrl, type = 'onetime_non_reusable' }) {
   const { baseUrl, apiKey } = getEnvironmentConfig();
   const body = {
     product: { title, description },
     amount_cents: amountCents,
-    // Single-buyer sessions are required for a one-time booking payment.
-    type: 'onetime_non_reusable',
+    type,
     metadata
   };
 
@@ -106,12 +104,87 @@ async function createHostedCheckoutSession({ amountCents, title, description, me
   };
 }
 
+async function getCheckoutSession({ baseUrl, apiKey, checkoutSessionId }) {
+  return requestJson({
+    baseUrl,
+    apiKey,
+    method: 'GET',
+    path: `/public-api/checkout-sessions/${encodeURIComponent(checkoutSessionId)}`
+  });
+}
+
+/**
+ * Embedded Checkout needs a Commas product id plus a server-created session
+ * secret. A checkout session creates the priced product from our authoritative
+ * booking amount; its product id is then used only by the Commas iframe SDK.
+ */
+async function createEmbeddedCheckoutSession({ amountCents, title, description, metadata, successUrl }) {
+  if (!process.env.COMMAS_CREATOR_ID) {
+    throw new Error('Missing COMMAS_CREATOR_ID required by the Commas Embedded Checkout SDK');
+  }
+  const { baseUrl, apiKey } = getEnvironmentConfig();
+  const checkoutSession = await createHostedCheckoutSession({
+    amountCents,
+    title,
+    description,
+    metadata,
+    // This setup session supplies the dynamically priced Commas product only;
+    // do not configure a hosted redirect for the embedded UI.
+    successUrl: null,
+    type: 'onetime_reusable'
+  });
+  const details = await getCheckoutSession({
+    baseUrl,
+    apiKey,
+    checkoutSessionId: checkoutSession.checkoutSessionId
+  });
+  const productId = details?.data?.product?.id;
+  if (!productId) {
+    throw new Error('Commas checkout session response did not include product.id for Embedded Checkout');
+  }
+
+  const embeddedResponse = await requestJson({
+    baseUrl,
+    apiKey,
+    path: '/public-api/checkout-sessions/embedded',
+    body: {
+      creator_id: process.env.COMMAS_CREATOR_ID || undefined,
+      product_id: productId,
+      metadata
+    }
+  });
+  const checkoutSessionSecret = embeddedResponse?.data?.checkout_session_secret;
+  if (!checkoutSessionSecret) {
+    throw new Error('Commas Embedded Checkout response did not include checkout_session_secret');
+  }
+  return {
+    provider: 'commas',
+    checkoutMode: 'embedded',
+    checkoutSessionId: checkoutSession.checkoutSessionId,
+    productId,
+    creatorId: process.env.COMMAS_CREATOR_ID,
+    checkoutSessionSecret,
+    environment: (process.env.NODE_ENV || 'development') === 'production' ? 'production' : 'sandbox'
+  };
+}
+
+async function createBookingCheckout(input) {
+  const mode = String(process.env.COMMAS_CHECKOUT_MODE || 'hosted').trim().toLowerCase();
+  if (mode === 'hosted') {
+    return { ...(await createHostedCheckoutSession(input)), checkoutMode: 'hosted' };
+  }
+  if (mode === 'embedded') return createEmbeddedCheckoutSession(input);
+  throw new Error('COMMAS_CHECKOUT_MODE must be either "hosted" or "embedded"');
+}
+
 function parseVerifiedWebhook(rawBody) {
   return JSON.parse(rawBody.toString('utf8'));
 }
 
 module.exports = {
   createHostedCheckoutSession,
+  createEmbeddedCheckoutSession,
+  createBookingCheckout,
   verifyWebhookSignature,
   parseVerifiedWebhook
 };

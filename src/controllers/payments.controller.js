@@ -2860,16 +2860,18 @@ exports.createPaymentIntentMulti = async (req, res) => {
       use_credit: shouldUseCredit ? '1' : '0',
       credit_amount_used: shouldUseCredit ? String(requestedCreditAmount) : '0',
       payment_link_token: payment_link_token || '',
-      payment_link_amount: linkRequestedAmount ? String(linkRequestedAmount) : '',
-      beige_amount_cents: String(Math.round(amountToCharge * 100))
+      payment_link_amount: linkRequestedAmount ? String(linkRequestedAmount) : ''
     };
     const provider = getPaymentProvider();
     const paymentCheckout = provider.name === 'commas'
-      ? await provider.createHostedCheckoutSession({
+      ? await provider.createBookingCheckout({
           amountCents: Math.round(amountToCharge * 100),
           title: `Beige booking #${booking_id}`,
           description: booking.shoot_name || 'Beige shoot booking payment',
-          metadata: paymentMetadata,
+          metadata: {
+            ...paymentMetadata,
+            beige_amount_cents: String(Math.round(amountToCharge * 100))
+          },
           successUrl: buildCommasSuccessUrl(booking_id)
         })
       : await provider.createBookingCheckout({
@@ -2880,11 +2882,24 @@ exports.createPaymentIntentMulti = async (req, res) => {
     return res.status(200).json({
       success: true,
       data: {
-        provider: paymentCheckout.provider,
-        clientSecret: paymentCheckout.clientSecret || null,
-        paymentIntentId: paymentCheckout.paymentIntentId || null,
-        payment_link: paymentCheckout.paymentLink || null,
-        checkout_session_id: paymentCheckout.checkoutSessionId || null,
+        ...(provider.name === 'stripe'
+          ? {
+              // Preserve the established Stripe response contract exactly.
+              clientSecret: paymentCheckout.clientSecret,
+              paymentIntentId: paymentCheckout.paymentIntentId
+            }
+          : {
+              provider: 'commas',
+              checkout_mode: paymentCheckout.checkoutMode,
+              payment_link: paymentCheckout.paymentLink || null,
+              checkout_session_id: paymentCheckout.checkoutSessionId,
+              ...(paymentCheckout.checkoutMode === 'embedded' ? {
+                creator_id: paymentCheckout.creatorId,
+                product_id: paymentCheckout.productId,
+                checkout_session_secret: paymentCheckout.checkoutSessionSecret,
+                environment: paymentCheckout.environment
+              } : {})
+            }),
         amount: amountToCharge,
         isFree: false
       }

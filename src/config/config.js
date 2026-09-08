@@ -35,6 +35,8 @@ module.exports = {
     sandboxApiKey: process.env.COMMAS_SANDBOX_API_KEY,
     liveApiKey: process.env.COMMAS_LIVE_API_KEY,
     webhookSecret: process.env.COMMAS_WEBHOOK_SECRET,
-    webhookUrl: process.env.COMMAS_WEBHOOK_URL
+    webhookUrl: process.env.COMMAS_WEBHOOK_URL,
+    checkoutMode: process.env.COMMAS_CHECKOUT_MODE || 'hosted',
+    creatorId: process.env.COMMAS_CREATOR_ID
   }
 };
