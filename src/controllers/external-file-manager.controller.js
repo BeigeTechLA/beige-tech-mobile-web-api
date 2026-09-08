@@ -2573,6 +2573,19 @@ const toPositiveInteger = (value, fallback) => {
   return Math.max(1, Math.floor(parsed));
 };
 
+const getWorkspaceUpdatedTimestamp = (workspace = {}) => {
+  const value =
+    workspace.updatedAt ||
+    workspace.updated_at ||
+    workspace.lastModifiedAt ||
+    workspace.lastModified ||
+    workspace.modifiedAt ||
+    workspace.createdAt ||
+    workspace.created_at;
+  const timestamp = value ? new Date(value).getTime() : 0;
+  return Number.isFinite(timestamp) ? timestamp : 0;
+};
+
 const limitFaceScanCandidates = (candidates = [], limit = FACE_SCAN_MAX_CANDIDATES) =>
   (Array.isArray(candidates) ? candidates : []).slice(0, toPositiveInteger(limit, FACE_SCAN_MAX_CANDIDATES));
 
@@ -4202,7 +4215,27 @@ exports.listWorkspaces = async (req, res) => {
     const workspaceType = String(req.query.workspaceType || req.query.type || '').trim().toLowerCase();
     const commonEventsOnly = ['common', 'common-event', 'common-events', 'common_event', 'common_events'].includes(workspaceType);
     const expiredCommonEventsOnly = ['visibility-expired', 'expired', 'expired-common-events'].includes(workspaceType);
-    const result = await proxyRequest('/workspaces');
+    const recentOnly = ['recent', 'recently-updated', 'recent-workspaces'].includes(workspaceType);
+    const recentDays = Math.min(30, toPositiveInteger(req.query.recentDays || req.query.days, 5));
+    const creatorRole = isCreatorRole(req);
+    const clientRole = isClientRole(req);
+    const canUseUpstreamPagination =
+      hasPaginationParams &&
+      !creatorRole &&
+      !clientRole &&
+      !commonEventsOnly &&
+      !expiredCommonEventsOnly &&
+      !recentOnly &&
+      !search;
+    const upstreamQuery = new URLSearchParams();
+    if (canUseUpstreamPagination) {
+      upstreamQuery.set('page', String(page));
+      upstreamQuery.set('limit', String(limit));
+    }
+    if (search) upstreamQuery.set('search', search);
+    if (workspaceType) upstreamQuery.set('workspaceType', workspaceType);
+    if (recentOnly) upstreamQuery.set('recentDays', String(recentDays));
+    const result = await proxyRequest(`/workspaces${upstreamQuery.toString() ? `?${upstreamQuery.toString()}` : ''}`);
     const eventRows = await listCommonEventRows().catch(() => []);
     const displayNameMap = await getWorkspaceDisplayNameRows([
       ...((result.data?.workspaces || []).map((workspace) => workspace?.externalId)),
@@ -4233,13 +4266,15 @@ exports.listWorkspaces = async (req, res) => {
       mergedWorkspaceByExternalId.set(externalId, applyWorkspaceDisplayName(workspace, displayNameMap));
     }
 
-    for (const workspace of eventWorkspaces) {
-      const externalId = String(workspace.externalId || '').trim().toLowerCase();
-      if (!externalId) continue;
-      if (mergedWorkspaceByExternalId.has(externalId)) {
-        continue;
+    if (!canUseUpstreamPagination) {
+      for (const workspace of eventWorkspaces) {
+        const externalId = String(workspace.externalId || '').trim().toLowerCase();
+        if (!externalId) continue;
+        if (mergedWorkspaceByExternalId.has(externalId)) {
+          continue;
+        }
+        mergedWorkspaceByExternalId.set(externalId, workspace);
       }
-      mergedWorkspaceByExternalId.set(externalId, workspace);
     }
 
     for (const workspace of mergedWorkspaceByExternalId.values()) {
@@ -4272,7 +4307,7 @@ exports.listWorkspaces = async (req, res) => {
       });
     }
 
-    if (isCreatorRole(req)) {
+    if (creatorRole) {
       const allowedProjectIds = await getCreatorAssignedProjectIds(req);
       const allowedIdSet = new Set((allowedProjectIds || []).map((id) => String(id)));
       filteredWorkspaces = filteredWorkspaces.filter((workspace) =>
@@ -4280,7 +4315,7 @@ exports.listWorkspaces = async (req, res) => {
       );
     }
 
-    if (isClientRole(req)) {
+    if (clientRole) {
       const allowedProjectIds = await getClientProjectIds(req);
       const allowedIdSet = new Set((allowedProjectIds || []).map((id) => String(id)));
       filteredWorkspaces = filteredWorkspaces.filter((workspace) =>
@@ -4299,6 +4334,13 @@ exports.listWorkspaces = async (req, res) => {
         const eventRow = eventRowByExternalId.get(String(workspace?.externalId || '').trim().toLowerCase());
         return eventRow ? !isCommonEventVisibleForRole(eventRow) : false;
       });
+    }
+
+    if (recentOnly) {
+      const recentCutoff = Date.now() - recentDays * 24 * 60 * 60 * 1000;
+      filteredWorkspaces = filteredWorkspaces.filter((workspace) =>
+        getWorkspaceUpdatedTimestamp(workspace) >= recentCutoff
+      );
     }
 
     if (search) {
@@ -4325,12 +4367,28 @@ exports.listWorkspaces = async (req, res) => {
         );
       });
     }
-    const total = filteredWorkspaces.length;
+    filteredWorkspaces = [...filteredWorkspaces].sort((a, b) => {
+      const diff = getWorkspaceUpdatedTimestamp(b) - getWorkspaceUpdatedTimestamp(a);
+      if (diff !== 0) return diff;
+      return String(a?.folderName || a?.externalId || '').localeCompare(String(b?.folderName || b?.externalId || ''));
+    });
+
+    const upstreamPagination = result.data?.pagination || null;
+    const upstreamAlreadyPaginated =
+      canUseUpstreamPagination &&
+      upstreamPagination &&
+      Number(upstreamPagination.limit) === limit &&
+      Number(upstreamPagination.page || page) === page;
+    const total = upstreamAlreadyPaginated
+      ? Number(upstreamPagination.total || filteredWorkspaces.length)
+      : filteredWorkspaces.length;
     const effectiveLimit = hasPaginationParams ? limit : Math.max(total, 1);
     const totalPages = Math.max(1, Math.ceil(total / effectiveLimit));
     const safePage = hasPaginationParams ? Math.min(page, totalPages) : 1;
     const offset = (safePage - 1) * effectiveLimit;
-    const paginatedWorkspaces = filteredWorkspaces.slice(offset, offset + effectiveLimit);
+    const paginatedWorkspaces = upstreamAlreadyPaginated
+      ? filteredWorkspaces
+      : filteredWorkspaces.slice(offset, offset + effectiveLimit);
 
     return res.status(200).json({
       ...result,
