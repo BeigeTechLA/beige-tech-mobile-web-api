@@ -3994,7 +3994,7 @@ async function syncConvertedQuoteArtifacts({
 
   let booking = lead?.booking_id
     ? await db.stream_project_booking.findOne({
-        where: { stream_project_booking_id: lead.booking_id, is_active: 1 },
+        where: { stream_project_booking_id: lead.booking_id },
         transaction
       })
     : null;
