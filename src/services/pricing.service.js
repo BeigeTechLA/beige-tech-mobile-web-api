@@ -556,7 +556,10 @@ async function calculateQuote({
 
     // 1. Fetch all relevant items from DB in one go
     // We fetch by ID (for crew) and by SLUG (for edits)
-    const creatorItemIds = items.map(i => i.item_id).filter(id => id !== null);
+    const creatorItemIds = items.map(i => i.item_id).filter(id => id !== null && id !== undefined);
+    const selectedItemSlugs = items
+      .map(i => String(i.slug || '').trim())
+      .filter(Boolean);
     const editCounts = new Map();
     mergeEditTypeCounts(editCounts, normalizeEditTypeCounts(videoEditTypes));
     mergeEditTypeCounts(editCounts, normalizeEditTypeCounts(photoEditTypes));
@@ -566,6 +569,7 @@ async function calculateQuote({
       where: { 
         [Op.or]: [
           { item_id: { [Op.in]: creatorItemIds } },
+          { slug: { [Op.in]: selectedItemSlugs } },
           { slug: { [Op.in]: editSlugs } }
         ],
         is_active: 1 
@@ -587,7 +591,9 @@ async function calculateQuote({
     // 2. Process Crew / Base Items
     for (const selectedItem of items) {
       if (isPodcast && selectedItem.item_id === 50) continue; 
-      const dbItem = itemMap.get(selectedItem.item_id);
+      const dbItem = selectedItem.item_id
+        ? itemMap.get(selectedItem.item_id)
+        : slugMap.get(String(selectedItem.slug || '').trim());
       if (!dbItem) continue;
 
       const quantity = selectedItem.quantity || 1;
