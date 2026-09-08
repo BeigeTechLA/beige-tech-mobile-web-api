@@ -1,6 +1,9 @@
 -- Book-a-shoot v4 self-serve pricing refresh.
 -- Source: client pricing doc supplied 2026-09-08.
 
+SET @OLD_SQL_SAFE_UPDATES = @@SQL_SAFE_UPDATES;
+SET SQL_SAFE_UPDATES = 0;
+
 UPDATE pricing_items
 SET
   rate = 250.00,
@@ -183,3 +186,5 @@ JOIN (
 SET pi.is_active = CASE WHEN pi.item_id = keepers.keep_item_id THEN 1 ELSE 0 END,
     pi.updated_at = NOW()
 WHERE pi.slug = keepers.slug;
+
+SET SQL_SAFE_UPDATES = @OLD_SQL_SAFE_UPDATES;
