@@ -5,7 +5,7 @@ const { authenticate } = require('../middleware/auth.middleware');
 const { requireAnyPermission } = require('../middleware/permission.middleware');
 
 const adminQuotesView = requireAnyPermission([
-  'admin_quotes.view',
+  'admin_quotes_master_pricing.view',
   'sales_rep_quotes.view',
   'sales_admin_quotes.view',
   'client_quotes.view'

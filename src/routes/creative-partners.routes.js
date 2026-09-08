@@ -5,8 +5,8 @@ const { authMiddleware } = require('../middleware/auth');
 const { requireAnyPermission } = require('../middleware/permission.middleware');
 
 const adminUsersOrSalesRepresentativeView = requireAnyPermission([
-  'admin_users.view',
-  'admin_sales_representative.view',
+  'admin_users_creative_partners.view',
+  'admin_sales_representative_dashboard.view',
   'sales_rep_sales.view',
   'sales_admin_dashboard.view'
 ], { allowRoles: ['sales_rep', 'sales_admin'] });

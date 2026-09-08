@@ -46,6 +46,7 @@ function isMobileAppPaymentMetadata(metadata = {}) {
 }
 
 async function sendBookingConfirmedPush({ booking, bookingId }) {
+  /*
   const clientUserId = Number(booking?.user_id || 0);
   if (!clientUserId) return;
 
@@ -87,6 +88,7 @@ async function sendBookingConfirmedPush({ booking, bookingId }) {
       message: error.message || error
     });
   }
+    */
 }
 
 async function getQuoteCreatorNotificationRecipient({

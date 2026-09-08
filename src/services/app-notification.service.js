@@ -240,6 +240,7 @@ exports.createAndPushNotification = async ({
   appUserType = null,
   dedupeWindowSeconds = 0
 }) => {
+  /*
   const pushData = normalizePayload({
     topic,
     category: category || topic,
@@ -319,6 +320,9 @@ exports.createAndPushNotification = async ({
   )));
 
   return notifications[0] || null;
+  */
+
+  return null;
 };
 
 exports.listNotifications = async ({

@@ -9,13 +9,13 @@ const { authenticate } = require('../middleware/auth.middleware');
 const { requireAnyPermission } = require('../middleware/permission.middleware');
 
 const adminSalesRepresentativeView = requireAnyPermission([
-  'admin_sales_representative.view',
+  'admin_sales_representative_dashboard.view',
   'sales_admin_dashboard.view',
   'creative_partner_request_shoots.view',
   'production_manager_creative_partner.view'
 ], { allowRoles: ['sales_admin', 'creative', 'production_manager'] });
 const adminSalesRepresentativeAvailabilityView = requireAnyPermission([
-  'admin_sales_representative.view',
+  'admin_sales_representative_dashboard.view',
   'admin_availability.view',
   'sales_admin_dashboard.view',
   'creative_partner_dashboard.view',
