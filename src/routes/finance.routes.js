@@ -55,6 +55,7 @@ const cpReceiptUpload = multer({
   }
 });
 
+router.get('/transactions/export', authenticate, adminFinancesView, financeController.exportTransactions);
 router.get('/transactions', authenticate, adminFinanceTransactionsView, financeController.listTransactions);
 router.get('/shoots', authenticate, adminFinanceTransactionsView, financeController.listShootBreakdowns);
 router.get('/shoots/:bookingId', authenticate, adminFinanceTransactionsView, financeController.getShootFinance);

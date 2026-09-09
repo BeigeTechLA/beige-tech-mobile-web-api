@@ -1067,6 +1067,25 @@ function formatDateOnly(value) {
   return date.toISOString().slice(0, 10);
 }
 
+function formatDateKeyInTimeZone(value, timeZone) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: timeZone || 'UTC',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).formatToParts(date);
+    const getPart = (type) => parts.find((part) => part.type === type)?.value;
+    return `${getPart('year')}-${getPart('month')}-${getPart('day')}`;
+  } catch {
+    return formatDateOnly(date);
+  }
+}
+
 function normalizeDisplayStatus(status, hasPayment = false) {
   if (status === 'failed') return 'failed';
   if (status === 'refunded') return 'refunded';
@@ -2139,15 +2158,12 @@ async function getClientPaymentDetails(bookingId, userContext = {}) {
   };
 }
 
-async function listTransactions(filters = {}) {
+async function buildFilteredTransactionRows(filters = {}) {
   const Op = db.Sequelize.Op;
-  const page = Math.max(parseInt(filters.page, 10) || 1, 1);
-  const limit = Math.min(Math.max(parseInt(filters.limit, 10) || 20, 1), 100);
-  const offset = (page - 1) * limit;
   const search = String(filters.search || filters.q || '').trim();
   const explicitBookingId = Number(filters.booking_id || 0) || null;
   const entries = await fetchPaymentHistoryEntriesForBookings(explicitBookingId ? [explicitBookingId] : []);
-   const leadMatchedBookingIds = search && !explicitBookingId
+  const leadMatchedBookingIds = search && !explicitBookingId
     ? new Set(await getSearchMatchedBookingIds(search))
     : new Set();
   const bookingIds = [...new Set(entries.map((entry) => Number(entry.booking_id)).filter(Boolean))];
@@ -2165,7 +2181,7 @@ async function listTransactions(filters = {}) {
     : [];
   const bookingById = new Map(bookingRows.map((booking) => [Number(booking.stream_project_booking_id), booking]));
 
-  const mappedRows = entries
+  return entries
     .map((entry) => {
       const bookingId = Number(entry.booking_id);
       return buildPaymentHistoryListRow(
@@ -2189,20 +2205,37 @@ async function listTransactions(filters = {}) {
               !leadMatchedBookingIds.has(Number(row.booking_id))) return false;
       const transactionTime = row.transaction_date ? new Date(row.transaction_date).getTime() : 0;
       if (filters.date_from) {
-        const fromTime = new Date(filters.date_from).getTime();
-        if (Number.isFinite(fromTime) && transactionTime < fromTime) return false;
+        if (filters.time_zone) {
+          const localDateValue = formatDateKeyInTimeZone(row.transaction_date, filters.time_zone);
+          if (localDateValue && localDateValue < filters.date_from) return false;
+        } else {
+          const fromTime = new Date(filters.date_from).getTime();
+          if (Number.isFinite(fromTime) && transactionTime < fromTime) return false;
+        }
       }
       if (filters.date_to) {
-        const toDate = new Date(filters.date_to);
-        if (Number.isFinite(toDate.getTime())) {
-          toDate.setHours(23, 59, 59, 999);
-          if (transactionTime > toDate.getTime()) return false;
+        if (filters.time_zone) {
+          const localDateValue = formatDateKeyInTimeZone(row.transaction_date, filters.time_zone);
+          if (localDateValue && localDateValue > filters.date_to) return false;
+        } else {
+          const toDate = new Date(filters.date_to);
+          if (Number.isFinite(toDate.getTime())) {
+            toDate.setHours(23, 59, 59, 999);
+            if (transactionTime > toDate.getTime()) return false;
+          }
         }
       }
 
       return true;
     });
+}
 
+async function listTransactions(filters = {}) {
+  const page = Math.max(parseInt(filters.page, 10) || 1, 1);
+  const limit = Math.min(Math.max(parseInt(filters.limit, 10) || 20, 1), 100);
+  const offset = (page - 1) * limit;
+
+  const mappedRows = await buildFilteredTransactionRows(filters);
   const pagedRows = mappedRows.slice(offset, offset + limit);
 
   return {
@@ -2214,6 +2247,63 @@ async function listTransactions(filters = {}) {
       total_pages: Math.ceil(mappedRows.length / limit)
     }
   };
+}
+
+function csvEscape(value) {
+  const str = value === null || value === undefined ? '' : String(value);
+  if (/[",\n\r]/.test(str)) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+async function exportTransactionsCsv(filters = {}) {
+  const hasStartDate = Boolean(filters.start_date);
+  const hasEndDate = Boolean(filters.end_date);
+
+  if (hasStartDate !== hasEndDate) {
+    const error = new Error('Select both dates or leave both blank to export all records.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const exportFilters = { ...filters };
+  if (hasStartDate && hasEndDate) {
+    const startDate = new Date(`${filters.start_date}T00:00:00.000Z`);
+    const endDate = new Date(`${filters.end_date}T23:59:59.999Z`);
+
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+      const error = new Error('Dates must be in YYYY-MM-DD format');
+      error.statusCode = 400;
+      throw error;
+    }
+    if (startDate > endDate) {
+      const error = new Error('start_date cannot be after end_date');
+      error.statusCode = 400;
+      throw error;
+    }
+
+    exportFilters.date_from = filters.start_date;
+    exportFilters.date_to = filters.end_date;
+  }
+
+  const rows = await buildFilteredTransactionRows(exportFilters);
+
+  const header = ['Transaction Date', 'Transaction ID', 'Client Name', 'Total Amount', 'Payment Method', 'Receipt URL'];
+  const csvLines = [header.map(csvEscape).join(',')];
+
+  rows.forEach((row) => {
+    csvLines.push([
+      formatDateKeyInTimeZone(row.transaction_date, filters.time_zone) || '',
+      row.transaction_id || row.transaction_code || row.receipt_number || '',
+      row.client_name || '',
+      toMoney(row.total_amount || 0).toFixed(2),
+      row.payment_method || 'N/A',
+      row.receipt_download_url || row.receipt_url || ''
+    ].map(csvEscape).join(','));
+  });
+
+  return csvLines.join('\r\n');
 }
 
 async function listShootBreakdowns(filters = {}) {
@@ -3246,6 +3336,7 @@ async function markCreatorPayoutPaid(payoutRequestId, payload = {}, options = {}
 module.exports = {
   syncBookingFinance,
   listTransactions,
+  exportTransactionsCsv,
   listShootBreakdowns,
   getShootFinance,
   getClientPaymentManagement,
