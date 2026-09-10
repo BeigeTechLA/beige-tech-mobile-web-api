@@ -606,9 +606,29 @@ exports.calculateFromCreators = async (req, res) => {
       photographer: 10,
       cinematographer: 12,
     };
+    const ROLE_TO_ITEM_SLUG_MAP = {
+      photoVideoCreator: 'photo-video-creator',
+      photo_video_creator: 'photo-video-creator',
+      photographerVideographer: 'photo-video-creator',
+    };
+    const hasRoleCountSelections = role_counts && Object.values(role_counts).some((count) => Number(count) > 0);
 
     const pricingItems = [];
     let creators = [];
+
+    if (!isAiEditingFlow && hasRoleCountSelections) {
+      Object.entries(role_counts).forEach(([role, count]) => {
+        const qty = Number(count) || 0;
+        const itemId = ROLE_TO_ITEM_MAP[role];
+        const slug = ROLE_TO_ITEM_SLUG_MAP[role];
+
+        if (itemId && qty > 0) {
+          pricingItems.push({ item_id: itemId, quantity: qty });
+        } else if (slug && qty > 0) {
+          pricingItems.push({ slug, quantity: qty });
+        }
+      });
+    }
 
     if (Array.isArray(creator_ids) && creator_ids.length > 0) {
       const db = require('../models');
@@ -634,7 +654,7 @@ exports.calculateFromCreators = async (req, res) => {
         });
       }
 
-      if (!isAiEditingFlow) {
+      if (!isAiEditingFlow && !hasRoleCountSelections) {
         const roleCounts = {};
 
         creators.forEach((c) => {
@@ -678,8 +698,11 @@ exports.calculateFromCreators = async (req, res) => {
     if (!isAiEditingFlow && pricingItems.length === 0 && role_counts) {
       Object.entries(role_counts).forEach(([role, count]) => {
         const itemId = ROLE_TO_ITEM_MAP[role];
+        const slug = ROLE_TO_ITEM_SLUG_MAP[role];
         if (itemId && count > 0) {
           pricingItems.push({ item_id: itemId, quantity: count });
+        } else if (slug && count > 0) {
+          pricingItems.push({ slug, quantity: count });
         }
       });
     }

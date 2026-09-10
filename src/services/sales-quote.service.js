@@ -129,7 +129,7 @@ const AI_EDITING_PHOTO_TYPE_MAP = {
     { key: 'edited_photos', value: 'Edited Photos', note: '25 edited photos per hour' }
   ],
   wedding: [
-    { key: 'edited_photos', value: 'Edited Photos', note: '50 edited photos per hour for weddings' }
+    { key: 'edited_photos', value: 'Edited Photos', note: '25 edited photos per hour' }
   ],
   privateevent: [
     { key: 'edited_photos', value: 'Edited Photos', note: '25 edited photos per hour' }
